@@ -45,6 +45,7 @@ import {
   registerSendingDomain,
   setAutomatedSendingEnabled,
 } from '@fss/domain/outbound';
+import { registerCallingIdentity, verifyCallingIdentity } from '@fss/domain/dial';
 import { openPause } from '@fss/domain/policy';
 import { readRestoreCounts } from '@fss/domain/restore';
 import {
@@ -92,22 +93,24 @@ import type { MailWorkerOptions } from '../../handlers/mail.ts';
  *     outright, with `rehearsal_require_prefix`, and has no `--environment production`
  *     escape hatch for an operator to reach for.
  *
- * ## The domain's own entry points, and the one row that still has none
+ * ## The domain's own entry points, and no row without one
  *
  * Every business fact below is produced by the function that owns its invariant —
  * `createFirm`, `addEmailRoute`, `addPhoneRoute`, `enrollContact`,
  * `prepareOutboundMessage`, `dispatchOutboundMessage`, `processMessageIds`,
  * `recordSuppression`, `confirmReplyDisposition`, `openPause`, `updateSetting`,
- * `registerSendingDomain`. That matters because the drill then reconstructs rows a real
- * path wrote: a fence seeded with an `INSERT` would prove the restore copied a row, not
- * that at-most-once sending survived it.
+ * `registerSendingDomain`, `registerCallingIdentity`, `verifyCallingIdentity`. That
+ * matters because the drill then reconstructs rows a real path wrote: a fence seeded
+ * with an `INSERT` would prove the restore copied a row, not that at-most-once sending
+ * survived it.
  *
  * The `sending_domains` row was g40's one exception, inserted with its booleans left
  * false; lane g57's `registerSendingDomain` is its creator now, and the seed calls it.
- * What still has no creator is a *verified calling identity*: nothing in this build
- * writes `calling_identities` or verifies one. So the seed does not write one (lane
- * g59), and the drill's step 1 dial probe refuses to answer and names that as the
- * prerequisite it lacks.
+ * The last row with no creator was a *verified calling identity*, and lane g59 left the
+ * drill's step 1 dial probe unanswered rather than fake one. Lane g60 gave it its
+ * creator — a salesperson registers their own number and attests that it is the one they
+ * call from — and the seed now takes that path as the rehearsal admin, so the probe has
+ * a subject and step 1 can be answered.
  *
  * ## Three phases (lane g59)
  *
@@ -143,8 +146,8 @@ import type { MailWorkerOptions } from '../../handlers/mail.ts';
  *
  *   * `before` — the workflow's own step, long before the restore target: everything
  *     0.1 lists, plus the prerequisites the later steps of the drill need to exist in
- *     the restored copy (a firm whose opt-out arrives later, a phone route, an
- *     administrative pause).
+ *     the restored copy (a firm whose opt-out arrives later, a phone route and the
+ *     admin's attested calling number, an administrative pause).
  *   * `in-flight` — run by the drill script just before it reads the restore target:
  *     one send whose Gmail call delivered and whose response never came back, so its
  *     fence is `reconciling` when the target is taken and Appendix E step 3 has a fence
@@ -283,10 +286,19 @@ const LATE_OPT_OUT_MESSAGE_ID = 'fss-drill-evidence-opt-out-2';
  *
  * 555-0100 to 555-0199 is reserved for fiction in the North American plan, and 617 is
  * the MA zone every evidence firm is in. The route is real — `addPhoneRoute`, usable —
- * so the drill's step 1 dial probe finds an assigned firm with a usable phone route and
- * can name the one prerequisite this build cannot produce: a verified calling identity.
+ * so the drill's step 1 dial probe finds an assigned firm with a usable phone route.
  */
 const DIAL_ROUTE_E164 = '+16175550142';
+
+/**
+ * The rehearsal admin's own calling number, the dial probe's other half (lane g60).
+ *
+ * Fictional, like the route, and a different number: the line a call leaves on is not
+ * the line it rings. It becomes verified the way David's does — registered, then
+ * attested by its owner — so the drill's step 1 asks `authorizeDial` a question whose
+ * only honest answer during a restore is a refusal.
+ */
+const DRILL_CALLING_NUMBER = '+16175550143';
 
 interface EvidenceFirmSpec {
   readonly key: string;
@@ -928,12 +940,8 @@ async function ensureInDoubtSend(
 /**
  * A usable phone route on the sending firm, through `addPhoneRoute` (lane g59).
  *
- * Half of what the drill's step 1 dial probe needs. The other half, a verified and
- * enabled calling identity owned by the firm's assignee, has no creator anywhere in
- * this build — no domain function and no API route writes `calling_identities` or
- * verifies one — so the seed does not write one either: an `INSERT` of a verified
- * identity would be the fixture g40 refuses to make. The probe therefore still refuses
- * to answer, and now says exactly why (`admin.ts`, `no_dialable_subject`).
+ * Half of what the drill's step 1 dial probe needs; `ensureCallingIdentity` below is
+ * the other half.
  */
 async function ensureDialRoute(context: RepositoryContext, seeded: SeededFirm): Promise<{ id: string; outcome: DrillEvidenceOutcome }> {
   const routes = await listRoutes(context, 'phone', seeded.firm.id);
@@ -952,6 +960,44 @@ async function ensureDialRoute(context: RepositoryContext, seeded: SeededFirm): 
     throw new EvidenceRefusal('dial_route', `the phone route is ${added.value.eligibility} rather than usable`);
   }
   return { id: added.value.id, outcome: 'created' };
+}
+
+/**
+ * The rehearsal admin's attested calling number, through the path a salesperson takes
+ * (lane g60): `registerCallingIdentity`, then `verifyCallingIdentity` in the owner's own
+ * scope, so it is recorded as an `owner_attestation` by the admin, with the instant.
+ *
+ * It is the attestation a person makes in the desktop's "Your calling number" section,
+ * made here by the seed on the rehearsal admin's behalf — which is what every other row
+ * this seed writes is, too: the fictional admin's activity, through the functions that
+ * own each invariant. It is not an `INSERT` of a verified row, which migration 0016's
+ * `calling_identities_verification_recorded` would refuse anyway. Both calls are
+ * idempotent, so a re-run reports `existing`.
+ */
+async function ensureCallingIdentity(
+  context: RepositoryContext,
+  session: SessionQueryable,
+): Promise<{ id: string; outcome: DrillEvidenceOutcome }> {
+  const registered = await withTransaction(
+    session,
+    async () => await registerCallingIdentity(context, { e164: DRILL_CALLING_NUMBER, label: 'Drill evidence' }),
+  );
+  if (!registered.ok) {
+    throw new EvidenceRefusal('calling_identity', `registerCallingIdentity refused with ${registered.reason}`);
+  }
+  const attested = await withTransaction(
+    session,
+    async () => await verifyCallingIdentity(context, { identityId: registered.value.identity.id }),
+  );
+  if (!attested.ok) {
+    throw new EvidenceRefusal('calling_identity', `verifyCallingIdentity refused with ${attested.reason}`);
+  }
+  const identity = attested.value.identity;
+  if (!identity.enabled || identity.verificationStatus !== 'verified') {
+    throw new EvidenceRefusal('calling_identity', 'the attested calling identity is not verified and enabled');
+  }
+  const created = registered.value.outcome === 'created' || attested.value.outcome === 'verified';
+  return { id: identity.id, outcome: created ? 'created' : 'existing' };
 }
 
 /**
@@ -1325,10 +1371,12 @@ export async function seedDrillEvidence(input: DrillEvidenceInput): Promise<Dril
         // restored database can match the opt-out step 4 recovers.
         const lateOptOut = await ensureFirm(admin, workspace, FIRMS.lateOptOut);
         note('late_opt_out_firm', lateOptOut.outcome, lateOptOut.firm.id);
-        // Half of the step 1 dial probe's subject; the half this build cannot make is
-        // named by the probe's refusal.
+        // The step 1 dial probe's subject: a usable phone route on a firm assigned to
+        // the admin, and the admin's own attested calling number (lane g60).
         const dialRoute = await ensureDialRoute(admin, sending);
         note('dial_route', dialRoute.outcome, dialRoute.id);
+        const callingIdentity = await ensureCallingIdentity(admin, session);
+        note('calling_identity', callingIdentity.outcome, callingIdentity.id);
         // A hold step 9 has to leave in force (4.3).
         const pause = await ensureAdministrativePause(admin, session, workspace, optOut);
         note('administrative_pause', pause.outcome, pause.id);

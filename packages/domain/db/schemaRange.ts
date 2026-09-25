@@ -18,7 +18,7 @@ export interface SchemaRange {
 }
 
 /** The highest migration version this source tree contains. */
-export const CURRENT_SCHEMA_VERSION = 15;
+export const CURRENT_SCHEMA_VERSION = 16;
 
 /**
  * The range the release before this one declared. Widen this one release ahead of the
@@ -33,8 +33,21 @@ export const CURRENT_SCHEMA_VERSION = 15;
  * promise made to a running production binary. From the first real deployment onwards
  * the widening must precede the migration by a release, and the compatibility test
  * will keep saying so.
+ *
+ * Lane g60 widened it again, for 0016, and it is the first migration after production
+ * went live (23 September 2026), so the sentence above now bites and has to be answered
+ * rather than repeated. The release running in production declares `{15, 15}` for both
+ * services, not this constant's `{1, 16}`; no deployed binary accepts 16. What makes that
+ * safe is not this constant but the release procedure: every range since 0006 is a
+ * strict `{N, N}`, so a schema release is deployed with
+ * `infra/scripts/release-deploy.sh … --schema-change`, which scales both services to zero
+ * *before* the migration and back up on the new images after it (release.md 4.1). No
+ * binary of the previous release ever meets schema 16. The compatibility test's
+ * assertion below is therefore met the way G20's was, by widening, and Appendix G 22's
+ * scenario keeps asserting the refusal that is the real relationship between the
+ * previous images and the new schema (`test/release/scenario22.check.ts`).
  */
-export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 15 };
+export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 16 };
 
 /**
  * Both services need migration 0002's shape: the API's dead-job list reads `dead_at`
@@ -289,8 +302,39 @@ export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum:
  * does not exist — `database_ahead_of_binary` for the old images against the new
  * schema, which is correct: their SELECTs name a column that is gone.
  */
-export const API_SCHEMA_RANGE: SchemaRange = { minimum: 15, maximum: 15 };
-export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 15, maximum: 15 };
+/**
+ * Migration 0016 (g60) moves both to 16, and it is expansion again: six nullable columns
+ * on `calling_identities` and the constraints that make a `verified` row say who
+ * verified it, how and when.
+ *
+ * **The API's minimum moves by the usual rule.** `POST /calling-identities/register`,
+ * `/attest` and `/disable` write `label`, `verified_at`, `verified_by_user_id`,
+ * `verification_method`, `disabled_at` and `disabled_by_user_id`, and
+ * `GET /calling-identities` selects them. On a version-15 database each of those
+ * statements fails with `undefined_column`: a salesperson who typed their number and
+ * pressed Attest would be told nothing was recorded, and would have no Call button
+ * afterwards either.
+ *
+ * **The worker's minimum moves by G20's rule rather than by arithmetic.** The worker
+ * service never reads the new columns; its statements would succeed on 15. `{15, 16}`
+ * is what "the lowest version on which its first statement can succeed" gives, and it
+ * is refused for the reason 0015's paragraph above states: a range is what
+ * `rehearsal-schema-ranges.sh` runs the pairs of and what `verify-schema` gates a
+ * production deploy on, and on a version-15 database this release's API refuses to
+ * start, so a worker declaring 15 would admit only half a deployment — the state
+ * `release-deploy.sh --schema-change` exists to prevent. The `fss` tool in the worker
+ * image does write the new columns (the drill seed attests the rehearsal admin's number
+ * through the domain functions), and it runs only after `fss migrate` has.
+ *
+ * **Both maxima move to 16** on the same reasoning as every widening before. The
+ * previous release's binaries declared `{15, 15}`, so no pair overlaps and Appendix
+ * G 22 asserts `database_ahead_of_binary` for the old images against the new schema.
+ * The production deploy is therefore the stop-migrate-start path: apply with both
+ * ranges at `{16, 16}` and the new digests, then `release-deploy.sh infra/roots/production
+ * fss-prod --schema-change` (release.md 8.0ab).
+ */
+export const API_SCHEMA_RANGE: SchemaRange = { minimum: 16, maximum: 16 };
+export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 16, maximum: 16 };
 
 export function acceptsSchemaVersion(range: SchemaRange, version: number): boolean {
   return Number.isInteger(version) && version >= range.minimum && version <= range.maximum;

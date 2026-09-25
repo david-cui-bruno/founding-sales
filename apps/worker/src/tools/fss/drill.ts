@@ -51,11 +51,24 @@ import { runMigrate, readSchemaVersionReport } from './migrate.ts';
  *
  * The drill stops at the first step that fails, with one exception: a probe that
  * *refused to answer* because its own prerequisite is absent. Step 1's dial probe is
- * the only one, and its prerequisite — a verified, enabled calling identity owned by an
- * assignee — has no creator anywhere in this build. The step is recorded as failed and
- * `unanswered`, the drill runs the steps after it so they are measured, and the drill
- * still fails: `ok` is false and the runner refuses it. A dial that was *authorized*
- * stops the drill where it happens, as it always did.
+ * the only one, and its prerequisite is a verified, enabled calling identity owned by an
+ * assignee. When g59 wrote this nothing could create one; lane g60 gave it a creator,
+ * and the rehearsal's seed now attests one for the rehearsal admin, so a rehearsal's
+ * probe has a subject. A database without one — a production restore where nobody has
+ * attested a number, or a seed that did not run — still gets the same treatment: the
+ * step is recorded as failed and `unanswered`, the drill runs the steps after it so they
+ * are measured, and the drill still fails: `ok` is false and the runner refuses it. A
+ * dial that was *authorized* stops the drill where it happens, as it always did.
+ *
+ * ## What step 1's dial refusal has to show (lane g60)
+ *
+ * `allowed: false` alone is not the answer to "a dial is refused during a restore".
+ * `authorizeDial` stops at its first refusal and the restore hold is its eighth step, so
+ * a probe refused `posture_missing` or `outside_calling_window` — which a rehearsal with
+ * no posture, or at three in the morning, always is — was refused for a reason that has
+ * nothing to do with the restore. So the step also requires `restore_in_progress` among
+ * the holds that apply to that very dial, which `dial-authorize` reports beside the
+ * decision: the refusal is then one the restore would have made on its own.
  */
 
 export interface DrillStepReport {
@@ -205,6 +218,26 @@ async function step(
   }
   const failure = assertion(outcome.value);
   return { step: name, ok: failure === null, failure, report };
+}
+
+/**
+ * Step 1's dial assertion, in the drill's own words, or null (lanes g59 and g60).
+ *
+ * Refused, and refused *because of the restore*: the restore hold is among the holds
+ * that apply to this very dial, which `dial-authorize` reports beside its decision. A
+ * dial refused at an earlier step of 9.2 for a reason of its own — no posture, outside
+ * the window — with no restore hold behind it says nothing about the restore (see the
+ * header). Exported so the rule can be tested on its own, since no real database has a
+ * restore hold that does not apply to a dial in the same workspace.
+ */
+export function dialProbeFailure(report: Readonly<Record<string, unknown>>): string | null {
+  if (report['allowed'] !== false) {
+    return `a dial was authorized while a restore was in progress: ${JSON.stringify(report)}`;
+  }
+  const holds = Array.isArray(report['holds']) ? (report['holds'] as readonly unknown[]) : [];
+  return holds.includes('restore_in_progress')
+    ? null
+    : `the dial was refused (${String(report['reason'])}) but no restore hold applies to it, so the refusal says nothing about the restore: ${JSON.stringify(report)}`;
 }
 
 /** Whether the drill carries on: every step so far passed, or could only not be answered. */
@@ -521,16 +554,13 @@ export async function runDrill(input: DrillInput): Promise<DrillResult> {
         'step1-dial-refused',
         directory,
         async () => await dialAuthorizeCommand(invoke({}, ['--any'])),
-        report =>
-          report['allowed'] === false
-            ? null
-            : `a dial was authorized while a restore was in progress: ${JSON.stringify(report)}`,
+        dialProbeFailure,
         // Lane g59. `no_dialable_subject` is the probe declining to answer, not a dial
         // that was allowed: no firm with a usable phone route has an assignee who owns a
-        // verified, enabled calling identity, and nothing in this build can make one.
-        // The step stays failed, and so does the drill, but the steps after it are
-        // measured rather than skipped, because this probe says nothing about them. A
-        // dial that *was* authorized stops the drill here, as it always did.
+        // verified, enabled calling identity. The step stays failed, and so does the
+        // drill, but the steps after it are measured rather than skipped, because this
+        // probe says nothing about them. A dial that *was* authorized stops the drill
+        // here, as it always did.
         ['no_dialable_subject'],
       ),
     );

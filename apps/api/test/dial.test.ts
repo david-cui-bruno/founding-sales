@@ -152,12 +152,17 @@ describe('policy, suppression and dialing routes', () => {
     routeId = String(resultOf(route)['id']);
     routeVersion = Number(resultOf(route)['version'] ?? 1);
 
-    const identity = await fixture.db.query<{ id: string }>(
-      `INSERT INTO calling_identities (workspace_id, owner_user_id, e164, verification_status, enabled)
-       VALUES ($1, $2, '+14015550100', 'verified', true) RETURNING id`,
-      [fixture.alpha.workspaceId, assigneeUserId],
+    // The assignee's own number, through the product path a person takes (lane g60):
+    // register it, then attest that it is the number they call from.
+    const registered = await post('/calling-identities/register', assigneeToken, command({ e164: '+14015550100' }));
+    expect(registered.status).toBe(200);
+    callingIdentityId = String((resultOf(registered)['identity'] as Record<string, unknown>)['id']);
+    const attested = await post(
+      '/calling-identities/attest',
+      assigneeToken,
+      command({ identityId: callingIdentityId, attested: true }),
     );
-    callingIdentityId = identity.rows[0]?.id ?? '';
+    expect(attested.status).toBe(200);
 
     const posture = await post(
       '/postures/record',
@@ -230,8 +235,9 @@ describe('policy, suppression and dialing routes', () => {
 
   it('refuses a calling identity that is not the actor own', async () => {
     const other = await fixture.db.query<{ id: string }>(
-      `INSERT INTO calling_identities (workspace_id, owner_user_id, e164, verification_status, enabled)
-       VALUES ($1, $2, '+14015550101', 'verified', true) RETURNING id`,
+      `INSERT INTO calling_identities (workspace_id, owner_user_id, e164, verification_status, enabled,
+                                       verified_at, verified_by_user_id, verification_method)
+       VALUES ($1, $2, '+14015550101', 'verified', true, now(), $2, 'owner_attestation') RETURNING id`,
       [fixture.alpha.workspaceId, fixture.alpha.admin.userId],
     );
     const answer = await post(
@@ -245,9 +251,10 @@ describe('policy, suppression and dialing routes', () => {
 
   it('refuses the reserved shared line, which has no owner', async () => {
     const shared = await fixture.db.query<{ id: string }>(
-      `INSERT INTO calling_identities (workspace_id, owner_user_id, e164, verification_status, enabled)
-       VALUES ($1, NULL, '+14015550102', 'verified', false) RETURNING id`,
-      [fixture.alpha.workspaceId],
+      `INSERT INTO calling_identities (workspace_id, owner_user_id, e164, verification_status, enabled,
+                                       verified_at, verified_by_user_id, verification_method)
+       VALUES ($1, NULL, '+14015550102', 'verified', false, now(), $2, 'admin_attestation') RETURNING id`,
+      [fixture.alpha.workspaceId, fixture.alpha.admin.userId],
     );
     const answer = await post(
       '/dial/authorize',

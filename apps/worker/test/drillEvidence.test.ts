@@ -235,6 +235,7 @@ describe('fss admin drill seed-evidence', () => {
       'manual_suppression',
       'late_opt_out_firm',
       'dial_route',
+      'calling_identity',
       'administrative_pause',
       'crm_edit',
     ]) {
@@ -245,10 +246,41 @@ describe('fss admin drill seed-evidence', () => {
 
     // Lane g59: what the later steps of the drill need to find in the restored copy,
     // each through its own entry point. A usable phone route on an assigned firm, and
-    // no calling identity, because nothing in this build creates or verifies one.
+    // (lane g60) the assignee's own calling number, attested by its owner through the
+    // path a person takes — with who, how and when recorded, and an audit event for
+    // each step — rather than an INSERT of a verified row.
     const phones = await session.query<{ eligibility: string }>('SELECT eligibility FROM phone_routes');
     expect(phones.rows).toEqual([{ eligibility: 'usable' }]);
-    expect(await countOf('calling_identities')).toBe(0);
+    const identities = await session.query<{
+      id: string;
+      owner_user_id: string;
+      verification_status: string;
+      enabled: boolean;
+      verified_by_user_id: string;
+      verification_method: string;
+    }>(
+      `SELECT id, owner_user_id, verification_status, enabled, verified_by_user_id, verification_method
+         FROM calling_identities`,
+    );
+    expect(identities.rows).toEqual([
+      {
+        id: steps['calling_identity']?.id,
+        owner_user_id: report.adminUserId,
+        verification_status: 'verified',
+        enabled: true,
+        verified_by_user_id: report.adminUserId,
+        verification_method: 'owner_attestation',
+      },
+    ]);
+    expect(await countOf('audit_events', "action IN ('calling_identity.registered', 'calling_identity.attested')")).toBe(2);
+    // The route's firm is assigned to the identity's owner: together they are a subject
+    // the step 1 dial probe can ask about.
+    expect(
+      await countOf(
+        'firms f JOIN phone_routes r ON r.firm_id = f.id JOIN calling_identities i ON i.owner_user_id = f.assigned_user_id',
+        "r.eligibility = 'usable' AND i.enabled",
+      ),
+    ).toBe(1);
     // An administrative pause, which step 9 has to leave in force (4.3).
     expect(
       await countOf('active_holds', "reason_code = 'scoped_pause' AND released_at IS NULL"),
@@ -350,6 +382,7 @@ describe('fss admin drill seed-evidence', () => {
       suppressions: await countOf('suppression_events'),
       messages: await countOf('mail_messages'),
       edits: await countOf('audit_events', "action = 'firm.updated'"),
+      attestations: await countOf('audit_events', "action = 'calling_identity.attested'"),
     };
     expect(before.firms, 'the idempotence case needs the first run to have happened').toBeGreaterThan(0);
     const appended = journalled.length;
@@ -371,6 +404,9 @@ describe('fss admin drill seed-evidence', () => {
     expect(await countOf('suppression_events')).toBe(before.suppressions);
     expect(await countOf('mail_messages')).toBe(before.messages);
     expect(await countOf('audit_events', "action = 'firm.updated'")).toBe(before.edits);
+    // The calling number is attested once, however many times the seed runs (lane g60).
+    expect(await countOf('calling_identities')).toBe(1);
+    expect(await countOf('audit_events', "action = 'calling_identity.attested'")).toBe(before.attestations);
     // `recordSuppression` writes the journal before the row and the event id is
     // deterministic, so a replay appends the same object rather than a second one.
     expect(journalled.length - appended).toBeLessThanOrEqual(1);

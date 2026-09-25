@@ -74,6 +74,84 @@ export const dialRefusalCodeSchema = z.enum(DIAL_REFUSAL_CODES);
 export type DialRefusalCode = z.infer<typeof dialRefusalCodeSchema>;
 
 // ---------------------------------------------------------------------------
+// Calling identities (specification 9.1; lane g60)
+// ---------------------------------------------------------------------------
+
+/**
+ * How a calling identity came to be verified.
+ *
+ * Version one has no telephony provider — a call is a `tel:` handoff from the Mac — so
+ * the only verification there is is a person's statement that this is the number they
+ * place calls from, recorded with who made it and when, the way 12.7's sending
+ * checklist records a person saying they looked. The owner's own statement and an
+ * admin's on a member's behalf are recorded as different methods, because they are
+ * different evidence. A later call-back code would be a third value here and a third
+ * branch in the CHECK. See `docs/decisions/g60-calling-identities-are-attested-in-version-one.md`.
+ */
+export const CALLING_IDENTITY_VERIFICATION_METHODS = ['owner_attestation', 'admin_attestation'] as const;
+export const callingIdentityVerificationMethodSchema = z.enum(CALLING_IDENTITY_VERIFICATION_METHODS);
+export type CallingIdentityVerificationMethod = z.infer<typeof callingIdentityVerificationMethodSchema>;
+
+/**
+ * Why a calling-identity command was refused.
+ *
+ * Request refusals in the sense of `docs/decisions/g4-dial-refusal-codes.md`: none of
+ * them is a hold, none has a recovery action, and none becomes an `active_holds` row.
+ * Where a fact already has a word in `DIAL_REQUEST_REFUSAL_CODES` it is spelled the
+ * same (`identity_shared_line_disabled`), so a refusal here and the dial refusal it
+ * prevents never say one thing in two words.
+ *
+ * A colleague's identity is `identity_unknown` to a salesperson, not "not yours", for
+ * the reason a colleague's Today card is `not_found`: the difference would tell them
+ * what exists.
+ */
+export const CALLING_IDENTITY_REFUSAL_CODES = [
+  /** Not `+`, a country code and 8 to 15 digits in all. No country is ever assumed. */
+  'number_invalid',
+  /** The label is empty after trimming or longer than 80 characters. */
+  'label_invalid',
+  /** The owner is not an active member of this workspace. */
+  'owner_not_member',
+  /** Registering, attesting or retiring somebody else's number is an admin's act. */
+  'admin_only',
+  /** The number is already registered in this workspace to somebody else. */
+  'number_registered_to_another',
+  'identity_unknown',
+  /** A null-owner row is the deferred shared line and stays disabled (9.1). */
+  'identity_shared_line_disabled',
+] as const;
+export const callingIdentityRefusalCodeSchema = z.enum(CALLING_IDENTITY_REFUSAL_CODES);
+export type CallingIdentityRefusalCode = z.infer<typeof callingIdentityRefusalCodeSchema>;
+
+/** One calling identity as the API hands it out: to its owner, or to an admin. */
+export const callingIdentityDtoSchema = z.strictObject({
+  id: uuid,
+  ownerUserId: uuid.nullable(),
+  e164,
+  label: z.string().max(80).nullable(),
+  verificationStatus: z.enum(['unverified', 'verified']),
+  enabled: z.boolean(),
+  verifiedAt: instant.nullable(),
+  verifiedByUserId: uuid.nullable(),
+  verificationMethod: callingIdentityVerificationMethodSchema.nullable(),
+  disabledAt: instant.nullable(),
+  /**
+   * Whether this is the number the owner's Today cards dial from: the most recently
+   * attested of their verified, enabled numbers, chosen by the server so the Mac shows
+   * the choice rather than re-deriving it.
+   */
+  usedForCalls: z.boolean(),
+  createdAt: instant,
+});
+export type CallingIdentityDto = z.infer<typeof callingIdentityDtoSchema>;
+
+/** `GET /calling-identities`: the caller's own numbers, oldest first. */
+export const callingIdentityListSchema = z.strictObject({
+  identities: z.array(callingIdentityDtoSchema),
+});
+export type CallingIdentityList = z.infer<typeof callingIdentityListSchema>;
+
+// ---------------------------------------------------------------------------
 // Call outcomes (specification 9.1)
 // ---------------------------------------------------------------------------
 
@@ -350,4 +428,36 @@ export const releasePauseCommandSchema = z.strictObject({
 export const completeCallbackCommandSchema = z.strictObject({
   ...commandEnvelope,
   callbackId: uuid,
+});
+
+/**
+ * Register a calling number (lane g60).
+ *
+ * The number travels as typed — trimmed, and at most 32 characters — and is
+ * normalized by the domain, which strips spaces, dots, hyphens and parentheses after a
+ * leading `+` and refuses anything else as `number_invalid`. `ownerUserId` is absent
+ * for "my own number"; naming another member is an admin's act.
+ */
+export const registerCallingIdentityCommandSchema = z.strictObject({
+  ...commandEnvelope,
+  e164: z.string().trim().min(1).max(32),
+  label: z.string().max(200).optional(),
+  ownerUserId: uuid.optional(),
+});
+
+/**
+ * The attestation: "this is the number I place calls from". `attested` is a literal
+ * `true` so that no client can verify a number without sending the statement; the
+ * method recorded is decided by who sends it, never by the body.
+ */
+export const attestCallingIdentityCommandSchema = z.strictObject({
+  ...commandEnvelope,
+  identityId: uuid,
+  attested: z.literal(true),
+});
+
+/** Stop using a number. The row stays: call logs and tickets reference it. */
+export const disableCallingIdentityCommandSchema = z.strictObject({
+  ...commandEnvelope,
+  identityId: uuid,
 });

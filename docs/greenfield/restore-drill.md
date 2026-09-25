@@ -45,7 +45,7 @@ Those six are what the baseline refusal below counts. They are not everything th
 
 | Step | What it has to find | What produces it | When |
 |---|---|---|---|
-| 1, dial probe | an assigned firm with a usable **phone** route, **and** a verified, enabled **calling identity** owned by that firm's assignee | the route: `addPhoneRoute`. The identity: **nothing** — no domain function, command or API route creates or verifies a `calling_identities` row, so nothing seeds one | route in `before`; identity **open** (below) |
+| 1, dial probe | an assigned firm with a usable **phone** route, **and** a verified, enabled **calling identity** owned by that firm's assignee | the route: `addPhoneRoute`. The identity: `registerCallingIdentity`, then `verifyCallingIdentity` in the rehearsal admin's own scope, the attestation a person makes on the Settings screen (lane g60) | `before` |
 | 2 | a journalled suppression the restore **loses** | a second prospect opt-out, ingested by the mail pipeline (`processMessageIds`), journalled before its row | `after` |
 | 3 | a fence in `dispatching` or `reconciling`, started no earlier than the target minus ten minutes, whose Message-ID the Sent folder holds | one send through `dispatchOutboundMessage` against a recorded Gmail that delivers it and loses the response (Appendix B's fifth scenario), leaving the fence `reconciling` | `in-flight`, just before the target |
 | 4 | an inbox message the restore lost, from a prospect the restored copy knows | the same late opt-out: its reply-lane entry is the reply effect step 4 counts, its firm and handle suppressions the opt-out effects; its firm and contact are made in `before` | `after` |
@@ -53,7 +53,11 @@ Those six are what the baseline refusal below counts. They are not everything th
 | 8 | the counts at the moment of failure | `fss admin counts` on the source after the `after` phase, handed to the drill as `--at-failure-json` | after `after` |
 | 9 | a hold other than the restore holds, in force immediately before the advance; an active admin to attribute the advance to | an administrative pause through `openPause`; the workspace admin the seed acted as, handed to the drill as `--admin-user` | `before` |
 
-**Step 1's dial probe stays open.** A calling identity is "a verified Callie outbound number" (9.1), and this build has no path that verifies one: nothing writes `verification_status = 'verified'`. Production has none either, so every dial there is refused at 9.1's second step before the restore pause is consulted, and a refused dial on such a database would prove nothing about the pause. The probe therefore refuses `no_dialable_subject`, and its detail gives the count of each half and names the row it lacks. The drill records that step as failed and **unanswered**, runs every step after it so they are measured, and still fails: its report's `unanswered` names the step, the runner refuses any report with an unanswered step, and no release record is written. A dial that was *authorized* stops the drill where it happens, as it always did. The step closes when a calling identity can be verified through a product path; an `INSERT` of one would be exactly the fixture this section refuses.
+**Step 1's dial probe has a subject (lane g60).** A calling identity is "a verified Callie outbound number" (9.1). Until lane g60 no path could verify one, so the probe refused `no_dialable_subject` and the drill recorded step 1 as **unanswered** (lane g59). Now a salesperson registers their own number and attests that it is the one they place calls from (`docs/decisions/g60-calling-identities-are-attested-in-version-one.md`). The seed's `before` phase does exactly that for the rehearsal admin, through the same two domain functions and in the admin's own scope, with the fictional number `+16175550143`. The row is recorded as an `owner_attestation` by the admin, with the instant. It is not an `INSERT` of a verified row, which migration 0016's `calling_identities_verification_recorded` would refuse anyway. So the restored copy holds a firm assigned to the admin, a usable phone route on it, and the admin's attested number, and the probe asks `authorizeDial` a real question.
+
+**Refused is not enough.** `authorizeDial` stops at its first refusal, and the restore hold is its eighth step. The evidence firms' state (MA) has no posture in a rehearsal, so the probe is refused `posture_missing` at step 6 whether or not a restore is in progress, or `outside_calling_window` at step 7 at night. So step 1 also requires **`restore_in_progress` among the holds that apply to that same dial**. `dial-authorize` reports them beside its decision. The drill's `dialProbeFailure` and the runner's verdict both assert it, so the refusal is one the restore would have made on its own.
+
+**Without a subject the step is still unanswered.** A database with no attested number — a production restore where nobody has added one, or a rehearsal whose seed did not run — gets the lane g59 treatment unchanged. The probe refuses `no_dialable_subject` and names the half it lacks. The drill records the step as failed and unanswered, runs every step after it, and still fails. The runner refuses any report with an unanswered step, and no release record is written. A dial that was *authorized* stops the drill where it happens, as it always did.
 
 **The mailbox, across tasks.** Each phase and the drill are separate one-off tasks, and two things the drill shares with the seed do not survive a process by themselves. Each is handed over rather than faked:
 
@@ -76,7 +80,8 @@ opportunity manual and the opt-out's suppression is journalled before its row; r
 a salesperson's own manual suppression, whose ten-minute correction window is still
 open when the drill runs minutes later; makes one ordinary CRM edit; and makes what the
 later steps need to find: the firm whose opt-out arrives after the target, a usable
-phone route, and an administrative pause. Each item is reported `created` or
+phone route, the admin's own calling number registered and attested through the domain
+(lane g60), and an administrative pause. Each item is reported `created` or
 `existing`, and the report carries the same five counts `fss admin counts` reports —
 it calls the same code, so the numbers cannot drift from the ones the refusal below
 reads — along with the workspace admin it acted as and its mailbox recording. A second
@@ -202,12 +207,16 @@ fss admin dial-authorize --any   # expect: allowed=false, and restore_in_progres
 ```
 
 The dial half needs a subject that could otherwise be dialed: an assigned firm with a
-usable phone route whose assignee owns a verified, enabled calling identity. Nothing in
-this build can verify a calling identity (0.1), so the probe refuses
+usable phone route whose assignee owns a verified, enabled calling identity. In a
+rehearsal the seed's `before` phase makes one (0.1). In production it is whichever
+salesperson has attested their number on the Settings screen. The step passes when the
+dial is refused **and** `restore_in_progress` is among the holds that apply to it. A
+refusal at an earlier step of 9.2 with no restore hold behind it says nothing about the
+restore, and fails the step. With no subject at all the probe refuses
 `no_dialable_subject` and says which half is missing, rather than calling a refusal for
 a missing number a restore hold. The automated drill records `step1-dial-refused` as
-unanswered and carries on so the later steps are measured; the runner fails the drill
-on it all the same.
+unanswered and carries on so the later steps are measured, and the runner fails the
+drill on it all the same.
 
 And the alarm must have fired. This is the `restore_generation_mismatch` metric filter feeding the immediately-critical alarm. It is one datapoint of one at 60 s and treats missing data as not breaching, so a few minutes after the last mismatch line its *state* is OK again; read its history, which keeps the transition:
 

@@ -4,7 +4,7 @@ import { createAuthedClient } from '../src/main/authedClient.ts';
 import { ADMIN_IPC_CHANNELS, createAdminBridge } from '../src/main/settingsBridge.ts';
 import { adminViewOf } from '../src/renderer/settingsView.ts';
 import { windowMenuTemplate } from '../src/main/todayWindow.ts';
-import type { AdminState } from '../src/renderer/settingsContract.ts';
+import type { AdminState, CallingNumberView } from '../src/renderer/settingsContract.ts';
 
 /**
  * The administration window: its bridge and its view model
@@ -93,6 +93,7 @@ const emptyState = (overrides: Partial<AdminState> = {}): AdminState => ({
   stages: [],
   history: null,
   sendingAdmin: null,
+  callingNumbers: null,
   ...overrides,
 });
 
@@ -144,6 +145,38 @@ const diagnosticsBody = (mailboxId: string) => ({
 });
 
 const MAILBOX_ID = '55555555-5555-4555-8555-555555555555';
+const IDENTITY_ID = '66666666-6666-4666-8666-666666666666';
+
+/** One calling number as `GET /calling-identities` answers it (lane g60). */
+const callingIdentity = (overrides: Record<string, unknown> = {}) => ({
+  id: IDENTITY_ID,
+  ownerUserId: '11111111-1111-4111-8111-111111111111',
+  e164: '+14015550150',
+  label: 'Mobile',
+  verificationStatus: 'unverified',
+  enabled: false,
+  verifiedAt: null,
+  verifiedByUserId: null,
+  verificationMethod: null,
+  disabledAt: null,
+  usedForCalls: false,
+  createdAt: '2026-09-25T12:00:00.000Z',
+  ...overrides,
+});
+
+/** The same number as the bridge hands the view. */
+const numberView = (overrides: Partial<CallingNumberView> = {}): CallingNumberView => ({
+  id: IDENTITY_ID,
+  e164: '+14015550150',
+  label: 'Mobile',
+  verificationStatus: 'unverified',
+  enabled: false,
+  verifiedAt: null,
+  verificationMethod: null,
+  disabledAt: null,
+  usedForCalls: false,
+  ...overrides,
+});
 
 describe('the administration bridge', () => {
   it('reads the settings and the pipeline on first open', async () => {
@@ -153,7 +186,16 @@ describe('the administration bridge', () => {
     });
     const bridge = createAdminBridge({ api, session: { state: async () => await Promise.resolve(session()) } });
     const state = await bridge.state();
-    expect(calls.map(call => call.path)).toEqual(['/settings', '/pipeline/stages', '/outbound/status']);
+    // The calling numbers are read for every role (lane g60); here the route answers
+    // 404, as an API older than it would, and the page says so rather than failing.
+    expect(calls.map(call => call.path)).toEqual([
+      '/settings',
+      '/pipeline/stages',
+      '/outbound/status',
+      '/calling-identities',
+    ]);
+    expect(state.callingNumbers).toBeNull();
+    expect(state.notice).toBeNull();
     expect(state.settings?.settings.map(entry => entry.settingKey)).toEqual([
       'alert_thresholds',
       'business_time_zone',
@@ -245,6 +287,9 @@ describe('the administration bridge', () => {
       'callie:admin:set-sending-cap',
       'callie:admin:record-sending-authentication',
       'callie:admin:record-holiday-calendar',
+      'callie:admin:add-calling-number',
+      'callie:admin:attest-calling-number',
+      'callie:admin:retire-calling-number',
     ]);
   });
 
@@ -403,6 +448,141 @@ describe('the administration bridge', () => {
       automatedSendingEnabled: true,
     });
     expect(state.notice).toBe('authentication_incomplete');
+  });
+
+  it('adds a calling number and attests it in one press, as two commands in that order (lane g60)', async () => {
+    const identity = callingIdentity({ id: IDENTITY_ID });
+    const attested = callingIdentity({
+      id: IDENTITY_ID,
+      verificationStatus: 'verified',
+      enabled: true,
+      verifiedAt: '2026-09-25T13:00:00.000Z',
+      verifiedByUserId: '11111111-1111-4111-8111-111111111111',
+      verificationMethod: 'owner_attestation',
+      usedForCalls: true,
+    });
+    const listed: HttpAnswer[] = [
+      { status: 200, body: { identities: [] } },
+      { status: 200, body: { identities: [attested] } },
+    ];
+    const calls: { path: string; body: unknown }[] = [];
+    const api = createAuthedClient({
+      baseUrl: 'https://api.example.test/',
+      clientVersion: '1.0.2',
+      accessToken: async () => await Promise.resolve('token-value'),
+      send: async (url, init) => {
+        const path = new URL(url).pathname;
+        calls.push({ path, body: init.body === undefined ? null : JSON.parse(init.body) });
+        const answers: Record<string, HttpAnswer> = {
+          '/settings': { status: 200, body: settingsBody() },
+          '/pipeline/stages': { status: 200, body: stagesBody },
+          '/calling-identities/register': {
+            status: 200,
+            body: { status: 'accepted', replayed: false, result: { outcome: 'created', identity } },
+          },
+          '/calling-identities/attest': {
+            status: 200,
+            body: { status: 'accepted', replayed: false, result: { outcome: 'verified', identity: attested } },
+          },
+        };
+        if (path === '/calling-identities') return await Promise.resolve(listed.shift() ?? { status: 500, body: {} });
+        return await Promise.resolve(answers[path] ?? { status: 404, body: { error: 'not_found' } });
+      },
+    });
+    const bridge = createAdminBridge({
+      api,
+      session: { state: async () => await Promise.resolve(session({ device: { role: 'salesperson' as const } })) },
+    });
+    const before = await bridge.state();
+    expect(before.callingNumbers).toEqual([]);
+    expect(adminViewOf(before).callingNumber.summary).toContain('Today has no Call button');
+
+    const after = await bridge.addCallingNumber({ e164: '+1 401 555 0150', label: 'Mobile', attested: true });
+    const sequence = calls.map(call => call.path).filter(path => path.startsWith('/calling-identities'));
+    expect(sequence).toEqual([
+      '/calling-identities',
+      '/calling-identities/register',
+      '/calling-identities/attest',
+      '/calling-identities',
+    ]);
+    // The number goes as typed: normalizing it is the server's rule, not the client's.
+    expect(calls.find(call => call.path === '/calling-identities/register')?.body).toMatchObject({
+      e164: '+1 401 555 0150',
+      label: 'Mobile',
+      clientVersion: '1.0.2',
+    });
+    expect(calls.find(call => call.path === '/calling-identities/attest')?.body).toMatchObject({
+      identityId: IDENTITY_ID,
+      attested: true,
+    });
+    expect(after.notice).toBeNull();
+    expect(after.callingNumbers?.map(number => [number.id, number.usedForCalls])).toEqual([[IDENTITY_ID, true]]);
+    expect(adminViewOf(after).callingNumber.summary).toBe('Today calls from +14015550150 (Mobile).');
+  });
+
+  it('adds a number without attesting it when the statement is not ticked, and keeps a refusal as the notice', async () => {
+    const { api, calls } = scriptedApi({
+      '/settings': { status: 200, body: settingsBody() },
+      '/pipeline/stages': { status: 200, body: stagesBody },
+      '/calling-identities': { status: 200, body: { identities: [] } },
+      '/calling-identities/register': { status: 409, body: { status: 'refused', replayed: false, reason: 'number_invalid' } },
+    });
+    const bridge = createAdminBridge({ api, session: { state: async () => await Promise.resolve(session()) } });
+    await bridge.state();
+    const refused = await bridge.addCallingNumber({ e164: '401-555-0150', label: '', attested: true });
+    expect(refused.notice).toBe('number_invalid');
+    // Refused at the registration, so nothing was attested, and no empty label was sent.
+    expect(calls.map(call => call.path)).not.toContain('/calling-identities/attest');
+    expect(calls.find(call => call.path === '/calling-identities/register')?.body).not.toHaveProperty('label');
+    expect(adminViewOf(refused).notice).toContain('+ and your country code');
+  });
+
+  it('shows the registered number when its attestation is refused, with the refusal as the notice', async () => {
+    const { api, calls } = scriptedApi({
+      '/settings': { status: 200, body: settingsBody() },
+      '/pipeline/stages': { status: 200, body: stagesBody },
+      '/calling-identities': { status: 200, body: { identities: [callingIdentity()] } },
+      '/calling-identities/register': {
+        status: 200,
+        body: { status: 'accepted', replayed: false, result: { outcome: 'created', identity: callingIdentity() } },
+      },
+      '/calling-identities/attest': { status: 409, body: { status: 'refused', replayed: false, reason: 'owner_not_member' } },
+    });
+    const bridge = createAdminBridge({ api, session: { state: async () => await Promise.resolve(session()) } });
+    await bridge.state();
+    const before = calls.filter(call => call.path === '/calling-identities').length;
+    const state = await bridge.addCallingNumber({ e164: '+14015550150', label: '', attested: true });
+    expect(state.notice).toBe('owner_not_member');
+    expect(calls.filter(call => call.path === '/calling-identities').length).toBe(before + 1);
+    expect(adminViewOf(state).callingNumber.numbers.map(number => [number.status, number.canAttest])).toEqual([
+      ['unverified', true],
+    ]);
+  });
+
+  it('attests and retires a number through their own commands', async () => {
+    const { api, calls } = scriptedApi({
+      '/settings': { status: 200, body: settingsBody() },
+      '/pipeline/stages': { status: 200, body: stagesBody },
+      '/calling-identities': { status: 200, body: { identities: [callingIdentity({ id: IDENTITY_ID })] } },
+      '/calling-identities/attest': {
+        status: 200,
+        body: { status: 'accepted', replayed: false, result: { outcome: 'verified', identity: callingIdentity({ id: IDENTITY_ID }) } },
+      },
+      '/calling-identities/disable': {
+        status: 200,
+        body: { status: 'accepted', replayed: false, result: { outcome: 'disabled', identity: callingIdentity({ id: IDENTITY_ID }) } },
+      },
+    });
+    const bridge = createAdminBridge({ api, session: { state: async () => await Promise.resolve(session()) } });
+    await bridge.state();
+    await bridge.attestCallingNumber({ identityId: IDENTITY_ID });
+    await bridge.retireCallingNumber({ identityId: IDENTITY_ID });
+    expect(calls.find(call => call.path === '/calling-identities/attest')?.body).toMatchObject({
+      identityId: IDENTITY_ID,
+      attested: true,
+    });
+    expect(calls.find(call => call.path === '/calling-identities/disable')?.body).toMatchObject({ identityId: IDENTITY_ID });
+    expect(calls.find(call => call.path === '/calling-identities/disable')?.body).not.toHaveProperty('attested');
   });
 });
 
@@ -629,5 +809,90 @@ describe('the window menu', () => {
       'Firms',
       'Sequences',
     ]);
+  });
+});
+
+describe('Your calling number (lane g60)', () => {
+  it('is offered to a salesperson as well as an admin, and is inert only offline or out of date', () => {
+    for (const role of ['admin', 'salesperson'] as const) {
+      const section = adminViewOf(emptyState({ role, callingNumbers: [] })).callingNumber;
+      expect(section.canAdd, role).toBe(true);
+      expect(section.notEditableBecause, role).toBeNull();
+    }
+    expect(adminViewOf(emptyState({ online: false, callingNumbers: [] })).callingNumber).toMatchObject({
+      canAdd: false,
+      notEditableBecause: 'offline',
+    });
+    expect(adminViewOf(emptyState({ mayMutate: false, callingNumbers: [] })).callingNumber).toMatchObject({
+      canAdd: false,
+      notEditableBecause: 'upgrade_required',
+    });
+  });
+
+  it('says why there is no Call button, and never shows an unread list as an empty one', () => {
+    expect(adminViewOf(emptyState({ callingNumbers: [] })).callingNumber.summary).toBe(
+      'You have no calling number yet, so Today has no Call button. Add the number you place your calls from.',
+    );
+    const unread = adminViewOf(emptyState({ callingNumbers: null })).callingNumber;
+    expect(unread.summary).toContain('could not read your calling numbers');
+    // Adding blind could register a second number beside one the page cannot see.
+    expect(unread.canAdd).toBe(false);
+    expect(adminViewOf(emptyState({ callingNumbers: [numberView()] })).callingNumber.summary).toContain(
+      'None of your numbers is attested',
+    );
+  });
+
+  it('shows the server’s choice of number, and offers the controls each state allows', () => {
+    const section = adminViewOf(
+      emptyState({
+        callingNumbers: [
+          numberView({
+            id: '66666666-6666-4666-8666-000000000001',
+            verificationStatus: 'verified',
+            enabled: true,
+            verifiedAt: '2026-09-25T13:00:00.000Z',
+            verificationMethod: 'owner_attestation',
+            usedForCalls: true,
+          }),
+          numberView({
+            id: '66666666-6666-4666-8666-000000000002',
+            e164: '+14015550151',
+            label: null,
+            verificationStatus: 'verified',
+            enabled: true,
+            verifiedAt: '2026-09-24T13:00:00.000Z',
+            verificationMethod: 'admin_attestation',
+          }),
+          numberView({ id: '66666666-6666-4666-8666-000000000003', e164: '+14015550152', label: null }),
+          numberView({
+            id: '66666666-6666-4666-8666-000000000004',
+            e164: '+14015550153',
+            label: 'Old desk',
+            verificationStatus: 'verified',
+            disabledAt: '2026-09-20T09:00:00.000Z',
+          }),
+        ],
+      }),
+    ).callingNumber;
+    expect(section.summary).toBe('Today calls from +14015550150 (Mobile).');
+    expect(section.numbers.map(number => [number.status, number.canAttest, number.canRetire])).toEqual([
+      ['in_use', false, true],
+      ['verified', false, true],
+      ['unverified', true, true],
+      ['retired', true, false],
+    ]);
+    expect(section.numbers[0]?.line).toBe(
+      '+14015550150 (Mobile): you attested it on 2026-09-25. Today calls from this number.',
+    );
+    expect(section.numbers[1]?.line).toContain('an admin attested it for you on 2026-09-24');
+    expect(section.numbers[3]?.line).toContain('retired on 2026-09-20');
+    expect(section.statement).toBe('This is the number I place my calls from.');
+  });
+
+  it('turns a calling-number refusal into a sentence and leaves every other code as it was', () => {
+    expect(adminViewOf(emptyState({ notice: 'number_invalid', callingNumbers: [] })).notice).toBe(
+      'Callie cannot call from that. Type the number with the + and your country code.',
+    );
+    expect(adminViewOf(emptyState({ notice: 'admin_only', callingNumbers: [] })).notice).toBe('admin_only');
   });
 });

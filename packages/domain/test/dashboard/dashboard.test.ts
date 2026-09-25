@@ -80,8 +80,9 @@ describe('the dashboard', () => {
 
     // One call on each salesperson's firm, with different outcomes.
     const identity = await database.session.query<{ id: string }>(
-      `INSERT INTO calling_identities (workspace_id, owner_user_id, e164, verification_status, enabled)
-       VALUES ($1, $2, '+14015550101', 'verified', true) RETURNING id`,
+      `INSERT INTO calling_identities (workspace_id, owner_user_id, e164, verification_status, enabled,
+                                       verified_at, verified_by_user_id, verification_method)
+       VALUES ($1, $2, '+14015550101', 'verified', true, now(), $2, 'owner_attestation') RETURNING id`,
       [seeded.alpha.workspaceId, seeded.alpha.salesperson.userId],
     );
     await database.session.query(

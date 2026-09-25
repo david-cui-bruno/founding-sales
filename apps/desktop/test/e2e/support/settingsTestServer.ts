@@ -168,11 +168,12 @@ export function adminState(overrides: Partial<AdminState> = {}): AdminState {
     ],
     history: null,
     sendingAdmin: null,
+    callingNumbers: [],
     ...overrides,
   };
 }
 
-/** The bridge the browser gets. The same thirteen methods the preload script exposes. */
+/** The bridge the browser gets. The same sixteen methods the preload script exposes. */
 const BRIDGE_SCRIPT = `
 globalThis.callieAdmin = {
   async state() { return await ask('state'); },
@@ -188,6 +189,9 @@ globalThis.callieAdmin = {
   async setSendingCap(input) { return await ask('setSendingCap', input); },
   async recordSendingAuthentication(input) { return await ask('recordSendingAuthentication', input); },
   async recordHolidayCalendar(input) { return await ask('recordHolidayCalendar', input); },
+  async addCallingNumber(input) { return await ask('addCallingNumber', input); },
+  async attestCallingNumber(input) { return await ask('attestCallingNumber', input); },
+  async retireCallingNumber(input) { return await ask('retireCallingNumber', input); },
 };
 async function ask(method, argument) {
   const response = await fetch('/bridge/' + method, {

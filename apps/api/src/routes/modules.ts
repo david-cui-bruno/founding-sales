@@ -25,6 +25,8 @@ import { SEARCH_PATHS, routeSearch } from './search.ts';
 import { CALLBACK_PATHS, routeCallbacks } from './callbacks.ts';
 import { CALL_PATHS, routeCalls } from './calls.ts';
 import { DIAL_PATHS, routeDial } from './dial.ts';
+// Lane g60's calling numbers: the identity a dial is placed from.
+import { CALLING_IDENTITY_PATHS, routeCallingIdentities } from './callingIdentities.ts';
 import { PAUSE_PATHS, routePauses } from './pauses.ts';
 import { POSTURE_PATHS, routePostures } from './postures.ts';
 import { SUPPRESSION_PATHS, routeSuppressions } from './suppressions.ts';
@@ -150,6 +152,7 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     moduleOf('postures', { paths: POSTURE_PATHS }, routePostures, routing),
     moduleOf('suppressions', { paths: SUPPRESSION_PATHS }, routeSuppressions, routing),
     moduleOf('dial', { paths: DIAL_PATHS }, routeDial, routing),
+    moduleOf('calling-identities', { paths: CALLING_IDENTITY_PATHS }, routeCallingIdentities, routing),
     moduleOf('calls', { paths: CALL_PATHS }, routeCalls, routing),
     moduleOf('callbacks', { paths: CALLBACK_PATHS }, routeCallbacks, routing),
     moduleOf('pauses', { paths: PAUSE_PATHS }, routePauses, routing),

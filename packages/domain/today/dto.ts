@@ -1,4 +1,5 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
+import { currentCallingIdentityId } from '../dial/identities.ts';
 import { businessDateOf, listTodayCards, listTodayItems, workspaceBusinessTimeZone } from './snapshots.ts';
 import type { TodayCounts, TodayItemKind, TodayLane } from './types.ts';
 
@@ -81,7 +82,8 @@ export interface TodayFirmDto {
    * 9.1: a calling identity "must be active and owned by the acting salesperson", so
    * there is nothing here for the client to choose and no reason for it to hold a
    * list. Null is a card with no Call button, which is the honest state for an actor
-   * who has not had a number verified.
+   * who has not attested a number. With several, it is the most recently attested
+   * (`currentCallingIdentityId`, lane g60).
    */
   readonly callingIdentityId: string | null;
 }
@@ -163,18 +165,11 @@ export async function readTodayFirm(
     [context.scope.workspaceId, input.firmId],
   );
 
+  // The same choice the settings page shows as "used for calls" (lane g60): the most
+  // recently attested of the actor's verified, enabled numbers. One function, so the
+  // card and the page cannot disagree about which line a call will leave on.
   const actor = context.scope.actor;
-  const identity =
-    actor.kind === 'user'
-      ? await context.db.query<{ id: string }>(
-          `SELECT id FROM calling_identities
-            WHERE workspace_id = $1 AND owner_user_id = $2 AND enabled = true
-              AND verification_status = 'verified'
-            ORDER BY created_at, id
-            LIMIT 1`,
-          [context.scope.workspaceId, actor.userId],
-        )
-      : { rows: [] as { id: string }[] };
+  const callingIdentityId = actor.kind === 'user' ? await currentCallingIdentityId(context, actor.userId) : null;
 
   return {
     firmId: card.firmId,
@@ -200,6 +195,6 @@ export async function readTodayFirm(
       version: Number(row.version),
       eligibility: row.eligibility,
     })),
-    callingIdentityId: identity.rows[0]?.id ?? null,
+    callingIdentityId,
   };
 }

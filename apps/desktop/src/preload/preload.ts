@@ -169,6 +169,10 @@ const admin: AdminBridge = {
     await invokeAdmin(ADMIN_IPC_CHANNELS.recordSendingAuthentication, input),
   recordHolidayCalendar: async input =>
     await invokeAdmin(ADMIN_IPC_CHANNELS.recordHolidayCalendar, input),
+  // Lane g60: the person's own calling number, without which Today has no Call button.
+  addCallingNumber: async input => await invokeAdmin(ADMIN_IPC_CHANNELS.addCallingNumber, input),
+  attestCallingNumber: async input => await invokeAdmin(ADMIN_IPC_CHANNELS.attestCallingNumber, input),
+  retireCallingNumber: async input => await invokeAdmin(ADMIN_IPC_CHANNELS.retireCallingNumber, input),
 };
 
 contextBridge.exposeInMainWorld('callie', bridge);

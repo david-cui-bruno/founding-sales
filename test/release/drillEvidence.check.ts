@@ -330,6 +330,8 @@ describe('g40: the drill waits for the restore target to pass the evidence', () 
     for (const assertion of [
       'the restored database opened no restore hold',
       'a dial was authorized while a restore was in progress',
+      // Lane g60: and the restore hold is what refused it, not an earlier step of 9.2.
+      'no restore hold applied to it',
       'the journal replay reinserted nothing',
       'the second replay was not idempotent',
       'no send was reconstructed, so nothing was proved',

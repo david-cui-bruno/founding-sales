@@ -4,8 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import type { SessionQueryable } from '@fss/domain/db';
+import { repositoryContext, workspaceScope, type SessionQueryable } from '@fss/domain/db';
 import { CLUSTER_URL_ENVIRONMENT_VARIABLE, asSession } from '@fss/domain/db/testing';
+import { disableCallingIdentity } from '@fss/domain/dial';
 import type { KmsTransport } from '@fss/domain/mail';
 import {
   SuppressionJournalError,
@@ -62,9 +63,14 @@ import type { MailWorkerOptions } from '../src/handlers/mail.ts';
  *     fail step 3 on the same database — the Sent folder the seed filled is the proof.
  *   * "Step 4 passed" could count the before-phase effects. So the copy is checked to
  *     lack the late opt-out, and the effects counted must be ones step 4 applied.
- *   * "The drill ran past step 1" could be a dial probe that was quietly passed. So the
- *     drill must still fail, and name the dial probe as unanswered with the exact
- *     prerequisite it lacks.
+ *   * "Step 1's dial was refused" could be a refusal at an earlier step of 9.2 for a
+ *     reason of its own — there is no posture for the evidence firms' state — which says
+ *     nothing about the restore. So the step must also report `restore_in_progress`
+ *     among the holds that apply to that dial (lane g60), and the probe's subject must
+ *     be the calling identity the seed attested, not one the drill found lying about.
+ *   * "The dial probe was answered" could be a probe quietly passed without a subject.
+ *     So a copy whose calling number was retired must still fail the drill, naming the
+ *     probe as unanswered with the prerequisite it lacks.
  */
 
 let adminUrl: string;
@@ -253,7 +259,12 @@ async function seed(
 }
 
 async function drill(
-  options: { readonly recording?: boolean; readonly atFailure?: boolean } = {},
+  options: {
+    readonly recording?: boolean;
+    readonly atFailure?: boolean;
+    /** Something done to the fresh copy before the drill runs against it. */
+    readonly prepare?: (session: SessionQueryable) => Promise<void>;
+  } = {},
 ): Promise<{ readonly result: Awaited<ReturnType<typeof runDrill>>; readonly report: DrillReport; readonly copy: string }> {
   // Each drill gets a fresh copy of the restored database, so one case cannot hand the
   // next a reconstructed one.
@@ -262,6 +273,7 @@ async function drill(
   created.push(copy);
   const { client, session } = await connect(copy);
   try {
+    if (options.prepare !== undefined) await options.prepare(session);
     const mail = await taskMail(rehearsal.kms, rehearsal.bucket, 'reader');
     const reports = mkdtempSync(join(tmpdir(), 'fss-g59-drill-'));
     const result = await runDrill({
@@ -370,9 +382,16 @@ describe('the rehearsal leaves the restored copy something to reconstruct (lane 
         await counted(session, 'SELECT count(*)::text AS count FROM suppression_events'),
       ).toBe(Number(rehearsal.baseline['suppressions']));
       expect(Number(rehearsal.atFailure['suppressions'])).toBe(Number(rehearsal.baseline['suppressions']) + 2);
-      // A usable phone route on an assigned firm, and no calling identity at all.
+      // A usable phone route on an assigned firm, and (lane g60) the assignee's attested
+      // calling number: the step 1 dial probe's subject, made before the target.
       expect(await counted(session, "SELECT count(*)::text AS count FROM phone_routes WHERE eligibility = 'usable'")).toBe(1);
-      expect(await counted(session, 'SELECT count(*)::text AS count FROM calling_identities')).toBe(0);
+      expect(
+        await counted(
+          session,
+          "SELECT count(*)::text AS count FROM calling_identities WHERE enabled AND verification_status = 'verified' AND verification_method = 'owner_attestation' AND owner_user_id = $1",
+          [rehearsal.reports.before.adminUserId],
+        ),
+      ).toBe(1);
     } finally {
       await client.end();
     }
@@ -387,22 +406,18 @@ describe('the rehearsal leaves the restored copy something to reconstruct (lane 
   });
 });
 
-describe('fss drill against the restored copy (lane g59)', () => {
-  it('runs every step, passes every step but the dial probe, and names what the probe lacks', async () => {
+describe('fss drill against the restored copy (lanes g59 and g60)', () => {
+  it('runs every step and passes every step, the dial probe included, with the restore hold refusing the dial', async () => {
     const { result, report, copy } = await drill();
     const verdicts = report.steps.map(entry => [entry.step, entry.ok, entry.unanswered === true, entry.failure]);
 
-    // Still a failed drill, and it says so: a probe that could not be answered is not
-    // a pass, and the release record depends on this staying false.
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.reason, JSON.stringify(verdicts)).toBe('unanswered_step1-dial-refused');
-    expect(report.ok).toBe(false);
-    expect(report.stoppedAt, JSON.stringify(verdicts)).toBeNull();
-    expect(report.unanswered).toEqual(['step1-dial-refused']);
-    expect(stepOf(report, 'step1-dial-refused')?.failure).toContain(
-      'this database has 1 assigned firm(s) with a usable phone route and 0 verified, enabled calling identities',
-    );
-    expect(verdicts.filter(([, ok]) => ok !== true).map(([name]) => name)).toEqual(['step1-dial-refused']);
+    // A pass, for the first time: the calling number the seed attested gives the probe a
+    // subject, and nothing else in the drill is left unanswered.
+    expect(result.ok, JSON.stringify(verdicts)).toBe(true);
+    expect(report.ok).toBe(true);
+    expect(report.stoppedAt).toBeNull();
+    expect(report.unanswered).toEqual([]);
+    expect(verdicts.filter(([, ok]) => ok !== true).map(([name]) => name)).toEqual([]);
     expect(report.steps.map(entry => entry.step)).toEqual([
       'step1a-generation-check',
       'step1-restore-holds',
@@ -420,6 +435,26 @@ describe('fss drill against the restored copy (lane g59)', () => {
       'step9-system-generation-advance',
       'step9-generation-reconciled',
     ]);
+
+    // Step 1's dial: refused, the restore hold among the holds that apply to it, and
+    // asked about the seed's own subject — the admin's attested number and the phone
+    // route on the admin's firm.
+    const dial = bodyOf(report, 'step1-dial-refused');
+    expect(dial['allowed']).toBe(false);
+    expect(dial['holds']).toContain('restore_in_progress');
+    const subject = dial['subject'] as Record<string, unknown>;
+    {
+      const { client, session } = await connect(copy);
+      try {
+        const seeded = await session.query<{ id: string }>(
+          'SELECT id FROM calling_identities WHERE owner_user_id = $1',
+          [rehearsal.reports.before.adminUserId],
+        );
+        expect(subject['callingIdentityId']).toBe(seeded.rows[0]?.id);
+      } finally {
+        await client.end();
+      }
+    }
 
     // Step 2: exactly the after phase's two suppressions came back from the journal.
     expect(bodyOf(report, 'step2-journal-replay')['inserted']).toBe(2);
@@ -501,6 +536,31 @@ describe('fss drill against the restored copy (lane g59)', () => {
       }
     }
     expect(bodyOf(report, 'step9-generation-reconciled')).toMatchObject({ reconciled: true, mismatch: false, holdsOpened: 0 });
+  }, 120_000);
+
+  it('leaves the dial probe unanswered, and the drill failed, on a copy whose calling number was retired', async () => {
+    const { result, report } = await drill({
+      prepare: async session => {
+        const admin = rehearsal.reports.before.adminUserId;
+        const context = repositoryContext(
+          workspaceScope(rehearsal.reports.before.workspaceId, { kind: 'user', userId: admin, role: 'admin' }),
+          session,
+        );
+        const identities = await session.query<{ id: string }>('SELECT id FROM calling_identities WHERE owner_user_id = $1', [
+          admin,
+        ]);
+        for (const row of identities.rows) {
+          const retired = await disableCallingIdentity(context, { identityId: row.id });
+          expect(retired.ok).toBe(true);
+        }
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe('unanswered_step1-dial-refused');
+    expect(report.unanswered).toEqual(['step1-dial-refused']);
+    expect(stepOf(report, 'step1-dial-refused')?.failure).toContain(
+      'this database has 1 assigned firm(s) with a usable phone route and 0 verified, enabled calling identities',
+    );
   }, 120_000);
 
   it('fails step 3 on the same copy without the recorded Sent folder, so the recording is the proof', async () => {

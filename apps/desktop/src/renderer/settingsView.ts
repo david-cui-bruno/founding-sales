@@ -1,5 +1,5 @@
 import { SETTINGS_ELSEWHERE_FALLBACK } from './settingsElsewhere.ts';
-import type { AdminState } from './settingsContract.ts';
+import type { AdminState, CallingNumberView } from './settingsContract.ts';
 
 /**
  * The administration window as a value (specification 10.1, 13.3, 13.4, 14.2).
@@ -70,6 +70,56 @@ export interface SendingAdminSectionView {
   }[];
 }
 
+/**
+ * "Your calling number" (9.1; lane g60): the person's own numbers and which one Today
+ * dials from.
+ *
+ * Offered to every role, because a number is the person's own and 9.2 refuses a dial
+ * from anybody else's. Inert only offline or below the minimum version. Nothing here
+ * decides which number is in use — `usedForCalls` is the server's answer — and nothing
+ * checks the number's shape: `number_invalid` comes back as a notice.
+ */
+export interface CallingNumberSectionView {
+  /** One sentence: which number Today calls from, or why there is no Call button. */
+  readonly summary: string;
+  readonly numbers: readonly {
+    readonly id: string;
+    readonly status: 'in_use' | 'verified' | 'unverified' | 'retired';
+    readonly line: string;
+    readonly canAttest: boolean;
+    readonly canRetire: boolean;
+  }[];
+  readonly canAdd: boolean;
+  readonly notEditableBecause: string | null;
+  /** The statement an attestation makes, shown beside the box a person ticks. */
+  readonly statement: string;
+  /** How to type the number. */
+  readonly hint: string;
+}
+
+/**
+ * The attestation, in the words the person agrees to. Version one has no telephony
+ * provider to prove the number with, so this sentence *is* the verification, recorded
+ * with who ticked it and when (`docs/decisions/g60-calling-identities-are-attested-in-version-one.md`).
+ */
+export const CALLING_NUMBER_STATEMENT = 'This is the number I place my calls from.';
+
+/**
+ * The calling-number refusals as sentences (lane g60). Every other notice on this page
+ * is shown as its code, as before; these are the ones a salesperson meets while typing
+ * their own number, and a code is no help there.
+ */
+const CALLING_NUMBER_NOTICES: Readonly<Record<string, string>> = Object.freeze({
+  number_invalid: 'Callie cannot call from that. Type the number with the + and your country code.',
+  label_invalid: 'Keep the name to 80 plain characters or fewer.',
+  number_registered_to_another: 'That number is already somebody else’s calling number in this workspace.',
+  owner_not_member: 'That person is not an active member of this workspace.',
+  identity_unknown: 'Callie has no such number of yours. Reopen the page and try again.',
+});
+
+export const CALLING_NUMBER_HINT =
+  'Type it with the + and your country code, for example +1 401 555 0123. Spaces and dashes are fine.';
+
 /** Why the guard has no control, in the words the page shows. */
 const GUARD_READ_ONLY =
   'Section 12.6 makes changing the personal-Gmail guard a reviewed policy change, so there is no control for it here.';
@@ -83,6 +133,8 @@ export interface AdminView {
   readonly sending: { readonly line: string; readonly editable: boolean } | null;
   /** G7-2's section. Null for anybody who is not an admin. */
   readonly sendingAdmin: SendingAdminSectionView | null;
+  /** Lane g60's section, for every role. */
+  readonly callingNumber: CallingNumberSectionView;
   /** G8's holiday calendar: what it is now, and whether this person may replace it. */
   readonly holidays: {
     readonly version: string;
@@ -201,12 +253,13 @@ export function adminViewOf(state: AdminState): AdminView {
 
   return {
     screen: state.screen,
-    notice: state.notice,
+    notice: state.notice === null ? null : (CALLING_NUMBER_NOTICES[state.notice] ?? state.notice),
     banner: state.online ? null : 'Offline. This page is a snapshot and nothing can be changed.',
     settings,
     elsewhere,
     sending,
     sendingAdmin: sendingAdminSection(state, reason),
+    callingNumber: callingNumberSection(state),
     holidays:
       state.settings === null
         ? null
@@ -231,6 +284,68 @@ export function adminViewOf(state: AdminState): AdminView {
       runbookPath: alert.runbookPath,
       acknowledgeable: editable && alert.acknowledgedAt === null,
     })),
+  };
+}
+
+function numberText(number: CallingNumberView): string {
+  return number.label === null ? number.e164 : `${number.e164} (${number.label})`;
+}
+
+function attestedBy(number: CallingNumberView): string {
+  const when = number.verifiedAt === null ? '' : ` on ${number.verifiedAt.slice(0, 10)}`;
+  return number.verificationMethod === 'admin_attestation'
+    ? `an admin attested it for you${when}`
+    : `you attested it${when}`;
+}
+
+function callingNumberSection(state: AdminState): CallingNumberSectionView {
+  // Not `inertBecause`: this section is not admin-only.
+  const reason = !state.online ? 'offline' : !state.mayMutate ? 'upgrade_required' : null;
+  const editable = reason === null;
+  const listed = state.callingNumbers;
+  const inUse = listed?.find(number => number.usedForCalls) ?? null;
+
+  const summary =
+    listed === null
+      ? 'Callie could not read your calling numbers. Reopen this page when Callie is online.'
+      : inUse !== null
+        ? `Today calls from ${numberText(inUse)}.`
+        : listed.length === 0
+          ? 'You have no calling number yet, so Today has no Call button. Add the number you place your calls from.'
+          : 'None of your numbers is attested, so Today has no Call button. Attest the number you place your calls from.';
+
+  const numbers = (listed ?? []).map(number => {
+    const status: CallingNumberSectionView['numbers'][number]['status'] = number.usedForCalls
+      ? 'in_use'
+      : number.disabledAt !== null
+        ? 'retired'
+        : number.verificationStatus === 'verified' && number.enabled
+          ? 'verified'
+          : 'unverified';
+    const line =
+      status === 'in_use'
+        ? `${numberText(number)}: ${attestedBy(number)}. Today calls from this number.`
+        : status === 'verified'
+          ? `${numberText(number)}: ${attestedBy(number)}. Not in use: you attested another number more recently.`
+          : status === 'retired'
+            ? `${numberText(number)}: retired on ${(number.disabledAt ?? '').slice(0, 10)}. Attest it again to use it.`
+            : `${numberText(number)}: not attested yet, so Today cannot call from it.`;
+    return {
+      id: number.id,
+      status,
+      line,
+      canAttest: editable && (status === 'unverified' || status === 'retired'),
+      canRetire: editable && status !== 'retired',
+    };
+  });
+
+  return {
+    summary,
+    numbers,
+    canAdd: editable && listed !== null,
+    notEditableBecause: reason,
+    statement: CALLING_NUMBER_STATEMENT,
+    hint: CALLING_NUMBER_HINT,
   };
 }
 

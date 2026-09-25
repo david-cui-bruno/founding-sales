@@ -170,6 +170,18 @@ back a state with a notice. The calling identity is the one the server reported 
 card, because 9.1 requires it to be the actor's own and there is nothing there to
 choose.
 
+**The card needs the person's own attested number (lane g60).** `readTodayFirm` reports
+`callingIdentityId` from `currentCallingIdentityId`: the most recently attested of the
+actor's verified, enabled calling numbers. Until someone has registered and attested a
+number (the Settings screen's **Your calling number**, `docs/greenfield/settings.md`) it
+is null. The card then has no Call button, and says so: a card with a usable route and
+no calling identity shows *"Callie has no attested number of yours to call from. Add it
+in Window › Administration, under Your calling number."* (`NO_CALLING_NUMBER` in
+`todayView.ts`). Before g60 no product path could make one, so every production card was
+in that state. Once the number is attested, the next expansion carries it and the Call
+button appears. A retired number stops being offered at once, because both the card and
+`authorizeDial` read `enabled`. See `docs/decisions/g60-calling-identities-are-attested-in-version-one.md`.
+
 ### What this lane wired that it did not write
 
 G3b built `firmWorkspace.ts`, `firmPage.ts`, `pipelineBoard.ts` and `firmMerge.ts` and
