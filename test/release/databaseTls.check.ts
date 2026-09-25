@@ -51,6 +51,8 @@ describe('TLS to the database: the parameter, the images and the bundle agree', 
       'apps/worker/src/tools/fss.ts',
       'apps/worker/src/bootstrap/main.ts',
       'apps/api/src/bootstrap/main.ts',
+      // The API's request pool is built here since lane g75.
+      'apps/api/src/bootstrap/connections.ts',
       'apps/worker/src/bootstrap/config.ts',
     ]) {
       const source = readRepositoryFile(file);

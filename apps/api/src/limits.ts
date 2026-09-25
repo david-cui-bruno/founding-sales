@@ -21,6 +21,7 @@ export const REFUSAL_CODES = [
   'malformed_body',
   'unauthenticated',
   'internal_error',
+  'database_busy',
 ] as const;
 export type RefusalCode = (typeof REFUSAL_CODES)[number];
 
@@ -32,6 +33,10 @@ export const REFUSAL_STATUS: Readonly<Record<RefusalCode, number>> = Object.free
   malformed_body: 400,
   unauthenticated: 401,
   internal_error: 500,
+  // Lane g75: no database connection came free inside the checkout timeout. 503, not
+  // 500: nothing is broken, the request was not run, and the same request may be sent
+  // again.
+  database_busy: 503,
 });
 
 export interface RequestEnvelope {
@@ -77,6 +82,7 @@ const REFUSAL_MESSAGES: Readonly<Record<RefusalCode, string>> = Object.freeze({
   malformed_body: 'The request body could not be read as JSON.',
   unauthenticated: 'This endpoint requires an authenticated session.',
   internal_error: 'The request could not be completed.',
+  database_busy: 'The API is busy. Nothing was changed; try again.',
 });
 
 /**

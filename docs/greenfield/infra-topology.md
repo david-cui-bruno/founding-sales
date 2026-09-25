@@ -35,6 +35,8 @@ Cost levers worth David's attention, in order of size:
 2. **`cpu_architecture = "ARM64"`** is a materially cheaper Fargate rate for the same vCPU and memory. It is `X86_64` today only because the images must be built for the target. If the G-lane image build produces arm64, switching this is a one-line change and the digest validation still holds.
 3. **`api_desired_count = 2`** is for rolling deployment without a gap, not for load. One salesperson does not need two tasks for throughput. Dropping to 1 halves the API compute and means a deployment has a brief window with no API; the Electron cache covers a brief outage by design (spec 4.2).
 
+**Database connections** are not billed but are bounded by the instance class: each API task holds at most 9 (a request pool of 8 plus its heartbeat, lane g75) and the worker `FSS_WORKER_CONCURRENCY + 2` (3 by default), so even a rolling API deployment at 200 % peaks near 36 + 3 plus a few one-off operations connections, far below a `db.t4g.small`'s default `max_connections` of roughly 200 — the arithmetic is in `docs/decisions/g75-one-connection-per-request.md`.
+
 ## 3. Network and edge
 
 | Line item | Pricing dimension | Quantity | Variable | Rehearsal |

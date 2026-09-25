@@ -5,10 +5,12 @@ import { POSTURE_STATEMENT_KEYS } from '@fss/domain';
 import { repositoryContext, workspaceScope } from '@fss/domain/db';
 import { buildTodaySnapshot, businessDateOf, promoteTodayItem } from '@fss/domain/today';
 import type { AddressInfo } from 'node:net';
+import { poolConnections } from '../src/bootstrap/connections.ts';
 import { recordingLogger } from '../src/bootstrap/log.ts';
 import { localNoopSuppressionJournal } from '../src/journal/index.ts';
 import { createApiServer, dispatch, refusalCodeOf, type ApiRequest } from '../src/server.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
+import { testRequestPool } from './support/poolFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
 
 /**
@@ -349,7 +351,10 @@ describe('the calling-number routes', () => {
     // and nothing else, and a 409 here is any of five refusals. The line now carries
     // the body's code beside the status the Refusals metric counts by.
     const log = recordingLogger();
-    const server = createApiServer({ ...options(), log });
+    // The server takes connections, not a session (lane g75): a pool over this file's database.
+    const pool = testRequestPool(fixture.database);
+    const { session: _session, ...serverOptions } = options();
+    const server = createApiServer({ ...serverOptions, connections: poolConnections(pool), log });
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
     try {
       const { port } = server.address() as AddressInfo;
@@ -365,6 +370,7 @@ describe('the calling-number routes', () => {
       expect(await register(command({}))).toBe(400);
     } finally {
       await new Promise<void>(resolve => server.close(() => resolve()));
+      await pool.end();
     }
 
     const refusals = log.lines.filter(line => line['event'] === 'refusal');

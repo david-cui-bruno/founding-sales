@@ -1,10 +1,13 @@
 import { connect, type AddressInfo } from 'node:net';
+import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing';
 import { clientVersionRangeSchema } from '@fss/contracts';
 import { MAX_REQUEST_BYTES } from '../src/limits.ts';
 import { createApiServer } from '../src/server.ts';
+import { poolConnections } from '../src/bootstrap/connections.ts';
 import { recordingLogger } from '../src/bootstrap/log.ts';
+import { testRequestPool } from './support/poolFixture.ts';
 
 /**
  * The API's HTTP surface, over a real socket.
@@ -21,14 +24,17 @@ import { recordingLogger } from '../src/bootstrap/log.ts';
  */
 describe('the API server over a socket', () => {
   let database: TestDatabase;
+  let pool: pg.Pool;
   let origin: string;
   let port: number;
   let close: () => Promise<void>;
 
   beforeAll(async () => {
     database = await createTestDatabase();
+    // The same shape `bootstrap/main.ts` builds: a pool, one connection per request.
+    pool = testRequestPool(database);
     const server = createApiServer({
-      session: database.session,
+      connections: poolConnections(pool),
       expectedSystemGeneration: null,
       supportedClientVersions: clientVersionRangeSchema.parse({ minimum: '1.0.0', maximum: '1.0.0' }),
       sendingEnabled: false,
@@ -43,6 +49,7 @@ describe('the API server over a socket', () => {
 
   afterAll(async () => {
     await close();
+    await pool.end();
     await database.drop();
   });
 

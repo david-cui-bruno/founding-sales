@@ -1,5 +1,6 @@
 import { API_SCHEMA_RANGE, checkSchemaRange, readSystemGeneration } from '@fss/domain/db';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
+import { DatabaseBusyError } from './connections.ts';
 import type { BootstrapResponse, ReadinessInputs, RouteModule } from './routeRegistry.ts';
 
 /**
@@ -20,6 +21,12 @@ import type { BootstrapResponse, ReadinessInputs, RouteModule } from './routeReg
  *
  * `/health` stays where G0 put it: a fuller, human-facing report that answers 200 even
  * when degraded. It is for an operator, not for a load balancer.
+ *
+ * Since lane g75 the two questions are asked on the request's own connection from the
+ * pool, checked out for this request and released when it answers — so a ready report
+ * means the pool could hand out a connection and that connection could read the
+ * schema. A pool with nothing free inside the checkout timeout is `database_busy`,
+ * not `database_unreachable`: the database was never asked.
  */
 
 export const LIVENESS_PATH = '/healthz';
@@ -28,7 +35,11 @@ export const READINESS_PATH = '/readyz';
 /** 503: the task is alive and deliberately not serving. Never 500, which means broken. */
 export const NOT_READY_STATUS = 503;
 
-export type NotReadyReason = 'database_unreachable' | 'schema_out_of_range' | 'system_generation_mismatch';
+export type NotReadyReason =
+  | 'database_unreachable'
+  | 'database_busy'
+  | 'schema_out_of_range'
+  | 'system_generation_mismatch';
 
 export interface ReadinessReport {
   readonly ready: boolean;
@@ -38,7 +49,12 @@ export interface ReadinessReport {
     readonly declaredRange: { readonly minimum: number; readonly maximum: number };
     readonly databaseVersion: number | null;
     readonly accepted: boolean;
-    readonly reason: 'database_behind_binary' | 'database_ahead_of_binary' | 'database_unreachable' | null;
+    readonly reason:
+      | 'database_behind_binary'
+      | 'database_ahead_of_binary'
+      | 'database_unreachable'
+      | 'database_busy'
+      | null;
   };
   readonly generation: {
     readonly expected: number | null;
@@ -60,14 +76,15 @@ export async function buildReadinessReport(inputs: ReadinessInputs): Promise<Rea
     accepted = check.accepted;
     schemaReason = check.accepted ? null : check.reason;
     generation = await readSystemGeneration(inputs.session);
-  } catch {
+  } catch (error) {
     // The cause is not carried out of the catch: it may name a host, a role or a
     // database. The operator reads it in the structured log, not over HTTP.
+    const unanswered = error instanceof DatabaseBusyError ? 'database_busy' : 'database_unreachable';
     return {
       ready: false,
       component: 'api',
-      reason: 'database_unreachable',
-      schema: { declaredRange, databaseVersion: null, accepted: false, reason: 'database_unreachable' },
+      reason: unanswered,
+      schema: { declaredRange, databaseVersion: null, accepted: false, reason: unanswered },
       generation: { expected: inputs.expectedSystemGeneration, observed: null, matches: false },
     };
   }

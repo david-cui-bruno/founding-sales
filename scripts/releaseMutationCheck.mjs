@@ -1188,6 +1188,25 @@ const MUTATIONS = [
     because:
       'The production operator passes the green rehearsal record to the deploy, and the enable rule refuses a reference no stored record carries, so a deploy that accepted the flag and skipped the put would leave sending impossible to enable with nothing saying why. scenario42.check.ts dry-runs the deploy with the flag and requires the put after the final verify, and has to go red.',
   },
+  {
+    name: 'every API request is handed the same database connection again',
+    file: 'apps/api/src/bootstrap/connections.ts',
+    find: '  return {\n    checkout: async () => leaseOf(await checkoutClient(pool), log),\n',
+    replace:
+      '  let shared: pg.PoolClient | undefined;\n  return {\n    checkout: async () => ({ session: sessionOf((shared ??= await checkoutClient(pool))), release: () => undefined }),\n',
+    suite: ['run', 'test', '--workspace', 'apps/api', '--', 'test/connectionPerRequest.test.ts'],
+    because:
+      'This is the API until 25 September 2026: one pg.Client for every request, and withTransaction issuing BEGIN, the work and COMMIT as separate statements on it, so a request that rolled back discarded another\u2019s answered-200 write and a FOR UPDATE lock was already held by every other request. A shared connection still passes every sequential route test; connectionPerRequest.test.ts holds one request inside its transaction while a second runs, and has to go red.',
+  },
+  {
+    name: 'the API stops giving a request\u2019s connection back when it finishes',
+    file: 'apps/api/src/server.ts',
+    find: '  } finally {\n    connection.release();\n  }\n',
+    replace: '  } finally {\n  }\n',
+    suite: ['run', 'test', '--workspace', 'apps/api', '--', 'test/connectionPerRequest.test.ts'],
+    because:
+      'With eight connections in the pool, a handler that returns its connection only on the happy path loses one to every thrown request, and the ninth failure turns every request after it into database_busy until the task is replaced. connectionPerRequest.test.ts counts the pool back to its baseline after a request that throws, and has to go red.',
+  },
 ];
 
 // A listener on each of these keeps Node from exiting mid-mutation with a file still
