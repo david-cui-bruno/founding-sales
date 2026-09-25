@@ -648,3 +648,41 @@ run "a_production_generation_that_is_not_a_positive_whole_number_is_refused" {
 
   expect_failures = [var.expected_system_generation]
 }
+
+# Lane g86. `/auth/client-version` publishes the signed update manifest in
+# production, on the API task alone, and the root refuses the placeholder the
+# API falls back to elsewhere.
+# `docs/decisions/g86-the-upgrade-notice-names-the-update-channel.md`.
+run "the_production_api_names_the_update_manifest_as_its_upgrade_address" {
+  command = plan
+
+  assert {
+    condition     = module.stack.api_environment["FSS_DESKTOP_UPGRADE_URL"] == "https://dlcmdaeskewt5.cloudfront.net/releases/darwin-arm64/latest.json"
+    error_message = "The production API publishes the signed update manifest, releases/darwin-arm64/latest.json on the updates distribution."
+  }
+
+  assert {
+    condition     = !contains(keys(module.stack.worker_environment), "FSS_DESKTOP_UPGRADE_URL")
+    error_message = "The upgrade address is the API's alone."
+  }
+}
+
+run "a_production_upgrade_address_that_is_the_placeholder_is_refused" {
+  command = plan
+
+  variables {
+    desktop_upgrade_url = "https://callie.example/downloads/mac"
+  }
+
+  expect_failures = [var.desktop_upgrade_url]
+}
+
+run "a_production_upgrade_address_that_is_not_plain_https_is_refused" {
+  command = plan
+
+  variables {
+    desktop_upgrade_url = "http://dlcmdaeskewt5.cloudfront.net/releases/darwin-arm64/latest.json"
+  }
+
+  expect_failures = [var.desktop_upgrade_url]
+}

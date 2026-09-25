@@ -223,7 +223,7 @@ Until 8.0aj the maximum was the exact latest desktop, so every desktop release n
    infra/scripts/release-promote.sh image-digests.json --app-only
    ```
 
-   Each digest is copied from `fss-rh-*` to `fss-prod-*` with `docker buildx imagetools create` and read back. A digest production already holds is not copied again, and a tag that already names another image is refused.
+   Each digest is copied from `fss-rh-*` to `fss-prod-*` with `docker buildx imagetools create --prefer-index=false`, a carbon copy of CI's bare manifest, and the tag is read back. If the tag names anything else, the image itself must be in production, and it is tagged there by its own manifest (`<tag>-image` when the release's tag is taken) and read back again. A digest production already holds under a tag is not copied again; one it holds untagged is tagged in place. A tag that already names another image is never overwritten. `docs/decisions/g86-the-promotion-copies-a-bare-manifest-as-itself.md`.
 
 The **desktop commit stamp** is the release commit from 2.0 — the same `git rev-parse HEAD` you have been using — and the release record names it. You do not wait for a Mac build to learn it.
 
@@ -3370,6 +3370,48 @@ Twelve mutations are appended to `scripts/releaseMutationCheck.mjs` (217 → 229
 - **Email routes still cannot become usable.** An email step to a contact whose only address is `candidate` will hold `route_candidate` once sending opens. A validator is the route policy's work and is owed before about 1 October.
 - Enrolment is from the Firm page only; Today has no enrol control.
 - The reply page's resolve is covered by the API, unit and Playwright tests, but not by a release check.
+### 8.0at What lane g86 changed: a task that is not ready serves nothing, the upgrade notice names the update channel, and a plan line nobody should skip is gone (25 September)
+
+**The items.** The tidy list after the 25 September audit fixes (`GPT6-ASTRA-EXHAUSTIVE-20260925.md`, `TRIAGE-20260925.md`):
+
+- **S14, the other half.** Since 8.0an the load balancer asks `/readyz`, but a request that reached a task whose readiness failed still ran its route.
+- **upgradeUrl.** `/auth/client-version` published `https://callie.example/downloads/mac` from production.
+- **The perpetual parameter-group diff** 8.0s left standing.
+- **Strip-only TypeScript.** `KeychainError` used a constructor parameter property, which Node's strip-only mode refuses and vitest compiles.
+- **N05, N07, O18, T08**, and **N06**, which needs a migration and is described below, not written.
+- **G12's prose.** Sections 0, 2.1 and 4.1 of this runbook, `processes.md`, `readiness.ts` and `infra-apply-runbook.md`'s rolling row still described the operator's image push, the old rolling path, the load balancer on `/healthz`, and secrets under their logical names. Lane g85's root split (8.0ar) left stale prose in `infra-apply-runbook.md` 1.3 and 1.3a, the 3.0 and 3.2 plans, 1.7 and section 4 here, `infra/README.md`, `accounts.md`, the stack's push-variable descriptions and `offline-gate.sh`'s Google check.
+
+**What changed.** Three decisions are recorded: `docs/decisions/g86-readiness-gates-every-request.md`, `g86-the-upgrade-notice-names-the-update-channel.md` and `g86-the-parameter-group-names-what-aws-holds.md`.
+
+- **Readiness gates every request.** `server.ts` asks `bootstrap/readinessGate.ts` before authentication. Not ready is **503 `not_ready`** (new in `REFUSAL_CODES`) with a `refusal` line naming the failed check. `/healthz`, `/readyz`, `/health` and `/auth/client-version` are exempt. The verdict is `/readyz`'s report, cached five seconds per process and shared by concurrent requests, so a request inside the window costs no database round trip. A busy pool caches nothing and answers `database_busy`. `api_readiness_changed` logs each change.
+- **The upgrade address.** `FSS_DESKTOP_UPGRADE_URL`, on the API task definition only, from the production root's new `desktop_upgrade_url`. Its default is the signed manifest, `https://dlcmdaeskewt5.cloudfront.net/releases/darwin-arm64/latest.json`, machine-facing, validated https-only with no placeholder. Unset outside production is the placeholder. Unset in production, or the placeholder, is a refusal to start. The desktop never showed the address and now has a test saying so.
+- **The parameter group** names `apply_method = "pending-reboot"` on `rds.force_ssl` and `log_autovacuum_min_duration`. That is what the saved production plan of 25 September shows AWS holding, and a method change alone is never registered.
+- **Strip-only.** `KeychainError` has an explicit field. `erasableSyntaxOnly` is on in the desktop and contracts `tsconfig.json`. `apps/desktop/test/packaging/stripOnly.test.ts` runs Node's own `stripTypeScriptTypes` over `packages/contracts/src`, `apps/desktop/src/main`, `src/shared` and `scripts`.
+- **N07.** `decideUpdate` checks the manifest's `minimumSystemVersion` against `process.getSystemVersion()`. A Mac below it is refused `update_system_too_old`, and an unreadable version is refused `update_system_version_unreadable`. An up-to-date Mac stays up to date.
+- **The promotion** (`release-promote.sh`). CI pushes a bare OCI manifest, and `imagetools create` wraps a single bare source in a new index by default, so the promotion of `e220f468` read back the wrapper's digest and was refused. The copy is `--prefer-index=false` now. If the read-back still differs, the image itself must be in production, and it is tagged there with `batch-get-image` and `put-image --image-digest`, then read back. An image in production with no tag, the child that refusal left behind, is tagged in place rather than taken as done. `docs/decisions/g86-the-promotion-copies-a-bare-manifest-as-itself.md`.
+- **O18.** Both job-age alarms fire on the first one-minute maximum above 300 s and 900 s, one of one instead of five of five, which fired at about ten and twenty minutes. The age only grows while a job waits. The labels say the threshold and the delay.
+- **T08.** An entry may say `kind: 'wiring'` (default `'behaviour'`). The runner prints the split before its unchanged closing line and returns `killedByKind`. The 18 entries that edit the scenario map or workflow text are tagged.
+- **N05.** The dashboard prose no longer calls live sources "not in this build". The unwired fallback says "not wired".
+
+**N06, not fixed: migration 0018.** `template_versions_no_unsubscribe_link` (0009), `outbound_messages_no_unsubscribe_link` (0010) and `sequence_steps_no_unsubscribe_link` (0012) refuse the *word*, so "reply unsubscribe" is refused as a link. A constraint cannot be edited in place. The fix is a migration 0018 that drops and re-adds all three with a link-shaped pattern: `unsubscrib` inside an `http(s)://` or `www.` token, or in the text of a Markdown or HTML link. It is looser, so existing rows pass without `NOT VALID`. `sequenceView.ts`'s check, `templates.ts`'s prose and the editor's sentence change in the same release, which is a `{18,18}` stop-migrate-start release. The renderer still mirrors the constraint as it stands: relaxing it first would offer an approval the server refuses.
+
+**Release class and the production plan.** API, desktop, infrastructure, a release script (`release-promote.sh`) and the mutation runner. Infrastructure means a full rehearsal before production relies on it. The production plan changes in three places:
+
+1. The recurring in-place update of `aws_db_parameter_group.main` disappears.
+2. `fss-prod-api`'s task definition is replaced, gaining `FSS_DESKTOP_UPGRADE_URL`, and the API service is updated in place.
+3. `fss-prod-oldest-runnable-job-warning` and `-critical` are updated in place: periods and datapoints to 1, and new descriptions.
+
+No other resource changes. The new API image refuses to start in production without the variable, so it is deployed with this commit's root, as every release is: the apply that registers the task definition carries it. The desktop change needs no API.
+
+Fourteen mutations are appended to `scripts/releaseMutationCheck.mjs` (main + 14: 217 → 231 at the rebase onto PR 226). Each was run through the runner against its own suite and killed by a failing test.
+
+**Still unverified.**
+
+- `terraform test` for the changed roots and modules (CI's `greenfield-infra.yml`). Locally only `fmt -check` and `validate` after an offline `init -backend=false`.
+- That `dlcmdaeskewt5.cloudfront.net` is production's updates distribution. The value is the coordinator's and was not read from AWS.
+- What `process.getSystemVersion()` returns on macOS 26.
+- The gate under a real load balancer drain.
+- `imagetools create --prefer-index=false` against ECR, and `batch-get-image` / `put-image` against a real wrapped copy. The stubs model both; the re-run of the `e220f468` promotion is the first real test.
 
 ### 8.1 Still unverified
 
