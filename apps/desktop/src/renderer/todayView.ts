@@ -43,7 +43,6 @@ export const TASK_LABELS: Readonly<Record<TodayTask['kind'], string>> = Object.f
   callback: 'Callback',
   email_due: 'Email due',
   call_due: 'Call due',
-  linkedin_due: 'LinkedIn task',
   new_firm: 'Not yet contacted',
 });
 
@@ -164,7 +163,6 @@ export function countsLabel(counts: TodayCard['counts']): string {
     plural(counts.replies, 'reply', 'replies'),
     plural(counts.emailsDue, 'email', 'emails'),
     plural(counts.callsDue, 'call', 'calls'),
-    plural(counts.linkedInDue, 'LinkedIn task', 'LinkedIn tasks'),
   ].filter((part): part is string => part !== null);
   return parts.length === 0 ? 'Nothing outstanding' : parts.join(', ');
 }

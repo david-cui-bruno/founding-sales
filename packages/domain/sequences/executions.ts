@@ -25,6 +25,7 @@ import { successorDue } from './successor.ts';
 import { BLOCKING_HOLD_SQL } from './wake.ts';
 import {
   acceptSequence,
+  isStepChannel,
   refuseSequence,
   type EnrollmentRow,
   type SequenceResult,
@@ -53,9 +54,9 @@ export { rescheduleExecution, type RescheduleInput } from './shifts.ts';
  * * `scheduled` — the step was due outside a sending window, so its due instant moved
  *   to the next one and a shift was recorded. This is not a hold: nothing is wrong,
  *   the work is simply not at 03:00 on a Sunday.
- * * `awaiting_manual` — a call or LinkedIn task is due, and the only thing that can
- *   complete it is a person. The worker's job on these is to make them visible on
- *   Today, which the Today source does from the same rows.
+ * * `awaiting_manual` — a call task is due, and the only thing that can complete it
+ *   is a person. The worker's job on these is to make them visible on Today, which
+ *   the Today source does from the same rows.
  * * `held` — one of the eleven eligibility questions said no, with the reason code
  *   section 15 gives it.
  *
@@ -94,8 +95,6 @@ export { rescheduleExecution, type RescheduleInput } from './shifts.ts';
  * hold somebody else opened, or a cap the sending lane re-reads inside its own
  * fence, and opening a second row for it would be a second thing to clear.
  */
-
-export const LINKEDIN_UNDO_WINDOW_MILLISECONDS = 10 * 60 * 1000;
 
 /**
  * The hold reasons that clear with the clock rather than with a person, and how long
@@ -207,6 +206,11 @@ export async function runDueStepExecution(
   if (enrollment === null) return { kind: 'nothing_to_do' };
   if (enrollment.endedAt !== null) return { kind: 'nothing_to_do' };
 
+  // LinkedIn was removed on 25 September 2026, and `step_executions_channel_known` still
+  // admits `linkedin_task`. A step with a channel this lane does not know is held for a
+  // person — stop the enrollment or migrate it — and never run.
+  if (!isStepChannel(loaded.channel)) return await holdExecution(context, loaded, 'long_hold_review');
+
   // What the fence says comes first once there is one. A send that happened, or may
   // have, is settled from the fence whatever else is true of the enrollment now.
   const fence = loaded.channel === 'email' ? await input.sendHandoff.readOutcome(context, loaded.id) : NO_FENCE;
@@ -261,8 +265,8 @@ export async function runDueStepExecution(
   if (!eligible.ok) return await holdExecution(context, execution, eligible.reasonCode);
 
   if (execution.channel !== 'email') {
-    // A call task and a LinkedIn task are completed by a person. Clearing a stale
-    // hold is the whole of the state change; the Today source makes it visible.
+    // A call task is completed by a person. Clearing a stale hold is the whole of the
+    // state change; the Today source makes it visible.
     if (execution.state === 'held') await clearExecutionHold(context, execution.id);
     return { kind: 'awaiting_manual', stepExecutionId: execution.id, channel: execution.channel };
   }
@@ -672,8 +676,6 @@ export interface CompleteStepInput {
    * Absent is database now. The successor's spacing floor counts from it (`successor.ts`).
    */
   readonly completedAt?: string | undefined;
-  /** 11.3's ten-minute grace on the successor. */
-  readonly successorNotBeforeMilliseconds?: number | undefined;
 }
 
 export interface CompletedStep {
@@ -695,11 +697,6 @@ export interface CompletedStep {
  * actually happened (lane g82, audit C11; `successor.ts`). On time the two agree, so a
  * firm that sat in a queue before its first step still keeps its cadence; late, the
  * next step keeps its spacing instead of falling due the same hour.
- *
- * The grace period is the exception, and it is a `not_before` rather than a due
- * instant: 11.3's ten minutes are an undo window, not a delay, and putting them in
- * `due_at` would make the cadence a different shape from the one the salesperson
- * reviewed.
  */
 export async function completeStepExecution(
   context: RepositoryContext,
@@ -734,7 +731,6 @@ export async function completeStepExecution(
     enrollment,
     afterOrdinal: execution.ordinal,
     completedAt,
-    notBeforeMilliseconds: input.successorNotBeforeMilliseconds ?? 0,
   });
   if (successor === null) {
     await completeEnrollment(context, enrollment.id);
@@ -762,7 +758,6 @@ interface SuccessorInput {
   readonly afterOrdinal: number;
   /** When the completed step actually happened. */
   readonly completedAt: string;
-  readonly notBeforeMilliseconds: number;
 }
 
 /** The next step of the frozen version, or null when the plan has run out. */
@@ -786,8 +781,7 @@ async function createSuccessor(
     completedAt: input.completedAt,
   });
   const { rows: clock } = await context.db.query<{ now: Date }>('SELECT now() AS now');
-  const now = (clock[0]?.now ?? new Date()).toISOString();
-  const notBefore = new Date(Date.parse(now) + input.notBeforeMilliseconds).toISOString();
+  const notBefore = (clock[0]?.now ?? new Date()).toISOString();
 
   const { rows } = await context.db.query<{ id: string; not_before: Date }>(
     `INSERT INTO step_executions

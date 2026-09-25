@@ -81,7 +81,6 @@ describe('what a reply card contains (8.3)', () => {
     expect(card.impact.holds[0]?.blockedActionKinds).toEqual([
       'email_send',
       'call_task',
-      'linkedin_task',
       'enrollment_advance',
     ]);
 
@@ -156,7 +155,7 @@ describe('what a reply card contains (8.3)', () => {
         scopeKind: 'opportunity',
         scopeKey: candidate.opportunityId,
         reasonCode: 'ambiguous_match',
-        blockedActionKinds: ['email_send', 'call_task', 'linkedin_task', 'enrollment_advance'],
+        blockedActionKinds: ['email_send', 'call_task', 'enrollment_advance'],
         sourceEventKind: 'mail_message',
         sourceEventId: messageId,
         recoveryAction: 'resolve_ambiguity',

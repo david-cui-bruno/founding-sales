@@ -12,7 +12,7 @@ import type { StepExecutionRow } from './types.ts';
 export interface RescheduleInput {
   readonly execution: StepExecutionRow;
   readonly toDueAt: string;
-  readonly reason: 'hold_union' | 'send_window' | 'migration' | 'retry_call' | 'linkedin_grace';
+  readonly reason: 'hold_union' | 'send_window' | 'migration' | 'retry_call';
   readonly holdUnionMilliseconds?: number | undefined;
   readonly sourceEventId?: string | undefined;
 }

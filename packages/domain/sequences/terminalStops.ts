@@ -40,9 +40,9 @@ import type { EnrollmentEndReason } from './types.ts';
  *
  * ## Two kinds, not one (lane G15)
  *
- * 8.1's close is `opportunity.terminal_stop`. 7.3's other half — "manual is entered by
- * a confirmed human email reply, user-recorded LinkedIn reply, engaged call outcome,
- * or direct Gmail send. Current active enrollments end terminally" — is
+ * 8.1's close is `opportunity.terminal_stop`. 7.3's other half — manual is entered by
+ * a confirmed human email reply, an engaged call outcome or a direct Gmail send, and
+ * "current active enrollments end terminally" — is
  * `opportunity.manual_mode`, and until lane G15 nothing acted on that either, so a
  * confirmed reply set the control mode and left the sequence running. Invariant 3 says
  * it must not, so this consumer reads both kinds.
@@ -51,7 +51,7 @@ import type { EnrollmentEndReason } from './types.ts';
  * `setManualControlMode` writes one of `MANUAL_MODE_ORIGINS` into
  * `crm_domain_events.detail.origin`, so an engaged call ends its enrollments
  * `engaged_call` and a direct Gmail send ends them `direct_send`, which is what 7.3's
- * four ways in and `ENROLLMENT_END_REASONS`' first members have always meant.
+ * ways in and `ENROLLMENT_END_REASONS`' first members have always meant.
  * `manualModeEndReason` is the map, and an event with no origin — every one written
  * before this lane — still reads as `human_reply`, which is exactly what G15 recorded,
  * so no existing reader changes its answer.
@@ -103,11 +103,10 @@ interface EventDbRow {
 
 const MANUAL_MODE_END_REASONS: Readonly<Record<ManualModeOrigin, EnrollmentEndReason>> = Object.freeze({
   human_reply: 'human_reply',
-  linkedin_reply: 'linkedin_reply',
   engaged_call: 'engaged_call',
   direct_send: 'direct_send',
   // A person inside the workspace deciding, which is not one of 7.3's prospect
-  // signals: the vocabulary reserves its first five members for those.
+  // signals: the vocabulary reserves its first four members for those.
   salesperson_command: 'admin_stop',
 });
 
@@ -272,7 +271,7 @@ async function endReasonFor(
  * One audit event per enrollment this consumer ended (5.2, Appendix A).
  *
  * `stopEnrollments` writes none, and it should not: it is called by the API's own
- * command, by the LinkedIn result and by the enrollment's own completion, each of
+ * command and by the enrollment's own completion, each of
  * which audits its own action under its own name. What is audited here is the
  * *consumption* — the moment the worker acted on a signal somebody else committed —
  * and `detail` is identifiers and codes, never a note or a name.
@@ -307,7 +306,7 @@ const PROSPECT_SOURCES: ReadonlySet<string> = new Set(['prospect_opt_out', 'pros
  *
  * A firm-wide do-not-contact is `firm_suppressed`, which is the fact itself. A handle
  * a prospect asked to stop is `opt_out`. A handle a salesperson suppressed and did not
- * correct inside the ten minutes is neither — the vocabulary reserves its first five
+ * correct inside the ten minutes is neither — the vocabulary reserves its first four
  * members for prospect signals — so it is `admin_stop`, the member that means somebody
  * inside decided.
  */

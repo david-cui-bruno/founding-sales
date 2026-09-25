@@ -127,7 +127,8 @@ What a commit does:
   the firm's `mail_messages` and everything cascading from them, `dial_tickets`,
   `call_logs`, `callbacks`, `today_snoozes`, `today_items`, `phone_routes`,
   `email_addresses`, `research_suggestions`, `evidence_items`,
-  `enrollment_linkedin_results`, `record_aliases` and `firm_locations`;
+  `enrollment_linkedin_results` (written by nothing since LinkedIn was removed on 25
+  September 2026), `record_aliases` and `firm_locations`;
 * **stops** live `sequence_enrollments` with 11.2's `admin_stop` and cancels
   unexecuted `step_executions` — nothing is removed or blanked; what changes is that
   no worker will act on the plan again;

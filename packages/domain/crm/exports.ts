@@ -58,7 +58,6 @@ interface ContactRowShape {
   readonly firm_id: string;
   readonly full_name: string;
   readonly title: string | null;
-  readonly linkedin_url: string | null;
   readonly status: 'active' | 'inactive' | 'merged';
   readonly is_primary: boolean;
   readonly [column: string]: unknown;
@@ -135,7 +134,7 @@ async function detailsFor(
     [workspace, firmIds],
   );
   const contacts = await context.db.query<ContactRowShape>(
-    `SELECT id::text AS id, firm_id::text AS firm_id, full_name, title, linkedin_url, status, is_primary
+    `SELECT id::text AS id, firm_id::text AS firm_id, full_name, title, status, is_primary
        FROM contacts
       WHERE workspace_id = $1 AND firm_id = ANY ($2::uuid[]) AND status <> 'merged'
       ORDER BY is_primary DESC, full_name`,
@@ -175,7 +174,6 @@ function contactDto(row: ContactRowShape): ContactDto {
     id: row.id,
     fullName: row.full_name,
     title: row.title,
-    linkedinUrl: row.linkedin_url,
     status: row.status,
     isPrimary: row.is_primary,
   };

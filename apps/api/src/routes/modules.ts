@@ -196,8 +196,8 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     // modules rather than one: `/sequences` publishes the plan, `/templates`
     // approves the bytes that may be sent, and `/enrollments` is the only family a
     // salesperson rather than an admin calls. A single `/sequences` prefix would
-    // have let the plan editor answer for the LinkedIn task card, and the registry
-    // is the only thing that can promise it does not.
+    // have let the plan editor answer for an enrollment path, and the registry is the
+    // only thing that can promise it does not.
     moduleOf('sequences', { paths: SEQUENCE_PATHS }, routeSequences, routing),
     moduleOf('templates', { paths: TEMPLATE_PATHS }, routeTemplates, routing),
     moduleOf('enrollments', { paths: ENROLLMENT_PATHS }, routeEnrollments, routing),

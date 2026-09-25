@@ -1,5 +1,5 @@
 /**
- * Sequences, enrollments, step executions and the LinkedIn handoff
+ * Sequences, enrollments and step executions
  * (specification 11 in full, 4.3, 8.2, Appendix A, B, C, D and G).
  *
  * The pure rules are G0's, in `packages/domain/src/rules/` — the cadence walk, the
@@ -14,10 +14,12 @@ export {
   SEQUENCE_REFUSAL_CODES,
   SEQUENCE_STOP_CONDITIONS,
   SEQUENCE_VERSION_STATES,
+  STEP_CHANNELS,
   STEP_COMPLETION_SOURCES,
   STEP_EXECUTION_STATES,
   STEP_RESULTS,
   acceptSequence,
+  isStepChannel,
   refuseSequence,
   type EnrollmentEndReason,
   type EnrollmentRow,
@@ -108,7 +110,6 @@ export {
   CLOCK_CLEARING_HOLDS,
   DEFAULT_HOLD_RECHECK_MILLISECONDS,
   HOLD_RECHECK_MILLISECONDS,
-  LINKEDIN_UNDO_WINDOW_MILLISECONDS,
   holdRecheckMilliseconds,
   completeEmailStep,
   completeStepExecution,
@@ -137,15 +138,6 @@ export {
   type SendHandoff,
   type SendHandoffRefusal,
 } from './sendHandoff.ts';
-
-export {
-  completeLinkedInStep,
-  recordLinkedInResult,
-  undoLinkedInStep,
-  type LinkedInHandoff,
-  type RecordLinkedInResultInput,
-  type UndoLinkedInStepInput,
-} from './linkedin.ts';
 
 export {
   holdsAffectingEnrollment,

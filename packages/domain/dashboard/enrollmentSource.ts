@@ -7,12 +7,12 @@ import type {
 } from './sources.ts';
 
 /**
- * 13.4's enrollment and LinkedIn figures, read from G8's tables (migration 0012).
+ * 13.4's enrollment figures, read from G8's tables (migration 0012).
  *
  * ## What is counted over the window and what is counted now
  *
  * A *transition* belongs to the window it happened in: enrollments started,
- * enrollments ended, step executions completed, LinkedIn results recorded. A *state*
+ * enrollments ended, step executions completed. A *state*
  * does not — "active" and "held" are facts about this instant, and reporting how
  * many were active during a window would mean either a figure that double-counts or
  * a history table G8 did not build. So the two kinds are named differently in the
@@ -44,9 +44,6 @@ type CountsRow = {
   started: string;
   active: string;
   review_required: string;
-  linkedin_handoffs: string;
-  linkedin_replied: string;
-  linkedin_no_engagement: string;
 };
 
 type KeyedRow = {
@@ -69,22 +66,7 @@ export async function enrollmentFacts(
        (SELECT count(*) FROM visible
          WHERE started_at >= $2::timestamptz AND started_at < $3::timestamptz)::text AS started,
        (SELECT count(*) FROM visible WHERE state = 'active')::text AS active,
-       (SELECT count(*) FROM visible WHERE state = 'review_required')::text AS review_required,
-       -- 11.4: the handoff is the moment the task stopped being the worker's. A
-       -- cancelled LinkedIn step was never handed to anybody, so it is not one.
-       (SELECT count(*) FROM step_executions x JOIN visible v ON v.id = x.enrollment_id
-         WHERE x.workspace_id = $1 AND x.channel = 'linkedin_task'
-           AND x.state IN ('dispatched', 'completed')
-           AND x.due_at >= $2::timestamptz AND x.due_at < $3::timestamptz)::text
-         AS linkedin_handoffs,
-       (SELECT count(*) FROM enrollment_linkedin_results r JOIN visible v ON v.id = r.enrollment_id
-         WHERE r.workspace_id = $1 AND r.result = 'replied'
-           AND r.recorded_at >= $2::timestamptz AND r.recorded_at < $3::timestamptz)::text
-         AS linkedin_replied,
-       (SELECT count(*) FROM enrollment_linkedin_results r JOIN visible v ON v.id = r.enrollment_id
-         WHERE r.workspace_id = $1 AND r.result = 'no_engagement'
-           AND r.recorded_at >= $2::timestamptz AND r.recorded_at < $3::timestamptz)::text
-         AS linkedin_no_engagement`,
+       (SELECT count(*) FROM visible WHERE state = 'review_required')::text AS review_required`,
     scope,
   );
 
@@ -123,8 +105,5 @@ export async function enrollmentFacts(
     ended: of('ended'),
     stepsCompleted: of('completed'),
     heldSteps: of('held'),
-    linkedinHandoffs: Number(row?.linkedin_handoffs ?? '0'),
-    linkedinRecordedReplies: Number(row?.linkedin_replied ?? '0'),
-    linkedinNoEngagement: Number(row?.linkedin_no_engagement ?? '0'),
   };
 }

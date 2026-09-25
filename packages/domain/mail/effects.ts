@@ -51,7 +51,6 @@ import {
 const REPLY_HOLD_BLOCKS: readonly BlockedActionKind[] = Object.freeze([
   'email_send',
   'call_task',
-  'linkedin_task',
   'enrollment_advance',
 ]);
 

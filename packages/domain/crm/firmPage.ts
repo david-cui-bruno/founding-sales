@@ -1,3 +1,4 @@
+import { knownBlockedActionKinds } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import type { FirmReadDto } from './dto.ts';
 import { readFirmForActor } from './dto.ts';
@@ -173,7 +174,7 @@ export async function readFirmPage(
     holds: holds.rows.map(hold => ({
       id: hold.id,
       reasonCode: hold.reason_code,
-      blockedActionKinds: [...hold.blocked_action_kinds],
+      blockedActionKinds: knownBlockedActionKinds(hold.blocked_action_kinds),
       startedAt: hold.started_at.toISOString(),
       recoveryAction: hold.recovery_action,
     })),

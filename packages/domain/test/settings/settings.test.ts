@@ -323,7 +323,6 @@ describe('what a sending pause cannot reach', () => {
       'dial_authorization',
       'email_send',
       'enrollment_advance',
-      'linkedin_task',
       'research',
     ]);
     for (const forbidden of ['mail_sync', 'opt_out', 'today_build', 'suppression']) {
@@ -336,7 +335,6 @@ describe('what a sending pause cannot reach', () => {
     // Only a call pause -- or a pause over all automation -- reaches dialling.
     expect(CHANNEL_BLOCKED_ACTION_KINDS.call).toEqual(['call_task', 'dial_authorization']);
     expect(CHANNEL_BLOCKED_ACTION_KINDS.email).not.toContain('dial_authorization');
-    expect(CHANNEL_BLOCKED_ACTION_KINDS.linkedin).toEqual(['linkedin_task']);
     expect(CHANNEL_BLOCKED_ACTION_KINDS.research).toEqual(['research']);
   });
 });

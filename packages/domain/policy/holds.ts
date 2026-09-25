@@ -1,4 +1,4 @@
-import type { BlockedActionKind, HoldReasonCode } from '@fss/contracts';
+import { knownBlockedActionKinds, type BlockedActionKind, type HoldReasonCode } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { lockSendGateForStopFact } from './sendGate.ts';
 import type { OpenHold } from './types.ts';
@@ -43,7 +43,7 @@ function toOpenHold(row: HoldRow): OpenHold {
     scopeKind: row.scope_kind,
     scopeKey: row.scope_key,
     reasonCode: row.reason_code,
-    blockedActionKinds: row.blocked_action_kinds as BlockedActionKind[],
+    blockedActionKinds: knownBlockedActionKinds(row.blocked_action_kinds),
     sourceEventKind: row.source_event_kind,
     sourceEventId: row.source_event_id,
     ownerUserId: row.owner_user_id,

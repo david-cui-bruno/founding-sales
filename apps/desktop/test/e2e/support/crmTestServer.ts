@@ -79,8 +79,8 @@ export function assigneeFirmPage(): NonNullable<CrmState['firm']> {
         timeZoneConfidence: 'medium',
         timeZoneSource: 'state_default',
         contacts: [
-          { id: '66666666-6666-4666-8666-666666666666', fullName: 'Dana Example', title: 'Operations Lead', linkedinUrl: null, status: 'active', isPrimary: true },
-          { id: '77777777-7777-4777-8777-777777777777', fullName: 'Robin Placeholder', title: null, linkedinUrl: null, status: 'active', isPrimary: false },
+          { id: '66666666-6666-4666-8666-666666666666', fullName: 'Dana Example', title: 'Operations Lead', status: 'active', isPrimary: true },
+          { id: '77777777-7777-4777-8777-777777777777', fullName: 'Robin Placeholder', title: null, status: 'active', isPrimary: false },
         ],
         phoneRoutes: [
           { id: '88888888-8888-4888-8888-888888888888', contactId: null, value: '+14015550187', eligibility: 'usable', version: 3 },

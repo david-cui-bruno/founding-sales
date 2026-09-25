@@ -108,7 +108,6 @@ describe('wireDrift: exact at the route, tolerant on the Mac (D07)', () => {
       delay: { unit: 'elapsed', hours: 0 },
       onNoAnswer: null,
       templateVersionId: null,
-      linkedInMessage: null,
     };
     expect(sequenceStepDtoSchema.safeParse({ ...step, addedLater: 1 }).success).toBe(true);
     expect(wireDrift(sequenceStepDtoSchema, { ...step, addedLater: 1 })).toEqual(['addedLater: not declared by the contract']);

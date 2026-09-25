@@ -277,7 +277,7 @@ export async function reassignFirm(
        (workspace_id, scope_kind, scope_key, reason_code, blocked_action_kinds, source_event_kind,
         source_event_id, owner_user_id, recovery_action)
      VALUES ($1, 'firm', $2, 'reassignment',
-             ARRAY['email_send', 'call_task', 'linkedin_task', 'dial_authorization', 'enrollment_advance']::text[],
+             ARRAY['email_send', 'call_task', 'dial_authorization', 'enrollment_advance']::text[],
              'firm.reassigned', $3, $4, 'resume_after_review')
      RETURNING id`,
     [context.scope.workspaceId, input.firmId, input.commandId ?? null, input.toUserId],

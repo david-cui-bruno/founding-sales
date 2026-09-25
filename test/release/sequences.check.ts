@@ -3,7 +3,6 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   SENDING_STOP_LINE,
   enrollmentsResponseSchema,
-  linkedInHandoffResultSchema,
   mayMutate,
   sequenceVersionsResponseSchema,
   sequencesResponseSchema,
@@ -16,10 +15,9 @@ import { issueSessionFor } from '../../apps/api/test/support/sessionFixture.ts';
 import { createSequenceBridge } from '../../apps/desktop/src/main/sequenceBridge.ts';
 import { sequenceScreen } from '../../apps/desktop/src/renderer/sequenceView.ts';
 import {
+  callStepAnswer,
   emailStepAnswer,
   enrollmentAnswer,
-  linkedInHandoffAnswer,
-  linkedInStepAnswer,
   sequenceSummaryAnswer,
   sequenceVersionAnswer,
   templateVersionAnswer,
@@ -67,7 +65,6 @@ describe('8.0aj: the sequence editor reads a populated version and its enrollmen
   let sequenceId = '';
   let sequenceVersionId = '';
   let heldEnrollmentId = '';
-  let linkedInExecutionId = '';
 
   const command = (extra: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> => ({
     commandId: randomUUID(),
@@ -85,14 +82,10 @@ describe('8.0aj: the sequence editor reads a populated version and its enrollmen
     return String(result(created)['id']);
   };
 
-  const bridgeFor = (token: string, role: 'admin' | 'salesperson', copied: string[] = []) =>
+  const bridgeFor = (token: string, role: 'admin' | 'salesperson') =>
     createSequenceBridge({
       api: desktopClient(fixture, token),
       session: { state: async () => await Promise.resolve({ online: true, mayMutate: true, device: { role } }) },
-      copyToClipboard: text => copied.push(text),
-      openExternally: async () => {
-        await Promise.resolve();
-      },
     });
 
   beforeAll(async () => {
@@ -132,7 +125,7 @@ describe('8.0aj: the sequence editor reads a populated version and its enrollmen
     templateVersionId = String(result(template)['id']);
     expect((await post('/templates/approve', adminToken, command({ templateVersionId }))).status).toBe(200);
 
-    // The version the editor draws: an email step and a LinkedIn step, published.
+    // The version the editor draws: an email step and a call step, published.
     const sequence = await post('/sequences/create', adminToken, command({ name: 'Founding outreach' }));
     sequenceId = String(result(sequence)['id']);
     const draft = await post(
@@ -142,7 +135,7 @@ describe('8.0aj: the sequence editor reads a populated version and its enrollmen
         sequenceId,
         steps: [
           { ordinal: 1, channel: 'email', delay: { unit: 'elapsed', hours: 0 }, templateVersionId },
-          { ordinal: 2, channel: 'linkedin_task', delay: { unit: 'business_days', days: 2 }, linkedInMessage: 'A short note.' },
+          { ordinal: 2, channel: 'call_task', delay: { unit: 'business_days', days: 2 }, onNoAnswer: 'advance' },
         ],
       }),
     );
@@ -168,26 +161,6 @@ describe('8.0aj: the sequence editor reads a populated version and its enrollmen
         WHERE workspace_id = $1 AND id = $2`,
       [fixture.alpha.workspaceId, heldEnrollmentId, NINE_DAYS],
     );
-
-    // A LinkedIn-first sequence, so a handoff exists to complete.
-    const linkedIn = await post('/sequences/create', adminToken, command({ name: 'LinkedIn first' }));
-    const linkedInDraft = await post(
-      '/sequences/versions/draft',
-      adminToken,
-      command({
-        sequenceId: String(result(linkedIn)['id']),
-        steps: [{ ordinal: 1, channel: 'linkedin_task', delay: { unit: 'elapsed', hours: 0 }, linkedInMessage: 'Hello from Callie.' }],
-      }),
-    );
-    const linkedInVersionId = String(result(linkedInDraft)['sequenceVersionId']);
-    expect((await post('/sequences/versions/publish', adminToken, command({ sequenceVersionId: linkedInVersionId }))).status).toBe(200);
-    const linkedInEnrolled = await post(
-      '/enrollments/enroll',
-      salespersonToken,
-      command({ sequenceVersionId: linkedInVersionId, opportunityId, firmId, contactId: await contact('Lee Example') }),
-    );
-    const steps = await post('/enrollments/steps', salespersonToken, { enrollmentId: String(result(linkedInEnrolled)['enrollmentId']) });
-    linkedInExecutionId = String((steps.body as { steps: { id: string }[] }).steps[0]?.id ?? '');
   });
 
   afterAll(async () => {
@@ -212,20 +185,10 @@ describe('8.0aj: the sequence editor reads a populated version and its enrollmen
     expect(screen.versions.map(panel => panel.heading)).toEqual(['Version 1 — published']);
     expect(screen.versions[0]?.steps.map(step => [step.ordinal, step.detail, step.problem])).toEqual([
       [1, 'Template email', null],
-      [2, 'LinkedIn task, opened and copied by hand', null],
+      [2, 'Call task (move on if nobody answers)', null],
     ]);
     expect(screen.templates.map(panel => [panel.label, panel.approved])).toEqual([['First touch v1', true]]);
     expect(screen.holdReview.map(row => [row.enrollmentId, row.heldForDays])).toEqual([[heldEnrollmentId, 9]]);
-  });
-
-  it('hands off a LinkedIn step through the real route and copies the frozen text', async () => {
-    const copied: string[] = [];
-    const bridge = bridgeFor(salespersonToken, 'salesperson', copied);
-    const state = await bridge.completeLinkedIn({ stepExecutionId: linkedInExecutionId });
-    expect(state.notice).toBe('Message copied. This contact has no usable LinkedIn profile to open.');
-    expect(copied).toEqual(['Hello from Callie.']);
-    expect(state.linkedInCard).toMatchObject({ stepExecutionId: linkedInExecutionId, handedOff: true });
-    expect(sequenceScreen(state).linkedIn?.statusLabel).toBe('Handed off — FSS does not know whether it was sent');
   });
 
   it('holds the desktop’s unit fixtures to the routes: the same keys, the same types, all the way down', async () => {
@@ -239,7 +202,7 @@ describe('8.0aj: the sequence editor reads a populated version and its enrollmen
     const version = (versions.body as { versions: unknown[] }).versions[0];
     expect(shapeOf(version)).toEqual(
       shapeOf(
-        sequenceVersionAnswer([emailStepAnswer(templateVersionId), linkedInStepAnswer()], {
+        sequenceVersionAnswer([emailStepAnswer(templateVersionId), callStepAnswer()], {
           state: 'published',
           publishedAt: '2026-09-25T12:00:00.000Z',
         }),
@@ -263,25 +226,6 @@ describe('8.0aj: the sequence editor reads a populated version and its enrollmen
     // The two fields the defects were about, said outright.
     expect(Object.keys((version as { steps: object[] }).steps[0] ?? {})).toContain('sequenceVersionId');
     expect(Object.keys(liveRow ?? {})).toEqual(expect.arrayContaining(['opportunityId', 'assignedUserId', 'firmTimeZone', 'holidayCalendarVersion']));
-  });
-
-  it('holds the handoff fixture to the route’s answer', async () => {
-    // A second LinkedIn enrollment, so there is a pending step to complete here too.
-    const another = await contact('Kim Example');
-    const versions = await routeAnswer(fixture, 'GET', '/sequences', adminToken);
-    const linkedInSequence = (versions.body as { sequences: { id: string; name: string }[] }).sequences.find(
-      entry => entry.name === 'LinkedIn first',
-    );
-    const published = await routeAnswer(fixture, 'POST', '/sequences/versions', adminToken, { sequenceId: linkedInSequence?.id ?? '' });
-    const versionId = (published.body as { versions: { id: string }[] }).versions[0]?.id ?? '';
-    const enrolled = await post('/enrollments/enroll', salespersonToken, command({ sequenceVersionId: versionId, opportunityId, firmId, contactId: another }));
-    const steps = await post('/enrollments/steps', salespersonToken, { enrollmentId: String(result(enrolled)['enrollmentId']) });
-    const stepExecutionId = String((steps.body as { steps: { id: string }[] }).steps[0]?.id ?? '');
-
-    const handoff = await post('/enrollments/linkedin/complete', salespersonToken, command({ stepExecutionId }));
-    expect(handoff.status).toBe(200);
-    expect(wireDrift(linkedInHandoffResultSchema, result(handoff))).toEqual([]);
-    expect(shapeOf(result(handoff))).toEqual(shapeOf(linkedInHandoffAnswer({ linkedInUrl: null })));
   });
 
   it('is a build the deployed API accepts', () => {

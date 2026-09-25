@@ -244,7 +244,8 @@ oversight: a firm typed in by hand has an address and no coordinate. See
 * **Evidence retention deletion.** The provider's terms are recorded and
   `evidence_items.retention_expires_at` is written; the sweep that acts on it is lane
   G14's retention batch.
-* **LinkedIn.** `researchSourcePolicy` calls it `manual_only`, and nothing reads it.
+* **LinkedIn.** `researchSourcePolicy` blocks it. Until LinkedIn was removed on 25
+  September 2026 it was `manual_only`, which every caller already treated as blocked.
 
 ## Shipping it
 

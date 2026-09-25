@@ -25,7 +25,7 @@ import { businessDate, e164, ianaTimeZone, instant, uuid } from './foundationRow
 export const TODAY_LANES = ['reply', 'callback', 'due_work', 'new_firm'] as const;
 export type TodayLane = (typeof TODAY_LANES)[number];
 
-export const TODAY_ITEM_KINDS = ['reply', 'callback', 'email_due', 'call_due', 'linkedin_due', 'new_firm'] as const;
+export const TODAY_ITEM_KINDS = ['reply', 'callback', 'email_due', 'call_due', 'new_firm'] as const;
 export type TodayItemKind = (typeof TODAY_ITEM_KINDS)[number];
 
 const firmName = z.string().min(1).max(300);
@@ -34,7 +34,6 @@ export const todayCountsSchema = z.object({
   replies: z.number().int().min(0),
   emailsDue: z.number().int().min(0),
   callsDue: z.number().int().min(0),
-  linkedInDue: z.number().int().min(0),
 });
 export type TodayCounts = z.infer<typeof todayCountsSchema>;
 

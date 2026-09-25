@@ -70,7 +70,7 @@ const session = () => ({
   state: async () => await Promise.resolve({ online: true, mayMutate: true, device: { role: 'admin' as const } }),
 });
 const sequenceBridge = (api: ReturnType<typeof createAuthedClient>) =>
-  createSequenceBridge({ api, session: session(), copyToClipboard: () => undefined, openExternally: async () => await Promise.resolve() });
+  createSequenceBridge({ api, session: session() });
 
 const TEMPLATE = SEQUENCE_IDS.template;
 const call = (days: number): DraftStep => ({
@@ -78,14 +78,12 @@ const call = (days: number): DraftStep => ({
   delay: { unit: 'business_days', days },
   onNoAnswer: 'advance',
   templateVersionId: null,
-  linkedInMessage: null,
 });
 const email = (days: number, templateVersionId: string | null = TEMPLATE): DraftStep => ({
   channel: 'email',
   delay: { unit: 'business_days', days },
   onNoAnswer: null,
   templateVersionId,
-  linkedInMessage: null,
 });
 
 // ---------------------------------------------------------------- the step editor
@@ -112,7 +110,7 @@ describe('the step editor (audit G03)', () => {
     ]);
   });
 
-  it('suggests a call, an email and a call, naming the newest approved template, and never a LinkedIn step', () => {
+  it('suggests a call, an email and a call, naming the newest approved template', () => {
     const unapproved = templateVersionAnswer({ id: SEQUENCE_IDS.enrollment, approvedAt: null });
     const plan = suggestedPlan([unapproved, templateVersionAnswer()]);
     expect(plan.map(step => [step.channel, step.delay, step.templateVersionId])).toEqual([
@@ -341,7 +339,7 @@ describe('the Firm page enrols, confirms a number, and clears a title (audit G03
         countryCode: 'US',
         timeZoneConfidence: 'high',
         timeZoneSource: 'recorded',
-        contacts: [{ id: CONTACT, fullName: 'Kim Placeholder', title: 'Principal', linkedinUrl: null, status: 'active', isPrimary: true }],
+        contacts: [{ id: CONTACT, fullName: 'Kim Placeholder', title: 'Principal', status: 'active', isPrimary: true }],
         phoneRoutes: [{ id: ROUTE, contactId: CONTACT, value: '+14015550121', eligibility: 'candidate', version: 1 }],
         emailRoutes: [],
         aliases: [],

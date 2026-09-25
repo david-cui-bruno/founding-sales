@@ -200,7 +200,7 @@ export const administrativePauseSchema = z.strictObject({
   workspaceId: uuid,
   scopeKind: z.enum(['workspace', 'owner', 'mailbox', 'opportunity', 'channel', 'all_automation']),
   scopeKey: z.string().max(200).nullable(),
-  channel: z.enum(['email', 'call', 'linkedin', 'research']).nullable(),
+  channel: z.enum(['email', 'call', 'research']).nullable(),
   reasonCode: holdReasonCodeSchema,
   reasonNote: z.string().trim().min(1).max(500).nullable(),
   holdId: uuid,

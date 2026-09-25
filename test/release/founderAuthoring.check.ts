@@ -58,10 +58,6 @@ describe('8.0au: a founder authors, enrols, confirms a number and reviews a resu
     createSequenceBridge({
       api: desktopClient(fixture, adminToken),
       session: session(),
-      copyToClipboard: () => undefined,
-      openExternally: async () => {
-        await Promise.resolve();
-      },
     });
   const crm = () => createCrmBridge({ api: desktopClient(fixture, adminToken), clientVersion: CURRENT_CLIENT_VERSION, session: session() });
 

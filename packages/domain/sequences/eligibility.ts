@@ -106,14 +106,12 @@ export interface StepEligibility {
 export const CHANNEL_ACTION_KINDS: Readonly<Record<StepChannel, BlockedActionKind>> = Object.freeze({
   email: 'email_send',
   call_task: 'call_task',
-  linkedin_task: 'linkedin_task',
 });
 
 /** The key a channel-scoped pause is stored under for a step's channel (10.1). */
 export const CHANNEL_PAUSE_KEYS: Readonly<Record<StepChannel, PauseChannel>> = Object.freeze({
   email: 'email',
   call_task: 'call',
-  linkedin_task: 'linkedin',
 });
 
 /**
@@ -160,9 +158,8 @@ export function holdSource(): StepEligibilitySource {
 /**
  * The opportunity's control mode (7.3).
  *
- * "`manual` is entered by a confirmed human email reply, user-recorded LinkedIn
- * reply, engaged call outcome, or direct Gmail send ... Automation never reverses
- * manual mode." A manual opportunity is not a hold — there is no interval to shift by
+ * `manual` is entered by a confirmed human email reply, an engaged call outcome or a
+ * direct Gmail send, and "automation never reverses manual mode". A manual opportunity is not a hold — there is no interval to shift by
  * and no control that clears it — so it is a refusal with its own reason code.
  */
 export function controlModeSource(): StepEligibilitySource {

@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   enrollmentsResponseSchema,
-  linkedInHandoffResultSchema,
   sequenceVersionsResponseSchema,
   sequencesResponseSchema,
   templateVersionsResponseSchema,
@@ -135,7 +134,6 @@ describe('the sequence, template and enrollment routes', () => {
       '/templates/create',
       '/templates/approve',
       '/enrollments/enroll',
-      '/enrollments/linkedin/complete',
     ]) {
       expect((await post(path, null, command())).status, path).toBe(401);
     }
@@ -225,9 +223,9 @@ describe('the sequence, template and enrollment routes', () => {
           { ordinal: 1, channel: 'email', delay: { unit: 'elapsed', hours: 0 }, templateVersionId },
           {
             ordinal: 2,
-            channel: 'linkedin_task',
+            channel: 'call_task',
             delay: { unit: 'business_days', days: 2 },
-            linkedInMessage: 'A short note.',
+            onNoAnswer: 'advance',
           },
         ],
       }),
@@ -304,37 +302,16 @@ describe('the sequence, template and enrollment routes', () => {
     expect(enrollmentsResponseSchema.parse(enrollments.body).enrollments.length).toBeGreaterThan(0);
   });
 
-  it('answers a LinkedIn handoff in the shape @fss/contracts declares (lane g78)', async () => {
-    const contact = await post('/contacts/create', salespersonToken, command({ firmId, fullName: 'Lee Example' }));
-    expect(contact.status).toBe(200);
-    const created = await post('/sequences/create', adminToken, command({ name: 'LinkedIn first' }));
-    const linkedInSequenceId = String(resultOf(created)['id']);
-    const draft = await post(
-      '/sequences/versions/draft',
-      adminToken,
-      command({
-        sequenceId: linkedInSequenceId,
-        steps: [{ ordinal: 1, channel: 'linkedin_task', delay: { unit: 'elapsed', hours: 0 }, linkedInMessage: 'Hello.' }],
-      }),
-    );
-    const versionId = String(resultOf(draft)['sequenceVersionId']);
-    expect((await post('/sequences/versions/publish', adminToken, command({ sequenceVersionId: versionId }))).status).toBe(200);
-    const enrolled = await post(
-      '/enrollments/enroll',
-      salespersonToken,
-      command({ sequenceVersionId: versionId, opportunityId, firmId, contactId: String(resultOf(contact)['id']) }),
-    );
-    expect(enrolled.status).toBe(200);
-    const executions = await post('/enrollments/steps', salespersonToken, { enrollmentId: String(resultOf(enrolled)['enrollmentId']) });
-    const stepExecutionId = String((executions.body['steps'] as { id: string }[])[0]?.id ?? '');
-
-    const handoff = await post('/enrollments/linkedin/complete', salespersonToken, command({ stepExecutionId }));
-    expect(handoff.status).toBe(200);
-    expect(wireDrift(linkedInHandoffResultSchema, resultOf(handoff))).toEqual([]);
-  });
-
   it('answers a path nobody mounted under these roots with not_found', async () => {
-    for (const path of ['/sequences/nope', '/templates/nope', '/enrollments/nope']) {
+    // The LinkedIn task card's three paths went with LinkedIn on 25 September 2026.
+    for (const path of [
+      '/sequences/nope',
+      '/templates/nope',
+      '/enrollments/nope',
+      '/enrollments/linkedin/complete',
+      '/enrollments/linkedin/undo',
+      '/enrollments/linkedin/result',
+    ]) {
       expect((await post(path, adminToken, command())).status, path).toBe(404);
     }
   });

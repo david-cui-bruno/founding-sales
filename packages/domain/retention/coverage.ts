@@ -171,7 +171,7 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
   step_execution_shifts: coverage(['retained'], 'Append-only schedule history; UPDATE and DELETE revoked.'),
   enrollment_linkedin_results: coverage(
     ['deletion_removes'],
-    'The prospect’s own response, recorded by hand — the one row in the sequence tables holding their words, so a deletion removes it.',
+    'The prospect’s own response, recorded by hand — the one row in the sequence tables holding their words, so a deletion removes it. Nothing writes it since LinkedIn was removed on 25 September 2026.',
   ),
   enrollment_migrations: coverage(['retained'], 'The audited admin command of 11.1 and its approval.'),
   enrollment_migration_items: coverage(['retained'], 'Which enrollment the migration remapped or refused, and why.'),

@@ -128,7 +128,6 @@ export const contactDtoSchema = z.strictObject({
   id: uuid,
   fullName: contactNameSchema,
   title: z.string().nullable(),
-  linkedinUrl: z.string().nullable(),
   status: z.enum(['active', 'inactive', 'merged']),
   isPrimary: z.boolean(),
 });
@@ -235,7 +234,6 @@ export const createContactCommandSchema = z.strictObject({
   firmId: uuid,
   fullName: contactNameSchema,
   title: z.string().trim().min(1).max(200).optional(),
-  linkedinUrl: z.url().max(400).optional(),
   isPrimary: z.boolean().optional(),
   externalId: z.string().trim().min(1).max(320).optional(),
 });
@@ -246,7 +244,6 @@ export const updateContactCommandSchema = z.strictObject({
   patch: z.strictObject({
     fullName: contactNameSchema.optional(),
     title: z.string().trim().min(1).max(200).nullable().optional(),
-    linkedinUrl: z.url().max(400).nullable().optional(),
     status: z.enum(['active', 'inactive']).optional(),
     isPrimary: z.boolean().optional(),
   }),

@@ -64,7 +64,6 @@ describe('lane precedence', () => {
     expect(laneOfItemKind('callback')).toBe('callback');
     expect(laneOfItemKind('email_due')).toBe('due_work');
     expect(laneOfItemKind('call_due')).toBe('due_work');
-    expect(laneOfItemKind('linkedin_due')).toBe('due_work');
     expect(laneOfItemKind('new_firm')).toBe('new_firm');
   });
 });
@@ -130,7 +129,6 @@ describe('a firm card aggregates its own items', () => {
     { itemKey: 'callback:1', kind: 'callback', dueAt: '2026-09-21T16:00:00.000Z' },
     { itemKey: 'email:1', kind: 'email_due', dueAt: '2026-09-21T09:00:00.000Z' },
     { itemKey: 'call:1', kind: 'call_due', dueAt: '2026-09-21T10:00:00.000Z' },
-    { itemKey: 'linkedin:1', kind: 'linkedin_due', dueAt: '2026-09-21T11:00:00.000Z' },
   ];
 
   it('takes its lane and sort instant from the highest-priority, earliest-due item', () => {
@@ -138,7 +136,7 @@ describe('a firm card aggregates its own items', () => {
     expect(aggregateCard(items)).toEqual({
       lane: 'callback',
       sortAt: '2026-09-21T16:00:00.000Z',
-      counts: { replies: 0, emailsDue: 2, callsDue: 1, linkedInDue: 1, open: 5 },
+      counts: { replies: 0, emailsDue: 2, callsDue: 1, open: 4 },
     });
   });
 
@@ -147,7 +145,6 @@ describe('a firm card aggregates its own items', () => {
       'callback:1',
       'email:1',
       'call:1',
-      'linkedin:1',
       'email:2',
     ]);
   });

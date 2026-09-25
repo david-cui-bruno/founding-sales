@@ -1,7 +1,6 @@
 import {
   SENDING_STOP_LINE,
   type EnrollmentDto,
-  type LinkedInHandoffResult,
   type SequenceStepDto,
   type SequenceSummaryDto,
   type SequenceVersionDto,
@@ -18,8 +17,7 @@ import {
  * while every real populated answer failed (D01, D02). `test/release/sequences.check.ts`
  * now holds these to the real routes' answers key for key and type for type.
  *
- * Fictional data only: `example.test` is reserved by RFC 6761, and the one LinkedIn
- * URL is an obviously fictional path.
+ * Fictional data only: `example.test` is reserved by RFC 6761.
  */
 
 export const SEQUENCE_IDS = Object.freeze({
@@ -51,21 +49,19 @@ export function emailStepAnswer(templateVersionId: string | null, ordinal = 1, o
     delay: { unit: 'elapsed', hours: 0 },
     onNoAnswer: null,
     templateVersionId,
-    linkedInMessage: null,
     ...overrides,
   };
 }
 
-export function linkedInStepAnswer(ordinal = 2, overrides: Partial<SequenceStepDto> = {}): SequenceStepDto {
+export function callStepAnswer(ordinal = 2, overrides: Partial<SequenceStepDto> = {}): SequenceStepDto {
   return {
     id: `55555555-5555-4555-8555-55555555556${String(ordinal)}`,
     sequenceVersionId: SEQUENCE_IDS.version,
     ordinal,
-    channel: 'linkedin_task',
+    channel: 'call_task',
     delay: { unit: 'business_days', days: 2 },
-    onNoAnswer: null,
+    onNoAnswer: 'advance',
     templateVersionId: null,
-    linkedInMessage: 'A short note.',
     ...overrides,
   };
 }
@@ -79,7 +75,7 @@ export function sequenceVersionAnswer(
     sequenceId: SEQUENCE_IDS.sequence,
     version: 2,
     state: 'draft',
-    stopConditions: ['human_reply', 'linkedin_reply', 'engaged_call', 'opt_out_or_suppression', 'stage_closed'],
+    stopConditions: ['human_reply', 'engaged_call', 'opt_out_or_suppression', 'stage_closed'],
     publishedAt: null,
     retiredAt: null,
     steps: [...steps],
@@ -122,22 +118,6 @@ export function enrollmentAnswer(overrides: Partial<EnrollmentDto> = {}): Enroll
     firmTimeZone: 'America/New_York',
     holidayCalendarVersion: 'none',
     reviewUnionMilliseconds: null,
-    ...overrides,
-  };
-}
-
-/** `LinkedInHandoff`: the completed step, plus what the Mac copies and opens. */
-export function linkedInHandoffAnswer(overrides: Partial<LinkedInHandoffResult> = {}): LinkedInHandoffResult {
-  return {
-    stepExecutionId: SEQUENCE_IDS.stepExecution,
-    completionSource: 'open_and_copy',
-    result: 'handed_off',
-    successorExecutionId: null,
-    successorNotBefore: null,
-    enrollmentCompleted: true,
-    linkedInUrl: 'https://www.linkedin.com/in/dana-example-000',
-    message: 'A short note.',
-    undoUntil: '2026-09-21T13:10:00.000Z',
     ...overrides,
   };
 }

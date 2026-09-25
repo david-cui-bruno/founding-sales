@@ -28,7 +28,6 @@ const LANE_OF_KIND: Readonly<Record<TodayItemKind, TodayLane>> = Object.freeze({
   callback: 'callback',
   email_due: 'due_work',
   call_due: 'due_work',
-  linkedin_due: 'due_work',
   new_firm: 'new_firm',
 });
 
@@ -107,7 +106,6 @@ export function aggregateCard(items: readonly TodayItemOrder[]): AggregatedCard 
       replies: count('reply'),
       emailsDue: count('email_due'),
       callsDue: count('call_due'),
-      linkedInDue: count('linkedin_due'),
       open: items.length,
     },
   };

@@ -37,7 +37,7 @@ function firmPage(overrides: Partial<TodayFirm> = {}): TodayFirm {
     firmName: 'Northwind Test Holdings',
     snapshotDate: '2026-09-21',
     lane: 'callback',
-    counts: { replies: 0, emailsDue: 2, callsDue: 1, linkedInDue: 0 },
+    counts: { replies: 0, emailsDue: 2, callsDue: 1 },
     tasks: [
       {
         itemId: ITEM_ID,
@@ -81,14 +81,14 @@ function state(overrides: Partial<TodayState> = {}): TodayState {
         firmName: 'Northwind Test Holdings',
         lane: 'callback',
         dueAt: '2026-09-21T18:00:00.000Z',
-        counts: { replies: 0, emailsDue: 2, callsDue: 1, linkedInDue: 0 },
+        counts: { replies: 0, emailsDue: 2, callsDue: 1 },
       },
       {
         firmId: OTHER_FIRM_ID,
         firmName: 'Larkspur Test Foundry',
         lane: 'new_firm',
         dueAt: '2026-09-01T12:00:00.000Z',
-        counts: { replies: 0, emailsDue: 0, callsDue: 0, linkedInDue: 0 },
+        counts: { replies: 0, emailsDue: 0, callsDue: 0 },
       },
     ],
     expanded: null,
@@ -105,10 +105,10 @@ function state(overrides: Partial<TodayState> = {}): TodayState {
 
 describe('the Today view model', () => {
   it('labels the aggregate counts a card shows', () => {
-    expect(countsLabel({ replies: 1, emailsDue: 2, callsDue: 1, linkedInDue: 0 })).toBe(
+    expect(countsLabel({ replies: 1, emailsDue: 2, callsDue: 1 })).toBe(
       '1 reply, 2 emails, 1 call',
     );
-    expect(countsLabel({ replies: 0, emailsDue: 0, callsDue: 0, linkedInDue: 0 })).toBe('Nothing outstanding');
+    expect(countsLabel({ replies: 0, emailsDue: 0, callsDue: 0 })).toBe('Nothing outstanding');
   });
 
   it('shows a stale list and lets nothing on it be pressed', () => {

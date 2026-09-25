@@ -124,8 +124,8 @@ describe('the source policy (ported from companySourcePolicy)', () => {
     }
   });
 
-  it('makes LinkedIn manual only, because version one never reads it', () => {
-    expect(researchSourcePolicy('https://www.linkedin.com/in/someone')).toBe('manual_only');
+  it('blocks LinkedIn, which research has never read', () => {
+    expect(researchSourcePolicy('https://www.linkedin.com/in/someone')).toBe('blocked');
   });
 
   it('refuses every private and reserved IPv4 range, and all of IPv6', () => {

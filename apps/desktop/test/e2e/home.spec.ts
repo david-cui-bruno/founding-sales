@@ -79,7 +79,7 @@ test('Home opens on the business date, a line of counts, and the four lanes in t
     'Larkspur Test Foundry',
   ]);
   // Five people are due at Northwind; there is one card, and it carries the counts.
-  await expect(page.getByTestId('card-counts').nth(1)).toHaveText('3 emails, 1 call, 1 LinkedIn task');
+  await expect(page.getByTestId('card-counts').nth(1)).toHaveText('3 emails, 1 call');
   await expect(page.getByTestId('card-counts').nth(3)).toHaveText('Nothing outstanding');
 
   // The cached list first, then today's: the morning list is there without a press.
@@ -509,7 +509,7 @@ test('an outage leaves Home readable and nothing on it pressable', async ({ page
   await expect(page.getByTestId('status-system')).toHaveText('Callie 1.0.3 · offline');
 
   await expect(page.getByTestId('today-card')).toHaveCount(4);
-  await expect(page.getByTestId('card-counts').nth(1)).toHaveText('3 emails, 1 call, 1 LinkedIn task');
+  await expect(page.getByTestId('card-counts').nth(1)).toHaveText('3 emails, 1 call');
   await expect(page.getByTestId('today-task')).toHaveCount(5);
 
   for (const index of [0, 1, 2, 3]) await expect(page.getByTestId('card-expand').nth(index)).toBeDisabled();

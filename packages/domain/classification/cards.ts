@@ -1,5 +1,5 @@
 import type { HoldReasonCode } from '@fss/contracts';
-import { isRecoverableHoldReason } from '@fss/contracts';
+import { isRecoverableHoldReason, knownBlockedActionKinds } from '@fss/contracts';
 import { decideFirmRead, readContact, readFirm, readOpportunity } from '../crm/index.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { listMatches, readMessage, readMessageBody } from '../mail/index.ts';
@@ -140,7 +140,7 @@ async function holdsOfMessage(
     holdId: row.id,
     opportunityId: row.scope_key,
     reasonCode: row.reason_code,
-    blockedActionKinds: row.blocked_action_kinds,
+    blockedActionKinds: knownBlockedActionKinds(row.blocked_action_kinds),
     recoveryAction: row.recovery_action,
     recoverable: isRecoverableHoldReason(row.reason_code),
     startedAt: row.started_at.toISOString(),

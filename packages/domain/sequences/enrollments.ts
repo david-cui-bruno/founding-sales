@@ -5,6 +5,7 @@ import { currentHolidayCalendar, holidayCalendarByVersion } from './calendars.ts
 import { listEnrollments, readEnrollment, readSequenceVersion, toEnrollment } from './rows.ts';
 import {
   acceptSequence,
+  isStepChannel,
   refuseSequence,
   type EnrollmentEndReason,
   type EnrollmentRow,
@@ -77,6 +78,8 @@ export async function enrollContact(
   if (version.state !== 'published') return refuseSequence('version_not_published');
   const firstStep = version.steps[0];
   if (firstStep === undefined) return refuseSequence('version_has_no_steps');
+  // A version stored before 25 September 2026 may have a LinkedIn step, which nothing runs.
+  if (!version.steps.every(step => isStepChannel(step.channel))) return refuseSequence('step_unknown');
 
   const { rows: firms } = await context.db.query<FirmForEnrollment>(
     'SELECT assigned_user_id, time_zone, status FROM firms WHERE workspace_id = $1 AND id = $2 FOR UPDATE',
@@ -227,7 +230,7 @@ export interface StopReport {
  * touches `pending` and `held` rows, which is exactly "unclaimed executions".
  *
  * It also does not set the opportunity manual. That is the caller's, because the
- * reasons differ: a Won stage is not manual mode, a recorded LinkedIn reply is.
+ * reasons differ: a Won stage is not manual mode, a confirmed reply is.
  */
 export async function stopEnrollments(
   context: RepositoryContext,

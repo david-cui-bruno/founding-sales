@@ -1,4 +1,4 @@
-import type { BlockedActionKind, PauseChannel, PauseScopeKind } from '@fss/contracts';
+import { PAUSE_CHANNELS, type BlockedActionKind, type PauseChannel, type PauseScopeKind } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { isAdminScope } from '../db/workspaceScope.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
@@ -54,7 +54,7 @@ interface PauseDbRow {
   readonly id: string;
   readonly scope_kind: PauseScopeKind;
   readonly scope_key: string | null;
-  readonly channel: PauseChannel | null;
+  readonly channel: string | null;
   readonly hold_id: string;
   readonly created_by_user_id: string;
   readonly created_at: Date;
@@ -64,12 +64,23 @@ interface PauseDbRow {
 
 const PAUSE_COLUMNS = 'id, scope_kind, scope_key, channel, hold_id, created_by_user_id, created_at, released_at';
 
+/**
+ * Whether a stored pause's channel is one `PAUSE_CHANNELS` still has.
+ *
+ * LinkedIn was removed on 25 September 2026, and `administrative_pauses_channel_known`
+ * (migration 0001) still admits `linkedin`. Such a pause blocks only `linkedin_task`,
+ * which nothing does any more, so the list does not show it.
+ */
+function isKnownChannel(channel: string | null): channel is PauseChannel | null {
+  return channel === null || (PAUSE_CHANNELS as readonly string[]).includes(channel);
+}
+
 function toPause(row: PauseDbRow): PauseRow {
   return {
     id: row.id,
     scopeKind: row.scope_kind,
     scopeKey: row.scope_key,
-    channel: row.channel,
+    channel: isKnownChannel(row.channel) ? row.channel : null,
     holdId: row.hold_id,
     createdByUserId: row.created_by_user_id,
     createdAt: row.created_at.toISOString(),
@@ -191,5 +202,5 @@ export async function listPauses(
       ORDER BY created_at DESC`,
     [context.scope.workspaceId, options.openOnly ?? false],
   );
-  return rows.map(toPause);
+  return rows.filter(row => isKnownChannel(row.channel)).map(toPause);
 }

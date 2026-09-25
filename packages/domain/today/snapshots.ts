@@ -1,11 +1,12 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
-import type {
-  TodayCardRow,
-  TodayItemKind,
-  TodayItemRow,
-  TodayItemStatus,
-  TodayLane,
-  TodaySourceKind,
+import {
+  isTodayItemKind,
+  type TodayCardRow,
+  type TodayItemKind,
+  type TodayItemRow,
+  type TodayItemStatus,
+  type TodayLane,
+  type TodaySourceKind,
 } from './types.ts';
 
 /**
@@ -23,7 +24,7 @@ import type {
 
 const CARD_COLUMNS = `s.snapshot_date::text AS snapshot_date, s.firm_id, f.name AS firm_name, s.lane,
   s.sort_at, s.assigned_user_id, s.open_items, s.replies_due, s.emails_due, s.calls_due,
-  s.linkedin_due, s.algorithm_version`;
+  s.algorithm_version`;
 
 interface CardDbRow {
   readonly snapshot_date: string;
@@ -36,7 +37,6 @@ interface CardDbRow {
   readonly replies_due: number;
   readonly emails_due: number;
   readonly calls_due: number;
-  readonly linkedin_due: number;
   readonly algorithm_version: string;
   readonly [column: string]: unknown;
 }
@@ -54,7 +54,6 @@ function toCard(row: CardDbRow): TodayCardRow {
       replies: Number(row.replies_due),
       emailsDue: Number(row.emails_due),
       callsDue: Number(row.calls_due),
-      linkedInDue: Number(row.linkedin_due),
     },
     algorithmVersion: row.algorithm_version,
   };
@@ -71,7 +70,7 @@ interface ItemDbRow {
   readonly contact_id: string | null;
   readonly contact_name: string | null;
   readonly item_key: string;
-  readonly kind: TodayItemKind;
+  readonly kind: string;
   readonly lane: TodayLane;
   readonly due_at: Date;
   readonly status: TodayItemStatus;
@@ -82,7 +81,12 @@ interface ItemDbRow {
   readonly [column: string]: unknown;
 }
 
-function toItem(row: ItemDbRow): TodayItemRow {
+/**
+ * The task a row is, or null when its kind is one `TODAY_ITEM_KINDS` no longer has — a
+ * LinkedIn task stored before 25 September 2026, which no reader lists or acts on.
+ */
+function toItem(row: ItemDbRow): TodayItemRow | null {
+  if (!isTodayItemKind(row.kind)) return null;
   return {
     id: row.id,
     snapshotDate: row.snapshot_date,
@@ -225,7 +229,7 @@ export async function listTodayItems(
       ORDER BY i.lane_precedence, i.due_at, i.item_key`,
     [context.scope.workspaceId, input.businessDate, input.firmId, input.includeFinished ?? false],
   );
-  return rows.map(toItem);
+  return rows.flatMap(row => toItem(row) ?? []);
 }
 
 /** One task by id, or null. */

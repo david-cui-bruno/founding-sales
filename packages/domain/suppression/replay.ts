@@ -127,7 +127,6 @@ const TERMINAL_SOURCES: ReadonlySet<string> = new Set([
 const REVIEW_HOLD_BLOCKS = [
   'email_send',
   'call_task',
-  'linkedin_task',
   'dial_authorization',
   'enrollment_advance',
 ] as const;

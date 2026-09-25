@@ -190,7 +190,7 @@ describe('the Today routes', () => {
     const card = cards[0] ?? {};
     expect(Object.keys(card).sort()).toEqual(['counts', 'dueAt', 'firmId', 'firmName', 'lane']);
     expect(card['firmId']).toBe(firmId);
-    expect(card['counts']).toEqual({ replies: 0, emailsDue: 1, callsDue: 1, linkedInDue: 0 });
+    expect(card['counts']).toEqual({ replies: 0, emailsDue: 1, callsDue: 1 });
   });
 
   it('expands a card into its contact tasks', async () => {

@@ -236,7 +236,10 @@ async function measure(
       byContact,
     ),
     // G8. A recorded LinkedIn reply is the prospect's own response — the one row in
-    // the sequence tables that holds their words rather than the plan's.
+    // the sequence tables that holds their words rather than the plan's. LinkedIn was
+    // removed on 25 September 2026 and nothing writes this table now, but it is still in
+    // the schema (migration 0012) and a row from before then is still removed, and still
+    // has to go before its enrollment can.
     enrollment_linkedin_results: await countOf(
       context,
       `SELECT count(*) AS count FROM enrollment_linkedin_results r

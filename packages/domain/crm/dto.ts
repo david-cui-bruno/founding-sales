@@ -67,7 +67,6 @@ export interface ContactDto {
   readonly id: string;
   readonly fullName: string;
   readonly title: string | null;
-  readonly linkedinUrl: string | null;
   readonly status: 'active' | 'inactive' | 'merged';
   readonly isPrimary: boolean;
 }
@@ -184,7 +183,6 @@ export async function readFirmForActor(
         id: contact.id,
         fullName: contact.full_name,
         title: contact.title,
-        linkedinUrl: contact.linkedin_url,
         status: contact.status,
         isPrimary: contact.is_primary,
       })),

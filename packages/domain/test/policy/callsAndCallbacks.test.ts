@@ -147,7 +147,7 @@ async function addContact(firmId: string, name: string): Promise<string> {
   return id;
 }
 
-/** A published two-step version: a call first, configured `onNoAnswer`, then a LinkedIn task. */
+/** A published two-step version: a call first, configured `onNoAnswer`, then a second call. */
 async function callFirstVersion(onNoAnswer: 'advance' | 'retry_call'): Promise<string> {
   const { id: sequenceId } = await one<{ id: string }>(
     'INSERT INTO sequences (workspace_id, name, created_by_user_id) VALUES ($1, $2, $3) RETURNING id',
@@ -163,8 +163,8 @@ async function callFirstVersion(onNoAnswer: 'advance' | 'retry_call'): Promise<s
     [seeded.alpha.workspaceId, versionId, onNoAnswer],
   );
   await database.session.query(
-    `INSERT INTO sequence_steps (workspace_id, sequence_version_id, ordinal, channel, delay_unit, delay_amount, linkedin_message)
-     VALUES ($1, $2, 2, 'linkedin_task', 'business_days', 2, 'Hello — following up on my call.')`,
+    `INSERT INTO sequence_steps (workspace_id, sequence_version_id, ordinal, channel, delay_unit, delay_amount, on_no_answer)
+     VALUES ($1, $2, 2, 'call_task', 'business_days', 2, 'advance')`,
     [seeded.alpha.workspaceId, versionId],
   );
   await database.session.query(
@@ -271,7 +271,7 @@ describe('C04: a logged call applies the frozen step, bound through its Today ta
       result: 'voicemail_left',
       completion_source: 'call_log',
     });
-    // The successor is the frozen version's step 2, the LinkedIn task.
+    // The successor is the frozen version's step 2, the second call.
     expect(await executionsOf(enrolled.enrollmentId)).toEqual([
       { ordinal: 1, state: 'completed' },
       { ordinal: 2, state: 'pending' },

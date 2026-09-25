@@ -54,11 +54,10 @@ const delaySchema = z.union([
 
 const stepSchema = z.strictObject({
   ordinal: z.number().int().min(1).max(50),
-  channel: z.enum(['email', 'call_task', 'linkedin_task']),
+  channel: z.enum(['email', 'call_task']),
   delay: delaySchema,
   onNoAnswer: z.enum(['advance', 'retry_call']).optional(),
   templateVersionId: uuid.optional(),
-  linkedInMessage: z.string().trim().min(1).max(1200).optional(),
 });
 
 const createSequenceSchema = z.strictObject({

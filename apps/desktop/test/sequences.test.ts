@@ -1,23 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import { SENDING_STOP_LINE } from '@fss/contracts';
-import type { ApiOutcome } from '../src/main/apiClient.ts';
 import { createAuthedClient, type AuthedClient } from '../src/main/authedClient.ts';
-import { createSequenceBridge, isOpenableProfile } from '../src/main/sequenceBridge.ts';
+import { createSequenceBridge } from '../src/main/sequenceBridge.ts';
 import type { SequenceState, SequenceStep, TemplateVersion } from '../src/renderer/sequenceContract.ts';
 import {
   EMPTY_SEQUENCE_STATE,
   SEQUENCE_UNREAD,
   publishRefusalFor,
-  remainingUndoMilliseconds,
   sequenceScreen,
 } from '../src/renderer/sequenceView.ts';
 import {
   FOOTER_SIGN_OFF,
   SEQUENCE_IDS,
+  callStepAnswer,
   emailStepAnswer,
   enrollmentAnswer,
-  linkedInHandoffAnswer,
-  linkedInStepAnswer,
   sequenceSummaryAnswer,
   sequenceVersionAnswer,
   templateVersionAnswer,
@@ -25,19 +22,17 @@ import {
 
 /**
  * The sequence editor's rules, without Electron and without a database
- * (specification 11.1, 11.3, 4.3, 14.2).
+ * (specification 11.1, 4.3, 14.2).
  *
  * The view model is pure, so every "can this be done" is a function call here; the
- * bridge takes its API and its two side effects as ports, so the LinkedIn handoff is
- * a recorded clipboard write and a recorded browser open.
+ * bridge takes its API as a port.
  *
  * The answers are the routes' shapes, from `./support/sequenceAnswers.ts`, which the
  * release suite holds to the real routes (lane g78). Until g78 this file built its own:
  * steps with no `sequenceVersionId` and enrollments missing four fields — the
  * desktop's wrong DTO, so the suite passed while every populated answer failed (T04).
  *
- * No real person, firm or profile appears. `example.test` is reserved by RFC 6761,
- * and the one LinkedIn URL is an obviously fictional path.
+ * No real person, firm or profile appears. `example.test` is reserved by RFC 6761.
  */
 
 const HASH = 'a'.repeat(64);
@@ -143,39 +138,6 @@ describe('the template panel shows the digest and names what is wrong (11.1, 12.
   });
 });
 
-describe('the LinkedIn card measures its undo against the server (11.3, G 9)', () => {
-  const card = {
-    stepExecutionId: '66666666-6666-4666-8666-666666666666',
-    enrollmentId: '77777777-7777-4777-8777-777777777777',
-    contactName: 'Dana Example',
-    linkedInUrl: 'https://www.linkedin.com/in/dana-example-000',
-    message: 'A short note.',
-    handedOff: true,
-    undoUntil: '2026-09-21T13:10:00.000Z',
-  };
-
-  it('offers the undo at 9:59 of database time and not at 10:00', () => {
-    expect(remainingUndoMilliseconds(card, '2026-09-21T13:09:00.000Z')).toBe(60_000);
-    expect(remainingUndoMilliseconds(card, '2026-09-21T13:10:00.000Z')).toBe(0);
-    expect(remainingUndoMilliseconds(card, '2026-09-21T13:11:00.000Z')).toBe(0);
-  });
-
-  it('never claims the message was sent, and keeps both result buttons alive', () => {
-    const screen = sequenceScreen({
-      ...EMPTY_SEQUENCE_STATE,
-      online: true,
-      mayMutate: true,
-      asOf: '2026-09-21T13:09:00.000Z',
-      linkedInCard: card,
-    });
-    expect(screen.linkedIn?.statusLabel).toContain('does not know whether it was sent');
-    expect(screen.linkedIn?.statusLabel).not.toContain('Sent');
-    expect(screen.linkedIn?.canUndo).toBe(true);
-    expect(screen.linkedIn?.canOpenAndCopy).toBe(false);
-    expect(screen.linkedIn?.canRecordResult).toBe(true);
-  });
-});
-
 describe('the hold review screen (4.3, G 31)', () => {
   it('shows only enrollments awaiting review, with the union in days', () => {
     const screen = sequenceScreen({
@@ -196,94 +158,11 @@ describe('the hold review screen (4.3, G 31)', () => {
   });
 });
 
-describe('the bridge copies and opens after the server has recorded the handoff', () => {
-  const answers = new Map<string, ApiOutcome<unknown>>();
-  const copied: string[] = [];
-  const opened: string[] = [];
-  const commands: { path: string; payload: unknown }[] = [];
-
+describe('the bridge while offline (4.2)', () => {
   const api: AuthedClient = {
-    read: async (path, parse) => {
-      const answer = answers.get(path) ?? { ok: false, reason: 'not_found', offline: false };
-      return answer.ok ? { ok: true, value: parse(answer.value) } : answer;
-    },
-    command: async (path, payload, parse) => {
-      commands.push({ path, payload });
-      const answer = answers.get(path) ?? { ok: false, reason: 'refused', offline: false };
-      return answer.ok ? { ok: true, value: parse(answer.value) } : answer;
-    },
+    read: async () => await Promise.resolve({ ok: false, reason: 'not_found', offline: false }),
+    command: async () => await Promise.resolve({ ok: false, reason: 'refused', offline: false }),
   };
-
-  const bridge = () =>
-    createSequenceBridge({
-      api,
-      session: {
-        state: async () =>
-          await Promise.resolve({ online: true, mayMutate: true, device: { role: 'admin' as const } }),
-      },
-      copyToClipboard: text => copied.push(text),
-      openExternally: async url => {
-        opened.push(url);
-        await Promise.resolve();
-      },
-    });
-
-  it('copies the text and opens the profile only after a successful completion', async () => {
-    answers.set('/sequences', { ok: true, value: { sequences: [] } });
-    answers.set('/templates', { ok: true, value: { templates: [] } });
-    answers.set('/enrollments', {
-      ok: true,
-      value: { asOf: '2026-09-21T13:00:00.000Z', enrollments: [] },
-    });
-    answers.set('/enrollments/linkedin/complete', { ok: true, value: linkedInHandoffAnswer() });
-
-    const host = bridge();
-    const state = await host.completeLinkedIn({
-      stepExecutionId: '66666666-6666-4666-8666-666666666666',
-    });
-    expect(copied).toEqual(['A short note.']);
-    expect(opened).toEqual(['https://www.linkedin.com/in/dana-example-000']);
-    expect(state.linkedInCard?.handedOff).toBe(true);
-    expect(state.asOf).toBe('2026-09-21T13:00:00.000Z');
-    expect(state.notice).toContain('has not claimed it was sent');
-  });
-
-  it('copies nothing and opens nothing when the completion is refused', async () => {
-    copied.length = 0;
-    opened.length = 0;
-    answers.set('/enrollments/linkedin/complete', {
-      ok: false,
-      reason: 'execution_not_pending',
-      offline: false,
-    });
-    const state = await bridge().completeLinkedIn({
-      stepExecutionId: '66666666-6666-4666-8666-666666666666',
-    });
-    expect(copied).toEqual([]);
-    expect(opened).toEqual([]);
-    expect(state.notice).toBe('execution_not_pending');
-  });
-
-  it('fails the undo visibly when the successor has begun dispatching (11.3)', async () => {
-    answers.set('/enrollments/linkedin/undo', {
-      ok: false,
-      reason: 'successor_dispatching',
-      offline: false,
-    });
-    const state = await bridge().undoLinkedIn({
-      stepExecutionId: '66666666-6666-4666-8666-666666666666',
-    });
-    expect(state.notice).toContain('already begun sending');
-  });
-
-  it('opens only an https linkedin.com profile', () => {
-    expect(isOpenableProfile('https://www.linkedin.com/in/dana-example-000')).toBe(true);
-    expect(isOpenableProfile('https://linkedin.com/in/dana')).toBe(true);
-    expect(isOpenableProfile('http://www.linkedin.com/in/dana')).toBe(false);
-    expect(isOpenableProfile('https://linkedin.com.example.test/in/dana')).toBe(false);
-    expect(isOpenableProfile('javascript:alert(1)')).toBe(false);
-    expect(isOpenableProfile(null)).toBe(false);
-  });
 
   it('shows nothing and refuses everything while offline (4.2)', async () => {
     const host = createSequenceBridge({
@@ -291,11 +170,6 @@ describe('the bridge copies and opens after the server has recorded the handoff'
       session: {
         state: async () =>
           await Promise.resolve({ online: false, mayMutate: false, device: { role: 'admin' as const } }),
-      },
-      copyToClipboard: text => copied.push(text),
-      openExternally: async url => {
-        opened.push(url);
-        await Promise.resolve();
       },
     });
     const state = await host.state();
@@ -322,17 +196,13 @@ describe('the bridge reads what the routes answer (lane g78)', () => {
       session: {
         state: async () => await Promise.resolve({ online: true, mayMutate: true, device: { role: 'admin' as const } }),
       },
-      copyToClipboard: () => undefined,
-      openExternally: async () => {
-        await Promise.resolve();
-      },
     });
 
   const populated = {
     '/sequences': { status: 200, body: { sequences: [sequenceSummaryAnswer()] } },
     '/sequences/versions': {
       status: 200,
-      body: { versions: [sequenceVersionAnswer([emailStepAnswer(SEQUENCE_IDS.template), linkedInStepAnswer()])] },
+      body: { versions: [sequenceVersionAnswer([emailStepAnswer(SEQUENCE_IDS.template), callStepAnswer()])] },
     },
     '/templates': { status: 200, body: { templates: [templateVersionAnswer()] } },
     '/enrollments': {
@@ -350,7 +220,7 @@ describe('the bridge reads what the routes answer (lane g78)', () => {
     expect(state.versions).toHaveLength(1);
     expect(state.versions[0]?.steps.map(step => [step.ordinal, step.channel, step.sequenceVersionId])).toEqual([
       [1, 'email', SEQUENCE_IDS.version],
-      [2, 'linkedin_task', SEQUENCE_IDS.version],
+      [2, 'call_task', SEQUENCE_IDS.version],
     ]);
     expect(state.heldEnrollments.map(entry => [entry.id, entry.opportunityId, entry.firmTimeZone])).toEqual([
       ['bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', SEQUENCE_IDS.opportunity, 'America/New_York'],
@@ -360,7 +230,7 @@ describe('the bridge reads what the routes answer (lane g78)', () => {
     expect(screen.unread).toEqual([]);
     expect(screen.versions[0]?.steps.map(step => step.detail)).toEqual([
       'Template email',
-      'LinkedIn task, opened and copied by hand',
+      'Call task (move on if nobody answers)',
     ]);
     expect(screen.holdReview).toHaveLength(1);
   });
@@ -383,7 +253,7 @@ describe('the bridge reads what the routes answer (lane g78)', () => {
       templates: 'service_unavailable',
       enrollments: 'offline',
     });
-    // No enrollments, so no server clock: the undo is measured against nothing rather than this Mac.
+    // No enrollments, so no server clock: nothing is measured against this Mac instead.
     expect(state.asOf).toBeNull();
 
     const screen = sequenceScreen(state);

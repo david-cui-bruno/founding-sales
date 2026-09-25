@@ -126,7 +126,6 @@ export interface ContactRow {
   readonly firm_id: string;
   readonly full_name: string;
   readonly title: string | null;
-  readonly linkedin_url: string | null;
   readonly status: 'active' | 'inactive' | 'merged';
   readonly is_primary: boolean;
   readonly merged_into_contact_id: string | null;

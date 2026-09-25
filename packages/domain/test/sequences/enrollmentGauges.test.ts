@@ -182,7 +182,7 @@ describe('with nothing enrolled', () => {
     await hold('alpha', {
       scopeKind: 'workspace',
       reasonCode: 'restore_in_progress',
-      blockedActionKinds: ['email_send', 'call_task', 'linkedin_task', 'dial_authorization', 'enrollment_advance', 'research'],
+      blockedActionKinds: ['email_send', 'call_task', 'dial_authorization', 'enrollment_advance', 'research'],
     });
     expect(await counts()).toEqual({ active: 0, held: 0 });
   });
@@ -237,7 +237,7 @@ describe('the holds that count', () => {
           scopeKind: 'firm',
           scopeKey: target.firmId,
           reasonCode: 'manual_suppression_review',
-          blockedActionKinds: ['email_send', 'call_task', 'linkedin_task', 'dial_authorization', 'enrollment_advance'],
+          blockedActionKinds: ['email_send', 'call_task', 'dial_authorization', 'enrollment_advance'],
         });
       },
       held: 1,
@@ -249,7 +249,7 @@ describe('the holds that count', () => {
           scopeKind: 'opportunity',
           scopeKey: target.opportunityId,
           reasonCode: 'uncertain_reply',
-          blockedActionKinds: ['email_send', 'call_task', 'linkedin_task', 'enrollment_advance'],
+          blockedActionKinds: ['email_send', 'call_task', 'enrollment_advance'],
         });
       },
       held: 1,
@@ -261,7 +261,7 @@ describe('the holds that count', () => {
           scopeKind: 'owner',
           scopeKey: seeded.alpha.salesperson.userId,
           reasonCode: 'mailbox_disconnected',
-          blockedActionKinds: ['email_send', 'call_task', 'linkedin_task', 'enrollment_advance'],
+          blockedActionKinds: ['email_send', 'call_task', 'enrollment_advance'],
         });
       },
       held: 2,
@@ -272,7 +272,7 @@ describe('the holds that count', () => {
         await hold('alpha', {
           scopeKind: 'workspace',
           reasonCode: 'restore_in_progress',
-          blockedActionKinds: ['email_send', 'call_task', 'linkedin_task', 'dial_authorization', 'enrollment_advance', 'research'],
+          blockedActionKinds: ['email_send', 'call_task', 'dial_authorization', 'enrollment_advance', 'research'],
         });
       },
       held: 2,
@@ -327,7 +327,7 @@ describe('the holds that count', () => {
     await hold('alpha', {
       scopeKind: 'workspace',
       reasonCode: 'restore_in_progress',
-      blockedActionKinds: ['email_send', 'call_task', 'linkedin_task', 'dial_authorization', 'enrollment_advance', 'research'],
+      blockedActionKinds: ['email_send', 'call_task', 'dial_authorization', 'enrollment_advance', 'research'],
     });
     expect(await counts()).toEqual({ active: 1, held: 1 });
   });
@@ -460,19 +460,19 @@ describe('the holds that do not count', () => {
       scopeKind: 'opportunity',
       scopeKey: elsewhere.opportunityId,
       reasonCode: 'uncertain_reply',
-      blockedActionKinds: ['email_send', 'call_task', 'linkedin_task', 'enrollment_advance'],
+      blockedActionKinds: ['email_send', 'call_task', 'enrollment_advance'],
     });
     // The administrator owns no enrollment; the salesperson does.
     await hold('alpha', {
       scopeKind: 'owner',
       scopeKey: seeded.alpha.admin.userId,
       reasonCode: 'mailbox_disconnected',
-      blockedActionKinds: ['email_send', 'call_task', 'linkedin_task', 'enrollment_advance'],
+      blockedActionKinds: ['email_send', 'call_task', 'enrollment_advance'],
     });
     await hold('beta', {
       scopeKind: 'workspace',
       reasonCode: 'restore_in_progress',
-      blockedActionKinds: ['email_send', 'call_task', 'linkedin_task', 'enrollment_advance'],
+      blockedActionKinds: ['email_send', 'call_task', 'enrollment_advance'],
     });
     expect(await counts()).toEqual({ active: 1, held: 0 });
   });
@@ -493,7 +493,7 @@ describe('enrollments that are over', () => {
     await hold('alpha', {
       scopeKind: 'workspace',
       reasonCode: 'restore_in_progress',
-      blockedActionKinds: ['email_send', 'call_task', 'linkedin_task', 'dial_authorization', 'enrollment_advance', 'research'],
+      blockedActionKinds: ['email_send', 'call_task', 'dial_authorization', 'enrollment_advance', 'research'],
     });
     expect(await counts()).toEqual({ active: 1, held: 1 });
   });
@@ -523,7 +523,7 @@ describe('two workspaces', () => {
     await hold('beta', {
       scopeKind: 'workspace',
       reasonCode: 'restore_in_progress',
-      blockedActionKinds: ['email_send', 'call_task', 'linkedin_task', 'dial_authorization', 'enrollment_advance', 'research'],
+      blockedActionKinds: ['email_send', 'call_task', 'dial_authorization', 'enrollment_advance', 'research'],
     });
     expect(await collectSequenceMetrics(database.session)).toEqual([
       { name: 'ActiveEnrollments', value: 3, unit: 'Count' },

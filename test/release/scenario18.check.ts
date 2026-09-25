@@ -1,51 +1,46 @@
 import { describe, expect, it } from 'vitest';
 import {
-  ENROLLMENT_END_REASONS,
-  SEQUENCE_STOP_CONDITIONS,
-  STEP_EXECUTION_STATES,
-} from '@fss/domain/sequences';
+  ENROLLMENT_END_REASONS as WIRE_END_REASONS,
+  SEQUENCE_STOP_CONDITIONS as WIRE_STOP_CONDITIONS,
+} from '@fss/contracts';
+import { MANUAL_MODE_ORIGINS } from '@fss/domain/crm';
+import { ENROLLMENT_END_REASONS, SEQUENCE_STOP_CONDITIONS, manualModeEndReason } from '@fss/domain/sequences';
 import { mustCover } from './support/coverage.ts';
 
 /**
  * Appendix G 18: "A LinkedIn reply after handoff and before the next email stops the
  * opportunity through the recorded-reply path."
  *
- * The sequences suite records the reply on a live enrollment and asserts three
- * things at once: the enrollment is `stopped`, its end reason is `linkedin_reply`,
- * and every remaining step execution is `cancelled`. This check adds the vocabulary
- * behind those three words — a LinkedIn reply is a stop condition in its own right,
- * not an email reply wearing a different label, and "cancelled" is a state a step can
- * actually be in.
+ * LinkedIn was removed on 25 September 2026, and with it the recorded LinkedIn reply.
+ * Migration 0012 was not changed: every version's `stop_conditions` still carries
+ * `linkedin_reply`, because the column's default puts it there and
+ * `sequence_versions_stop_conditions_complete` requires it, and `end_reason` still
+ * admits it. So what remains of the scenario is on the read side: a stored
+ * `linkedin_reply` is dropped rather than handed to a Mac whose contract no longer has
+ * the word, and a manual-mode event that names it as its origin still stops the
+ * enrollment — as `human_reply`, the reading of every origin nothing knows.
  *
  * ## The vacuous-pass trap
  *
- * If no successor was ever scheduled, nothing needed stopping and the assertion that
- * every execution is cancelled is true of the empty set. The lane test closes it by
- * enrolling properly first and asserting the successor existed. The trap this file
- * closes is subtler and more likely: `linkedin_reply` quietly folded into
- * `human_reply` because "a reply is a reply". The two are reported differently to the
- * salesperson and counted differently in the dashboard, and the fold would pass every
- * behavioural test while losing the distinction the specification draws.
+ * A reader that drops a value nobody stored passes by construction. The lane test reads
+ * the raw row first and asserts `linkedin_reply` is really there. This check holds the
+ * vocabulary: neither side of the wire has the member, and an origin nobody knows
+ * still ends an enrollment rather than leaving it running.
  */
 
-describe('Appendix G 18: a recorded LinkedIn reply is its own terminal condition', () => {
-  mustCover(18, ['scenario 18', 'linkedin_reply', 'recordLinkedInResult']);
+describe('Appendix G 18: removed with LinkedIn; a stored linkedin_reply is no value, and still stops', () => {
+  mustCover(18, ['linkedin_reply', 'stop_conditions', 'end_reason', 'endReason', 'human_reply']);
 
-  it('keeps the LinkedIn reply distinct from the email reply', () => {
-    expect(SEQUENCE_STOP_CONDITIONS).toContain('linkedin_reply');
-    expect(SEQUENCE_STOP_CONDITIONS).toContain('human_reply');
-    expect(ENROLLMENT_END_REASONS).toContain('linkedin_reply');
-    // Distinct values, not aliases: a fold would make these two the same string.
-    const reasons: readonly string[] = ENROLLMENT_END_REASONS;
-    expect(new Set(reasons).size).toBe(reasons.length);
+  it('has no linkedin_reply on either side of the wire', () => {
+    for (const list of [SEQUENCE_STOP_CONDITIONS, WIRE_STOP_CONDITIONS, ENROLLMENT_END_REASONS, WIRE_END_REASONS]) {
+      expect(list as readonly string[]).not.toContain('linkedin_reply');
+    }
+    expect(MANUAL_MODE_ORIGINS as readonly string[]).not.toContain('linkedin_reply');
+    expect([...WIRE_STOP_CONDITIONS]).toEqual([...SEQUENCE_STOP_CONDITIONS]);
+    expect([...WIRE_END_REASONS]).toEqual([...ENROLLMENT_END_REASONS]);
   });
 
-  it('gives an unexecuted successor somewhere terminal to go', () => {
-    // "Stops the opportunity" means the scheduled successor must end in a state that
-    // is not pending and is not completed — cancelling it is the only honest answer,
-    // because it never ran.
-    expect(STEP_EXECUTION_STATES).toContain('cancelled');
-    expect(STEP_EXECUTION_STATES).toContain('pending');
-    expect(STEP_EXECUTION_STATES.indexOf('cancelled')).not.toBe(STEP_EXECUTION_STATES.indexOf('completed'));
+  it('still ends an enrollment for the removed origin', () => {
+    expect(manualModeEndReason('linkedin_reply')).toBe('human_reply');
   });
 });
