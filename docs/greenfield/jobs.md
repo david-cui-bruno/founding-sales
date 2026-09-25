@@ -155,11 +155,13 @@ fifteen (`docs/decisions/g41-the-canary-age-is-the-newest-runs-latency.md`).
 
 ## Metrics and the repeating critical alert
 
-`METRIC_OWNERS` in `metrics.ts` claims one of three things about every metric the
-infrastructure alarms on: this lane emits it, a CloudWatch log filter derives it, or a
-later lane owns it. A test reads `infra/modules/alerts/main.tf` and
+`METRIC_OWNERS` in `metrics.ts` names what raises every metric the infrastructure alarms
+on: this lane's collector, another lane's collector in the worker's metric loop (mail,
+outbound, Today, sequences), or a CloudWatch log filter. There is no "later lane" owner
+since g72. A test reads `infra/modules/alerts/main.tf` and
 `infra/modules/observability/main.tf` and fails when a name there has no owner, or an
-owner names a metric no alarm reads. An alarm over a metric nobody emits never fires,
+owner names a metric no alarm reads, and the worker's coverage test fails when a
+collector's claim is not published. An alarm over a metric nobody emits never fires,
 which is worse than no alarm.
 
 The adapter takes a `putMetricData` function rather than importing an AWS SDK. Locally

@@ -453,5 +453,12 @@ describe('counters, heartbeats, the canary and alerts', () => {
     expect(METRIC_OWNERS['UnacknowledgedCriticalAlertAgeSeconds']).toBe('jobs');
     // Published by the Today collector since g67, so no longer owed by a later lane.
     expect(METRIC_OWNERS['TodaySnapshotMissing']).toBe('today');
+    // g72: the two stale labels made true, and the enrollment gauges given a publisher.
+    // Nothing is owed by a later lane any more; `later_lane` is not a MetricOwner.
+    expect(METRIC_OWNERS['GmailWatchHoursToExpiry']).toBe('mail');
+    expect(METRIC_OWNERS['MailboxDisconnectedHours']).toBe('outbound');
+    expect(METRIC_OWNERS['ActiveEnrollments']).toBe('sequences');
+    expect(METRIC_OWNERS['HeldEnrollments']).toBe('sequences');
+    expect(Object.values(METRIC_OWNERS)).not.toContain('later_lane');
   });
 });

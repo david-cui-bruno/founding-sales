@@ -179,15 +179,18 @@ is configured.
 ## Metrics, and what is not published
 
 `packages/domain/jobs/metrics.ts` publishes what can be read out of the job,
-heartbeat, canary and alert tables. `apps/worker/src/bootstrap/metricCoverage.ts`
-names every remaining metric an alarm watches and the mechanism that raises it — a log
-event a CloudWatch metric filter counts, another process, or a named later lane.
+heartbeat, canary and alert tables, and the mail, outbound, Today and sequences
+collectors publish their lanes' gauges through the same loop.
+`apps/worker/src/bootstrap/metricCoverage.ts` names every remaining metric an alarm
+watches and the log event a CloudWatch metric filter counts for it. Since g72 there is
+no third kind: nothing is "owed by a later lane".
 
-`apps/worker/test/metricCoverage.test.ts` parses `local.alarms` out of
-`infra/modules/alerts/main.tf`, starts the real worker against a real database with the
-alarm conditions already true, and fails when a name there is in neither list. An alarm
-over a metric nobody emits never fires, and an operator who has seen the alarm exist
-will believe it is watching.
+`apps/worker/test/metricCoverage.test.ts` parses `local.alarms` and the standalone
+metric alarms (`all_sequences_held`) out of `infra/modules/alerts/main.tf`, starts the
+real worker against a real database with the alarm conditions already true, and fails
+when a name there is in neither list, or when `METRIC_OWNERS` claims a collector for a
+name the worker did not publish. An alarm over a metric nobody emits never fires, and an
+operator who has seen the alarm exist will believe it is watching.
 
 The log events that become metrics, and who writes them:
 

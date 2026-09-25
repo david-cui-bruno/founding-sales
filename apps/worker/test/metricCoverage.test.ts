@@ -7,12 +7,19 @@ import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing';
 import { WORKER_SCHEMA_RANGE } from '@fss/domain/db';
 import {
   HandlerRegistry,
+  JOB_METRIC_NAMES,
+  METRIC_OWNERS,
   canaryHandler,
   enqueueJob,
   raiseCriticalAlert,
   recordHeartbeat,
   recordingMetricSink,
+  type MetricOwner,
 } from '@fss/domain/jobs';
+import { MAIL_METRIC_NAMES } from '@fss/domain/mail';
+import { OUTBOUND_METRIC_NAMES } from '@fss/domain/outbound';
+import { SEQUENCE_METRIC_NAMES } from '@fss/domain/sequences';
+import { TODAY_METRIC_NAMES } from '@fss/domain/today';
 import { canarySource } from '../src/scheduler/sources.ts';
 import { APPLICATION_RAISED_METRICS } from '../src/bootstrap/metricCoverage.ts';
 import { readWorkerConfig } from '../src/bootstrap/config.ts';
@@ -28,50 +35,96 @@ import { startWorker } from '../src/bootstrap/worker.ts';
  * *emission*: it starts the real worker against a real database with the conditions
  * the alarms describe already true, and asserts the names that arrive at the sink.
  * What the worker does not publish must be named in `APPLICATION_RAISED_METRICS` with
- * the mechanism that raises it — a structured log event a CloudWatch metric filter
- * counts, another process, or a named later lane. Nothing may be uncovered.
+ * the structured log event a CloudWatch metric filter counts. Nothing may be
+ * uncovered, and since g72 nothing may be "owed by a later lane" either:
+ * `METRIC_OWNERS` names a collector the worker runs or a log filter for every metric,
+ * and the last test here holds each claim against what the worker actually published.
  */
 
 const ALERTS_TF = fileURLToPath(new URL('../../../infra/modules/alerts/main.tf', import.meta.url));
+const OBSERVABILITY_TF = fileURLToPath(new URL('../../../infra/modules/observability/main.tf', import.meta.url));
 
-/**
- * The metric names inside `locals { alarms = { … } }`, parsed from the block rather
- * than from the whole file, so a metric named in a comment or in an output does not
- * silently satisfy the assertion.
- */
-export function alarmMetricNames(terraform: string): Set<string> {
-  const start = terraform.indexOf('alarms = {');
-  if (start < 0) throw new Error('infra/modules/alerts/main.tf no longer declares local.alarms');
+/** The text of the `{ … }` block that opens at or after `start`, braces balanced. */
+function blockFrom(terraform: string, start: number): string {
   let depth = 0;
-  let end = start;
-  for (let index = terraform.indexOf('{', start); index < terraform.length; index += 1) {
+  for (let index = terraform.indexOf('{', start); index >= 0 && index < terraform.length; index += 1) {
     const character = terraform[index];
     if (character === '{') depth += 1;
     else if (character === '}') {
       depth -= 1;
-      if (depth === 0) {
-        end = index;
-        break;
-      }
+      if (depth === 0) return terraform.slice(start, index);
     }
   }
-  const block = terraform.slice(start, end);
-  const names = new Set<string>();
+  throw new Error('an unbalanced block in the Terraform; the parser or the module changed');
+}
+
+function metricNamesInBlock(block: string, into: Set<string>): void {
   for (const match of block.matchAll(/metric_name\s*=\s*"([A-Za-z0-9]+)"/g)) {
     const name = match[1];
-    if (name !== undefined) names.add(name);
+    if (name !== undefined) into.add(name);
   }
+}
+
+/**
+ * The metric names every metric alarm reads: the ones inside `locals { alarms = { … } }`,
+ * and the `metric_query` metrics of each metric alarm that is its own resource —
+ * `all_sequences_held`, whose two inputs this parser did not see until g72, which is
+ * how they could stay unpublished while this test passed. Parsed from those blocks
+ * rather than from the whole file, so a metric named in a comment or in an output does
+ * not silently count as an alarm.
+ */
+export function alarmMetricNames(terraform: string): Set<string> {
+  const start = terraform.indexOf('alarms = {');
+  if (start < 0) throw new Error('infra/modules/alerts/main.tf no longer declares local.alarms');
+  const names = new Set<string>();
+  metricNamesInBlock(blockFrom(terraform, start), names);
   if (names.size === 0) throw new Error('local.alarms named no metrics; the parser or the module changed');
+
+  let standalone = 0;
+  for (const match of terraform.matchAll(/resource "aws_cloudwatch_metric_alarm" "([a-z0-9_]+)" \{/g)) {
+    // `this` is the `for_each` over `local.alarms`, whose names were read above.
+    if (match[1] === 'this' || match.index === undefined) continue;
+    const before = names.size;
+    metricNamesInBlock(blockFrom(terraform, match.index), names);
+    if (names.size === before) throw new Error(`the metric alarm ${match[1] ?? ''} named no metric the parser could read`);
+    standalone += 1;
+  }
+  if (standalone === 0) throw new Error('no metric alarm outside local.alarms; all_sequences_held moved or the parser broke');
   return names;
 }
+
+/** The metric names `local.metric_filters` in `infra/modules/observability/main.tf` derives from log events. */
+export function logFilterMetricNames(terraform: string): Set<string> {
+  const start = terraform.indexOf('metric_filters = {');
+  if (start < 0) throw new Error('infra/modules/observability/main.tf no longer declares local.metric_filters');
+  const names = new Set<string>();
+  metricNamesInBlock(blockFrom(terraform, start), names);
+  if (names.size === 0) throw new Error('local.metric_filters named no metrics; the parser or the module changed');
+  return names;
+}
+
+/**
+ * The names each collector in the worker's metric loop declares it can publish. An
+ * owner in `METRIC_OWNERS` that is not `log_derived` is one of these collectors, and
+ * the name it claims must be one that collector declares.
+ */
+const COLLECTOR_METRIC_NAMES: Readonly<Record<Exclude<MetricOwner, 'log_derived'>, readonly string[]>> = {
+  jobs: JOB_METRIC_NAMES,
+  mail: MAIL_METRIC_NAMES,
+  outbound: OUTBOUND_METRIC_NAMES,
+  today: TODAY_METRIC_NAMES,
+  sequences: SEQUENCE_METRIC_NAMES,
+};
 
 describe('every alarm metric has something that emits it', () => {
   let database: TestDatabase;
   let published: Set<string>;
   let alarms: Set<string>;
+  let logFilters: Set<string>;
 
   beforeAll(async () => {
     alarms = alarmMetricNames(readFileSync(ALERTS_TF, 'utf8'));
+    logFilters = logFilterMetricNames(readFileSync(OBSERVABILITY_TF, 'utf8'));
     database = await createTestDatabase();
 
     const workspaces = await Promise.all(
@@ -198,6 +251,8 @@ describe('every alarm metric has something that emits it', () => {
       'GmailWatchHoursToExpiry',
       'MailboxDisconnectedHours',
       'TodaySnapshotMissing',
+      'ActiveEnrollments',
+      'HeldEnrollments',
     ];
     while (Date.now() < deadline && !wanted.every(name => sink.published.some(datum => datum.name === name))) {
       await new Promise(resolve => setTimeout(resolve, 20));
@@ -224,6 +279,9 @@ describe('every alarm metric has something that emits it', () => {
       'MailboxDisconnectedHours',
       // Published on every pass, 0 or 1, whatever the time of day (lane g67).
       'TodaySnapshotMissing',
+      // Published on every pass, 0 and 0 here because nothing is enrolled (lane g72).
+      'ActiveEnrollments',
+      'HeldEnrollments',
     ]) {
       expect([...published].includes(name), `${name} was never published by the worker`).toBe(true);
     }
@@ -244,6 +302,30 @@ describe('every alarm metric has something that emits it', () => {
       if (entry.raisedBy !== 'log_event') continue;
       expect(entry.detail, `${name} is log-derived but names no event`).toMatch(/^[a-z][a-z0-9_]+$/);
     }
+  });
+
+  it('finds the enrollment gauges among the alarm metrics, so the metric-math alarm is covered too', () => {
+    expect(alarms.has('ActiveEnrollments')).toBe(true);
+    expect(alarms.has('HeldEnrollments')).toBe(true);
+  });
+
+  it('holds every METRIC_OWNERS claim to what the worker published or a log filter derives', () => {
+    const untrue: string[] = [];
+    for (const [name, owner] of Object.entries(METRIC_OWNERS)) {
+      if (owner === 'log_derived') {
+        // Derived from a log event, so a CloudWatch filter must derive it and the
+        // worker must not also PutMetricData it: two sources would double every count.
+        if (!logFilters.has(name)) untrue.push(`${name}: log_derived, but no metric filter derives it`);
+        if (published.has(name)) untrue.push(`${name}: log_derived, but the worker published it`);
+        if (alarms.has(name) && APPLICATION_RAISED_METRICS[name]?.raisedBy !== 'log_event') {
+          untrue.push(`${name}: an alarm reads it, but no log event is documented for it`);
+        }
+        continue;
+      }
+      if (!COLLECTOR_METRIC_NAMES[owner].includes(name)) untrue.push(`${name}: claimed by ${owner}, which does not declare it`);
+      if (!published.has(name)) untrue.push(`${name}: claimed by ${owner}, but the worker never published it`);
+    }
+    expect(untrue, 'METRIC_OWNERS claims that are not true').toEqual([]);
   });
 
   it('publishes no metric name an alarm does not read and no filter derives', () => {

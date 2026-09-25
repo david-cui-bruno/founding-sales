@@ -1097,6 +1097,24 @@ const MUTATIONS = [
     because:
       'release-stop.sh stops both services before a schema-change apply, and the apply after it puts the declared count back unless the service ignores changes to desired_count: the worker would start against the old schema and exit 12 before the migration. release_owns_the_count.tftest.hcl applies the difference but runs outside npm run test:release, so scenario22 reads the lifecycle inside each service block and has to go red.',
   },
+  {
+    name: 'the held-enrollment gauge ignores the open holds and counts only steps the worker already held',
+    file: 'packages/domain/sequences/metrics.ts',
+    find: '                        AND h.released_at IS NULL\n',
+    replace: '                        AND false\n',
+    suite: ['run', 'test', '--workspace', 'packages/domain', '--', 'test/sequences/enrollmentGauges.test.ts'],
+    because:
+      'Counting held step executions is the plausible shortcut, and it is wrong exactly when the alarm matters: a step is held only once it comes due and the worker tries it, so under a restore, a mailbox-health hold or a send nobody can account for, every enrollment waiting for next week\u2019s step reads as running and all-sequences-held never reaches 1. enrollmentGauges.test.ts counts enrollment, firm, opportunity, owner and workspace holds over steps that are still pending and has to go red.',
+  },
+  {
+    name: 'the active-enrollment gauge counts a completed enrollment as active',
+    file: 'packages/domain/sequences/metrics.ts',
+    find: '          WHERE n.ended_at IS NULL\n',
+    replace: "          WHERE n.state <> 'stopped'\n",
+    suite: ['run', 'test', '--workspace', 'packages/domain', '--', 'test/sequences/enrollmentGauges.test.ts'],
+    because:
+      'Excluding only terminal stops forgets that a plan which ran out is also over. Every completed enrollment then sits in the denominator forever, and the held fraction can never reach 1 once any sequence has finished, so the critical alarm is silenced by success. enrollmentGauges.test.ts completes one enrollment, stops another, expects one active and has to go red.',
+  },
 ];
 
 // A listener on each of these keeps Node from exiting mid-mutation with a file still
