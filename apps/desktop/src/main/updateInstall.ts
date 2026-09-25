@@ -575,6 +575,8 @@ export async function confirmLaunch(currentVersion: string, host: UpdateHost): P
 
 export interface UpdaterOptions {
   readonly currentVersion: string;
+  /** This Mac's macOS version, which the manifest's minimum is checked against (lane g86). */
+  readonly systemVersion: string;
   readonly channelBaseUrl: string;
   /** Base64 SPKI DER, compiled in by the build. Empty means every update is refused. */
   readonly publicKey: string;
@@ -664,6 +666,7 @@ export function createUpdater(options: UpdaterOptions): Updater {
   const decide = async (): Promise<UpdateDecision> =>
     await options.check({
       currentVersion,
+      systemVersion: options.systemVersion,
       channelBaseUrl: options.channelBaseUrl,
       publicKey: options.publicKey,
     });

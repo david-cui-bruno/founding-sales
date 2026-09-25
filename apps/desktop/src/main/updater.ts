@@ -40,6 +40,8 @@ const SIX_HOURS = 6 * 60 * 60 * 1000;
 
 export interface UpdateWatchOptions {
   readonly currentVersion: string;
+  /** Defaults to Electron's `process.getSystemVersion()`; the manifest's OS minimum is checked against it. */
+  readonly systemVersion?: string;
   readonly channelBaseUrl: string;
   /** Base64 SPKI DER, compiled in by the build. Empty means every update is refused. */
   readonly publicKey: string;
@@ -66,6 +68,7 @@ export interface UpdateWatch {
 export function startUpdateWatch(options: UpdateWatchOptions): UpdateWatch {
   const updater = createUpdater({
     currentVersion: options.currentVersion,
+    systemVersion: options.systemVersion ?? hostSystemVersion(),
     channelBaseUrl: options.channelBaseUrl,
     publicKey: options.publicKey,
     host: {
@@ -121,6 +124,16 @@ export function startUpdateWatch(options: UpdateWatchOptions): UpdateWatch {
       clearInterval(timer);
     },
   };
+}
+
+/**
+ * macOS's version, as Electron reports it (`15.4.1`). Outside Electron there is none,
+ * and the empty string refuses every update rather than assuming the Mac is new enough
+ * (`macOsVersion` in `updateChannel.ts`).
+ */
+function hostSystemVersion(): string {
+  const read = (process as { readonly getSystemVersion?: () => string }).getSystemVersion;
+  return typeof read === 'function' ? read.call(process) : '';
 }
 
 async function defaultTell(message: string, detail: string): Promise<void> {

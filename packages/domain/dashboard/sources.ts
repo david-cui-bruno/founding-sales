@@ -1,32 +1,25 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 
 /**
- * The parts of 13.4's dashboard whose tables are not on main yet.
+ * The parts of 13.4's dashboard whose tables other lanes own.
  *
  * Section 13.4 asks for emails sent, skipped, held and unknown; reply and
  * positive-reply rates; provider deferrals and reputation warnings; results by
  * sequence, template version, segment, weekday and local send hour; LinkedIn
- * handoffs and recorded replies; and classifier cost and drift. Every one of those
- * read a table another lane was building when this interface was written — the
- * outbound fence and the sending ramp (G7-2), enrollments and step executions (G8),
- * and the model classification records (G7b).
+ * handoffs and recorded replies; and classifier cost and drift. Those read the
+ * outbound fence and the sending ramp (G7-2, migration 0010), enrollments and step
+ * executions (G8, 0012), and the model classification records (G7b, 0011).
  *
- * G7-2's migration 0010 has since landed, so `sending` is implemented against it in
- * `sendingSource.ts` and `liveDashboardSources()` is what the API supplies. The two
- * that remain declared-unavailable are the ones whose tables still do not exist.
+ * All three are live. `liveDashboardSources()` (in `sendingSource.ts`) combines
+ * `sendingFacts`, `enrollmentFacts` and `classifierFacts`, and it is what the API
+ * supplies (`apps/api/src/routes/dashboard.ts`).
  *
- * The choice made here is to build the aggregate against an interface with a
- * declared-unavailable default rather than to leave the figures out or to invent a
- * table for them. Three consequences, all of them wanted:
- *
- * * the DTO, the route and the Mac's rendering of these panels exist and are tested
- *   today, against a fake, so the lane that lands the table wires one function
- *   instead of designing a surface;
- * * a figure nobody can compute says so — `{ available: false, owner, expectedIn }`
- *   — rather than rendering as zero, which is the failure this shape exists to
- *   prevent. "No emails were skipped" and "nothing can tell you how many were
- *   skipped" are very different sentences to show an operator;
- * * the seam is named and greppable, so the follow-up is a scheduled piece of work.
+ * The interface keeps its declared-unavailable shape, because a figure nobody can
+ * compute must say so — `{ available: false, owner, reason }` — rather than render as
+ * zero. "No emails were skipped" and "nothing can tell you how many were skipped" are
+ * very different sentences to show an operator. `unavailableDashboardSources()` is
+ * that shape for all three at once: what `readDashboard` uses when a caller wires no
+ * source, which today is the domain tests and nothing else.
  *
  * See `docs/decisions/g9-dashboard-sources.md`.
  */
@@ -130,7 +123,7 @@ export interface SendingFacts {
    * and a breakdown keyed by an enrollment id is not the breakdown 13.4 asks for.
    */
   readonly bySequence: readonly Breakdown[] | Unavailable;
-  /** Nothing in this build records a segment. G8's enrolment is where one will be. */
+  /** Nothing records a segment yet, so this is always the unavailable shape. */
   readonly bySegment: readonly Breakdown[] | Unavailable;
 }
 
@@ -208,15 +201,16 @@ export interface DashboardSources {
   ): Promise<ClassifierFacts | Unavailable>;
 }
 
-/** What the API supplies until the lanes below land. */
+/**
+ * Every figure declared unavailable: what `readDashboard` reads when its caller wires
+ * no source. The API never does that — it passes `liveDashboardSources()` — so the
+ * reasons say "not wired" rather than "not built": every table exists.
+ */
 export function unavailableDashboardSources(): DashboardSources {
   const absent = (owner: string, reason: string): Unavailable => ({ available: false, owner, reason });
   return {
-    sending: async () =>
-      await Promise.resolve(absent('G7-2', 'the outbound fence and sending ramp are not in this build')),
-    enrollments: async () =>
-      await Promise.resolve(absent('G8', 'sequences and enrollments are not in this build')),
-    classifier: async () =>
-      await Promise.resolve(absent('G7b', 'model classification records are not in this build')),
+    sending: async () => await Promise.resolve(absent('G7-2', 'no sending source was wired for this read')),
+    enrollments: async () => await Promise.resolve(absent('G8', 'no enrollment source was wired for this read')),
+    classifier: async () => await Promise.resolve(absent('G7b', 'no classifier source was wired for this read')),
   };
 }

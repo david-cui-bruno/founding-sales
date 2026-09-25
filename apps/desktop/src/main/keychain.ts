@@ -83,8 +83,14 @@ export function keychainCommand(
 }
 
 export class KeychainError extends Error {
-  constructor(readonly reason: 'unavailable' | 'write_failed' | 'remove_failed') {
+  // An explicit field, not a constructor parameter property: the package step loads
+  // main-process files under Node's strip-only TypeScript, which refuses parameter
+  // properties (lane g86; `test/packaging/stripOnly.test.ts`).
+  readonly reason: 'unavailable' | 'write_failed' | 'remove_failed';
+
+  constructor(reason: 'unavailable' | 'write_failed' | 'remove_failed') {
     super(`keychain_${reason}`);
+    this.reason = reason;
     this.name = 'KeychainError';
   }
 }

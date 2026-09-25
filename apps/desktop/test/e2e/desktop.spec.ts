@@ -64,7 +64,10 @@ test('an outdated Mac sees only the upgrade instruction', async ({ page }) => {
 
   await expect(page.getByTestId('heading')).toHaveText('Update Callie');
   await expect(page.getByTestId('banner-blocking')).toContainText('out of date');
-  await expect(page.getByTestId('upgrade-only')).toBeVisible();
+  await expect(page.getByTestId('upgrade-only')).toHaveText('Callie will work again once this Mac is updated.');
+  // A sentence, never an address (lane g86): the notice's upgradeUrl is the signed
+  // update manifest, which is for the updater, not for a person.
+  expect(await page.locator('body').innerText()).not.toMatch(/https?:\/\/|latest\.json/u);
   // Nothing to press: no sign-in form, no card actions, no refresh.
   await expect(page.getByTestId('sign-in-form')).toHaveCount(0);
   await expect(page.getByTestId('card-expand')).toHaveCount(0);

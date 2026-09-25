@@ -35,6 +35,19 @@ resource "aws_db_subnet_group" "main" {
   tags = merge(var.tags, { Name = "${var.name_prefix}-db" })
 }
 
+# Two parameters say `apply_method = "pending-reboot"` because that is what AWS
+# reports for them in production (lane g86). With the provider's default,
+# `immediate`, every production plan showed an in-place update of this group that
+# changed nothing: AWS does not register a change of apply method alone, so the
+# apply "succeeded" and the next plan showed it again (release.md 8.0s). The AWS
+# provider documents exactly this perpetual diff for aws_db_parameter_group and
+# says the code must name the method AWS holds. `ignore_changes` cannot reach one
+# attribute of an element of the `parameter` set.
+#
+# The method only matters when a value changes. Changing either of these two
+# values later takes effect at the next reboot unless the same change also sets
+# `apply_method = "immediate"`, which AWS does register together with a new value.
+# docs/decisions/g86-the-parameter-group-names-what-aws-holds.md.
 resource "aws_db_parameter_group" "main" {
   name        = "${var.name_prefix}-pg16"
   family      = "postgres16"
@@ -43,6 +56,8 @@ resource "aws_db_parameter_group" "main" {
   parameter {
     name  = "rds.force_ssl"
     value = "1"
+
+    apply_method = "pending-reboot"
   }
 
   parameter {
@@ -68,6 +83,8 @@ resource "aws_db_parameter_group" "main" {
   parameter {
     name  = "log_autovacuum_min_duration"
     value = "10000"
+
+    apply_method = "pending-reboot"
   }
 
   # DDL only. Statement text of business writes never reaches CloudWatch.

@@ -21,7 +21,11 @@
 //   * `suite`       — the arguments to `npm` for the vitest run that must then FAIL:
 //                     `['run', 'test:release']`, `['run', 'test:release', '--', '<file>']`
 //                     or `['run', 'test', '--workspace', '<workspace>', '--', '<file>']`;
-//   * `because`     — the trap this proves is closed, in one sentence.
+//   * `because`     — the trap this proves is closed, in one sentence;
+//   * `kind`        — optional: `'wiring'` for an edit to the suite's own map — the
+//                     scenario map, a script path, a workflow's text — and `'behaviour'`,
+//                     the default, for everything else. The runner reports the two
+//                     kinds of kill apart (lane g86, audit T08) and counts them together.
 //
 // A mutation whose `find` does not appear, or appears more than once, is itself a
 // failure: it means the code moved and the mutation is no longer testing what it says.
@@ -38,7 +42,7 @@ import { runMutationCheck, spawnSuite } from './releaseMutationRunner.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
-/** @type {{name: string, file: string, find: string, replace: string, suite: string[], because: string}[]} */
+/** @type {{name: string, file: string, find: string, replace: string, suite: string[], because: string, kind?: 'behaviour' | 'wiring'}[]} */
 const MUTATIONS = [
   {
     name: 'the stale schema-range case reads the run-task call again instead of the container',
@@ -54,6 +58,7 @@ const MUTATIONS = [
   {
     name: 'the rehearsal stops filling one of the six application entries',
     file: '.github/workflows/greenfield-release.yml',
+    kind: 'wiring',
     find: '              session-signing-key|device-credential-pepper)\n',
     replace: '              session-signing-key)\n',
     suite: ['run', 'test:release'],
@@ -171,6 +176,7 @@ const MUTATIONS = [
   {
     name: 'the scenario map loses a scenario',
     file: 'test/release/support/scenarioMap.ts',
+    kind: 'wiring',
     find: '  {\n    number: 42,',
     replace: '  /* removed by the mutation check */ {\n    number: 43,',
     suite: ['run', 'test:release'],
@@ -180,6 +186,7 @@ const MUTATIONS = [
   {
     name: 'a rehearsal-only scenario loses its script',
     file: 'test/release/support/scenarioMap.ts',
+    kind: 'wiring',
     find: "    script: 'infra/scripts/rehearsal-restore-drill.sh',",
     replace: '',
     suite: ['run', 'test:release'],
@@ -234,6 +241,7 @@ const MUTATIONS = [
   {
     name: 'the rehearsal registry apply stops running in the rehearsal environment',
     file: '.github/workflows/greenfield-rehearsal-registry.yml',
+    kind: 'wiring',
     find: '    environment: rehearsal\n',
     replace: '',
     suite: ['run', 'test:release'],
@@ -261,6 +269,7 @@ const MUTATIONS = [
   {
     name: 'the rehearsal apply goes back to assuming the role it already holds',
     file: '.github/workflows/greenfield-release.yml',
+    kind: 'wiring',
     find: '            -var="assume_deployment_role=false" \\\n',
     replace: '',
     suite: ['run', 'test:release'],
@@ -460,6 +469,7 @@ const MUTATIONS = [
   {
     name: 'the rehearsal apply stops naming a variable the root requires',
     file: '.github/workflows/greenfield-release.yml',
+    kind: 'wiring',
     find: '            -var="api_schema_range={min=${API_SCHEMA_MIN},max=${API_SCHEMA_MAX}}" \\\n',
     replace: '',
     suite: ['run', 'test:release'],
@@ -469,6 +479,7 @@ const MUTATIONS = [
   {
     name: 'any stage can write a release record',
     file: '.github/workflows/greenfield-release.yml',
+    kind: 'wiring',
     find: "      - name: Write the release record, last\n        if: inputs.stage == 'full'\n",
     replace: '      - name: Write the release record, last\n',
     suite: ['run', 'test:release'],
@@ -478,6 +489,7 @@ const MUTATIONS = [
   {
     name: 'a plan run applies what it planned',
     file: '.github/workflows/greenfield-release.yml',
+    kind: 'wiring',
     find: "      - name: Create the rehearsal environment\n        if: contains(fromJSON('[\"create\",\"deploy\",\"full\"]'), inputs.stage)\n",
     replace: '      - name: Create the rehearsal environment\n',
     suite: ['run', 'test:release'],
@@ -487,6 +499,7 @@ const MUTATIONS = [
   {
     name: 'the plan summary guard stops looking for the values it holds',
     file: '.github/workflows/greenfield-release.yml',
+    kind: 'wiring',
     find: '                  if len(text) >= 8 and text in summary:\n',
     replace: '                  if False:\n',
     suite: ['run', 'test:release'],
@@ -496,6 +509,7 @@ const MUTATIONS = [
   {
     name: 'a teardown run also creates the environment',
     file: '.github/workflows/greenfield-release.yml',
+    kind: 'wiring',
     find: "        if: contains(fromJSON('[\"create\",\"deploy\",\"full\"]'), inputs.stage)\n",
     replace: "        if: contains(fromJSON('[\"create\",\"deploy\",\"full\",\"teardown\"]'), inputs.stage)\n",
     suite: ['run', 'test:release'],
@@ -570,6 +584,7 @@ const MUTATIONS = [
   {
     name: 'a deploy stage stops bootstrapping the first workspace',
     file: '.github/workflows/greenfield-release.yml',
+    kind: 'wiring',
     find:
       "      - name: Bootstrap the rehearsal workspace and its admin\n        if: contains(fromJSON('[\"deploy\",\"full\"]'), inputs.stage)\n",
     replace: "      - name: Bootstrap the rehearsal workspace and its admin\n        if: inputs.stage == 'teardown'\n",
@@ -672,6 +687,7 @@ const MUTATIONS = [
   {
     name: 'the rehearsal smoke reads the canary age from the bare FSS namespace again',
     file: '.github/workflows/greenfield-release.yml',
+    kind: 'wiring',
     find: '            age="$(aws cloudwatch get-metric-statistics --namespace "$namespace" \\\n',
     replace: '            age="$(aws cloudwatch get-metric-statistics --namespace FSS \\\n',
     suite: ['run', 'test:release', '--', 'test/release/metricNamespace.check.ts'],
@@ -987,6 +1003,7 @@ const MUTATIONS = [
   {
     name: 'the pull-request gate runs the release mutation check again',
     file: '.github/workflows/greenfield.yml',
+    kind: 'wiring',
     find: '        run: npm run gate:greenfield\n',
     replace: '        run: npm run gate:greenfield && npm run test:release:mutation\n',
     suite: ['run', 'test:release', '--', 'test/release/mutationSchedule.check.ts'],
@@ -996,6 +1013,7 @@ const MUTATIONS = [
   {
     name: 'the nightly mutation check is allowed to fail quietly',
     file: '.github/workflows/greenfield-nightly.yml',
+    kind: 'wiring',
     find: '      - name: Release mutation check\n',
     replace: '      - name: Release mutation check\n        continue-on-error: true\n',
     suite: ['run', 'test:release', '--', 'test/release/mutationSchedule.check.ts'],
@@ -1302,6 +1320,7 @@ const MUTATIONS = [
   {
     name: 'the weekly caller stamps the images’ commit instead of its own',
     file: '.github/workflows/greenfield-weekly-rehearsal.yml',
+    kind: 'wiring',
     find: '      desktop_commit_stamp: ${{ github.sha }}\n',
     replace: '      desktop_commit_stamp: ${{ needs.pin.outputs.images_commit }}\n',
     suite: ['run', 'test:release', '--', 'test/release/weeklyRehearsal.check.ts'],
@@ -1311,6 +1330,7 @@ const MUTATIONS = [
   {
     name: 'a pinned rehearsal stops refusing a checkout that is not its pin',
     file: '.github/workflows/greenfield-release.yml',
+    kind: 'wiring',
     find: '            if [ "$GITHUB_SHA" != "$pinned" ]; then\n',
     replace: '            if false; then\n',
     suite: ['run', 'test:release', '--', 'test/release/weeklyRehearsal.check.ts'],
@@ -1374,6 +1394,7 @@ const MUTATIONS = [
   {
     name: 'the images workflow stops publishing when only the certificate bundle changed',
     file: '.github/workflows/greenfield-images.yml',
+    kind: 'wiring',
     find: "      - 'certs/**'\n      - 'package.json'\n      - 'package-lock.json'\n      - '.github/workflows/greenfield-images.yml'\n\npermissions:\n",
     replace: "      - 'package.json'\n      - 'package-lock.json'\n      - '.github/workflows/greenfield-images.yml'\n\npermissions:\n",
     suite: ['run', 'test:release', '--', 'test/release/weeklyRehearsal.check.ts'],
@@ -1383,6 +1404,7 @@ const MUTATIONS = [
   {
     name: 'the release manifest is written by a stage that is not full',
     file: '.github/workflows/greenfield-release.yml',
+    kind: 'wiring',
     find: "      - name: Write the release manifest beside the record\n        if: inputs.stage == 'full'\n",
     replace: '      - name: Write the release manifest beside the record\n',
     suite: ['run', 'test:release', '--', 'test/release/releaseManifest.check.ts'],

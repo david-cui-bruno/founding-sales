@@ -4,6 +4,9 @@ import { buildManifest, resolveUpdateSigningKey, UPDATE_SIGNING_KEY_VARIABLE } f
 import { decideUpdate, signManifest, verifyArtifactBytes } from '../../src/main/updateChannel.ts';
 import { generateUpdateKeyPair, sha256Hex } from '../support/updateKeys.ts';
 
+/** The macOS these fixtures run on: above the 13.0.0 every fixture manifest asks for. */
+const MAC_OS = '15.4.1';
+
 /**
  * The publish side, round-tripped against the client side.
  *
@@ -98,12 +101,13 @@ describe('a published manifest is one the client accepts', () => {
     const signed = signManifest(manifest, keys.privateKey);
 
     expect(
-      decideUpdate({ currentVersion: '1.4.0', channelBaseUrl: CHANNEL, publicKey: keys.publicKey, answer: signed }),
+      decideUpdate({ currentVersion: '1.4.0', systemVersion: MAC_OS, channelBaseUrl: CHANNEL, publicKey: keys.publicKey, answer: signed }),
     ).toEqual({ kind: 'available', manifest });
 
     expect(
       decideUpdate({
         currentVersion: '1.4.0',
+        systemVersion: MAC_OS,
         channelBaseUrl: CHANNEL,
         publicKey: generateUpdateKeyPair().publicKey,
         answer: signed,

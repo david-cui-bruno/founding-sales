@@ -29,7 +29,7 @@ import {
   resolveSuppressionJournal,
   type JournalPutObject,
 } from '../journal/index.ts';
-import type { MailRoutingDeps } from '../routes/types.ts';
+import { DEFAULT_UPGRADE_URL, type MailRoutingDeps } from '../routes/types.ts';
 
 /**
  * What a deployed API was actually given, and what it refuses to start without.
@@ -119,6 +119,12 @@ export const DEPLOYMENT_ENVIRONMENT_VARIABLES = Object.freeze({
   // lane g81 its task definition is handed neither (`infra/modules/cluster`).
   // ---- the API's own ----
   sessionSigningKey: 'session-signing-key',
+  /**
+   * The address `/auth/client-version` publishes as `upgradeUrl` (lane g86). A public
+   * identifier: the production root sets it from `desktop_upgrade_url` on the API task
+   * definition alone.
+   */
+  upgradeUrl: 'FSS_DESKTOP_UPGRADE_URL',
 } as const);
 
 const VARIABLES = DEPLOYMENT_ENVIRONMENT_VARIABLES;
@@ -358,9 +364,15 @@ export interface ApiSignIn {
   readonly google: GoogleClient;
 }
 
+/** Where the published upgrade address came from: the task environment, or the placeholder. */
+export type UpgradeUrlSource = 'environment' | 'placeholder';
+
 export interface ApiDeployment {
   readonly environmentName: string;
   readonly dependencies: DependencySelection;
+  /** What `/auth/client-version` publishes as `upgradeUrl` (lane g86). */
+  readonly upgradeUrl: string;
+  readonly upgradeUrlSource: UpgradeUrlSource;
   /** Absent when `dependencies` is `none`; the four mail paths then answer not_found. */
   readonly mail: MailRoutingDeps | undefined;
   readonly mailConfig: MailPublicConfig | undefined;
@@ -410,6 +422,49 @@ function booleanFlag(environment: Environment, name: string): boolean {
   throw new DeploymentConfigError('INVALID', `${name} must be true or false`);
 }
 
+/**
+ * The upgrade notice's address (lane g86).
+ *
+ * Until this lane every API published `https://callie.example/downloads/mac`, a
+ * placeholder nobody could download from. The production root now sets
+ * `FSS_DESKTOP_UPGRADE_URL` to the signed update manifest the desktop reads
+ * (`docs/decisions/g86-the-upgrade-notice-names-the-update-channel.md`). It is
+ * machine-facing: since lane g83 the Mac installs from that manifest itself, and the
+ * upgrade screen shows a sentence, never this address.
+ *
+ * Unset outside production is the placeholder, which is what a laptop and a rehearsal
+ * publish. Unset in production is a refusal to start, the rule this file keeps for every
+ * default: a production process does not reach a fallback by omission. The root's
+ * variable has the production value as its default and refuses a blank, so the refusal
+ * here is the second line, not the first. A value that is set must be a plain
+ * `https://` address — no credentials, query or fragment, so never a signed URL — and
+ * production refuses the placeholder by value too.
+ */
+export function readUpgradeUrl(environment: Environment): { readonly value: string; readonly source: UpgradeUrlSource } {
+  const name = VARIABLES.upgradeUrl;
+  const raw = environment[name]?.trim() ?? '';
+  const production = environment[VARIABLES.environmentName]?.trim().toLowerCase() === 'production';
+  if (raw.length === 0) {
+    if (production) {
+      throw new DeploymentConfigError('MISSING', `${name} is not set, and a production API does not publish the placeholder`);
+    }
+    return { value: DEFAULT_UPGRADE_URL, source: 'placeholder' };
+  }
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new DeploymentConfigError('INVALID', `${name} is not a URL`);
+  }
+  if (url.protocol !== 'https:' || url.username !== '' || url.password !== '' || url.search !== '' || url.hash !== '') {
+    throw new DeploymentConfigError('INVALID', `${name} must be a plain https address, with no credentials, query or fragment`);
+  }
+  if (production && url.hostname === new URL(DEFAULT_UPGRADE_URL).hostname) {
+    throw new DeploymentConfigError('INVALID', `${name} is the placeholder, which a production API does not publish`);
+  }
+  return { value: url.href, source: 'environment' };
+}
+
 export interface ReadApiDeploymentOptions {
   readonly loadKms?: typeof loadKmsTransport;
   readonly fetch?: HttpFetch;
@@ -428,6 +483,7 @@ export async function readApiDeployment(
   const environmentName = environment[VARIABLES.environmentName]?.trim() ?? 'unset';
   const dependencies = dependencySelection(environment);
   const sendingEnabled = booleanFlag(environment, VARIABLES.sendingEnabled);
+  const upgrade = readUpgradeUrl(environment);
   const bucket = environment[VARIABLES.journalBucket]?.trim() ?? '';
 
   const resolved = resolveSuppressionJournal({
@@ -442,6 +498,8 @@ export async function readApiDeployment(
     return {
       environmentName,
       dependencies,
+      upgradeUrl: upgrade.value,
+      upgradeUrlSource: upgrade.source,
       mail: undefined,
       mailConfig: undefined,
       auth: undefined,
@@ -527,6 +585,8 @@ export async function readApiDeployment(
     return {
       environmentName,
       dependencies,
+      upgradeUrl: upgrade.value,
+      upgradeUrlSource: upgrade.source,
       mail: {
         gmail: recordedGmailClient({ emailAddress: 'rehearsal@rehearsal.invalid', historyId: '1', messages: [] }),
         config,
@@ -555,6 +615,8 @@ export async function readApiDeployment(
   return {
     environmentName,
     dependencies,
+    upgradeUrl: upgrade.value,
+    upgradeUrlSource: upgrade.source,
     mail: {
       gmail: createGmailHttpClient({ fetch: options.fetch ?? httpFetch, apiBaseUrl: config.apiBaseUrl }),
       config,
@@ -622,6 +684,9 @@ export function describeDeployment(deployment: ApiDeployment): LogFields {
     session_signing_key_configured: (deployment.auth?.stateSigningKey.length ?? 0) >= 32,
     journal: deployment.journalDescription,
     sending_enabled: deployment.sendingEnabled,
+    // The source, not the address: a field whose name says `url` is redacted by the
+    // logger, and the rule above is that this line carries no operator-supplied string.
+    upgrade_notice_source: deployment.upgradeUrlSource,
   };
 }
 

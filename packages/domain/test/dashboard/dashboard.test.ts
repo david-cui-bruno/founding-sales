@@ -204,7 +204,7 @@ describe('the dashboard', () => {
     expect(theAdmins.sending).toEqual({
       available: false,
       owner: 'G7-2',
-      reason: 'the outbound fence and sending ramp are not in this build',
+      reason: 'no sending source was wired for this read',
     });
     expect(theAdmins.enrollments).toMatchObject({ available: false, owner: 'G8' });
     expect(theAdmins.classifier).toMatchObject({ available: false, owner: 'G7b' });

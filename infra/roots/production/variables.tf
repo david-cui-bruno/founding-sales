@@ -456,3 +456,28 @@ variable "bootstrap" {
   type        = bool
   default     = false
 }
+
+variable "desktop_upgrade_url" {
+  description = <<-EOT
+    `FSS_DESKTOP_UPGRADE_URL` on the API task definition alone: the `upgradeUrl`
+    that `/auth/client-version` publishes to a Mac below the minimum client
+    version (5.3). It is machine-facing — the signed update manifest on this
+    stack's updates distribution, `releases/darwin-arm64/latest.json`, which
+    the desktop reads and, since lane g83, installs from by itself. The
+    desktop's upgrade screen shows a sentence and never this address.
+
+    A default rather than a tfvars entry, for the reason `cpu_architecture`
+    gives. The validation refuses a blank, anything but a plain https address,
+    and the `callie.example` placeholder the API publishes outside production;
+    the API refuses to start in production without a value, so both lines hold.
+    `docs/decisions/g86-the-upgrade-notice-names-the-update-channel.md`.
+  EOT
+  type        = string
+  default     = "https://dlcmdaeskewt5.cloudfront.net/releases/darwin-arm64/latest.json"
+  nullable    = false
+
+  validation {
+    condition     = can(regex("^https://[a-z0-9.-]+(/[A-Za-z0-9._~/-]*)?$", var.desktop_upgrade_url)) && !strcontains(var.desktop_upgrade_url, "callie.example")
+    error_message = "desktop_upgrade_url is a plain https address with no credentials, query or fragment, and never the callie.example placeholder: in production it is https://<updates distribution>/releases/darwin-arm64/latest.json."
+  }
+}

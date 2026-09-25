@@ -133,6 +133,7 @@ describe("the Gmail grant against Google's real endpoints", () => {
         [V.pushTopic]: 'projects/example/topics/fss-prod-gmail-push',
         [V.hostedDomain]: fixture.hostedDomain,
         [V.sendingEnabled]: 'false',
+        [V.upgradeUrl]: 'https://updates.example.test/releases/darwin-arm64/latest.json',
         [V.sessionSigningKey]: randomBytes(48).toString('base64'),
         [V.gmailOAuthClient]: JSON.stringify({ client_id: clientId, client_secret: randomBytes(24).toString('hex') }),
         [V.oidcClient]: JSON.stringify({

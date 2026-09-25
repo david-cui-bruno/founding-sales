@@ -5,6 +5,9 @@ import { checkForUpdate, CHANNEL_MANIFEST_PATH, signManifest, type UpdateManifes
 import { createDesktopFixture, type DesktopFixture } from '../support/desktopFixture.ts';
 import { generateUpdateKeyPair, sha256Hex } from '../support/updateKeys.ts';
 
+/** The macOS these fixtures run on: above the 13.0.0 every fixture manifest asks for. */
+const MAC_OS = '15.4.1';
+
 /**
  * Appendix G scenario 40: "Minimum-client-version increase blocks old Electron
  * mutation while preserving the upgrade path."
@@ -120,6 +123,7 @@ describe('scenario 40: the API raises the minimum client version', () => {
 
     const decision = await checkForUpdate({
       currentVersion: OLD_CLIENT,
+      systemVersion: MAC_OS,
       channelBaseUrl: channel.baseUrl,
       publicKey: keys.publicKey,
     });
@@ -139,7 +143,7 @@ describe('scenario 40: the API raises the minimum client version', () => {
     channel.serve({ ...signed, manifest: { ...signed.manifest, releaseVersion: '9.9.9' } });
 
     await expect(
-      checkForUpdate({ currentVersion: OLD_CLIENT, channelBaseUrl: channel.baseUrl, publicKey: keys.publicKey }),
+      checkForUpdate({ currentVersion: OLD_CLIENT, systemVersion: MAC_OS, channelBaseUrl: channel.baseUrl, publicKey: keys.publicKey }),
     ).resolves.toEqual({ kind: 'refused', reason: 'update_signature_invalid' });
 
     // Being stuck is not a reason to relax the gate.
@@ -156,6 +160,7 @@ describe('scenario 40: the API raises the minimum client version', () => {
     await expect(
       checkForUpdate({
         currentVersion: OLD_CLIENT,
+        systemVersion: MAC_OS,
         channelBaseUrl: channel.baseUrl,
         publicKey: generateUpdateKeyPair().publicKey,
       }),
@@ -176,6 +181,7 @@ describe('scenario 40: the API raises the minimum client version', () => {
     await expect(
       checkForUpdate({
         currentVersion: RAISED.minimum,
+        systemVersion: MAC_OS,
         channelBaseUrl: channel.baseUrl,
         publicKey: keys.publicKey,
       }),

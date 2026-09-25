@@ -120,6 +120,7 @@ describe('Appendix G 23: a production API cannot run without sign-in configured'
       [V.pushTopic]: 'projects/example/topics/example-gmail-push',
       [V.hostedDomain]: 'example.test',
       [V.sendingEnabled]: 'false',
+      [V.upgradeUrl]: 'https://updates.example.test/releases/darwin-arm64/latest.json',
       // Generated when the test runs. Nothing in this file is a credential.
       [V.sessionSigningKey]: randomBytes(48).toString('base64'),
       [V.gmailOAuthClient]: JSON.stringify({

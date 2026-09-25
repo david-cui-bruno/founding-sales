@@ -158,18 +158,20 @@ The DNS A/ALIAS record for the API hostname is created **after** the first apply
 
 ### 1.3 The Google Cloud project and OAuth consent screen
 
-1. Create a Google Cloud project for production Gmail push. Note its id; it becomes `gcp_project_id`.
+1. Create a Google Cloud project for production Gmail push. Note its id; it becomes `gcp_project_id` of `infra/roots/production-google`, whose default is the project in use, `callie-fss`.
 2. Enable the Cloud Pub/Sub API and the Gmail API in it.
 3. Configure the OAuth consent screen as an **Internal** application in the Callie Workspace organisation.
 4. Create two OAuth client credentials:
    - the **sign-in** client, for the Google OpenID Connect authorization-code flow with PKCE in the system browser;
    - the **Gmail** client, for the separate `gmail.readonly` + `gmail.send` grant.
 5. Keep both client secrets to hand for step 1.4. Do not put either in a file in the repository, in a `tfvars` file, or in a shell history line.
-6. **No rehearsal Google Cloud project, ever.** The Pub/Sub topic and its push subscription belong to `infra/roots/production` alone; the rehearsal root declares no Google provider, has no `gcp_project_id`, and creates nothing in Google Cloud. A rehearsal's Gmail is the recorded fake and its webhook is exercised offline with locally signed tokens, so a rehearsal project would be a second cloud trust relationship that proves nothing. Its two task definitions carry a derived audience and two public placeholders naming a project that does not exist; `docs/decisions/g12j-the-rehearsal-has-no-google-provider.md` lists the values and why they are not blank.
+6. **No rehearsal Google Cloud project, ever.** The Pub/Sub topic and its push subscription belong to `infra/roots/production-google` alone (lane g85); the rehearsal root declares no Google provider, has no `gcp_project_id`, and creates nothing in Google Cloud. A rehearsal's Gmail is the recorded fake and its webhook is exercised offline with locally signed tokens, so a rehearsal project would be a second cloud trust relationship that proves nothing. Its two task definitions carry a derived audience and two public placeholders naming a project that does not exist; `docs/decisions/g12j-the-rehearsal-has-no-google-provider.md` lists the values and why they are not blank.
 
-### 1.3a Google application-default credentials, on your Mac, before any production plan
+### 1.3a Google application-default credentials, on your Mac, before a plan of the Google root
 
-`infra/roots/production` is the one root that declares `provider "google"`. Terraform configures **every** provider a configuration requires before it evaluates anything, whether or not a resource uses it, so a production plan needs a working Google credential even when `enable_gmail_push` is false. Without one it stops with
+`infra/roots/production-google` is the one root that declares `provider "google"` (lane g85, `docs/decisions/g85-the-google-provider-has-its-own-root.md`). It holds the four Gmail push objects and is planned and applied only when one of them has to change. `infra/roots/production` declares no Google provider: it takes the topic and the push service account as validated variable defaults, so **a production plan needs no Google credential** — once the one-time migration in `docs/greenfield/google-root-migration-runbook.md` has taken the four addresses out of the production state. Until then a production plan still needs one, because its state names Google objects.
+
+Terraform configures **every** provider a configuration requires before it evaluates anything, whether or not a resource uses it. Without a credential a plan of the Google root stops with
 
 ```
 Error: Attempted to load application default credentials since neither `credentials`
@@ -203,7 +205,7 @@ Never `cat` that file, never echo a token, and never paste one into a variable, 
 
 **A service-account key file is refused by name.** Do not create one, do not download one, and do not set `GOOGLE_APPLICATION_CREDENTIALS` or the provider's `credentials` argument to a path. David's rule is that no key is pasted anywhere, and a downloaded Google key is a long-lived credential in a file no rotation reaches. Application-default credentials from an interactive login expire and are revocable; that is the whole difference. If you find such a file, delete it and re-run the login.
 
-The provider block in `infra/roots/production/providers.tf` names only `project` and `region`: there is no `credentials` and no `access_token` argument to fill in, which is why the failure above is the one you get rather than a quiet wrong-identity apply.
+The provider block in `infra/roots/production-google/providers.tf` names only `project` and `region`: there is no `credentials` and no `access_token` argument to fill in, which is why the failure above is the one you get rather than a quiet wrong-identity apply.
 
 ### 1.4 The secret values
 
@@ -344,11 +346,10 @@ terraform plan -out=production.tfplan \
   -var='api_schema_range={min=1,max=1}' \
   -var='worker_schema_range={min=1,max=1}' \
   -var='alert_emails=["<address>"]' \
-  -var="gcp_project_id=callie-fss" \
   -var="bootstrap=true"
 ```
 
-This needs the AWS credential of section 1.1 **and** the Google application-default credential of section 1.3a. The plan file is a read-only artefact here: **nothing in this section applies it.** Section 3.2 is where an apply happens, from a plan you have read.
+This needs the AWS credential of section 1.1, and no Google credential once the migration of 1.3a is done: the production root no longer has a `gcp_project_id` and refuses one passed to it. The plan file is a read-only artefact here: **nothing in this section applies it.** Section 3.2 is where an apply happens, from a plan you have read.
 
 A clean first plan shows:
 
@@ -418,7 +419,6 @@ terraform plan -out=production.tfplan \
   -var='api_schema_range={min=1,max=1}' \
   -var='worker_schema_range={min=1,max=1}' \
   -var='alert_emails=["<address>"]' \
-  -var="gcp_project_id=<production gcp project>" \
   -var="bootstrap=true"          # THE FIRST APPLY ONLY. See below.
 
 terraform apply production.tfplan
@@ -448,7 +448,7 @@ export FSS_REHEARSAL_REPORTS="$HOME/fss-release-$(date -u +%Y%m%d%H%M)"
 # Read it first. No credential is used and nothing is launched.
 FSS_REHEARSAL_DRY_RUN=1 \
   infra/scripts/release-deploy.sh infra/roots/production fss-prod \
-    --schema-change --worker-digest "<worker digest>"
+    --schema-change --api-digest "<api digest>" --worker-digest "<worker digest>"
 
 # A schema change on a running environment: this ran before the apply (3.2).
 #   infra/scripts/release-stop.sh infra/roots/production fss-prod --environment production
@@ -459,7 +459,7 @@ infra/scripts/release-deploy.sh infra/roots/production fss-prod \
   --worker-digest "<worker digest>"
 ```
 
-In order: with `--schema-change`, refuse unless both services are already at zero (the first apply created them there, or `release-stop.sh` put them there before the apply, in 3.2); `fss migrate` as a one-off ECS task, `fss admin database-users ensure`, `fss verify`, the worker to its declared count, the API to its, and `fss verify` again against the running deployment. It no longer stops the services itself, because by the time it runs the apply has already registered task definitions that refuse the old schema. Without `--schema-change` nothing is asserted and the rest is the same, which is the rolling path. Terraform no longer moves a count after the first apply, so steps 5 and 6 here are what put the declared numbers on the services.
+In order: with `--schema-change`, refuse unless both services are already at zero (the first apply created them there, or `release-stop.sh` put them there before the apply, in 3.2); `fss migrate` as a one-off ECS task, `fss admin database-users ensure`, `fss verify`, the worker to its declared count, the API to its, and `fss verify` again against the running deployment. It no longer stops the services itself, because by the time it runs the apply has already registered task definitions that refuse the old schema. Terraform no longer moves a count after the first apply, so steps 5 and 6 here are what put the declared numbers on the services. Without `--schema-change` it is the rolling path (`release.md` 4.1 and 8.0am): no one-off task at all, the worker's and then the API's declared count with no forced deployment, one wait for both, and the running-digest check that each service runs its declared number of tasks on the release's digest.
 
 This is **the same script** `.github/workflows/greenfield-release.yml` runs for a rehearsal. The differences are the root in argument one and the credentials in your shell; production applies stay local by decision, because `fss-prod-deploy` trusts no OIDC subject and giving it one is a separate decision nobody has made. `infra/scripts/release-common.sh` refuses a production command that names a rehearsal resource exactly as it refuses the reverse.
 
@@ -613,7 +613,7 @@ A freshly applied stack will show several alarms in `INSUFFICIENT_DATA` until th
 
 | Operation | Command |
 |---|---|
-| Deploy a new digest | edit `api_image` / `worker_image`, `terraform plan`, read it, `terraform apply`, then `release-deploy.sh` without `--schema-change` (3.2a). The circuit breaker rolls back a task that cannot pass its health check. The apply never moves a service's count; the deploy sets the declared ones. |
+| Deploy a new digest (app-only) | promote CI's digests (`release-promote.sh image-digests.json --app-only`, `release.md` 2.1), set `api_image` / `worker_image` to them, `terraform plan` and read it — only the two service task definitions and the services' `task_definition` change — `terraform apply`, then `release-deploy.sh --api-digest … --worker-digest …` without `--schema-change` (3.2a): no one-off task, the declared counts, one wait, and the running-digest check, which also fails a service the circuit breaker rolled back. Smoke after (`release.md` 8.0am). |
 | Widen a schema range | change `api_schema_range` / `worker_schema_range` and apply. Expand, migrate, contract: additive migration first, both binaries accepting the range, backfill, then behaviour. A strict `{N,N}` move is not a widening: plan, `release-stop.sh … --environment production`, apply, `release-deploy.sh --schema-change` (3.2). |
 | Change an alarm threshold | the thresholds are variables in `infra/modules/alerts`; surface the one you need in the root and apply. Spec 13.3 says thresholds are configuration versioned with the release. |
 | Rotate a secret value | `aws secretsmanager put-secret-value`, then `--force-new-deployment`. Terraform is not involved. **Except `app-runtime-database`**, whose value is a live PostgreSQL password: a put on its own leaves a secret the database refuses. Put the new value, then `fss admin database-users ensure --rotate-password` to alter the role to match, then force the deployment — and never re-put it as part of a redeploy (`release.md` 5.1 and 8.0s). |

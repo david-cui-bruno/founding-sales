@@ -16,10 +16,11 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  * cannot ask for the workspace and an admin cannot accidentally be narrowed. See
  * `docs/decisions/g9-dashboard-visibility.md`.
  *
- * `sources` supplies the figures whose tables belong to other lanes.
- * `liveDashboardSources()` reads sending from G7-2's fence and ramp (migration 0010)
- * and still reports the G8 and G7b figures as unavailable, naming the lane that owns
- * each. A figure nobody can compute says so rather than rendering as zero.
+ * `sources` supplies the figures whose tables other lanes built, and
+ * `liveDashboardSources()` reads every one of them: sending from G7-2's fence and ramp
+ * (migration 0010), enrollments from G8's tables (0012) and the classifier from G7b's
+ * (0011). The declared-unavailable shape remains for a figure that cannot be computed,
+ * which says so rather than rendering as zero.
  */
 export const DASHBOARD_PATHS: readonly string[] = ['/dashboard'];
 

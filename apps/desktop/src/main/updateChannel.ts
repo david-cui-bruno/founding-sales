@@ -31,6 +31,11 @@ export const updateManifestSchema = z.strictObject({
   /** The commit the artifact was built from; the same value the bundle is stamped with. */
   commitSha,
   publishedAt: z.iso.datetime(),
+  /**
+   * The oldest macOS the artifact runs on. Enforced (lane g86, audit N07): a Mac below
+   * it is refused the update, `update_system_too_old`, rather than handed a bundle
+   * that cannot start.
+   */
   minimumSystemVersion: semanticVersionSchema,
   artifact: z.strictObject({
     url: z.url(),
@@ -54,6 +59,10 @@ export type UpdateRefusal =
   | 'update_signature_invalid'
   | 'update_downgrade_refused'
   | 'update_running_version_unreadable'
+  /** The manifest's `minimumSystemVersion` is above this Mac's macOS. */
+  | 'update_system_too_old'
+  /** This Mac's macOS version could not be read, so the minimum cannot be checked. */
+  | 'update_system_version_unreadable'
   | 'update_artifact_untrusted'
   | 'update_artifact_size_mismatch'
   | 'update_artifact_digest_mismatch'
@@ -131,8 +140,26 @@ export function verifySignedManifest(answer: unknown, publicKeyBase64: string): 
   return good ? { ok: true, manifest: parsed.data.manifest } : { ok: false, reason: 'update_signature_invalid' };
 }
 
+/**
+ * macOS's version as a three-part version the manifest's minimum compares with.
+ *
+ * Electron's `process.getSystemVersion()` answers `15.4.1`, and `26.0` on a release
+ * with no patch yet, so a missing minor or patch is zero. Anything else — an empty
+ * string, a build number, a development shell that is not Electron — is null, and null
+ * refuses the update rather than guessing that the Mac is new enough.
+ */
+export function macOsVersion(raw: string): SemanticVersion | null {
+  const match = /^(\d{1,4})(?:\.(\d{1,4}))?(?:\.(\d{1,4}))?$/u.exec(raw.trim());
+  if (match === null) return null;
+  const part = (digits: string | undefined): string => String(Number(digits ?? '0'));
+  const parsed = semanticVersionSchema.safeParse(`${part(match[1])}.${part(match[2])}.${part(match[3])}`);
+  return parsed.success ? parsed.data : null;
+}
+
 export interface UpdateDecisionInput {
   readonly currentVersion: string;
+  /** This Mac's macOS version, as `process.getSystemVersion()` reports it. */
+  readonly systemVersion: string;
   /** The CloudFront origin this build was told to trust. */
   readonly channelBaseUrl: string;
   readonly publicKey: string;
@@ -158,6 +185,12 @@ export function decideUpdate(input: UpdateDecisionInput): UpdateDecision {
   const order = compareVersions(manifest.releaseVersion, running.data);
   if (order < 0) return { kind: 'refused', reason: 'update_downgrade_refused' };
   if (order === 0) return { kind: 'up_to_date' };
+
+  // Only an update that would otherwise be offered is measured against the OS: a Mac
+  // that is up to date stays up to date whatever the manifest asks of the next one.
+  const system = macOsVersion(input.systemVersion);
+  if (system === null) return { kind: 'refused', reason: 'update_system_version_unreadable' };
+  if (compareVersions(manifest.minimumSystemVersion, system) > 0) return { kind: 'refused', reason: 'update_system_too_old' };
   return { kind: 'available', manifest };
 }
 
@@ -189,6 +222,8 @@ export function verifyArtifactBytes(manifest: UpdateManifest, bytes: Uint8Array)
 
 export interface UpdateCheckOptions {
   readonly currentVersion: string;
+  /** This Mac's macOS version, as `process.getSystemVersion()` reports it. */
+  readonly systemVersion: string;
   readonly channelBaseUrl: string;
   readonly publicKey: string;
   /** Injected in tests. The default reads the channel with the platform `fetch`. */
@@ -207,6 +242,7 @@ export async function checkForUpdate(options: UpdateCheckOptions): Promise<Updat
   }
   return decideUpdate({
     currentVersion: options.currentVersion,
+    systemVersion: options.systemVersion,
     channelBaseUrl: options.channelBaseUrl,
     publicKey: options.publicKey,
     answer,

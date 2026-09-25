@@ -32,6 +32,9 @@ import {
 } from './support/updateFakes.ts';
 import { generateUpdateKeyPair } from './support/updateKeys.ts';
 
+/** The macOS these fixtures run on: above the 13.0.0 every fixture manifest asks for. */
+const MAC_OS = '15.4.1';
+
 /**
  * Lane g83: Callie updates itself when it is opened (audit item G11).
  *
@@ -125,6 +128,7 @@ function harness(options: HarnessOptions = {}): Harness {
   };
   const updater = createUpdater({
     currentVersion: current,
+    systemVersion: MAC_OS,
     channelBaseUrl: CHANNEL,
     publicKey: 'compiled-in',
     host,
@@ -195,7 +199,7 @@ describe('at launch', () => {
     const h = harness({ decision: { kind: 'up_to_date' } });
 
     await expect(h.updater.atLaunch()).resolves.toEqual({ kind: 'nothing', decision: { kind: 'up_to_date' } });
-    expect(h.checks).toEqual([{ currentVersion: '1.0.5', channelBaseUrl: CHANNEL, publicKey: 'compiled-in' }]);
+    expect(h.checks).toEqual([{ currentVersion: '1.0.5', systemVersion: MAC_OS, channelBaseUrl: CHANNEL, publicKey: 'compiled-in' }]);
     expectApplicationsUntouched(h);
   });
 
@@ -262,6 +266,7 @@ describe('at launch', () => {
     const relaunched: string[] = [];
     const updater = createUpdater({
       currentVersion: '1.0.5',
+      systemVersion: MAC_OS,
       channelBaseUrl: CHANNEL,
       publicKey: keys.publicKey,
       host: { updateDirectory: UPDATES, executablePath: EXE, files: fake.files, run: createFakeTools(fake).run, now: () => new Date() },

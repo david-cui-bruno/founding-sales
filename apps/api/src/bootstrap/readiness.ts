@@ -6,18 +6,21 @@ import type { BootstrapResponse, ReadinessInputs, RouteModule } from './routeReg
 /**
  * Liveness and readiness, which are different questions.
  *
- * **`/healthz`** is what the load balancer target group (`infra/modules/edge`,
- * `health_check_path` default `/healthz`) and the container health check
- * (`infra/modules/cluster`, `api_health_check_command`) call. It answers "is this
- * process running", touches no database, and cannot fail because of something outside
- * the process. A liveness check that queries a database restarts every task in the
- * fleet the moment the database hiccups, which is the opposite of what it is for.
+ * **`/healthz`** is what the container health check (`infra/modules/cluster`,
+ * `api_health_check_command`) calls. It answers "is this process running", touches no
+ * database, and cannot fail because of something outside the process. A liveness check
+ * that queries a database restarts every task in the fleet the moment the database
+ * hiccups, which is the opposite of what it is for.
  *
- * **`/readyz`** answers "should this task be given traffic". It fails closed when the
- * database cannot answer, when the applied schema version is outside the range this
- * binary accepts (4.2), or when the system generation is not the one the operator
- * pinned — which after a restore is how a task learns it is looking at recovered data
- * before it serves anything from it (Appendix E step 1).
+ * **`/readyz`** answers "should this task be given traffic", and since lane g81 it is
+ * what the load balancer target group asks (`infra/modules/edge`, `health_check_path`
+ * default `/readyz`). It fails closed when the database cannot answer, when the applied
+ * schema version is outside the range this binary accepts (4.2), or when the system
+ * generation is not the one the operator pinned — which after a restore is how a task
+ * learns it is looking at recovered data before it serves anything from it (Appendix E
+ * step 1). Since lane g86 the same report also gates every other request
+ * (`readinessGate.ts`): a task that is not ready answers 503 `not_ready` rather than
+ * running a route while the load balancer is still deciding.
  *
  * `/health` stays where G0 put it: a fuller, human-facing report that answers 200 even
  * when degraded. It is for an operator, not for a load balancer.

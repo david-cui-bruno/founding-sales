@@ -169,7 +169,11 @@ export type SessionRenewal = z.infer<typeof sessionRenewalSchema>;
 
 export const clientVersionNoticeSchema = z.strictObject({
   supported: clientVersionRangeSchema,
-  /** Where a person is told to get the new build. A public URL, never a signed one. */
+  /**
+   * Where the current build is published. A public URL, never a signed one; in
+   * production the signed update manifest the desktop reads (lane g86), so it is
+   * machine-facing and the Mac never shows it: the person reads `instruction`.
+   */
   upgradeUrl: z.url(),
   /** A fixed sentence for the banner. The client never composes its own. */
   instruction: z.string().min(1).max(300),

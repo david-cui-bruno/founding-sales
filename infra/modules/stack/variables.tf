@@ -462,9 +462,9 @@ variable "updates_price_class" {
 # ---------------------------------------------------------------------------
 
 # This module creates nothing in Google Cloud and requires no Google provider.
-# The topic and its push subscription belong to `infra/roots/production`, the
-# one root with a project; each root passes the three identifiers its task
-# definitions carry. Terraform configures every provider a module *requires*
+# The topic and its push subscription belong to `infra/roots/production-google`
+# (lane g85), the one root with a Google provider; each AWS root passes the three
+# identifiers its task definitions carry. Terraform configures every provider a module *requires*
 # during a plan, even with no instances of it, which is why `module "pubsub"`
 # with `count = 0` still asked CI for a Google credential.
 # `docs/decisions/g12j-the-rehearsal-has-no-google-provider.md`.
@@ -479,7 +479,9 @@ variable "gmail_push_topic" {
   description = <<-EOT
     `FSS_GMAIL_PUSH_TOPIC` on both task definitions: the fully qualified Pub/Sub
     topic id `users.watch` registers against, `projects/<project>/topics/<name>`.
-    Production passes `module.pubsub[0].topic_id`, a value that apply computes.
+    Production passes its root's `gmail_push_topic`, whose default is the topic
+    `infra/roots/production-google` owns (lane g85); the rehearsal passes a
+    placeholder.
   EOT
   type        = string
   default     = ""
@@ -509,8 +511,9 @@ variable "gmail_push_audience" {
 variable "gmail_push_service_account" {
   description = <<-EOT
     `FSS_GMAIL_PUSH_SERVICE_ACCOUNT` on both task definitions: the one service
-    account whose OIDC token the webhook accepts. Production passes
-    `module.pubsub[0].push_service_account_email`.
+    account whose OIDC token the webhook accepts. Production passes its root's
+    `gmail_push_service_account`, whose default is the push identity
+    `infra/roots/production-google` owns (lane g85).
   EOT
   type        = string
   default     = ""
@@ -519,6 +522,18 @@ variable "gmail_push_service_account" {
     condition     = var.gmail_push_service_account == "" || can(regex("^[^@[:space:]]+@[^@[:space:]]+$", var.gmail_push_service_account))
     error_message = "The push service account is an email address, and the webhook compares it exactly."
   }
+}
+
+variable "desktop_upgrade_url" {
+  description = <<-EOT
+    `FSS_DESKTOP_UPGRADE_URL` on the API task definition alone (lane g86): the
+    address `/auth/client-version` publishes as `upgradeUrl`. Null, the default
+    and the rehearsal's, leaves the variable off the task definition, and the
+    API then publishes its placeholder — or, in production, refuses to start.
+    The production root supplies the update manifest and validates it.
+  EOT
+  type        = string
+  default     = null
 }
 
 variable "extra_tags" {

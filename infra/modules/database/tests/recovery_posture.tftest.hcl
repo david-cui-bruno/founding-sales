@@ -111,6 +111,25 @@ run "parameter_group_logs_slow_statements_and_forces_tls" {
     ]) == 1
     error_message = "Connections must be TLS only."
   }
+
+  # Lane g86: the apply method each parameter carries is the one AWS reports for
+  # it in production, or every plan shows an update that changes nothing
+  # (docs/decisions/g86-the-parameter-group-names-what-aws-holds.md).
+  assert {
+    condition = length([
+      for parameter in aws_db_parameter_group.main.parameter :
+      parameter if contains(["rds.force_ssl", "log_autovacuum_min_duration"], parameter.name) && parameter.apply_method == "pending-reboot"
+    ]) == 2
+    error_message = "rds.force_ssl and log_autovacuum_min_duration are pending-reboot, which is what AWS holds for them."
+  }
+
+  assert {
+    condition = length([
+      for parameter in aws_db_parameter_group.main.parameter :
+      parameter if !contains(["rds.force_ssl", "log_autovacuum_min_duration"], parameter.name) && parameter.apply_method != "immediate"
+    ]) == 0
+    error_message = "Every other parameter is immediate, which is what AWS holds for them."
+  }
 }
 
 run "a_protected_instance_may_not_skip_its_final_snapshot" {

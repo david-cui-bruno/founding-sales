@@ -22,6 +22,7 @@ export const REFUSAL_CODES = [
   'unauthenticated',
   'internal_error',
   'database_busy',
+  'not_ready',
 ] as const;
 export type RefusalCode = (typeof REFUSAL_CODES)[number];
 
@@ -37,6 +38,11 @@ export const REFUSAL_STATUS: Readonly<Record<RefusalCode, number>> = Object.free
   // 500: nothing is broken, the request was not run, and the same request may be sent
   // again.
   database_busy: 503,
+  // Lane g86: the task's own readiness check says it must not serve — the database did
+  // not answer, its schema is outside this binary's range, or its system generation is
+  // not the pinned one (`bootstrap/readinessGate.ts`). 503 for the same reason: the
+  // route did not run, and another task, or this one shortly, may answer.
+  not_ready: 503,
 });
 
 export interface RequestEnvelope {
@@ -83,6 +89,7 @@ const REFUSAL_MESSAGES: Readonly<Record<RefusalCode, string>> = Object.freeze({
   unauthenticated: 'This endpoint requires an authenticated session.',
   internal_error: 'The request could not be completed.',
   database_busy: 'The API is busy. Nothing was changed; try again.',
+  not_ready: 'The API is not ready to serve requests. Nothing was changed; try again shortly.',
 });
 
 /**

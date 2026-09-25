@@ -3,12 +3,16 @@ import {
   canonicalJsonBytes,
   CHANNEL_MANIFEST_PATH,
   decideUpdate,
+  macOsVersion,
   signManifest,
   verifyArtifactBytes,
   type SignedUpdateManifest,
   type UpdateManifest,
 } from '../../src/main/updateChannel.ts';
 import { generateUpdateKeyPair, sha256Hex } from '../support/updateKeys.ts';
+
+/** The macOS these fixtures run on: above the 13.0.0 every fixture manifest asks for. */
+const MAC_OS = '15.4.1';
 
 /**
  * The update channel (specification 14.2: "signed update enforcement"; G13a
@@ -51,6 +55,7 @@ describe('the update manifest is believed only when its signature verifies', () 
 
     const decision = decideUpdate({
       currentVersion: '1.4.0',
+      systemVersion: MAC_OS,
       channelBaseUrl: CHANNEL,
       publicKey: keys.publicKey,
       answer,
@@ -66,7 +71,7 @@ describe('the update manifest is believed only when its signature verifies', () 
     // An unsigned development bundle, or a build step that forgot the key. Either
     // way the only safe answer is "no update", never "install it anyway".
     expect(
-      decideUpdate({ currentVersion: '1.4.0', channelBaseUrl: CHANNEL, publicKey: '', answer }),
+      decideUpdate({ currentVersion: '1.4.0', systemVersion: MAC_OS, channelBaseUrl: CHANNEL, publicKey: '', answer }),
     ).toEqual({ kind: 'refused', reason: 'update_key_absent' });
   });
 
@@ -76,7 +81,7 @@ describe('the update manifest is believed only when its signature verifies', () 
     const answer = signManifest(manifest(), theirs.privateKey);
 
     expect(
-      decideUpdate({ currentVersion: '1.4.0', channelBaseUrl: CHANNEL, publicKey: mine.publicKey, answer }),
+      decideUpdate({ currentVersion: '1.4.0', systemVersion: MAC_OS, channelBaseUrl: CHANNEL, publicKey: mine.publicKey, answer }),
     ).toEqual({ kind: 'refused', reason: 'update_signature_invalid' });
   });
 
@@ -89,7 +94,7 @@ describe('the update manifest is believed only when its signature verifies', () 
     };
 
     expect(
-      decideUpdate({ currentVersion: '1.4.0', channelBaseUrl: CHANNEL, publicKey: keys.publicKey, answer: tampered }),
+      decideUpdate({ currentVersion: '1.4.0', systemVersion: MAC_OS, channelBaseUrl: CHANNEL, publicKey: keys.publicKey, answer: tampered }),
     ).toEqual({ kind: 'refused', reason: 'update_signature_invalid' });
   });
 
@@ -97,6 +102,7 @@ describe('the update manifest is believed only when its signature verifies', () 
     expect(
       decideUpdate({
         currentVersion: '1.4.0',
+        systemVersion: MAC_OS,
         channelBaseUrl: CHANNEL,
         publicKey: generateUpdateKeyPair().publicKey,
         answer: { manifest: manifest() },
@@ -111,6 +117,7 @@ describe('the update manifest is believed only when its signature verifies', () 
     expect(
       decideUpdate({
         currentVersion: '1.4.0',
+        systemVersion: MAC_OS,
         channelBaseUrl: CHANNEL,
         publicKey: keys.publicKey,
         answer: { ...signed, installSilently: true },
@@ -127,7 +134,7 @@ describe('the update manifest is believed only when its signature verifies', () 
     ) as unknown;
 
     expect(
-      decideUpdate({ currentVersion: '1.4.0', channelBaseUrl: CHANNEL, publicKey: keys.publicKey, answer: reordered }),
+      decideUpdate({ currentVersion: '1.4.0', systemVersion: MAC_OS, channelBaseUrl: CHANNEL, publicKey: keys.publicKey, answer: reordered }),
     ).toEqual({ kind: 'available', manifest: manifest() });
   });
 
@@ -142,7 +149,7 @@ describe('a signed manifest still has to be a newer build from this channel', ()
     const answer = signManifest(manifest({ releaseVersion: '1.3.0' }), keys.privateKey);
 
     expect(
-      decideUpdate({ currentVersion: '1.4.0', channelBaseUrl: CHANNEL, publicKey: keys.publicKey, answer }),
+      decideUpdate({ currentVersion: '1.4.0', systemVersion: MAC_OS, channelBaseUrl: CHANNEL, publicKey: keys.publicKey, answer }),
     ).toEqual({ kind: 'refused', reason: 'update_downgrade_refused' });
   });
 
@@ -151,7 +158,7 @@ describe('a signed manifest still has to be a newer build from this channel', ()
     const answer = signManifest(manifest({ releaseVersion: '1.4.0' }), keys.privateKey);
 
     expect(
-      decideUpdate({ currentVersion: '1.4.0', channelBaseUrl: CHANNEL, publicKey: keys.publicKey, answer }),
+      decideUpdate({ currentVersion: '1.4.0', systemVersion: MAC_OS, channelBaseUrl: CHANNEL, publicKey: keys.publicKey, answer }),
     ).toEqual({ kind: 'up_to_date' });
   });
 
@@ -169,7 +176,7 @@ describe('a signed manifest still has to be a newer build from this channel', ()
     );
 
     expect(
-      decideUpdate({ currentVersion: '1.4.0', channelBaseUrl: CHANNEL, publicKey: keys.publicKey, answer }),
+      decideUpdate({ currentVersion: '1.4.0', systemVersion: MAC_OS, channelBaseUrl: CHANNEL, publicKey: keys.publicKey, answer }),
     ).toEqual({ kind: 'refused', reason: 'update_artifact_untrusted' });
   });
 
@@ -187,7 +194,7 @@ describe('a signed manifest still has to be a newer build from this channel', ()
     );
 
     expect(
-      decideUpdate({ currentVersion: '1.4.0', channelBaseUrl: CHANNEL, publicKey: keys.publicKey, answer }),
+      decideUpdate({ currentVersion: '1.4.0', systemVersion: MAC_OS, channelBaseUrl: CHANNEL, publicKey: keys.publicKey, answer }),
     ).toEqual({ kind: 'refused', reason: 'update_artifact_untrusted' });
   });
 
@@ -196,12 +203,61 @@ describe('a signed manifest still has to be a newer build from this channel', ()
     const answer = signManifest(manifest(), keys.privateKey);
 
     expect(
-      decideUpdate({ currentVersion: 'dev', channelBaseUrl: CHANNEL, publicKey: keys.publicKey, answer }),
+      decideUpdate({ currentVersion: 'dev', systemVersion: MAC_OS, channelBaseUrl: CHANNEL, publicKey: keys.publicKey, answer }),
     ).toEqual({ kind: 'refused', reason: 'update_running_version_unreadable' });
   });
 
   it('names the one path on the channel it reads', () => {
     expect(CHANNEL_MANIFEST_PATH).toBe('releases/darwin-arm64/latest.json');
+  });
+});
+
+/**
+ * Lane g86, audit N07: the signed manifest's `minimumSystemVersion` used to be carried
+ * and never read. The trap is a check that never refuses, so the first case requires a
+ * refusal of the very manifest the Mac on 15.4.1 accepts above, signed the same way.
+ */
+describe('the manifest’s minimum macOS is enforced', () => {
+  const keys = generateUpdateKeyPair();
+  const decide = (systemVersion: string, over: Partial<UpdateManifest> = {}) =>
+    decideUpdate({
+      currentVersion: '1.4.0',
+      systemVersion,
+      channelBaseUrl: CHANNEL,
+      publicKey: keys.publicKey,
+      answer: signManifest(manifest(over), keys.privateKey),
+    });
+
+  it('refuses an update whose minimum is above this Mac', () => {
+    expect(decide(MAC_OS, { minimumSystemVersion: '15.5.0' })).toEqual({ kind: 'refused', reason: 'update_system_too_old' });
+    expect(decide('12.7.6')).toEqual({ kind: 'refused', reason: 'update_system_too_old' });
+  });
+
+  it('offers it at the minimum and above, including a macOS with no patch number', () => {
+    expect(decide('13.0')).toMatchObject({ kind: 'available' });
+    expect(decide('26.0')).toMatchObject({ kind: 'available' });
+    expect(decide(MAC_OS, { minimumSystemVersion: '15.4.1' })).toMatchObject({ kind: 'available' });
+  });
+
+  it('refuses rather than guess when this Mac’s version cannot be read', () => {
+    for (const unreadable of ['', 'dev', '15.4.1.2', 'Version 15.4']) {
+      expect(decide(unreadable), unreadable).toEqual({ kind: 'refused', reason: 'update_system_version_unreadable' });
+    }
+  });
+
+  it('leaves an up-to-date Mac up to date whatever the manifest asks of the next one', () => {
+    const answer = signManifest(manifest({ releaseVersion: '1.4.0', minimumSystemVersion: '99.0.0' }), keys.privateKey);
+    expect(
+      decideUpdate({ currentVersion: '1.4.0', systemVersion: MAC_OS, channelBaseUrl: CHANNEL, publicKey: keys.publicKey, answer }),
+    ).toEqual({ kind: 'up_to_date' });
+  });
+
+  it('reads macOS versions the way Electron reports them', () => {
+    expect(macOsVersion('15.4.1')).toBe('15.4.1');
+    expect(macOsVersion(' 26.0 ')).toBe('26.0.0');
+    expect(macOsVersion('15')).toBe('15.0.0');
+    expect(macOsVersion('15.04')).toBe('15.4.0');
+    expect(macOsVersion('')).toBeNull();
   });
 });
 

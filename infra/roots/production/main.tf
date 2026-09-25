@@ -94,6 +94,9 @@ module "stack" {
 
   expected_system_generation = var.expected_system_generation
 
+  # Lane g86: the address `/auth/client-version` publishes, on the API alone.
+  desktop_upgrade_url = var.desktop_upgrade_url
+
   certificate_arn = var.certificate_arn
   api_hostname    = var.api_hostname
   elb_account_id  = var.elb_account_id
