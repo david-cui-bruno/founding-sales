@@ -14,7 +14,9 @@ import {
 } from '../../release/index.ts';
 import {
   FIXTURE_API_DIGEST,
+  FIXTURE_CI_COMMIT,
   FIXTURE_WORKER_DIGEST,
+  fixtureCiGateRecord,
   fixtureDigest,
   fixtureReleaseRecord,
 } from './support/releaseRecords.ts';
@@ -106,6 +108,50 @@ describe('storing a release record', () => {
       await putReleaseRecord({ db: database.session }, { ...fixtureReleaseRecord(reference), extra: true }),
     ).toMatchObject({ ok: false, reason: 'release_record_invalid' });
     expect(await readReleaseRecord({ db: database.session }, reference)).toBeNull();
+  });
+
+  it('stores a record from the CI gate, which carries no drill evidence, and binds both sides to it', async () => {
+    // Lane g96. The row's columns are the same five, and the rule reads only them.
+    const record = fixtureCiGateRecord('41000000001');
+    const stored = await putReleaseRecord({ db: database.session }, JSON.stringify(record, null, 2));
+    expect(stored).toMatchObject({ ok: true, value: { outcome: 'created' } });
+    const read = await readReleaseRecord({ db: database.session }, record.releaseGateReference);
+    expect(read).toMatchObject({
+      reference: `ci-gate-41000000001-${FIXTURE_CI_COMMIT.slice(0, 12)}`,
+      suite: 'pass',
+      apiDigest: FIXTURE_API_DIGEST,
+      workerDigest: FIXTURE_WORKER_DIGEST,
+      desktopCommitStamp: FIXTURE_CI_COMMIT,
+      enablesSending: true,
+    });
+    expect(read?.record).toEqual(record);
+    expect(releaseRecordBinding(read, 'api', FIXTURE_API_DIGEST)).toMatchObject({ ok: true });
+    expect(releaseRecordBinding(read, 'worker', FIXTURE_WORKER_DIGEST)).toMatchObject({ ok: true });
+    expect(releaseRecordBinding(read, 'worker', fixtureDigest('e'))).toEqual({
+      ok: false,
+      reason: 'release_record_digest_mismatch',
+    });
+
+    // Building it again from the same run is the same record: `existing`, not a conflict.
+    expect(await putReleaseRecord({ db: database.session }, fixtureCiGateRecord('41000000001'))).toMatchObject({
+      ok: true,
+      value: { outcome: 'existing' },
+    });
+  });
+
+  it('refuses a rehearsal record without its drill evidence, and a ci-gate record that claims some', async () => {
+    const { carryDrill: _carryDrill, ...undrilled } = fixtureReleaseRecord('fss-rh-fixture-undrilled');
+    const refused = await putReleaseRecord({ db: database.session }, undrilled);
+    expect(refused).toMatchObject({ ok: false, reason: 'release_record_invalid' });
+    if (!refused.ok) expect(refused.detail).toContain('carryDrill');
+
+    const claiming = { ...fixtureCiGateRecord('41000000005'), carryDrill: 'ran' };
+    expect(await putReleaseRecord({ db: database.session }, claiming)).toMatchObject({
+      ok: false,
+      reason: 'release_record_invalid',
+    });
+    expect(await readReleaseRecord({ db: database.session }, 'fss-rh-fixture-undrilled')).toBeNull();
+    expect(await readReleaseRecord({ db: database.session }, claiming.releaseGateReference)).toBeNull();
   });
 
   it('is append-only for the runtime role: no UPDATE, no DELETE, no TRUNCATE', async () => {

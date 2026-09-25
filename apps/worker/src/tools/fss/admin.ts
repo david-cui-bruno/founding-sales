@@ -40,7 +40,7 @@ import {
   type SentMessageRecovery,
   type UnresolvedSentFolderItem,
 } from '@fss/domain/restore';
-import type { HoldReasonCode } from '@fss/contracts';
+import { releaseRecordSource, type HoldReasonCode } from '@fss/contracts';
 import { runSchedulerPass } from '../../scheduler/schedulerPass.ts';
 import { workerDueWorkSources } from '../../bootstrap/main.ts';
 import type { MailWorkerOptions } from '../../handlers/mail.ts';
@@ -911,6 +911,8 @@ export async function systemGenerationAdvanceCommand(invocation: AdminInvocation
 function describeRecord(record: StoredReleaseRecord): Readonly<Record<string, unknown>> {
   return {
     reference: record.reference,
+    // Lane g96: `ci-gate` or `rehearsal`, so the operator reads which gate certified it.
+    source: releaseRecordSource(record.record),
     suite: record.suite,
     apiDigest: record.apiDigest,
     workerDigest: record.workerDigest,
@@ -924,7 +926,8 @@ function describeRecord(record: StoredReleaseRecord): Readonly<Record<string, un
 /**
  * `fss admin release-record put --json <file> | --json-base64 <value>`.
  *
- * Stores the `fss.release-record.v1` a green rehearsal wrote, so that an admin's
+ * Stores the `fss.release-record.v1` the CI gate (`release-record-from-ci.sh`, lane g96)
+ * or a green rehearsal wrote, so that an admin's
  * `sending_enabled` attestation can name it and both rules can read it: the API
  * compares its own digest with the record's `api` when the enable is saved, and the
  * worker compares its own with the record's `worker` before every dispatch. Putting a
@@ -944,7 +947,7 @@ export async function releaseRecordPutCommand(invocation: AdminInvocation): Prom
     try {
       text = await readFile(path, 'utf8');
     } catch {
-      return refuse('release_record_unreadable', '--json names the release-record.json the green rehearsal wrote, and it could not be read');
+      return refuse('release_record_unreadable', '--json names the release-record.json to store, and it could not be read');
     }
   } else if (encoded !== undefined && /^[A-Za-z0-9+/]+={0,2}$/u.test(encoded)) {
     text = Buffer.from(encoded, 'base64').toString('utf8');

@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { releaseRecordSchema } from '@fss/contracts';
+import { rehearsalReleaseRecordSchema, releaseRecordSchema } from '@fss/contracts';
 import { effectiveSendingEnabled } from '@fss/domain/settings';
 import { SEND_REFUSAL_CODES } from '@fss/domain/outbound';
 import { DEPLOYMENT_ENVIRONMENT_VARIABLES as WORKER_VARIABLES } from '../../apps/worker/src/bootstrap/deployment.ts';
@@ -483,8 +483,14 @@ describe('Appendix G 42: the attestation is bound to the release record (lane g7
     const parsed = releaseRecordSchema.safeParse(written);
     expect(parsed.success, JSON.stringify(parsed.error?.issues ?? [])).toBe(true);
     // Strict both ways: every field the script writes is one the contract names, and
-    // the digests the two rules compare are where the domain reads them.
-    expect(Object.keys(written).sort()).toEqual(Object.keys(releaseRecordSchema.shape).sort());
+    // the digests the two rules compare are where the domain reads them. The script
+    // writes no `source`, which is how the contract knows a rehearsal record (lane g96).
+    expect(written).not.toHaveProperty('source');
+    expect(Object.keys(written).sort()).toEqual(
+      Object.keys(rehearsalReleaseRecordSchema.shape)
+        .filter(key => key !== 'source')
+        .sort(),
+    );
     expect(parsed.data?.artifacts).toEqual({ api: digest('a'), worker: digest('b'), desktopCommitStamp: 'c'.repeat(40) });
     expect(parsed.data?.suite).toBe('pass');
     expect(parsed.data?.releaseGateReference.startsWith('fss-rh-contract-')).toBe(true);
