@@ -255,6 +255,12 @@ module "cluster" {
   envelope_kms_key_arn = module.secrets.envelope_kms_key_arn
   secrets_kms_key_arn  = module.secrets.secrets_kms_key_arn
 
+  # Lane g59: the drill may unwrap the refresh token the drill-evidence seed stored,
+  # under the recorded seam's encryption context only, and only in a rehearsal.
+  # Production is never seeded, so its drill role has nothing to unwrap and gets no
+  # envelope grant; its plan is unchanged by this line.
+  drill_unwraps_recorded_envelopes = !local.is_production
+
   metric_namespace       = local.metric_namespace
   container_insights     = var.container_insights
   enable_execute_command = var.enable_execute_command

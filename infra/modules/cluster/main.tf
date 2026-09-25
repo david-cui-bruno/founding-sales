@@ -387,7 +387,7 @@ resource "aws_iam_role_policy" "drill_task" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
+    Statement = concat([
       {
         # Read, and only read. Appendix E step 2 replays what the journal already
         # holds into the restored database; a drill that could write the journal
@@ -404,10 +404,6 @@ resource "aws_iam_role_policy" "drill_task" {
         Resource = [var.journal_kms_key_arn]
       },
       {
-        # No envelope key: the drill runs with FSS_DEPENDENCIES=recorded, fixed in
-        # the task definition, so the mail commands reach the recorded adapters and
-        # there is no real refresh token to unwrap. A key granted to an identity
-        # that has nothing to use it on is a grant nobody can justify later.
         Sid      = "PublishOperationalMetrics"
         Effect   = "Allow"
         Action   = ["cloudwatch:PutMetricData"]
@@ -416,7 +412,25 @@ resource "aws_iam_role_policy" "drill_task" {
           StringEquals = { "cloudwatch:namespace" = var.metric_namespace }
         }
       },
-    ]
+      ],
+      # The envelope key, for the recorded seam only, and only where the root asks
+      # (lane g59). The drill runs with FSS_DEPENDENCIES=recorded, fixed in the task
+      # definition, and still has one refresh token to unwrap: the one the
+      # drill-evidence seed stored, in another task, through the same key. Decrypt and
+      # nothing else — the drill never wraps — and only under the recorded seam's
+      # encryption context, which a live process never uses, so no real mailbox's
+      # token is reachable from this identity. Absent in production.
+      var.drill_unwraps_recorded_envelopes ? [
+        {
+          Sid      = "UnwrapRecordedSeamRefreshTokens"
+          Effect   = "Allow"
+          Action   = ["kms:Decrypt"]
+          Resource = [var.envelope_kms_key_arn]
+          Condition = {
+            StringEquals = { "kms:EncryptionContext:fss_envelope_seam" = "recorded" }
+          }
+        },
+    ] : [])
   })
 }
 

@@ -346,10 +346,23 @@ async function runCommand(
       ...(options['--from'] === undefined ? {} : { replayFrom: options['--from'] }),
       ...(options['--since'] === undefined ? {} : { since: options['--since'] }),
       ...(options['--expected-generation'] === undefined ? {} : { expectedGeneration: options['--expected-generation'] }),
+      ...(options['--at-failure-json'] === undefined ? {} : { atFailureJson: options['--at-failure-json'] }),
+      ...(options['--mailbox-recording-json'] === undefined
+        ? {}
+        : { mailboxRecordingJson: options['--mailbox-recording-json'] }),
       ...(adminUserId === undefined || adminUserId.length === 0 ? {} : { adminUserId }),
     });
     if (outcome.ok) return { ok: true, value: { ...outcome.value } };
-    return { ok: false, reason: outcome.reason, detail: outcome.detail };
+    // The report travels with the refusal (lane g59). A one-off task's filesystem goes
+    // with it, so a drill that failed used to leave one log line naming the first
+    // failure and nothing about the steps it had measured, or, past an unanswered step,
+    // the steps it went on to run.
+    return {
+      ok: false,
+      reason: outcome.reason,
+      detail: outcome.detail,
+      ...(outcome.value === undefined ? {} : { report: { ...outcome.value } }),
+    };
   }
   if (path === 'admin drill seed-evidence') {
     // The runtime identity, like `verify` and `admin workspace bootstrap`: it writes
@@ -477,6 +490,12 @@ export async function main(
     );
     if (!outcome.ok) {
       log.log('error', 'fss_refused', { command: parsed.value.spec.path.join(' '), reason: outcome.reason, detail: outcome.detail });
+      // A refusal that got somewhere prints how far, on stdout where the runner reads
+      // answers (lane g59). The exit code is still 20: a report is not a pass.
+      if (outcome.report !== undefined) {
+        await report(parsed.value.options['--report'] ?? parsed.value.options['--out'], outcome.report);
+        write(JSON.stringify(outcome.report));
+      }
       return FSS_EXIT_CODES.refused;
     }
     await report(parsed.value.options['--report'] ?? parsed.value.options['--out'], outcome.value);

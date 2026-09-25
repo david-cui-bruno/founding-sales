@@ -137,6 +137,11 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
       // derives as the source baseline's `systemGeneration` plus one. Step 1a runs
       // `admin restore-holds open` with it.
       '--expected-generation',
+      // Lane g59: the counts at the moment of failure, which step 8 reads as
+      // `--at-failure`, and what the rehearsal's recorded mailbox holds, which steps 3,
+      // 4 and 6 run against. Both handed over as values, like `--baseline-json`.
+      '--at-failure-json',
+      '--mailbox-recording-json',
       ...REPORTABLE,
     ],
     booleanFlags: ['--all-mailboxes'],
@@ -233,7 +238,7 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     // section 0.1, and a phase reached by omission is a seed that silently did the
     // other one.
     requiredFlags: ['--workspace-slug', '--phase'],
-    summary: 'the five kinds restore-drill.md 0.1 needs, through the real paths. Rehearsal only',
+    summary: 'the evidence restore-drill.md 0.1 needs, by phase (before, in-flight, after), through the real paths. Rehearsal only',
   },
   {
     path: ['admin', 'jobs', 'discard-runnable'],

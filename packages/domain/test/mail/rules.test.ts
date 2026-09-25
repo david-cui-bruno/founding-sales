@@ -2,11 +2,19 @@ import { randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_PUSH_TOKEN_POLICY,
+  RECORDED_SEAM_ENCRYPTION_CONTEXT,
+  RECORDED_SEAM_KEY_PREFIX,
   decidePushToken,
+  envelopeCipher,
   fixturePushTokens,
   grantCodeChallenge,
   grantCodeVerifier,
+  kmsDataKeyWrapper,
   localEnvelopeCipher,
+  recordedGmailClient,
+  recordedSeamDataKeyWrapper,
+  type GmailSendRequest,
+  type KmsTransport,
   normalizeAddress,
   normalizeAddressList,
   normalizeMessageId,
@@ -241,6 +249,84 @@ describe('the envelope cipher', () => {
     const envelope = await cipher.encrypt('a secret value');
     const other = localEnvelopeCipher('key-two');
     await expect(other.decrypt(envelope)).rejects.toMatchObject({ code: 'KEY_MISMATCH' });
+  });
+
+  /**
+   * Lane g59: the recorded seam's wrapper is the production KMS wrapper with an
+   * encryption context and a labelled key id. The trap is a wrapper that dropped the
+   * context: every assertion about sharing would still pass, and a live process could
+   * then unwrap a recorded token and the drill's IAM condition would never match.
+   */
+  it('on the recorded seam, binds every KMS call to the recorded context and labels the key id', async () => {
+    const calls: { kind: string; keyId: string; context: unknown }[] = [];
+    const transport: KmsTransport = {
+      generateDataKey: async input => {
+        calls.push({ kind: 'generate', keyId: input.KeyId, context: input.EncryptionContext });
+        const plaintext = randomBytes(32);
+        return await Promise.resolve({ Plaintext: plaintext, CiphertextBlob: Buffer.from(plaintext) });
+      },
+      decrypt: async input => {
+        calls.push({ kind: 'decrypt', keyId: input.KeyId, context: input.EncryptionContext });
+        return await Promise.resolve({ Plaintext: Buffer.from(input.CiphertextBlob) });
+      },
+    };
+    const cipher = envelopeCipher(recordedSeamDataKeyWrapper({ keyId: 'alias/fss-rh-test-envelope', transport }));
+    const envelope = await cipher.encrypt('a recorded token');
+    expect(envelope.keyId).toBe(`${RECORDED_SEAM_KEY_PREFIX}alias/fss-rh-test-envelope`);
+    expect(await cipher.decrypt(envelope)).toBe('a recorded token');
+    expect(calls).toEqual([
+      { kind: 'generate', keyId: 'alias/fss-rh-test-envelope', context: RECORDED_SEAM_ENCRYPTION_CONTEXT },
+      { kind: 'decrypt', keyId: 'alias/fss-rh-test-envelope', context: RECORDED_SEAM_ENCRYPTION_CONTEXT },
+    ]);
+    // A live wrapper names the bare key, so it refuses the row before asking KMS.
+    const live = envelopeCipher(kmsDataKeyWrapper({ keyId: 'alias/fss-rh-test-envelope', transport }));
+    await expect(live.decrypt(envelope)).rejects.toMatchObject({ code: 'KEY_MISMATCH' });
+    expect(calls).toHaveLength(2);
+  });
+});
+
+describe('the recorded Gmail mailbox, across processes (lane g59)', () => {
+  const access = { accessToken: 'fixture-access', expiresAtEpochSeconds: 0 };
+  const request = (rfcMessageId: string): GmailSendRequest => ({
+    to: 'prospect@example.test',
+    from: 'sales@example.test',
+    subject: 'Hello',
+    body: 'Hello',
+    rfcMessageId,
+  });
+
+  it('reports what its Sent folder holds: delivered sends, never refused or lost ones', async () => {
+    const accepting = recordedGmailClient({ emailAddress: 'sales@example.test', historyId: '1', messages: [] });
+    await accepting.sendMessage(access, request('<a@example.test>'));
+    const dropping = recordedGmailClient({
+      emailAddress: 'sales@example.test',
+      historyId: '1',
+      messages: [],
+      sendBehaviour: 'indeterminate_but_delivered',
+    });
+    await dropping.sendMessage(access, request('<b@example.test>'));
+    const losing = recordedGmailClient({
+      emailAddress: 'sales@example.test',
+      historyId: '1',
+      messages: [],
+      sendBehaviour: 'indeterminate',
+    });
+    await losing.sendMessage(access, request('<c@example.test>'));
+    expect(accepting.sentMessageIds).toEqual(['<a@example.test>']);
+    expect(dropping.sentMessageIds).toEqual(['<b@example.test>']);
+    expect(losing.sentMessageIds).toEqual([]);
+  });
+
+  it('a second client built from that recording finds the send, and one without it does not', async () => {
+    const recorded = recordedGmailClient({
+      emailAddress: 'sales@example.test',
+      historyId: '1',
+      messages: [],
+      sentMessageIds: ['<b@example.test>'],
+    });
+    expect(await recorded.searchSentByMessageId(access, '<b@example.test>')).toMatchObject({ ok: true, found: { threadId: expect.any(String) } });
+    const empty = recordedGmailClient({ emailAddress: 'sales@example.test', historyId: '1', messages: [] });
+    expect(await empty.searchSentByMessageId(access, '<b@example.test>')).toEqual({ ok: true, found: null });
   });
 });
 

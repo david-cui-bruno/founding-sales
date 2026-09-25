@@ -9,11 +9,11 @@ import {
 import { databaseNow, listApplicableHolds } from '@fss/domain/policy';
 import { authorizeDial } from '@fss/domain/dial';
 import {
+  beginRestoreRecovery,
   listConnectedMailboxes,
   nextWatchGeneration,
   renewWatch,
   runMailRecovery,
-  startRecovery,
   listIncompleteRecoveries,
   type GmailClient,
   type MailboxRow,
@@ -83,7 +83,18 @@ export interface AdminInvocation {
 
 export type AdminOutcome =
   | { readonly ok: true; readonly value: Readonly<Record<string, unknown>>; readonly print?: string }
-  | { readonly ok: false; readonly reason: string; readonly detail: string };
+  | {
+      readonly ok: false;
+      readonly reason: string;
+      readonly detail: string;
+      /**
+       * What the command got as far as, when a refusal still has a report worth reading
+       * (lane g59: `fss drill`, whose per-step report is the only record of every step
+       * after the first failure). Printed on stdout like an answer, and the exit code
+       * still says refused.
+       */
+      readonly report?: Readonly<Record<string, unknown>>;
+    };
 
 const accept = (
   value: Readonly<Record<string, unknown>>,
@@ -240,17 +251,42 @@ async function anyDialSubject(session: SessionQueryable): Promise<DialSubject | 
       };
 }
 
+/**
+ * Which half of a dialable subject this database lacks, in counts (lane g59).
+ *
+ * `no_dialable_subject` used to say only that the triple was missing, and the restore
+ * drill stops on it: the refusal is the one place an operator reads what to fix, so it
+ * names each half and how many of it exist. In every environment this build has made,
+ * the second number is zero — nothing writes `calling_identities` or verifies one — and
+ * the refusal says what the row it needs looks like rather than claiming why.
+ */
+async function missingDialPrerequisites(session: SessionQueryable): Promise<string> {
+  const { rows } = await session.query<{ routed_firms: string; identities: string }>(
+    `SELECT (SELECT count(DISTINCT f.id) FROM firms f
+               JOIN phone_routes r
+                 ON r.workspace_id = f.workspace_id AND r.firm_id = f.id AND r.eligibility = 'usable'
+              WHERE f.assigned_user_id IS NOT NULL AND f.status <> 'merged')::text AS routed_firms,
+            (SELECT count(*) FROM calling_identities
+              WHERE verification_status = 'verified' AND enabled)::text AS identities`,
+  );
+  const routedFirms = Number(rows[0]?.routed_firms ?? '0');
+  const identities = Number(rows[0]?.identities ?? '0');
+  return (
+    `this database has ${String(routedFirms)} assigned firm(s) with a usable phone route and ` +
+    `${String(identities)} verified, enabled calling identit${identities === 1 ? 'y' : 'ies'}, and none of them ` +
+    'belongs to such a firm\'s assignee; a dial probe needs both for the same person (9.1 steps 2 to 4): ' +
+    `${routedFirms === 0 ? 'a usable phone route on an assigned firm, and ' : ''}` +
+    'a calling_identities row owned by that assignee with verification_status verified and enabled true. ' +
+    'A refusal without one would prove nothing'
+  );
+}
+
 export async function dialAuthorizeCommand(invocation: AdminInvocation): Promise<AdminOutcome> {
   const { session } = invocation;
   let subject: DialSubject | null;
   if (invocation.switches.has('--any')) {
     subject = await anyDialSubject(session);
-    if (subject === null) {
-      return refuse(
-        'no_dialable_subject',
-        'this database has no assigned firm with a usable route and a verified identity, so a refusal would prove nothing',
-      );
-    }
+    if (subject === null) return refuse('no_dialable_subject', await missingDialPrerequisites(session));
   } else {
     const firmId = invocation.options['--firm'];
     const routeId = invocation.options['--route'];
@@ -468,8 +504,12 @@ export async function mailboxRecoverCommand(invocation: AdminInvocation): Promis
   const mailboxes: Record<string, unknown>[] = [];
   for (const { workspaceId, mailbox } of await chosenMailboxes(invocation)) {
     const context = repositoryContext(workspaceScope(workspaceId, RESTORE_ACTOR), invocation.session);
+    // A new generation, not the mailbox's current one (lane g59): the current one's
+    // recovery is the baseline, already complete, and starting "a restore recovery" on
+    // it returned that row and reprocessed nothing. `beginRestoreRecovery` advances the
+    // generation and holds coverage first, as the expired-cursor recovery does.
     const recovery = await withTransaction(invocation.session, async () =>
-      startRecovery(context, { mailbox, reason: 'restore', fromAt: since }),
+      beginRestoreRecovery(context, { mailbox, fromAt: since }),
     );
     let outcome = 'continued';
     let passes = 0;
@@ -479,7 +519,7 @@ export async function mailboxRecoverCommand(invocation: AdminInvocation): Promis
     // command runs the pages itself, bounded, and reports how far it got.
     while (outcome === 'continued' && passes < RECOVERY_PASS_LIMIT) {
       const report = await withTransaction(invocation.session, async () =>
-        runMailRecovery(context, deps, { mailboxId: mailbox.id, generation: mailbox.generation }),
+        runMailRecovery(context, deps, { mailboxId: mailbox.id, generation: recovery.generation }),
       );
       outcome = report.outcome;
       coverageProved = report.coverageProved;
@@ -610,6 +650,17 @@ export async function restoreReportCommand(invocation: AdminInvocation): Promise
       '--before names the baseline `fss admin counts --as-of <restore target>` wrote, and it carries the instant it was measured at',
     );
   }
+  // restore-drill.md step 8's `--at-failure` (lane g59): optional, because an operator
+  // may not have measured it; refused when named and unreadable, because a report that
+  // silently dropped it would measure "no suppression lost" against the weaker floor.
+  const atFailurePath = invocation.options['--at-failure'];
+  const atFailure = atFailurePath === undefined ? null : ((await readJson(atFailurePath)) as CountsFile | null);
+  if (atFailurePath !== undefined && (atFailure === null || typeof atFailure.asOf !== 'string')) {
+    return refuse(
+      'at_failure_unreadable',
+      '--at-failure names the counts `fss admin counts` wrote at the moment of failure, and it carries the instant it was measured at',
+    );
+  }
   const journal = await readJson(invocation.options['--journal']);
   const sent = await readJson(invocation.options['--sent']);
   const inbox = await readJson(invocation.options['--inbox']);
@@ -626,6 +677,18 @@ export async function restoreReportCommand(invocation: AdminInvocation): Promise
       crm_edits: before.crm_edits ?? 0,
       migrations: before.migrations ?? 0,
     },
+    ...(atFailure === null || typeof atFailure.asOf !== 'string'
+      ? {}
+      : {
+          atFailure: {
+            asOf: atFailure.asOf,
+            sends: atFailure.sends ?? 0,
+            replies: atFailure.replies ?? 0,
+            suppressions: atFailure.suppressions ?? 0,
+            crm_edits: atFailure.crm_edits ?? 0,
+            migrations: atFailure.migrations ?? 0,
+          },
+        }),
     after,
     // Both halves: a step execution with two accepted sends, and a send this drill's
     // own reconciliation made. Either one is a repeated send and fails the release.

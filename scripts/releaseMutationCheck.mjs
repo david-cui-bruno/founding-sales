@@ -774,6 +774,132 @@ const MUTATIONS = [
     because:
       'restore-drill.md step 1 says the alarm must have fired, and a check that passes on any history, an OK transition included, never looks. scenario11.check.ts hands the runner a history whose only transition is to OK and has to go red when that passes.',
   },
+  {
+    name: 'the drill reports a pass when a step could not be answered',
+    file: 'apps/worker/src/tools/fss/drill.ts',
+    find: '  const first = unanswered[0];\n  if (first !== undefined) {\n',
+    replace: "  const first = unanswered[0];\n  if (first !== undefined && first.step === 'never-a-step') {\n",
+    suite: ['run', 'test', '--workspace', 'apps/worker', '--', 'test/drillRehearsal.test.ts'],
+    because:
+      'Lane g59 lets the drill run past a dial probe that had nothing to probe, so the steps after it are measured; that is only honest if the drill still fails. drillRehearsal.test.ts drills a restored copy whose only failing step is the unanswered probe and has to go red when that drill reports ok.',
+  },
+  {
+    name: 'the drill stops at a probe that could not be answered, as before lane g59',
+    file: 'apps/worker/src/tools/fss/drill.ts',
+    find: '  steps.every(entry => entry.ok || entry.unanswered === true);\n',
+    replace: '  steps.every(entry => entry.ok);\n',
+    suite: ['run', 'test', '--workspace', 'apps/worker', '--', 'test/drillRehearsal.test.ts'],
+    because:
+      'No firm in any environment this build makes has an assignee with a verified calling identity, so a drill that stops at the dial probe measures nothing after step 1 on any run, and every fix for steps 2 to 9 goes unproved. drillRehearsal.test.ts requires all fifteen steps in the report and has to go red when the drill stops at the probe.',
+  },
+  {
+    name: 'the runner reads a drill that ran to the end as a pass whatever it could not answer',
+    file: 'infra/scripts/rehearsal-restore-drill.sh',
+    find: 'assert not unanswered, f"the drill could not answer',
+    replace: 'assert True or not unanswered, f"the drill could not answer',
+    suite: ['run', 'test:release', '--', 'test/release/scenario11.check.ts'],
+    because:
+      'A report with stoppedAt null and one unanswered step passes every other assertion the runner makes once that step is absent from the required list or tolerated. scenario11.check.ts hands the runner such a report and has to go red when it passes.',
+  },
+  {
+    name: 'an opt-out is keyed on its database row id again',
+    file: 'packages/domain/mail/effects.ts',
+    find: '  const optOutCommand = `mail-message:${message.mailboxId}:${message.providerMessageId}`;\n',
+    replace: '  const optOutCommand = `mail-message:${message.id}`;\n',
+    suite: ['run', 'test', '--workspace', 'apps/worker', '--', 'test/drillRehearsal.test.ts'],
+    because:
+      'After a restore the recovered opt-out is a new mail_messages row with a new id, so a command id built from it mints a second event for a suppression step 2 already replayed, and has to append it to a journal the drill identity cannot write: step 4 cannot reapply the opt-out at all. drillRehearsal.test.ts gives the drill a read-only journal, as the drill task role has, and has to go red.',
+  },
+  {
+    name: 'a restore recovery reuses the mailbox generation whose baseline is already complete',
+    file: 'packages/domain/mail/recover.ts',
+    find: '  const generation = await advanceGeneration(context, input.mailbox.id);\n',
+    replace: '  const generation = input.mailbox.generation;\n',
+    suite: ['run', 'test', '--workspace', 'apps/worker', '--', 'test/drillRehearsal.test.ts'],
+    because:
+      'mailbox_recoveries holds one recovery per generation, so a restore recovery started on the current one is the completed baseline, and fss admin mailbox recover reprocessed nothing while reporting a completed pass. drillRehearsal.test.ts reads the recovered opt-out and its effects back from the restored copy and has to go red when step 4 read no inbox.',
+  },
+  {
+    name: 'a recorded deployment wraps with a per-process key again',
+    file: 'apps/worker/src/bootstrap/deployment.ts',
+    find: '    const recordedSeam = envelopeKeyId.length > 0;\n',
+    replace: '    const recordedSeam = false;\n',
+    suite: ['run', 'test', '--workspace', 'apps/worker', '--', 'test/deployment.test.ts'],
+    because:
+      'localDataKeyWrapper makes a master key per process, so the refresh token the drill-evidence seed stored could not be unwrapped by fss drill in the next task, and every mailbox step of the drill failed on it (release.md 8.0s). deployment.test.ts has a second recorded deployment unwrap what the first wrapped and has to go red.',
+  },
+  {
+    name: 'the drill stops handing step 8 the counts at the moment of failure',
+    file: 'apps/worker/src/tools/fss/drill.ts',
+    find: "              ...(atFailurePath === undefined ? {} : { '--at-failure': atFailurePath }),\n",
+    replace: '',
+    suite: ['run', 'test', '--workspace', 'apps/worker', '--', 'test/drillRehearsal.test.ts'],
+    because:
+      'restore-drill.md step 8 reads --at-failure and nothing wrote it until lane g59; without it "no suppression lost" is measured against the baseline alone, which never had the suppressions recorded after the target. drillRehearsal.test.ts requires the step 8 report to carry suppressions_at_failure and has to go red.',
+  },
+  {
+    name: 'step 9 accepts a report that lost a suppression recorded after the target',
+    file: 'packages/domain/restore/report.ts',
+    find: "    if (after < atFailure) return { ok: false, reason: 'suppression_lost' };\n",
+    replace: '',
+    suite: ['run', 'test', '--workspace', 'packages/domain', '--', 'test/restore/adminCommands.test.ts'],
+    because:
+      'A restore that brought back one of two post-target suppressions is above the baseline and below the failure, and only the at-failure comparison sees it. adminCommands.test.ts composes that report and has to go red when verifyRestoreReport lets the generation advance past it.',
+  },
+  {
+    name: 'a recorded Gmail built from a recording forgets its Sent folder',
+    file: 'packages/domain/mail/gmailClientFake.ts',
+    find: '  const sentFolder = new Set<string>(fixture.sentMessageIds ?? []);\n',
+    replace: '  const sentFolder = new Set<string>();\n',
+    suite: ['run', 'test', '--workspace', 'packages/domain', '--', 'test/mail/rules.test.ts'],
+    because:
+      'The drill task is another process from the seed that sent, and its Sent search can find a delivered message only in the folder the recording hands it; an empty folder makes step 3 reconcile nothing. rules.test.ts builds a client from a recording and has to go red when the send is not found.',
+  },
+  {
+    name: 'the restore drill launches the drill without the counts at the moment of failure',
+    file: 'infra/scripts/rehearsal-restore-drill.sh',
+    find: '    --at-failure-json "$AT_FAILURE_JSON" \\\n',
+    replace: '',
+    suite: ['run', 'test:release', '--', 'test/release/scenario11.check.ts'],
+    because:
+      'The runner measures the at-failure counts on the source and the plan line prints them, so a real launch that dropped the flag would read as handed over. scenario11.check.ts reads the real drill_task launch through the extractor and has to go red.',
+  },
+  {
+    name: 'the restore drill launches the drill without the mailbox recording',
+    file: 'infra/scripts/rehearsal-restore-drill.sh',
+    find: '    --mailbox-recording-json "$MAILBOX_RECORDING_JSON" \\\n',
+    replace: '',
+    suite: ['run', 'test:release', '--', 'test/release/scenario11.check.ts'],
+    because:
+      'Without the recording the drill task runs its mail steps against the empty fixture every recorded deployment is handed, and step 3 finds no Sent message to reconcile. scenario11.check.ts reads the real drill_task launch through the extractor and has to go red.',
+  },
+  {
+    name: 'a drill that failed prints no report again',
+    file: 'apps/worker/src/tools/fss.ts',
+    find: '        write(JSON.stringify(outcome.report));\n',
+    replace: '',
+    suite: ['run', 'test', '--workspace', 'apps/worker', '--', 'test/fssSurface.test.ts'],
+    because:
+      'A one-off task keeps nothing but its log, so a drill that failed left one line naming the first failure and no record of the steps it measured, which past an unanswered step is every step. fssSurface.test.ts reads the report off stdout of a drill that failed and has to go red.',
+  },
+  {
+    name: 'the in-flight seed lets its send reach sent in one pass',
+    file: 'apps/worker/src/tools/fss/drillEvidence.ts',
+    find: "        sendBehaviour: 'indeterminate_but_delivered',\n",
+    replace: "        sendBehaviour: 'accept',\n",
+    suite: ['run', 'test', '--workspace', 'apps/worker', '--', 'test/drillEvidence.test.ts'],
+    because:
+      'Appendix E step 3 reconciles a fence left in doubt, and a send that reached sent in one pass leaves it nothing to reconcile (release.md 8.0s). drillEvidence.test.ts reads the in-flight fence back in reconciling and has to go red.',
+  },
+  {
+    name: 'the after seed delivers the late opt-out and never ingests it',
+    file: 'apps/worker/src/tools/fss/drillEvidence.ts',
+    find: "        await ingestPending('late_opt_out');\n",
+    replace: '',
+    suite: ['run', 'test', '--workspace', 'apps/worker', '--', 'test/drillEvidence.test.ts'],
+    because:
+      'Step 2 replays a suppression the restore lost, and the only one the after phase journals is the late opt-out; a phase that put the message in the mailbox without ingesting it journals nothing. drillEvidence.test.ts counts the after phase’s two journalled suppressions and has to go red.',
+  },
 ];
 
 // A listener on each of these keeps Node from exiting mid-mutation with a file still

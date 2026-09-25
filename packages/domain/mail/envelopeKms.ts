@@ -83,6 +83,53 @@ export function kmsDataKeyWrapper(options: KmsWrapperOptions): DataKeyWrapper {
 }
 
 /**
+ * The KMS encryption context every recorded-seam envelope is bound to (lane g59).
+ *
+ * `fss admin drill seed-evidence` and `fss drill` are two processes in a rehearsal,
+ * both on `FSS_DEPENDENCIES=recorded`, and the drill has to read the refresh token the
+ * seed stored. `localDataKeyWrapper` makes a master key per process, so it could not,
+ * and every mailbox step of the drill failed to unwrap. The fix is the environment's
+ * own envelope key through the production wrapper, with this context on both calls:
+ *
+ *   * a live process asks KMS without it, so KMS refuses to decrypt a recorded-seam
+ *     envelope for a live worker, and a live envelope for a recorded process;
+ *   * the drill's IAM grant (`infra/modules/cluster`) is conditioned on it, so the
+ *     drill identity can unwrap only what a recorded seed wrapped, never a real
+ *     mailbox's token, even in an environment that holds real ones.
+ */
+export const RECORDED_SEAM_ENCRYPTION_CONTEXT: Readonly<Record<string, string>> = Object.freeze({
+  fss_envelope_seam: 'recorded',
+});
+
+/** The prefix a recorded-seam envelope's key id carries in `mailbox_tokens.key_id`. */
+export const RECORDED_SEAM_KEY_PREFIX = 'recorded-seam:';
+
+/**
+ * The environment's KMS envelope key, for the recorded seam only (lane g59).
+ *
+ * The production wrapper, unchanged, with `RECORDED_SEAM_ENCRYPTION_CONTEXT`. The key
+ * id an envelope records is labelled `recorded-seam:<key>`, so a live process, whose
+ * wrapper names the bare key, refuses the row locally with `KEY_MISMATCH` before it
+ * ever asks KMS, and the row says which seam wrapped it in one query, as
+ * `local-envelope` does for a laptop. KMS is still called with the bare key.
+ */
+export function recordedSeamDataKeyWrapper(options: {
+  readonly keyId: string;
+  readonly transport: KmsTransport;
+}): DataKeyWrapper {
+  const inner = kmsDataKeyWrapper({
+    keyId: options.keyId,
+    transport: options.transport,
+    encryptionContext: RECORDED_SEAM_ENCRYPTION_CONTEXT,
+  });
+  return {
+    keyId: `${RECORDED_SEAM_KEY_PREFIX}${options.keyId}`,
+    generateDataKey: inner.generateDataKey,
+    unwrapDataKey: inner.unwrapDataKey,
+  };
+}
+
+/**
  * Build the real transport. The only line in the mail lane that loads an AWS SDK and
  * the only one that can reach the network.
  *

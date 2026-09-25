@@ -616,3 +616,254 @@ describe('Appendix G 11: the drill pins the restored copy ahead of the source (l
     expect(required).toContain('"step9-generation-reconciled"');
   });
 });
+
+/**
+ * Lane g59: the drill is handed what it needs to run past step 1, and the runner reads
+ * a drill that could not answer a step as the failure it is.
+ *
+ * The fourteenth full run (36062337914) stopped at step 1, and release.md named five
+ * reasons the steps after it could not pass: no dialable subject, no suppression the
+ * restore loses, no fence in doubt, no envelope key shared between the seed and the
+ * drill task, and no counts at the moment of failure. The runner's half of the fix is
+ * three more values in the drill task's command — `--at-failure-json`, measured on the
+ * source after the work the restore loses; `--mailbox-recording-json`, the merge of what
+ * each seed phase's recorded mailbox holds; `--admin-user`, the workspace admin step 9
+ * is attributed to — and a verdict that refuses an unanswered step.
+ *
+ * ## The vacuous-pass traps, named
+ *
+ * The plan is not the launch, so the real `drill_task` line is read through the
+ * extractor for all three flags. A merge that dropped a phase would still hand over a
+ * recording, so the handed value is compared with the three reports placed in the
+ * reports directory. And "ran to the end" is not "passed": a report whose dial probe is
+ * unanswered and whose every other step passed must fail the runner, naming the step.
+ */
+describe('Appendix G 11: the drill is handed the moment of failure, the mailbox and the admin (lane g59)', () => {
+  const SCRIPT = 'infra/scripts/rehearsal-restore-drill.sh';
+  const baseline = {
+    asOf: '2026-09-21T00:00:00Z',
+    sends: 2,
+    replies: 3,
+    suppressions: 4,
+    crm_edits: 5,
+    migrations: 30,
+    systemGeneration: 7,
+  };
+  /** A seed phase's report, as `release_captured_report` leaves it beside its .txt. */
+  const phaseReport = (sent: readonly string[], messages: readonly Record<string, unknown>[]): string =>
+    JSON.stringify({
+      phase: 'x',
+      adminUserId: '00000000-0000-4000-8000-00000000a0a0',
+      mailbox: { emailAddress: 'sales@drill-evidence.invalid', historyId: '12', sentMessageIds: sent, messages },
+    });
+  const message = (id: string): Record<string, unknown> => ({
+    id,
+    threadId: `thread-${id}`,
+    internalDateEpochMilliseconds: 1790000000000,
+    labelIds: ['INBOX'],
+    headers: { From: 'late@drill-evidence.invalid' },
+    body: 'stop',
+    historyId: '12',
+  });
+
+  function dryRun(
+    files: Readonly<Record<string, string>>,
+    environment: Readonly<Record<string, string>> = {},
+  ): { readonly code: number; readonly output: string } {
+    const reports = mkdtempSync(join(tmpdir(), 'fss-g59-drill-'));
+    for (const [name, text] of Object.entries(files)) writeFileSync(join(reports, name), text);
+    const result = spawnSync(repositoryPath(SCRIPT), ['fss-rh-g59'], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        FSS_REHEARSAL_DRY_RUN: '1',
+        FSS_REHEARSAL_REPORTS: reports,
+        FSS_RESTORE_TARGET: '2026-09-21T00:00:00Z',
+        ...environment,
+      },
+    });
+    return { code: result.status ?? 1, output: `${result.stdout}${result.stderr}` };
+  }
+
+  /** The value of one flag on the planned drill line. The fixtures here carry no spaces. */
+  function planned(output: string, flag: string): string {
+    const line = output.split('\n').find(entry => entry.startsWith('PLAN fss drill ')) ?? '';
+    const words = line.split(' ');
+    return words[words.indexOf(flag) + 1] ?? '';
+  }
+
+  it('launches the drill with all three values, in the real launch as well as the plan', async () => {
+    const { drillInvocations, parseFssCommand } = await import('../../apps/worker/src/tools/fss/commands.ts');
+    const launches = drillInvocations(readRepositoryFile(SCRIPT)).filter(invocation => invocation.argv[0] === 'drill');
+    expect(launches.filter(invocation => !invocation.planned).length).toBeGreaterThanOrEqual(1);
+    for (const launch of launches) {
+      for (const flag of ['--at-failure-json', '--mailbox-recording-json', '--admin-user']) {
+        expect(launch.argv, `${launch.text} does not hand the drill ${flag}`).toContain(flag);
+      }
+      if (!launch.planned) expect(parseFssCommand(launch.argv), launch.text).toMatchObject({ ok: true });
+    }
+  });
+
+  it('measures the moment of failure on the source after the work the restore loses, and hands it over', () => {
+    const { code, output } = dryRun({ 'baseline.json': JSON.stringify(baseline) });
+    expect(code, output).toBe(0);
+    const order = [
+      'restore-db-instance-to-point-in-time',
+      '--phase after',
+      'fss admin counts (in-VPC task, operations, against the source, at the moment of failure)',
+      'wait db-instance-available',
+      'PLAN fss drill ',
+    ].map(marker => output.indexOf(marker));
+    expect(order.every(at => at >= 0), output).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    const handed = JSON.parse(planned(output, '--at-failure-json')) as Record<string, unknown>;
+    expect(Object.keys(handed).sort()).toEqual(['asOf', 'crm_edits', 'migrations', 'replies', 'sends', 'suppressions']);
+  });
+
+  it('refuses at-failure counts with no instant before the drill is launched', () => {
+    const { code, output } = dryRun({
+      'baseline.json': JSON.stringify(baseline),
+      'at-failure.json': JSON.stringify({ sends: 1 }),
+    });
+    expect(code).not.toBe(0);
+    expect(output).toContain('the counts at the moment of failure carry no asOf instant');
+    expect(output).not.toContain('PLAN fss drill ');
+  });
+
+  it('hands over the merge of every phase’s recorded mailbox, and the admin the before phase acted as', () => {
+    const { code, output } = dryRun({
+      'baseline.json': JSON.stringify(baseline),
+      'drill-evidence-before.json': phaseReport(['<a@drill-evidence.invalid>'], [message('reply-1'), message('opt-out-1')]),
+      'drill-evidence-in-flight.json': phaseReport(['<b@drill-evidence.invalid>'], []),
+      'drill-evidence-after.json': phaseReport(['<c@drill-evidence.invalid>'], [message('opt-out-2')]),
+    });
+    expect(code, output).toBe(0);
+    const recording = JSON.parse(planned(output, '--mailbox-recording-json')) as {
+      sentMessageIds: string[];
+      messages: { id: string }[];
+      emailAddress: string;
+    };
+    expect(recording.sentMessageIds).toEqual([
+      '<a@drill-evidence.invalid>',
+      '<b@drill-evidence.invalid>',
+      '<c@drill-evidence.invalid>',
+    ]);
+    expect(recording.messages.map(entry => entry.id)).toEqual(['reply-1', 'opt-out-1', 'opt-out-2']);
+    expect(recording.emailAddress).toBe('sales@drill-evidence.invalid');
+    expect(planned(output, '--admin-user')).toBe('00000000-0000-4000-8000-00000000a0a0');
+    expect(output).toContain('mailbox recording handed to the drill task: 3 sent, 3 messages');
+
+    // An operator drilling by hand names the admin instead.
+    const named = dryRun(
+      { 'baseline.json': JSON.stringify(baseline) },
+      { FSS_DRILL_ADMIN_USER_ID: '00000000-0000-4000-8000-00000000b0b0' },
+    );
+    expect(planned(named.output, '--admin-user')).toBe('00000000-0000-4000-8000-00000000b0b0');
+  });
+
+  it('fails a drill whose dial probe was unanswered even when every other step passed, and says how far it got', () => {
+    const report = JSON.parse(
+      JSON.stringify({
+        ok: false,
+        stoppedAt: null,
+        unanswered: ['step1-dial-refused'],
+        steps: [
+          { step: 'step1a-generation-check', ok: true, report: { expectedGeneration: 8, mismatch: true, restoreHoldsInForce: 1 } },
+          { step: 'step1-restore-holds', ok: true, report: { count: 1 } },
+          {
+            step: 'step1-dial-refused',
+            ok: false,
+            unanswered: true,
+            failure: 'no_dialable_subject: this database has 1 assigned firm(s) with a usable phone route and 0 verified, enabled calling identities',
+            report: { refused: 'no_dialable_subject' },
+          },
+          { step: 'step2-journal-replay', ok: true, report: { inserted: 2 } },
+        ],
+      }),
+    ) as Record<string, unknown>;
+    const alarm = JSON.stringify({ AlarmHistoryItems: [{ HistoryData: JSON.stringify({ newState: { stateValue: 'ALARM' } }) }] });
+    const { code, output } = dryRun(
+      { 'baseline.json': JSON.stringify(baseline), 'drill.json': JSON.stringify(report) },
+      { FSS_RELEASE_ALARM_HISTORY: alarm },
+    );
+    expect(code).not.toBe(0);
+    expect(output).toContain('the drill could not answer step1-dial-refused, so it is not a pass');
+    expect(output).toContain('step1-dial-refused: UNANSWERED - no_dialable_subject');
+    expect(output).toContain('step2-journal-replay: ok');
+    // The alarm half of step 1 is still read first, because step 1a held the copy.
+    expect(output.indexOf('went to ALARM')).toBeLessThan(output.indexOf('could not answer'));
+  });
+
+  it('fails a step 8 report that was not measured against the moment of failure, or lost a suppression since it', () => {
+    const steps = (restore: Record<string, unknown>): string =>
+      JSON.stringify({
+        ok: true,
+        stoppedAt: null,
+        unanswered: [],
+        steps: [
+          { step: 'step1a-generation-check', ok: true, report: { expectedGeneration: 8, mismatch: true, restoreHoldsInForce: 1 } },
+          { step: 'step1-restore-holds', ok: true, report: { count: 1 } },
+          { step: 'step1-dial-refused', ok: true, report: { allowed: false } },
+          { step: 'step2-journal-replay', ok: true, report: { inserted: 1 } },
+          { step: 'step2-journal-replay-second', ok: true, report: { inserted: 0 } },
+          { step: 'step3-reconcile-sent', ok: true, report: { tombstones: 1, resent: 0 } },
+          { step: 'step4-inbox-recover', ok: true, report: { replies: 1, opt_outs: 1 } },
+          { step: 'step6-coverage', ok: true, report: { mailboxes: [{ complete: true }] } },
+          { step: 'step7-migrate', ok: true, report: { schema: { apiAccepts: true, workerAccepts: true } } },
+          { step: 'step8-restore-report', ok: true, report: restore },
+          { step: 'step9-system-generation-advance', ok: true, report: { otherHoldsBefore: 1, otherHoldsAfter: 1 } },
+          {
+            step: 'step9-generation-reconciled',
+            ok: true,
+            report: { generation: 8, reconciled: true, mismatch: false, holdsOpened: 0, restoreHoldsInForce: 0 },
+          },
+        ],
+      });
+    const alarm = JSON.stringify({ AlarmHistoryItems: [{ HistoryData: JSON.stringify({ newState: { stateValue: 'ALARM' } }) }] });
+    const base = { suppressions_before: 4, sends_repeated: 0, crm_rpo_seconds: 60, unresolved: [] };
+
+    const unmeasured = dryRun(
+      { 'baseline.json': JSON.stringify(baseline), 'drill.json': steps({ ...base, suppressions_after: 6 }) },
+      { FSS_RELEASE_ALARM_HISTORY: alarm },
+    );
+    expect(unmeasured.code).not.toBe(0);
+    expect(unmeasured.output).toContain('the report was not measured against the moment of failure');
+
+    const lost = dryRun(
+      {
+        'baseline.json': JSON.stringify(baseline),
+        'drill.json': steps({ ...base, suppressions_at_failure: 6, suppressions_after: 5 }),
+      },
+      { FSS_RELEASE_ALARM_HISTORY: alarm },
+    );
+    expect(lost.code).not.toBe(0);
+    expect(lost.output).toContain('a suppression acknowledged before the failure was lost');
+
+    // The positive control: the same report, with nothing lost since the failure, passes.
+    const kept = dryRun(
+      {
+        'baseline.json': JSON.stringify(baseline),
+        'drill.json': steps({ ...base, suppressions_at_failure: 6, suppressions_after: 6 }),
+      },
+      { FSS_RELEASE_ALARM_HISTORY: alarm },
+    );
+    expect(kept.code, kept.output).toBe(0);
+  });
+
+  it('keeps the drill task’s own exit status and refuses it after reading the report', () => {
+    // The real launch cannot run offline, so this reads the script's shape: the launch
+    // is bracketed by `set +e`/`set -e` rather than `||` (which the extractor would read
+    // as an argument), its status is kept, and a non-zero one fails the step at the end.
+    const script = readRepositoryFile(SCRIPT);
+    const launch = script.indexOf('  drill_task drill drill "$REPORTS/drill.log" drill \\');
+    expect(launch, 'the real drill launch is not where this check looks').toBeGreaterThan(-1);
+    expect(script.slice(script.lastIndexOf('\nelse\n', launch), launch)).toContain('\n  set +e\n');
+    expect(script.slice(launch, script.indexOf('release_captured_report "$REPORTS/drill.log"', launch))).toContain(
+      '  DRILL_STATUS=$?\n  set -e\n',
+    );
+    const refusal = script.indexOf('if [ "${DRILL_STATUS:-0}" -ne 0 ]; then');
+    expect(refusal, 'nothing refuses a drill task that exited non-zero').toBeGreaterThan(launch);
+    // After the verdict, so a failed drill is judged — and named — before the status is.
+    expect(refusal).toBeGreaterThan(script.indexOf('assert not unanswered'));
+  });
+});

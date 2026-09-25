@@ -233,12 +233,42 @@ describe('fss admin drill seed-evidence', () => {
       'prospect_opt_out',
       'opportunity_manual',
       'manual_suppression',
+      'late_opt_out_firm',
+      'dial_route',
+      'administrative_pause',
       'crm_edit',
     ]) {
       expect(steps[step], `the report says nothing about ${step}`).toBeDefined();
       expect(steps[step]?.outcome).toBe('created');
       expect(steps[step]?.id.length, `${step} reported no id`).toBeGreaterThan(0);
     }
+
+    // Lane g59: what the later steps of the drill need to find in the restored copy,
+    // each through its own entry point. A usable phone route on an assigned firm, and
+    // no calling identity, because nothing in this build creates or verifies one.
+    const phones = await session.query<{ eligibility: string }>('SELECT eligibility FROM phone_routes');
+    expect(phones.rows).toEqual([{ eligibility: 'usable' }]);
+    expect(await countOf('calling_identities')).toBe(0);
+    // An administrative pause, which step 9 has to leave in force (4.3).
+    expect(
+      await countOf('active_holds', "reason_code = 'scoped_pause' AND released_at IS NULL"),
+      'the seed opened no administrative pause',
+    ).toBe(1);
+    // The sending domain came through lane g57's creator, not an INSERT of the seed's own.
+    expect(await countOf('audit_events', "action = 'sending_domain.registered'")).toBe(1);
+    // The recording: the accepted send is in the Sent folder, the two inbound messages
+    // are what the phase delivered, and the admin is named for step 9.
+    const sentHeader = (
+      await session.query<{ header: string }>(
+        "SELECT provider_message_id_header AS header FROM outbound_messages WHERE state = 'sent'",
+      )
+    ).rows[0]?.header;
+    expect(report.mailbox.sentMessageIds).toEqual([sentHeader]);
+    expect(report.mailbox.messages.map(message => message.id).sort()).toEqual([
+      'fss-drill-evidence-opt-out-1',
+      'fss-drill-evidence-reply-1',
+    ]);
+    expect(report.adminUserId).toMatch(/^[0-9a-f-]{36}$/u);
 
     // ---- the five kinds, read from the tables rather than from the report ----
     //
@@ -346,12 +376,68 @@ describe('fss admin drill seed-evidence', () => {
     expect(journalled.length - appended).toBeLessThanOrEqual(1);
   }, 120_000);
 
-  it('the after phase adds a second accepted send and a second CRM edit, and nothing else', async () => {
+  /**
+   * Lane g59: the send left in doubt at the restore target, for Appendix E step 3.
+   *
+   * The trap: a fence that reached `sent`, or one that was *set* to `reconciling`,
+   * would give step 3 nothing to prove or a row no dispatch ever wrote. So the fence is
+   * read back in `reconciling` with its `send_unknown_reconciling` hold, through the
+   * ledger the dispatch path writes, and its Message-ID is in the phase's recorded Sent
+   * folder — which is what step 3 searches.
+   */
+  it('the in-flight phase leaves one delivered send in doubt, and records its Message-ID as sent', async () => {
+    const before = {
+      sent: await countOf('outbound_messages', "state = 'sent'"),
+      suppressions: await countOf('suppression_events'),
+      edits: await countOf('audit_events', "action = 'firm.updated'"),
+    };
+    const outcome = await seedDrillEvidence({
+      session,
+      mail: await mailOptions(),
+      workspaceSlug: 'rehearsal',
+      phase: 'in-flight',
+    });
+    expect(outcome.ok, `the in-flight phase refused: ${JSON.stringify(outcome)}`).toBe(true);
+    if (!outcome.ok) return;
+    const steps = Object.fromEntries(outcome.value.items.map(item => [item.step, item.outcome]));
+    expect(steps['in_doubt_send']).toBe('created');
+    expect(steps['accepted_send']).toBeUndefined();
+    expect(steps['crm_edit']).toBeUndefined();
+
+    const doubt = await session.query<{ id: string; header: string }>(
+      "SELECT id, provider_message_id_header AS header FROM outbound_messages WHERE state = 'reconciling'",
+    );
+    expect(doubt.rows).toHaveLength(1);
+    const ledger = await session.query<{ to_state: string }>(
+      'SELECT to_state FROM outbound_message_events WHERE outbound_message_id = $1 ORDER BY occurred_at, id',
+      [doubt.rows[0]?.id],
+    );
+    expect(ledger.rows.map(row => row.to_state)).toContain('reconciling');
+    expect(
+      await countOf('active_holds', "reason_code = 'send_unknown_reconciling' AND released_at IS NULL"),
+    ).toBe(1);
+    expect(outcome.value.mailbox.sentMessageIds).toEqual([doubt.rows[0]?.header]);
+    expect(outcome.value.mailbox.messages).toEqual([]);
+    // Nothing else moved: no send reached `sent`, no suppression, no edit.
+    expect(await countOf('outbound_messages', "state = 'sent'")).toBe(before.sent);
+    expect(await countOf('suppression_events')).toBe(before.suppressions);
+    expect(await countOf('audit_events', "action = 'firm.updated'")).toBe(before.edits);
+
+    // Idempotent, and the recording is the same on the re-run.
+    const again = await seedDrillEvidence({ session, mail: await mailOptions(), workspaceSlug: 'rehearsal', phase: 'in-flight' });
+    expect(again.ok).toBe(true);
+    if (!again.ok) return;
+    expect(again.value.items.every(item => item.outcome === 'existing')).toBe(true);
+    expect(await countOf('outbound_messages', "state = 'reconciling'")).toBe(1);
+    expect(again.value.mailbox.sentMessageIds).toEqual(outcome.value.mailbox.sentMessageIds);
+  }, 120_000);
+
+  it('the after phase adds a second send, a second CRM edit and the prospect opt-out the restore loses', async () => {
     const before = {
       sends: await countOf('outbound_messages', "state = 'sent'"),
       suppressions: await countOf('suppression_events'),
-      replies: await countOf('mail_message_effects'),
       edits: await countOf('audit_events', "action = 'firm.updated'"),
+      journalled: journalled.length,
     };
 
     const outcome = await seedDrillEvidence({
@@ -365,18 +451,47 @@ describe('fss admin drill seed-evidence', () => {
     const steps = Object.fromEntries(outcome.value.items.map(item => [item.step, item.outcome]));
     expect(steps['accepted_send']).toBe('created');
     expect(steps['crm_edit']).toBe('created');
-    // 0.1's "let the clock run past it while more activity happens": the after phase is
-    // the activity the restore is meant to lose, and it is a send and an edit. A second
-    // suppression or a second reply would change what steps 2 and 4 of the drill are
-    // reconstructing.
+    // 0.1's "let the clock run past it while more activity happens", and lane g59's
+    // correction of what that activity has to be: steps 2 and 4 reconstruct what the
+    // restore *lost*, so the after phase journals a prospect's opt-out, from a firm the
+    // before phase made so the restored copy can match it. No second reply: an
+    // uncertain reply recovered by step 4 would hold an opportunity nobody confirms,
+    // and step 9 rightly refuses to advance past an unresolved one.
+    expect(steps['late_opt_out']).toBe('created');
+    expect(steps['late_opt_out_firm']).toBe('existing');
     expect(steps['prospect_reply']).toBeUndefined();
-    expect(steps['prospect_opt_out']).toBeUndefined();
     expect(steps['manual_suppression']).toBeUndefined();
 
     expect(await countOf('outbound_messages', "state = 'sent'")).toBe(before.sends + 1);
-    expect(await countOf('suppression_events')).toBe(before.suppressions);
-    expect(await countOf('mail_message_effects')).toBe(before.replies);
     expect(await countOf('audit_events', "action = 'firm.updated'")).toBe(before.edits + 1);
+    // The handle and its one unambiguous firm, each journalled before its row.
+    expect(await countOf('suppression_events')).toBe(before.suppressions + 2);
+    expect(journalled.length - before.journalled).toBe(2);
+    expect(
+      journalled.slice(before.journalled).map(record => [record.scope, record.source]).sort(),
+    ).toEqual([
+      ['firm', 'prospect_opt_out'],
+      ['handle', 'prospect_opt_out'],
+    ]);
+    // The command id is the message as Gmail knows it, not its row id, so a recovery
+    // after a restore reaches the same event id (packages/domain/mail/effects.ts).
+    expect(journalled.slice(before.journalled).every(record => record.commandId?.includes('fss-drill-evidence-opt-out-2'))).toBe(true);
+
+    // The recording: the after send in the Sent folder, and the opt-out dated now rather
+    // than at the send clock's nine in the morning, so step 4's window contains it.
+    expect(outcome.value.mailbox.sentMessageIds).toHaveLength(1);
+    const [late] = outcome.value.mailbox.messages;
+    expect(late?.id).toBe('fss-drill-evidence-opt-out-2');
+    expect(Math.abs((late?.internalDateEpochMilliseconds ?? 0) - Date.now())).toBeLessThan(120_000);
+
+    // Idempotent: a re-run adds no send, no edit, no suppression, and records the same.
+    const again = await seedDrillEvidence({ session, mail: await mailOptions(), workspaceSlug: 'rehearsal', phase: 'after' });
+    expect(again.ok).toBe(true);
+    if (!again.ok) return;
+    expect(again.value.items.every(item => item.outcome === 'existing'), JSON.stringify(again.value.items)).toBe(true);
+    expect(await countOf('suppression_events')).toBe(before.suppressions + 2);
+    expect(await countOf('outbound_messages', "state = 'sent'")).toBe(before.sends + 1);
+    expect(again.value.mailbox).toEqual(outcome.value.mailbox);
   }, 120_000);
 });
 

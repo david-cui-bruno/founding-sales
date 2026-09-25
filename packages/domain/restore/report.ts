@@ -121,11 +121,37 @@ export interface RestoreReport {
   readonly crm_rpo_seconds: number;
   readonly dead_jobs: number;
   readonly unresolved: readonly UnresolvedEntry[];
+  /**
+   * The counts at the moment of failure (restore-drill.md step 8's `--at-failure`, lane
+   * g59), present only when they were given. They are what the restore lost measured
+   * from: `suppressions_after` may never be below `suppressions_at_failure`, and
+   * `crm_edits_lost` is the accepted RPO as a count, beside `crm_rpo_seconds`.
+   */
+  readonly at_failure_as_of?: string;
+  readonly suppressions_at_failure?: number;
+  readonly sends_at_failure?: number;
+  readonly replies_at_failure?: number;
+  readonly crm_edits_at_failure?: number;
+  readonly migrations_at_failure?: number;
+  /**
+   * Ordinary CRM edits the database knew at the failure and does not know now: the
+   * accepted RPO as a count, beside `crm_rpo_seconds`. Reported, never hidden, and a
+   * floor rather than an exact figure, because a reconstruction that writes a CRM audit
+   * row of its own (a recovered reply setting an opportunity manual) offsets one lost.
+   * There is deliberately no such figure for sends: a send the restore lost and a fence
+   * step 3 reconciled count the same in a total, so a difference of totals would hide a
+   * lost send behind a reconstructed one.
+   */
+  readonly crm_edits_lost?: number;
 }
 
 export interface ComposeRestoreReportInput {
   /** The baseline, measured before the restore at the instant it restored to. */
   readonly before: Pick<RestoreCounts, 'asOf' | 'sends' | 'replies' | 'suppressions' | 'crm_edits' | 'migrations'>;
+  /** The counts at the moment of failure, when known (lane g59). */
+  readonly atFailure?:
+    | Pick<RestoreCounts, 'asOf' | 'sends' | 'replies' | 'suppressions' | 'crm_edits' | 'migrations'>
+    | undefined;
   readonly after: Pick<RestoreCounts, 'asOf' | 'sends' | 'replies' | 'suppressions' | 'crm_edits' | 'migrations'>;
   readonly sendsRepeated: number;
   readonly crmRpoSeconds: number;
@@ -187,6 +213,17 @@ export function composeRestoreReport(input: ComposeRestoreReportInput): RestoreR
     crm_rpo_seconds: input.crmRpoSeconds,
     dead_jobs: input.unresolved.deadJobs,
     unresolved,
+    ...(input.atFailure === undefined
+      ? {}
+      : {
+          at_failure_as_of: input.atFailure.asOf,
+          suppressions_at_failure: input.atFailure.suppressions,
+          sends_at_failure: input.atFailure.sends,
+          replies_at_failure: input.atFailure.replies,
+          crm_edits_at_failure: input.atFailure.crm_edits,
+          migrations_at_failure: input.atFailure.migrations,
+          crm_edits_lost: Math.max(0, input.atFailure.crm_edits - input.after.crm_edits),
+        }),
   };
 }
 
@@ -215,6 +252,13 @@ export function verifyRestoreReport(parsed: unknown): ReportVerdict {
   }
   if (repeated !== 0) return { ok: false, reason: 'send_repeated' };
   if (after < before) return { ok: false, reason: 'suppression_lost' };
+  // Lane g59: when the report knows the moment of failure, a suppression acknowledged
+  // between the restore target and the failure that did not come back is lost too.
+  const atFailure = report['suppressions_at_failure'];
+  if (atFailure !== undefined) {
+    if (typeof atFailure !== 'number') return { ok: false, reason: 'malformed' };
+    if (after < atFailure) return { ok: false, reason: 'suppression_lost' };
+  }
   const unresolved = report['unresolved'];
   if (!Array.isArray(unresolved)) return { ok: false, reason: 'malformed' };
   if (unresolved.length > 0) return { ok: false, reason: 'unresolved' };

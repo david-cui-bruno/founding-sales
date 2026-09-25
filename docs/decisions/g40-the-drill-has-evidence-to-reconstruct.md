@@ -174,6 +174,41 @@ Each is a named, testable gap rather than a surprise, and each is a lane. Relaxi
 of the drill's assertions to accommodate them would be the vacuous pass this whole
 document exists to prevent.
 
+## Follow-up, lane g59 (24 September 2026): what changed in four of these decisions
+
+Lane g59 gave steps 1 to 9 the prerequisites the section above lists as missing, and
+that changed four of the decisions. The rest stand as written.
+
+* **Decision 1, the one raw insert, is gone.** The `sending_domains` row now has a
+  creator, `registerSendingDomain` (PR 197), and the seed calls it, so every row the
+  command writes goes through its owning function. The rule for a row with no creator is
+  unchanged, and it now applies to the calling identity step 1's dial probe needs. No
+  function or route verifies one, so the seed writes none. The probe refuses
+  `no_dialable_subject` and names the missing row. The drill records the step as
+  unanswered, runs the later steps, and still fails. That gap stays open
+  (`docs/greenfield/release.md` 8.1 item 12).
+* **Decision 3, re-wrapping on every run, no longer carries the handoff.** Re-wrapping
+  made the token readable by the next run of the *seed*, never by the drill, which is
+  another task and so had another per-process key. In a recorded deployment that
+  carries `FSS_ENVELOPE_KEY_ID`, the wrapper is now the production KMS wrapper under the
+  encryption context `fss_envelope_seam = recorded`. A live process asks KMS with no
+  context and names the bare key, so it refuses such a row. The drill role gets a context-conditioned
+  `kms:Decrypt` outside production only. The recorded Gmail also lives in one process.
+  Each phase reports its mailbox, and the runner hands the drill the merged recording as
+  `--mailbox-recording-json`. The upsert still runs on every run and still costs nothing.
+* **Decision 5 is reversed in both halves.** `--phase after` now runs **after the
+  restore request**, not before it. Activity between the baseline and the request may or
+  may not be in the restored copy, and only a point RDS has not reached when it is asked
+  certainly is not. It also adds a second, late prospect opt-out from a firm the `before`
+  phase makes. That opt-out is the suppression step 2 replays and the message step 4
+  recovers, and without it steps 2 and 4 reconstructed nothing. Every assertion is still
+  a floor. The runner counts the source straight after this phase and hands the drill
+  those counts as `--at-failure-json`, so step 8 compares against the failure as well
+  as the baseline.
+* **A third phase, `in-flight`**, runs just before the target. It makes one send that
+  Gmail delivers and whose response is lost, so the restored copy holds a fence in
+  `reconciling` and the Sent folder holds its Message-ID. That is step 3's fence.
+
 ## Where this is enforced
 
 * `apps/worker/src/tools/fss/drillEvidence.ts` — the command;

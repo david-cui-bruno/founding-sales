@@ -333,6 +333,56 @@ run "the_drill_is_its_own_identity_because_it_needs_the_journal_and_the_migratio
   }
 }
 
+# Lane g59. The drill has one refresh token to unwrap — the one the drill-evidence seed
+# stored in another task through the environment's envelope key, under the recorded
+# seam's encryption context — and production has none. So the grant is absent by
+# default, which is what production gets, and present only where a root asks for it,
+# as `kms:Decrypt` alone, on the envelope key alone, under that context alone.
+run "the_drill_has_no_envelope_grant_unless_the_root_asks_for_one" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for statement in jsondecode(aws_iam_role_policy.drill_task.policy).Statement :
+      !contains(statement.Resource, var.envelope_kms_key_arn)
+    ])
+    error_message = "By default — production's case — the drill task role names the envelope key nowhere."
+  }
+}
+
+run "the_rehearsal_drill_may_decrypt_recorded_seam_envelopes_and_nothing_else" {
+  command = plan
+
+  variables {
+    drill_unwraps_recorded_envelopes = true
+  }
+
+  assert {
+    condition = [
+      for statement in jsondecode(aws_iam_role_policy.drill_task.policy).Statement :
+      {
+        action    = statement.Action
+        condition = statement.Condition
+      }
+      if contains(statement.Resource, var.envelope_kms_key_arn)
+      ] == [{
+        action    = ["kms:Decrypt"]
+        condition = { StringEquals = { "kms:EncryptionContext:fss_envelope_seam" = "recorded" } }
+    }]
+    error_message = "The drill may Decrypt with the envelope key only, only under the recorded seam's encryption context, and never wrap."
+  }
+
+  # The rest of the drill's policy is unchanged by the grant: it still reads the journal
+  # and never writes it.
+  assert {
+    condition = alltrue([
+      for statement in jsondecode(aws_iam_role_policy.drill_task.policy).Statement :
+      alltrue([for action in statement.Action : action != "s3:PutObject" && !startswith(action, "s3:Delete")])
+    ])
+    error_message = "The drill task role reads the suppression journal and never writes it, with or without the envelope grant."
+  }
+}
+
 # Bootstrap. A fresh environment creates both services at zero and is scaled by
 # `infra/scripts/release-deploy.sh` after the migration task and `fss verify` succeed.
 run "a_bootstrap_apply_creates_both_services_at_zero" {

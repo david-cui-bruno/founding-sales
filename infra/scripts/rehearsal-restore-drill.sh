@@ -116,7 +116,35 @@ to_utc_instant() { # to_utc_instant <RDS timestamp>
 # and this is an ordering of instants.
 RESTORABLE_WAIT_ATTEMPTS=${FSS_RESTORABLE_WAIT_ATTEMPTS:-40}
 RESTORABLE_WAIT_SECONDS=${FSS_RESTORABLE_WAIT_SECONDS:-15}
+SEED_EVIDENCE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/release-seed-drill-evidence.sh"
+
+# ---------------------------------------------------------------------------
+# Step 0a. The send left in doubt at the restore target (lane g59).
+#
+# Appendix E step 3 reconciles fences the restored database has in `dispatching` or
+# `reconciling`, dispatched from the restore point minus ten minutes, against the Sent
+# folder. The `before` phase's send reached `sent` in one pass half an hour earlier, so
+# step 3 had nothing to reconcile. This phase dispatches one send through the real path
+# with a recorded Gmail that delivers it and drops the response, so its fence is
+# `reconciling` — and it runs here, just before the wait, so the restore target the wait
+# produces is minutes after it: inside step 3's window, and early enough that the
+# restored copy has the fence.
+# ---------------------------------------------------------------------------
+rehearsal_log "step 0a: the send left in doubt at the restore target"
+if rehearsal_dry_run; then
+  rehearsal_plan "$SEED_EVIDENCE infra/roots/rehearsal $PREFIX --worker-digest \$FSS_RELEASE_WORKER_DIGEST --phase in-flight"
+else
+  "$SEED_EVIDENCE" infra/roots/rehearsal "$PREFIX" \
+    --worker-digest "$FSS_RELEASE_WORKER_DIGEST" \
+    --phase in-flight
+fi
+
+# The newest evidence instant is the one the target must pass: the in-flight phase's
+# when it ran, the before phase's for an operator drilling an environment by hand.
 EVIDENCE_REPORT="$REPORTS/drill-evidence-before.txt"
+if [ -f "$REPORTS/drill-evidence-in-flight.txt" ]; then
+  EVIDENCE_REPORT="$REPORTS/drill-evidence-in-flight.txt"
+fi
 EVIDENCE_AT=''
 if [ -f "$EVIDENCE_REPORT" ]; then
   EVIDENCE_AT="$(grep -o 'asOf=[^ ]*' "$EVIDENCE_REPORT" | head -1 | cut -d= -f2)"
@@ -339,30 +367,30 @@ if ! EXPECTED_GENERATION="$(expected_generation "$BASELINE")"; then
 fi
 rehearsal_log "the restored copy is held against generation $EXPECTED_GENERATION (the source's plus one)"
 
-# ---------------------------------------------------------------------------
-# Step 0b. The work the restore is meant to lose (0.1, lane g40).
+# Who step 9's advance is attributed to (lane g59).
 #
-# "Then let the clock run past it while more activity happens, so the restore genuinely
-# loses work." The target has been read and the baseline measured at it; everything
-# from here is after that instant. The after phase adds a second accepted send and a
-# second ordinary CRM edit and nothing else — a second suppression or a second reply
-# would change what steps 2 and 4 are reconstructing, and every assertion below is
-# unchanged by this step because every one of them is a floor.
-#
-# It runs here rather than in the workflow because it has to sit between the baseline
-# and the restore, and the workflow has no seam there. The root is named rather than
-# taken as an argument: `rehearsal_require_prefix` above has already refused anything
-# that is not a rehearsal run, so there is only one root this can be.
-# ---------------------------------------------------------------------------
-rehearsal_log "step 0b: the activity the restore has to lose"
-SEED_EVIDENCE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/release-seed-drill-evidence.sh"
-if rehearsal_dry_run; then
-  rehearsal_plan "$SEED_EVIDENCE infra/roots/rehearsal $PREFIX --worker-digest \$FSS_RELEASE_WORKER_DIGEST --phase after"
-else
-  "$SEED_EVIDENCE" infra/roots/rehearsal "$PREFIX" \
-    --worker-digest "$FSS_RELEASE_WORKER_DIGEST" \
-    --phase after
+# Appendix E step 9 is "an authenticated admin advances system_generation", and the
+# tool refuses to advance without one named (`admin_missing`). The drill task carries no
+# identity of its own, and until lane g59 nothing named one, so step 9 could never have
+# passed. The before phase's report names the workspace admin the seed acted as; an
+# operator drilling by hand names one with FSS_DRILL_ADMIN_USER_ID. A public identifier,
+# refused here if absent, before a restored instance exists.
+ADMIN_USER_ID="${FSS_DRILL_ADMIN_USER_ID:-}"
+if [ -z "$ADMIN_USER_ID" ] && [ -f "$REPORTS/drill-evidence-before.json" ]; then
+  ADMIN_USER_ID="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("adminUserId") or "")' \
+    "$REPORTS/drill-evidence-before.json")"
 fi
+if [ -z "$ADMIN_USER_ID" ]; then
+  if rehearsal_dry_run; then
+    ADMIN_USER_ID="dry-run-admin"
+  else
+    echo "FAIL: nothing names the admin step 9's generation advance is attributed to." >&2
+    echo "      The before phase's report (drill-evidence-before.json) carries adminUserId; drilling by hand," >&2
+    echo "      set FSS_DRILL_ADMIN_USER_ID to an active admin's user id." >&2
+    exit 1
+  fi
+fi
+rehearsal_log "step 9 will be attributed to admin $ADMIN_USER_ID"
 
 # ---------------------------------------------------------------------------
 # Step 1a. Restore. The runner's half of step 1: two RDS calls and a wait.
@@ -404,6 +432,58 @@ rehearsal_aws rds restore-db-instance-to-point-in-time \
   --db-subnet-group-name "$SOURCE_SUBNET_GROUP" \
   --db-parameter-group-name "$SOURCE_PARAMETER_GROUP" \
   --vpc-security-group-ids "$SOURCE_SECURITY_GROUPS"
+
+# ---------------------------------------------------------------------------
+# Step 0b. The work the restore is meant to lose (0.1; lanes g40 and g59).
+#
+# "Then let the clock run past it while more activity happens, so the restore genuinely
+# loses work." It runs here, after the restore has been *requested*, and not between the
+# baseline and the request as it did until lane g59: `--use-latest-restorable-time`
+# restores to the latest point RDS has when it acts, which can be later than the target
+# read above, so work written before the request may be restored rather than lost —
+# and steps 2 and 4 now depend on it being lost. Nothing written after the request can
+# be in a copy of a point that already existed when the request was made.
+#
+# The after phase adds a second accepted send, a second ordinary CRM edit, and a
+# prospect's opt-out, journalled — the suppression step 2 replays and the message step 4
+# recovers. Every assertion below is unchanged by it.
+# ---------------------------------------------------------------------------
+rehearsal_log "step 0b: the activity the restore has to lose"
+if rehearsal_dry_run; then
+  rehearsal_plan "$SEED_EVIDENCE infra/roots/rehearsal $PREFIX --worker-digest \$FSS_RELEASE_WORKER_DIGEST --phase after"
+else
+  "$SEED_EVIDENCE" infra/roots/rehearsal "$PREFIX" \
+    --worker-digest "$FSS_RELEASE_WORKER_DIGEST" \
+    --phase after
+fi
+
+# ---------------------------------------------------------------------------
+# Step 0c. The counts at the moment of failure (restore-drill.md 0.1 and step 8).
+#
+# `fss admin counts > /tmp/at-failure.json` has stood in the runbook since G1, and step
+# 8's `--at-failure` reads it; nothing wrote it until lane g59. The rehearsal's failure
+# is the instant after the work the restore loses, so the counts are measured here, on
+# the source, and handed to the drill as `--at-failure-json` the way the baseline is.
+# Step 8 then measures "no suppression lost" against them: a suppression acknowledged
+# after the target and before the failure is exactly what the journal must bring back.
+# ---------------------------------------------------------------------------
+rehearsal_log "step 0c: the counts at the moment of failure, on the source"
+AT_FAILURE="$REPORTS/at-failure.json"
+if rehearsal_dry_run; then
+  rehearsal_plan "fss admin counts (in-VPC task, operations, against the source, at the moment of failure)"
+  if [ ! -f "$AT_FAILURE" ]; then
+    printf '{"asOf":"%s","sends":2,"replies":2,"suppressions":3,"crm_edits":2,"migrations":1}\n' "$RESTORE_TARGET" > "$AT_FAILURE"
+  fi
+else
+  drill_task at-failure operations "$REPORTS/at-failure.log" admin counts
+  release_captured_report "$REPORTS/at-failure.log" "$AT_FAILURE"
+fi
+if ! AT_FAILURE_JSON="$(handed_baseline "$AT_FAILURE")"; then
+  echo "FAIL: the counts at the moment of failure carry no asOf instant, so step 8 cannot measure against them" >&2
+  exit 1
+fi
+rehearsal_log "at-failure counts handed to the drill task: $AT_FAILURE_JSON"
+
 rehearsal_aws rds wait db-instance-available --db-instance-identifier "${PREFIX}-pg-restored"
 
 # The lag between the requested point and the actual one is one of the three numbers
@@ -450,8 +530,44 @@ rehearsal_log "restored instance at $RESTORED_HOST"
 # ---------------------------------------------------------------------------
 rehearsal_log "steps 1 to 9: one in-VPC task against the restored instance"
 DRILL_REPORT="$REPORTS/drill.json"
+
+# What the rehearsal's recorded mailbox holds (lane g59).
+#
+# A recorded Gmail lives in the process that built it. Each seed phase reports its own
+# mailbox — the Sent folder it delivered into, the inbound messages it delivered — and
+# the drill task, being another process, can know the mailbox only from those reports:
+# without them its Sent search finds nothing for step 3 to reconcile and its inbox holds
+# nothing for step 4 to recover. So the three are merged here and handed over as
+# `--mailbox-recording-json`, like the baseline. Nothing in it comes from the restored
+# database and nothing in it is a credential; it is one line, because
+# `release_run_task` reads the command one word per line.
+merged_recording() { # merged_recording <reports directory>
+  python3 - "$1" <<'PY'
+import json, pathlib, sys
+
+reports = pathlib.Path(sys.argv[1])
+address, history, sent, messages = None, 1, set(), {}
+for phase in ("before", "in-flight", "after"):
+    path = reports / ("drill-evidence-%s.json" % phase)
+    if not path.is_file():
+        continue
+    mailbox = json.load(open(path)).get("mailbox") or {}
+    address = address or mailbox.get("emailAddress")
+    history = max(history, int(mailbox.get("historyId") or 1))
+    sent.update(mailbox.get("sentMessageIds") or [])
+    for message in mailbox.get("messages") or []:
+        messages[message["id"]] = message
+recording = {"historyId": str(history), "sentMessageIds": sorted(sent), "messages": list(messages.values())}
+if address:
+    recording["emailAddress"] = address
+print(json.dumps(recording, separators=(",", ":")))
+PY
+}
+MAILBOX_RECORDING_JSON="$(merged_recording "$REPORTS")"
+rehearsal_log "mailbox recording handed to the drill task: $(printf '%s' "$MAILBOX_RECORDING_JSON" | python3 -c 'import json, sys; r = json.load(sys.stdin); print("%d sent, %d messages" % (len(r["sentMessageIds"]), len(r["messages"])))')"
+
 if rehearsal_dry_run; then
-  rehearsal_plan "fss drill --reports /tmp/fss-drill --baseline-json $BASELINE_JSON --expected-generation $EXPECTED_GENERATION --from $REPLAY_FROM --since $SENT_FROM --all-mailboxes (in-VPC task, drill, FSS_DATABASE_HOST=$RESTORED_HOST)"
+  rehearsal_plan "fss drill --reports /tmp/fss-drill --baseline-json $BASELINE_JSON --at-failure-json $AT_FAILURE_JSON --mailbox-recording-json $MAILBOX_RECORDING_JSON --expected-generation $EXPECTED_GENERATION --admin-user $ADMIN_USER_ID --from $REPLAY_FROM --since $SENT_FROM --all-mailboxes (in-VPC task, drill, FSS_DATABASE_HOST=$RESTORED_HOST)"
   # Unquoted, for the two generations only: the step 1a and step 9 reports carry the
   # pin this run handed over, as the real drill's do. Nothing else in it expands. A
   # report the caller already placed is left alone, as the baseline is, so
@@ -463,6 +579,7 @@ if rehearsal_dry_run; then
   "ok": true,
   "baselineAt": "2026-09-21T00:00:00Z",
   "stoppedAt": null,
+  "unanswered": [],
   "steps": [
     { "step": "step1a-generation-check", "ok": true, "report": { "systemGeneration": ${OBSERVED_GENERATION}, "expectedGeneration": ${EXPECTED_GENERATION}, "mismatch": true, "holdsOpened": 1, "holdsAlreadyOpen": 0, "restoreHoldsInForce": 1 } },
     { "step": "step1-restore-holds", "ok": true, "report": { "count": 1 } },
@@ -476,7 +593,7 @@ if rehearsal_dry_run; then
     { "step": "step6-watch-renew", "ok": true, "report": { "renewed": 1 } },
     { "step": "step6-coverage", "ok": true, "report": { "mailboxes": [{ "complete": true }] } },
     { "step": "step7-migrate", "ok": true, "report": { "schema": { "apiAccepts": true, "workerAccepts": true } } },
-    { "step": "step8-restore-report", "ok": true, "report": { "suppressions_before": 1, "suppressions_after": 1, "sends_repeated": 0, "crm_rpo_seconds": 300, "unresolved": [] } },
+    { "step": "step8-restore-report", "ok": true, "report": { "suppressions_before": 1, "suppressions_at_failure": 3, "suppressions_after": 3, "sends_repeated": 0, "crm_rpo_seconds": 300, "crm_edits_lost": 1, "unresolved": [] } },
     { "step": "step9-system-generation-advance", "ok": true, "report": { "holdsReleased": 1, "otherHoldsBefore": 1, "otherHoldsAfter": 1 } },
     { "step": "step9-generation-reconciled", "ok": true, "report": { "generation": ${EXPECTED_GENERATION}, "expectedGeneration": ${EXPECTED_GENERATION}, "reconciled": true, "mismatch": false, "holdsOpened": 0, "restoreHoldsInForce": 0 } }
   ]
@@ -491,13 +608,23 @@ JSON
       "$EXPECTED_GENERATION" "$OBSERVED_GENERATION" > "$REPORTS/drill.log"
   fi
 else
+  # A drill that failed still prints its report (lane g59), so the task's refusal is
+  # not the end of the step: the report is read, the alarm half of step 1 is read when
+  # step 1a held the copy, and the verdict below names every step that failed. The
+  # task's own status is kept and refused at the end whatever the verdict said.
+  set +e
   drill_task drill drill "$REPORTS/drill.log" drill \
     --reports /tmp/fss-drill \
     --baseline-json "$BASELINE_JSON" \
+    --at-failure-json "$AT_FAILURE_JSON" \
+    --mailbox-recording-json "$MAILBOX_RECORDING_JSON" \
     --expected-generation "$EXPECTED_GENERATION" \
+    --admin-user "$ADMIN_USER_ID" \
     --from "$REPLAY_FROM" \
     --since "$SENT_FROM" \
     --all-mailboxes
+  DRILL_STATUS=$?
+  set -e
   release_captured_report "$REPORTS/drill.log" "$DRILL_REPORT"
 fi
 
@@ -631,7 +758,17 @@ report = json.load(open(sys.argv[1]))
 reports = pathlib.Path(sys.argv[2])
 expected_generation = int(sys.argv[3])
 
+# Every step, as the drill saw it, before any verdict (lane g59): a run that fails
+# should say how far it got, and past an unanswered step that is every step.
+for entry in report.get("steps", []):
+    verdict = "ok" if entry.get("ok") else ("UNANSWERED" if entry.get("unanswered") else "FAILED")
+    print(f"  {entry.get('step')}: {verdict}" + ("" if entry.get("ok") else f" - {entry.get('failure')}"))
+
 assert report.get("stoppedAt") is None, f"the drill stopped at {report.get('stoppedAt')}"
+# Ran to the end is not passed: a step that could not be answered is a failed step, and
+# the drill says which prerequisite it lacked (lane g59).
+unanswered = report.get("unanswered") or []
+assert not unanswered, f"the drill could not answer {', '.join(unanswered)}, so it is not a pass"
 steps = {entry["step"]: entry for entry in report.get("steps", [])}
 
 # A drill report with no steps in it would satisfy every assertion below by having
@@ -704,6 +841,10 @@ assert all(mailbox.get("complete") for mailbox in mailboxes), f"coverage is inco
 restore = body("step8-restore-report")
 assert restore["sends_repeated"] == 0, f"a send repeated: {restore}"
 assert restore["suppressions_after"] >= restore["suppressions_before"], f"a suppression was lost: {restore}"
+# And against the moment of failure, which this runner always hands over (lane g59): a
+# report without it is a drill that ignored --at-failure-json.
+assert "suppressions_at_failure" in restore, f"the report was not measured against the moment of failure: {restore}"
+assert restore["suppressions_after"] >= restore["suppressions_at_failure"], f"a suppression acknowledged before the failure was lost: {restore}"
 # The accepted RPO is reported, never hidden. Absent is a failure; a number is not.
 assert isinstance(restore.get("crm_rpo_seconds"), int), "the CRM recovery point objective was not reported"
 print(f"CRM RPO reported as {restore['crm_rpo_seconds']}s")
@@ -734,6 +875,14 @@ rehearsal_log "step 7: the declared ranges, against the deployed images"
 # `FSS_RELEASE_WORKER_DIGEST`, checked above — exactly as they do for
 # `rehearsal-run-task.sh`, so this call stays the prefix and nothing else.
 "$(dirname "${BASH_SOURCE[0]}")/rehearsal-schema-ranges.sh" "$PREFIX"
+
+# The task's own verdict, whatever the report said (lane g59). A drill that exits
+# non-zero has refused something, and a report that reads as a pass beside that refusal
+# is a report this runner cannot vouch for.
+if [ "${DRILL_STATUS:-0}" -ne 0 ]; then
+  echo "FAIL: the drill task did not exit 0, though its report reads as a pass; see $REPORTS/drill.log." >&2
+  exit 1
+fi
 
 rehearsal_write_report "restore-drill.txt" \
   "prefix=$PREFIX target=$RESTORE_TARGET restored_host=$RESTORED_HOST expected_generation=$EXPECTED_GENERATION result=pass"
