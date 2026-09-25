@@ -491,9 +491,15 @@ export const SCENARIOS: readonly Scenario[] = Object.freeze([
       'apps/api/src/bootstrap/deployment.ts',
       'infra/scripts/rehearsal-release-record.sh',
       'scripts/productionSmoke.mjs',
+      // Lane g71: the record is stored, and the attestation binds to the running digests.
+      'packages/contracts/src/release.ts',
+      'packages/domain/release/records.ts',
+      'packages/domain/release/identity.ts',
+      'packages/domain/test/settings/sendingEnable.test.ts',
+      'infra/scripts/release-deploy.sh',
     ),
     trap: 'Four conditions ANDed are indistinguishable from one condition if only one is ever varied.',
-    closedBy: 'The check varies each of the four independently and requires sending to stay off for each; the release record script refuses to write a record whose digests differ or whose suite failed.',
+    closedBy: 'The check varies each of the four independently and requires sending to stay off for each; the release record script refuses to write a record whose digests differ or whose suite failed; and since lane g71 the API refuses an enable whose record does not pass or does not name its own digest, and the worker refuses to send when the record does not name its own.',
     script: 'infra/scripts/rehearsal-release-record.sh',
   },
 ]);

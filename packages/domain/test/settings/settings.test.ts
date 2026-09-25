@@ -20,6 +20,7 @@ import {
 } from '../../settings/index.ts';
 import { ALL_BLOCKED_ACTION_KINDS, CHANNEL_BLOCKED_ACTION_KINDS } from '../../policy/types.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
+import { FIXTURE_API_DIGEST, storeFixtureRecord } from '../release/support/releaseRecords.ts';
 
 /**
  * Versioned administrative configuration (specification 10.1, 13.3, 16.2).
@@ -228,17 +229,23 @@ describe('workspace settings', () => {
 
     // `sending_enabled` is the one slice no earlier test in this file has written, so
     // the two saves really are version 1 and version 2. It was `postal_footer` until
-    // migration 0015 removed that slice.
+    // migration 0015 removed that slice. Since lane g71 an enable names a stored,
+    // passing release record bound to the running API, so both references are stored
+    // first and both saves say which API image they are.
+    await storeFixtureRecord(database.session, 'rehearsal-2026-09-20-a');
+    await storeFixtureRecord(database.session, 'rehearsal-2026-09-20-b');
     const [left, right] = await Promise.all([
       withTransaction(database.session, async () => await updateSetting(admin, {
         settingKey: 'sending_enabled',
         value: { enabled: true, releaseGateReference: 'rehearsal-2026-09-20-a' },
         changeNote: 'first save',
+        runningApiDigest: FIXTURE_API_DIGEST,
       })),
       withTransaction(second, async () => await updateSetting(other, {
         settingKey: 'sending_enabled',
         value: { enabled: true, releaseGateReference: 'rehearsal-2026-09-20-b' },
         changeNote: 'second save',
+        runningApiDigest: FIXTURE_API_DIGEST,
       })),
     ]);
 

@@ -1,5 +1,6 @@
 import { API_SCHEMA_RANGE, readAppliedSchemaVersion } from '@fss/domain/db';
 import { readDiagnostics } from '@fss/domain/dashboard';
+import { attestedReleaseBinding } from '@fss/domain/release';
 import { effectiveSendingEnabled, readSetting } from '@fss/domain/settings';
 import { REFUSAL_STATUS, contextForPrincipal, policyRouteDeps, redactError } from './dialSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
@@ -41,8 +42,12 @@ export async function routeDiagnostics(request: ApiRequest, options: RoutingOpti
       clientVersions: options.supportedClientVersions,
       deploymentSendingEnabled: options.sendingEnabled,
       // Only the admin half. `effectiveSendingEnabled` ANDs them, and the DTO shows
-      // all three so an operator can see which half is off.
-      adminSendingEnabled: effectiveSendingEnabled(true, sendingSetting.value),
+      // all three so an operator can see which half is off. Since lane g71 the admin
+      // half holds only while the release record it names binds to this API's image,
+      // the same answer `GET /settings` gives.
+      adminSendingEnabled:
+        effectiveSendingEnabled(true, sendingSetting.value) &&
+        (await attestedReleaseBinding(scoped.context, sendingSetting.value, 'api', options.imageDigest))?.ok === true,
     }),
   };
 }

@@ -1,5 +1,6 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { listApplicableHolds } from '../policy/holds.ts';
+import { attestedReleaseBinding } from '../release/records.ts';
 import { effectiveSendingEnabled } from '../settings/effective.ts';
 import { readSetting } from '../settings/store.ts';
 import { firstSuppressed } from '../suppression/effective.ts';
@@ -58,6 +59,19 @@ export interface SendGateDeps {
    * defaulting the other way is sending from an artifact nobody rehearsed.
    */
   readonly deploymentSendingEnabled?: boolean | undefined;
+  /**
+   * The digest of the worker image this process is running, as its bootstrap
+   * discovered it (`discoverImageDigest`), or `unknown` (lane g71).
+   *
+   * 16.2's middle clause — "the deployed commit/image digests match the rehearsal
+   * artifacts" — as a comparison: the release record the attestation names must pass
+   * and must name *this* worker. An argument for the reason the deployment flag is one:
+   * the process knows which image it is, and the domain does not go looking.
+   *
+   * Absent means **unknown**, and an unknown identity is a refusal
+   * (`release_record_identity_unknown`), never a pass.
+   */
+  readonly workerImageDigest?: string | undefined;
 }
 
 export interface SendPlan {
@@ -148,11 +162,12 @@ export async function decideSend(
   // artifacts, and an authenticated admin enables sending."
   //
   // Two facts, ANDed by `effectiveSendingEnabled`, and this is the only place in FSS
-  // that reads them before an irreversible action. The stored half is the admin's
-  // attestation carrying the `releaseGateReference` of the rehearsal whose digests
-  // match; the argument is the deployment's own. It is checked before the sending
-  // domain because it is the broader statement: a workspace nobody has enabled must
-  // report that, not the state of its DNS records.
+  // that reads them before an irreversible action. A third follows them (lane g71):
+  // the release record the attestation names binds to this worker's own digest. The
+  // stored half is the admin's attestation carrying the `releaseGateReference` of the
+  // rehearsal whose digests match; the argument is the deployment's own. It is
+  // checked before the sending domain because it is the broader statement: a
+  // workspace nobody has enabled must report that, not the state of its DNS records.
   const attestation = await readSetting(context, 'sending_enabled');
   if (!effectiveSendingEnabled(deps.deploymentSendingEnabled ?? false, attestation.value)) {
     return refuseSend(
@@ -161,6 +176,16 @@ export async function decideSend(
       // which is operational detail an operator reads from the settings page.
       deps.deploymentSendingEnabled === true ? 'workspace' : 'deployment',
     );
+  }
+  // Lane g71: and the attestation binds to *this* worker. The record it names must be
+  // stored, must have passed, and must name the image that is about to send. So a
+  // worker deployed after the enable, from digests nobody rehearsed, holds every send
+  // until somebody rehearses it and attests again — without anybody having to
+  // remember to withdraw the old attestation. The detail is the binding's refusal
+  // code, which says what to fix and still never names the reference.
+  const binding = await attestedReleaseBinding(context, attestation.value, 'worker', deps.workerImageDigest);
+  if (binding === null || !binding.ok) {
+    return refuseSend('workspace_sending_not_attested', binding === null ? 'workspace' : binding.reason);
   }
 
   const domain = await readPrimarySendingDomain(context);

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { DEFAULT_ALERT_THRESHOLDS, SETTING_KEYS } from '@fss/contracts';
+import { DEFAULT_ALERT_THRESHOLDS, RELEASE_RECORD_SCHEMA_ID, SETTING_KEYS } from '@fss/contracts';
+import { putReleaseRecord } from '@fss/domain/release';
 import { dispatch, type ApiRequest } from '../src/server.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
@@ -15,18 +16,28 @@ import { issueSessionFor } from './support/sessionFixture.ts';
  * that a replay of that command returns the original version rather than writing a
  * second one.
  */
+/**
+ * The API image the fixture deployment "runs", and the worker beside it (lane g71).
+ * Fictional: repeated hex letters, never a digest anybody built.
+ */
+const RUNNING_API_DIGEST = `sha256:${'a'.repeat(64)}`;
+const RUNNING_WORKER_DIGEST = `sha256:${'b'.repeat(64)}`;
+
 describe('the administration surface', () => {
   let fixture: AuthFixture;
   let adminToken: string;
   let salespersonToken: string;
 
-  const options = (sendingEnabled = false) => ({
+  // `null` is a deployment that never said which image it is; a default parameter
+  // cannot be `undefined`, because `undefined` selects the default.
+  const options = (sendingEnabled = false, imageDigest: string | null = RUNNING_API_DIGEST) => ({
     session: fixture.db,
     supportedClientVersions: fixture.deps.config.supportedClientVersions,
     sendingEnabled,
     expectedSystemGeneration: null,
     auth: fixture.deps,
     upgradeUrl: 'https://callie.example/downloads/mac',
+    ...(imageDigest === null ? {} : { imageDigest }),
   });
 
   const call = async (
@@ -35,6 +46,7 @@ describe('the administration surface', () => {
     token: string | null,
     body?: unknown,
     sendingEnabled = false,
+    imageDigest: string | null = RUNNING_API_DIGEST,
   ): Promise<{ status: number; body: Record<string, unknown> }> => {
     const request: ApiRequest = {
       method,
@@ -43,9 +55,35 @@ describe('the administration surface', () => {
       headers: token === null ? {} : { authorization: `Bearer ${token}` },
       body,
     };
-    const result = await dispatch(request, options(sendingEnabled));
+    const result = await dispatch(request, options(sendingEnabled, imageDigest));
     return { status: result.status, body: result.body as Record<string, unknown> };
   };
+
+  /** The release record a green rehearsal wrote, stored the way `fss admin release-record put` stores it. */
+  const storeRecord = async (reference: string, suite = 'pass'): Promise<void> => {
+    const stored = await putReleaseRecord(
+      { db: fixture.db },
+      {
+        schema: RELEASE_RECORD_SCHEMA_ID,
+        releaseGateReference: reference,
+        rehearsalPrefix: 'fss-rh-fixture',
+        recordedAt: '2026-09-20T12:00:00Z',
+        suite,
+        artifacts: { api: RUNNING_API_DIGEST, worker: RUNNING_WORKER_DIGEST, desktopCommitStamp: 'e'.repeat(40) },
+        carryDrill: 'skipped_no_watermark',
+        rehearsalScenarios: {},
+        enablesSending: false,
+      },
+    );
+    expect(stored.ok, JSON.stringify(stored)).toBe(true);
+  };
+
+  const enableCommand = (reference: string) =>
+    command({
+      settingKey: 'sending_enabled',
+      value: { enabled: true, releaseGateReference: reference },
+      changeNote: `rehearsal ${reference} passed; digests match production`,
+    });
 
   const command = (extra: Record<string, unknown>): Record<string, unknown> => ({
     commandId: randomUUID(),
@@ -104,6 +142,8 @@ describe('the administration surface', () => {
     expect(off.body['deploymentSendingEnabled']).toBe(false);
     expect(off.body['effectiveSendingEnabled']).toBe(false);
 
+    // Lane g71: the reference names a stored record whose API digest is this API's.
+    await storeRecord('rehearsal-2026-09-20');
     const enabled = await call(
       'POST',
       '/settings/update',
@@ -125,6 +165,85 @@ describe('the administration surface', () => {
     const both = await call('GET', '/settings', adminToken, undefined, true);
     expect(both.body['deploymentSendingEnabled']).toBe(true);
     expect(both.body['effectiveSendingEnabled']).toBe(true);
+
+    // Lane g71: the same attestation read by an API running a different image is not
+    // in force here, and the page says so — which is what the worker's gate says too.
+    const redeployed = await call('GET', '/settings', adminToken, undefined, true, `sha256:${'f'.repeat(64)}`);
+    expect(redeployed.body['deploymentSendingEnabled']).toBe(true);
+    expect(redeployed.body['effectiveSendingEnabled']).toBe(false);
+    const diagnostics = await call('GET', '/diagnostics', adminToken, undefined, true, `sha256:${'f'.repeat(64)}`);
+    expect(diagnostics.body['sending']).toEqual({ deploymentEnabled: true, adminEnabled: false, effective: false });
+    const bound = await call('GET', '/diagnostics', adminToken, undefined, true);
+    expect(bound.body['sending']).toEqual({ deploymentEnabled: true, adminEnabled: true, effective: true });
+
+    // Turned off again, so the refusal cases below start from a disabled workspace.
+    const withdrawn = await call(
+      'POST',
+      '/settings/update',
+      adminToken,
+      command({
+        settingKey: 'sending_enabled',
+        value: { enabled: false, releaseGateReference: null },
+        changeNote: 'withdrawn',
+      }),
+      true,
+      'unknown',
+    );
+    expect(withdrawn.body['status']).toBe('accepted');
+  });
+
+  describe('an enable of production sending, bound to the release record (lane g71)', () => {
+    it('refuses a reference no stored record carries', async () => {
+      const answer = await call('POST', '/settings/update', adminToken, enableCommand('fss-rh-nobody-ran-this'));
+      expect(answer.status).toBe(409);
+      expect(answer.body).toMatchObject({ status: 'refused', reason: 'release_record_unknown' });
+    });
+
+    it('refuses a record whose suite did not pass', async () => {
+      await storeRecord('fss-rh-fixture-failed', 'fail');
+      const answer = await call('POST', '/settings/update', adminToken, enableCommand('fss-rh-fixture-failed'));
+      expect(answer.status).toBe(409);
+      expect(answer.body).toMatchObject({ status: 'refused', reason: 'release_record_not_passing' });
+    });
+
+    it('refuses when this API is not the image the rehearsal certified', async () => {
+      await storeRecord('fss-rh-fixture-mismatch');
+      const answer = await call(
+        'POST',
+        '/settings/update',
+        adminToken,
+        enableCommand('fss-rh-fixture-mismatch'),
+        true,
+        `sha256:${'f'.repeat(64)}`,
+      );
+      expect(answer.status).toBe(409);
+      expect(answer.body).toMatchObject({ status: 'refused', reason: 'release_record_digest_mismatch' });
+    });
+
+    it('refuses, failing closed, when the API does not know which image it is', async () => {
+      await storeRecord('fss-rh-fixture-identity');
+      for (const imageDigest of ['unknown', null]) {
+        const answer = await call(
+          'POST',
+          '/settings/update',
+          adminToken,
+          enableCommand('fss-rh-fixture-identity'),
+          true,
+          imageDigest,
+        );
+        expect(answer.status, String(imageDigest)).toBe(409);
+        expect(answer.body).toMatchObject({ status: 'refused', reason: 'release_record_identity_unknown' });
+      }
+      const settings = await call('GET', '/settings', adminToken, undefined, true);
+      expect(settings.body['effectiveSendingEnabled']).toBe(false);
+    });
+
+    it('accepts the passing record whose API digest is this API’s, which is the positive control', async () => {
+      await storeRecord('fss-rh-fixture-accepted');
+      const answer = await call('POST', '/settings/update', adminToken, enableCommand('fss-rh-fixture-accepted'), true);
+      expect(answer.status).toBe(200);
+      expect(answer.body).toMatchObject({ status: 'accepted' });
+    });
   });
 
   it('refuses a settings command from a salesperson and accepts one from an admin', async () => {

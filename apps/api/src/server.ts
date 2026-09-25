@@ -76,6 +76,13 @@ export interface ApiOptions {
   readonly extraRoutes?: readonly RouteModule[] | undefined;
   /** The structured log the CloudWatch metric filters read. Absent in unit tests. */
   readonly log?: Logger | undefined;
+  /**
+   * Which API image this process is (lane g71): a `sha256:` digest from the ECS task
+   * metadata, or `unknown`. The settings command compares it with the API digest of
+   * the release record an admin's enable names, and refuses when they differ or when
+   * this is unknown.
+   */
+  readonly imageDigest?: string | undefined;
 }
 
 export type { ApiRequest, RouteResult } from './routes/types.ts';
@@ -91,6 +98,7 @@ function routingOptions(options: ApiOptions): RoutingOptions {
     upgradeUrl: options.upgradeUrl ?? DEFAULT_UPGRADE_URL,
     suppressionJournal: options.suppressionJournal ?? localNoopSuppressionJournal(),
     expectedSystemGeneration: options.expectedSystemGeneration,
+    ...(options.imageDigest === undefined ? {} : { imageDigest: options.imageDigest }),
   };
 }
 

@@ -149,6 +149,11 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
 
   // ---------------------------------------------------- settings (G9, 0013)
   workspace_settings: coverage(['operational'], 'Workspace configuration and its audited history; no prospect identity.'),
+  // ------------------------------------------------ release records (g71, 0017)
+  release_records: coverage(
+    ['operational', 'retained'],
+    'The rehearsal gate a sending attestation names: image digests and scenario report lines, no prospect or personal data. Append-only; UPDATE and DELETE revoked.',
+  ),
 
   // ------------------------------------------------------- sequences (G8)
   workspace_holiday_calendars: coverage(['operational'], 'Versioned holiday sets; Callie’s configuration.'),

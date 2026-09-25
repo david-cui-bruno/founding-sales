@@ -8,3 +8,4 @@ export * from './dial.ts';
 export * from './settings.ts';
 export * from './templates.ts';
 export * from './mail.ts';
+export * from './release.ts';

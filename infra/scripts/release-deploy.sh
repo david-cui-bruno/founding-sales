@@ -2,6 +2,7 @@
 # The deployment, in the one order that works, for both environments (lane G12h).
 #
 #   infra/scripts/release-deploy.sh <root> <prefix> [--schema-change] [--api-digest D] [--worker-digest D]
+#       [--release-record <release-record.json>]
 #
 #   infra/scripts/release-deploy.sh infra/roots/rehearsal  fss-rh-0921 --schema-change   # CI
 #   infra/scripts/release-deploy.sh infra/roots/production fss-prod    --schema-change   # David, locally
@@ -34,6 +35,15 @@
 #   6. API to its declared count, and wait;
 #   7. `fss verify` again, against the running deployment. A release gate after every
 #      deploy, which is the point of having one.
+#
+# And, only when `--release-record <file>` is given (lane g71): after the final verify,
+# `fss admin release-record put` on the operations task, so the record the green
+# rehearsal wrote is in this deployment's database for the admin's attestation to name.
+# The production operator passes the `release-record.json` downloaded from the green
+# rehearsal run whose digests are the ones being deployed here. Without the flag nothing
+# about the deploy changes. Putting a record enables nothing: the API still refuses an
+# enable unless the record's API digest is its own, and the worker still refuses to send
+# unless the record's worker digest is its own (release.md section 6).
 #
 # Stop-during-migration is the policy (`docs/greenfield/release.md` 4.1): every
 # declared range from migration 0006 onwards is a strict `{N,N}`, so there is no
@@ -80,18 +90,56 @@ shift 2 2>/dev/null || true
 SCHEMA_CHANGE=0
 API_DIGEST=''
 WORKER_DIGEST=''
+RELEASE_RECORD=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --schema-change) SCHEMA_CHANGE=1; shift ;;
     --api-digest) API_DIGEST=$2; shift 2 ;;
     --worker-digest) WORKER_DIGEST=$2; shift 2 ;;
+    --release-record) RELEASE_RECORD=$2; shift 2 ;;
     *) echo "FAIL: release-deploy.sh does not take '$1'" >&2; exit 1 ;;
   esac
 done
 
 if [ -z "$ROOT_DIRECTORY" ] || [ -z "$PREFIX" ]; then
-  echo "usage: release-deploy.sh <terraform root> <name prefix> [--schema-change] [--api-digest D] [--worker-digest D]" >&2
+  echo "usage: release-deploy.sh <terraform root> <name prefix> [--schema-change] [--api-digest D] [--worker-digest D] [--release-record <file>]" >&2
   exit 1
+fi
+
+# The release record, read and encoded before anything is scaled, so a missing or
+# malformed file is a refusal in the first second rather than after the deploy.
+#
+# It travels to the task as standard base64, for two reasons. A one-off task can be
+# handed nothing but arguments, and the record's JSON is braces, quotes and newlines.
+# And the record *names the rehearsal it certifies* — that is what a release record is
+# — so its text contains `fss-rh-`, which `release_refuse_foreign_arguments` refuses in
+# a production command because such an argument would normally be a rehearsal resource
+# the command is about to act on. This command acts on nothing but this environment's
+# database; the rehearsal is its subject, not its target. The shape is checked here and
+# the whole record against the contract by the tool, before anything is written.
+RELEASE_RECORD_BASE64=''
+if [ -n "$RELEASE_RECORD" ]; then
+  if [ ! -r "$RELEASE_RECORD" ]; then
+    echo "FAIL: --release-record names '$RELEASE_RECORD', which cannot be read. Pass the release-record.json the green rehearsal run wrote." >&2
+    exit 1
+  fi
+  if ! RELEASE_RECORD_BASE64="$(FSS_RECORD="$RELEASE_RECORD" python3 -c '
+import base64, json, os, sys
+path = os.environ["FSS_RECORD"]
+raw = open(path, "rb").read()
+record = json.loads(raw)
+if not isinstance(record, dict) or record.get("schema") != "fss.release-record.v1":
+    sys.exit("the file is not an fss.release-record.v1")
+if not str(record.get("releaseGateReference", "")):
+    sys.exit("the record carries no releaseGateReference")
+encoded = base64.b64encode(raw).decode("ascii")
+if len(encoded) > 6000:
+    sys.exit("the record is too large to hand to a one-off task as an argument")
+sys.stdout.write(encoded)
+')"; then
+    echo "FAIL: --release-record '$RELEASE_RECORD' is not a release record this script can hand to the task." >&2
+    exit 1
+  fi
 fi
 
 ENVIRONMENT="$(release_environment_for_prefix "$PREFIX")"
@@ -256,6 +304,47 @@ release_aws "$ENVIRONMENT" ecs wait services-stable --cluster "$CLUSTER_ARN" --s
 rehearsal_log "7/7 fss verify (deployed)"
 one_off verify-deployed "$OPERATIONS_TASK_DEFINITION" operations verify --report /tmp/fss-verify-deployed.json
 
+# ---------------------------------------------------------------------------
+# After 7, and only with --release-record: store the record the admin will attest to.
+#
+# On the operations task, as the runtime identity, like `verify`: `release_records` is
+# append-only for that role, which may insert and read and nothing else. Idempotent, so a
+# re-run of this script with the same file answers `existing`. The outcome is printed,
+# because the reference and the two digests in it are what the admin compares before
+# attesting.
+# ---------------------------------------------------------------------------
+RELEASE_RECORD_OUTCOME=none
+if [ -n "$RELEASE_RECORD" ]; then
+  rehearsal_log "after 7/7: fss admin release-record put --json-base64 \"\$RELEASE_RECORD_BASE64\" --report /tmp/fss-release-record.json (the record in $RELEASE_RECORD)"
+  RECORD_CAPTURE="$REPORTS/release-record-put.log"
+  release_run_task \
+    --step release-record-put \
+    --environment "$ENVIRONMENT" \
+    --prefix "$PREFIX" \
+    --account "$ACCOUNT" \
+    --region "$REGION" \
+    --cluster "$CLUSTER_ARN" \
+    --task-definition "$OPERATIONS_TASK_DEFINITION" \
+    --container operations \
+    --network-plan "$NETWORK_PLAN" \
+    --image-digest "$WORKER_DIGEST" \
+    --database-host "$DATABASE_HOST" \
+    --secret-arn "$RUNTIME_SECRET_ARN" \
+    --log-group "$LOG_GROUP" \
+    --log-stream-prefix operations \
+    --capture "$RECORD_CAPTURE" \
+    -- admin release-record put --json-base64 "$RELEASE_RECORD_BASE64" --report /tmp/fss-release-record.json
+  if rehearsal_dry_run; then
+    rehearsal_plan "read the task's log stream and print the put's outcome from $REPORTS/release-record-put.json"
+    RELEASE_RECORD_OUTCOME=planned
+  else
+    release_captured_report "$RECORD_CAPTURE" "$REPORTS/release-record-put.json"
+    rehearsal_log "release record stored:"
+    cat "$REPORTS/release-record-put.json"
+    RELEASE_RECORD_OUTCOME="$(release_json_path "$(cat "$REPORTS/release-record-put.json")" "outcome" "unreadable")"
+  fi
+fi
+
 rehearsal_write_report "release-deploy.txt" \
-  "prefix=$PREFIX environment=$ENVIRONMENT schema_change=$SCHEMA_CHANGE bootstrap=$BOOTSTRAP worker=$WORKER_TARGET api=$API_TARGET api_digest=${API_DIGEST:-unset} worker_digest=$WORKER_DIGEST"
+  "prefix=$PREFIX environment=$ENVIRONMENT schema_change=$SCHEMA_CHANGE bootstrap=$BOOTSTRAP worker=$WORKER_TARGET api=$API_TARGET api_digest=${API_DIGEST:-unset} worker_digest=$WORKER_DIGEST release_record=$RELEASE_RECORD_OUTCOME"
 rehearsal_log "deployed: migrate, users, verify, worker, API, verify"

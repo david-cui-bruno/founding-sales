@@ -1161,6 +1161,33 @@ const MUTATIONS = [
     because:
       'The marker is the whole deterministic Message-ID, <fss.{fence}@{the sending mailbox’s domain}>, because a tombstone stops a real step from ever sending. A check that took the fss.<uuid> shape alone would tombstone a copy or another system’s message onto a prospect’s pending step. missingFences.test.ts puts that shape at another domain in the Sent folder beside a pending step, expects it ignored, and has to go red.',
   },
+  {
+    name: 'the release-record binding stops comparing the running image digest',
+    file: 'packages/domain/release/records.ts',
+    find: "  if (digestFor(record, side) !== runningDigest) return { ok: false, reason: 'release_record_digest_mismatch' };\n",
+    replace: '',
+    suite: ['run', 'test', '--workspace', 'packages/domain', '--', 'test/outbound/attestation.test.ts'],
+    because:
+      'Specification 16.2 asks that the deployed image digests match the rehearsal artifacts, and this comparison is the only place the software asks it. Without it any stored passing record would bind to any image, so a worker deployed from digests nobody rehearsed would send under an old attestation. attestation.test.ts dispatches under a mismatching worker digest and requires release_record_digest_mismatch, and has to go red.',
+  },
+  {
+    name: 'the release-record binding accepts a record whose suite did not pass',
+    file: 'packages/domain/release/records.ts',
+    find: "  if (record.suite !== 'pass') return { ok: false, reason: 'release_record_not_passing' };\n",
+    replace: '',
+    suite: ['run', 'test', '--workspace', 'packages/domain', '--', 'test/settings/sendingEnable.test.ts'],
+    because:
+      'The contract stores a suite verdict other than pass on purpose, so that this rule is the one that refuses it at the moment an admin relies on the record. Without it an enable could name a failed rehearsal whose digests happen to match. sendingEnable.test.ts enables against a stored failed record and requires release_record_not_passing, and has to go red.',
+  },
+  {
+    name: 'release-deploy.sh ignores --release-record and stores nothing',
+    file: 'infra/scripts/release-deploy.sh',
+    find: 'RELEASE_RECORD_OUTCOME=none\nif [ -n "$RELEASE_RECORD" ]; then\n',
+    replace: 'RELEASE_RECORD_OUTCOME=none\nif false; then\n',
+    suite: ['run', 'test:release', '--', 'test/release/scenario42.check.ts'],
+    because:
+      'The production operator passes the green rehearsal record to the deploy, and the enable rule refuses a reference no stored record carries, so a deploy that accepted the flag and skipped the put would leave sending impossible to enable with nothing saying why. scenario42.check.ts dry-runs the deploy with the flag and requires the put after the final verify, and has to go red.',
+  },
 ];
 
 // A listener on each of these keeps Node from exiting mid-mutation with a file still

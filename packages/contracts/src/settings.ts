@@ -167,6 +167,13 @@ export type BusinessTimeZoneSetting = z.infer<typeof businessTimeZoneSettingSche
  * what the admin is attesting to — the rehearsal run whose artifact digests match what
  * is deployed — and it is required when enabling, because "an admin clicked yes" is
  * not the gate.
+ *
+ * The schema checks only that a reference is there. Since lane g71 the server also
+ * requires it to be the `releaseGateReference` of a stored release record
+ * (`./release.ts`) that passed and names the running API's digest, and the worker
+ * requires the same record to name its own. Those checks need the database and the
+ * process's own identity, so they are the domain's (`updateSetting`, `decideSend`), not
+ * this schema's.
  */
 export const sendingEnabledSettingSchema = z
   .strictObject({

@@ -10,6 +10,7 @@ import {
   readSettingHistory,
   updateSetting,
 } from '@fss/domain/settings';
+import { attestedReleaseBinding } from '@fss/domain/release';
 import { currentHolidayCalendar } from '@fss/domain/sequences';
 import { REFUSAL_STATUS, contextForPrincipal, policyRouteDeps, redactError, runPolicyCommand } from './dialSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
@@ -31,6 +32,11 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  * not store: it is G8's `workspace_holiday_calendars`, read through G8's
  * `currentHolidayCalendar`. A page that could not show the current calendar could
  * not offer an edit of it, and the edit goes to G8's command.
+ *
+ * Enabling production sending is refused unless the attested reference is a stored,
+ * passing release record whose API digest is this API's own (lane g71); the refusal
+ * codes are the domain's, `release_record_unknown`, `release_record_not_passing`,
+ * `release_record_identity_unknown` and `release_record_digest_mismatch`.
  *
  * `/settings/history` is a POST and a read. It carries no personal data, so
  * `docs/decisions/g3b-reads-are-posts.md`'s argument about query strings does not
@@ -67,7 +73,12 @@ export async function routeSettings(request: ApiRequest, options: RoutingOptions
         // 16.2 is two switches ANDed. Both are shown, because an admin who has
         // enabled sending and still cannot send needs to see which half is off.
         deploymentSendingEnabled: options.sendingEnabled,
-        effectiveSendingEnabled: effectiveSendingEnabled(options.sendingEnabled, sendingSetting),
+        // And, since lane g71, only when the attested release record binds to this
+        // API's own image: after a deploy of digests nobody rehearsed, the page says
+        // sending is off, which is what the worker's gate is about to say too.
+        effectiveSendingEnabled:
+          effectiveSendingEnabled(options.sendingEnabled, sendingSetting) &&
+          (await attestedReleaseBinding(scoped.context, sendingSetting, 'api', options.imageDigest))?.ok === true,
       },
     };
   }
@@ -94,6 +105,10 @@ export async function routeSettings(request: ApiRequest, options: RoutingOptions
       value: body.value,
       changeNote: body.changeNote,
       commandId: body.commandId,
+      // 16.2, lane g71: an enable names a release record whose API digest is this
+      // process's own. The domain refuses in the same transaction; the route only
+      // says which image it is.
+      runningApiDigest: options.imageDigest,
     });
     // The receipt carries the updated slice, not the whole configuration: a receipt
     // is a record of what this command did.

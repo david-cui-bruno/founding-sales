@@ -513,7 +513,7 @@ before it run:
 12. [full] **Carry watermark** (Appendix G 20): the carry tooling must contain no writer at all, and — once a cutover is scheduled and the two optional secrets exist — the export must refuse a table with a post-watermark write. Before the cutover the step prints `carry drill skipped: no cutover watermark yet` and the record says `"carryDrill": "skipped_no_watermark"`. That is not a pass being claimed; it is the state being named.
 13. [every stage] **Tear down**, always, with bypass-governance — and tolerantly, on a session renewed immediately before it so that a run which has already outlived its first hour can still destroy what it made. The teardown is five steps (any one-off task still running, the restored instance, any manual snapshot carrying the run prefix, the object-locked journal objects, the root), and each treats the AWS error code for absence as "already done" rather than as a failure, because `if: always()` means it runs after a creation that never happened. A failure that is *not* an absence — an `AccessDenied`, a throttle — still stops it, and an unreadable state that is not "the root was never initialised" still stops it. The report says which: `destroyed=true`, or `destroyed=nothing_created`. `terraform destroy` requires every variable `apply` did, so the step that opens item 4 writes them to `run.auto.tfvars.json` beside the rehearsal root (identifiers only, ignored by `infra/.gitignore`) and the teardown refuses to destroy without that file rather than fail on a missing variable and leave the environment standing. To tear a run down by hand from a fresh checkout, recreate the file first: `name_prefix`, `api_image` and `worker_image` (`<repository>@<digest>`, from the release record or the run's inputs), `certificate_arn`, `api_hostname`, `assume_deployment_role: false`, `bootstrap: true`, and the two schema ranges read from `packages/domain/db/schemaRange.ts`; then run `rehearsal-teardown.sh <prefix>` from the root directory as the `fss-rh-deploy` session.
 14. [every stage] **Assert nothing with the production prefix was touched**, always, including on a run that created nothing. The guard classifies every name it sees: the run's own resources, the two stable rehearsal repositories that carry no run, and anything production's — which it refuses. A state it cannot list is reported as "the run created nothing" rather than swallowed, and the inventory comparison still runs. An inventory recorded only by a dry run is refused rather than compared: the workflow records the sentinel `["dry-run: no production inventory was read"]` when it validates the prefix, and comparing production against that would be a pass nobody earned. The comparison is between durable resources. ECS task ARNs are set aside on both sides, because the tagging API lists tasks and ECS forgets a stopped one after about an hour (8.0v). So are EC2 ARNs whose resource part begins `network-interface/`, because a Fargate task's elastic network interface carries the same propagated tags and is created and deleted with its task (run 36032732128, 8.1 item 1). The guard logs both counts for each side. Task-definition revisions, services, the VPC, the subnets, the security groups, the route tables, the internet gateway and every other resource are still compared. The guard runs in dry mode on every pull request, so every branch is exercised without a credential.
-15. [full] **Write the release record**, last. It names the two digests, the desktop stamp, and a `releaseGateReference` you will need in section 6.
+15. [full] **Write the release record**, last. It names the two digests, the desktop stamp, and a `releaseGateReference` you will need in section 6. It is `release-record.json` in the run's `rehearsal-reports-<prefix>` artifact. Keep that file: since lane g71, section 6 step 2 stores it in production (`release-deploy.sh --release-record`), and the enable and the send are both checked against it.
 
 If any step fails, steps 13 and 14 still run and no record is written. That is the design: there is no such thing as a partially passed release gate — and it is why a `plan`, `create` or `deploy` run writes no record either. A stage that stopped early and a stage that was never asked to go that far look the same to section 6, which is the correct answer to both.
 
@@ -639,6 +639,8 @@ Why a script rather than four commands you can see:
 - **The declared counts come from the plan.** The script scales the services to `terraform output deployment_plan`'s `declared_desired_count`, not to a number in a shell file that somebody has to keep in step with the root. Terraform sets a count only when it creates a service. After that both services ignore changes to `desired_count`, so an apply never moves one, and steps 5 and 6 of every deploy, rolling or schema, set the declared numbers explicitly.
 
 `--schema-change` is the flag that makes it refuse unless both services are already at desired, running and pending zero. It no longer stops them itself: by the time it runs, the apply has registered the new task definitions, and a stop there is the defect 8.0af records. The refusal names the `release-stop.sh` command to run. Leave the flag off for a release that moves no migration. That is the rolling path and it is unchanged: the apply replaces the task definitions and ECS rolls the running services on to them at their current counts, the migration task finds nothing to apply and says so, and steps 5 and 6 set the declared counts.
+
+`--release-record <release-record.json>` (lane g71) is optional. When given, after the final verify the script runs `fss admin release-record put` on the operations task and prints the stored record. Pass the file the green `full` rehearsal of these same digests wrote (section 3, step 15). Without it nothing about the deploy changes. Section 6 is where it matters: an enable of sending is refused unless its reference is a stored record naming the running API's digest.
 
 **The policy, and it is not negotiable.**
 
@@ -840,16 +842,60 @@ Six lines, all `PASS`. The sixth reads `PASS sending_disabled (sendingEnabled=fa
 
 **What the canary line measures.** `CanaryCompletionAgeSeconds` is the newest canary run's **scheduler-to-worker latency** — the gap between the scheduler inserting the run and the worker completing it, and `now() - inserted_at` while it is still uncompleted, worst over the newest run of each workspace (`packages/domain/jobs/canary.ts`). It is not the time since the last completion: the canary is inserted once per quarter hour, so that reading sawtooths to 900 on a healthy system and fails this 300-second check for about ten minutes in every fifteen, which is what the first production smoke did (8.0r). A healthy system reads a few seconds here at any moment; a worker that has stopped pushes it past 300 within five minutes, which is the same fact `fss-prod-canary-stale` alarms on.
 
-**2. The digests match.** The release record names two digests. Compare them with what production is actually running:
+**2. Put the release record, then check the digests match.** Since lane g71 (8.0ag) the software makes the comparison. You still read it before you attest.
+
+The green `full` rehearsal wrote `release-record.json` into its `rehearsal-reports-<prefix>` artifact. Download that file from the run whose digests you are deploying, and pass it to the deploy:
 
 ```bash
-aws ecs describe-task-definition --task-definition fss-prod-api \
-  --query 'taskDefinition.containerDefinitions[0].image' --output text
-aws ecs describe-task-definition --task-definition fss-prod-worker \
-  --query 'taskDefinition.containerDefinitions[0].image' --output text
+gh run download <run id> --repo david-cui-bruno/founding-sales --name rehearsal-reports-<prefix> --dir /tmp/fss-green
+infra/scripts/release-deploy.sh infra/roots/production fss-prod [--schema-change] \
+  --api-digest <artifacts.api> --worker-digest <artifacts.worker> \
+  --release-record /tmp/fss-green/release-record.json
 ```
 
-This comparison is deliberately yours rather than the workflow's. It is the moment a person takes responsibility for the claim that the thing rehearsed is the thing deployed.
+After the final verify, the script runs `fss admin release-record put` on the operations task. It prints the stored record: the reference, `suite`, `apiDigest`, `workerDigest`, and `outcome` (`created`, or `existing` on a re-run). A different record under the same reference is refused `release_record_conflict`. Records are never replaced. The put enables nothing.
+
+If production is already running the rehearsed digests, you do not have to redeploy to store the record. Run the put alone, from a checkout at the commit production runs, as the admin profile, with the production root initialised as for section 4:
+
+```bash
+export AWS_REGION=us-east-1
+export WORKER_DIGEST="$(aws ecs describe-task-definition --task-definition fss-prod-operations \
+  --query 'taskDefinition.containerDefinitions[0].image' --output text | sed 's/.*@//')"
+export RECORD_BASE64="$(python3 -c 'import base64,sys; print(base64.b64encode(open(sys.argv[1],"rb").read()).decode())' /tmp/fss-green/release-record.json)"
+bash -c 'set -euo pipefail
+source infra/scripts/release-common.sh
+root=infra/roots/production
+network=$(release_output "$root" task_network_configuration json)
+release_run_task --step release-record-put --environment production --prefix fss-prod \
+  --account "$(release_caller_account)" --region "$AWS_REGION" \
+  --cluster "$(release_output "$root" cluster_arn)" \
+  --task-definition "$(release_output "$root" operations_task_definition_arn)" \
+  --container operations --network-plan "$network" --image-digest "$WORKER_DIGEST" \
+  --database-host "$(release_json_path "$network" database_host)" \
+  --secret-arn "$(release_output "$root" app_runtime_database_secret_arn)" \
+  --log-group "$(release_output "$root" worker_log_group_name)" --log-stream-prefix operations \
+  --capture /tmp/fss-release-record-put.log \
+  -- admin release-record put --json-base64 "$RECORD_BASE64"
+release_captured_report /tmp/fss-release-record-put.log /tmp/fss-release-record-put.json'
+cat /tmp/fss-release-record-put.json
+```
+
+A one-off task can only be handed arguments, so the record travels as base64. That also keeps the record's `fss-rh-` text out of the arguments the production guard reads. The record names the rehearsal it certifies, and the guard would otherwise read that as a rehearsal resource the command is about to act on. `fss admin release-record show --reference <reference>` reads a stored record back the same way.
+
+Then read which images are running. Each service logs its own digest at startup, from the ECS task metadata:
+
+```bash
+for service in api worker; do
+  aws logs filter-log-events --log-group-name "/fss/fss-prod/$service" \
+    --filter-pattern "{ \$.event = \"${service}_configuration\" }" \
+    --start-time $(( ($(date +%s) - 86400) * 1000 )) \
+    --query 'events[-1].message' --output text
+done
+```
+
+`image_digest` on the API line must be the record's `artifacts.api`, and on the worker line its `artifacts.worker`. `image_digest_source` should be `ecs_metadata_image`. If `image_digest` is `unknown`, the service could not read its own metadata: every enable is refused `release_record_identity_unknown` and every send is held. That is fail-closed, and the fix is the task, not the setting.
+
+You still make this comparison by eye, and it is still the moment you take responsibility for the claim. But it is no longer the only thing between an unrehearsed image and a prospect. The API refuses an enable whose record's API digest is not its own. The worker refuses to send when the record's worker digest is not its own.
 
 **3. The sending domain passes authentication.** 12.7, and the database enforces it: `sending_domains.automated_sending_enabled` cannot be true without SPF, DKIM, DMARC and a recorded Postmaster review. Set it from the admin surface (`/outbound/authentication`). If it refuses, a check is missing — fix the DNS, not the constraint.
 
@@ -862,24 +908,33 @@ Once the row exists, reopen Settings on desktop **1.0.4 or later**: the section 
 
 **4. Flip the deployment flag.** `terraform apply -var="sending_enabled=true"` in the production root, then re-deploy (worker, then API). That puts `FSS_SENDING_ENABLED=true` on both task definitions; read the plan first, and expect it to change exactly the two task definitions and nothing else. This is the release process's statement that the gate passed on these digests.
 
-**5. Write the attestation, as an authenticated admin.** From the settings page, or:
+**5. Write the attestation, as an authenticated admin, naming the stored record.** From the settings page, or:
 
 ```
 POST /settings/update
 { "settingKey": "sending_enabled",
-  "value": { "enabled": true, "releaseGateReference": "<from the release record>" },
+  "value": { "enabled": true, "releaseGateReference": "<releaseGateReference from the record step 2 stored>" },
   "changeNote": "rehearsal <reference> passed; digests match production" }
 ```
 
-The command refuses a non-admin caller and refuses an enable that names no release gate: "an admin clicked yes" is not the gate.
+The command refuses a non-admin caller and an enable that names no release gate: "an admin clicked yes" is not the gate. Since g71 it also refuses, in the same transaction as the write:
 
-Only when **4 and 5 and 3** are all true does an automated email leave FSS. `packages/domain/outbound/gate.ts` reads all three before every dispatch and refuses `workspace_sending_not_attested` or `automated_sending_disabled` when any is false, naming which half said no.
+| Refusal | Means | Fix |
+|---|---|---|
+| `release_record_unknown` | no stored record has that reference | step 2's put, or a typo in the reference |
+| `release_record_not_passing` | the record's `suite` is not `pass` | rehearse again |
+| `release_record_digest_mismatch` | the record's `artifacts.api` is not the API image serving the request | deploy the rehearsed digests, or rehearse what is deployed |
+| `release_record_identity_unknown` | the API could not read its own digest | the API task's metadata; its `api_configuration` line says why in `image_digest_detail` |
+
+Turning sending off (`enabled: false`) is always accepted.
+
+Only when **4 and 5 and 3** are all true, and the attested record names the running worker's digest, does an automated email leave FSS. `packages/domain/outbound/gate.ts` reads all of it before every dispatch. When any part is false it refuses `workspace_sending_not_attested` or `automated_sending_disabled`, and names what said no. For the release half the `detail` is `deployment`, `workspace`, or one of the four codes above, never the reference. A worker deployed later from other digests therefore holds every send (`release_record_digest_mismatch`) until someone rehearses it, puts its record and attests again. `GET /settings` then reports `effectiveSendingEnabled: false` on an API whose digest the record does not name, so Home's sidebar says sending is off.
 
 **What enabling sending commits you to.** A mailbox that has sent automated mail in the last thirty days is not disconnected and its Google authorization is not revoked, so that a late reply-based "stop" is still received and honoured (12.6's reply-only opt-out). This is the workspace's own operating rule, not a guard the software enforces yet; see `docs/greenfield/mail.md`, "Mailbox lifecycle: the thirty-day rule".
 
 ### 6.1 Turning it off
 
-Withdraw either half. The attestation (`enabled: false`) stops it immediately and is a versioned change with a reason; the deployment flag stops it at the next deployment. Neither cancels a fence that has already entered `dispatching` — that message may have gone, and Appendix B is how it settles.
+Withdraw either half, or deploy other digests: the worker holds every send when the attested record does not name its image. The attestation (`enabled: false`) stops it immediately and is a versioned change with a reason; the deployment flag stops it at the next deployment. Neither cancels a fence that has already entered `dispatching` — that message may have gone, and Appendix B is how it settles.
 
 ---
 
@@ -2762,6 +2817,32 @@ A release with no migration keeps its order: plan, apply, `release-deploy.sh` wi
 - If the step fails, its refusal names the reason. `no send whose fence the restore lost was tombstoned` means the recording or the before phase's enrollment did not reach the drill.
 
 **Still unverified.** Nothing here has run in the cloud. The live Gmail client's `in:sent` listing has been exercised only against the HTTP stub, never against a real mailbox. In particular, a trashed Sent message's appearance with `includeSpamTrash` is Gmail's documented behaviour, not an observation. The daily cap of a lost send's day is not re-counted, which is a known limit written in the decision. Production has still never sent an automated email.
+
+### 8.0ag What lane g71 changed: the sending attestation is bound to the release record (25 September)
+
+**The gap.** Found by the independent review of `b2cc080b` (section 1, P1 "sending gate"; action 6). 16.2 keeps production sending disabled until three things hold. The mandatory rehearsal scenarios passed. The deployed image digests match the rehearsal artifacts. An authenticated admin enabled sending. The admin's attestation `sending_enabled = { enabled: true, releaseGateReference }` accepted any nonempty reference, and nothing compared it with anything. Once the deployment flag was on, the send gate checked a boolean. The digest match was an instruction in section 6, step 2, and nothing enforced it.
+
+**What g71 adds.** `docs/decisions/g71-sending-gate-is-bound-to-the-release-record.md` has the reasoning.
+
+- **Migration 0017**, `release_records`: one row per `releaseGateReference`, holding the whole `fss.release-record.v1` and the columns the rules read. CHECKs mirror the script's refusals: a digest is `sha256:` plus 64 hex, the two digests differ, and the columns agree with the JSON. The table is append-only for the runtime role.
+- **The contract** is `packages/contracts/src/release.ts`, and it is strict. `test/release/scenario42.check.ts` runs `rehearsal-release-record.sh` and parses its output with it, so a field renamed on either side fails the release suite, not the production enable.
+- **`fss admin release-record put --json <file> | --json-base64 <value>`**, idempotent by reference, and `show --reference <reference>`. `release-deploy.sh --release-record <file>` runs the put on the operations task after the final verify and prints the outcome. Without the flag the deploy is unchanged.
+- **Each service knows its own digest.** The API and the worker read `ECS_CONTAINER_METADATA_URI_V4` once at startup. The digest comes from `Image`'s `@sha256:` suffix, or from `ImageID` when the reference has none. It is logged as `image_digest` in `api_configuration` and `worker_configuration`. Outside ECS, `FSS_IMAGE_DIGEST` is used; inside ECS it is ignored. Failing both, the digest is `unknown`. No Terraform change was needed.
+- **The enable rule (API).** Saving `enabled: true` is refused unless the reference is a stored record with `suite = pass` whose `artifacts.api` is the running API's digest. The refusals are `release_record_unknown`, `release_record_not_passing`, `release_record_digest_mismatch`, and `release_record_identity_unknown` when the API cannot read its own digest. `enabled: false` is always accepted. `GET /settings` and `GET /diagnostics` report the attestation in force only while its record names this API's digest.
+- **The send rule (worker).** `decideSend` also requires the attested record to be stored and passing, and its `artifacts.worker` to be the running worker's digest. Otherwise it refuses `workspace_sending_not_attested`, with the binding refusal as `detail` and never the reference. A later deploy of other digests holds every send without anybody withdrawing the attestation.
+- **The drill seed** stores a record of its own and sends under it. Its two digests are SHA-256 of a sentence, so they can never be a built image, and no production API or worker can bind to them.
+
+**Migration 0017, and what the production deploy therefore does.** Both images now declare `{17, 17}`. The images running today declare `{16, 16}`, so this is a stop-migrate-start release with no rolling path, like 8.0ab:
+
+1. build and push both images at the release commit (2.1), and run a `full` rehearsal on them, because this release touches the schema and sending;
+2. apply production with the new digests and `api_schema_range` and `worker_schema_range` both `{min=17,max=17}`;
+3. `infra/scripts/release-deploy.sh infra/roots/production fss-prod --schema-change --api-digest … --worker-digest … --release-record <release-record.json from that green run>` (4.1). The put runs after the final verify.
+
+No desktop build is needed. The settings page renders the new refusal codes as they come back, and Home's sending line reads `effectiveSendingEnabled` as before.
+
+**What the next `full` rehearsal should show.** The `before` phase's report lists `release_record: created` next to `sending_attestation: created`, and `accepted_send` still reaches `sent`. The API's and worker's startup lines carry `image_digest` equal to the run's two digest inputs, with `image_digest_source: ecs_metadata_image`.
+
+**Still unverified.** Nothing here has run in the cloud. Migration 0017 has not been applied to a deployed database. The shape of the ECS metadata answer comes from AWS's documentation, and the tests reproduce it with a local server. No Fargate task has been read. If the answer lacks the digest, both services log `image_digest: unknown`. Enabling is then refused and sending held, which is fail-closed, but a real gap until it is fixed. The first rehearsal after this merge is where that shows. Production sending is still disabled, and no real attestation has been written under the new rule.
 
 ### 8.1 Still unverified
 

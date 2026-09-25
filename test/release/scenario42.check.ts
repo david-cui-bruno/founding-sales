@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { releaseRecordSchema } from '@fss/contracts';
 import { effectiveSendingEnabled } from '@fss/domain/settings';
 import { SEND_REFUSAL_CODES } from '@fss/domain/outbound';
 import { DEPLOYMENT_ENVIRONMENT_VARIABLES as WORKER_VARIABLES } from '../../apps/worker/src/bootstrap/deployment.ts';
@@ -429,5 +430,180 @@ describe('Appendix G 42: the inventory exemption did not become a general one', 
 
     expect(code).not.toBe(0);
     expect(output).toContain('names a production resource');
+  });
+});
+
+/**
+ * Lane g71: "the deployed commit/image digests match the rehearsal artifacts" is a
+ * comparison the software makes, not a sentence an admin reads.
+ *
+ * The record the rehearsal writes is stored (`fss admin release-record put`, run by
+ * `release-deploy.sh --release-record`), the API refuses an enable whose record does
+ * not pass or does not carry the API's own digest, and the worker refuses to send when
+ * the record does not carry the worker's own. The behaviour is asserted in the domain,
+ * API and worker suites; this is where the three pieces are held to each other.
+ *
+ * ## The vacuous-pass trap
+ *
+ * A contract the script's output was never parsed with would agree with the script
+ * only until one of them renamed a field — and the first place that disagreement would
+ * surface is David's production enable. So the script is *run* and its output parsed
+ * with `releaseRecordSchema`, which is strict: a field the contract does not know, or
+ * one it requires and the script dropped, fails here. And the deploy step is run in dry
+ * mode rather than read, both with the flag (the put is planned, after the final
+ * verify, carrying the file byte for byte) and without it (nothing about the deploy
+ * changes). The mutation check drops the flag's branch and requires this to go red.
+ */
+describe('Appendix G 42: the attestation is bound to the release record (lane g71)', () => {
+  const digest = (letter: string): string => `sha256:${letter.repeat(64)}`;
+
+  function writeRecordWithScript(): Record<string, unknown> {
+    const reports = mkdtempSync(join(tmpdir(), 'fss-record-contract-'));
+    for (const report of ['restore-drill.txt', 'schema-ranges.txt', 'prefix-guard.txt']) {
+      writeFileSync(join(reports, report), 'prefix=fss-rh-contract result=pass');
+    }
+    writeFileSync(join(reports, 'carry-watermark.txt'), 'prefix=fss-rh-contract carry_drill=skipped_no_watermark');
+    const out = join(reports, 'release-record.json');
+    const result = spawnSync(
+      repositoryPath('infra/scripts/rehearsal-release-record.sh'),
+      ['fss-rh-contract', digest('a'), digest('b'), 'c'.repeat(40), 'pass', out],
+      { encoding: 'utf8', env: { ...process.env, FSS_REHEARSAL_REPORTS: reports, FSS_REHEARSAL_DRY_RUN: '1' } },
+    );
+    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    return JSON.parse(readFileSync(out, 'utf8')) as Record<string, unknown>;
+  }
+
+  it('parses what rehearsal-release-record.sh writes with the contract the domain stores it by', () => {
+    const written = writeRecordWithScript();
+    const parsed = releaseRecordSchema.safeParse(written);
+    expect(parsed.success, JSON.stringify(parsed.error?.issues ?? [])).toBe(true);
+    // Strict both ways: every field the script writes is one the contract names, and
+    // the digests the two rules compare are where the domain reads them.
+    expect(Object.keys(written).sort()).toEqual(Object.keys(releaseRecordSchema.shape).sort());
+    expect(parsed.data?.artifacts).toEqual({ api: digest('a'), worker: digest('b'), desktopCommitStamp: 'c'.repeat(40) });
+    expect(parsed.data?.suite).toBe('pass');
+    expect(parsed.data?.releaseGateReference.startsWith('fss-rh-contract-')).toBe(true);
+  });
+
+  it('refuses the enable on the API side and the send on the worker side, each with its own digest', () => {
+    const store = readRepositoryFile('packages/domain/settings/store.ts');
+    expect(store).toContain("await bindReleaseRecord(");
+    expect(store).toContain("'api',\n        input.runningApiDigest,");
+    const gate = readRepositoryFile('packages/domain/outbound/gate.ts');
+    expect(gate).toContain("attestedReleaseBinding(context, attestation.value, 'worker', deps.workerImageDigest)");
+    // After the two switches and before the domain, so the order of refusals is kept.
+    expect(gate.indexOf('attestedReleaseBinding(context')).toBeGreaterThan(gate.indexOf('effectiveSendingEnabled('));
+    expect(gate.indexOf('readPrimarySendingDomain(')).toBeGreaterThan(gate.indexOf('attestedReleaseBinding(context'));
+    // Both processes say which image they are, from the task metadata.
+    for (const path of ['apps/api/src/bootstrap/main.ts', 'apps/worker/src/bootstrap/main.ts']) {
+      const main = readRepositoryFile(path);
+      expect(main, path).toContain('await discoverImageDigest(environment)');
+      expect(main, path).toContain('image_digest: identity.digest');
+    }
+    expect(readRepositoryFile('apps/api/src/routes/settings.ts')).toContain('runningApiDigest: options.imageDigest');
+    expect(readRepositoryFile('apps/worker/src/bootstrap/main.ts')).toContain('workerImageDigest: options.imageDigest');
+  });
+
+  describe('release-deploy.sh --release-record', () => {
+    const recordFile = (): { readonly path: string; readonly bytes: Buffer } => {
+      const directory = mkdtempSync(join(tmpdir(), 'fss-deploy-record-'));
+      const path = join(directory, 'release-record.json');
+      writeFileSync(path, `${JSON.stringify(writeRecordWithScript(), null, 2)}\n`);
+      return { path, bytes: readFileSync(path) };
+    };
+
+    function dryDeploy(extra: readonly string[]): { readonly code: number; readonly output: string; readonly report: string } {
+      const reports = mkdtempSync(join(tmpdir(), 'fss-deploy-dry-'));
+      const result = spawnSync(
+        'bash',
+        [
+          repositoryPath('infra/scripts/release-deploy.sh'),
+          'infra/roots/production',
+          'fss-prod',
+          '--worker-digest',
+          digest('b'),
+          ...extra,
+        ],
+        {
+          cwd: repositoryPath(''),
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            FSS_REHEARSAL_DRY_RUN: '1',
+            FSS_REHEARSAL_REPORTS: reports,
+            FSS_RELEASE_CALLER_ACCOUNT: '123456789012',
+            AWS_REGION: 'us-east-1',
+            FSS_RELEASE_OUTPUT_CLUSTER_ARN: 'arn:aws:ecs:us-east-1:123456789012:cluster/fss-prod-cluster',
+            FSS_RELEASE_OUTPUT_MIGRATION_TASK_DEFINITION_ARN:
+              'arn:aws:ecs:us-east-1:123456789012:task-definition/fss-prod-migration:1',
+            FSS_RELEASE_OUTPUT_OPERATIONS_TASK_DEFINITION_ARN:
+              'arn:aws:ecs:us-east-1:123456789012:task-definition/fss-prod-operations:1',
+            FSS_RELEASE_OUTPUT_APP_RUNTIME_DATABASE_SECRET_ARN:
+              'arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-prod/app-runtime-database-a',
+            FSS_RELEASE_OUTPUT_TASK_NETWORK_CONFIGURATION: JSON.stringify({
+              subnet_ids: ['subnet-1111111111111111a'],
+              security_group_id: 'sg-1111111111111111b',
+              assign_public_ip: 'ENABLED',
+              database_host: 'fss-prod-pg.example',
+              inbound_rule_count: 0,
+            }),
+            FSS_RELEASE_OUTPUT_DEPLOYMENT_PLAN: JSON.stringify({
+              api: { service_name: 'fss-prod-api', declared_desired_count: 1 },
+              worker: { service_name: 'fss-prod-worker', declared_desired_count: 1 },
+              bootstrap: false,
+            }),
+            FSS_RELEASE_OUTPUT_WORKER_LOG_GROUP_NAME: '/fss/fss-prod/worker',
+          },
+        },
+      );
+      const reportPath = join(reports, 'release-deploy.txt');
+      return {
+        code: result.status ?? 1,
+        output: `${result.stdout}${result.stderr}`,
+        report: existsSync(reportPath) ? readFileSync(reportPath, 'utf8') : '',
+      };
+    }
+
+    const plannedCommands = (output: string): readonly string[][] =>
+      [...output.matchAll(/--overrides (\{"containerOverrides".*\})$/gmu)].map(match => {
+        const overrides = JSON.parse(match[1] ?? '{}') as { containerOverrides: { command: string[] }[] };
+        return overrides.containerOverrides[0]?.command ?? [];
+      });
+
+    it('puts the record after the final verify, as the file’s own bytes', () => {
+      const file = recordFile();
+      const { code, output, report } = dryDeploy(['--release-record', file.path]);
+      expect(code, output).toBe(0);
+      const commands = plannedCommands(output);
+      const verifyDeployed = commands.findIndex(
+        command => command.includes('verify') && command.includes('/tmp/fss-verify-deployed.json'),
+      );
+      const put = commands.findIndex(command => command.slice(0, 3).join(' ') === 'admin release-record put');
+      expect(verifyDeployed, 'the final verify is not planned').toBeGreaterThan(-1);
+      expect(put, 'the release record put is not planned').toBeGreaterThan(verifyDeployed);
+      const encoded = commands[put]?.[(commands[put]?.indexOf('--json-base64') ?? -2) + 1] ?? '';
+      expect(Buffer.from(encoded, 'base64').equals(file.bytes)).toBe(true);
+      // The record names the rehearsal it certifies; the argument that carries it must
+      // not, or the production foreign-argument guard would refuse the launch.
+      expect(commands[put]?.join(' ')).not.toContain('fss-rh-');
+      expect(report).toContain('release_record=planned');
+    });
+
+    it('changes nothing about the deploy without the flag', () => {
+      const { code, output, report } = dryDeploy([]);
+      expect(code, output).toBe(0);
+      expect(plannedCommands(output).some(command => command.includes('release-record'))).toBe(false);
+      expect(report).toContain('release_record=none');
+    });
+
+    it('refuses before anything is scaled when the file is not a release record', () => {
+      const directory = mkdtempSync(join(tmpdir(), 'fss-deploy-bad-'));
+      const path = join(directory, 'not-a-record.json');
+      writeFileSync(path, JSON.stringify({ schema: 'something.else' }));
+      const { code, output } = dryDeploy(['--release-record', path]);
+      expect(code).not.toBe(0);
+      expect(output).toContain('is not a release record');
+      expect(output).not.toContain('update-service');
+    });
   });
 });

@@ -1,0 +1,23 @@
+export {
+  attestedReleaseBinding,
+  bindReleaseRecord,
+  putReleaseRecord,
+  readReleaseRecord,
+  releaseRecordBinding,
+  type ReleaseArtifactSide,
+  type ReleaseBinding,
+  type ReleaseRecordContext,
+  type ReleaseRecordPutResult,
+  type StoredReleaseRecord,
+} from './records.ts';
+export {
+  ECS_METADATA_VARIABLE,
+  IMAGE_DIGEST_VARIABLE,
+  UNKNOWN_IMAGE_DIGEST,
+  digestFromContainerMetadata,
+  discoverImageDigest,
+  type DiscoverImageDigestOptions,
+  type ImageDigestSource,
+  type MetadataFetch,
+  type RunningImageIdentity,
+} from './identity.ts';

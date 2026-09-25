@@ -20,6 +20,7 @@ import {
   type MailboxRow,
 } from '@fss/domain/mail';
 import { reconcileOutboundMessage, scanSentFolder } from '@fss/domain/outbound';
+import { putReleaseRecord, readReleaseRecord, type StoredReleaseRecord } from '@fss/domain/release';
 import { replaySuppressionJournal, type SuppressionJournalSource } from '@fss/domain/suppression';
 import {
   RESTORE_ACTOR,
@@ -900,4 +901,68 @@ export async function systemGenerationAdvanceCommand(invocation: AdminInvocation
     );
   }
   return accept({ ...outcome.value });
+}
+
+// ---------------------------------------------------------------------------
+// The release record (lane g71; specification 16.2, Appendix G 42).
+// ---------------------------------------------------------------------------
+
+/** What an operator reads back: the fields the two rules compare, and when it was stored. */
+function describeRecord(record: StoredReleaseRecord): Readonly<Record<string, unknown>> {
+  return {
+    reference: record.reference,
+    suite: record.suite,
+    apiDigest: record.apiDigest,
+    workerDigest: record.workerDigest,
+    desktopCommitStamp: record.desktopCommitStamp,
+    recordedAt: record.recordedAt,
+    putAt: record.putAt,
+    enablesSending: record.enablesSending,
+  };
+}
+
+/**
+ * `fss admin release-record put --json <file> | --json-base64 <value>`.
+ *
+ * Stores the `fss.release-record.v1` a green rehearsal wrote, so that an admin's
+ * `sending_enabled` attestation can name it and both rules can read it: the API
+ * compares its own digest with the record's `api` when the enable is saved, and the
+ * worker compares its own with the record's `worker` before every dispatch. Putting a
+ * record enables nothing — the record says `enablesSending: false` and the admin's act
+ * is still the switch.
+ *
+ * `--json-base64` is the form `release-deploy.sh` uses, because a one-off task can be
+ * handed nothing but arguments and the record's JSON is braces, quotes and newlines.
+ * Idempotent: the same record twice is `existing`; a different one under a reference
+ * already stored is refused `release_record_conflict`, and nothing is ever replaced.
+ */
+export async function releaseRecordPutCommand(invocation: AdminInvocation): Promise<AdminOutcome> {
+  const path = invocation.options['--json'];
+  const encoded = invocation.options['--json-base64'];
+  let text: string;
+  if (path !== undefined) {
+    try {
+      text = await readFile(path, 'utf8');
+    } catch {
+      return refuse('release_record_unreadable', '--json names the release-record.json the green rehearsal wrote, and it could not be read');
+    }
+  } else if (encoded !== undefined && /^[A-Za-z0-9+/]+={0,2}$/u.test(encoded)) {
+    text = Buffer.from(encoded, 'base64').toString('utf8');
+  } else {
+    return refuse('release_record_unreadable', '--json-base64 carries the release record as standard base64, and this is not');
+  }
+
+  const stored = await withTransaction(invocation.session, async () => await putReleaseRecord({ db: invocation.session }, text));
+  if (!stored.ok) return refuse(stored.reason, stored.detail);
+  return accept({ outcome: stored.value.outcome, ...describeRecord(stored.value.record) });
+}
+
+/** `fss admin release-record show --reference <reference>`. Reads only. */
+export async function releaseRecordShowCommand(invocation: AdminInvocation): Promise<AdminOutcome> {
+  const reference = invocation.options['--reference'] ?? '';
+  const record = await readReleaseRecord({ db: invocation.session }, reference);
+  if (record === null) {
+    return refuse('release_record_unknown', 'no release record is stored under that reference; put it first with fss admin release-record put');
+  }
+  return accept({ ...describeRecord(record), record: record.record });
 }

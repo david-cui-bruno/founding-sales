@@ -38,6 +38,7 @@
 !packages/domain/settings
 !packages/domain/dashboard
 !packages/domain/retention
+!packages/domain/release
 !packages/contracts/package.json
 !packages/contracts/src
 

@@ -61,12 +61,13 @@ const INVOCATIONS = CALLERS.flatMap(relative =>
 describe('the fss command line accepts every invocation the release scripts make', () => {
   it('finds every `fss` invocation in both scripts, planned and real', () => {
     // A floor on purpose: an extractor that silently found none would make every case
-    // below vacuous, and the scripts are the specification here. Seven is the number of
+    // below vacuous, and the scripts are the specification here. Eight is the number of
     // distinct commands the release actually issues — `admin counts`, `drill`,
     // `migrate`, `admin database-users ensure`, `verify`, `admin workspace bootstrap`
-    // since g39 and `admin drill seed-evidence` since g40 — and each appears at least
-    // once in a planned line and once in a real one.
-    expect(INVOCATIONS.length).toBeGreaterThanOrEqual(7);
+    // since g39, `admin drill seed-evidence` since g40 and `admin release-record put`
+    // since g71 — and each appears at least once in a planned line and once in a real
+    // one.
+    expect(INVOCATIONS.length).toBeGreaterThanOrEqual(8);
     expect(INVOCATIONS.some(invocation => invocation.planned)).toBe(true);
     expect(INVOCATIONS.some(invocation => !invocation.planned)).toBe(true);
 
@@ -86,6 +87,8 @@ describe('the fss command line accepts every invocation the release scripts make
       'verify',
       'admin workspace bootstrap',
       'admin drill seed-evidence',
+      // g71: release-deploy.sh --release-record stores the record the admin attests to.
+      'admin release-record put',
     ]) {
       expect(commands, `no release script invokes \`fss ${expected}\``).toContain(expected);
     }

@@ -3,6 +3,7 @@ import type { QueryResultRowLike, SessionQueryable } from '@fss/domain/db';
 import { HandlerRegistry, canaryHandler, createCloudWatchSink, loadCloudWatchTransport } from '@fss/domain/jobs';
 import { defaultTodaySources } from '@fss/domain/today';
 import { dueSequenceWorkSource } from '@fss/domain/sequences';
+import { discoverImageDigest } from '@fss/domain/release';
 import { WORKER_EXIT_CODES } from '../index.ts';
 import {
   classifyHandlers,
@@ -192,6 +193,12 @@ export async function composeHandlers(
   options: {
     readonly journal?: SuppressionJournal | undefined;
     readonly region?: string | undefined;
+    /**
+     * Which worker image this is (lane g71), from `discoverImageDigest`. The send gate
+     * compares it with the worker digest of the release record the attestation names;
+     * absent is unknown, and unknown holds every send.
+     */
+    readonly imageDigest?: string | undefined;
   } = {},
 ): Promise<HandlerComposition> {
   const gmail = deployment.gmail;
@@ -230,6 +237,9 @@ export async function composeHandlers(
       // 16.2's deployment half. `decideSend` defaults it to false, so a composition
       // that forgot it would hold every send rather than send one.
       deploymentSendingEnabled: deployment.sendingEnabled,
+      // And the image this worker is, which the attested release record must name
+      // (lane g71). Same default, same direction: absent holds every send.
+      workerImageDigest: options.imageDigest,
     },
   };
 }
@@ -303,13 +313,20 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
   // runs, so the backlog is truthful about what is owed. `describeClassifier` says
   // whether a key is configured and never what it is.
   const classifier = await classifyWorkerOptions(environment);
+  // Lane g71: which worker image this is, from the ECS task metadata (or
+  // FSS_IMAGE_DIGEST outside ECS), once. Public, so it is in the startup line.
+  const identity = await discoverImageDigest(environment);
   const composition = await composeHandlers(deployment, classifier, {
     ...(config.metrics.region === null ? {} : { region: config.metrics.region }),
+    imageDigest: identity.digest,
   });
   log.log('info', 'worker_configuration', {
     ...describeWorkerConfig(config),
     ...describeClassifier(classifier),
     ...describeDeployment(deployment),
+    image_digest: identity.digest,
+    image_digest_source: identity.source,
+    image_digest_detail: identity.detail,
   });
 
   const sink = await createSink(config, log);
