@@ -730,8 +730,9 @@ FSS_DESKTOP_PACKAGE_MODE=local-smoke FSS_DESKTOP_APP_VERSION=1.5.0 \
 npm run verify:desktop:package -- /tmp/callie-smoke/Callie-darwin-arm64/Callie.app --integrity
 ```
 
-The host layer needs the Electron binary, which the documented install deliberately
-does not fetch. Once, in the checkout:
+The host layer needs the Electron binary. A plain `npm ci` fetches it (the root
+`postinstall`, since lane g89); an `npm ci --ignore-scripts` install does not. After
+one of those, once, in the checkout:
 
 ```
 node node_modules/electron/install.js

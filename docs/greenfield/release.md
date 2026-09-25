@@ -3413,6 +3413,27 @@ Fourteen mutations are appended to `scripts/releaseMutationCheck.mjs` (main + 14
 - The gate under a real load balancer drain.
 - `imagetools create --prefer-index=false` against ECR, and `batch-get-image` / `put-image` against a real wrapped copy. The stubs model both; the re-run of the `e220f468` promotion is the first real test.
 
+### 8.0av What lane g89 changed: the root is the greenfield product, and the old app runs only when it changes (25 September)
+
+**What was wrong.** Audit item G10 (`GPT6-ASTRA-EXHAUSTIVE-20260925.md`): the root `package.json` belonged to the unused previous-generation app, so `npm start`, `npm test`, `npm run typecheck` and `npm run lint` meant that app, `npm ci` built its native modules, and `.github/workflows/ci.yml` ran its two macOS jobs, `source` and `client`, on every push and pull request. They waited 20 to 40 minutes for a runner and gated every greenfield change.
+
+**What changed.** `docs/decisions/g89-greenfield-is-the-default.md` has the reasoning, and `docs/greenfield/legacy.md` lists what remains of the old app and how to run it.
+
+- The bare `typecheck`, `lint` and `test` run the greenfield equivalents; there is no bare `start`. Every old script is `legacy:<its old name>`, except `verify:secrets`, which is shared. `gate:greenfield`, `test:desktop:e2e`, `package:desktop` and every script the `greenfield*.yml` workflows call are unchanged.
+- `postinstall` only fetches the Electron binary. The `safe-log-fs` build and the SQLite driver rebuilds are `npm run legacy:setup`, which `source` and `release.yml` run after `npm ci`.
+- `ci.yml` has a `secrets` job (the Gitleaks history and tree scan) and a `root-scripts` job (the old ESLint config over the four greenfield files at the root, on Linux), both on every change. `source` and `client` run only when `old-trees-changed` finds a changed path outside the greenfield-only list. Of the 73 pull requests merged between 20 and 25 September, one, a lock-file change, would have run them.
+- Nothing was deleted: the deletion map's "now" rows were deleted on 18 September, and its other rows each wait on a dependency or are kept.
+
+**No deployment.** Nothing here reaches a running process, an image or a desktop build.
+
+**Test evidence, offline only.**
+
+- `test/release/rootScripts.check.ts` holds the root's shape: the three defaults' exact commands, no bare `start`, the exact list of unprefixed scripts, an install that builds nothing of the old app, and no greenfield script reaching a `legacy:` one. Two mutations were applied by hand and each turned it red: the old `postinstall` restored under its new names, and the whole `package.json` of `main`. Neither is in `scripts/releaseMutationCheck.mjs`.
+- A fresh `npm ci` runs the root `postinstall` as `install-electron --no` only, with no node-gyp, `electron-rebuild` or staging step. `FSS_DESKTOP_PACKAGE_MODE=local-smoke npm run package:desktop` produced `Callie.app` after it, and again with `node_modules/electron/dist` moved aside, so packaging does not need `install-electron`; `docs/greenfield/install.md` says the host tests do.
+- The old tree's own pins of the renamed scripts, `test/verifyRelease.test.mjs` and `test/releaseDocumentation.test.mjs`, pass locally. `old-trees-changed` was run by hand for a pull request, a push, a zero `before` and an empty `before`.
+
+**Still unverified.** The first run of the new `ci.yml` on GitHub, including whether `source` and `client` are required status checks and so whether a skipped run satisfies branch protection as GitHub documents. The full old gate, since running it needs the native builds this lane was told not to run; this pull request changes `package.json` and `ci.yml`, so `source` and `client` run on it. The `secrets` job still waits for a macOS runner, because the only pinned Gitleaks checksum is the `darwin_arm64` tarball's.
+
 ### 8.1 Still unverified
 
 Production was applied, deployed, bootstrapped and smoked at `66203322`, and redeployed at `02da3dd5` between 05:50Z and 05:57Z on 24 September, which carries the sign-in fix (8.0v). The signed desktop build is published at `66203322` (8.0t), and thirteen rehearsal runs have existed (8.0s, 8.0t, 8.0v, 8.0w). The first real sign-in was attempted against the `66203322` deployment and refused by the API's own discovery rule (8.0u); the retry against the g45 fix succeeded at 15:08Z, and showed that desktop 1.0.0 has no way to connect the mailbox (8.0x). Desktop 1.0.1 connected the first mailbox at about 18:10Z on 24 September. From 18:11Z CloudWatch refused every worker metric publication over one unit, and ECS replaced the worker every few minutes for failed health checks. That blackout lasts until the g51 fix is deployed (8.0y). What follows is what that still does not settle. Items 1 to 10 were written before any of it ran, and each carries whatever a later run answered; items 11 to 18 are what is open on 24 September, and the first of them is the release record this release does not have.

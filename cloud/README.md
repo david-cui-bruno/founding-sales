@@ -24,10 +24,10 @@ Nothing here initializes providers, reads state, contacts AWS or deploys. Instal
 export PATH="/opt/homebrew/opt/node@24/bin:/opt/homebrew/bin:$PATH"
 npm ci --no-audit --no-fund
 npm ci --prefix cloud/lambdas/delegated-worker --no-audit --no-fund
-npm run verify:lambdas            # delegated-worker (typecheck, test, build)
+npm run legacy:verify:lambdas            # delegated-worker (typecheck, test, build)
 npx vitest run tests/infrastructure
-npm run lint:tracked
-npm run typecheck
+npm run legacy:lint:tracked
+npm run legacy:typecheck
 ```
 
 `verify:lambdas` discovers tracked `cloud/lambdas/*/package.json` manifests, so CI carries no package list. Terraform formatting, validation and the mock-provider plan tests for the worker root are described in `worker-terraform/README.md`.

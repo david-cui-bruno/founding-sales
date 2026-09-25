@@ -506,9 +506,11 @@ another module's claim, so the guarantee is the one an exact path gives; see
 
 ## Running the old gate on this Mac
 
-`npm run typecheck` and `npm run lint:tracked` are the **old** trees' gate, not the
-greenfield one (`npm run gate:greenfield`). Both fail on a fresh clone with seven
-errors that look alarming and are not:
+`npm run legacy:typecheck` and `npm run legacy:lint:tracked` are the **old** trees' gate,
+not the greenfield one (`npm run gate:greenfield`; since lane g89 the bare
+`npm run typecheck`, `npm run lint` and `npm test` are greenfield too, see
+`docs/greenfield/legacy.md`). Both fail on a fresh clone with seven errors that look
+alarming and are not:
 
 ```
 cloud/lambdas/delegated-worker/src/handler.ts(11,80): error TS2307:
@@ -522,7 +524,8 @@ with their own pinned lock files — `docs/decisions/g1-provider-lock-files.md` 
 `docs/decisions/g0-old-gate-isolation.md` are why — and the root `npm install` does
 not install them. The root `tsconfig.json` and the old ESLint config still *read* their
 sources, so an uninstalled dependency reads as a missing module. `.github/workflows/ci.yml`
-installs each one before it runs the gate, which is why CI is green and a laptop is not:
+installs each one (after `npm run legacy:setup`, which builds the old app's native
+modules) before it runs the gate, which is why CI is green and a laptop is not:
 
 ```bash
 while IFS= read -r -d '' lock; do
