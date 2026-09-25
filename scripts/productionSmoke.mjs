@@ -2,7 +2,8 @@
 // Production smoke checks (specification 16.2, 13.3).
 //
 //   node scripts/productionSmoke.mjs --origin https://api.usecallie.com \
-//        --canary-age-seconds "$(aws cloudwatch get-metric-statistics --namespace FSS/fss-prod ... )" [--json]
+//        --canary-age-seconds "$(aws cloudwatch get-metric-statistics --namespace FSS/fss-prod ... )" \
+//        [--expect-sending disabled|enabled] [--json]
 //
 // 16.2: "Production receives safe health, schema-range, connectivity, synthetic-canary,
 // and sending-disabled smoke checks." Six checks, all read-only. Every Appendix G case
@@ -19,6 +20,8 @@
 //   2. `/readyz`   — readiness: the schema range is accepted, the system generation is
 //                    the one the operator pinned, the database answered.
 //   3. `/health`   — the operator-facing report, which is where `sendingEnabled` is.
+//                    Compared with `--expect-sending`, the deployment state the operator
+//                    says this release should have (below).
 //   4. the canary age, which is a CloudWatch metric rather than an HTTP field. It is
 //      passed in, so this script needs no AWS credential of its own; the exact command
 //      to produce it is in `docs/greenfield/release.md`. It is read from the
@@ -48,6 +51,20 @@
 // failure with that name in it, and the canary is a **failure** when its age was not
 // supplied rather than a skip. There is no "probably fine" branch anywhere in the file.
 //
+// ## The expected sending state (lane g80, audit item O12)
+//
+// 16.2 names a *sending-disabled* check because, when it was written, sending had never
+// been on, and until lane g80 the sixth check passed only on `sendingEnabled === false`.
+// Section 6 of `docs/greenfield/release.md` is how sending is turned on, and from that
+// day every ordinary deployment would have failed its smoke for being exactly what it
+// should be. So the expected state is an input: `--expect-sending disabled` (the
+// default, which is the state every environment starts in and the rehearsal always
+// has) or `--expect-sending enabled`, and the check is named for what it expects —
+// `sending_disabled` or `sending_enabled` — so a PASS line says which state it
+// confirmed. Anything else is a refusal to run, never a guess: a smoke that quietly
+// accepted either state would pass a deployment that had flipped sending by accident,
+// which is the one thing this check is for.
+//
 // Exit codes: 0 all checks passed; 1 a check failed; 2 the script could not run.
 
 import { fileURLToPath } from 'node:url';
@@ -61,7 +78,11 @@ const REPOSITORY_ROOT = fileURLToPath(new URL('..', import.meta.url));
  */
 export const CANARY_MAXIMUM_AGE_SECONDS = 300;
 
-/** The six checks 16.2 names, in the order this script runs them. */
+/**
+ * The six checks 16.2 names, in the order this script runs them. The sixth is named for
+ * the sending state it expects: `sending_disabled` by default, `sending_enabled` under
+ * `--expect-sending enabled` (`sendingCheckName`).
+ */
 export const SMOKE_CHECKS = Object.freeze([
   'health',
   'readiness',
@@ -71,8 +92,23 @@ export const SMOKE_CHECKS = Object.freeze([
   'sending_disabled',
 ]);
 
+/** The two deployment states `--expect-sending` accepts. The first is the default. */
+export const SENDING_EXPECTATIONS = Object.freeze(['disabled', 'enabled']);
+
+/** The sixth check's name, for the state it expects. Refuses any other state. */
+export function sendingCheckName(expectation) {
+  if (!SENDING_EXPECTATIONS.includes(expectation)) throw new Error(`SMOKE_BAD_EXPECT_SENDING:${String(expectation)}`);
+  return `sending_${expectation}`;
+}
+
 export function parseArguments(argv) {
-  const options = { origin: null, json: false, timeoutMilliseconds: 10_000, canaryAgeSeconds: null };
+  const options = {
+    origin: null,
+    json: false,
+    timeoutMilliseconds: 10_000,
+    canaryAgeSeconds: null,
+    expectSending: SENDING_EXPECTATIONS[0],
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === '--origin') {
@@ -81,6 +117,10 @@ export function parseArguments(argv) {
     } else if (argument === '--canary-age-seconds') {
       options.canaryAgeSeconds = argv[index + 1] ?? null;
       index += 1;
+    } else if (argument === '--expect-sending') {
+      options.expectSending = argv[index + 1] ?? null;
+      index += 1;
+      sendingCheckName(options.expectSending);
     } else if (argument === '--timeout-ms') {
       options.timeoutMilliseconds = Number(argv[index + 1]);
       index += 1;
@@ -220,15 +260,24 @@ export async function runSmoke(options, dependencies = {}) {
     );
   }
 
+  // Named before anything is read, so a bad expectation is a refusal to run (exit 2)
+  // rather than a failed check, and never a pass.
+  const expectation = options.expectSending ?? SENDING_EXPECTATIONS[0];
+  const sendingCheck = sendingCheckName(expectation);
   const health = await readJson(fetchImplementation, `${options.origin}/health`, options.timeoutMilliseconds);
   try {
-    // 16.2, and the one check whose expected answer is false. `sendingEnabled` here is
-    // the *deployment* half; the admin attestation is the other and is read from the
-    // admin surface, because it is workspace state rather than process state.
+    // 16.2. `sendingEnabled` here is the *deployment* half; the admin attestation is the
+    // other and is read from the admin surface, because it is workspace state rather
+    // than process state. It must be a boolean and must be the state the operator
+    // expects: a truthy string is neither.
     const enabled = required(health.body, 'sendingEnabled');
-    record('sending_disabled', enabled === false, `sendingEnabled=${String(enabled)}`);
+    record(
+      sendingCheck,
+      typeof enabled === 'boolean' && enabled === (expectation === 'enabled'),
+      `sendingEnabled=${String(enabled)} expected=${expectation}`,
+    );
   } catch (error) {
-    record('sending_disabled', false, error.message);
+    record(sendingCheck, false, error.message);
   }
 
   return results;

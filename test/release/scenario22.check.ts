@@ -572,6 +572,16 @@ describe('Appendix G 22 (g38): the refusal cases measure the container, not the 
  * `run-task` and no `update-service`, a deploy with both services at zero must reach
  * the migration's `run-task`, and a stop must scale the API before the worker and then
  * read both back. The mutation check removes the refusal and requires this to go red.
+ *
+ * Lane g80 (audit items O03 and O08) runs the same fake further. Without
+ * `--schema-change` a deploy is one rolling deployment and nothing else — no `run-task`
+ * at all, one `update-service --desired-count` per service and no forced second
+ * rollout — and on both paths the deploy then reads the running tasks back. The fake
+ * answers `list-tasks` and `describe-tasks` from a per-service digest file, so a
+ * service that is stable on the wrong image (the circuit breaker's rollback), or on
+ * fewer tasks than it declares, is a failure the checks below can ask for; and it can
+ * let the one-off tasks pass, so a schema release runs from its assertion to its
+ * final verify offline.
  */
 
 const STOP = 'infra/scripts/release-stop.sh';
@@ -580,6 +590,8 @@ const ORDER_PREFIX = 'fss-rh-order';
 const ORDER_ACCOUNT = '111111111111';
 const ORDER_CLUSTER = `arn:aws:ecs:us-east-1:${ORDER_ACCOUNT}:cluster/${ORDER_PREFIX}-cluster`;
 const ORDER_WORKER_DIGEST = `sha256:${'b'.repeat(64)}`;
+const ORDER_API_DIGEST = `sha256:${'a'.repeat(64)}`;
+const ORDER_OLD_DIGEST = `sha256:${'9'.repeat(64)}`;
 const ORDER_RUNTIME_SECRET = `arn:aws:secretsmanager:us-east-1:${ORDER_ACCOUNT}:secret:${ORDER_PREFIX}/app-runtime-database-bbbbbb`;
 const ORDER_HOST = `${ORDER_PREFIX}-pg.example.com`;
 
@@ -602,6 +614,11 @@ interface OrderRun {
  * A fake AWS CLI holding each service's desired and running counts in a file. An
  * `update-service --desired-count` moves both at once, which is what a stable service
  * ends at, unless `sticky` is set: then ECS acknowledges the call and nothing stops.
+ *
+ * Lane g80: `list-tasks` answers one RUNNING task per running count, and
+ * `describe-tasks` gives each the digest in `<service>.digest` and the service's one
+ * deployment's task definition. `run-task` stops the run at the migration unless
+ * `one-offs-pass` exists; then every one-off task exits 0 and logs one line.
  */
 function orderStub(directory: string): string {
   const path = join(directory, 'aws');
@@ -610,19 +627,22 @@ function orderStub(directory: string): string {
     `state='${directory}'`,
     'printf "%s\\n" "$*" >> "$state/calls.log"',
     'service=$1; operation=$2; shift 2',
-    'name=""; count=""',
+    'name=""; count=""; tasks=""',
     'while [ "$#" -gt 0 ]; do',
     '  case "$1" in',
-    '    --service|--services) name=$2; shift ;;',
+    '    --service|--services|--service-name) name=$2; shift ;;',
     '    --desired-count) count=$2; shift ;;',
+    '    --tasks) shift; while [ "$#" -gt 0 ] && [ "${1#--}" = "$1" ]; do tasks="$tasks $1"; shift; done; continue ;;',
     '  esac',
     '  shift',
     'done',
+    `definition() { echo "arn:aws:ecs:us-east-1:${ORDER_ACCOUNT}:task-definition/$1:7"; }`,
     'case "$service $operation" in',
     '  "ecs describe-services")',
     '    desired=$(cat "$state/$name.desired" 2>/dev/null || echo 0)',
     '    running=$(cat "$state/$name.running" 2>/dev/null || echo 0)',
-    '    printf \'{"services":[{"serviceName":"%s","status":"ACTIVE","desiredCount":%s,"runningCount":%s,"pendingCount":0}],"failures":[]}\\n\' "$name" "$desired" "$running"',
+    '    rollout=$(cat "$state/$name.rollout" 2>/dev/null || echo COMPLETED)',
+    '    printf \'{"services":[{"serviceName":"%s","status":"ACTIVE","desiredCount":%s,"runningCount":%s,"pendingCount":0,"deployments":[{"status":"PRIMARY","taskDefinition":"%s","rolloutState":"%s"}]}],"failures":[]}\\n\' "$name" "$desired" "$running" "$(definition "$name")" "$rollout"',
     '    exit 0 ;;',
     '  "ecs update-service")',
     '    if [ -n "$count" ]; then',
@@ -632,10 +652,35 @@ function orderStub(directory: string): string {
     '    printf "%s\\t%s\\n" "$name" "${count:-unchanged}"',
     '    exit 0 ;;',
     '  "ecs wait") exit 0 ;;',
+    '  "ecs list-tasks")',
+    '    running=$(cat "$state/$name.running" 2>/dev/null || echo 0)',
+    '    arns=""; i=1',
+    `    while [ "$i" -le "$running" ]; do arns="$arns\${arns:+,}\\"arn:aws:ecs:us-east-1:${ORDER_ACCOUNT}:task/${ORDER_PREFIX}-cluster/$name-$i\\""; i=$((i + 1)); done`,
+    '    printf \'{"taskArns":[%s]}\\n\' "$arns"',
+    '    exit 0 ;;',
+    '  "ecs describe-tasks")',
+    '    out=""',
+    '    for arn in $tasks; do',
+    '      id=${arn##*/}',
+    '      case "$id" in',
+    '        oneoff-*) entry=\'{"lastStatus":"STOPPED","stopCode":"EssentialContainerExited","containers":[{"name":"one-off","exitCode":0}]}\' ;;',
+    '        *) owner=${id%-*}; container=${owner##*-}',
+    '           entry=$(printf \'{"taskArn":"%s","lastStatus":"RUNNING","taskDefinitionArn":"%s","containers":[{"name":"%s","image":"registry/%s","imageDigest":"%s"}]}\' "$arn" "$(definition "$owner")" "$container" "$container" "$(cat "$state/$owner.digest")") ;;',
+    '      esac',
+    '      out="$out${out:+,}$entry"',
+    '    done',
+    '    printf \'{"tasks":[%s],"failures":[]}\\n\' "$out"',
+    '    exit 0 ;;',
     '  "ecs run-task")',
+    '    if [ -f "$state/one-offs-pass" ]; then',
+    '      n=$(( $(cat "$state/one-offs" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$state/one-offs"',
+    `      printf '{"tasks":[{"taskArn":"arn:aws:ecs:us-east-1:${ORDER_ACCOUNT}:task/${ORDER_PREFIX}-cluster/oneoff-%s"}],"failures":[]}\\n' "$n"`,
+    '      exit 0',
+    '    fi',
     '    # The migration is where these runs stop: reaching it is the assertion.',
     '    echo \'{"tasks": [], "failures": [{"arn": "stub", "reason": "STUB_STOPS_AT_THE_MIGRATION"}]}\'',
     '    exit 0 ;;',
+    '  "logs get-log-events") echo \'{"events":[{"message":"{\\"ok\\":true}"}]}\'; exit 0 ;;',
     'esac',
     'echo "unexpected: $service $operation" >&2',
     'exit 1',
@@ -646,11 +691,22 @@ function orderStub(directory: string): string {
   return path;
 }
 
+interface OrderOptions {
+  readonly sticky?: boolean;
+  readonly bootstrap?: boolean;
+  /** The digest each service's running tasks report; the release's own by default. */
+  readonly running?: Readonly<Partial<Record<'api' | 'worker', string>>>;
+  /** The one-off tasks exit 0 instead of the run stopping at the migration. */
+  readonly oneOffsPass?: boolean;
+  /** Fixtures to replace, to prove a refusal. */
+  readonly fixtures?: Readonly<Record<string, string>>;
+}
+
 function runOrder(
   script: string,
   args: readonly string[],
   services: Readonly<Record<'api' | 'worker', ServiceCounts>>,
-  options: { readonly sticky?: boolean; readonly bootstrap?: boolean } = {},
+  options: OrderOptions = {},
 ): OrderRun {
   const directory = mkdtempSync(join(tmpdir(), 'fss-order-'));
   const reports = mkdtempSync(join(tmpdir(), 'fss-order-reports-'));
@@ -658,51 +714,61 @@ function runOrder(
     writeFileSync(join(directory, `${ORDER_PREFIX}-${name}.desired`), `${String(counts.desired)}\n`);
     writeFileSync(join(directory, `${ORDER_PREFIX}-${name}.running`), `${String(counts.running)}\n`);
   }
+  writeFileSync(join(directory, `${ORDER_PREFIX}-api.digest`), `${options.running?.api ?? ORDER_API_DIGEST}\n`);
+  writeFileSync(join(directory, `${ORDER_PREFIX}-worker.digest`), `${options.running?.worker ?? ORDER_WORKER_DIGEST}\n`);
   if (options.sticky === true) writeFileSync(join(directory, 'sticky'), '');
+  if (options.oneOffsPass === true) writeFileSync(join(directory, 'one-offs-pass'), '');
   const env: Record<string, string> = {};
   for (const [name, value] of Object.entries(process.env)) {
     // No dry run and no ambient fixture may leak into a run judged by its CLI calls.
     if (value !== undefined && !name.startsWith('FSS_')) env[name] = value;
   }
+  const fixtures: Record<string, string> = {
+    AWS_REGION: 'us-east-1',
+    FSS_REHEARSAL_REPORTS: reports,
+    FSS_REHEARSAL_AWS_COMMAND: orderStub(directory),
+    RELEASE_LOG_POLL_SECONDS: '0',
+    FSS_RELEASE_ACCOUNT: ORDER_ACCOUNT,
+    FSS_RELEASE_CALLER_ACCOUNT: ORDER_ACCOUNT,
+    FSS_RELEASE_CLUSTER_TAGS: JSON.stringify([{ key: 'Environment', value: 'rehearsal' }]),
+    FSS_RELEASE_OUTPUT_CLUSTER_ARN: ORDER_CLUSTER,
+    FSS_RELEASE_OUTPUT_MIGRATION_TASK_DEFINITION_ARN: `arn:aws:ecs:us-east-1:${ORDER_ACCOUNT}:task-definition/${ORDER_PREFIX}-migration:1`,
+    FSS_RELEASE_OUTPUT_OPERATIONS_TASK_DEFINITION_ARN: `arn:aws:ecs:us-east-1:${ORDER_ACCOUNT}:task-definition/${ORDER_PREFIX}-operations:1`,
+    FSS_RELEASE_OUTPUT_APP_RUNTIME_DATABASE_SECRET_ARN: ORDER_RUNTIME_SECRET,
+    FSS_RELEASE_OUTPUT_WORKER_LOG_GROUP_NAME: `/fss/${ORDER_PREFIX}/worker`,
+    FSS_RELEASE_OUTPUT_TASK_NETWORK_CONFIGURATION: JSON.stringify({
+      subnet_ids: ['subnet-0a'],
+      security_group_id: 'sg-0a',
+      assign_public_ip: 'ENABLED',
+      database_port: 5432,
+      database_host: ORDER_HOST,
+      inbound_rule_count: 0,
+    }),
+    FSS_RELEASE_OUTPUT_DEPLOYMENT_PLAN: JSON.stringify({
+      bootstrap: options.bootstrap === true,
+      api: { service_name: `${ORDER_PREFIX}-api`, declared_desired_count: 2, planned_desired_count: 2 },
+      worker: { service_name: `${ORDER_PREFIX}-worker`, declared_desired_count: 1, planned_desired_count: 1 },
+    }),
+    FSS_RELEASE_TASK_DEFINITION: JSON.stringify({
+      containerDefinitions: [
+        {
+          name: 'migration',
+          image: `${ORDER_ACCOUNT}.dkr.ecr.us-east-1.amazonaws.com/fss-rh-worker@${ORDER_WORKER_DIGEST}`,
+          environment: [{ name: 'FSS_DATABASE_HOST', value: ORDER_HOST }],
+          secrets: [],
+        },
+        {
+          name: 'operations',
+          image: `${ORDER_ACCOUNT}.dkr.ecr.us-east-1.amazonaws.com/fss-rh-worker@${ORDER_WORKER_DIGEST}`,
+          environment: [{ name: 'FSS_DATABASE_HOST', value: ORDER_HOST }],
+          secrets: [{ name: 'DATABASE_SECRET_ARN', valueFrom: ORDER_RUNTIME_SECRET }],
+        },
+      ],
+    }),
+  };
   const result = spawnSync(repositoryPath(script), [...args], {
     encoding: 'utf8',
-    env: {
-      ...env,
-      AWS_REGION: 'us-east-1',
-      FSS_REHEARSAL_REPORTS: reports,
-      FSS_REHEARSAL_AWS_COMMAND: orderStub(directory),
-      FSS_RELEASE_ACCOUNT: ORDER_ACCOUNT,
-      FSS_RELEASE_CALLER_ACCOUNT: ORDER_ACCOUNT,
-      FSS_RELEASE_CLUSTER_TAGS: JSON.stringify([{ key: 'Environment', value: 'rehearsal' }]),
-      FSS_RELEASE_OUTPUT_CLUSTER_ARN: ORDER_CLUSTER,
-      FSS_RELEASE_OUTPUT_MIGRATION_TASK_DEFINITION_ARN: `arn:aws:ecs:us-east-1:${ORDER_ACCOUNT}:task-definition/${ORDER_PREFIX}-migration:1`,
-      FSS_RELEASE_OUTPUT_OPERATIONS_TASK_DEFINITION_ARN: `arn:aws:ecs:us-east-1:${ORDER_ACCOUNT}:task-definition/${ORDER_PREFIX}-operations:1`,
-      FSS_RELEASE_OUTPUT_APP_RUNTIME_DATABASE_SECRET_ARN: ORDER_RUNTIME_SECRET,
-      FSS_RELEASE_OUTPUT_WORKER_LOG_GROUP_NAME: `/fss/${ORDER_PREFIX}/worker`,
-      FSS_RELEASE_OUTPUT_TASK_NETWORK_CONFIGURATION: JSON.stringify({
-        subnet_ids: ['subnet-0a'],
-        security_group_id: 'sg-0a',
-        assign_public_ip: 'ENABLED',
-        database_port: 5432,
-        database_host: ORDER_HOST,
-        inbound_rule_count: 0,
-      }),
-      FSS_RELEASE_OUTPUT_DEPLOYMENT_PLAN: JSON.stringify({
-        bootstrap: options.bootstrap === true,
-        api: { service_name: `${ORDER_PREFIX}-api`, declared_desired_count: 2, planned_desired_count: 2 },
-        worker: { service_name: `${ORDER_PREFIX}-worker`, declared_desired_count: 1, planned_desired_count: 1 },
-      }),
-      FSS_RELEASE_TASK_DEFINITION: JSON.stringify({
-        containerDefinitions: [
-          {
-            name: 'migration',
-            image: `${ORDER_ACCOUNT}.dkr.ecr.us-east-1.amazonaws.com/fss-rh-worker@${ORDER_WORKER_DIGEST}`,
-            environment: [{ name: 'FSS_DATABASE_HOST', value: ORDER_HOST }],
-            secrets: [],
-          },
-        ],
-      }),
-    },
+    env: { ...env, ...fixtures, ...options.fixtures },
   });
   const read = (file: string): string | null =>
     existsSync(join(directory, file)) ? readFileSync(join(directory, file), 'utf8').trim() : null;
@@ -729,6 +795,8 @@ const deployArgs = (...extra: readonly string[]): readonly string[] => [
   'infra/roots/rehearsal',
   ORDER_PREFIX,
   ...extra,
+  '--api-digest',
+  ORDER_API_DIGEST,
   '--worker-digest',
   ORDER_WORKER_DIGEST,
 ];
@@ -780,13 +848,186 @@ describe('Appendix G 22 (g70): a schema release stops before the apply, and the 
     expect(run.output).toContain('STUB_STOPS_AT_THE_MIGRATION');
   });
 
-  it('leaves the rolling path alone: no schema change, nothing asserted, straight to the migration', () => {
-    const run = runOrder(DEPLOY, deployArgs(), RUNNING);
-    expect(run.output).toContain('1/7 nothing to stop: this release declares no schema change');
-    expect(run.calls.filter(call => call.startsWith('ecs describe-services'))).toEqual([]);
-    expect(launched(run.calls)).toHaveLength(1);
+  it('runs a schema release from the assertion to the final verify, and reads the running digests before it', () => {
+    const run = runOrder(DEPLOY, deployArgs('--schema-change'), STOPPED, { oneOffsPass: true });
+    expect(run.code, run.output).toBe(0);
+    // Every one-off step, in order, and nothing forced to replace what the scale-up started
+    // beyond the one `--force-new-deployment` per service the path has always had.
+    expect(launched(run.calls)).toHaveLength(4);
+    const at = (needle: string): number => {
+      const index = run.output.indexOf(needle);
+      expect(index, `the schema release did not log ${needle}`).toBeGreaterThan(-1);
+      return index;
+    };
+    const verify = at('4/7 fss verify');
+    const digests = at(`6/7 the running tasks of ${ORDER_PREFIX}-worker and ${ORDER_PREFIX}-api`);
+    const deployed = at('7/7 fss verify (deployed)');
+    expect(digests).toBeGreaterThan(verify);
+    expect(deployed).toBeGreaterThan(digests);
+    expect(run.output).toContain(`${ORDER_PREFIX}-api: task ${ORDER_PREFIX}-api-2 runs ${ORDER_API_DIGEST}`);
+    expect(run.report).toContain('running_digests=verified');
+    expect(run.counts).toEqual({ api: { desired: 2, running: 2 }, worker: { desired: 1, running: 1 } });
+  });
+});
+
+/**
+ * Lane g80, audit item O03: the app-only fast path is one rolling deployment.
+ *
+ * Until g80 a release with no `--schema-change` still launched four one-off tasks —
+ * `fss migrate`, `fss admin database-users ensure`, `fss verify` twice — and forced a
+ * second rollout of each service after the one the apply had started. David's release
+ * cadence of 25 September makes app-only "deploy and smoke".
+ *
+ * ## The vacuous-pass trap
+ *
+ * "No run-task" is also what a deploy that did nothing at all would show, and "stable"
+ * is also what a service the circuit breaker rolled back shows. So the checks require the
+ * two `update-service` calls with the declared counts, one wait naming both services,
+ * and the reads of every running task — and they fail the deploy when a service is
+ * stable on the old digest or on fewer tasks than it declares. Mutations in
+ * `scripts/releaseMutationCheck.mjs` put a one-off launch back, the forced rollout
+ * back, and the digest comparison out, and require this to go red.
+ */
+describe('g80: an app-only release is one rolling deployment, and ends only when the release is what runs', () => {
+  const RELEASE_RUNNING = { api: { desired: 2, running: 2 }, worker: { desired: 1, running: 1 } } as const;
+
+  it('launches no one-off task, scales each service once to its declared count, waits once, and reads what runs', () => {
+    const run = runOrder(DEPLOY, deployArgs(), { api: { desired: 1, running: 1 }, worker: { desired: 1, running: 1 } });
+    expect(run.code, run.output).toBe(0);
+    expect(launched(run.calls), 'an app-only deploy launched a one-off task').toEqual([]);
+    expect(scaled(run.calls)).toEqual([
+      `ecs update-service --cluster ${ORDER_CLUSTER} --service ${ORDER_PREFIX}-worker --desired-count 1 --query service.[serviceName,desiredCount,taskDefinition] --output text`,
+      `ecs update-service --cluster ${ORDER_CLUSTER} --service ${ORDER_PREFIX}-api --desired-count 2 --query service.[serviceName,desiredCount,taskDefinition] --output text`,
+    ]);
+    expect(run.calls.filter(call => call.includes('--force-new-deployment'))).toEqual([]);
+    expect(run.calls.filter(call => call.startsWith('ecs wait'))).toEqual([
+      `ecs wait services-stable --cluster ${ORDER_CLUSTER} --services ${ORDER_PREFIX}-worker ${ORDER_PREFIX}-api`,
+    ]);
+    // Read back after the wait: the service, its running tasks, and each task.
+    const waited = run.calls.findIndex(call => call.startsWith('ecs wait'));
+    for (const service of ['worker', 'api']) {
+      const listed = run.calls.findIndex(call => call.startsWith(`ecs list-tasks --cluster ${ORDER_CLUSTER} --service-name ${ORDER_PREFIX}-${service}`));
+      expect(listed, `the running tasks of ${service} were not listed`).toBeGreaterThan(waited);
+    }
+    expect(run.calls.filter(call => call.startsWith('ecs describe-tasks'))).toHaveLength(2);
+    expect(run.output).toContain(`${ORDER_PREFIX}-worker: task ${ORDER_PREFIX}-worker-1 runs ${ORDER_WORKER_DIGEST}`);
+    expect(run.output).toContain(`${ORDER_PREFIX}-api: task ${ORDER_PREFIX}-api-2 runs ${ORDER_API_DIGEST}`);
+    expect(run.output).toContain('1/3 one rolling deployment');
+    expect(run.counts).toEqual(RELEASE_RUNNING);
+    expect(run.report).toContain('schema_change=0');
+    expect(run.report).toContain('running_digests=verified');
   });
 
+  it('fails when a service is stable on a digest that is not the release’s, as a rolled-back one is', () => {
+    const run = runOrder(DEPLOY, deployArgs(), RELEASE_RUNNING, { running: { api: ORDER_OLD_DIGEST } });
+    expect(run.code).not.toBe(0);
+    expect(run.output).toContain(`container api runs ${ORDER_OLD_DIGEST} and this release is ${ORDER_API_DIGEST}`);
+    expect(run.output).toContain('is a schema-change release');
+    // The worker was read too, and was right; the failure names only the API.
+    expect(run.output).toContain(`${ORDER_PREFIX}-worker: task ${ORDER_PREFIX}-worker-1 runs ${ORDER_WORKER_DIGEST}`);
+    expect(run.output).toContain(`FAIL: ${ORDER_PREFIX}-api is not running this release`);
+    expect(run.report).toBeNull();
+  });
+
+  it('fails on the worker’s digest as well as the API’s', () => {
+    const run = runOrder(DEPLOY, deployArgs(), RELEASE_RUNNING, { running: { worker: ORDER_OLD_DIGEST } });
+    expect(run.code).not.toBe(0);
+    expect(run.output).toContain(`container worker runs ${ORDER_OLD_DIGEST} and this release is ${ORDER_WORKER_DIGEST}`);
+    expect(run.report).toBeNull();
+  });
+
+  it('fails when fewer tasks run than the root declares, which is where a check over no tasks would pass', () => {
+    // Sticky: ECS takes the count and starts nothing, so one API task runs against two.
+    const run = runOrder(DEPLOY, deployArgs(), { api: { desired: 1, running: 1 }, worker: { desired: 0, running: 0 } }, { sticky: true });
+    expect(run.code).not.toBe(0);
+    expect(run.output).toContain('1 task(s) are RUNNING and the root declares 2');
+    expect(run.output).toContain('0 task(s) are RUNNING and the root declares 1');
+    expect(run.report).toBeNull();
+  });
+
+  it('fails when the deployment itself failed, whatever the tasks say', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'fss-rollout-'));
+    // The stub reads `<service>.rollout`; a run on its own directory cannot set it, so
+    // this drives the helper directly against the same fake.
+    const stub = orderStub(directory);
+    writeFileSync(join(directory, `${ORDER_PREFIX}-api.desired`), '1\n');
+    writeFileSync(join(directory, `${ORDER_PREFIX}-api.running`), '1\n');
+    writeFileSync(join(directory, `${ORDER_PREFIX}-api.digest`), `${ORDER_API_DIGEST}\n`);
+    writeFileSync(join(directory, `${ORDER_PREFIX}-api.rollout`), 'FAILED\n');
+    const script = join(directory, 'case.sh');
+    writeFileSync(
+      script,
+      [
+        '#!/usr/bin/env bash',
+        `source ${repositoryPath('infra/scripts/release-common.sh')}`,
+        'set +e',
+        `release_require_running_digest rehearsal ${ORDER_CLUSTER} ${ORDER_PREFIX}-api api ${ORDER_API_DIGEST} 1`,
+        'echo "helper exit $?"',
+        '',
+      ].join('\n'),
+    );
+    const result = spawnSync('/bin/bash', [script], {
+      encoding: 'utf8',
+      env: { PATH: process.env['PATH'] ?? '', FSS_REHEARSAL_AWS_COMMAND: stub },
+    });
+    const output = `${result.stdout}${result.stderr}`;
+    expect(output).toContain('its deployment failed');
+    expect(output).toContain('helper exit 1');
+  });
+
+  it('refuses without --api-digest, or with a tag, or a bootstrap without --schema-change, before any call', () => {
+    const noApi = runOrder(DEPLOY, ['infra/roots/rehearsal', ORDER_PREFIX, '--worker-digest', ORDER_WORKER_DIGEST], RELEASE_RUNNING);
+    expect(noApi.code).not.toBe(0);
+    expect(noApi.output).toContain('--api-digest is required');
+    expect(noApi.calls).toEqual([]);
+
+    const tagged = runOrder(
+      DEPLOY,
+      ['infra/roots/rehearsal', ORDER_PREFIX, '--api-digest', 'latest', '--worker-digest', ORDER_WORKER_DIGEST],
+      RELEASE_RUNNING,
+    );
+    expect(tagged.code).not.toBe(0);
+    expect(tagged.output).toContain("'latest' is not an image digest");
+    expect(tagged.calls).toEqual([]);
+
+    const bootstrap = runOrder(DEPLOY, deployArgs(), STOPPED, { bootstrap: true });
+    expect(bootstrap.code).not.toBe(0);
+    expect(bootstrap.output).toContain('Run this with --schema-change');
+    expect(bootstrap.calls).toEqual([]);
+  });
+
+  it('carries the guards the one-off wrapper used to supply, now that the first call is update-service', () => {
+    const tagged = runOrder(DEPLOY, deployArgs(), RELEASE_RUNNING, {
+      fixtures: { FSS_RELEASE_CLUSTER_TAGS: JSON.stringify([{ key: 'Environment', value: 'production' }]) },
+    });
+    expect(tagged.code).not.toBe(0);
+    expect(tagged.output).toContain('the cluster is tagged Environment=production and this is a rehearsal deploy');
+    expect(tagged.calls).toEqual([]);
+
+    const elsewhere = runOrder(DEPLOY, deployArgs(), RELEASE_RUNNING, {
+      fixtures: { FSS_RELEASE_OUTPUT_CLUSTER_ARN: `arn:aws:ecs:us-east-1:222222222222:cluster/${ORDER_PREFIX}-cluster` },
+    });
+    expect(elsewhere.code).not.toBe(0);
+    expect(elsewhere.output).toContain('is in account 222222222222 and this release is in 111111111111');
+    expect(elsewhere.calls).toEqual([]);
+
+    const credentials = runOrder(DEPLOY, deployArgs(), RELEASE_RUNNING, {
+      fixtures: { FSS_RELEASE_CALLER_ACCOUNT: '333333333333' },
+    });
+    expect(credentials.code).not.toBe(0);
+    expect(credentials.output).toContain('these credentials belong to account 333333333333');
+    expect(credentials.calls).toEqual([]);
+
+    const script = readRepositoryFile(DEPLOY);
+    expect(script).toContain('release_require_arn "the cluster" "$CLUSTER_ARN" ecs "$ACCOUNT" "$REGION" "$PREFIX" || exit 1');
+    expect(script).toContain('release_refuse_foreign_arguments "$ENVIRONMENT" "$CLUSTER_ARN" "$API_SERVICE" "$WORKER_SERVICE" || exit 1');
+    expect(script.indexOf('CLUSTER_TAG="$(release_cluster_environment_tag "$ENVIRONMENT" "$CLUSTER_ARN")"')).toBeLessThan(
+      script.indexOf('if [ "$SCHEMA_CHANGE" = "1" ]; then\n  # ---'),
+    );
+  });
+});
+
+describe('Appendix G 22 (g70), continued: the stop', () => {
   it('stops the API, then the worker, and reads both back', () => {
     const run = runOrder(STOP, ['infra/roots/rehearsal', ORDER_PREFIX], RUNNING);
     expect(run.code, run.output).toBe(0);

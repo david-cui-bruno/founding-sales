@@ -1479,6 +1479,106 @@ const MUTATIONS = [
     because:
       'A fence the cap held never entered dispatching, and the dispatch path is what releases it and decides again (g7-held-returns-to-prepared). stepWake.test.ts holds a step’s fence on the cap, lifts the cap and requires the next look to send it through held, prepared, dispatching and sent; if only prepared fences are dispatched the fence stays held and it has to go red.',
   },
+  {
+    name: 'an app-only deploy launches a one-off task again',
+    file: 'infra/scripts/release-deploy.sh',
+    find: '  rehearsal_log "2/3 wait until both are stable"\n',
+    replace:
+      '  one_off migrate "$MIGRATION_TASK_DEFINITION" migration migrate --report /tmp/fss-migrate.json\n  rehearsal_log "2/3 wait until both are stable"\n',
+    suite: ['run', 'test:release', '--', 'test/release/scenario22.check.ts'],
+    because:
+      'Audit item O03: a release with no --schema-change launched four administrative one-off tasks (migrate, database users, verify twice) that an app-only release does not need, each a chance to fail a deploy that changes no schema. scenario22 drives the rolling path against a fake ECS and requires no run-task at all, and has to go red when one comes back.',
+  },
+  {
+    name: 'an app-only deploy forces a second rollout after the apply’s again',
+    file: 'infra/scripts/release-deploy.sh',
+    find: '--service "$WORKER_SERVICE" --desired-count "$WORKER_TARGET" \\\n',
+    replace: '--service "$WORKER_SERVICE" --desired-count "$WORKER_TARGET" --force-new-deployment \\\n',
+    suite: ['run', 'test:release', '--', 'test/release/scenario22.check.ts'],
+    because:
+      'The apply that registers the new task definitions has already started the rolling deployment; forcing another one replaces every task it just started and doubles the rollout (O03). scenario22 reads every update-service the rolling path makes and has to go red on a forced one.',
+  },
+  {
+    name: 'the running-digest check stops comparing the digest a task runs with the release',
+    file: 'infra/scripts/release-common.sh',
+    find: '    elif running != digest:\n',
+    replace: '    elif False:\n',
+    suite: ['run', 'test:release', '--', 'test/release/scenario22.check.ts'],
+    because:
+      'Audit item O08: services-stable is also what a service the circuit breaker rolled back to the previous revision reports, so a deploy that ended there reported success on the old image. scenario22 leaves the API stable on another digest and requires the deploy to fail naming both, and has to go red.',
+  },
+  {
+    name: 'the running-digest check passes over fewer tasks than the root declares',
+    file: 'infra/scripts/release-common.sh',
+    find: 'if len(tasks) != expected:\n',
+    replace: 'if False:\n',
+    suite: ['run', 'test:release', '--', 'test/release/scenario22.check.ts'],
+    because:
+      '"Every running task carries the digest" is true of no running tasks at all, which is the vacuous pass a rolled-back or crash-looping service would give. scenario22 lets ECS take the count and start nothing, requires "0 task(s) are RUNNING and the root declares 1", and has to go red.',
+  },
+  {
+    name: 'a one-off task whose image could not be pulled is not launched again',
+    file: 'infra/scripts/release-common.sh',
+    find: '    if pull_reason="$(release_pull_failure "$described")"; then\n',
+    replace: '    if false; then\n',
+    suite: ['run', 'test:release', '--', 'test/release/oneOffTaskRecords.check.ts'],
+    because:
+      'Audit item O06: a CannotPullContainerError minutes after an ECR copy stopped a production one-off before any container ran, and clearing it took a person. oneOffTaskRecords.check.ts answers the first launch with that error and the second with exit 0, requires two launches and a pass, and has to go red.',
+  },
+  {
+    name: 'the wrapper launches again after any failure that left no exit code',
+    file: 'infra/scripts/release-common.sh',
+    find: '    if "CannotPullContainerError" in reason:\n',
+    replace: '    if True:\n',
+    suite: ['run', 'test:release', '--', 'test/release/oneOffTaskRecords.check.ts'],
+    because:
+      'Only a pull failure is proven to be the registry catching up. A secret with no value, which also stops a task before any container runs, is a release that is wrong, and launching it three times hides that for minutes. oneOffTaskRecords.check.ts requires one launch for it and has to go red.',
+  },
+  {
+    name: 'a recorded one-off task is waited on whatever invocation recorded it',
+    file: 'infra/scripts/release-common.sh',
+    find: '      if [ "$recorded_fingerprint" = "$fingerprint" ]; then\n',
+    replace: '      if true; then\n',
+    suite: ['run', 'test:release', '--', 'test/release/oneOffTaskRecords.check.ts'],
+    because:
+      'Audit item O07: the record was keyed by the step name alone, so a reports directory reused by another release, command or task definition revision read that task’s verdict as its own. oneOffTaskRecords.check.ts leaves another release’s passing task recorded and requires this one to launch its own and fail, and has to go red.',
+  },
+  {
+    name: 'a one-off task record stays after its outcome was read',
+    file: 'infra/scripts/release-common.sh',
+    find: '    release_retire_task_record "$record" "read_verdict_$verdict"\n',
+    replace: '',
+    suite: ['run', 'test:release', '--', 'test/release/oneOffTaskRecords.check.ts'],
+    because:
+      'The restore drill’s step 7 runs rehearsal-schema-ranges.sh again, under the same step names, and a record kept after its verdict was read made that second run judge the first run’s tasks. oneOffTaskRecords.check.ts runs one step twice, passing then failing, requires two launches and the failure, and has to go red.',
+  },
+  {
+    name: 'the production smoke requires sending to be disabled again, whatever it was told',
+    file: 'scripts/productionSmoke.mjs',
+    find: "      typeof enabled === 'boolean' && enabled === (expectation === 'enabled'),\n",
+    replace: '      enabled === false,\n',
+    suite: ['run', 'test:release', '--', 'test/release/productionSmoke.check.ts'],
+    because:
+      'Audit item O12: once section 6 turns sending on, a smoke that only passes on sendingEnabled=false fails every ordinary deployment for being right. productionSmoke.check.ts runs --expect-sending enabled against an enabled deployment and has to go red.',
+  },
+  {
+    name: 'the mutation runner counts a mutated file that did not parse as a kill again',
+    file: 'scripts/releaseMutationRunner.mjs',
+    find: '  if (syntax !== null) {\n',
+    replace: '  if (false) {\n',
+    suite: ['run', 'test:release', '--', 'test/release/mutationRunner.check.ts'],
+    because:
+      'Audit item T01: a test that failed because the script it ran would not parse is a failing test for the wrong reason, and a mutation that broke the syntax proves nothing about the trap. mutationRunner.check.ts feeds the runner a failed test over a node SyntaxError and a bash syntax error, requires a broken run, and has to go red.',
+  },
+  {
+    name: 'the mutation runner counts a failed test file with no failed test as a kill again',
+    file: 'scripts/releaseMutationRunner.mjs',
+    find: '  if (!testFailed && !(errors && testsRan)) {\n',
+    replace: '  if (false) {\n',
+    suite: ['run', 'test:release', '--', 'test/release/mutationRunner.check.ts'],
+    because:
+      'Audit item T01 exactly: "Test Files 1 failed" beside "Tests no tests", or beside only passing tests, is a test file that never loaded, and it was read as red. mutationRunner.check.ts gives the runner a file that failed to load beside passing ones, requires a broken run, and has to go red.',
+  },
 ];
 
 // A listener on each of these keeps Node from exiting mid-mutation with a file still

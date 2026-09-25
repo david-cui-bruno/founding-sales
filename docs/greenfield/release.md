@@ -3021,6 +3021,58 @@ Two more defects surfaced on the way. A capped step's own firm cap hold kept its
 - the wake query's cost with many held steps (the `dispatched` arm and the live-job check scan without a dedicated index);
 - a real worker killed mid-claim on Fargate rather than a terminated backend;
 - the hour-long recheck interval, which is reasoned, not measured.
+### 8.0am What lane g80 changed: an app-only release is one rolling deployment, and it ends only when the release is what runs (25 September)
+
+**The findings.** The GPT-6 exhaustive audit of `b2cc080b` raised six release and test items against the scripts this lane owns:
+
+- **O03.** An app-only deploy, with no `--schema-change`, still launched four one-off tasks: migrate, database users, and verify twice. It also forced a second rollout of each service after the one the apply had started.
+- **O08.** "Services stable" was the last word. The circuit breaker rolls a failed deployment back, and a service that has rolled back is stable.
+- **O07.** A one-off task record was keyed by its step name alone, so a reused reports directory could read another release's verdict. Read from the code, one case did this on every `full` run: the restore drill's step 7 runs `rehearsal-schema-ranges.sh` again, in the same job and directory with the same step names, and it waited on the first run's tasks instead of launching its own.
+- **O06.** A failed record was read for ever, including the `CannotPullContainerError … not found` a one-off hit minutes after an ECR copy.
+- **O12.** The smoke passed only on `sendingEnabled === false`.
+- **T01.** The mutation runner counted "Test Files 1 failed" with "Tests no tests" as a kill.
+
+**What changed.** `docs/decisions/g80-app-only-deploy-and-task-records.md` has the rules. In short:
+
+- **The rolling path** is `update-service --desired-count` on the worker and then the API, with no forced deployment. Then one wait for both, then the running-digest check. It launches no one-off task. `--release-record`, when given, is the one launch, and it runs last.
+- **The schema path** keeps all seven steps. The running-digest check runs after step 6.
+- **The running-digest check** reads `describe-services`, `list-tasks` and `describe-tasks` for both services. Each service must have one deployment that did not fail, exactly the declared number of running tasks, every task on that deployment's task definition, and the release's digest in the `api` or `worker` container. A release that adds a migration but is deployed without `--schema-change` fails here, and the message says so.
+- **`--api-digest` is required** as well as `--worker-digest`, both as `sha256:` digests. `bootstrap=true` without `--schema-change` is refused. The account, cluster ARN and cluster tag guards now run in the deploy script before its first call.
+- **A task record** carries a SHA-256 fingerprint of the invocation: the run, cluster, step, task definition revision, container, digest, database host, credential entry, command words, overrides and expected exit code. It is waited on only by the same invocation. A record with any other fingerprint, or none, is refused while its task runs, and otherwise set aside unread. A record is retired to `tasks/<step>.history` once its outcome is read. The run is `FSS_RELEASE_RUN_ID`, else the Actions run and attempt, else the reports directory.
+- **A task stopped by `CannotPullContainerError`** before any container ran is launched again. It gets three attempts in all, 30 s then 60 s apart, and each is logged. Everything else fails on its first attempt, including a secret with no value.
+- **`scripts/productionSmoke.mjs --expect-sending disabled|enabled`**, default `disabled`. The sixth line reads `PASS sending_disabled (sendingEnabled=false expected=disabled)` by default, where section 6's text shows it without `expected=`. Under `--expect-sending enabled` it is `sending_enabled`. An unknown state is exit 2.
+- **The mutation runner** counts a kill only when a test ran and failed and nothing in the output is a syntax or transform failure. Otherwise the run is broken, counted in `brokenRuns`, and reported as `MUTATION_UNDECIDED <name>: broken run: …`, which fails the nightly.
+
+Section 4.1's sentence on the rolling path ("the migration task finds nothing to apply and says so, and steps 5 and 6 set the declared counts") and `infra-apply-runbook.md`'s rolling row describe the path before this lane; this record supersedes them.
+
+**What an app-only release is now, in production.**
+
+1. Build and push both images (2.1).
+2. Plan and read it. Only the two service task definitions and the services' `task_definition` change (`infra-apply-runbook.md` 3.2).
+3. Apply.
+4. `infra/scripts/release-deploy.sh infra/roots/production fss-prod --api-digest … --worker-digest …`, with no `--schema-change`. It prints the running task of each service with its digest.
+5. Smoke. Pass `--expect-sending enabled` once section 6 has turned sending on.
+
+**Test evidence, offline only.**
+
+- `test/release/scenario22.check.ts` drives both paths against a fake ECS. The rolling path makes no `run-task`, exactly two `update-service --desired-count` calls, no forced deployment and one wait. It fails on a stale API or worker digest, on fewer tasks than declared, on a failed deployment, and on a wrong tag, account or caller, and it refuses a bootstrap or a missing API digest before any call. The schema path runs from its assertion to the final verify, with the digest check between step 6 and step 7.
+- `test/release/oneOffTaskRecords.check.ts` covers the record rules against a fake CLI that counts launches: resume, another release, another command, another revision, a second run after a read, a task still running, a record from before g80, a pull failure then a pass, three pull failures, and no retry for an exit code or a missing secret.
+- `test/release/productionSmoke.check.ts` runs both expectations against both answers.
+- `test/release/mutationRunner.check.ts` feeds the runner the vitest output of 25 September probes.
+- `test/release/support/runTaskGuards.sh` seeds a fingerprinted record and adds the set-aside and pull-retry guards.
+
+Eleven mutations are appended to `scripts/releaseMutationCheck.mjs` (136 → 147 at the rebase onto PR 218). Each was applied by hand and turned its own check red.
+
+**Still unverified.** Nothing here has run in the cloud. Unmeasured:
+
+- that a count-only `update-service` starts no second deployment;
+- that `describe-tasks` reports `imageDigest` for these Fargate tasks as expected;
+- the state a rolled-back service is left in;
+- that ECS words a post-copy pull failure as `CannotPullContainerError`, as the 25 September log did.
+
+The `fss-rh-deploy` and `fss-prod-deploy` policies allow `ecs:Describe*` and `ecs:List*` on every resource, so the three reads need no new permission. This is a release-script change under the release cadence, so a full rehearsal must pass before production relies on it.
+
+One question is left open. Once sending is on, the worker sends only under a stored record carrying its own digest (8.0ag). An app-only release with a new worker digest, deployed without a rehearsal, holds every send until such a record exists.
 
 ### 8.1 Still unverified
 

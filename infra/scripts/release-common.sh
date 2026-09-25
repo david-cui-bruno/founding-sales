@@ -22,7 +22,12 @@
 #   * `stoppedReason` and `stopCode`, which are the only explanation of a pull error;
 #   * a log stream that does not exist yet when the task has already stopped;
 #   * a wait that times out, leaving a task running and a script that walked away;
-#   * a non-essential container's exit code read as if it were the task's.
+#   * a non-essential container's exit code read as if it were the task's;
+#   * an image the registry does not serve yet, minutes after it was copied there,
+#     which stops the task before any container runs (lane g80: launched again, a
+#     bounded number of times, and nothing else is);
+#   * a task recorded by another release, run or command, whose verdict is not this
+#     step's (lane g80: the record carries a fingerprint and is retired once read).
 #
 # ## One code path, two environments
 #
@@ -63,6 +68,16 @@ RELEASE_LOG_GRACE_SECONDS=60
 # reports it stopped; the two runs of 23 September 2026 read the stream in that gap and
 # printed nothing, and the teardown then destroyed the log group with the answer in it.
 RELEASE_LOG_POLL_SECONDS=${RELEASE_LOG_POLL_SECONDS:-5}
+
+# How many times a one-off task whose image could not be pulled is launched, and the
+# pause before the next launch, which grows with each attempt (30 s, then 60 s). Lane
+# g80, audit item O06: a `CannotPullContainerError ... not found` a few minutes after
+# an ECR copy is a registry that has not caught up yet, not a release that is wrong,
+# and it used to need a person to clear the record and start the step again. Only a
+# failure that provably happened before the application started is retried — see
+# `release_pull_failure` — and anything else still fails on the first attempt.
+RELEASE_PULL_ATTEMPTS=${RELEASE_PULL_ATTEMPTS:-3}
+RELEASE_PULL_BACKOFF_SECONDS=${RELEASE_PULL_BACKOFF_SECONDS:-30}
 
 # A plan line from a helper whose *stdout is the answer*.
 #
@@ -346,6 +361,117 @@ release_require_service_stopped() {
   return 0
 }
 
+# Refuse unless a service is running exactly the release's image (lane g80, audit O08).
+#
+#   release_require_running_digest <environment> <cluster arn> <service> <container>
+#                                  <image digest> <declared count>
+#
+# `aws ecs wait services-stable` says that one deployment has as many running tasks as
+# it wants. It does not say which deployment: the circuit breaker on both services rolls
+# a failed deployment back to the previous task definition, and a service that has
+# rolled back is stable. So after every deploy the running tasks themselves are read
+# and each is held to four things, or this fails naming what it found:
+#
+#   * the service is ACTIVE, has one deployment, and that deployment did not fail;
+#   * exactly the declared number of tasks are RUNNING — a check over no tasks at all
+#     is the vacuous pass, so zero running against a declared one is a failure;
+#   * every running task belongs to that deployment's task definition;
+#   * in every running task, the service's container (`api` or `worker`) reports the
+#     image digest ECS actually pulled, and it is the digest this release names.
+#
+# Three read-only calls: describe-services, list-tasks, describe-tasks. Dry-run mode
+# prints them and judges nothing.
+release_require_running_digest() {
+  local environment=$1 cluster=$2 service=$3 container=$4 digest=$5 expected=$6
+  if rehearsal_dry_run; then
+    rehearsal_plan "aws ecs describe-services --cluster $cluster --services $service --output json"
+    rehearsal_plan "aws ecs list-tasks --cluster $cluster --service-name $service --desired-status RUNNING --output json"
+    rehearsal_plan "aws ecs describe-tasks --cluster $cluster --tasks <every running task of $service> --output json"
+    rehearsal_plan "refuse unless $service runs $expected task(s) of its one deployment and every $container container runs ${digest:-<the digest a real run requires>}"
+    return 0
+  fi
+  if [ -z "$digest" ]; then
+    echo "FAIL: nothing names the digest $service should be running, so what it runs cannot be checked" >&2
+    return 1
+  fi
+  local services listed described arns
+  services="$(release_aws "$environment" ecs describe-services --cluster "$cluster" --services "$service" --output json)" || return 1
+  listed="$(release_aws "$environment" ecs list-tasks --cluster "$cluster" --service-name "$service" \
+    --desired-status RUNNING --output json)" || return 1
+  arns="$(FSS_JSON="$listed" python3 -c '
+import json, os, sys
+sys.stdout.write(" ".join((json.loads(os.environ["FSS_JSON"] or "{}") or {}).get("taskArns") or []))
+')"
+  described='{"tasks": []}'
+  if [ -n "$arns" ]; then
+    # One word per task ARN, which is what `--tasks` takes.
+    # shellcheck disable=SC2086
+    described="$(release_aws "$environment" ecs describe-tasks --cluster "$cluster" --tasks $arns --output json)" || return 1
+  fi
+  FSS_SERVICES="$services" FSS_TASKS="$described" FSS_NAME="$service" FSS_CONTAINER="$container" \
+    FSS_DIGEST="$digest" FSS_EXPECTED="$expected" python3 -c '
+import json, os, sys
+
+name = os.environ["FSS_NAME"]
+container = os.environ["FSS_CONTAINER"]
+digest = os.environ["FSS_DIGEST"]
+expected = int(os.environ["FSS_EXPECTED"])
+failures = []
+
+def short(arn):
+    return str(arn or "<none>").rsplit("/", 1)[-1]
+
+entry = None
+for candidate in (json.loads(os.environ["FSS_SERVICES"] or "{}") or {}).get("services") or []:
+    if candidate.get("serviceName") == name or str(candidate.get("serviceArn", "")).endswith("/" + name):
+        entry = candidate
+        break
+if entry is None:
+    print("FAIL: ECS does not describe a service named {}".format(name), file=sys.stderr)
+    sys.exit(1)
+if entry.get("status") != "ACTIVE":
+    failures.append("ECS reports it as {}, not ACTIVE".format(entry.get("status") or "no status"))
+deployments = entry.get("deployments") or []
+primary = next((d for d in deployments if d.get("status") == "PRIMARY"), None)
+if primary is None:
+    failures.append("it has no PRIMARY deployment")
+    primary = {}
+if len(deployments) != 1:
+    failures.append("it has {} deployments, so a rollout is still under way or rolling back".format(len(deployments)))
+if primary.get("rolloutState") == "FAILED":
+    failures.append("its deployment failed: {}".format(primary.get("rolloutStateReason") or "no reason given"))
+definition = primary.get("taskDefinition")
+
+tasks = [task for task in (json.loads(os.environ["FSS_TASKS"] or "{}") or {}).get("tasks") or [] if task.get("lastStatus") == "RUNNING"]
+if len(tasks) != expected:
+    failures.append("{} task(s) are RUNNING and the root declares {}".format(len(tasks), expected))
+for task in tasks:
+    label = "task {}".format(short(task.get("taskArn")))
+    if definition and task.get("taskDefinitionArn") != definition:
+        failures.append("{} runs {}, and the deployment is {}".format(label, short(task.get("taskDefinitionArn")), short(definition)))
+    found = next((c for c in task.get("containers") or [] if c.get("name") == container), None)
+    if found is None:
+        failures.append("{} has no container named {}".format(label, container))
+        continue
+    running = found.get("imageDigest")
+    if not running:
+        failures.append("{}: container {} reports no image digest (image {})".format(label, container, found.get("image") or "<none>"))
+    elif running != digest:
+        failures.append("{}: container {} runs {} and this release is {}".format(label, container, running, digest))
+    else:
+        print("{}: {} runs {} ({})".format(name, label, running, short(task.get("taskDefinitionArn"))))
+
+if failures:
+    print("FAIL: {} is not running this release (deployment {}, rollout {}):".format(
+        name, short(definition), primary.get("rolloutState") or "unknown"), file=sys.stderr)
+    for failure in failures:
+        print("      " + failure, file=sys.stderr)
+    sys.exit(1)
+if expected == 0:
+    print("{}: the root declares no task, and none runs".format(name))
+'
+}
+
 # The registered task definition, as JSON. Everything the launch is checked against —
 # the image digest, the secret references, the database host — is read from here
 # rather than from what the caller believes.
@@ -479,6 +605,37 @@ sys.stdout.write(",".join(json.loads(os.environ["FSS_JSON"]) or []))
 
 # ---------------------------------------------------------------------------
 # Recorded task ARNs, so a retry waits rather than launching a second copy.
+#
+# A record is `tasks/<step>.arn` (the task ARN) beside `tasks/<step>.fingerprint`
+# (what launched it), and it means one thing: *this task was launched and nobody has
+# read how it ended*. Until lane g80 it meant "a task was once launched under this step
+# name", keyed by the file name alone (audit item O07). A reports directory reused for
+# another release, or a second run of the same script in one job, then read an old
+# task's verdict as the new one's: the restore drill's step 7 runs
+# `rehearsal-schema-ranges.sh` again after the restore, under the same four step names,
+# and read the four tasks the first run had already judged instead of launching its
+# own. And a failed task was reused for ever, including the `CannotPullContainerError`
+# that nothing but a new launch can clear (O06).
+#
+# So now:
+#
+#   * the fingerprint is a SHA-256 over everything that decides what the task does —
+#     the run, the environment, the account, the region, the cluster, the step, the
+#     task definition with its revision (as ECS registered it), the container, the image
+#     digest, the database host and credential entry, the command words, the
+#     environment overrides and the exit code the step calls success;
+#   * a record is waited on only when its fingerprint is this invocation's;
+#   * a record with any other fingerprint, or none (a record written before g80), is
+#     never read as this step's answer. If its task is still running this refuses,
+#     because launching beside it is how a second migration hides the first; if it has
+#     stopped it is set aside, unread, and this step launches its own;
+#   * once a task's outcome has been read — a verdict, a timeout, a pull failure that
+#     will be retried — the record is retired into `tasks/<step>.history`, so the next
+#     invocation launches rather than re-reading a verdict somebody already acted on.
+#
+# The run is `release_run_id`: `FSS_RELEASE_RUN_ID` when the caller names one, the
+# Actions run and attempt in CI, and otherwise the reports directory itself, which is
+# what the documented production commands make fresh for every release.
 # ---------------------------------------------------------------------------
 
 release_task_record_path() {
@@ -486,6 +643,119 @@ release_task_record_path() {
   directory="$(rehearsal_report_dir)/tasks"
   mkdir -p "$directory"
   echo "$directory/${step}.arn"
+}
+
+# The run a record belongs to. Printed with every launch, and part of every fingerprint.
+release_run_id() {
+  if [ -n "${FSS_RELEASE_RUN_ID:-}" ]; then
+    printf '%s' "$FSS_RELEASE_RUN_ID"
+  elif [ -n "${GITHUB_RUN_ID:-}" ]; then
+    printf 'github-%s-%s' "$GITHUB_RUN_ID" "${GITHUB_RUN_ATTEMPT:-1}"
+  else
+    printf 'local:%s' "$(rehearsal_report_dir)"
+  fi
+}
+
+# release_task_fingerprint <run> <environment> <prefix> <account> <region> <cluster>
+#                          <step> <task definition> <container> <image digest>
+#                          <database host> <secret arn> <expect exit>
+#                          <command json> <override json>
+#
+# `sha256:<hex>` over the canonical JSON of the fifteen fields, in this order. Nothing
+# in it is a secret: ARNs, a digest, a hostname, command words and the overrides the
+# wrapper has already refused anything credential-shaped in. Only the hash is stored.
+release_task_fingerprint() {
+  python3 -c '
+import hashlib, json, sys
+
+names = ("run", "environment", "prefix", "account", "region", "cluster", "step",
+         "task_definition", "container", "image_digest", "database_host", "secret_arn",
+         "expect_exit", "command", "overrides")
+values = sys.argv[1:]
+if len(values) != len(names):
+    sys.exit("release_task_fingerprint takes {} fields, not {}".format(len(names), len(values)))
+fields = dict(zip(names, values))
+fields["command"] = json.loads(fields["command"])
+fields["overrides"] = json.loads(fields["overrides"])
+canonical = json.dumps({"schema": "fss.task-record.v1", **fields}, sort_keys=True, separators=(",", ":"))
+print("sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest())
+' "$@"
+}
+
+# Retire a record whose outcome has been read, keeping one line of it in the history.
+#
+#   release_retire_task_record <record path> <outcome>
+release_retire_task_record() {
+  local record=$1 outcome=$2 base
+  base=${record%.arn}
+  [ -f "$record" ] || return 0
+  printf '%s outcome=%s task=%s %s\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$outcome" "$(head -n 1 "$record")" \
+    "$(head -n 1 "$base.fingerprint" 2>/dev/null || echo 'fingerprint=<none: recorded before lane g80>')" \
+    >> "$base.history"
+  rm -f "$record" "$base.fingerprint"
+}
+
+# A record this invocation did not write: refuse while its task runs, otherwise set it
+# aside unread.
+#
+#   release_set_aside_task_record <environment> <cluster> <step> <record path> <recorded arn>
+#
+# "Stopped" includes a task ECS no longer describes at all: it forgets stopped tasks
+# about an hour after they stop, and a task it cannot find is not running.
+release_set_aside_task_record() {
+  local environment=$1 cluster=$2 step=$3 record=$4 recorded_arn=$5 described status
+  described="$(release_describe_task "$environment" "$cluster" "$recorded_arn")" || described=''
+  if [ -z "$described" ]; then
+    if rehearsal_dry_run; then
+      rehearsal_plan "$step: $recorded_arn is recorded for another run or command; refuse while it is not STOPPED, otherwise set it aside unread and launch"
+      release_retire_task_record "$record" "set_aside_unread_dry_run"
+      return 0
+    fi
+    echo "FAIL: $step: $recorded_arn is recorded for another run or command, and ECS could not be asked whether it is still running. Nothing was launched beside it." >&2
+    return 1
+  fi
+  status="$(release_json_path "$described" "tasks.0.lastStatus" "GONE")"
+  if [ "$status" != "STOPPED" ] && [ "$status" != "GONE" ]; then
+    echo "FAIL: $step: task $recorded_arn, recorded for another run or command, is still $status." >&2
+    echo "      Launching beside it is how a second migration hides the first. Wait until it stops and run this again," >&2
+    echo "      or, if it is this release's own task, resume it under the FSS_RELEASE_RUN_ID it was launched with (in $record.history or the log)." >&2
+    return 1
+  fi
+  rehearsal_log "$step: $recorded_arn was recorded for another run or command and has stopped ($status); its outcome is set aside unread in ${record%.arn}.history, and this step launches its own"
+  release_retire_task_record "$record" "set_aside_unread_$status"
+  return 0
+}
+
+# Print why a stopped task's image could not be pulled, and succeed, only when that is
+# provably what happened before the application started: the task is STOPPED, no
+# container reports an exit code (so no process ran), and ECS names a
+# `CannotPullContainerError`. Anything else — an exit code, a secret that could not be
+# resolved, capacity, a timeout — is not this, and fails on its first attempt.
+#
+#   release_pull_failure <describe-tasks json>
+release_pull_failure() {
+  local described=$1
+  [ -n "$described" ] || return 1
+  FSS_JSON="$described" python3 -c '
+import json, os, sys
+
+tasks = (json.loads(os.environ["FSS_JSON"]) or {}).get("tasks") or []
+if not tasks:
+    sys.exit(1)
+task = tasks[0]
+if task.get("lastStatus") != "STOPPED":
+    sys.exit(1)
+containers = task.get("containers") or []
+if any(entry.get("exitCode") is not None for entry in containers):
+    sys.exit(1)
+reasons = [str(task.get("stoppedReason") or "")] + [str(entry.get("reason") or "") for entry in containers]
+for reason in reasons:
+    if "CannotPullContainerError" in reason:
+        print(reason.strip())
+        sys.exit(0)
+sys.exit(1)
+'
 }
 
 # ---------------------------------------------------------------------------
@@ -675,97 +945,154 @@ json.dump({"awsvpcConfiguration": {
 }}, sys.stdout)
 ')"
 
-  # (o): a recorded ARN means this step already launched. Wait on that task rather
-  # than launching a second one — a retried job that started two migrations would have
-  # the second one block on the advisory lock and then apply nothing, which looks like
-  # success and is not.
+  # (o): a recorded ARN means this step already launched and nobody has read how it
+  # ended. Wait on that task rather than launching a second one — a retried job that
+  # started two migrations would have the second one block on the advisory lock and
+  # then apply nothing, which looks like success and is not.
+  #
+  # (p), lane g80 (audit O07): only a record this invocation would have written. See
+  # "Recorded task ARNs" above for what the fingerprint covers and why a record is
+  # retired once its outcome is read.
   local record task_arn=''
   record="$(release_task_record_path "$step")"
   # The log stream is the only thing of a one-off task that outlives it, and the
   # teardown destroys the log group minutes later. Keep a copy beside the task's ARN
   # unless the caller named its own capture file.
   capture=${capture:-${record%.arn}.log}
-  if [ -s "$record" ]; then
-    task_arn="$(cat "$record")"
-    rehearsal_log "$step: a task was already launched for this step; waiting on it rather than launching another"
-  else
-    local launched
-    if rehearsal_dry_run; then
-      rehearsal_plan "aws ecs run-task --cluster $cluster --task-definition $task_definition --launch-type FARGATE --network-configuration $network_configuration --overrides $overrides"
-      launched="${FSS_RELEASE_RUN_TASK:-}"
-    else
-      launched="$(command "$(rehearsal_aws_command)" ecs run-task \
-        --cluster "$cluster" \
-        --task-definition "$task_definition" \
-        --launch-type FARGATE \
-        --network-configuration "$network_configuration" \
-        --overrides "$overrides" \
-        --propagate-tags TASK_DEFINITION \
-        --output json)"
-    fi
+  local fingerprint_file=${record%.arn}.fingerprint
+  local run_id registered_definition fingerprint
+  run_id="$(release_run_id)"
+  # The revision ECS registered, when the definition was read; the caller's ARN
+  # otherwise. Terraform's outputs carry the revision already, and this makes the
+  # fingerprint the registered one rather than the one the caller believes.
+  registered_definition="$(release_json_path "${definition:-}" "taskDefinitionArn" "$task_definition")"
+  fingerprint="$(release_task_fingerprint "$run_id" "$environment" "$prefix" "$account" "$region" "$cluster" \
+    "$step" "$registered_definition" "$container" "$image_digest" "$database_host" "$secret_arn" \
+    "$expect_exit" "$command_json" "$override_json")"
 
-    # (i): the `failures` array. `run-task` returns 200 with an empty `tasks` list and
-    # a populated `failures` list for a capacity problem, a bad subnet or a missing
-    # platform version, and a caller reading only the exit code sees success.
-    local failure_count
-    failure_count="$(release_json_path "${launched:-}" "failures" "[]" | python3 -c 'import json,sys; print(len(json.load(sys.stdin) or []))')"
-    if [ "$failure_count" -gt 0 ]; then
-      echo "FAIL: $step was not started. ECS reported $failure_count failure(s):" >&2
-      FSS_JSON="$launched" python3 -c '
+  # (q), lane g80 (audit O06): an image that could not be pulled is launched again, up
+  # to RELEASE_PULL_ATTEMPTS times, and nothing else is.
+  local attempt=1 attempts=$RELEASE_PULL_ATTEMPTS
+  if ! [[ "$attempts" =~ ^[1-9][0-9]*$ ]]; then attempts=1; fi
+  while :; do
+    task_arn=''
+    if [ -s "$record" ]; then
+      local recorded_arn recorded_fingerprint=''
+      recorded_arn="$(head -n 1 "$record")"
+      if [ -s "$fingerprint_file" ]; then recorded_fingerprint="$(head -n 1 "$fingerprint_file" | cut -d ' ' -f 1)"; fi
+      if [ "$recorded_fingerprint" = "$fingerprint" ]; then
+        task_arn=$recorded_arn
+        # Resuming counts as the attempt it was, so the bound below stays a bound.
+        local recorded_attempt
+        recorded_attempt="$(sed -n 's/.* attempt=\([0-9][0-9]*\).*/\1/p' "$fingerprint_file" | head -n 1)"
+        if [ -n "$recorded_attempt" ]; then attempt=$recorded_attempt; fi
+        rehearsal_log "$step: task $task_arn was launched for this step by this run ($run_id) and its outcome was never read; waiting on it rather than launching another"
+      else
+        release_set_aside_task_record "$environment" "$cluster" "$step" "$record" "$recorded_arn" || return 1
+      fi
+    fi
+    if [ -z "$task_arn" ]; then
+      local launched
+      if rehearsal_dry_run; then
+        rehearsal_plan "aws ecs run-task --cluster $cluster --task-definition $task_definition --launch-type FARGATE --network-configuration $network_configuration --overrides $overrides"
+        launched="${FSS_RELEASE_RUN_TASK:-}"
+      else
+        launched="$(command "$(rehearsal_aws_command)" ecs run-task \
+          --cluster "$cluster" \
+          --task-definition "$task_definition" \
+          --launch-type FARGATE \
+          --network-configuration "$network_configuration" \
+          --overrides "$overrides" \
+          --propagate-tags TASK_DEFINITION \
+          --output json)"
+      fi
+
+      # (i): the `failures` array. `run-task` returns 200 with an empty `tasks` list and
+      # a populated `failures` list for a capacity problem, a bad subnet or a missing
+      # platform version, and a caller reading only the exit code sees success.
+      local failure_count
+      failure_count="$(release_json_path "${launched:-}" "failures" "[]" | python3 -c 'import json,sys; print(len(json.load(sys.stdin) or []))')"
+      if [ "$failure_count" -gt 0 ]; then
+        echo "FAIL: $step was not started. ECS reported $failure_count failure(s):" >&2
+        FSS_JSON="$launched" python3 -c '
 import json, os, sys
 for failure in json.loads(os.environ["FSS_JSON"]).get("failures") or []:
     print("  {} {}: {}".format(failure.get("arn", "<no arn>"), failure.get("reason", "<no reason>"), failure.get("detail", "")), file=sys.stderr)
 '
-      return 1
-    fi
-
-    task_arn="$(release_json_path "${launched:-}" "tasks.0.taskArn")"
-    # (j): no failures and no task. It happens, and "nothing to wait for" must not be
-    # read as "nothing went wrong".
-    if [ -z "$task_arn" ]; then
-      if rehearsal_dry_run; then
-        rehearsal_plan "aws ecs wait tasks-stopped --cluster $cluster --tasks <task arn>"
-        rehearsal_plan "aws ecs describe-tasks --cluster $cluster --tasks <task arn>"
-        rehearsal_plan "read the essential container's exitCode; a missing one is a failure, never a zero"
-        rehearsal_plan "aws logs get-log-events --log-group-name ${log_group:-<worker log group>} --log-stream-name ${log_stream_prefix:-<prefix>}/$container/<task id>"
-        return 0
+        return 1
       fi
-      echo "FAIL: $step reported neither a task nor a failure. Nothing was started and nothing said why." >&2
-      return 1
-    fi
-    printf '%s\n' "$task_arn" > "$record"
-    rehearsal_log "$step: task $task_arn (recorded in $record)"
-  fi
 
-  # (k): the wait, with a budget. `aws ecs wait tasks-stopped` polls for up to 100
-  # attempts at 6 seconds, which is 10 minutes and not always enough; this is the
-  # budget the caller declared, and a task still running at the end of it is stopped
-  # rather than abandoned.
-  local waited=0 status=''
-  while :; do
+      task_arn="$(release_json_path "${launched:-}" "tasks.0.taskArn")"
+      # (j): no failures and no task. It happens, and "nothing to wait for" must not be
+      # read as "nothing went wrong".
+      if [ -z "$task_arn" ]; then
+        if rehearsal_dry_run; then
+          rehearsal_plan "aws ecs wait tasks-stopped --cluster $cluster --tasks <task arn>"
+          rehearsal_plan "aws ecs describe-tasks --cluster $cluster --tasks <task arn>"
+          rehearsal_plan "read the essential container's exitCode; a missing one is a failure, never a zero"
+          rehearsal_plan "a task stopped by CannotPullContainerError before any container ran is launched again, up to $attempts attempt(s), ${RELEASE_PULL_BACKOFF_SECONDS}s apart and growing; anything else fails at once"
+          rehearsal_plan "aws logs get-log-events --log-group-name ${log_group:-<worker log group>} --log-stream-name ${log_stream_prefix:-<prefix>}/$container/<task id>"
+          return 0
+        fi
+        echo "FAIL: $step reported neither a task nor a failure. Nothing was started and nothing said why." >&2
+        return 1
+      fi
+      printf '%s\n' "$task_arn" > "$record"
+      printf '%s run=%s task_definition=%s image_digest=%s attempt=%s\n' \
+        "$fingerprint" "$run_id" "$registered_definition" "$image_digest" "$attempt" > "$fingerprint_file"
+      rehearsal_log "$step: task $task_arn (recorded in $record; run $run_id; attempt $attempt of $attempts)"
+    fi
+
+    # (k): the wait, with a budget. `aws ecs wait tasks-stopped` polls for up to 100
+    # attempts at 6 seconds, which is 10 minutes and not always enough; this is the
+    # budget the caller declared, and a task still running at the end of it is stopped
+    # rather than abandoned.
+    local waited=0 status=''
+    while :; do
+      local described
+      described="$(release_describe_task "$environment" "$cluster" "$task_arn")"
+      status="$(release_json_path "${described:-}" "tasks.0.lastStatus")"
+      if [ "$status" = "STOPPED" ] || [ -z "$described" ]; then break; fi
+      if [ "$waited" -ge "$timeout_seconds" ]; then
+        echo "FAIL: $step was still $status after ${timeout_seconds}s. Stopping it rather than leaving it running." >&2
+        release_aws "$environment" ecs stop-task --cluster "$cluster" --task "$task_arn" \
+          --reason "release wrapper timeout after ${timeout_seconds}s" >/dev/null || true
+        release_retire_task_record "$record" "timed_out_and_stopped"
+        return 1
+      fi
+      sleep 10
+      waited=$((waited + 10))
+    done
+
     local described
     described="$(release_describe_task "$environment" "$cluster" "$task_arn")"
-    status="$(release_json_path "${described:-}" "tasks.0.lastStatus")"
-    if [ "$status" = "STOPPED" ] || [ -z "$described" ]; then break; fi
-    if [ "$waited" -ge "$timeout_seconds" ]; then
-      echo "FAIL: $step was still $status after ${timeout_seconds}s. Stopping it rather than leaving it running." >&2
-      release_aws "$environment" ecs stop-task --cluster "$cluster" --task "$task_arn" \
-        --reason "release wrapper timeout after ${timeout_seconds}s" >/dev/null || true
-      return 1
-    fi
-    sleep 10
-    waited=$((waited + 10))
-  done
 
-  local described
-  described="$(release_describe_task "$environment" "$cluster" "$task_arn")"
-  # The verdict first, but the log whatever the verdict: a task that failed is the one
-  # whose output matters, and until 23 September 2026 a non-zero exit returned here
-  # before the fetch below ever ran (run 35876269976 printed "exited 21" and nothing else).
-  local verdict=0
-  release_report_task "$step" "$described" "$container" "$expect_exit" || verdict=1
-  release_print_task_logs "$environment" "$log_group" "$log_stream_prefix" "$container" "$task_arn" "$capture"
-  return "$verdict"
+    # (q): the image never arrived, so the application never started. Launch again,
+    # after a pause, while attempts remain; the last attempt falls through to the
+    # verdict below, which reports the missing exit code and the stop reason.
+    local pull_reason=''
+    if pull_reason="$(release_pull_failure "$described")"; then
+      if [ "$attempt" -lt "$attempts" ]; then
+        local pause=$((RELEASE_PULL_BACKOFF_SECONDS * attempt))
+        rehearsal_log "$step: attempt $attempt of $attempts: task $task_arn stopped before any container ran, because its image could not be pulled ($pull_reason); launching again in ${pause}s"
+        release_retire_task_record "$record" "image_not_pulled_attempt_$attempt"
+        sleep "$pause"
+        attempt=$((attempt + 1))
+        continue
+      fi
+      echo "FAIL: $step: the image could not be pulled on any of $attempts attempt(s); the last said: $pull_reason" >&2
+    fi
+
+    # The verdict first, but the log whatever the verdict: a task that failed is the one
+    # whose output matters, and until 23 September 2026 a non-zero exit returned here
+    # before the fetch below ever ran (run 35876269976 printed "exited 21" and nothing else).
+    local verdict=0
+    release_report_task "$step" "$described" "$container" "$expect_exit" || verdict=1
+    release_print_task_logs "$environment" "$log_group" "$log_stream_prefix" "$container" "$task_arn" "$capture"
+    # Read, so retired: the next invocation of this step launches its own task.
+    release_retire_task_record "$record" "read_verdict_$verdict"
+    return "$verdict"
+  done
 }
 
 # The JSON object a command printed on stdout, out of the captured log lines.

@@ -30,7 +30,8 @@ import {
  *   * **rehearsal gate** — the record is written last, from reports the rehearsal-only
  *     scenarios left behind, and only for a green suite;
  *   * **smoke tests** — `scripts/productionSmoke.mjs`, whose sixth check's expected
- *     answer is that sending is *off*;
+ *     answer is that sending is *off* before the enable (`--expect-sending`, whose
+ *     default is `disabled`; lane g80);
  *   * **manual enable** — `workspace_settings.sending_enabled`, admin-only, carrying the
  *     `releaseGateReference` of the rehearsal whose digests match.
  *
@@ -327,8 +328,12 @@ describe('Appendix G 42: sending stays off until all four agree', () => {
       expect(smoke).toContain('SMOKE_CANARY_AGE_NOT_SUPPLIED');
     });
 
-    it('expects sending to be off, which is the one check whose pass is a false', () => {
-      expect(smoke).toContain("record('sending_disabled', enabled === false");
+    it('compares sending with the state the operator expects, off unless told otherwise', () => {
+      // Lane g80 (audit O12): the expectation is an input, and its default is off. The
+      // behaviour, both ways, is in productionSmoke.check.ts.
+      expect(smoke).toContain("typeof enabled === 'boolean' && enabled === (expectation === 'enabled')");
+      expect(smoke).toContain("export const SENDING_EXPECTATIONS = Object.freeze(['disabled', 'enabled']);");
+      expect(smoke).toContain('expectSending: SENDING_EXPECTATIONS[0],');
     });
   });
 
@@ -570,9 +575,9 @@ describe('Appendix G 42: the attestation is bound to the release record (lane g7
         return overrides.containerOverrides[0]?.command ?? [];
       });
 
-    it('puts the record after the final verify, as the file’s own bytes', () => {
+    it('puts the record after the final verify of a schema release, as the file’s own bytes', () => {
       const file = recordFile();
-      const { code, output, report } = dryDeploy(['--release-record', file.path]);
+      const { code, output, report } = dryDeploy(['--schema-change', '--release-record', file.path]);
       expect(code, output).toBe(0);
       const commands = plannedCommands(output);
       const verifyDeployed = commands.findIndex(
@@ -589,11 +594,29 @@ describe('Appendix G 42: the attestation is bound to the release record (lane g7
       expect(report).toContain('release_record=planned');
     });
 
-    it('changes nothing about the deploy without the flag', () => {
-      const { code, output, report } = dryDeploy([]);
+    it('puts the record last on the rolling path too, as its only one-off task, after the running digests', () => {
+      // Lane g80: an app-only deploy launches no one-off task of its own, so the put is
+      // the one command planned, and it comes after the deployment has been read back.
+      const file = recordFile();
+      const { code, output, report } = dryDeploy(['--release-record', file.path]);
       expect(code, output).toBe(0);
-      expect(plannedCommands(output).some(command => command.includes('release-record'))).toBe(false);
-      expect(report).toContain('release_record=none');
+      const commands = plannedCommands(output);
+      expect(commands.map(command => command.slice(0, 3).join(' '))).toEqual(['admin release-record put']);
+      const digests = output.indexOf('3/3 the running tasks of fss-prod-worker and fss-prod-api');
+      expect(digests, 'the running digests are not planned').toBeGreaterThan(-1);
+      expect(output.indexOf('admin release-record put')).toBeGreaterThan(digests);
+      const encoded = commands[0]?.[(commands[0]?.indexOf('--json-base64') ?? -2) + 1] ?? '';
+      expect(Buffer.from(encoded, 'base64').equals(file.bytes)).toBe(true);
+      expect(report).toContain('release_record=planned');
+    });
+
+    it('changes nothing about the deploy without the flag', () => {
+      for (const extra of [[], ['--schema-change']]) {
+        const { code, output, report } = dryDeploy(extra);
+        expect(code, output).toBe(0);
+        expect(plannedCommands(output).some(command => command.includes('release-record'))).toBe(false);
+        expect(report).toContain('release_record=none');
+      }
     });
 
     it('refuses before anything is scaled when the file is not a release record', () => {
