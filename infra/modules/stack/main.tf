@@ -24,6 +24,11 @@ locals {
   # depending on the module that depends on the journal.
   api_task_role_name    = "${var.name_prefix}-api-task"
   worker_task_role_name = "${var.name_prefix}-worker-task"
+  # The drill task runs Appendix E step 2 against the restored database and reads the
+  # journal to do it. The bucket policy names its readers by role, so the drill role has
+  # to be here as well as in its own IAM statement; rehearsal 36089161207 (25 September
+  # 2026) stopped at step 2 with AccessDenied because it was not.
+  drill_task_role_name = "${var.name_prefix}-drill-task"
 
   # One CloudWatch namespace per environment, derived here and nowhere else: the
   # metric filters (observability), the worker's FSS_METRIC_NAMESPACE and the task
@@ -154,7 +159,7 @@ module "journal" {
   name_prefix                = var.name_prefix
   aws_account_id             = var.aws_account_id
   writer_role_names          = [local.api_task_role_name, local.worker_task_role_name]
-  reader_role_names          = [local.worker_task_role_name]
+  reader_role_names          = [local.worker_task_role_name, local.drill_task_role_name]
   object_lock_mode           = var.journal_object_lock_mode
   object_lock_retention_days = var.journal_object_lock_retention_days
   force_destroy              = var.destroyable
