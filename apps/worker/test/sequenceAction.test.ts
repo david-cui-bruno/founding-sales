@@ -66,12 +66,15 @@ describe('the sequence action as a job', () => {
     );
   };
 
-  /** How many jobs the scheduler has materialized for one execution. */
+  /**
+   * How many jobs the scheduler has materialized for one execution — every wake of it
+   * (lane g82: the key is `step-execution:{id}:{wake}`).
+   */
   const jobsFor = async (id: string): Promise<number> => {
     const { rows } = await database.session.query<{ count: string }>(
       `SELECT count(*)::text AS count FROM jobs
-        WHERE kind = 'sequence.action' AND idempotency_key = $1`,
-      [`step-execution:${id}`],
+        WHERE kind = 'sequence.action' AND payload ->> 'stepExecutionId' = $1`,
+      [id],
     );
     return Number(rows[0]?.count ?? '0');
   };
@@ -255,15 +258,15 @@ describe('the sequence action as a job', () => {
     expect(first?.result).toBe('sent');
   });
 
-  it('asks again about a capped step, and never about one waiting for a person', async () => {
+  it('asks again about a capped step once its interval passes, and about a paused one only after the release', async () => {
     await database.session.query("DELETE FROM jobs WHERE kind = 'sequence.action'");
     await reopen();
     // A cap clears with the business date, so the step is runnable again once its
-    // `not_before` passes; a template nobody has approved is not.
+    // `not_before` passes.
     await database.session.query(
       `UPDATE step_executions
-          SET state = 'held', hold_reason_code = 'daily_cap',
-              completed_at = NULL, completion_source = NULL, result = NULL
+          SET state = 'held', hold_reason_code = 'daily_cap', not_before = due_at,
+              completed_at = NULL, completion_source = NULL, result = NULL, updated_at = now()
         WHERE workspace_id = $1 AND id = $2`,
       [workspaceId, executionId],
     );
@@ -273,9 +276,18 @@ describe('the sequence action as a job', () => {
     });
     expect(await jobsFor(executionId)).toBe(1);
 
+    // An administrator's pause of the firm: while its hold is open the step is not
+    // asked at all (C10), and the pass after the release asks (C05).
     await database.session.query("DELETE FROM jobs WHERE kind = 'sequence.action'");
+    const { rows } = await database.session.query<{ id: string }>(
+      `INSERT INTO active_holds (workspace_id, scope_kind, scope_key, reason_code, blocked_action_kinds,
+                                 source_event_kind)
+       VALUES ($1, 'firm', $2, 'scoped_pause', ARRAY['email_send', 'enrollment_advance'], 'administrative_pause')
+       RETURNING id`,
+      [workspaceId, firmId],
+    );
     await database.session.query(
-      `UPDATE step_executions SET hold_reason_code = 'template_unapproved'
+      `UPDATE step_executions SET hold_reason_code = 'scoped_pause', updated_at = now()
         WHERE workspace_id = $1 AND id = $2`,
       [workspaceId, executionId],
     );
@@ -284,6 +296,37 @@ describe('the sequence action as a job', () => {
       now: '2026-09-18T14:00:00Z',
     });
     expect(await jobsFor(executionId)).toBe(0);
+
+    await database.session.query('UPDATE active_holds SET released_at = now() WHERE workspace_id = $1 AND id = $2', [
+      workspaceId,
+      rows[0]?.id,
+    ]);
+    await runSchedulerPass(database.session, {
+      sources: [sequenceActionSource()],
+      now: '2026-09-18T14:00:00Z',
+    });
+    expect(await jobsFor(executionId)).toBe(1);
+
+    // A reason no hold row stands behind waits out its recheck, then is asked again.
+    await database.session.query("DELETE FROM jobs WHERE kind = 'sequence.action'");
+    await database.session.query(
+      `UPDATE step_executions
+          SET hold_reason_code = 'template_unapproved', not_before = TIMESTAMPTZ '2026-09-18T15:00:00Z',
+              updated_at = now()
+        WHERE workspace_id = $1 AND id = $2`,
+      [workspaceId, executionId],
+    );
+    await runSchedulerPass(database.session, {
+      sources: [sequenceActionSource()],
+      now: '2026-09-18T14:00:00Z',
+    });
+    expect(await jobsFor(executionId)).toBe(0);
+    await runSchedulerPass(database.session, {
+      sources: [sequenceActionSource()],
+      now: '2026-09-18T15:00:00Z',
+    });
+    expect(await jobsFor(executionId)).toBe(1);
+    await database.session.query("DELETE FROM jobs WHERE kind = 'sequence.action'");
   });
 
   it('holds a due email step when no send is wired, rather than failing the job', async () => {

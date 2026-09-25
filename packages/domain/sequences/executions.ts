@@ -1,11 +1,12 @@
 import type { HoldReasonCode } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
-import { openHold } from '../policy/index.ts';
-import { placeEmailSend, resolveStepDue, type WorkspaceHolidayCalendar } from '../src/index.ts';
+import { openHold, releaseHoldsOfEvent } from '../policy/index.ts';
+import { placeEmailSend, type WorkspaceHolidayCalendar } from '../src/index.ts';
 import { readTemplateVersion, renderTemplateVersion } from '../templates/index.ts';
 import { businessDateOf } from '../today/index.ts';
 import { calendarOfEnrollment, completeEnrollment, stepForCadence, stopEnrollments } from './enrollments.ts';
 import { CHANNEL_ACTION_KINDS, type StepEligibility } from './eligibility.ts';
+import { resumeEnrollment } from './resume.ts';
 import {
   loadEnrollmentForUpdate,
   loadStepExecutionForUpdate,
@@ -13,7 +14,15 @@ import {
   readSequenceVersion,
   readStepExecution,
 } from './rows.ts';
-import { SEND_HANDOFF_REFUSALS, type OutboundEmailRequest, type SendHandoff } from './sendHandoff.ts';
+import {
+  SEND_HANDOFF_REFUSALS,
+  type OutboundEmailRequest,
+  type OutboundFenceOutcome,
+  type SendHandoff,
+} from './sendHandoff.ts';
+import { rescheduleExecution } from './shifts.ts';
+import { successorDue } from './successor.ts';
+import { BLOCKING_HOLD_SQL } from './wake.ts';
 import {
   acceptSequence,
   refuseSequence,
@@ -27,6 +36,8 @@ import {
   type StepResult,
 } from './types.ts';
 import { templateVariablesFor } from './variables.ts';
+
+export { rescheduleExecution, type RescheduleInput } from './shifts.ts';
 
 /**
  * Running a due step (specification 11.2, 11.3, 12.2, Appendix B, Appendix C).
@@ -54,6 +65,26 @@ import { templateVariablesFor } from './variables.ts';
  * committed and reads the fence rather than assuming it
  * (`docs/decisions/g8-this-lane-dispatches.md`), and in `completeEmailStep`, which is
  * what an administrator's unknown-terminal resolution lands in.
+ *
+ * ## A step is run more than once (lane g82)
+ *
+ * The scheduler wakes a step again whenever its row has moved and it is due: a held
+ * step whose `not_before` has passed and that no open hold blocks, and a `dispatched`
+ * step whose worker went quiet (`wake.ts`). So `runDueStepExecution` begins from what
+ * already happened rather than assuming nothing did:
+ *
+ * * an email step that already has a fence is driven from the fence. `sent` completes
+ *   the step from the original dispatch instant; `dispatching` and `reconciling` hold
+ *   it while Gmail's Sent folder decides; `unknown_terminal` waits for the admin's
+ *   answer and then continues or stops the sequence (12.5, Appendix B); `prepared` and
+ *   `held` — nothing ever reached Gmail — are handed to the dispatch path again, which
+ *   rechecks everything under the send gate and claims atomically or not at all;
+ * * a held step is resumed first (`resumeEnrollment`): 4.3's shift by the union of the
+ *   holds that just cleared, or the seven-day review, and then the fresh eligibility
+ *   check in the same transaction (audit C05).
+ *
+ * Two more answers follow from that: `completed`, when the fence says the step is
+ * done, and a `handed_to_send` for a fence that already existed.
  *
  * ## Which holds this lane opens
  *
@@ -89,6 +120,34 @@ export const CLOCK_CLEARING_HOLDS: Partial<Record<HoldReasonCode, number>> = {
   send_unknown_reconciling: 5 * 60 * 1000,
 };
 
+/**
+ * How long a step held for any *other* reason waits before it is asked again, when no
+ * open hold row explains it (lane g82).
+ *
+ * A step held because an open hold blocks it is not asked at all until that hold is
+ * released — `holdExecution` leaves its `not_before` where it was and the wake skips it
+ * while the hold is open. The reasons no hold row stands behind — a route that is
+ * missing, a template not yet approved, coverage that went stale for a moment, a
+ * mailbox never connected — have nobody to release them, and before lane g82 a step
+ * held for one of them waited for ever. It is asked again after this long instead.
+ *
+ * `send_unknown_terminal` is shorter because the thing it waits for is an
+ * administrator's answer, and the step should continue soon after it is given.
+ */
+export const HOLD_RECHECK_MILLISECONDS: Partial<Record<HoldReasonCode, number>> = {
+  send_unknown_terminal: 15 * 60 * 1000,
+};
+
+/** The recheck for every reason neither table names. */
+export const DEFAULT_HOLD_RECHECK_MILLISECONDS = 60 * 60 * 1000;
+
+/** How long a step held for this reason waits before the scheduler may ask again. */
+export function holdRecheckMilliseconds(reasonCode: HoldReasonCode): number {
+  return (
+    CLOCK_CLEARING_HOLDS[reasonCode] ?? HOLD_RECHECK_MILLISECONDS[reasonCode] ?? DEFAULT_HOLD_RECHECK_MILLISECONDS
+  );
+}
+
 export type StepRunOutcome =
   | {
       readonly kind: 'handed_to_send';
@@ -107,6 +166,11 @@ export type StepRunOutcome =
       readonly stepExecutionId: string;
       readonly reasonCode: HoldReasonCode;
     }
+  | {
+      readonly kind: 'completed';
+      readonly stepExecutionId: string;
+      readonly result: 'sent' | 'skipped';
+    }
   | { readonly kind: 'not_due'; readonly stepExecutionId: string; readonly notBefore: string }
   | { readonly kind: 'nothing_to_do' };
 
@@ -120,31 +184,68 @@ export interface RunDueStepInput {
   readonly sendHandoff: SendHandoff;
 }
 
+const NO_FENCE: OutboundFenceOutcome = { state: 'absent', dispatchedAt: null, heldReason: null };
+
 export async function runDueStepExecution(
   context: RepositoryContext,
   input: RunDueStepInput,
 ): Promise<StepRunOutcome> {
-  const execution =
+  const loaded =
     input.stepExecutionId !== undefined
       ? await loadStepExecutionForUpdate(context, input.stepExecutionId)
       : input.enrollmentId === undefined
         ? null
         : await nextUnfinishedExecution(context, input.enrollmentId);
-  if (execution === null) return { kind: 'nothing_to_do' };
-  if (execution.state !== 'pending' && execution.state !== 'held') {
+  if (loaded === null) return { kind: 'nothing_to_do' };
+  // `dispatched` is runnable since lane g82 (audit C03): its fence may still be
+  // `prepared` because the worker that prepared it died before the claim.
+  if (loaded.state !== 'pending' && loaded.state !== 'held' && loaded.state !== 'dispatched') {
     return { kind: 'nothing_to_do' };
   }
 
-  const enrollment = await loadEnrollmentForUpdate(context, execution.enrollmentId);
+  const enrollment = await loadEnrollmentForUpdate(context, loaded.enrollmentId);
   if (enrollment === null) return { kind: 'nothing_to_do' };
   if (enrollment.endedAt !== null) return { kind: 'nothing_to_do' };
+
+  // What the fence says comes first once there is one. A send that happened, or may
+  // have, is settled from the fence whatever else is true of the enrollment now.
+  const fence = loaded.channel === 'email' ? await input.sendHandoff.readOutcome(context, loaded.id) : NO_FENCE;
+  const settled = await settleFromFence(context, loaded, fence, input.now);
+  if (settled !== null) return settled;
+
+  // From here nothing was ever handed to Gmail: the fence is absent, prepared or held.
   if (enrollment.state === 'review_required') {
     // 4.3: "the enrollment remains held for salesperson review and explicit resume".
-    return await holdExecution(context, execution, 'long_hold_review');
+    return await holdExecution(context, loaded, 'long_hold_review');
   }
 
-  if (Date.parse(execution.notBefore) > Date.parse(input.now)) {
-    return { kind: 'not_due', stepExecutionId: execution.id, notBefore: execution.notBefore };
+  if (loaded.state !== 'dispatched' && Date.parse(loaded.notBefore) > Date.parse(input.now)) {
+    return { kind: 'not_due', stepExecutionId: loaded.id, notBefore: loaded.notBefore };
+  }
+
+  let execution = loaded;
+  if (execution.state === 'dispatched' && fence.state === 'absent') {
+    // No fence means nothing was prepared, let alone sent: the step is simply pending.
+    await context.db.query(
+      `UPDATE step_executions SET state = 'pending', updated_at = now()
+        WHERE workspace_id = $1 AND id = $2 AND state = 'dispatched'`,
+      [context.scope.workspaceId, execution.id],
+    );
+    execution = { ...execution, state: 'pending' };
+  }
+  if (execution.state === 'held') {
+    const resumed = await resumeHeldStep(context, execution, input.now);
+    if (resumed.kind === 'stopped') return resumed.outcome;
+    execution = resumed.execution;
+  }
+
+  const fenceId = fence.outboundMessageId ?? null;
+  if ((fence.state === 'prepared' || fence.state === 'held') && fenceId !== null) {
+    // The bytes were decided and frozen when the fence was prepared, and nothing was
+    // attempted with them. Appendix B: "Prepared, and Gmail request provably not
+    // started — retry same fence". The dispatch that follows the commit re-decides
+    // everything — eligibility, window, cap — under the send gate.
+    return await handBackToSend(context, execution, fenceId);
   }
 
   const eligible = await input.eligibility.evaluate(context, {
@@ -166,7 +267,135 @@ export async function runDueStepExecution(
     return { kind: 'awaiting_manual', stepExecutionId: execution.id, channel: execution.channel };
   }
 
-  return await runEmailStep(context, { execution, enrollment, ...input });
+  return await runEmailStep(context, { ...input, execution, enrollment });
+}
+
+/**
+ * Settle an email step whose fence has left `prepared` for good, or return null.
+ *
+ * * `sent` — complete it from the original dispatch instant (12.5), however late the
+ *   step learns of it: after a reconciliation, a restore, or a worker that died between
+ *   the send and the step's own completion.
+ * * `dispatching`, `reconciling` — the request may have left, so the step waits on the
+ *   Sent folder; `CLOCK_CLEARING_HOLDS` asks again in five minutes.
+ * * `unknown_terminal` — 12.5's admin answer. `delivered` continues the sequence from
+ *   the original dispatch time and `skipped` stops the enrollment, and either way the
+ *   terminal hold the fence opened on the firm comes off with it: Appendix A commits
+ *   "delivered and successor, or skipped and terminal stop" together. Unanswered, the
+ *   step waits and is asked again (`HOLD_RECHECK_MILLISECONDS`).
+ */
+async function settleFromFence(
+  context: RepositoryContext,
+  execution: StepExecutionRow,
+  fence: OutboundFenceOutcome,
+  now: string,
+): Promise<StepRunOutcome | null> {
+  switch (fence.state) {
+    case 'sent':
+      return await completeFromFence(context, execution, 'sent', fence.dispatchedAt ?? now);
+    case 'dispatching':
+    case 'reconciling':
+      return await holdExecution(context, execution, 'send_unknown_reconciling');
+    case 'unknown_terminal': {
+      const resolution = fence.adminResolution ?? null;
+      if (resolution === null) return await holdExecution(context, execution, 'send_unknown_terminal');
+      const fenceId = fence.outboundMessageId ?? null;
+      if (fenceId !== null) {
+        await releaseHoldsOfEvent(context, { sourceEventId: fenceId, reasonCode: 'send_unknown_terminal' });
+      }
+      return await completeFromFence(
+        context,
+        execution,
+        resolution === 'delivered' ? 'sent' : 'skipped',
+        fence.dispatchedAt ?? now,
+      );
+    }
+    default:
+      return null;
+  }
+}
+
+async function completeFromFence(
+  context: RepositoryContext,
+  execution: StepExecutionRow,
+  result: 'sent' | 'skipped',
+  at: string,
+): Promise<StepRunOutcome> {
+  const completed = await completeEmailStep(context, { stepExecutionId: execution.id, result, at });
+  if (!completed.ok) return { kind: 'nothing_to_do' };
+  return { kind: 'completed', stepExecutionId: execution.id, result };
+}
+
+type ResumedStep =
+  | { readonly kind: 'resumed'; readonly execution: StepExecutionRow }
+  | { readonly kind: 'stopped'; readonly outcome: StepRunOutcome };
+
+/**
+ * 4.3 for a held step the scheduler woke (audit C05): the enrollment's holds are
+ * reconsidered before anything else, so a released hold shifts the unexecuted steps by
+ * the union it blocked for, or sends the enrollment to review past seven days.
+ *
+ * `still_held` holds the step with the reason of the oldest hold still open — the wake
+ * and the resume ask the same scopes, so this is the rare case of a hold opened between
+ * the two. A shift that moves the step's due instant past now leaves it pending until
+ * then; the scheduler wakes it when it is due.
+ */
+async function resumeHeldStep(
+  context: RepositoryContext,
+  execution: StepExecutionRow,
+  now: string,
+): Promise<ResumedStep> {
+  const resumed = await resumeEnrollment(context, { enrollmentId: execution.enrollmentId });
+  if (!resumed.ok) return { kind: 'stopped', outcome: { kind: 'nothing_to_do' } };
+  if (resumed.value.kind === 'still_held') {
+    const reason = await oldestOpenHoldReason(context, resumed.value.openHoldIds);
+    return {
+      kind: 'stopped',
+      outcome: await holdExecution(context, execution, reason ?? execution.holdReasonCode ?? 'scoped_pause'),
+    };
+  }
+  if (resumed.value.kind === 'review_required') {
+    return { kind: 'stopped', outcome: await holdExecution(context, execution, 'long_hold_review') };
+  }
+  const current = await loadStepExecutionForUpdate(context, execution.id);
+  if (current === null || (current.state !== 'pending' && current.state !== 'held')) {
+    return { kind: 'stopped', outcome: { kind: 'nothing_to_do' } };
+  }
+  if (Date.parse(current.notBefore) > Date.parse(now)) {
+    return { kind: 'stopped', outcome: { kind: 'not_due', stepExecutionId: current.id, notBefore: current.notBefore } };
+  }
+  return { kind: 'resumed', execution: current };
+}
+
+async function oldestOpenHoldReason(
+  context: RepositoryContext,
+  holdIds: readonly string[],
+): Promise<HoldReasonCode | null> {
+  if (holdIds.length === 0) return null;
+  const { rows } = await context.db.query<{ reason_code: HoldReasonCode }>(
+    `SELECT reason_code FROM active_holds
+      WHERE workspace_id = $1 AND id = ANY($2::uuid[])
+      ORDER BY started_at, id LIMIT 1`,
+    [context.scope.workspaceId, [...holdIds]],
+  );
+  return rows[0]?.reason_code ?? null;
+}
+
+/**
+ * A fence that already exists and never reached Gmail goes back to the dispatch path:
+ * the step is `dispatched` again, and `dispatchPreparedStep` runs after the commit.
+ */
+async function handBackToSend(
+  context: RepositoryContext,
+  execution: StepExecutionRow,
+  outboundMessageId: string,
+): Promise<StepRunOutcome> {
+  await context.db.query(
+    `UPDATE step_executions SET state = 'dispatched', hold_reason_code = NULL, updated_at = now()
+      WHERE workspace_id = $1 AND id = $2 AND state IN ('pending', 'held', 'dispatched')`,
+    [context.scope.workspaceId, execution.id],
+  );
+  return { kind: 'handed_to_send', stepExecutionId: execution.id, outboundMessageId, sendAt: execution.dueAt };
 }
 
 async function runEmailStep(
@@ -269,10 +498,12 @@ export type DispatchStepOutcome =
  * transaction; this runs *after* that transaction commits, because
  * `prepared → dispatching` and the provider call after it cannot be rolled back.
  *
- * It dispatches only while the fence still reads `prepared`. That is the whole of the
- * at-most-once discipline on this side: a retry after a stolen lease re-prepares the
- * same fence (prepare is idempotent by step execution), reads a state that is no
- * longer `prepared`, and reports rather than sends again.
+ * It dispatches only while the fence reads `prepared` or `held` — states that never
+ * entered `dispatching` — and the claim inside the dispatch is the atomic
+ * `prepared → dispatching` that exactly one caller can win. That is the whole of the
+ * at-most-once discipline on this side: a retry after a stolen lease, or a second wake
+ * of the same step, reads a fence that is no longer claimable and reports rather than
+ * sends again.
  *
  * A held fence is not terminal — G7-2's `g7-held-returns-to-prepared` says a cap that
  * clears puts it back — so the step is held with the cap's own reason and a
@@ -291,7 +522,12 @@ export async function dispatchPreparedStep(
   if (execution === null || execution.state !== 'dispatched') return { kind: 'nothing_to_do' };
 
   let fence = await input.sendHandoff.readOutcome(context, execution.id);
-  if (fence.state === 'prepared') {
+  // `held` as well as `prepared` since lane g82: a step woken after its cap, window or
+  // pause cleared carries a held fence, and the dispatch path is what releases it and
+  // decides again (`g7-held-returns-to-prepared`). Neither state ever entered
+  // `dispatching`, so neither can have reached Gmail, and the claim is still the one
+  // atomic `prepared → dispatching`.
+  if (fence.state === 'prepared' || fence.state === 'held') {
     const dispatched = await input.sendHandoff.dispatch(context, {
       outboundMessageId: input.outboundMessageId,
       stepExecutionId: execution.id,
@@ -374,17 +610,7 @@ async function holdExecution(
   reasonCode: HoldReasonCode,
   options: { readonly openHoldRow?: boolean; readonly detail?: readonly string[] } = {},
 ): Promise<StepRunOutcome> {
-  await context.db.query(
-    `UPDATE step_executions
-        SET state = 'held', hold_reason_code = $3,
-            not_before = CASE WHEN $4::double precision > 0
-                              THEN GREATEST(not_before, now() + ($4 * interval '1 millisecond'))
-                              ELSE not_before END,
-            updated_at = now()
-      WHERE workspace_id = $1 AND id = $2 AND state IN ('pending', 'held', 'dispatched')`,
-    [context.scope.workspaceId, execution.id, reasonCode, CLOCK_CLEARING_HOLDS[reasonCode] ?? 0],
-  );
-
+  // The hold row first, so the `not_before` decision below sees it (lane g82).
   if (options.openHoldRow === true) {
     const { rows } = await context.db.query<{ id: string }>(
       `SELECT id FROM active_holds
@@ -404,6 +630,27 @@ async function holdExecution(
       });
     }
   }
+
+  // When the scheduler may ask again (lane g82, `wake.ts`). A step an open hold blocks
+  // keeps its `not_before`: the wake skips it while the hold is open and takes it on
+  // the first pass after the release, which is 4.3's resume. Any other held step —
+  // its own fence's cap or window, a reason no hold row stands behind — waits out the
+  // reason's interval. The blocking question is the wake's own `BLOCKING_HOLD_SQL`,
+  // asked in this statement, so the two cannot disagree: a step is either skipped
+  // until a release or asked again later, never re-run every pass.
+  await context.db.query(
+    `UPDATE step_executions AS e
+        SET state = 'held', hold_reason_code = $3,
+            not_before = CASE WHEN ${BLOCKING_HOLD_SQL}
+                              THEN e.not_before
+                              ELSE GREATEST(e.not_before, now() + ($4::double precision * interval '1 millisecond'))
+                         END,
+            updated_at = now()
+       FROM sequence_enrollments n
+      WHERE e.workspace_id = $1 AND e.id = $2 AND e.state IN ('pending', 'held', 'dispatched')
+        AND n.workspace_id = e.workspace_id AND n.id = e.enrollment_id`,
+    [context.scope.workspaceId, execution.id, reasonCode, holdRecheckMilliseconds(reasonCode)],
+  );
   return { kind: 'held', stepExecutionId: execution.id, reasonCode };
 }
 
@@ -415,62 +662,15 @@ async function clearExecutionHold(context: RepositoryContext, stepExecutionId: s
   );
 }
 
-export interface RescheduleInput {
-  readonly execution: StepExecutionRow;
-  readonly toDueAt: string;
-  readonly reason: 'hold_union' | 'send_window' | 'migration' | 'retry_call' | 'linkedin_grace';
-  readonly holdUnionMilliseconds?: number | undefined;
-  readonly sourceEventId?: string | undefined;
-}
-
-/**
- * Move an unexecuted step forward and record why.
- *
- * `original_due_at` never moves, and the shift row is append-only, so "original and
- * shifted timing history" (11.2) survives every later move. A shift that would move
- * work earlier is refused by the database rather than clamped here, because a caller
- * asking to move a send earlier has a bug this should not hide.
- */
-export async function rescheduleExecution(
-  context: RepositoryContext,
-  input: RescheduleInput,
-): Promise<void> {
-  const from = input.execution.dueAt;
-  const shift = Date.parse(input.toDueAt) - Date.parse(from);
-  if (shift <= 0) return;
-
-  await context.db.query(
-    `UPDATE step_executions
-        SET due_at = $3::timestamptz,
-            not_before = GREATEST(not_before, $3::timestamptz),
-            updated_at = now()
-      WHERE workspace_id = $1 AND id = $2 AND state IN ('pending', 'held')`,
-    [context.scope.workspaceId, input.execution.id, input.toDueAt],
-  );
-  await context.db.query(
-    `INSERT INTO step_execution_shifts
-       (workspace_id, step_execution_id, enrollment_id, from_due_at, to_due_at,
-        shift_milliseconds, reason, hold_union_milliseconds, source_event_id)
-     VALUES ($1, $2, $3, $4::timestamptz, $5::timestamptz, $6, $7, $8, $9)`,
-    [
-      context.scope.workspaceId,
-      input.execution.id,
-      input.execution.enrollmentId,
-      from,
-      input.toDueAt,
-      shift,
-      input.reason,
-      input.holdUnionMilliseconds ?? null,
-      input.sourceEventId ?? null,
-    ],
-  );
-}
-
 export interface CompleteStepInput {
   readonly stepExecutionId: string;
   readonly completionSource: StepCompletionSource;
   readonly result: StepResult;
-  /** The instant the completion happened. The successor's delay is not counted from it. */
+  /**
+   * The instant the step actually happened: for a sent email, the fence's original
+   * dispatch time (12.5), never the moment a reconciliation or an admin settled it.
+   * Absent is database now. The successor's spacing floor counts from it (`successor.ts`).
+   */
   readonly completedAt?: string | undefined;
   /** 11.3's ten-minute grace on the successor. */
   readonly successorNotBeforeMilliseconds?: number | undefined;
@@ -488,10 +688,13 @@ export interface CompletedStep {
 /**
  * Complete a step and create its successor, in one transaction (Appendix A).
  *
- * The successor's due instant is start-anchored: counted from the instant the
- * enrollment began, not from this completion. That is G0's ported rule
- * (`packages/domain/src/rules/cadence.ts`) and the reason is unchanged — a firm that
- * sat in a queue should not have its whole cadence pushed out by the wait.
+ * The successor's due instant is the plan — the next step's delay from the instant the
+ * enrollment began, G0's start anchor (`packages/domain/src/rules/cadence.ts`) and what
+ * the editor shows as "N business days after enrollment" — unless this step ran late,
+ * in which case it is the plan's gap between the two steps counted from when this one
+ * actually happened (lane g82, audit C11; `successor.ts`). On time the two agree, so a
+ * firm that sat in a queue before its first step still keeps its cadence; late, the
+ * next step keeps its spacing instead of falling due the same hour.
  *
  * The grace period is the exception, and it is a `not_before` rather than a due
  * instant: 11.3's ten minutes are an undo window, not a delay, and putting them in
@@ -511,11 +714,12 @@ export async function completeStepExecution(
   if (enrollment === null) return refuseSequence('enrollment_unknown');
   if (enrollment.endedAt !== null) return refuseSequence('enrollment_not_live');
 
-  await context.db.query(
+  const { rows: done } = await context.db.query<{ completed_at: Date }>(
     `UPDATE step_executions
         SET state = 'completed', completed_at = coalesce($3::timestamptz, now()),
             completion_source = $4, result = $5, hold_reason_code = NULL, updated_at = now()
-      WHERE workspace_id = $1 AND id = $2`,
+      WHERE workspace_id = $1 AND id = $2
+      RETURNING completed_at`,
     [
       context.scope.workspaceId,
       execution.id,
@@ -524,10 +728,12 @@ export async function completeStepExecution(
       input.result,
     ],
   );
+  const completedAt = (done[0]?.completed_at ?? new Date()).toISOString();
 
   const successor = await createSuccessor(context, {
     enrollment,
     afterOrdinal: execution.ordinal,
+    completedAt,
     notBeforeMilliseconds: input.successorNotBeforeMilliseconds ?? 0,
   });
   if (successor === null) {
@@ -554,6 +760,8 @@ export async function completeStepExecution(
 interface SuccessorInput {
   readonly enrollment: EnrollmentRow;
   readonly afterOrdinal: number;
+  /** When the completed step actually happened. */
+  readonly completedAt: string;
   readonly notBeforeMilliseconds: number;
 }
 
@@ -566,14 +774,17 @@ async function createSuccessor(
   if (version === null) return null;
   const next = version.steps.find(step => step.ordinal === input.afterOrdinal + 1);
   if (next === undefined) return null;
+  const previous = version.steps.find(step => step.ordinal === input.afterOrdinal);
 
   const calendar = await calendarOfEnrollment(context, input.enrollment);
-  const due = resolveStepDue(
-    stepForCadence(next),
-    input.enrollment.startedAt,
-    input.enrollment.firmTimeZone,
+  const due = successorDue({
+    previous: previous === undefined ? undefined : stepForCadence(previous),
+    next: stepForCadence(next),
+    startedAt: input.enrollment.startedAt,
+    zone: input.enrollment.firmTimeZone,
     calendar,
-  );
+    completedAt: input.completedAt,
+  });
   const { rows: clock } = await context.db.query<{ now: Date }>('SELECT now() AS now');
   const now = (clock[0]?.now ?? new Date()).toISOString();
   const notBefore = new Date(Date.parse(now) + input.notBeforeMilliseconds).toISOString();
