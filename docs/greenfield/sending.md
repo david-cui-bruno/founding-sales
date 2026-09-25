@@ -44,7 +44,7 @@ is built around.
 | Handler and source | `apps/worker/src/handlers/mail.ts`, `scheduler/mailSources.ts` |
 | Tests | `packages/domain/test/outbound/**`, `apps/api/test/outbound.test.ts`, `apps/api/test/sendingDomain.test.ts`, `apps/worker/test/mailHandlers.test.ts`, `apps/worker/test/sequenceActionDispatch.test.ts` |
 
-## The eight rules a reader should carry
+## The nine rules a reader should carry
 
 ### 1. One fence per origin, and `prepare` reuses rather than duplicates
 
@@ -106,6 +106,37 @@ read from `readOutboundOutcome`.
 schedule change governs every mailbox the moment it lands. `admin_daily_cap` only
 lowers and `raised_daily_cap` only raises, to at most 75, under a database ceiling of
 100.
+
+**A raise is earned, and it counts only while it stays earned** (lane g87, audit S06).
+12.7 says "After sustained healthy results they may raise a mailbox to 75". Until g87
+`setAdminCap` accepted `raiseTo: 75` for a mailbox on its first day and
+`effectiveDailyCap` let the raise replace the schedule, so the whole ramp was one admin
+click deep. The rule now has two parts (`raiseRefusal` in `outbound/ramp.ts`):
+
+* the mailbox has finished the schedule: `RAMP_SETTLED_DAY` (30) healthy sending days,
+  12.7's "After six healthy weeks". Otherwise the refusal is `ramp_not_settled`.
+* its last `RAMP_RAISE_HEALTHY_STREAK` (10) closed sending days were all healthy, with
+  no unhealthy one among them. Otherwise it is `health_not_sustained`. A day with no
+  automated send is not a sending day and neither breaks the run nor extends it. A
+  closed day that a late bounce condemned does break it.
+
+`POST /outbound/cap` refuses any non-null `raiseTo` that fails either part, and the code
+is the command's 409 `reason`. Lowering, and clearing a raise, are never refused for
+health, because both only shrink the cap. The gate asks the same question again before
+every send (`dailyCapInForce`): a stored raise lifts the day's cap only while the rule
+holds, and otherwise the schedule's cap governs that day. So a raise written before
+g87, a late bounce that took back the thirtieth day, or a bad fortnight after the raise
+can never put a mailbox above what the schedule allows it that day. `POST
+/outbound/status` reports that cap in force, not the stored column.
+
+Ten is a number the specification does not give. It is the longest step the table takes
+("Weeks 5–6", ten sending days at one cap). Changing it is David's decision, like the
+rate thresholds below.
+
+**Absent leaves a cap column alone; null clears it** (lane g87). The route passes an
+absent field through as absent, and the desktop sends only the field a person changed.
+Until g87 `setAdminCap` read absent as null, so lowering a raised mailbox during an
+incident silently cleared the raise too, and raising it cleared the lowering.
 
 That number only grows if somebody closes the day, and until lane G15 nobody did.
 `closeSendDay`, `listDaysToClose`, `recordDaySignal` and `countDirectSend` were built
@@ -179,13 +210,75 @@ and is counted across every mailbox plus every direct send the sync imported. Co
 a second mailbox adds to the same total — the count query takes no mailbox at all,
 which is the structural form of "it cannot be bypassed with extra mailboxes".
 
-It is rolling rather than daily (a midnight reset would permit 8,000 in two hours), it
-counts messages rather than distinct recipients (deliberately conservative), and it
-applies only to recipients on `gmail.com` or `googlemail.com` — a Workspace mailbox on
+It is rolling rather than daily (a midnight reset would permit 8,000 in two hours), and
+it applies only to recipients on `gmail.com` or `googlemail.com` — a Workspace mailbox on
 a customer's own domain is not covered by Google's rule, and holding it would be an
 outage on traffic nobody objected to.
 
-### 8. The application never queries DNS
+**It counts recipient exposure** (lane g87, audit S08). Before g87 it counted `sent`
+fences and one per direct message, so a send in doubt left the count the moment Gmail
+went quiet, and a mail merge sent as one message to forty Gmail addresses moved it by
+one. `personalGmailRecipientsInWindow` now counts:
+
+* **`automated`:** every FSS fence to a personal-Gmail address whose dispatch began in
+  the window, in every state after the claim: `dispatching`, `reconciling`, `sent` and
+  `unknown_terminal`. A claimed send may have left, so it is reserved against the guard
+  exactly as a sent one is. Its instant is the later of the claim and the proven send.
+* **`direct`:** every distinct personal-Gmail address on the `To` and `Cc` of every
+  imported outgoing message, counted once per message. `Bcc` is not in 12.3's header
+  allowlist, so it is the one recipient this count cannot see.
+* A message FSS sent is left out of `direct` exactly when its fence is counted in
+  `automated`: a claimed fence in the same mailbox with the message's Gmail id or its
+  deterministic `Message-ID`. So the sync importing FSS's own copy is counted once.
+
+Across messages it still over-counts on purpose: two messages to one address count
+twice. The answer keeps the `{ automated, direct, total }` shape the desktop parses, and
+the in-doubt part is inside `automated`.
+
+**The decision is serialized.** Every dispatch claim holds the send gate *shared*, so
+two claims to personal Gmail from two mailboxes used to run side by side, each count the
+other's fence as unclaimed, and both take the last place. The gate now takes a
+per-workspace transaction advisory lock (`lockDomainGuard`, key `fss.domain-guard:` plus
+the workspace id) before it counts a personal-Gmail recipient. The claim holds it until
+it commits, so the next claim counts this one in `dispatching`. It is taken after every
+row lock the claim already holds and by nothing but a claim, so it adds no lock-order
+cycle.
+
+### 8. Every outgoing message spends the account's headroom
+
+12.7: "All outgoing Gmail messages, including direct sends, count toward operational
+headroom. Automated capacity is conservatively reserved so sync lag cannot approach
+Google's account ceiling." Until lane g87 (audit S07) FSS counted direct sends in
+`mailbox_send_days.direct_sent` and nothing read them.
+
+The rule: **an automated send is refused as `daily_cap`, with detail `account
+used/ceiling`, when the mailbox's `automated_sent + direct_sent` on the claim's business
+date and the one before it already reach `ACCOUNT_OPERATIONAL_CEILING` (1,500).** That
+is Google Workspace's per-user limit of 2,000 messages in any rolling 24 hours
+(`GMAIL_ACCOUNT_DAILY_LIMIT`), less a reserve of 500 (`ACCOUNT_HEADROOM_RESERVE`).
+
+* **Two dates, because Google's window rolls.** At nine in the morning, yesterday
+  afternoon's sends are still inside Google's 24 hours. Any 24 hours ending now lies
+  inside today's business date and yesterday's, so their sum can only overstate what
+  Google counts.
+* **The reserve is for what the counters cannot see yet.** That means direct sends the
+  sync has not imported. The gate refuses automated sending once coverage is older than
+  fifteen minutes, so the unseen part is at most a quarter of an hour of a person's own
+  sending. It also absorbs the extra hour a spring-forward night adds to Google's window.
+* **It is its own ceiling.** The automated cap still applies first, and it can never
+  reach 1,500 on its own (the hard ceiling is 100). So this refusal only fires on an
+  account a person is already sending a great deal from by hand. The detail says which
+  ceiling: `automated n/cap` for the cap, `account used/ceiling` for this.
+* **It is enforced in the claim.** The gate's `openSendDay` upsert locks today's row
+  inside the claiming transaction, so two claims on one mailbox read it one after the
+  other. Yesterday's row changes only when the pipeline counts a late direct send, which
+  takes the send gate exclusive first.
+
+What it does not model is in `docs/decisions/g87-ramp-raise-headroom-exposure.md`:
+Google's separate recipient limits, trial Workspace accounts (500 a day), and a
+salesperson's own sending beyond the ceiling, which FSS observes and cannot stop.
+
+### 9. The application never queries DNS
 
 12.7 gates automated sending on SPF, DKIM and DMARC. Those are three booleans on
 `sending_domains`, set by an admin through `/outbound/authentication`, with who and
@@ -330,8 +423,13 @@ daily cap is reported as suppressed, because that is the fact somebody needs to 
 6. **the release gate** (16.2), refused as `workspace_sending_not_attested`. The deployment flag and the admin's `sending_enabled` attestation must both say yes. Since lane g71 the release record the attestation names must also be stored, have passed, and carry *this worker's own* image digest. The `detail` says which part said no: `deployment`, `workspace`, `release_record_unknown`, `release_record_not_passing`, `release_record_identity_unknown` or `release_record_digest_mismatch`. It never names the reference. See `docs/decisions/g71-sending-gate-is-bound-to-the-release-record.md`;
 7. the sending domain unknown, unauthenticated, or sending disabled (12.7);
 8. outside the firm-local window, re-derived rather than trusted (11.2);
-9. the mailbox's daily cap (12.7);
-10. the domain guard (12.6).
+9. the mailbox's daily cap (12.7): the cap in force, with a stored raise judged on
+   today's health (lane g87), detail `automated n/cap`;
+10. the account headroom (12.7, lane g87): automated and direct sends on today's and
+    yesterday's business date against 1,500, refused as `daily_cap` with detail
+    `account used/ceiling`;
+11. the domain guard (12.6), serialized for a personal-Gmail recipient and counting
+    recipient exposure (lane g87).
 
 Each refusal sets the fence `held` — which by definition means nothing was attempted —
 and opens the matching `active_holds` row. A later attempt releases the fence's own
@@ -366,6 +464,8 @@ Nothing in `packages/domain/outbound` imports anything of G8's.
   coverage freshness; the claim's business date; holidays at dispatch.
 * `docs/decisions/g7-domain-guard-scope.md` — why the guard counts the domain and
   holds the firm, including the over-broad hold the scenario test caught.
+* `docs/decisions/g87-ramp-raise-headroom-exposure.md` — the raise's health rule, the
+  account headroom and its reserve, and recipient exposure with in-doubt reservation.
 * `docs/decisions/g7-no-dns-lookup.md` — why 12.7's authentication gate is a person's
   checklist and this application never resolves a TXT record.
 
@@ -383,6 +483,7 @@ Nothing in `packages/domain/outbound` imports anything of G8's.
 
 ```
 npm --workspace @fss/domain run test -- test/outbound
+npm --workspace @fss/domain run test -- test/outbound/sendingCeilings.test.ts
 npm --workspace @fss/api run test -- test/outbound.test.ts test/sendingDomain.test.ts
 npm --workspace @fss/worker run test -- test/mailHandlers.test.ts test/sequenceActionDispatch.test.ts
 ```

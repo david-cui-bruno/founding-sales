@@ -19,7 +19,9 @@ import { issueSessionFor } from './support/sessionFixture.ts';
  *   * the authentication gate refuses to open on an incomplete checklist, so 12.7's
  *     "SPF, DKIM, and DMARC must pass before automated sending is enabled" cannot be
  *     satisfied by a client that simply asks twice;
- *   * a cap raise above 75 is refused rather than silently clamped.
+ *   * a cap raise above 75 is refused rather than silently clamped, and a raise the
+ *     mailbox has not earned is refused with the part of 12.7's rule it has not met
+ *     (lane g87, audit S06) — the command's 409 is where an admin reads it.
  */
 describe('the outbound admin routes', () => {
   let fixture: AuthFixture;
@@ -157,7 +159,7 @@ describe('the outbound admin routes', () => {
     );
   });
 
-  it('12.7: refuses a raise above 75 rather than clamping it', async () => {
+  it('12.7: refuses a raise above 75 rather than clamping it, and one the mailbox has not earned', async () => {
     const mailbox = await fixture.db.query<{ id: string }>(
       `INSERT INTO mailboxes (workspace_id, owner_user_id, email_address)
        VALUES ($1, $2, $3) RETURNING id`,
@@ -170,12 +172,50 @@ describe('the outbound admin routes', () => {
     expect(tooHigh.body['status']).toBe('refused');
     expect(tooHigh.body['reason']).toBe('raise_above_limit');
 
+    // S06: a mailbox on its first day has not finished the schedule. Before lane g87
+    // this answered 200 with an effective cap of 75, which was the whole ramp gone.
+    const unearned = await post('/outbound/cap', adminToken, command({ mailboxId, raiseTo: 75 }));
+    expect(unearned.status).toBe(409);
+    expect(unearned.body['status']).toBe('refused');
+    expect(unearned.body['reason']).toBe('ramp_not_settled');
+    const untouched = await post('/outbound/status', adminToken, { mailboxId });
+    const untouchedRamp = untouched.body['ramp'] as { effectiveCap: number; raisedDailyCap: number | null };
+    expect(untouchedRamp.raisedDailyCap).toBeNull();
+    expect(untouchedRamp.effectiveCap).toBe(5);
+
+    // Settled, but nine healthy sending days since the last bad one: not sustained.
+    await fixture.db.query(
+      'UPDATE mailbox_send_ramp SET healthy_sending_days = 40 WHERE workspace_id = $1 AND mailbox_id = $2',
+      [fixture.alpha.workspaceId, mailboxId],
+    );
+    for (let day = 0; day < 10; day += 1) {
+      await fixture.db.query(
+        `INSERT INTO mailbox_send_days (workspace_id, mailbox_id, business_date, automated_sent, cap_granted, healthy, closed_at)
+         VALUES ($1, $2, '2026-08-01'::date + $3::integer, 20, 50, $4, now() - interval '1 hour')`,
+        [fixture.alpha.workspaceId, mailboxId, day, day !== 0],
+      );
+    }
+    const unsustained = await post('/outbound/cap', adminToken, command({ mailboxId, raiseTo: 75 }));
+    expect(unsustained.status).toBe(409);
+    expect(unsustained.body['reason']).toBe('health_not_sustained');
+
+    // Ten in a row, and the raise is the cap in force.
+    await fixture.db.query(
+      `INSERT INTO mailbox_send_days (workspace_id, mailbox_id, business_date, automated_sent, cap_granted, healthy, closed_at)
+       VALUES ($1, $2, '2026-08-11', 20, 50, true, now() - interval '1 hour')`,
+      [fixture.alpha.workspaceId, mailboxId],
+    );
     const raised = await post('/outbound/cap', adminToken, command({ mailboxId, raiseTo: 75 }));
+    expect(raised.status).toBe(200);
     expect((raised.body['result'] as { effectiveCap: number }).effectiveCap).toBe(75);
 
     // And lowering wins over the raise, because an incident is today.
     const lowered = await post('/outbound/cap', adminToken, command({ mailboxId, raiseTo: 75, lowerTo: 5 }));
     expect((lowered.body['result'] as { effectiveCap: number }).effectiveCap).toBe(5);
+
+    // Clearing only the lowering leaves the raise where it was: absent is not null.
+    const restored = await post('/outbound/cap', adminToken, command({ mailboxId, lowerTo: null }));
+    expect((restored.body['result'] as { effectiveCap: number }).effectiveCap).toBe(75);
   });
 
   it('12.5: refuses to resolve a fence that is not unknown_terminal', async () => {

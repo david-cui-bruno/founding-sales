@@ -5,7 +5,15 @@ import { readSetting } from '../settings/store.ts';
 import { firstSuppressed } from '../suppression/effective.ts';
 import { localParts } from '../src/index.ts';
 import { businessDateOf } from '../today/snapshots.ts';
-import { effectiveDailyCap, ensureRamp, openSendDay, type RampRow, type SendDayRow } from './ramp.ts';
+import {
+  dailyCapInForce,
+  ensureRamp,
+  openSendDay,
+  readAccountHeadroom,
+  type AccountHeadroom,
+  type RampRow,
+  type SendDayRow,
+} from './ramp.ts';
 import { decideStepPermission, dispatchHolidayCalendar, insideSendingWindow } from './stepPermission.ts';
 import {
   authenticationPasses,
@@ -89,6 +97,8 @@ export interface SendPlan {
   readonly ramp: RampRow;
   readonly day: SendDayRow;
   readonly cap: number;
+  /** 12.7's operational headroom on the claim's business date (lane g87). */
+  readonly account: AccountHeadroom;
   readonly guard: DomainGuardDecision;
 }
 
@@ -197,13 +207,37 @@ export async function decideSend(
   // (lane g77). The fence's `business_date` is the date its placement planned; a fence
   // held by yesterday's cap and sent today is today's send, and charging it to
   // yesterday would both spend a closed day and leave today's allowance untouched.
+  //
+  // The cap is the one in force *now* (lane g87, S06): a stored admin raise lifts it
+  // only while the mailbox has finished the schedule and kept its last ten sending
+  // days healthy, and otherwise the schedule governs today.
   const ramp = await ensureRamp(context, mailbox.id);
-  const cap = effectiveDailyCap(ramp);
+  const cap = await dailyCapInForce(context, ramp);
   const businessDate = await businessDateOf(context, now.toISOString());
   const day = await openSendDay(context, { mailboxId: mailbox.id, businessDate, cap });
-  if (day.automatedSent >= cap) return refuseSend('daily_cap', `${String(day.automatedSent)}/${String(cap)}`);
+  if (day.automatedSent >= cap) {
+    return refuseSend('daily_cap', `automated ${String(day.automatedSent)}/${String(cap)}`);
+  }
 
-  const guard = await decideDomainGuard(context, { recipientAddress: fence.recipientAddress, domain });
+  // 12.7's operational headroom (lane g87, S07): every outgoing message of this
+  // account, the person's own included, on today's business date and yesterday's,
+  // against Google's per-account limit less the sync-lag reserve. The same refusal as
+  // the cap, because it is the same kind of fact — this mailbox has sent enough for
+  // now, and time lifts it — and the detail says which ceiling it was. `openSendDay`
+  // above locked today's row inside the claim, so two claims read it in turn.
+  const account = await readAccountHeadroom(context, { mailboxId: mailbox.id, businessDate, today: day });
+  if (!account.allowed) {
+    return refuseSend('daily_cap', `account ${String(account.used)}/${String(account.ceiling)}`);
+  }
+
+  // 12.6 (lane g87, S08): serialized across the workspace for a personal-Gmail
+  // recipient, so a claim counts every send claimed before it — in doubt included —
+  // and the next claim counts this one.
+  const guard = await decideDomainGuard(context, {
+    recipientAddress: fence.recipientAddress,
+    domain,
+    serialize: true,
+  });
   if (!guard.allowed) {
     return refuseSend('domain_guard', `${String(guard.used)}/${String(guard.guard)}`);
   }
@@ -215,6 +249,7 @@ export async function decideSend(
     ramp,
     day,
     cap,
+    account,
     guard,
   });
 }
