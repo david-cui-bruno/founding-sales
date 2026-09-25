@@ -2,10 +2,13 @@
  * Every alarm metric this process does *not* publish, and what raises it instead.
  *
  * `infra/modules/alerts/main.tf` is the contract: each entry of `local.alarms` watches
- * one metric name. `packages/domain/jobs/metrics.ts` publishes the ones that can be
- * read out of the job, heartbeat, canary and alert tables. The rest are here, each
- * with the mechanism that raises it, and `test/metricCoverage.test.ts` starts the real
- * worker, records what it publishes, and fails when an alarm name is in neither list.
+ * one metric name. The worker's metric loop publishes the ones its collectors read out
+ * of the database: `packages/domain/jobs/metrics.ts` (the job, heartbeat, canary and
+ * alert tables), the mail and outbound lanes' gauges, and since lane g67 the Today
+ * lane's `TodaySnapshotMissing` (`packages/domain/today/metrics.ts`). The rest are
+ * here, each with the mechanism that raises it, and `test/metricCoverage.test.ts`
+ * starts the real worker, records what it publishes, and fails when an alarm name is
+ * in neither list.
  *
  * An alarm over a metric nobody emits never fires, and an operator who has seen the
  * alarm exist will believe it is watching. That is worse than having no alarm, so the
@@ -43,14 +46,7 @@ export const APPLICATION_RAISED_METRICS: Readonly<Record<string, ApplicationRais
     why: 'the outbound fence lane raises it from the send path (Appendix B)',
   },
 
-  // Owned by the lanes that build the tables they are read from. Each one is a metric
-  // the worker will publish once that table exists, through the same metric loop.
-  TodaySnapshotMissing: {
-    raisedBy: 'later_lane',
-    detail: 'today list',
-    // `today_snapshots` exists (migration 0008) but no collector reads it, so the
-    // alarm, whose missing data is ignored, is INSUFFICIENT_DATA before and after the
-    // first 05:00 snapshot alike (docs/greenfield/release.md 8.0z).
-    why: 'nothing publishes it yet; 13.3 alarms when the 05:00 snapshot is absent at 05:10 workspace time',
-  },
+  // A metric owed by a later lane goes here with `raisedBy: 'later_lane'` until that
+  // lane's collector joins the metric loop. The last one, `TodaySnapshotMissing`, left
+  // this list in lane g67.
 });

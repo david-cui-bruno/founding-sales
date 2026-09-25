@@ -137,6 +137,12 @@ A workspace whose scheduler was down at 05:00 gets its list on the first pass af
 comes back, which is also what makes 13.3's "Today snapshot absent at 05:10 workspace
 time" an alarm about a real outage.
 
+That alarm reads `TodaySnapshotMissing`, which the worker's metric loop publishes on
+every pass (lane g67, `packages/domain/today/metrics.ts`): 1 when a workspace is at or
+past 05:10 local and that business date's job, under the current algorithm version, is
+not `done`; otherwise 0. It reads the job and not `today_snapshots`, because a workspace
+with no firms is built and still has no snapshot rows.
+
 `TODAY_ALGORITHM_VERSION` in TypeScript and `today_algorithm_version()` in SQL are the
 same string, and a test compares them.
 

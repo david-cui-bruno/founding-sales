@@ -451,5 +451,7 @@ describe('counters, heartbeats, the canary and alerts', () => {
     expect(METRIC_OWNERS['OutboundSafetyInvariantFailures']).toBe('log_derived');
     // And the one G1 asked this lane for.
     expect(METRIC_OWNERS['UnacknowledgedCriticalAlertAgeSeconds']).toBe('jobs');
+    // Published by the Today collector since g67, so no longer owed by a later lane.
+    expect(METRIC_OWNERS['TodaySnapshotMissing']).toBe('today');
   });
 });
