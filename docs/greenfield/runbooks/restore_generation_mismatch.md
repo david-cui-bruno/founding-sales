@@ -26,6 +26,15 @@ This is Appendix E step 1 working. Two very different situations produce it:
 
 ## Safe recovery
 
+The worker that logged this has already opened one `restore_in_progress` hold per
+workspace (lane g56). A restart never adds a second one.
+`fss admin holds list --reason restore_in_progress` shows them. If the database was
+restored deliberately, the pin (`expected_system_generation`) is the restored copy's
+generation plus one, and step 9 below lands the database on exactly that number. If it
+was not restored, the pin is wrong. Set it to the database's generation and apply, then
+release the holds the wrong pin opened. Step 9 is the only thing that releases a
+restore hold, so `docs/greenfield/release.md` 7.1 covers it.
+
 Run Appendix E in order and do not skip a step:
 
 1. Replay the suppression journal from the restore point minus one hour, inserting

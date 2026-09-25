@@ -87,7 +87,8 @@ export async function checkWorkerStartup(options: WorkerStartupOptions): Promise
 
 /**
  * Whether a restore has left the database on a generation the operator did not expect.
- * The worker reports it; releasing the restore holds is an admin command (Appendix E 9).
+ * `enforceRestoreGeneration` (bootstrap/restoreGeneration.ts) applies the same rule and
+ * opens the restore holds; releasing them is an admin command (Appendix E 9).
  */
 export function restoreSuspected(report: WorkerStartupReport, expectedSystemGeneration: number | undefined): boolean {
   if (expectedSystemGeneration === undefined) return false;
@@ -125,6 +126,11 @@ export {
 } from './bootstrap/config.ts';
 export { APPLICATION_RAISED_METRICS, type ApplicationRaisedMetric, type MetricRaiser } from './bootstrap/metricCoverage.ts';
 export { createLiveness, noLiveness, type Liveness } from './bootstrap/liveness.ts';
+export {
+  enforceRestoreGeneration,
+  type RestoreGenerationCheck,
+  type RestoreGenerationOptions,
+} from './bootstrap/restoreGeneration.ts';
 export { suppressionFinalizeJobHandler } from './handlers/suppressionFinalize.ts';
 export {
   TODAY_BUILD_LOCAL_MINUTE,

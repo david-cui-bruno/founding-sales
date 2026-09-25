@@ -18,6 +18,7 @@ import {
   mailboxReconcileSentCommand,
   mailboxRecoverCommand,
   mailboxWatchRenewCommand,
+  restoreHoldsOpenCommand,
   restoreReportCommand,
   schedulerRunOnceCommand,
   suppressionJournalReplayCommand,
@@ -175,6 +176,7 @@ const ADMIN_COMMANDS: Readonly<Record<string, AdminRunner>> = Object.freeze({
   'scheduler run-once': schedulerRunOnceCommand,
   'restore-report': restoreReportCommand,
   'system-generation advance': systemGenerationAdvanceCommand,
+  'restore-holds open': restoreHoldsOpenCommand,
 });
 
 async function report(path: string | undefined, value: unknown): Promise<void> {
@@ -217,6 +219,7 @@ async function adminInvocation(
   session: SessionQueryable,
   config: ToolConfig,
   environment: Readonly<Record<string, string | undefined>>,
+  log: Logger,
 ): Promise<AdminInvocation | { readonly refusal: AdminOutcome }> {
   const mode = COMMAND_DEPENDENCIES[name] ?? 'database';
   const base: AdminInvocation = {
@@ -225,6 +228,7 @@ async function adminInvocation(
     environment,
     options: parsed.options,
     switches: parsed.switches,
+    log,
   };
   if (mode === 'database') return base;
   if (mode === 'journal') {
@@ -250,6 +254,7 @@ async function runCommand(
   migrationSession: SessionQueryable | null,
   config: ToolConfig,
   environment: Readonly<Record<string, string | undefined>>,
+  log: Logger,
 ): Promise<AdminOutcome> {
   const { spec, options, switches } = parsed;
   const path = spec.path.join(' ');
@@ -332,6 +337,7 @@ async function runCommand(
         environment,
         journalSource: await resolveJournalSource(config),
         mail: resolvedMail.mail,
+        log,
       },
       ...(options['--baseline'] === undefined ? {} : { baselinePath: options['--baseline'] }),
       ...(options['--baseline-json'] === undefined ? {} : { baselineJson: options['--baseline-json'] }),
@@ -339,6 +345,7 @@ async function runCommand(
       reportsDirectory: options['--reports'] ?? '',
       ...(options['--from'] === undefined ? {} : { replayFrom: options['--from'] }),
       ...(options['--since'] === undefined ? {} : { since: options['--since'] }),
+      ...(options['--expected-generation'] === undefined ? {} : { expectedGeneration: options['--expected-generation'] }),
       ...(adminUserId === undefined || adminUserId.length === 0 ? {} : { adminUserId }),
     });
     if (outcome.ok) return { ok: true, value: { ...outcome.value } };
@@ -390,7 +397,7 @@ async function runCommand(
   const admin = ADMIN_COMMANDS[name];
   if (admin === undefined) return { ok: false, reason: 'command_unimplemented', detail: path };
 
-  const resolved = await adminInvocation(name, parsed, session, config, environment);
+  const resolved = await adminInvocation(name, parsed, session, config, environment, log);
   if ('refusal' in resolved) return resolved.refusal;
   return await admin(resolved);
 }
@@ -466,6 +473,7 @@ export async function main(
       migrationClient === null ? null : asSession(migrationClient),
       config,
       environment,
+      log,
     );
     if (!outcome.ok) {
       log.log('error', 'fss_refused', { command: parsed.value.spec.path.join(' '), reason: outcome.reason, detail: outcome.detail });

@@ -1,6 +1,8 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { SessionQueryable } from '@fss/domain/db';
+import { readSystemGeneration, type SessionQueryable } from '@fss/domain/db';
+import { enforceRestoreGeneration } from '../../bootstrap/restoreGeneration.ts';
+import { createLogger, type Logger } from '../../bootstrap/log.ts';
 import {
   countsCommand,
   holdsListCommand,
@@ -9,6 +11,7 @@ import {
   mailboxReconcileSentCommand,
   mailboxRecoverCommand,
   mailboxWatchRenewCommand,
+  restoreHoldsOpenCommand,
   restoreReportCommand,
   schedulerRunOnceCommand,
   suppressionJournalReplayCommand,
@@ -20,8 +23,9 @@ import {
 import { runMigrate, readSchemaVersionReport } from './migrate.ts';
 
 /**
- * `fss drill` (David's condition 4, 21 September): Appendix E steps 2 to 9 in one
- * process.
+ * `fss drill` (David's condition 4, 21 September): Appendix E steps 1 to 9 in one
+ * process. Step 1a, the generation check that opens the restore holds, and the
+ * reconciliation after step 9 are lane g56's.
  *
  * The runner keeps the control-plane steps — the point-in-time restore, the service
  * redeployment, the alarm reads, the snapshots and the teardown — because those need
@@ -90,6 +94,15 @@ export interface DrillInput {
   /** Appendix E.3 and E.4's "minus ten minutes". Derived from the baseline when absent. */
   readonly since?: string | undefined;
   readonly adminUserId?: string | undefined;
+  /**
+   * Lane g56: the generation the operator expects, as the flag's text. The rehearsal
+   * passes the source baseline's `systemGeneration` plus one, which is what an operator
+   * pins production to after a restore. With it, step 1a runs
+   * `admin restore-holds open` — the worker's own startup check — against the restored
+   * copy, and step 9 is followed by the reconciliation. Without it the drill asserts
+   * step 1 against whatever holds a worker pinned ahead of this database opened.
+   */
+  readonly expectedGeneration?: string | undefined;
 }
 
 const minus = (instant: string, seconds: number): string =>
@@ -123,6 +136,48 @@ async function step(
   if (!outcome.ok) return { step: name, ok: false, failure: `${outcome.reason}: ${outcome.detail}`, report };
   const failure = assertion(outcome.value);
   return { step: name, ok: failure === null, failure, report };
+}
+
+export interface GenerationReconciliation {
+  readonly generation: number | null;
+  readonly expectedGeneration: number;
+  /** False when the database is not on the pin, in which case the check was not run. */
+  readonly reconciled: boolean;
+  readonly mismatch?: boolean;
+  readonly holdsOpened?: number;
+  readonly restoreHoldsInForce?: number;
+}
+
+/**
+ * After step 9 (lane g56): is the database on the pin step 1a used, and does the
+ * worker's own startup check, run with that pin, now hold nothing?
+ *
+ * That is the steady state an operator leaves production in after a restore. When the
+ * database is on another generation the check is deliberately *not* run: it would open
+ * the restore holds again on a database step 9 has just released, which is the loop a
+ * pin that disagrees with step 9 would put production in.
+ */
+export async function reconcileGenerationAfterAdvance(
+  session: SessionQueryable,
+  expectedGeneration: number,
+  log: Logger,
+): Promise<GenerationReconciliation> {
+  const generation = await readSystemGeneration(session);
+  if (generation !== expectedGeneration) return { generation, expectedGeneration, reconciled: false };
+  const check = await enforceRestoreGeneration(session, {
+    expectedGeneration,
+    observedGeneration: generation,
+    openedBy: 'fss',
+    log,
+  });
+  return {
+    generation,
+    expectedGeneration,
+    reconciled: true,
+    mismatch: check.mismatch,
+    holdsOpened: check.holdsOpened,
+    restoreHoldsInForce: check.restoreHoldsInForce,
+  };
 }
 
 export async function runDrill(input: DrillInput): Promise<DrillResult> {
@@ -252,19 +307,49 @@ export async function runDrill(input: DrillInput): Promise<DrillResult> {
   // Step 9's selectivity is measured before anything is released (4.3).
   const otherHoldsBefore = await holdsCount({ '--exclude-reason': 'restore_in_progress' });
 
+  // Step 1a (lane g56): the generation check the worker runs at startup, against the
+  // restored copy, with the generation the operator would pin. It opens the restore
+  // holds and logs `restore_generation_mismatch` into this task's stream in the worker
+  // log group, which is what raises the immediately-critical alarm. Until this lane
+  // nothing opened a restore hold anywhere, and the drill stopped at step 1 on the
+  // first run that reached it (36062337914, 24 September 2026).
+  const expectedGeneration = input.expectedGeneration;
+  if (expectedGeneration !== undefined) {
+    steps.push(
+      await step(
+        'step1a-generation-check',
+        directory,
+        async () => await restoreHoldsOpenCommand(invoke({ '--expected-generation': expectedGeneration })),
+        report => {
+          if (report['mismatch'] !== true) return `the generation check found no mismatch: ${JSON.stringify(report)}`;
+          if (number(report['restoreHoldsInForce']) < 1) {
+            return `the generation check held no workspace: ${JSON.stringify(report)}`;
+          }
+          return null;
+        },
+      ),
+    );
+  }
+
   // Step 1's assertion, which is the one that makes every step after it mean
   // something: the restored database holds sending and dialing.
-  steps.push(
-    await step(
-      'step1-restore-holds',
-      directory,
-      async () => await holdsListCommand(invoke({ '--reason': 'restore_in_progress' })),
-      report =>
-        number(report['count']) >= 1
-          ? null
-          : 'the restored database did not open a restore hold. Stop the drill and fail the release.',
-    ),
-  );
+  if (steps.every(entry => entry.ok)) {
+    steps.push(
+      await step(
+        'step1-restore-holds',
+        directory,
+        async () => await holdsListCommand(invoke({ '--reason': 'restore_in_progress' })),
+        report =>
+          number(report['count']) >= 1
+            ? null
+            : `the restored database did not open a restore hold. Stop the drill and fail the release.${
+                expectedGeneration === undefined
+                  ? ' No --expected-generation was given, so nothing in this drill checked the generation: pass the source baseline\'s systemGeneration plus one, or point a worker pinned ahead at this database.'
+                  : ''
+              }`,
+      ),
+    );
+  }
   if (steps.every(entry => entry.ok)) {
     steps.push(
       await step(
@@ -481,6 +566,43 @@ export async function runDrill(input: DrillInput): Promise<DrillResult> {
           if (number(report['otherHoldsAfter']) !== otherHoldsBefore) {
             return `advancing the generation cleared ${String(otherHoldsBefore - number(report['otherHoldsAfter']))} unrelated holds`;
           }
+          return null;
+        },
+      ),
+    );
+  }
+
+  // Step 9's consequence (lane g56). Step 9 moved the database's generation, so the
+  // pin step 1a used must now *be* the database's generation: that is the steady state
+  // an operator leaves production in after a restore, and a worker restarted with it
+  // must hold nothing. If step 9 landed anywhere else, a worker restarted with the pin
+  // would reopen the restore holds the moment it started, and releasing those would
+  // need another advance — so that is a failed drill, stated with both numbers, and
+  // the check is not run against a database it would hold again.
+  if (expectedGeneration !== undefined && steps.every(entry => entry.ok)) {
+    steps.push(
+      await step(
+        'step9-generation-reconciled',
+        directory,
+        async () => ({
+          ok: true,
+          value: {
+            ...(await reconcileGenerationAfterAdvance(
+              input.session,
+              Number(expectedGeneration),
+              input.invocation.log ??
+                createLogger({ component: 'fss', instanceKey: 'drill', write: line => void process.stderr.write(`${line}\n`) }),
+            )),
+          },
+        }),
+        report => {
+          if (report['reconciled'] !== true) {
+            return `step 9 advanced the generation to ${String(report['generation'])} and the pin is ${String(report['expectedGeneration'])}: a worker restarted with that pin would reopen the restore holds`;
+          }
+          if (report['mismatch'] !== false || number(report['holdsOpened']) !== 0) {
+            return `the generation check with the step 1a pin still found a restore: ${JSON.stringify(report)}`;
+          }
+          if (number(report['restoreHoldsInForce']) !== 0) return 'a restore hold is in force after step 9';
           return null;
         },
       ),

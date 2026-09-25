@@ -247,6 +247,25 @@ variable "sending_enabled" {
   default     = false
 }
 
+variable "expected_system_generation" {
+  description = <<-EOT
+    Appendix E step 1: the generation the API and worker services expect the
+    database to report, as FSS_EXPECTED_SYSTEM_GENERATION. Null: unpinned,
+    and the worker makes no generation check.
+    Production is unpinned in code. `docs/greenfield/release.md` ("The
+    expected system generation") says how to read the database's generation
+    with an operations task, how to pin it, and what to set after a restore:
+    the restored copy's generation plus one, never after step 9.
+  EOT
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.expected_system_generation == null ? true : (var.expected_system_generation >= 1 && floor(var.expected_system_generation) == var.expected_system_generation)
+    error_message = "expected_system_generation is a positive whole number, or null for unpinned. The bootstraps refuse anything else at startup."
+  }
+}
+
 variable "extra_environment" {
   description = "Any further non-secret environment variable both tasks need. Never a credential: secrets reach a container only as a Secrets Manager reference."
   type        = map(string)

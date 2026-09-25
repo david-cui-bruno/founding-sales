@@ -156,8 +156,8 @@ output "api_environment" {
 }
 
 output "worker_environment" {
-  description = "Non-secret worker environment, for offline assertions. Never contains a credential."
-  value       = local.worker_environment
+  description = "Non-secret environment of the worker service's task definition, for offline assertions. Never contains a credential. The one-off definitions carry the same minus FSS_EXPECTED_SYSTEM_GENERATION."
+  value       = local.worker_service_environment
 }
 
 output "secret_environment_names" {

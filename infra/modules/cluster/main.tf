@@ -61,6 +61,15 @@ locals {
     AWS_REGION           = var.aws_region
   })
 
+  # Appendix E step 1, on the two services only (lane g56). Absent rather than
+  # empty when unpinned: both bootstraps read an absent variable as "the check is
+  # not made" and refuse an empty one. The one-off definitions below are built from
+  # `worker_environment`, not from `worker_service_environment`, so a pin never
+  # reaches them; the commands that need a generation take it as a flag.
+  generation_environment = var.expected_system_generation == null ? {} : {
+    FSS_EXPECTED_SYSTEM_GENERATION = tostring(var.expected_system_generation)
+  }
+
   api_environment = merge(local.common_environment, var.api_environment, {
     FSS_ROLE        = "api"
     FSS_SCHEMA_MIN  = tostring(var.api_schema_range.min)
@@ -68,13 +77,16 @@ locals {
     PORT            = tostring(var.container_port)
     FSS_HTTP_PORT   = tostring(var.container_port)
     FSS_JOURNAL_ARN = var.journal_bucket_arn
-  })
+  }, local.generation_environment)
 
   worker_environment = merge(local.common_environment, var.worker_environment, {
     FSS_ROLE       = "worker"
     FSS_SCHEMA_MIN = tostring(var.worker_schema_range.min)
     FSS_SCHEMA_MAX = tostring(var.worker_schema_range.max)
   })
+
+  # What the worker *service* runs with: the one-off environment plus the pin.
+  worker_service_environment = merge(local.worker_environment, local.generation_environment)
 
   task_secrets = merge(var.secret_arns, { DATABASE_SECRET_ARN = var.app_runtime_database_secret_arn })
 
@@ -603,9 +615,9 @@ resource "aws_ecs_task_definition" "worker" {
       image     = var.worker_image
       essential = true
 
-      environment = [for name in sort(keys(local.worker_environment)) : {
+      environment = [for name in sort(keys(local.worker_service_environment)) : {
         name  = name
-        value = local.worker_environment[name]
+        value = local.worker_service_environment[name]
       }]
 
       secrets = [for name in sort(keys(local.task_secrets)) : {

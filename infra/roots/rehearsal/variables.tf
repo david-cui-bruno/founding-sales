@@ -302,6 +302,25 @@ variable "sending_enabled" {
   default     = false
 }
 
+variable "expected_system_generation" {
+  description = <<-EOT
+    Appendix E step 1: the generation the API and worker services expect the
+    database to report, as FSS_EXPECTED_SYSTEM_GENERATION. Null: unpinned,
+    and the worker makes no generation check.
+    Nothing in the release workflow sets it. The restore drill pins its own
+    one-off task instead (`fss drill --expected-generation`), because the
+    rehearsal's services run against the source database, not the restored
+    copy.
+  EOT
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.expected_system_generation == null ? true : (var.expected_system_generation >= 1 && floor(var.expected_system_generation) == var.expected_system_generation)
+    error_message = "expected_system_generation is a positive whole number, or null for unpinned. The bootstraps refuse anything else at startup."
+  }
+}
+
 variable "extra_environment" {
   description = "Any further non-secret environment variable both rehearsal tasks need. Never a credential."
   type        = map(string)

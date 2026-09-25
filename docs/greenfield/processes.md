@@ -75,9 +75,13 @@ datum and sends nothing, so a wrong unit or an unknown metric name fails on a la
 
 **Startup** refuses a database outside the declared schema range and exits 10 (4.2,
 `docs/decisions/g5-schema-range.md`). It does *not* refuse a restored database: restore
-holds are what stop sending and dialing, so the worker runs and logs
-`restore_generation_mismatch`, which is the event `infra/modules/observability`
-turns into the immediately-critical `RestoreGenerationMismatches` metric.
+holds are what stop sending and dialing, so when the database's `system_generation` is
+not `FSS_EXPECTED_SYSTEM_GENERATION` the worker opens one `restore_in_progress` hold
+per workspace (idempotently; `openRestoreHolds` in `packages/domain/restore/holds.ts`),
+logs `restore_generation_mismatch`, which is the event `infra/modules/observability`
+turns into the immediately-critical `RestoreGenerationMismatches` metric, and runs.
+Until lane g56 it only logged, and nothing anywhere opened a restore hold
+(`docs/decisions/g56-restore-holds-are-opened-by-the-generation-check.md`).
 
 **Stopping** drains. `SIGTERM` sets every loop stopping and waits for the pass in
 flight, so the job being run finishes inside the lease it already holds. The budget is
@@ -142,7 +146,7 @@ startup line names every decision and no credential.
 | `FSS_SCHEMA_MIN`, `FSS_SCHEMA_MAX` | ✓ | the range the *task definition* believes this image accepts. A disagreement with the binary is a stale deployment and is refused at startup. |
 | `DATABASE_SECRET_ARN` | ✓ | the Secrets Manager **value**, injected by the ECS `secrets` block. An ARN arriving here means the task definition used `environment` instead, and that is refused rather than diagnosed later as "database unreachable". |
 | `DATABASE_URL` | ✓ | the alternative, for a laptop and for rehearsal. |
-| `FSS_EXPECTED_SYSTEM_GENERATION` | ✓ | Appendix E step 1. Absent means the check is not made. |
+| `FSS_EXPECTED_SYSTEM_GENERATION` | ✓ | Appendix E step 1, from `expected_system_generation` in the root, on the two services only. Absent means the check is not made. On a mismatch the worker opens the restore holds and the API fails `/readyz`. |
 | `AWS_REGION`, `FSS_METRIC_NAMESPACE` | ✓ | where metrics go. The namespace is the environment's own, `FSS/<name prefix>` (`FSS/fss-prod`, `FSS/fss-rh-<run>`), derived once in `infra/modules/stack`; the task roles may publish nowhere else. It has no default: a worker that would publish (a region is set and `FSS_METRICS` is not `off`) refuses to start without one, and refuses one that is not `FSS/` followed by `FSS_NAME_PREFIX`. The bare `FSS` was shared by every environment in the account (g42, lane g55). |
 | `FSS_METRICS` | worker | `on`, `off` or `auto` (default). `on` with no usable transport is a refusal; `auto` degrades to the validating no-op and says so. |
 | `FSS_WORKER_CONCURRENCY` | worker | runner slots. Default 1. |
@@ -189,7 +193,7 @@ The log events that become metrics, and who writes them:
 
 | Event | Written by | Metric |
 |---|---|---|
-| `restore_generation_mismatch` | the worker, at startup | `RestoreGenerationMismatches` |
+| `restore_generation_mismatch` | the worker at startup, and `fss admin restore-holds open` (so `fss drill` step 1a), when the generation is not the expected one | `RestoreGenerationMismatches` |
 | `job_dead` | the worker, one line per dead job | `DeadJobs` |
 | `refusal` | the API, one line per refusal, with `reason` | `Refusals` |
 | `level: "error"` | both | `ApiErrors`, `WorkerErrors` |
@@ -262,11 +266,21 @@ is whose `INSERT` is in doubt, and it reports `persisted: false` after re-readin
 read-only check passes against a user who has lost `INSERT`, a full volume and a read
 replica, and each of those is a deployment that looks ready and is not.
 
+**`fss admin restore-holds open --expected-generation <n>`** is Appendix E step 1 by
+hand: the worker's own startup check (`enforceRestoreGeneration`,
+`apps/worker/src/bootstrap/restoreGeneration.ts`) against whatever database the task
+was pointed at. An operator runs it against a restored instance *before* any service is
+pointed there, so that neither the API's dial gate nor an early worker ever sees that
+database unheld. It refuses a generation equal to the database's (`generation_matches`),
+because then it would hold nothing.
+
 **`fss drill`** runs the restore drill's database-level steps — the baseline counts as of
-the restore instant, the restore holds and the refused dial, the journal replay twice,
+the restore instant, the generation check with `--expected-generation` (step 1a, lane
+g56), the restore holds and the refused dial, the journal replay twice,
 the Sent reconciliation and the inbox recovery, the job discard and the scheduler pass,
 the watch renewal and coverage, the migrations reapplied with both ranges checked, the
-reconciliation report and the generation advance — in one process, writing
+reconciliation report, the generation advance and the check that it landed on the pin —
+in one process, writing
 `<dir>/<step>.json` as each step finishes and stopping at the first failure with the
 step named. The runner keeps the control-plane steps: the point-in-time restore, the
 service redeployments, the alarm reads, the snapshots and the teardown.
@@ -320,7 +334,7 @@ otherwise would start a worker every time an operator asked it for a migration.
 | Task definition | Identity | Reads | Runs |
 |---|---|---|---|
 | `<prefix>-migration` | `<prefix>-migration-task` / `<prefix>-migration-exec` | `migration-database` as `MIGRATION_DATABASE_SECRET`, `app-runtime-database` as `FSS_RUNTIME_DATABASE_SECRET_ARN`. **No runtime connection at all** | `migrate`, `admin database-users ensure` |
-| `<prefix>-operations` | the worker task role / worker execution role | `app-runtime-database` as `DATABASE_SECRET_ARN`, plus the application secrets | `verify` |
+| `<prefix>-operations` | the worker task role / worker execution role | `app-runtime-database` as `DATABASE_SECRET_ARN`, plus the application secrets | `verify`, `admin counts`, `admin restore-holds open` |
 | `<prefix>-drill` | `<prefix>-drill-task` / `<prefix>-drill-exec` | both connections; journal **read** only; `FSS_DEPENDENCIES=recorded` fixed in the definition | `drill` |
 
 Three rather than one, because of what each needs and what each must not have.

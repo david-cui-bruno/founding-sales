@@ -535,3 +535,41 @@ run "the_assume_flag_chooses_a_credential_path_and_not_a_plan" {
     error_message = "The namespace refusal is a property of the root, not of the credential path, so it holds with the assumption turned off too."
   }
 }
+
+# Lane g56. The rehearsal's services run against the source database and are never
+# pinned by the workflow; the restore drill pins its own one-off task with
+# `--expected-generation`. The variable still reaches both services, because the
+# rehearsal root is the production root's rehearsal.
+run "the_rehearsal_is_unpinned_unless_told" {
+  command = plan
+
+  assert {
+    condition = (!contains(keys(module.stack.api_environment), "FSS_EXPECTED_SYSTEM_GENERATION")
+    && !contains(keys(module.stack.worker_environment), "FSS_EXPECTED_SYSTEM_GENERATION"))
+    error_message = "Nothing pins a rehearsal's services by default."
+  }
+}
+
+run "a_rehearsal_pin_reaches_both_services" {
+  command = plan
+
+  variables {
+    expected_system_generation = 5
+  }
+
+  assert {
+    condition = (module.stack.api_environment["FSS_EXPECTED_SYSTEM_GENERATION"] == "5"
+    && module.stack.worker_environment["FSS_EXPECTED_SYSTEM_GENERATION"] == "5")
+    error_message = "The same control as production, to the same two services."
+  }
+}
+
+run "a_rehearsal_generation_below_one_is_refused" {
+  command = plan
+
+  variables {
+    expected_system_generation = 0
+  }
+
+  expect_failures = [var.expected_system_generation]
+}

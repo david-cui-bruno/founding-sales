@@ -325,6 +325,9 @@ describe('Appendix G 11: the drill is handed the baseline measured on the source
     workspaces: [
       { workspaceId: '00000000-0000-4000-8000-000000000001', sends: 2, replies: 3, suppressions: 4, crm_edits: 5 },
     ],
+    // Lane g56. Measured with the counts, never handed over with them: the runner
+    // pins the restored copy one ahead of it with --expected-generation instead.
+    systemGeneration: 1,
   };
   /** What the drill task is handed: the instant and the five counts, on one line. */
   const handed = '{"asOf":"2026-09-21T00:00:00Z","sends":2,"replies":3,"suppressions":4,"crm_edits":5,"migrations":30}';
@@ -365,7 +368,7 @@ describe('Appendix G 11: the drill is handed the baseline measured on the source
     const words = (line ?? '').split(' ');
     const value = words[words.indexOf('--baseline-json') + 1];
     expect(value).toBe(handed);
-    expect(JSON.parse(value ?? '')).toEqual({ ...measured, workspaces: undefined });
+    expect(JSON.parse(value ?? '')).toEqual({ ...measured, workspaces: undefined, systemGeneration: undefined });
     expect(line).not.toContain('--as-of');
   });
 
@@ -444,5 +447,172 @@ describe('Appendix G 11: the drill is handed the baseline measured on the source
     };
     expect(overrides.containerOverrides[0]?.name).toBe('drill');
     expect(overrides.containerOverrides[0]?.command).toEqual(command);
+  });
+});
+
+/**
+ * Lane g56: the drill pins the restored copy one generation ahead of the source, and
+ * the runner reads both halves of step 1's alarm.
+ *
+ * The fourteenth full run (36062337914, 24 September 2026) passed step 0 and stopped at
+ * step 1 because nothing opened a restore hold: the worker only logged a mismatch, and
+ * nothing ever gave it a generation to compare with. `fss admin counts` now reports the
+ * source's `systemGeneration`; the runner refuses a baseline without it before the
+ * restore, and launches `fss drill --expected-generation <that + 1>`, whose step 1a
+ * runs the worker's own startup check against the restored copy.
+ *
+ * ## The vacuous-pass traps, named
+ *
+ * Three. The plan line is not the launch: a script whose plan says
+ * `--expected-generation` while its real `drill_task` does not passes a plan-only
+ * check, so the real launch is read through the extractor. A pin that is merely
+ * present could be the source's own generation, which holds nothing, so the value is
+ * read out of the plan and must be the baseline's plus one. And "the alarm fired" read
+ * from a runner that never looks would pass every time, so the runner is handed a log
+ * without the mismatch line, and an alarm history without a transition to ALARM, and
+ * each must fail it.
+ */
+describe('Appendix G 11: the drill pins the restored copy ahead of the source (lane g56)', () => {
+  const SCRIPT = 'infra/scripts/rehearsal-restore-drill.sh';
+  const baseline = {
+    asOf: '2026-09-21T00:00:00Z',
+    sends: 2,
+    replies: 3,
+    suppressions: 4,
+    crm_edits: 5,
+    migrations: 30,
+    systemGeneration: 7,
+  };
+
+  function dryRun(
+    files: Readonly<Record<string, string>>,
+    environment: Readonly<Record<string, string>> = {},
+  ): { readonly code: number; readonly output: string } {
+    const reports = mkdtempSync(join(tmpdir(), 'fss-g56-drill-'));
+    for (const [name, text] of Object.entries(files)) writeFileSync(join(reports, name), text);
+    const result = spawnSync(repositoryPath(SCRIPT), ['fss-rh-g56'], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        FSS_REHEARSAL_DRY_RUN: '1',
+        FSS_REHEARSAL_REPORTS: reports,
+        FSS_RESTORE_TARGET: '2026-09-21T00:00:00Z',
+        ...environment,
+      },
+    });
+    return { code: result.status ?? 1, output: `${result.stdout}${result.stderr}` };
+  }
+
+  it('launches the drill with --expected-generation, in the real launch as well as the plan', async () => {
+    const { drillInvocations } = await import('../../apps/worker/src/tools/fss/commands.ts');
+    const launches = drillInvocations(readRepositoryFile(SCRIPT)).filter(invocation => invocation.argv[0] === 'drill');
+    expect(
+      launches.filter(invocation => !invocation.planned).length,
+      'the extractor no longer sees the real drill_task launch, so this check would read the plan alone',
+    ).toBeGreaterThanOrEqual(1);
+    for (const launch of launches) {
+      expect(launch.argv, `${launch.text} does not pin the restored copy, so nothing opens a restore hold`).toContain(
+        '--expected-generation',
+      );
+    }
+  });
+
+  it('pins the source baseline’s generation plus one, never the source’s own', () => {
+    const { code, output } = dryRun({ 'baseline.json': JSON.stringify(baseline) });
+    expect(code, output).toBe(0);
+    const line = output.split('\n').find(entry => entry.startsWith('PLAN fss drill '));
+    expect(line, 'the plan no longer launches the drill').toBeDefined();
+    const words = (line ?? '').split(' ');
+    expect(words[words.indexOf('--expected-generation') + 1]).toBe('8');
+    // Still the six-key baseline of lane g53: the generation travels as the pin only.
+    expect(words[words.indexOf('--baseline-json') + 1]).not.toContain('systemGeneration');
+    expect(output).toContain('the restored copy is held against generation 8');
+  });
+
+  it('refuses a baseline without a generation before the restore, not in the drill task after it', () => {
+    const { code, output } = dryRun({ 'baseline.json': JSON.stringify({ ...baseline, systemGeneration: undefined }) });
+    expect(code).not.toBe(0);
+    expect(output).toContain('carries no systemGeneration');
+    expect(output).not.toContain('restore-db-instance-to-point-in-time');
+  });
+
+  it('fails when the drill’s log holds no restore_generation_mismatch line', () => {
+    const quiet = '{"level":"info","component":"fss","event":"fss_started"}\n';
+    const { code, output } = dryRun({ 'baseline.json': JSON.stringify(baseline), 'drill.log': quiet });
+    expect(code).not.toBe(0);
+    expect(output).toContain('the drill logged no restore_generation_mismatch');
+  });
+
+  it('reads the alarm’s history for a transition to ALARM, and fails without one', () => {
+    const history = (state: string): string =>
+      JSON.stringify({
+        AlarmHistoryItems: [
+          {
+            AlarmName: 'fss-rh-g56-restore-generation-mismatch',
+            HistoryItemType: 'StateUpdate',
+            HistoryData: JSON.stringify({ oldState: { stateValue: 'OK' }, newState: { stateValue: state } }),
+          },
+        ],
+      });
+    const fired = dryRun({ 'baseline.json': JSON.stringify(baseline) }, { FSS_RELEASE_ALARM_HISTORY: history('ALARM') });
+    expect(fired.code, fired.output).toBe(0);
+    expect(fired.output).toContain('fss-rh-g56-restore-generation-mismatch went to ALARM');
+
+    const silent = dryRun({ 'baseline.json': JSON.stringify(baseline) }, { FSS_RELEASE_ALARM_HISTORY: history('OK') });
+    expect(silent.code).not.toBe(0);
+    expect(silent.output).toContain('never went to ALARM');
+
+    // And the credentialed branch asks CloudWatch for the history since the drill began.
+    const planned = dryRun({ 'baseline.json': JSON.stringify(baseline) });
+    expect(planned.output).toMatch(
+      /PLAN aws cloudwatch describe-alarm-history --alarm-name fss-rh-g56-restore-generation-mismatch --history-item-type StateUpdate --start-date \d{4}-\d{2}-\d{2}T/,
+    );
+  });
+
+  it('reads the mismatch and the alarm when the drill held the copy and stopped later, before judging the report', () => {
+    // The next full run is expected to stop at step 1's dial probe (no dialable subject,
+    // release.md 8.0s). The alarm half of step 1 must still be read on that run, so the
+    // runner reads it before the verdict rather than after a pass it will not reach.
+    const stopped = JSON.stringify({
+      ok: false,
+      stoppedAt: 'step1-dial-refused',
+      steps: [
+        { step: 'step1a-generation-check', ok: true, report: { expectedGeneration: 8, mismatch: true, restoreHoldsInForce: 1 } },
+        { step: 'step1-restore-holds', ok: true, report: { count: 1 } },
+        { step: 'step1-dial-refused', ok: false, report: { refused: 'no_dialable_subject' } },
+      ],
+    });
+    const alarm = JSON.stringify({
+      AlarmHistoryItems: [{ HistoryData: JSON.stringify({ newState: { stateValue: 'ALARM' } }) }],
+    });
+    const { code, output } = dryRun(
+      { 'baseline.json': JSON.stringify(baseline), 'drill.json': stopped },
+      { FSS_RELEASE_ALARM_HISTORY: alarm },
+    );
+    expect(code).not.toBe(0);
+    expect(output).toContain('the drill\'s log stream holds restore_generation_mismatch');
+    expect(output).toContain('fss-rh-g56-restore-generation-mismatch went to ALARM');
+    expect(output).toContain('the drill stopped at step1-dial-refused');
+    expect(output.indexOf('went to ALARM')).toBeLessThan(output.indexOf('the drill stopped at step1-dial-refused'));
+
+    // And a drill that never held the copy has no mismatch or alarm to read; the verdict says why.
+    const unheld = JSON.stringify({
+      ok: false,
+      stoppedAt: 'step1a-generation-check',
+      steps: [{ step: 'step1a-generation-check', ok: false, report: { refused: 'generation_matches' } }],
+    });
+    const early = dryRun({ 'baseline.json': JSON.stringify(baseline), 'drill.json': unheld });
+    expect(early.code).not.toBe(0);
+    expect(early.output).toContain('step 1a did not pass, so the mismatch line and the alarm are not read');
+    expect(early.output).toContain('the drill stopped at step1a-generation-check');
+  });
+
+  it('requires step 1a and the step 9 reconciliation in the drill’s report', () => {
+    // The runner's own required list, read from the script: a report without either step
+    // would otherwise pass every assertion it makes by having nothing to disagree with.
+    const script = readRepositoryFile(SCRIPT);
+    const required = script.slice(script.indexOf('required = ['), script.indexOf(']', script.indexOf('required = [')));
+    expect(required).toContain('"step1a-generation-check"');
+    expect(required).toContain('"step9-generation-reconciled"');
   });
 });
