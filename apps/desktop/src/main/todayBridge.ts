@@ -12,6 +12,7 @@ import {
   todayStateSchema,
   type DialRequest,
   type OutcomeRequest,
+  type RefreshRequest,
   type ReleasePauseRequest,
   type ScheduleCallbackRequest,
   type SnoozeRequest,
@@ -100,7 +101,7 @@ export interface TodayBridgeDeps {
 
 export interface TodayBridgeHost {
   state(): Promise<TodayState>;
-  refresh(): Promise<TodayState>;
+  refresh(input?: RefreshRequest): Promise<TodayState>;
   expand(input: { readonly firmId: string }): Promise<TodayState>;
   collapse(): Promise<TodayState>;
   snooze(input: SnoozeRequest): Promise<TodayState>;
@@ -219,7 +220,15 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
   return {
     state: snapshot,
 
-    async refresh() {
+    async refresh(input = {}) {
+      // A read Home made by itself — on focus, at the rollover (lane g84, G05) — keeps
+      // the last notice, exactly as the re-read after a mutation does: "Call recorded."
+      // should not vanish because the person came back to the window. Refresh pressed
+      // is a fresh look and clears it, as it always has.
+      if (input.quiet === true) {
+        await reloadAfterMutation({ refreshList: true });
+        return await snapshot();
+      }
       await deps.session.refreshToday();
       if (expanded !== null) await loadExpansion(expanded.firmId);
       return await snapshot();

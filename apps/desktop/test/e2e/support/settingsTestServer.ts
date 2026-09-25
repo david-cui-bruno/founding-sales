@@ -62,6 +62,7 @@ export function settingsSnapshot(overrides: Record<string, unknown> = {}): NonNu
     elsewhere: [
       { topic: 'Research limits', path: '/research/config', ownedBy: 'G10 research' },
       { topic: 'Sending caps and the ramp', path: '/outbound/cap', ownedBy: 'G7-2 sending' },
+      { topic: 'State postures', path: '/postures', ownedBy: 'G4 policy' },
     ],
     holidayCalendar: { version: '2026-federal', dates: ['2026-12-25'] },
     deploymentSendingEnabled: false,
@@ -153,6 +154,50 @@ export function sendingPosture(): NonNullable<AdminState['sendingAdmin']> {
   };
 }
 
+export const POSTURE_ID = '44444444-4444-4444-8444-444444444444';
+
+/** The postures reference the API serves (lane g84), cut to two statements and two states. */
+export function postureReference(): NonNullable<NonNullable<AdminState['postures']>['reference']> {
+  return {
+    rulesRevision: 2,
+    statements: [
+      { key: 'federal_rules_apply', text: 'I understand the federal calling rules apply.' },
+      { key: 'state_rules_checked', text: 'I checked this state’s rules myself.' },
+    ],
+    federalCitations: [{ title: 'Federal rule', url: 'https://example.test/federal', quote: 'A quoted federal line.' }],
+    states: [
+      { state: 'AL', name: 'Alabama', rule: null },
+      {
+        state: 'RI',
+        name: 'Rhode Island',
+        rule: {
+          summary: 'Rhode Island quoted summary.',
+          citations: [{ title: 'R.I. rule', url: 'https://example.test/ri', quote: 'A quoted Rhode Island line.' }],
+        },
+      },
+      { state: 'TX', name: 'Texas', rule: null },
+    ],
+  };
+}
+
+/** One posture in force for Rhode Island, as `GET /postures` lists it. */
+export function recordedPosture(overrides: Record<string, unknown> = {}): NonNullable<NonNullable<AdminState['postures']>['records']>[number] {
+  return {
+    id: POSTURE_ID,
+    state: 'RI',
+    revision: 1,
+    effectiveFrom: '2026-09-01T05:00:00.000Z',
+    effectiveTo: null,
+    reviewAt: '2099-09-01T05:00:00.000Z',
+    rulesRevision: 2,
+    confirmedStatements: ['federal_rules_apply', 'state_rules_checked'],
+    sources: [{ title: 'R.I. rule', url: 'https://example.test/ri' }],
+    confirmedByUserId: ADMIN_ID,
+    revokedAt: null,
+    ...overrides,
+  };
+}
+
 export function adminState(overrides: Partial<AdminState> = {}): AdminState {
   return {
     screen: 'settings',
@@ -171,11 +216,12 @@ export function adminState(overrides: Partial<AdminState> = {}): AdminState {
     sendingAdmin: null,
     sendingReadError: null,
     callingNumbers: [],
+    postures: { reference: postureReference(), records: [recordedPosture()], readError: null },
     ...overrides,
   };
 }
 
-/** The bridge the browser gets. The same sixteen methods the preload script exposes. */
+/** The bridge the browser gets. The same eighteen methods the preload script exposes. */
 const BRIDGE_SCRIPT = `
 globalThis.callieAdmin = {
   async state() { return await ask('state'); },
@@ -194,6 +240,8 @@ globalThis.callieAdmin = {
   async addCallingNumber(input) { return await ask('addCallingNumber', input); },
   async attestCallingNumber(input) { return await ask('attestCallingNumber', input); },
   async retireCallingNumber(input) { return await ask('retireCallingNumber', input); },
+  async recordPosture(input) { return await ask('recordPosture', input); },
+  async revokePosture(input) { return await ask('revokePosture', input); },
 };
 async function ask(method, argument) {
   const response = await fetch('/bridge/' + method, {
@@ -282,6 +330,38 @@ export async function startSettingsTestServer(initial: AdminState): Promise<Sett
         // the window draws as "from" and "to".
         if (method === 'openHistory') {
           state = { ...state, notice: null, history: settingHistoryAnswer() };
+        }
+        // Lane g84. Texas is refused as overlapping, the way the server refuses a state
+        // that already has a posture in force; any other state is recorded and listed.
+        if (method === 'recordPosture' && state.postures !== undefined && state.postures !== null) {
+          const asked = argument as { state: string; effectiveFromDate: string };
+          if (asked.state === 'TX') {
+            state = { ...state, notice: 'posture_overlapping' };
+          } else {
+            const added = recordedPosture({
+              id: '55555555-5555-4555-8555-555555555555',
+              state: asked.state,
+              effectiveFrom: `${asked.effectiveFromDate}T05:00:00.000Z`,
+            });
+            state = {
+              ...state,
+              notice: 'posture_recorded',
+              postures: { ...state.postures, records: [...(state.postures.records ?? []), added] },
+            };
+          }
+        }
+        if (method === 'revokePosture' && state.postures !== undefined && state.postures !== null) {
+          const { postureId } = argument as { postureId: string };
+          state = {
+            ...state,
+            notice: 'posture_revoked',
+            postures: {
+              ...state.postures,
+              records: (state.postures.records ?? []).map(row =>
+                row.id === postureId ? { ...row, revokedAt: '2026-09-25T15:00:00.000Z' } : row,
+              ),
+            },
+          };
         }
         if (method === 'acknowledgeAlert') {
           state = {

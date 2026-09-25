@@ -111,7 +111,7 @@ const mailbox: MailboxBridge = {
 
 const today: TodayBridge = {
   state: async () => await invokeToday(TODAY_IPC_CHANNELS.state),
-  refresh: async () => await invokeToday(TODAY_IPC_CHANNELS.refresh),
+  refresh: async input => await invokeToday(TODAY_IPC_CHANNELS.refresh, input),
   expand: async input => await invokeToday(TODAY_IPC_CHANNELS.expand, input),
   collapse: async () => await invokeToday(TODAY_IPC_CHANNELS.collapse),
   snooze: async input => await invokeToday(TODAY_IPC_CHANNELS.snooze, input),
@@ -142,6 +142,12 @@ const crm: CrmBridge = {
   saveContact: async input => await invokeCrm(CRM_IPC_CHANNELS.saveContact, input),
   changeStage: async input => await invokeCrm(CRM_IPC_CHANNELS.changeStage, input),
   resolveMerge: async input => await invokeCrm(CRM_IPC_CHANNELS.resolveMerge, input),
+  // Lane g84: Add firm and Import.
+  openAddFirm: async () => await invokeCrm(CRM_IPC_CHANNELS.openAddFirm),
+  addFirm: async input => await invokeCrm(CRM_IPC_CHANNELS.addFirm, input),
+  openImport: async () => await invokeCrm(CRM_IPC_CHANNELS.openImport),
+  previewImport: async input => await invokeCrm(CRM_IPC_CHANNELS.previewImport, input),
+  commitImport: async () => await invokeCrm(CRM_IPC_CHANNELS.commitImport),
 };
 
 const sequences: SequenceBridge = {
@@ -180,6 +186,9 @@ const admin: AdminBridge = {
   addCallingNumber: async input => await invokeAdmin(ADMIN_IPC_CHANNELS.addCallingNumber, input),
   attestCallingNumber: async input => await invokeAdmin(ADMIN_IPC_CHANNELS.attestCallingNumber, input),
   retireCallingNumber: async input => await invokeAdmin(ADMIN_IPC_CHANNELS.retireCallingNumber, input),
+  // Lane g84: record a state posture, and revoke one.
+  recordPosture: async input => await invokeAdmin(ADMIN_IPC_CHANNELS.recordPosture, input),
+  revokePosture: async input => await invokeAdmin(ADMIN_IPC_CHANNELS.revokePosture, input),
 };
 
 // Lane g83: the update line in Home's sidebar. Two calls with no argument and one

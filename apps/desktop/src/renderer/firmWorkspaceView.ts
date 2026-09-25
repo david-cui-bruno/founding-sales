@@ -1,3 +1,4 @@
+import { IMPORT_ISSUE_CODES } from '@fss/contracts';
 import type { CrmScreen, CrmState, MergeView } from './firmWorkspaceContract.ts';
 
 /**
@@ -33,6 +34,8 @@ export interface FirmWorkspaceView {
 export const FIRM_HEADING = 'Firm';
 export const PIPELINE_HEADING = 'Pipeline';
 export const MERGE_HEADING = 'Resolve this merge';
+export const ADD_FIRM_HEADING = 'Add firm';
+export const IMPORT_HEADING = 'Import firms';
 
 /**
  * Every code the CRM windows can be handed, and the one sentence each one says.
@@ -61,18 +64,35 @@ export const CRM_NOTICES: Readonly<Record<string, string>> = Object.freeze({
   saved: 'Saved.',
   merged: 'Merged.',
   stage_changed: 'Stage changed.',
+  // Lane g84: Add firm and Import. A refused form marks its fields; the line says so.
+  firm_added: 'Firm added.',
+  imported: 'Imported.',
+  imported_with_refusals: 'Imported, except the rows listed below.',
+  import_nothing_to_commit: 'Nothing in this file is new. Fix the rows marked, or choose another file.',
+  import_file_too_large: 'That file is larger than 512 KB. Split it and import each part.',
+  duplicate_in_workspace: 'That firm is already here. Open it, or change the website or the name.',
+  malformed_body: 'Callie could not send that. Check the fields and try again.',
 });
+
+/** The line above a refused Add firm form: its fields say what is wrong with each. */
+export const CHECK_FIELDS = 'Check the fields marked below.';
 
 export const GENERIC_NOTICE = 'That could not be done. Try again, or ask an administrator.';
 
 export function noticeText(code: string): string {
-  return CRM_NOTICES[code] ?? GENERIC_NOTICE;
+  const known = CRM_NOTICES[code];
+  if (known !== undefined) return known;
+  // A field's code (lane g84): the sentence is under the field, and the line points there.
+  if ((IMPORT_ISSUE_CODES as readonly string[]).includes(code)) return CHECK_FIELDS;
+  return GENERIC_NOTICE;
 }
+
+const INFO_NOTICES: ReadonlySet<string> = new Set(['saved', 'merged', 'stage_changed', 'firm_added', 'imported']);
 
 /** The tone a notice is shown in. A refusal warns; an outcome informs. */
 function toneOf(code: string): BannerView['tone'] {
   if (code === 'client_upgrade_required') return 'blocking';
-  if (code === 'saved' || code === 'merged' || code === 'stage_changed') return 'info';
+  if (INFO_NOTICES.has(code)) return 'info';
   return 'warning';
 }
 
@@ -80,6 +100,8 @@ const HEADINGS: Readonly<Record<CrmScreen, string>> = Object.freeze({
   firm: FIRM_HEADING,
   pipeline: PIPELINE_HEADING,
   merge: MERGE_HEADING,
+  add_firm: ADD_FIRM_HEADING,
+  import: IMPORT_HEADING,
 });
 
 export function buildFirmWorkspaceView(state: CrmState): FirmWorkspaceView {

@@ -310,6 +310,61 @@ export const statePostureDtoSchema = z.strictObject({
 });
 export type StatePostureDto = z.infer<typeof statePostureDtoSchema>;
 
+/*
+ * What the postures form reads (lane g84, audit item G04). `statePostureDtoSchema`
+ * above is strict and has no `confirmedByUserId`, which `listStatePostures` has always
+ * answered with; nothing parsed it until now. These are the stripping shapes the rest
+ * of the Mac's reads use (g78), and the route test holds the real answers to them with
+ * `wireDrift`.
+ */
+
+/** One recorded posture, as `GET /postures` lists it and `POST /postures/record` answers it. */
+export const statePostureViewSchema = z.object({
+  id: uuid,
+  state: z.string().regex(/^[A-Z]{2}$/u),
+  revision: z.number().int().min(1),
+  effectiveFrom: instant,
+  effectiveTo: instant.nullable(),
+  reviewAt: instant,
+  rulesRevision: z.number().int().min(1),
+  confirmedStatements: z.array(z.string().min(1).max(80)),
+  sources: z.array(z.object({ title: z.string().max(400), url: z.string().max(500) })),
+  confirmedByUserId: uuid,
+  revokedAt: instant.nullable(),
+});
+export type StatePostureView = z.infer<typeof statePostureViewSchema>;
+
+/** `GET /postures`. */
+export const statePostureListResponseSchema = z.object({ postures: z.array(statePostureViewSchema) });
+export type StatePostureListResponse = z.infer<typeof statePostureListResponseSchema>;
+
+export const postureCitationSchema = z.object({ title: z.string(), url: z.string(), quote: z.string() });
+export type PostureCitationDto = z.infer<typeof postureCitationSchema>;
+
+/**
+ * `GET /postures/reference` (lane g84): the statements a posture confirms and the quoted
+ * rules, verbatim from `@fss/domain`'s `statePosture.ts`, for the form to show. Invariant
+ * 7 — "Software records and enforces legal posture; it does not invent it" — is why the
+ * Mac reads these rather than carrying a copy: an edit to a quoted passage is a new
+ * rules revision in one place, and a second copy on the Mac would be a second text.
+ *
+ * `states` is every state a posture can be recorded for, in the domain's order, with the
+ * quoted rule where the release carries one and null where it does not.
+ */
+export const postureReferenceResponseSchema = z.object({
+  rulesRevision: z.number().int().min(1),
+  statements: z.array(z.object({ key: z.string().min(1).max(80), text: z.string() })),
+  federalCitations: z.array(postureCitationSchema),
+  states: z.array(
+    z.object({
+      state: z.string().regex(/^[A-Z]{2}$/u),
+      name: z.string(),
+      rule: z.object({ summary: z.string(), citations: z.array(postureCitationSchema) }).nullable(),
+    }),
+  ),
+});
+export type PostureReferenceResponse = z.infer<typeof postureReferenceResponseSchema>;
+
 export const callbackDtoSchema = z.strictObject({
   id: uuid,
   firmId: uuid,

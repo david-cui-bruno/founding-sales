@@ -54,7 +54,9 @@ describe('the CRM surface', () => {
     return { status: result.status, body: result.body as Record<string, unknown> };
   };
 
-  const csv = (...rows: readonly string[]): string => [IMPORT_COLUMNS.join(','), ...rows].join('\n');
+  // The twelve columns before lane g84's `time_zone`: an old file still reads.
+  const csv = (...rows: readonly string[]): string =>
+    [IMPORT_COLUMNS.filter(column => column !== 'time_zone').join(','), ...rows].join('\n');
 
   beforeAll(async () => {
     fixture = await createAuthFixture();
@@ -153,7 +155,7 @@ describe('the CRM surface', () => {
     const parsed = importPreviewResponseSchema.safeParse(preview.body);
     expect(parsed.success, JSON.stringify(parsed.error?.issues ?? [])).toBe(true);
     if (!parsed.success) return;
-    expect(parsed.data.counts).toEqual({ create: 1, duplicate: 1, invalid: 2 });
+    expect(parsed.data.counts).toEqual({ create: 1, attach: 0, duplicate: 1, invalid: 2 });
   });
 
   it('commits one receipt per row, keeps the good rows when a bad one is refused, and replays a retry', async () => {

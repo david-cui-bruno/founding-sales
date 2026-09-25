@@ -177,12 +177,15 @@ describe('the administration bridge', () => {
     const bridge = createAdminBridge({ api, session: { state: async () => await Promise.resolve(session()) } });
     const state = await bridge.state();
     // The calling numbers are read for every role (lane g60); here the route answers
-    // 404, as an API older than it would, and the page says so rather than failing.
+    // 404, as an API older than it would, and the page says so rather than failing. The
+    // postures reference and list follow (lane g84), and answer 404 the same way.
     expect(calls.map(call => call.path)).toEqual([
       '/settings',
       '/pipeline/stages',
       '/outbound/status',
       '/calling-identities',
+      '/postures/reference',
+      '/postures',
     ]);
     expect(state.callingNumbers).toBeNull();
     expect(state.notice).toBeNull();
@@ -328,6 +331,8 @@ describe('the administration bridge', () => {
       'callie:admin:add-calling-number',
       'callie:admin:attest-calling-number',
       'callie:admin:retire-calling-number',
+      'callie:admin:record-posture',
+      'callie:admin:revoke-posture',
     ]);
   });
 

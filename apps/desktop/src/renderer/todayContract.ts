@@ -142,9 +142,17 @@ export interface OutcomeRequest {
   readonly doNotCallCoversAllContact: boolean;
 }
 
+/**
+ * A read of the list. `quiet` is a read Home made by itself, on focus or at the
+ * business day's rollover (lane g84, G05): it keeps the last notice on screen.
+ */
+export interface RefreshRequest {
+  readonly quiet?: boolean;
+}
+
 export interface TodayBridge {
   state(): Promise<TodayState>;
-  refresh(): Promise<TodayState>;
+  refresh(input?: RefreshRequest): Promise<TodayState>;
   expand(input: { readonly firmId: string }): Promise<TodayState>;
   collapse(): Promise<TodayState>;
   snooze(input: SnoozeRequest): Promise<TodayState>;

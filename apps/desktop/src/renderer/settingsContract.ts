@@ -1,9 +1,11 @@
 import type {
   DashboardResponse,
   DiagnosticsResponse,
+  PostureReferenceResponse,
   SettingHistoryResponse,
   SettingKey,
   SettingsSnapshot,
+  StatePostureView,
 } from '@fss/contracts';
 
 /**
@@ -62,6 +64,42 @@ export interface AdminState {
    * showing an empty list that would read as "you have no number".
    */
   readonly callingNumbers: readonly CallingNumberView[] | null;
+  /**
+   * State postures (9.2 step 6; lane g84, audit item G04): the reference texts the form
+   * shows and the postures recorded, as `GET /postures/reference` and `GET /postures`
+   * answered them. Absent in a state built before g84.
+   */
+  readonly postures?: PosturesState | null;
+}
+
+/**
+ * What the postures form reads. `reference` is the release's own words — the statements
+ * and the quoted rules — and `records` every posture ever recorded, revoked ones too.
+ * Either is null when its read did not answer, and `readError` names why, so the section
+ * says it could not read them rather than showing an empty list that would read as
+ * "no state has a posture".
+ */
+export interface PosturesState {
+  readonly reference: PostureReferenceResponse | null;
+  readonly records: readonly StatePostureView[] | null;
+  readonly readError: string | null;
+}
+
+/**
+ * A posture as the form collects it (lane g84). The dates are local calendar dates in the
+ * workspace's business zone; the main process turns them into instants with the domain's
+ * clock, as it does a callback's, so the window does no zone arithmetic.
+ */
+export interface RecordPostureInput {
+  readonly state: string;
+  /** `YYYY-MM-DD`: the day the posture takes effect, from midnight in the business zone. */
+  readonly effectiveFromDate: string;
+  /** `YYYY-MM-DD`, or empty for the default: one year after it takes effect. */
+  readonly reviewDate: string;
+  /** The statement keys the person ticked. The server refuses anything short of all of them. */
+  readonly confirmedStatements: readonly string[];
+  /** Where the person read it, a registration number; empty for none. */
+  readonly note: string;
 }
 
 /**
@@ -195,6 +233,9 @@ export interface AdminBridge {
   addCallingNumber(input: AddCallingNumberInput): Promise<AdminState>;
   attestCallingNumber(input: { readonly identityId: string }): Promise<AdminState>;
   retireCallingNumber(input: { readonly identityId: string }): Promise<AdminState>;
+  /** Lane g84: record a state posture, and revoke one. */
+  recordPosture(input: RecordPostureInput): Promise<AdminState>;
+  revokePosture(input: { readonly postureId: string }): Promise<AdminState>;
 }
 
 declare global {

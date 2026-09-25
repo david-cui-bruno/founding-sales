@@ -208,7 +208,7 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
   // reply state is never cached, so it needs nothing from the offline cache but the
   // token, the online flag and the version gate.
   registerReplyBridge({ api, session });
-  registerCrmBridge({ api, session });
+  registerCrmBridge({ api, session, clientVersion: configuration.clientVersion });
   // G8's editor. The clipboard and the browser open are ports so the bridge itself
   // imports nothing from Electron and is testable without a window (11.3).
   registerSequenceBridge({

@@ -18,15 +18,16 @@ audited once. The windows show what they were sent and disable what cannot be do
 ```
 packages/domain/db/migrations/0005_search.sql  pg_trgm and the indexes
 packages/domain/crm/search.ts                  the term, the filters, the match fields
-packages/domain/crm/import.ts                  the CSV parser, the preview, the commit
+packages/domain/crm/import.ts                  the CSV parser, the preview, the commit, Add firm
 packages/domain/crm/exports.ts                 the rows and the audit event
 packages/domain/crm/firmPage.ts                opportunity, stage history, holds
 packages/contracts/src/crmSurface.ts           the wire contract
-apps/api/src/routes/{search,import,export,firmPage}.ts
+apps/api/src/routes/{search,import,addFirm,export,firmPage}.ts
 apps/api/src/routes/modules.ts                 which router owns which paths
 apps/desktop/src/renderer/firmWorkspace.ts     the CRM window's entry point
 apps/desktop/src/renderer/firmWorkspaceView.ts what it shows, as a pure function
 apps/desktop/src/renderer/{firmPage,contactsEditor,pipelineBoard,firmMerge}.ts
+apps/desktop/src/renderer/{addFirmForm,importScreen,captureView}.ts   Add firm and Import (g84)
 ```
 
 ## Four rules a reader should carry
@@ -89,6 +90,7 @@ amount of response redaction reaches it.
 | `POST /crm/firm-page` | any active member | one firm; detail adds opportunity, stage history, holds |
 | `POST /import/preview` | admin | per-row outcomes and issues; writes nothing |
 | `POST /import/commit` | admin | the file again plus one command id per row |
+| `POST /crm/firms/add` | any active member | one firm and optionally its first contact; one command (g84) |
 | `POST /export/firms` | any active member | typed redacted rows; one audit event |
 
 Filters are shared by search and export: `owner` (a member, or unassigned),
@@ -109,24 +111,106 @@ expression when their lanes land.
 
 ## The CSV
 
-One header row, these columns in any order, all of them optional except `firm_name`:
+This is the format the Mac's **Import firms** screen reads (Firms window, **Import CSV**,
+admins only), and the one `POST /import/preview` and `POST /import/commit` take.
+
+**One row per contact.** A spreadsheet of prospects has a line per person, so the
+firm's columns are repeated on each of that firm's lines. A header row is required; the
+columns may come in any order, and all of them are optional except `firm_name`:
 
 ```
-firm_name, website, address_line, locality, region_code, postal_code,
-external_id, owner_user_id, contact_name, contact_title, contact_email, contact_phone
+firm_name, website, contact_name, contact_title, contact_email, contact_phone,
+time_zone, address_line, locality, region_code, postal_code, external_id, owner_user_id
 ```
 
-An unknown column, a row of the wrong width or an empty file is refused whole: a file
-that half-parses is a file somebody exported from the wrong system.
+For example:
 
-A row is `create`, `duplicate` or `invalid`, and carries the issues that made it so.
-Invalid beats duplicate, because a row that is both should be shown the fault it can
-fix. A bad email address or an unparseable number makes the whole row invalid rather
-than importing the firm and dropping the route: a route silently missing is a firm
-nobody can contact and nobody knows why.
+```
+firm_name,website,contact_name,contact_title,contact_email,contact_phone,region_code
+Birch Test Advisors,birch.example.test,Lee Placeholder,Principal,lee@birch.example.test,401 555 0131,RI
+Birch Test Advisors,birch.example.test,Pat Placeholder,Associate,pat@birch.example.test,,RI
+Cedar Test Partners,cedar.example.test,,,,,MA
+```
 
-A ten-digit number is taken as North American and eleven digits starting with 1 as the
-same; anything else needs its `+`. A guess would be dialed at a stranger.
+That is two firms: Birch with two people, and Cedar with nobody yet.
+
+A header is matched without regard to case, and a space or a hyphen in it reads as an
+underscore, so `Contact Email` is `contact_email`. A `website` may be a bare domain
+(`birch.example.test`) or a full address; it is stored as `https://…`. `time_zone` is an
+IANA name such as `America/Chicago`; without one the firm's zone comes from its postal
+code or state where it can, and calls to it wait until it has one. `region_code` is two
+letters. A ten-digit number is taken as North American and eleven digits starting with 1
+as the same; anything else needs its `+`. A guess would be dialed at a stranger.
+
+**A whole file is refused** before any row is read when it is empty, has a column this
+list does not name (`csv_column_unknown`, naming the header as written), names a column
+twice (`csv_column_repeated`), has a line of the wrong width (`csv_row_width`, naming the
+line as a spreadsheet counts it, the header being line 1) or has more than 2,000 rows. A
+file that half-parses is a file somebody exported from the wrong system. The answer is
+409 `{ "status": "refused", "reason": "csv_column_unknown", "column": "Notes",
+"rowNumber": null }`, and the screen says *The column “Notes” is not one Callie imports.*
+
+**Each row is one of four outcomes**, with the issues that made it so:
+
+| Outcome | When |
+|---|---|
+| `create` | a firm nobody has yet, with this row's contact if it has one |
+| `attach` | a firm already here, or created on an earlier row, and a contact new to it |
+| `duplicate` | the row adds nothing: its contact is already at that firm, or it names only a firm that is already here |
+| `invalid` | a field is wrong; nothing from the row is imported |
+
+**Matching, in order.** A row's firm is the workspace's firm with the same `external_id`,
+else the same website domain (`www.` ignored), else the same name (case and spacing
+ignored) — but a name match is not taken when both have websites and the domains differ.
+A row that matches two firms here is `firm_ambiguous`: merge them first. Failing all of
+those, a firm an earlier row of the file creates, by domain and then by name. A contact is
+the same person as one already at the firm by email address, or by name when the row has
+no email. Only the workspace is searched: a firm in another workspace is never a match.
+
+**Invalid beats duplicate**, because a row that is both should be shown the fault it can
+fix. A bad email address or an unparseable number makes the whole row invalid rather than
+importing the firm and dropping the route: a route silently missing is a firm nobody can
+contact and nobody knows why.
+
+**A refused row names its row and its field.** Every issue is `{ column, code }` — for
+example `{ "column": "contact_email", "code": "email_invalid" }` on row 4 — and the screen
+shows it under the row as *Email: Not an email address.* The codes are `firm_name_missing`,
+`website_invalid`, `region_code_invalid`, `postal_code_invalid`, `email_invalid`,
+`phone_invalid`, `contact_name_missing` (a title, email or phone with no name),
+`owner_unknown`, `time_zone_invalid`, `too_long`, `firm_ambiguous`, `duplicate_in_file` and
+`duplicate_in_workspace`.
+
+**The commit decides again.** Import commits the rows the preview marked `create` or
+`attach`, in the file's order, each under its own command id. Each row is decided again
+against the workspace as it is at that moment, so a contact somebody added by hand since
+the preview comes back refused, with its row and column, rather than added twice:
+
+```
+{ "rowNumber": 2, "status": "refused", "replayed": false, "reason": "duplicate_in_workspace",
+  "firmId": null, "column": "contact_email", "outcome": null }
+{ "rowNumber": 3, "status": "accepted", "replayed": false, "reason": null,
+  "firmId": "…", "column": null, "outcome": "attached" }
+```
+
+A row is one transaction: a row refused after its firm was written takes the firm back
+with it. Pressing Import again on the same preview replays what landed.
+
+**What an imported firm is.** It is assigned to the row's `owner_user_id`, or to the
+admin who imported it — dialing needs an assignee. Its addresses and numbers are
+`candidate`, with source `import`: a spreadsheet is not a technical validation, and
+eligibility is the policy's decision (7.4), never a column's. It has no pipeline stage
+yet, so the pipeline lists it under **Not in the pipeline yet**.
+
+## Add firm
+
+`POST /crm/firms/add` is the Mac's **Add firm** form (Firms window, any member): a firm
+name, its website and time zone, and optionally its first contact's name, title, email and
+phone. It is one command and one receipt, and runs the same checks and the same matching
+as an import row. A refusal names every field at fault — `{ "reason": "email_invalid",
+"issues": [{ "column": "contact_email", "code": "email_invalid" }, …] }` — and a firm that
+is already here is `duplicate_in_workspace` with its `firmId`, so the form can offer to
+open it. An added firm is assigned to whoever added it, its routes are `candidate` with
+source `salesperson`, and the window opens its page.
 
 ## The windows
 
@@ -150,6 +234,11 @@ clear non-actionable state" is a unit test rather than a screenshot.
 * **Merge resolution** — the conflicts the API refused with, offering only the two
   recorded values, preselecting neither, disabled until every field has been decided.
   A salesperson sees them and cannot commit.
+* **Add firm and Import** (lane g84) — two buttons above the pipeline; Import is shown to
+  admins only. Add firm comes back after a refusal with what was typed and each field the
+  server named marked under it. Import reads a chosen or pasted file on the Mac, previews
+  every row with its outcome and issues, and imports nothing until **Import N rows** is
+  pressed; the results list each refused row as *Row 3 · Email: Already here.*
 
 ## Running the tests
 
@@ -157,6 +246,8 @@ clear non-actionable state" is a unit test rather than a screenshot.
 npm run gate:greenfield
 npm run test --workspace packages/domain -- test/crm/search.test.ts    # G 8, Appendix F
 npm run test --workspace packages/domain -- test/crm/import.test.ts    # G 38
+npm run test --workspace packages/domain -- test/crm/capture.test.ts   # one row per contact, Add firm
+npm run test --workspace apps/api -- test/capture.test.ts
 npm run test --workspace packages/domain -- test/crm/export.test.ts
 npm run test --workspace packages/domain -- test/crm/firmPage.test.ts
 npm run test --workspace apps/api -- test/crmSurface.test.ts

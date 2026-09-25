@@ -1,6 +1,15 @@
 import type { DesktopBridge, DesktopState, MailboxBridge, MailboxState } from '../shared/contract.ts';
 import type { UpdateStatus } from '../shared/updateContract.ts';
-import { forgetHome, hasTodayBridge, loadHomeAdmin, loadHomeToday, renderHome, setHomeRedraw } from './homePage.ts';
+import {
+  autoRefreshToday,
+  forgetHome,
+  hasTodayBridge,
+  loadHomeAdmin,
+  loadHomeToday,
+  renderHome,
+  setHomeRedraw,
+  startTodayTicker,
+} from './homePage.ts';
 import { updateLine } from './homeView.ts';
 import { buildMailboxView, buildScreenView, MAILBOX_ROW_LABEL } from './viewModel.ts';
 
@@ -323,16 +332,20 @@ export async function boot(): Promise<void> {
   });
   render(await bridge().state());
   await Promise.all([loadUpdate(), enterHome()]);
+  startTodayTicker();
 }
 
 if (typeof document !== 'undefined') {
   // Coming back from the browser is when a grant has just landed: read the row again.
   // Coming back from Administration is when a calling number has just been added: the
   // administration bridge already holds it, and reading its state asks the API nothing.
+  // And coming back from the phone app or anywhere else is when today's list may have
+  // moved: Home reads it again if the last read is a minute old (lane g84, G05).
   window.addEventListener('focus', () => {
     void loadMailbox();
     void loadUpdate();
     if (signedIn()) void loadHomeAdmin();
+    if (signedIn()) autoRefreshToday('focus');
   });
   void boot();
 }

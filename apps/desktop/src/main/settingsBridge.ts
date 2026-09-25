@@ -1,23 +1,30 @@
 import {
   alertAcknowledgedResponseSchema,
+  callbackInstant,
   callingIdentityChangeResultSchema,
   callingIdentityListSchema,
   dashboardResponseSchema,
   diagnosticsResponseSchema,
   outboundStatusResponseSchema,
   pipelineStagesResponseSchema,
+  postureReferenceResponseSchema,
   settingHistoryResponseSchema,
   settingsSnapshotSchema,
+  statePostureListResponseSchema,
+  statePostureViewSchema,
   type CallingIdentityDto,
   type SettingKey,
 } from '@fss/contracts';
+import { businessZoneOf } from '../renderer/postureView.ts';
 import type {
   AddCallingNumberInput,
   AdminScreen,
   AdminState,
   CallingNumberView,
   PipelineStageRowView,
+  PosturesState,
   RecordHolidayCalendarInput,
+  RecordPostureInput,
   RecordSendingAuthenticationInput,
   SaveSettingInput,
   SetSendingCapInput,
@@ -57,6 +64,9 @@ export const ADMIN_IPC_CHANNELS = {
   addCallingNumber: 'callie:admin:add-calling-number',
   attestCallingNumber: 'callie:admin:attest-calling-number',
   retireCallingNumber: 'callie:admin:retire-calling-number',
+  // Lane g84: the postures form.
+  recordPosture: 'callie:admin:record-posture',
+  revokePosture: 'callie:admin:revoke-posture',
 } as const;
 export type AdminIpcChannel = (typeof ADMIN_IPC_CHANNELS)[keyof typeof ADMIN_IPC_CHANNELS];
 
@@ -70,6 +80,38 @@ export const CALLING_NUMBER_API_PATHS = {
   attest: '/calling-identities/attest',
   disable: '/calling-identities/disable',
 } as const;
+
+/** The postures paths (lane g84), named once for the release suite to compare with `POSTURE_PATHS`. */
+export const POSTURE_API_PATHS = {
+  list: '/postures',
+  reference: '/postures/reference',
+  record: '/postures/record',
+  revoke: '/postures/revoke',
+} as const;
+
+/**
+ * The posture form as `POST /postures/record` takes it, or null when a date is not one.
+ *
+ * A date is midnight of that day in the business zone, through the domain's own clock
+ * (`callbackInstant` from `@fss/contracts`), so a posture "from 25 September" is in force
+ * from the first minute of the 25th where the workspace keeps its days. An empty review
+ * date is left out and the server sets it a year on (10.1). The statements go as ticked:
+ * whether they are all of them is the server's refusal to make.
+ */
+export function recordPostureBody(input: RecordPostureInput, zone: string): Readonly<Record<string, unknown>> | null {
+  const effectiveFrom = callbackInstant(input.effectiveFromDate, '00:00', zone);
+  if (effectiveFrom === null) return null;
+  const review = input.reviewDate.trim();
+  const reviewAt = review === '' ? undefined : callbackInstant(review, '00:00', zone);
+  if (reviewAt === null) return null;
+  return {
+    state: input.state.trim().toUpperCase(),
+    effectiveFrom,
+    ...(reviewAt === undefined ? {} : { reviewAt }),
+    confirmedStatements: [...input.confirmedStatements],
+    ...(input.note.trim() === '' ? {} : { note: input.note.trim() }),
+  };
+}
 
 /*
  * Every answer this window reads is parsed with `@fss/contracts`' schema for its route
@@ -114,6 +156,8 @@ export interface AdminBridgeHost {
   addCallingNumber(input: AddCallingNumberInput): Promise<AdminState>;
   attestCallingNumber(input: { readonly identityId: string }): Promise<AdminState>;
   retireCallingNumber(input: { readonly identityId: string }): Promise<AdminState>;
+  recordPosture(input: RecordPostureInput): Promise<AdminState>;
+  revokePosture(input: { readonly postureId: string }): Promise<AdminState>;
 }
 
 /** The last 30 days, in UTC. A window the page shows and a person may change. */
@@ -135,6 +179,7 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
   let sendingAdmin: AdminState['sendingAdmin'] = null;
   let sendingReadError: AdminState['sendingReadError'] = null;
   let callingNumbers: AdminState['callingNumbers'] = null;
+  let postures: PosturesState | null = null;
   /** The role the state above was read under, or null before the first read. */
   let roleSeen: AdminState['role'] | null = null;
   const window = defaultWindow(clock());
@@ -178,6 +223,7 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
       sendingAdmin,
       sendingReadError,
       callingNumbers,
+      postures,
     };
   };
 
@@ -277,6 +323,26 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
     callingNumbers = answer.ok ? answer.value.identities.map(viewOfNumber) : null;
   };
 
+  /**
+   * The postures and the texts the form shows (lane g84), for every role: 9.2 refuses a
+   * salesperson's call over a missing posture, so a salesperson may read which. The
+   * reference texts are the release's and do not change under an open window, so they
+   * are read once. A failure is the section's grey line, not the page's notice.
+   */
+  const loadPostures = async (): Promise<void> => {
+    const known = postures?.reference ?? null;
+    const reference =
+      known !== null
+        ? { ok: true as const, value: known }
+        : await deps.api.read(POSTURE_API_PATHS.reference, value => postureReferenceResponseSchema.parse(value));
+    const listed = await deps.api.read(POSTURE_API_PATHS.list, value => statePostureListResponseSchema.parse(value));
+    postures = {
+      reference: reference.ok ? reference.value : null,
+      records: listed.ok ? listed.value.postures : null,
+      readError: !reference.ok ? reference.reason : !listed.ok ? listed.reason : null,
+    };
+  };
+
   const loadSettings = async (): Promise<void> => {
     const answer = await deps.api.read('/settings', value => settingsSnapshotSchema.parse(value));
     if (!answer.ok) {
@@ -299,6 +365,7 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
     // Until g69 a failed `/settings` returned before the sending read was even asked.
     await loadSending();
     await loadCallingNumbers();
+    await loadPostures();
   };
 
   /** One `/dashboard` read over the window named. It changes nothing but `dashboard`. */
@@ -541,6 +608,31 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
         value => callingIdentityChangeResultSchema.parse(value),
       );
       return await afterCommand(outcome, loadCallingNumbers);
+    },
+
+    async recordPosture(input) {
+      // Invariant 7: the software records the founder's decision and the sources quoted
+      // for it; the server copies the sources from the release, never from this body.
+      const body = recordPostureBody(input, businessZoneOf(settings));
+      if (body === null) {
+        notice = 'posture_date_invalid';
+        return await snapshot();
+      }
+      const outcome = await deps.api.command(POSTURE_API_PATHS.record, body, value => statePostureViewSchema.parse(value));
+      const answered = await afterCommand(outcome, loadPostures);
+      if (!outcome.ok) return answered;
+      notice = 'posture_recorded';
+      return await snapshot();
+    },
+
+    async revokePosture(input) {
+      const outcome = await deps.api.command(POSTURE_API_PATHS.revoke, { postureId: input.postureId }, value =>
+        statePostureViewSchema.parse(value),
+      );
+      const answered = await afterCommand(outcome, loadPostures);
+      if (!outcome.ok) return answered;
+      notice = 'posture_revoked';
+      return await snapshot();
     },
   };
 }

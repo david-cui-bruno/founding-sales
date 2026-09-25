@@ -51,6 +51,7 @@ describe('8.0aj: a refused merge opens the conflict screen (lane g78)', () => {
   const bridge = () =>
     createCrmBridge({
       api: desktopClient(fixture, adminToken),
+      clientVersion: CURRENT_CLIENT_VERSION,
       session: { state: async () => await Promise.resolve({ online: true, mayMutate: true, device: { role: 'admin' as const } }) },
     });
 
