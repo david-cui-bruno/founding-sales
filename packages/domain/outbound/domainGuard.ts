@@ -30,10 +30,15 @@ import {
  * 4,000 at 23:00 and 4,000 at 01:00, which is 8,000 in two hours and exactly the
  * traffic shape Google's rule is about.
  *
- * **Messages, not distinct recipients.** Two messages to the same personal Gmail
- * address count twice. Google counts recipients, so this over-counts — deliberately.
- * A guard that under-counted would be no guard at all, and the cost of the
- * conservative reading is that the hold arrives slightly early.
+ * **Recipient exposure, never fewer than Google could count** (lane g87, audit S08).
+ * Every personal-Gmail recipient of every message counts once per message: two
+ * messages to the same address count twice, and one direct message to five Gmail
+ * addresses counts five. Google counts recipients, so across messages this
+ * over-counts — deliberately. An FSS send counts from the moment it is claimed, not
+ * from the moment it is proved sent: a fence in `dispatching`, `reconciling` or
+ * `unknown_terminal` may have left, so it is reserved against the guard exactly as a
+ * sent one is. A guard that under-counted would be no guard at all, and the cost of
+ * the conservative reading is that the hold arrives slightly early.
  *
  * **It only applies while reply-only opt-out is configured.** 12.6 says so in the
  * same sentence, and the flag is on the domain row, because the day FSS offers a
@@ -249,53 +254,79 @@ export async function registerMailboxSendingDomain(
   return await registerSendingDomain(context, { domain: address.slice(at + 1), registeredBy: 'mailbox_connect' });
 }
 
+/** The fence states in which an FSS send may have reached Gmail: every state after the claim. */
+const CLAIMED_STATES = ['dispatching', 'reconciling', 'sent', 'unknown_terminal'] as const;
+
 /**
  * How many personal-Gmail recipients this workspace's primary domain has written to
  * in the rolling window.
  *
  * Two sources are summed, because 12.7 is explicit that "All outgoing Gmail messages,
- * including direct sends, count toward operational headroom": the fences FSS sent,
+ * including direct sends, count toward operational headroom": the fences FSS claimed,
  * and the outgoing messages the mail sync imported that FSS did not send. Counting
  * only the first would let a salesperson's own bulk mail-merge push the domain past
  * Google's threshold with FSS reporting plenty of headroom.
  *
- * The direct half is deliberately imprecise about the recipient: `mail_messages`
- * keeps the header allowlist, so the normalized `header_to` array is what there is,
- * and a message is counted once when *any* of its recipients is on personal Gmail.
- * A direct send that FSS also has a fence for is excluded, so the two halves cannot
- * double-count the same message when the sync imports something FSS sent.
+ * **`automated`** is every fence to a personal-Gmail address whose dispatch began in
+ * the window, in any state after the claim (lane g87, S08). Until g87 only `sent`
+ * counted, so a fence in doubt — which may well have been delivered — left the guard
+ * the moment Gmail went quiet, and the next claim saw room that was not there. Its
+ * instant is the later of the claim and the proven send, so a fence stays in the
+ * window at least as long as either says. A fence carries exactly one recipient.
+ *
+ * **`direct`** is every personal-Gmail recipient on the `To` and `Cc` of every
+ * imported outgoing message, counted once per message (lane g87, S08). Until g87 a
+ * direct message counted one however many Gmail recipients it named, so a mail merge
+ * sent as one message to forty addresses moved the guard by one. `Bcc` is not in 12.3's
+ * header allowlist and so is not in `mail_messages`; it is the one recipient this
+ * count cannot see, named in the decision record.
+ *
+ * A message FSS sent is excluded from `direct` exactly when its fence is counted in
+ * `automated`: a claimed fence in the same mailbox with the message's Gmail id or its
+ * deterministic `Message-ID` (the pair `fenceForOutgoingMessage` matches on). So the
+ * sync importing FSS's own send cannot count it twice, and a fence that never reached
+ * the claim cannot hide a message from both halves.
+ *
+ * The answer keeps the shape the desktop parses (`{ automated, direct, total }`,
+ * `personalGmailRecipientsSchema` in `@fss/contracts`); the in-doubt part is inside
+ * `automated`, not beside it.
  */
 export async function personalGmailRecipientsInWindow(
   context: RepositoryContext,
   options: { readonly windowHours?: number | undefined } = {},
 ): Promise<{ readonly automated: number; readonly direct: number; readonly total: number }> {
   const hours = options.windowHours ?? DOMAIN_GUARD_WINDOW_HOURS;
+  const personal = [...PERSONAL_GMAIL_DOMAINS];
   const automated = await context.db.query<{ count: string }>(
     `SELECT count(*)::text AS count
        FROM outbound_messages
       WHERE workspace_id = $1
-        AND state = 'sent'
-        AND sent_at > now() - make_interval(hours => $2::integer)
-        AND (split_part(recipient_address, '@', 2) = ANY ($3::text[]))`,
-    [context.scope.workspaceId, hours, ['gmail.com', 'googlemail.com']],
+        AND state = ANY ($4::text[])
+        AND greatest(dispatch_started_at, sent_at) > now() - make_interval(hours => $2::integer)
+        AND lower(substring(recipient_address from '@([^@]*)$')) = ANY ($3::text[])`,
+    [context.scope.workspaceId, hours, personal, CLAIMED_STATES],
   );
   const direct = await context.db.query<{ count: string }>(
-    `SELECT count(*)::text AS count
+    `SELECT coalesce(sum(exposure.recipients), 0)::text AS count
        FROM mail_messages AS m
-       JOIN mailboxes AS b ON b.workspace_id = m.workspace_id AND b.id = m.mailbox_id
+       CROSS JOIN LATERAL (
+         SELECT count(DISTINCT lower(recipient)) AS recipients
+           FROM unnest(m.header_to || m.header_cc) AS recipient
+          WHERE lower(substring(recipient from '@([^@]*)$')) = ANY ($3::text[])
+       ) AS exposure
       WHERE m.workspace_id = $1
         AND m.direction = 'outgoing'
         AND m.internal_date > now() - make_interval(hours => $2::integer)
-        AND EXISTS (
-          SELECT 1 FROM unnest(m.header_to) AS recipient
-           WHERE split_part(lower(recipient), '@', 2) = ANY ($3::text[])
-        )
         AND NOT EXISTS (
           SELECT 1 FROM outbound_messages AS o
            WHERE o.workspace_id = m.workspace_id
-             AND o.provider_message_id = m.provider_message_id
+             AND o.mailbox_id = m.mailbox_id
+             AND o.state = ANY ($4::text[])
+             AND (o.provider_message_id = m.provider_message_id
+                  OR (m.rfc_message_id IS NOT NULL
+                      AND o.provider_message_id_header = '<' || m.rfc_message_id || '>'))
         )`,
-    [context.scope.workspaceId, hours, ['gmail.com', 'googlemail.com']],
+    [context.scope.workspaceId, hours, personal, CLAIMED_STATES],
   );
   const automatedCount = Number(automated.rows[0]?.count ?? '0');
   const directCount = Number(direct.rows[0]?.count ?? '0');
@@ -311,12 +342,40 @@ export interface DomainGuardDecision {
 }
 
 /**
+ * Serialize the guard's decisions for one workspace, for the rest of the transaction
+ * (lane g87, S08).
+ *
+ * Every dispatch claim takes the send gate *shared*, so two claims to personal Gmail
+ * from two mailboxes run side by side, each counts the other's fence as not yet
+ * claimed, and both take the last place under the guard. Counting a claimed fence as
+ * reserved only helps once the next decision can see it, and this lock is what makes
+ * it see it: the claim holds it from its count to its commit, the next claim's count
+ * waits, and then reads the fence in `dispatching`.
+ *
+ * Taken after every row lock the claim already holds (the ramp, the day) and by
+ * nothing but a claim, so it adds no lock-order cycle: two claims on one mailbox have
+ * already queued on the day's row, and claims on different mailboxes wait only here.
+ * Outside a transaction — the precheck — it is held for the one statement and gone,
+ * which is harmless.
+ */
+export async function lockDomainGuard(context: RepositoryContext): Promise<void> {
+  await context.db.query(
+    "SELECT pg_advisory_xact_lock(hashtextextended('fss.domain-guard:' || $1::text, 0))",
+    [context.scope.workspaceId],
+  );
+}
+
+/**
  * Whether one more personal-Gmail recipient may be written to.
  *
  * `applies` is false for a recipient who is not on personal Gmail, and the guard is
  * not consulted for them at all — a Workspace mailbox on a customer's own domain is
  * not covered by Google's bulk-sender rule and holding it would be a self-inflicted
  * outage on traffic nobody objected to.
+ *
+ * `serialize` is the dispatch gate's: it takes `lockDomainGuard` before counting, so
+ * the decision and the claim it licenses are one step as far as every other claim is
+ * concerned. A read-only caller — the status route's headroom — leaves it off.
  */
 export async function decideDomainGuard(
   context: RepositoryContext,
@@ -324,6 +383,7 @@ export async function decideDomainGuard(
     readonly recipientAddress: string;
     readonly domain: SendingDomainRow;
     readonly windowHours?: number | undefined;
+    readonly serialize?: boolean | undefined;
   },
 ): Promise<DomainGuardDecision> {
   const applies = isPersonalGmailAddress(input.recipientAddress) && input.domain.replyOnlyOptOut;
@@ -331,6 +391,7 @@ export async function decideDomainGuard(
   if (!applies) {
     return { allowed: true, applies: false, used: 0, guard, headroom: guard };
   }
+  if (input.serialize === true) await lockDomainGuard(context);
   const counted = await personalGmailRecipientsInWindow(context, {
     ...(input.windowHours === undefined ? {} : { windowHours: input.windowHours }),
   });

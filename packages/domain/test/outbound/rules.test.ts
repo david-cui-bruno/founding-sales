@@ -1,13 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ACCOUNT_HEADROOM_RESERVE,
+  ACCOUNT_OPERATIONAL_CEILING,
+  GMAIL_ACCOUNT_DAILY_LIMIT,
   RAMP_ADMIN_RAISE_LIMIT,
   RAMP_HARD_CEILING,
+  RAMP_RAISE_HEALTHY_STREAK,
   RAMP_SETTLED_CAP,
+  RAMP_SETTLED_DAY,
   RECONCILE_BACKOFF_SECONDS,
   deterministicMessageId,
   effectiveDailyCap,
   fenceIdOfMessageId,
   isPersonalGmailAddress,
+  raiseAllowance,
+  raiseRefusal,
   rampHealthFailure,
   reconcileBackoffSeconds,
   renderedHash,
@@ -59,15 +66,56 @@ describe('the reputation ramp (12.7)', () => {
     expect(effectiveDailyCap(ramp({ healthySendingDays: 0, adminDailyCap: 90 }))).toBe(5);
   });
 
-  it('lets an admin raise through the raising column, and the minimum still wins', () => {
-    expect(effectiveDailyCap(ramp({ healthySendingDays: 0, raisedDailyCap: 75 }))).toBe(75);
+  it('lets an earned raise replace the schedule, and the minimum still wins', () => {
+    const settled = { healthySendingDays: 40, raisedDailyCap: 75 };
+    expect(effectiveDailyCap(ramp(settled), RAMP_RAISE_HEALTHY_STREAK)).toBe(75);
     // An admin who raised last month and lowers today means today.
-    expect(effectiveDailyCap(ramp({ raisedDailyCap: 75, adminDailyCap: 10 }))).toBe(10);
+    expect(effectiveDailyCap(ramp({ ...settled, adminDailyCap: 10 }), RAMP_RAISE_HEALTHY_STREAK)).toBe(10);
+  });
+
+  it('S06: a stored raise never lifts a mailbox above what the schedule allows it that day', () => {
+    // The bypass, as the audit found it: a raise to 75 on a mailbox's first day.
+    // Whatever the column says, day zero is five.
+    expect(effectiveDailyCap(ramp({ healthySendingDays: 0, raisedDailyCap: 75 }))).toBe(5);
+    expect(effectiveDailyCap(ramp({ healthySendingDays: 0, raisedDailyCap: 75 }), RAMP_RAISE_HEALTHY_STREAK)).toBe(5);
+    // One day short of settling is still the schedule's thirty-five.
+    expect(effectiveDailyCap(ramp({ healthySendingDays: RAMP_SETTLED_DAY - 1, raisedDailyCap: 75 }), 30)).toBe(35);
+    // Settled, but the last sending days were not all healthy: the schedule's fifty.
+    expect(
+      effectiveDailyCap(ramp({ healthySendingDays: 40, raisedDailyCap: 75 }), RAMP_RAISE_HEALTHY_STREAK - 1),
+    ).toBe(RAMP_SETTLED_CAP);
+    // A "raise" below the schedule is the admin's choice and is honoured as written.
+    expect(effectiveDailyCap(ramp({ healthySendingDays: 12, raisedDailyCap: 10 }), 0)).toBe(10);
+  });
+
+  it('S06: names the part of the sustained-health rule a raise has not met', () => {
+    expect(RAMP_SETTLED_DAY).toBe(30);
+    expect(scheduledCap(RAMP_SETTLED_DAY)).toBe(RAMP_SETTLED_CAP);
+    expect(raiseRefusal({ healthySendingDays: 0 }, RAMP_RAISE_HEALTHY_STREAK)).toBe('ramp_not_settled');
+    expect(raiseRefusal({ healthySendingDays: RAMP_SETTLED_DAY - 1 }, 50)).toBe('ramp_not_settled');
+    expect(raiseRefusal({ healthySendingDays: RAMP_SETTLED_DAY }, RAMP_RAISE_HEALTHY_STREAK - 1)).toBe(
+      'health_not_sustained',
+    );
+    expect(raiseRefusal({ healthySendingDays: RAMP_SETTLED_DAY }, RAMP_RAISE_HEALTHY_STREAK)).toBeNull();
+    expect(raiseAllowance({ healthySendingDays: 12 }, 0)).toBe(15);
+    expect(raiseAllowance({ healthySendingDays: 40 }, RAMP_RAISE_HEALTHY_STREAK)).toBe(RAMP_ADMIN_RAISE_LIMIT);
   });
 
   it('never exceeds 12.7’s hard ceiling, whatever the columns say', () => {
-    expect(effectiveDailyCap(ramp({ raisedDailyCap: RAMP_HARD_CEILING }))).toBe(RAMP_HARD_CEILING);
+    // The column's CHECK allows 100; the command allows 75; the cap in force is 75.
+    expect(
+      effectiveDailyCap(ramp({ healthySendingDays: 40, raisedDailyCap: RAMP_HARD_CEILING }), RAMP_RAISE_HEALTHY_STREAK),
+    ).toBe(RAMP_ADMIN_RAISE_LIMIT);
     expect(RAMP_ADMIN_RAISE_LIMIT).toBeLessThan(RAMP_HARD_CEILING);
+  });
+
+  it('S07: keeps a reserve of Google’s account limit that automated sending never plans to use', () => {
+    expect(GMAIL_ACCOUNT_DAILY_LIMIT).toBe(2000);
+    expect(ACCOUNT_OPERATIONAL_CEILING).toBe(GMAIL_ACCOUNT_DAILY_LIMIT - ACCOUNT_HEADROOM_RESERVE);
+    expect(ACCOUNT_HEADROOM_RESERVE).toBeGreaterThan(0);
+    // The automated cap alone can never reach the ceiling, so it only bites for an
+    // account a person is already sending a great deal from by hand.
+    expect(RAMP_HARD_CEILING).toBeLessThan(ACCOUNT_OPERATIONAL_CEILING);
   });
 
   it('advances only on 12.7’s health conditions, and names the one that failed', () => {

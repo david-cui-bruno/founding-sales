@@ -32,6 +32,24 @@ import {
  * CHECK on the column, because 12.7 calls it "a hard automated ceiling" and version
  * one should not be able to exceed it by any path at all.
  *
+ * **A raise is earned, and it stays earned or it stops counting** (lane g87, audit
+ * S06). Before g87 the command accepted `raiseTo: 75` for a mailbox on its first day
+ * and `effectiveDailyCap` let it replace the schedule, so the whole ramp was one admin
+ * click deep. Now the "sustained healthy results" clause is a rule with two parts,
+ * `raiseRefusal`:
+ *
+ *   * the mailbox has finished the schedule — `RAMP_SETTLED_DAY` (30) healthy sending
+ *     days, "After six healthy weeks" — refused as `ramp_not_settled` otherwise;
+ *   * its last `RAMP_RAISE_HEALTHY_STREAK` (10) closed sending days were all healthy,
+ *     with no unhealthy one between them — refused as `health_not_sustained`.
+ *
+ * `setAdminCap` refuses a raise that fails either part. And because a raise is stored
+ * and health is not, the gate asks the same question again before every send
+ * (`dailyCapInForce`): a stored raise lifts the day's cap only while the rule holds,
+ * and otherwise the schedule governs that day. So no path — a raise recorded before
+ * this rule, a late bounce that took back the thirtieth day, a bad fortnight after the
+ * raise — lets a raise put a mailbox above what the schedule allows it that day.
+ *
  * When both are set the minimum wins. An admin who raised a mailbox last month and
  * lowers it during an incident today means the incident.
  */
@@ -84,13 +102,136 @@ export function scheduledCap(healthySendingDays: number): number {
 }
 
 /**
- * The cap in force for one mailbox today: the schedule, the admin raise, the admin
- * lowering, and the hard ceiling, in that order of application.
+ * The healthy sending day on which 12.7's schedule settles: "After six healthy weeks".
+ * The last rung's end, so a schedule change moves it with the table.
  */
-export function effectiveDailyCap(ramp: RampRow): number {
-  const base = ramp.raisedDailyCap ?? scheduledCap(ramp.healthySendingDays);
+export const RAMP_SETTLED_DAY: number = RAMP_SCHEDULE[RAMP_SCHEDULE.length - 1]?.throughDay ?? 30;
+
+/**
+ * "Sustained healthy results", as a number the specification does not give: the most
+ * recent closed sending days that must all have been healthy before a raise counts.
+ *
+ * Ten is the longest step the table itself takes — "Weeks 5–6", ten sending days at
+ * one cap — so a raise asks for as long a clean run as any rung of the schedule does.
+ * A lane's choice, named in `docs/decisions/g87-ramp-raise-headroom-exposure.md`;
+ * changing it is David's decision, like the rate thresholds below.
+ */
+export const RAMP_RAISE_HEALTHY_STREAK = 10;
+
+/** Why a raise is not earned (lane g87, S06). */
+export type RaiseRefusal = 'ramp_not_settled' | 'health_not_sustained';
+
+/**
+ * Whether a mailbox has earned a raise above its schedule, or which part of the rule
+ * it has not met. `healthyStreak` is `readHealthyStreak`'s answer.
+ */
+export function raiseRefusal(
+  ramp: Pick<RampRow, 'healthySendingDays'>,
+  healthyStreak: number,
+): RaiseRefusal | null {
+  if (ramp.healthySendingDays < RAMP_SETTLED_DAY) return 'ramp_not_settled';
+  if (healthyStreak < RAMP_RAISE_HEALTHY_STREAK) return 'health_not_sustained';
+  return null;
+}
+
+/**
+ * The most a stored raise may set the day's cap to: 75 once the raise is earned, and
+ * the schedule's own cap for the day until then. "Never above the schedule's
+ * allowance for that day" is this function.
+ */
+export function raiseAllowance(ramp: Pick<RampRow, 'healthySendingDays'>, healthyStreak: number): number {
+  return raiseRefusal(ramp, healthyStreak) === null
+    ? RAMP_ADMIN_RAISE_LIMIT
+    : scheduledCap(ramp.healthySendingDays);
+}
+
+/**
+ * The cap in force for one mailbox today: the schedule, the admin raise (bounded by
+ * what the day allows it), the admin lowering, and the hard ceiling, in that order.
+ *
+ * `healthyStreak` is what the raise is judged on. The gate and the admin surfaces pass
+ * it (`dailyCapInForce`, `setAdminCap`, `readRampStanding`); a display that cannot
+ * read it may leave it out, and then only the first part of the rule — the settled
+ * schedule — bounds the raise. Nothing that decides a send leaves it out.
+ */
+export function effectiveDailyCap(ramp: RampRow, healthyStreak?: number): number {
+  const scheduled = scheduledCap(ramp.healthySendingDays);
+  const allowance =
+    healthyStreak === undefined
+      ? ramp.healthySendingDays >= RAMP_SETTLED_DAY
+        ? RAMP_ADMIN_RAISE_LIMIT
+        : scheduled
+      : raiseAllowance(ramp, healthyStreak);
+  const base = ramp.raisedDailyCap === null ? scheduled : Math.min(ramp.raisedDailyCap, allowance);
   const lowered = ramp.adminDailyCap === null ? base : Math.min(base, ramp.adminDailyCap);
   return Math.max(Math.min(lowered, RAMP_HARD_CEILING), 0);
+}
+
+/**
+ * How many of the mailbox's most recent closed sending days were healthy, counting
+ * back from the latest until the first that was not, up to `limit`.
+ *
+ * A *sending* day is one with at least one automated send: 12.7 counts "healthy
+ * sending days", and `rampHealthFailure` says a day with none "neither advances the
+ * ramp nor counts against it", so a quiet Monday neither breaks a streak nor extends
+ * one. An open day has no verdict yet and is not read. A closed day a late bounce
+ * condemned (`recordBounceAgainstDay`) reads `healthy = false` and ends the streak.
+ */
+export async function readHealthyStreak(
+  context: RepositoryContext,
+  mailboxId: string,
+  limit: number = RAMP_RAISE_HEALTHY_STREAK,
+): Promise<number> {
+  const { rows } = await context.db.query<{ healthy: boolean | null }>(
+    `SELECT healthy FROM mailbox_send_days
+      WHERE workspace_id = $1 AND mailbox_id = $2
+        AND closed_at IS NOT NULL AND automated_sent > 0
+      ORDER BY business_date DESC
+      LIMIT $3`,
+    [context.scope.workspaceId, mailboxId, Math.max(Math.trunc(limit), 0)],
+  );
+  let streak = 0;
+  for (const row of rows) {
+    if (row.healthy !== true) break;
+    streak += 1;
+  }
+  return streak;
+}
+
+/**
+ * The cap the gate enforces for this mailbox now: `effectiveDailyCap`, with the raise
+ * judged on the mailbox's health as it stands (lane g87, S06).
+ *
+ * The streak is read only when there is a raise to judge, so a mailbox on the plain
+ * schedule costs the send path nothing extra.
+ */
+export async function dailyCapInForce(context: RepositoryContext, ramp: RampRow): Promise<number> {
+  if (ramp.raisedDailyCap === null) return effectiveDailyCap(ramp, 0);
+  return effectiveDailyCap(ramp, await readHealthyStreak(context, ramp.mailboxId));
+}
+
+/** One mailbox's ramp as an admin sees it: the row, the streak and the cap in force. */
+export interface RampStanding {
+  readonly ramp: RampRow;
+  readonly healthyStreak: number;
+  readonly effectiveCap: number;
+  /** Why a raise would be refused today, or null when one would be accepted. */
+  readonly raiseRefusal: RaiseRefusal | null;
+}
+
+export async function readRampStanding(
+  context: RepositoryContext,
+  mailboxId: string,
+): Promise<RampStanding | null> {
+  const ramp = await readRamp(context, mailboxId);
+  if (ramp === null) return null;
+  const healthyStreak = await readHealthyStreak(context, mailboxId);
+  return {
+    ramp,
+    healthyStreak,
+    effectiveCap: effectiveDailyCap(ramp, healthyStreak),
+    raiseRefusal: raiseRefusal(ramp, healthyStreak),
+  };
 }
 
 export async function readRamp(
@@ -290,10 +431,28 @@ export async function closeSendDay(
  * `RAMP_ADMIN_RAISE_LIMIT` is refused here rather than silently clamped: an admin who
  * typed 100 meant 100, and telling them the limit is 75 is better than giving them 75
  * and letting them believe they have 100.
+ *
+ * **A raise must be earned** (lane g87, S06). Any non-null `raiseTo` is refused unless
+ * the mailbox has finished the schedule and its last `RAMP_RAISE_HEALTHY_STREAK`
+ * closed sending days were all healthy — `ramp_not_settled` or
+ * `health_not_sustained`, the part of the rule it has not met. Clearing a raise
+ * (`raiseTo: null`) and lowering are never refused for health: both only make the cap
+ * smaller.
+ *
+ * **Absent leaves a column alone; null clears it.** The route passes an absent field
+ * through as absent and the desktop sends only the field a person changed, both on
+ * that understanding. Until g87 this function read absent as null, so lowering a
+ * raised mailbox during an incident silently cleared the raise as well, and raising it
+ * cleared the lowering.
+ *
+ * The row is locked for the decision, so two admins cannot each read the other's
+ * column as it was.
  */
+export type AdminCapRefusal = 'raise_above_limit' | 'cap_out_of_range' | 'mailbox_unknown' | RaiseRefusal;
+
 export type AdminCapOutcome =
   | { readonly ok: true; readonly ramp: RampRow; readonly effectiveCap: number }
-  | { readonly ok: false; readonly reason: 'raise_above_limit' | 'cap_out_of_range' | 'mailbox_unknown' };
+  | { readonly ok: false; readonly reason: AdminCapRefusal };
 
 export async function setAdminCap(
   context: RepositoryContext,
@@ -322,6 +481,22 @@ export async function setAdminCap(
     await ensureRamp(context, input.mailboxId);
   }
 
+  const locked = await context.db.query<RampDbRow>(
+    `SELECT ${RAMP_COLUMNS} FROM mailbox_send_ramp WHERE workspace_id = $1 AND mailbox_id = $2 FOR UPDATE`,
+    [context.scope.workspaceId, input.mailboxId],
+  );
+  const lockedRow = locked.rows[0];
+  if (lockedRow === undefined) return { ok: false, reason: 'mailbox_unknown' };
+  const current = toRamp(lockedRow);
+
+  const healthyStreak = await readHealthyStreak(context, input.mailboxId);
+  if (raiseTo !== null) {
+    const refusal = raiseRefusal(current, healthyStreak);
+    if (refusal !== null) return { ok: false, reason: refusal };
+  }
+
+  const nextLower = input.lowerTo === undefined ? current.adminDailyCap : lowerTo;
+  const nextRaise = input.raiseTo === undefined ? current.raisedDailyCap : raiseTo;
   const { rows } = await context.db.query<RampDbRow>(
     `UPDATE mailbox_send_ramp
         SET admin_daily_cap = $3,
@@ -333,12 +508,12 @@ export async function setAdminCap(
             updated_at = now()
       WHERE workspace_id = $1 AND mailbox_id = $2
       RETURNING ${RAMP_COLUMNS}`,
-    [context.scope.workspaceId, input.mailboxId, lowerTo, raiseTo, input.adminUserId],
+    [context.scope.workspaceId, input.mailboxId, nextLower, nextRaise, input.adminUserId],
   );
   const row = rows[0];
   if (row === undefined) return { ok: false, reason: 'mailbox_unknown' };
   const ramp = toRamp(row);
-  return { ok: true, ramp, effectiveCap: effectiveDailyCap(ramp) };
+  return { ok: true, ramp, effectiveCap: effectiveDailyCap(ramp, healthyStreak) };
 }
 
 export interface SendDayRow {
@@ -450,7 +625,9 @@ export async function claimedAutomatedSends(
  * 12.7: "All outgoing Gmail messages, including direct sends, count toward
  * operational headroom." They are counted in their own column and never against the
  * automated cap, because the cap is FSS's self-restraint and a person writing their
- * own email is not FSS.
+ * own email is not FSS. They do count against the account headroom the gate enforces
+ * (`readAccountHeadroom`, lane g87): a person's own mail spends the same Google
+ * allowance FSS's does.
  */
 export async function countDirectSend(
   context: RepositoryContext,
@@ -463,6 +640,81 @@ export async function countDirectSend(
      DO UPDATE SET direct_sent = mailbox_send_days.direct_sent + 1, updated_at = now()`,
     [context.scope.workspaceId, input.mailboxId, input.businessDate, input.cap],
   );
+}
+
+/**
+ * 12.7's operational headroom (lane g87, audit S07).
+ *
+ * "All outgoing Gmail messages, including direct sends, count toward operational
+ * headroom. Automated capacity is conservatively reserved so sync lag cannot approach
+ * Google's account ceiling."
+ *
+ * Google's ceiling is per account: a Google Workspace user may send
+ * `GMAIL_ACCOUNT_DAILY_LIMIT` messages in any rolling 24 hours, and every message
+ * counts whoever wrote it. FSS already keeps both halves per mailbox per business date
+ * — `automated_sent`, reserved by fence at the claim, and `direct_sent`, counted when
+ * the sync imports a message FSS did not send — and until g87 nothing read their sum.
+ * The rule that now does:
+ *
+ *   **an automated send is refused as `daily_cap` (detail `account used/ceiling`) when
+ *   the mailbox's automated and direct sends on the claim's business date and the one
+ *   before it already reach `ACCOUNT_OPERATIONAL_CEILING`.**
+ *
+ * Two dates rather than one because Google's window rolls and the counters do not: at
+ * nine in the morning, yesterday afternoon's sends are still inside Google's 24 hours,
+ * and a ceiling on today's row alone would let an account that sent 1,900 messages by
+ * hand yesterday evening take FSS's whole cap this morning. Any 24 hours ending now
+ * lies inside today's business date and yesterday's, so their sum can only overstate
+ * what Google is counting — the conservative direction.
+ *
+ * `ACCOUNT_HEADROOM_RESERVE` is the part of Google's limit FSS never plans to use. It
+ * is there for what the counters cannot see yet: direct sends the sync has not
+ * imported. The gate refuses automated sending once coverage is older than
+ * `COVERAGE_FRESHNESS_SECONDS` (fifteen minutes), so the unseen part is at most a
+ * quarter of an hour of a person's own sending plus the import itself; five hundred
+ * messages is more than any one mailbox sends in that time, mail merges included. It
+ * also absorbs the hour a spring-forward night adds to Google's window beyond two
+ * business dates. The reasoning, and what it leaves out — Google's separate recipient
+ * limits, Bcc, trial accounts — is in `docs/decisions/g87-ramp-raise-headroom-exposure.md`.
+ *
+ * The automated cap still applies on its own: at most 100 a day ever reach this sum
+ * from FSS, so the headroom only bites for an account a person is already driving
+ * hard, which is exactly the account FSS should stop adding to.
+ */
+export const GMAIL_ACCOUNT_DAILY_LIMIT = 2000;
+export const ACCOUNT_HEADROOM_RESERVE = 500;
+export const ACCOUNT_OPERATIONAL_CEILING = GMAIL_ACCOUNT_DAILY_LIMIT - ACCOUNT_HEADROOM_RESERVE;
+
+export interface AccountHeadroom {
+  /** Automated and direct sends on the business date and the one before it. */
+  readonly used: number;
+  readonly ceiling: number;
+  /** Whether one more automated send fits under the ceiling. */
+  readonly allowed: boolean;
+}
+
+/**
+ * The mailbox's account headroom for a business date.
+ *
+ * `today` is the day's row as the gate just upserted it (`openSendDay`), which inside
+ * the claiming transaction is locked, so two claims on one mailbox read it one after
+ * the other. The day before is a plain read: its only writer after the fact is the
+ * mail pipeline's direct-send counter, which takes the send gate exclusive before it
+ * counts and so cannot commit while a claim holds the gate shared.
+ */
+export async function readAccountHeadroom(
+  context: RepositoryContext,
+  input: { readonly mailboxId: string; readonly businessDate: string; readonly today: SendDayRow },
+): Promise<AccountHeadroom> {
+  const { rows } = await context.db.query<{ sent: string }>(
+    `SELECT coalesce(sum(automated_sent + direct_sent), 0)::text AS sent
+       FROM mailbox_send_days
+      WHERE workspace_id = $1 AND mailbox_id = $2 AND business_date = $3::date - 1`,
+    [context.scope.workspaceId, input.mailboxId, input.businessDate],
+  );
+  const yesterday = Number(rows[0]?.sent ?? '0');
+  const used = input.today.automatedSent + input.today.directSent + yesterday;
+  return { used, ceiling: ACCOUNT_OPERATIONAL_CEILING, allowed: used < ACCOUNT_OPERATIONAL_CEILING };
 }
 
 /** Record a bounce, an opt-out or a provider error against the day the ramp reads. */

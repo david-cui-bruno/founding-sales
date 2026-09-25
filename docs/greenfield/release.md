@@ -3291,6 +3291,31 @@ Eight mutations are appended to `scripts/releaseMutationCheck.mjs` (200 → 208 
 - a real spreadsheet export's quoting and encoding;
 - dialing a captured firm: its routes are `candidate`, and nothing on the Mac validates a route yet.
 
+### 8.0as What lane g87 changed: a raise is earned, the account has headroom, and the guard counts exposure (25 September)
+
+**The gap.** The 25 September audit (`GPT6-ASTRA-EXHAUSTIVE-20260925.md`) left three send-path items after lane g77. All three were real in code.
+
+- **S06, P0.** `POST /outbound/cap` accepted `raiseTo: 75` for a mailbox connected that morning, and the stored raise replaced the ramp's schedule. The whole six-week ramp was one admin click deep.
+- **S07, P1.** A salesperson's own sends were counted in `direct_sent`, but nothing read the column. The gate had no ceiling for the account as a whole.
+- **S08, P1.** The personal-Gmail guard counted `sent` fences only. A send in doubt left the count, and a direct message counted once however many Gmail recipients it named.
+
+**What g87 changes.** `docs/decisions/g87-ramp-raise-headroom-exposure.md` has the reasoning, and `docs/greenfield/sending.md` rules 6 to 8 have the rules.
+
+- **A raise is earned (S06).** It needs two things. The mailbox has finished the schedule, which is 30 healthy sending days; otherwise the refusal is `ramp_not_settled`. Its last 10 closed sending days were all healthy; otherwise it is `health_not_sustained`. `POST /outbound/cap` returns either code as its 409 `reason`. The gate asks again before every send: a stored raise lifts the day's cap only while the rule holds, and otherwise the schedule governs that day. So a raise recorded before this release on a young mailbox now sends only the schedule's number. `POST /outbound/status` reports the cap in force. `setAdminCap` also stops reading an absent field as null, so lowering a raised mailbox no longer clears its raise.
+- **The account has headroom (S07).** An automated send is refused as `daily_cap`, detail `account used/ceiling`, once the mailbox's automated plus direct sends on the claim's business date and the one before it reach 1,500. That is Google Workspace's 2,000 a rolling day, less a 500-message reserve for direct sends the sync has not imported yet. The automated cap's detail now reads `automated n/cap`.
+- **The guard counts exposure (S08).** The count covers every fence to personal Gmail that has been claimed, whether `dispatching`, `reconciling`, `sent` or `unknown_terminal`. It also covers every distinct personal-Gmail address on each imported message's `To` and `Cc`. FSS's own imported copy is counted once, matched by Gmail id or deterministic `Message-ID`. The gate now serializes the guard's decisions with a per-workspace advisory lock, so a claim counts the claim before it. The answer keeps the `{ automated, direct, total }` shape: `test/release/sendingSection.check.ts` holds the desktop's fixture to it key for key, and it passes unchanged.
+- Six mutations are appended to `scripts/releaseMutationCheck.mjs` (see the pull request for the count on its base). Each was applied by hand and turns `sendingCeilings.test.ts` red.
+
+**Release class.** This is application-only, with no migration and no schema range change. It changes the worker image, because the gate runs there, and the API image, because of the cap command and the status read. No desktop change is needed. Sending stays disabled in production (`FSS_SENDING_ENABLED=false`), so nothing changes live behaviour until the attestation is written. Because this is a sending-safety change, it rides the next `full` rehearsal already owed for g77.
+
+**What the next `full` rehearsal should prove.**
+
+1. Scenarios 5, 12, 16 and 33 pass unchanged. The rehearsal's mailbox is young, and none of them raises a cap.
+2. The drill's `accepted_send` and `in_doubt_send` still send. The in-doubt fence now counts against the personal-Gmail guard only if its recipient is on personal Gmail, and the drill's is not.
+3. No claim logs a lock timeout or `40P01`. The guard lock is taken only for personal-Gmail recipients, only by claims, and last.
+
+**Still unverified.** Nothing here has run in the cloud. The lock's behaviour is measured only on embedded PostgreSQL 16. Google's limits of 2,000 messages and the Workspace recipient ceilings are taken from Google's published figures, not measured, and this lane had no network to re-read them. The ten-day streak and the 500-message reserve are this lane's numbers, not the specification's, and are David's to change.
+
 ### 8.1 Still unverified
 
 Production was applied, deployed, bootstrapped and smoked at `66203322`, and redeployed at `02da3dd5` between 05:50Z and 05:57Z on 24 September, which carries the sign-in fix (8.0v). The signed desktop build is published at `66203322` (8.0t), and thirteen rehearsal runs have existed (8.0s, 8.0t, 8.0v, 8.0w). The first real sign-in was attempted against the `66203322` deployment and refused by the API's own discovery rule (8.0u); the retry against the g45 fix succeeded at 15:08Z, and showed that desktop 1.0.0 has no way to connect the mailbox (8.0x). Desktop 1.0.1 connected the first mailbox at about 18:10Z on 24 September. From 18:11Z CloudWatch refused every worker metric publication over one unit, and ECS replaced the worker every few minutes for failed health checks. That blackout lasts until the g51 fix is deployed (8.0y). What follows is what that still does not settle. Items 1 to 10 were written before any of it ran, and each carries whatever a later run answered; items 11 to 18 are what is open on 24 September, and the first of them is the release record this release does not have.

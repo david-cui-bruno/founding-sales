@@ -2,13 +2,12 @@ import { z } from 'zod';
 import {
   authenticationPasses,
   decideDomainGuard,
-  effectiveDailyCap,
   outboundDoubtCounts,
   personalGmailRecipientsInWindow,
   readFence,
   readFenceEvents,
   readPrimarySendingDomain,
-  readRamp,
+  readRampStanding,
   recordAuthenticationChecklist,
   registerSendingDomain,
   resolveUnknownTerminal,
@@ -34,8 +33,12 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  *     skipped" for a fence that ended `unknown_terminal`;
  *   * `/outbound/authentication` — 12.7's SPF, DKIM and DMARC checklist, which is a
  *     person saying they looked, because **this application never queries DNS**;
- *   * `/outbound/cap` — 12.7's "Admins may lower caps ... they may raise a mailbox
- *     to 75";
+ *   * `/outbound/cap` — 12.7's "Admins may lower caps ... After sustained healthy
+ *     results they may raise a mailbox to 75". The raise is refused, with the part of
+ *     the rule not met, unless the mailbox has finished the schedule
+ *     (`ramp_not_settled`) and kept its last ten closed sending days healthy
+ *     (`health_not_sustained`) — lane g87, audit S06. The refusal is the command's
+ *     409 `reason`, like every other;
  *   * `/outbound/domain` — registers a sending domain (lane g57), so a workspace whose
  *     mailbox connected before the connect path registered one has somewhere to
  *     record the checklist. Idempotent: an existing row comes back unchanged, and the
@@ -96,7 +99,12 @@ const capCommandSchema = z
     mailboxId: z.string().uuid(),
     /** 12.7: "Admins may lower caps." Null clears the lowering. */
     lowerTo: z.number().int().min(0).max(100).nullable().optional(),
-    /** 12.7: "they may raise a mailbox to 75". Above that is refused, not clamped. */
+    /**
+     * 12.7: "After sustained healthy results they may raise a mailbox to 75". Above 75
+     * is refused, not clamped (`raise_above_limit`); so is any raise the mailbox has
+     * not earned (`ramp_not_settled`, `health_not_sustained`). Null clears the raise;
+     * absent leaves it as it is.
+     */
     raiseTo: z.number().int().min(1).max(100).nullable().optional(),
   })
   .strict();
@@ -233,8 +241,10 @@ export async function routeOutbound(request: ApiRequest, options: RoutingOptions
   const doubt = await outboundDoubtCounts(context.db);
   const recipients = await personalGmailRecipientsInWindow(context);
 
-  const ramp =
-    parsed.data.mailboxId === undefined ? null : await readRamp(context, parsed.data.mailboxId);
+  // The cap in force, with a stored raise judged on the mailbox's health as it stands
+  // (lane g87) — the number the gate enforces, not the column an admin once wrote.
+  const standing =
+    parsed.data.mailboxId === undefined ? null : await readRampStanding(context, parsed.data.mailboxId);
   const fence =
     parsed.data.outboundMessageId === undefined
       ? null
@@ -256,15 +266,15 @@ export async function routeOutbound(request: ApiRequest, options: RoutingOptions
       personalGmailRecipients: recipients,
       doubt,
       ramp:
-        ramp === null
+        standing === null
           ? null
           : {
-              mailboxId: ramp.mailboxId,
-              healthySendingDays: ramp.healthySendingDays,
-              effectiveCap: effectiveDailyCap(ramp),
-              adminDailyCap: ramp.adminDailyCap,
-              raisedDailyCap: ramp.raisedDailyCap,
-              lastHealthFailure: ramp.lastHealthFailure,
+              mailboxId: standing.ramp.mailboxId,
+              healthySendingDays: standing.ramp.healthySendingDays,
+              effectiveCap: standing.effectiveCap,
+              adminDailyCap: standing.ramp.adminDailyCap,
+              raisedDailyCap: standing.ramp.raisedDailyCap,
+              lastHealthFailure: standing.ramp.lastHealthFailure,
             },
       fence:
         fence === null
