@@ -250,6 +250,7 @@ describe('the release mutation check runs once a day on main, and on demand', ()
 interface JudgedRun {
   verdict: 'green' | 'red' | 'broken';
   reason: string;
+  brokenRun?: boolean;
   output: string;
   seconds: number;
   signal: string | null;
@@ -272,7 +273,7 @@ interface Runner {
     writeFile: (file: string, text: string) => void;
     log: (line: string) => void;
     stopRequested?: () => boolean;
-  }): Promise<{ killed: number; problems: number; interrupted: boolean }>;
+  }): Promise<{ killed: number; problems: number; brokenRuns: number; interrupted: boolean }>;
 }
 
 // A computed specifier, as in mutationRunner.check.ts: plain ESM with no declarations.
@@ -305,13 +306,16 @@ describe("the nightly's summary step reads what the runner really prints", () =>
       'test:kills': ['green', 'red'],
       'test:survives': ['green', 'green'],
       'test:undecided': ['green', 'broken'],
+      'test:malformed': ['green', 'broken'],
       'test:red': ['red', 'red'],
     };
     const result = await runner.runMutationCheck({
       mutations,
       runSuite: suite => {
         const [before, after] = answers[suite[1] ?? ''] ?? ['broken', 'broken'];
-        return run(text === PRISTINE ? before : after);
+        const judged = run(text === PRISTINE ? before : after);
+        // Lane g80: a mutated file that did not parse is a broken run of its own kind.
+        return suite[1] === 'test:malformed' && text !== PRISTINE ? { ...judged, brokenRun: true } : judged;
       },
       readFile: () => text,
       writeFile: (_file, next) => {
@@ -325,7 +329,7 @@ describe("the nightly's summary step reads what the runner really prints", () =>
 
   it('finds the summary line, and only it, in a clean run', async () => {
     const { result, file } = await logFile([mutation('killed', 'test:kills')]);
-    expect(result).toEqual({ killed: 1, problems: 0, interrupted: false });
+    expect(result).toEqual({ killed: 1, problems: 0, brokenRuns: 0, interrupted: false });
     expect(file.filter(line => SUMMARY.test(line))).toEqual(['1 mutation(s) killed, 0 problem(s).']);
     expect(file.filter(line => PROBLEM.test(line))).toEqual([]);
   });
@@ -336,11 +340,12 @@ describe("the nightly's summary step reads what the runner really prints", () =>
       mutation('stale', 'test:kills', 'not in the file'),
       mutation('survivor', 'test:survives'),
       mutation('undecided', 'test:undecided'),
+      mutation('malformed', 'test:malformed'),
       mutation('red suite', 'test:red'),
     ]);
-    // Stale, survived, undecided, and the red suite twice: once for the suite, once
-    // for the mutation it could not run.
-    expect(result).toEqual({ killed: 1, problems: 5, interrupted: false });
+    // Stale, survived, undecided, a broken run, and the red suite twice: once for the
+    // suite, once for the mutation it could not run.
+    expect(result).toEqual({ killed: 1, problems: 6, brokenRuns: 1, interrupted: false });
     const problems = file.filter(line => PROBLEM.test(line));
     expect(problems).toHaveLength(result.problems);
     expect(problems.map(line => line.split(' ')[0]).sort()).toEqual([
@@ -348,9 +353,10 @@ describe("the nightly's summary step reads what the runner really prints", () =>
       'MUTATION_STALE',
       'MUTATION_SURVIVED',
       'MUTATION_UNDECIDED',
+      'MUTATION_UNDECIDED',
       'SUITE_RED_BEFORE_MUTATION',
     ]);
-    expect(file.filter(line => SUMMARY.test(line))).toEqual(['1 mutation(s) killed, 5 problem(s).']);
+    expect(file.filter(line => SUMMARY.test(line))).toEqual(['1 mutation(s) killed, 6 problem(s).']);
   });
 
   it('finds the interruption too', async () => {

@@ -27,6 +27,22 @@
 //   * anything else — an npm usage error, a setup failure before any test ran, a run
 //     stopped by a signal, output too large to read — is BROKEN, which is a problem and
 //     never a kill.
+//
+// ## A failing test file is not a failing test (lane g80, audit item T01)
+//
+// The rule above still counted one thing that is not a kill. A mutation whose edit does
+// not parse — a `.ts` file esbuild cannot transform, an `.mjs` file vite cannot analyse,
+// a script node or python or bash refuses to read — fails every test file that loads
+// it *before any test runs*: vitest prints "Failed Suites 1", "Test Files  1 failed",
+// "Tests  no tests", and exits 1. That summary names a failed test file, so it was read
+// as red, and the mutation was counted as killed without one assertion having executed.
+// The audit reproduced exactly that. It proves the edit was malformed, not that the
+// suite tests the trap. So a red verdict now needs a failed *test* — vitest's "Tests"
+// line must name one — and output that shows a syntax or transform failure is BROKEN
+// whatever else it says: a test that failed because the file under test would not
+// load has failed for the wrong reason. Such a run is its own kind of broken
+// (`brokenRuns` below, and `broken run:` in the problem line), and like every broken
+// run it is a problem, so the nightly fails on it.
 
 import { spawnSync } from 'node:child_process';
 
@@ -61,6 +77,48 @@ const ANSI = /\u001b\[[0-9;]*m/gu;
 /** Room for any suite's output. Node's default of 1 MiB fails the run when exceeded. */
 const OUTPUT_LIMIT_BYTES = 256 * 1024 * 1024;
 
+/**
+ * What a syntax or transform failure looks like in a suite's output, one pattern per
+ * tool that can refuse to read a mutated file:
+ *
+ *   * vite and esbuild, which load every test file and what it imports: "Transform
+ *     failed with 1 error", "Failed to parse source for import analysis", "Parse
+ *     failure";
+ *   * node and python, when a test runs a script that will not parse: a `SyntaxError:`
+ *     (or python's `IndentationError:`/`TabError:`) line. Not one about JSON:
+ *     `JSON.parse` throws a SyntaxError too, and a test that parsed a command's output
+ *     and got something else has failed for a real reason;
+ *   * bash, whose parser says `<file>: line N: syntax error …`.
+ *
+ * Every pattern is anchored where the tool prints it: at the start of a line, or
+ * straight after the error name vitest puts in front of a failure message. That is
+ * what keeps a failure *report* from reading as a failure to parse. vitest prints the
+ * source around a failed assertion (`  243|     expect(…).toContain('Transform
+ * failed …')`) and the values it compared, and a test about these very messages — this
+ * runner's own — would otherwise turn every kill into a broken run.
+ *
+ * Returns the first matching line, or null.
+ */
+const SYNTAX_FAILURES = Object.freeze([
+  /^[ \t]*(?:[A-Za-z]*Error: )?Transform failed with \d+ errors?/mu,
+  /^[ \t]*(?:[A-Za-z]*Error: )?Failed to parse source for import analysis/mu,
+  /^[ \t]*(?:[A-Za-z]*Error: )?Parse failure: /mu,
+  /^[ \t]*(?:SyntaxError|IndentationError|TabError): (?!.*\bJSON\b).*$/mu,
+  /^(?:[ \t]*[A-Za-z]*Error: )?[^\s|+-]\S*(?:: -c)?: line \d+: syntax error\b/mu,
+]);
+
+export function syntaxFailure(output) {
+  for (const pattern of SYNTAX_FAILURES) {
+    const match = pattern.exec(output);
+    if (match) {
+      const start = output.lastIndexOf('\n', match.index) + 1;
+      const end = output.indexOf('\n', match.index);
+      return output.slice(start, end < 0 ? undefined : end).trim();
+    }
+  }
+  return null;
+}
+
 /** The last lines of a run's output, for a problem report. */
 export function outputTail(output, lines = 30) {
   return output.replace(ANSI, '').trimEnd().split('\n').slice(-lines);
@@ -74,9 +132,12 @@ export function outputTail(output, lines = 30) {
  *
  *   green  — exit 0, vitest's summary names at least one test file that passed and
  *            nothing that failed;
- *   red    — exit non-zero, and vitest's summary names a failed test file, a failed
- *            test or an error;
- *   broken — everything else, with the reason. Never a kill.
+ *   red    — exit non-zero, at least one test executed, vitest's "Tests" line names a
+ *            failed test (or its summary an error thrown while tests ran), and nothing
+ *            in the output is a syntax or transform failure;
+ *   broken — everything else, with the reason. Never a kill. A run that never executed
+ *            a failing test — a syntax or transform failure, a test file that failed to
+ *            load, "Tests  no tests" — also carries `brokenRun: true`, the T01 bucket.
  */
 export function readSuiteRun(run) {
   const output = `${run.stdout ?? ''}\n${run.stderr ?? ''}`.replace(ANSI, '');
@@ -116,7 +177,22 @@ export function readSuiteRun(run) {
     if (!ranFiles) return { verdict: 'broken', reason: `exited 0 having run no test file (Test Files ${files.trim()})` };
     return { verdict: 'green', reason: `Test Files ${files.trim()}` };
   }
-  if (failed && ranFiles) return { verdict: 'red', reason: `Test Files ${files.trim()}` };
+  // T01: a kill is a test that ran and failed, and nothing that could not be read.
+  const summary = `Test Files ${files.trim()}; Tests ${tests.trim() || '<none>'}`;
+  const syntax = syntaxFailure(output);
+  if (syntax !== null) {
+    return {
+      verdict: 'broken',
+      brokenRun: true,
+      reason: `broken run: a syntax or transform failure, not a failing test (${syntax}; ${summary})`,
+    };
+  }
+  const testFailed = /\b\d+ failed\b/u.test(tests);
+  const testsRan = /\b\d+ (?:passed|failed)\b/u.test(tests);
+  if (!testFailed && !(errors && testsRan)) {
+    return { verdict: 'broken', brokenRun: true, reason: `broken run: no test executed and failed (${summary})` };
+  }
+  if (failed && ranFiles) return { verdict: 'red', reason: summary };
   return {
     verdict: 'broken',
     reason: `exited ${String(run.status)} and vitest reported no failing test (Test Files ${files.trim()})`,
@@ -152,12 +228,15 @@ const INTERRUPTS = new Set(['SIGINT', 'SIGTERM', 'SIGHUP']);
  *   log        — one line at a time;
  *   stopRequested — true once the process has been asked to stop.
  *
- * Returns `{ killed, problems, interrupted }`. The last line logged is always
- * `N mutation(s) killed, M problem(s).`; CI and the coordinator's records read it.
+ * Returns `{ killed, problems, brokenRuns, interrupted }`. `brokenRuns` counts the
+ * mutated runs that never executed a failing test (T01); each is also a problem. The
+ * last line logged is always `N mutation(s) killed, M problem(s).`; CI and the
+ * coordinator's records read it.
  */
 export async function runMutationCheck({ mutations, runSuite, readFile, writeFile, log, stopRequested = () => false }) {
   let killed = 0;
   let problems = 0;
+  let brokenRuns = 0;
   let interrupted = false;
   const timing = { unmutated: 0, mutated: 0, seconds: 0 };
   const problem = (line, ...detail) => {
@@ -236,9 +315,14 @@ export async function runMutationCheck({ mutations, runSuite, readFile, writeFil
         `The suite stayed green with ${mutation.file} broken, so it is not testing this.`,
       );
     } else {
+      // The nightly's summary step lists problem lines by their first word, so a broken
+      // run keeps MUTATION_UNDECIDED and says which kind it is after the name.
+      if (run.brokenRun === true) brokenRuns += 1;
       problem(
         `MUTATION_UNDECIDED ${mutation.name}: ${run.reason}`,
-        `The suite (${describeSuite(mutation.suite)}) did not fail a test, so this is not a kill.`,
+        run.brokenRun === true
+          ? `The suite (${describeSuite(mutation.suite)}) never executed a failing test: the mutated file did not load, or no test ran. A mutation must leave the file valid and fail a test.`
+          : `The suite (${describeSuite(mutation.suite)}) did not fail a test, so this is not a kill.`,
         ...outputTail(run.output),
       );
     }
@@ -253,6 +337,9 @@ export async function runMutationCheck({ mutations, runSuite, readFile, writeFil
     `\n${String(timing.unmutated + timing.mutated)} suite run(s) in ${timing.seconds.toFixed(0)} s: ` +
       `${String(timing.unmutated)} unmutated, ${String(timing.mutated)} mutated.`,
   );
+  if (brokenRuns > 0) {
+    log(`\n${String(brokenRuns)} broken run(s): a mutated suite that never executed a failing test is never a kill.`);
+  }
   log(`\n${String(killed)} mutation(s) killed, ${String(problems)} problem(s).`);
-  return { killed, problems, interrupted };
+  return { killed, problems, brokenRuns, interrupted };
 }

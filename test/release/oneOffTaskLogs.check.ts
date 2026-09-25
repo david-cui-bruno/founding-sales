@@ -111,10 +111,27 @@ describe('the one-off task log fetch, after the two silent runs of 23 September 
     // Run 35876269976 (23 September 2026) printed "container migration exited 21" and
     // nothing else: the wrapper returned on the verdict before it ever fetched the log.
     // Every guard the wrapper runs first has a fixture hook, so this drives the whole
-    // path with a recorded ARN (no launch), a stopped task with exit 21, and one log line.
+    // path with a fake CLI that answers the launch (and nothing else), a stopped task
+    // with exit 21, and one log line. Until lane g80 it seeded a bare ARN record
+    // instead; a record without its fingerprint is now set aside rather than read
+    // (oneOffTaskRecords.check.ts), so the launch is the fake's.
     const reports = mkdtempSync(join(tmpdir(), 'fss-reports-'));
     mkdirSync(join(reports, 'tasks'));
-    writeFileSync(join(reports, 'tasks', 'migrate.arn'), `${TASK_ARN}\n`);
+    const stubs = mkdtempSync(join(tmpdir(), 'fss-task-logs-stub-'));
+    const aws = join(stubs, 'aws');
+    writeFileSync(
+      aws,
+      [
+        '#!/usr/bin/env bash',
+        'if [ "$1 $2" = "ecs run-task" ]; then',
+        `  echo '{"tasks":[{"taskArn":"${TASK_ARN}"}],"failures":[]}'`,
+        '  exit 0',
+        'fi',
+        'echo "unexpected: $*" >&2; exit 1',
+        '',
+      ].join('\n'),
+    );
+    chmodSync(aws, 0o755);
     const digest = `sha256:${'a'.repeat(64)}`;
     const plan = JSON.stringify({
       subnet_ids: ['subnet-0a'],
@@ -145,6 +162,8 @@ describe('the one-off task log fetch, after the two silent runs of 23 September 
       env: {
         ...process.env,
         FSS_REHEARSAL_REPORTS: reports,
+        FSS_REHEARSAL_AWS_COMMAND: aws,
+        FSS_REHEARSAL_DRY_RUN: '0',
         FSS_RELEASE_CALLER_ACCOUNT: '111111111111',
         FSS_RELEASE_CLUSTER_TAGS: JSON.stringify([{ key: 'Environment', value: 'rehearsal' }]),
         FSS_RELEASE_TASK_DEFINITION: '',

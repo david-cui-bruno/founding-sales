@@ -211,22 +211,58 @@ judge refused "a prefix belonging to neither environment" \
 judge refused "the empty prefix" \
   release_environment_for_prefix ''
 
-# (o) a recorded ARN means the step already launched: a retry waits on that task
-# rather than starting a second migration, which would block on the advisory lock,
-# apply nothing, and look exactly like success.
+# (o) a recorded ARN means the step already launched and nobody read how it ended: a
+# retry waits on that task rather than starting a second migration, which would block
+# on the advisory lock, apply nothing, and look exactly like success. Lane g80: only a
+# record whose fingerprint is this invocation's, so the record is seeded with one.
 record="$FSS_REHEARSAL_REPORTS/tasks/recorded.arn"
+history="$FSS_REHEARSAL_REPORTS/tasks/recorded.history"
 mkdir -p "$(dirname "$record")"
-printf 'arn:aws:ecs:us-east-1:123456789012:task/fss-rh-check/recorded\n' > "$record"
-launched_again=0
-FSS_RELEASE_RUN_TASK='{"tasks":[{"taskArn":"arn:aws:ecs:us-east-1:123456789012:task/fss-rh-check/fresh"}],"failures":[]}' \
-FSS_RELEASE_DESCRIBE_TASKS='{"tasks":[{"lastStatus":"STOPPED","stopCode":"EssentialContainerExited","stoppedReason":"","containers":[{"name":"migration","exitCode":0}]}]}' \
+seed_record() { # seed_record <run id>
+  printf 'arn:aws:ecs:us-east-1:123456789012:task/fss-rh-check/recorded\n' > "$record"
+  printf '%s run=%s attempt=1\n' "$(release_task_fingerprint "$1" rehearsal fss-rh-check 123456789012 us-east-1 \
+    "$CLUSTER" recorded "$TASK_DEFINITION" migration "$GOOD_DIGEST" fss-rh-check-pg.example "$SECRET" 0 \
+    '["migrate"]' '[]')" "$1" > "${record%.arn}.fingerprint"
+}
+FRESH='{"tasks":[{"taskArn":"arn:aws:ecs:us-east-1:123456789012:task/fss-rh-check/fresh"}],"failures":[]}'
+PASSED='{"tasks":[{"lastStatus":"STOPPED","stopCode":"EssentialContainerExited","stoppedReason":"","containers":[{"name":"migration","exitCode":0}]}]}'
+seed_record "$(release_run_id)"
+FSS_RELEASE_RUN_TASK="$FRESH" FSS_RELEASE_DESCRIBE_TASKS="$PASSED" \
   release_run_task "${BASE[@]}" --step recorded -- migrate >/dev/null 2>&1
-if [ "$(cat "$record")" != "arn:aws:ecs:us-east-1:123456789012:task/fss-rh-check/recorded" ]; then
+if ! grep -q 'outcome=read_verdict_0 task=arn:aws:ecs:us-east-1:123456789012:task/fss-rh-check/recorded' "$history" 2>/dev/null \
+  || grep -q 'task/fss-rh-check/fresh' "$history" 2>/dev/null; then
   echo "GUARD_SURVIVED: a retry launched a second task instead of waiting on the recorded one"
   failures=$((failures + 1))
-  launched_again=1
+else
+  proven=$((proven + 1))
 fi
-[ "$launched_again" -eq 0 ] && proven=$((proven + 1))
+
+# (p) lane g80: a record another run wrote is never read as this one's. Its task has
+# stopped, so it is set aside unread and this step launches its own.
+rm -f "$history"
+seed_record "another-release"
+FSS_RELEASE_RUN_TASK="$FRESH" FSS_RELEASE_DESCRIBE_TASKS="$PASSED" \
+  release_run_task "${BASE[@]}" --step recorded -- migrate >/dev/null 2>&1
+if grep -q 'outcome=set_aside_unread_STOPPED task=arn:aws:ecs:us-east-1:123456789012:task/fss-rh-check/recorded' "$history" 2>/dev/null \
+  && grep -q 'outcome=read_verdict_0 task=arn:aws:ecs:us-east-1:123456789012:task/fss-rh-check/fresh' "$history" 2>/dev/null; then
+  proven=$((proven + 1))
+else
+  echo "GUARD_SURVIVED: a record another run wrote was read as this run's"
+  failures=$((failures + 1))
+fi
+
+# (q) lane g80: an image that could not be pulled is launched again, a bounded number
+# of times, and then fails; an exit code is not retried at all.
+judge refused "a task whose image could not be pulled on any attempt" \
+  env RELEASE_PULL_BACKOFF_SECONDS=0 FSS_RELEASE_RUN_TASK="$FRESH" \
+  FSS_RELEASE_DESCRIBE_TASKS='{"tasks":[{"lastStatus":"STOPPED","stopCode":"TaskFailedToStart","stoppedReason":"CannotPullContainerError: failed to resolve ref: not found","containers":[{"name":"migration","reason":"CannotPullContainerError: not found"}]}]}' \
+  bash -c 'source infra/scripts/release-common.sh; release_run_task "$@"' _ "${BASE[@]}" --step pull -- migrate
+if [ "$(grep -c 'outcome=image_not_pulled_attempt_' "$FSS_REHEARSAL_REPORTS/tasks/pull.history" 2>/dev/null)" = "2" ]; then
+  proven=$((proven + 1))
+else
+  echo "GUARD_SURVIVED: a pull failure was not launched again exactly twice before failing"
+  failures=$((failures + 1))
+fi
 
 echo "${proven} wrapper guard(s) exercised, ${failures} problem(s)."
 [ "$failures" -eq 0 ]
