@@ -14,14 +14,15 @@ jobs:
     # container, which GitHub provides on Linux runners. The macOS-specific parts of
     # the product (Electron packaging, Keychain, tel: handoff) are not in this tree.
     runs-on: ubuntu-24.04
-    # 45, not 20. The "Release mutation check" step is most of this job: it runs each
-    # distinct suite once unmutated, then one suite per mutation, and most mutations
-    # name the whole release suite. At c5ee7508 (67 mutations, before lane g54's
-    # pristine runs and --bail=1) that step took 15m51s of a 19-minute job, and PR 188's
-    # run was cancelled at the old 20-minute limit with the mutation check at 17m14s.
-    # Every mutation that names the whole release suite adds up to about 15 s, so this
-    # limit has to grow as the traps do.
-    timeout-minutes: 45
+    # 20. Until lane g62 this was 45, because the release mutation check was most of
+    # the job: about sixteen minutes of it on main at 102 mutations (run 36089059879,
+    # "129 suite run(s) in 940 s"), growing by about 15 s with every mutation that
+    # names the whole release suite. David's decision of 25 September 2026 moved that check to
+    # `.github/workflows/greenfield-nightly.yml`, which runs it once a day on main
+    # (and on demand), so this job is typecheck, lint, the workspace tests and the
+    # release suite: about three minutes. `test/release/mutationSchedule.check.ts`
+    # fails if the mutation check comes back here.
+    timeout-minutes: 20
     defaults:
       run:
         shell: bash
@@ -69,23 +70,9 @@ jobs:
           set -euo pipefail
           npm ci --ignore-scripts --no-audit --no-fund
       - name: Greenfield gate
+        # Typecheck, lint, the workspace tests and the release suite. The release
+        # mutation check, which proves the release suite's traps are closed by
+        # breaking each one, runs nightly on main instead
+        # (`.github/workflows/greenfield-nightly.yml`) and locally as
+        # `npm run test:release:mutation`.
         run: npm run gate:greenfield
-      - name: Release mutation check
-        # The traps the release suite names are only closed if breaking them
-        # turns the suite red, and a trap that stopped working looks exactly
-        # like one that works. `releaseMutationCheck.mjs` breaks each in turn
-        # and requires the suite to fail; it also fails when the text it edits
-        # has moved, so a refactor that outran a trap is reported rather than
-        # silently tolerated. It ran only in the rehearsal workflow before
-        # G12b, which meant a pull request could land a vacuous test and the
-        # gate would not notice until release day.
-        #
-        # Every distinct suite runs once unmutated first and must pass; then each
-        # mutation re-runs its own suite with --bail=1. Most mutations name the
-        # whole release suite, which does use PostgreSQL (the service container
-        # above), so this step is most of the job's wall clock: see
-        # timeout-minutes. A suite that is red before any mutation, or a run that
-        # ends without vitest reporting a failed test (an npm usage error, a setup
-        # that never reached a test), is a problem, never a kill: until lane g54
-        # ten mutations were "killed" by npm answering "Unknown command".
-        run: npm run test:release:mutation

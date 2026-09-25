@@ -984,6 +984,24 @@ const MUTATIONS = [
     because:
       'Pub/Sub presents the same OIDC token for its whole hour, so a 600-second bound refused every push past a token\u2019s eleventh minute as too_old: 138 refusals in three hours in production on 24 and 25 September 2026. rules.test.ts decides a half-hour-old token under the shipped policy and has to go red.',
   },
+  {
+    name: 'the pull-request gate runs the release mutation check again',
+    file: '.github/workflows/greenfield.yml',
+    find: '        run: npm run gate:greenfield\n',
+    replace: '        run: npm run gate:greenfield && npm run test:release:mutation\n',
+    suite: ['run', 'test:release', '--', 'test/release/mutationSchedule.check.ts'],
+    because:
+      'David moved this check off the pull-request path on 25 September 2026 (lane g62): it was about sixteen minutes of every pull request at 102 mutations, and it now runs nightly on main. Chaining it onto the gate step is the shortest way back, and a reader that found no steps would call the job clean. mutationSchedule.check.ts reads the gate step itself and every step\u2019s script, so it has to go red.',
+  },
+  {
+    name: 'the nightly mutation check is allowed to fail quietly',
+    file: '.github/workflows/greenfield-nightly.yml',
+    find: '      - name: Release mutation check\n',
+    replace: '      - name: Release mutation check\n        continue-on-error: true\n',
+    suite: ['run', 'test:release', '--', 'test/release/mutationSchedule.check.ts'],
+    because:
+      'Off the pull-request path the check blocks nothing, so a failure is only worth what it tells somebody. With continue-on-error the step goes red, the job goes green, and nobody is told that a trap stopped closing. mutationSchedule.check.ts refuses continue-on-error anywhere in the nightly, so it has to go red.',
+  },
 ];
 
 // A listener on each of these keeps Node from exiting mid-mutation with a file still

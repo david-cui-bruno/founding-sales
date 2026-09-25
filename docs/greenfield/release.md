@@ -787,6 +787,8 @@ aws sns publish --topic-arn "$(terraform output -raw alert_topic_arn)" \
   --subject "FSS alert path test" --message "If you are reading this, the independent alert path works."
 ```
 
+**What arrives after that.** Two alarms e-mail: `fss-prod-critical` and `fss-prod-warning`, each once when it goes to `ALARM` and once when it returns to `OK`. The sixteen metric alarms under them keep their state and send nothing, and a composite already in `ALARM` sends nothing more when a second member trips (8.0ac, `docs/greenfield/runbooks/README.md`).
+
 ### 5.4 The Gmail push grant
 
 ```bash
@@ -2554,6 +2556,46 @@ In version one a number is verified by the owner's attestation, recorded with wh
 - `unanswered` is `[]`. If the run fails now, it fails at a later step for that step's own reason, and every step's verdict is in the log.
 
 **Still unverified.** Nothing here has run in the cloud. Migration 0016 has not been applied to a deployed database. The Settings section has not run in a signed build on a Mac. The Today card's Call button after an attestation has been seen only in tests.
+
+### 8.0ac What lane g62 changed: the mutation check runs nightly, and only the composites e-mail (25 September)
+
+**The decision.** David, 25 September at about 03:50Z: the release ceremony gets shorter without touching safety. The full rehearsal runs only for schema, infrastructure or release-script changes. App-only changes go CI, rolling deploy, smoke. Desktop-only changes go CI, build, publish. Lane g62 is two pieces of that.
+
+**The mutation check leaves the pull-request path.** `npm run test:release:mutation` was a step of `.github/workflows/greenfield.yml` and most of its wall clock: about sixteen minutes of every pull request and every push at 102 mutations (main, run 36089059879: "129 suite run(s) in 940 s").
+
+- `greenfield.yml` now runs `npm run gate:greenfield` only: typecheck, lint, the workspace tests and the release suite. Its timeout goes from 45 minutes back to 20.
+- `.github/workflows/greenfield-nightly.yml` runs the check at 09:00 UTC every day on main, and on `workflow_dispatch` against any branch. It uses the same `postgres:16` service container, Node 24.20.0 and install, with a 60-minute timeout.
+- A failed run fails the job. A summary step that always runs writes the check's last line, "N mutation(s) killed, M problem(s).", and every problem line to the job summary, and raises an error annotation when M is not 0 or the line is missing. GitHub's own notice of a failed scheduled run goes to the user who last changed the cron line, if their notification settings allow it.
+- Locally the check runs exactly as before. The rehearsal's `full` stage still runs it after the release suite (section 3, step 9).
+- `test/release/mutationSchedule.check.ts` holds the shape. It checks that the pull-request job and `gate:greenfield` no longer reach the check, and that the nightly has its schedule, a step that decides its own status, and the same setup as the pull-request job line for line. It also runs the summary step's patterns against what the runner really prints. Two mutations at the end of `scripts/releaseMutationCheck.mjs` must be killed: the check chained back onto the gate step, and the nightly step marked `continue-on-error`.
+
+What that gives up: a pull request can land a trap that no longer closes, and the nightly reports it the next morning rather than before the merge. A pull request that edits a trap or the mutation list can be checked first by dispatching the nightly on its branch.
+
+**Alarm e-mail comes only from the composites.** Every metric alarm notified the topic on `ALARM` and on `OK` beside its composite, so one flap sent the composite's two e-mails plus two for each member it tripped: four to six per incident on 24 September. Now only the composites carry `alarm_actions` and `ok_actions`. The metric alarms keep their state, which is what the composites read, and send nothing. No threshold, period, evaluation count or `treat_missing_data` changed.
+
+| Alarm | E-mails? | Member of |
+|---|---|---|
+| `fss-prod-critical` (composite) | yes, on `ALARM` and `OK` | — |
+| `fss-prod-warning` (composite) | yes, on `ALARM` and `OK` | — |
+| `api-heartbeat-missed`, `scheduler-heartbeat-missed`, `worker-heartbeat-missed`, `mailbox-heartbeat-missed`, `today-snapshot-absent`, `oldest-runnable-job-critical`, `gmail-watch-expiring`, `canary-stale`, `mailbox-disconnected`, `suppression-journal-failure`, `restore-generation-mismatch`, `outbound-invariant-failure` (severity critical) | no | `fss-prod-critical` |
+| `all-sequences-held` (metric math, critical) | no | `fss-prod-critical` |
+| `oldest-runnable-job-warning`, `dead-job-unresolved`, `unacknowledged-critical-alert` (severity warning) | no | `fss-prod-warning` |
+
+Every metric alarm was already a member of exactly one composite, so none had to be added and none keeps its own notification. `infra/modules/alerts/tests/thresholds.tftest.hcl` asserts both halves. The composites notify the topic and only it, on `ALARM` and `OK`, and no metric alarm has an action of any kind. Every metric alarm is named by exactly one composite, the one its severity says, and the composites name nothing else.
+
+What that gives up, and how to read around it:
+
+- **A composite already in `ALARM` sends nothing when a second member trips.** It sends its `OK` only when every member has cleared. A member stuck in `ALARM` hides every later member of its composite from the inbox. `gmail-watch-expiring` treats missing data as breaching, so with no connected mailbox it sits in `ALARM` and holds `fss-prod-critical` there. Before this change the members' own e-mails were a backstop for that; now `aws cloudwatch describe-alarms --state-value ALARM --alarm-name-prefix fss-prod` is.
+- **The unacknowledged-critical repeat** (`docs/decisions/g1-alert-repetition.md`) is mailed by `fss-prod-warning`. So it is not mailed while `oldest-runnable-job-warning` or `dead-job-unresolved` already holds that composite in `ALARM`. The decision record says how to give it back its own e-mail.
+- The composite's state-change reason names the member that raised it. That member's key is the runbook to open.
+
+**To close it: a production apply, nothing else.** No image and no redeploy. The plan must show exactly this from lane g62, beside whatever else the apply carries:
+
+- 16 resources updated in place. They are `module.stack.module.alerts.aws_cloudwatch_metric_alarm.this["<key>"]` for the fifteen keys above, and `module.stack.module.alerts.aws_cloudwatch_metric_alarm.all_sequences_held`. Each changes `alarm_actions` and `ok_actions` from the topic ARN to empty.
+- The two `aws_cloudwatch_composite_alarm` resources unchanged.
+- 0 to add and 0 to destroy, and no `-/+`. Only `alarm_name` would force a replacement, and no name changed.
+
+If an alarm's actions were switched off by hand (`disable-alarm-actions`, 8.0r), its line also shows `actions_enabled` going from false to true. That is harmless now, because it has no actions. Each new rehearsal gets the same routing from the same module.
 
 ### 8.1 Still unverified
 

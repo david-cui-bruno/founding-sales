@@ -104,11 +104,15 @@ run "the_three_immediately_critical_conditions_alarm_on_one_datapoint" {
   }
 }
 
-# An apply run, because two of these assertions are about the topic ARN, and an
+# An apply run, because the routing assertions are about the topic ARN, and an
 # ARN is a value only the apply knows. Mocked providers make the apply offline:
 # no credential, no call, and the values are the mock defaults above. Asserting
 # them during a plan would need `override_during = plan`, which is the setting
 # that hid the rehearsal's error.
+#
+# Lane g62: only the composites notify. Until then every metric alarm notified
+# the topic on ALARM and OK beside its composite, and one flap on 24 September
+# 2026 sent four to six e-mails. The metric alarms now carry no action at all.
 run "criticals_roll_up_into_one_composite_that_notifies_the_topic" {
   command = apply
 
@@ -128,15 +132,74 @@ run "criticals_roll_up_into_one_composite_that_notifies_the_topic" {
   }
 
   assert {
-    condition     = contains(aws_cloudwatch_composite_alarm.critical.alarm_actions, aws_sns_topic.alerts.arn)
-    error_message = "The composite must notify the alert topic."
+    condition = alltrue([
+      for composite in [aws_cloudwatch_composite_alarm.critical, aws_cloudwatch_composite_alarm.warning] :
+      composite.actions_enabled
+      && composite.alarm_actions == toset([aws_sns_topic.alerts.arn])
+      && composite.ok_actions == toset([aws_sns_topic.alerts.arn])
+    ])
+    error_message = "Both composites notify the alert topic, and only it, on ALARM and on OK."
   }
 
   assert {
     condition = alltrue([
-      for alarm in aws_cloudwatch_metric_alarm.this : contains(alarm.alarm_actions, aws_sns_topic.alerts.arn)
+      for alarm in concat(values(aws_cloudwatch_metric_alarm.this), [aws_cloudwatch_metric_alarm.all_sequences_held]) :
+      length(alarm.alarm_actions) == 0
+      && length(alarm.ok_actions) == 0
+      && try(length(alarm.insufficient_data_actions), 0) == 0
     ])
-    error_message = "Every alarm notifies the alert topic."
+    error_message = "No metric alarm notifies anything: the composite it belongs to is the one e-mail per incident."
+  }
+
+  # The floor under the assertion above: it must have read every metric alarm.
+  assert {
+    condition     = length(concat(values(aws_cloudwatch_metric_alarm.this), [aws_cloudwatch_metric_alarm.all_sequences_held])) == length(output.alarm_inventory) + 1
+    error_message = "The routing assertions must cover the whole inventory and the metric-math alarm."
+  }
+}
+
+# A metric alarm that sends nothing and belongs to no composite would be an
+# alarm nobody hears. So every one is named by exactly one composite, the one
+# its severity says, and the composites name nothing else.
+run "every_metric_alarm_feeds_exactly_one_composite" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for name, alarm in aws_cloudwatch_metric_alarm.this :
+      (strcontains(aws_cloudwatch_composite_alarm.critical.alarm_rule, "ALARM(\"${alarm.alarm_name}\")") ? 1 : 0)
+      + (strcontains(aws_cloudwatch_composite_alarm.warning.alarm_rule, "ALARM(\"${alarm.alarm_name}\")") ? 1 : 0)
+      == 1
+    ])
+    error_message = "Every metric alarm is a member of exactly one composite."
+  }
+
+  assert {
+    condition = alltrue([
+      for name, alarm in aws_cloudwatch_metric_alarm.this :
+      strcontains(
+        output.alarm_inventory[name].severity == "critical" ? aws_cloudwatch_composite_alarm.critical.alarm_rule : aws_cloudwatch_composite_alarm.warning.alarm_rule,
+        "ALARM(\"${alarm.alarm_name}\")",
+      )
+    ])
+    error_message = "A critical alarm is a member of the critical composite, a warning of the warning composite."
+  }
+
+  assert {
+    condition = (
+      strcontains(aws_cloudwatch_composite_alarm.critical.alarm_rule, "ALARM(\"fss-test-all-sequences-held\")")
+      && !strcontains(aws_cloudwatch_composite_alarm.warning.alarm_rule, "fss-test-all-sequences-held")
+    )
+    error_message = "The metric-math alarm is a member of the critical composite only."
+  }
+
+  assert {
+    condition = (
+      length(regexall("ALARM\\(", aws_cloudwatch_composite_alarm.critical.alarm_rule))
+      + length(regexall("ALARM\\(", aws_cloudwatch_composite_alarm.warning.alarm_rule))
+      == length(aws_cloudwatch_metric_alarm.this) + 1
+    )
+    error_message = "The composites name every metric alarm once and nothing else."
   }
 }
 

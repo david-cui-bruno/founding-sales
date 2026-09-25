@@ -24,6 +24,13 @@ critical condition is open and unacknowledged the worker publishes its age, the 
 cycles, and each cycle mails. When none is open the worker publishes nothing and the
 alarm's `notBreaching` treatment of missing data says so.
 
+Since lane g62 the mail is `<prefix>-warning`'s, not this alarm's: this alarm is a
+member of the warning composite and sends nothing itself. So while
+`oldest_runnable_job_warning` or `dead_job_unresolved` already holds the warning
+composite in `ALARM`, this alarm's transitions reach nobody's inbox. Read its state
+rather than waiting for mail:
+`aws cloudwatch describe-alarms --alarm-names fss-prod-unacknowledged-critical-alert`.
+
 So this firing means one of:
 
 - nobody has seen the real alert;

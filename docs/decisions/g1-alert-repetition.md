@@ -20,6 +20,13 @@ Repetition is driven by the application, and the infrastructure provides the ala
 
 Because the metric is re-emitted while the condition persists and the acknowledgement clears it, the alarm cycles `ALARM` → `OK` → `ALARM` and each cycle publishes. That is the repetition, and unlike a timer it stops the moment someone acknowledges.
 
+**Lane g62 (25 September 2026).** Only the two composite alarms notify now, so these
+transitions are mailed by `<prefix>-warning`, of which this alarm is a member, rather
+than by the alarm itself. That keeps one incident to one pair of e-mails, and it means
+the repeat is not mailed while another warning already holds the warning composite in
+`ALARM`. If that ever matters more than the extra e-mail, the fix is small: give this
+alarm its own `alarm_actions` and take it out of the warning composite's rule.
+
 Acknowledgement itself is an FSS admin command, not an AWS one, because "who acknowledged which alert" is business state that belongs in the audit trail with the rest.
 
 ## What this hands to the application lanes

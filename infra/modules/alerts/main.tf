@@ -4,6 +4,21 @@
 # applications emit, and the criticals roll up into one composite alarm so the
 # operator gets one notification for one incident rather than nine.
 #
+# Only the two composites notify (lane g62). Until then every metric alarm
+# notified the topic on ALARM and on OK beside the composite, so one incident
+# sent the composite's two e-mails plus two for every member it tripped: four
+# to six e-mails per flap on 24 September 2026. The metric alarms keep their
+# state, which is what the composites read, and send nothing themselves. Every
+# metric alarm is a member of exactly one composite: severity "critical" and
+# all_sequences_held in <prefix>-critical, severity "warning" in
+# <prefix>-warning. tests/thresholds.tftest.hcl holds both halves.
+#
+# What that costs: a composite already in ALARM does not notify again when a
+# second member trips, and does not send its OK until every member is clear.
+# The composite's state-change reason names the member that raised it; which
+# members are in ALARM now is
+# `aws cloudwatch describe-alarms --state-value ALARM --alarm-name-prefix <prefix>`.
+#
 # Delivery is SNS email. That path is AWS-native: it does not use a salesperson
 # Gmail grant, so "connected mailbox disconnected for 48 hours" can still be
 # delivered when every mailbox is disconnected. The topic is encrypted with a
@@ -320,9 +335,11 @@ resource "aws_cloudwatch_metric_alarm" "this" {
   datapoints_to_alarm = each.value.datapoints_to_alarm
   treat_missing_data  = each.value.treat_missing_data
 
+  # A member of one composite, which is what notifies (see the top of this
+  # file). The state is the product; the e-mail is the composite's.
   actions_enabled = true
-  alarm_actions   = [aws_sns_topic.alerts.arn]
-  ok_actions      = [aws_sns_topic.alerts.arn]
+  alarm_actions   = []
+  ok_actions      = []
 
   tags = merge(var.tags, {
     Name     = "${var.name_prefix}-${replace(each.key, "_", "-")}"
@@ -371,9 +388,10 @@ resource "aws_cloudwatch_metric_alarm" "all_sequences_held" {
     }
   }
 
+  # A member of the critical composite, which notifies for it.
   actions_enabled = true
-  alarm_actions   = [aws_sns_topic.alerts.arn]
-  ok_actions      = [aws_sns_topic.alerts.arn]
+  alarm_actions   = []
+  ok_actions      = []
 
   tags = merge(var.tags, {
     Name     = "${var.name_prefix}-all-sequences-held"
@@ -381,6 +399,8 @@ resource "aws_cloudwatch_metric_alarm" "all_sequences_held" {
   })
 }
 
+# The two composites are the only alarms that notify the topic, on ALARM and on
+# OK. Between them they name every metric alarm above exactly once.
 resource "aws_cloudwatch_composite_alarm" "critical" {
   alarm_name        = "${var.name_prefix}-critical"
   alarm_description = "Any immediately critical FSS condition. One notification per incident."
