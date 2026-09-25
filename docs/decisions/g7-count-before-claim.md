@@ -2,6 +2,11 @@
 
 **Date:** 20 September 2026 · **Lane:** G7-2 sending · **Spec:** 12.7, Appendix G 33
 
+> **Superseded on 25 September 2026 by `g77-dispatch-rechecks-under-the-lock.md`.** The
+> count and the claim now commit in one transaction, so neither order below exists any
+> more: a process that dies before the commit leaves neither, and the refund is gone.
+> The single-statement conditional increment and the `cap_granted` backstop are kept.
+
 ## The two irreversible things, in order
 
 `dispatchOutboundMessage` does two things that cannot both be rolled back:

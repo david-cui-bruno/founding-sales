@@ -75,6 +75,13 @@ export const SEND_REFUSAL_CODES = [
   'rate_limited',
   'recipient_rejected',
   'provider_refusal',
+  /**
+   * The step's own eligibility said no at the last moment (lane g77): a reply's hold, a
+   * pause, manual mode, a stopped enrollment, a reassignment. The detail is section
+   * 15's code. It opens no hold of its own, because whatever refused already is one —
+   * see `sendRefusalForIneligibility` in `stepPermission.ts`.
+   */
+  'step_ineligible',
 ] as const;
 export type SendRefusalCode = (typeof SEND_REFUSAL_CODES)[number];
 

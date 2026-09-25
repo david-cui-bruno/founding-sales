@@ -185,6 +185,15 @@ export {
 } from './mailboxes.ts';
 
 export {
+  COVERAGE_CLOCK_SKEW_SECONDS,
+  COVERAGE_FRESHNESS_SECONDS,
+  coverageIsFresh,
+  coverageRefusal,
+  readMailboxCoverage,
+  type MailboxCoverage,
+} from './coverage.ts';
+
+export {
   deleteRefreshToken,
   hasRefreshToken,
   readRefreshToken,

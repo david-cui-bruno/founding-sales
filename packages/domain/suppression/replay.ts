@@ -5,6 +5,7 @@ import { enqueueJob } from '../jobs/jobStore.ts';
 import { jobIdempotencyKey } from '../jobs/jobKinds.ts';
 import { databaseNow } from '../policy/clock.ts';
 import { openHold } from '../policy/holds.ts';
+import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { claimFinalization } from './finalize.ts';
 import { readSuppressionEvent } from './events.ts';
 import type { SuppressionJournalRecord } from './journal.ts';
@@ -146,6 +147,8 @@ export async function replaySuppressionJournal(
   context: RepositoryContext,
   input: ReplayInput,
 ): Promise<JournalReplayReport> {
+  // A replayed suppression stops sends exactly as the original did (lane g77).
+  await lockSendGateForStopFact(context);
   const now = await databaseNow(context);
   let inserted = 0;
   let alreadyPresent = 0;

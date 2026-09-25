@@ -75,9 +75,17 @@ export const SCENARIOS: readonly Scenario[] = Object.freeze([
     number: 3,
     title: 'Worker pauses after the eligibility read, a reply commits, the worker resumes: no external action after the reply linearizes.',
     coverage: 'release',
-    references: laneTest('packages/domain/outbound/gate.ts', 'packages/domain/test/outbound/scenarios.test.ts'),
-    trap: 'Asserting only that a suppressed send is refused proves the gate reads suppressions, not that it re-reads them after an eligibility decision was already made.',
-    closedBy: 'The check decides once, mutates the world, decides again on the same fence, and requires the second answer to differ.',
+    references: laneTest(
+      'packages/domain/outbound/gate.ts',
+      'packages/domain/test/outbound/scenarios.test.ts',
+      // Lane g77: the recheck and the claim share one transaction under the send gate.
+      'packages/domain/outbound/send.ts',
+      'packages/domain/policy/sendGate.ts',
+      'packages/domain/test/outbound/dispatchRace.test.ts',
+      'packages/domain/test/outbound/support/dispatchFixtures.ts',
+    ),
+    trap: 'Committing the reply before the dispatch begins proves only that the gate reads holds; the window between the dispatch’s own eligibility read and its claim, where the token refresh sits, is never entered (audit T02).',
+    closedBy: 'The reply commits on another connection during the real dispatch’s token refresh — after the precheck found the fence sendable, before the claim — and the check requires no send and the reply’s own refusal, with a control whose identical pause commits nothing and sends; the lane suite also proves the send gate serializes claim and reply in both orders.',
   },
   {
     number: 4,

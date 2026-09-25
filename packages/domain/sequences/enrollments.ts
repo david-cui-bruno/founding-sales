@@ -1,4 +1,5 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
+import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { resolveStepDue, type WorkspaceHolidayCalendar } from '../src/index.ts';
 import { currentHolidayCalendar, holidayCalendarByVersion } from './calendars.ts';
 import { listEnrollments, readEnrollment, readSequenceVersion, toEnrollment } from './rows.ts';
@@ -239,6 +240,11 @@ export async function stopEnrollments(
   ) {
     throw new TypeError('a terminal stop names a firm, an opportunity or an enrollment');
   }
+
+  // An ended enrollment is a stop fact: the send gate before the enrollment rows
+  // (lane g77, `policy/sendGate.ts`). The dispatch claim also locks the enrollment
+  // `FOR UPDATE`, so the two serialize on the row as well as on the gate.
+  await lockSendGateForStopFact(context);
 
   const { rows: locked } = await context.db.query<{ id: string }>(
     `SELECT id FROM sequence_enrollments

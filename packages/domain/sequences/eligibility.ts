@@ -1,5 +1,6 @@
-import type { BlockedActionKind, HoldReasonCode } from '@fss/contracts';
+import type { BlockedActionKind, HoldReasonCode, PauseChannel } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
+import { coverageRefusal, readMailboxCoverage } from '../mail/coverage.ts';
 import { listApplicableHolds } from '../policy/index.ts';
 import type { StepChannel, StepExecutionRow } from './types.ts';
 
@@ -26,22 +27,50 @@ import type { StepChannel, StepExecutionRow } from './types.ts';
  *
  *   1. suppression — the fact that must never be worked around;
  *   2. control mode — an opportunity a human is handling is not automated;
- *   3. holds — every reversible blocker, in one indexed statement;
- *   4. ownership and assignment;
- *   5. route eligibility and version;
- *   6. mailbox health and coverage;
- *   7. template approval;
- *   8. caps and the domain guard;
- *   9. the sending window.
+ *   3. the enrollment — live, and the execution still its own;
+ *   4. holds — every reversible blocker, in one indexed statement;
+ *   5. ownership and assignment;
+ *   6. route eligibility and version;
+ *   7. mailbox health and coverage;
+ *   8. template approval;
+ *   9. caps and the domain guard;
+ *  10. the sending window.
  *
  * Suppression before assignment for the reason `docs/greenfield/policy.md` gives: an
  * unassigned salesperson should be told the firm is suppressed rather than that it is
  * not theirs, because the suppression is the more important fact.
+ *
+ * ## One implementation, asked twice (lane g77)
+ *
+ * The composition is asked when a due step is prepared (`runDueStepExecution`) and
+ * again, by the sending lane, immediately before the dispatch claim
+ * (`outbound/stepPermission.ts`), inside the claim's transaction and under the send
+ * gate. Same sources, same order — never a second copy that can drift. The only thing
+ * the second asking adds is `frozen`: by then a fence exists, and the questions that
+ * were "is there a usable route" and "is the step's template approved" become "is *the
+ * route this fence froze* still usable at the version it froze" and "is *the template
+ * version these bytes came from* still approved". A fence prepared on Monday for a
+ * route a bounce invalidated on Tuesday must not go on Wednesday merely because the
+ * contact has some other usable address.
  */
 
 export type StepEligibilityOutcome =
   | { readonly ok: true }
-  | { readonly ok: false; readonly reasonCode: HoldReasonCode };
+  | { readonly ok: false; readonly reasonCode: HoldReasonCode; readonly detail?: string | undefined };
+
+/**
+ * What a prepared fence froze (Appendix B's envelope), for the re-read at dispatch.
+ *
+ * Absent at preparation, when there is no fence yet.
+ */
+export interface FrozenEnvelope {
+  /** `email_addresses.id` the fence names, or null for a fence with no route. */
+  readonly routeId: string | null;
+  /** The route's version when the fence was prepared. */
+  readonly routeVersion: number | null;
+  /** The template version the fence's bytes were rendered from. */
+  readonly templateVersionId: string | null;
+}
 
 export interface StepEligibilityInput {
   readonly execution: StepExecutionRow;
@@ -53,6 +82,8 @@ export interface StepEligibilityInput {
   readonly actionKind: BlockedActionKind;
   /** Database time. Nothing in an eligibility decision reads a host clock. */
   readonly now: string;
+  /** The fence's frozen envelope, when a fence exists. See `FrozenEnvelope`. */
+  readonly frozen?: FrozenEnvelope | undefined;
 }
 
 export interface StepEligibilitySource {
@@ -78,6 +109,13 @@ export const CHANNEL_ACTION_KINDS: Readonly<Record<StepChannel, BlockedActionKin
   linkedin_task: 'linkedin_task',
 });
 
+/** The key a channel-scoped pause is stored under for a step's channel (10.1). */
+const CHANNEL_PAUSE_KEYS: Readonly<Record<StepChannel, PauseChannel>> = Object.freeze({
+  email: 'email',
+  call_task: 'call',
+  linkedin_task: 'linkedin',
+});
+
 /**
  * Every applicable hold, as a source.
  *
@@ -87,25 +125,31 @@ export const CHANNEL_ACTION_KINDS: Readonly<Record<StepChannel, BlockedActionKin
  * the email step and lets the call step through, which is 10.1's "a sending pause
  * does not stop ... manual calling unless calling is separately paused" applied to a
  * sequence rather than to a dial.
+ *
+ * Every scope `active_holds` has is asked (lane g77). Until then this source named no
+ * mailbox and no channel, so an administrator's pause of the owner's mailbox, or of
+ * the email channel, held nothing here — `openPause` writes both scopes, and the send
+ * gate asked about the mailbox but not the channel. The owner's mailbox is the one the
+ * work would use (12.1: one per owner), and a channel pause's key is 10.1's channel.
  */
 export function holdSource(): StepEligibilitySource {
   return {
     name: 'holds',
     evaluate: async (context, input) => {
-      const holds = await listApplicableHolds(context, {
-        actionKind: input.actionKind,
+      const mailbox = await context.db.query<{ id: string }>(
+        'SELECT id FROM mailboxes WHERE workspace_id = $1 AND owner_user_id = $2',
+        [context.scope.workspaceId, input.ownerUserId],
+      );
+      const subject = {
         firmId: input.firmId,
         opportunityId: input.opportunityId,
         ownerUserId: input.ownerUserId,
         enrollmentId: input.execution.enrollmentId,
-      });
-      const advance = await listApplicableHolds(context, {
-        actionKind: 'enrollment_advance',
-        firmId: input.firmId,
-        opportunityId: input.opportunityId,
-        ownerUserId: input.ownerUserId,
-        enrollmentId: input.execution.enrollmentId,
-      });
+        ...(mailbox.rows[0] === undefined ? {} : { mailboxId: mailbox.rows[0].id }),
+        channel: CHANNEL_PAUSE_KEYS[input.channel],
+      };
+      const holds = await listApplicableHolds(context, { actionKind: input.actionKind, ...subject });
+      const advance = await listApplicableHolds(context, { actionKind: 'enrollment_advance', ...subject });
       const blocking = [...holds, ...advance];
       const first = blocking[0];
       return first === undefined ? { ok: true } : { ok: false, reasonCode: first.reasonCode };
@@ -136,6 +180,55 @@ export function controlModeSource(): StepEligibilitySource {
       return opportunity.control_mode === 'automated'
         ? { ok: true }
         : { ok: false, reasonCode: 'opportunity_manual' };
+    },
+  };
+}
+
+/**
+ * The enrollment (11.2, 4.3; lane g77).
+ *
+ * `runDueStepExecution` asks this before it asks anything else and answers
+ * `nothing_to_do` for an ended enrollment, so at preparation this source only ever
+ * sees a live one. It is in the composition for the *second* asking: between the
+ * preparation and the dispatch claim a confirmed reply, a Won stage or an admin's stop
+ * may have ended the enrollment, and the fence it left behind must not go.
+ *
+ * There is no section 15 code for "the enrollment ended", because an ended enrollment
+ * is not a hold — nothing clears it. `scoped_pause` is the code 15 gives an
+ * administrative stop, and it is the honest one here: automation for this work has
+ * been stopped by somebody, and the end reason on the enrollment says who. A review
+ * the enrollment is waiting on is `long_hold_review`, which is what it is.
+ */
+export function enrollmentSource(): StepEligibilitySource {
+  return {
+    name: 'enrollment',
+    evaluate: async (context, input) => {
+      const { rows } = await context.db.query<{
+        state: string;
+        ended_at: Date | null;
+        execution_state: string | null;
+      }>(
+        `SELECT n.state, n.ended_at, e.state AS execution_state
+           FROM sequence_enrollments n
+           LEFT JOIN step_executions e
+             ON e.workspace_id = n.workspace_id AND e.id = $3 AND e.enrollment_id = n.id
+          WHERE n.workspace_id = $1 AND n.id = $2`,
+        [context.scope.workspaceId, input.execution.enrollmentId, input.execution.id],
+      );
+      const enrollment = rows[0];
+      if (enrollment === undefined) return { ok: false, reasonCode: 'scoped_pause', detail: 'enrollment_missing' };
+      if (enrollment.ended_at !== null) return { ok: false, reasonCode: 'scoped_pause', detail: 'enrollment_ended' };
+      if (enrollment.state === 'review_required') return { ok: false, reasonCode: 'long_hold_review' };
+      if (enrollment.state !== 'active') {
+        return { ok: false, reasonCode: 'scoped_pause', detail: `enrollment_${enrollment.state}` };
+      }
+      // The execution must still be this enrollment's, and not finished: a cancelled
+      // execution is one a stop already took back.
+      const execution = enrollment.execution_state;
+      if (execution === null || execution === 'cancelled' || execution === 'completed') {
+        return { ok: false, reasonCode: 'scoped_pause', detail: `execution_${execution ?? 'missing'}` };
+      }
+      return { ok: true };
     },
   };
 }
@@ -206,6 +299,7 @@ export function emailRouteSource(): StepEligibilitySource {
     name: 'email-route',
     evaluate: async (context, input) => {
       if (input.channel !== 'email') return { ok: true };
+      if (input.frozen !== undefined) return await frozenRouteOutcome(context, input.frozen);
       const { rows } = await context.db.query<{ eligibility: string }>(
         `SELECT eligibility FROM email_addresses
           WHERE workspace_id = $1 AND contact_id = $2 AND retired_at IS NULL
@@ -224,6 +318,43 @@ export function emailRouteSource(): StepEligibilitySource {
 }
 
 /**
+ * The route a fence froze, re-read at dispatch (7.2, 12.4, Appendix B; lane g77).
+ *
+ * `usable` and nothing else: a `candidate` was never cleared to receive automated
+ * mail, and before lane g77 the dispatch gate let one through because it refused only
+ * `invalid` and `retired`. And the *version* must be the one the fence froze. A route
+ * whose eligibility changed bumps its version (`email_addresses_version_increases`), so
+ * a different version is a route that has been re-decided since these bytes were
+ * addressed — invalidated by a bounce and restored, say — and the decision the fence
+ * carries is no longer the route's. It holds as `route_invalid`, the code a stale
+ * frozen route has always been, with the reason in the detail.
+ */
+async function frozenRouteOutcome(
+  context: RepositoryContext,
+  frozen: FrozenEnvelope,
+): Promise<StepEligibilityOutcome> {
+  if (frozen.routeId === null) return { ok: false, reasonCode: 'route_missing', detail: 'no_frozen_route' };
+  const { rows } = await context.db.query<{ eligibility: string; version: number; retired_at: Date | null }>(
+    'SELECT eligibility, version, retired_at FROM email_addresses WHERE workspace_id = $1 AND id = $2',
+    [context.scope.workspaceId, frozen.routeId],
+  );
+  const route = rows[0];
+  if (route === undefined) return { ok: false, reasonCode: 'route_missing', detail: 'frozen_route_gone' };
+  if (route.retired_at !== null || route.eligibility === 'retired') return { ok: false, reasonCode: 'route_retired' };
+  if (route.eligibility === 'invalid') return { ok: false, reasonCode: 'route_invalid' };
+  if (route.eligibility === 'candidate') return { ok: false, reasonCode: 'route_candidate' };
+  if (route.eligibility !== 'usable') return { ok: false, reasonCode: 'route_invalid', detail: route.eligibility };
+  if (frozen.routeVersion === null || Number(route.version) !== frozen.routeVersion) {
+    return {
+      ok: false,
+      reasonCode: 'route_invalid',
+      detail: `version:${String(frozen.routeVersion)}->${String(route.version)}`,
+    };
+  }
+  return { ok: true };
+}
+
+/**
  * The mailbox (12.6: "While a mailbox grant is revoked or coverage unhealthy, every
  * automated step kind for that owner is held").
  *
@@ -231,31 +362,47 @@ export function emailRouteSource(): StepEligibilitySource {
  * *mailbox row* rather than about the hold: the hold answers through `holdSource`,
  * and this catches the case of an owner who has never connected a mailbox at all,
  * which no hold covers because nothing ever opened one.
+ *
+ * Coverage is *proven* coverage (lane g77): `ready` and a watermark no older than
+ * `COVERAGE_FRESHNESS_SECONDS`. A mailbox that stays `ready` while every sync is rate
+ * limited is exactly the unhealthy coverage 12.6 holds for, and `mail/coverage.ts` is
+ * the one place that says what fresh means.
  */
 export function mailboxSource(): StepEligibilitySource {
   return {
     name: 'mailbox',
     evaluate: async (context, input) => {
       if (input.channel !== 'email') return { ok: true };
-      const { rows } = await context.db.query<{ status: string; sync_state: string }>(
-        'SELECT status, sync_state FROM mailboxes WHERE workspace_id = $1 AND owner_user_id = $2',
-        [context.scope.workspaceId, input.ownerUserId],
-      );
-      const mailbox = rows[0];
-      if (mailbox === undefined) return { ok: false, reasonCode: 'mailbox_disconnected' };
-      if (mailbox.status !== 'connected') return { ok: false, reasonCode: 'mailbox_disconnected' };
-      if (mailbox.sync_state !== 'ready') return { ok: false, reasonCode: 'coverage_incomplete' };
-      return { ok: true };
+      const refusal = coverageRefusal(await readMailboxCoverage(context, { ownerUserId: input.ownerUserId }));
+      return refusal === null ? { ok: true } : { ok: false, reasonCode: refusal.reason, detail: refusal.detail };
     },
   };
 }
 
-/** The template's standing approval (11.1, 12.2). */
+/**
+ * The template's standing approval (11.1, 12.2).
+ *
+ * At dispatch the question is about the version the fence's bytes were rendered from,
+ * which is `frozen.templateVersionId` (lane g77): an approval withdrawn after the bytes
+ * were decided withdraws the bytes too.
+ */
 export function templateApprovalSource(): StepEligibilitySource {
   return {
     name: 'template-approval',
     evaluate: async (context, input) => {
       if (input.channel !== 'email') return { ok: true };
+      if (input.frozen !== undefined) {
+        if (input.frozen.templateVersionId === null) return { ok: false, reasonCode: 'template_unapproved' };
+        const frozen = await context.db.query<{ approved_at: Date | null; retired_at: Date | null }>(
+          'SELECT approved_at, retired_at FROM template_versions WHERE workspace_id = $1 AND id = $2',
+          [context.scope.workspaceId, input.frozen.templateVersionId],
+        );
+        const version = frozen.rows[0];
+        if (version === undefined || version.approved_at === null || version.retired_at !== null) {
+          return { ok: false, reasonCode: 'template_unapproved' };
+        }
+        return { ok: true };
+      }
       const { rows } = await context.db.query<{ approved_at: Date | null; retired_at: Date | null }>(
         `SELECT t.approved_at, t.retired_at
            FROM step_executions e
@@ -278,6 +425,7 @@ export function defaultEligibilitySources(): readonly StepEligibilitySource[] {
   return [
     suppressionSource(),
     controlModeSource(),
+    enrollmentSource(),
     holdSource(),
     assignmentSource(),
     emailRouteSource(),

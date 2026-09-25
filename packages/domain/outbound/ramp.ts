@@ -1,5 +1,6 @@
 import type { Queryable } from '../db/queryable.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
+import { coverageRefusal, readMailboxCoverage } from '../mail/coverage.ts';
 import { listApplicableHolds } from '../policy/holds.ts';
 import { authenticationPasses, readPrimarySendingDomain } from './domainGuard.ts';
 import {
@@ -398,6 +399,12 @@ export async function openSendDay(
  * it would let two workers each read four, each decide four is under five, and each
  * send — which is Appendix G 33's "mailbox caps hold excess" failing in the one way
  * that matters.
+ *
+ * It is a *reservation by fence* (lane g77, C25): `send.ts` calls it only inside the
+ * transaction that claims the fence, on the business date the claim records. The two
+ * commit together or not at all, so no count exists without a claimed fence behind it
+ * and none can be orphaned by a crash — `claimedAutomatedSends` is the same number
+ * derived from the fences.
  */
 export async function countAutomatedSend(
   context: RepositoryContext,
@@ -411,6 +418,30 @@ export async function countAutomatedSend(
     [context.scope.workspaceId, input.mailboxId, input.businessDate, input.cap],
   );
   return (rowCount ?? 0) > 0;
+}
+
+/**
+ * `automated_sent`, derived from the fences (lane g77, C25).
+ *
+ * Every increment of the counter commits in the transaction that claims a fence and
+ * writes the same business date onto it, so for any mailbox and date the counter is
+ * the number of fences whose dispatch began with that business date — sent, in doubt
+ * or unknown alike, because the count stands once a message may have left. A
+ * difference between the two is a count no claim explains, which is what the old
+ * increment-then-OAuth-then-claim order produced when a process died in the middle;
+ * the send path cannot produce one, and a day-boundary check or an incident can ask.
+ */
+export async function claimedAutomatedSends(
+  context: RepositoryContext,
+  input: { readonly mailboxId: string; readonly businessDate: string },
+): Promise<number> {
+  const { rows } = await context.db.query<{ claimed: string }>(
+    `SELECT count(*)::text AS claimed FROM outbound_messages
+      WHERE workspace_id = $1 AND mailbox_id = $2 AND business_date = $3::date
+        AND attempt_token IS NOT NULL`,
+    [context.scope.workspaceId, input.mailboxId, input.businessDate],
+  );
+  return Number(rows[0]?.claimed ?? '0');
 }
 
 /**
@@ -600,8 +631,10 @@ export async function listDaysToClose(
  *   * **authentication** — the workspace's primary sending domain has SPF, DKIM and
  *     DMARC recorded as passing and automated sending enabled. 12.7's gate is an
  *     admin's checklist, never a DNS lookup (`docs/decisions/g7-no-dns-lookup.md`).
- *   * **coverage** — the mailbox is `ready` and no open hold blocks `email_send` for
- *     it or for its owner, which is `decideSend`'s own pair of checks.
+ *   * **coverage** — the mailbox's coverage is *proven* (`coverageRefusal`: connected,
+ *     `ready`, and a watermark inside `COVERAGE_FRESHNESS_SECONDS`, lane g77) and no
+ *     open hold blocks `email_send` for it or for its owner — the same decision the
+ *     send gate makes, from the same function.
  *   * **provider warning** — FSS subscribes to no Postmaster Tools feed, so the only
  *     provider complaint it can observe is an error during dispatch, and that is
  *     already counted on the day as `provider_errors`. Reporting a second, unsourced
@@ -615,23 +648,19 @@ export async function readSendDayHealth(
   context: RepositoryContext,
   mailboxId: string,
 ): Promise<Omit<RampHealthSignals, 'automatedSent' | 'bounces' | 'optOuts' | 'providerErrors'> | null> {
-  const { rows } = await context.db.query<{ sync_state: string; owner_user_id: string }>(
-    'SELECT sync_state, owner_user_id FROM mailboxes WHERE workspace_id = $1 AND id = $2',
-    [context.scope.workspaceId, mailboxId],
-  );
-  const mailbox = rows[0];
-  if (mailbox === undefined) return null;
+  const coverage = await readMailboxCoverage(context, { mailboxId });
+  if (coverage === null) return null;
 
   const domain = await readPrimarySendingDomain(context);
   const holds = await listApplicableHolds(context, {
     actionKind: 'email_send',
-    ownerUserId: mailbox.owner_user_id,
+    ownerUserId: coverage.ownerUserId,
     mailboxId,
   });
 
   return {
     authenticationPasses: domain !== null && authenticationPasses(domain) && domain.automatedSendingEnabled,
-    coverageHealthy: mailbox.sync_state === 'ready' && holds.length === 0,
+    coverageHealthy: coverageRefusal(coverage) === null && holds.length === 0,
     providerWarning: false,
   };
 }

@@ -490,6 +490,11 @@ describe('fss admin drill seed-evidence', () => {
   }, 120_000);
 
   it('the after phase adds a second send, a second CRM edit and the prospect opt-out the restore loses', async () => {
+    // Lane g77: in a rehearsal the after phase runs half an hour after the before phase,
+    // and the mailbox's coverage was last proved then. The send gate holds a mailbox
+    // whose proof is older than its freshness window, so the phase has to prove it
+    // again before its send — this is that half hour, applied to the row.
+    await session.query("UPDATE mailboxes SET coverage_watermark_at = now() - interval '45 minutes'");
     const before = {
       sends: await countOf('outbound_messages', "state = 'sent'"),
       suppressions: await countOf('suppression_events'),
@@ -526,6 +531,7 @@ describe('fss admin drill seed-evidence', () => {
     expect(
       await countOf('outbound_messages', "state = 'sent' AND recipient_address = 'restore-lost@drill-evidence.invalid'"),
     ).toBe(1);
+    expect(await countOf('mailboxes', "coverage_watermark_at > now() - interval '5 minutes'")).toBe(1);
     expect(await countOf('audit_events', "action = 'firm.updated'")).toBe(before.edits + 1);
     // The handle and its one unambiguous firm, each journalled before its row.
     expect(await countOf('suppression_events')).toBe(before.suppressions + 2);

@@ -1,4 +1,5 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
+import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { fenceForOutgoingMessage } from '../outbound/fence.ts';
 import { countDirectSend, effectiveDailyCap, ensureRamp } from '../outbound/ramp.ts';
 import type { SuppressionJournal } from '../suppression/index.ts';
@@ -94,6 +95,10 @@ async function countOutgoingAgainstHeadroom(
     providerMessageId: message.providerMessageId,
   });
   if (fenceId !== null) return false;
+  // A direct send switches its firm to manual a moment later, which takes the send
+  // gate; taking it here, before the day's counter, keeps the lock order a dispatch
+  // claim uses (gate, then counter) and so keeps the two from deadlocking (lane g77).
+  await lockSendGateForStopFact(context);
   const ramp = await ensureRamp(context, message.mailboxId);
   await countDirectSend(context, {
     mailboxId: message.mailboxId,

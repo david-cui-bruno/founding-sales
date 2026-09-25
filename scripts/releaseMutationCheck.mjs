@@ -1207,6 +1207,33 @@ const MUTATIONS = [
     because:
       'With eight connections in the pool, a handler that returns its connection only on the happy path loses one to every thrown request, and the ninth failure turns every request after it into database_busy until the task is replaced. connectionPerRequest.test.ts counts the pool back to its baseline after a request that throws, and has to go red.',
   },
+  {
+    name: 'the claim acts on the precheck’s answer instead of rechecking under the lock',
+    file: 'packages/domain/outbound/send.ts',
+    find: '    const gate = await decideSend(context, fence, deps);\n    if (!gate.ok) {\n',
+    replace: '    const gate = { ok: true as const, value: precheck };\n    if (!gate.ok) {\n',
+    suite: ['run', 'test', '--workspace', 'packages/domain', '--', 'test/outbound/dispatchRace.test.ts'],
+    because:
+      'This is audit S01 and T02: the gate read, OAuth ran, and a state-only UPDATE claimed on the earlier answer, so a reply that committed during the token refresh was never seen. dispatchRace.test.ts commits an uncertain reply through the real mail sync, a confirmed reply and an opt-out on another connection during the real dispatch’s token refresh, and a reply whose transaction is open when the claim begins; with the claim acting on the precheck, each of them sends, and the suite has to go red.',
+  },
+  {
+    name: 'the send path trusts a ready mailbox whose coverage was proved an hour ago',
+    file: 'packages/domain/mail/coverage.ts',
+    find: '  if (!coverage.fresh) {\n',
+    replace: '  if (false) {\n',
+    suite: ['run', 'test', '--workspace', 'packages/domain', '--', 'test/outbound/dispatchRecheck.test.ts'],
+    because:
+      'This is audit S03: sync_state stays ready while every Gmail history read is rate limited, and recordSyncError moves last_synced_at forward as it fails, so a reply that arrived in that hour was unread and the next email to its author went anyway. dispatchRecheck.test.ts ages the watermark past COVERAGE_FRESHNESS_SECONDS, runs a rate-limited sync that moves the attempt time and not the watermark, and requires the fence held for coverage_incomplete until a real sync proves coverage; without the freshness arm it sends at once and has to go red.',
+  },
+  {
+    name: 'the cap is charged to the business date the fence was planned for, not the claim’s',
+    file: 'packages/domain/outbound/gate.ts',
+    find: '  const businessDate = await businessDateOf(context, now.toISOString());\n',
+    replace: '  const businessDate = fence.businessDate ?? (await businessDateOf(context, now.toISOString()));\n',
+    suite: ['run', 'test', '--workspace', 'packages/domain', '--', 'test/outbound/dispatchRecheck.test.ts'],
+    because:
+      'This is audit S05: a fence held overnight kept the date its placement planned, so today’s send spent yesterday’s allowance (or waited behind yesterday’s full cap) and today’s counter never moved. dispatchRecheck.test.ts plans a fence for Monday, holds it past Monday’s window and sends it Tuesday, and requires Tuesday’s counter to move, Monday’s not to, and the fence to record Tuesday; charged to the planned date it records Monday and has to go red.',
+  },
 ];
 
 // A listener on each of these keeps Node from exiting mid-mutation with a file still

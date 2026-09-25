@@ -5,7 +5,7 @@ import {
   readOutboundOutcome,
   type OutboundSendDeps,
 } from '@fss/domain/outbound';
-import type { SendHandoff, SendHandoffRefusal } from '@fss/domain/sequences';
+import { SEND_HANDOFF_REFUSALS, type SendHandoff, type SendHandoffRefusal } from '@fss/domain/sequences';
 
 /**
  * G8's `SendHandoff`, over G7-2's fence (specification 11.2, 12.2, 12.5, Appendix B).
@@ -65,7 +65,7 @@ export function outboundSendHandoff(options: OutboundSendHandoffOptions = {}): S
       // off the fence a moment later, so they are not refusals here: reporting them
       // twice, once as a refusal and once as a state, is how the two sides come to
       // disagree. Only a refusal that names a reason is passed back.
-      if (report.refusal !== undefined) return { ok: false, reason: refusalFor(report.refusal) };
+      if (report.refusal !== undefined) return { ok: false, reason: refusalFor(report.refusal, report.detail) };
       return { ok: true };
     },
     readOutcome: async (context, stepExecutionId) => {
@@ -87,8 +87,17 @@ export function outboundSendHandoff(options: OutboundSendHandoffOptions = {}): S
  * exist is a mailbox that is not connected, and everything else left — automated
  * sending switched off, no sending domain, a fence somebody else owns — is an
  * administrative state that stops sending, which is what `scoped_pause` names.
+ *
+ * `step_ineligible` (lane g77) is the step's own eligibility refusing at the claim, and
+ * its detail begins with the section 15 code that refused: that code is the step's
+ * reason when the hand-off vocabulary has it, and `scoped_pause` otherwise.
  */
-function refusalFor(reason: string): SendHandoffRefusal {
+function refusalFor(reason: string, detail?: string): SendHandoffRefusal {
   if (reason === 'mailbox_unknown') return 'mailbox_disconnected';
+  if (reason === 'step_ineligible') {
+    const code = detail?.split(':')[0];
+    const known: readonly string[] = SEND_HANDOFF_REFUSALS;
+    return code !== undefined && known.includes(code) ? (code as SendHandoffRefusal) : 'scoped_pause';
+  }
   return holdReasonForRefusal(reason) ?? 'scoped_pause';
 }

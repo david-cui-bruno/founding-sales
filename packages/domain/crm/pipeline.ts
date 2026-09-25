@@ -1,4 +1,5 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
+import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { decideFirmMutation } from './authorization.ts';
 import { recordCrmAuditEvent } from './audit.ts';
 import { emitCrmDomainEvent, type ManualModeOrigin } from './events.ts';
@@ -153,6 +154,9 @@ export async function changeStage(
   context: RepositoryContext,
   input: ChangeStageInput,
 ): Promise<CrmResult<OpportunityRow>> {
+  // Won and Lost stop automation (8.1), so a stage change is a potential stop fact and
+  // takes the send gate before the opportunity's row (lane g77, `policy/sendGate.ts`).
+  await lockSendGateForStopFact(context);
   const opportunity = await loadOpportunityForUpdate(context, input.opportunityId);
   if (opportunity === null) return refuse('opportunity_unknown');
   const firm = await loadFirmForUpdate(context, opportunity.firm_id);
@@ -240,6 +244,10 @@ export async function setManualControlMode(
     readonly commandId?: string | undefined;
   },
 ): Promise<CrmResult<OpportunityRow>> {
+  // 7.3's manual mode is the confirmed reply's stop, so it takes the send gate before
+  // any row (lane g77, `policy/sendGate.ts`): a send whose claim is in flight commits
+  // first, and one that has not claimed yet reads `manual` and does not.
+  await lockSendGateForStopFact(context);
   const opportunity = await loadOpportunityForUpdate(context, input.opportunityId);
   if (opportunity === null) return refuse('opportunity_unknown');
   const firm = await loadFirmForUpdate(context, opportunity.firm_id);

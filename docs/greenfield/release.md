@@ -2843,6 +2843,40 @@ No desktop build is needed. The settings page renders the new refusal codes as t
 **What the next `full` rehearsal should show.** The `before` phase's report lists `release_record: created` next to `sending_attestation: created`, and `accepted_send` still reaches `sent`. The API's and worker's startup lines carry `image_digest` equal to the run's two digest inputs, with `image_digest_source: ecs_metadata_image`.
 
 **Still unverified.** Nothing here has run in the cloud. Migration 0017 has not been applied to a deployed database. The shape of the ECS metadata answer comes from AWS's documentation, and the tests reproduce it with a local server. No Fargate task has been read. If the answer lacks the digest, both services log `image_digest: unknown`. Enabling is then refused and sending held, which is fail-closed, but a real gap until it is fixed. The first rehearsal after this merge is where that shows. Production sending is still disabled, and no real attestation has been written under the new rule.
+### 8.0ai What lane g77 changed: the dispatch rechecks everything under one lock, then claims (25 September)
+
+**The gap.** The independent audit of 25 September (`GPT6-ASTRA-EXHAUSTIVE-20260925.md`) rated six items P0 or P1 before automated sending: S01, S02, S03, S05, S09 and C25. All six were real in code. Before this lane, `dispatchOutboundMessage` ran four autocommit statements: read, count, OAuth, and a state-only claim.
+
+- A reply, opt-out or hold that committed during the token refresh was never seen (S01).
+- The gate never asked the enrollment, control mode, assignment or template, and it let a `candidate` route through (S02).
+- The gate trusted `sync_state = 'ready'` through any number of rate-limited syncs (S03).
+- The cap was charged to the planned business date, not the day the email left (S05).
+- The window ignored holidays (S09).
+- A crash between the count and the claim left a count no fence explained (C25).
+
+Audit T02 applied too: `scenario03.check.ts` committed the reply before the dispatch, so it never entered that window.
+
+**What g77 changes.** `docs/decisions/g77-dispatch-rechecks-under-the-lock.md` has the reasoning, and `docs/greenfield/sending.md` has the sequence.
+
+- **OAuth first, then one claiming transaction.** The transaction takes the send gate shared, locks the fence and its enrollment `FOR UPDATE`, reruns `decideSend`, reserves the day's capacity and claims, then commits. Gmail is called only after the commit, with the claimed row's bytes. The dispatch refuses to run inside a caller's transaction.
+- **The send gate** (`packages/domain/policy/sendGate.ts`) is a per-workspace transaction advisory lock. Every writer of a restrictive stop fact takes it exclusive: `openHold`, the direct hold inserts in reassignment and departure, restrictive suppression events, manual mode, stage changes and `stopEnrollments`. So a stop either commits before the recheck reads, or waits for the claim.
+- **The complete eligibility at the claim.** `decideStepPermission` reruns `composeEligibility()`, with the fence's frozen route version and template version. The composition gains `enrollmentSource`. Its hold read now includes the owner's mailbox scope and the email channel, so an administrator's mailbox or email-channel pause is honoured. The new refusal `step_ineligible` carries the section 15 code as its detail and opens no second hold. A reply's hold used to surface as `provider_refusal`.
+- **Proven coverage.** `coverage_watermark_at` is the last success and `last_synced_at` the last attempt. No migration was needed, and the schema stays at 16 on this branch (17 with PR 211). The watermark must be no older than `COVERAGE_FRESHNESS_SECONDS` (15 minutes) on the database clock (`packages/domain/mail/coverage.ts`). The ramp's day health uses the same decision.
+- **The claim's business date and holidays.** The cap counts on the workspace business date of the decision instant, and the claim writes that date to `outbound_messages.business_date`. The window asks `placeEmailSend` about that instant, using the union of the enrollment's frozen holiday calendar and the current one.
+- **Capacity by fence.** `claimedAutomatedSends` derives `automated_sent` from the fences. `releaseCount` is gone.
+- **The drill** proves coverage again (one sync over its recorded inbox) when a phase finds the previous phase's watermark stale. The in-flight and after phases run about half an hour after the before phase.
+- Three mutations, appended to `scripts/releaseMutationCheck.mjs` (120 → 123 on this branch, rebased on main `ac26db53`; other lanes append concurrently).
+
+**Release class.** Application-only for the schema: no migration and no range change. Both images change, because the domain's writers now take the gate inside API commands too. Sending stays disabled in production (`FSS_SENDING_ENABLED=false`), so nothing here changes live behaviour until the attestation is written. Because this is a sending-safety change, it rides the next `full` rehearsal already owed for g70 and g73.
+
+**What the next `full` rehearsal's release suite should prove.**
+
+1. `scenario03.check.ts` enters the race window: the reply commits during the real dispatch's token refresh and nothing is sent, and the control's identical pause sends.
+2. The drill's `in-flight` and `after` phases still reach `accepted_send` or `in_doubt_send` with their mailbox proved fresh. If a phase refuses with `the coverage sync answered …` or `still unproved`, that is this lane's change meeting the deployed seam.
+3. Scenarios 5, 12, 16 and 33 pass unchanged on the claimed-row envelope and the claim's business date.
+4. No API command in the run logs a lock timeout or `40P01`. Holds and suppressions now wait for in-flight claims, which last milliseconds.
+
+**Still unverified.** Nothing here has run in the cloud. These are measured only on embedded PostgreSQL 16: the advisory lock's behaviour under the RDS parameter group, the deadlock-detector path the decision doc accepts, and the drill's re-sync on the rehearsal's recorded seam. The fifteen-minute window is reasoned, not measured: nobody has yet watched a production watermark's age through a Gmail 429.
 
 ### 8.1 Still unverified
 

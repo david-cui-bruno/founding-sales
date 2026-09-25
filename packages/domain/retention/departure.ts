@@ -1,6 +1,7 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { isAdminScope } from '../db/workspaceScope.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
+import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { accept, refuse, type RetentionResult } from './result.ts';
 
 /**
@@ -218,6 +219,9 @@ export async function commitDeparture(
   if (actor.userId === input.userId) return refuse('self_departure');
 
   const workspace = context.scope.workspaceId;
+  // A departure revokes the owner's mailbox and holds their firms and enrollments:
+  // stop facts, so the send gate first (lane g77, `policy/sendGate.ts`).
+  await lockSendGateForStopFact(context);
   const membership = await loadMembership(context, input.userId);
   if (membership === null) return refuse('membership_unknown');
   if (await wouldStrandTheWorkspace(context, input.userId)) return refuse('last_active_admin');

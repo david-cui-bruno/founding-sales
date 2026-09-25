@@ -1,6 +1,7 @@
 import type { BlockedActionKind, HoldReasonCode } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { openHold } from '../policy/holds.ts';
+import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { setManualControlMode } from '../crm/pipeline.ts';
 import { recordSuppression, type SuppressionJournal } from '../suppression/index.ts';
 import { originatingSend } from '../outbound/fence.ts';
@@ -202,6 +203,13 @@ export async function applyClassificationEffects(
   const holdIds: string[] = [];
   const suppressionEventIds: string[] = [];
   const { message, classification, candidates } = input;
+
+  // Lane g77: every effect below is a stop fact or rides with one, so the send gate is
+  // taken once, first. The order matters as much as the lock: a bounce counts against
+  // the day's send counter *before* it opens its hold, and a claim holding the gate
+  // waits on that counter — taking the gate here, ahead of the counter, is what keeps
+  // the two from deadlocking (`policy/sendGate.ts`).
+  await lockSendGateForStopFact(context);
 
   // 12.4: "Every possibly relevant incoming message creates a hold before
   // classification can release anything." Human and uncertain both hold; the

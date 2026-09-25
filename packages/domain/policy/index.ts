@@ -20,6 +20,8 @@ export {
 
 export { databaseNow } from './clock.ts';
 
+export { lockSendGateForDispatch, lockSendGateForStopFact, sendGateLockName } from './sendGate.ts';
+
 export {
   listApplicableHolds,
   listHoldsByReason,
