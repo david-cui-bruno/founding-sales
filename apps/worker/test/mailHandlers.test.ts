@@ -7,6 +7,7 @@ import {
   JOB_KIND_PROTECTION,
   claimJobs,
   enqueueJob,
+  readHeartbeats,
   runTwiceUnderStolenLease,
 } from '@fss/domain/jobs';
 import {
@@ -461,14 +462,12 @@ describe('the mail handlers and scheduler sources', () => {
   // ------------------------------------------------------- the due-work sources
   it('the reconciliation sweep coalesces a sync for a mailbox that has gone quiet', async () => {
     await settleJobs('mail.sync', 'done');
-    // Relative to the pass's instant, not the database's: the sweep compares
-    // `last_synced_at` with the `now` the scheduler pass was given.
     await session.query(
       "UPDATE mailboxes SET last_synced_at = $2::timestamptz - interval '1 hour' WHERE id = $1",
       [mailboxId, NOW],
     );
 
-    const specifications = await mailSyncReconciliationSource(5).find(session, NOW);
+    const specifications = await mailSyncReconciliationSource().find(session, NOW);
     // The source does its own upsert, because `mail-sync:{mailbox}` carries no
     // instant and `ON CONFLICT DO NOTHING` cannot re-arm a finished row.
     expect(specifications).toEqual([]);
@@ -480,15 +479,72 @@ describe('the mail handlers and scheduler sources', () => {
     expect(rows.map(row => row.state)).toEqual(['queued']);
   });
 
-  it('the reconciliation sweep leaves a freshly synced mailbox alone', async () => {
+  /**
+   * 13.3's "three missed one-minute mailbox checks", as the pass produces them (g58).
+   *
+   * On 24 September 2026 production's one mailbox was checked every five minutes
+   * unless a push happened to arrive, because this sweep skipped any mailbox synced in
+   * the last five minutes, and `mailbox_heartbeat_missed` fired between healthy checks.
+   *
+   * The vacuous-pass trap is a mailbox that *looks* quiet. A test that backdates
+   * `last_synced_at` by an hour passes against the five-minute filter too — that is the
+   * test above. So this one syncs the mailbox for real, with nothing new in Gmail,
+   * immediately before every pass: any "synced recently" filter at all skips it, the
+   * claim finds nothing, and the loop goes red on its first minute.
+   */
+  it('13.3: a mailbox with no new mail is checked on every pass, and every check is a fresh sixty-second heartbeat', async () => {
     await settleJobs('mail.sync', 'done');
-    await session.query('UPDATE mailboxes SET last_synced_at = $2::timestamptz WHERE id = $1', [mailboxId, NOW]);
-    await mailSyncReconciliationSource(5).find(session, NOW);
-    const { rows } = await session.query<{ state: string }>(
-      "SELECT state FROM jobs WHERE workspace_id = $1 AND idempotency_key = $2",
-      [workspaceId, `mail-sync:${mailboxId}`],
-    );
-    expect(rows.map(row => row.state)).toEqual(['done']);
+    const registry = registryFor();
+    const heartbeat = async (): Promise<{ observed: string; interval: number; detail: Record<string, unknown> } | null> => {
+      const { rows } = await session.query<{
+        observed_at: string;
+        expected_interval_seconds: number;
+        detail: Record<string, unknown>;
+      }>(
+        `SELECT observed_at::text AS observed_at, expected_interval_seconds, detail
+           FROM heartbeats WHERE component = 'mailbox' AND instance_key = $1`,
+        [mailboxId],
+      );
+      const row = rows[0];
+      return row === undefined
+        ? null
+        : { observed: row.observed_at, interval: row.expected_interval_seconds, detail: row.detail };
+    };
+
+    for (let minute = 0; minute < 3; minute += 1) {
+      // The mailbox was synced a moment ago and Gmail has nothing new since.
+      await session.query('UPDATE mailboxes SET last_synced_at = now() WHERE id = $1', [mailboxId]);
+      // Age the previous beat past its promise, so only this minute's check can make it fresh.
+      await session.query(
+        "UPDATE heartbeats SET observed_at = now() - interval '10 minutes' WHERE component = 'mailbox' AND instance_key = $1",
+        [mailboxId],
+      );
+      const historyReadsBefore = gmail.calls.filter(call => call.method === 'listHistory').length;
+      const passAt = new Date(Date.parse(NOW) + minute * 60_000).toISOString();
+
+      await mailSyncReconciliationSource().find(session, passAt);
+      const claims = await claimJobs(session, {
+        owner: `cadence-${String(minute)}`,
+        kinds: ['mail.sync'],
+        limit: 5,
+        leaseSeconds: 60,
+      });
+      expect(claims.map(job => job.idempotencyKey), `minute ${String(minute)}`).toEqual([`mail-sync:${mailboxId}`]);
+      const claim = claims[0];
+      if (claim === undefined) throw new Error('the pass asked for no check');
+      expect(await runClaimedJob(session, { registry, job: claim })).toBe('completed');
+
+      // The check was a real one: one history read from the cursor, nothing new in it.
+      expect(gmail.calls.filter(call => call.method === 'listHistory').length).toBe(historyReadsBefore + 1);
+      const beat = await heartbeat();
+      expect(beat?.interval).toBe(60);
+      expect(beat?.detail).toMatchObject({ outcome: 'synced', messages: 0 });
+      const status = (await readHeartbeats(session)).find(
+        entry => entry.component === 'mailbox' && entry.instanceKey === mailboxId,
+      );
+      expect(status?.fresh, `minute ${String(minute)}`).toBe(true);
+      expect(status?.ageSeconds ?? 600).toBeLessThan(60);
+    }
   });
 
   it('13.2: the reconciliation sweep never revives a dead sync', async () => {
@@ -497,7 +553,7 @@ describe('the mail handlers and scheduler sources', () => {
       "UPDATE mailboxes SET last_synced_at = $2::timestamptz - interval '1 hour' WHERE id = $1",
       [mailboxId, NOW],
     );
-    await mailSyncReconciliationSource(5).find(session, NOW);
+    await mailSyncReconciliationSource().find(session, NOW);
     const { rows } = await session.query<{ state: string }>(
       "SELECT state FROM jobs WHERE workspace_id = $1 AND idempotency_key = $2",
       [workspaceId, `mail-sync:${mailboxId}`],
@@ -547,10 +603,50 @@ describe('the mail handlers and scheduler sources', () => {
     expect(second[0]?.idempotencyKey).toBe(specification.idempotencyKey);
   });
 
+  /**
+   * 12.3's "renewed daily" is the watch's age, not its remaining life (g58).
+   *
+   * The source used to renew a watch only inside its last day, so a seven-day watch was
+   * renewed on day six and `GmailWatchHoursToExpiry` sat below the alarm's 48 hours for
+   * the whole of day five. The trap is a test that only ever looks at a watch with no
+   * row or one about to lapse — both were due under the old query too. So the middle
+   * case is the one that matters: a day-old watch with six days left must be due, and an
+   * hour-old one must not.
+   */
+  it('12.3: renews a watch once it is a day old, while it still has six days to run', async () => {
+    const liveWatch = async (registeredHoursAgo: number, expiresInHours: number): Promise<void> => {
+      await session.query(
+        `UPDATE mailbox_watches SET cancelled_at = greatest(now(), registered_at),
+                                    cancelled_reason = 'the test registers its own'
+          WHERE workspace_id = $1 AND cancelled_at IS NULL`,
+        [workspaceId],
+      );
+      await session.query(
+        `INSERT INTO mailbox_watches (workspace_id, mailbox_id, generation, topic_name, registered_at, expires_at)
+         SELECT $1, $2, coalesce(max(generation), 0) + 1, 'projects/callie-fss/topics/fss-test-gmail-push',
+                $3::timestamptz - make_interval(hours => $4::integer),
+                $3::timestamptz + make_interval(hours => $5::integer)
+           FROM mailbox_watches WHERE workspace_id = $1 AND mailbox_id = $2`,
+        [workspaceId, mailboxId, NOW, registeredHoursAgo, expiresInHours],
+      );
+    };
+    const due = async (): Promise<boolean> =>
+      (await watchRenewalSource().find(session, NOW)).some(entry => entry.payload['mailboxId'] === mailboxId);
+
+    await liveWatch(1, 7 * 24 - 1);
+    expect(await due(), 'an hour-old watch').toBe(false);
+
+    await liveWatch(25, 6 * 24 - 1);
+    expect(await due(), 'a day-old watch with six days left').toBe(true);
+
+    await liveWatch(24 * 7 - 12, 12);
+    expect(await due(), 'a watch in its last day').toBe(true);
+  });
+
   it('no source reaches anything but PostgreSQL, which is what 13.1 requires of the pass', async () => {
     const before = gmail.calls.length;
     await mailRecoverySource().find(session, NOW);
-    await mailSyncReconciliationSource(5).find(session, NOW);
+    await mailSyncReconciliationSource().find(session, NOW);
     await watchRenewalSource().find(session, NOW);
     expect(gmail.calls.length).toBe(before);
   });

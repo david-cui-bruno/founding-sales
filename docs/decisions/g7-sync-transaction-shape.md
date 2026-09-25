@@ -39,12 +39,13 @@ The same applies to `mail.recover` and `rearmRecoveryJob`.
 So both self-re-arms were removed, and the continuation lives in
 `apps/worker/src/scheduler/mailSources.ts`, on a connection that is not the runner's:
 
-* `mail-sync-reconcile` coalesces a sync for any connected, `ready` mailbox whose
-  `last_synced_at` is older than `MAIL_RECONCILE_INTERVAL_MINUTES` (five);
+* `mail-sync-reconcile` coalesces a sync for every connected, `ready` mailbox on every
+  pass (it was: whose `last_synced_at` is older than five minutes; see the amendment
+  below);
 * `mail-recovery` re-arms the `mail.recover` job of every recovery that has not
   completed at the mailbox's current generation.
 
-Worst case, a capped run resumes five minutes later. The alternative — an unbounded run
+Worst case, a capped run resumes a minute later (five, before the amendment). The alternative — an unbounded run
 — is a handler holding a write transaction open across an arbitrary number of Gmail
 calls, which is how a database ends up with a two-hour-old snapshot and a table it
 cannot vacuum.
@@ -55,6 +56,14 @@ Push is a hint, not a guarantee, and it fails silently in at least three ordinar
 a watch lapses, Pub/Sub exhausts retention while the API is down, the webhook refuses a
 token through a rotation. The reconciliation sweep is the same mechanism answering that
 problem, which is why it is a sweep over mailboxes rather than a queue of continuations.
+
+**Amended 24 September 2026 (lane g58).** The five-minute filter made the sweep a
+five-minute check while the mailbox heartbeat promised one a minute, and 13.3's
+"three missed one-minute mailbox checks" alarm fired between healthy checks on
+production's first mailbox. The sweep now asks for every connected, `ready` mailbox on
+every pass, which is also what 12.3's "one-minute reconciliation" says. The cost is
+one token refresh and one `history.list` a minute per mailbox; `docs/greenfield/mail.md`,
+"The mailbox check, once a minute", has the numbers.
 
 ## What the sweep must not do
 

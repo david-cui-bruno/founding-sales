@@ -70,6 +70,8 @@ export {
 
 export {
   DEFAULT_HEARTBEAT_INTERVAL_SECONDS,
+  HEARTBEAT_GRACE_SECONDS,
+  heartbeatIsFresh,
   readHeartbeats,
   recordHeartbeat,
   type HeartbeatComponent,

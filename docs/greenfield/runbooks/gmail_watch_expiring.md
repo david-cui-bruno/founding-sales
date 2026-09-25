@@ -18,8 +18,13 @@ until the reconciliation also fails.
 
 ## Diagnosis
 
-Watches are renewed daily under the key `watch:{mailbox}:{generation}`. An approaching
-expiry means the renewal is not completing:
+Watches are renewed daily under the key `watch:{mailbox}:{generation}`: the scheduler
+asks for a renewal once the live watch is 24 hours old, so a healthy mailbox reads
+between 144 and 168 hours and falling below 48 means about four days of renewals have
+not completed. (Before lane g58 the renewal waited for the watch's last day, and this
+alarm fired for a day in every six on a healthy system; on such a build, check the
+watch's `registered_at` before treating it as a fault.) An approaching expiry means the
+renewal is not completing:
 
 - the worker is down or the queue is behind;
 - the grant is revoked, so Google refuses the watch;

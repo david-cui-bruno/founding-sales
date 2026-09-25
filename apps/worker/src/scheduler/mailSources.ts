@@ -1,7 +1,6 @@
 import type { SessionQueryable } from '@fss/domain/db';
 import { jobIdempotencyKey, type JobSpecification } from '@fss/domain/jobs';
 import {
-  MAIL_RECONCILE_INTERVAL_MINUTES,
   coalesceMailSync,
   listIncompleteRecoveries,
   listMailboxesDueForSync,
@@ -34,26 +33,31 @@ import type { DueWorkSource } from './schedulerPass.ts';
  */
 
 /**
- * 12.3's reconciliation sweep.
+ * 12.3's reconciliation sweep, which is also 13.3's mailbox check.
  *
  * Push is a hint. A watch can lapse, Pub/Sub can exhaust its retention while the API
  * is down, the webhook can refuse a token through a rotation — and every one of those
- * is silent. This is the backstop that makes the worst case a few minutes of latency
+ * is silent. This is the backstop that makes the worst case a minute of latency
  * instead of a mailbox that quietly stopped importing mail. It is also what continues
  * a sync that stopped at its page cap.
  *
- * `coalesceMailSync` rather than `enqueueJob`, so a mailbox with a `running` sync
- * merges rather than duplicating, and a mailbox with a `dead` sync stays dead: 13.2
- * makes reviving an exhausted job an audited admin command, and a scheduler is not an
- * admin. The dead-job alarm is what gets somebody's attention.
+ * It asks for one check of every connected, `ready` mailbox on **every** pass, so a
+ * mailbox with no new mail is still read once a minute and its heartbeat means what
+ * the `mailbox_heartbeat_missed` alarm reads it as (`MAILBOX_CHECK_INTERVAL_SECONDS`,
+ * lane g58). Until 24 September 2026 it asked only for a mailbox five minutes past its
+ * last sync, and the alarm fired between healthy checks.
+ *
+ * `coalesceMailSync` rather than `enqueueJob`, so a mailbox with a queued or `running`
+ * sync merges rather than duplicating, and a mailbox with a `dead` sync stays dead:
+ * 13.2 makes reviving an exhausted job an audited admin command, and a scheduler is
+ * not an admin. The dead-job alarm is what gets somebody's attention, and the mailbox
+ * heartbeat goes stale beside it, which is true.
  */
-export function mailSyncReconciliationSource(
-  intervalMinutes: number = MAIL_RECONCILE_INTERVAL_MINUTES,
-): DueWorkSource {
+export function mailSyncReconciliationSource(): DueWorkSource {
   return {
     name: 'mail-sync-reconcile',
-    find: async (session: SessionQueryable, now: string): Promise<readonly JobSpecification[]> => {
-      for (const mailbox of await listMailboxesDueForSync(session, now, intervalMinutes)) {
+    find: async (session: SessionQueryable): Promise<readonly JobSpecification[]> => {
+      for (const mailbox of await listMailboxesDueForSync(session)) {
         // No history id: the run reads from the stored cursor. A reconciliation has
         // no hint to offer and must not lower a hint a notification already left.
         await coalesceMailSync(session, {
@@ -167,10 +171,10 @@ export function outboundReconcileSource(): DueWorkSource {
 }
 
 /** All four, in the order the pass should read them. */
-export function mailSources(intervalMinutes?: number): readonly DueWorkSource[] {
+export function mailSources(): readonly DueWorkSource[] {
   return [
     mailRecoverySource(),
-    mailSyncReconciliationSource(intervalMinutes),
+    mailSyncReconciliationSource(),
     watchRenewalSource(),
     outboundReconcileSource(),
   ];

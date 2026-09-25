@@ -155,8 +155,8 @@ export {
 } from './config.ts';
 
 export {
+  MAILBOX_CHECK_INTERVAL_SECONDS,
   MAILBOX_HOLD_BLOCKS,
-  MAIL_RECONCILE_INTERVAL_MINUTES,
   advanceCursor,
   advanceGeneration,
   insertOrReviveMailbox,

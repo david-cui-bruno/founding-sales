@@ -196,8 +196,19 @@ export interface WatchDueRow {
 }
 
 /**
- * Every connected mailbox whose watch needs renewing: none registered, or one within
- * `WATCH_RENEWAL_INTERVAL_HOURS` of expiry.
+ * Every connected mailbox whose watch needs renewing: none registered, one registered
+ * `WATCH_RENEWAL_INTERVAL_HOURS` or more ago, or one within that long of expiry.
+ *
+ * "Renewed daily" (12.3) means the watch's *age*. Until lane g58 this asked only
+ * whether the watch expired within a day, which for a seven-day Gmail watch is a
+ * renewal on day six — a day after `GmailWatchHoursToExpiry` has fallen below the
+ * alarm's 48 hours. The gauge is refreshed every minute but its value only moves when
+ * a renewal runs, so every connected mailbox would have raised
+ * `fss-prod-gmail-watch-expiring`, a critical alarm, for about a day in every six.
+ * Renewed daily, the value stays between six and seven days and the alarm fires only
+ * after four days of failed renewals, which is what "within two days of expiry" is for.
+ * The expiry clause is kept as a floor for a watch Gmail registered for less than the
+ * usual week.
  *
  * The generation returned is the *next* one, so the scheduler's key is
  * `watch:{mailbox}:{next}` and a pass that repeats inside the same minute composes
@@ -219,6 +230,8 @@ export async function listWatchesDue(db: Queryable, nowIso: string): Promise<rea
       WHERE m.status = 'connected'
       GROUP BY m.workspace_id, m.id
      HAVING max(w.expires_at) FILTER (WHERE w.cancelled_at IS NULL) IS NULL
+         OR max(w.registered_at) FILTER (WHERE w.cancelled_at IS NULL)
+            <= $1::timestamptz - make_interval(hours => $2::integer)
          OR max(w.expires_at) FILTER (WHERE w.cancelled_at IS NULL)
             <= $1::timestamptz + make_interval(hours => $2::integer)
       ORDER BY m.id`,

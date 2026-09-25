@@ -717,6 +717,26 @@ const MUTATIONS = [
     because:
       'A connected mailbox\u2019s domain is the workspace\u2019s sending domain, and the callback is the only zero-step path to the row 12.7\u2019s checklist is recorded against (lane g57). Without the call the consent page still says "Gmail connected" and every status check still passes, so sendingDomain.test.ts reads sending_domains back after a real callback and has to go red when no row appears.',
   },
+  {
+    name: 'the mailbox sweep skips a mailbox synced in the last five minutes again',
+    file: 'packages/domain/mail/mailboxes.ts',
+    find: "        AND sync_state = 'ready'\n      ORDER BY id`,\n",
+    replace:
+      "        AND sync_state = 'ready'\n        AND (last_synced_at IS NULL OR last_synced_at <= now() - interval '5 minutes')\n      ORDER BY id`,\n",
+    suite: ['run', 'test', '--workspace', 'apps/worker', '--', 'test/mailHandlers.test.ts'],
+    because:
+      'This is production on 24 September 2026 exactly: with one mailbox and no new mail the sweep asked for a check every five minutes, the heartbeat promised sixty seconds, and fss-prod-mailbox-heartbeat-missed went ALARM and OK twice in an hour between healthy checks (lane g58). mailHandlers.test.ts syncs the mailbox for real before every pass and requires the pass to ask for another check, so it has to go red.',
+  },
+  {
+    name: 'the mailbox heartbeat alarm counts five-minute periods while the heartbeat promises one',
+    file: 'infra/modules/alerts/main.tf',
+    find: '      metric_name         = "MailboxCheckHeartbeat"\n      statistic           = "Sum"\n      comparison          = "LessThanThreshold"\n      threshold           = 1\n      period              = 60\n',
+    replace:
+      '      metric_name         = "MailboxCheckHeartbeat"\n      statistic           = "Sum"\n      comparison          = "LessThanThreshold"\n      threshold           = 1\n      period              = 300\n',
+    suite: ['run', 'test:release', '--', 'test/release/mailboxHeartbeatCadence.check.ts'],
+    because:
+      'Raising the alarm to the old sweep\u2019s five minutes is the other way to stop the 24 September flapping, and it leaves the alarm and the sixty-second heartbeat disagreeing in the opposite direction: fifteen quiet minutes before anyone hears that a mailbox stopped being read. mailboxHeartbeatCadence.check.ts requires the period to equal the interval recordMailboxHeartbeat writes, so it has to go red.',
+  },
 ];
 
 // A listener on each of these keeps Node from exiting mid-mutation with a file still

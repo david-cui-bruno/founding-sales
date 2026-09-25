@@ -133,6 +133,11 @@ because read-then-write is how the fifty-first message of a fifty-message day ge
 **Heartbeats** are an upsert per `(component, instance_key, workspace_id)` carrying
 `expected_interval_seconds`, so the emitter and the alarm's "three missed checks" agree
 through a configuration change. Mailbox is the only workspace-scoped component.
+A beat is fresh when its age is within that interval plus the component's
+`HEARTBEAT_GRACE_SECONDS`: zero for the API, scheduler and worker, which beat on their
+own loops, and 30 seconds for the mailbox, whose check the scheduler asks for and a
+runner performs a claim later (`docs/greenfield/mail.md`, "The mailbox check, once a
+minute").
 
 **The canary** is one `canary_runs` row per workspace per quarter hour, inserted by the
 scheduler and completed by the worker. Neither heartbeat can prove scheduler-to-worker
