@@ -754,6 +754,29 @@ ol {
   width: 120px;
 }
 
+/* Lane g79: "Callback — needs a time" keeps its day and time in view, not on hover. */
+.schedule {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.schedule input {
+  font-size: 13px;
+}
+
+.schedule .quiet,
+.outcome .quiet {
+  margin: 0;
+  font-size: 12.5px;
+}
+
+.schedule .quiet:empty,
+.outcome .quiet:empty {
+  display: none;
+}
+
 .dial {
   display: flex;
   flex-wrap: wrap;

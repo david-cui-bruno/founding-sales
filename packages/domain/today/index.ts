@@ -7,8 +7,12 @@
  */
 
 export {
+  CALLBACK_TIME_NEEDED_KEY_PREFIX,
   TODAY_ALGORITHM_VERSION,
   TODAY_ITEM_KINDS,
+  TODAY_PAUSE_SOURCE_EVENT_KIND,
+  callLogIdOfItemKey,
+  callbackTimeNeededItemKey,
   TODAY_ITEM_STATUSES,
   TODAY_LANES,
   TODAY_REFUSAL_CODES,
@@ -42,6 +46,7 @@ export {
   businessDateOf,
   cancelUnproducedItems,
   completeTodayItem,
+  completeTodayItemsByKey,
   listTodayCards,
   listTodayItems,
   readTodayItem,
@@ -70,7 +75,9 @@ export {
   SNOOZE_REASON_MAX,
   cancelTodaySnooze,
   listActiveSnoozes,
+  releaseTodayPause,
   snoozeTodayItem,
+  type ReleasedTodayPause,
   type SnoozeOutcome,
   type SnoozeTodayItemInput,
 } from './snooze.ts';
@@ -78,12 +85,14 @@ export {
 export {
   readTodayFirm,
   readTodayList,
+  todayFirmVersion1,
   type ReadTodayInput,
   type TodayCardDto,
   type TodayFirmDto,
   type TodayListDto,
   type TodayRouteDto,
   type TodayTaskDto,
+  type TodayTaskDtoV2,
 } from './dto.ts';
 
 export {

@@ -64,6 +64,7 @@ describe('what the API mounts', () => {
       '/attachments/open',
       '/callbacks',
       '/callbacks/complete',
+      '/callbacks/schedule',
       '/calling-identities',
       '/calling-identities/attest',
       '/calling-identities/disable',
@@ -156,6 +157,7 @@ describe('what the API mounts', () => {
       '/templates/retire',
       '/today',
       '/today/firm',
+      '/today/pause/release',
       '/today/snooze',
       '/today/snooze/cancel',
     ]);

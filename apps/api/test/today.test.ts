@@ -1,6 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { todayFirmResponseSchema, todayListResponseSchema, todaySnoozeResultSchema, wireDrift } from '@fss/contracts';
+import {
+  todayFirmResponseSchema,
+  todayListResponseSchema,
+  todayPauseReleaseResultSchema,
+  todaySnoozeResultSchema,
+  wireDrift,
+} from '@fss/contracts';
 import { repositoryContext, workspaceScope } from '@fss/domain/db';
 import { buildTodaySnapshot, businessDateOf, promoteTodayItem } from '@fss/domain/today';
 import { localNoopSuppressionJournal } from '../src/journal/index.ts';
@@ -161,7 +167,7 @@ describe('the Today routes', () => {
 
   it('refuses every path in this lane without a session', async () => {
     expect((await get('/today', null)).status).toBe(401);
-    for (const path of ['/today/firm', '/today/snooze', '/today/snooze/cancel']) {
+    for (const path of ['/today/firm', '/today/snooze', '/today/snooze/cancel', '/today/pause/release']) {
       expect((await post(path, null, command())).status, path).toBe(401);
     }
   });
@@ -194,6 +200,33 @@ describe('the Today routes', () => {
     const tasks = answer.body['tasks'] as Record<string, unknown>[];
     expect(tasks).toHaveLength(3);
     expect(tasks.filter(task => task['automated'] === true)).toHaveLength(1);
+  });
+
+  it('answers G6’s card shape unless the client asks for version 2 (lane g79)', async () => {
+    // A desktop released before lane g79 parses the task with a strict schema, so the
+    // card it asks for carries exactly the fields it knows.
+    const first = await post('/today/firm', assigneeToken, { firmId });
+    const firstTask = (first.body['tasks'] as Record<string, unknown>[])[0] ?? {};
+    expect(Object.keys(firstTask).sort()).toEqual([
+      'automated',
+      'contactId',
+      'contactName',
+      'dueAt',
+      'itemId',
+      'kind',
+      'lane',
+      'snoozeUntil',
+      'status',
+    ]);
+    const second = await post('/today/firm', assigneeToken, { firmId, cardVersion: 2 });
+    expect(second.status).toBe(200);
+    // One contract reads both versions exactly: the four identities are optional in it.
+    expect(wireDrift(todayFirmResponseSchema, first.body)).toEqual([]);
+    expect(wireDrift(todayFirmResponseSchema, second.body)).toEqual([]);
+    const secondTask = (second.body['tasks'] as Record<string, unknown>[])[0] ?? {};
+    for (const key of ['callbackId', 'stepExecutionId', 'callLogId', 'pauseHoldId']) expect(secondTask).toHaveProperty(key);
+    // Any other version is a malformed request, not a guess.
+    expect((await post('/today/firm', assigneeToken, { firmId, cardVersion: 3 })).status).toBe(400);
   });
 
   it('gives a colleague nothing at all, rather than a redacted card', async () => {
@@ -255,17 +288,69 @@ describe('the Today routes', () => {
     // The request said nothing about a hold. The item's `automated` column did.
     expect(resultOf(answer)['outcome']).toBe('held');
     expect(resultOf(answer)['blockedActionKind']).toBe('email_send');
+    // This fixture's automated item has no enrollment behind it, so the pause covers the
+    // firm; the domain suite pauses a real enrollment's step (callsAndCallbacks.test.ts).
+    expect(resultOf(answer)['scope']).toBe('firm');
+    expect(wireDrift(todaySnoozeResultSchema, resultOf(answer))).toEqual([]);
   });
 
   it('refuses a snooze of a task that is not open, as a value with a reason', async () => {
-    const returnAt = new Date(Date.now() + 2 * 86_400_000).toISOString();
+    const returnAt = new Date(Date.now() + 3 * 86_400_000).toISOString();
     const answer = await post(
       '/today/snooze',
       assigneeToken,
-      command({ itemId: automatedItemId, reason: 'Again', returnAt }),
+      command({ itemId: manualItemId, reason: 'Again', returnAt }),
     );
     expect(answer.status).toBe(409);
     expect(answer.body['reason']).toBe('item_not_open');
+  });
+
+  it('shows the pause on the card and releases it from there, once (lane g79, C22)', async () => {
+    // The paused send stays on the card with the hold its Resume control releases.
+    const card = await post('/today/firm', assigneeToken, { firmId, cardVersion: 2 });
+    const paused = (card.body['tasks'] as Record<string, unknown>[]).find(task => task['itemId'] === automatedItemId);
+    expect(paused?.['status']).toBe('open');
+    const holdId = paused?.['pauseHoldId'];
+    expect(typeof holdId).toBe('string');
+
+    // Pressing Pause again answers with the same hold; a pause needs no return time.
+    const again = await post('/today/snooze', assigneeToken, command({ itemId: automatedItemId, reason: 'Still closed' }));
+    expect(again.status).toBe(200);
+    expect(resultOf(again)['holdId']).toBe(holdId);
+
+    // A colleague cannot lift it, and cannot tell it exists.
+    const stranger = await post('/today/pause/release', strangerToken, command({ holdId }));
+    expect(stranger.status).toBe(409);
+    expect(stranger.body['reason']).toBe('not_assigned');
+
+    const released = await post('/today/pause/release', assigneeToken, command({ holdId }));
+    expect(released.status).toBe(200);
+    expect(resultOf(released)['holdId']).toBe(holdId);
+    expect(wireDrift(todayPauseReleaseResultSchema, resultOf(released))).toEqual([]);
+    const twice = await post('/today/pause/release', assigneeToken, command({ holdId }));
+    expect(twice.status).toBe(409);
+    expect(twice.body['reason']).toBe('pause_already_released');
+
+    const after = await post('/today/firm', assigneeToken, { firmId, cardVersion: 2 });
+    expect(
+      (after.body['tasks'] as Record<string, unknown>[]).find(task => task['itemId'] === automatedItemId)?.['pauseHoldId'],
+    ).toBeNull();
+  });
+
+  it('never releases a hold a Today pause did not open', async () => {
+    const { rows } = await fixture.db.query<{ id: string }>(
+      `INSERT INTO active_holds (workspace_id, scope_kind, scope_key, reason_code, blocked_action_kinds, source_event_kind)
+       VALUES ($1, 'firm', $2, 'scoped_pause', ARRAY['email_send'], 'administrative_pause') RETURNING id`,
+      [fixture.alpha.workspaceId, firmId],
+    );
+    const answer = await post('/today/pause/release', assigneeToken, command({ holdId: rows[0]?.id }));
+    expect(answer.status).toBe(409);
+    expect(answer.body['reason']).toBe('pause_unknown');
+    const still = await fixture.db.query<{ released_at: Date | null }>(
+      'SELECT released_at FROM active_holds WHERE workspace_id = $1 AND id = $2',
+      [fixture.alpha.workspaceId, rows[0]?.id],
+    );
+    expect(still.rows[0]?.released_at).toBeNull();
   });
 
   it('cancels a snooze and puts the task back', async () => {

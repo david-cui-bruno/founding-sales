@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   instant,
+  uuid,
   todayCardDtoSchema,
   todayFirmResponseSchema,
   type CALL_OUTCOMES,
@@ -11,7 +12,7 @@ import {
 } from '@fss/contracts';
 
 /**
- * What the Today window is given, and the seven things it may ask for
+ * What the Today window is given, and the nine things it may ask for
  * (specification 8.2, 14.2).
  *
  * A second contract beside G2's `shared/contract.ts` rather than an extension of it,
@@ -38,6 +39,12 @@ import {
  */
 export { TODAY_LANES, type TodayLane } from '@fss/contracts';
 export type TodayCard = TodayCardDto;
+/**
+ * A task on an expanded card. The window asks for the card's second version (lane
+ * g79), whose optional `callbackId`, `stepExecutionId`, `callLogId` and `pauseHoldId`
+ * say what recording a call against the task completes, and which pause its Resume
+ * releases. A card without them offers none of those controls.
+ */
 export type TodayTask = TodayTaskDto;
 /**
  * One dialable route on an expanded card (9.1, 9.2). The version is the one
@@ -72,14 +79,40 @@ export const todayStateSchema = z.strictObject({
   notice: z.string().max(80).nullable(),
   /** 9.2's last clause, so the window never has to compose it. */
   handoffNotice: z.string(),
+  /**
+   * The call the last Call button handed to the phone app, so the outcome form can say
+   * which number it is recording (lane g79, C16). The ticket and the calling identity
+   * that authorized it stay in the main process, which attaches them to the outcome.
+   */
+  lastCall: z
+    .strictObject({ firmId: uuid, routeId: uuid, contactId: uuid.nullable(), e164: z.string().max(20) })
+    .nullable()
+    .optional(),
 });
 export type TodayState = z.infer<typeof todayStateSchema>;
 
 export interface SnoozeRequest {
   readonly itemId: string;
   readonly reason: string;
-  /** The explicit instant the task comes back. 8.2 requires one; there is no default. */
+  /**
+   * The explicit instant a manual task comes back; 8.2 requires one. Empty for an
+   * automated task's pause, which is released by a person rather than by a clock.
+   */
   readonly returnAt: string;
+}
+
+/** Give "Callback — needs a time" its time (lane g79, C13). Local fields, business zone. */
+export interface ScheduleCallbackRequest {
+  readonly callLogId: string;
+  /** `YYYY-MM-DD`. */
+  readonly localDate: string;
+  /** `HH:MM`, or empty for a day with no hour. */
+  readonly localTime: string;
+}
+
+/** The Resume control on a paused automated task (lane g79, C22). */
+export interface ReleasePauseRequest {
+  readonly holdId: string;
 }
 
 export interface DialRequest {
@@ -91,6 +124,11 @@ export interface DialRequest {
 
 export interface OutcomeRequest {
   readonly firmId: string;
+  /**
+   * The Today task the call was for (lane g79). The server applies the outcome to the
+   * step or callback behind it; null records the call as history only.
+   */
+  readonly itemId: string | null;
   readonly contactId: string | null;
   readonly routeId: string | null;
   readonly outcome: (typeof CALL_OUTCOMES)[number];
@@ -113,6 +151,8 @@ export interface TodayBridge {
   /** Authorize, consume and open `tel:` in one call. The renderer never sees a ticket. */
   dial(input: DialRequest): Promise<TodayState>;
   recordOutcome(input: OutcomeRequest): Promise<TodayState>;
+  scheduleCallback(input: ScheduleCallbackRequest): Promise<TodayState>;
+  releasePause(input: ReleasePauseRequest): Promise<TodayState>;
 }
 
 declare global {

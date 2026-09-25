@@ -1,8 +1,18 @@
-import { CALL_OUTCOMES } from '@fss/contracts';
+import { CALL_OUTCOMES, callbackInstant } from '@fss/contracts';
 import { button, element, orDash } from './firmDom.ts';
-import { OUTCOME_LABELS, logCallCommand, outcomeProblem, outcomeSuppresses, OUTCOME_PROBLEM_SENTENCES, SUPPRESSION_WARNINGS, type OutcomeDraft } from './outcomeForm.ts';
+import {
+  OUTCOME_LABELS,
+  OUTCOME_PROBLEM_SENTENCES,
+  SUPPRESSION_WARNINGS,
+  callbackNeedsTime,
+  logCallCommand,
+  outcomeProblem,
+  outcomeSuppresses,
+  resolvedCallbackInstant,
+  type OutcomeDraft,
+} from './outcomeForm.ts';
 import type { TodayBridge, TodayState } from './todayContract.ts';
-import type { CardView, TodayScreenView } from './todayView.ts';
+import type { CardView, TaskView, TodayScreenView } from './todayView.ts';
 import { dueLabel, type LaneSection } from './homeView.ts';
 
 /**
@@ -15,6 +25,11 @@ import { dueLabel, type LaneSection } from './homeView.ts';
  * outcome form behave exactly as they did in that window; what changed is where they
  * sit — sections with a grey header, rows with dividers, the expanded firm under its own
  * row — and that a task's instant reads as the business zone's clock.
+ *
+ * Lane g79 added three things, all asked of the view model rather than decided here:
+ * the outcome form names the task the call was for and the number just called, so the
+ * server can apply the outcome to its step or callback; a paused automated send shows
+ * Resume where Pause was; and "Callback — needs a time" offers a day and a time.
  *
  * The module holds no rule. It asks `buildTodayView` what to show, `outcomeForm` what a
  * call outcome needs before it may be recorded, and the bridge for everything else. It
@@ -53,7 +68,18 @@ function renderCard(item: HTMLElement, entry: CardView, view: TodayScreenView, h
   item.append(row);
 }
 
-function renderSnooze(panel: HTMLElement, itemId: string, label: string, enabled: boolean, host: LanesHost): void {
+/** The line that says what a callback's day and time resolve to, or why it has none. */
+function callbackLine(instant: string | null, state: TodayState): string {
+  if (instant === null) return '';
+  return `Callie will put the callback at ${dueLabel(instant, state.businessTimeZone, state.snapshotDate)}.`;
+}
+
+function renderSnooze(panel: HTMLElement, entry: TaskView, host: LanesHost): void {
+  const itemId = entry.task.itemId;
+  const enabled = entry.enabled;
+  // An automated send is paused until Resume, so it asks why and not until when
+  // (8.2; lane g79, C22). A manual task's snooze needs both.
+  const asksReturn = !entry.task.automated;
   const form = element('form', { className: 'snooze', testId: 'snooze-form' });
   const reason = element('input', { testId: 'snooze-reason' });
   reason.type = 'text';
@@ -62,14 +88,15 @@ function renderSnooze(panel: HTMLElement, itemId: string, label: string, enabled
   reason.disabled = !enabled;
   const returnAt = element('input', { testId: 'snooze-return' });
   returnAt.type = 'datetime-local';
-  returnAt.required = true;
+  returnAt.required = asksReturn;
   returnAt.disabled = !enabled;
+  returnAt.hidden = !asksReturn;
 
-  const submit = button(label, 'snooze-submit', enabled);
+  const submit = button(entry.delayLabel, 'snooze-submit', enabled);
   submit.className = 'btn';
   submit.type = 'submit';
   const update = (): void => {
-    submit.disabled = !enabled || reason.value.trim().length === 0 || returnAt.value.length === 0;
+    submit.disabled = !enabled || reason.value.trim().length === 0 || (asksReturn && returnAt.value.length === 0);
   };
   reason.addEventListener('input', update);
   returnAt.addEventListener('input', update);
@@ -79,16 +106,81 @@ function renderSnooze(panel: HTMLElement, itemId: string, label: string, enabled
     event.preventDefault();
     // `datetime-local` has no zone. The main process resolves it against the
     // workspace's business zone, which is the only zone this page is told about.
-    host.apply(host.bridge.snooze({ itemId, reason: reason.value.trim(), returnAt: returnAt.value }));
+    host.apply(host.bridge.snooze({ itemId, reason: reason.value.trim(), returnAt: asksReturn ? returnAt.value : '' }));
   });
   form.append(reason, returnAt, submit);
   panel.append(form);
 }
 
-function renderOutcome(panel: HTMLElement, state: TodayState, enabled: boolean, host: LanesHost): void {
+/** A paused automated task: says so, and offers the one control that lifts it (C22). */
+function renderPaused(panel: HTMLElement, holdId: string, enabled: boolean, host: LanesHost): void {
+  const resume = button('Resume', 'pause-release', enabled);
+  resume.className = 'btn';
+  resume.addEventListener('click', () => {
+    host.apply(host.bridge.releasePause({ holdId }));
+  });
+  panel.append(resume);
+}
+
+/** "Callback — needs a time": the day and time the person now confirms (C13). */
+function renderSchedule(panel: HTMLElement, callLogId: string, state: TodayState, enabled: boolean, host: LanesHost): void {
+  const form = element('form', { className: 'schedule', testId: 'schedule-form' });
+  const date = element('input', { testId: 'schedule-date' });
+  date.type = 'date';
+  date.disabled = !enabled;
+  const time = element('input', { testId: 'schedule-time' });
+  time.type = 'time';
+  time.disabled = !enabled;
+  const resolved = element('p', { className: 'quiet', testId: 'schedule-resolved' });
+  const submit = button('Set time', 'schedule-submit', false);
+  submit.className = 'btn';
+  submit.type = 'submit';
+  const instant = (): string | null =>
+    state.businessTimeZone === null || date.value === '' ? null : callbackInstant(date.value, time.value, state.businessTimeZone);
+  const update = (): void => {
+    const at = instant();
+    resolved.textContent = callbackLine(at, state);
+    submit.disabled = !enabled || at === null;
+  };
+  date.addEventListener('input', update);
+  time.addEventListener('input', update);
+  update();
+  form.addEventListener('submit', event => {
+    event.preventDefault();
+    host.apply(host.bridge.scheduleCallback({ callLogId, localDate: date.value, localTime: time.value }));
+  });
+  form.append(date, time, resolved, submit);
+  panel.append(form);
+}
+
+function renderOutcome(panel: HTMLElement, state: TodayState, view: TodayScreenView, enabled: boolean, host: LanesHost): void {
   const expanded = state.expanded;
   if (expanded === null) return;
   const form = element('form', { className: 'outcome', testId: 'outcome-form' });
+
+  // The number the last Call button handed to the phone app, when it was this firm's:
+  // the outcome is recorded against it and the ticket that authorized it (C16).
+  const lastCall = state.lastCall !== undefined && state.lastCall !== null && state.lastCall.firmId === expanded.firmId
+    ? state.lastCall
+    : null;
+  const called = element('p', {
+    className: 'quiet',
+    testId: 'outcome-call',
+    text: lastCall === null ? 'Not after a call from Callie: this records the call as history.' : `The call to ${lastCall.e164}.`,
+  });
+
+  // Which task the call was for, so its step or callback moves on (C04, C17).
+  const taskSelect = element('select', { testId: 'outcome-task' });
+  taskSelect.disabled = !enabled;
+  const noTask = element('option', { text: 'Not for a task on this card' });
+  noTask.value = '';
+  taskSelect.append(noTask);
+  for (const entry of view.tasks.filter(candidate => candidate.callable)) {
+    const option = element('option', { text: `${entry.label} — ${orDash(entry.task.contactName)}` });
+    option.value = entry.task.itemId;
+    taskSelect.append(option);
+  }
+  taskSelect.value = view.outcomeItemId ?? '';
 
   const select = element('select', { testId: 'outcome-select' });
   select.disabled = !enabled;
@@ -115,7 +207,13 @@ function renderOutcome(panel: HTMLElement, state: TodayState, enabled: boolean, 
   callbackDate.type = 'date';
   const callbackTime = element('input', { testId: 'callback-time' });
   callbackTime.type = 'time';
-  callback.append(element('legend', { text: 'When did you promise to call back?' }), callbackDate, callbackTime);
+  const callbackResolved = element('p', { className: 'quiet', testId: 'callback-resolved' });
+  callback.append(
+    element('legend', { text: 'When did you promise to call back?' }),
+    callbackDate,
+    callbackTime,
+    callbackResolved,
+  );
   callback.hidden = true;
 
   const read = (): OutcomeDraft => ({
@@ -124,16 +222,19 @@ function renderOutcome(panel: HTMLElement, state: TodayState, enabled: boolean, 
     callbackLocalDate: callbackDate.value,
     callbackLocalTime: callbackTime.value,
     callbackTimeZone: state.businessTimeZone ?? '',
-    // The instant is resolved by the main process, which knows the zone; the form
-    // only has to carry a plausible one so `outcomeProblem` can stop an empty draft.
-    callbackDueAt:
-      callbackDate.value === '' ? '' : `${callbackDate.value}T${callbackTime.value === '' ? '09:00' : callbackTime.value}:00.000Z`,
+    callbackDueAt: '',
     doNotCallCoversAllContact: false,
   });
 
   const update = (): void => {
     const draft = read();
     callback.hidden = draft.outcome !== 'callback_requested';
+    // The instant the domain's own clock gives the day and time, shown back so the
+    // person confirms the instant that will be stored (9.1, C18) — including the hour
+    // a DST gap moves it to. With no day at all it says where the callback will wait.
+    callbackResolved.textContent = callbackNeedsTime(draft)
+      ? 'No day yet? Record it anyway: “Callback — needs a time” goes on today’s list.'
+      : callbackLine(resolvedCallbackInstant(draft), state);
     const suppression = outcomeSuppresses(draft);
     warning.textContent = suppression === 'none' ? '' : SUPPRESSION_WARNINGS[suppression];
     const stopper = outcomeProblem(draft);
@@ -152,7 +253,6 @@ function renderOutcome(panel: HTMLElement, state: TodayState, enabled: boolean, 
       commandId: 'draft',
       clientVersion: '0.0.0',
       firmId: expanded.firmId,
-      occurredAt: new Date().toISOString(),
       draft: read(),
     });
     if ('problem' in built) {
@@ -160,28 +260,32 @@ function renderOutcome(panel: HTMLElement, state: TodayState, enabled: boolean, 
       return;
     }
     const outcome = built.command.outcome;
+    const itemId = taskSelect.value === '' ? null : taskSelect.value;
+    const task = view.tasks.find(entry => entry.task.itemId === itemId)?.task ?? null;
+    const draft = read();
     host.apply(
       host.bridge.recordOutcome({
         firmId: expanded.firmId,
-        contactId: null,
-        routeId: null,
+        contactId: lastCall?.contactId ?? task?.contactId ?? null,
+        routeId: lastCall?.routeId ?? null,
+        itemId,
         outcome,
         note: built.command.note ?? '',
         callback:
-          built.command.callback === undefined
+          outcome !== 'callback_requested' || callbackNeedsTime(draft)
             ? null
             : {
-                localDate: built.command.callback.localDate,
-                localTime: built.command.callback.localTime ?? '',
-                dueAt: built.command.callback.dueAt,
-                sourceTimeZone: built.command.callback.sourceTimeZone,
+                localDate: draft.callbackLocalDate.trim(),
+                localTime: draft.callbackLocalTime.trim(),
+                dueAt: built.command.callback?.dueAt ?? '',
+                sourceTimeZone: draft.callbackTimeZone,
               },
         doNotCallCoversAllContact: built.command.doNotCallCoversAllContact ?? false,
       }),
     );
   });
 
-  form.append(select, callback, note, warning, problem, submit);
+  form.append(called, taskSelect, select, callback, note, warning, problem, submit);
   panel.append(form);
 }
 
@@ -205,8 +309,13 @@ function renderExpanded(parent: HTMLElement, state: TodayState, view: TodayScree
       const until = entry.task.snoozeUntil === null ? null : dueLabel(entry.task.snoozeUntil, state.businessTimeZone, state.snapshotDate);
       what.append(element('span', { className: 'tag', testId: 'task-snoozed', text: `Asleep until ${orDash(until)}` }));
     }
+    if (entry.paused) what.append(element('span', { className: 'tag', testId: 'task-paused', text: 'Paused' }));
     item.append(what);
-    renderSnooze(item, entry.task.itemId, entry.delayLabel, entry.enabled, host);
+    const holdId = entry.task.pauseHoldId;
+    const callLogId = entry.task.callLogId;
+    if (typeof holdId === 'string') renderPaused(item, holdId, view.actionsEnabled, host);
+    else if (typeof callLogId === 'string') renderSchedule(item, callLogId, state, entry.enabled, host);
+    else renderSnooze(item, entry, host);
     list.append(item);
   }
   panel.append(list);
@@ -231,7 +340,7 @@ function renderExpanded(parent: HTMLElement, state: TodayState, view: TodayScree
   dialling.append(element('p', { className: 'limitation', testId: 'dial-limitation', text: state.handoffNotice }));
   panel.append(dialling);
 
-  renderOutcome(panel, state, view.actionsEnabled, host);
+  renderOutcome(panel, state, view, view.actionsEnabled, host);
   parent.append(panel);
 }
 

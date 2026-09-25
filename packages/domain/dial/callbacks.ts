@@ -1,6 +1,11 @@
+import { callbackInstant } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
+import { decideFirmMutation } from '../crm/authorization.ts';
+import { loadFirmForUpdate } from '../crm/firms.ts';
 import { isKnownTimeZone } from '../src/rules/localClock.ts';
+import { completeTodayItemsByKey } from '../today/snapshots.ts';
+import { callbackTimeNeededItemKey } from '../today/types.ts';
 import { acceptPolicy, refusePolicy, type PolicyResult } from '../policy/types.ts';
 
 /**
@@ -18,6 +23,18 @@ import { acceptPolicy, refusePolicy, type PolicyResult } from '../policy/types.t
  * sorts on; the other three are what lets the card say "Tuesday at 2pm" a month
  * later, after a zone change or across a DST boundary, without recomputing a
  * different answer.
+ *
+ * ## The instant is the server's resolution (lane g79, audit item C18)
+ *
+ * Until lane g79 the caller resolved the local fields to `dueAt` and this function
+ * stored whatever it was given, so a Mac that resolved a DST gap differently from the
+ * domain committed a callback an hour away from the one the person confirmed, and the
+ * four stored columns disagreed with each other. Now the local date, time and zone are
+ * resolved here through `callbackInstant` — the one calendar clock, shared with the
+ * Mac through `@fss/contracts` — and a supplied `dueAt` must equal that resolution or
+ * the callback is refused as `callback_instant_mismatch`. The client's `dueAt` is
+ * what it showed the person; refusing a disagreement is what makes "the instant the
+ * salesperson confirmed" and "the instant stored" the same instant.
  */
 
 export interface CreateCallbackInput {
@@ -29,8 +46,8 @@ export interface CreateCallbackInput {
   readonly localDate: string;
   readonly localTime?: string | undefined;
   readonly sourceTimeZone: string;
-  /** The instant the salesperson confirmed, resolved to UTC by the caller. */
-  readonly dueAt: string;
+  /** What the client resolved and showed, if it sent one. Checked, never trusted. */
+  readonly dueAt?: string | undefined;
 }
 
 export interface CallbackRow {
@@ -75,14 +92,44 @@ function toCallback(row: CallbackDbRow): CallbackRow {
   };
 }
 
+export type ConfirmedInstant =
+  | { readonly ok: true; readonly dueAt: string }
+  | { readonly ok: false; readonly reason: 'invalid_input' | 'callback_instant_mismatch' };
+
+/**
+ * The instant a callback's local fields name, and whether the client's `dueAt` agrees.
+ *
+ * Pure, and exported so `logCallOutcome` can decide before it writes anything whether a
+ * callback can be committed at all (C14: a refusal must never follow a write).
+ * Millisecond equality rather than string equality: `2026-03-08T07:30:00Z` and
+ * `2026-03-08T07:30:00.000Z` are one instant.
+ */
+export function resolveConfirmedInstant(input: {
+  readonly localDate: string;
+  readonly localTime?: string | undefined;
+  readonly sourceTimeZone: string;
+  readonly dueAt?: string | undefined;
+}): ConfirmedInstant {
+  if (!isKnownTimeZone(input.sourceTimeZone)) return { ok: false, reason: 'invalid_input' };
+  const resolved = callbackInstant(input.localDate, input.localTime, input.sourceTimeZone);
+  if (resolved === null) return { ok: false, reason: 'invalid_input' };
+  if (input.dueAt !== undefined) {
+    const supplied = Date.parse(input.dueAt);
+    if (!Number.isFinite(supplied)) return { ok: false, reason: 'invalid_input' };
+    if (supplied !== Date.parse(resolved)) return { ok: false, reason: 'callback_instant_mismatch' };
+  }
+  return { ok: true, dueAt: resolved };
+}
+
 export async function createCallback(
   context: RepositoryContext,
   input: CreateCallbackInput,
 ): Promise<PolicyResult<CallbackRow>> {
   const actor = context.scope.actor;
   if (actor.kind !== 'user') return refusePolicy('invalid_input');
-  if (!isKnownTimeZone(input.sourceTimeZone)) return refusePolicy('invalid_input');
-  if (!Number.isFinite(Date.parse(input.dueAt))) return refusePolicy('invalid_input');
+  const instant = resolveConfirmedInstant(input);
+  if (!instant.ok) return refusePolicy(instant.reason);
+  const localTime = input.localTime === undefined || input.localTime.trim() === '' ? null : input.localTime.trim();
 
   const { rows } = await context.db.query<CallbackDbRow>(
     `INSERT INTO callbacks
@@ -99,9 +146,9 @@ export async function createCallback(
       input.callLogId ?? null,
       input.assignedUserId,
       input.localDate,
-      input.localTime ?? null,
+      localTime,
       input.sourceTimeZone,
-      input.dueAt,
+      instant.dueAt,
       actor.userId,
     ],
   );
@@ -112,17 +159,38 @@ export async function createCallback(
     action: 'callback.created',
     subjectKind: 'callback',
     subjectId: row.id,
-    detail: { firmId: input.firmId, dueAt: input.dueAt, sourceTimeZone: input.sourceTimeZone },
+    detail: { firmId: input.firmId, dueAt: instant.dueAt, sourceTimeZone: input.sourceTimeZone },
   });
   return acceptPolicy(toCallback(row));
 }
 
+/**
+ * Complete a callback (Appendix A "Callback confirm/complete").
+ *
+ * The Today task is finished by `callbacks_today_promotion`, in this statement's
+ * transaction. Since lane g79 the firm is locked and the CRM's assignment rule is
+ * applied first: completing a colleague's callback is a mutation of their firm
+ * (Appendix G 7), and `logCallOutcome` now completes callbacks too.
+ */
 export async function completeCallback(
   context: RepositoryContext,
   input: { readonly callbackId: string },
 ): Promise<PolicyResult<CallbackRow>> {
   const actor = context.scope.actor;
   if (actor.kind !== 'user') return refusePolicy('invalid_input');
+  const existing = await context.db.query<{ firm_id: string; status: string }>(
+    'SELECT firm_id, status FROM callbacks WHERE workspace_id = $1 AND id = $2',
+    [context.scope.workspaceId, input.callbackId],
+  );
+  const found = existing.rows[0];
+  if (found === undefined) return refusePolicy('callback_unknown');
+  const firm = await loadFirmForUpdate(context, found.firm_id);
+  if (firm === null) return refusePolicy('callback_unknown');
+  const permitted = decideFirmMutation(context, firm);
+  if (!permitted.permitted) {
+    return refusePolicy(permitted.reason === 'not_assigned' ? 'not_assigned' : 'callback_unknown');
+  }
+
   const { rows } = await context.db.query<CallbackDbRow>(
     `UPDATE callbacks
         SET status = 'completed', completed_at = now(), completed_by_user_id = $3
@@ -131,13 +199,7 @@ export async function completeCallback(
     [context.scope.workspaceId, input.callbackId, actor.userId],
   );
   const row = rows[0];
-  if (row === undefined) {
-    const existing = await context.db.query('SELECT 1 FROM callbacks WHERE workspace_id = $1 AND id = $2', [
-      context.scope.workspaceId,
-      input.callbackId,
-    ]);
-    return refusePolicy(existing.rows.length === 0 ? 'callback_unknown' : 'callback_not_open');
-  }
+  if (row === undefined) return refusePolicy('callback_not_open');
   await recordCrmAuditEvent(context, {
     action: 'callback.completed',
     subjectKind: 'callback',
@@ -145,6 +207,76 @@ export async function completeCallback(
     detail: { firmId: row.firm_id },
   });
   return acceptPolicy(toCallback(row));
+}
+
+export interface ScheduleCallbackForCallInput {
+  readonly callLogId: string;
+  readonly localDate: string;
+  readonly localTime?: string | undefined;
+  readonly sourceTimeZone: string;
+  readonly dueAt?: string | undefined;
+}
+
+/**
+ * Give a recorded "call me back" its confirmed instant, later (lane g79, audit C13).
+ *
+ * `logCallOutcome` records a callback request that arrived without an instant — or
+ * with one the server resolved differently — and puts "Callback — needs a time" on
+ * Today. This is the other half: the salesperson says when, and the callback is
+ * created beside the call that asked for it, exactly as the outcome would have
+ * created it, with the needs-a-time task finished in the same transaction.
+ *
+ * Every refusal is decided before the insert.
+ */
+export async function scheduleCallbackForCall(
+  context: RepositoryContext,
+  input: ScheduleCallbackForCallInput,
+): Promise<PolicyResult<CallbackRow>> {
+  const actor = context.scope.actor;
+  if (actor.kind !== 'user') return refusePolicy('invalid_input');
+
+  const { rows: logs } = await context.db.query<{
+    firm_id: string;
+    contact_id: string | null;
+    opportunity_id: string | null;
+    outcome: string;
+  }>(
+    'SELECT firm_id, contact_id, opportunity_id, outcome FROM call_logs WHERE workspace_id = $1 AND id = $2',
+    [context.scope.workspaceId, input.callLogId],
+  );
+  const log = logs[0];
+  if (log === undefined || log.outcome !== 'callback_requested') return refusePolicy('call_log_unknown');
+
+  const firm = await loadFirmForUpdate(context, log.firm_id);
+  if (firm === null) return refusePolicy('call_log_unknown');
+  const permitted = decideFirmMutation(context, firm);
+  if (!permitted.permitted) {
+    return refusePolicy(permitted.reason === 'not_assigned' ? 'not_assigned' : 'call_log_unknown');
+  }
+
+  const already = await context.db.query(
+    'SELECT 1 FROM callbacks WHERE workspace_id = $1 AND call_log_id = $2',
+    [context.scope.workspaceId, input.callLogId],
+  );
+  if (already.rows.length > 0) return refusePolicy('callback_already_scheduled');
+
+  const instant = resolveConfirmedInstant(input);
+  if (!instant.ok) return refusePolicy(instant.reason);
+
+  const created = await createCallback(context, {
+    firmId: log.firm_id,
+    ...(log.contact_id === null ? {} : { contactId: log.contact_id }),
+    ...(log.opportunity_id === null ? {} : { opportunityId: log.opportunity_id }),
+    callLogId: input.callLogId,
+    assignedUserId: firm.assigned_user_id ?? actor.userId,
+    localDate: input.localDate,
+    ...(input.localTime === undefined ? {} : { localTime: input.localTime }),
+    sourceTimeZone: input.sourceTimeZone,
+    dueAt: instant.dueAt,
+  });
+  if (!created.ok) return created;
+  await completeTodayItemsByKey(context, { firmId: log.firm_id, itemKey: callbackTimeNeededItemKey(input.callLogId) });
+  return created;
 }
 
 export async function listCallbacks(

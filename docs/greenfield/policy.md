@@ -131,9 +131,15 @@ versions, the actor, the device, the assignment and the identity. `issued_at` an
 `expires_at` are computed in SQL, so a client cannot mint itself a longer one, and a
 CHECK refuses a row whose life exceeds sixty seconds.
 
-Consumption is one conditional `UPDATE`. Two Macs racing the same ticket: one
-statement affects one row and the other affects none. There is no read-then-write and
-therefore no window.
+Consumption takes the dial decision again (lane g79, audit S10). It locks the ticket,
+re-runs `authorizeDial` at database time against exactly what the ticket recorded — the
+firm, the contact, the route *at the recorded version*, the calling identity — and only
+on an allow marks it consumed and issues the `tel:` URI. A suppression, a retired or
+replaced route, a disabled identity, a revoked posture, a pause or a restore hold that
+arrived inside the ticket's sixty seconds is refused with its own code, and the refusal
+writes nothing: the ticket stays unconsumed and every further attempt is decided again.
+Two Macs racing the same ticket serialize on the row lock, and the second reads it
+consumed.
 
 Replay is refused in three places, and all three have to agree:
 
@@ -199,16 +205,32 @@ refuses history." That sentence is about the *ticket*. Who may write onto whose 
 a different question and is the CRM's usual one: `decideFirmMutation` under the firm's
 row lock.
 
-`step_effect` is recorded rather than applied, because no enrollment table exists yet.
-It is the hook the sequences lane reads, beside a nullable `step_execution_id` that
-lane fills in.
+Since lane g79 the effect is applied, not only recorded. A call logged against its Today
+task (`itemId`) is bound to the step execution behind it, `step_execution_id` is filled,
+and the step's configured successor or `retry_call` is applied in the same transaction
+from the frozen step — never from the request, whose `retryBehaviour` is ignored. An
+engaged outcome completes the step with no successor and stops every live enrollment at
+the firm at once (Appendix G 26). The command decides every refusal before it writes,
+records the call, then applies the effects in a savepoint, so a refusal never leaves a
+partial write and a call that happened is never refused: a callback without a confirmed
+instant, a wrong number with no route, or an effect that could not be applied comes back
+as a `followUps` entry beside the recorded call. The route must be the firm's and the
+contact's, the ticket the firm's, the actor's and the route's, and "just now" is database
+time. See `docs/decisions/g79-calls-carry-their-authorization.md`.
 
 ## Callbacks
 
 Created only by the call outcome that asked for one, with the instant the salesperson
-confirmed, inside that command's transaction. There is deliberately no create
-endpoint: a callback with no record of the call it came from is a callback nobody can
-explain.
+confirmed, inside that command's transaction — or, since lane g79, by
+`POST /callbacks/schedule` for a recorded "call me back" that had no time yet, beside that
+call. There is still no free-standing create endpoint: a callback with no record of the
+call it came from is a callback nobody can explain.
+
+The instant is the server's: `createCallback` resolves the local date, time and zone
+through `callbackInstant` in `@fss/contracts` (the Mac calls the same function) and
+refuses a supplied `dueAt` that disagrees, so a DST gap resolves forward to the first
+valid time on both sides (`docs/decisions/g0-dst-gap-resolution.md`). Completing one
+applies the CRM's assignment rule.
 
 Appendix D wants four things stored and there are four columns — requested local date,
 local time, source zone, resolved UTC instant. The UTC instant is what Today sorts on;

@@ -26,6 +26,12 @@ export const CALL_PATHS: readonly string[] = [
  * write onto whose firm: that is the CRM's usual assignment rule, decided by the
  * domain command under the firm's row lock.
  *
+ * Since lane g79 the body may name the Today task the call was placed from (`itemId`),
+ * and the domain applies the outcome to the step or callback behind it; `occurredAt`
+ * may be omitted for "just now", which is then the database's clock. The accepted
+ * result carries `followUps` — what the call still needs from a person, such as a
+ * callback time — rather than a refusal of the history.
+ *
  * The read redacts. Appendix F's first row makes "call outcomes without notes"
  * visible to any active member and the note visible only to the assigned
  * salesperson and admins, so the note is dropped for everyone else — decided by the
@@ -60,6 +66,8 @@ export async function routeCalls(request: ApiRequest, options: RoutingOptions): 
     return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };
   }
 
+  // `retryBehaviour` is parsed so an old body is still understood, and deliberately
+  // not passed on: what a no-answer does is the frozen step's decision (9.1, lane g79).
   return await runPolicyCommand(deps, logCallOutcomeCommandSchema, 'log_call_outcome', async (repository, body) =>
     await logCallOutcome(repository, {
       firmId: body.firmId,
@@ -67,10 +75,10 @@ export async function routeCalls(request: ApiRequest, options: RoutingOptions): 
       ...(body.routeId === undefined ? {} : { routeId: body.routeId }),
       ...(body.ticketId === undefined ? {} : { ticketId: body.ticketId }),
       ...(body.callingIdentityId === undefined ? {} : { callingIdentityId: body.callingIdentityId }),
+      ...(body.itemId === undefined ? {} : { itemId: body.itemId }),
       outcome: body.outcome,
-      occurredAt: body.occurredAt,
+      ...(body.occurredAt === undefined ? {} : { occurredAt: body.occurredAt }),
       ...(body.note === undefined ? {} : { note: body.note }),
-      ...(body.retryBehaviour === undefined ? {} : { retryBehaviour: body.retryBehaviour }),
       ...(body.callback === undefined ? {} : { callback: body.callback }),
       ...(body.doNotCallCoversAllContact === undefined
         ? {}

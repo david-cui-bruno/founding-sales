@@ -1,7 +1,6 @@
-import { z } from 'zod';
-import { uuid } from '@fss/contracts';
+import { TODAY_CARD_VERSION, todayFirmRequestSchema } from '@fss/contracts';
 import { databaseNow } from '@fss/domain/policy';
-import { readTodayFirm, readTodayList } from '@fss/domain/today';
+import { readTodayFirm, readTodayList, todayFirmVersion1 } from '@fss/domain/today';
 import { REFUSAL_STATUS, contextForPrincipal, policyRouteDeps, redactError } from './dialSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
@@ -26,12 +25,18 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  */
 export const TODAY_PATHS: readonly string[] = ['/today', '/today/firm'];
 
-const todayFirmRequestSchema = z.strictObject({ firmId: uuid });
+/*
+ * `cardVersion: 2` (`todayFirmRequestSchema` in `@fss/contracts`) asks for the tasks
+ * with the identities lane g79 added: the callback, the step execution, the call that
+ * needs a callback time, and the pause. Without it the card is G6's shape exactly,
+ * because a desktop released before g79 parses the card with a strict schema and
+ * would refuse a field it has never heard of.
+ */
 
 export async function routeToday(request: ApiRequest, options: RoutingOptions): Promise<RouteResult | null> {
   if (!request.path.startsWith('/today')) return null;
-  // `/today/snooze` is the snooze module's; the registry routes it there and this
-  // guard keeps the direct caller honest.
+  // `/today/snooze` and `/today/pause/release` are the snooze module's; the registry
+  // routes them there and this guard keeps the direct caller honest.
   if (!TODAY_PATHS.includes(request.path)) return null;
 
   const prepared = await policyRouteDeps(request, options);
@@ -61,5 +66,5 @@ export async function routeToday(request: ApiRequest, options: RoutingOptions): 
   // telling a salesperson that somebody else's firm has work on it is a read Appendix
   // F's first row does not grant.
   if (page === null) return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };
-  return { status: 200, body: page };
+  return { status: 200, body: parsed.data.cardVersion === TODAY_CARD_VERSION ? page : todayFirmVersion1(page) };
 }

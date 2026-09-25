@@ -62,6 +62,11 @@ export const TODAY_REFUSAL_CODES = [
   'snooze_return_not_future',
   'snooze_unknown',
   'snooze_already_cancelled',
+  // Lane g79: a manual task's snooze needs its return instant; an automated task's
+  // pause does not, and is released by a person rather than by a clock.
+  'snooze_return_required',
+  'pause_unknown',
+  'pause_already_released',
 ] as const;
 export type TodayRefusalCode = (typeof TODAY_REFUSAL_CODES)[number];
 
@@ -128,3 +133,34 @@ export interface TodaySnoozeRow {
   readonly createdAt: string;
   readonly cancelledAt: string | null;
 }
+
+/**
+ * A recorded "call me back" that has no confirmed instant yet (lane g79, audit C13).
+ *
+ * 9.1 creates a callback only "after salesperson confirmation of the instant", and
+ * "call logging ... never refuses history". Both hold when a callback request without
+ * a time is recorded as a call and shown on Today as its own task until a time is set:
+ * lane 2, kind `callback`, keyed by the call that asked for it. `source_kind` is
+ * `callback` because the callback source is what produces and reconciles it, and
+ * `source_id` is null because there is no callback row yet — the key is the identity.
+ * See `docs/decisions/g79-calls-carry-their-authorization.md`.
+ */
+export const CALLBACK_TIME_NEEDED_KEY_PREFIX = 'callback-time:';
+
+export function callbackTimeNeededItemKey(callLogId: string): string {
+  return `${CALLBACK_TIME_NEEDED_KEY_PREFIX}${callLogId}`;
+}
+
+/** The call log behind a needs-a-time task, or null for every other key. */
+export function callLogIdOfItemKey(itemKey: string): string | null {
+  return itemKey.startsWith(CALLBACK_TIME_NEEDED_KEY_PREFIX)
+    ? itemKey.slice(CALLBACK_TIME_NEEDED_KEY_PREFIX.length)
+    : null;
+}
+
+/**
+ * The `source_event_kind` of the hold a paused automated task opens (8.2, lane g79).
+ * One constant, because the pause, its release and the card that shows it must all
+ * recognise the same holds and no others.
+ */
+export const TODAY_PAUSE_SOURCE_EVENT_KIND = 'today.delay_requested';

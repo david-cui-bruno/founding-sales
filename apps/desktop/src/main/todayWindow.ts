@@ -89,6 +89,18 @@ export function registerTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
     }
     return await host.recordOutcome(input as unknown as Parameters<TodayBridgeHost['recordOutcome']>[0]);
   });
+  // Lane g79: set a time on "Callback — needs a time", and Resume a paused send.
+  handleOnce(TODAY_IPC_CHANNELS.scheduleCallback, async argument => {
+    const input = argument as { callLogId?: unknown; localDate?: unknown; localTime?: unknown } | null;
+    if (typeof input?.callLogId !== 'string' || typeof input.localDate !== 'string' || typeof input.localTime !== 'string') {
+      return await host.state();
+    }
+    return await host.scheduleCallback({ callLogId: input.callLogId, localDate: input.localDate, localTime: input.localTime });
+  });
+  handleOnce(TODAY_IPC_CHANNELS.releasePause, async argument => {
+    const holdId = (argument as { holdId?: unknown } | null)?.holdId;
+    return typeof holdId === 'string' ? await host.releasePause({ holdId }) : await host.state();
+  });
   return host;
 }
 

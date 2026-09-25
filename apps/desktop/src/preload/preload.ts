@@ -116,6 +116,8 @@ const today: TodayBridge = {
   snooze: async input => await invokeToday(TODAY_IPC_CHANNELS.snooze, input),
   dial: async input => await invokeToday(TODAY_IPC_CHANNELS.dial, input),
   recordOutcome: async input => await invokeToday(TODAY_IPC_CHANNELS.recordOutcome, input),
+  scheduleCallback: async input => await invokeToday(TODAY_IPC_CHANNELS.scheduleCallback, input),
+  releasePause: async input => await invokeToday(TODAY_IPC_CHANNELS.releasePause, input),
 };
 
 /**

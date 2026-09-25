@@ -264,6 +264,27 @@ export async function completeTodayItem(
 }
 
 /**
+ * Finish every open task with this key at this firm, on any date (lane g79).
+ *
+ * A needs-a-time callback and a sequence step's task are both carried from day to day
+ * under one key, and what finishes them — a scheduled callback, a recorded call — is
+ * not a question of which day's row was on screen. Returns how many were finished.
+ */
+export async function completeTodayItemsByKey(
+  context: RepositoryContext,
+  input: { readonly firmId: string; readonly itemKey: string },
+): Promise<number> {
+  const { rowCount } = await context.db.query(
+    `UPDATE today_items
+        SET status = 'completed', completed_at = now(), snooze_until = NULL,
+            updated_at = greatest(now(), created_at)
+      WHERE workspace_id = $1 AND firm_id = $2 AND item_key = $3 AND status IN ('open', 'snoozed')`,
+    [context.scope.workspaceId, input.firmId, input.itemKey],
+  );
+  return rowCount ?? 0;
+}
+
+/**
  * Cancel the tasks a rebuild no longer produced.
  *
  * Only the source kinds the build actually enumerated: a reply the classification
