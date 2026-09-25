@@ -42,7 +42,10 @@ export interface PushTokenPolicy {
   /** The push identity `infra/modules/pubsub` created. Compared lower-cased. */
   readonly serviceAccountEmail: string;
   readonly clockSkewSeconds: number;
-  /** How old a token may be even if it has not expired. A replay bound. */
+  /**
+   * How old a token may be even if it has not expired. A replay bound, and it is the
+   * lifetime Google gives the token (`DEFAULT_PUSH_TOKEN_POLICY`), not anything shorter.
+   */
   readonly maximumAgeSeconds: number;
 }
 
@@ -62,10 +65,26 @@ export type PushTokenDecision =
   | { readonly accepted: true }
   | { readonly accepted: false; readonly refusal: PushTokenRefusal };
 
+/**
+ * `maximumAgeSeconds` is the lifetime of a Pub/Sub push token: one hour.
+ *
+ * Pub/Sub mints the OIDC token it presents with `exp` an hour after `iat`, and it sends
+ * the *same* token with every delivery until it mints the next one. A genuine push can
+ * therefore carry a token up to an hour old. The bound was 600 seconds until lane g63,
+ * and production refused every push whose token was past its eleventh minute as
+ * `too_old`: 138 `gmail_push_too_old` refusals in three hours on 24 and 25 September
+ * 2026, with the mailbox kept current only by the scheduler's one-minute sweep. A
+ * refused push is retried with the same token, so the retries were refused as well
+ * until Google rotated it.
+ *
+ * A token more than an hour old is still refused, whatever its `exp` says; that is the
+ * replay bound. The hour is a fact about Google, not a deployment choice, so
+ * `pushTokenPolicyOf` takes it from here and no environment variable overrides it.
+ */
 export const DEFAULT_PUSH_TOKEN_POLICY = Object.freeze({
   issuer: 'https://accounts.google.com',
   clockSkewSeconds: 60,
-  maximumAgeSeconds: 600,
+  maximumAgeSeconds: 3600,
 });
 
 /**
@@ -93,6 +112,10 @@ export function decidePushToken(
   if (!Number.isFinite(claims.iat) || claims.iat - policy.clockSkewSeconds > nowEpochSeconds) {
     return { accepted: false, refusal: 'issued_in_future' };
   }
+  // The replay bound. A genuine Google token has `exp - iat` equal to the hour this
+  // allows, so `expired` above refuses it first; this refuses a token whose `exp` claims
+  // a longer life than Google gives one. Deriving the bound from `exp - iat` with an
+  // hour's cap would behave the same, because below the cap `exp` already bounds the age.
   if (nowEpochSeconds - claims.iat > policy.maximumAgeSeconds + policy.clockSkewSeconds) {
     return { accepted: false, refusal: 'too_old' };
   }

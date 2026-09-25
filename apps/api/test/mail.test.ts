@@ -241,10 +241,22 @@ describe('Gmail routes', () => {
     expect(accepted.status).toBe(200);
     expect(accepted.body['status']).toBe('accepted');
 
+    // Pub/Sub reuses a token for its hour, so a half-hour-old one is a normal delivery
+    // (lane g63); one past the hour is refused like any other bad token.
+    const halfHour = await post('/integrations/gmail/push', null, body('push-half-hour'), {
+      authorization: `Bearer ${tokens.sign(claims({ iat: now - 1800, exp: now + 1800 }))}`,
+    });
+    expect(halfHour.status).toBe(200);
+    const stale = await post('/integrations/gmail/push', null, body('push-stale'), {
+      authorization: `Bearer ${tokens.sign(claims({ iat: now - 3700, exp: now + 3600 }))}`,
+    });
+    expect(stale.status).toBe(401);
+    expect(stale.body['error']).toBe('push_refused');
+
     const { rows } = await fixture.db.query<{ provider_message_id: string }>(
       'SELECT provider_message_id FROM gmail_push_notifications ORDER BY provider_message_id',
     );
-    expect(rows.map(row => row.provider_message_id)).toEqual(['push-good']);
+    expect(rows.map(row => row.provider_message_id)).toEqual(['push-good', 'push-half-hour']);
   });
 
   it('disconnects, deletes the refresh-token material and holds the owner', async () => {
