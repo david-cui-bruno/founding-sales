@@ -256,6 +256,8 @@ fss admin jobs discard-runnable
 fss admin scheduler run-once
 fss admin restore-report --before <path> --journal <path> --sent <path> --inbox <path> --out <path>
 fss admin system-generation advance --report <step 8 report> [--admin-user <uuid>]
+fss admin release-record put --json <file> | --json-base64 <value>
+fss admin release-record show --reference <releaseGateReference>
 ```
 
 Every command takes `--report <path>` (`--out` for `restore-report`), which writes the
@@ -287,6 +289,18 @@ in one process, writing
 `<dir>/<step>.json` as each step finishes and stopping at the first failure with the
 step named. The runner keeps the control-plane steps: the point-in-time restore, the
 service redeployments, the alarm reads, the snapshots and the teardown.
+
+**`fss admin release-record put`** (lane g71) stores the `fss.release-record.v1` a
+green rehearsal wrote, so an admin's `sending_enabled` attestation can name it. The API
+refuses an enable whose record did not pass or does not carry the API's own image digest,
+and the worker refuses to send when the record does not carry its own
+(`docs/decisions/g71-sending-gate-is-bound-to-the-release-record.md`). The command is
+idempotent by reference: the same record is `existing`, and a different record under a
+stored reference is refused `release_record_conflict`. It runs on the operations task,
+as the runtime identity, which may insert into `release_records` and read it, and do
+nothing else. `release-deploy.sh --release-record <file>` runs it after the final
+verify. `--json-base64` is that form, because a one-off task is handed only arguments.
+`show --reference` reads a stored record back.
 
 **`fss admin database-users ensure`** runs on the migration task. It creates or alters
 the runtime login user named in the runtime secret as `LOGIN IN ROLE app_runtime` (0001
@@ -337,7 +351,7 @@ otherwise would start a worker every time an operator asked it for a migration.
 | Task definition | Identity | Reads | Runs |
 |---|---|---|---|
 | `<prefix>-migration` | `<prefix>-migration-task` / `<prefix>-migration-exec` | `migration-database` as `MIGRATION_DATABASE_SECRET`, `app-runtime-database` as `FSS_RUNTIME_DATABASE_SECRET_ARN`. **No runtime connection at all** | `migrate`, `admin database-users ensure` |
-| `<prefix>-operations` | the worker task role / worker execution role | `app-runtime-database` as `DATABASE_SECRET_ARN`, plus the application secrets | `verify`, `admin counts`, `admin restore-holds open` |
+| `<prefix>-operations` | the worker task role / worker execution role | `app-runtime-database` as `DATABASE_SECRET_ARN`, plus the application secrets | `verify`, `admin counts`, `admin restore-holds open`, `admin release-record put` |
 | `<prefix>-drill` | `<prefix>-drill-task` / `<prefix>-drill-exec` | both connections; journal **read** only; `FSS_DEPENDENCIES=recorded` fixed in the definition | `drill` |
 
 Three rather than one, because of what each needs and what each must not have.

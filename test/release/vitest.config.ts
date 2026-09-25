@@ -50,6 +50,7 @@ export default defineConfig({
       '@fss/domain/templates': fileURLToPath(new URL('../../packages/domain/templates/index.ts', import.meta.url)),
       '@fss/domain/settings': fileURLToPath(new URL('../../packages/domain/settings/index.ts', import.meta.url)),
       '@fss/domain/dashboard': fileURLToPath(new URL('../../packages/domain/dashboard/index.ts', import.meta.url)),
+      '@fss/domain/release': fileURLToPath(new URL('../../packages/domain/release/index.ts', import.meta.url)),
       '@fss/domain': fileURLToPath(new URL('../../packages/domain/src/index.ts', import.meta.url)),
     },
   },

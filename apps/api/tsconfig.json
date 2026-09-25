@@ -20,6 +20,7 @@
       "@fss/domain/settings": ["../../packages/domain/settings/index.ts"],
       "@fss/domain/dashboard": ["../../packages/domain/dashboard/index.ts"],
       "@fss/domain/retention": ["../../packages/domain/retention/index.ts"],
+      "@fss/domain/release": ["../../packages/domain/release/index.ts"],
       "@fss/domain/db/testing": ["../../packages/domain/db/testing/index.ts"]
     }
   },

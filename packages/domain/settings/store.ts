@@ -1,12 +1,15 @@
 import {
   DEFAULT_SETTING_VALUES,
+  RELEASE_RECORD_BINDING_REFUSAL_CODES,
   SETTING_KEYS,
   SETTING_VALUE_SCHEMAS,
+  type SendingEnabledSetting,
   type SettingKey,
 } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { isAdminScope } from '../db/workspaceScope.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
+import { bindReleaseRecord } from '../release/records.ts';
 import { isKnownTimeZone } from '../src/rules/localClock.ts';
 
 /**
@@ -29,6 +32,16 @@ import { isKnownTimeZone } from '../src/rules/localClock.ts';
  * **Configuration never bypasses suppression, and it is admin-only.** The refusal is
  * made here, in the same transaction as the write, rather than at the route, so a
  * second caller cannot reach the mutation past a route-level guard.
+ *
+ * **Enabling production sending names a release record that binds to this API**
+ * (16.2, lane g71). `sending_enabled` with `enabled: true` is refused unless its
+ * `releaseGateReference` is a stored `release_records` row whose suite is `pass` and
+ * whose API digest is the digest of the API image making the write — the caller
+ * passes that digest in as `runningApiDigest`. The four refusals are the release
+ * record's binding refusals, and they are made here for the same reason as the
+ * others: a check at the route would be a check a second caller could walk past.
+ * `enabled: false` is always accepted, because turning sending off must never need a
+ * rehearsal.
  */
 
 export const SETTINGS_REFUSAL_CODES = [
@@ -36,6 +49,7 @@ export const SETTINGS_REFUSAL_CODES = [
   'invalid_value',
   'unknown_time_zone',
   'setting_version_conflict',
+  ...RELEASE_RECORD_BINDING_REFUSAL_CODES,
 ] as const;
 export type SettingsRefusalCode = (typeof SETTINGS_REFUSAL_CODES)[number];
 
@@ -161,6 +175,13 @@ export interface UpdateSettingInput {
   readonly value: unknown;
   readonly changeNote: string;
   readonly commandId?: string | undefined;
+  /**
+   * The digest of the API image making this write, as its bootstrap discovered it
+   * (`discoverImageDigest`), or `unknown`. Read only for `sending_enabled` with
+   * `enabled: true`, and absent means unknown: an enable from a caller that cannot say
+   * which image it is running is refused `release_record_identity_unknown`.
+   */
+  readonly runningApiDigest?: string | undefined;
 }
 
 /**
@@ -195,6 +216,22 @@ export async function updateSetting(
   if (input.settingKey === 'business_time_zone') {
     const zone = (value as { readonly timeZone: string }).timeZone;
     if (!isKnownTimeZone(zone)) return { ok: false, reason: 'unknown_time_zone' };
+  }
+
+  // 16.2: the reference must be a stored, passing record, and it must name the API
+  // image that is taking this write. The schema has already refused an enable with no
+  // reference at all.
+  if (input.settingKey === 'sending_enabled') {
+    const sending = value as SendingEnabledSetting;
+    if (sending.enabled) {
+      const binding = await bindReleaseRecord(
+        context,
+        sending.releaseGateReference ?? '',
+        'api',
+        input.runningApiDigest,
+      );
+      if (!binding.ok) return { ok: false, reason: binding.reason };
+    }
   }
 
   await context.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [

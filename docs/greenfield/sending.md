@@ -252,10 +252,11 @@ daily cap is reported as suppressed, because that is the fact somebody needs to 
 3. the frozen route invalidated or retired since preparation (12.3's bounce handling);
 4. any open hold blocking `email_send` for this owner or firm (4.2, 12.6);
 5. coverage unproved;
-6. the sending domain unknown, unauthenticated, or sending disabled (12.7);
-7. outside the firm-local window, re-derived rather than trusted (11.2);
-8. the mailbox's daily cap (12.7);
-9. the domain guard (12.6).
+6. **the release gate** (16.2), refused as `workspace_sending_not_attested`. The deployment flag and the admin's `sending_enabled` attestation must both say yes. Since lane g71 the release record the attestation names must also be stored, have passed, and carry *this worker's own* image digest. The `detail` says which part said no: `deployment`, `workspace`, `release_record_unknown`, `release_record_not_passing`, `release_record_identity_unknown` or `release_record_digest_mismatch`. It never names the reference. See `docs/decisions/g71-sending-gate-is-bound-to-the-release-record.md`;
+7. the sending domain unknown, unauthenticated, or sending disabled (12.7);
+8. outside the firm-local window, re-derived rather than trusted (11.2);
+9. the mailbox's daily cap (12.7);
+10. the domain guard (12.6).
 
 Each refusal sets the fence `held` — which by definition means nothing was attempted —
 and opens the matching `active_holds` row. A later attempt releases the fence's own

@@ -76,6 +76,10 @@ export const COMMAND_DEPENDENCIES: Readonly<Record<string, DependencyMode>> = Ob
   'restore-holds open': 'database',
   'mailbox coverage': 'database',
   'workspace bootstrap': 'database',
+  // Lane g71. The release record lives in PostgreSQL and nowhere else; the command
+  // never reads the deployment, so it cannot reach Gmail, KMS or S3.
+  'release-record put': 'database',
+  'release-record show': 'database',
   'suppression-journal replay': 'journal',
   // g40. It drives a fence through the real dispatch path and ingests a reply and an
   // opt-out through the real pipeline, so it reaches the Gmail seam and is bound by the
@@ -228,6 +232,28 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     requiredFlags: ['--slug', '--display-name', '--admin-email'],
     summary:
       'the first workspace, its first active admin and optionally its sending domain, in one transaction, idempotently',
+  },
+  {
+    // Lane g71. What `release-deploy.sh --release-record` runs after the final verify,
+    // on the operations task. `--json` is a file, for a laptop or a test; a one-off task
+    // can be handed nothing but arguments, so the script passes the record as
+    // `--json-base64`. Exactly one of the two, and neither is a default.
+    path: ['admin', 'release-record', 'put'],
+    valueFlags: ['--json', '--json-base64', ...REPORTABLE],
+    booleanFlags: [],
+    requiredFlags: [],
+    oneOf: ['--json', '--json-base64'],
+    summary:
+      'store the rehearsal release record (fss.release-record.v1) an admin attests to, idempotently by reference',
+  },
+  {
+    // `--reference` rather than a bare word: the grammar refuses a word after the
+    // command path, so an operator's typo is a refusal rather than a subcommand.
+    path: ['admin', 'release-record', 'show'],
+    valueFlags: ['--reference', ...REPORTABLE],
+    booleanFlags: [],
+    requiredFlags: ['--reference'],
+    summary: 'the stored release record for one reference, and the digests it binds sending to. Reads only',
   },
   {
     path: ['admin', 'drill', 'seed-evidence'],

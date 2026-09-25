@@ -11,6 +11,7 @@ import {
   readApiDeployment,
   type ApiDeployment,
 } from './deployment.ts';
+import { discoverImageDigest } from '@fss/domain/release';
 import type { AuthDeps } from '../auth/index.ts';
 import { JournalConfigurationError } from '../journal/index.ts';
 import { startApiHeartbeat } from './heartbeat.ts';
@@ -137,7 +138,18 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
     log.log('info', 'api_selftest', { ...describeApiConfig(config), ...describeDeployment(deployment) });
     return API_EXIT_CODES.ok;
   }
-  log.log('info', 'api_configuration', { ...describeApiConfig(config), ...describeDeployment(deployment) });
+  // Lane g71: which API image this is, from the ECS task metadata (or FSS_IMAGE_DIGEST
+  // outside ECS), once, before anything can ask. An enable of production sending is
+  // refused unless the release record it names carries this digest, and `unknown`
+  // refuses every enable. Public, so it is in the startup line an operator reads.
+  const identity = await discoverImageDigest(environment);
+  log.log('info', 'api_configuration', {
+    ...describeApiConfig(config),
+    ...describeDeployment(deployment),
+    image_digest: identity.digest,
+    image_digest_source: identity.source,
+    image_digest_detail: identity.detail,
+  });
 
   // One connection for requests, one for the heartbeat: a heartbeat that waits behind
   // a slow query is a heartbeat that reports the queue rather than the process.
@@ -180,6 +192,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
     // attestation by `effectiveSendingEnabled`, and it is false unless the variable
     // says otherwise — so an unset deployment is a deployment that cannot send.
     sendingEnabled: deployment.sendingEnabled,
+    imageDigest: identity.digest,
     // 10.2: a live deployment has a durable one or `readApiDeployment` refused above.
     suppressionJournal: deployment.suppressionJournal,
     ...(deployment.mail === undefined ? {} : { mail: deployment.mail }),

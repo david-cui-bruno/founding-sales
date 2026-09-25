@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   repositoryContext,
   withTransaction,
@@ -6,7 +6,7 @@ import {
   type RepositoryContext,
   type SessionQueryable,
 } from '@fss/domain/db';
-import { SENDING_STOP_LINE } from '@fss/contracts';
+import { RELEASE_RECORD_SCHEMA_ID, SENDING_STOP_LINE, type ReleaseRecord } from '@fss/contracts';
 import {
   addEmailRoute,
   addPhoneRoute,
@@ -50,6 +50,7 @@ import {
 } from '@fss/domain/outbound';
 import { registerCallingIdentity, verifyCallingIdentity } from '@fss/domain/dial';
 import { openPause } from '@fss/domain/policy';
+import { putReleaseRecord } from '@fss/domain/release';
 import { readRestoreCounts } from '@fss/domain/restore';
 import {
   createDraftVersion,
@@ -423,6 +424,46 @@ const CRM_EDIT_NAMES: Readonly<Record<'before' | 'after', string>> = Object.free
 const RELEASE_GATE_REFERENCE = 'rehearsal-drill-evidence';
 
 /**
+ * The release identity the seed sends under (lane g71).
+ *
+ * Since g71 an enable names a stored, passing release record whose API digest is the
+ * running API's, and the send gate refuses unless that record names the running
+ * worker's digest. The seed is neither process — it is a one-off task in the rehearsal,
+ * before any release record exists — so it names its identity itself, exactly as it
+ * already names 16.2's deployment half (`deploymentSendingEnabled: true` below): it
+ * stores a record under `RELEASE_GATE_REFERENCE`, attests to it as that record's API,
+ * and dispatches as that record's worker. The real rules run on real rows; only the
+ * identity is the drill's.
+ *
+ * The two digests are SHA-256 of a sentence, so they are well-formed and can never be
+ * the digest of an image anybody built. A drill record that somehow reached production
+ * could therefore bind to nothing: no production API could accept an enable naming it
+ * and no production worker could send under it. And it cannot get there — the command
+ * refuses `FSS_DEPENDENCIES=live` and its script refuses a production prefix.
+ */
+const drillDigest = (side: string): string =>
+  `sha256:${createHash('sha256').update(`fss drill evidence seed: the ${side} image no one built`).digest('hex')}`;
+export const DRILL_EVIDENCE_API_DIGEST = drillDigest('api');
+export const DRILL_EVIDENCE_WORKER_DIGEST = drillDigest('worker');
+
+const DRILL_EVIDENCE_RELEASE_RECORD: ReleaseRecord = Object.freeze({
+  schema: RELEASE_RECORD_SCHEMA_ID,
+  releaseGateReference: RELEASE_GATE_REFERENCE,
+  rehearsalPrefix: 'rehearsal-drill-evidence',
+  // Fixed, so a re-run of any phase finds the same record and reports `existing`.
+  recordedAt: '2026-09-25T00:00:00Z',
+  suite: 'pass',
+  artifacts: Object.freeze({
+    api: DRILL_EVIDENCE_API_DIGEST,
+    worker: DRILL_EVIDENCE_WORKER_DIGEST,
+    desktopCommitStamp: 'drill-evidence-seed',
+  }),
+  carryDrill: 'skipped_no_watermark',
+  rehearsalScenarios: Object.freeze({}),
+  enablesSending: false,
+}) as ReleaseRecord;
+
+/**
  * An instant inside the email window of the fence's own zone.
  *
  * `decideSend` re-derives 11.2's window from the clock it is given rather than from the
@@ -695,14 +736,30 @@ async function ensureSendingDomain(
   return outcome;
 }
 
+/** The drill's release record, through the same function `fss admin release-record put` runs. */
+async function ensureDrillReleaseRecord(session: SessionQueryable): Promise<DrillEvidenceOutcome> {
+  const stored = await putReleaseRecord({ db: session }, DRILL_EVIDENCE_RELEASE_RECORD);
+  if (!stored.ok) throw new EvidenceRefusal('release_record', `putReleaseRecord refused with ${stored.reason}`);
+  return stored.value.outcome;
+}
+
 async function ensureSendingAttestation(context: RepositoryContext): Promise<DrillEvidenceOutcome> {
   const current = await readSetting(context, 'sending_enabled');
-  const value = current.value as { enabled?: unknown } | null;
-  if (value !== null && typeof value === 'object' && value.enabled === true) return 'existing';
+  const value = current.value as { enabled?: unknown; releaseGateReference?: unknown } | null;
+  if (
+    value !== null &&
+    typeof value === 'object' &&
+    value.enabled === true &&
+    value.releaseGateReference === RELEASE_GATE_REFERENCE
+  ) {
+    return 'existing';
+  }
   const updated = await updateSetting(context, {
     settingKey: 'sending_enabled',
     value: { enabled: true, releaseGateReference: RELEASE_GATE_REFERENCE },
     changeNote: 'the drill evidence seed, so the rehearsal has an accepted send to reconstruct',
+    // The drill record's API half; see DRILL_EVIDENCE_RELEASE_RECORD.
+    runningApiDigest: DRILL_EVIDENCE_API_DIGEST,
   });
   if (!updated.ok) throw new EvidenceRefusal('sending_attestation', `updateSetting refused with ${updated.reason}`);
   return 'created';
@@ -895,6 +952,10 @@ async function dispatchSeededFence(
       // is a real `updateSetting` above, and `live` is refused before any of this runs.
       now: () => at,
       deploymentSendingEnabled: true,
+      // The drill record's worker half (lane g71), named for the same reason: the
+      // recorded client sends nowhere, and the gate still compares it with a stored,
+      // passing record through the real rule.
+      workerImageDigest: DRILL_EVIDENCE_WORKER_DIGEST,
     },
     { outboundMessageId },
   );
@@ -1290,6 +1351,7 @@ export async function seedDrillEvidence(input: DrillEvidenceInput): Promise<Dril
     const sequence = await ensureSequence(admin, template.id);
     note('sequence', sequence.outcome, sequence.versionId);
     note('sending_domain', await ensureSendingDomain(admin, workspace.adminUserId), EVIDENCE_DOMAIN);
+    note('release_record', await ensureDrillReleaseRecord(session), RELEASE_GATE_REFERENCE);
     note('sending_attestation', await ensureSendingAttestation(admin), 'sending_enabled');
     const mailbox = await ensureMailbox(worker, session, workspace, mail, gmail);
     note('mailbox', mailbox.outcome, mailbox.row.id);

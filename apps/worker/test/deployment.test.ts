@@ -134,6 +134,24 @@ describe('the live deployment', () => {
     expect(composition.send?.deploymentSendingEnabled).toBe(true);
   });
 
+  it('carries the worker image digest through to the send deps, and leaves it absent when unknown', async () => {
+    // Lane g71: the send gate compares this with the worker digest of the release
+    // record the attestation names. Absent is unknown, and unknown holds every send.
+    const deployment = await readWorkerDeployment(liveEnvironment({ [V.sendingEnabled]: 'true' }), {
+      loadKms: loadKms as never,
+    });
+    const digest = `sha256:${'b'.repeat(64)}`;
+    const composed = await composeHandlers(deployment, undefined, {
+      journal: { append: async () => await Promise.resolve() },
+      imageDigest: digest,
+    });
+    expect(composed.send?.workerImageDigest).toBe(digest);
+    const unknown = await composeHandlers(deployment, undefined, {
+      journal: { append: async () => await Promise.resolve() },
+    });
+    expect(unknown.send?.workerImageDigest).toBeUndefined();
+  });
+
   for (const missing of [
     V.region,
     V.publicOrigin,

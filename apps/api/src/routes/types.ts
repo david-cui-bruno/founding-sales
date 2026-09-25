@@ -65,6 +65,13 @@ export interface RoutingOptions {
    * being refused by the load balancer because of one.
    */
   readonly expectedSystemGeneration?: number | null | undefined;
+  /**
+   * The digest of the API image serving this request, as the bootstrap discovered it
+   * (`discoverImageDigest`), or `unknown` (lane g71). An enable of production sending
+   * names a release record whose API digest must be this one; absent is unknown, and
+   * unknown refuses every enable (`release_record_identity_unknown`).
+   */
+  readonly imageDigest?: string | undefined;
 }
 
 export interface MailRoutingDeps extends MailGrantDeps {

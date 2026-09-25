@@ -18,7 +18,7 @@ export interface SchemaRange {
 }
 
 /** The highest migration version this source tree contains. */
-export const CURRENT_SCHEMA_VERSION = 16;
+export const CURRENT_SCHEMA_VERSION = 17;
 
 /**
  * The range the release before this one declared. Widen this one release ahead of the
@@ -46,8 +46,12 @@ export const CURRENT_SCHEMA_VERSION = 16;
  * assertion below is therefore met the way G20's was, by widening, and Appendix G 22's
  * scenario keeps asserting the refusal that is the real relationship between the
  * previous images and the new schema (`test/release/scenario22.check.ts`).
+ *
+ * Lane g71 widened it for 0017 by the same reasoning. Production declares `{16, 16}`
+ * for both services once 0016's release is deployed, no deployed binary accepts 17, and
+ * the release that carries 0017 is again a `--schema-change` deploy (release.md 8.0ag).
  */
-export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 16 };
+export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 17 };
 
 /**
  * Both services need migration 0002's shape: the API's dead-job list reads `dead_at`
@@ -333,8 +337,35 @@ export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum:
  * ranges at `{16, 16}` and the new digests, then `release-deploy.sh infra/roots/production
  * fss-prod --schema-change` (release.md 8.0ab).
  */
-export const API_SCHEMA_RANGE: SchemaRange = { minimum: 16, maximum: 16 };
-export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 16, maximum: 16 };
+/**
+ * Migration 0017 (g71) moves both to 17, and this time **both by the usual rule**: each
+ * service's own first statement against the new table fails on 16.
+ *
+ * **The API** reads `release_records` when an admin saves `sending_enabled` with
+ * `enabled: true`: the enable is refused unless the attested reference is a stored,
+ * passing record whose API digest is the running API's own. `GET /settings` and
+ * `GET /diagnostics` read it too, to say whether the attestation binds to this
+ * deployment. On a version-16 database each of those statements fails with
+ * `undefined_table`, which would turn an admin's enable into a 500 rather than a
+ * refusal that names why.
+ *
+ * **The worker** reads it in `decideSend`, inside the dispatching transaction, before
+ * every automated send: the attested record must pass and name this worker's own
+ * image digest. That is the same position G12 was in with `workspace_settings` — a
+ * statement against a table that does not exist, at the one moment it must not fail —
+ * and it is answered the same way: the minimum moves rather than the gate guessing.
+ * Treating a missing table as "not attested" would make a stale deployment look like
+ * an admin who has not enabled sending.
+ *
+ * **Both maxima move to 17** on the same reasoning as every widening before. The
+ * previous release's binaries declared `{16, 16}`, so no pair overlaps and Appendix
+ * G 22 asserts `database_ahead_of_binary` for the old images against the new schema.
+ * The production deploy is therefore the stop-migrate-start path again: apply with
+ * both ranges at `{17, 17}` and the new digests, then `release-deploy.sh
+ * infra/roots/production fss-prod --schema-change` (release.md 8.0ag).
+ */
+export const API_SCHEMA_RANGE: SchemaRange = { minimum: 17, maximum: 17 };
+export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 17, maximum: 17 };
 
 export function acceptsSchemaVersion(range: SchemaRange, version: number): boolean {
   return Number.isInteger(version) && version >= range.minimum && version <= range.maximum;

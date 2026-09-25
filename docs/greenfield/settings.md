@@ -236,12 +236,30 @@ A **third** fact holds beside them and is not this lane's: G7-2's per-domain
 `sending_domains.automated_sending_enabled`, the DNS authentication gate. The two are
 not copies of one another — a domain with perfect authentication that nobody
 rehearsed must not send, and a rehearsed release must not send from a domain that
-fails DMARC — and all three must hold before an automated send. **G12 (release
-gates) wires the send path's read**; this lane owns the storage, the history, the
-admin command and the surfaces. Until G12 lands the attestation is enforced nowhere
-on the send path, which is safe only because both switches are off by default and no
-automated send exists yet. See
-`docs/decisions/g9-two-slices-that-belong-to-other-lanes.md`.
+fails DMARC — and all three must hold before an automated send. G12 wired the send
+path's read of the attestation (`docs/decisions/g12-the-send-gate-reads-both-switches.md`).
+See `docs/decisions/g9-two-slices-that-belong-to-other-lanes.md`.
+
+**The reference is bound to the release record (lane g71).** `releaseGateReference`
+was once any nonempty string. Now it has to name a row of `release_records` (migration
+0017), which `fss admin release-record put` stores from the rehearsal's
+`release-record.json`. The rule is checked twice, and each process compares its own
+half of the record:
+
+* **Saving** `sending_enabled` with `enabled: true` (`updateSetting`, in the command's
+  transaction) is refused unless the record exists, its suite is `pass`, and its
+  `artifacts.api` is the digest of the API image taking the write. Each failure has its
+  own settings refusal code: `release_record_unknown`, `release_record_not_passing`,
+  `release_record_digest_mismatch`, and `release_record_identity_unknown` when the API
+  could not read its own digest from the ECS task metadata. That last one fails closed.
+  `enabled: false` is always accepted.
+* **Sending**: the worker's gate requires the record's `artifacts.worker` to be its own
+  running digest (`docs/greenfield/sending.md`).
+
+`GET /settings`'s `effectiveSendingEnabled` and `GET /diagnostics`'s admin half are
+true only while the attested record names this API's digest. After a deploy of other
+digests the page says sending is off, which is also what the worker's gate says. See
+`docs/decisions/g71-sending-gate-is-bound-to-the-release-record.md`.
 
 ## The dashboard
 

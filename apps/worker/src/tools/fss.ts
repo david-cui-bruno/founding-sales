@@ -18,6 +18,8 @@ import {
   mailboxReconcileSentCommand,
   mailboxRecoverCommand,
   mailboxWatchRenewCommand,
+  releaseRecordPutCommand,
+  releaseRecordShowCommand,
   restoreHoldsOpenCommand,
   restoreReportCommand,
   schedulerRunOnceCommand,
@@ -177,6 +179,8 @@ const ADMIN_COMMANDS: Readonly<Record<string, AdminRunner>> = Object.freeze({
   'restore-report': restoreReportCommand,
   'system-generation advance': systemGenerationAdvanceCommand,
   'restore-holds open': restoreHoldsOpenCommand,
+  'release-record put': releaseRecordPutCommand,
+  'release-record show': releaseRecordShowCommand,
 });
 
 async function report(path: string | undefined, value: unknown): Promise<void> {

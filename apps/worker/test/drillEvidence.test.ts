@@ -225,6 +225,8 @@ describe('fss admin drill seed-evidence', () => {
       'template',
       'sequence',
       'sending_domain',
+      // Lane g71: the drill's own release record, which the attestation names.
+      'release_record',
       'sending_attestation',
       'mailbox',
       'firm',

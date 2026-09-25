@@ -33,6 +33,7 @@ export default defineConfig({
       '@fss/domain/restore': fileURLToPath(new URL('../../packages/domain/restore/index.ts', import.meta.url)),
       '@fss/domain/policy': fileURLToPath(new URL('../../packages/domain/policy/index.ts', import.meta.url)),
       '@fss/domain/dial': fileURLToPath(new URL('../../packages/domain/dial/index.ts', import.meta.url)),
+      '@fss/domain/release': fileURLToPath(new URL('../../packages/domain/release/index.ts', import.meta.url)),
       '@fss/domain': fileURLToPath(new URL('../../packages/domain/src/index.ts', import.meta.url)),
     },
   },

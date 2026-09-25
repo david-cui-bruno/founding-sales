@@ -14,6 +14,11 @@
 # carries its `releaseGateReference`, and `packages/domain/outbound/gate.ts` refuses to
 # send without it.
 #
+# The shape it writes is `releaseRecordSchema` in `packages/contracts/src/release.ts`,
+# which is strict; `test/release/scenario42.check.ts` runs this script and parses the
+# output with it, so a field added or renamed here without the contract fails the
+# release suite (lane g71).
+#
 # ## What this script refuses
 #
 # It refuses more often than it writes, and that is the design:
@@ -31,9 +36,13 @@
 #   * a production prefix anywhere in its arguments.
 #
 # The record names the digests rather than asserting they match the deployment. The
-# match is made at enable time, by the admin, against what production is actually
-# running — that comparison belongs to the person taking the responsibility, not to the
-# process that produced the artefacts.
+# match is made against what production is actually running, and since lane g71 it is
+# made by the software as well as by the admin: `fss admin release-record put` stores
+# this file in production (`release-deploy.sh --release-record`), the API refuses an
+# enable whose record's `api` digest is not its own, and the worker refuses to send
+# when the record's `worker` digest is not its own. The admin still reads both before
+# attesting — that is the person taking the responsibility — but no longer alone
+# (`docs/decisions/g71-sending-gate-is-bound-to-the-release-record.md`).
 #
 # Dry run: FSS_REHEARSAL_DRY_RUN=1 still writes the record to the given path, because
 # the record is a local file and writing it is how the workflow's dry run is checked.
@@ -125,5 +134,6 @@ cat > "$OUT" <<JSON
 JSON
 
 rehearsal_log "wrote the release record $REFERENCE to $OUT"
-rehearsal_log "sending stays disabled until an authenticated admin sets workspace_settings.sending_enabled"
-rehearsal_log "to this reference AND the deployment flag FSS_SENDING_ENABLED is true on both services"
+rehearsal_log "sending stays disabled until this record is stored in production (release-deploy.sh --release-record),"
+rehearsal_log "an authenticated admin sets workspace_settings.sending_enabled to this reference from an API running"
+rehearsal_log "its api digest, the deployment flag FSS_SENDING_ENABLED is true, and the worker runs its worker digest"
