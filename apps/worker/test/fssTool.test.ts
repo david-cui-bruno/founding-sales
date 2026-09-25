@@ -800,6 +800,124 @@ describe('fss admin workspace bootstrap', () => {
     expect(kept.rows[0]?.google_sub).toBe(realSub);
   });
 
+  it('registers the sending domain for a workspace that already exists, and a re-run changes nothing (g57)', async () => {
+    // Production's case exactly: `callie` was bootstrapped, its admin signed in and its
+    // mailbox connected before anything registered a sending domain, so Administration
+    // had nowhere to record 12.7's checklist. `first` stands in for it here.
+    const { code, stdout } = await run([
+      'admin',
+      'workspace',
+      'bootstrap',
+      '--slug',
+      'first',
+      '--display-name',
+      'First Workspace',
+      '--admin-email',
+      'first.admin@example.test',
+      '--sending-domain',
+      ' First.Example.Test ',
+      '--report',
+      join(reports, 'bootstrap-domain.json'),
+    ]);
+    expect(code).toBe(0);
+    const report = JSON.parse(stdout) as {
+      workspace: { id: string; outcome: string };
+      sendingDomain: { domain: string; isPrimary: boolean; outcome: string } | null;
+    };
+    expect(report.workspace.outcome).toBe('existing');
+    expect(report.sendingDomain).toEqual({ domain: 'first.example.test', isPrimary: true, outcome: 'created' });
+    expect(readReport('bootstrap-domain.json')).toMatchObject({ sendingDomain: { outcome: 'created' } });
+
+    // The row, read back, with every checklist column unticked.
+    const row = await session.query<{ is_primary: boolean; spf_pass: boolean; automated_sending_enabled: boolean }>(
+      'SELECT is_primary, spf_pass, automated_sending_enabled FROM sending_domains WHERE workspace_id = $1 AND domain = $2',
+      [report.workspace.id, 'first.example.test'],
+    );
+    expect(row.rows).toEqual([{ is_primary: true, spf_pass: false, automated_sending_enabled: false }]);
+    // Audited by the registration itself, as the system, naming the operator path.
+    const audit = await session.query<{ actor_kind: string; detail: Record<string, unknown> }>(
+      "SELECT actor_kind, detail FROM audit_events WHERE workspace_id = $1 AND action = 'sending_domain.registered'",
+      [report.workspace.id],
+    );
+    expect(audit.rows).toEqual([
+      { actor_kind: 'system', detail: { domain: 'first.example.test', isPrimary: true, registeredBy: 'operator' } },
+    ]);
+
+    // The admin records the checklist; the next deploy's 5.1a re-run must not undo it.
+    const admin = await session.query<{ user_id: string }>(
+      "SELECT user_id FROM workspace_memberships WHERE workspace_id = $1 AND role = 'admin' AND status = 'active' LIMIT 1",
+      [report.workspace.id],
+    );
+    await session.query(
+      `UPDATE sending_domains
+          SET spf_pass = true, dkim_pass = true, dmarc_pass = true,
+              authentication_checked_at = now(), authentication_checked_by_user_id = $2,
+              postmaster_reviewed_at = now()
+        WHERE workspace_id = $1`,
+      [report.workspace.id, admin.rows[0]?.user_id],
+    );
+    const again = await run([
+      'admin',
+      'workspace',
+      'bootstrap',
+      '--slug',
+      'first',
+      '--display-name',
+      'First Workspace',
+      '--admin-email',
+      'first.admin@example.test',
+      '--sending-domain',
+      'first.example.test',
+    ]);
+    expect(again.code).toBe(0);
+    expect((JSON.parse(again.stdout) as { sendingDomain: unknown }).sendingDomain).toEqual({
+      domain: 'first.example.test',
+      isPrimary: true,
+      outcome: 'existing',
+    });
+    const kept = await session.query<{ count: string; spf: boolean }>(
+      'SELECT count(*)::text AS count, bool_and(spf_pass AND dkim_pass AND dmarc_pass) AS spf FROM sending_domains WHERE workspace_id = $1',
+      [report.workspace.id],
+    );
+    expect(kept.rows[0]).toEqual({ count: '1', spf: true });
+  });
+
+  it('reports no sending domain when the flag is absent', async () => {
+    const { code, stdout } = await run([
+      'admin',
+      'workspace',
+      'bootstrap',
+      '--slug',
+      'first',
+      '--display-name',
+      'First Workspace',
+      '--admin-email',
+      'first.admin@example.test',
+    ]);
+    expect(code).toBe(0);
+    expect((JSON.parse(stdout) as { sendingDomain: unknown }).sendingDomain).toBeNull();
+  });
+
+  it('refuses an address or personal Gmail as the sending domain, before writing anything', async () => {
+    for (const domain of ['callie@example.test', 'https://example.test', 'gmail.com']) {
+      const { code } = await run([
+        'admin',
+        'workspace',
+        'bootstrap',
+        '--slug',
+        'not-created',
+        '--display-name',
+        'Not Created',
+        '--admin-email',
+        'nobody@example.test',
+        '--sending-domain',
+        domain,
+      ]);
+      expect(code, domain).toBe(20);
+    }
+    expect(await countOf('workspaces', 'slug = $1', ['not-created'])).toBe(0);
+  });
+
   it('refuses a slug, an address and a zone the database would refuse, and writes nothing', async () => {
     const before = await countOf('workspaces', 'true', []);
     for (const argv of [

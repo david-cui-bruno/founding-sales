@@ -76,12 +76,18 @@ export {
   decideDomainGuard,
   personalGmailRecipientsInWindow,
   readPrimarySendingDomain,
+  normalizeSendingDomain,
   readSendingDomain,
   recordAuthenticationChecklist,
+  registerMailboxSendingDomain,
+  registerSendingDomain,
   setAutomatedSendingEnabled,
   setPersonalGmailGuard,
   type ChecklistOutcome,
   type DomainGuardDecision,
+  type RegisterSendingDomainOutcome,
+  type SendingDomainRefusal,
+  type SendingDomainRegistrar,
   type SendingDomainRow,
 } from './domainGuard.ts';
 

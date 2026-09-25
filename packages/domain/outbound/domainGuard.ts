@@ -1,5 +1,11 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
-import { DEFAULT_PERSONAL_GMAIL_GUARD, DOMAIN_GUARD_WINDOW_HOURS, isPersonalGmailAddress } from './types.ts';
+import { recordCrmAuditEvent } from '../crm/audit.ts';
+import {
+  DEFAULT_PERSONAL_GMAIL_GUARD,
+  DOMAIN_GUARD_WINDOW_HOURS,
+  PERSONAL_GMAIL_DOMAINS,
+  isPersonalGmailAddress,
+} from './types.ts';
 
 /**
  * The rolling primary-domain guard (specification 12.6).
@@ -101,6 +107,146 @@ export async function readSendingDomain(
   );
   const row = rows[0];
   return row === undefined ? null : toDomain(row);
+}
+
+/**
+ * How a sending domain comes to exist (lane g57).
+ *
+ * Until this function nothing inserted into `sending_domains` outside the tests and the
+ * rehearsal's drill-evidence seed: `recordAuthenticationChecklist`,
+ * `setAutomatedSendingEnabled` and `setPersonalGmailGuard` are all `UPDATE`s, so a
+ * production workspace with a connected mailbox read "No sending domain is configured."
+ * in Administration and had nowhere to record 12.7's checklist — the UPDATE answered
+ * `domain_unknown` for a row nobody had written. Three callers now reach this:
+ *
+ *   * `mailbox_connect` — the Gmail callback registers the connected address's domain,
+ *     which is the zero-step path: the mailbox a person connected *is* the domain FSS
+ *     sends from;
+ *   * `operator` — `fss admin workspace bootstrap --sending-domain`, for a workspace
+ *     whose mailbox connected before this function existed;
+ *   * `admin` — `POST /outbound/domain`, for a future desktop control.
+ *
+ * ## What it never does
+ *
+ * **It never changes a row that exists.** A re-registration returns the row as it is.
+ * The checklist columns are a person's recorded confirmation and the enable is 12.7's
+ * gate; a mailbox reconnect or a bootstrap re-run that reset either would silently
+ * close sending, or worse, and neither caller has any business deciding that. `ON
+ * CONFLICT DO NOTHING` rather than `DO UPDATE` is the structural form of that sentence.
+ *
+ * **It never moves the primary.** A new row is primary only when the workspace has no
+ * primary at all; otherwise it is registered beside it. Which domain the 12.6 guard
+ * counts against is not something a reconnect may change as a side effect.
+ *
+ * **It never registers personal Gmail.** `gmail.com` and `googlemail.com` are the
+ * recipient class 12.6's guard exists for, not a domain whose DNS anybody at Callie
+ * can attest to; a sending-domain row for one would be a checklist nobody can
+ * truthfully tick.
+ */
+export type SendingDomainRegistrar = 'mailbox_connect' | 'operator' | 'admin';
+
+export type SendingDomainRefusal = 'domain_invalid' | 'personal_gmail_domain';
+
+export type RegisterSendingDomainOutcome =
+  | { readonly ok: true; readonly outcome: 'created' | 'existing'; readonly domain: SendingDomainRow }
+  | { readonly ok: false; readonly reason: SendingDomainRefusal };
+
+/** The shape `sending_domains_domain_shape` (migration 0010) accepts, spelled the same way. */
+const DOMAIN_SHAPE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/u;
+const MAX_DOMAIN_LENGTH = 253;
+const MAX_LABEL_LENGTH = 63;
+
+/**
+ * A domain as the table stores it, or the reason it is not one.
+ *
+ * Lower-cased and trimmed, then held to the CHECK's own pattern so a refusal names the
+ * rule rather than arriving as a constraint violation. Two things the CHECK does not
+ * say are refused here as well: a label longer than DNS allows, and an all-digit last
+ * label, which is an IPv4 address rather than a host a mailbox can be on. A value with
+ * an `@`, a scheme or a path fails the pattern, which is the point — the caller passes
+ * a domain, and an address is the connect path's to split.
+ */
+export function normalizeSendingDomain(
+  value: string,
+): { readonly ok: true; readonly domain: string } | { readonly ok: false; readonly reason: SendingDomainRefusal } {
+  const domain = value.trim().toLowerCase();
+  if (domain.length === 0 || domain.length > MAX_DOMAIN_LENGTH || !DOMAIN_SHAPE.test(domain)) {
+    return { ok: false, reason: 'domain_invalid' };
+  }
+  const labels = domain.split('.');
+  if (labels.some(label => label.length > MAX_LABEL_LENGTH) || /^[0-9]+$/u.test(labels[labels.length - 1] ?? '')) {
+    return { ok: false, reason: 'domain_invalid' };
+  }
+  if (PERSONAL_GMAIL_DOMAINS.has(domain)) return { ok: false, reason: 'personal_gmail_domain' };
+  return { ok: true, domain };
+}
+
+/**
+ * How many times a registration re-reads after an insert that inserted nothing.
+ *
+ * `ON CONFLICT DO NOTHING` answers two different races with the same empty result: a
+ * concurrent registration of *this* domain won (the next read returns its row), or a
+ * concurrent registration of *another* domain took the primary between the `NOT
+ * EXISTS` and the insert (the next insert computes `false` and succeeds). Each race
+ * costs one pass; three is two more than a single-user workspace will ever need.
+ */
+const REGISTRATION_PASSES = 3;
+
+export async function registerSendingDomain(
+  context: RepositoryContext,
+  input: { readonly domain: string; readonly registeredBy: SendingDomainRegistrar },
+): Promise<RegisterSendingDomainOutcome> {
+  const normalized = normalizeSendingDomain(input.domain);
+  if (!normalized.ok) return normalized;
+  const domain = normalized.domain;
+
+  for (let pass = 0; pass < REGISTRATION_PASSES; pass += 1) {
+    const existing = await readSendingDomain(context, domain);
+    if (existing !== null) return { ok: true, outcome: 'existing', domain: existing };
+
+    // Every checklist column takes its default — false, null — so
+    // `sending_domains_passes_are_checked` holds without anybody having looked, and
+    // the enable stays closed until an admin records all four.
+    const { rows } = await context.db.query<DomainDbRow>(
+      `INSERT INTO sending_domains (workspace_id, domain, is_primary)
+       VALUES ($1::uuid, $2::text, NOT EXISTS (
+         SELECT 1 FROM sending_domains WHERE workspace_id = $1::uuid AND is_primary
+       ))
+       ON CONFLICT DO NOTHING
+       RETURNING ${DOMAIN_COLUMNS}`,
+      [context.scope.workspaceId, domain],
+    );
+    const row = rows[0];
+    if (row === undefined) continue;
+
+    const created = toDomain(row);
+    await recordCrmAuditEvent(context, {
+      action: 'sending_domain.registered',
+      subjectKind: 'sending_domain',
+      subjectId: created.id,
+      detail: { domain: created.domain, isPrimary: created.isPrimary, registeredBy: input.registeredBy },
+    });
+    return { ok: true, outcome: 'created', domain: created };
+  }
+  throw new Error(`the registration of a sending domain did not settle in ${String(REGISTRATION_PASSES)} passes`);
+}
+
+/**
+ * The connect path's half: the domain of the address a mailbox just connected.
+ *
+ * The address has already been through the Gmail profile and, in every deployment,
+ * through `completeGmailGrant`'s hosted-domain check, so the split cannot meet an
+ * address without an `@`; it is still refused as `domain_invalid` rather than
+ * assumed, because the next caller of this may not have made that check.
+ */
+export async function registerMailboxSendingDomain(
+  context: RepositoryContext,
+  input: { readonly emailAddress: string },
+): Promise<RegisterSendingDomainOutcome> {
+  const address = input.emailAddress.trim();
+  const at = address.lastIndexOf('@');
+  if (at <= 0 || at === address.length - 1) return { ok: false, reason: 'domain_invalid' };
+  return await registerSendingDomain(context, { domain: address.slice(at + 1), registeredBy: 'mailbox_connect' });
 }
 
 /**

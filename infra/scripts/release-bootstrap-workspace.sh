@@ -3,7 +3,7 @@
 #
 #   infra/scripts/release-bootstrap-workspace.sh <root> <prefix> \
 #       --worker-digest D --slug S --display-name N --admin-email E [--time-zone Z] \
-#       [--environment production]
+#       [--sending-domain DOMAIN] [--environment production]
 #
 #   infra/scripts/release-bootstrap-workspace.sh infra/roots/rehearsal fss-rh-0923 \
 #       --worker-digest "$digest" --slug rehearsal --display-name Rehearsal \
@@ -11,7 +11,8 @@
 #
 #   infra/scripts/release-bootstrap-workspace.sh infra/roots/production fss-prod \
 #       --environment production --worker-digest "$digest" \
-#       --slug callie --display-name Callie --admin-email callie@usecallie.com  # David
+#       --slug callie --display-name Callie --admin-email callie@usecallie.com \
+#       --sending-domain usecallie.com                                         # David
 #
 # ## Why a deployed environment needs this step at all
 #
@@ -53,6 +54,15 @@
 # into the reports directory as `bootstrap-workspace.txt`, because the workspace UUID it
 # names is what a person types into the desktop's Workspace field.
 #
+# ## The sending domain (lane g57)
+#
+# `--sending-domain` is optional and passed through as the tool's own flag. It
+# registers the workspace's sending domain — the row Administration's 12.7 checklist
+# is recorded against — and, like the rest of this command, changes nothing on a
+# re-run: a registered domain is reported `existing` with its checklist untouched. A
+# mailbox connected after lane g57 registers its own domain; this is for the one that
+# connected before. The summary line names the domain and the outcome.
+#
 # Dry run: FSS_REHEARSAL_DRY_RUN=1 prints every command and needs no credential.
 
 # shellcheck source=infra/scripts/release-common.sh
@@ -67,6 +77,7 @@ SLUG=''
 DISPLAY_NAME=''
 ADMIN_EMAIL=''
 TIME_ZONE=''
+SENDING_DOMAIN=''
 NAMED_ENVIRONMENT=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -75,13 +86,14 @@ while [ "$#" -gt 0 ]; do
     --display-name) DISPLAY_NAME=$2; shift 2 ;;
     --admin-email) ADMIN_EMAIL=$2; shift 2 ;;
     --time-zone) TIME_ZONE=$2; shift 2 ;;
+    --sending-domain) SENDING_DOMAIN=$2; shift 2 ;;
     --environment) NAMED_ENVIRONMENT=$2; shift 2 ;;
     *) echo "FAIL: release-bootstrap-workspace.sh does not take '$1'" >&2; exit 1 ;;
   esac
 done
 
 if [ -z "$ROOT_DIRECTORY" ] || [ -z "$PREFIX" ] || [ -z "$SLUG" ] || [ -z "$DISPLAY_NAME" ] || [ -z "$ADMIN_EMAIL" ]; then
-  echo "usage: release-bootstrap-workspace.sh <terraform root> <name prefix> --worker-digest D --slug S --display-name N --admin-email E [--time-zone Z] [--environment production]" >&2
+  echo "usage: release-bootstrap-workspace.sh <terraform root> <name prefix> --worker-digest D --slug S --display-name N --admin-email E [--time-zone Z] [--sending-domain DOMAIN] [--environment production]" >&2
   exit 1
 fi
 
@@ -125,7 +137,11 @@ mkdir -p "$REPORTS"
 EFFECTIVE_TIME_ZONE=${TIME_ZONE:-America/New_York}
 
 rehearsal_log "bootstrapping the first workspace of $PREFIX from $ROOT_DIRECTORY ($ENVIRONMENT)"
-rehearsal_log "fss admin workspace bootstrap --slug $SLUG --display-name $DISPLAY_NAME --admin-email $ADMIN_EMAIL --time-zone $EFFECTIVE_TIME_ZONE --report /tmp/fss-bootstrap.json"
+SENDING_DOMAIN_WORDS=''
+if [ -n "$SENDING_DOMAIN" ]; then
+  SENDING_DOMAIN_WORDS=" --sending-domain $SENDING_DOMAIN"
+fi
+rehearsal_log "fss admin workspace bootstrap --slug $SLUG --display-name $DISPLAY_NAME --admin-email $ADMIN_EMAIL --time-zone $EFFECTIVE_TIME_ZONE$SENDING_DOMAIN_WORDS --report /tmp/fss-bootstrap.json"
 
 # ---------------------------------------------------------------------------
 # Everything the launch needs, from the root's own outputs — the same lines
@@ -155,6 +171,9 @@ COMMAND=(admin workspace bootstrap
 if [ -n "$TIME_ZONE" ]; then
   COMMAND+=(--time-zone "$TIME_ZONE")
 fi
+if [ -n "$SENDING_DOMAIN" ]; then
+  COMMAND+=(--sending-domain "$SENDING_DOMAIN")
+fi
 
 release_run_task \
   --step bootstrap-workspace \
@@ -181,7 +200,7 @@ if rehearsal_dry_run; then
   rehearsal_plan "read the task's log stream and take the JSON report out of it into $REPORT_JSON"
   rehearsal_plan "print the report, whose workspace.id is what the desktop's Workspace field takes"
   rehearsal_write_report "bootstrap-workspace.txt" \
-    "planned prefix=$PREFIX environment=$ENVIRONMENT slug=$SLUG time_zone=$EFFECTIVE_TIME_ZONE worker_digest=$WORKER_DIGEST"
+    "planned prefix=$PREFIX environment=$ENVIRONMENT slug=$SLUG time_zone=$EFFECTIVE_TIME_ZONE sending_domain=${SENDING_DOMAIN:-none} worker_digest=$WORKER_DIGEST"
   rehearsal_log "dry run: nothing was launched and no workspace exists"
   exit 0
 fi
@@ -196,8 +215,9 @@ report = json.load(open(os.environ["FSS_REPORT"], encoding="utf-8"))
 workspace = report.get("workspace") or {}
 admin = report.get("admin") or {}
 membership = report.get("membership") or {}
+sending = report.get("sendingDomain") or {}
 print(
-    "workspace_id=%s slug=%s workspace=%s admin=%s membership=%s role=%s"
+    "workspace_id=%s slug=%s workspace=%s admin=%s membership=%s role=%s sending_domain=%s sending_domain_outcome=%s sending_domain_primary=%s"
     % (
         workspace.get("id", "unknown"),
         workspace.get("slug", "unknown"),
@@ -205,6 +225,9 @@ print(
         admin.get("outcome", "unknown"),
         membership.get("outcome", "unknown"),
         membership.get("role", "unknown"),
+        sending.get("domain", "none"),
+        sending.get("outcome", "none"),
+        str(sending.get("isPrimary", "none")).lower(),
     )
 )
 ')"

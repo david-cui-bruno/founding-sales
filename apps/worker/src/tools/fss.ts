@@ -304,6 +304,7 @@ async function runCommand(
       displayName: options['--display-name'] ?? '',
       adminEmail: options['--admin-email'] ?? '',
       ...(options['--time-zone'] === undefined ? {} : { timeZone: options['--time-zone'] }),
+      ...(options['--sending-domain'] === undefined ? {} : { sendingDomain: options['--sending-domain'] }),
     });
     return outcome.ok
       ? { ok: true, value: { ...outcome.value } }

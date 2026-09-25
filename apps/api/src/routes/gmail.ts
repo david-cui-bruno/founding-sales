@@ -6,6 +6,9 @@ import {
   readOwnMailbox,
   verifyGrantState,
 } from '@fss/domain/mail';
+import { withTransaction, type RepositoryContext, type SessionQueryable } from '@fss/domain/db';
+import { registerMailboxSendingDomain } from '@fss/domain/outbound';
+import { errorFields, type Logger } from '../bootstrap/log.ts';
 import {
   REFUSAL_STATUS,
   connectMailboxCommandSchema,
@@ -79,7 +82,9 @@ export async function routeGmail(request: ApiRequest, options: RoutingOptions): 
     if (scoped === null) return html(REFUSED_PAGE, 403);
 
     const outcome = await completeGmailGrant(scoped.context, mail, { state, code });
-    return outcome.ok ? html(CONNECTED_PAGE, 200) : html(REFUSED_PAGE, 409);
+    if (!outcome.ok) return html(REFUSED_PAGE, 409);
+    await registerConnectedDomain(auth.db, scoped.context, outcome.value, options.log);
+    return html(CONNECTED_PAGE, 200);
   }
 
   const prepared = await mailRouteDeps(request, options);
@@ -140,5 +145,51 @@ export async function routeGmail(request: ApiRequest, options: RoutingOptions): 
       );
     default:
       return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };
+  }
+}
+
+/**
+ * A connected mailbox's domain is the workspace's sending domain (lane g57).
+ *
+ * Runs after `completeGmailGrant` has returned, so the mailbox, its token and its
+ * coverage hold are already written, and nothing here can undo them: a registration
+ * that throws is a `warn` line and a connected mailbox, never a consent page that says
+ * "not connected" about a mailbox that is. The admin can still create the row with
+ * `POST /outbound/domain` or the operator with `fss admin workspace bootstrap
+ * --sending-domain`, and both are idempotent with this.
+ *
+ * The registration and its audit row commit together or not at all, in a transaction
+ * of their own on the request session — the same session `runCommand` opens its
+ * transactions on — so a failure leaves neither behind.
+ *
+ * `registerSendingDomain` never changes a row that exists and never moves the primary,
+ * so a reconnect is a read. A personal-Gmail address is refused there, quietly — an
+ * `info` line naming the reason — because 12.6 treats that domain as a recipient
+ * class, not as somewhere Callie sends from; `completeGmailGrant`'s hosted-domain check
+ * already makes it unreachable in any deployment whose hosted domain is a Workspace.
+ */
+async function registerConnectedDomain(
+  session: SessionQueryable,
+  context: RepositoryContext,
+  connected: { readonly mailboxId: string; readonly emailAddress: string },
+  log: Logger | undefined,
+): Promise<void> {
+  try {
+    const registered = await withTransaction(session, async () =>
+      registerMailboxSendingDomain(context, { emailAddress: connected.emailAddress }),
+    );
+    if (!registered.ok) {
+      log?.log('info', 'sending_domain_not_registered', { mailbox_id: connected.mailboxId, reason: registered.reason });
+      return;
+    }
+    if (registered.outcome === 'created') {
+      log?.log('info', 'sending_domain_registered', {
+        mailbox_id: connected.mailboxId,
+        domain: registered.domain.domain,
+        primary: registered.domain.isPrimary,
+      });
+    }
+  } catch (error) {
+    log?.log('warn', 'sending_domain_registration_failed', { mailbox_id: connected.mailboxId, ...errorFields(error) });
   }
 }

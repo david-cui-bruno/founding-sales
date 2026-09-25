@@ -683,8 +683,11 @@ Run this **after 4.1** — it is one command against the migrated, deployed data
 infra/scripts/release-bootstrap-workspace.sh infra/roots/production fss-prod \
   --environment production \
   --worker-digest <the worker digest this release is about> \
-  --slug callie --display-name Callie --admin-email callie@usecallie.com
+  --slug callie --display-name Callie --admin-email callie@usecallie.com \
+  --sending-domain usecallie.com
 ```
+
+`--sending-domain` (lane g57) registers the sending domain that section 6 item 3's checklist is recorded against. It is optional and idempotent: a domain that is already registered is reported `existing` and left untouched, checklist included. It needs a worker image built at or after g57; an older tool refuses the flag as `flag_unknown`.
 
 It launches `fss admin workspace bootstrap` as a one-off task on the **operations** task definition, inside the VPC, under the runtime credential — the same wrapper, the same digest comparison and the same log-stream read as every other one-off task in 4.1. `--environment production` is required and is the only argument that differs from the rehearsal's: this command writes the first business rows of the environment, and production is named out loud or not at all.
 
@@ -695,9 +698,12 @@ It prints the tool's JSON report and writes a summary line into the reports dire
   "workspace": { "id": "…-…-…-…-…", "slug": "callie", "displayName": "Callie",
                  "businessTimeZone": "America/New_York", "outcome": "created" },
   "admin": { "userId": "…", "email": "callie@usecallie.com", "outcome": "provisional_created" },
-  "membership": { "role": "admin", "outcome": "created" }
+  "membership": { "role": "admin", "outcome": "created" },
+  "sendingDomain": { "domain": "usecallie.com", "isPrimary": true, "outcome": "created" }
 }
 ```
+
+`sendingDomain` is `null` when the flag is not passed. The summary line in `bootstrap-workspace.txt` ends with `sending_domain=usecallie.com sending_domain_outcome=created sending_domain_primary=true`, or `none` in all three places when no domain was passed.
 
 **`workspace.id` is what the desktop asks for.** The Mac's sign-in form has a Workspace field (`apps/desktop/src/renderer/renderer.ts`), and the UUID above is what goes in it. Keep the line; nothing else prints it.
 
@@ -827,6 +833,13 @@ aws ecs describe-task-definition --task-definition fss-prod-worker \
 This comparison is deliberately yours rather than the workflow's. It is the moment a person takes responsibility for the claim that the thing rehearsed is the thing deployed.
 
 **3. The sending domain passes authentication.** 12.7, and the database enforces it: `sending_domains.automated_sending_enabled` cannot be true without SPF, DKIM, DMARC and a recorded Postmaster review. Set it from the admin surface (`/outbound/authentication`). If it refuses, a check is missing — fix the DNS, not the constraint.
+
+The checklist needs the `sending_domains` row to exist. If Administration says **"No sending domain is configured."** and shows no checkboxes, the row is missing, and `/outbound/authentication` would answer `domain_unknown`. Two things create it (`docs/greenfield/sending.md`, "How a sending domain comes to exist"):
+
+* **A mailbox connect**, on an API built at or after lane g57, registers the connected address's domain. A mailbox connected before that is not registered retroactively.
+* **5.1a with `--sending-domain usecallie.com`**, run with the worker digest of a release that includes g57. This is the backfill for `callie@usecallie.com`, which connected on 24 September 2026, before g57. The report should show `"sendingDomain": { "domain": "usecallie.com", "isPrimary": true, "outcome": "created" }` the first time and `"outcome": "existing"` after that.
+
+Once the row exists, reopen Settings: the installed desktop build shows the five checkboxes and **Record checklist**. No new desktop release is needed.
 
 **4. Flip the deployment flag.** `terraform apply -var="sending_enabled=true"` in the production root, then re-deploy (worker, then API). That puts `FSS_SENDING_ENABLED=true` on both task definitions; read the plan first, and expect it to change exactly the two task definitions and nothing else. This is the release process's statement that the gate passed on these digests.
 

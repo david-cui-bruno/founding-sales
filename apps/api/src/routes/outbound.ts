@@ -10,6 +10,7 @@ import {
   readPrimarySendingDomain,
   readRamp,
   recordAuthenticationChecklist,
+  registerSendingDomain,
   resolveUnknownTerminal,
   setAdminCap,
   setAutomatedSendingEnabled,
@@ -25,7 +26,7 @@ import {
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**
- * The four admin surfaces of at-most-once sending (specification 12.5, 12.7).
+ * The admin surfaces of at-most-once sending (specification 12.5, 12.7).
  *
  * Every one of them is a decision a person makes and the application cannot:
  *
@@ -35,24 +36,31 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  *     person saying they looked, because **this application never queries DNS**;
  *   * `/outbound/cap` — 12.7's "Admins may lower caps ... they may raise a mailbox
  *     to 75";
+ *   * `/outbound/domain` — registers a sending domain (lane g57), so a workspace whose
+ *     mailbox connected before the connect path registered one has somewhere to
+ *     record the checklist. Idempotent: an existing row comes back unchanged, and the
+ *     primary is never moved;
  *   * `/outbound/status` — what the ramp, the guard and the doubt look like now.
  *
- * All four are `POST`, including the read, for the reason in
+ * All of them are `POST`, including the read, for the reason in
  * `docs/decisions/g3b-reads-are-posts.md`.
  *
  * ## Admin only, and the refusal says nothing
  *
- * Each of the three commands is an admin decision with real consequences — marking a
+ * Each of the commands is an admin decision with real consequences — marking a
  * send delivered continues a sequence; enabling authentication opens the sending
- * gate; raising a cap increases volume against somebody's domain reputation. A
- * salesperson gets `forbidden` with no detail, because which mailbox exists and what
- * state a fence is in are not theirs to learn by probing.
+ * gate; raising a cap increases volume against somebody's domain reputation;
+ * registering a domain decides which name the checklist is recorded against. A
+ * salesperson gets `forbidden` with no detail, because which mailbox exists, which
+ * domain is registered and what state a fence is in are not theirs to learn by
+ * probing.
  */
 
 export const OUTBOUND_PATHS: readonly string[] = [
   '/outbound/resolve',
   '/outbound/authentication',
   '/outbound/cap',
+  '/outbound/domain',
   '/outbound/status',
 ];
 
@@ -90,6 +98,14 @@ const capCommandSchema = z
     lowerTo: z.number().int().min(0).max(100).nullable().optional(),
     /** 12.7: "they may raise a mailbox to 75". Above that is refused, not clamped. */
     raiseTo: z.number().int().min(1).max(100).nullable().optional(),
+  })
+  .strict();
+
+const domainCommandSchema = z
+  .object({
+    ...commandEnvelope,
+    /** A domain, not an address: `registerSendingDomain` refuses an `@`, a scheme or a path. */
+    domain: z.string().trim().min(3).max(253),
   })
   .strict();
 
@@ -184,6 +200,23 @@ export async function routeOutbound(request: ApiRequest, options: RoutingOptions
           mailboxId: body.mailboxId,
           effectiveCap: outcome.effectiveCap,
           healthySendingDays: outcome.ramp.healthySendingDays,
+        },
+      };
+    });
+  }
+
+  if (request.path === '/outbound/domain') {
+    return await runMailCommand(deps, domainCommandSchema, 'register_sending_domain', async (context, body) => {
+      const registered = await registerSendingDomain(context, { domain: body.domain, registeredBy: 'admin' });
+      if (!registered.ok) return { ok: false, reason: registered.reason };
+      return {
+        ok: true,
+        value: {
+          ...describeDomain(registered.domain),
+          isPrimary: registered.domain.isPrimary,
+          // `existing` is an answer, not a refusal: the row the admin asked for is
+          // there, and it came back exactly as it was.
+          outcome: registered.outcome,
         },
       };
     });
