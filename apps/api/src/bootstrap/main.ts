@@ -49,10 +49,16 @@ import { createApiServer } from '../server.ts';
  * would refuse the very build that lets David call. This API must therefore be
  * deployed before desktop 1.0.2 is published to the channel. The minimum stays 1.0.0,
  * so the installed 1.0.0 and 1.0.1 keep working until they take the update.
+ *
+ * 1.0.3 is the Home build (lane g65, 8.0ad): Today as the main window's first screen,
+ * with the status sidebar, the last seven days and the Needs-you list. It needs no new
+ * route and no migration, only this maximum, and the order is the same: the API that
+ * publishes 1.0.3 is deployed first, and desktop 1.0.3 is published after it. Until
+ * then 1.0.2 and older keep working, and a 1.0.3 Mac would be refused everything.
  */
 export const CONTAINER_CLIENT_VERSIONS: ClientVersionRange = clientVersionRangeSchema.parse({
   minimum: '1.0.0',
-  maximum: '1.0.2',
+  maximum: '1.0.3',
 });
 
 export const API_EXIT_CODES = Object.freeze({

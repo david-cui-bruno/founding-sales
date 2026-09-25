@@ -1,96 +1,976 @@
-/* Enough to make the window legible. The design belongs to a later slice. */
+/*
+ * Callie's one stylesheet, shared by every window (lane g65).
+ *
+ * Mockup A2, "minimal, with design principles from Notion", which David approved on
+ * 25 September 2026 (docs/decisions/g65-today-is-the-home.md):
+ *
+ *   - one content column, at most 860px wide;
+ *   - sentence-case grey section headers with a small count;
+ *   - dividers instead of cards;
+ *   - colour only as a 7px dot or a small tag, never as a filled banner;
+ *   - row actions that appear on hover (and on keyboard focus);
+ *   - keyboard shortcuts shown beside the windows they open;
+ *   - system status in Home's sidebar rather than in banners;
+ *   - an empty state that says what to do next.
+ *
+ * Light only. Every window's markup is styled by element and by the class names its page
+ * already writes, so a page gets this design without being rewritten. Test ids are never
+ * styled: they are what the specs read, and a restyle must not be able to move them.
+ */
+
 :root {
-  color-scheme: light dark;
-  font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  color-scheme: light;
+  --ink: #37352f;
+  --ink-2: #787774;
+  --ink-3: #9b9a97;
+  --line: rgba(55, 53, 47, 0.09);
+  --line-strong: rgba(55, 53, 47, 0.16);
+  --hover: rgba(55, 53, 47, 0.06);
+  --sidebar: #f7f7f5;
+  --tag: #f1f1ef;
+  --ok: #448361;
+  --ok-tag: #edf3ec;
+  --warn: #cb912f;
+  --stop: #d44c47;
+  --stop-tag: #fbeceb;
+  --focus: rgba(35, 131, 226, 0.45);
+  --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-height: 100%;
 }
 
 body {
   margin: 0;
-  padding: 2rem;
-  line-height: 1.5;
+  background: #fff;
+  color: var(--ink);
+  font: 15px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
-h1 {
-  font-size: 1.6rem;
-  margin: 0 0 1rem;
+/* ------------------------------------------------------------------------- */
+/* The column every window is                                                 */
+/* ------------------------------------------------------------------------- */
+
+#app {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 48px 56px 80px;
 }
 
-.banner {
-  margin: 0 0 0.5rem;
-  padding: 0.6rem 0.8rem;
-  border-radius: 6px;
-  border: 1px solid currentColor;
+#app.single {
+  max-width: 520px;
+  padding-top: 12vh;
 }
 
-.banner-info {
-  color: #315;
-}
-
-.banner-warning {
-  color: #7a4b00;
-}
-
-.banner-blocking {
-  color: #8a1212;
-  font-weight: 600;
-}
-
-.sign-in label {
-  display: block;
-  margin-bottom: 0.75rem;
-}
-
-.sign-in input {
-  display: block;
-  width: 24rem;
-  max-width: 100%;
-  padding: 0.4rem;
-}
-
-.today ul {
-  list-style: none;
+#app.home {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  max-width: none;
+  min-height: 100vh;
+  margin: 0;
   padding: 0;
 }
 
-.today li {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 0.5rem 0;
-  border-bottom: 1px solid rgb(128 128 128 / 30%);
+/* ------------------------------------------------------------------------- */
+/* Type                                                                       */
+/* ------------------------------------------------------------------------- */
+
+h1 {
+  margin: 0 0 8px;
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
 }
 
-button[disabled] {
-  opacity: 0.5;
-  cursor: not-allowed;
+h2,
+.section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 32px 0 6px;
+  color: var(--ink-3);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
 }
+
+h2 small,
+.section-head small {
+  font-size: 13px;
+  font-weight: 400;
+}
+
+h3 {
+  margin: 20px 0 6px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+p {
+  margin: 0 0 8px;
+}
+
+pre {
+  margin: 8px 0;
+  padding: 10px 12px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  background: var(--sidebar);
+  border-radius: 4px;
+  font: 13px/1.55 var(--mono);
+}
+
+blockquote {
+  margin: 8px 0;
+  padding: 2px 0 2px 12px;
+  color: var(--ink-2);
+  border-left: 3px solid var(--line-strong);
+}
+
+kbd {
+  color: var(--ink-3);
+  font: 11px/1 var(--mono);
+}
+
+.quiet,
+.inert,
+.unavailable,
+.provenance,
+.hint,
+.runbook,
+.by,
+.limitation,
+.truncated {
+  color: var(--ink-3);
+  font-size: 13px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------------------- */
+/* Dots, tags and quiet notice lines                                          */
+/* ------------------------------------------------------------------------- */
+
+.dot {
+  display: inline-block;
+  flex: none;
+  width: 7px;
+  height: 7px;
+  margin-right: 8px;
+  background: rgba(55, 53, 47, 0.2);
+  border-radius: 50%;
+}
+
+.dot-ok {
+  background: var(--ok);
+}
+
+.dot-warn {
+  background: var(--warn);
+}
+
+.dot-stop {
+  background: var(--stop);
+}
+
+.tag {
+  padding: 1px 6px;
+  color: var(--ink-2);
+  white-space: nowrap;
+  background: var(--tag);
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+.tag-ok {
+  color: var(--ok);
+  background: var(--ok-tag);
+}
+
+.tag-stop {
+  color: var(--stop);
+  background: var(--stop-tag);
+}
+
+/*
+ * A notice is a line of grey text with a dot, not a coloured box: offline, stale, a
+ * refusal, "Snoozed.". The dot's colour is the only thing the tone changes.
+ */
+.banners {
+  margin: 0 0 12px;
+}
+
+.banners:empty {
+  display: none;
+}
+
+.banner,
+.notice,
+.mailbox-notice,
+.outcome .warning:not(:empty) {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 4px;
+  color: var(--ink-2);
+  font-size: 13.5px;
+}
+
+.banner::before,
+.notice::before,
+.mailbox-notice::before,
+.outcome .warning:not(:empty)::before {
+  content: '';
+  flex: none;
+  width: 7px;
+  height: 7px;
+  margin-top: 0.55em;
+  background: var(--ink-3);
+  border-radius: 50%;
+}
+
+.banner-warning::before,
+.mailbox-notice::before,
+.outcome .warning:not(:empty)::before {
+  background: var(--warn);
+}
+
+.banner-blocking {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.banner-blocking::before {
+  background: var(--stop);
+}
+
+/* ------------------------------------------------------------------------- */
+/* Buttons and fields                                                         */
+/* ------------------------------------------------------------------------- */
+
+button {
+  padding: 6px 10px;
+  color: var(--ink);
+  cursor: pointer;
+  background: #fff;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+button:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+button.btn-primary {
+  color: #fff;
+  background: var(--ink);
+  border-color: var(--ink);
+}
+
+button.btn-primary:hover:not(:disabled) {
+  background: #25231f;
+}
+
+button.btn-quiet {
+  color: var(--ink-2);
+  background: transparent;
+  border-color: transparent;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+input:not([type='checkbox'], [type='radio']),
+select,
+textarea {
+  max-width: 100%;
+  padding: 6px 8px;
+  color: var(--ink);
+  background: #fff;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  font: inherit;
+  font-size: 14px;
+}
+
+input:disabled,
+select:disabled,
+textarea:disabled {
+  color: var(--ink-3);
+  background: var(--sidebar);
+}
+
+input[type='checkbox'],
+input[type='radio'] {
+  margin: 0 6px 0 0;
+  accent-color: var(--ink);
+}
+
+textarea {
+  width: 100%;
+  min-height: 72px;
+  resize: vertical;
+}
+
+[aria-invalid='true'] {
+  border-color: var(--stop);
+}
+
+label {
+  color: var(--ink-2);
+  font-size: 14px;
+}
+
+fieldset {
+  margin: 8px 0;
+  padding: 8px 10px 10px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+legend {
+  padding: 0 4px;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+details > summary {
+  cursor: pointer;
+}
+
+/* ------------------------------------------------------------------------- */
+/* Definition lists and plain lists                                           */
+/* ------------------------------------------------------------------------- */
 
 dl {
   display: grid;
-  grid-template-columns: max-content 1fr;
-  gap: 0.25rem 1rem;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 16px;
+  margin: 8px 0;
+  font-size: 14px;
 }
 
 dt {
-  font-weight: 600;
+  color: var(--ink-2);
 }
 
 dd {
   margin: 0;
+  overflow-wrap: anywhere;
   font-variant-numeric: tabular-nums;
+}
+
+ul,
+ol {
+  margin: 8px 0;
+  padding-left: 20px;
+}
+
+/* Lists of things are rows with dividers, never boxes. */
+.rows,
+.reply-list,
+.sequence-list,
+.settings,
+.stages,
+.calling-numbers,
+.alerts,
+.ramps,
+.elsewhere,
+.signals,
+.tasks {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.reply-list > li,
+.sequence-list > li,
+.settings > li,
+.stages > li,
+.calling-numbers > li,
+.alerts > li,
+.ramps > li,
+.elsewhere > li,
+.rows > li {
+  border-top: 1px solid var(--line);
+}
+
+.reply-list > li,
+.sequence-list > li,
+.settings > li,
+.stages > li,
+.calling-numbers > li,
+.alerts > li,
+.ramps > li,
+.elsewhere > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 9px 6px;
+}
+
+.reply-list > li:last-child,
+.sequence-list > li:last-child,
+.settings > li:last-child,
+.stages > li:last-child,
+.calling-numbers > li:last-child,
+.alerts > li:last-child,
+.ramps > li:last-child,
+.elsewhere > li:last-child,
+.rows > li:last-child {
+  border-bottom: 1px solid var(--line);
+}
+
+.signals > li {
+  display: inline-block;
+  margin: 0 6px 6px 0;
+  padding: 1px 6px;
+  color: var(--ink-2);
+  background: var(--tag);
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+/* ------------------------------------------------------------------------- */
+/* Rows: a name, a grey "why" line, and actions on hover                      */
+/* ------------------------------------------------------------------------- */
+
+.row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 6px;
+  border-radius: 4px;
+}
+
+.row:hover {
+  background: var(--hover);
+}
+
+.row-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.row-main .name {
+  overflow-wrap: anywhere;
+  font-weight: 500;
+}
+
+.row-main .why {
+  margin-top: 1px;
+  color: var(--ink-2);
+  font-size: 13.5px;
+}
+
+.row-actions {
+  display: flex;
+  gap: 6px;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.row:hover .row-actions,
+.row:focus-within .row-actions,
+.expanded > .row .row-actions {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .row-actions {
+    opacity: 1;
+  }
+}
+
+.empty {
+  margin: 0;
+  padding: 14px 6px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+/* ------------------------------------------------------------------------- */
+/* Home: the sidebar                                                          */
+/* ------------------------------------------------------------------------- */
+
+.sidebar {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  padding: 14px 8px;
+  overflow-y: auto;
+  background: var(--sidebar);
+  border-right: 1px solid var(--line);
+  font-size: 14px;
+}
+
+.workspace {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 6px 8px;
+  font-weight: 600;
+}
+
+.workspace-mark {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  color: #fff;
+  background: var(--ink);
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.nav-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  padding: 5px 8px;
+  color: var(--ink-2);
+  text-align: left;
+  background: transparent;
+  border: 0;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.nav-row[aria-current='page'] {
+  color: var(--ink);
+  background: var(--hover);
+  font-weight: 500;
+}
+
+.sidebar-label {
+  margin: 18px 8px 6px;
+  color: var(--ink-3);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.status {
+  margin: 0;
+  padding: 0 8px;
+  color: var(--ink-2);
+  list-style: none;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.status-row {
+  display: flex;
+  align-items: flex-start;
+  padding: 2px 0;
+  overflow-wrap: anywhere;
+}
+
+.status-row .dot {
+  margin-top: 0.5em;
+}
+
+.this-mac {
+  margin-top: auto;
+  padding: 10px 8px 4px;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+}
+
+.this-mac > summary {
+  color: var(--ink-2);
+}
+
+.this-mac .device {
+  padding-top: 8px;
+}
+
+.this-mac dl {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+  font-size: 12.5px;
+}
+
+.this-mac dt {
+  margin-top: 6px;
+  color: var(--ink-3);
+  font-size: 11px;
 }
 
 .device-controls {
   display: flex;
-  gap: 0.5rem;
-  margin-top: 0.75rem;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
 }
 
 .mailbox-hint,
 .mailbox-notice {
-  margin: 0.5rem 0 0;
+  margin: 8px 0 0;
+  font-size: 12.5px;
 }
 
-.mailbox-notice {
-  color: #7a4b00;
+.mailbox-hint {
+  color: var(--ink-2);
+}
+
+/* ------------------------------------------------------------------------- */
+/* Home: the column                                                           */
+/* ------------------------------------------------------------------------- */
+
+.column {
+  min-width: 0;
+  max-width: 860px;
+  padding: 56px 72px 80px;
+}
+
+.column-head h1 {
+  font-size: 34px;
+}
+
+.summary-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 22px;
+}
+
+.summary {
+  min-height: 1.5em;
+  margin: 0;
+  color: var(--ink-2);
+}
+
+.lane:first-child .section-head {
+  margin-top: 12px;
+}
+
+/* The expanded firm, under its own row. */
+.today-firm {
+  padding: 4px 6px 14px 24px;
+  border-top: 1px solid var(--line);
+  font-size: 14px;
+}
+
+/* A task on one line: when, what, and its snooze or hold on hover. */
+.task {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 12px;
+  padding: 6px 0;
+}
+
+.task .when {
+  color: var(--ink-3);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.task .what {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.task .who {
+  color: var(--ink-2);
+  font-size: 13.5px;
+}
+
+.task .tag {
+  margin-top: 2px;
+}
+
+.snooze {
+  display: flex;
+  gap: 6px;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.task:hover .snooze,
+.task:focus-within .snooze {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .snooze {
+    opacity: 1;
+  }
+}
+
+.snooze input {
+  font-size: 13px;
+}
+
+.snooze input[type='text'] {
+  width: 120px;
+}
+
+.dial {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.dial .limitation {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 12.5px;
+}
+
+.outcome {
+  display: grid;
+  gap: 8px;
+  max-width: 520px;
+  margin-top: 10px;
+}
+
+.outcome select,
+.outcome button {
+  justify-self: start;
+}
+
+.outcome .problem {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+.outcome .problem:empty,
+.outcome .warning:empty {
+  display: none;
+}
+
+/* The last seven days. */
+.figures {
+  margin-top: 44px;
+}
+
+.figure-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 18px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.figure-label {
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.figure-value {
+  margin-top: 2px;
+  font-size: 22px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.figure-value small {
+  margin-left: 6px;
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.figures .quiet {
+  margin: 10px 0 0;
+}
+
+.needs {
+  margin-top: 34px;
+}
+
+.needs .label {
+  overflow-wrap: anywhere;
+}
+
+/* ------------------------------------------------------------------------- */
+/* Sign in                                                                    */
+/* ------------------------------------------------------------------------- */
+
+.single h1 {
+  margin-bottom: 18px;
+}
+
+.sign-in label {
+  display: block;
+  margin-bottom: 14px;
+  font-size: 13px;
+}
+
+.sign-in input {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 8px 10px;
+  font-size: 15px;
+}
+
+.sign-in button {
+  margin-top: 6px;
+  padding: 8px 14px;
+  font-size: 14px;
+}
+
+/* ------------------------------------------------------------------------- */
+/* The other windows: Replies, Firms, Sequences, Administration               */
+/* ------------------------------------------------------------------------- */
+
+main#app > section,
+main#app .panel,
+main#app .reply-card {
+  margin-top: 8px;
+}
+
+main#app section input:not([type='checkbox'], [type='radio']),
+main#app section select,
+main#app section textarea,
+main#app .settings input:not([type='checkbox'], [type='radio']),
+main#app .settings textarea {
+  margin: 4px 6px 4px 0;
+}
+
+main#app section button,
+main#app .settings button,
+main#app .stages button,
+main#app .ramps button,
+main#app .alerts button,
+main#app .calling-numbers button {
+  margin: 4px 6px 4px 0;
+}
+
+main#app section label {
+  display: inline-flex;
+  align-items: center;
+  margin: 4px 14px 4px 0;
+}
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  margin: 8px 0 24px;
+  border-bottom: 1px solid var(--line);
+}
+
+.tabs .tab {
+  margin-bottom: -1px;
+  padding: 8px 10px;
+  color: var(--ink-2);
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  font-size: 14px;
+}
+
+.tabs .tab:hover:not(:disabled) {
+  color: var(--ink);
+  background: transparent;
+}
+
+.tabs .tab-current {
+  color: var(--ink);
+  border-bottom-color: var(--ink);
+  font-weight: 500;
+}
+
+.settings > li {
+  display: block;
+}
+
+.settings h2 {
+  margin-top: 4px;
+}
+
+.settings textarea {
+  min-height: 96px;
+  font: 12.5px/1.5 var(--mono);
+}
+
+.settings input[type='text'] {
+  width: 100%;
+}
+
+.panels {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 0 28px;
+}
+
+.panel p {
+  margin: 0 0 4px;
+  font-size: 14px;
+}
+
+.pipeline {
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+  overflow-x: auto;
+}
+
+.pipeline-column {
+  flex: 1 1 180px;
+  min-width: 180px;
+}
+
+.pipeline-column ul {
+  padding: 0;
+  list-style: none;
+}
+
+.pipeline-column li {
+  padding: 6px 0;
+  border-top: 1px solid var(--line);
 }

@@ -1,20 +1,29 @@
 import type { DesktopBridge, DesktopState, MailboxBridge, MailboxState } from '../shared/contract.ts';
+import { forgetHome, hasTodayBridge, loadHomeAdmin, loadHomeToday, renderHome, setHomeRedraw } from './homePage.ts';
 import { buildMailboxView, buildScreenView, MAILBOX_ROW_LABEL } from './viewModel.ts';
 
 /**
- * The window.
+ * The main window.
  *
  * Deliberately plain: no framework, no build step beyond a transpile, and every
  * value written to the page through `textContent` rather than `innerHTML`, so a firm
  * name that contains a tag is a firm name. The renderer holds no rule of its own —
  * it asks `buildScreenView` what to show and does that.
  *
- * The "This Mac" card also carries the Mailbox row (release.md 8.0x): the second bridge,
+ * Signed out, it is the sign-in form; below the minimum version, the upgrade
+ * instruction and nothing to press. Signed in, it is **Home** (lane g65,
+ * `homePage.ts`): the Today lanes, the status sidebar, the last seven days and what
+ * needs the person. Home replaced G2's "This Mac" card and its bare list of cached
+ * cards; the card is now "This Mac" at the foot of the sidebar, and this file still
+ * builds it.
+ *
+ * "This Mac" carries the Mailbox row (release.md 8.0x): the second bridge,
  * `callieMailbox`, answers it, and `buildMailboxView` decides what it says. Connect
  * Gmail asks the main process to start the grant; the main process opens Google's
  * consent screen in the system browser and holds the call until the mailbox connects,
  * the grant expires or Refresh is pressed. The row is read again whenever the window
- * regains focus — which is the moment a person comes back from that browser.
+ * regains focus — which is the moment a person comes back from that browser. Home's
+ * Needs-you list offers the same Connect Gmail while the mailbox is not connected.
  */
 
 const bridge = (): DesktopBridge => {
@@ -60,23 +69,24 @@ function renderSignIn(root: HTMLElement, busy: boolean, enabled: boolean): void 
   submit.type = 'submit';
   submit.disabled = busy || !enabled;
   submit.dataset['testid'] = 'sign-in';
+  submit.className = 'btn btn-primary';
 
   form.append(workspaceLabel, labelLabel, submit);
   form.addEventListener('submit', event => {
     event.preventDefault();
     void (async () => {
       render(await bridge().signIn({ workspaceId: workspace.value.trim(), deviceLabel: deviceLabel.value.trim() }));
-      await loadMailbox();
+      await enterHome();
     })();
     render(null, { busy: true });
   });
   root.append(form);
 }
 
-function renderDevice(root: HTMLElement, state: DesktopState): void {
-  if (state.device === null) return;
+/** "This Mac": the device, the Mailbox row with its one control, and Sign out. Home puts it in the sidebar. */
+function devicePanel(state: DesktopState): HTMLElement {
   const panel = element('section', { className: 'device', testId: 'device-panel' });
-  panel.append(element('h2', { text: 'This Mac' }));
+  if (state.device === null) return panel;
   const list = element('dl');
   for (const [term, value] of [
     ['Name', state.device.deviceLabel],
@@ -99,7 +109,7 @@ function renderDevice(root: HTMLElement, state: DesktopState): void {
 
   const controls = element('div', { className: 'device-controls' });
   if (mailbox.action !== null) {
-    const connect = element('button', { text: mailbox.action.label, testId: 'mailbox-connect' });
+    const connect = element('button', { className: 'btn', text: mailbox.action.label, testId: 'mailbox-connect' });
     connect.disabled = !mailbox.action.enabled;
     connect.addEventListener('click', () => {
       void connectMailbox();
@@ -107,13 +117,15 @@ function renderDevice(root: HTMLElement, state: DesktopState): void {
     controls.append(connect);
   }
 
-  const signOut = element('button', { text: 'Sign out' });
+  const signOut = element('button', { className: 'btn', text: 'Sign out' });
   signOut.dataset['testid'] = 'sign-out';
   signOut.addEventListener('click', () => {
     void (async () => {
-      // The next person to sign in on this Mac must not see this one's mailbox.
+      // The next person to sign in on this Mac must not see this one's mailbox, list,
+      // numbers or figures.
       lastMailbox = null;
       mailboxWaiting = false;
+      forgetHome();
       render(await bridge().signOut());
     })();
   });
@@ -125,34 +137,25 @@ function renderDevice(root: HTMLElement, state: DesktopState): void {
   if (mailbox.notice !== null) {
     panel.append(element('p', { className: 'mailbox-notice', text: mailbox.notice, testId: 'mailbox-notice' }));
   }
-  root.append(panel);
+  return panel;
 }
 
-function renderToday(root: HTMLElement, state: DesktopState, actionsEnabled: boolean): void {
-  const panel = element('section', { className: 'today', testId: 'today-panel' });
-  const refresh = element('button', { text: 'Refresh' });
-  refresh.dataset['testid'] = 'refresh';
-  refresh.addEventListener('click', () => {
-    void (async () => {
+/**
+ * Refresh: the list read again, the session's view of that read, the Mailbox row, and
+ * Home's status and figures. Refresh is also how a person stops waiting for a consent
+ * screen they abandoned.
+ */
+function refreshAll(): void {
+  void refreshMailbox();
+  void (async () => {
+    if (hasTodayBridge()) {
+      await loadHomeToday(true);
+      render(await bridge().state());
+    } else {
       render(await bridge().refreshToday());
-    })();
-    // Refresh is also how a person stops waiting for a consent screen they abandoned.
-    void refreshMailbox();
-  });
-  panel.append(refresh);
-
-  const list = element('ul', { testId: 'today-cards' });
-  for (const card of state.today?.cards ?? []) {
-    const item = element('li', { text: `${card.firmName} — ${card.lane}` });
-    item.dataset['testid'] = 'today-card';
-    const act = element('button', { text: 'Open' });
-    act.disabled = !actionsEnabled;
-    act.dataset['testid'] = 'card-action';
-    item.append(act);
-    list.append(item);
-  }
-  panel.append(list);
-  root.append(panel);
+    }
+  })();
+  void loadHomeAdmin({ figures: true });
 }
 
 let lastState: DesktopState | null = null;
@@ -165,6 +168,27 @@ const signedIn = (): boolean => lastState?.screen === 'today' && lastState.devic
 function showMailbox(state: MailboxState): void {
   lastMailbox = state;
   render(null);
+}
+
+/**
+ * What a signed-in window reads first: the Mailbox row; the lanes as cached and then as
+ * the server has them now, so the morning's list is on screen without a press; and
+ * Home's status and figures.
+ */
+async function enterHome(): Promise<void> {
+  if (!signedIn()) return;
+  await Promise.all([
+    loadMailbox(),
+    (async () => {
+      if (!hasTodayBridge()) return;
+      await loadHomeToday(false);
+      await loadHomeToday(true);
+      // The read above may have found the server gone or the cache stale; the session
+      // says so, and the system row and the quiet lines follow it.
+      if (signedIn()) render(await bridge().state());
+    })(),
+    loadHomeAdmin({ figures: true }),
+  ]);
 }
 
 /** Read the row, when there is a row to read: signed in, on the Today screen. */
@@ -203,7 +227,31 @@ export function render(state: DesktopState | null, options: { readonly busy?: bo
   if (!(root instanceof HTMLElement) || current === null) return;
   const view = buildScreenView(current);
 
+  if (view.screen === 'today' && current.device !== null) {
+    renderHome(root, {
+      desktop: current,
+      desktopBanners: view.banners,
+      mailbox: lastMailbox,
+      mailboxWaiting,
+      thisMac: () => devicePanel(current),
+      connectMailbox: () => {
+        void connectMailbox();
+      },
+      refresh: refreshAll,
+    });
+    return;
+  }
+
+  if (root.dataset['view'] === 'home') {
+    // Leaving Home without a Sign out press — a revoked device, an expired
+    // membership — forgets the person as thoroughly as the button does.
+    lastMailbox = null;
+    mailboxWaiting = false;
+    forgetHome();
+  }
   root.replaceChildren();
+  root.className = 'single';
+  root.dataset['view'] = 'single';
   root.append(element('h1', { text: view.heading, testId: 'heading' }));
 
   const banners = element('div', { className: 'banners', testId: 'banners' });
@@ -219,23 +267,25 @@ export function render(state: DesktopState | null, options: { readonly busy?: bo
     root.append(element('p', { testId: 'upgrade-only', text: 'Callie will work again once this Mac is updated.' }));
     return;
   }
-  if (view.screen === 'sign_in') {
-    renderSignIn(root, options.busy ?? false, view.signInEnabled);
-    return;
-  }
-  renderDevice(root, current);
-  renderToday(root, current, view.actionsEnabled);
+  // `signing_in` is a sign-in the browser has not finished: the same form, waiting.
+  renderSignIn(root, (options.busy ?? false) || view.screen === 'signing_in', view.signInEnabled);
 }
 
 export async function boot(): Promise<void> {
+  setHomeRedraw(() => {
+    render(null);
+  });
   render(await bridge().state());
-  await loadMailbox();
+  await enterHome();
 }
 
 if (typeof document !== 'undefined') {
   // Coming back from the browser is when a grant has just landed: read the row again.
+  // Coming back from Administration is when a calling number has just been added: the
+  // administration bridge already holds it, and reading its state asks the API nothing.
   window.addEventListener('focus', () => {
     void loadMailbox();
+    if (signedIn()) void loadHomeAdmin();
   });
   void boot();
 }

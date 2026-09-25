@@ -12,14 +12,16 @@ import {
   registerReplyBridge,
   registerSequenceBridge,
   registerTodayBridge,
-  windowMenuTemplate,
+  type OpenOptions,
 } from './todayWindow.ts';
+import { windowMenuTemplate } from './windowMenu.ts';
 import { registerAdminBridge } from './settingsWindow.ts';
 import { createDeviceStore } from './deviceStore.ts';
 import { createKeychainVault } from './keychain.ts';
 import { createOfflineCache } from './offlineCache.ts';
 import { createSessionManager, type SessionManager } from './sessionManager.ts';
 import { IPC_CHANNELS } from './ipc.ts';
+import { windowTargetOf, type WindowTarget } from '../shared/contract.ts';
 import {
   MAILBOX_IPC_CHANNELS,
   createMailboxBridge,
@@ -32,8 +34,10 @@ import {
  *
  * It does four things and no more: build the session manager from real adapters,
  * open one window with context isolation on and node integration off, answer the
- * four bridge channels (and the Mailbox row's three), and send external links to the
- * system browser. Every rule
+ * five bridge channels (and the Mailbox row's three), and send external links to the
+ * system browser. Since lane g65 that window's signed-in content is Home: the Today
+ * lanes, a status sidebar, the last seven days' figures and what needs the person, and
+ * its fifth channel opens the other windows by name. Every rule
  * about sessions, caches and versions lives in `sessionManager.ts`, which knows
  * nothing about Electron and is therefore tested without it.
  *
@@ -88,7 +92,13 @@ export function buildSessionManager(configuration: DesktopConfiguration): Sessio
   });
 }
 
-export function registerBridge(manager: SessionManager): void {
+/**
+ * What opens each window: the Window menu's items and Home's sidebar call the same ones.
+ * `today` brings the main window forward; the rest are `WINDOW_TARGETS`.
+ */
+export type WindowOpeners = Readonly<Record<WindowTarget | 'today', () => void>>;
+
+export function registerBridge(manager: SessionManager, open: WindowOpeners): void {
   ipcMain.handle(IPC_CHANNELS.state, async () => await manager.state());
   ipcMain.handle(IPC_CHANNELS.signIn, async (_event, raw: unknown) => {
     // The renderer's word is never taken for a shape: a malformed request is a
@@ -99,6 +109,14 @@ export function registerBridge(manager: SessionManager): void {
   });
   ipcMain.handle(IPC_CHANNELS.signOut, async () => await manager.signOut());
   ipcMain.handle(IPC_CHANNELS.refreshToday, async () => await manager.refreshToday());
+  // Lane g65. The page names a window and nothing else: a name outside WINDOW_TARGETS
+  // opens nothing, and the answer is the current state either way, as for every
+  // other channel here.
+  ipcMain.handle(IPC_CHANNELS.openWindow, async (_event, raw: unknown) => {
+    const target = windowTargetOf(raw);
+    if (target !== null) open[target]();
+    return await manager.state();
+  });
 }
 
 /**
@@ -115,6 +133,9 @@ export function registerMailboxBridge(deps: MailboxBridgeDeps): MailboxBridgeHos
   ipcMain.handle(MAILBOX_IPC_CHANNELS.connect, async () => await host.connect());
   return host;
 }
+
+/** The main window, so ⌘1 can bring it forward, or open it again once it was closed. */
+let homeWindow: BrowserWindow | null = null;
 
 export async function openWindow(configuration: DesktopConfiguration): Promise<BrowserWindow> {
   const window = new BrowserWindow({
@@ -137,24 +158,36 @@ export async function openWindow(configuration: DesktopConfiguration): Promise<B
     void shell.openExternal(url);
     return { action: 'deny' };
   });
+  homeWindow = window;
   if (configuration.rendererUrl === undefined) await window.loadFile(configuration.rendererEntry);
   else await window.loadURL(configuration.rendererUrl);
   return window;
 }
 
+/** ⌘1: Home to the front, or a new main window when the last one was closed. */
+function showHome(configuration: DesktopConfiguration): void {
+  const existing = homeWindow;
+  if (existing !== null && !existing.isDestroyed()) {
+    if (existing.isMinimized()) existing.restore();
+    existing.focus();
+    return;
+  }
+  void openWindow(configuration);
+}
+
 /**
- * Register the Today, reply and CRM bridges and put their windows on the menu.
+ * Register the Today, reply, CRM, sequence, administration and mailbox bridges, put
+ * their windows on the menu, and return what opens each one.
  *
- * This is the wiring G3b's renderer has been waiting for: `firmWorkspace.ts` reads
- * `globalThis.callieCrm`, the preload script installs it, and nothing until now
- * answered the channels behind it. The Today window is the third, on the same
- * pattern, and G7b's reply cards are the fourth.
+ * This is the wiring G3b's renderer waited for: `firmWorkspace.ts` reads
+ * `globalThis.callieCrm`, the preload script installs it, and these handlers answer it.
+ * The Today bridge was G6's window's; since lane g65 the main window's Home calls it.
  *
- * The windows are reachable from the application menu rather than from a button on
- * G2's page, because this lane does not own `renderer.ts` — and because on macOS the
- * menu is where a window that is not the front one is found anyway.
+ * Each window is reachable from the application menu and, since lane g65, from Home's
+ * sidebar, which asks for it by name through `registerBridge`'s `openWindow` channel.
+ * Both call the openers returned here, so the two ways in cannot disagree.
  */
-export function registerWindows(configuration: DesktopConfiguration, manager: SessionManager): void {
+export function registerWindows(configuration: DesktopConfiguration, manager: SessionManager): WindowOpeners {
   const api = createAuthedClient({
     baseUrl: configuration.apiBaseUrl,
     clientVersion: configuration.clientVersion,
@@ -208,59 +241,62 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
       : { pageUrl: new URL(name, configuration.rendererUrl).toString() }),
   });
 
-  let todayWindow: BrowserWindow | null = null;
   let replyWindow: BrowserWindow | null = null;
   let crmWindow: BrowserWindow | null = null;
   let sequenceWindow: BrowserWindow | null = null;
   let adminWindow: BrowserWindow | null = null;
+  const openAdministration = (options: OpenOptions): void => {
+    void openSecondaryWindow('Callie — Administration', renderer('settings.html'), adminWindow, options).then(window => {
+      adminWindow = window;
+    });
+  };
+  const open: WindowOpeners = {
+    today: () => {
+      showHome(configuration);
+    },
+    replies: () => {
+      void openSecondaryWindow('Callie — Replies', renderer('replyCard.html'), replyWindow).then(window => {
+        replyWindow = window;
+      });
+    },
+    firms: () => {
+      void openSecondaryWindow('Callie — CRM', renderer('firmWorkspace.html'), crmWindow).then(window => {
+        crmWindow = window;
+      });
+    },
+    sequences: () => {
+      void openSecondaryWindow('Callie — Sequences', renderer('sequenceEditor.html'), sequenceWindow).then(
+        window => {
+          sequenceWindow = window;
+        },
+      );
+    },
+    // ⌘5 opens Administration on Settings, and only brings it forward when it is
+    // already open, so nothing typed into it is lost. ⌘6 is the same window on its
+    // Dashboard screen, and loads it again when it is open, exactly as pressing the
+    // Dashboard tab would redraw it.
+    administration: () => {
+      openAdministration({ query: { screen: 'settings' } });
+    },
+    dashboard: () => {
+      openAdministration({ query: { screen: 'dashboard' }, reloadExisting: true });
+    },
+  };
   Menu.setApplicationMenu(
     Menu.buildFromTemplate([
       ...(Menu.getApplicationMenu()?.items.map(item => item as unknown as Electron.MenuItemConstructorOptions) ?? []),
-      ...(windowMenuTemplate({
-        today: () => {
-          void openSecondaryWindow('Callie — Today', renderer('today.html'), todayWindow).then(window => {
-            todayWindow = window;
-          });
-        },
-        replies: () => {
-          void openSecondaryWindow('Callie — Replies', renderer('replyCard.html'), replyWindow).then(window => {
-            replyWindow = window;
-          });
-        },
-        firms: () => {
-          void openSecondaryWindow('Callie — CRM', renderer('firmWorkspace.html'), crmWindow).then(window => {
-            crmWindow = window;
-          });
-        },
-        sequences: () => {
-          void openSecondaryWindow(
-            'Callie — Sequences',
-            renderer('sequenceEditor.html'),
-            sequenceWindow,
-          ).then(window => {
-            sequenceWindow = window;
-          });
-        },
-        administration: () => {
-          void openSecondaryWindow(
-            'Callie — Administration',
-            renderer('settings.html'),
-            adminWindow,
-          ).then(window => {
-            adminWindow = window;
-          });
-        },
-      }) as unknown as Electron.MenuItemConstructorOptions[]),
+      ...(windowMenuTemplate(open) as unknown as Electron.MenuItemConstructorOptions[]),
     ]),
   );
+  return open;
 }
 
 /** The entry point. Kept tiny so that everything above it is testable without Electron. */
 export async function start(configuration: DesktopConfiguration): Promise<void> {
   await app.whenReady();
   const manager = buildSessionManager(configuration);
-  registerBridge(manager);
-  registerWindows(configuration, manager);
+  const windows = registerWindows(configuration, manager);
+  registerBridge(manager, windows);
   await openWindow(configuration);
   app.on('window-all-closed', () => {
     app.quit();

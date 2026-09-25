@@ -10,14 +10,17 @@ import {
 } from './sequenceBridge.ts';
 
 /**
- * The four windows beside G2's, and the channels that feed them
+ * The windows beside the main one, and the channels that feed them
  * (specification 8.2, 8.3, 11.1, 14.2).
  *
  * G2 opened one window; G3b wrote a second renderer and a contract for its bridge and
- * stopped there; G6 added the third and wired both; G7b added the reply cards and G8
- * the sequence editor. They are separate windows rather than screens inside one, which is the choice G3b's own
- * note records: the Today window is the one a person leaves open all day and has to
- * stay small and fast, and the others are opened, used and closed.
+ * stopped there; G6 added a Today window and wired both; G7b added the reply cards, G8
+ * the sequence editor and G9 Administration. Lane g65 folded Today back into the main
+ * window as its Home (`docs/decisions/g65-today-is-the-home.md`): the list a person
+ * leaves open all day is the first thing the app shows, and ⌘1 brings that window
+ * forward. `registerTodayBridge` stays here because Home is what calls it now. The
+ * other four — Replies, Firms, Sequences, Administration — are opened, used and
+ * closed, which is the choice G3b's own note records.
  *
  * Every window is built the same way as G2's: context isolation on, node integration
  * off, sandboxed, no `webview`, and every link out to the system browser. The only
@@ -25,8 +28,8 @@ import {
  * thing a bridge can reach is this file's `host`.
  *
  * Registration is idempotent. `ipcMain.handle` throws on a second registration of the
- * same channel, and a person who closes the Today window and opens it again must not
- * take the app down.
+ * same channel, and a person who closes a window and opens it again must not take the
+ * app down.
  */
 
 export interface WindowDeps {
@@ -241,15 +244,42 @@ export function registerSequenceBridge(deps: SequenceBridgeDeps): SequenceBridge
   return host;
 }
 
+/**
+ * How a window is opened: with a query on its address, and whether a window that is
+ * already open is loaded again with it rather than only brought forward.
+ *
+ * Only Administration uses either (lane g65). `?screen=dashboard` is how ⌘6 opens it
+ * on the Dashboard screen; `settingsPage.ts` reads it once, when the page loads. A
+ * query rather than a fragment, because a changed query is a new document everywhere
+ * — the bundle scheme matches the path alone, so it serves the same page — and the
+ * page's one entry point is the only reader it needs.
+ */
+export interface OpenOptions {
+  readonly query?: Readonly<Record<string, string>>;
+  readonly reloadExisting?: boolean;
+}
+
+async function load(window: BrowserWindow, deps: WindowDeps, query: Readonly<Record<string, string>> | undefined): Promise<void> {
+  if (deps.pageUrl === undefined) {
+    await window.loadFile(deps.pageFile, query === undefined ? undefined : { query: { ...query } });
+    return;
+  }
+  const url = new URL(deps.pageUrl);
+  for (const [key, value] of Object.entries(query ?? {})) url.searchParams.set(key, value);
+  await window.loadURL(url.toString());
+}
+
 /** One window, built exactly as G2 builds its own. Focused rather than duplicated. */
 export async function openSecondaryWindow(
   title: string,
   deps: WindowDeps,
   existing: BrowserWindow | null,
+  options: OpenOptions = {},
 ): Promise<BrowserWindow> {
   if (existing !== null && !existing.isDestroyed()) {
     if (existing.isMinimized()) existing.restore();
     existing.focus();
+    if (options.reloadExisting === true) await load(existing, deps, options.query);
     return existing;
   }
   const window = new BrowserWindow({
@@ -268,41 +298,6 @@ export async function openSecondaryWindow(
     void shell.openExternal(url);
     return { action: 'deny' };
   });
-  if (deps.pageUrl === undefined) await window.loadFile(deps.pageFile);
-  else await window.loadURL(deps.pageUrl);
+  await load(window, deps, options.query);
   return window;
-}
-
-/**
- * The application menu items that open them.
- *
- * A menu rather than a button on G2's page: this lane does not own `renderer.ts`, and
- * a menu is the macOS way to reach a window that is not the front one anyway. The
- * template is a value so it can be asserted without Electron.
- */
-export function windowMenuTemplate(open: {
-  readonly today: () => void;
-  readonly replies: () => void;
-  readonly firms: () => void;
-  readonly sequences: () => void;
-  /** Lane G9's Settings, Dashboard and Diagnostics window. Optional so a caller
-   * that has not wired it yet still gets the selling windows. */
-  readonly administration?: (() => void) | undefined;
-}): readonly { readonly label: string; readonly submenu: readonly { readonly label: string; readonly accelerator: string; readonly click: () => void }[] }[] {
-  return [
-    {
-      label: 'Window',
-      submenu: [
-        { label: 'Today', accelerator: 'CmdOrCtrl+1', click: open.today },
-        { label: 'Replies', accelerator: 'CmdOrCtrl+2', click: open.replies },
-        { label: 'Firms', accelerator: 'CmdOrCtrl+3', click: open.firms },
-        { label: 'Sequences', accelerator: 'CmdOrCtrl+4', click: open.sequences },
-        // Last, and the only optional one: ⌘1 to ⌘4 are the windows somebody uses
-        // to sell, and administration is the one they open when they are not.
-        ...(open.administration === undefined
-          ? []
-          : [{ label: 'Administration', accelerator: 'CmdOrCtrl+5', click: open.administration }]),
-      ],
-    },
-  ];
 }

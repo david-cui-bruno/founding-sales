@@ -479,11 +479,46 @@ number: it now has a **Call** button. A card still saying *"Callie has no attest
 of yours to call from"* means the attestation did not land. Read the notice on the
 Settings screen: `number_invalid` means the `+` or the country code is missing.
 
+### 5b — publish 1.0.3, and open on Home
+
+Desktop 1.0.2 signs in to a device card and a bare list, with the real Today list behind
+⌘1 in a second window. 1.0.3 is the **Home** build: the main window opens on today's
+list, with the status sidebar, the last seven days and a **Needs you** list
+(`docs/greenfield/release.md` 8.0ad). Build it from a commit that carries lane g65.
+
+**First, the API.** Lane g65 raises `CONTAINER_CLIENT_VERSIONS` to
+`{ minimum: 1.0.0, maximum: 1.0.3 }` and adds no migration, so this is an app-only
+release: build both images at the release commit and deploy with
+`release-deploy.sh infra/roots/production fss-prod --api-digest … --worker-digest …`
+and no `--schema-change` (`docs/greenfield/release.md` 2.1, 4.1 and 8.0ad). Smoke, then
+confirm it:
+
+```bash
+curl -fsS https://api.usecallie.com/auth/client-version
+```
+
+**Expected:** `"supported":{"minimum":"1.0.0","maximum":"1.0.3"}`. If the maximum is still
+`1.0.2`, stop. Publishing now would offer every Mac an update that the API refuses.
+
+**Then the build.** The coordinator sets `FSS_DESKTOP_APP_VERSION` to `1.0.3`. Run
+*Greenfield desktop* with **release** ticked on the same commit the API was deployed
+from, with that commit as `desktop_commit_stamp`. Verify, download and publish it as in
+step 1, **zip first, manifest second**, and receive it on the Mac as in step 5.
+
+**Then look at Home.** Open Callie. The window opens on the date and today's lanes
+without a press; there is no Today window any more, and **⌘1** brings this one forward.
+The sidebar's **Status** should read *Mailbox connected · callie@usecallie.com*,
+*Calling from* and your number, masked, *Sending off* until section 6 of the release runbook turns
+it on, *Domain passes* once the checklist is recorded, and *Callie 1.0.3 · online*.
+Anything amber is also a row under **Needs you**: hover it and press its button.
+**Dashboard ⌘6** opens Administration on its Dashboard screen. If the heading reads
+*Today* rather than a date, the list has not been read: press **Refresh**.
+
 ### 6 — the adversarial half, which is the part worth doing
 
 Take the published `latest.json`, change **one character** of `releaseVersion` — make it
 one patch above what is published (`1.0.2` while 1.0.1 is current, `1.0.3` once 1.0.2
-is) — and re-upload it with an invalidation. Do not re-sign it. Then quit Callie and
+is, `1.0.4` once 1.0.3 is) — and re-upload it with an invalidation. Do not re-sign it. Then quit Callie and
 open it.
 
 **Expected: no prompt at all, and no message.** The app checks the Ed25519 signature

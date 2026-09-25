@@ -1,0 +1,382 @@
+import type { DesktopState, MailboxState, WindowTarget } from '../shared/contract.ts';
+import { button, element } from './firmDom.ts';
+import {
+  NAV_ROWS,
+  UNAVAILABLE,
+  buildHomeView,
+  figuresWindow,
+  type FiguresRead,
+  type HomeView,
+  type NeedsRow,
+} from './homeView.ts';
+import type { AdminState } from './settingsContract.ts';
+import type { TodayState } from './todayContract.ts';
+import { renderLanes } from './todayLanes.ts';
+import { buildTodayView, type BannerView } from './todayView.ts';
+
+/**
+ * Home: what a signed-in person sees in the main window (lane g65; specification 8.2,
+ * 13.4, 14.2).
+ *
+ * One column of Today — the business date, a line of counts, the four lanes in the
+ * server's order, the last seven days in four figures, and what needs the person — beside
+ * a sidebar holding the windows with their keys, the system's status as dots and words,
+ * and "This Mac". The design is Mockup A2's (`docs/decisions/g65-today-is-the-home.md`):
+ * dividers rather than cards, grey section headers with a small count, colour only as a
+ * dot or a small tag, actions that appear on hover, status in the sidebar rather than in
+ * banners.
+ *
+ * `renderer.ts` owns the session, sign-in and the Mailbox row, and hands this module the
+ * "This Mac" panel it builds. This module owns the three reads Home adds — the lanes from
+ * `callieToday`, the status and figures from `callieAdmin` — and draws them. It decides
+ * nothing: `homeView.ts` says what to show and `todayLanes.ts` draws the lanes.
+ *
+ * **The lanes are redrawn only when the list changes.** The sidebar, the figures and the
+ * Needs-you list are redrawn whenever any answer arrives, and those answers include the
+ * mailbox row read every time the window regains focus. The lanes hold text a person is
+ * typing — a snooze reason, a call note — so they are redrawn only when `callieToday`
+ * answers with a list that differs from the one on screen, and are `aria-busy` while a
+ * call to it is in flight.
+ */
+
+export interface HomeContext {
+  readonly desktop: DesktopState;
+  /** The session's own lines, from `buildScreenView`. */
+  readonly desktopBanners: readonly BannerView[];
+  readonly mailbox: MailboxState | null;
+  readonly mailboxWaiting: boolean;
+  /** `renderer.ts`'s panel: the device details, the Mailbox row and Sign out. */
+  readonly thisMac: () => HTMLElement;
+  readonly connectMailbox: () => void;
+  readonly refresh: () => void;
+}
+
+let today: TodayState | null = null;
+let admin: AdminState | null = null;
+let figures: FiguresRead = { requested: null, answered: false, dashboard: null };
+let thisMacOpen = false;
+/** Bumped at sign-out, so an answer to the previous person's read is dropped. */
+let generation = 0;
+/** The list the lanes on screen were drawn from, as text, or undefined when they must be drawn. */
+let lanesDrawnFrom: string | undefined;
+/** `callieToday` calls not yet answered; the lanes are `aria-busy` while there are any. */
+let todayPending = 0;
+let redraw: () => void = () => undefined;
+
+/** `renderer.ts` says how to draw the window again when an answer arrives. */
+export function setHomeRedraw(next: () => void): void {
+  redraw = next;
+}
+
+/** Whether the page was built with the lanes' bridge. */
+export function hasTodayBridge(): boolean {
+  return globalThis.callieToday !== undefined;
+}
+
+/**
+ * Keep an answer if it belongs to the person still signed in, then draw. A bridge that
+ * rejects — an IPC fault, never a refusal, which arrives as a state — leaves what was on
+ * screen and says nothing in a dialog.
+ */
+async function keep<T>(read: () => Promise<T>, store: (value: T) => void, failed: () => void = () => undefined): Promise<void> {
+  const mine = generation;
+  let value: T;
+  try {
+    value = await read();
+  } catch (error: unknown) {
+    console.error(error);
+    if (mine === generation) {
+      failed();
+      redraw();
+    }
+    return;
+  }
+  if (mine !== generation) return;
+  store(value);
+  redraw();
+}
+
+/** One `callieToday` call, counted while it is in flight. */
+async function keepToday(next: () => Promise<TodayState>): Promise<void> {
+  todayPending += 1;
+  redraw();
+  await keep(
+    async () => {
+      try {
+        return await next();
+      } finally {
+        todayPending -= 1;
+      }
+    },
+    value => {
+      today = value;
+    },
+  );
+}
+
+/** The lanes: the list as cached (`refresh: false`) or read again (`refresh: true`). */
+export async function loadHomeToday(refresh: boolean): Promise<void> {
+  const bridge = globalThis.callieToday;
+  if (bridge === undefined) return;
+  await keepToday(async () => (refresh ? await bridge.refresh() : await bridge.state()));
+}
+
+/**
+ * The sidebar's calling number, sending and domain, and then the last seven days.
+ *
+ * `state()` is the Administration bridge's cached read — it asks the API only the first
+ * time — so it is also what runs when the window regains focus: a number added in
+ * Administration a moment ago is on the bridge already. `loadDashboard` is a read and
+ * is asked for only here, at sign-in and on Refresh.
+ */
+export async function loadHomeAdmin(options: { readonly figures?: boolean; readonly now?: Date } = {}): Promise<void> {
+  const bridge = globalThis.callieAdmin;
+  if (bridge === undefined) return;
+  await keep(
+    async () => await bridge.state(),
+    value => {
+      admin = value;
+    },
+  );
+  if (options.figures !== true) return;
+  const requested = figuresWindow(options.now ?? new Date());
+  figures = { requested, answered: false, dashboard: null };
+  await keep(
+    async () => await bridge.loadDashboard(requested),
+    value => {
+      admin = value;
+      figures = { requested, answered: true, dashboard: value.dashboard };
+    },
+    () => {
+      figures = { requested, answered: true, dashboard: null };
+    },
+  );
+}
+
+/** Sign-out: nothing of this person's stays for the next one. */
+export function forgetHome(): void {
+  generation += 1;
+  today = null;
+  admin = null;
+  figures = { requested: null, answered: false, dashboard: null };
+  thisMacOpen = false;
+  lanesDrawnFrom = undefined;
+}
+
+function applyToday(next: Promise<TodayState>): void {
+  void keepToday(async () => await next);
+}
+
+function openWindow(window: WindowTarget): void {
+  void globalThis.callie?.openWindow({ window });
+}
+
+// ---------------------------------------------------------------------------
+// Drawing
+// ---------------------------------------------------------------------------
+
+function renderSidebar(sidebar: HTMLElement, view: HomeView, context: HomeContext): void {
+  sidebar.replaceChildren();
+  const mark = element('div', { className: 'workspace' });
+  mark.append(element('span', { className: 'workspace-mark', text: 'C' }), element('span', { text: 'Callie' }));
+  sidebar.append(mark);
+
+  const nav = element('nav', { className: 'nav', testId: 'nav' });
+  for (const row of NAV_ROWS) {
+    const item = element('button', { className: 'nav-row', testId: `nav-${row.window ?? 'today'}` });
+    item.type = 'button';
+    item.append(element('span', { text: row.label }), element('kbd', { text: row.keys }));
+    const target = row.window;
+    if (target === null) item.setAttribute('aria-current', 'page');
+    else {
+      item.addEventListener('click', () => {
+        openWindow(target);
+      });
+    }
+    nav.append(item);
+  }
+  sidebar.append(nav);
+
+  sidebar.append(element('p', { className: 'sidebar-label', text: 'Status' }));
+  const status = element('ul', { className: 'status', testId: 'status' });
+  for (const row of view.status) {
+    const item = element('li', { className: 'status-row', testId: `status-${row.key}` });
+    item.dataset['tone'] = row.tone;
+    item.append(element('span', { className: `dot dot-${row.tone}` }), element('span', { text: row.text }));
+    status.append(item);
+  }
+  sidebar.append(status);
+
+  const details = element('details', { className: 'this-mac', testId: 'this-mac' });
+  details.open = thisMacOpen;
+  details.append(element('summary', { text: 'This Mac', testId: 'this-mac-summary' }), context.thisMac());
+  details.addEventListener('toggle', () => {
+    thisMacOpen = details.open;
+  });
+  sidebar.append(details);
+}
+
+function renderHeader(header: HTMLElement, view: HomeView, context: HomeContext): void {
+  header.replaceChildren();
+  header.append(element('h1', { text: view.heading, testId: 'heading' }));
+  const line = element('div', { className: 'summary-line' });
+  line.append(element('p', { className: 'summary', text: view.summary ?? '', testId: 'summary' }));
+  const refresh = button('Refresh', 'refresh', true);
+  refresh.className = 'btn btn-quiet';
+  refresh.addEventListener('click', () => {
+    context.refresh();
+  });
+  line.append(refresh);
+  header.append(line);
+}
+
+function renderNotices(notices: HTMLElement, view: HomeView): void {
+  notices.replaceChildren();
+  for (const notice of view.notices) {
+    notices.append(element('p', { className: `banner banner-${notice.tone}`, text: notice.text, testId: `banner-${notice.tone}` }));
+  }
+}
+
+function renderTodayRegion(region: HTMLElement, view: HomeView, todayView: ReturnType<typeof buildTodayView> | null): void {
+  region.setAttribute('aria-busy', String(todayPending > 0));
+  // Compared as text: the cached list and the fresh read are two objects with the same
+  // content more often than not, and redrawing for that would drop a half-typed reason.
+  const drawnFrom = JSON.stringify(today);
+  if (lanesDrawnFrom === drawnFrom) return;
+  lanesDrawnFrom = drawnFrom;
+  region.replaceChildren();
+  const bridge = globalThis.callieToday;
+  if (view.lanes === null || bridge === undefined) {
+    region.append(element('p', { className: 'quiet empty', text: UNAVAILABLE, testId: 'today-unavailable' }));
+    return;
+  }
+  if (today === null || todayView === null) {
+    if (view.lanes.emptyLine !== null) {
+      region.append(element('p', { className: 'quiet empty', text: view.lanes.emptyLine, testId: 'today-empty' }));
+    }
+    return;
+  }
+  renderLanes(region, today, todayView, view.lanes, { bridge, apply: applyToday });
+}
+
+function renderFigures(region: HTMLElement, view: HomeView): void {
+  region.replaceChildren();
+  region.append(element('h2', { className: 'section-head', text: view.figures.label, testId: 'figures-label' }));
+  const grid = element('div', { className: 'figure-grid' });
+  for (const cell of view.figures.cells) {
+    const figure = element('div', { className: 'figure', testId: `figure-${cell.key}` });
+    figure.append(element('div', { className: 'figure-label', text: cell.label }));
+    const value = element('div', { className: 'figure-value' });
+    value.append(element('span', { text: cell.value, testId: 'figure-value' }));
+    if (cell.note !== null) value.append(element('small', { text: cell.note, testId: 'figure-note' }));
+    figure.append(value);
+    grid.append(figure);
+  }
+  region.append(grid);
+  if (view.figures.line !== null) region.append(element('p', { className: 'quiet', text: view.figures.line, testId: 'figures-line' }));
+}
+
+function renderNeed(list: HTMLElement, need: NeedsRow, context: HomeContext): void {
+  const item = element('li', { className: 'need', testId: 'needs-row' });
+  item.dataset['need'] = need.key;
+  const row = element('div', { className: 'row' });
+  const main = element('div', { className: 'row-main' });
+  main.append(element('span', { className: 'label', text: need.label, testId: 'needs-label' }));
+  if (need.detail !== null) main.append(element('span', { className: 'why', text: need.detail, testId: 'needs-detail' }));
+  row.append(main);
+
+  const actions = element('div', { className: 'row-actions' });
+  const action = need.action;
+  if (action.kind === 'connect_mailbox') {
+    const connect = button(action.label, 'needs-connect', action.enabled);
+    connect.className = 'btn btn-primary';
+    connect.addEventListener('click', () => {
+      context.connectMailbox();
+    });
+    actions.append(connect);
+  } else {
+    const open = button(action.label, 'needs-open', true);
+    open.className = 'btn';
+    open.addEventListener('click', () => {
+      openWindow(action.window);
+    });
+    actions.append(open);
+  }
+  row.append(actions);
+  item.append(row);
+  list.append(item);
+}
+
+function renderNeeds(region: HTMLElement, view: HomeView, context: HomeContext): void {
+  region.replaceChildren();
+  const heading = element('h2', { className: 'section-head' });
+  heading.append(element('span', { text: 'Needs you' }));
+  if (view.needs.length > 0) heading.append(element('small', { text: String(view.needs.length), testId: 'needs-count' }));
+  region.append(heading);
+  if (view.needsLine !== null) {
+    region.append(element('p', { className: 'quiet empty', text: view.needsLine, testId: 'needs-empty' }));
+    return;
+  }
+  const list = element('ul', { className: 'rows' });
+  for (const need of view.needs) renderNeed(list, need, context);
+  region.append(list);
+}
+
+/** The regions of the page, found by name once the skeleton exists. */
+function region(root: HTMLElement, name: string): HTMLElement {
+  const found = root.querySelector(`[data-region="${name}"]`);
+  if (!(found instanceof HTMLElement)) throw new Error(`the Home region ${name} is missing`);
+  return found;
+}
+
+function skeleton(root: HTMLElement): void {
+  root.replaceChildren();
+  root.className = 'home';
+  root.dataset['view'] = 'home';
+  lanesDrawnFrom = undefined;
+
+  const sidebar = element('aside', { className: 'sidebar', testId: 'sidebar' });
+  sidebar.dataset['region'] = 'sidebar';
+  const column = element('main', { className: 'column', testId: 'home' });
+  for (const [name, tag, className, testId] of [
+    ['header', 'header', 'column-head', 'column-head'],
+    ['notices', 'div', 'banners', 'banners'],
+    ['today', 'div', 'today', 'today'],
+    ['figures', 'section', 'figures', 'figures'],
+    ['needs', 'section', 'needs', 'needs'],
+  ] as const) {
+    const part = element(tag, { className, testId });
+    part.dataset['region'] = name;
+    column.append(part);
+  }
+  root.append(sidebar, column);
+}
+
+/** Draw Home into `root`, building its skeleton the first time. */
+export function renderHome(root: HTMLElement, context: HomeContext): void {
+  if (root.dataset['view'] !== 'home') skeleton(root);
+  const todayView = today === null ? null : buildTodayView(today);
+  const view = buildHomeView(
+    {
+      desktop: context.desktop,
+      bridges: {
+        today: globalThis.callieToday !== undefined,
+        mailbox: globalThis.callieMailbox !== undefined,
+        admin: globalThis.callieAdmin !== undefined,
+      },
+      today,
+      todayView,
+      mailbox: context.mailbox,
+      mailboxWaiting: context.mailboxWaiting,
+      admin,
+      figures,
+    },
+    context.desktopBanners,
+  );
+  renderSidebar(region(root, 'sidebar'), view, context);
+  renderHeader(region(root, 'header'), view, context);
+  renderNotices(region(root, 'notices'), view);
+  renderTodayRegion(region(root, 'today'), view, todayView);
+  renderFigures(region(root, 'figures'), view);
+  renderNeeds(region(root, 'needs'), view, context);
+}

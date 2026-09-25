@@ -1,5 +1,5 @@
 /**
- * The four channels the preload bridge exposes, as a closed set.
+ * The five channels the preload bridge exposes, as a closed set.
  *
  * They are named here rather than spelled out in three files, so the main process,
  * the preload script and the renderer cannot drift apart silently: a channel that is
@@ -10,6 +10,8 @@ export const IPC_CHANNELS = {
   signIn: 'callie:sign-in',
   signOut: 'callie:sign-out',
   refreshToday: 'callie:refresh-today',
+  /** Lane g65: Home's sidebar opens the other windows through the main process. */
+  openWindow: 'callie:open-window',
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];

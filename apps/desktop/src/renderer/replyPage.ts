@@ -5,8 +5,9 @@ import { buildReplyView, replyNotice, type ReplyCardView } from './replyView.ts'
 /**
  * The reply window (specification 8.3, 12.4, 14.2).
  *
- * A fourth entry point beside `renderer.ts`, `firmWorkspace.ts` and `todayPage.ts`,
- * for the reason G3b gave for the second: the windows are opened, used and closed,
+ * A fourth entry point beside `renderer.ts`, `firmWorkspace.ts` and G6's `todayPage.ts`
+ * (whose lanes are Home's `todayLanes.ts` since lane g65), for the reason G3b gave for
+ * the second: the windows are opened, used and closed,
  * and every rule lives where it can be tested without Electron.
  *
  * The page holds one piece of state — `chosen`, the disposition the person has

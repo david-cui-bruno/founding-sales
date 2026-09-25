@@ -174,7 +174,7 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
   let history: AdminState['history'] = null;
   let sendingAdmin: AdminState['sendingAdmin'] = null;
   let callingNumbers: AdminState['callingNumbers'] = null;
-  let window = defaultWindow(clock());
+  const window = defaultWindow(clock());
 
   const snapshot = async (): Promise<AdminState> => {
     const session = await deps.session.state();
@@ -305,10 +305,10 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
     await loadCallingNumbers();
   };
 
-  const loadDashboardFor = async (next: { readonly from: string; readonly to: string }): Promise<void> => {
-    window = next;
+  /** One `/dashboard` read over the window named. It changes nothing but `dashboard`. */
+  const readDashboard = async (range: { readonly from: string; readonly to: string }): Promise<void> => {
     const answer = await deps.api.read('/dashboard', value => dashboardResponseSchema.parse(value), {
-      window: next,
+      window: range,
     });
     if (!answer.ok) {
       notice = answer.reason;
@@ -350,7 +350,7 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
       notice = null;
       screen = input.screen;
       if (input.screen === 'settings') await loadSettings();
-      if (input.screen === 'dashboard') await loadDashboardFor(window);
+      if (input.screen === 'dashboard') await readDashboard(window);
       if (input.screen === 'diagnostics') await loadDiagnostics();
       return await snapshot();
     },
@@ -377,9 +377,15 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
     },
 
     async loadDashboard(input) {
+      // Home's "Last 7 days" reads through here (lane g65), often while Administration is
+      // open in its own window on another screen. This host is one object behind both
+      // windows, so the read moves neither the screen Administration shows nor the
+      // window its Dashboard reads. Until g65 it set both, and the next command
+      // Administration sent came back drawn on the Dashboard screen. A caller checks
+      // the answer's `dashboard.window` against the window it asked for: a failed read
+      // leaves the previous figures in place.
       notice = null;
-      screen = 'dashboard';
-      await loadDashboardFor(input);
+      await readDashboard(input);
       return await snapshot();
     },
 
