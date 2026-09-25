@@ -2521,6 +2521,11 @@ as before it. Both are written down in `docs/greenfield/mail.md` and here, not f
 (Lane g67 gives `TodaySnapshotMissing` a publisher: every metric pass, 1 when a workspace
 is past 05:10 local without that day's `today.build` job `done`, otherwise 0; see
 `docs/greenfield/runbooks/today_snapshot_absent.md`.)
+(Lane g72 does the same for `ActiveEnrollments` and `HeldEnrollments`, the two inputs of
+`all-sequences-held`, which were also `later_lane` and published by nothing: both are now
+published every metric pass, 0 and 0 with nothing enrolled, and pauses, sending switched
+off and the clock-clearing holds do not count as held; see
+`docs/decisions/g72-enrollment-gauges.md`.)
 
 **To close it.** Build the worker image from the merge commit and redeploy the worker.
 No Terraform apply is needed: no alarm changed. On the new task, `MailboxCheckHeartbeat`

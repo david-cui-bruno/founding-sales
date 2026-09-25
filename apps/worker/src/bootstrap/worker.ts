@@ -2,6 +2,7 @@ import type { SessionQueryable } from '@fss/domain/db';
 import { MetricError, collectJobMetrics, type HandlerRegistry, type MetricDatum, type MetricSink } from '@fss/domain/jobs';
 import { collectMailMetrics } from '@fss/domain/mail';
 import { collectOutboundMetrics } from '@fss/domain/outbound';
+import { collectSequenceMetrics } from '@fss/domain/sequences';
 import { collectTodayMetrics } from '@fss/domain/today';
 import { checkWorkerStartup, type WorkerStartupReport } from '../index.ts';
 import { runOnce } from '../runner/jobRunner.ts';
@@ -226,11 +227,18 @@ export async function startWorker(options: WorkerProcessOptions): Promise<Worker
   // loop runs (lane g67). It is 1 when a workspace is at or past 05:10 local and that
   // business date's `today.build` job is not `done`. It is handed the same clock the
   // scheduler pass is, so the business date it checks is the one the pass materializes.
+  //
+  // `ActiveEnrollments` and `HeldEnrollments` are published on every pass as well, 0
+  // and 0 with nothing enrolled, so `all_sequences_held` (`IF(active > 0, held /
+  // active, 0) >= 1`) is OK rather than INSUFFICIENT_DATA (lane g72). Held means
+  // blocked by a hold nobody chose: an admin pause, a Today delay, sending switched
+  // off and the clock-clearing pacing holds do not count. Neither reads the clock.
   const collectors: readonly (readonly [string, (session: SessionQueryable) => Promise<readonly MetricDatum[]>])[] = [
     ['jobs', collectJobMetrics],
     ['mail', collectMailMetrics],
     ['outbound', collectOutboundMetrics],
     ['today', session => collectTodayMetrics(session, { now: now().toISOString() })],
+    ['sequences', collectSequenceMetrics],
   ];
 
   /**

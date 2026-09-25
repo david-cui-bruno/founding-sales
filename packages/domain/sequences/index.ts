@@ -181,3 +181,11 @@ export {
 } from './variables.ts';
 
 export { enrollmentFloor } from './recoveryFloor.ts';
+
+export {
+  EXPECTED_HOLD_REASONS,
+  SEQUENCE_METRIC_NAMES,
+  collectSequenceMetrics,
+  countEnrollments,
+  type EnrollmentCounts,
+} from './metrics.ts';

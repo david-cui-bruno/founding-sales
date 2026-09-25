@@ -5,8 +5,9 @@ import { hoursToSoonestWatchExpiry } from './watch.ts';
 /**
  * The two mail metrics the infrastructure alarms on (13.3).
  *
- * `METRIC_OWNERS` in `packages/domain/jobs/metrics.ts` marks both as `later_lane`,
- * and this lane is that lane for the first of them. They are collected here rather
+ * `METRIC_OWNERS` in `packages/domain/jobs/metrics.ts` names this lane (`mail`) as the
+ * owner of the first and the outbound lane as the owner of the second, which is the
+ * collector the worker actually publishes it from (g72). They are collected here rather
  * than in `collectJobMetrics` so that the mail tables stay behind the mail package's
  * export, and the worker's metric loop publishes the two arrays together.
  *
