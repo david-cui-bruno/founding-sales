@@ -271,8 +271,8 @@ There is no build step: Node runs the TypeScript. It needs
 
 `npm ci --workspace @fss/api --workspace @fss/domain --workspace @fss/contracts`
 resolves from the same lock file as the repository root and installs only what those
-three need — 45 packages — so the old trees' Electron, React and native modules never
-enter the image. `Dockerfile.api.dockerignore` and `Dockerfile.worker.dockerignore`
+three need — 45 packages — so the desktop app's Electron and the root's lint and test
+tooling never enter the image. `Dockerfile.api.dockerignore` and `Dockerfile.worker.dockerignore`
 allow four directories into the build context and exclude everything else.
 
 Both entry points take `--selftest`: read the environment, print the decisions, exit.
@@ -504,38 +504,3 @@ already answer `not_found` for the unknown paths under their own root and becaus
 `GET /firms/<uuid>` cannot be enumerated. The registry refuses a prefix that overlaps
 another module's claim, so the guarantee is the one an exact path gives; see
 `docs/decisions/g3b-route-registry-prefixes.md`.
-
-## Running the old gate on this Mac
-
-`npm run legacy:typecheck` and `npm run legacy:lint:tracked` are the **old** trees' gate,
-not the greenfield one (`npm run gate:greenfield`; since lane g89 the bare
-`npm run typecheck`, `npm run lint` and `npm test` are greenfield too, see
-`docs/greenfield/legacy.md`). Both fail on a fresh clone with seven errors that look
-alarming and are not:
-
-```
-cloud/lambdas/delegated-worker/src/handler.ts(11,80): error TS2307:
-  Cannot find module '@aws-sdk/client-ssm' or its corresponding type declarations.
-...
-Unable to resolve path to module '@aws-sdk/client-sqs'  import/no-unresolved
-```
-
-**Nothing is wrong with the lambdas.** `cloud/lambdas/*` are independent npm packages
-with their own pinned lock files — `docs/decisions/g1-provider-lock-files.md` and
-`docs/decisions/g0-old-gate-isolation.md` are why — and the root `npm install` does
-not install them. The root `tsconfig.json` and the old ESLint config still *read* their
-sources, so an uninstalled dependency reads as a missing module. `.github/workflows/ci.yml`
-installs each one (after `npm run legacy:setup`, which builds the old app's native
-modules) before it runs the gate, which is why CI is green and a laptop is not:
-
-```bash
-while IFS= read -r -d '' lock; do
-  npm ci --prefix "${lock%/package-lock.json}"
-done < <(git ls-files -z -- 'cloud/lambdas/*/package-lock.json')
-```
-
-Run that once and both commands pass. A greenfield lane does not need to: the old trees
-are frozen until the deletion PRs, no greenfield lane may edit them, and
-`gate:greenfield` excludes them entirely. The honest statement is the one in this
-section rather than a wrapper script that would have to live in the old tree to say it
-— see `docs/decisions/g12b-the-old-gate-needs-a-per-lambda-install.md`.

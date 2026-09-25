@@ -61,4 +61,4 @@ The policy half of the gate is not here: `infra/policies/**` is judged by `npm r
 
 ## The old tree
 
-`cloud/terraform` and `cloud/worker-terraform` are the previous stack and are untouched by this lane. They stay until the D3 deletion. The only thing read from them was the public state-backend identifiers: bucket `callie-sourcing-tfstate-326255650484`, lock table `callie-sourcing-tflock`. The greenfield roots use their own state keys under `fss/greenfield/` and CI fails if either points at a legacy key.
+`cloud/terraform` and `cloud/worker-terraform` were the previous stack; lane g95 deleted them from the repository, and the tag `legacy-final` holds them. The only thing read from them was the public state-backend identifiers: bucket `callie-sourcing-tfstate-326255650484`, lock table `callie-sourcing-tflock`. The greenfield roots use their own state keys under `fss/greenfield/` and CI fails if either points at a legacy key.

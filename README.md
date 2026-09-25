@@ -15,7 +15,7 @@ Callie is a 24/7 maintenance agent for property managers: it handles tenant requ
 | `test/release` | The release suite (specification Appendix G and the checks added since). |
 | `docs/greenfield/` | How each part works and how it is released; `docs/decisions/` has the decisions made along the way. |
 
-Everything else at the top level (`src/`, `client/`, `cloud/`, `native/`, `tests/`, most of `scripts/`) is the previous-generation app. Nobody uses it; it stays until its deletion is decided and runs only as `npm run legacy:*`. What remains of it, why, and how to run it: [`docs/greenfield/legacy.md`](docs/greenfield/legacy.md).
+At the root: `scripts/` holds the secret scan (`verifySecrets.mjs`), the production smoke and the release mutation check, and `certs/` the RDS CA bundle the images trust. The previous-generation app was deleted in lane g95; the tag `legacy-final` holds its last tree ([`docs/greenfield/legacy.md`](docs/greenfield/legacy.md)).
 
 ## Quick start
 
@@ -24,7 +24,7 @@ You need an Apple Silicon Mac and Node.js 24 (24.20.0 in CI). Put the Homebrew N
 ```bash
 export PATH="/opt/homebrew/opt/node@24/bin:/opt/homebrew/bin:$PATH"
 git clone https://github.com/david-cui-bruno/founding-sales.git && cd founding-sales
-npm ci --no-audit --no-fund       # fetches the Electron binary; builds nothing of the old app
+npm ci --no-audit --no-fund       # fetches the Electron binary, which the desktop host tests need
 npx playwright install chromium   # only for the desktop window specs
 ```
 

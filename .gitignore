@@ -1,14 +1,15 @@
 .worktrees/
 .superpowers/
-native/apple-bridge/.build/
-native/safe-log-fs/build/
-build/generated/
 node_modules/
 out/
-.vite/
 coverage/
 playwright-report/
 test-results/
 *.log
 .DS_Store
 artifacts/
+# Build output the deleted old app (tag legacy-final) leaves behind in an existing checkout.
+native/apple-bridge/.build/
+native/safe-log-fs/build/
+build/generated/
+.vite/

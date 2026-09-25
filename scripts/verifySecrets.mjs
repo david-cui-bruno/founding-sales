@@ -1,13 +1,11 @@
 import { spawnSync } from 'node:child_process';
 import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { extractAll, listPackage, statFile } from '@electron/asar';
-import { selectPackagedApp } from './verifyPackage.mjs';
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const fail = () => { throw new Error('SECRET_VERIFICATION_FAILED'); };
-const phases = new Set(['scanner-version', 'temporary-directory', 'history-readiness', 'history-scan', 'context-staging', 'context-scan', 'package-staging', 'package-scan', 'cleanup']);
+const phases = new Set(['scanner-version', 'temporary-directory', 'history-readiness', 'history-scan', 'context-staging', 'context-scan', 'cleanup']);
 const historyReasons = new Set(['git-unavailable', 'git-interrupted', 'repository-unavailable', 'unsafe-ownership', 'git-command-failed', 'shallow-history', 'unexpected-history-response']);
 function inPhase(phase, operation) {
   try { return operation(); }
@@ -36,18 +34,13 @@ function requireFullHistory(root, run) {
   }
   if (reason) throw Object.assign(new Error('SECRET_VERIFICATION_FAILED'), { reason });
 }
-const within = (parent, child) => { const path = relative(parent, child); return path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path); };
 function privateDirectory(path) { mkdirSync(path, { recursive: true, mode: 0o700 }); chmodSync(path, 0o700); }
-function copyTree(source, destination, boundary, allowInternalLinks = false) {
+function copyTree(source, destination) {
   const stat = lstatSync(source);
-  if (stat.isSymbolicLink()) {
-    // Framework aliases are covered by their real target in this same bundle.
-    if (!allowInternalLinks || !within(boundary, realpathSync(source))) fail();
-    return 0;
-  }
+  if (stat.isSymbolicLink()) fail();
   if (stat.isDirectory()) {
     privateDirectory(destination);
-    return readdirSync(source).reduce((count, name) => count + copyTree(join(source, name), join(destination, name), boundary, allowInternalLinks), 0);
+    return readdirSync(source).reduce((count, name) => count + copyTree(join(source, name), join(destination, name)), 0);
   }
   if (!stat.isFile() || stat.nlink < 1) fail();
   privateDirectory(dirname(destination)); copyFileSync(source, destination); chmodSync(destination, 0o600); return 1;
@@ -64,36 +57,10 @@ export function stageBuildContext(root, destination, run = spawnSync) {
   for (const path of tracked.split('\0').filter(Boolean)) {
     // Directory selection only. These exclusions NEVER apply to Git history.
     if (/(^|\/)(?:node_modules|out|\.vite|\.git|\.worktrees|\.superpowers|coverage|artifacts|test-results|playwright-report)(\/|$)/.test(path)
-      || /^build\/generated\//.test(path) || /^native\/.*\/(?:build|\.build)\//.test(path)
       || /(?:\.tfstate(?:\.|$)|\.tfvars$|\.sqlite3?(?:\.|$)|\.key-envelope\.json$|(^|\/)\.env(?:\.|$))/.test(path)) continue;
-    assertSourcePath(root, path); count += copyTree(join(root, path), join(destination, path), root);
+    assertSourcePath(root, path); count += copyTree(join(root, path), join(destination, path));
   }
-  const generated = ['.vite/build', '.vite/renderer', 'build/generated/operational-tools', 'build/generated/pre-release-tools'];
-  const lambdas = join(root, 'cloud/lambdas');
-  if (existsSync(lambdas)) for (const name of readdirSync(lambdas)) if (/^[a-z0-9-]+$/.test(name)) generated.push(`cloud/lambdas/${name}/dist`);
-  for (const path of generated) if (existsSync(join(root, path))) { assertSourcePath(root, path); count += copyTree(join(root, path), join(destination, path), root); }
   if (!count) fail(); return count;
-}
-export function stagePackage(root, destination, outDirectory = join(root, 'out')) {
-  const app = selectPackagedApp(resolve(root, outDirectory));
-  const asar = join(app, 'Contents/Resources/app.asar');
-  const unpacked = join(app, 'Contents/Resources/app.asar.unpacked');
-  if (!lstatSync(unpacked).isDirectory() || !lstatSync(join(app, 'Contents/Helpers')).isDirectory()) fail();
-  const entries = listPackage(asar);
-  if (!entries.length) fail();
-  for (const entry of entries) {
-    const name = entry.replace(/^\//, '');
-    if (!name || name.split('/').includes('..') || isAbsolute(name) || statFile(asar, name, false).link) fail();
-  }
-  privateDirectory(join(destination, 'asar'));
-  extractAll(asar, join(destination, 'asar'));
-  // Recopy through the checked walker to enforce private modes and reject links.
-  copyTree(join(destination, 'asar'), join(destination, 'checked-asar'), destination);
-  rmSync(join(destination, 'checked-asar'), { recursive: true });
-  const count = copyTree(app, join(destination, 'bundle'), app, true);
-  // Scanning the opaque archive is redundant, not a substitute for extraction.
-  rmSync(join(destination, 'bundle/Contents/Resources/app.asar'));
-  return count;
 }
 export function scanWithGitleaks({ root, target, kind, temporary, run = spawnSync }) {
   let cwd = root, input = target;
@@ -119,8 +86,7 @@ export function scanWithGitleaks({ root, target, kind, temporary, run = spawnSyn
   // Never emit findings, paths, snippets, arbitrary rule names or tool stderr.
   return { kind, status: findings.length ? 'findings' : 'passed', findings: findings.length };
 }
-export function verifySecrets({ root = projectRoot, mode = 'source', outDirectory = join(root, 'out'), run = spawnSync } = {}) {
-  if (!['source', 'package'].includes(mode)) fail();
+export function verifySecrets({ root = projectRoot, run = spawnSync } = {}) {
   inPhase('scanner-version', () => { if (checked('gitleaks', ['version'], root, run).trim() !== '8.30.1') fail(); });
   const temporary = inPhase('temporary-directory', () => {
     const path = mkdtempSync(join(tmpdir(), 'callie-secret-scan-')); chmodSync(path, 0o700); return path;
@@ -128,22 +94,17 @@ export function verifySecrets({ root = projectRoot, mode = 'source', outDirector
   const results = [];
   try {
     const stage = join(temporary, 'input'); inPhase('temporary-directory', () => privateDirectory(stage));
-    if (mode === 'source') {
-      inPhase('history-readiness', () => requireFullHistory(root, run));
-      results.push(inPhase('history-scan', () => scanWithGitleaks({ root, target: root, kind: 'history', temporary, run })));
-      const files = inPhase('context-staging', () => stageBuildContext(root, stage, run));
-      results.push({ ...inPhase('context-scan', () => scanWithGitleaks({ root, target: stage, kind: 'context', temporary, run })), files });
-    } else {
-      const files = inPhase('package-staging', () => stagePackage(root, stage, outDirectory));
-      results.push({ ...inPhase('package-scan', () => scanWithGitleaks({ root, target: stage, kind: 'package', temporary, run })), files });
-    }
+    inPhase('history-readiness', () => requireFullHistory(root, run));
+    results.push(inPhase('history-scan', () => scanWithGitleaks({ root, target: root, kind: 'history', temporary, run })));
+    const files = inPhase('context-staging', () => stageBuildContext(root, stage, run));
+    results.push({ ...inPhase('context-scan', () => scanWithGitleaks({ root, target: stage, kind: 'context', temporary, run })), files });
     return results;
   } finally { inPhase('cleanup', () => rmSync(temporary, { recursive: true, force: true })); }
 }
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   try {
-    if (process.argv.length > 4 || (process.argv[2] !== undefined && process.argv[2] !== '--package')) fail();
-    const results = verifySecrets({ mode: process.argv[2] === '--package' ? 'package' : 'source', outDirectory: resolve(projectRoot, process.argv[3] ?? 'out') });
+    if (process.argv.length > 2) fail();
+    const results = verifySecrets();
     console.log(JSON.stringify({ scanner: 'gitleaks-8.30.1', results }));
     if (results.some(result => result.status !== 'passed')) process.exitCode = 1;
   } catch (error) {

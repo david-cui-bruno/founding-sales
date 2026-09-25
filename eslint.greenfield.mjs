@@ -1,8 +1,8 @@
 // ESLint 9 flat configuration for the greenfield workspace only (apps/*, packages/*).
 //
-// The old trees keep eslint.config.mjs; that config ignores apps/ and packages/, and
-// scripts/lintTracked.mjs skips them, so the two gates never lint the same file.
-// `npm run lint:greenfield` runs this one: eslint --config eslint.greenfield.mjs apps packages.
+// eslint.config.mjs is the root scripts' config (`npm run lint:root-scripts`) and ignores
+// apps/, packages/ and test/release/, so the two never lint the same file.
+// `npm run lint:greenfield` runs this one: eslint --config eslint.greenfield.mjs apps packages test/release.
 import js from '@eslint/js';
 // The typescript-eslint packages publish only an `exports` map, which the node
 // resolver cannot read; the same disable the old config carries.

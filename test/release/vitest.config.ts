@@ -2,20 +2,14 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
 /**
- * The Appendix G release suite (`npm run test:release`). This file lives inside
- * `test/release` so the old trees' lint and typecheck, which exclude that directory,
- * never see it: at the repository root it was linted by the old ESLint config, whose
- * resolver cannot see `vitest/config`, and failed CI's source gate.
+ * The Appendix G release suite (`npm run test:release`).
  *
  * Two things about this file are deliberate and worth reading before changing either.
  *
- * **The files are `*.check.ts`, not `*.test.ts`.** The repository root has no vitest
- * configuration, so the old trees' `npm test` collects every `**\/*.test.ts` outside a
- * workspace package — which would include `test/release`. Those files import
- * `@fss/domain`, need a PostgreSQL 16 cluster and belong to the greenfield gate, so
- * the suffix keeps them out of a run they would only break. `tsconfig.json`,
- * `eslint.config.mjs` and `scripts/lintTracked.mjs` exclude the directory for the same
- * reason and in the same way they already exclude `apps/` and `packages/`. See
+ * **The files are `*.check.ts`, not `*.test.ts`.** The suffix kept them out of the
+ * previous-generation app's root `vitest run`, which collected every `**\/*.test.ts`
+ * outside a workspace package; that app was deleted in lane g95, and the suffix stays
+ * so that no other runner picks the suite up by the default pattern. See
  * `docs/decisions/g12-where-the-release-suite-lives.md`.
  *
  * **The aliases mirror the workspace packages.** `test/release` is not an npm
