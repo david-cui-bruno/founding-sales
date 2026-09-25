@@ -55,10 +55,17 @@ import { createApiServer } from '../server.ts';
  * route and no migration, only this maximum, and the order is the same: the API that
  * publishes 1.0.3 is deployed first, and desktop 1.0.3 is published after it. Until
  * then 1.0.2 and older keep working, and a 1.0.3 Mac would be refused everything.
+ *
+ * 1.0.4 is the sending-section fix (lane g69, 8.0ae): Administration's "Sending domain
+ * and caps" parses the API's `personalGmailRecipients` object at last, a failed sending
+ * read says so with Retry, a renewal applies the role the server gives, and Home says
+ * Attest when a number is saved. No route changes shape and no migration; the API's
+ * only other change is the refusal code in its `refusal` log line. The order is the
+ * same again: this API is deployed first, then desktop 1.0.4 is published.
  */
 export const CONTAINER_CLIENT_VERSIONS: ClientVersionRange = clientVersionRangeSchema.parse({
   minimum: '1.0.0',
-  maximum: '1.0.3',
+  maximum: '1.0.4',
 });
 
 export const API_EXIT_CODES = Object.freeze({

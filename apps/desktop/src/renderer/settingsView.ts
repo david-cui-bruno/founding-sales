@@ -71,6 +71,36 @@ export interface SendingAdminSectionView {
 }
 
 /**
+ * The sending section when its read failed (lane g69): one grey line and Retry.
+ *
+ * An admin's only, like the section it stands in for. Before g69 a failed read made the
+ * section vanish, and "nothing configured" and "Callie could not read it" looked the
+ * same — which is how a parse failure on every answer went unseen (release.md 8.0ae).
+ */
+export interface SendingUnreadView {
+  /** "Callie could not read the sending status." and a sentence naming the code. */
+  readonly line: string;
+}
+
+/** The line's first sentence, fixed so a test and a person can both find it. */
+export const SENDING_UNREAD = 'Callie could not read the sending status.';
+
+/**
+ * The second sentence, for the codes a person can do something about. Any other code
+ * is named as it is, so the line is something an operator can search the logs for.
+ */
+const SENDING_READ_SENTENCES: Readonly<Record<string, string>> = Object.freeze({
+  offline: 'The server did not answer',
+  not_signed_in: 'This Mac is not signed in',
+  unreadable_answer: 'The answer was not in the shape this version of Callie reads',
+});
+
+export function sendingReadSentence(code: string): string {
+  const sentence = SENDING_READ_SENTENCES[code];
+  return sentence === undefined ? `The server answered ${code}.` : `${sentence} (${code}).`;
+}
+
+/**
  * "Your calling number" (9.1; lane g60): the person's own numbers and which one Today
  * dials from.
  *
@@ -133,6 +163,8 @@ export interface AdminView {
   readonly sending: { readonly line: string; readonly editable: boolean } | null;
   /** G7-2's section. Null for anybody who is not an admin. */
   readonly sendingAdmin: SendingAdminSectionView | null;
+  /** The same section when its read failed: an admin's only, null otherwise (lane g69). */
+  readonly sendingUnread: SendingUnreadView | null;
   /** Lane g60's section, for every role. */
   readonly callingNumber: CallingNumberSectionView;
   /** G8's holiday calendar: what it is now, and whether this person may replace it. */
@@ -259,6 +291,10 @@ export function adminViewOf(state: AdminState): AdminView {
     elsewhere,
     sending,
     sendingAdmin: sendingAdminSection(state, reason),
+    sendingUnread:
+      state.role === 'admin' && state.sendingAdmin === null && state.sendingReadError !== null
+        ? { line: `${SENDING_UNREAD} ${sendingReadSentence(state.sendingReadError)}` }
+        : null,
     callingNumber: callingNumberSection(state),
     holidays:
       state.settings === null

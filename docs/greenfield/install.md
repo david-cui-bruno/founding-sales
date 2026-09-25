@@ -514,11 +514,50 @@ Anything amber is also a row under **Needs you**: hover it and press its button.
 **Dashboard ⌘6** opens Administration on its Dashboard screen. If the heading reads
 *Today* rather than a date, the list has not been read: press **Refresh**.
 
+### 5c — publish 1.0.4, and see the sending section
+
+Desktop 1.0.2 and 1.0.3 never show Administration's **Sending domain and caps**. Every
+`/outbound/status` answer fails to parse, so the section is absent and Home's sidebar reads
+*Domain not read*. 1.0.4 is the fix (`docs/greenfield/release.md` 8.0ae). It also shows a
+failed sending read with **Retry** instead of nothing, applies the role a renewal carries,
+and says **Attest your calling number** when a number is saved but not attested. Build it
+from a commit that carries lane g69.
+
+**First, the API.** Lane g69 raises `CONTAINER_CLIENT_VERSIONS` to
+`{ minimum: 1.0.0, maximum: 1.0.4 }` and adds no migration, so this is an app-only
+release: build both images at the release commit and deploy with
+`release-deploy.sh infra/roots/production fss-prod --api-digest … --worker-digest …`
+and no `--schema-change` (`docs/greenfield/release.md` 2.1, 4.1 and 8.0ae). Smoke, then
+confirm it:
+
+```bash
+curl -fsS https://api.usecallie.com/auth/client-version
+```
+
+**Expected:** `"supported":{"minimum":"1.0.0","maximum":"1.0.4"}`. If the maximum is still
+`1.0.3`, stop. Publishing now would offer every Mac an update that the API refuses.
+
+**Then the build.** The coordinator sets `FSS_DESKTOP_APP_VERSION` to `1.0.4`. Run
+*Greenfield desktop* with **release** ticked on the same commit the API was deployed
+from, with that commit as `desktop_commit_stamp`. Verify, download and publish it as in
+step 1, **zip first, manifest second**, and receive it on the Mac as in step 5.
+
+**Then look at Administration.** Open **Administration › Settings** (⌘5). **Sending
+domain and caps** should be there, with *usecallie.com: …*, the checklist boxes, the
+guard line (*Personal-Gmail guard: 4000 per 24 hours, N used.*) and one ramp line per
+connected mailbox. If it reads *Callie could not read the sending status.*, the sentence
+after it names the code: press **Retry**, and if it still fails, send the code. Back on
+Home the sidebar's domain row should name the domain (*Domain passes · usecallie.com* or
+*Domain checklist not passing · usecallie.com*, not *Domain not read*), and the last row
+should read *Callie 1.0.4 · online*. A saved number that is not attested reads
+*Calling number needs attestation*. Press **Open** on **Attest your calling number** and
+attest the existing row. Do not add it again.
+
 ### 6 — the adversarial half, which is the part worth doing
 
 Take the published `latest.json`, change **one character** of `releaseVersion` — make it
 one patch above what is published (`1.0.2` while 1.0.1 is current, `1.0.3` once 1.0.2
-is, `1.0.4` once 1.0.3 is) — and re-upload it with an invalidation. Do not re-sign it. Then quit Callie and
+is, `1.0.4` once 1.0.3 is, `1.0.5` once 1.0.4 is) — and re-upload it with an invalidation. Do not re-sign it. Then quit Callie and
 open it.
 
 **Expected: no prompt at all, and no message.** The app checks the Ed25519 signature

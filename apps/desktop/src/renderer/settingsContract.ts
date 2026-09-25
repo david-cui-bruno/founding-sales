@@ -47,6 +47,13 @@ export interface AdminState {
    */
   readonly sendingAdmin: SendingAdminView | null;
   /**
+   * Why an admin's `/outbound/status` read failed, as the refusal code — `offline`,
+   * `unreadable_answer`, `http_500` and the like — or null when it did not fail or was
+   * not asked (lane g69). The section says it could not read the status rather than
+   * vanishing, which is how a parse failure on every answer went unseen until 8.0ae.
+   */
+  readonly sendingReadError: string | null;
+  /**
    * The person's own calling numbers (9.1; lane g60), as `GET /calling-identities`
    * answered them. Every role has this section: a number is the person's own, and 9.2
    * refuses a dial from anybody else's. Null when the read did not answer — offline,

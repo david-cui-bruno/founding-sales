@@ -618,7 +618,7 @@ const MUTATIONS = [
   {
     name: 'the API stops admitting the desktop build that carries the Mailbox row',
     file: 'apps/api/src/bootstrap/main.ts',
-    find: "  maximum: '1.0.3',\n",
+    find: "  maximum: '1.0.4',\n",
     replace: "  maximum: '1.0.0',\n",
     suite: ['run', 'test:release', '--', 'test/release/desktopMailbox.check.ts'],
     because:
@@ -905,7 +905,7 @@ const MUTATIONS = [
   {
     name: 'the API stops admitting the desktop build that carries Your calling number',
     file: 'apps/api/src/bootstrap/main.ts',
-    find: "  maximum: '1.0.3',\n",
+    find: "  maximum: '1.0.4',\n",
     replace: "  maximum: '1.0.1',\n",
     suite: ['run', 'test:release', '--', 'test/release/callingNumber.check.ts'],
     because:
@@ -1048,6 +1048,35 @@ const MUTATIONS = [
     suite: ['run', 'test', '--workspace', 'packages/domain', '--', 'test/today/snapshotMissing.test.ts'],
     because:
       'Specification 13.3 alarms at 05:10 workspace time, ten minutes after the 05:00 build, and the build minute is the plausible constant to reach for (the worker\u2019s TODAY_BUILD_LOCAL_MINUTE is 5 * 60). With the deadline at 05:00 every healthy morning reads 1 between the first scheduler pass and the first completion, and one such datapoint fires the critical alarm. snapshotMissing.test.ts reads 0 at 05:09:59 New York time with nothing built and has to go red.',
+  },
+  // Lane g69: the sending section parses the API's recipients object, a renewal applies
+  // the role the server gives, and Home says Attest when a number is saved.
+  {
+    name: 'the Administration window parses the personal-Gmail recipients as a number again',
+    file: 'apps/desktop/src/main/settingsBridge.ts',
+    find: '    personalGmailRecipients: z\n      .object({ automated: z.number(), direct: z.number(), total: z.number() })\n      .loose(),\n',
+    replace: '    personalGmailRecipients: z.number(),\n',
+    suite: ['run', 'test:release', '--', 'test/release/sendingSection.check.ts'],
+    because:
+      'This is desktop 1.0.2 and 1.0.3 in production: POST /outbound/status has always answered the recipients as { automated, direct, total }, a z.number() parser refused every answer as unreadable_answer, and the sending section never rendered, with nothing logged because the API had answered 200. The unit fixture carried the same wrong number, so only a check that feeds the real route’s answer to the real parser can see it. sendingSection.check.ts does, and has to go red.',
+  },
+  {
+    name: 'Home asks a person with a saved, unattested number to add one again',
+    file: 'apps/desktop/src/renderer/homeView.ts',
+    find: '      rows.push(callingNumberNeed(missingNumber(admin.callingNumbers)));\n',
+    replace: "      rows.push(callingNumberNeed('none'));\n",
+    suite: ['run', 'test', '--workspace', 'apps/desktop', '--', 'test/home.test.ts'],
+    because:
+      'An unticked Add leaves a registered, unverified number, and before lane g69 Home answered it with Add your calling number, which invites a second registration of a number that is already there. home.test.ts expects Attest your calling number for a saved number and Re-attest for a retired one, and has to go red when every case reads Add.',
+  },
+  {
+    name: 'a renewal keeps the credentials and drops the role the server sent',
+    file: 'apps/desktop/src/main/sessionManager.ts',
+    find: '        device = current;\n        await options.store.saveDevice(current);\n',
+    replace: '',
+    suite: ['run', 'test', '--workspace', 'apps/desktop', '--', 'test/desktop.test.ts'],
+    because:
+      'The renewal carries the membership’s current role, and a Mac that ignored it stayed a salesperson after an admin promoted it: no Domain row on Home, no sending section in Administration, until the next full sign-in. desktop.test.ts renews after a promotion and a demotion, reads the role in memory, on disk and through an open Administration bridge, and has to go red.',
   },
 ];
 

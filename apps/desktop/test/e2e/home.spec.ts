@@ -4,6 +4,7 @@ import {
   FIRM_ID,
   MANUAL_ITEM_ID,
   ROUTE_ID,
+  callingNumber,
   connectedMailbox,
   desktopState,
   diagnostics,
@@ -157,6 +158,29 @@ test('Needs you lists only what the bridges say is missing, and each row does it
     '1 alert to acknowledge',
   ]);
   await expect(page.getByTestId('status-mailbox')).toHaveText('Mailbox connected · sales@example.test');
+});
+
+test('a saved number that is not attested is asked to be attested, not added again (lane g69)', async ({ page }) => {
+  // What an unticked Add leaves behind: the number is registered, unverified and
+  // disabled, and Today still has no Call button. Until g69 Home said "Add your calling
+  // number" and "No calling number" here, and a second Add is what that invites.
+  server = await startHomeTestServer({
+    admin: readyAdmin({
+      callingNumbers: [
+        callingNumber({ verificationStatus: 'unverified', enabled: false, verifiedAt: null, verificationMethod: null, usedForCalls: false }),
+      ],
+    }),
+  });
+  await page.goto(server.url);
+
+  await expect(page.getByTestId('status-calling')).toHaveText('Calling number needs attestation');
+  await expect(page.getByTestId('status-calling')).toHaveAttribute('data-tone', 'warn');
+  await expect(page.getByTestId('needs-label')).toHaveText(['Attest your calling number']);
+  await expect(page.getByTestId('needs-detail')).toHaveText(['Your number is saved. Open Your calling number and attest it.']);
+
+  // Administration opens on Settings, where the saved row has its own Attest button.
+  await page.getByTestId('needs-row').getByTestId('needs-open').click();
+  await expect.poll(() => called('callie.openWindow')).toEqual([{ window: 'administration' }]);
 });
 
 test('with everything in order, Needs you says so in one grey line', async ({ page }) => {

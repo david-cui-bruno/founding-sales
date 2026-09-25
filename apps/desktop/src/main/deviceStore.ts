@@ -27,6 +27,12 @@ export interface DeviceStoreOptions {
 export interface DeviceStore {
   load(): Promise<StoredDevice | null>;
   save(device: StoredDevice, secrets: { readonly deviceSecret: string; readonly refreshCredential: string }): Promise<void>;
+  /**
+   * Rewrite the public half alone — the identifiers and the role — leaving both secrets
+   * where they are. A renewal uses it to record the role the server now gives this
+   * membership (lane g69); nothing secret is passed and nothing secret is written.
+   */
+  saveDevice(device: StoredDevice): Promise<void>;
   /** The live refresh credential, or null when this Mac holds none. */
   refreshCredential(): Promise<string | null>;
   saveRefreshCredential(credential: string): Promise<void>;
@@ -67,6 +73,10 @@ export function createDeviceStore(options: DeviceStoreOptions): DeviceStore {
       await options.vault.write(DEVICE_SECRET_ACCOUNT, secrets.deviceSecret);
       await options.vault.write(REFRESH_CREDENTIAL_ACCOUNT, secrets.refreshCredential);
       await writeAtomically(parsed);
+    },
+
+    async saveDevice(device) {
+      await writeAtomically(storedDeviceSchema.parse(device));
     },
 
     async refreshCredential() {

@@ -159,9 +159,20 @@ exist: a mailbox connect registers its address's domain, and for a mailbox conne
 before g57 the operator runs `fss admin workspace bootstrap --sending-domain` (release.md
 5.1a). `POST /outbound/domain` (admin only) creates it too, but the page has no "Add
 sending domain" control yet. Adding one means a new bridge channel and a new desktop
-build, which is a follow-up. Once the row exists, the current build shows the checklist
-with no change. `docs/greenfield/sending.md`, "How a sending domain comes to exist", has
-the rules.
+build, which is a follow-up. Once the row exists, desktop 1.0.4 or later shows the
+checklist with no change. `docs/greenfield/sending.md`, "How a sending domain comes to
+exist", has the rules.
+
+**No build before desktop 1.0.4 renders this section at all** (lane g69, release.md
+8.0ae). The route answers `personalGmailRecipients` as `{ automated, direct, total }`,
+and until 1.0.4 the desktop parsed it as a number. Every answer failed, and the section
+was absent whatever the database held. From 1.0.4 the guard line reads `total`, and a
+read that fails is no longer silent: for an admin the section keeps its heading and
+shows one grey line, *Callie could not read the sending status.*, a sentence naming the
+refusal code, and **Retry**, which shows Settings again. The sending read no longer waits
+on `/settings` succeeding, and Home's focus and Refresh ask again while it is failing.
+`test/release/sendingSection.check.ts` runs the real route into the real desktop
+parser, so a change of shape on either side fails the release suite.
 
 ## Your calling number
 

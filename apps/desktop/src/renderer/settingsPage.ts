@@ -326,6 +326,10 @@ function renderHolidays(root: HTMLElement, view: ReturnType<typeof adminViewOf>)
  * the page does not pre-empt that refusal, it shows it.
  */
 function renderSendingAdmin(root: HTMLElement, view: ReturnType<typeof adminViewOf>): void {
+  if (view.sendingUnread !== null) {
+    renderSendingUnread(root, view.sendingUnread.line);
+    return;
+  }
   const section = view.sendingAdmin;
   if (section === null) return;
 
@@ -402,6 +406,25 @@ function renderSendingAdmin(root: HTMLElement, view: ReturnType<typeof adminView
     ramps.append(item);
   }
   block.append(ramps);
+  root.append(block);
+}
+
+/**
+ * The sending section when its read failed (lane g69): the heading, one grey line with
+ * the code, and Retry. Retry is the Settings tab pressed again — `show` re-reads the
+ * settings, the sending posture and the calling numbers — so it needs no channel of
+ * its own.
+ */
+function renderSendingUnread(root: HTMLElement, line: string): void {
+  const block = element('section', { className: 'sending-admin', testId: 'sending-admin' });
+  block.append(element('h2', { text: 'Sending domain and caps' }));
+  block.append(element('p', { className: 'inert', text: line, testId: 'sending-unread' }));
+  const retry = element('button', { text: 'Retry' });
+  retry.dataset['testid'] = 'sending-retry';
+  retry.addEventListener('click', () => {
+    apply(bridge().show({ screen: 'settings' }));
+  });
+  block.append(retry);
   root.append(block);
 }
 

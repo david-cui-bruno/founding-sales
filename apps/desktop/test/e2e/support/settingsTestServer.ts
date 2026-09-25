@@ -168,6 +168,7 @@ export function adminState(overrides: Partial<AdminState> = {}): AdminState {
     ],
     history: null,
     sendingAdmin: null,
+    sendingReadError: null,
     callingNumbers: [],
     ...overrides,
   };
@@ -265,6 +266,11 @@ export async function startSettingsTestServer(initial: AdminState): Promise<Sett
             dashboard: screen === 'dashboard' ? dashboard() : state.dashboard,
             diagnostics: screen === 'diagnostics' ? diagnostics() : state.diagnostics,
           };
+          // Settings shown again re-reads the sending posture (lane g69): a read that
+          // failed is answered this time, which is what Retry is for.
+          if (screen === 'settings' && state.sendingReadError !== null) {
+            state = { ...state, sendingAdmin: sendingPosture(), sendingReadError: null };
+          }
         }
         // An admin-only refusal arrives as its code, which the view turns into one
         // sentence. This is what a salesperson gets.

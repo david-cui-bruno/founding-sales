@@ -4,8 +4,10 @@ import { callingIdentityDtoSchema, callingIdentityListSchema } from '@fss/contra
 import { POSTURE_STATEMENT_KEYS } from '@fss/domain';
 import { repositoryContext, workspaceScope } from '@fss/domain/db';
 import { buildTodaySnapshot, businessDateOf, promoteTodayItem } from '@fss/domain/today';
+import type { AddressInfo } from 'node:net';
+import { recordingLogger } from '../src/bootstrap/log.ts';
 import { localNoopSuppressionJournal } from '../src/journal/index.ts';
-import { dispatch, type ApiRequest } from '../src/server.ts';
+import { createApiServer, dispatch, refusalCodeOf, type ApiRequest } from '../src/server.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
 
@@ -340,5 +342,57 @@ describe('the calling-number routes', () => {
     expect(await expandedIdentity()).toBeNull();
     const after = callingIdentityListSchema.parse((await send('GET', '/calling-identities', salespersonToken)).body);
     expect(after.identities.map(entry => [entry.id, entry.enabled])).toEqual([[id, false]]);
+  });
+
+  it('logs a refusal with the code its body carries, over the real server, and never the number typed (lane g69)', async () => {
+    // Production logged `POST /calling-identities/register → 409` on 25 September 2026
+    // and nothing else, and a 409 here is any of five refusals. The line now carries
+    // the body's code beside the status the Refusals metric counts by.
+    const log = recordingLogger();
+    const server = createApiServer({ ...options(), log });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const { port } = server.address() as AddressInfo;
+      const register = async (body: unknown): Promise<number> =>
+        (
+          await fetch(`http://127.0.0.1:${String(port)}/calling-identities/register`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', authorization: `Bearer ${salespersonToken}` },
+            body: JSON.stringify(body),
+          })
+        ).status;
+      expect(await register(command({ e164: '401-555-0153' }))).toBe(409);
+      expect(await register(command({}))).toBe(400);
+    } finally {
+      await new Promise<void>(resolve => server.close(() => resolve()));
+    }
+
+    const refusals = log.lines.filter(line => line['event'] === 'refusal');
+    expect(refusals).toEqual([
+      expect.objectContaining({ reason: '409', code: 'number_invalid', path: '/calling-identities/register' }),
+      expect.objectContaining({ reason: '400', code: 'malformed_body', path: '/calling-identities/register' }),
+    ]);
+    // Nothing the person typed, in any spelling, and not the session that sent it.
+    const text = JSON.stringify(log.lines);
+    for (const typed of ['401-555-0153', '4015550153', '555-0153', salespersonToken]) expect(text).not.toContain(typed);
+  });
+
+  it('takes a refusal code only in the shape of one', () => {
+    expect(refusalCodeOf({ status: 'refused', replayed: false, reason: 'number_invalid' })).toBe('number_invalid');
+    expect(refusalCodeOf({ error: 'not_found', message: 'No such endpoint.' })).toBe('not_found');
+    // `reason` first, as the desktop's `refusalOf` reads it.
+    expect(refusalCodeOf({ reason: 'admin_only', error: 'forbidden' })).toBe('admin_only');
+    for (const body of [
+      { reason: '+14015550150' },
+      { reason: 'Callie cannot call from that.' },
+      { error: 'NUMBER_INVALID' },
+      { reason: 42 },
+      { reason: 'x'.repeat(81) },
+      null,
+      'number_invalid',
+      [],
+    ]) {
+      expect(refusalCodeOf(body)).toBeNull();
+    }
   });
 });

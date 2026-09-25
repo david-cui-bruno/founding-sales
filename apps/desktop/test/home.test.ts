@@ -153,6 +153,7 @@ function admin(overrides: Partial<AdminState> = {}): AdminState {
     stages: [],
     history: null,
     sendingAdmin: { domain: passingDomain, personalGmailRecipients: 0, ramps: [] },
+    sendingReadError: null,
     callingNumbers: [number()],
     ...overrides,
   };
@@ -311,13 +312,29 @@ describe('the sidebar’s status', () => {
     expect(maskedNumber('+16175550100')).toBe('+1 617 ··· 0100');
     expect(maskedNumber('+447700900123')).toBe('+44 ··· 0123');
     expect(status(input(), 'calling')).toMatchObject({ tone: 'ok', text: 'Calling from +1 617 ··· 0100' });
-    // The server chose none — unverified, or retired — so there is none.
-    expect(status(input({ admin: admin({ callingNumbers: [number({ usedForCalls: false, verificationStatus: 'unverified' })] }) }), 'calling')).toMatchObject({
-      tone: 'warn',
-      text: 'No calling number',
-    });
+    // The server chose none, and the person has none, or only retired ones.
+    expect(status(input({ admin: admin({ callingNumbers: [] }) }), 'calling')).toMatchObject({ tone: 'warn', text: 'No calling number' });
+    expect(
+      status(input({ admin: admin({ callingNumbers: [number({ usedForCalls: false, enabled: false, disabledAt: '2026-09-25T13:00:00.000Z' })] }) }), 'calling'),
+    ).toMatchObject({ tone: 'warn', text: 'No calling number' });
     expect(status(input({ admin: admin({ callingNumbers: null }) }), 'calling')).toMatchObject({ tone: 'none', text: 'Calling number not read' });
     expect(status(input({ admin: null }), 'calling')).toMatchObject({ tone: 'none', text: 'Calling number: checking…' });
+  });
+
+  // Until lane g69 this row read "No calling number" for a saved, unattested number,
+  // which is what an unticked Add leaves: the person had a number, and Home said they
+  // did not. The row now names what is missing — the attestation — in amber.
+  it('says a saved but unattested number needs attestation rather than that there is no number (lane g69)', () => {
+    const saved = number({ usedForCalls: false, verificationStatus: 'unverified', enabled: false, verifiedAt: null, verificationMethod: null });
+    expect(status(input({ admin: admin({ callingNumbers: [saved] }) }), 'calling')).toEqual({
+      key: 'calling',
+      tone: 'warn',
+      text: 'Calling number needs attestation',
+    });
+    // Beside a retired one, the saved one is still the one to attest.
+    expect(
+      status(input({ admin: admin({ callingNumbers: [number({ id: '55555555-5555-4555-8555-000000000002', usedForCalls: false, enabled: false, disabledAt: '2026-09-24T13:00:00.000Z' }), saved] }) }), 'calling'),
+    ).toMatchObject({ text: 'Calling number needs attestation' });
   });
 
   it('reads sending from the server’s effective flag and never recombines it', () => {
@@ -395,6 +412,35 @@ describe('Needs you', () => {
     expect(needs(input({ admin: admin({ callingNumbers: [number()] }) }))).toEqual([]);
     // A list that was not read is not an empty list.
     expect(needs(input({ admin: admin({ callingNumbers: null }) }))).toEqual([]);
+  });
+
+  it('asks a person with a saved, unattested number to attest it, not to add another (lane g69)', () => {
+    // What an unticked Add leaves: registered, unverified, disabled, not retired.
+    const saved = number({ usedForCalls: false, verificationStatus: 'unverified', enabled: false, verifiedAt: null, verificationMethod: null });
+    expect(needsRows(input({ admin: admin({ callingNumbers: [saved] }) }))).toEqual([
+      {
+        key: 'calling_number',
+        label: 'Attest your calling number',
+        detail: 'Your number is saved. Open Your calling number and attest it.',
+        // Administration opens on Settings, where the saved row has its own Attest.
+        action: { kind: 'open', window: 'administration', label: 'Open' },
+      },
+    ]);
+    // A saved number beside a retired one: attest the saved one.
+    const retired = number({ id: '55555555-5555-4555-8555-000000000002', usedForCalls: false, enabled: false, disabledAt: '2026-09-24T13:00:00.000Z' });
+    expect(needsRows(input({ admin: admin({ callingNumbers: [retired, saved] }) }))[0]?.label).toBe('Attest your calling number');
+  });
+
+  it('asks a person whose every number is retired to re-attest one (lane g69)', () => {
+    const retired = number({ usedForCalls: false, enabled: false, disabledAt: '2026-09-25T13:00:00.000Z' });
+    expect(needsRows(input({ admin: admin({ callingNumbers: [retired] }) }))).toEqual([
+      {
+        key: 'calling_number',
+        label: 'Re-attest your calling number',
+        detail: 'Your number was retired. Open Your calling number and attest it again.',
+        action: { kind: 'open', window: 'administration', label: 'Open' },
+      },
+    ]);
   });
 
   it('asks an admin to record the domain checklist when it is missing or does not pass', () => {

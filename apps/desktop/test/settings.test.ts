@@ -6,6 +6,7 @@ import { adminViewOf } from '../src/renderer/settingsView.ts';
 import { windowMenuTemplate } from '../src/main/windowMenu.ts';
 import { requestedScreen } from '../src/renderer/settingsPage.ts';
 import type { AdminState, CallingNumberView } from '../src/renderer/settingsContract.ts';
+import { outboundRampAnswer, outboundStatusAnswer } from './support/outboundStatus.ts';
 
 /**
  * The administration window: its bridge and its view model
@@ -100,27 +101,8 @@ const emptyState = (overrides: Partial<AdminState> = {}): AdminState => ({
   stages: [],
   history: null,
   sendingAdmin: null,
+  sendingReadError: null,
   callingNumbers: null,
-  ...overrides,
-});
-
-const outboundStatusBody = (overrides: Record<string, unknown> = {}) => ({
-  domain: {
-    domain: 'sending.example.test',
-    spfPass: true,
-    dkimPass: true,
-    dmarcPass: false,
-    postmasterReviewedAt: null,
-    authenticationPasses: false,
-    automatedSendingEnabled: false,
-    personalGmailGuardPer24h: 4000,
-    replyOnlyOptOut: true,
-  },
-  guard: { allowed: true, remaining: 3999 },
-  personalGmailRecipients: 1,
-  doubt: { unknownTerminal: 0, reconciling: 0 },
-  ramp: null,
-  fence: null,
   ...overrides,
 });
 
@@ -354,15 +336,11 @@ describe('the administration bridge', () => {
       '/pipeline/stages': { status: 200, body: stagesBody },
       '/outbound/status': {
         status: 200,
-        body: outboundStatusBody({
-          ramp: {
-            mailboxId: MAILBOX_ID,
-            healthySendingDays: 3,
-            effectiveCap: 5,
-            adminDailyCap: null,
-            raisedDailyCap: null,
-            lastHealthFailure: null,
-          },
+        // The route's own shape (`support/outboundStatus.ts`, held to the route by
+        // `test/release/sendingSection.check.ts`): the recipients are an object.
+        body: outboundStatusAnswer({
+          personalGmailRecipients: { automated: 2, direct: 1, total: 3 },
+          ramp: outboundRampAnswer(MAILBOX_ID, { healthySendingDays: 3 }),
         }),
       },
       '/diagnostics': { status: 200, body: diagnosticsBody(MAILBOX_ID) },
@@ -373,7 +351,11 @@ describe('the administration bridge', () => {
       api: admin.api,
       session: { state: async () => await Promise.resolve(session()) },
     }).state();
+    expect(state.sendingReadError).toBeNull();
     expect(state.sendingAdmin?.domain?.domain).toBe('sending.example.test');
+    // The whole guard — FSS's two and the one direct send — never one half of it.
+    expect(state.sendingAdmin?.personalGmailRecipients).toBe(3);
+    expect(adminViewOf(state).sendingAdmin?.guard.line).toBe('Personal-Gmail guard: 4000 per 24 hours, 3 used.');
     expect(state.sendingAdmin?.ramps).toEqual([
       {
         mailboxId: MAILBOX_ID,
@@ -403,11 +385,139 @@ describe('the administration bridge', () => {
     expect(salesperson.calls.map(call => call.path)).not.toContain('/outbound/status');
   });
 
+  it('keeps a failed sending read as its code, and asks again on the next state() and on show (lane g69)', async () => {
+    // The answer 1.0.2 and 1.0.3 expected and the route never sent: a number where the
+    // route sends `{ automated, direct, total }`. Here it stands for any answer this
+    // parser cannot read.
+    let status: HttpAnswer = {
+      status: 200,
+      body: { ...outboundStatusAnswer(), personalGmailRecipients: 1 },
+    };
+    const { api, calls } = scriptedApi({
+      '/settings': { status: 200, body: settingsBody() },
+      '/pipeline/stages': { status: 200, body: stagesBody },
+      get '/outbound/status'() {
+        return status;
+      },
+      '/diagnostics': { status: 200, body: diagnosticsBody(MAILBOX_ID) },
+    });
+    const bridge = createAdminBridge({ api, session: { state: async () => await Promise.resolve(session()) } });
+    const statusReads = (): number => calls.filter(call => call.path === '/outbound/status').length;
+
+    const failed = await bridge.state();
+    expect(failed.sendingAdmin).toBeNull();
+    expect(failed.sendingReadError).toBe('unreadable_answer');
+    // Not a notice: the rest of the page is untouched.
+    expect(failed.notice).toBeNull();
+    expect(adminViewOf(failed).sendingUnread?.line).toBe(
+      'Callie could not read the sending status. The answer was not in the shape this version of Callie reads (unreadable_answer).',
+    );
+
+    // Home's focus and Refresh read `state()`: a failed read is asked again there, and
+    // only the sending read — the settings it already holds are not.
+    status = { status: 500, body: { error: 'internal_error' } };
+    const again = await bridge.state();
+    expect(statusReads()).toBe(2);
+    expect(calls.filter(call => call.path === '/settings')).toHaveLength(1);
+    expect(again.sendingReadError).toBe('internal_error');
+    expect(adminViewOf(again).sendingUnread?.line).toBe(
+      'Callie could not read the sending status. The server answered internal_error.',
+    );
+
+    // Retry is the Settings screen shown again, and it recovers.
+    status = { status: 200, body: outboundStatusAnswer({ ramp: outboundRampAnswer(MAILBOX_ID) }) };
+    const recovered = await bridge.show({ screen: 'settings' });
+    expect(recovered.sendingReadError).toBeNull();
+    expect(recovered.sendingAdmin?.domain?.domain).toBe('sending.example.test');
+    expect(adminViewOf(recovered).sendingUnread).toBeNull();
+    expect(adminViewOf(recovered).sendingAdmin).not.toBeNull();
+
+    // And a read that succeeded is not repeated on every focus.
+    const before = statusReads();
+    await bridge.state();
+    expect(statusReads()).toBe(before);
+  });
+
+  it('reads the sending posture even when the settings read fails (lane g69)', async () => {
+    const { api, calls } = scriptedApi({
+      '/settings': { status: 500, body: { error: 'internal_error' } },
+      '/outbound/status': { status: 200, body: outboundStatusAnswer() },
+      '/diagnostics': { status: 200, body: diagnosticsBody(MAILBOX_ID) },
+    });
+    const state = await createAdminBridge({
+      api,
+      session: { state: async () => await Promise.resolve(session()) },
+    }).state();
+    expect(state.notice).toBe('internal_error');
+    expect(state.settings).toBeNull();
+    expect(calls.map(call => call.path)).toContain('/outbound/status');
+    expect(state.sendingAdmin?.domain?.domain).toBe('sending.example.test');
+    expect(state.sendingReadError).toBeNull();
+  });
+
+  it('drops what it read under one role when the session comes back with another (lane g69)', async () => {
+    let role: 'admin' | 'salesperson' = 'salesperson';
+    const month = { from: '2026-08-26T12:00:00.000Z', to: '2026-09-25T12:00:00.000Z' };
+    const { api, calls } = scriptedApi({
+      '/settings': { status: 200, body: settingsBody() },
+      '/pipeline/stages': { status: 200, body: stagesBody },
+      '/outbound/status': { status: 200, body: outboundStatusAnswer() },
+      '/diagnostics': { status: 200, body: diagnosticsBody(MAILBOX_ID) },
+      '/dashboard': {
+        status: 200,
+        body: {
+          window: month,
+          audience: 'workspace',
+          firmsInScope: 0,
+          messages: { incomingMatched: 0, human: 0, uncertain: 0, automated: 0, bounces: 0, optOuts: 0 },
+          replyHandling: { replies: 0, handled: 0, medianSecondsToHandle: null, slowestSecondsToHandle: null },
+          calls: [],
+          stageMovement: [],
+          holds: { open: 0, byReason: [] },
+          suppressions: [],
+          sending: { available: false, owner: 'G7-2', reason: 'not in this build' },
+          enrollments: { available: false, owner: 'G8', reason: 'not in this build' },
+          classifier: { available: false, owner: 'G7b', reason: 'not in this build' },
+        },
+      },
+    });
+    const bridge = createAdminBridge({
+      api,
+      session: { state: async () => await Promise.resolve(session({ device: { role } })) },
+    });
+
+    // Signed in as a salesperson: no sending read, no section, no unread line.
+    const before = await bridge.state();
+    expect(calls.map(call => call.path)).not.toContain('/outbound/status');
+    expect(adminViewOf(before).sendingAdmin).toBeNull();
+    expect(adminViewOf(before).sendingUnread).toBeNull();
+
+    // A renewal said admin. The next read asks for the posture it never had.
+    role = 'admin';
+    const promoted = await bridge.state();
+    expect(promoted.role).toBe('admin');
+    expect(calls.map(call => call.path)).toContain('/outbound/status');
+    expect(promoted.sendingAdmin?.domain?.domain).toBe('sending.example.test');
+    await bridge.show({ screen: 'diagnostics' });
+    const held = await bridge.loadDashboard(month);
+    expect(held.diagnostics).not.toBeNull();
+    expect(held.dashboard).not.toBeNull();
+
+    // And back: nothing read as an admin outlives the role it was read under.
+    role = 'salesperson';
+    const demoted = await bridge.state();
+    expect(demoted.role).toBe('salesperson');
+    expect(demoted.sendingAdmin).toBeNull();
+    expect(demoted.sendingReadError).toBeNull();
+    expect(demoted.diagnostics).toBeNull();
+    expect(demoted.dashboard).toBeNull();
+  });
+
   it("sends a cap change to G7-2's command and re-reads the posture", async () => {
     const { api, calls } = scriptedApi({
       '/settings': { status: 200, body: settingsBody() },
       '/pipeline/stages': { status: 200, body: stagesBody },
-      '/outbound/status': { status: 200, body: outboundStatusBody() },
+      '/outbound/status': { status: 200, body: outboundStatusAnswer() },
       '/diagnostics': { status: 200, body: diagnosticsBody(MAILBOX_ID) },
       '/outbound/cap': {
         status: 200,
@@ -433,7 +543,7 @@ describe('the administration bridge', () => {
     const { api, calls } = scriptedApi({
       '/settings': { status: 200, body: settingsBody() },
       '/pipeline/stages': { status: 200, body: stagesBody },
-      '/outbound/status': { status: 200, body: outboundStatusBody() },
+      '/outbound/status': { status: 200, body: outboundStatusAnswer() },
       '/diagnostics': { status: 200, body: diagnosticsBody(MAILBOX_ID) },
       '/outbound/authentication': { status: 200, body: { status: 'accepted', replayed: false, result: { domain: 'sending.example.test' } } },
     });
@@ -462,7 +572,7 @@ describe('the administration bridge', () => {
     const { api, calls } = scriptedApi({
       '/settings': { status: 200, body: settingsBody() },
       '/pipeline/stages': { status: 200, body: stagesBody },
-      '/outbound/status': { status: 200, body: outboundStatusBody() },
+      '/outbound/status': { status: 200, body: outboundStatusAnswer() },
       '/diagnostics': { status: 200, body: diagnosticsBody(MAILBOX_ID) },
       '/sequences/holidays': {
         status: 200,
@@ -488,7 +598,7 @@ describe('the administration bridge', () => {
     const { api } = scriptedApi({
       '/settings': { status: 200, body: settingsBody() },
       '/pipeline/stages': { status: 200, body: stagesBody },
-      '/outbound/status': { status: 200, body: outboundStatusBody() },
+      '/outbound/status': { status: 200, body: outboundStatusAnswer() },
       '/diagnostics': { status: 200, body: diagnosticsBody(MAILBOX_ID) },
       '/outbound/authentication': { status: 409, body: { error: 'authentication_incomplete' } },
     });
@@ -807,6 +917,24 @@ describe('the administration view', () => {
     expect(section?.guard.line).toContain('4000');
     expect(section?.ramps[0]?.line).toContain('5');
     expect(section?.ramps[0]?.editable).toBe(true);
+  });
+
+  it('says an admin’s sending read failed, with its code, where the section would be (lane g69)', () => {
+    const view = adminViewOf({ ...withSettings(), sendingReadError: 'offline' });
+    expect(view.sendingAdmin).toBeNull();
+    expect(view.sendingUnread?.line).toBe('Callie could not read the sending status. The server did not answer (offline).');
+    // A salesperson's page never asked, so it has nothing to say about it.
+    expect(adminViewOf({ ...withSettings(), role: 'salesperson', sendingReadError: 'offline' }).sendingUnread).toBeNull();
+    // Nothing failed, nothing to say.
+    expect(adminViewOf(withSettings()).sendingUnread).toBeNull();
+    // A posture that is held is shown, whatever an earlier read said.
+    const held = adminViewOf({
+      ...withSettings(),
+      sendingAdmin: { domain: null, personalGmailRecipients: 0, ramps: [] },
+      sendingReadError: 'offline',
+    });
+    expect(held.sendingUnread).toBeNull();
+    expect(held.sendingAdmin?.domainLine).toBe('No sending domain is configured.');
   });
 
   it('shows a salesperson no sending section at all', () => {

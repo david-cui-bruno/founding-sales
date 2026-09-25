@@ -294,6 +294,21 @@ function inUse(numbers: readonly CallingNumberView[]): CallingNumberView | null 
   return numbers.find(number => number.usedForCalls) ?? null;
 }
 
+/**
+ * Why no number is in use, in the terms of Administration's own rows (lane g69):
+ * `none` — the person has no number; `unattested` — a number is saved, not retired, and
+ * not yet attested, which is what an unticked Add leaves behind; `retired` — every
+ * number they have was retired. The same reading `settingsView.ts` gives each row, so
+ * Home never names a state Administration does not show.
+ */
+function missingNumber(numbers: readonly CallingNumberView[]): 'none' | 'unattested' | 'retired' {
+  if (numbers.length === 0) return 'none';
+  const unattested = numbers.some(
+    number => number.disabledAt === null && !(number.verificationStatus === 'verified' && number.enabled),
+  );
+  return unattested ? 'unattested' : 'retired';
+}
+
 function mailboxStatus(input: HomeInput): StatusRow {
   const row = (tone: Tone, text: string): StatusRow => ({ key: 'mailbox', tone, text });
   if (!input.bridges.mailbox) return row('none', `Mailbox: ${UNAVAILABLE.toLowerCase()}`);
@@ -319,12 +334,16 @@ function adminRows(input: HomeInput): readonly StatusRow[] {
 
   const numbers = admin.callingNumbers;
   const number = numbers === null ? null : inUse(numbers);
+  // A saved number that is not attested is not "no number" (lane g69): the person has
+  // one, and the thing missing is their statement about it.
   const calling: StatusRow =
     numbers === null
       ? { key: 'calling', tone: 'none', text: 'Calling number not read' }
-      : number === null
-        ? { key: 'calling', tone: 'warn', text: 'No calling number' }
-        : { key: 'calling', tone: 'ok', text: `Calling from ${maskedNumber(number.e164)}` };
+      : number !== null
+        ? { key: 'calling', tone: 'ok', text: `Calling from ${maskedNumber(number.e164)}` }
+        : missingNumber(numbers) === 'unattested'
+          ? { key: 'calling', tone: 'warn', text: 'Calling number needs attestation' }
+          : { key: 'calling', tone: 'warn', text: 'No calling number' };
 
   // 16.2's two switches, ANDed by the server. Read out, never recombined.
   const sending: StatusRow =
@@ -371,7 +390,11 @@ export function statusRows(input: HomeInput): readonly StatusRow[] {
  *
  * * The mailbox reads as not connected → **Connect Gmail**, pressed right here.
  * * The calling numbers were read and none is the one Today calls from → **Add your
- *   calling number**, which opens Administration.
+ *   calling number** when there is none, **Attest your calling number** when one is saved
+ *   and not attested, and **Re-attest your calling number** when every one is retired.
+ *   Each opens Administration on Settings, where **Your calling number** is first and
+ *   the existing row has its own Attest button (lane g69: until then a saved, unattested
+ *   number was told to add itself again).
  * * An admin, whose `/outbound/status` read answered with no domain or a checklist that
  *   does not pass → **Record the domain checklist**, which opens Administration.
  * * An admin with unacknowledged alerts in a Diagnostics read the bridge already holds →
@@ -402,12 +425,7 @@ export function needsRows(input: HomeInput): readonly NeedsRow[] {
   const admin = input.bridges.admin ? input.admin : null;
   if (admin !== null) {
     if (admin.callingNumbers !== null && inUse(admin.callingNumbers) === null) {
-      rows.push({
-        key: 'calling_number',
-        label: 'Add your calling number',
-        detail: null,
-        action: { kind: 'open', window: 'administration', label: 'Open' },
-      });
+      rows.push(callingNumberNeed(missingNumber(admin.callingNumbers)));
     }
     const posture = admin.sendingAdmin;
     if (isAdmin && posture !== null && (posture.domain === null || !posture.domain.authenticationPasses)) {
@@ -429,6 +447,28 @@ export function needsRows(input: HomeInput): readonly NeedsRow[] {
     }
   }
   return rows;
+}
+
+/** The calling-number row, worded for what is missing. Administration opens on Settings. */
+function callingNumberNeed(missing: 'none' | 'unattested' | 'retired'): NeedsRow {
+  const action: NeedsAction = { kind: 'open', window: 'administration', label: 'Open' };
+  if (missing === 'unattested') {
+    return {
+      key: 'calling_number',
+      label: 'Attest your calling number',
+      detail: 'Your number is saved. Open Your calling number and attest it.',
+      action,
+    };
+  }
+  if (missing === 'retired') {
+    return {
+      key: 'calling_number',
+      label: 'Re-attest your calling number',
+      detail: 'Your number was retired. Open Your calling number and attest it again.',
+      action,
+    };
+  }
+  return { key: 'calling_number', label: 'Add your calling number', detail: null, action };
 }
 
 function needsLine(input: HomeInput, rows: readonly NeedsRow[]): string | null {

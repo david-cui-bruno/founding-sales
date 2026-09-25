@@ -226,6 +226,25 @@ function refuse(response: ServerResponse, log: Logger | undefined, code: Refusal
   send(response, REFUSAL_STATUS[code], redactError(code), undefined, { connection: 'close' });
 }
 
+/** A stable refusal code: lower-case words joined by underscores. Nothing else is logged. */
+const REFUSAL_CODE_SHAPE = /^[a-z][a-z0-9_]{0,79}$/u;
+
+/**
+ * The refusal code a route answered with, or null.
+ *
+ * Two shapes carry one: a command refusal, `{ status: 'refused', reason }` (`crmReply`,
+ * `runPolicyCommand`, `contextForPrincipal`), and a redacted error, `{ error, message }`
+ * (`redactError`). `reason` is read first, as the desktop's `refusalOf` reads it. A value
+ * that is not code-shaped — a sentence, a number, anything with a `+` or a space — is
+ * dropped rather than logged.
+ */
+export function refusalCodeOf(body: unknown): string | null {
+  if (typeof body !== 'object' || body === null) return null;
+  const record = body as { readonly reason?: unknown; readonly error?: unknown };
+  const code = typeof record.reason === 'string' ? record.reason : record.error;
+  return typeof code === 'string' && REFUSAL_CODE_SHAPE.test(code) ? code : null;
+}
+
 async function handle(request: IncomingMessage, response: ServerResponse, options: ApiOptions): Promise<void> {
   const method = request.method ?? 'GET';
   let path = '/';
@@ -265,7 +284,15 @@ async function handle(request: IncomingMessage, response: ServerResponse, option
       },
       options,
     );
-    if (result.status >= 400) options.log?.log('info', 'refusal', { reason: String(result.status), path });
+    if (result.status >= 400) {
+      // `reason` stays the HTTP status: it is the Refusals metric's dimension. `code` is
+      // what the body said (lane g69), so a 409 from `/calling-identities/register`
+      // reads `number_invalid` or `number_registered_to_another` rather than a bare
+      // status that fits five refusals. Only a code-shaped string is taken, never the
+      // request body, so nothing a person typed reaches the log.
+      const code = refusalCodeOf(result.body);
+      options.log?.log('info', 'refusal', { reason: String(result.status), path, ...(code === null ? {} : { code }) });
+    }
     send(response, result.status, result.body, result.contentType);
   } catch (error) {
     // `level: "error"` is the ApiErrors metric filter. The caller learns nothing
