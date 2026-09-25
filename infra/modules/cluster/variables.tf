@@ -164,18 +164,59 @@ variable "environment" {
   description = "Non-secret environment variables added to both tasks. Never put a credential here."
   type        = map(string)
   default     = {}
+
+  validation {
+    condition     = !contains(keys(var.environment), "FSS_EXPECTED_SYSTEM_GENERATION")
+    error_message = "FSS_EXPECTED_SYSTEM_GENERATION is set by expected_system_generation and nowhere else, so there is one control and a plan that shows it."
+  }
 }
 
 variable "api_environment" {
   description = "Non-secret environment variables for the API task only."
   type        = map(string)
   default     = {}
+
+  validation {
+    condition     = !contains(keys(var.api_environment), "FSS_EXPECTED_SYSTEM_GENERATION")
+    error_message = "FSS_EXPECTED_SYSTEM_GENERATION is set by expected_system_generation and nowhere else, so there is one control and a plan that shows it."
+  }
 }
 
 variable "worker_environment" {
   description = "Non-secret environment variables for the worker task only."
   type        = map(string)
   default     = {}
+
+  validation {
+    condition     = !contains(keys(var.worker_environment), "FSS_EXPECTED_SYSTEM_GENERATION")
+    error_message = "FSS_EXPECTED_SYSTEM_GENERATION is set by expected_system_generation and nowhere else, so there is one control and a plan that shows it."
+  }
+}
+
+variable "expected_system_generation" {
+  description = <<-EOT
+    Appendix E step 1's operator-controlled expected generation, as
+    FSS_EXPECTED_SYSTEM_GENERATION on the API and worker service task
+    definitions. Null leaves both unpinned and the check unmade.
+
+    The worker compares it with the database's `system_generation` at startup
+    and, when they differ, opens one restore hold per workspace and logs the
+    event RestoreGenerationMismatches counts; the API reports it on /readyz and
+    /diagnostics. A restored copy carries its source's generation, so after a
+    restore this is set to the restored copy's generation plus one, in the
+    same apply as (or one before) whatever points the services at it — which
+    is also the generation step 9 then advances the database to. The one-off
+    task definitions do not carry it: `fss admin restore-holds open` and
+    `fss drill` take the generation as a flag.
+    docs/decisions/g56-restore-holds-are-opened-by-the-generation-check.md.
+  EOT
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.expected_system_generation == null ? true : (var.expected_system_generation >= 1 && floor(var.expected_system_generation) == var.expected_system_generation)
+    error_message = "expected_system_generation is a positive whole number, or null for unpinned. The bootstraps refuse anything else at startup."
+  }
 }
 
 variable "secret_arns" {

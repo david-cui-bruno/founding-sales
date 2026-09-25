@@ -636,7 +636,7 @@
       "roles": [
         "fss-rh"
       ],
-      "why": "The point-in-time restore, the wait, and the teardown of the restored instance and any snapshot the run left.",
+      "why": "The point-in-time restore, the wait, the teardown of the restored instance and any snapshot the run left, and step 1's alarm: the history of <prefix>-restore-generation-mismatch since the drill began (lane g56).",
       "actions": [
         "rds:RestoreDBInstanceToPointInTime",
         "rds:DescribeDBInstances",
@@ -644,7 +644,8 @@
         "rds:DeleteDBInstance",
         "rds:DeleteDBSnapshot",
         "kms:CreateGrant",
-        "kms:DescribeKey"
+        "kms:DescribeKey",
+        "cloudwatch:DescribeAlarmHistory"
       ]
     },
     {

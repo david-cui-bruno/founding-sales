@@ -508,7 +508,7 @@ before it run:
 8. [deploy] **Smoke** with the same `scripts/productionSmoke.mjs` production gets.
 9. [full] **Release suite (recorded mode, runner)**: the 42 scenarios (`npm run test:release`) and the **mutation check** (`npm run test:release:mutation`), which breaks each trap in turn and requires the suite to go red. They run in the runner against the job's own `postgres:16` service container, which is what they were built for. They do **not** touch the rehearsal database and could not: it is private — `publicly_accessible = false`, no NAT gateway, no bastion — so the step that used to assemble a URL from the rehearsal's outputs could never have connected. What runs against the rehearsal database is `fss verify` and `fss drill`, inside the VPC.
     [full] **Before it, the evidence the drill has to reconstruct** (lane g40), as its own step between item 6's bootstrap and item 7: `infra/scripts/release-seed-drill-evidence.sh infra/roots/rehearsal <prefix> --worker-digest D --phase before --workspace-slug rehearsal`. `docs/greenfield/restore-drill.md` 0.1 needs an accepted send, a prospect reply, a prospect-originated opt-out, a salesperson's own manual suppression inside its ten-minute window and an ordinary CRM edit to exist *before* the restore target is read, and nothing in this repository could produce any of them in a deployed environment — so the drill's own refusal fired on every fresh rehearsal, which is how the ninth full run ended (8.0q). `fss admin drill seed-evidence` produces all five through the domain's own entry points. The drill then adds `--phase after` between the baseline and the restore, so the restore genuinely loses work, and waits for RDS to report a `LatestRestorableTime` past the evidence before reading the target at all. **Production is never seeded**: the script refuses any prefix that is not `fss-rh-<run>` and the command refuses unless `FSS_DEPENDENCIES=recorded`.
-10. [full] **Restore drill**, Appendix E steps 1 to 9, preceded by a session renewal and its identity check. The runner keeps the control plane (reading the latest restorable point, the restore itself, the wait, the teardown); two in-VPC tasks do the database work — `fss admin counts` for the baseline on the source, then one `fss drill` against the restored instance for steps 1 to 9, with one correlated log and per-step JSON. The runner reads the report and decides whether it is a pass, so a change to the tool cannot quietly relax the gate. It refuses to report a pass unless the baseline contained an accepted send, a reply, a suppression, a CRM edit and a migration — a drill against an empty database proves nothing. The drill task is fixed at `FSS_DEPENDENCIES=recorded` **in its task definition**, because `reconcile-sent`, `recover` and `watch-renew` all reach Gmail when it is live and a mode a caller passes is a mode a caller can forget. The restored instance reaches the drill task only as the `FSS_DATABASE_HOST` override. `--database-host` stays the primary host the task definition names, which is what the run-task wrapper checks the definition against (lane g48). Run 35962272085 (24 September) passed the restored endpoint as both, and the wrapper refused the drill's first task after a restore that had succeeded. That first item of the deferred drill work is fixed in code. Run 35976297919 (24 September) proved it and showed where the drill stops next. The task started against the restored instance and stopped at its first write, a step-0 baseline file in `/tmp/fss-drill`, which nothing in the container created. The baseline the runner measured on the source was not handed to the drill task either (8.0w). Lane g53 fixes both in code: the drill creates its reports directory before its first write, and the runner hands the drill task the source baseline as `--baseline-json`, one line holding the `asOf` instant and the five counts, instead of `--as-of`.
+10. [full] **Restore drill**, Appendix E steps 1 to 9, preceded by a session renewal and its identity check. The runner keeps the control plane (reading the latest restorable point, the restore itself, the wait, the teardown); two in-VPC tasks do the database work — `fss admin counts` for the baseline on the source, then one `fss drill` against the restored instance for steps 1 to 9, with one correlated log and per-step JSON. The runner reads the report and decides whether it is a pass, so a change to the tool cannot quietly relax the gate. It refuses to report a pass unless the baseline contained an accepted send, a reply, a suppression, a CRM edit and a migration — a drill against an empty database proves nothing. The drill task is fixed at `FSS_DEPENDENCIES=recorded` **in its task definition**, because `reconcile-sent`, `recover` and `watch-renew` all reach Gmail when it is live and a mode a caller passes is a mode a caller can forget. The restored instance reaches the drill task only as the `FSS_DATABASE_HOST` override. `--database-host` stays the primary host the task definition names, which is what the run-task wrapper checks the definition against (lane g48). Run 35962272085 (24 September) passed the restored endpoint as both, and the wrapper refused the drill's first task after a restore that had succeeded. That first item of the deferred drill work is fixed in code. Run 35976297919 (24 September) proved it and showed where the drill stops next. The task started against the restored instance and stopped at its first write, a step-0 baseline file in `/tmp/fss-drill`, which nothing in the container created. The baseline the runner measured on the source was not handed to the drill task either (8.0w). Lane g53 fixes both in code: the drill creates its reports directory before its first write, and the runner hands the drill task the source baseline as `--baseline-json`, one line holding the `asOf` instant and the five counts, instead of `--as-of`. Run 36062337914 (24 September, 22:45Z) passed step 0 and stopped at step 1, because nothing anywhere opened a restore hold (8.0z). Lane g56 closes that. The runner refuses a baseline without `systemGeneration` before the restore. It launches the drill with `--expected-generation` set to that value plus one, so step 1a runs the worker's own generation check against the restored copy. After step 9, `step9-generation-reconciled` asserts the database landed on that pin. After the drill, the runner reads the mismatch line in the drill's log and a transition to ALARM in the history of `<prefix>-restore-generation-mismatch`.
 11. [full] **Suppression journal replay and Gmail reconstruction**, against the recorded fake (no real mailbox in rehearsal unless you provide a rehearsal Google project). The second replay must insert nothing; no send may repeat. The drill above already ran both; this step reads the reports it left, which the drill wrote out of the captured task report under the names they have always had.
 12. [full] **Carry watermark** (Appendix G 20): the carry tooling must contain no writer at all, and — once a cutover is scheduled and the two optional secrets exist — the export must refuse a table with a post-watermark write. Before the cutover the step prints `carry drill skipped: no cutover watermark yet` and the record says `"carryDrill": "skipped_no_watermark"`. That is not a pass being claimed; it is the state being named.
 13. [every stage] **Tear down**, always, with bypass-governance — and tolerantly, on a session renewed immediately before it so that a run which has already outlived its first hour can still destroy what it made. The teardown is five steps (any one-off task still running, the restored instance, any manual snapshot carrying the run prefix, the object-locked journal objects, the root), and each treats the AWS error code for absence as "already done" rather than as a failure, because `if: always()` means it runs after a creation that never happened. A failure that is *not* an absence — an `AccessDenied`, a throttle — still stops it, and an unreadable state that is not "the root was never initialised" still stops it. The report says which: `destroyed=true`, or `destroyed=nothing_created`. `terraform destroy` requires every variable `apply` did, so the step that opens item 4 writes them to `run.auto.tfvars.json` beside the rehearsal root (identifiers only, ignored by `infra/.gitignore`) and the teardown refuses to destroy without that file rather than fail on a missing variable and leave the environment standing. To tear a run down by hand from a fresh checkout, recreate the file first: `name_prefix`, `api_image` and `worker_image` (`<repository>@<digest>`, from the release record or the run's inputs), `certificate_arn`, `api_hostname`, `assume_deployment_role: false`, `bootstrap: true`, and the two schema ranges read from `packages/domain/db/schemaRange.ts`; then run `rehearsal-teardown.sh <prefix>` from the root directory as the `fss-rh-deploy` session.
@@ -873,6 +873,49 @@ Withdraw either half. The attestation (`enabled: false`) stops it immediately an
 **If the data is wrong rather than the code.** `docs/greenfield/restore-drill.md`, all nine steps, in production, with sending and dialing held until step 9. There is no faster version.
 
 **Never.** The old stack. It is read-only after the cutover watermark and the carry tooling contains no writer at all (Appendix G 20).
+
+### 7.1 The expected system generation (Appendix E step 1)
+
+`expected_system_generation` in the production root is Appendix E's "operator-controlled expected generation". Its code default is `null`, meaning unpinned. When set, it becomes `FSS_EXPECTED_SYSTEM_GENERATION` on `fss-prod-api` and `fss-prod-worker` and on no one-off task definition. At startup the worker compares it with the database's `system_generation`. When they differ, the worker opens one `restore_in_progress` hold per workspace, logs `restore_generation_mismatch` (which fires `fss-prod-restore-generation-mismatch`, a critical alarm), and runs. The API fails `/readyz` (the smoke's second check) and shows both numbers in the Settings diagnostics line. Until lane g56 nothing set it, and nothing anywhere opened a restore hold (`docs/decisions/g56-restore-holds-are-opened-by-the-generation-check.md`).
+
+**Read the database's generation.** Run this from a checkout at the commit production runs, as the admin profile, with the production root initialised as for section 4. It runs `fss verify` on the operations task, which the deployed image already has. The write it proves is rolled back, and `release-deploy.sh` runs the same command at every deploy. From g56 on, `fss admin counts` reports the same `systemGeneration` field.
+
+```bash
+export AWS_REGION=us-east-1
+export WORKER_DIGEST="$(aws ecs describe-task-definition --task-definition fss-prod-operations \
+  --query 'taskDefinition.containerDefinitions[0].image' --output text | sed 's/.*@//')"
+bash -c 'set -euo pipefail
+source infra/scripts/release-common.sh
+root=infra/roots/production
+network=$(release_output "$root" task_network_configuration json)
+release_run_task --step read-generation --environment production --prefix fss-prod \
+  --account "$(release_caller_account)" --region "$AWS_REGION" \
+  --cluster "$(release_output "$root" cluster_arn)" \
+  --task-definition "$(release_output "$root" operations_task_definition_arn)" \
+  --container operations --network-plan "$network" --image-digest "$WORKER_DIGEST" \
+  --database-host "$(release_json_path "$network" database_host)" \
+  --secret-arn "$(release_output "$root" app_runtime_database_secret_arn)" \
+  --log-group "$(release_output "$root" worker_log_group_name)" --log-stream-prefix operations \
+  --capture /tmp/fss-read-generation.log \
+  -- verify
+release_captured_report /tmp/fss-read-generation.log /tmp/fss-read-generation.json'
+python3 -c 'import json; print(json.load(open("/tmp/fss-read-generation.json"))["systemGeneration"])'
+```
+
+It prints one integer, `1` unless a step 9 has ever run. The desktop Settings diagnostics line shows the same value as "Database N, expected unpinned".
+
+**Pin it.** Apply with the value you read. Read the plan first. It changes exactly two task definitions, `fss-prod-api` and `fss-prod-worker`, each replaced by a new revision that differs only in `FSS_EXPECTED_SYSTEM_GENERATION`. Both services update in place to the new revision, and nothing else changes. The apply itself rolls both services onto the new revisions. The new worker's log must show `worker_started` with `system_generation` equal to the pin, and **no** `restore_generation_mismatch` before it. If that line is there, the value is wrong: the worker has opened restore holds, sending and dialing are held, and the alarm is firing. Set the right value and apply. Releasing the holds it opened is then Appendix E step 9, because that is the only thing that releases a restore hold.
+
+```bash
+terraform -chdir=infra/roots/production plan -out=pin.tfplan -var="expected_system_generation=<N>" <the same -var list as section 4>
+```
+
+**After a restore** (`docs/greenfield/restore-drill.md`, in production):
+
+1. Read the restored copy's generation R with the command above, adding `--env FSS_DATABASE_HOST=<restored endpoint>` to `release_run_task`.
+2. Before any service is pointed at the copy, hold it: run the same command with `-- admin restore-holds open --expected-generation <R+1>`, and the same `--env`, in place of `-- verify`.
+3. Set `expected_system_generation = R + 1` in the same apply as, or an apply before, whatever points the services at the copy. Never after. A worker that starts on the copy with the old pin sees no mismatch and holds nothing.
+4. **Step 9 needs no bump.** It inserts generation `max + 1 = R + 1`, which is the pin. Confirm that the `generation` step 9 reports equals the pin. If it does not, set the pin to it and apply before any worker restarts. A pin that disagrees with the database makes the next worker start reopen the restore holds that step 9 released.
 
 ---
 
@@ -2463,6 +2506,21 @@ should read 1 every minute, `fss-prod-mailbox-heartbeat-missed` should stay OK, 
 `mail.sync` job for the mailbox should complete about once a minute. The first pass after
 the watch registered on 24 September turns a day old (on the new build) should renew it,
 and `GmailWatchHoursToExpiry` should read just under 168 again, and stay above 144.
+
+### 8.0aa What the fourteenth full run proved: step 0 passes, and nothing opens a restore hold (24 September, late evening)
+
+Run 36062337914 (22:45Z) carried lane g53. The drill task received the source baseline, created its reports directory, and passed step 0 against the restored instance for the first time. It then stopped at step 1: `holds list --reason restore_in_progress` returned 0, with "the restored database did not open a restore hold. Stop the drill and fail the release."
+
+**Why.** No code opened a `restore_in_progress` hold. `advanceSystemGeneration` released them, the gates and `holds list` read them, and the worker only *logged* `restore_generation_mismatch` when `FSS_EXPECTED_SYSTEM_GENERATION` differed from the database. No task definition set that variable. Even if one had, a restored copy carries its source's generation, so only an expected generation pinned ahead of the copy can show a mismatch. A real production restore would have held nothing.
+
+**Lane g56** adds four things:
+
+- `openRestoreHolds`: one workspace-scope hold per workspace, idempotent, under an advisory lock, touching no other hold.
+- The worker opens those holds at startup on a mismatch.
+- `fss admin restore-holds open --expected-generation <n>`, the same check by hand.
+- `expected_system_generation` on both roots (7.1).
+
+The drill runs that command as step 1a with the source generation plus one. It asserts the step 9 reconciliation, and the runner reads the alarm's history. The next `full` run is the one that proves it (8.1 item 12).
 
 ### 8.1 Still unverified
 

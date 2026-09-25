@@ -737,6 +737,43 @@ const MUTATIONS = [
     because:
       'Raising the alarm to the old sweep\u2019s five minutes is the other way to stop the 24 September flapping, and it leaves the alarm and the sixty-second heartbeat disagreeing in the opposite direction: fifteen quiet minutes before anyone hears that a mailbox stopped being read. mailboxHeartbeatCadence.check.ts requires the period to equal the interval recordMailboxHeartbeat writes, so it has to go red.',
   },
+  {
+    name: 'the worker logs a restore and opens no restore hold again',
+    file: 'apps/worker/src/bootstrap/worker.ts',
+    find:
+      "  await enforceRestoreGeneration(sessions.scheduler, {\n    expectedGeneration: config.expectedSystemGeneration,\n    observedGeneration: startup.systemGeneration,\n    openedBy: 'worker',\n    log,\n  });\n",
+    replace: '',
+    suite: ['run', 'test', '--workspace', 'apps/worker', '--', 'test/workerProcess.test.ts'],
+    because:
+      'This is rehearsal run 36062337914 (24 September 2026) exactly: the drill passed step 0 and stopped at step 1 because nothing anywhere opened a restore_in_progress hold, and a production restore would have held nothing. workerProcess.test.ts starts a worker pinned one generation ahead of the database and reads the holds back per workspace, so it has to go red when the startup opener is gone.',
+  },
+  {
+    name: 'the restore drill launches the drill without a pin again',
+    file: 'infra/scripts/rehearsal-restore-drill.sh',
+    find: '    --expected-generation "$EXPECTED_GENERATION" \\\n',
+    replace: '',
+    suite: ['run', 'test:release', '--', 'test/release/scenario11.check.ts'],
+    because:
+      'Without --expected-generation the drill runs no generation check against the restored copy, which carries its source’s generation, so nothing opens a restore hold and step 1 fails as it did in run 36062337914. The dry run prints only the plan line, so scenario 11 reads the real drill_task launch through the extractor and has to go red when the pin is dropped from it.',
+  },
+  {
+    name: 'the drill ignores its pin and skips step 1a',
+    file: 'apps/worker/src/tools/fss/drill.ts',
+    find: '  if (expectedGeneration !== undefined) {\n',
+    replace: "  if (expectedGeneration === 'never-a-flag-value') {\n",
+    suite: ['run', 'test', '--workspace', 'apps/worker', '--', 'test/fssSurface.test.ts'],
+    because:
+      'A drill that accepted --expected-generation and never ran the check would stop at step 1 on every run with the pin in its command line, which reads like the runner is right and the database is wrong. fssSurface.test.ts drills a database that has a workspace and no hold, with the pin one ahead, and has to go red when step 1a does not open the hold.',
+  },
+  {
+    name: 'the runner reads any alarm history as the alarm having fired',
+    file: 'infra/scripts/rehearsal-restore-drill.sh',
+    find: '    if (data.get("newState") or {}).get("stateValue") == "ALARM":\n',
+    replace: '    if True:\n',
+    suite: ['run', 'test:release', '--', 'test/release/scenario11.check.ts'],
+    because:
+      'restore-drill.md step 1 says the alarm must have fired, and a check that passes on any history, an OK transition included, never looks. scenario11.check.ts hands the runner a history whose only transition is to OK and has to go red when that passes.',
+  },
 ];
 
 // A listener on each of these keeps Node from exiting mid-mutation with a file still

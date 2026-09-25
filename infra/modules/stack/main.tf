@@ -259,6 +259,11 @@ module "cluster" {
   container_insights     = var.container_insights
   enable_execute_command = var.enable_execute_command
 
+  # Appendix E step 1 (lane g56). A first-class input rather than an
+  # extra_environment entry, for the reason the deployment flags are: the cluster
+  # refuses it anywhere else, so the plan shows the one place it changes.
+  expected_system_generation = var.expected_system_generation
+
   # FSS_RESEARCH_PROVIDERS is the worker's alone: the API has no research
   # adapter, and a variable a process never reads is a variable that drifts.
   worker_environment = {

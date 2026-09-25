@@ -588,3 +588,40 @@ run "the_assume_flag_chooses_a_credential_path_and_not_a_plan" {
     error_message = "The root still plans with the assumption turned off; otherwise the flag would be a way to plan an empty stack."
   }
 }
+
+# Lane g56. Production is unpinned in code: the value is read from the database
+# with an operations task and set by an operator (docs/greenfield/release.md, "The
+# expected system generation"). A default here would be a generation nobody read.
+run "production_is_unpinned_in_code" {
+  command = plan
+
+  assert {
+    condition = (!contains(keys(module.stack.api_environment), "FSS_EXPECTED_SYSTEM_GENERATION")
+    && !contains(keys(module.stack.worker_environment), "FSS_EXPECTED_SYSTEM_GENERATION"))
+    error_message = "No production generation is pinned in code."
+  }
+}
+
+run "an_operator_pin_reaches_both_production_services" {
+  command = plan
+
+  variables {
+    expected_system_generation = 2
+  }
+
+  assert {
+    condition = (module.stack.api_environment["FSS_EXPECTED_SYSTEM_GENERATION"] == "2"
+    && module.stack.worker_environment["FSS_EXPECTED_SYSTEM_GENERATION"] == "2")
+    error_message = "Appendix E step 1's control must reach the worker, which opens the restore holds, and the API, which reports the mismatch."
+  }
+}
+
+run "a_production_generation_that_is_not_a_positive_whole_number_is_refused" {
+  command = plan
+
+  variables {
+    expected_system_generation = 0
+  }
+
+  expect_failures = [var.expected_system_generation]
+}

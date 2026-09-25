@@ -261,7 +261,7 @@ if rehearsal_dry_run; then
   # being a comment and becomes a test.
   if [ ! -f "$BASELINE" ]; then
     cat > "$BASELINE" <<'JSON'
-{"asOf":"2026-09-21T00:00:00Z","sends":1,"replies":1,"suppressions":1,"crm_edits":1,"migrations":1}
+{"asOf":"2026-09-21T00:00:00Z","sends":1,"replies":1,"suppressions":1,"crm_edits":1,"migrations":1,"systemGeneration":1}
 JSON
   fi
 else
@@ -310,6 +310,34 @@ if ! BASELINE_JSON="$(handed_baseline "$BASELINE")"; then
   exit 1
 fi
 rehearsal_log "baseline handed to the drill task: $BASELINE_JSON"
+
+# The generation the restored copy has to be held against (lane g56).
+#
+# A point-in-time copy carries its source's `system_generation`, and only step 9 ever
+# moves one, so a restored database looks restored only to a check that expects a
+# generation *ahead* of it. That is what an operator pins production to after a restore
+# (`expected_system_generation`, docs/greenfield/release.md), and it is what the drill
+# task is handed: the source's generation, measured with the baseline, plus one. Step 1a
+# of the drill runs the worker's own startup check with it, which opens the restore
+# holds and logs the line the immediately-critical alarm counts; after step 9 the
+# database must be on exactly this generation. Refused here, before a restored instance
+# exists, when the baseline does not carry it: an image older than lane g56 measured it.
+expected_generation() { # expected_generation <baseline file>
+  python3 - "$1" <<'PY'
+import json, sys
+
+generation = json.load(open(sys.argv[1])).get("systemGeneration")
+if isinstance(generation, bool) or not isinstance(generation, int) or generation < 1:
+    sys.exit(1)
+print(generation + 1)
+PY
+}
+if ! EXPECTED_GENERATION="$(expected_generation "$BASELINE")"; then
+  echo "FAIL: the drill baseline carries no systemGeneration, so the restored copy cannot be pinned against one" >&2
+  echo "      fss admin counts reports it from lane g56 on; the drill passes it plus one as --expected-generation." >&2
+  exit 1
+fi
+rehearsal_log "the restored copy is held against generation $EXPECTED_GENERATION (the source's plus one)"
 
 # ---------------------------------------------------------------------------
 # Step 0b. The work the restore is meant to lose (0.1, lane g40).
@@ -401,11 +429,14 @@ rehearsal_log "restored instance at $RESTORED_HOST"
 # ---------------------------------------------------------------------------
 # Steps 1b to 9. One in-VPC task, one correlated log, per-step JSON reports.
 #
-# `fss drill` runs them in one process against the restored instance: step 1's two
-# assertions (a restore hold exists, a dial is refused), the journal replay twice, the
-# Sent reconciliation, the inbox recovery, the job discard and rematerialisation, the
-# watch renewal and coverage, the forward migration, the reconciliation report and the
-# generation advance. It stops at the first step that fails and says which.
+# `fss drill` runs them in one process against the restored instance: step 1a's
+# generation check, which opens the restore holds exactly as a worker pinned ahead of
+# the restored copy would (lane g56), step 1's two assertions (a restore hold exists, a
+# dial is refused), the journal replay twice, the Sent reconciliation, the inbox
+# recovery, the job discard and rematerialisation, the watch renewal and coverage, the
+# forward migration, the reconciliation report, the generation advance, and the check
+# that the advance landed on the pin. It stops at the first step that fails and says
+# which.
 #
 # One task rather than eight: they share a connection, a transactional view of a
 # database that is being reconstructed underneath them, and a log stream — and eight
@@ -420,13 +451,20 @@ rehearsal_log "restored instance at $RESTORED_HOST"
 rehearsal_log "steps 1 to 9: one in-VPC task against the restored instance"
 DRILL_REPORT="$REPORTS/drill.json"
 if rehearsal_dry_run; then
-  rehearsal_plan "fss drill --reports /tmp/fss-drill --baseline-json $BASELINE_JSON --from $REPLAY_FROM --since $SENT_FROM --all-mailboxes (in-VPC task, drill, FSS_DATABASE_HOST=$RESTORED_HOST)"
-  cat > "$DRILL_REPORT" <<'JSON'
+  rehearsal_plan "fss drill --reports /tmp/fss-drill --baseline-json $BASELINE_JSON --expected-generation $EXPECTED_GENERATION --from $REPLAY_FROM --since $SENT_FROM --all-mailboxes (in-VPC task, drill, FSS_DATABASE_HOST=$RESTORED_HOST)"
+  # Unquoted, for the two generations only: the step 1a and step 9 reports carry the
+  # pin this run handed over, as the real drill's do. Nothing else in it expands. A
+  # report the caller already placed is left alone, as the baseline is, so
+  # `test/release/scenario11.check.ts` can hand the runner a drill that stopped.
+  OBSERVED_GENERATION=$((EXPECTED_GENERATION - 1))
+  if [ ! -f "$DRILL_REPORT" ]; then
+  cat > "$DRILL_REPORT" <<JSON
 {
   "ok": true,
   "baselineAt": "2026-09-21T00:00:00Z",
   "stoppedAt": null,
   "steps": [
+    { "step": "step1a-generation-check", "ok": true, "report": { "systemGeneration": ${OBSERVED_GENERATION}, "expectedGeneration": ${EXPECTED_GENERATION}, "mismatch": true, "holdsOpened": 1, "holdsAlreadyOpen": 0, "restoreHoldsInForce": 1 } },
     { "step": "step1-restore-holds", "ok": true, "report": { "count": 1 } },
     { "step": "step1-dial-refused", "ok": true, "report": { "allowed": false } },
     { "step": "step2-journal-replay", "ok": true, "report": { "inserted": 1 } },
@@ -439,18 +477,142 @@ if rehearsal_dry_run; then
     { "step": "step6-coverage", "ok": true, "report": { "mailboxes": [{ "complete": true }] } },
     { "step": "step7-migrate", "ok": true, "report": { "schema": { "apiAccepts": true, "workerAccepts": true } } },
     { "step": "step8-restore-report", "ok": true, "report": { "suppressions_before": 1, "suppressions_after": 1, "sends_repeated": 0, "crm_rpo_seconds": 300, "unresolved": [] } },
-    { "step": "step9-system-generation-advance", "ok": true, "report": { "holdsReleased": 1, "otherHoldsBefore": 1, "otherHoldsAfter": 1 } }
+    { "step": "step9-system-generation-advance", "ok": true, "report": { "holdsReleased": 1, "otherHoldsBefore": 1, "otherHoldsAfter": 1 } },
+    { "step": "step9-generation-reconciled", "ok": true, "report": { "generation": ${EXPECTED_GENERATION}, "expectedGeneration": ${EXPECTED_GENERATION}, "reconciled": true, "mismatch": false, "holdsOpened": 0, "restoreHoldsInForce": 0 } }
   ]
 }
 JSON
+  fi
+  # The capture the real launch leaves, with the one line the check below reads. A
+  # capture the caller already placed is left alone, exactly as the baseline is, so
+  # `test/release/scenario11.check.ts` can hand the runner one without it.
+  if [ ! -f "$REPORTS/drill.log" ]; then
+    printf '{"ts":"2026-09-21T00:10:00.000Z","level":"error","component":"fss","instance":"drill","event":"restore_generation_mismatch","expected_generation":%s,"observed_generation":%s,"restore_holds_opened":1,"restore_holds_already_open":0}\n' \
+      "$EXPECTED_GENERATION" "$OBSERVED_GENERATION" > "$REPORTS/drill.log"
+  fi
 else
   drill_task drill drill "$REPORTS/drill.log" drill \
     --reports /tmp/fss-drill \
     --baseline-json "$BASELINE_JSON" \
+    --expected-generation "$EXPECTED_GENERATION" \
     --from "$REPLAY_FROM" \
     --since "$SENT_FROM" \
     --all-mailboxes
   release_captured_report "$REPORTS/drill.log" "$DRILL_REPORT"
+fi
+
+# ---------------------------------------------------------------------------
+# Step 1's alarm half (lane g56): "And the alarm must have fired."
+#
+# Read straight after the drill, and whenever step 1a passed, *before* the report is
+# judged: a drill that held the restored copy and then stopped at a later step has
+# still produced the mismatch, and a run that stops at step 1's dial probe (no
+# dialable subject, release.md 8.0s) should still prove the alarm rather than exit
+# before looking. When step 1a did not pass there is nothing to read, and the report
+# below says why.
+#
+# Two assertions, because they fail for different reasons. The first reads the drill's
+# own captured log stream: it must hold the `restore_generation_mismatch` line, the
+# event `infra/modules/observability` turns into `RestoreGenerationMismatches`. The
+# drill task writes to the worker log group, so that line is counted exactly as a
+# worker's would be. The second reads the alarm. It is one datapoint of one at 60 s
+# and treats missing data as not breaching, so by the end of a drill that ran for
+# minutes its *current* state is normally OK again: what is asserted is its history,
+# a transition to ALARM since the drill started, polled for as long as metric delivery
+# and one evaluation can take.
+# ---------------------------------------------------------------------------
+step1a_passed() { # step1a_passed <drill report>
+  python3 - "$1" <<'PY'
+import json, sys
+
+report = json.load(open(sys.argv[1]))
+sys.exit(0 if any(entry.get("step") == "step1a-generation-check" and entry.get("ok") for entry in report.get("steps", [])) else 1)
+PY
+}
+
+drill_logged_mismatch() { # drill_logged_mismatch <captured log>
+  python3 - "$1" <<'PY'
+import json, sys
+
+found = False
+for line in open(sys.argv[1], encoding="utf-8"):
+    text = line.strip()
+    if not text.startswith("{"):
+        continue
+    try:
+        event = json.loads(text)
+    except ValueError:
+        continue
+    if isinstance(event, dict) and event.get("event") == "restore_generation_mismatch" and event.get("level") == "error":
+        found = True
+sys.exit(0 if found else 1)
+PY
+}
+
+alarm_went_to_alarm() { # alarm_went_to_alarm <describe-alarm-history JSON>
+  FSS_HISTORY="$1" python3 -c '
+import json, os, sys
+history = json.loads(os.environ["FSS_HISTORY"] or "null") or {}
+for item in history.get("AlarmHistoryItems") or []:
+    try:
+        data = json.loads(item.get("HistoryData") or "{}")
+    except ValueError:
+        continue
+    if (data.get("newState") or {}).get("stateValue") == "ALARM":
+        sys.exit(0)
+sys.exit(1)
+'
+}
+
+ALARM_NAME="${PREFIX}-restore-generation-mismatch"
+ALARM_WAIT_ATTEMPTS=${FSS_ALARM_WAIT_ATTEMPTS:-20}
+ALARM_WAIT_SECONDS=${FSS_ALARM_WAIT_SECONDS:-15}
+
+if step1a_passed "$DRILL_REPORT"; then
+  rehearsal_log "step 1: the mismatch reached the log group and the alarm"
+  if ! drill_logged_mismatch "$REPORTS/drill.log"; then
+    echo "FAIL: the drill logged no restore_generation_mismatch, so the immediately-critical alarm had nothing to count." >&2
+    echo "      Its stream is kept in $REPORTS/drill.log; step 1a runs the check that writes it." >&2
+    exit 1
+  fi
+  rehearsal_log "the drill's log stream holds restore_generation_mismatch"
+
+  if [ "${FSS_RELEASE_ALARM_HISTORY+set}" = "set" ]; then
+    # The answer handed in, which is how the release suite drives this offline.
+    if ! alarm_went_to_alarm "$FSS_RELEASE_ALARM_HISTORY"; then
+      echo "FAIL: $ALARM_NAME never went to ALARM after $DRILL_START." >&2
+      exit 1
+    fi
+    rehearsal_log "$ALARM_NAME went to ALARM after $DRILL_START"
+  elif rehearsal_dry_run; then
+    rehearsal_plan "aws cloudwatch describe-alarm-history --alarm-name $ALARM_NAME --history-item-type StateUpdate --start-date $DRILL_START (until a transition to ALARM, $ALARM_WAIT_ATTEMPTS x ${ALARM_WAIT_SECONDS}s)"
+  else
+    attempt=1
+    fired=0
+    while [ "$attempt" -le "$ALARM_WAIT_ATTEMPTS" ]; do
+      history="$(rehearsal_aws cloudwatch describe-alarm-history \
+        --alarm-name "$ALARM_NAME" \
+        --history-item-type StateUpdate \
+        --start-date "$DRILL_START" \
+        --output json)"
+      if alarm_went_to_alarm "$history"; then
+        fired=1
+        break
+      fi
+      rehearsal_log "attempt $attempt of $ALARM_WAIT_ATTEMPTS: $ALARM_NAME has not gone to ALARM since $DRILL_START yet"
+      sleep "$ALARM_WAIT_SECONDS"
+      attempt=$((attempt + 1))
+    done
+    if [ "$fired" -ne 1 ]; then
+      echo "FAIL: $ALARM_NAME never went to ALARM after $DRILL_START, though the drill logged the mismatch." >&2
+      echo "      Read the metric filter (infra/modules/observability) and the alarm (infra/modules/alerts) against" >&2
+      echo "      the environment's namespace; docs/greenfield/restore-drill.md step 1." >&2
+      exit 1
+    fi
+    rehearsal_log "$ALARM_NAME went to ALARM after $DRILL_START"
+  fi
+else
+  rehearsal_log "step 1a did not pass, so the mismatch line and the alarm are not read; the report below says why"
 fi
 
 # ---------------------------------------------------------------------------
@@ -462,11 +624,12 @@ fi
 # name the release record and the workflow already look for, so the artifacts a
 # release leaves behind are unchanged by where the work ran.
 # ---------------------------------------------------------------------------
-python3 - "$DRILL_REPORT" "$REPORTS" <<'PY'
+python3 - "$DRILL_REPORT" "$REPORTS" "$EXPECTED_GENERATION" <<'PY'
 import json, pathlib, sys
 
 report = json.load(open(sys.argv[1]))
 reports = pathlib.Path(sys.argv[2])
+expected_generation = int(sys.argv[3])
 
 assert report.get("stoppedAt") is None, f"the drill stopped at {report.get('stoppedAt')}"
 steps = {entry["step"]: entry for entry in report.get("steps", [])}
@@ -474,6 +637,7 @@ steps = {entry["step"]: entry for entry in report.get("steps", [])}
 # A drill report with no steps in it would satisfy every assertion below by having
 # nothing to disagree with, which is this check's own vacuous pass.
 required = [
+    "step1a-generation-check",
     "step1-restore-holds",
     "step1-dial-refused",
     "step2-journal-replay",
@@ -484,6 +648,7 @@ required = [
     "step7-migrate",
     "step8-restore-report",
     "step9-system-generation-advance",
+    "step9-generation-reconciled",
 ]
 missing = [name for name in required if name not in steps]
 assert not missing, f"the drill reported no {', '.join(missing)}"
@@ -507,7 +672,12 @@ for name, destination in [
     (reports / destination).write_text(json.dumps(body(name), indent=2) + "\n")
 
 # Step 1: the generation mismatch held sending and dialing. Everything after it is
-# meaningless if this was not true.
+# meaningless if this was not true. Step 1a is what held it (lane g56): the worker's own
+# startup check, run with the pin this runner handed over, against the restored copy.
+check = body("step1a-generation-check")
+assert check.get("expectedGeneration") == expected_generation, f"the generation check ran against another pin: {check}"
+assert check.get("mismatch") is True, f"the generation check found no mismatch: {check}"
+assert check.get("restoreHoldsInForce", 0) >= 1, f"the generation check held no workspace: {check}"
 assert body("step1-restore-holds").get("count", 0) >= 1, "the restored database opened no restore hold"
 assert body("step1-dial-refused").get("allowed") is False, "a dial was authorized while a restore was in progress"
 
@@ -544,6 +714,13 @@ advance = body("step9-system-generation-advance")
 before_other = advance.get("otherHoldsBefore", 0)
 assert before_other >= 1, f"no other hold existed, so selectivity was not tested: {advance}"
 assert advance.get("otherHoldsAfter") == before_other, f"advancing the generation cleared unrelated holds: {advance}"
+
+# Step 9's consequence (lane g56): the database is now on the pin, so a worker restarted
+# with it holds nothing. This is the steady state production is left in after a restore.
+reconciled = body("step9-generation-reconciled")
+assert reconciled.get("generation") == expected_generation, f"step 9 did not land on the pinned generation {expected_generation}: {reconciled}"
+assert reconciled.get("mismatch") is False and reconciled.get("holdsOpened") == 0, f"the pinned check still found a restore after step 9: {reconciled}"
+assert reconciled.get("restoreHoldsInForce") == 0, f"a restore hold is in force after step 9: {reconciled}"
 PY
 
 # ---------------------------------------------------------------------------
@@ -559,5 +736,5 @@ rehearsal_log "step 7: the declared ranges, against the deployed images"
 "$(dirname "${BASH_SOURCE[0]}")/rehearsal-schema-ranges.sh" "$PREFIX"
 
 rehearsal_write_report "restore-drill.txt" \
-  "prefix=$PREFIX target=$RESTORE_TARGET restored_host=$RESTORED_HOST result=pass"
+  "prefix=$PREFIX target=$RESTORE_TARGET restored_host=$RESTORED_HOST expected_generation=$EXPECTED_GENERATION result=pass"
 rehearsal_log "Appendix E steps 1 to 9 complete; Appendix G 11 passes"

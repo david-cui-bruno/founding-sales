@@ -90,6 +90,8 @@ module "stack" {
   sending_enabled    = var.sending_enabled
   extra_environment  = var.extra_environment
 
+  expected_system_generation = var.expected_system_generation
+
   certificate_arn = var.certificate_arn
   api_hostname    = var.api_hostname
   elb_account_id  = var.elb_account_id

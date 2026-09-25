@@ -132,10 +132,20 @@ aws rds describe-db-instances --db-instance-identifier "${PREFIX}-pg-restored" \
   --query 'DBInstances[0].{restored:InstanceCreateTime,latestRestorable:LatestRestorableTime}'
 ```
 
+**Hold the restored instance before anything is pointed at it** (lane g56). A restored copy carries its source's `system_generation`, and only step 9 moves a generation, so the copy looks restored only to a check that expects a generation *ahead* of it. Read the copy's generation R (`fss admin counts` or `fss verify` on the operations task with `FSS_DATABASE_HOST` overridden to the restored endpoint: `systemGeneration`), then run the worker's own startup check against it by hand:
+
+```bash
+# (FSS) on the operations task definition, FSS_DATABASE_HOST = the restored endpoint.
+# Opens one restore_in_progress hold per workspace and logs restore_generation_mismatch.
+fss admin restore-holds open --expected-generation "$((R + 1))"
+```
+
+Then set the services' pin to the same number, `expected_system_generation = R + 1` in the root, **in the same apply as, or an apply before, whatever points the services at the restored instance — never after**. A worker that starts against the restored copy with the old pin sees no mismatch and holds nothing. With the new pin every worker start opens the holds again if they are gone (it never adds a second one) and raises the alarm. `docs/greenfield/release.md` 7.1 has the production commands. The automated drill does the same thing in one task: the runner hands `fss drill` the source baseline's `systemGeneration` plus one as `--expected-generation`, and step 1a runs `admin restore-holds open` with it.
+
 Point the services at the restored instance and confirm the refusal:
 
 ```bash
-# Repoint FSS_DATABASE_HOST at the restored endpoint, then:
+# Repoint FSS_DATABASE_HOST at the restored endpoint, and set expected_system_generation, then:
 aws ecs update-service --cluster "${PREFIX}-cluster" --service "${PREFIX}-api"    --force-new-deployment
 aws ecs update-service --cluster "${PREFIX}-cluster" --service "${PREFIX}-worker" --force-new-deployment
 aws ecs wait services-stable --cluster "${PREFIX}-cluster" --services "${PREFIX}-api" "${PREFIX}-worker"
@@ -149,13 +159,16 @@ fss admin holds list --reason restore_in_progress
 fss admin dial-authorize --any   # expect: allowed=false, and restore_in_progress among the holds
 ```
 
-And the alarm must have fired. This is the `restore_generation_mismatch` metric filter feeding the immediately-critical alarm:
+And the alarm must have fired. This is the `restore_generation_mismatch` metric filter feeding the immediately-critical alarm. It is one datapoint of one at 60 s and treats missing data as not breaching, so a few minutes after the last mismatch line its *state* is OK again; read its history, which keeps the transition:
 
 ```bash
-aws cloudwatch describe-alarms --alarm-names "${PREFIX}-restore-generation-mismatch" \
-  --query 'MetricAlarms[0].{state:StateValue,reason:StateReason}'
-# expect: ALARM
+aws cloudwatch describe-alarm-history --alarm-name "${PREFIX}-restore-generation-mismatch" \
+  --history-item-type StateUpdate --start-date "$DRILL_START" \
+  --query 'AlarmHistoryItems[].HistorySummary'
+# expect: "Alarm updated from OK to ALARM" (or from INSUFFICIENT_DATA)
 ```
+
+`rehearsal-restore-drill.sh` asserts both halves straight after the drill, before it judges the report, whenever step 1a passed. The drill task's captured log must hold the `restore_generation_mismatch` line, and the alarm's history must show a transition to ALARM since the drill began (polled for up to five minutes).
 
 If sending is **not** held at this point, stop the drill and fail the release. Nothing else in this document matters.
 
@@ -378,6 +391,8 @@ aws cloudwatch describe-alarms --alarm-names "${PREFIX}-restore-generation-misma
   --query 'MetricAlarms[0].StateValue'
 # expect: OK
 ```
+
+**The pin after step 9** (lane g56). Step 9 inserts generation `max + 1`, which is R + 1: exactly the pin set at step 1. So the pin needs no change here, and must not get one. Confirm that `generation` in the advance's report equals `expected_system_generation`. Only if it does not, set the pin to the reported generation and apply before any worker restarts. A worker restarted on a pin that disagrees with the database reopens restore holds that step 9 released. Releasing those takes another advance, which moves the database past the pin again. The drill asserts this as `step9-generation-reconciled`: the database is on the pin, and the worker's startup check run with it opens nothing.
 
 ## 10. Tear the drill down
 

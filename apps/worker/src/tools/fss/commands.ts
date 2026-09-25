@@ -73,6 +73,7 @@ export const COMMAND_DEPENDENCIES: Readonly<Record<string, DependencyMode>> = Ob
   'scheduler run-once': 'database',
   'restore-report': 'database',
   'system-generation advance': 'database',
+  'restore-holds open': 'database',
   'mailbox coverage': 'database',
   'workspace bootstrap': 'database',
   'suppression-journal replay': 'journal',
@@ -132,6 +133,10 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
       '--from',
       '--since',
       '--admin-user',
+      // Lane g56: the generation to pin the restored copy against, which the runner
+      // derives as the source baseline's `systemGeneration` plus one. Step 1a runs
+      // `admin restore-holds open` with it.
+      '--expected-generation',
       ...REPORTABLE,
     ],
     booleanFlags: ['--all-mailboxes'],
@@ -140,7 +145,7 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     // (lane g53) the source baseline handed over as a value, which is the rehearsal's
     // form because a one-off task can be handed nothing else.
     oneOf: ['--baseline', '--as-of', '--baseline-json'],
-    summary: 'Appendix E steps 2 to 9, in one process, stopping at the first step that fails',
+    summary: 'Appendix E steps 1 to 9, in one process, stopping at the first step that fails',
   },
   {
     path: ['admin', 'counts'],
@@ -250,6 +255,15 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     booleanFlags: [],
     requiredFlags: ['--out'],
     summary: 'Appendix E step 8: the reconciliation counts and the unresolved exceptions',
+  },
+  {
+    // Lane g56. Appendix E step 1 by hand, and `fss drill`'s step 1a: the worker's own
+    // startup check, run against whatever database this task was pointed at.
+    path: ['admin', 'restore-holds', 'open'],
+    valueFlags: ['--expected-generation', ...REPORTABLE],
+    booleanFlags: [],
+    requiredFlags: ['--expected-generation'],
+    summary: 'Appendix E step 1: hold every workspace when the database is not on the expected generation',
   },
   {
     path: ['admin', 'system-generation', 'advance'],

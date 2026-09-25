@@ -436,3 +436,211 @@ describe('fss drill --baseline-json, into a reports directory it makes (lane g53
     expect(file.code).toBe(64);
   });
 });
+
+/**
+ * Lane g56: the drill's step 1 is held by the generation check the worker runs, and
+ * `fss admin restore-holds open` is that check by hand.
+ *
+ * The fourteenth full run (36062337914, 24 September 2026) passed step 0 and stopped at
+ * step 1: nothing anywhere opened a restore hold. The drill now takes
+ * `--expected-generation`, the runner passes the source baseline's generation plus one,
+ * and step 1a runs `admin restore-holds open` with it.
+ *
+ * ## The vacuous-pass trap, named
+ *
+ * "Step 1 passes" could be true because a test inserted the hold, which is how every
+ * case before this lane reached it. Here nothing inserts one: the database has a
+ * workspace and no hold, the drill without a pin stops at step 1 exactly as the
+ * fourteenth run did, and the same drill with a pin gets past step 1 on holds step 1a
+ * opened — and is then refused a dial because there is nothing to dial, which is step
+ * 1's own second assertion and not this lane's. The mismatch line is read off stderr,
+ * where the tool logs in the shape the metric filter counts.
+ */
+describe('fss drill --expected-generation, and fss admin restore-holds open (lane g56)', () => {
+  const handed = {
+    asOf: '2026-09-21T00:00:00.000Z',
+    sends: 2,
+    replies: 3,
+    suppressions: 4,
+    crm_edits: 5,
+    migrations: 30,
+  };
+  let workspaceId: string;
+
+  beforeAll(async () => {
+    const created = await session.query<{ id: string }>(
+      "INSERT INTO workspaces (slug, display_name) VALUES ('g56', 'Restore holds') RETURNING id",
+    );
+    workspaceId = created.rows[0]?.id ?? '';
+  });
+
+  async function restoreHolds(): Promise<number> {
+    const { rows } = await session.query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM active_holds WHERE reason_code = 'restore_in_progress' AND released_at IS NULL",
+    );
+    return Number(rows[0]?.count ?? '0');
+  }
+
+  function mismatchLines(stderr: string): readonly Record<string, unknown>[] {
+    return stderr
+      .split('\n')
+      .filter(line => line.startsWith('{'))
+      .map(line => JSON.parse(line) as Record<string, unknown>)
+      .filter(line => line['event'] === 'restore_generation_mismatch');
+  }
+
+  function readStep(directory: string, name: string): Record<string, unknown> {
+    return JSON.parse(readFileSync(join(directory, `${name}.json`), 'utf8')) as Record<string, unknown>;
+  }
+
+  it('reports the database generation beside the counts, which is what the runner pins from', async () => {
+    const { code, stdout } = await run(['admin', 'counts']);
+    expect(code).toBe(0);
+    expect((JSON.parse(stdout) as Record<string, unknown>)['systemGeneration']).toBe(1);
+  });
+
+  it('without a pin, stops at step 1 exactly as the fourteenth run did, and says what was missing', async () => {
+    const drillReports = mkdtempSync(join(tmpdir(), 'fss-g56-unpinned-'));
+    const { code, stderr } = await run(
+      ['drill', '--reports', drillReports, '--baseline-json', JSON.stringify(handed), '--all-mailboxes'],
+      recordedEnvironment(),
+    );
+    expect(code, stderr).toBe(20);
+    const summary = JSON.parse(readFileSync(join(drillReports, 'drill.json'), 'utf8')) as Record<string, unknown>;
+    expect(summary['stoppedAt']).toBe('step1-restore-holds');
+    expect(stderr).toContain('No --expected-generation was given');
+    expect(existsSync(join(drillReports, 'step1a-generation-check.json'))).toBe(false);
+    expect(mismatchLines(stderr)).toHaveLength(0);
+    expect(await restoreHolds()).toBe(0);
+  });
+
+  it('refuses a pin equal to the database generation at step 1a, before step 1 is asked', async () => {
+    const drillReports = mkdtempSync(join(tmpdir(), 'fss-g56-equal-'));
+    const { code, stderr } = await run(
+      [
+        'drill',
+        '--reports',
+        drillReports,
+        '--baseline-json',
+        JSON.stringify(handed),
+        '--expected-generation',
+        '1',
+        '--all-mailboxes',
+      ],
+      recordedEnvironment(),
+    );
+    expect(code, stderr).toBe(20);
+    const summary = JSON.parse(readFileSync(join(drillReports, 'drill.json'), 'utf8')) as Record<string, unknown>;
+    expect(summary['stoppedAt']).toBe('step1a-generation-check');
+    expect(readStep(drillReports, 'step1a-generation-check')).toMatchObject({ refused: 'generation_matches' });
+    expect(existsSync(join(drillReports, 'step1-restore-holds.json'))).toBe(false);
+    expect(await restoreHolds()).toBe(0);
+  });
+
+  it('with the pin one ahead, opens the restore hold at step 1a, logs the mismatch, and passes step 1', async () => {
+    const drillReports = mkdtempSync(join(tmpdir(), 'fss-g56-pinned-'));
+    const { code, stderr } = await run(
+      [
+        'drill',
+        '--reports',
+        drillReports,
+        '--baseline-json',
+        JSON.stringify(handed),
+        '--expected-generation',
+        '2',
+        '--all-mailboxes',
+      ],
+      recordedEnvironment(),
+    );
+    // Stopped, but past step 1's restore-hold assertion: at the dial probe, which finds
+    // no dialable subject in a database with one bare workspace and refuses to call
+    // that a refusal (the vacuous pass step 1's second half exists to prevent).
+    expect(code, stderr).toBe(20);
+    const summary = JSON.parse(readFileSync(join(drillReports, 'drill.json'), 'utf8')) as Record<string, unknown>;
+    expect(summary['stoppedAt']).toBe('step1-dial-refused');
+    const steps = summary['steps'] as readonly Record<string, unknown>[];
+    expect(steps.map(entry => [entry['step'], entry['ok']])).toEqual([
+      ['step1a-generation-check', true],
+      ['step1-restore-holds', true],
+      ['step1-dial-refused', false],
+    ]);
+    expect(readStep(drillReports, 'step1a-generation-check')).toMatchObject({
+      systemGeneration: 1,
+      expectedGeneration: 2,
+      mismatch: true,
+      holdsOpened: 1,
+      holdsAlreadyOpen: 0,
+      restoreHoldsInForce: 1,
+    });
+    expect(readStep(drillReports, 'step1-restore-holds')['count']).toBe(1);
+    expect(await restoreHolds()).toBe(1);
+
+    const lines = mismatchLines(stderr);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({
+      level: 'error',
+      component: 'fss',
+      expected_generation: 2,
+      observed_generation: 1,
+      restore_holds_opened: 1,
+    });
+  });
+
+  it('admin restore-holds open is idempotent, and refuses a pin it cannot use', async () => {
+    const again = await run(['admin', 'restore-holds', 'open', '--expected-generation', '2']);
+    expect(again.code, again.stderr).toBe(0);
+    expect(JSON.parse(again.stdout)).toMatchObject({ mismatch: true, holdsOpened: 0, holdsAlreadyOpen: 1, restoreHoldsInForce: 1 });
+    expect(mismatchLines(again.stderr)).toHaveLength(1);
+    expect(await restoreHolds()).toBe(1);
+
+    for (const value of ['0', 'two', '1.5', '-3']) {
+      const refused = await run(['admin', 'restore-holds', 'open', '--expected-generation', value]);
+      expect(refused.code, value).toBe(20);
+      expect(refused.stderr, value).toContain('expected_generation_invalid');
+    }
+    const equal = await run(['admin', 'restore-holds', 'open', '--expected-generation', '1']);
+    expect(equal.code).toBe(20);
+    expect(equal.stderr).toContain('generation_matches');
+    // A usage error, not a guess: the generation is the one thing it cannot default.
+    expect((await run(['admin', 'restore-holds', 'open'])).code).toBe(64);
+    expect(await restoreHolds()).toBe(1);
+  });
+
+  it('after step 9 the database is on the pin and the pinned check holds nothing; on any other generation it is not run', async () => {
+    const { advanceSystemGeneration } = await import('@fss/domain/restore');
+    const { withTransaction } = await import('@fss/domain/db');
+    const { recordingLogger } = await import('../src/bootstrap/log.ts');
+    const { reconcileGenerationAfterAdvance } = await import('../src/tools/fss/drill.ts');
+
+    // Step 9 needs an attributed admin.
+    const user = await session.query<{ id: string }>(
+      'INSERT INTO users (google_sub, email, display_name) VALUES ($1, $2, $3) RETURNING id',
+      [`sub-${randomUUID()}`, 'g56-admin@example.test', 'Admin'],
+    );
+    const adminUserId = user.rows[0]?.id ?? '';
+    await session.query("INSERT INTO workspace_memberships (workspace_id, user_id, role) VALUES ($1, $2, 'admin')", [
+      workspaceId,
+      adminUserId,
+    ]);
+    const advanced = await withTransaction(session, async () => advanceSystemGeneration(session, { adminUserId }));
+    expect(advanced).toMatchObject({ ok: true, value: { generation: 2, releasedRestoreHolds: 1 } });
+
+    const log = recordingLogger();
+    expect(await reconcileGenerationAfterAdvance(session, 2, log)).toEqual({
+      generation: 2,
+      expectedGeneration: 2,
+      reconciled: true,
+      mismatch: false,
+      holdsOpened: 0,
+      restoreHoldsInForce: 0,
+    });
+    // A pin step 9 did not land on is reported, and nothing is opened on its account.
+    expect(await reconcileGenerationAfterAdvance(session, 3, log)).toEqual({
+      generation: 2,
+      expectedGeneration: 3,
+      reconciled: false,
+    });
+    expect(log.lines.map(line => line['event'])).not.toContain('restore_generation_mismatch');
+    expect(await restoreHolds()).toBe(0);
+  });
+});

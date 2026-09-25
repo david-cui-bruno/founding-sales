@@ -1,5 +1,11 @@
 import { readFile } from 'node:fs/promises';
-import { repositoryContext, withTransaction, workspaceScope, type SessionQueryable } from '@fss/domain/db';
+import {
+  readSystemGeneration,
+  repositoryContext,
+  withTransaction,
+  workspaceScope,
+  type SessionQueryable,
+} from '@fss/domain/db';
 import { databaseNow, listApplicableHolds } from '@fss/domain/policy';
 import { authorizeDial } from '@fss/domain/dial';
 import {
@@ -33,6 +39,8 @@ import type { HoldReasonCode } from '@fss/contracts';
 import { runSchedulerPass } from '../../scheduler/schedulerPass.ts';
 import { workerDueWorkSources } from '../../bootstrap/main.ts';
 import type { MailWorkerOptions } from '../../handlers/mail.ts';
+import { createLogger, type Logger } from '../../bootstrap/log.ts';
+import { enforceRestoreGeneration } from '../../bootstrap/restoreGeneration.ts';
 import type { ToolConfig } from './config.ts';
 
 /**
@@ -65,6 +73,12 @@ export interface AdminInvocation {
   /** Injected by the tests; resolved from the deployment in production. */
   readonly journalSource?: SuppressionJournalSource | undefined;
   readonly mail?: MailWorkerOptions | undefined;
+  /**
+   * The tool's logger (stderr, the metric filters' shape). `restore-holds open` writes
+   * the line `RestoreGenerationMismatches` counts through it; absent, a stderr logger
+   * of the same shape is used, so the line is never silently dropped.
+   */
+  readonly log?: Logger | undefined;
 }
 
 export type AdminOutcome =
@@ -93,7 +107,66 @@ async function scopes(session: SessionQueryable): Promise<readonly { id: string;
 export async function countsCommand(invocation: AdminInvocation): Promise<AdminOutcome> {
   const asOf = invocation.options['--as-of'];
   const counts = await readRestoreCounts(invocation.session, asOf === undefined ? {} : { asOf });
-  return accept({ ...counts });
+  // Lane g56. The generation the database reports *now*, not as of `--as-of`: it is not
+  // a count, only step 9 moves it, and what the restore drill needs from the baseline is
+  // the generation a copy restored from this database will carry, so that it can pin the
+  // expected generation one ahead of it. It is also how an operator reads the value to
+  // pin production at (docs/greenfield/release.md).
+  return accept({ ...counts, systemGeneration: await readSystemGeneration(invocation.session) });
+}
+
+// ---------------------------------------------------------------------------
+// Step 1: the restore holds, opened by the generation check (lane g56).
+// ---------------------------------------------------------------------------
+
+const toolStderrLogger = (): Logger =>
+  createLogger({ component: 'fss', instanceKey: 'admin', write: line => void process.stderr.write(`${line}\n`) });
+
+/**
+ * `fss admin restore-holds open --expected-generation <n>`: Appendix E step 1 by hand.
+ *
+ * The same function the worker runs at startup (`enforceRestoreGeneration`), against
+ * whatever database this task was pointed at. In production an operator runs it
+ * against the restored endpoint *before* any service is pointed there, so that neither
+ * the API's dial gate nor a worker that restarts early ever sees that database unheld;
+ * `fss drill` runs it as step 1a.
+ *
+ * It refuses when the database is already on the expected generation, because then it
+ * holds nothing and an operator reading a zero exit code at three in the morning would
+ * believe the restore was held. Any other difference is a mismatch, including a pin
+ * *behind* the database: that is a service pointed at a database it was not deployed
+ * against, and holding it is the safe answer.
+ */
+export async function restoreHoldsOpenCommand(invocation: AdminInvocation): Promise<AdminOutcome> {
+  const raw = invocation.options['--expected-generation'] ?? '';
+  if (!/^[1-9][0-9]{0,8}$/u.test(raw)) {
+    return refuse('expected_generation_invalid', '--expected-generation is the positive integer the operator expects the database to be on');
+  }
+  const expectedGeneration = Number(raw);
+  const observedGeneration = await readSystemGeneration(invocation.session);
+  if (observedGeneration === null) {
+    return refuse('generation_absent', 'this database reports no system_generation, so there is nothing to compare');
+  }
+  if (observedGeneration === expectedGeneration) {
+    return refuse(
+      'generation_matches',
+      `this database is on generation ${String(observedGeneration)}, which is the expected one, so nothing was held; after a restore, pass the restored copy's generation plus one`,
+    );
+  }
+  const check = await enforceRestoreGeneration(invocation.session, {
+    expectedGeneration,
+    observedGeneration,
+    openedBy: 'fss',
+    log: invocation.log ?? toolStderrLogger(),
+  });
+  return accept({
+    systemGeneration: check.observedGeneration,
+    expectedGeneration: check.expectedGeneration,
+    mismatch: check.mismatch,
+    holdsOpened: check.holdsOpened,
+    holdsAlreadyOpen: check.holdsAlreadyOpen,
+    restoreHoldsInForce: check.restoreHoldsInForce,
+  });
 }
 
 // ---------------------------------------------------------------------------

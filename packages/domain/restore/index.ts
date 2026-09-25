@@ -33,9 +33,14 @@ export { discardRunnableJobs, type DiscardRunnableReport } from './jobs.ts';
 
 export {
   RESTORE_ACTOR,
+  RESTORE_HOLDS_LOCK_KEY,
   listOpenHolds,
+  openRestoreHolds,
   releaseHoldsOfReason,
   type HoldFilter,
+  type OpenRestoreHoldsInput,
+  type OpenedRestoreHolds,
+  type RestoreHoldOpener,
   type ScopedOpenHold,
 } from './holds.ts';
 

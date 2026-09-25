@@ -288,6 +288,22 @@ variable "sending_enabled" {
   default     = false
 }
 
+variable "expected_system_generation" {
+  description = <<-EOT
+    Appendix E step 1's operator-controlled expected generation, passed to
+    infra/modules/cluster, which puts it on the API and worker services as
+    FSS_EXPECTED_SYSTEM_GENERATION. Null: unpinned. See that module's variable
+    for what it does and when it changes.
+  EOT
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.expected_system_generation == null ? true : (var.expected_system_generation >= 1 && floor(var.expected_system_generation) == var.expected_system_generation)
+    error_message = "expected_system_generation is a positive whole number, or null for unpinned. The bootstraps refuse anything else at startup."
+  }
+}
+
 variable "extra_environment" {
   description = <<-EOT
     Additional non-secret environment variables for both tasks. The three flags
