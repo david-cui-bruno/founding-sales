@@ -7,6 +7,7 @@ import {
   FIXTURE_API_DIGEST,
   FIXTURE_WORKER_DIGEST,
   fixtureDigest,
+  storeFixtureCiGateRecord,
   storeFixtureRecord,
 } from '../release/support/releaseRecords.ts';
 
@@ -193,6 +194,26 @@ describe('the send gate binds the attestation to the running worker', () => {
     await attest(true, 'fss-rh-binding-sends');
     const report = await dispatchWith(FIXTURE_WORKER_DIGEST);
     expect(report.outcome).toBe('sent');
+  });
+
+  it('sends under a record from the CI gate, which carries no drill evidence (lane g96)', async () => {
+    // The record the release puts since axiom 10B: `release-record-from-ci.sh`'s shape,
+    // no rehearsalPrefix, carryDrill or rehearsalScenarios. The enable rule accepts it
+    // from an API running its api digest, and the worker sends under it.
+    const reference = await storeFixtureCiGateRecord(world.database.session, '41000000011');
+    const enabled = await updateSetting(adminContext(world.alpha), {
+      settingKey: 'sending_enabled',
+      value: { enabled: true, releaseGateReference: reference },
+      changeNote: 'ci gate fixture',
+      runningApiDigest: FIXTURE_API_DIGEST,
+    });
+    expect(enabled.ok).toBe(true);
+    expect((await dispatchWith(FIXTURE_WORKER_DIGEST)).outcome).toBe('sent');
+
+    // And it binds exactly as a rehearsal's does: another worker image holds.
+    const mismatched = await dispatchWith(fixtureDigest('e'));
+    expect(mismatched.outcome).toBe('held');
+    expect(mismatched.detail).toBe('release_record_digest_mismatch');
   });
 
   it('holds when a different worker image is running than the rehearsal certified', async () => {

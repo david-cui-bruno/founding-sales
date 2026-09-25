@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   RELEASE_RECORD_BINDING_REFUSAL_CODES,
   RELEASE_RECORD_SCHEMA_ID,
+  ciGateReleaseReference,
   isImageDigest,
   releaseRecordSchema,
+  releaseRecordSource,
 } from '../src/index.ts';
 
 /**
@@ -76,5 +78,98 @@ describe('the release record contract', () => {
 
   it('has four binding refusals and no duplicates', () => {
     expect(new Set(RELEASE_RECORD_BINDING_REFUSAL_CODES).size).toBe(4);
+  });
+});
+
+/**
+ * Lane g96: the record from the CI gate (`infra/scripts/release-record-from-ci.sh`).
+ *
+ * The drill fields are the rehearsal's alone. A `ci-gate` record is accepted without
+ * them and refused with them; a rehearsal record is still refused without any one of
+ * them. Every other field keeps its rule, and the ones a `ci-gate` record adds are tied
+ * to each other: the reference, the run URL and the desktop stamp are derived from the
+ * run id and the commit.
+ */
+describe('the ci-gate release record', () => {
+  const COMMIT = 'e'.repeat(40);
+  const RUN = '41000000001';
+  const ciRecord = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+    schema: RELEASE_RECORD_SCHEMA_ID,
+    source: 'ci-gate',
+    releaseGateReference: ciGateReleaseReference(RUN, COMMIT),
+    recordedAt: '2026-09-25T21:40:12Z',
+    suite: 'pass',
+    commit: COMMIT,
+    gateRunId: RUN,
+    gateRunUrl: `https://github.com/example-owner/example-repo/actions/runs/${RUN}`,
+    imagesRunId: '41000000002',
+    artifacts: { api: digest('a'), worker: digest('b'), desktopCommitStamp: COMMIT },
+    enablesSending: true,
+    ...overrides,
+  });
+
+  it('accepts the shape the CI script writes, with no drill evidence, and says it is ci-gate', () => {
+    const parsed = releaseRecordSchema.safeParse(ciRecord());
+    expect(parsed.success, JSON.stringify(parsed.error?.issues)).toBe(true);
+    if (parsed.success) expect(releaseRecordSource(parsed.data)).toBe('ci-gate');
+    expect(ciGateReleaseReference(RUN, COMMIT)).toBe(`ci-gate-${RUN}-${'e'.repeat(12)}`);
+  });
+
+  it('refuses a ci-gate record that claims a drill a CI run did not do', () => {
+    for (const claim of [
+      { carryDrill: 'ran' },
+      { rehearsalScenarios: { '11': 'result=pass' } },
+      { rehearsalPrefix: 'fss-rh-example' },
+    ]) {
+      expect(releaseRecordSchema.safeParse(ciRecord(claim)).success, JSON.stringify(claim)).toBe(false);
+    }
+  });
+
+  it('still requires every drill field of a rehearsal record, with or without source spelled out', () => {
+    for (const field of ['carryDrill', 'rehearsalScenarios', 'rehearsalPrefix']) {
+      const { [field]: _dropped, ...without } = record();
+      expect(releaseRecordSchema.safeParse(without).success, field).toBe(false);
+      expect(releaseRecordSchema.safeParse({ ...without, source: 'rehearsal' }).success, field).toBe(false);
+    }
+    const explicit = releaseRecordSchema.safeParse(record({ source: 'rehearsal' }));
+    expect(explicit.success).toBe(true);
+    if (explicit.success) expect(releaseRecordSource(explicit.data)).toBe('rehearsal');
+    const implicit = releaseRecordSchema.safeParse(record());
+    if (implicit.success) expect(releaseRecordSource(implicit.data)).toBe('rehearsal');
+    expect(releaseRecordSchema.safeParse(record({ source: 'laptop' })).success).toBe(false);
+  });
+
+  it('refuses a missing run, commit or URL, and a field it does not know', () => {
+    for (const field of ['commit', 'gateRunId', 'gateRunUrl', 'imagesRunId', 'suite', 'artifacts']) {
+      const { [field]: _dropped, ...without } = ciRecord();
+      expect(releaseRecordSchema.safeParse(without).success, field).toBe(false);
+    }
+    expect(releaseRecordSchema.safeParse(ciRecord({ approvedBy: 'someone' })).success).toBe(false);
+  });
+
+  it('keeps the digest rules and the suite rule of the rehearsal record', () => {
+    const artifacts = (api: string, worker: string) => ({ api, worker, desktopCommitStamp: COMMIT });
+    expect(releaseRecordSchema.safeParse(ciRecord({ artifacts: artifacts('latest', digest('b')) })).success).toBe(false);
+    expect(releaseRecordSchema.safeParse(ciRecord({ artifacts: artifacts(digest('a'), digest('a')) })).success).toBe(false);
+    expect(releaseRecordSchema.safeParse(ciRecord({ suite: 'fail' })).success).toBe(true);
+    expect(releaseRecordSchema.safeParse(ciRecord({ suite: 'PASS!' })).success).toBe(false);
+  });
+
+  it('ties the reference, the run URL and the desktop stamp to the run and the commit', () => {
+    const refusedAt = (overrides: Record<string, unknown>): string[] => {
+      const parsed = releaseRecordSchema.safeParse(ciRecord(overrides));
+      return parsed.success ? [] : [...new Set(parsed.error.issues.map(issue => issue.path.join('.')))];
+    };
+    expect(refusedAt({ releaseGateReference: 'fss-rh-example-2026-09-25T07:20:44Z' })).toEqual(['releaseGateReference']);
+    expect(refusedAt({ gateRunUrl: 'https://github.com/example-owner/example-repo/actions/runs/41000000009' })).toEqual([
+      'gateRunUrl',
+    ]);
+    expect(refusedAt({ gateRunUrl: `https://example.com/actions/runs/${RUN}` })).toEqual(['gateRunUrl']);
+    expect(refusedAt({ imagesRunId: RUN })).toEqual(['imagesRunId']);
+    expect(refusedAt({ artifacts: { api: digest('a'), worker: digest('b'), desktopCommitStamp: 'f'.repeat(40) } })).toEqual([
+      'artifacts.desktopCommitStamp',
+    ]);
+    expect(refusedAt({ commit: COMMIT.slice(0, 12) })).toContain('commit');
+    expect(refusedAt({ gateRunId: '0' })).toContain('gateRunId');
   });
 });

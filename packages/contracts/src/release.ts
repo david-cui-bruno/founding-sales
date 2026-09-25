@@ -1,14 +1,33 @@
 import { z } from 'zod';
 
 /**
- * The release record (specification 16.2, Appendix G 42; lane g71).
+ * The release record (specification 16.2, Appendix G 42; lanes g71 and g96).
  *
- * `infra/scripts/rehearsal-release-record.sh` writes this JSON as the last step of a
- * green `full` rehearsal, and it is the thing an admin names when enabling production
- * sending: `workspace_settings.sending_enabled.releaseGateReference` is its
+ * It is the thing an admin names when enabling production sending:
+ * `workspace_settings.sending_enabled.releaseGateReference` is its
  * `releaseGateReference`. Until lane g71 the reference was any nonempty string and
  * nothing compared it with anything, so "the deployed commit/image digests match the
  * rehearsal artifacts" was an operator instruction rather than a rule.
+ *
+ * Two things write one, and `source` says which (lane g96, the owner's axiom 10B of
+ * 25 September 2026: the record comes from the CI gate):
+ *
+ *   * **`ci-gate`** — `infra/scripts/release-record-from-ci.sh`, from the green
+ *     *Greenfield gate* run on the deployed commit and the green *Greenfield images*
+ *     run whose `fss-image-digests` names the same two digests. This is the record a
+ *     release puts. A CI run drills nothing, so it carries no `rehearsalPrefix`,
+ *     `carryDrill` or `rehearsalScenarios`, and a `ci-gate` record that claims one is
+ *     refused: it names the run, its URL and the commit instead.
+ *   * **the rehearsal** — `infra/scripts/rehearsal-release-record.sh`, the last step of
+ *     a green `full` rehearsal. It writes no `source` (every record stored before g96
+ *     is one of these, so an absent `source` means the rehearsal), and it still has to
+ *     carry all three drill fields.
+ *
+ * Both are `fss.release-record.v1`: the table's CHECK (`0017_release_records.sql`) and
+ * `release-deploy.sh --release-record` both read that id, and the five columns the
+ * rules compare — reference, suite, the two digests, the desktop stamp — are the same
+ * fields in both. The binding (`packages/domain/release/records.ts`) reads only those,
+ * so a `ci-gate` record binds sending exactly as a rehearsal's does.
  *
  * The shape lives here, in `@fss/contracts`, for the reason every other wire shape
  * does: two places have to agree about it and neither may import the other. The
@@ -18,8 +37,9 @@ import { z } from 'zod';
  *
  * **Strict, on purpose.** An unknown field is refused rather than stripped: a record
  * from a script this contract no longer describes is a record nobody has reviewed the
- * meaning of, and storing a subset of it would store a claim the rehearsal did not
- * make.
+ * meaning of, and storing a subset of it would store a claim the writer did not make.
+ * `test/release/releaseRecordFromCi.check.ts` does for the CI script what
+ * `scenario42.check.ts` does for the rehearsal's.
  */
 
 export const RELEASE_RECORD_SCHEMA_ID = 'fss.release-record.v1';
@@ -37,9 +57,11 @@ export function isImageDigest(value: unknown): value is string {
 }
 
 /**
- * `<rehearsal prefix>-<recordedAt>`, as the script composes it
- * (`fss-rh-202609250554-2026-09-25T07:20:44Z`). Bounded at 200 characters, which is
- * the bound `sendingEnabledSettingSchema` already puts on the reference an admin types.
+ * `<rehearsal prefix>-<recordedAt>` from a rehearsal
+ * (`fss-rh-202609250554-2026-09-25T07:20:44Z`), `ci-gate-<gate run id>-<first twelve
+ * characters of the commit>` from the CI gate (`ciGateReleaseReference`). Bounded at
+ * 200 characters, which is the bound `sendingEnabledSettingSchema` already puts on the
+ * reference an admin types.
  */
 export const releaseGateReferenceSchema = z
   .string()
@@ -74,8 +96,27 @@ export const releaseArtifactsSchema = z
     message: 'the API and worker digests are identical',
   });
 
-export const releaseRecordSchema = z.strictObject({
+/** Who wrote the record. An absent `source` is the rehearsal (every record before g96). */
+export const RELEASE_RECORD_SOURCES = ['ci-gate', 'rehearsal'] as const;
+export type ReleaseRecordSource = (typeof RELEASE_RECORD_SOURCES)[number];
+
+/** A full forty-character lower-case commit, which is what GitHub reports as `headSha`. */
+export const COMMIT_SHA_PATTERN = /^[0-9a-f]{40}$/u;
+/** A GitHub Actions run id (`databaseId`), as a string so no reader rounds it. */
+const RUN_ID_PATTERN = /^[1-9][0-9]{0,19}$/u;
+/** `gh run view --json url`: the run's page, and nothing after the id. */
+const GATE_RUN_URL_PATTERN = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/actions\/runs\/([1-9][0-9]{0,19})$/u;
+
+/** The one reference a `ci-gate` record may carry, composed the way the script composes it. */
+export function ciGateReleaseReference(gateRunId: string, commit: string): string {
+  return `ci-gate-${gateRunId}-${commit.slice(0, 12)}`;
+}
+
+/** The record a green `full` rehearsal writes (`rehearsal-release-record.sh`), unchanged by g96. */
+export const rehearsalReleaseRecordSchema = z.strictObject({
   schema: z.literal(RELEASE_RECORD_SCHEMA_ID),
+  /** Absent in every record the rehearsal script writes; accepted when spelled out. */
+  source: z.literal('rehearsal').optional(),
   releaseGateReference: releaseGateReferenceSchema,
   rehearsalPrefix: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/u, 'a rehearsal prefix'),
   recordedAt: recordedAtSchema,
@@ -88,7 +129,69 @@ export const releaseRecordSchema = z.strictObject({
   /** Always false from the script: a record enables nothing by itself. */
   enablesSending: z.boolean(),
 });
+export type RehearsalReleaseRecord = z.infer<typeof rehearsalReleaseRecordSchema>;
+
+/**
+ * The record `infra/scripts/release-record-from-ci.sh` writes (lane g96).
+ *
+ * The same five fields the rules compare, and in place of the drill evidence the facts
+ * the script checked: the commit, the *Greenfield gate* run that was green on it (id
+ * and URL), and the *Greenfield images* run whose `fss-image-digests` named the two
+ * digests. The desktop stamp is the commit (release.md 2.0), and the reference is
+ * composed from the run and the commit, so a record cannot name one run and carry
+ * another's reference. `recordedAt` is the moment the gate run concluded, so building
+ * the record twice for one run writes the same record and a second put is `existing`.
+ *
+ * `enablesSending` is the operator's `--enables-sending`: whether this release is the
+ * one sending is to be switched on under. Nothing binds on it. Sending is still the
+ * deployment flag and the admin's attestation (release.md section 6), unchanged.
+ */
+export const ciGateReleaseRecordSchema = z
+  .strictObject({
+    schema: z.literal(RELEASE_RECORD_SCHEMA_ID),
+    source: z.literal('ci-gate'),
+    releaseGateReference: releaseGateReferenceSchema,
+    recordedAt: recordedAtSchema,
+    suite: releaseSuiteSchema,
+    commit: z.string().regex(COMMIT_SHA_PATTERN, 'a full forty-character commit'),
+    gateRunId: z.string().regex(RUN_ID_PATTERN, 'a GitHub Actions run id'),
+    gateRunUrl: z.string().regex(GATE_RUN_URL_PATTERN, 'a GitHub Actions run URL'),
+    imagesRunId: z.string().regex(RUN_ID_PATTERN, 'a GitHub Actions run id'),
+    artifacts: releaseArtifactsSchema,
+    enablesSending: z.boolean(),
+  })
+  .superRefine((value, context) => {
+    if (value.releaseGateReference !== ciGateReleaseReference(value.gateRunId, value.commit)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['releaseGateReference'],
+        message: `a ci-gate record's reference is ${ciGateReleaseReference(value.gateRunId, value.commit)}`,
+      });
+    }
+    if (GATE_RUN_URL_PATTERN.exec(value.gateRunUrl)?.[1] !== value.gateRunId) {
+      context.addIssue({ code: 'custom', path: ['gateRunUrl'], message: 'the URL names another run than gateRunId' });
+    }
+    if (value.imagesRunId === value.gateRunId) {
+      context.addIssue({ code: 'custom', path: ['imagesRunId'], message: 'the images run is the gate run' });
+    }
+    if (value.artifacts.desktopCommitStamp !== value.commit) {
+      context.addIssue({
+        code: 'custom',
+        path: ['artifacts', 'desktopCommitStamp'],
+        message: 'the desktop commit stamp of a ci-gate record is its commit',
+      });
+    }
+  });
+export type CiGateReleaseRecord = z.infer<typeof ciGateReleaseRecordSchema>;
+
+/** Either, told apart by `source`; the drill fields are required of the rehearsal only. */
+export const releaseRecordSchema = z.discriminatedUnion('source', [rehearsalReleaseRecordSchema, ciGateReleaseRecordSchema]);
 export type ReleaseRecord = z.infer<typeof releaseRecordSchema>;
+
+/** `ci-gate` or `rehearsal`, for a record the contract accepted. */
+export function releaseRecordSource(record: ReleaseRecord): ReleaseRecordSource {
+  return record.source ?? 'rehearsal';
+}
 
 /**
  * Why a stored attestation does not bind to the artifact that is asking.

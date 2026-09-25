@@ -244,7 +244,7 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     requiredFlags: [],
     oneOf: ['--json', '--json-base64'],
     summary:
-      'store the rehearsal release record (fss.release-record.v1) an admin attests to, idempotently by reference',
+      'store the release record (fss.release-record.v1, from the CI gate or a rehearsal) an admin attests to, idempotently by reference',
   },
   {
     // `--reference` rather than a bare word: the grammar refuses a word after the

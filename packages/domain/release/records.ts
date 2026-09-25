@@ -14,11 +14,15 @@ import type { Queryable } from '../db/queryable.ts';
  *
  * 16.2 asks three things before production sends: the mandatory rehearsal scenarios
  * passed, "the deployed commit/image digests match the rehearsal artifacts", and an
- * authenticated admin enabled sending. The rehearsal writes a record of the first
- * (`infra/scripts/rehearsal-release-record.sh`), the admin's attestation names that
+ * authenticated admin enabled sending. A record of the first is written by the CI gate
+ * since lane g96 (`infra/scripts/release-record-from-ci.sh`, `source: "ci-gate"`, the
+ * owner's axiom 10B) and by a green `full` rehearsal before it
+ * (`infra/scripts/rehearsal-release-record.sh`); the admin's attestation names that
  * record's `releaseGateReference`, and this file is what makes the middle clause a
  * comparison rather than a sentence: a stored record, compared with the digest of the
- * image that is asking.
+ * image that is asking. The rule reads the reference, the suite and the two digests,
+ * which both kinds of record carry, and never the rehearsal's drill fields, so a
+ * `ci-gate` record binds exactly as a rehearsal's does.
  *
  * Two moments ask, and each compares its own half of the record:
  *
@@ -108,8 +112,8 @@ function describeIssues(issues: readonly { readonly path: readonly PropertyKey[]
  * Store one `fss.release-record.v1`, idempotently by reference.
  *
  * Takes the JSON text or an already-parsed value. The contract is applied first and
- * the row is written only from what it returned, so a record the rehearsal did not
- * write in this shape is refused with `release_record_invalid` and names the field.
+ * the row is written only from what it returned, so a record not in the shape its
+ * `source` requires is refused with `release_record_invalid` and names the field.
  *
  * The same reference twice is `existing` when the content is the same (jsonb equality,
  * so key order and whitespace do not matter) and `release_record_conflict` when it is

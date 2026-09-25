@@ -1,4 +1,9 @@
-import { RELEASE_RECORD_SCHEMA_ID, type ReleaseRecord } from '@fss/contracts';
+import {
+  RELEASE_RECORD_SCHEMA_ID,
+  ciGateReleaseReference,
+  type CiGateReleaseRecord,
+  type RehearsalReleaseRecord,
+} from '@fss/contracts';
 import type { Queryable } from '../../../db/queryable.ts';
 import { putReleaseRecord } from '../../../release/records.ts';
 
@@ -22,7 +27,7 @@ export interface FixtureRecordOptions {
   readonly desktopCommitStamp?: string;
 }
 
-export function fixtureReleaseRecord(reference: string, options: FixtureRecordOptions = {}): ReleaseRecord {
+export function fixtureReleaseRecord(reference: string, options: FixtureRecordOptions = {}): RehearsalReleaseRecord {
   return {
     schema: RELEASE_RECORD_SCHEMA_ID,
     releaseGateReference: reference,
@@ -51,4 +56,43 @@ export async function storeFixtureRecord(
 ): Promise<void> {
   const stored = await putReleaseRecord({ db }, fixtureReleaseRecord(reference, options));
   if (!stored.ok) throw new Error(`the fixture release record was refused: ${stored.reason} ${stored.detail}`);
+}
+
+/**
+ * A record from the CI gate (lane g96): the shape `release-record-from-ci.sh` writes,
+ * with no drill evidence. The run id is the only thing a test varies, so each case gets
+ * its own reference (`ci-gate-<run>-<commit>`); the commit is repeated letters.
+ */
+export const FIXTURE_CI_COMMIT = 'c'.repeat(40);
+
+export function fixtureCiGateRecord(gateRunId: string, options: FixtureRecordOptions = {}): CiGateReleaseRecord {
+  return {
+    schema: RELEASE_RECORD_SCHEMA_ID,
+    source: 'ci-gate',
+    releaseGateReference: ciGateReleaseReference(gateRunId, FIXTURE_CI_COMMIT),
+    recordedAt: '2026-09-25T21:40:12Z',
+    suite: options.suite ?? 'pass',
+    commit: FIXTURE_CI_COMMIT,
+    gateRunId,
+    gateRunUrl: `https://github.com/example-owner/example-repo/actions/runs/${gateRunId}`,
+    imagesRunId: '1',
+    artifacts: {
+      api: options.api ?? FIXTURE_API_DIGEST,
+      worker: options.worker ?? FIXTURE_WORKER_DIGEST,
+      desktopCommitStamp: FIXTURE_CI_COMMIT,
+    },
+    enablesSending: true,
+  };
+}
+
+/** Store a CI-gate record and answer its reference, which is what the attestation names. */
+export async function storeFixtureCiGateRecord(
+  db: Queryable,
+  gateRunId: string,
+  options: FixtureRecordOptions = {},
+): Promise<string> {
+  const record = fixtureCiGateRecord(gateRunId, options);
+  const stored = await putReleaseRecord({ db }, record);
+  if (!stored.ok) throw new Error(`the fixture ci-gate record was refused: ${stored.reason} ${stored.detail}`);
+  return record.releaseGateReference;
 }

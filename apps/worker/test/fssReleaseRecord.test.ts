@@ -137,6 +137,42 @@ describe('fss admin release-record put', () => {
     expect(await rows(reference)).toBe(1);
   });
 
+  it('stores a record from the CI gate as release-deploy.sh hands it over, and says it is ci-gate', async () => {
+    // Lane g96: the shape release-record-from-ci.sh writes, which carries no drill evidence.
+    const commit = 'e'.repeat(40);
+    const reference = `ci-gate-41000000001-${commit.slice(0, 12)}`;
+    const ciRecord = {
+      schema: RELEASE_RECORD_SCHEMA_ID,
+      source: 'ci-gate',
+      releaseGateReference: reference,
+      recordedAt: '2026-09-25T21:40:12Z',
+      suite: 'pass',
+      commit,
+      gateRunId: '41000000001',
+      gateRunUrl: 'https://github.com/example-owner/example-repo/actions/runs/41000000001',
+      imagesRunId: '41000000002',
+      artifacts: { api: digest('a'), worker: digest('b'), desktopCommitStamp: commit },
+      enablesSending: true,
+    };
+    const encoded = Buffer.from(`${JSON.stringify(ciRecord, null, 2)}\n`).toString('base64');
+    const put = await run(['admin', 'release-record', 'put', '--json-base64', encoded]);
+    expect(put.code, put.stderr).toBe(0);
+    expect(JSON.parse(put.stdout)).toMatchObject({
+      outcome: 'created',
+      reference,
+      source: 'ci-gate',
+      suite: 'pass',
+      apiDigest: digest('a'),
+      workerDigest: digest('b'),
+      desktopCommitStamp: commit,
+      enablesSending: true,
+    });
+    expect(await rows(reference)).toBe(1);
+
+    const shown = await run(['admin', 'release-record', 'show', '--reference', reference]);
+    expect(JSON.parse(shown.stdout)).toMatchObject({ source: 'ci-gate', record: ciRecord });
+  });
+
   it('refuses a different record under a reference already stored, with exit 20', async () => {
     const reference = 'fss-rh-fixture-conflict';
     const first = join(directory, 'first.json');
@@ -195,7 +231,13 @@ describe('fss admin release-record show', () => {
     const shown = await run(['admin', 'release-record', 'show', '--reference', reference]);
     expect(shown.code, shown.stderr).toBe(0);
     const answer = JSON.parse(shown.stdout) as Record<string, unknown>;
-    expect(answer).toMatchObject({ reference, apiDigest: digest('a'), workerDigest: digest('b'), suite: 'pass' });
+    expect(answer).toMatchObject({
+      reference,
+      source: 'rehearsal',
+      apiDigest: digest('a'),
+      workerDigest: digest('b'),
+      suite: 'pass',
+    });
     expect(answer['record']).toEqual(record(reference));
   });
 
