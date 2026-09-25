@@ -882,16 +882,18 @@ describe('Appendix G 39: the dry run reads the plan it printed, so the rehearsal
       'docs/decisions/g12f-the-rehearsals-own-guard-refused-the-rehearsal.md',
     );
     const releaseDoc = readRepositoryFile('docs/greenfield/release.md');
+    // The 8.0x records moved, verbatim, out of the runbook (lane g93).
+    const records = readRepositoryFile('docs/greenfield/release-records.md');
     const g12 = readRepositoryFile('docs/decisions/g12-what-the-rehearsal-cannot-prove.md');
 
     // The run, so the claim can be checked against the log rather than believed.
     expect(decision).toContain('35548888865');
     expect(decision).toContain('rehearsal_read_production_inventory');
     expect(releaseDoc).toContain('rehearsal_read_production_inventory');
-    // Section 8 separates what the first run proved from what it refuted; the old
+    // Section 8 separated what the first run proved from what it refuted; the old
     // section said the rehearsal had never run at all.
-    expect(releaseDoc).toContain('What the first credentialed run proved, and what it refuted');
-    expect(releaseDoc).toContain('arn:aws:sts::326255650484:assumed-role/fss-rh-deploy/');
+    expect(records).toContain('What the first credentialed run proved, and what it refuted');
+    expect(records).toContain('arn:aws:sts::326255650484:assumed-role/fss-rh-deploy/');
     // And the paragraph that claimed this scenario was proved in rehearsal is corrected
     // where a reader of that document will meet it.
     expect(g12).toContain('g12f-the-rehearsals-own-guard-refused-the-rehearsal.md');
@@ -1396,7 +1398,10 @@ describe('Appendix G 39: the production comparison is between durable resources'
 
   it('is written down beside the run that found it', () => {
     const release = readRepositoryFile('docs/greenfield/release.md');
-    expect(release).toContain('### 8.0v What the twelfth full run proved');
+    // The record moved, verbatim, with the other 8.0x records (lane g93).
+    expect(readRepositoryFile('docs/greenfield/release-records.md')).toContain(
+      '### 8.0v What the twelfth full run proved',
+    );
     expect(release).toContain('35962272085');
     // G52's run, in the guard's own item and in the step that names what is compared.
     expect(release).toContain('36032732128');
@@ -1847,6 +1852,8 @@ describe('Appendix G 39: a plan run publishes addresses and counts, never values
  */
 describe('Appendix G 39: the stages, and the run that caused them, are in the release document', () => {
   const release = readRepositoryFile('docs/greenfield/release.md');
+  // The 8.0x records moved, verbatim, out of the runbook (lane g93).
+  const records = readRepositoryFile('docs/greenfield/release-records.md');
   const decision = readRepositoryFile('docs/decisions/g12k-the-rehearsal-has-stages-and-one-gate.md');
 
   it('says what each stage proves and that only the full one is the gate', () => {
@@ -1861,14 +1868,14 @@ describe('Appendix G 39: the stages, and the run that caused them, are in the re
   });
 
   it('carries the third run’s two errors verbatim, and why no offline layer saw them', () => {
-    expect(release).toContain('### 8.0c What the third credentialed run proved, and what it refuted');
-    expect(release).toContain('35611374218');
-    expect(release).toContain(
+    expect(records).toContain('### 8.0c What the third credentialed run proved, and what it refuted');
+    expect(records).toContain('35611374218');
+    expect(records).toContain(
       'Attempted to load application default credentials since neither `credentials` nor `access_token` was set in the provider block.',
     );
-    expect(release).toContain('count = var.kms_key_arn == null ? 1 : 0');
-    expect(release).toContain('The "count" value depends on resource attributes that cannot be determined until apply.');
-    expect(release).toContain('override_during = plan');
+    expect(records).toContain('count = var.kms_key_arn == null ? 1 : 0');
+    expect(records).toContain('The "count" value depends on resource attributes that cannot be determined until apply.');
+    expect(records).toContain('override_during = plan');
   });
 
   it('records the decision, and that the stages do not weaken the gate', () => {
