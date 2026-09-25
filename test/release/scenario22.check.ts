@@ -12,7 +12,7 @@ import {
   type SchemaRange,
 } from '@fss/domain/db';
 import { mustBeRehearsed, readRepositoryFile, repositoryPath } from './support/coverage.ts';
-import { stepScript } from './support/releaseWorkflow.ts';
+import { embeddedPythonProgram, stepScript } from './support/releaseWorkflow.ts';
 
 /**
  * Appendix G 22: "Old API with new worker and reverse across every expand/contract
@@ -118,15 +118,27 @@ describe('Appendix G 22: the declared ranges decide, and a non-overlap is the re
   });
 
   it('stops during a schema migration and never rolls the database back', () => {
+    // Lane g70: the stop is its own script and it runs before the apply, API first so
+    // no request reaches a schema that is about to move. The deploy script no longer
+    // scales anything to zero; it refuses to migrate unless both are already there.
+    const stop = readRepositoryFile('infra/scripts/release-stop.sh');
+    const api = stop.indexOf('stop_service "$API_SERVICE" || exit 1');
+    const worker = stop.indexOf('stop_service "$WORKER_SERVICE" || exit 1');
+    expect(api).toBeGreaterThan(-1);
+    expect(worker).toBeGreaterThan(api);
+
     const script = readRepositoryFile('infra/scripts/release-deploy.sh');
-    // API first, so no request reaches a schema that is about to move.
-    const stop = script.indexOf('scale "$API_SERVICE" 0');
-    const stopWorker = script.indexOf('scale "$WORKER_SERVICE" 0');
-    expect(stop).toBeGreaterThan(-1);
-    expect(stopWorker).toBeGreaterThan(stop);
-    expect(script.indexOf('scale "$API_SERVICE" 0')).toBeLessThan(
-      script.indexOf('one_off migrate "$MIGRATION_TASK_DEFINITION"'),
+    expect(script).not.toContain('scale "$API_SERVICE" 0');
+    expect(script).not.toContain('scale "$WORKER_SERVICE" 0');
+    const assertApi = script.indexOf(
+      'release_require_service_stopped "$ENVIRONMENT" "$CLUSTER_ARN" "$API_SERVICE" || refuse_not_stopped "$API_SERVICE"',
     );
+    const assertWorker = script.indexOf(
+      'release_require_service_stopped "$ENVIRONMENT" "$CLUSTER_ARN" "$WORKER_SERVICE" || refuse_not_stopped "$WORKER_SERVICE"',
+    );
+    expect(assertApi).toBeGreaterThan(-1);
+    expect(assertWorker).toBeGreaterThan(assertApi);
+    expect(assertWorker).toBeLessThan(script.indexOf('one_off migrate "$MIGRATION_TASK_DEFINITION"'));
 
     // And the policy is written where an operator reads it, not only here.
     const release = readRepositoryFile('docs/greenfield/release.md');
@@ -142,9 +154,21 @@ describe('Appendix G 22: the declared ranges decide, and a non-overlap is the re
     const cluster = readRepositoryFile('infra/modules/cluster/main.tf');
     expect(cluster).toContain('api_desired_count    = var.bootstrap ? 0 : var.api_desired_count');
     expect(cluster).toContain('worker_desired_count = var.bootstrap ? 0 : var.worker_desired_count');
-    // Never `ignore_changes` on the count: that would make it untracked for ever and
-    // take away Terraform's ability to scale to zero for the next schema release.
-    expect(cluster).not.toContain('ignore_changes = [desired_count]');
+    // Lane g70 reversed G12h's rejection of `ignore_changes` on the count: an apply that
+    // could move it is an apply that repoints running services at task definitions
+    // whose strict range refuses the current schema, or restarts services a schema
+    // release stopped. Both services carry it, each inside its own resource block.
+    // `infra/modules/cluster/tests/release_owns_the_count.tftest.hcl` applies what it
+    // does; this is the half `npm run test:release` sees.
+    for (const service of ['api', 'worker']) {
+      const start = cluster.indexOf(`resource "aws_ecs_service" "${service}" {`);
+      expect(start, `the cluster module declares no ${service} service`).toBeGreaterThan(-1);
+      const end = cluster.indexOf('\n}\n', start);
+      expect(cluster.slice(start, end), `the ${service} service lets an apply move its count`).toContain(
+        '  lifecycle {\n    ignore_changes = [desired_count]\n  }\n',
+      );
+    }
+    expect(cluster.split('ignore_changes = [desired_count]').length - 1).toBe(2);
 
     for (const root of ['infra/roots/rehearsal/main.tf', 'infra/roots/production/main.tf']) {
       expect(readRepositoryFile(root)).toContain('bootstrap              = var.bootstrap');
@@ -520,5 +544,372 @@ describe('Appendix G 22 (g38): the refusal cases measure the container, not the 
     const run = runSchemaRanges({ staleExit: 1 });
     expect(run.code).not.toBe(0);
     expect(run.output).toContain('exited 1 and this step requires exit 12');
+  });
+});
+
+/**
+ * Lane g70: a schema-change release stops the services before the apply, and the
+ * deploy refuses to migrate under a service that is still running.
+ *
+ * The independent review of 25 September found the order backwards. `terraform apply`
+ * registers the release's task definitions, whose strict `{N,N}` range refuses the
+ * schema the database is still at, and repointed the running services at them;
+ * `release-deploy.sh --schema-change` then scaled them to zero in its step 1, after
+ * ECS had begun replacing working tasks with tasks that exit 12. The 04:41Z deploy of
+ * schema 16 ran in exactly that order (`docs/greenfield/release.md` 8.0af).
+ *
+ * The order is now `release-stop.sh` → apply → `release-deploy.sh --schema-change`,
+ * the apply cannot move a count (`ignore_changes`, asserted above and applied in
+ * `infra/modules/cluster/tests/release_owns_the_count.tftest.hcl`), and step 1 is a
+ * refusal rather than a scale.
+ *
+ * ## The vacuous-pass trap
+ *
+ * Reading the refusal out of the script passes against a refusal that is never reached,
+ * or one that refuses every deploy. So both scripts are driven offline against a fake
+ * CLI that keeps each service's counts in a file, and every run is judged by the calls
+ * the CLI saw as well as by the exit code: a refused deploy must have made no
+ * `run-task` and no `update-service`, a deploy with both services at zero must reach
+ * the migration's `run-task`, and a stop must scale the API before the worker and then
+ * read both back. The mutation check removes the refusal and requires this to go red.
+ */
+
+const STOP = 'infra/scripts/release-stop.sh';
+const DEPLOY = 'infra/scripts/release-deploy.sh';
+const ORDER_PREFIX = 'fss-rh-order';
+const ORDER_ACCOUNT = '111111111111';
+const ORDER_CLUSTER = `arn:aws:ecs:us-east-1:${ORDER_ACCOUNT}:cluster/${ORDER_PREFIX}-cluster`;
+const ORDER_WORKER_DIGEST = `sha256:${'b'.repeat(64)}`;
+const ORDER_RUNTIME_SECRET = `arn:aws:secretsmanager:us-east-1:${ORDER_ACCOUNT}:secret:${ORDER_PREFIX}/app-runtime-database-bbbbbb`;
+const ORDER_HOST = `${ORDER_PREFIX}-pg.example.com`;
+
+interface ServiceCounts {
+  readonly desired: number;
+  readonly running: number;
+}
+
+interface OrderRun {
+  readonly code: number;
+  readonly output: string;
+  /** Every CLI call, one line each, in order: `<service> <operation> <arguments>`. */
+  readonly calls: readonly string[];
+  /** Each service's counts afterwards, as the fake ECS holds them. */
+  readonly counts: Readonly<Record<string, ServiceCounts>>;
+  readonly report: string | null;
+}
+
+/**
+ * A fake AWS CLI holding each service's desired and running counts in a file. An
+ * `update-service --desired-count` moves both at once, which is what a stable service
+ * ends at, unless `sticky` is set: then ECS acknowledges the call and nothing stops.
+ */
+function orderStub(directory: string): string {
+  const path = join(directory, 'aws');
+  const lines = [
+    '#!/usr/bin/env bash',
+    `state='${directory}'`,
+    'printf "%s\\n" "$*" >> "$state/calls.log"',
+    'service=$1; operation=$2; shift 2',
+    'name=""; count=""',
+    'while [ "$#" -gt 0 ]; do',
+    '  case "$1" in',
+    '    --service|--services) name=$2; shift ;;',
+    '    --desired-count) count=$2; shift ;;',
+    '  esac',
+    '  shift',
+    'done',
+    'case "$service $operation" in',
+    '  "ecs describe-services")',
+    '    desired=$(cat "$state/$name.desired" 2>/dev/null || echo 0)',
+    '    running=$(cat "$state/$name.running" 2>/dev/null || echo 0)',
+    '    printf \'{"services":[{"serviceName":"%s","status":"ACTIVE","desiredCount":%s,"runningCount":%s,"pendingCount":0}],"failures":[]}\\n\' "$name" "$desired" "$running"',
+    '    exit 0 ;;',
+    '  "ecs update-service")',
+    '    if [ -n "$count" ]; then',
+    '      echo "$count" > "$state/$name.desired"',
+    '      [ -f "$state/sticky" ] || echo "$count" > "$state/$name.running"',
+    '    fi',
+    '    printf "%s\\t%s\\n" "$name" "${count:-unchanged}"',
+    '    exit 0 ;;',
+    '  "ecs wait") exit 0 ;;',
+    '  "ecs run-task")',
+    '    # The migration is where these runs stop: reaching it is the assertion.',
+    '    echo \'{"tasks": [], "failures": [{"arn": "stub", "reason": "STUB_STOPS_AT_THE_MIGRATION"}]}\'',
+    '    exit 0 ;;',
+    'esac',
+    'echo "unexpected: $service $operation" >&2',
+    'exit 1',
+    '',
+  ];
+  writeFileSync(path, lines.join('\n'));
+  chmodSync(path, 0o755);
+  return path;
+}
+
+function runOrder(
+  script: string,
+  args: readonly string[],
+  services: Readonly<Record<'api' | 'worker', ServiceCounts>>,
+  options: { readonly sticky?: boolean; readonly bootstrap?: boolean } = {},
+): OrderRun {
+  const directory = mkdtempSync(join(tmpdir(), 'fss-order-'));
+  const reports = mkdtempSync(join(tmpdir(), 'fss-order-reports-'));
+  for (const [name, counts] of Object.entries(services)) {
+    writeFileSync(join(directory, `${ORDER_PREFIX}-${name}.desired`), `${String(counts.desired)}\n`);
+    writeFileSync(join(directory, `${ORDER_PREFIX}-${name}.running`), `${String(counts.running)}\n`);
+  }
+  if (options.sticky === true) writeFileSync(join(directory, 'sticky'), '');
+  const env: Record<string, string> = {};
+  for (const [name, value] of Object.entries(process.env)) {
+    // No dry run and no ambient fixture may leak into a run judged by its CLI calls.
+    if (value !== undefined && !name.startsWith('FSS_')) env[name] = value;
+  }
+  const result = spawnSync(repositoryPath(script), [...args], {
+    encoding: 'utf8',
+    env: {
+      ...env,
+      AWS_REGION: 'us-east-1',
+      FSS_REHEARSAL_REPORTS: reports,
+      FSS_REHEARSAL_AWS_COMMAND: orderStub(directory),
+      FSS_RELEASE_ACCOUNT: ORDER_ACCOUNT,
+      FSS_RELEASE_CALLER_ACCOUNT: ORDER_ACCOUNT,
+      FSS_RELEASE_CLUSTER_TAGS: JSON.stringify([{ key: 'Environment', value: 'rehearsal' }]),
+      FSS_RELEASE_OUTPUT_CLUSTER_ARN: ORDER_CLUSTER,
+      FSS_RELEASE_OUTPUT_MIGRATION_TASK_DEFINITION_ARN: `arn:aws:ecs:us-east-1:${ORDER_ACCOUNT}:task-definition/${ORDER_PREFIX}-migration:1`,
+      FSS_RELEASE_OUTPUT_OPERATIONS_TASK_DEFINITION_ARN: `arn:aws:ecs:us-east-1:${ORDER_ACCOUNT}:task-definition/${ORDER_PREFIX}-operations:1`,
+      FSS_RELEASE_OUTPUT_APP_RUNTIME_DATABASE_SECRET_ARN: ORDER_RUNTIME_SECRET,
+      FSS_RELEASE_OUTPUT_WORKER_LOG_GROUP_NAME: `/fss/${ORDER_PREFIX}/worker`,
+      FSS_RELEASE_OUTPUT_TASK_NETWORK_CONFIGURATION: JSON.stringify({
+        subnet_ids: ['subnet-0a'],
+        security_group_id: 'sg-0a',
+        assign_public_ip: 'ENABLED',
+        database_port: 5432,
+        database_host: ORDER_HOST,
+        inbound_rule_count: 0,
+      }),
+      FSS_RELEASE_OUTPUT_DEPLOYMENT_PLAN: JSON.stringify({
+        bootstrap: options.bootstrap === true,
+        api: { service_name: `${ORDER_PREFIX}-api`, declared_desired_count: 2, planned_desired_count: 2 },
+        worker: { service_name: `${ORDER_PREFIX}-worker`, declared_desired_count: 1, planned_desired_count: 1 },
+      }),
+      FSS_RELEASE_TASK_DEFINITION: JSON.stringify({
+        containerDefinitions: [
+          {
+            name: 'migration',
+            image: `${ORDER_ACCOUNT}.dkr.ecr.us-east-1.amazonaws.com/fss-rh-worker@${ORDER_WORKER_DIGEST}`,
+            environment: [{ name: 'FSS_DATABASE_HOST', value: ORDER_HOST }],
+            secrets: [],
+          },
+        ],
+      }),
+    },
+  });
+  const read = (file: string): string | null =>
+    existsSync(join(directory, file)) ? readFileSync(join(directory, file), 'utf8').trim() : null;
+  const counts: Record<string, ServiceCounts> = {};
+  for (const name of ['api', 'worker']) {
+    counts[name] = {
+      desired: Number(read(`${ORDER_PREFIX}-${name}.desired`) ?? 'NaN'),
+      running: Number(read(`${ORDER_PREFIX}-${name}.running`) ?? 'NaN'),
+    };
+  }
+  const report = join(reports, script === STOP ? 'release-stop.txt' : 'release-deploy.txt');
+  return {
+    code: result.status ?? 1,
+    output: `${result.stdout}${result.stderr}`,
+    calls: (read('calls.log') ?? '').split('\n').filter(line => line !== ''),
+    counts,
+    report: existsSync(report) ? readFileSync(report, 'utf8').trim() : null,
+  };
+}
+
+const RUNNING = { api: { desired: 2, running: 2 }, worker: { desired: 1, running: 1 } } as const;
+const STOPPED = { api: { desired: 0, running: 0 }, worker: { desired: 0, running: 0 } } as const;
+const deployArgs = (...extra: readonly string[]): readonly string[] => [
+  'infra/roots/rehearsal',
+  ORDER_PREFIX,
+  ...extra,
+  '--worker-digest',
+  ORDER_WORKER_DIGEST,
+];
+const scaled = (calls: readonly string[]): readonly string[] =>
+  calls.filter(call => call.startsWith('ecs update-service'));
+const launched = (calls: readonly string[]): readonly string[] => calls.filter(call => call.startsWith('ecs run-task'));
+
+describe('Appendix G 22 (g70): a schema release stops before the apply, and the deploy refuses otherwise', () => {
+  it('refuses a schema-change deploy while the API still runs, naming the stop, and touches nothing', () => {
+    const run = runOrder(DEPLOY, deployArgs('--schema-change'), RUNNING);
+    expect(run.code).not.toBe(0);
+    expect(run.output).toContain(`${ORDER_PREFIX}-api is not stopped: desired 2, running 2, pending 0`);
+    expect(run.output).toContain(`infra/scripts/release-stop.sh infra/roots/rehearsal ${ORDER_PREFIX}, then the apply, then this command`);
+    // The harm has already happened by now, so the script must not quietly scale.
+    expect(scaled(run.calls), 'a refused deploy scaled a service').toEqual([]);
+    expect(launched(run.calls), 'a refused deploy launched the migration').toEqual([]);
+    expect(run.counts['api']).toEqual({ desired: 2, running: 2 });
+    expect(run.report).toBeNull();
+  });
+
+  it('refuses when only the worker still runs', () => {
+    const run = runOrder(DEPLOY, deployArgs('--schema-change'), {
+      api: { desired: 0, running: 0 },
+      worker: { desired: 0, running: 1 },
+    });
+    expect(run.code).not.toBe(0);
+    expect(run.output).toContain(`${ORDER_PREFIX}-worker is not stopped: desired 0, running 1, pending 0`);
+    expect(scaled(run.calls)).toEqual([]);
+    expect(launched(run.calls)).toEqual([]);
+  });
+
+  it('refuses on a bootstrap too, because bootstrap=true no longer stops a standing stack', () => {
+    const run = runOrder(DEPLOY, deployArgs('--schema-change'), RUNNING, { bootstrap: true });
+    expect(run.code).not.toBe(0);
+    expect(run.output).toContain('is not stopped');
+    expect(launched(run.calls)).toEqual([]);
+  });
+
+  it('reaches the migration when both services are already at zero', () => {
+    // The positive control for the three refusals: a refusal that refused everything
+    // would pass them and deploy nothing, ever.
+    const run = runOrder(DEPLOY, deployArgs('--schema-change'), STOPPED);
+    expect(run.output).toContain(`${ORDER_PREFIX}-api is stopped: desired 0, running 0, pending 0`);
+    expect(run.output).toContain(`${ORDER_PREFIX}-worker is stopped: desired 0, running 0, pending 0`);
+    expect(run.output).toContain('2/7 fss migrate');
+    expect(launched(run.calls)).toHaveLength(1);
+    expect(scaled(run.calls)).toEqual([]);
+    // The stub ends the run at the migration; that it ended there is the point.
+    expect(run.output).toContain('STUB_STOPS_AT_THE_MIGRATION');
+  });
+
+  it('leaves the rolling path alone: no schema change, nothing asserted, straight to the migration', () => {
+    const run = runOrder(DEPLOY, deployArgs(), RUNNING);
+    expect(run.output).toContain('1/7 nothing to stop: this release declares no schema change');
+    expect(run.calls.filter(call => call.startsWith('ecs describe-services'))).toEqual([]);
+    expect(launched(run.calls)).toHaveLength(1);
+  });
+
+  it('stops the API, then the worker, and reads both back', () => {
+    const run = runOrder(STOP, ['infra/roots/rehearsal', ORDER_PREFIX], RUNNING);
+    expect(run.code, run.output).toBe(0);
+    expect(scaled(run.calls)).toEqual([
+      `ecs update-service --cluster ${ORDER_CLUSTER} --service ${ORDER_PREFIX}-api --desired-count 0 --query service.[serviceName,desiredCount] --output text`,
+      `ecs update-service --cluster ${ORDER_CLUSTER} --service ${ORDER_PREFIX}-worker --desired-count 0 --query service.[serviceName,desiredCount] --output text`,
+    ]);
+    // Each scale is waited on and then read back before the next service is touched.
+    const apiScaled = run.calls.findIndex(call => call.includes(`--service ${ORDER_PREFIX}-api --desired-count 0`));
+    const apiWaited = run.calls.findIndex(call => call.startsWith('ecs wait services-stable') && call.includes(`${ORDER_PREFIX}-api`));
+    const workerScaled = run.calls.findIndex(call => call.includes(`--service ${ORDER_PREFIX}-worker --desired-count 0`));
+    expect(apiWaited).toBeGreaterThan(apiScaled);
+    expect(workerScaled).toBeGreaterThan(apiWaited);
+    expect(run.counts).toEqual(STOPPED);
+    expect(run.report).toBe(
+      `prefix=${ORDER_PREFIX} environment=rehearsal ${ORDER_PREFIX}-api=stopped_from_2 ${ORDER_PREFIX}-worker=stopped_from_1`,
+    );
+    // And the deploy that follows it is the one that reaches the migration.
+    expect(launched(run.calls)).toEqual([]);
+  });
+
+  it('is idempotent: services already at zero are reported and not touched', () => {
+    const run = runOrder(STOP, ['infra/roots/rehearsal', ORDER_PREFIX], STOPPED);
+    expect(run.code, run.output).toBe(0);
+    expect(scaled(run.calls)).toEqual([]);
+    expect(run.output).toContain(`${ORDER_PREFIX}-api is already stopped`);
+    expect(run.report).toContain(`${ORDER_PREFIX}-worker=already_stopped`);
+  });
+
+  it('fails, naming the counts, when a service is still running after the wait', () => {
+    const run = runOrder(STOP, ['infra/roots/rehearsal', ORDER_PREFIX], RUNNING, { sticky: true });
+    expect(run.code).not.toBe(0);
+    expect(run.output).toContain(`${ORDER_PREFIX}-api is not stopped: desired 0, running 2, pending 0`);
+    // It stopped at the API: the worker is not scaled behind a failure it cannot see.
+    expect(scaled(run.calls)).toHaveLength(1);
+    expect(run.report).toBeNull();
+  });
+
+  it('refuses production unless it is named out loud, and a root that is not the prefix’s, before any call', () => {
+    const unnamed = runOrder(STOP, ['infra/roots/production', 'fss-prod'], RUNNING);
+    expect(unnamed.code).not.toBe(0);
+    expect(unnamed.output).toContain('re-run with --environment production');
+    expect(unnamed.calls).toEqual([]);
+
+    const crossed = runOrder(STOP, ['infra/roots/production', ORDER_PREFIX], RUNNING);
+    expect(crossed.code).not.toBe(0);
+    expect(crossed.output).toContain('is not the rehearsal root');
+    expect(crossed.calls).toEqual([]);
+
+    const misnamed = runOrder(STOP, ['infra/roots/rehearsal', ORDER_PREFIX, '--environment', 'production'], RUNNING);
+    expect(misnamed.code).not.toBe(0);
+    expect(misnamed.output).toContain('--environment production was given');
+    expect(misnamed.calls).toEqual([]);
+
+    const stop = readRepositoryFile(STOP);
+    // The other guards every production-capable script carries, read where they are.
+    expect(stop).toContain('release_require_arn "the cluster" "$CLUSTER_ARN" ecs "$ACCOUNT" "$REGION" "$PREFIX" || exit 1');
+    expect(stop).toContain('release_refuse_foreign_arguments "$ENVIRONMENT" "$CLUSTER_ARN" "$API_SERVICE" "$WORKER_SERVICE" || exit 1');
+    expect(stop).toContain('TAG="$(release_cluster_environment_tag "$ENVIRONMENT" "$CLUSTER_ARN")"');
+  });
+
+  it('runs the stop in the rehearsal only on a standing stack, before the apply, as the plan says', () => {
+    const create = stepScript('Create the rehearsal environment');
+    const stopAt = create.indexOf('"$GITHUB_WORKSPACE/infra/scripts/release-stop.sh" "$GITHUB_WORKSPACE/infra/roots/rehearsal" "$prefix"');
+    const applyAt = create.indexOf('terraform apply -auto-approve -input=false');
+    expect(stopAt).toBeGreaterThan(-1);
+    expect(applyAt).toBeGreaterThan(stopAt);
+    expect(create).toContain('if [ "$services" = standing ]; then');
+
+    // The classifier is taken out of the workflow and run against four plans.
+    const classifier = embeddedPythonProgram(create, 'rehearsal-standing-services:');
+    const directory = mkdtempSync(join(tmpdir(), 'fss-standing-'));
+    let plans = 0;
+    const classify = (
+      actions: Readonly<Record<string, readonly string[]>>,
+    ): { readonly code: number; readonly output: string } => {
+      plans += 1;
+      const path = join(directory, `plan-${String(plans)}.json`);
+      writeFileSync(
+        path,
+        JSON.stringify({
+          resource_changes: [
+            { address: 'module.stack.module.network.aws_lb.main', change: { actions: ['create'] } },
+            ...Object.entries(actions).map(([name, list]) => ({
+              address: `module.stack.module.cluster.aws_ecs_service.${name}`,
+              change: { actions: list },
+            })),
+          ],
+        }),
+      );
+      const result = spawnSync('python3', ['-', path], { encoding: 'utf8', input: classifier });
+      return { code: result.status ?? 1, output: `${result.stdout}${result.stderr}`.trim() };
+    };
+    expect(classify({ api: ['create'], worker: ['create'] })).toEqual({ code: 0, output: 'fresh' });
+    expect(classify({ api: ['update'], worker: ['no-op'] })).toEqual({ code: 0, output: 'standing' });
+    expect(classify({ api: ['delete', 'create'], worker: ['update'] })).toEqual({ code: 0, output: 'standing' });
+    const partial = classify({ api: ['create'], worker: ['update'] });
+    expect(partial.code).not.toBe(0);
+    expect(partial.output).toContain('creates the api service and not the other');
+    const missing = classify({ api: ['create'] });
+    expect(missing.code).not.toBe(0);
+    expect(missing.output).toContain('names 1 of the two ECS services');
+
+    // And the dry run every pull request prints walks the stop before the deploy.
+    const workflow = readRepositoryFile('.github/workflows/greenfield-release.yml');
+    const dryStop = workflow.indexOf('"infra/scripts/release-stop.sh infra/roots/rehearsal $prefix" \\');
+    expect(dryStop).toBeGreaterThan(-1);
+    expect(workflow.indexOf('"infra/scripts/release-deploy.sh infra/roots/rehearsal $prefix --schema-change')).toBeGreaterThan(dryStop);
+  });
+
+  it('writes the new order where the operator reads it', () => {
+    const release = readRepositoryFile('docs/greenfield/release.md');
+    expect(release).toContain('infra/scripts/release-stop.sh infra/roots/production fss-prod --environment production');
+    expect(release).toContain('### 8.0af');
+    const runbook = readRepositoryFile('docs/greenfield/infra-apply-runbook.md');
+    expect(runbook).toContain('infra/scripts/release-stop.sh infra/roots/production fss-prod --environment production');
+    // In the order that works: the stop, then the apply, then the deploy.
+    const section = release.slice(release.indexOf('\n### 4.1 '), release.indexOf('\n## 5. '));
+    const stopAt = section.indexOf('infra/scripts/release-stop.sh infra/roots/production fss-prod --environment production');
+    const applyAt = section.indexOf('terraform apply production.tfplan', stopAt);
+    const deployAt = section.indexOf('infra/scripts/release-deploy.sh infra/roots/production fss-prod', applyAt);
+    expect(stopAt).toBeGreaterThan(-1);
+    expect(applyAt).toBeGreaterThan(stopAt);
+    expect(deployAt).toBeGreaterThan(applyAt);
   });
 });

@@ -51,7 +51,8 @@ locals {
 
   # Bootstrap: see the variable. Both services are created at zero on the first
   # apply of a fresh environment and scaled by the shared deploy script once the
-  # migration task and `fss verify` have succeeded.
+  # migration task and `fss verify` have succeeded. These numbers reach a service
+  # on create only: both services ignore later changes to `desired_count`.
   api_desired_count    = var.bootstrap ? 0 : var.api_desired_count
   worker_desired_count = var.bootstrap ? 0 : var.worker_desired_count
 
@@ -861,6 +862,22 @@ resource "aws_ecs_service" "api" {
     container_port   = var.container_port
   }
 
+  # The count is Terraform's on create and the release scripts' afterwards (lane g70).
+  #
+  # An apply that changes a task definition updates the service in place and ECS
+  # rolls it: that is the rolling release, and it still happens. What an apply no
+  # longer does is move the count. A schema-change release stops both services with
+  # `infra/scripts/release-stop.sh` *before* the apply, because the task definitions
+  # the apply registers declare a strict schema range the database has not reached
+  # yet; an apply that put the declared count back would start tasks that exit 12 and
+  # undo the stop it came after. `infra/scripts/release-deploy.sh` sets the declared
+  # count (`output.deployment_plan`) in steps 5 and 6 of every deploy, rolling or
+  # schema, so the number still comes from the root; it just no longer arrives
+  # through the apply. `docs/decisions/g12h-bootstrap-is-a-root-variable.md`, "Amended".
+  lifecycle {
+    ignore_changes = [desired_count]
+  }
+
   tags = merge(var.tags, { Name = "${var.name_prefix}-api" })
 }
 
@@ -891,6 +908,12 @@ resource "aws_ecs_service" "worker" {
     subnets          = var.subnet_ids
     security_groups  = var.worker_security_group_ids
     assign_public_ip = true
+  }
+
+  # As on the API service above: the apply replaces the task definition and leaves
+  # the count where the release scripts put it.
+  lifecycle {
+    ignore_changes = [desired_count]
   }
 
   tags = merge(var.tags, { Name = "${var.name_prefix}-worker" })

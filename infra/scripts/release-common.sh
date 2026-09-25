@@ -272,6 +272,80 @@ for tag in json.loads(os.environ["FSS_JSON"] or "[]") or []:
 '
 }
 
+# A service's counts, as three words: `desired running pending` (lane g70).
+#
+#   release_service_counts <environment> <cluster arn> <service name>
+#
+# What `release-stop.sh` waits for and what `release-deploy.sh --schema-change` refuses
+# without. Read from `describe-services` rather than from Terraform, because the whole
+# point is the count ECS is running *now*, and Terraform no longer tracks it after the
+# first apply (`ignore_changes = [desired_count]` in `infra/modules/cluster`).
+#
+# A service ECS does not know, or knows as anything but `ACTIVE`, is a refusal rather
+# than a zero: "there is nothing running" and "this is not the service I meant" must not
+# be the same answer. `FSS_RELEASE_SERVICES` supplies the response offline; in dry-run
+# mode without it this prints the call on stderr and nothing on stdout, and the caller
+# reads the empty answer as "not judged" — never as a pass outside dry-run mode.
+release_service_counts() {
+  local environment=$1 cluster=$2 service=$3 described
+  if [ "${FSS_RELEASE_SERVICES+set}" = "set" ]; then
+    described=${FSS_RELEASE_SERVICES}
+  elif rehearsal_dry_run; then
+    release_plan_note "aws ecs describe-services --cluster $cluster --services $service"
+    return 0
+  else
+    described="$(release_aws "$environment" ecs describe-services --cluster "$cluster" --services "$service" \
+      --output json)" || return 1
+  fi
+  FSS_JSON="$described" FSS_NAME="$service" python3 -c '
+import json, os, sys
+
+name = os.environ["FSS_NAME"]
+answer = json.loads(os.environ["FSS_JSON"] or "{}") or {}
+for entry in answer.get("services") or []:
+    if entry.get("serviceName") == name or str(entry.get("serviceArn", "")).endswith("/" + name):
+        status = entry.get("status")
+        if status != "ACTIVE":
+            print("FAIL: ECS reports {} as {}, not ACTIVE".format(name, status or "no status"), file=sys.stderr)
+            sys.exit(1)
+        counts = [entry.get(field) for field in ("desiredCount", "runningCount", "pendingCount")]
+        if any(not isinstance(count, int) for count in counts):
+            print("FAIL: ECS did not report all three counts for {}".format(name), file=sys.stderr)
+            sys.exit(1)
+        print(" ".join(str(count) for count in counts))
+        sys.exit(0)
+reasons = ", ".join("{} {}".format(failure.get("reason", "?"), failure.get("arn", "")).strip() for failure in answer.get("failures") or [])
+print("FAIL: ECS does not describe a service named {}{}".format(name, " ({})".format(reasons) if reasons else ""), file=sys.stderr)
+sys.exit(1)
+'
+}
+
+# Refuse unless a service is at zero on all three counts.
+#
+#   release_require_service_stopped <environment> <cluster arn> <service name>
+#
+# Desired zero is what an operator asked for; running and pending zero are what ECS has
+# actually done. A task still starting is a process about to read the schema.
+release_require_service_stopped() {
+  local environment=$1 cluster=$2 service=$3 counts desired running pending
+  counts="$(release_service_counts "$environment" "$cluster" "$service")" || return 1
+  if [ -z "$counts" ]; then
+    if rehearsal_dry_run; then
+      rehearsal_plan "refuse unless $service is at desired 0, running 0, pending 0"
+      return 0
+    fi
+    echo "FAIL: nothing reported the counts of $service" >&2
+    return 1
+  fi
+  read -r desired running pending <<<"$counts"
+  if [ "$desired" != "0" ] || [ "$running" != "0" ] || [ "$pending" != "0" ]; then
+    echo "FAIL: $service is not stopped: desired $desired, running $running, pending $pending." >&2
+    return 1
+  fi
+  rehearsal_log "$service is stopped: desired 0, running 0, pending 0"
+  return 0
+}
+
 # The registered task definition, as JSON. Everything the launch is checked against —
 # the image digest, the secret references, the database host — is read from here
 # rather than from what the caller believes.

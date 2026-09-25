@@ -55,7 +55,8 @@ name: Greenfield release rehearsal
 #                `terraform plan` with the same variables the apply uses, and a summary
 #                of counts and addresses. Nothing is created.
 #   * `create` — the plan, then `terraform apply`, which names no variable of its own
-#                and reads the `run.auto.tfvars.json` the plan stage wrote.
+#                and reads the `run.auto.tfvars.json` the plan stage wrote. On a stack
+#                that already stands, `release-stop.sh` runs first (lane g70).
 #   * `deploy` — create, then the two database entries and `release-deploy.sh`, then the
 #                smoke.
 #   * `full`   — everything, and the **only** stage that writes a release record.
@@ -332,6 +333,7 @@ jobs:
           for step in \
             "infra/scripts/rehearsal-caller-identity.sh fss-rh-deploy" \
             "infra/scripts/rehearsal-prefix-guard.sh $prefix before" \
+            "infra/scripts/release-stop.sh infra/roots/rehearsal $prefix" \
             "infra/scripts/release-deploy.sh infra/roots/rehearsal $prefix --schema-change --worker-digest $FSS_RELEASE_WORKER_DIGEST" \
             "infra/scripts/rehearsal-schema-ranges.sh $prefix --api-digest $FSS_RELEASE_API_DIGEST --worker-digest $FSS_RELEASE_WORKER_DIGEST" \
             "infra/scripts/release-bootstrap-workspace.sh infra/roots/rehearsal $prefix --worker-digest $FSS_RELEASE_WORKER_DIGEST --slug rehearsal --display-name Rehearsal --admin-email rehearsal-admin@usecallie.com" \
@@ -888,6 +890,50 @@ jobs:
           # auto-loaded variables file is behaviour no offline check here could
           # settle, and a lane whose whole purpose is to stop discovering things on
           # credentialed runs does not get to introduce one.
+          #
+          # A standing stack is stopped first (lane g70). Every rehearsal deploys with
+          # `--schema-change`, and the task definitions this apply registers declare a
+          # strict schema range the database has not reached yet; an apply that
+          # repointed running services at them would start tasks that exit 12 before
+          # the migration, which is what the 25 September production deploy did
+          # (`docs/greenfield/release.md` 8.0af). Both services ignore changes to
+          # their count, so once stopped the apply cannot start them again, and
+          # `release-deploy.sh` refuses to migrate unless they are at zero. A fresh
+          # stack has nothing to stop: the apply creates both services at zero. The
+          # plan above says which of the two this is, from its addresses and actions.
+          prefix='${{ steps.prefix.outputs.prefix }}'
+          python3 - "$RUNNER_TEMP/rehearsal-plan.json" > "$RUNNER_TEMP/rehearsal-services.txt" <<'PY'
+          # rehearsal-standing-services: are both ECS services already in the state of this run?
+          #
+          # Reads `address` and `change.actions` and nothing else, like the summary. A
+          # service the plan creates is not standing; one it updates, replaces or leaves
+          # alone is. Anything in between is a state nobody should apply over unread.
+          import json, pathlib, sys
+
+          plan = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          found = {}
+          for change in plan.get("resource_changes") or []:
+              address = change.get("address") or ""
+              for name in ("api", "worker"):
+                  if address.endswith(".module.cluster.aws_ecs_service." + name):
+                      found[name] = change.get("change", {}).get("actions") or []
+          if sorted(found) != ["api", "worker"]:
+              raise SystemExit("FAIL: the plan names {} of the two ECS services, so it cannot say whether they are standing".format(len(found)))
+          created = sorted(name for name, actions in found.items() if actions == ["create"])
+          if created == ["api", "worker"]:
+              print("fresh")
+          elif not created:
+              print("standing")
+          else:
+              raise SystemExit("FAIL: the plan creates the {} service and not the other; read the state before applying".format(created[0]))
+          PY
+          services="$(cat "$RUNNER_TEMP/rehearsal-services.txt")"
+          if [ "$services" = standing ]; then
+            echo "both services already stand in this run's state; stopping them before the apply"
+            "$GITHUB_WORKSPACE/infra/scripts/release-stop.sh" "$GITHUB_WORKSPACE/infra/roots/rehearsal" "$prefix"
+          else
+            echo "a fresh stack: the apply creates both services at zero, so there is nothing to stop"
+          fi
           terraform apply -auto-approve -input=false
 
       - name: Fill every secret entry this run's tasks resolve
@@ -1005,10 +1051,11 @@ jobs:
           set -euo pipefail
           # One code path with production (G12h; David's condition 10). The same
           # script David runs locally under `fss-prod-deploy` runs here under
-          # `fss-rh-deploy`: scale to zero, `fss migrate` as a one-off task inside the
-          # VPC, `fss admin database-users ensure`, `fss verify`, worker, API, verify
-          # again. Never beside each other: the API's declared schema range needs the
-          # migration to have run.
+          # `fss-rh-deploy`: both services confirmed at zero (the apply created them
+          # there, or the create step stopped them before it), `fss migrate` as a
+          # one-off task inside the VPC, `fss admin database-users ensure`, `fss
+          # verify`, worker, API, verify again. Never beside each other: the API's
+          # declared schema range needs the migration to have run.
           infra/scripts/release-deploy.sh infra/roots/rehearsal \
             '${{ steps.prefix.outputs.prefix }}' \
             --schema-change \

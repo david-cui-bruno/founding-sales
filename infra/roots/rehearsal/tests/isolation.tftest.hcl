@@ -300,12 +300,13 @@ run "the_topology_answers_are_the_rehearsal_defaults_at_one_plus_one" {
   }
 }
 
-# The same root with the bootstrap off, which is what a re-apply of a standing
-# environment is. Without this run the assertions above would be satisfied by a root
-# that could only ever create services at zero — and Terraform would have lost the
-# ability to scale to zero for the next schema release, which is exactly why
-# `ignore_changes = [desired_count]` was rejected
-# (`docs/decisions/g12h-bootstrap-is-a-root-variable.md`).
+# The same root with the bootstrap off. Without this run the assertions above would be
+# satisfied by a root that could only ever create services at zero. It is a plan with
+# no state, so it shows the count a service is *created* at: since lane g70 both
+# services carry `ignore_changes = [desired_count]`, and a re-apply of a standing
+# environment leaves the running count to `release-stop.sh` and `release-deploy.sh`
+# (`infra/modules/cluster/tests/release_owns_the_count.tftest.hcl` applies that;
+# `docs/decisions/g12h-bootstrap-is-a-root-variable.md`, "Amended").
 run "a_rehearsal_re_apply_declares_the_real_counts" {
   command = plan
 
@@ -316,7 +317,7 @@ run "a_rehearsal_re_apply_declares_the_real_counts" {
   assert {
     condition = (module.stack.service_shape.api.desired_count == 1
     && module.stack.service_shape.worker.desired_count == 1)
-    error_message = "With the bootstrap off, Terraform declares the counts the services actually run at."
+    error_message = "With the bootstrap off, Terraform creates the services at the counts they are declared to run at."
   }
 
   assert {

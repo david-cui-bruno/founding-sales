@@ -64,3 +64,30 @@ So the order is: database and cluster and task definitions, then the migration t
 then `fss verify`, then the worker, then the API. Nothing before the migration can
 usefully be running, and the honest way to say that in Terraform is to create it at
 zero.
+
+## Amended (lane g70, 25 September 2026): `ignore_changes = [desired_count]` after all
+
+The rejection above rested on the next schema release needing Terraform to scale to
+zero. In practice no release ever asked Terraform to. The schema release stopped the
+services inside `release-deploy.sh`, and that script runs *after* the apply. The apply
+had already pointed the running services at task definitions whose strict `{N,N}` range
+refuses the old schema. The 25 September deploy of schema 16 ran in that order
+(`docs/greenfield/release.md` 8.0af). An apply that can move the count cannot come
+after a stop either: it would put the declared numbers back and start the tasks the
+stop was for.
+
+So both services now carry `ignore_changes = [desired_count]`, and the split is:
+
+- **Terraform** decides the count a service is *created* at. `bootstrap` still states
+  "this environment is being created", in the plan an operator reads.
+- **`infra/scripts/release-stop.sh`** takes both services to zero before a
+  schema-change apply.
+- **`infra/scripts/release-deploy.sh`** refuses a schema change unless they are at zero,
+  and sets the declared counts from `output.deployment_plan` in every deploy, as it
+  always has.
+
+The count is still a number the repository states, in the root's variables and in
+`deployment_plan`, so reason 1's worry, a count nobody can reason about from the
+repository, does not return. What is given up is the reconciliation the last paragraph
+of "What was rejected" wanted: an apply no longer puts a service back to its declared
+count. The next deploy does.

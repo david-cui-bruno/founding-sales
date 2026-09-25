@@ -6,6 +6,9 @@
 #   infra/scripts/release-deploy.sh infra/roots/rehearsal  fss-rh-0921 --schema-change   # CI
 #   infra/scripts/release-deploy.sh infra/roots/production fss-prod    --schema-change   # David, locally
 #
+# A schema change on a standing stack runs `infra/scripts/release-stop.sh` before the
+# apply and this after it; step 1 below refuses when that did not happen.
+#
 # ## What this replaces, and why
 #
 # Until 21 September nothing in deployment ever ran a database migration. The step
@@ -16,9 +19,9 @@
 #
 # ## The order, and David's conditions of 21 September
 #
-#   1. scale to zero — on a bootstrap the apply already created them there; on a
-#      schema release this script does it, API first so no request reaches a schema
-#      that is about to move, then worker;
+#   1. confirm both services are at zero — on a bootstrap the apply created them
+#      there; on a schema release `infra/scripts/release-stop.sh` put them there
+#      *before* the apply (lane g70), and this refuses if it did not;
 #   2. `fss migrate` — as a one-off ECS task, under the migration task role, with the
 #      migration credential, inside the VPC because the database is private;
 #   3. `fss admin database-users ensure` — idempotent; the `app_runtime` login user
@@ -35,7 +38,25 @@
 # Stop-during-migration is the policy (`docs/greenfield/release.md` 4.1): every
 # declared range from migration 0006 onwards is a strict `{N,N}`, so there is no
 # version of the software that straddles a schema change and no honest way to do this
-# without an outage. **The database never rolls back.** After a successful migration
+# without an outage.
+#
+# ## Why step 1 no longer stops anything (lane g70)
+#
+# The apply runs before this script, and the apply is what registers the new task
+# definitions. Until 25 September step 1 scaled both services to zero here — by which
+# time the apply had already pointed them, at their running counts, at task definitions
+# whose strict range refuses the schema the database was still at. ECS was starting
+# tasks that exit 12 and taking working ones away, and the stop arrived after the harm
+# (`docs/greenfield/release.md` 8.0af). So a schema-change release is now
+#
+#   release-stop.sh  ->  terraform apply  ->  release-deploy.sh --schema-change
+#
+# and step 1 is an assertion. It refuses, naming the command, when either service is
+# not already at desired, running and pending zero, and it does not scale them itself:
+# a script that quietly stopped the services at this point would make the wrong order
+# look like the right one. The apply cannot undo the stop, because both services carry
+# `ignore_changes = [desired_count]`: the count is this script's, set in steps 5 and 6
+# to the root's declared numbers, in a rolling release as in a schema one. **The database never rolls back.** After a successful migration
 # and a failed deployment the path is forward repair or the restore protocol, never
 # an attempt to undo the schema.
 #
@@ -163,16 +184,32 @@ one_off() { # one_off <step> <task definition> <container> <command word>...
 }
 
 # ---------------------------------------------------------------------------
-# 1. Stop, if this release moves the schema.
+# 1. If this release moves the schema, both services are already stopped.
 #
-# API first: a request served against a schema that is about to move is the one
-# thing an ordered shutdown can prevent, and the worker holds job leases it should
-# be allowed to finish releasing.
+# Stopped before the apply, by `release-stop.sh`: API first, so no request reaches a
+# schema that is about to move, then the worker, which holds job leases it should be
+# allowed to release. By the time this runs the apply has registered task definitions
+# that refuse the current schema, so a service still running here is already the
+# harm, and scaling it now would only hide the order that caused it. A bootstrap
+# passes without a stop, because the apply created both services at zero; it is
+# asserted all the same, because `bootstrap=true` against a standing stack no longer
+# scales anything (`ignore_changes`), and "the apply created them at zero" is then a
+# claim about a different apply.
 # ---------------------------------------------------------------------------
-if [ "$SCHEMA_CHANGE" = "1" ] && [ "$BOOTSTRAP" != "true" ]; then
-  rehearsal_log "1/7 stop-during-migration: scaling both services to zero"
-  scale "$API_SERVICE" 0
-  scale "$WORKER_SERVICE" 0
+refuse_not_stopped() { # refuse_not_stopped <service>
+  local stop_command="infra/scripts/release-stop.sh $ROOT_DIRECTORY $PREFIX"
+  if [ "$ENVIRONMENT" = production ]; then stop_command="$stop_command --environment production"; fi
+  echo "FAIL: a schema-change release starts with both services stopped, and $1 is not." >&2
+  echo "      The apply has already pointed it at task definitions that refuse the current schema;" >&2
+  echo "      this script no longer scales it to zero here, because by now that is too late." >&2
+  echo "      The order is: $stop_command, then the apply, then this command." >&2
+  exit 1
+}
+
+if [ "$SCHEMA_CHANGE" = "1" ]; then
+  rehearsal_log "1/7 stop-during-migration: both services must already be at zero ($( [ "$BOOTSTRAP" = "true" ] && echo "the apply created them there" || echo "release-stop.sh put them there before the apply" ))"
+  release_require_service_stopped "$ENVIRONMENT" "$CLUSTER_ARN" "$API_SERVICE" || refuse_not_stopped "$API_SERVICE"
+  release_require_service_stopped "$ENVIRONMENT" "$CLUSTER_ARN" "$WORKER_SERVICE" || refuse_not_stopped "$WORKER_SERVICE"
 else
   rehearsal_log "1/7 nothing to stop: $( [ "$BOOTSTRAP" = "true" ] && echo "the apply created both services at zero" || echo "this release declares no schema change" )"
 fi

@@ -171,13 +171,13 @@ run "production_runs_its_services_unless_an_operator_says_this_is_a_bootstrap" {
 
   assert {
     condition     = module.stack.deployment_plan.bootstrap == false
-    error_message = "An ordinary production apply is not a bootstrap; passing true scales both services to zero, which is a real outage."
+    error_message = "An ordinary production apply is not a bootstrap; true creates both services at zero, which is only ever right for a brand-new environment."
   }
 
   assert {
     condition = (module.stack.deployment_plan.api.planned_desired_count == module.stack.deployment_plan.api.declared_desired_count
     && module.stack.deployment_plan.worker.planned_desired_count == module.stack.deployment_plan.worker.declared_desired_count)
-    error_message = "Outside a bootstrap the plan and the declaration are the same number."
+    error_message = "Outside a bootstrap a service is created at its declared count. After that the count is the release scripts' (ignore_changes, lane g70)."
   }
 
   # The three one-off task definitions exist in production too, so the rehearsal is a
