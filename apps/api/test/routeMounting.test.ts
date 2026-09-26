@@ -122,6 +122,8 @@ describe('what the API mounts', () => {
       '/replies/confirm',
       '/replies/settings',
       '/replies/settings/update',
+      '/retention/deletions/commit',
+      '/retention/deletions/preview',
       '/sequences',
       '/sequences/create',
       '/sequences/holidays',
@@ -133,6 +135,10 @@ describe('what the API mounts', () => {
       '/settings',
       '/settings/history',
       '/settings/update',
+      '/suppressions',
+      '/suppressions/correct',
+      '/suppressions/record',
+      '/suppressions/supersede',
       '/templates',
       '/templates/approve',
       '/templates/create',
@@ -183,11 +189,18 @@ describe('what the API mounts', () => {
     expect(registry.moduleFor('/firmsomething')).toBeUndefined();
   });
 
-  it('mounts the admin job paths and the attachment link as exact claims and nothing beside them', () => {
+  it('mounts the admin job paths, the deletion pair and the attachment link as exact claims and nothing beside them', () => {
     const registry = registryFor(options());
     expect(registry.moduleFor('/admin/jobs/dead')?.name).toBe('admin-jobs');
+    expect(registry.moduleFor('/retention/deletions/preview')?.name).toBe('retention');
+    expect(registry.moduleFor('/retention/deletions/commit')?.name).toBe('retention');
+    expect(registry.moduleFor('/suppressions/record')?.name).toBe('suppressions');
     expect(registry.moduleFor('/attachments/open')?.name).toBe('attachments');
     expect(registry.moduleFor('/admin/something-else')).toBeUndefined();
+    // A typo near a command that deletes prospect data is nobody's path.
+    expect(registry.moduleFor('/retention')).toBeUndefined();
+    expect(registry.moduleFor('/retention/deletions')).toBeUndefined();
+    expect(registry.moduleFor('/retention/deletions/committ')).toBeUndefined();
     expect(registry.moduleFor('/attachments')).toBeUndefined();
   });
 
@@ -202,20 +215,20 @@ describe('what the API mounts', () => {
       '/admin/memberships/role',
       '/export/firms',
       '/outbound/domain',
-      '/retention/deletions/commit',
       '/retention/policies',
       '/retention/run',
+      '/retention/runs',
       '/search/firms',
-      '/suppressions',
-      '/suppressions/record',
       '/templates/retire',
     ]) {
       expect(registry.moduleFor(path), path).toBeUndefined();
     }
   });
 
-  it('answers the attachment link with not_found when the deployment has no identity configuration', async () => {
-    expect((await route('POST', '/attachments/open', options())).status).toBe(404);
+  it('answers the deletion pair and the attachment link with not_found when the deployment has no identity configuration', async () => {
+    for (const path of ['/retention/deletions/preview', '/retention/deletions/commit', '/attachments/open']) {
+      expect((await route('POST', path, options())).status, path).toBe(404);
+    }
   });
 
   it('refuses a prefix that swallows another module’s exact path', () => {
@@ -293,6 +306,7 @@ describe('what the API mounts', () => {
       'import',
       'add-firm',
       'postures',
+      'suppressions',
       'dial',
       'calling-identities',
       'calls',
@@ -311,6 +325,7 @@ describe('what the API mounts', () => {
       'settings',
       'dashboard',
       'diagnostics',
+      'retention',
       'attachments',
     ]);
   });

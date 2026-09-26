@@ -51,6 +51,7 @@ export {
   listStepExecutions,
   loadEnrollmentForUpdate,
   loadStepExecutionForUpdate,
+  lockStepWithEnrollment,
   nextUnfinishedExecution,
   readEnrollment,
   readSequenceSteps,

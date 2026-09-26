@@ -4,7 +4,7 @@ import { addBusinessDays } from '../src/rules/businessDays.ts';
 import { localDate, localInstant, localParts } from '../src/rules/localClock.ts';
 import { calendarOfEnrollment } from '../sequences/enrollments.ts';
 import { completeStepExecution, rescheduleExecution } from '../sequences/executions.ts';
-import { loadEnrollmentForUpdate, loadStepExecutionForUpdate, readSequenceVersion } from '../sequences/rows.ts';
+import { lockStepWithEnrollment, readSequenceVersion } from '../sequences/rows.ts';
 import type { EnrollmentRow, StepExecutionRow, StepResult } from '../sequences/types.ts';
 import { completeTodayItemsByKey } from '../today/snapshots.ts';
 import { callOutcomeEffects, type CallOutcomeEffects } from './outcomes.ts';
@@ -76,9 +76,9 @@ export async function loadBoundCallStep(
   context: RepositoryContext,
   input: { readonly stepExecutionId: string; readonly firmId: string },
 ): Promise<BoundStep | null> {
-  const execution = await loadStepExecutionForUpdate(context, input.stepExecutionId);
+  // Enrollment first, then the step: the one lock order (`lockStepWithEnrollment`).
+  const { execution, enrollment } = await lockStepWithEnrollment(context, input.stepExecutionId);
   if (execution === null || execution.firmId !== input.firmId || execution.channel !== 'call_task') return null;
-  const enrollment = await loadEnrollmentForUpdate(context, execution.enrollmentId);
   if (enrollment === null) return null;
   const version = await readSequenceVersion(context, enrollment.sequenceVersionId);
   const step = version?.steps.find(candidate => candidate.id === execution.stepId);
