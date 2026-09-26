@@ -69,8 +69,10 @@ export interface SentFolderMessage {
  * read are still returned, and a rerun lists the folder again without it.
  *
  * `malformed_response`: a listing page or a metadata read Gmail answered 200 with
- * something that is not one (no JSON object, an entry without an id, no usable internal
- * date). The folder was not read, and an unreadable page is never zero messages.
+ * something that is not one (no JSON object, an entry without a string id, a token that is
+ * present and unusable; metadata for another message, without a thread, a decimal
+ * internal date or a list of headers: `GmailClient.getSentMetadata`). The folder was not
+ * read, and an unreadable answer is never zero messages or a message without the marker.
  */
 export type SentFolderScanOutcome =
   | 'scanned'
@@ -152,7 +154,9 @@ export async function scanSentFolder(
     return { outcome, listed, messages, vanished };
   };
   for (const id of [...new Set(ids)]) {
-    const metadata = await unlessMalformed(deps.gmail.getMetadata(access.access, id, SENT_SCAN_HEADERS));
+    // The restore's strict read: a 200 that is not this message's metadata is malformed,
+    // never a message without FSS's marker (lane W3-S8 third review).
+    const metadata = await unlessMalformed(deps.gmail.getSentMetadata(access.access, id, SENT_SCAN_HEADERS));
     if (metadata === MALFORMED) return settle('malformed_response');
     // Deleted between the listing and the read: Gmail no longer has it to vouch for, so
     // the folder was not read to the end (`message_vanished`), and the scan says so.

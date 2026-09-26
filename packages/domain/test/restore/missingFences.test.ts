@@ -516,7 +516,7 @@ describe('sends whose fence a point-in-time restore lost (lane g73)', () => {
     const recorded = world.clientWith(world.alpha, { sentMessages: [kept, gone] });
     const gmail: RecordedGmailClient = {
       ...recorded,
-      getMetadata: async (access, id, headers) => (id === gone.id ? null : await recorded.getMetadata(access, id, headers)),
+      getSentMetadata: async (access, id, headers) => (id === gone.id ? null : await recorded.getSentMetadata(access, id, headers)),
     };
     const scan = await scanSentFolder(context(), scanDeps(gmail), { mailboxId: world.alpha.mailboxId, ...around(at) });
     expect(scan).toMatchObject({ outcome: 'message_vanished', vanished: 1, listed: 1 });
@@ -543,14 +543,14 @@ describe('sends whose fence a point-in-time restore lost (lane g73)', () => {
       messages: [],
       vanished: 0,
     });
-    expect(await scan({ ...recorded, getMetadata: async () => await Promise.resolve(malformed()) })).toMatchObject({
+    expect(await scan({ ...recorded, getSentMetadata: async () => await Promise.resolve(malformed()) })).toMatchObject({
       outcome: 'malformed_response',
       messages: [],
     });
     const undated: RecordedGmailClient = {
       ...recorded,
-      getMetadata: async (access, id, headers) => {
-        const metadata = await recorded.getMetadata(access, id, headers);
+      getSentMetadata: async (access, id, headers) => {
+        const metadata = await recorded.getSentMetadata(access, id, headers);
         return metadata === null ? null : { ...metadata, internalDateEpochMilliseconds: Number.NaN };
       },
     };

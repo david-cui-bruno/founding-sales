@@ -11,6 +11,7 @@ import {
   mailboxListCommand,
   mailboxReconcileSentCommand,
   releaseRecordPutCommand,
+  restoreMarkerPutCommand,
   releaseRecordShowCommand,
   suppressionJournalReplayCommand,
   type AdminInvocation,
@@ -157,6 +158,7 @@ const ADMIN_COMMANDS: Readonly<Record<string, AdminRunner>> = Object.freeze({
   'mailbox list': mailboxListCommand,
   'mailbox reconcile-sent': mailboxReconcileSentCommand,
   'release-record put': releaseRecordPutCommand,
+  'restore-marker put': restoreMarkerPutCommand,
   'release-record show': releaseRecordShowCommand,
   'schema-preflight 0019': schemaPreflight0019Command,
 });

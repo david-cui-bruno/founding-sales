@@ -353,6 +353,11 @@ describe('the Gmail HTTP client', () => {
       ['an entry with no id', { messages: [{ id: 'm-7' }, { threadId: 't-8' }] }],
       ['an entry that is not an object', { messages: ['m-7'] }],
       ['a page token that is not a string', { messages: [{ id: 'm-7' }], nextPageToken: 7 }],
+      // Lane W3-S8 third review: present means usable, and an id is a string.
+      ['a null page token', { messages: [{ id: 'm-7' }], nextPageToken: null }],
+      ['an empty page token', { messages: [{ id: 'm-7' }], nextPageToken: '' }],
+      ['a numeric id', { messages: [{ id: 7 }] }],
+      ['an empty id', { messages: [{ id: '' }] }],
     ];
     for (const [label, body] of malformed) {
       answer('/gmail/v1/users/me/messages', 200, body);
@@ -367,6 +372,51 @@ describe('the Gmail HTTP client', () => {
     // The sync's listing is not the restore's, and keeps its reading.
     answer('/gmail/v1/users/me/messages', 200, { messages: [{ id: 'm-9' }, { threadId: 't-8' }] });
     expect(await client.listMessageIds(access, request)).toEqual({ ok: true, messageIds: ['m-9'], nextPageToken: null });
+  });
+
+  it('refuses a Sent metadata read that is not exactly the requested message, where the sync’s read does not', async () => {
+    // Lane W3-S8 third review: a 200 with an id, a thread and a date but no
+    // payload.headers was a message with no headers, which the restore reads as "not
+    // FSS's". The restore's read refuses it and every other shape that is not one.
+    const path = '/gmail/v1/users/me/messages/m-7';
+    const good = { id: 'm-7', threadId: 't-7', internalDate: '1757500000000', payload: { headers: [{ name: 'Message-ID', value: '<a@example.test>' }] } };
+    const malformed: readonly (readonly [string, unknown])[] = [
+      ['not JSON', new Raw('{"id": "m-7"')],
+      ['no payload', { id: 'm-7', threadId: 't-7', internalDate: '1757500000000' }],
+      ['a payload with no headers', { ...good, payload: {} }],
+      ['headers that are not a list', { ...good, payload: { headers: { 'Message-ID': '<a@example.test>' } } }],
+      ['a header without a value', { ...good, payload: { headers: [{ name: 'Message-ID' }] } }],
+      ['a header that is not an object', { ...good, payload: { headers: ['Message-ID: <a@example.test>'] } }],
+      ['another message', { ...good, id: 'm-8' }],
+      ['a numeric id', { ...good, id: 7 }],
+      ['no thread', { ...good, threadId: undefined }],
+      ['a numeric date', { ...good, internalDate: 1757500000000 }],
+      ['no date', { ...good, internalDate: undefined }],
+      ['a zero date', { ...good, internalDate: '0' }],
+      ['a date that is not a number', { ...good, internalDate: 'yesterday' }],
+    ];
+    for (const [label, body] of malformed) {
+      answer(path, 200, body);
+      await expect(client.getSentMetadata(access, 'm-7', ['Message-ID']), label).rejects.toMatchObject({
+        name: 'GmailClientError',
+        code: 'malformed_response',
+      });
+    }
+    answer(path, 200, good);
+    expect(await client.getSentMetadata(access, 'm-7', ['Message-ID'])).toMatchObject({
+      id: 'm-7',
+      threadId: 't-7',
+      internalDateEpochMilliseconds: 1_757_500_000_000,
+      headers: { 'Message-ID': '<a@example.test>' },
+    });
+    // No headers at all, as a list, is still a message: it has no FSS marker, and says so.
+    answer(path, 200, { ...good, payload: { headers: [] } });
+    expect(await client.getSentMetadata(access, 'm-7', ['Message-ID'])).toMatchObject({ headers: {} });
+    answer(path, 404, { error: { code: 404 } });
+    expect(await client.getSentMetadata(access, 'm-7', ['Message-ID'])).toBeNull();
+    // The sync's read is not the restore's, and keeps its reading.
+    answer(path, 200, { id: 'm-7', threadId: 't-7', internalDate: '1757500000000' });
+    expect(await client.getMetadata(access, 'm-7', ['Message-ID'])).toMatchObject({ id: 'm-7', headers: {} });
   });
 
   it('registers and stops a watch, and reads a refusal as a refusal', async () => {

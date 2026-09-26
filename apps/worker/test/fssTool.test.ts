@@ -378,6 +378,8 @@ describe('the fss admin commands a restore runs', () => {
       '2026-09-20T00:00:00Z',
       '--inventory-host',
       'fss-prod-pg.example.test',
+      '--inventory-marker',
+      '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d',
     ]);
     expect(reconcile.code).toBe(20);
   });

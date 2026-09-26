@@ -282,13 +282,18 @@ export function createGmailHttpClient(options: GmailHttpOptions): GmailClient {
       if (json === null) malformed('the page was not a JSON object');
       const members = json?.['messages'];
       if (members !== undefined && !Array.isArray(members)) malformed('messages was not a list');
+      // Present means usable: a null, empty or non-string token is not "the last page"
+      // (lane W3-S8 third review). Google omits the field on the last page.
       const token = json?.['nextPageToken'];
-      if (token !== undefined && token !== null && typeof token !== 'string') malformed('nextPageToken was not a string');
+      if (token !== undefined && (typeof token !== 'string' || token.length === 0)) malformed('nextPageToken was not a usable string');
+      const ids: string[] = [];
       for (const member of (members ?? []) as unknown[]) {
-        if (typeof member !== 'object' || member === null || asString((member as Json)['id']) === null) {
-          malformed('a listed message had no id');
-        }
+        const id = typeof member === 'object' && member !== null ? (member as Json)['id'] : undefined;
+        // A string, never a number read as one: an id is Gmail's opaque string.
+        if (typeof id !== 'string' || id.length === 0) malformed('a listed message had no string id');
+        ids.push(id as string);
       }
+      return { ok: true, messageIds: ids, nextPageToken: typeof token === 'string' ? token : null };
     }
     const messageIds: string[] = [];
     for (const member of Array.isArray(json?.['messages']) ? (json['messages'] as unknown[]) : []) {
@@ -297,6 +302,77 @@ export function createGmailHttpClient(options: GmailHttpOptions): GmailClient {
       if (id !== null) messageIds.push(id);
     }
     return { ok: true, messageIds, nextPageToken: asString(json?.['nextPageToken']) };
+  };
+
+  /**
+   * One message's metadata with the header allowlist. `strict` is the restore's Sent
+   * read (`getSentMetadata`; lane W3-S8 third review): a 200 that is not exactly the
+   * requested message's metadata is `malformed_response`, never a message with no
+   * headers, because the Sent scan reads "no FSS marker" as "not an FSS send".
+   */
+  const readMetadata = async (
+    access: GmailAccessGrant,
+    messageId: string,
+    headers: readonly string[],
+    strict: boolean,
+  ): Promise<GmailMessageMetadata | null> => {
+    const response = await api(
+      access,
+      `/gmail/v1/users/me/messages/${encodeURIComponent(messageId)}`,
+      { format: 'metadata', metadataHeaders: [...headers] },
+    );
+    if (response.status === 404) return null;
+    if (response.status !== 200) {
+      throw new GmailClientError('unexpected_status', 'the Gmail metadata read failed', response.status);
+    }
+    const json = parseJson(response.body);
+    if (json === null) throw new GmailClientError('malformed_response', 'the Gmail metadata read was not JSON');
+    const payload = json['payload'] as MessagePart | undefined;
+    if (strict) {
+      const malformed = (why: string): never => {
+        throw new GmailClientError('malformed_response', `the Gmail Sent metadata read ${why}`, response.status);
+      };
+      if (json['id'] !== messageId) malformed('answered for another message, or for none');
+      if (typeof json['threadId'] !== 'string' || json['threadId'].length === 0) malformed('had no threadId');
+      const date = json['internalDate'];
+      if (typeof date !== 'string' || !/^[1-9][0-9]{0,15}$/u.test(date) || !Number.isSafeInteger(Number(date))) {
+        malformed('had no usable internalDate');
+      }
+      const part = json['payload'];
+      if (typeof part !== 'object' || part === null || Array.isArray(part)) malformed('had no payload');
+      const members = (part as Json)['headers'];
+      if (!Array.isArray(members)) malformed('had no header list');
+      for (const member of members as unknown[]) {
+        const name = typeof member === 'object' && member !== null ? (member as Json)['name'] : undefined;
+        const value = typeof member === 'object' && member !== null ? (member as Json)['value'] : undefined;
+        if (typeof name !== 'string' || name.length === 0 || typeof value !== 'string') malformed('had a header that is not a name and a value');
+      }
+    }
+    const collected: Record<string, string> = {};
+    for (const member of Array.isArray((payload as Json | undefined)?.['headers'])
+      ? (((payload as unknown as Json)['headers'] as unknown[]) ?? [])
+      : []) {
+      if (typeof member !== 'object' || member === null) continue;
+      const name = asString((member as Json)['name']);
+      const value = strict ? (member as Json)['value'] as string : asString((member as Json)['value']);
+      if (name !== null && value !== null) collected[name] = value;
+    }
+    const id = asString(json['id']);
+    const threadId = asString(json['threadId']);
+    if (id === null || threadId === null) {
+      throw new GmailClientError('malformed_response', 'the Gmail metadata read had no id');
+    }
+    return {
+      id,
+      threadId,
+      internalDateEpochMilliseconds: Number(asString(json['internalDate']) ?? '0'),
+      labelIds: Array.isArray(json['labelIds'])
+        ? (json['labelIds'] as unknown[]).filter((label): label is string => typeof label === 'string')
+        : [],
+      headers: collected,
+      attachments: readAttachmentReferences(payload),
+      sizeEstimate: Number(json['sizeEstimate'] ?? 0),
+    };
   };
 
   return {
@@ -486,45 +562,11 @@ export function createGmailHttpClient(options: GmailHttpOptions): GmailClient {
     listSentMessageIds: async (access, request: GmailListRequest): Promise<GmailListOutcome> =>
       await listIds(access, 'in:sent ', request, 'the Gmail Sent folder listing failed', true),
 
-    getMetadata: async (access, messageId, headers): Promise<GmailMessageMetadata | null> => {
-      const response = await api(
-        access,
-        `/gmail/v1/users/me/messages/${encodeURIComponent(messageId)}`,
-        { format: 'metadata', metadataHeaders: [...headers] },
-      );
-      if (response.status === 404) return null;
-      if (response.status !== 200) {
-        throw new GmailClientError('unexpected_status', 'the Gmail metadata read failed', response.status);
-      }
-      const json = parseJson(response.body);
-      if (json === null) throw new GmailClientError('malformed_response', 'the Gmail metadata read was not JSON');
-      const payload = json['payload'] as MessagePart | undefined;
-      const collected: Record<string, string> = {};
-      for (const member of Array.isArray((payload as Json | undefined)?.['headers'])
-        ? (((payload as unknown as Json)['headers'] as unknown[]) ?? [])
-        : []) {
-        if (typeof member !== 'object' || member === null) continue;
-        const name = asString((member as Json)['name']);
-        const value = asString((member as Json)['value']);
-        if (name !== null && value !== null) collected[name] = value;
-      }
-      const id = asString(json['id']);
-      const threadId = asString(json['threadId']);
-      if (id === null || threadId === null) {
-        throw new GmailClientError('malformed_response', 'the Gmail metadata read had no id');
-      }
-      return {
-        id,
-        threadId,
-        internalDateEpochMilliseconds: Number(asString(json['internalDate']) ?? '0'),
-        labelIds: Array.isArray(json['labelIds'])
-          ? (json['labelIds'] as unknown[]).filter((label): label is string => typeof label === 'string')
-          : [],
-        headers: collected,
-        attachments: readAttachmentReferences(payload),
-        sizeEstimate: Number(json['sizeEstimate'] ?? 0),
-      };
-    },
+    getMetadata: async (access, messageId, headers): Promise<GmailMessageMetadata | null> =>
+      await readMetadata(access, messageId, headers, false),
+
+    getSentMetadata: async (access, messageId, headers): Promise<GmailMessageMetadata | null> =>
+      await readMetadata(access, messageId, headers, true),
 
     getBody: async (access, messageId): Promise<GmailMessageBody | null> => {
       const response = await api(

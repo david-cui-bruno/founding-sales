@@ -207,6 +207,16 @@ describe('the repoint check', () => {
     expect(problems(repoint(plan(NEW), { resource_changes: 'none' }))).toMatch(/the reference plan is not/u);
   });
 
+  it('refuses services planned differently in the plan and its reference', () => {
+    // Lane W3-S8 third review: each service changing only task_definition was checked in
+    // each plan alone, never across the pair.
+    const other = edit(plan(NEW), RESTORE_SERVICES[1] ?? '', entry => {
+      (entry.change.after as Record<string, unknown>)['deployment_circuit_breaker'] = [{ enable: true, rollback: false }];
+      (entry.change.before as Record<string, unknown>)['deployment_circuit_breaker'] = [{ enable: true, rollback: false }];
+    });
+    expect(problems(repoint(other))).toMatch(/aws_ecs_service\.worker: planned differently in the plan and the reference/u);
+  });
+
   it('checks the reference as strictly as the plan', () => {
     const drifted = plan(OLD, [{ ...unchanged('module.stack.module.journal.aws_s3_bucket.journal', 'aws_s3_bucket'), change: { actions: ['delete'], before: {}, after: null, after_unknown: {} } }]);
     expect(problems(repoint(plan(NEW), drifted))).toMatch(/aws_s3_bucket\.journal \(reference\): delete is not part of a restore/u);
@@ -309,7 +319,9 @@ describe('what the runbook tells a restore, against what the module configures',
 
   it('runs both checks through restorePlan.ts, each over a plan and a reference that replace the task definitions', () => {
     expect(runbook).toContain('check_plans repoint "$W/point.tfplan" "$W/point-reference.tfplan" "$NEW_HOST" "$OLD_HOST"');
-    expect(runbook).toContain('check_plans retire "$W/retire.tfplan" "$W/retire-reference.tfplan" "$OLD_HOST" "$NEW_HOST"');
+    // Retirement uses the renamed copy's own address, read after the rename (third review).
+    expect(runbook).toContain('check_plans retire "$W/retire.tfplan" "$W/retire-reference.tfplan" "$RETIRED_HOST" "$NEW_HOST"');
+    expect(runbook).toContain('fill_migration fss-prod-pg "$RETIRED_HOST"');
     for (const name of ['api', 'worker', 'migration', 'operations']) expect(runbook).toContain(`-replace=$TD.${name}`);
   });
 });

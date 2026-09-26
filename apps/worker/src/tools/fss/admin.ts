@@ -110,7 +110,7 @@ export async function holdsListCommand(invocation: AdminInvocation): Promise<Adm
 const PRINCIPAL_ARN = /^arn:aws:(sts|iam)::\d{12}:(assumed-role|user|role)\/[\w+=,.@/-]+$/u;
 
 /** How an unattached-send hold was settled, as `holds release-restore --resolution` says. */
-export const UNATTACHED_RESOLUTIONS = ['ended-duplicate-enrollment', 'checked-no-duplicate'] as const;
+export const UNATTACHED_RESOLUTIONS = ['ended-every-candidate', 'checked-no-duplicate'] as const;
 
 /** What the opening audit row of an unattached-send hold recorded (`holdUnattachedSend`). */
 async function unattachedHoldOpening(
@@ -137,17 +137,22 @@ async function unattachedHoldOpening(
  * generation advance that released them went with it. So without this, a hold left from
  * before, or one a restore opened, would block sending and dialing for good.
  *
- * **Who.** The launcher's verified principal and the task ARN (`AdminInvocation.launch`),
- * never a user id the caller types. It refuses without a principal. Each audit row names
- * it as the actor's detail, with `actor_kind = 'system'`, because the tool is never a
- * user.
+ * **Who.** The principal the launcher claims (`FSS_LAUNCHED_BY`, which the runbook's
+ * `fss_task` takes from `aws sts get-caller-identity`) and the task ARN from the ECS
+ * metadata endpoint (`AdminInvocation.launch`), never a user id the caller types. The
+ * principal is checked for ARN syntax only: it is an auditable claim, not a verified
+ * identity, and what makes it auditable is the task ARN, whose CloudTrail RunTask event
+ * names the real caller (the runbook's `audit_launch` compares the two). It refuses
+ * without a principal. Each audit row names both in its detail, with
+ * `actor_kind = 'system'`, because the tool is never a user.
  *
  * **Which.** Without `--hold`, every open restore hold from before, but never one a
  * restore opened for an unattached send: those are released one at a time, by id, with
  * `--resolution`, and they are reported under `needsResolution` otherwise.
- * `ended-duplicate-enrollment` is checked: at least one enrollment the send could have
- * belonged to (recorded when the hold opened) must have ended since. `checked-no-duplicate`
- * is a person's word, and the note has to say what they checked.
+ * `ended-every-candidate` is checked: every enrollment the send could belong to (recorded
+ * when the hold opened) must have ended, since any one still live could send it again.
+ * `checked-no-duplicate` is a human attestation, not a checked fact, and the note has to
+ * say what was checked.
  *
  * **How.** `releaseHold` with the reason in the UPDATE itself, and one `audit_events` row
  * (`hold.restore_released`) per hold in the same transaction. A named hold already
@@ -194,24 +199,30 @@ export async function holdsReleaseRestoreCommand(invocation: AdminInvocation): P
       if (resolution === undefined) {
         return refuse('resolution_missing', `a hold opened for an unattached send is released with --resolution ${UNATTACHED_RESOLUTIONS.join(' | ')}, once the send is settled`);
       }
-      if (resolution === 'ended-duplicate-enrollment') {
+      if (resolution === 'ended-every-candidate') {
+        // Every enrollment the send could belong to, not one of them (lane W3-S8 third
+        // review): the send has no fence, so any candidate still live can wake and send
+        // the same step again. Ending the duplicate alone leaves the other one able to.
         const opening = await unattachedHoldOpening(invocation.session, hold);
-        const ended =
-          opening === null || opening.enrollmentIds.length === 0
-            ? 0
-            : Number(
-                (
-                  await invocation.session.query<{ count: string }>(
-                    `SELECT count(*)::text AS count FROM sequence_enrollments
-                      WHERE workspace_id = $1 AND id = ANY($2::uuid[]) AND ended_at >= $3::timestamptz`,
-                    [hold.workspaceId, [...opening.enrollmentIds], hold.startedAt],
-                  )
-                ).rows[0]?.count ?? '0',
-              );
-        if (ended < 1) {
+        const candidates = opening?.enrollmentIds ?? [];
+        if (candidates.length === 0) {
           return refuse(
             'resolution_unverified',
-            'none of the enrollments this send could have belonged to has ended since the hold opened: end the duplicate in the app first, or say checked-no-duplicate and why',
+            'no enrollment was recorded for this send (its recipient was unreadable), so there is nothing to have ended: settle it by hand and say checked-no-duplicate and why',
+          );
+        }
+        const { rows: live } = await invocation.session.query<{ id: string }>(
+          `SELECT c.id::text AS id
+             FROM unnest($2::uuid[]) AS c(id)
+             LEFT JOIN sequence_enrollments e ON e.workspace_id = $1 AND e.id = c.id
+            WHERE e.id IS NULL OR e.ended_at IS NULL
+            ORDER BY c.id`,
+          [hold.workspaceId, [...candidates]],
+        );
+        if (live.length > 0) {
+          return refuse(
+            'resolution_unverified',
+            `${String(live.length)} of the ${String(candidates.length)} enrollments this send could belong to can still send it again (${live.map(row => row.id).join(', ')}): end every one in the app first, or settle it by hand and say checked-no-duplicate and why`,
           );
         }
       }
@@ -237,7 +248,10 @@ export async function holdsReleaseRestoreCommand(invocation: AdminInvocation): P
             launchedBy,
             taskArn,
             source: hold.sourceEventKind,
-            ...(hold.sourceEventKind === UNATTACHED_SEND_HOLD_SOURCE ? { resolution } : {}),
+            // What the release rests on: a check the command made, or a person's word.
+            ...(hold.sourceEventKind === UNATTACHED_SEND_HOLD_SOURCE
+              ? { resolution, basis: resolution === 'ended-every-candidate' ? 'every_candidate_enrollment_ended' : 'human_attestation' }
+              : {}),
             startedAt: done.startedAt,
             releasedAt: done.releasedAt,
             via: 'fss admin holds release-restore',
@@ -366,6 +380,54 @@ export async function mailboxListCommand(invocation: AdminInvocation): Promise<A
   });
 }
 
+/** What a restore marker is audited as (`restore-marker put`). */
+const RESTORE_MARKER_ACTION = 'restore.inventory_marker';
+const MARKER = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+
+/** How many audit rows on this instance carry the marker. */
+async function markerRows(session: SessionQueryable, marker: string): Promise<number> {
+  const { rows } = await session.query<{ count: string }>(
+    `SELECT count(*)::text AS count FROM audit_events WHERE action = $1 AND subject_kind = 'restore' AND subject_id = $2`,
+    [RESTORE_MARKER_ACTION, marker],
+  );
+  return Number(rows[0]?.count ?? '0');
+}
+
+/**
+ * `fss admin restore-marker put --marker <uuid>` (lane W3-S8 third review).
+ *
+ * A text hostname does not say which RDS instance answers it, and a restored copy is a
+ * physical copy with the same system identifier and the same roles. What tells the
+ * instance being replaced from the copy is a write made to it after the restore point:
+ * the runbook runs this in (a), on the operations task, against the instance production
+ * still points at and whose `DbiResourceId` it pinned, before anything stops (so it is
+ * also the proof that the runtime login works there). It inserts one audit row per
+ * workspace, `restore.inventory_marker` with the marker as its subject, which no
+ * application role can delete; a rerun adds nothing. `reconcile-sent --inventory-marker`
+ * then requires the marker on the inventory host and its absence from the copy.
+ */
+export async function restoreMarkerPutCommand(invocation: AdminInvocation): Promise<AdminOutcome> {
+  const marker = (invocation.options['--marker'] ?? '').trim().toLowerCase();
+  if (!MARKER.test(marker)) return refuse('marker_invalid', '--marker is a UUID the runbook generated for this restore');
+  let written = 0;
+  let existing = 0;
+  const workspaces = await listWorkspaceIds(invocation.session);
+  if (workspaces.length === 0) return refuse('marker_nowhere', 'this instance has no workspace, so it is not the instance being replaced');
+  for (const workspaceId of workspaces) {
+    const inserted = await invocation.session.query(
+      `INSERT INTO audit_events (workspace_id, actor_kind, actor_user_id, action, subject_kind, subject_id, detail)
+       SELECT $1, 'system', NULL, $2, 'restore', $3, $4::jsonb
+        WHERE NOT EXISTS (
+          SELECT 1 FROM audit_events WHERE workspace_id = $1 AND action = $2 AND subject_kind = 'restore' AND subject_id = $3)`,
+      [workspaceId, RESTORE_MARKER_ACTION, marker, JSON.stringify({ marker, via: 'fss admin restore-marker put' })],
+    );
+    if ((inserted.rowCount ?? 0) > 0) written += 1;
+    else existing += 1;
+  }
+  const { rows } = await invocation.session.query<{ at: string }>(`SELECT to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS at`);
+  return accept({ marker, workspaces: workspaces.length, written, existing, at: rows[0]?.at ?? null });
+}
+
 /** A DNS hostname as `active_database_host` takes one: lower case, at least one dot, no port. */
 const HOSTNAME = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/u;
 
@@ -405,8 +467,11 @@ async function auditedConnections(
  * The inventory: every mailbox address the instance being replaced has, in any status,
  * and every address its audit trail says was ever connected, read by this command itself
  * from `--inventory-host` with this task's runtime credential. Nobody types it (lane
- * W3-S8 review). It refuses the copy's own host; a host it cannot read, which is the
- * deleted-source case (`inventory_unreadable`); an instance with no mailbox; and an
+ * W3-S8 review). A hostname does not say which instance answers it, so the instance is
+ * identified by `--inventory-marker` (third review): the copy must not have the marker
+ * the runbook wrote in (a) (`inventory_marker_in_copy`) and the inventory host must
+ * (`inventory_marker_missing`). It refuses the copy's own host; a host it cannot read,
+ * which is the deleted-source case (`inventory_unreadable`); an instance with no mailbox; and an
  * instance whose mailbox rows were damaged (`inventory_source_incomplete`): one that lacks
  * a mailbox the copy has, or one its own audit trail records connecting. The application
  * never deletes a mailbox row, so either means its list cannot be the whole list.
@@ -431,6 +496,21 @@ async function readInventory(
       ),
     };
   }
+  // Which instance, not which name (lane W3-S8 third review): the copy must lack the
+  // marker (a) wrote after the restore point, and the inventory host must have it.
+  const marker = (invocation.options['--inventory-marker'] ?? '').trim().toLowerCase();
+  if (!MARKER.test(marker)) {
+    return { ok: false, outcome: refuse('inventory_marker_invalid', '--inventory-marker is the UUID (a) wrote with restore-marker put') };
+  }
+  if ((await markerRows(invocation.session, marker)) > 0) {
+    return {
+      ok: false,
+      outcome: refuse(
+        'inventory_marker_in_copy',
+        'the database this task reaches already has the marker (a) wrote to the instance being replaced, so it is not a copy from before (a): it may be that instance itself',
+      ),
+    };
+  }
   const unreadable = (why: string): InventoryRead => ({
     ok: false,
     outcome: refuse(
@@ -441,9 +521,11 @@ async function readInventory(
   if (invocation.connectElsewhere === undefined) return unreadable('this invocation cannot reach another host');
   let source: readonly RestoreMailbox[];
   let audited: Awaited<ReturnType<typeof auditedConnections>>;
+  let marked: number;
   try {
     const elsewhere = await invocation.connectElsewhere(host);
     try {
+      marked = await markerRows(elsewhere.session, marker);
       source = await everyMailbox(elsewhere.session);
       audited = await auditedConnections(elsewhere.session);
     } finally {
@@ -452,6 +534,15 @@ async function readInventory(
   } catch (error) {
     const code = (error as { readonly code?: unknown }).code;
     return unreadable(typeof code === 'string' ? code : error instanceof Error ? error.name : 'error');
+  }
+  if (marked === 0) {
+    return {
+      ok: false,
+      outcome: refuse(
+        'inventory_marker_missing',
+        `the instance at ${host} does not have the marker (a) wrote to the instance being replaced, so it is not that instance`,
+      ),
+    };
   }
   if (source.length === 0) {
     return { ok: false, outcome: refuse('inventory_empty', `the instance at ${host} has no mailbox at all, so it is not the instance being replaced`) };
@@ -618,7 +709,7 @@ function missingFenceLine(workspaceId: string, mailboxId: string, message: strin
 }
 
 /**
- * `fss admin mailbox reconcile-sent --since <instant> --inventory-host <host> [--hold-unattached]`.
+ * `fss admin mailbox reconcile-sent --since <instant> --inventory-host <host> --inventory-marker <uuid> [--hold-unattached]`.
  *
  * After a point-in-time restore, against the restored copy, with both services stopped
  * (`docs/greenfield/runbooks/restore.md`). A send made after the restore point is a
@@ -626,7 +717,8 @@ function missingFenceLine(workspaceId: string, mailboxId: string, message: strin
  * going again; this puts the fences back.
  *
  * **Which mailboxes.** Every address the instance being replaced has, or its audit trail
- * says was ever connected (`readInventory`, from `--inventory-host`), never only the
+ * says was ever connected (`readInventory`, from `--inventory-host`, identified as that
+ * instance by `--inventory-marker` rather than by its name), never only the
  * copy's, which cannot know a mailbox connected after the restore point; nobody types the
  * list, and a source that cannot be read stops everything. Each inventory address is read
  * in whatever status the copy has it; an address the copy has no mailbox for is
@@ -764,6 +856,7 @@ export async function mailboxReconcileSentCommand(invocation: AdminInvocation): 
     since,
     until,
     inventory_host: (invocation.options['--inventory-host'] ?? '').trim().toLowerCase(),
+    inventory_marker: (invocation.options['--inventory-marker'] ?? '').trim().toLowerCase(),
     inventory,
     mailboxes_scanned: mailboxes.length,
     fences_reconciled: fencesReconciled,
