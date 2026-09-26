@@ -50,14 +50,17 @@ function adminContext(mailbox: OutboundWorldMailbox) {
 }
 
 /**
- * The attestation an admin writes after a rehearsal whose digests match.
+ * The attestation an admin writes after a CI gate run whose digests match.
  *
  * Since lane g71 that is two acts: the release record is stored, and the enable names
  * it from an API whose digest the record carries. Both are done here through the real
- * functions, so the attestation in these cases is one the enable rule accepted.
+ * functions, so the attestation in these cases is one the enable rule accepted. The
+ * record is the CI gate's (`gateRunId` names the run), because that is the only kind a
+ * production deployment binds; answers the reference the enable named.
  */
-async function attest(enabled: boolean, reference: string | null): Promise<void> {
-  if (enabled && reference !== null) await storeFixtureRecord(world.database.session, reference);
+async function attest(enabled: boolean, gateRunId: string | null): Promise<string | null> {
+  const reference =
+    enabled && gateRunId !== null ? await storeFixtureCiGateRecord(world.database.session, gateRunId) : null;
   const result = await updateSetting(adminContext(world.alpha), {
     settingKey: 'sending_enabled',
     value: { enabled, releaseGateReference: reference },
@@ -65,6 +68,7 @@ async function attest(enabled: boolean, reference: string | null): Promise<void>
     runningApiDigest: FIXTURE_API_DIGEST,
   });
   expect(result.ok).toBe(true);
+  return reference;
 }
 
 /**
@@ -95,7 +99,7 @@ beforeEach(async () => {
 
 describe('the send gate reads both halves of 16.2', () => {
   it('sends when the domain is authenticated, the admin attested and the deployment agrees', async () => {
-    await attest(true, 'rehearsal-fixture-1');
+    await attest(true, '41000000401');
     const fenceId = await world.prepare(world.alpha);
     const report = await dispatchOutboundMessage(
       world.systemContext(world.alpha.workspace.workspaceId),
@@ -120,7 +124,7 @@ describe('the send gate reads both halves of 16.2', () => {
   });
 
   it('holds an attested workspace when the deployment flag is off', async () => {
-    await attest(true, 'rehearsal-fixture-2');
+    await attest(true, '41000000402');
     const fenceId = await world.prepare(world.alpha);
     const report = await dispatchOutboundMessage(
       world.systemContext(world.alpha.workspace.workspaceId),
@@ -132,7 +136,7 @@ describe('the send gate reads both halves of 16.2', () => {
   });
 
   it('still refuses on the domain half, so the two are not one switch', async () => {
-    await attest(true, 'rehearsal-fixture-3');
+    await attest(true, '41000000403');
     await world.database.session.query(
       `UPDATE sending_domains SET automated_sending_enabled = false, automated_sending_enabled_at = NULL
         WHERE workspace_id = $1`,
@@ -156,7 +160,7 @@ describe('the send gate reads both halves of 16.2', () => {
   it('reads the attestation of the sending workspace, not of any other', async () => {
     // Alpha stays attested; beta withdraws. One workspace's release gate is not
     // another's, and `readSetting` is workspace-scoped, so beta must be held.
-    await attest(true, 'rehearsal-fixture-4');
+    await attest(true, '41000000404');
     await updateSetting(adminContext(world.beta), {
       settingKey: 'sending_enabled',
       value: { enabled: false, releaseGateReference: null },
@@ -193,7 +197,7 @@ describe('the send gate binds the attestation to the running worker', () => {
   };
 
   it('sends when the record names this worker’s digest', async () => {
-    await attest(true, 'fss-rh-binding-sends');
+    await attest(true, '41000000405');
     const report = await dispatchWith(FIXTURE_WORKER_DIGEST);
     expect(report.outcome).toBe('sent');
   });
@@ -212,15 +216,14 @@ describe('the send gate binds the attestation to the running worker', () => {
     expect(enabled.ok).toBe(true);
     expect((await dispatchWith(FIXTURE_WORKER_DIGEST)).outcome).toBe('sent');
 
-    // And it binds exactly as a rehearsal's does: another worker image holds.
+    // And it binds to its own worker half: another worker image holds.
     const mismatched = await dispatchWith(fixtureDigest('e'));
     expect(mismatched.outcome).toBe('held');
     expect(mismatched.detail).toBe('release_record_digest_mismatch');
   });
 
-  it('holds when a different worker image is running than the rehearsal certified', async () => {
-    const reference = 'fss-rh-binding-mismatch';
-    await attest(true, reference);
+  it('holds when a different worker image is running than the CI gate certified', async () => {
+    const reference = await attest(true, '41000000408');
     const report = await dispatchWith(fixtureDigest('e'));
     expect(report.outcome).toBe('held');
     expect(report.refusal).toBe('workspace_sending_not_attested');
@@ -229,14 +232,14 @@ describe('the send gate binds the attestation to the running worker', () => {
   });
 
   it('holds when the worker runs the API’s image, because each side compares its own half', async () => {
-    await attest(true, 'fss-rh-binding-api-half');
+    await attest(true, '41000000406');
     const report = await dispatchWith(FIXTURE_API_DIGEST);
     expect(report.outcome).toBe('held');
     expect(report.detail).toBe('release_record_digest_mismatch');
   });
 
   it('holds, failing closed, when the worker cannot say which image it is running', async () => {
-    await attest(true, 'fss-rh-binding-identity');
+    await attest(true, '41000000407');
     for (const running of ['unknown', undefined]) {
       const report = await dispatchWith(running);
       expect(report.outcome, String(running)).toBe('held');
@@ -253,12 +256,77 @@ describe('the send gate binds the attestation to the running worker', () => {
   });
 
   it('holds an attestation naming a record whose suite did not pass', async () => {
-    const reference = 'fss-rh-binding-failed-suite';
-    await storeFixtureRecord(world.database.session, reference, { suite: 'fail' });
+    const reference = await storeFixtureCiGateRecord(world.database.session, '41000000409', { suite: 'fail' });
     await storeAttestationDirectly(reference);
     const report = await dispatchWith(FIXTURE_WORKER_DIGEST);
     expect(report.outcome).toBe('held');
     expect(report.detail).toBe('release_record_not_passing');
+  });
+});
+
+/**
+ * A production worker binds only the CI gate's records, under a named reference too
+ * (26 September 2026). A record a `full` rehearsal stored before W3-S8 — passing, and
+ * naming this very worker — holds every send in production exactly as a reference
+ * nobody stored does, while a rehearsal stack still sends under it. The attestation is
+ * written directly: a production enable would refuse to name that record.
+ *
+ * Digests of their own (`6` the API, `2` the worker), so no record stored above answers.
+ */
+describe('the send gate under a named rehearsal record, in production and in a rehearsal stack', () => {
+  const API = fixtureDigest('6');
+  const WORKER = fixtureDigest('2');
+  const REHEARSAL_REFERENCE = 'fss-rh-named-2026-09-24T10:00:00Z';
+
+  beforeAll(async () => {
+    await storeFixtureRecord(world.database.session, REHEARSAL_REFERENCE, { api: API, worker: WORKER });
+  });
+
+  const dispatchAs = async (production: boolean | undefined) => {
+    const fenceId = await world.prepare(world.alpha);
+    return await dispatchOutboundMessage(
+      world.systemContext(world.alpha.workspace.workspaceId),
+      world.sendDeps(world.alpha, { deploymentSendingEnabled: true, workerImageDigest: WORKER, production }),
+      { outboundMessageId: fenceId },
+    );
+  };
+
+  it('holds in production, with the refusal a missing record gets, and when the flag is absent', async () => {
+    await storeAttestationDirectly(REHEARSAL_REFERENCE);
+    for (const production of [true, undefined]) {
+      const report = await dispatchAs(production);
+      expect(report.outcome, String(production)).toBe('held');
+      expect(report.refusal, String(production)).toBe('workspace_sending_not_attested');
+      expect(report.detail, String(production)).toBe('release_record_unknown');
+      expect(JSON.stringify(report)).not.toContain(REHEARSAL_REFERENCE);
+    }
+  });
+
+  it('sends in a rehearsal stack, admitted by the reference', async () => {
+    await storeAttestationDirectly(REHEARSAL_REFERENCE);
+    const report = await dispatchAs(false);
+    expect(report.outcome).toBe('sent');
+    const { rows } = await world.database.session.query<{ detail: unknown }>(
+      `SELECT detail FROM outbound_message_events
+        WHERE workspace_id = $1 AND outbound_message_id = $2 AND to_state = 'dispatching'`,
+      [world.alpha.workspace.workspaceId, report.outboundMessageId],
+    );
+    expect(rows.map(row => row.detail)).toEqual([
+      { releaseAdmission: { attestation: 'reference', releaseGateReference: REHEARSAL_REFERENCE } },
+    ]);
+  });
+
+  it('sends in production under a passing ci-gate record named by its reference', async () => {
+    const reference = await storeFixtureCiGateRecord(world.database.session, '41000000410', { api: API, worker: WORKER });
+    const enabled = await updateSetting(adminContext(world.alpha), {
+      settingKey: 'sending_enabled',
+      value: { enabled: true, releaseGateReference: reference },
+      changeNote: 'named ci-gate record',
+      runningApiDigest: API,
+      production: true,
+    });
+    expect(enabled.ok).toBe(true);
+    expect((await dispatchAs(true)).outcome).toBe('sent');
   });
 });
 

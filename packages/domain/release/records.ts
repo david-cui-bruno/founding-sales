@@ -50,6 +50,14 @@ import type { Queryable } from '../db/queryable.ts';
  * with its own digest, and a binding says which form admitted it (`admittedBy`), which
  * the send gate writes on the claim it makes.
  *
+ * **Production binds only the CI gate's records** (26 September 2026). The process form
+ * always did. The reference form now does too when the asking process is a production
+ * deployment (`FSS_ENVIRONMENT=production`): a record a `full` rehearsal stored before
+ * W3-S8 deleted that mode is answered in production exactly as a reference nobody
+ * stored, `release_record_unknown`, so the send gate holds on it as it holds on a
+ * missing record and an enable naming it is refused. A rehearsal stack or a laptop
+ * still binds such a record by its reference (`ReleaseDeployment`).
+ *
  * Release records are deployment facts, not workspace facts, so these functions take
  * a bare `{ db }` rather than a `RepositoryContext`. A `RepositoryContext` satisfies
  * it, which is how the settings command and the send gate call them inside their own
@@ -218,6 +226,21 @@ export type ReleaseBinding =
   | { readonly ok: true; readonly record: StoredReleaseRecord; readonly admittedBy: ReleaseAdmission }
   | { readonly ok: false; readonly reason: ReleaseRecordBindingRefusal };
 
+/**
+ * The deployment that is asking, as far as a binding cares: whether it is production
+ * (`FSS_ENVIRONMENT=production`, `isProductionEnvironmentName`). Production binds only
+ * records the CI gate wrote; any other deployment also binds a rehearsal's by its
+ * reference. Each process says which it is, as it says which image it is running.
+ */
+export interface ReleaseDeployment {
+  readonly production: boolean;
+}
+
+/** Whether `deployment` may bind `record` at all: in production, only a `ci-gate` record. */
+function admitsSource(record: StoredReleaseRecord, deployment: ReleaseDeployment): boolean {
+  return !deployment.production || releaseRecordSource(record.record) === 'ci-gate';
+}
+
 function digestFor(record: StoredReleaseRecord, side: ReleaseArtifactSide): string {
   return side === 'api' ? record.apiDigest : record.workerDigest;
 }
@@ -225,8 +248,9 @@ function digestFor(record: StoredReleaseRecord, side: ReleaseArtifactSide): stri
 /**
  * Whether a record binds to the image that is asking. Pure, and the whole rule.
  *
- * The order is the order an operator fixes things in: a reference nobody stored, then
- * a record that did not pass, then a process that cannot say what it is running, then
+ * The order is the order an operator fixes things in: a reference nobody stored (or,
+ * in production, a record the CI gate did not write, which is the same answer), then a
+ * record that did not pass, then a process that cannot say what it is running, then
  * the comparison itself. `runningDigest` is anything the bootstrap discovered —
  * including the literal `unknown` — and only a real `sha256:` digest can match, so an
  * unknown identity is a refusal and never a pass (fail closed).
@@ -235,8 +259,9 @@ export function releaseRecordBinding(
   record: StoredReleaseRecord | null,
   side: ReleaseArtifactSide,
   runningDigest: string | null | undefined,
+  deployment: ReleaseDeployment,
 ): ReleaseBinding {
-  if (record === null) return { ok: false, reason: 'release_record_unknown' };
+  if (record === null || !admitsSource(record, deployment)) return { ok: false, reason: 'release_record_unknown' };
   if (record.suite !== 'pass') return { ok: false, reason: 'release_record_not_passing' };
   if (!isImageDigest(runningDigest)) return { ok: false, reason: 'release_record_identity_unknown' };
   if (digestFor(record, side) !== runningDigest) return { ok: false, reason: 'release_record_digest_mismatch' };
@@ -249,8 +274,9 @@ export async function bindReleaseRecord(
   reference: string,
   side: ReleaseArtifactSide,
   runningDigest: string | null | undefined,
+  deployment: ReleaseDeployment,
 ): Promise<ReleaseBinding> {
-  return releaseRecordBinding(await readReleaseRecord(context, reference), side, runningDigest);
+  return releaseRecordBinding(await readReleaseRecord(context, reference), side, runningDigest, deployment);
 }
 
 /**
@@ -261,12 +287,13 @@ export async function bindReleaseRecord(
  * admits a record only when the CI gate wrote it — `source: "ci-gate"`, which only
  * `release-record-from-ci.sh` writes, from a green gate run of a push to main at the
  * record's commit — so a rehearsal record is refused here even when it names this
- * digest; it binds only under its own reference. The order starts with the identity,
- * because the policy finds its record *by* the running digest: without one there is
- * nothing to look up (fail closed). Then no admitted record at all — no ci-gate record
- * names this image, which is the hold after a deploy whose record was not put — then
- * one that did not pass, then the comparison, which a record read by its digest passes
- * by construction and a record handed in by a caller need not.
+ * digest; it binds only under its own reference, and only outside production. The
+ * order starts with the identity, because the policy finds its record *by* the running
+ * digest: without one there is nothing to look up (fail closed). Then no admitted
+ * record at all — no ci-gate record names this image, which is the hold after a deploy
+ * whose record was not put — then one that did not pass, then the comparison, which a
+ * record read by its digest passes by construction and a record handed in by a caller
+ * need not.
  */
 export function releasePolicyBinding(
   record: StoredReleaseRecord | null,
@@ -310,16 +337,20 @@ export async function readCiGateRecordFor(
 /**
  * What an attestation's `releaseGateReference` binds to the image that is asking: the
  * record it names, or — when it names the release process, `ci-gate:main` — the
- * `ci-gate` record for this digest (lane g100).
+ * `ci-gate` record for this digest (lane g100). `deployment` matters to the first form
+ * only: the second reads nothing but `ci-gate` records wherever it runs.
  */
 export async function bindReleaseAttestation(
   context: ReleaseRecordContext,
   releaseGateReference: string,
   side: ReleaseArtifactSide,
   runningDigest: string | null | undefined,
+  deployment: ReleaseDeployment,
 ): Promise<ReleaseBinding> {
   const attestation = releaseAttestationOf(releaseGateReference);
-  if (attestation.kind === 'reference') return await bindReleaseRecord(context, attestation.reference, side, runningDigest);
+  if (attestation.kind === 'reference') {
+    return await bindReleaseRecord(context, attestation.reference, side, runningDigest, deployment);
+  }
   if (!isImageDigest(runningDigest)) return { ok: false, reason: 'release_record_identity_unknown' };
   return releasePolicyBinding(await readCiGateRecordFor(context, side, runningDigest), side, runningDigest);
 }
@@ -334,8 +365,9 @@ export async function attestedReleaseBinding(
   storedSetting: unknown,
   side: ReleaseArtifactSide,
   runningDigest: string | null | undefined,
+  deployment: ReleaseDeployment,
 ): Promise<ReleaseBinding | null> {
   const parsed = sendingEnabledSettingSchema.safeParse(storedSetting);
   if (!parsed.success || !parsed.data.enabled || parsed.data.releaseGateReference === null) return null;
-  return await bindReleaseAttestation(context, parsed.data.releaseGateReference, side, runningDigest);
+  return await bindReleaseAttestation(context, parsed.data.releaseGateReference, side, runningDigest, deployment);
 }

@@ -15,7 +15,7 @@ import {
 } from '../../settings/store.ts';
 import { ALL_BLOCKED_ACTION_KINDS, CHANNEL_BLOCKED_ACTION_KINDS } from '../../policy/types.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
-import { FIXTURE_API_DIGEST, storeFixtureRecord } from '../release/support/releaseRecords.ts';
+import { FIXTURE_API_DIGEST, storeFixtureCiGateRecord } from '../release/support/releaseRecords.ts';
 
 /**
  * Versioned administrative configuration (specification 10.1, 16.2).
@@ -217,18 +217,18 @@ describe('workspace settings', () => {
     // migration 0015 removed that slice. An enable names a stored,
     // passing release record bound to the running API, so both references are stored
     // first and both saves say which API image they are.
-    await storeFixtureRecord(database.session, 'rehearsal-2026-09-20-a');
-    await storeFixtureRecord(database.session, 'rehearsal-2026-09-20-b');
+    const firstReference = await storeFixtureCiGateRecord(database.session, '41000000131');
+    const secondReference = await storeFixtureCiGateRecord(database.session, '41000000132');
     const [left, right] = await Promise.all([
       withTransaction(database.session, async () => await updateSetting(admin, {
         settingKey: 'sending_enabled',
-        value: { enabled: true, releaseGateReference: 'rehearsal-2026-09-20-a' },
+        value: { enabled: true, releaseGateReference: firstReference },
         changeNote: 'first save',
         runningApiDigest: FIXTURE_API_DIGEST,
       })),
       withTransaction(second, async () => await updateSetting(other, {
         settingKey: 'sending_enabled',
-        value: { enabled: true, releaseGateReference: 'rehearsal-2026-09-20-b' },
+        value: { enabled: true, releaseGateReference: secondReference },
         changeNote: 'second save',
         runningApiDigest: FIXTURE_API_DIGEST,
       })),

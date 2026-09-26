@@ -43,6 +43,7 @@ import { isKnownTimeZone } from '../src/rules/localClock.ts';
  * `enabled: false` is always accepted, because turning sending off must never need a
  * rehearsal. The reference may be the release process, `ci-gate:main`:
  * the enable then needs a stored, passing `ci-gate` record naming this API's digest.
+ * A production API binds only `ci-gate` records under either form.
  */
 
 export const SETTINGS_REFUSAL_CODES = [
@@ -191,6 +192,13 @@ export interface UpdateSettingInput {
    * which image it is running is refused `release_record_identity_unknown`.
    */
   readonly runningApiDigest?: string | undefined;
+  /**
+   * Whether the API taking the write is a production deployment
+   * (`FSS_ENVIRONMENT=production`). Production binds only records the CI gate wrote, so
+   * an enable naming a rehearsal's record is refused `release_record_unknown`. Absent
+   * means production, the direction that refuses.
+   */
+  readonly production?: boolean | undefined;
 }
 
 /**
@@ -240,6 +248,7 @@ export async function updateSetting(
         sending.releaseGateReference ?? '',
         'api',
         input.runningApiDigest,
+        { production: input.production ?? true },
       );
       if (!binding.ok) return { ok: false, reason: binding.reason };
     }

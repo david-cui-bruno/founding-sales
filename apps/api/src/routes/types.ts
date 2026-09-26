@@ -70,6 +70,13 @@ export interface RoutingOptions {
    * unknown refuses every enable (`release_record_identity_unknown`).
    */
   readonly imageDigest?: string | undefined;
+  /**
+   * Whether this API is a production deployment (`FSS_ENVIRONMENT=production`). A
+   * production API binds only release records the CI gate wrote, so an enable naming a
+   * rehearsal's record is refused and one already stored shows as not attested. Absent
+   * means production, the direction that refuses.
+   */
+  readonly production?: boolean | undefined;
 }
 
 export interface MailRoutingDeps extends MailGrantDeps {

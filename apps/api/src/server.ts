@@ -105,6 +105,11 @@ export interface ApiOptions {
    * this is unknown.
    */
   readonly imageDigest?: string | undefined;
+  /**
+   * Whether this API is a production deployment (`FSS_ENVIRONMENT=production`).
+   * Production binds only the CI gate's release records. Absent means production.
+   */
+  readonly production?: boolean | undefined;
 }
 
 /**
@@ -139,6 +144,7 @@ function routingOptions(options: ApiOptions): RoutingOptions {
     upgradeUrl: options.upgradeUrl ?? DEFAULT_UPGRADE_URL,
     suppressionJournal: options.suppressionJournal ?? localNoopSuppressionJournal(),
     ...(options.imageDigest === undefined ? {} : { imageDigest: options.imageDigest }),
+    ...(options.production === undefined ? {} : { production: options.production }),
   };
 }
 

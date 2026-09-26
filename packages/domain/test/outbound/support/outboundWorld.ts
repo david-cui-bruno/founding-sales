@@ -5,7 +5,8 @@ import type { ReconcileDeps } from '../../../outbound/reconcile.ts';
 import type { OutboundSendDeps } from '../../../outbound/send.ts';
 import { createMailWorld, type MailWorld, type MailWorldMailbox } from '../../mail/support/mailWorld.ts';
 import { makeStepExecution } from '../../../db/testing/stepExecutions.ts';
-import { FIXTURE_WORKER_DIGEST, storeFixtureRecord } from '../../release/support/releaseRecords.ts';
+import { ciGateReleaseReference } from '@fss/contracts';
+import { FIXTURE_CI_COMMIT, FIXTURE_WORKER_DIGEST, storeFixtureCiGateRecord } from '../../release/support/releaseRecords.ts';
 
 /**
  * A world with mailboxes that can actually send.
@@ -34,8 +35,13 @@ export const FIXTURE_ZONE = 'UTC';
 export const FIXTURE_BUSINESS_DATE = '2026-09-23';
 
 export const SENDING_DOMAIN = 'example.test';
-/** The rehearsal run this fixture world attests to. A label, never a credential. */
-export const RELEASE_GATE_REFERENCE = 'rehearsal-fixture-world';
+/**
+ * The CI gate run this fixture world attests to, by its record's reference. A CI-gate
+ * record, so the world sends on the path production takes, where only the CI gate's
+ * records bind. A label, never a credential.
+ */
+const WORLD_GATE_RUN_ID = '41000000900';
+export const RELEASE_GATE_REFERENCE = ciGateReleaseReference(WORLD_GATE_RUN_ID, FIXTURE_CI_COMMIT);
 export const TEMPLATE_SUBJECT = 'A short note about your properties';
 export const TEMPLATE_BODY =
   'Hello.\n\nI work with property managers nearby.\n\nSigned off\n' +
@@ -97,7 +103,7 @@ export async function createOutboundWorld(): Promise<OutboundWorld> {
   // `sendDeps` says this worker is running. Without it every send would hold with
   // `workspace_sending_not_attested` for a reason no cap, window or suppression
   // scenario is about.
-  await storeFixtureRecord(world.database.session, RELEASE_GATE_REFERENCE);
+  await storeFixtureCiGateRecord(world.database.session, WORLD_GATE_RUN_ID);
 
   const prepareMailbox = async (mailbox: MailWorldMailbox): Promise<OutboundWorldMailbox> => {
     const context = mailbox.context;
@@ -162,7 +168,7 @@ export async function createOutboundWorld(): Promise<OutboundWorld> {
     // itself rather than relying on this.
     await context.db.query(
       `INSERT INTO workspace_settings (workspace_id, setting_key, version, value, change_note, changed_by_user_id)
-       VALUES ($1, 'sending_enabled', 1, $2::jsonb, 'fixture: the rehearsal gate this world stands for', $3)
+       VALUES ($1, 'sending_enabled', 1, $2::jsonb, 'fixture: the CI gate run this world stands for', $3)
        ON CONFLICT (workspace_id, setting_key, version) DO NOTHING`,
       [
         workspaceId,

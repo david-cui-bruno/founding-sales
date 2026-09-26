@@ -150,13 +150,21 @@ export function resolvePublicIdentifier(
   );
 }
 
+/**
+ * Whether `FSS_ENVIRONMENT` names production: trimmed and case-blind, the one comparison
+ * the dependency switch, the upgrade URL and the release-record binding all make.
+ */
+export function isProductionEnvironmentName(environmentName: string | undefined): boolean {
+  return environmentName?.trim().toLowerCase() === 'production';
+}
+
 export function readDependencySelection(environment: DeploymentEnvironment): DependencySelection {
   const raw = environment[VARIABLES.dependencies]?.trim().toLowerCase();
-  const environmentName = environment[VARIABLES.environmentName]?.trim().toLowerCase() ?? 'unset';
+  const production = isProductionEnvironmentName(environment[VARIABLES.environmentName]);
   if (raw === undefined || raw.length === 0) {
     // A production process that read no switch would run with whatever the code's
     // fallback happened to be. Outside production the absence is allowed and means `none`.
-    if (environmentName === 'production') {
+    if (production) {
       throw new DeploymentConfigError(
         'DEPENDENCIES_UNSET',
         `${VARIABLES.dependencies} must be set to live in a production deployment`,
@@ -167,7 +175,7 @@ export function readDependencySelection(environment: DeploymentEnvironment): Dep
   if (raw !== 'live' && raw !== 'recorded' && raw !== 'none') {
     throw new DeploymentConfigError('DEPENDENCIES_INVALID', `${VARIABLES.dependencies} must be live, recorded or none`);
   }
-  if (environmentName === 'production' && raw !== 'live') {
+  if (production && raw !== 'live') {
     throw new DeploymentConfigError(
       'PRODUCTION_REQUIRES_LIVE',
       `${VARIABLES.environmentName} is production, so ${VARIABLES.dependencies} may only be live`,

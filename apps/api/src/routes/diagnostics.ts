@@ -53,7 +53,11 @@ export async function routeDiagnostics(request: ApiRequest, options: RoutingOpti
       // the same answer `GET /settings` gives.
       adminSendingEnabled:
         effectiveSendingEnabled(true, sendingSetting.value) &&
-        (await attestedReleaseBinding(scoped.context, sendingSetting.value, 'api', options.imageDigest))?.ok === true,
+        (
+          await attestedReleaseBinding(scoped.context, sendingSetting.value, 'api', options.imageDigest, {
+            production: options.production ?? true,
+          })
+        )?.ok === true,
     }),
   };
 }

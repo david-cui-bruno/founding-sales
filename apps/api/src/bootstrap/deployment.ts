@@ -15,6 +15,7 @@ import {
   DeploymentConfigError,
   SHARED_DEPLOYMENT_VARIABLES,
   REHEARSAL_MAILBOX_ADDRESS,
+  isProductionEnvironmentName,
   readBooleanFlag,
   readDependencySelection,
   readGoogleClientBundle,
@@ -275,7 +276,7 @@ export interface ApiDeployment {
 export function readUpgradeUrl(environment: DeploymentEnvironment): { readonly value: string; readonly source: UpgradeUrlSource } {
   const name = VARIABLES.upgradeUrl;
   const raw = environment[name]?.trim() ?? '';
-  const production = environment[VARIABLES.environmentName]?.trim().toLowerCase() === 'production';
+  const production = isProductionEnvironmentName(environment[VARIABLES.environmentName]);
   if (raw.length === 0) {
     if (production) {
       throw new DeploymentConfigError('MISSING', `${name} is not set, and a production API does not publish the placeholder`);

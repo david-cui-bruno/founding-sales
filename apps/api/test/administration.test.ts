@@ -37,15 +37,21 @@ describe('the administration surface', () => {
   let adminToken: string;
   let salespersonToken: string;
 
-  // `null` is a deployment that never said which image it is; a default parameter
-  // cannot be `undefined`, because `undefined` selects the default.
-  const options = (sendingEnabled = false, imageDigest: string | null = RUNNING_API_DIGEST) => ({
+  // `null` is a deployment that never said which image it is (or, for `production`,
+  // whether it is production); a default parameter cannot be `undefined`, because
+  // `undefined` selects the default.
+  const options = (
+    sendingEnabled = false,
+    imageDigest: string | null = RUNNING_API_DIGEST,
+    production: boolean | null = null,
+  ) => ({
     session: fixture.db,
     supportedClientVersions: fixture.deps.config.supportedClientVersions,
     sendingEnabled,
     auth: fixture.deps,
     upgradeUrl: 'https://callie.example/downloads/mac',
     ...(imageDigest === null ? {} : { imageDigest }),
+    ...(production === null ? {} : { production }),
   });
 
   const call = async (
@@ -55,6 +61,7 @@ describe('the administration surface', () => {
     body?: unknown,
     sendingEnabled = false,
     imageDigest: string | null = RUNNING_API_DIGEST,
+    production: boolean | null = null,
   ): Promise<{ status: number; body: Record<string, unknown> }> => {
     const request: ApiRequest = {
       method,
@@ -63,7 +70,7 @@ describe('the administration surface', () => {
       headers: token === null ? {} : { authorization: `Bearer ${token}` },
       body,
     };
-    const result = await dispatch(request, options(sendingEnabled, imageDigest));
+    const result = await dispatch(request, options(sendingEnabled, imageDigest, production));
     // What a socket carries: JSON, so an instant is a string here as it is on the Mac.
     return { status: result.status, body: JSON.parse(JSON.stringify(result.body ?? null)) as Record<string, unknown> };
   };
@@ -252,6 +259,66 @@ describe('the administration surface', () => {
       }
       const settings = await call('GET', '/settings', adminToken, undefined, true);
       expect(settings.body['effectiveSendingEnabled']).toBe(false);
+    });
+
+    it('in production refuses a passing rehearsal record, which a rehearsal stack accepts and shows in force', async () => {
+      // A record a `full` rehearsal stored before W3-S8, naming this API. A put refuses
+      // one now, so it is inserted the way it was stored then.
+      const reference = 'fss-rh-admin-2026-09-24T10:00:00Z';
+      const commit = 'd'.repeat(40);
+      await fixture.db.query(
+        `INSERT INTO release_records
+           (reference, recorded_at, suite, api_digest, worker_digest, desktop_commit_stamp, enables_sending, record)
+         VALUES ($1, TIMESTAMPTZ '2026-09-24T10:00:00Z', 'pass', $2, $3, $4, false, $5::jsonb)`,
+        [
+          reference,
+          RUNNING_API_DIGEST,
+          RUNNING_WORKER_DIGEST,
+          commit,
+          JSON.stringify({
+            schema: RELEASE_RECORD_SCHEMA_ID,
+            releaseGateReference: reference,
+            rehearsalPrefix: 'fss-rh-admin',
+            recordedAt: '2026-09-24T10:00:00Z',
+            suite: 'pass',
+            artifacts: { api: RUNNING_API_DIGEST, worker: RUNNING_WORKER_DIGEST, desktopCommitStamp: commit },
+            rehearsalScenarios: { '11': 'prefix=fss-rh-admin result=pass' },
+            enablesSending: false,
+          }),
+        ],
+      );
+      // Production, said and unsaid: the answer a reference nobody stored gets.
+      for (const production of [true, null]) {
+        const refused = await call(
+          'POST',
+          '/settings/update',
+          adminToken,
+          enableCommand(reference),
+          true,
+          RUNNING_API_DIGEST,
+          production,
+        );
+        expect(refused.status, String(production)).toBe(409);
+        expect(refused.body).toMatchObject({ status: 'refused', reason: 'release_record_unknown' });
+      }
+
+      const rehearsalStack = await call(
+        'POST',
+        '/settings/update',
+        adminToken,
+        enableCommand(reference),
+        true,
+        RUNNING_API_DIGEST,
+        false,
+      );
+      expect(rehearsalStack.body).toMatchObject({ status: 'accepted' });
+      const inRehearsal = await call('GET', '/settings', adminToken, undefined, true, RUNNING_API_DIGEST, false);
+      expect(inRehearsal.body['effectiveSendingEnabled']).toBe(true);
+      // The same stored attestation, read by a production API, is not in force.
+      const inProduction = await call('GET', '/settings', adminToken, undefined, true);
+      expect(inProduction.body['effectiveSendingEnabled']).toBe(false);
+      const diagnostics = await call('GET', '/diagnostics', adminToken, undefined, true);
+      expect(diagnostics.body['sending']).toEqual({ deploymentEnabled: true, adminEnabled: false, effective: false });
     });
 
     it('accepts the passing record whose API digest is this API’s, which is the positive control', async () => {

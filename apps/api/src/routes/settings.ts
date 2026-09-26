@@ -75,7 +75,11 @@ export async function routeSettings(request: ApiRequest, options: RoutingOptions
         // sending is off, which is what the worker's gate is about to say too.
         effectiveSendingEnabled:
           effectiveSendingEnabled(options.sendingEnabled, sendingSetting) &&
-          (await attestedReleaseBinding(scoped.context, sendingSetting, 'api', options.imageDigest))?.ok === true,
+          (
+            await attestedReleaseBinding(scoped.context, sendingSetting, 'api', options.imageDigest, {
+              production: options.production ?? true,
+            })
+          )?.ok === true,
       },
     };
   }
@@ -106,6 +110,7 @@ export async function routeSettings(request: ApiRequest, options: RoutingOptions
       // process's own. The domain refuses in the same transaction; the route only
       // says which image it is.
       runningApiDigest: options.imageDigest,
+      production: options.production ?? true,
     });
     // The receipt carries the updated slice, not the whole configuration: a receipt
     // is a record of what this command did.

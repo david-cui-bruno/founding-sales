@@ -28,6 +28,10 @@ import {
   storeFixtureRecord,
 } from './support/releaseRecords.ts';
 
+/** The two deployments a binding tells apart: production binds only the CI gate's records. */
+const PRODUCTION = { production: true } as const;
+const REHEARSAL_STACK = { production: false } as const;
+
 /**
  * The release records and the rule that reads them (lane g71; specification 16.2,
  * Appendix G 42).
@@ -138,9 +142,9 @@ describe('storing a release record', () => {
       enablesSending: true,
     });
     expect(read?.record).toEqual(record);
-    expect(releaseRecordBinding(read, 'api', FIXTURE_API_DIGEST)).toMatchObject({ ok: true });
-    expect(releaseRecordBinding(read, 'worker', FIXTURE_WORKER_DIGEST)).toMatchObject({ ok: true });
-    expect(releaseRecordBinding(read, 'worker', fixtureDigest('e'))).toEqual({
+    expect(releaseRecordBinding(read, 'api', FIXTURE_API_DIGEST, PRODUCTION)).toMatchObject({ ok: true });
+    expect(releaseRecordBinding(read, 'worker', FIXTURE_WORKER_DIGEST, PRODUCTION)).toMatchObject({ ok: true });
+    expect(releaseRecordBinding(read, 'worker', fixtureDigest('e'), PRODUCTION)).toEqual({
       ok: false,
       reason: 'release_record_digest_mismatch',
     });
@@ -189,28 +193,31 @@ describe('whether a record binds to the image that is asking', () => {
   });
 
   it('binds each side to its own digest, which is the positive control', () => {
-    expect(releaseRecordBinding(stored(), 'api', FIXTURE_API_DIGEST)).toMatchObject({ ok: true });
-    expect(releaseRecordBinding(stored(), 'worker', FIXTURE_WORKER_DIGEST)).toMatchObject({ ok: true });
+    expect(releaseRecordBinding(stored(), 'api', FIXTURE_API_DIGEST, REHEARSAL_STACK)).toMatchObject({ ok: true });
+    expect(releaseRecordBinding(stored(), 'worker', FIXTURE_WORKER_DIGEST, REHEARSAL_STACK)).toMatchObject({ ok: true });
   });
 
   it('refuses each side the other side’s digest, and any other', () => {
-    expect(releaseRecordBinding(stored(), 'api', FIXTURE_WORKER_DIGEST)).toEqual({
+    expect(releaseRecordBinding(stored(), 'api', FIXTURE_WORKER_DIGEST, REHEARSAL_STACK)).toEqual({
       ok: false,
       reason: 'release_record_digest_mismatch',
     });
-    expect(releaseRecordBinding(stored(), 'worker', FIXTURE_API_DIGEST)).toEqual({
+    expect(releaseRecordBinding(stored(), 'worker', FIXTURE_API_DIGEST, REHEARSAL_STACK)).toEqual({
       ok: false,
       reason: 'release_record_digest_mismatch',
     });
-    expect(releaseRecordBinding(stored(), 'worker', fixtureDigest('e'))).toEqual({
+    expect(releaseRecordBinding(stored(), 'worker', fixtureDigest('e'), REHEARSAL_STACK)).toEqual({
       ok: false,
       reason: 'release_record_digest_mismatch',
     });
   });
 
   it('refuses a record nobody stored, and one that did not pass', () => {
-    expect(releaseRecordBinding(null, 'api', FIXTURE_API_DIGEST)).toEqual({ ok: false, reason: 'release_record_unknown' });
-    expect(releaseRecordBinding(stored('fail'), 'api', FIXTURE_API_DIGEST)).toEqual({
+    expect(releaseRecordBinding(null, 'api', FIXTURE_API_DIGEST, REHEARSAL_STACK)).toEqual({
+      ok: false,
+      reason: 'release_record_unknown',
+    });
+    expect(releaseRecordBinding(stored('fail'), 'api', FIXTURE_API_DIGEST, REHEARSAL_STACK)).toEqual({
       ok: false,
       reason: 'release_record_not_passing',
     });
@@ -218,7 +225,7 @@ describe('whether a record binds to the image that is asking', () => {
 
   it('refuses under an identity the process could not determine, whatever the record says', () => {
     for (const running of ['unknown', '', undefined, null, 'latest', `${FIXTURE_API_DIGEST} `]) {
-      expect(releaseRecordBinding(stored(), 'api', running), String(running)).toEqual({
+      expect(releaseRecordBinding(stored(), 'api', running, REHEARSAL_STACK), String(running)).toEqual({
         ok: false,
         reason: 'release_record_identity_unknown',
       });
@@ -266,7 +273,10 @@ describe('the process attestation, ci-gate:main', () => {
     });
     expect(releasePolicyBinding(ciGate(), 'api', FIXTURE_API_DIGEST)).toMatchObject({ ok: true });
     // A named reference says so too, so the audit line can tell the two apart.
-    expect(releaseRecordBinding(ciGate(), 'worker', FIXTURE_WORKER_DIGEST)).toMatchObject({ ok: true, admittedBy: 'reference' });
+    expect(releaseRecordBinding(ciGate(), 'worker', FIXTURE_WORKER_DIGEST, PRODUCTION)).toMatchObject({
+      ok: true,
+      admittedBy: 'reference',
+    });
   });
 
   it('refuses a rehearsal record under the policy, although it names this digest and passed', () => {
@@ -274,8 +284,12 @@ describe('the process attestation, ci-gate:main', () => {
       ok: false,
       reason: 'release_record_unknown',
     });
-    // The same record binds under its own reference: only the policy refuses it.
-    expect(releaseRecordBinding(rehearsal, 'worker', FIXTURE_WORKER_DIGEST)).toMatchObject({ ok: true });
+    // The same record binds under its own reference, outside production only.
+    expect(releaseRecordBinding(rehearsal, 'worker', FIXTURE_WORKER_DIGEST, REHEARSAL_STACK)).toMatchObject({ ok: true });
+    expect(releaseRecordBinding(rehearsal, 'worker', FIXTURE_WORKER_DIGEST, PRODUCTION)).toEqual({
+      ok: false,
+      reason: 'release_record_unknown',
+    });
   });
 
   it('refuses no record, a failed suite, another digest and an unknown identity', () => {
@@ -331,7 +345,7 @@ describe('the process attestation, ci-gate:main', () => {
 
     it('finds the passing ci-gate record for the running worker, and binds under the policy', async () => {
       expect((await readCiGateRecordFor({ db: database.session }, 'worker', RUNNING))?.reference).toBe(reference);
-      expect(await bindReleaseAttestation({ db: database.session }, CI_GATE_MAIN_POLICY, 'worker', RUNNING)).toMatchObject({
+      expect(await bindReleaseAttestation({ db: database.session }, CI_GATE_MAIN_POLICY, 'worker', RUNNING, PRODUCTION)).toMatchObject({
         ok: true,
         admittedBy: CI_GATE_MAIN_POLICY,
         record: { reference, workerDigest: RUNNING },
@@ -339,16 +353,18 @@ describe('the process attestation, ci-gate:main', () => {
     });
 
     it('holds a worker no ci-gate record names, including one only a rehearsal record names', async () => {
-      expect(await bindReleaseAttestation({ db: database.session }, CI_GATE_MAIN_POLICY, 'worker', fixtureDigest('e'))).toEqual({
+      expect(
+        await bindReleaseAttestation({ db: database.session }, CI_GATE_MAIN_POLICY, 'worker', fixtureDigest('e'), PRODUCTION),
+      ).toEqual({
         ok: false,
         reason: 'release_record_unknown',
       });
       expect(await readCiGateRecordFor({ db: database.session }, 'worker', REHEARSED_ONLY)).toBeNull();
-      expect(await bindReleaseAttestation({ db: database.session }, CI_GATE_MAIN_POLICY, 'worker', REHEARSED_ONLY)).toEqual({
+      expect(await bindReleaseAttestation({ db: database.session }, CI_GATE_MAIN_POLICY, 'worker', REHEARSED_ONLY, PRODUCTION)).toEqual({
         ok: false,
         reason: 'release_record_unknown',
       });
-      expect(await bindReleaseAttestation({ db: database.session }, CI_GATE_MAIN_POLICY, 'worker', 'unknown')).toEqual({
+      expect(await bindReleaseAttestation({ db: database.session }, CI_GATE_MAIN_POLICY, 'worker', 'unknown', PRODUCTION)).toEqual({
         ok: false,
         reason: 'release_record_identity_unknown',
       });
@@ -358,16 +374,80 @@ describe('the process attestation, ci-gate:main', () => {
       // The attestation names the rehearsal record, whose worker is not the one running;
       // the ci-gate record that does name the running worker is not what was attested.
       expect(
-        await bindReleaseAttestation({ db: database.session }, 'fss-rh-fixture-policy-only', 'worker', RUNNING),
+        await bindReleaseAttestation({ db: database.session }, 'fss-rh-fixture-policy-only', 'worker', RUNNING, REHEARSAL_STACK),
       ).toEqual({ ok: false, reason: 'release_record_digest_mismatch' });
       expect(
-        await bindReleaseAttestation({ db: database.session }, 'ci-gate-41000000299-cccccccccccc', 'worker', RUNNING),
+        await bindReleaseAttestation({ db: database.session }, 'ci-gate-41000000299-cccccccccccc', 'worker', RUNNING, PRODUCTION),
       ).toEqual({ ok: false, reason: 'release_record_unknown' });
-      expect(await bindReleaseAttestation({ db: database.session }, reference, 'worker', RUNNING)).toMatchObject({
+      expect(await bindReleaseAttestation({ db: database.session }, reference, 'worker', RUNNING, PRODUCTION)).toMatchObject({
         ok: true,
         admittedBy: 'reference',
       });
     });
+  });
+});
+
+/**
+ * An attestation that names one record binds only the CI gate's records in production
+ * (26 September 2026). A rehearsal stack keeps binding a rehearsal's record by its
+ * reference. Every case names a record that passed and names the running worker, so the
+ * only fact that differs is who wrote it and where the question is asked.
+ */
+describe('a named reference, in production and in a rehearsal stack', () => {
+  let database: TestDatabase;
+  const REHEARSAL_REFERENCE = 'fss-rh-fixture-2026-09-24T10:00:00Z';
+  let ciGateReference = '';
+  const bind = async (
+    reference: string,
+    side: 'api' | 'worker',
+    digest: string,
+    deployment: { readonly production: boolean },
+  ) => await bindReleaseAttestation({ db: database.session }, reference, side, digest, deployment);
+
+  beforeAll(async () => {
+    database = await createTestDatabase();
+    // A passing record a `full` rehearsal stored before W3-S8, naming the running worker.
+    await storeFixtureRecord(database.session, REHEARSAL_REFERENCE);
+    // A passing record the CI gate wrote for the same images.
+    const record = fixtureCiGateRecord('41000000301');
+    expect(await putReleaseRecord({ db: database.session }, record)).toMatchObject({ ok: true });
+    ciGateReference = record.releaseGateReference;
+  });
+
+  afterAll(async () => {
+    await database.drop();
+  });
+
+  it('refuses a passing rehearsal record in production as a record nobody stored, on both sides', async () => {
+    for (const [side, digest] of [['worker', FIXTURE_WORKER_DIGEST], ['api', FIXTURE_API_DIGEST]] as const) {
+      expect(await bind(REHEARSAL_REFERENCE, side, digest, PRODUCTION), side).toEqual({
+        ok: false,
+        reason: 'release_record_unknown',
+      });
+    }
+    // The same answer as a reference with no row at all.
+    expect(await bind('fss-rh-fixture-never-stored', 'worker', FIXTURE_WORKER_DIGEST, PRODUCTION)).toEqual({
+      ok: false,
+      reason: 'release_record_unknown',
+    });
+  });
+
+  it('admits the same rehearsal record in a rehearsal stack, by its reference', async () => {
+    expect(await bind(REHEARSAL_REFERENCE, 'worker', FIXTURE_WORKER_DIGEST, REHEARSAL_STACK)).toMatchObject({
+      ok: true,
+      admittedBy: 'reference',
+      record: { reference: REHEARSAL_REFERENCE },
+    });
+  });
+
+  it('admits a passing ci-gate record by its reference, in production and in a rehearsal stack', async () => {
+    for (const deployment of [PRODUCTION, REHEARSAL_STACK]) {
+      expect(await bind(ciGateReference, 'worker', FIXTURE_WORKER_DIGEST, deployment), String(deployment.production)).toMatchObject({
+        ok: true,
+        admittedBy: 'reference',
+        record: { reference: ciGateReference },
+      });
+    }
   });
 });
 
