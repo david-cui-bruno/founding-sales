@@ -1431,7 +1431,7 @@ const HISTORY = (() => {
     'apps/api/src/b.ts',
     'packages/domain/today/x.ts',
     'docs/greenfield/x.md',
-    'test/release/x.check.ts',
+    'test/ops/x.check.ts',
     'scripts/verifySecrets.mjs',
     'package-lock.json',
     'Dockerfile.api',

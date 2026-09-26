@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { claimForDispatch, dispatchOutboundMessage, readFence } from '@fss/domain/outbound';
+import { claimForDispatch, dispatchOutboundMessage, readFence } from '../../outbound/index.ts';
 import {
   createOutboundWorld,
   type OutboundWorld,
-} from '../../packages/domain/test/outbound/support/outboundWorld.ts';
+} from './support/outboundWorld.ts';
 
 /**
  * Appendix G 16: "Reassignment races a due send from the former owner's mailbox;

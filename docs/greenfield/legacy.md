@@ -1,7 +1,7 @@
 # The previous-generation app: deleted
 
 Lane g95 (25 September 2026) deleted the previous-generation app from the repository.
-The greenfield tree (`apps/`, `packages/`, `infra/`, `test/release/`, the root scripts
+The greenfield tree (`apps/`, `packages/`, `infra/`, `test/ops/`, the root scripts
 listed below, `docs/greenfield/` and `docs/archive/decisions/`) is now the whole repository.
 The last commit that holds the old app is the tag **`legacy-final`**; check it out to
 read, run or recover any of it.
@@ -52,7 +52,7 @@ decisions behind it.
 ## In CI
 
 The gate is `.github/workflows/greenfield.yml`, on every push and pull request, on
-Linux: the `greenfield` job (typecheck, lint, the workspace tests and the release suite)
+Linux: the `greenfield` job (typecheck, lint, the workspace tests and the ops suite)
 and the `secrets` job, `npm run verify:secrets` over the full history and the tracked
 tree with Gitleaks 8.30.1 from the `linux_x64` tarball, pinned by its SHA-256. The old
 `ci.yml` ("Source security gate") was folded into it on 26 September 2026. The other

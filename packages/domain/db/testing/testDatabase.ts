@@ -4,16 +4,22 @@ import type { QueryResultRowLike, SessionQueryable } from '../queryable.ts';
 import { applyMigrations } from '../migrationRunner.ts';
 
 /**
- * One database per test file, created from the migrations and dropped afterwards.
+ * One database per test file, dropped afterwards.
  *
- * The cluster is shared for the whole Vitest run (db/testing/globalSetup.ts); each
- * test file gets its own database so a failing insert in one file can never leave a
- * constraint half-tested in another, and so two files may hold the migration
- * advisory lock at the same time without waiting on each other.
+ * The cluster is shared for the whole Vitest run (db/testing/globalSetup.ts), and so is
+ * one template database the migrations are applied to once, at the start of the run.
+ * Each test file gets its own copy of it (`CREATE DATABASE … TEMPLATE …`), so a failing
+ * insert in one file can never leave a constraint half-tested in another, and no file
+ * pays for the migrations again. A migration that fails, fails the run in globalSetup.
+ *
+ * A database at an older schema (`throughVersion`) is not a copy: it starts empty and
+ * the migrations are applied to it up to that version, as before.
  */
 
 /** Where globalSetup leaves the superuser URL of the run's cluster. */
 export const CLUSTER_URL_ENVIRONMENT_VARIABLE = 'FSS_TEST_CLUSTER_URL';
+/** Where globalSetup leaves the name of the run's migrated template database. */
+export const TEMPLATE_DATABASE_ENVIRONMENT_VARIABLE = 'FSS_TEST_TEMPLATE_DATABASE';
 
 /** The application role; every privilege test runs as this rather than as the superuser. */
 export const APP_RUNTIME_ROLE = 'app_runtime';
@@ -49,14 +55,14 @@ export function asSession(client: RawClient): SessionQueryable {
   };
 }
 
-function clusterUrl(): string {
-  const url = process.env[CLUSTER_URL_ENVIRONMENT_VARIABLE];
-  if (url === undefined || url.trim().length === 0) {
+function fromGlobalSetup(variable: string): string {
+  const value = process.env[variable];
+  if (value === undefined || value.trim().length === 0) {
     throw new Error(
-      `${CLUSTER_URL_ENVIRONMENT_VARIABLE} is unset. The Vitest globalSetup in @fss/domain/db/testing starts the cluster; run these tests through vitest.`,
+      `${variable} is unset. The Vitest globalSetup in @fss/domain/db/testing starts the cluster and migrates the template; run these tests through vitest.`,
     );
   }
-  return url.trim();
+  return value.trim();
 }
 
 function databaseUrl(adminUrl: string, database: string): string {
@@ -65,23 +71,72 @@ function databaseUrl(adminUrl: string, database: string): string {
   return url.toString();
 }
 
-export interface CreateTestDatabaseOptions {
-  /** Stop after this migration version, for the seeded-previous-version compatibility test. */
-  readonly throughVersion?: number;
-}
-
-/** Create a database, apply the migrations to it, and hand back a superuser session. */
-export async function createTestDatabase(options: CreateTestDatabaseOptions = {}): Promise<TestDatabase> {
-  const adminUrl = clusterUrl();
-  const name = `fss_test_${randomUUID().replaceAll('-', '')}`;
-
+/** One statement on the cluster's maintenance database, on a connection of its own. */
+async function onCluster(adminUrl: string, statement: string): Promise<void> {
   const admin = new pg.Client({ connectionString: adminUrl }) as unknown as RawClient;
   await admin.connect();
   try {
-    await admin.query(`CREATE DATABASE "${name}"`);
+    await admin.query(statement);
   } finally {
     await admin.end();
   }
+}
+
+export interface TemplateDatabase {
+  readonly name: string;
+  drop(): Promise<void>;
+}
+
+/**
+ * Create the run's template: a database with every migration applied, closed to new
+ * connections afterwards, because `CREATE DATABASE … TEMPLATE` refuses a source that
+ * any other session is connected to. globalSetup calls this once per Vitest run.
+ */
+export async function createTemplateDatabase(adminUrl: string): Promise<TemplateDatabase> {
+  const name = `fss_template_${randomUUID().replaceAll('-', '')}`;
+  const drop = async (): Promise<void> => {
+    await onCluster(adminUrl, `DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
+  };
+  await onCluster(adminUrl, `CREATE DATABASE "${name}"`);
+  try {
+    const owner = new pg.Client({ connectionString: databaseUrl(adminUrl, name) }) as unknown as RawClient;
+    await owner.connect();
+    try {
+      await applyMigrations(asSession(owner));
+    } finally {
+      await owner.end();
+    }
+    await onCluster(adminUrl, `ALTER DATABASE "${name}" WITH ALLOW_CONNECTIONS false`);
+  } catch (error) {
+    await drop();
+    throw error;
+  }
+  return { name, drop };
+}
+
+export interface CreateTestDatabaseOptions {
+  /**
+   * Stop after this migration version: an empty database migrated up to it rather than
+   * a copy of the template. For the tests that need an older schema (0 is an empty
+   * database with only the runner's `schema_versions`).
+   */
+  readonly throughVersion?: number;
+}
+
+/**
+ * Create a database at the current schema (a copy of the run's template) or, with
+ * `throughVersion`, at an older one, and hand back a superuser session.
+ */
+export async function createTestDatabase(options: CreateTestDatabaseOptions = {}): Promise<TestDatabase> {
+  const adminUrl = fromGlobalSetup(CLUSTER_URL_ENVIRONMENT_VARIABLE);
+  const name = `fss_test_${randomUUID().replaceAll('-', '')}`;
+
+  await onCluster(
+    adminUrl,
+    options.throughVersion === undefined
+      ? `CREATE DATABASE "${name}" TEMPLATE "${fromGlobalSetup(TEMPLATE_DATABASE_ENVIRONMENT_VARIABLE)}"`
+      : `CREATE DATABASE "${name}"`,
+  );
 
   const url = databaseUrl(adminUrl, name);
   const owner = new pg.Client({ connectionString: url }) as unknown as RawClient;
@@ -89,14 +144,13 @@ export async function createTestDatabase(options: CreateTestDatabaseOptions = {}
   const session = asSession(owner);
   const extra: RawClient[] = [];
 
-  try {
-    await applyMigrations(
-      session,
-      options.throughVersion === undefined ? {} : { throughVersion: options.throughVersion },
-    );
-  } catch (error) {
-    await owner.end();
-    throw error;
+  if (options.throughVersion !== undefined) {
+    try {
+      await applyMigrations(session, { throughVersion: options.throughVersion });
+    } catch (error) {
+      await owner.end();
+      throw error;
+    }
   }
 
   return {
@@ -113,13 +167,7 @@ export async function createTestDatabase(options: CreateTestDatabaseOptions = {}
     async drop() {
       for (const client of extra.splice(0)) await client.end();
       await owner.end();
-      const dropper = new pg.Client({ connectionString: adminUrl }) as unknown as RawClient;
-      await dropper.connect();
-      try {
-        await dropper.query(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
-      } finally {
-        await dropper.end();
-      }
+      await onCluster(adminUrl, `DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
     },
   };
 }

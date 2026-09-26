@@ -478,7 +478,7 @@ describe('the deployment-role policy is code, and the Terraform tree judges it',
  * `infra/modules/journal/tests/object_lock.tftest.hcl` and the two roots'
  * `journal_teardown.tftest.hcl` are the real checks and they read the rendered policy
  * statement by statement — but `terraform test` runs in `infra/scripts/offline-gate.sh`
- * and not in `npm run test:release`, so a mutation of any one of these lines would leave
+ * and not in `npm run test:ops`, so a mutation of any one of these lines would leave
  * this suite green. Each is a single expression and each is the whole of one half of the
  * fix, which is the same reason scenario 22 asserts two lines of
  * `infra/modules/cluster/main.tf` here as well as in Terraform.

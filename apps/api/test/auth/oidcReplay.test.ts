@@ -1,15 +1,15 @@
 import { createSign, generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { AUTH_REFUSAL_CODES } from '@fss/contracts';
-import { createGoogleClient, type GoogleClient, type HttpFetch } from '../../apps/api/src/auth/googleClient.ts';
-import { validateIdToken } from '../../apps/api/src/auth/idToken.ts';
-import { sha256Hex } from '../../apps/api/src/auth/tokens.ts';
+import { createGoogleClient, type GoogleClient, type HttpFetch } from '../../src/auth/googleClient.ts';
+import { validateIdToken } from '../../src/auth/idToken.ts';
+import { sha256Hex } from '../../src/auth/tokens.ts';
 import {
   DEPLOYMENT_ENVIRONMENT_VARIABLES,
   GOOGLE_OIDC_DISCOVERY_URL,
   GOOGLE_OIDC_ISSUER,
   readApiDeployment,
-} from '../../apps/api/src/bootstrap/deployment.ts';
+} from '../../src/bootstrap/deployment.ts';
 
 /**
  * Appendix G 23: "OIDC state, nonce, code and token-audience replay are refused."

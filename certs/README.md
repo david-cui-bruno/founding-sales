@@ -5,7 +5,7 @@
 The public bundle of every Amazon RDS certificate authority, all regions, as AWS
 publishes it at <https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem>.
 Fetched 2026-09-23; 108 certificates; sha256 `e5bb2084ccf45087bda1c9bffdea0eb15ee67f0b91646106e466714f9de3c7e3`.
-`test/release/databaseTls.check.ts` pins both numbers.
+`test/ops/databaseTls.check.ts` pins both numbers.
 
 Why it is here: `infra/modules/database` sets `rds.force_ssl = 1`, so the database
 refuses any connection that is not TLS, and the `pg` driver verifies the server's

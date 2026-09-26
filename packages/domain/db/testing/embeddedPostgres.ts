@@ -138,6 +138,9 @@ export async function startPostgresCluster(): Promise<PostgresCluster> {
     password,
     port,
     persistent: false,
+    // A cluster that lives for one test run needs no durability: without these three,
+    // waiting on disk flushes is most of the suite's wall-clock time.
+    postgresFlags: ['-c', 'fsync=off', '-c', 'synchronous_commit=off', '-c', 'full_page_writes=off'],
     onLog: verbose ? (message: string) => { console.error(message); } : () => undefined,
     onError: verbose ? (message: unknown) => { console.error(message); } : () => undefined,
   });

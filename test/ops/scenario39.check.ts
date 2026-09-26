@@ -920,14 +920,14 @@ describe('Appendix G 39: the run’s own comparison is between durable resources
  * Reading the guards out of the source would pass against a wrapper that refuses
  * everything, and a wrapper that refuses everything is a release that cannot deploy —
  * discovered in the cloud, on a credentialed run, after an apply. So the guards are
- * *run*: `test/release/support/runTaskGuards.sh` puts each one against a launch it
+ * *run*: `test/ops/support/runTaskGuards.sh` puts each one against a launch it
  * must refuse **and** against one it must allow, with every AWS response supplied
  * through an `FSS_RELEASE_*` variable so nothing reaches a network.
  */
 describe('Appendix G 39: the refusal is symmetric, and the wrapper enforces it per launch', () => {
   it('runs every wrapper guard against a launch it must refuse and one it must allow', () => {
     const reports = mkdtempSync(join(tmpdir(), 'fss-wrapper-'));
-    const output = execFileSync('bash', [repositoryPath('test/release/support/runTaskGuards.sh')], {
+    const output = execFileSync('bash', [repositoryPath('test/ops/support/runTaskGuards.sh')], {
       env: { ...process.env, FSS_REHEARSAL_REPORTS: reports },
       encoding: 'utf8',
       stdio: 'pipe',

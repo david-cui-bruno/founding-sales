@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Every refusal the run-task wrapper makes, exercised with no credential (lane G12h).
 #
-#   bash test/release/support/runTaskGuards.sh
+#   bash test/ops/support/runTaskGuards.sh
 #
 # `aws ecs run-task` is the one call in a release that can do real damage with the
 # wrong argument, and each guard in `infra/scripts/release-common.sh` is a judgement
@@ -11,7 +11,7 @@
 # refuses *everything* — against a launch it must allow.
 #
 # Every AWS response is supplied through an `FSS_RELEASE_*` variable, so this reaches
-# no network and holds no credential. `test/release/scenario39.check.ts` runs it.
+# no network and holds no credential. `test/ops/scenario39.check.ts` runs it.
 
 set -uo pipefail
 

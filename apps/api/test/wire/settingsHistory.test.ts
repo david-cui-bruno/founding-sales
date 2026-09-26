@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { mayMutate, settingHistoryResponseSchema, wireDrift } from '@fss/contracts';
-import { CONTAINER_CLIENT_VERSIONS } from '../../apps/api/src/bootstrap/main.ts';
-import { createAuthFixture, type AuthFixture } from '../../apps/api/test/support/authFixture.ts';
-import { issueSessionFor } from '../../apps/api/test/support/sessionFixture.ts';
-import { createAdminBridge } from '../../apps/desktop/src/main/settingsBridge.ts';
-import { adminViewOf } from '../../apps/desktop/src/renderer/settingsView.ts';
-import { settingHistoryAnswer } from '../../apps/desktop/test/support/settingHistory.ts';
-import { DESKTOP_VERSION_UNDER_TEST, desktopClient, routeAnswer, shapeOf } from './support/wireThrough.ts';
+import { CONTAINER_CLIENT_VERSIONS } from '../../src/bootstrap/main.ts';
+import { createAuthFixture, type AuthFixture } from '../support/authFixture.ts';
+import { issueSessionFor } from '../support/sessionFixture.ts';
+import { createAdminBridge } from '../../../desktop/src/main/settingsBridge.ts';
+import { adminViewOf } from '../../../desktop/src/renderer/settingsView.ts';
+import { settingHistoryAnswer } from '../../../desktop/test/support/settingHistory.ts';
+import { DESKTOP_VERSION_UNDER_TEST, desktopClient, routeAnswer, shapeOf } from '../support/wireThrough.ts';
 
 /**
  * A setting's history says what changed, not only when (release.md 8.0aj; lane g78,

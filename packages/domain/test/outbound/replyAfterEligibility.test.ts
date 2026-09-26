@@ -1,18 +1,18 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { withTransaction } from '@fss/domain/db';
-import { decideSend, dispatchOutboundMessage, readFence } from '@fss/domain/outbound';
-import { openHold } from '@fss/domain/policy';
+import { withTransaction } from '../../db/index.ts';
+import { decideSend, dispatchOutboundMessage, readFence } from '../../outbound/index.ts';
+import { openHold } from '../../policy/index.ts';
 import {
   createOutboundWorld,
   type OutboundWorld,
-} from '../../packages/domain/test/outbound/support/outboundWorld.ts';
+} from './support/outboundWorld.ts';
 import {
   openExtraSession,
   pausingAtTokenRefresh,
   prepareFor,
   seedFirm,
   type ExtraSession,
-} from '../../packages/domain/test/outbound/support/dispatchFixtures.ts';
+} from './support/dispatchFixtures.ts';
 
 /**
  * Appendix G 3: "Worker pauses after eligibility read, reply commits, worker resumes: no

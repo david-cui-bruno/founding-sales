@@ -3,12 +3,14 @@ name: Greenfield desktop
 # The macOS half of specification 16.1: "the Electron macOS artifact and host
 # integrations are tested on macOS".
 #
-# Two jobs, and the difference between them is the whole design.
+# Two jobs, and the difference between them is the whole design. Neither runs on
+# a pull request or a push: the desktop typecheck, lint and unit tests run in the
+# Linux gate (greenfield.yml) on every change.
 #
-#   host     always runs, needs no credential at all, and proves the things a
-#            Linux job cannot: the real Keychain, a real packaged bundle that
-#            starts, real Launch Services, and a package verifier that refuses
-#            an unsigned, tampered or ad-hoc build.
+#   host     runs nightly and on every dispatch, needs no credential at all, and
+#            proves the things a Linux job cannot: the real Keychain, a real
+#            packaged bundle that starts, real Launch Services, and a package
+#            verifier that refuses an unsigned, tampered or ad-hoc build.
 #
 #   release  runs only when asked, needs every Apple secret David sets, and
 #            fails closed and by name when one is missing. It is the real path:
@@ -22,27 +24,11 @@ name: Greenfield desktop
 # echoed, no step sets `-x`, and `describeSigningPlan` (apps/desktop/scripts/
 # signing.ts) is the only thing that describes the configuration, by variable
 # name. A test asserts that its output contains no value.
-#
-# `apps/desktop/test/packaging/releaseWorkflow.test.ts` reads this file on every
-# change: every action pinned to a commit sha, every secret only ever the value
-# of an env entry named after it, the dirty-tree refusal before the build, and
-# the host job holding no credential at all.
 
 on:
-  pull_request:
-    paths:
-      - 'apps/desktop/**'
-      - 'packages/contracts/**'
-      - 'package.json'
-      - 'package-lock.json'
-      - '.github/workflows/greenfield-desktop.yml'
-  push:
-    branches: [main]
-    paths:
-      - 'apps/desktop/**'
-      - 'packages/contracts/**'
-      - 'package-lock.json'
-      - '.github/workflows/greenfield-desktop.yml'
+  schedule:
+    # Nightly, 07:00 UTC, on main.
+    - cron: '0 7 * * *'
   workflow_dispatch:
     inputs:
       release:
@@ -112,12 +98,6 @@ jobs:
           # does not run it under the repository's allow-scripts policy.
           node node_modules/electron/install.js
           test -d node_modules/electron/dist/Electron.app
-
-      - name: Desktop rules and window layers
-        run: |
-          set -euo pipefail
-          npm run typecheck --workspace apps/desktop
-          npm run test --workspace apps/desktop
 
       - name: Host integrations on a real Mac
         run: |

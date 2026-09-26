@@ -1,14 +1,12 @@
-import { localNoopSuppressionJournal } from '../../../apps/api/src/journal/index.ts';
-import { dispatch, type ApiOptions } from '../../../apps/api/src/server.ts';
-import { CURRENT_CLIENT_VERSION, type AuthFixture } from '../../../apps/api/test/support/authFixture.ts';
-import type { HttpAnswer, HttpSend } from '../../../apps/desktop/src/main/apiClient.ts';
-import { createAuthedClient, type AuthedClient } from '../../../apps/desktop/src/main/authedClient.ts';
+import { localNoopSuppressionJournal } from '../../src/journal/index.ts';
+import { dispatch, type ApiOptions } from '../../src/server.ts';
+import { CURRENT_CLIENT_VERSION, type AuthFixture } from './authFixture.ts';
+import type { HttpAnswer, HttpSend } from '../../../desktop/src/main/apiClient.ts';
+import { createAuthedClient, type AuthedClient } from '../../../desktop/src/main/authedClient.ts';
 
 /**
  * The real API route, in the real desktop transport, with the socket replaced by the
- * dispatcher (lane g78). The pattern `sendingSection.check.ts` introduced in lane g69,
- * shared by the four window checks that followed it: `sequences`, `replies`,
- * `settingsHistory` and `crmMerge`.
+ * dispatcher (lane g78), for the checks in `test/wire/`.
  *
  * Everything on both sides is the shipped code: the route over a real PostgreSQL and a
  * real session, and `createAuthedClient` with the parser the bridge names. The one

@@ -9,11 +9,11 @@ import {
   templateVersionsResponseSchema,
   wireDrift,
 } from '@fss/contracts';
-import { CONTAINER_CLIENT_VERSIONS } from '../../apps/api/src/bootstrap/main.ts';
-import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from '../../apps/api/test/support/authFixture.ts';
-import { issueSessionFor } from '../../apps/api/test/support/sessionFixture.ts';
-import { createSequenceBridge } from '../../apps/desktop/src/main/sequenceBridge.ts';
-import { sequenceScreen } from '../../apps/desktop/src/renderer/sequenceView.ts';
+import { CONTAINER_CLIENT_VERSIONS } from '../../src/bootstrap/main.ts';
+import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from '../support/authFixture.ts';
+import { issueSessionFor } from '../support/sessionFixture.ts';
+import { createSequenceBridge } from '../../../desktop/src/main/sequenceBridge.ts';
+import { sequenceScreen } from '../../../desktop/src/renderer/sequenceView.ts';
 import {
   callStepAnswer,
   emailStepAnswer,
@@ -21,8 +21,8 @@ import {
   sequenceSummaryAnswer,
   sequenceVersionAnswer,
   templateVersionAnswer,
-} from '../../apps/desktop/test/support/sequenceAnswers.ts';
-import { DESKTOP_VERSION_UNDER_TEST, desktopClient, routeAnswer, shapeOf } from './support/wireThrough.ts';
+} from '../../../desktop/test/support/sequenceAnswers.ts';
+import { DESKTOP_VERSION_UNDER_TEST, desktopClient, routeAnswer, shapeOf } from '../support/wireThrough.ts';
 
 /**
  * The sequence editor reads what the API sends (release.md 8.0aj; lane g78, audit items

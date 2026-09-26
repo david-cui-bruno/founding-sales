@@ -1,4 +1,4 @@
-// ESLint 9 flat configuration for the whole tree: apps/, packages/, test/release/ and the
+// ESLint 9 flat configuration for the whole tree: apps/, packages/, test/ops/ and the
 // scripts at the repository root. `npm run lint` runs it.
 import js from '@eslint/js';
 import tsPlugin from '@typescript-eslint/eslint-plugin';

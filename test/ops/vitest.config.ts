@@ -2,11 +2,13 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
 /**
- * The release suite (`npm run test:release`): the checks that run the release scripts,
- * the deploy workflow's own shell, and the code-to-Terraform cross-checks.
+ * The ops suite (`npm run test:ops`): the checks that run the release and deploy
+ * scripts against stub CLIs, the deploy workflow's own shell, the deployment role
+ * policies, the alarm digest, the production smoke and the code-to-Terraform
+ * cross-checks. Product behaviour is tested in the workspace suites.
  *
  * The files are `*.check.ts`, not `*.test.ts`, so no workspace runner picks them up by
- * the default pattern. `test/release` is not an npm workspace member, so `@fss/domain/...`
+ * the default pattern. `test/ops` is not an npm workspace member, so `@fss/domain/...`
  * resolves through the aliases below rather than a package `exports` map; they are the
  * same targets `apps/api/vitest.config.ts` uses.
  */
@@ -15,7 +17,6 @@ export default defineConfig({
   resolve: {
     alias: {
       '@fss/contracts': fileURLToPath(new URL('../../packages/contracts/src/index.ts', import.meta.url)),
-      '@fss/domain/db/testing': fileURLToPath(new URL('../../packages/domain/db/testing/index.ts', import.meta.url)),
       '@fss/domain/jobs': fileURLToPath(new URL('../../packages/domain/jobs/index.ts', import.meta.url)),
       '@fss/domain/crm': fileURLToPath(new URL('../../packages/domain/crm/index.ts', import.meta.url)),
       '@fss/domain/policy': fileURLToPath(new URL('../../packages/domain/policy/index.ts', import.meta.url)),
@@ -40,9 +41,7 @@ export default defineConfig({
   },
   test: {
     pool: 'forks',
-    globalSetup: ['packages/domain/db/testing/globalSetup.ts'],
-    include: ['test/release/**/*.check.ts'],
+    include: ['test/ops/**/*.check.ts'],
     testTimeout: 30_000,
-    hookTimeout: 60_000,
   },
 });

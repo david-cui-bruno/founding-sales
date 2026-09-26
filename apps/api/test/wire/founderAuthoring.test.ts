@@ -2,13 +2,13 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { repositoryContext, workspaceScope } from '@fss/domain/db';
 import { openHold, releaseHold } from '@fss/domain/policy';
 import { resumeEnrollment } from '@fss/domain/sequences';
-import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from '../../apps/api/test/support/authFixture.ts';
-import { issueSessionFor } from '../../apps/api/test/support/sessionFixture.ts';
-import { createCrmBridge } from '../../apps/desktop/src/main/crmBridge.ts';
-import { createSequenceBridge } from '../../apps/desktop/src/main/sequenceBridge.ts';
-import { buildFirmWorkspaceView } from '../../apps/desktop/src/renderer/firmWorkspaceView.ts';
-import { sequenceScreen, suggestedPlan } from '../../apps/desktop/src/renderer/sequenceView.ts';
-import { desktopClient } from './support/wireThrough.ts';
+import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from '../support/authFixture.ts';
+import { issueSessionFor } from '../support/sessionFixture.ts';
+import { createCrmBridge } from '../../../desktop/src/main/crmBridge.ts';
+import { createSequenceBridge } from '../../../desktop/src/main/sequenceBridge.ts';
+import { buildFirmWorkspaceView } from '../../../desktop/src/renderer/firmWorkspaceView.ts';
+import { sequenceScreen, suggestedPlan } from '../../../desktop/src/renderer/sequenceView.ts';
+import { desktopClient } from '../support/wireThrough.ts';
 
 /**
  * A founder authors a sequence, starts a firm on it, and reviews a long hold before

@@ -954,7 +954,7 @@ jobs:
         run: |
           set -euo pipefail
           npm ci --ignore-scripts --no-audit --no-fund
-          npm run test:release
+          npm run test:ops
 
       # The session this job assumed at its first step lasts an hour. The action is
       # given no `role-duration-seconds` and `fss-rh-deploy`'s own MaxSessionDuration
