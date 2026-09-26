@@ -218,18 +218,7 @@ describe('the dashboard', () => {
         return await Promise.resolve({
           available: true,
           sent: 12,
-          skipped: 1,
-          resolvedDelivered: 0,
           held: 2,
-          unknown: 0,
-          providerDeferrals: 0,
-          reputationWarnings: 0,
-          posture: { domain: null, ramps: [] },
-          bySequence: [{ key: 'intro.v1', sent: 12, replies: 3, positiveReplies: 1 }],
-          byTemplateVersion: [],
-          bySegment: { available: false, owner: 'G8', reason: 'no segment in the fixture' },
-          byWeekday: [],
-          byLocalSendHour: [],
         });
       },
       enrollments: async () =>
