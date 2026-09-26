@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { releaseRecordSchema } from '@fss/contracts';
 import { readRepositoryFile, repositoryPath } from './support/coverage.ts';
 import { registryStubs } from './support/cliStubs.ts';
-import { rehearsalJobSteps, stagesForCondition } from './support/releaseWorkflow.ts';
+import { modesForCondition, rehearsalJobSteps, stagesForCondition } from './support/releaseWorkflow.ts';
 
 /**
  * Lane g74, audit O09: one release manifest per green full rehearsal, binding the
@@ -243,18 +243,20 @@ describe('the release manifest binds a green full rehearsal’s artifacts (O09)'
   });
 });
 
-describe('the rehearsal writes and keeps the manifest after the record, in full only', () => {
+describe('the rehearsal writes and keeps the manifest after the record, in the full stage of the full mode only', () => {
   const steps = rehearsalJobSteps();
   const names = steps.map(step => step.name);
   const record = steps.find(step => step.text.includes('rehearsal-release-record.sh'));
   const write = steps.find(step => step.name === 'Write the release manifest beside the record');
   const keep = steps.find(step => step.name === 'Keep the release manifest');
 
-  it('runs both steps in the full stage and in no other', () => {
+  it('runs both steps in the full stage of the full mode and in no other', () => {
     for (const step of [write, keep]) {
       expect(step, 'a manifest step is missing').toBeDefined();
-      expect(step?.condition).toBe("inputs.stage == 'full'");
+      // Lane g97: a `mode: schema` run writes no record, so it writes no manifest either.
+      expect(step?.condition).toBe("inputs.stage == 'full' && inputs.mode == 'full'");
       expect([...stagesForCondition(step?.condition ?? null)]).toEqual(['full']);
+      expect([...modesForCondition(step?.condition ?? null)]).toEqual(['full']);
     }
   });
 

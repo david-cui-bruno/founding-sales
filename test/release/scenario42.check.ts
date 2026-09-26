@@ -11,6 +11,7 @@ import { DEPLOYMENT_ENVIRONMENT_VARIABLES as API_VARIABLES } from '../../apps/ap
 import { mustBeRehearsed, readRepositoryFile, repositoryPath } from './support/coverage.ts';
 import {
   REHEARSAL_STAGE_CHOICES,
+  modesForCondition,
   rehearsalJobSteps,
   stagesForCondition,
   stepScript,
@@ -150,7 +151,8 @@ describe('Appendix G 42: sending stays off until all four agree', () => {
   });
 
   /**
-   * G12k: the rehearsal has five stages and only one of them is the gate.
+   * G12k: the rehearsal has five stages and only one of them is the gate — and since
+   * lane g97 only in `mode: full`, which the monthly drill runs and nothing inherits.
    *
    * A `plan`, `create` or `deploy` run is a discovery run — it exists so that the next
    * plan-time error costs a minute rather than an hour — and none of them proves what
@@ -165,34 +167,42 @@ describe('Appendix G 42: sending stays off until all four agree', () => {
    * reads, and asserting the record step has some condition would pass against
    * `inputs.stage != 'plan'` — which lets a `create` run write a record for an
    * environment that was never deployed or drilled. Closed by reading the condition as
-   * a set of stages and requiring it to be exactly `{full}`, by requiring the record
-   * step to be absent from the step list of each of the other four, and by the
-   * positive control that it is present in `full`. The mutation check drops the
-   * condition and requires this to go red.
+   * a set of stages and requiring it to be exactly `{full}` and its modes exactly
+   * `{full}`, by requiring the record step to be absent from the step list of each of
+   * the other four and of a `mode: schema` run, and by the positive control that it is
+   * present in `full`. The mutation check drops the condition and requires this to go
+   * red.
    */
   describe('only the full stage can write a release record', () => {
     const steps = rehearsalJobSteps();
     const record = steps.find(step => step.text.includes('rehearsal-release-record.sh'));
 
-    it('offers the five stages and defaults to the cheap one', () => {
+    it('offers the five stages, and the gate is chosen, never inherited from a default', () => {
       const workflow = readRepositoryFile('.github/workflows/greenfield-release.yml');
       const input = workflow.slice(workflow.indexOf('      stage:'), workflow.indexOf('  pull_request:'));
       expect(input, 'workflow_dispatch declares no `stage` input').toContain('type: choice');
       for (const stage of REHEARSAL_STAGE_CHOICES) expect(input).toContain(`          - ${stage}\n`);
-      // The expensive gate is chosen, never inherited from a default.
-      expect(input).toContain("default: 'plan'");
+      // Since lane g97 the stage runs the whole of the chosen mode by default, and the
+      // mode defaults to `schema`, which writes no record: the record-writing gate is
+      // `mode: full`, chosen by the monthly drill or by hand.
+      expect(input).toContain("default: 'full'");
+      const mode = workflow.slice(workflow.indexOf('      mode:'), workflow.indexOf('      stage:'));
+      expect(mode).toContain("default: 'schema'");
     });
 
-    it('runs the release record in the full stage and in no other', () => {
+    it('runs the release record in the full stage of the full mode and in no other', () => {
       expect(record, 'no step of the rehearsal job writes a release record').toBeDefined();
-      expect(record?.condition).toBe("inputs.stage == 'full'");
+      expect(record?.condition).toBe("inputs.stage == 'full' && inputs.mode == 'full'");
       expect([...stagesForCondition(record?.condition ?? null)]).toEqual(['full']);
+      expect([...modesForCondition(record?.condition ?? null)]).toEqual(['full']);
     });
 
-    it('is not in the step list of a plan, a create, a deploy or a teardown run', () => {
+    it('is not in the step list of a plan, a create, a deploy, a teardown or a schema run', () => {
       for (const stage of REHEARSAL_STAGE_CHOICES) {
         const names = stepsForStage(stage, steps).map(step => step.name);
         expect(names.includes(record?.name ?? ''), `a ${stage} run writes a release record`).toBe(stage === 'full');
+        const schema = stepsForStage(stage, steps, 'schema').map(step => step.name);
+        expect(schema, `a schema-mode ${stage} run writes a release record`).not.toContain(record?.name ?? '');
       }
     });
 
@@ -217,7 +227,7 @@ describe('Appendix G 42: sending stays off until all four agree', () => {
    * teardown ran; it could not succeed, and nothing in the workflow could be dispatched
    * to try again without also creating a second environment.
    *
-   * So `stage = teardown` runs identity, the production inventory, the tfvars file and
+   * So `stage = teardown` runs identity, the run's own resources, the tfvars file and
    * `terraform init` against the prefix in `run_suffix`, and then the two steps every
    * stage runs. Nothing else.
    *
@@ -240,7 +250,7 @@ describe('Appendix G 42: sending stays off until all four agree', () => {
     it('runs identity, the inventory, the variables file, the init, the teardown and the guard', () => {
       for (const name of [
         'The assumed identity is the rehearsal role and nothing else',
-        'Record the production inventory before anything is created',
+        "Record the run's own resources before anything is created",
         'Write the variables this run plans, applies and tears down with',
         "Initialise the backend for this run's state key",
         'Tear the rehearsal run down',
@@ -248,10 +258,9 @@ describe('Appendix G 42: sending stays off until all four agree', () => {
       ]) {
         expect(names, `a teardown run skips ${name}`).toContain(name);
       }
-      // The production-untouched guard compares against an inventory the `before` phase
-      // recorded and fails outright without one, so a teardown that skipped the
-      // recording would fail its own last step.
-      expect(names.indexOf('Record the production inventory before anything is created')).toBeLessThan(
+      // The guard compares against what the `before` phase recorded and fails outright
+      // without it, so a teardown that skipped the recording would fail its own last step.
+      expect(names.indexOf("Record the run's own resources before anything is created")).toBeLessThan(
         names.indexOf('Nothing with the production prefix was touched'),
       );
     });
@@ -370,11 +379,12 @@ describe('Appendix G 42: sending stays off until all four agree', () => {
 });
 
 /**
- * G12f: the one exemption is one exemption.
+ * G12f: the one exemption stayed one exemption, and lane g97 removed it.
  *
- * `rehearsal_read_production_inventory` is allowed to name production because Appendix
- * G 39's last clause is measured rather than asserted. Appendix G 42's record is the
- * other thing that reads a production name — the digests it compares are production's —
+ * `rehearsal_read_production_inventory` was allowed to name production, until lane g97
+ * (25 September 2026) replaced the production diff with a comparison of the run's own
+ * resources and the exemption went with it. Appendix G 42's record is the other thing
+ * that reads a production name — the digests it compares are production's —
  * and it refuses every argument that names one. A change that widened the refusal into
  * a general allowance would show up here first: the record would accept
  * `fss-prod` as a rehearsal prefix and write a release gate reference for it.

@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { mustBeRehearsed, readRepositoryFile, repositoryPath } from './support/coverage.ts';
 import {
+  REHEARSAL_MODES,
   REHEARSAL_STAGES,
   REHEARSAL_STAGE_CHOICES,
   ladderStagesForCondition,
@@ -535,29 +536,27 @@ describe('Appendix G 39: the plan guard is what reads the plan nobody can read',
 });
 
 /**
- * G12f: the guard refused the rehearsal's own production-inventory read.
+ * G12f, and lane g97: the guard reads the run's own resources, and nothing names production.
  *
- * Appendix G 39's last clause is measured rather than asserted: the guard records the
- * production inventory before the run and compares it afterwards, so "teardown could
- * not address production" is a diff rather than a claim. That read names production,
- * and `rehearsal_refuse_production_arguments` refuses every argument that names
- * production — so the first credentialed rehearsal (Actions 35548888865) refused
- * itself at step 3 with
+ * Until g97 Appendix G 39's last clause was measured by recording the *production*
+ * inventory before the run and comparing it afterwards. That read named production, and
+ * `rehearsal_refuse_production_arguments` refuses every argument that names production —
+ * so the first credentialed rehearsal (Actions 35548888865) refused itself with
  *
  *   FAIL: a rehearsal command names a production resource: Key=Name,Values=fss-prod*
  *
- * and created nothing at all.
+ * and G12f gave the read the one exemption from the refusal. Lane g97 (25 September
+ * 2026) dropped the production diff — it failed a rehearsal only because the operator
+ * applied production while it ran — and the read is now of the run's own resources, by
+ * name, through the ordinary wrapper. There is no exemption left.
  *
  * ## The vacuous-pass trap
  *
- * The cheap fix is an exception for the string, and it is the wrong one twice over: a
- * substring exception would let a `delete-db-instance` wearing the same filter through,
- * and asserting that the guard "has an exception" would pass against a guard that had
- * stopped refusing anything. Closed by making the exemption a function — one caller,
- * one read-only operation checked against a list, no caller-supplied arguments — and by
- * running the guard against every neighbouring case rather than reading it: the read is
- * accepted, the same query anywhere else is refused, a mutating command naming
- * production is refused, and a mutating command *claiming the exemption* is refused.
+ * A read that selected by a bare string prefix would count another run's resources as
+ * this one's, and a guard that "has no exemption" is only worth saying if the old
+ * exempt caller is really gone and the old query is really refused. So the selection is
+ * run against a longer prefix and a production name, the old caller is called and must
+ * not exist, and the old query through the wrapper must still be refused.
  */
 
 /** Run a body with `rehearsal-common.sh` sourced, and report what it did. */
@@ -612,21 +611,28 @@ function planFile(...lines: readonly string[]): string {
 
 const GUARD = 'infra/scripts/rehearsal-prefix-guard.sh';
 const PRODUCTION_FILTER = 'Key=Name,Values=fss-prod*';
+/** The line the dry run prints for the read of the run's own resources. */
+const RUN_READ = 'PLAN aws resourcegroupstaggingapi get-resources --tag-filters Key=Name --output json | select names beginning fss-rh-dryrun';
 
-describe('Appendix G 39: the production-name guard exempts one read-only inventory query', () => {
-  it('accepts the inventory read, and marks the line of the plan that claimed the exemption', () => {
-    const { code, output } = inCommon(
-      'FSS_REHEARSAL_DRY_RUN=1 rehearsal_read_production_inventory resourcegroupstaggingapi get-resources',
-    );
+describe('Appendix G 39: the guard reads the run’s own resources, and no rehearsal command names production', () => {
+  it('reads the run’s own resources through the ordinary wrapper, and prints the line the plan guard looks for', () => {
+    const { code, output } = inCommon('FSS_REHEARSAL_DRY_RUN=1 rehearsal_read_run_inventory fss-rh-dryrun');
 
     expect(code).toBe(0);
-    expect(output).toContain('resourcegroupstaggingapi get-resources');
-    expect(output).toContain('exempt-read-only-production-inventory');
+    expect(output).toContain(RUN_READ);
+    expect(output).not.toContain('fss-prod');
   });
 
-  it('refuses the same query issued through the ordinary wrapper', () => {
-    // The exemption is a caller, not a string. This is the exact command the first
-    // credentialed run made, and it must still be refused everywhere else.
+  it('refuses a production prefix, so the read cannot become the old production read', () => {
+    const { output } = inCommon('FSS_REHEARSAL_DRY_RUN=1 rehearsal_read_run_inventory fss-prod\necho "rc=$?"');
+
+    expect(output).toContain("'fss-prod' is not a rehearsal prefix");
+    expect(output).toContain('rc=1');
+    expect(output).not.toContain('PLAN aws resourcegroupstaggingapi');
+  });
+
+  it('refuses the old production query issued through the ordinary wrapper', () => {
+    // The exact command of the first credentialed run. It is still refused everywhere.
     const { output } = inCommon(
       `FSS_REHEARSAL_DRY_RUN=1 rehearsal_aws resourcegroupstaggingapi get-resources --tag-filters '${PRODUCTION_FILTER}'\necho "rc=$?"`,
     );
@@ -653,42 +659,32 @@ describe('Appendix G 39: the production-name guard exempts one read-only invento
     expect(terraform.output).toContain('rc=1');
   });
 
-  it('refuses a mutating verb from inside the exemption itself', () => {
-    // The read-only constraint is a check over the operation, not a property of the
-    // one literal written in the guard, so it can be violated and must then refuse.
-    const { output } = inCommon(
-      'FSS_REHEARSAL_DRY_RUN=1 rehearsal_read_production_inventory rds delete-db-instance\necho "rc=$?"',
-    );
-
-    expect(output).toContain('may only issue [resourcegroupstaggingapi:get-resources]');
-    expect(output).toContain('rc=1');
+  it('has no exemption left: the old exempt caller and its marker are gone', () => {
+    const { output } = inCommon('rehearsal_read_production_inventory resourcegroupstaggingapi get-resources\necho "rc=$?"');
+    expect(output).toContain('rc=127');
+    const common = readRepositoryFile('infra/scripts/rehearsal-common.sh');
+    expect(common).not.toContain('exempt-read-only-production-inventory');
+    expect(common).not.toMatch(/^rehearsal_read_production_inventory\(\)/mu);
   });
 
-  it('refuses arguments handed to the exemption, so no caller can push a name through it', () => {
-    const { output } = inCommon(
-      `FSS_REHEARSAL_DRY_RUN=1 rehearsal_read_production_inventory resourcegroupstaggingapi get-resources --tag-filters '${PRODUCTION_FILTER}'\necho "rc=$?"`,
-    );
-
-    expect(output).toContain('takes no further arguments');
-    expect(output).toContain('rc=1');
-  });
-
-  it('selects the production names locally, sorted, because the tag filter cannot do it', () => {
-    // `get-resources` tag-filter values are exact matches: `Values=fss-prod*` matches
-    // nothing, which would have made the before/after comparison a comparison of two
-    // empty lists. And the API promises no order, so an unsorted answer would fail the
-    // comparison for no reason.
+  it('selects the run’s own names locally, sorted, and neither a longer prefix nor production', () => {
+    // `get-resources` tag-filter values are exact matches and take no wildcard, so the
+    // selection is local; and `fss-rh-dryrunx` is another run, not this one.
     const rows = JSON.stringify([
+      { arn: 'arn:aws:s3:::fss-rh-dryrun-journal', name: 'fss-rh-dryrun-journal' },
+      { arn: 'arn:aws:rds:us-east-1:1:db:fss-rh-dryrun-pg', name: 'fss-rh-dryrun-pg' },
+      { arn: 'arn:aws:ecs:us-east-1:1:cluster/fss-rh-dryrun', name: 'fss-rh-dryrun' },
+      { arn: 'arn:aws:rds:us-east-1:1:db:fss-rh-dryrunx-pg', name: 'fss-rh-dryrunx-pg' },
       { arn: 'arn:aws:s3:::fss-prod-journal', name: 'fss-prod-journal' },
-      { arn: 'arn:aws:rds:us-east-1:1:db:fss-prod-pg', name: 'fss-prod-pg' },
       { arn: 'arn:aws:s3:::somebody-elses', name: 'other' },
     ]);
-    const { code, output } = inCommon(`printf '%s' '${rows}' | rehearsal_select_production_names`);
+    const { code, output } = inCommon(`printf '%s' '${rows}' | rehearsal_select_run_names fss-rh-dryrun`);
 
     expect(code).toBe(0);
     expect(JSON.parse(output)).toEqual([
-      'arn:aws:rds:us-east-1:1:db:fss-prod-pg',
-      'arn:aws:s3:::fss-prod-journal',
+      'arn:aws:ecs:us-east-1:1:cluster/fss-rh-dryrun',
+      'arn:aws:rds:us-east-1:1:db:fss-rh-dryrun-pg',
+      'arn:aws:s3:::fss-rh-dryrun-journal',
     ]);
   });
 
@@ -699,13 +695,11 @@ describe('Appendix G 39: the production-name guard exempts one read-only invento
       FSS_REHEARSAL_REPORTS: reports,
     });
     expect(before.code).toBe(0);
-    expect(readFileSync(join(reports, 'production-inventory.json'), 'utf8')).toContain(
-      'dry-run: no production inventory was read',
-    );
+    expect(readFileSync(join(reports, 'run-inventory.json'), 'utf8')).toContain('dry-run: no inventory was read');
 
     // The workflow runs the `before` phase in dry mode when it decides the prefix. If
-    // the real one never ran, comparing production against that file would be a pass
-    // by construction.
+    // the real one never ran, comparing against that file would be a pass by
+    // construction.
     const stubs = mkdtempSync(join(tmpdir(), 'fss-stub-'));
     const after = runRehearsalScript(GUARD, ['fss-rh-dryrun', 'after'], {
       FSS_REHEARSAL_REPORTS: reports,
@@ -747,16 +741,16 @@ describe('Appendix G 39: the dry run reads the plan it printed, so the rehearsal
       expect(step.code, `${script} ${args.join(' ')}\n${step.output}`).toBe(0);
       printed += step.output;
     }
-    // The read is in the plan at all — before this lane it was invisible offline,
-    // which is why nothing caught it until a credential was spent.
-    expect(printed).toContain('exempt-read-only-production-inventory');
+    // The read is in the plan at all, and nothing in it names production.
+    expect(printed).toContain(RUN_READ);
+    expect(printed).not.toContain('fss-prod');
 
     const directory = mkdtempSync(join(tmpdir(), 'fss-plan-'));
     const path = join(directory, 'plan.txt');
     writeFileSync(path, printed);
     const guard = runRehearsalScript(GUARD, ['fss-rh-dryrun', 'plan', path], {});
     expect(guard.code, guard.output).toBe(0);
-    expect(guard.output).toContain('no other planned command names production');
+    expect(guard.output).toContain('no planned command names production');
   });
 
   it('refuses the plan this rehearsal printed before the exemption existed', () => {
@@ -767,6 +761,7 @@ describe('Appendix G 39: the dry run reads the plan it printed, so the rehearsal
         'fss-rh-dryrun',
         'plan',
         planFile(
+          RUN_READ,
           `PLAN aws resourcegroupstaggingapi get-resources --tag-filters ${PRODUCTION_FILTER} --query 'ResourceTagMappingList[].ResourceARN' --output json`,
         ),
       ],
@@ -777,20 +772,31 @@ describe('Appendix G 39: the dry run reads the plan it printed, so the rehearsal
     expect(guard.output).toContain('a rehearsal command names a production resource');
   });
 
-  it('refuses an unmarked production command standing beside a legitimate read', () => {
-    // The refusal that the "no inventory read" case cannot distinguish: a plan with the
-    // exempt read in it and one other command naming production. Without this, a guard
-    // that counted the read and ignored everything else would look identical.
+  it('refuses the production read the exemption allowed until g97, marker and all', () => {
     const guard = runRehearsalScript(
       GUARD,
       [
         'fss-rh-dryrun',
         'plan',
         planFile(
+          RUN_READ,
           'PLAN aws resourcegroupstaggingapi get-resources --tag-filters Key=Name --output json | select names beginning fss-prod # exempt-read-only-production-inventory',
-          'PLAN terraform destroy -var=name_prefix=fss-prod',
         ),
       ],
+      {},
+    );
+
+    expect(guard.code).not.toBe(0);
+    expect(guard.output).toContain('a rehearsal command names a production resource');
+  });
+
+  it('refuses a production command standing beside a legitimate read', () => {
+    // The refusal that the "no read" case cannot distinguish: a plan with the read in
+    // it and one other command naming production. Without this, a guard that counted
+    // the read and ignored everything else would look identical.
+    const guard = runRehearsalScript(
+      GUARD,
+      ['fss-rh-dryrun', 'plan', planFile(RUN_READ, 'PLAN terraform destroy -var=name_prefix=fss-prod')],
       {},
     );
 
@@ -799,24 +805,18 @@ describe('Appendix G 39: the dry run reads the plan it printed, so the rehearsal
     expect(guard.output).toContain("would be refused by the rehearsal's own guard");
   });
 
-  it('refuses a mutating command that wears the exemption marker', () => {
+  it('refuses a plan whose read is of another run', () => {
     const guard = runRehearsalScript(
       GUARD,
-      [
-        'fss-rh-dryrun',
-        'plan',
-        planFile(
-          'PLAN aws rds delete-db-instance --db-instance-identifier fss-prod-pg # exempt-read-only-production-inventory',
-        ),
-      ],
+      ['fss-rh-dryrun', 'plan', planFile(RUN_READ.replace(/fss-rh-dryrun$/u, 'fss-rh-otherrun'))],
       {},
     );
 
     expect(guard.code).not.toBe(0);
-    expect(guard.output).toContain('claims the inventory exemption without being the inventory read');
+    expect(guard.output).toContain('the plan contains no read of the resources named for fss-rh-dryrun');
   });
 
-  it('refuses a plan with no inventory read at all, which is the shape of a silent deletion', () => {
+  it('refuses a plan with no read at all, which is the shape of a silent deletion', () => {
     const guard = runRehearsalScript(
       GUARD,
       ['fss-rh-dryrun', 'plan', planFile('PLAN terraform destroy -var=name_prefix=fss-rh-dryrun')],
@@ -824,7 +824,7 @@ describe('Appendix G 39: the dry run reads the plan it printed, so the rehearsal
     );
 
     expect(guard.code).not.toBe(0);
-    expect(guard.output).toContain('the plan contains no production-inventory read');
+    expect(guard.output).toContain('the plan contains no read of the resources named for fss-rh-dryrun');
   });
 
   it('refuses a plan file that is not there, which is the shape of a step that did not run', () => {
@@ -1052,10 +1052,11 @@ echo "unexpected: $*" >&2; exit 9`,
     expect(output).not.toContain('deleting snapshot fss-rh-someone-else');
   });
 
-  it('still measures the production inventory afterwards when nothing was created', () => {
+  it('still compares the run’s own resources afterwards when nothing was created', () => {
     // The deliverable of the scenario, and the thing that was lost when the teardown
     // stopped at its first step: the comparison has to run, and pass, on the run that
-    // created nothing.
+    // created nothing. The account holds production's resources; the run's own read
+    // selects none of them.
     const stubs = mkdtempSync(join(tmpdir(), 'fss-after-'));
     const reports = mkdtempSync(join(tmpdir(), 'fss-after-reports-'));
     const environment = {
@@ -1071,22 +1072,30 @@ echo "unexpected: $*" >&2; exit 9`,
 
     const before = runRehearsalScript(GUARD, ['fss-rh-nothing', 'before'], environment);
     expect(before.code, before.output).toBe(0);
-    expect(readFileSync(join(reports, 'production-inventory.json'), 'utf8')).toContain('fss-prod-journal');
+    expect(JSON.parse(readFileSync(join(reports, 'run-inventory.json'), 'utf8'))).toEqual([]);
 
     const after = runRehearsalScript(GUARD, ['fss-rh-nothing', 'after'], environment, stubs);
     expect(after.code, after.output).toBe(0);
     expect(after.output).toContain('nothing with the production prefix was addressed');
-    expect(readFileSync(join(reports, 'prefix-guard.txt'), 'utf8')).toContain('state_read=false');
+    const report = readFileSync(join(reports, 'prefix-guard.txt'), 'utf8');
+    expect(report).toContain('state_read=false');
+    expect(report).toContain('production_untouched=true run_resources_left=0');
   });
 
-  it('fails the comparison when production changed, so the pass above is not free', () => {
+  it('passes when production changes during the run, which is what failed the night of 25 September', () => {
+    // Lane g97: the operator applied production while a rehearsal ran, and the old
+    // production diff failed the rehearsal for it. Production is not compared any more.
     const stubs = mkdtempSync(join(tmpdir(), 'fss-changed-'));
     const reports = mkdtempSync(join(tmpdir(), 'fss-changed-reports-'));
     const terraform = stubCommand(stubs, 'terraform', 'echo "No state file was found!" >&2; exit 1');
 
     const before = runRehearsalScript(GUARD, ['fss-rh-nothing', 'before'], {
       FSS_REHEARSAL_REPORTS: reports,
-      FSS_REHEARSAL_AWS_COMMAND: stubCommand(stubs, 'aws-before', `echo '[{"arn":"arn:a","name":"fss-prod-a"}]'`),
+      FSS_REHEARSAL_AWS_COMMAND: stubCommand(
+        stubs,
+        'aws-before',
+        `echo '[{"arn":"arn:aws:ecs:us-east-1:1:task-definition/fss-prod-api:4","name":"fss-prod-api"}]'`,
+      ),
       TERRAFORM: terraform,
     });
     expect(before.code, before.output).toBe(0);
@@ -1097,85 +1106,128 @@ echo "unexpected: $*" >&2; exit 9`,
       {
         FSS_REHEARSAL_REPORTS: reports,
         FSS_REHEARSAL_CALLER_IDENTITY: 'arn:aws:sts::123456789012:assumed-role/fss-rh-deploy/x',
-        FSS_REHEARSAL_AWS_COMMAND: stubCommand(stubs, 'aws-after', `echo '[]'`),
+        FSS_REHEARSAL_AWS_COMMAND: stubCommand(
+          stubs,
+          'aws-after',
+          `echo '[{"arn":"arn:aws:ecs:us-east-1:1:task-definition/fss-prod-api:5","name":"fss-prod-api"},{"arn":"arn:aws:rds:us-east-1:1:db:fss-prod-pg","name":"fss-prod-pg"}]'`,
+        ),
         TERRAFORM: terraform,
       },
       stubs,
     );
+    expect(after.code, after.output).toBe(0);
+    expect(after.output).not.toContain('fss-prod');
+  });
+
+  it('fails when the run left a durable resource of its own, after reading again, so the pass above is not free', () => {
+    const stubs = mkdtempSync(join(tmpdir(), 'fss-left-'));
+    const reports = mkdtempSync(join(tmpdir(), 'fss-left-reports-'));
+    writeFileSync(join(reports, 'run-inventory.json'), '[]\n');
+    const database = 'arn:aws:rds:us-east-1:123456789012:db:fss-rh-nothing-pg';
+
+    const after = runRehearsalScript(
+      GUARD,
+      ['fss-rh-nothing', 'after'],
+      {
+        FSS_REHEARSAL_REPORTS: reports,
+        FSS_REHEARSAL_CALLER_IDENTITY: 'arn:aws:sts::123456789012:assumed-role/fss-rh-deploy/x',
+        FSS_REHEARSAL_AWS_COMMAND: stubCommand(stubs, 'aws', `echo '[{"arn":"${database}","name":"fss-rh-nothing-pg"}]'`),
+        TERRAFORM: stubCommand(stubs, 'terraform', 'echo "No state file was found!" >&2; exit 1'),
+        FSS_REHEARSAL_SETTLE_READS: '2',
+        FSS_REHEARSAL_SETTLE_SECONDS: '0',
+      },
+      stubs,
+    );
     expect(after.code).not.toBe(0);
-    expect(after.output).toContain('the production inventory changed during the rehearsal run');
+    expect(after.output).toContain('the rehearsal run left resources named for fss-rh-nothing behind after its teardown');
+    expect(after.output).toContain(database);
+    // Read three times — the first and two more — before it was called a leftover.
+    expect(after.output).toContain('(1 of 3)');
+    expect(after.output).toContain('(2 of 3)');
+    expect(after.output).not.toContain('nothing with the production prefix was addressed');
+  });
+
+  it('passes when the tagging API stops listing the leftover by the next read, because it lags a deletion', () => {
+    const stubs = mkdtempSync(join(tmpdir(), 'fss-lag-'));
+    const reports = mkdtempSync(join(tmpdir(), 'fss-lag-reports-'));
+    writeFileSync(join(reports, 'run-inventory.json'), '[]\n');
+    const counter = join(stubs, 'reads');
+    const aws = stubCommand(
+      stubs,
+      'aws',
+      `n=$(cat '${counter}' 2>/dev/null || echo 0); echo $((n + 1)) > '${counter}'
+if [ "$n" -eq 0 ]; then echo '[{"arn":"arn:aws:s3:::fss-rh-nothing-updates","name":"fss-rh-nothing-updates"}]'; else echo '[]'; fi`,
+    );
+
+    const after = runRehearsalScript(
+      GUARD,
+      ['fss-rh-nothing', 'after'],
+      {
+        FSS_REHEARSAL_REPORTS: reports,
+        FSS_REHEARSAL_CALLER_IDENTITY: 'arn:aws:sts::123456789012:assumed-role/fss-rh-deploy/x',
+        FSS_REHEARSAL_AWS_COMMAND: aws,
+        TERRAFORM: stubCommand(stubs, 'terraform', 'echo "No state file was found!" >&2; exit 1'),
+        FSS_REHEARSAL_SETTLE_SECONDS: '0',
+      },
+      stubs,
+    );
+    expect(after.code, after.output).toBe(0);
+    expect(after.output).toContain('still listed; reading again');
+    expect(readFileSync(counter, 'utf8').trim()).toBe('2');
   });
 });
 
 /**
- * G47: the comparison counted tasks that ECS forgets on its own.
+ * G47, G52 and lane g97: the comparison sets aside what AWS keeps listing after a deletion.
  *
- * Run 35962272085 (24 September 2026, prefix fss-rh-202609240558) passed everything up
- * to its last step and then failed "Nothing with the production prefix was touched"
- * with a diff of exactly twelve deleted lines, every one an ECS task in
- * `fss-prod-cluster`. The tagging API lists tasks because they carry the service's
- * propagated tags; those twelve were stopped by the production redeploy minutes before
- * the `before` read, and ECS forgets a stopped task after about an hour, so they aged
- * out during the run. Production had not moved.
+ * The production comparison of G47 and G52 learned two shapes the tagging API keeps
+ * listing that are not durable: ECS tasks, which ECS forgets about an hour after they
+ * stop (run 35962272085: twelve of them), and a Fargate task's network interface, which
+ * goes with the task (run 36032732128). Since lane g97 the comparison is of the run's own
+ * resources after its teardown, and a teardown leaves more of those shapes behind: a
+ * deleted service or cluster is INACTIVE for a while, a deregistered task-definition
+ * revision is INACTIVE for good, a KMS key can only be scheduled for deletion, and the
+ * database module keeps an instance's automated backups when it is deleted.
  *
  * ## The vacuous-pass trap
  *
- * The cheap fix is to drop everything ECS, or everything whose resource part starts
- * `task`, and it is wrong both ways: a new task-definition revision *is* a production
- * touch — it is what a deploy leaves behind — and a missing service or cluster is the
- * thing the scenario exists to notice. So the guard is run, not read, against the shape
- * of that run (twelve stopped tasks before, none after, plus the running ones and a
- * replacement) and must pass; and against a new revision, a removed revision, a removed
- * service and a removed cluster, and must fail each time, naming the resource.
- *
- * G52: the same, one level down. Run 36032732128 (24 September 2026, prefix
- * fss-rh-202609241713) failed the comparison with exactly one changed line, an EC2
- * `network-interface/eni-…` ARN before and a different one after. ECS had replaced the
- * production worker task during the run, and a Fargate task's elastic network interface
- * is created and deleted with the task and carries its propagated tags. The cheap fix
- * here is to drop everything `ec2`, which would stop measuring the VPC, the subnets, the
- * security groups, the route tables and the internet gateway, the resources an interface
- * lives in and wears. So the guard is run against interfaces that vanish, appear and are
- * replaced (pass), and against each of those five replaced while the interfaces churn
- * beside it (fail, naming the resource and no interface).
+ * The cheap fix is to set aside every service the teardown ever troubled, which would
+ * stop measuring the database, the buckets and the network — the leftovers that cost
+ * money and hold data. So the guard is run, not read, against each set-aside shape still
+ * listed after the teardown (pass, counted per class), and against each durable resource
+ * left behind while those shapes churn beside it (fail, naming it and nothing set aside).
+ * The set-aside is by parsed service and resource type, so a bucket whose name contains
+ * `task-definition` and a KMS alias are still compared.
  */
-describe('Appendix G 39: the production comparison is between durable resources', () => {
+describe('Appendix G 39: the run’s own comparison is between durable resources', () => {
   const ACCOUNT = '123456789012';
+  const RUN = 'fss-rh-durable';
   const ecs = (resource: string): string => `arn:aws:ecs:us-east-1:${ACCOUNT}:${resource}`;
-  const CLUSTER = ecs('cluster/fss-prod-cluster');
-  const API_SERVICE = ecs('service/fss-prod-cluster/fss-prod-api');
-  const WORKER_DEFINITION = ecs('task-definition/fss-prod-worker:4');
-  const DURABLE: readonly string[] = [
-    CLUSTER,
-    API_SERVICE,
-    ecs('service/fss-prod-cluster/fss-prod-worker'),
-    ecs('task-definition/fss-prod-api:4'),
-    WORKER_DEFINITION,
-    `arn:aws:logs:us-east-1:${ACCOUNT}:log-group:fss-prod-api`,
-    `arn:aws:cloudwatch:us-east-1:${ACCOUNT}:alarm:fss-prod-canary-stale`,
-    `arn:aws:rds:us-east-1:${ACCOUNT}:db:fss-prod-pg`,
-    `arn:aws:s3:::fss-prod-journal-${ACCOUNT}`,
-    `arn:aws:iam::${ACCOUNT}:role/fss-prod-api-task`,
-  ];
-  const task = (index: number): string =>
-    ecs(`task/fss-prod-cluster/${index.toString(16).padStart(32, '0')}`);
   const ec2 = (resource: string): string => `arn:aws:ec2:us-east-1:${ACCOUNT}:${resource}`;
-  /** The network the production tasks run in: durable, and every one of them compared. */
-  const NETWORK: readonly string[] = [
+  /** What the run's teardown leaves listed that is not a leftover. */
+  const LINGERING: readonly string[] = [
+    ecs(`task/${RUN}-cluster/${'a1'.repeat(16)}`),
+    ecs(`service/${RUN}-cluster/${RUN}-api`),
+    ecs(`cluster/${RUN}-cluster`),
+    ecs(`task-definition/${RUN}-worker:1`),
+    ec2('network-interface/eni-0d67a1b2c3d4e5f60'),
+    `arn:aws:kms:us-east-1:${ACCOUNT}:key/0a1b2c3d-0000-0000-0000-0a1b2c3d4e5f`,
+    `arn:aws:rds:us-east-1:${ACCOUNT}:auto-backup:ab-0a1b2c3d4e5f60718`,
+  ];
+  /** What the teardown exists to remove, every one compared. */
+  const DURABLE: readonly string[] = [
+    `arn:aws:rds:us-east-1:${ACCOUNT}:db:${RUN}-pg`,
+    `arn:aws:rds:us-east-1:${ACCOUNT}:snapshot:${RUN}-pg-drill`,
+    `arn:aws:s3:::${RUN}-suppression-journal-${ACCOUNT}`,
+    `arn:aws:elasticloadbalancing:us-east-1:${ACCOUNT}:loadbalancer/app/${RUN}-alb/0a1b2c3d4e5f6071`,
+    `arn:aws:logs:us-east-1:${ACCOUNT}:log-group:/fss/${RUN}/worker`,
+    `arn:aws:secretsmanager:us-east-1:${ACCOUNT}:secret:${RUN}/session-signing-key-AbCdEf`,
     ec2('vpc/vpc-0a1b2c3d4e5f60718'),
     ec2('subnet/subnet-0a1b2c3d4e5f60718'),
     ec2('security-group/sg-0a1b2c3d4e5f60718'),
-    ec2('route-table/rtb-0a1b2c3d4e5f60718'),
-    ec2('internet-gateway/igw-0a1b2c3d4e5f60718'),
+    `arn:aws:s3:::${RUN}-task-definition-notes`,
+    `arn:aws:kms:us-east-1:${ACCOUNT}:alias/${RUN}-journal`,
   ];
-  /** A task's elastic network interface, created and deleted with the task. */
-  const eni = (id: string): string => ec2(`network-interface/eni-${id}`);
-  const WORKER_ENI_BEFORE = eni('0d67a1b2c3d4e5f60');
-  const WORKER_ENI_AFTER = eni('0e2fa1b2c3d4e5f60');
-  const API_ENI = eni('0c11a1b2c3d4e5f60');
-  /** The redeploy's stopped tasks: the old service tasks and the one-off migrate, users, verify and bootstrap. */
-  const STOPPED = Array.from({ length: 12 }, (_, index) => task(index + 1));
-  const RUNNING = [task(0xa1), task(0xa2)];
 
   /** Record `before`, then compare against `after`, the way the workflow does. */
   function guardAcross(
@@ -1185,12 +1237,11 @@ describe('Appendix G 39: the production comparison is between durable resources'
     const stubs = mkdtempSync(join(tmpdir(), 'fss-durable-'));
     const reports = mkdtempSync(join(tmpdir(), 'fss-durable-reports-'));
     const terraform = stubCommand(stubs, 'terraform', 'echo "No state file was found!" >&2; exit 1');
-    // What the tagging API answers after `--query`: a task carries the service's
-    // propagated Name tag, which is how it got into the production selection at all.
+    // What the tagging API answers after `--query`: every one carries the run's Name.
     const answer = (arns: readonly string[]): string =>
-      `echo '${JSON.stringify(arns.map(arn => ({ arn, name: 'fss-prod-api' })))}'`;
+      `echo '${JSON.stringify(arns.map(arn => ({ arn, name: `${RUN}-thing` })))}'`;
 
-    const recording = runRehearsalScript(GUARD, ['fss-rh-durable', 'before'], {
+    const recording = runRehearsalScript(GUARD, [RUN, 'before'], {
       FSS_REHEARSAL_REPORTS: reports,
       FSS_REHEARSAL_AWS_COMMAND: stubCommand(stubs, 'aws-before', answer(before)),
       TERRAFORM: terraform,
@@ -1199,122 +1250,59 @@ describe('Appendix G 39: the production comparison is between durable resources'
 
     const comparison = runRehearsalScript(
       GUARD,
-      ['fss-rh-durable', 'after'],
+      [RUN, 'after'],
       {
         FSS_REHEARSAL_REPORTS: reports,
         FSS_REHEARSAL_CALLER_IDENTITY: `arn:aws:sts::${ACCOUNT}:assumed-role/fss-rh-deploy/x`,
         FSS_REHEARSAL_AWS_COMMAND: stubCommand(stubs, 'aws-after', answer(after)),
         TERRAFORM: terraform,
+        FSS_REHEARSAL_SETTLE_READS: '0',
+        FSS_REHEARSAL_SETTLE_SECONDS: '0',
       },
       stubs,
     );
-    return { ...comparison, recorded: readFileSync(join(reports, 'production-inventory.json'), 'utf8') };
+    return { ...comparison, recorded: readFileSync(join(reports, 'run-inventory.json'), 'utf8') };
   }
 
-  it('passes when tasks the redeploy stopped age out during the run', () => {
-    // Run 35962272085 exactly: twelve stopped tasks recorded, gone an hour later; the
-    // running service tasks still there; and a replacement task started meanwhile.
-    const { code, output, recorded } = guardAcross(
-      [...DURABLE, ...STOPPED, ...RUNNING],
-      [...DURABLE, ...RUNNING, task(0xb1)],
-    );
+  it('passes when the teardown’s stopped tasks, INACTIVE ECS resources, interfaces, keys and backups are still listed', () => {
+    const { code, output } = guardAcross([], LINGERING);
 
     expect(code, output).toBe(0);
     expect(output).toContain('nothing with the production prefix was addressed');
-    // Said out loud, per side, rather than silently dropped.
-    expect(output).toContain('recorded before the run: 14 ECS task ARN(s), 0 network interface ARN(s) set aside');
-    expect(output).toContain('read now: 3 ECS task ARN(s), 0 network interface ARN(s) set aside');
-    // The recorded file is still the raw read — the tasks are in it — so the filter
-    // is applied to the recorded side at comparison time, which is also what makes a
-    // file recorded by an older guard compare correctly.
-    expect(recorded).toContain(STOPPED[0]);
-  });
-
-  it('fails on a new task-definition revision, because a revision is a production touch', () => {
-    const { code, output } = guardAcross(
-      [...DURABLE, ...STOPPED],
-      [...DURABLE, ecs('task-definition/fss-prod-api:5')],
+    // Said out loud, per class, rather than silently dropped.
+    expect(output).toContain(
+      'set aside 4 ECS ARN(s), 1 KMS key ARN(s), 1 network interface ARN(s), 1 retained automated backup ARN(s)',
     );
-
-    expect(code).not.toBe(0);
-    expect(output).toContain('the production inventory changed during the rehearsal run');
-    expect(output).toContain('task-definition/fss-prod-api:5');
-    // The diff names the durable change and nothing ECS forgot.
-    expect(output).not.toContain(':task/fss-prod-cluster/');
   });
 
-  it('fails when a revision, a service or the cluster is gone', () => {
-    for (const removed of [WORKER_DEFINITION, API_SERVICE, CLUSTER]) {
-      const { code, output } = guardAcross(
-        [...DURABLE, ...RUNNING],
-        [...DURABLE.filter(arn => arn !== removed), ...RUNNING],
-      );
+  it('fails on each durable resource left behind, naming it and nothing set aside', () => {
+    for (const left of DURABLE) {
+      const { code, output } = guardAcross([], [...LINGERING, left]);
 
-      expect(code, `${removed} removed, and the guard passed`).not.toBe(0);
-      expect(output).toContain('the production inventory changed during the rehearsal run');
-      expect(output).toContain(removed);
-    }
-  });
-
-  it('passes when ECS replaces a task and its network interface goes with it', () => {
-    // Run 36032732128 exactly: the worker task replaced during the run, its interface
-    // eni-0d67… gone and eni-0e2f… in its place; the API task and its interface stay.
-    const { code, output, recorded } = guardAcross(
-      [...DURABLE, ...NETWORK, task(0xa1), task(0xa2), API_ENI, WORKER_ENI_BEFORE],
-      [...DURABLE, ...NETWORK, task(0xa1), task(0xc1), API_ENI, WORKER_ENI_AFTER],
-    );
-
-    expect(code, output).toBe(0);
-    expect(output).toContain('nothing with the production prefix was addressed');
-    // Each class counted separately, per side, rather than silently dropped.
-    expect(output).toContain('recorded before the run: 2 ECS task ARN(s), 2 network interface ARN(s) set aside');
-    expect(output).toContain('read now: 2 ECS task ARN(s), 2 network interface ARN(s) set aside');
-    expect(recorded).toContain(WORKER_ENI_BEFORE);
-  });
-
-  it('passes when an interface only disappears, or only appears', () => {
-    for (const [before, after] of [
-      [[API_ENI, WORKER_ENI_BEFORE], [API_ENI]],
-      [[API_ENI], [API_ENI, WORKER_ENI_AFTER]],
-      [[WORKER_ENI_BEFORE], []],
-    ] as const) {
-      const { code, output } = guardAcross(
-        [...DURABLE, ...NETWORK, ...before],
-        [...DURABLE, ...NETWORK, ...after],
-      );
-
-      expect(code, `${before.join(',')} -> ${after.join(',')}: ${output}`).toBe(0);
-      expect(output).toContain(
-        `recorded before the run: 0 ECS task ARN(s), ${String(before.length)} network interface ARN(s) set aside`,
-      );
-    }
-  });
-
-  it('fails when the VPC, a subnet, a security group, a route table or the gateway is replaced', () => {
-    for (const replaced of NETWORK) {
-      const replacement = replaced.replace('-0a1b2c3d4e5f60718', '-0f9e8d7c6b5a40392');
-      const { code, output } = guardAcross(
-        [...DURABLE, ...NETWORK, task(0xa2), WORKER_ENI_BEFORE],
-        [...DURABLE, ...NETWORK.map(arn => (arn === replaced ? replacement : arn)), task(0xc1), WORKER_ENI_AFTER],
-      );
-
-      expect(code, `${replaced} replaced, and the guard passed`).not.toBe(0);
-      expect(output).toContain('the production inventory changed during the rehearsal run');
-      expect(output).toContain(replaced);
-      expect(output).toContain(replacement);
-      // The diff names the durable change and nothing that came and went with a task.
+      expect(code, `${left} left behind, and the guard passed`).not.toBe(0);
+      expect(output).toContain('left resources named for fss-rh-durable behind');
+      expect(output).toContain(left);
+      expect(output).not.toContain(':task/');
       expect(output).not.toContain(':network-interface/');
-      expect(output).not.toContain(':task/fss-prod-cluster/');
     }
+  });
+
+  it('passes a teardown run whose orphan was recorded before it, gone or not', () => {
+    // A `teardown` stage records the orphan's resources first. Removing them is a pass;
+    // failing to is the teardown step's own failure, not a leftover of this run.
+    expect(guardAcross(DURABLE.slice(0, 3), []).code).toBe(0);
+    const stuck = guardAcross(DURABLE.slice(0, 1), DURABLE.slice(0, 1));
+    expect(stuck.code, stuck.output).toBe(0);
+    expect(stuck.recorded).toContain(DURABLE[0]);
   });
 
   it('refuses a recording that is not a list of ARNs rather than comparing it', () => {
     const stubs = mkdtempSync(join(tmpdir(), 'fss-durable-bad-'));
     const reports = mkdtempSync(join(tmpdir(), 'fss-durable-bad-reports-'));
-    writeFileSync(join(reports, 'production-inventory.json'), '{"not": "a list"}\n');
+    writeFileSync(join(reports, 'run-inventory.json'), '{"not": "a list"}\n');
     const { code, output } = runRehearsalScript(
       GUARD,
-      ['fss-rh-durable', 'after'],
+      [RUN, 'after'],
       {
         FSS_REHEARSAL_REPORTS: reports,
         FSS_REHEARSAL_CALLER_IDENTITY: `arn:aws:sts::${ACCOUNT}:assumed-role/fss-rh-deploy/x`,
@@ -1448,10 +1436,9 @@ describe('Appendix G 39: the refusal is symmetric, and the wrapper enforces it p
     ]) {
       const workflow = readRepositoryFile(path);
       expect(workflow, `${path} declares no concurrency group`).toMatch(/^concurrency:$/mu);
-      // Two rehearsals overlapping share the account, the two stable repositories and
-      // the production-inventory comparison, which is recorded before a run and
-      // compared after it. And a teardown that runs on `always()` must not be
-      // cancelled: a cancelled run still has an environment standing.
+      // Two rehearsals overlapping share the account's quotas and the two stable
+      // repositories. And a teardown that runs on `always()` must not be cancelled: a
+      // cancelled run still has an environment standing.
       expect(workflow, `${path} cancels a run that is already holding the namespace`).toContain(
         'cancel-in-progress: false',
       );
@@ -1531,22 +1518,26 @@ describe('Appendix G 39: the rehearsal has five stages and four of them contain 
     }
   });
 
-  it('runs strictly more with each stage, so no two stages are the same run', () => {
-    for (const [index, stage] of REHEARSAL_STAGES.entries()) {
-      if (index === 0) continue;
-      const earlier = REHEARSAL_STAGES[index - 1] ?? 'plan';
-      const previous = stepsForStage(earlier, steps).map(step => step.name);
-      const current = stepsForStage(stage, steps).map(step => step.name);
-      for (const name of previous) {
-        expect(current, `${stage} does not run ${name}, which ${earlier} does`).toContain(name);
+  it('runs strictly more with each stage, in either mode, so no two stages are the same run', () => {
+    // In `mode: schema` too (lane g97): its `full` adds the declared schema ranges to
+    // `deploy`, which is the step a schema change is rehearsed for.
+    for (const mode of REHEARSAL_MODES) {
+      for (const [index, stage] of REHEARSAL_STAGES.entries()) {
+        if (index === 0) continue;
+        const earlier = REHEARSAL_STAGES[index - 1] ?? 'plan';
+        const previous = stepsForStage(earlier, steps, mode).map(step => step.name);
+        const current = stepsForStage(stage, steps, mode).map(step => step.name);
+        for (const name of previous) {
+          expect(current, `${mode} ${stage} does not run ${name}, which ${earlier} does`).toContain(name);
+        }
+        expect(current.length, `${mode} ${stage} adds nothing to the stage before it`).toBeGreaterThan(previous.length);
       }
-      expect(current.length, `${stage} adds nothing to the stage before it`).toBeGreaterThan(previous.length);
     }
     // And the cheapest stage is a real run rather than a shell: it plans.
     expect(stepsForStage('plan', steps).length).toBeGreaterThanOrEqual(10);
   });
 
-  it('tears down and re-reads the production inventory in every stage, unconditionally', () => {
+  it('tears down and runs the guard in every stage and every mode, unconditionally', () => {
     // These two are what protect against a stage condition being wrong, so neither may
     // depend on one: `always()` and nothing else. A `plan` run creates nothing, but
     // "creates nothing" is exactly the claim a broken `if:` would falsify, and the
@@ -1558,7 +1549,12 @@ describe('Appendix G 39: the rehearsal has five stages and four of them contain 
       expect(step, `the rehearsal job has no step named ${name}`).toBeDefined();
       expect(step?.condition).toBe('always()');
       for (const stage of REHEARSAL_STAGE_CHOICES) {
-        expect(stepsForStage(stage, steps).map(candidate => candidate.name), `${stage} skips ${name}`).toContain(name);
+        for (const mode of REHEARSAL_MODES) {
+          expect(
+            stepsForStage(stage, steps, mode).map(candidate => candidate.name),
+            `${mode} ${stage} skips ${name}`,
+          ).toContain(name);
+        }
       }
     }
     // The teardown needs the variables `terraform destroy` requires (G12i), so the

@@ -8,11 +8,36 @@ name: Greenfield release rehearsal
 # intended for production."
 #
 # It creates a run-prefixed rehearsal environment, migrates, deploys the two images by
-# digest in the order migrate → worker → API, smokes, runs the Appendix G suite, runs
-# the restore drill (Appendix E 1 to 9), replays the suppression journal, reconstructs
-# Gmail against the recorded fake, tears the run down with bypass-governance, asserts
-# that nothing with the production prefix was touched, and writes the release record
-# last.
+# digest in the order migrate → worker → API, checks the declared schema ranges against
+# the deployed images, smokes, tears the run down with bypass-governance, and asserts that
+# nothing with the production prefix was touched and nothing of the run's own was left.
+# In `mode: full` it also runs the Appendix G suite and the restore drill (Appendix E 1
+# to 9), replays the suppression journal, reconstructs Gmail against the recorded fake,
+# and writes the release record last.
+#
+# ## Two modes, and the cadence (lane g97, David's decision of 25 September 2026)
+#
+# `mode` says what the run is for, and `schema` is the default:
+#
+#   * `schema` — the rehearsal a schema, infrastructure or release-script change gets:
+#                create → fill the entries → migrate and deploy → bootstrap the workspace
+#                → the declared schema ranges against the deployed images → the
+#                production smoke script against the rehearsal → destroy → the guard.
+#                It skips the drill's evidence, the release suite (which already runs in
+#                the pull-request gate on every commit), the session renewal before the
+#                drill, the restore drill, the journal and carry drills, and the release
+#                record and manifest. Target: under 45 minutes; the job stops at 90.
+#   * `full`   — everything, as before g97: the restore drill and the release gate, and
+#                the **only** run that writes a release record and a manifest. It runs
+#                on the first Sunday of each month from
+#                `.github/workflows/greenfield-monthly-drill.yml`, and by hand when
+#                anybody wants one. The job stops at 180 minutes.
+#
+# The weekly scheduled full rehearsal of lane g74 is switched off: its workflow became
+# the monthly drill. `stage` still stops a run early (`plan`, `create`, `deploy`) or only
+# cleans (`teardown`); its default is now `full`, which means "the whole of the chosen
+# mode", so a dispatch left at its defaults is the schema rehearsal and the record-writing
+# gate is always chosen (`mode: full`), never inherited.
 #
 # ## Five rules this file keeps
 #
@@ -53,7 +78,7 @@ name: Greenfield release rehearsal
 # class no offline check can see, and each cost about an hour for one error, because the
 # workflow had one mode. The `stage` input makes the cheap part runnable alone:
 #
-#   * `plan`   — identity, the production inventory, `terraform init`, the tfvars file,
+#   * `plan`   — identity, the run's own resources, `terraform init`, the tfvars file,
 #                `terraform plan` with the same variables the apply uses, and a summary
 #                of counts and addresses. Nothing is created.
 #   * `create` — the plan, then `terraform apply`, which names no variable of its own
@@ -61,15 +86,17 @@ name: Greenfield release rehearsal
 #                that already stands, `release-stop.sh` runs first (lane g70).
 #   * `deploy` — create, then the two database entries and `release-deploy.sh`, then the
 #                smoke.
-#   * `full`   — everything, and the **only** stage that writes a release record.
+#   * `full`   — the whole of the chosen mode (above). Only `stage: full` with
+#                `mode: full` writes a release record.
 #
-# Those four nest: every step of one runs in the next. That is a property of the `if:`
-# conditions, and `test/release/support/releaseWorkflow.ts` reads them so that scenario
-# 39 can assert it rather than a reviewer having to. The default is `plan`, so the
-# expensive gate is chosen and never inherited.
+# Those four nest: every step of one runs in the next, in either mode, and a
+# `mode: schema` run is a subset of the `mode: full` run at the same stage. That is a
+# property of the `if:` conditions, and `test/release/support/releaseWorkflow.ts` reads
+# them so that scenario 39 and `test/release/rehearsalCadence.check.ts` can assert it
+# rather than a reviewer having to.
 #
 #   * `teardown` — the fifth, and **not** a rung on that ladder. It runs identity, the
-#                production inventory, the tfvars file and `terraform init` against the
+#                run's own resources, the tfvars file and `terraform init` against the
 #                prefix named in `run_suffix`, and then the two steps every stage runs:
 #                `rehearsal-teardown.sh` and the production-untouched guard. It does not
 #                plan, does not apply, deploys nothing and writes no record. It exists
@@ -81,16 +108,17 @@ name: Greenfield release rehearsal
 #                current UTC timestamp and a teardown of a prefix that names nothing is
 #                a run that reports success for doing nothing.
 #
-# ## The weekly run, and the manifest (lane g74)
+# ## The monthly drill, and the manifest (lane g74, monthly since g97)
 #
-# `.github/workflows/greenfield-weekly-rehearsal.yml` calls this workflow
-# (`workflow_call`) every Sunday with `stage: full`, the digests CI published for the
-# commit it runs at, that commit as the desktop stamp, and `pinned_commit`, which makes
-# the run refuse unless it checked out exactly that commit. A called workflow runs from
-# its caller's commit, so the pin cannot drift from the checkout. Nothing else differs:
-# the same jobs, the same environment and role, the same guards.
+# `.github/workflows/greenfield-monthly-drill.yml` calls this workflow (`workflow_call`)
+# on the first Sunday of each month with `stage: full`, `mode: full`, the digests CI
+# published for the commit it runs at, that commit as the desktop stamp, and
+# `pinned_commit`, which makes the run refuse unless it checked out exactly that commit
+# and is a full-mode run. A called workflow runs from its caller's commit, so the pin
+# cannot drift from the checkout. Nothing else differs: the same jobs, the same
+# environment and role, the same guards.
 #
-# A green `full` run writes, after the release record, the **release manifest**
+# A green `mode: full` run writes, after the release record, the **release manifest**
 # (`infra/scripts/release-manifest.sh`): the checkout, the run, both digests and where
 # they came from, the desktop stamp and app version, and the record's reference and
 # SHA-256. The record's own shape is unchanged, because production stores it. The
@@ -100,11 +128,19 @@ name: Greenfield release rehearsal
 on:
   workflow_dispatch:
     inputs:
-      stage:
-        description: 'How far to go. Only `full` is the release gate; `teardown` only cleans.'
+      mode:
+        description: '`schema` (default): create, migrate and deploy, the schema ranges, the smoke, destroy; no record. `full`: adds the release suite, the restore drill and the release record.'
         required: true
         type: choice
-        default: 'plan'
+        default: 'schema'
+        options:
+          - schema
+          - full
+      stage:
+        description: 'How far to go. `full` runs the whole of the chosen mode; `plan`, `create`, `deploy` stop early; `teardown` only cleans.'
+        required: true
+        type: choice
+        default: 'full'
         options:
           - plan
           - create
@@ -132,7 +168,7 @@ on:
     paths:
       - '.github/workflows/greenfield-release.yml'
       - '.github/workflows/greenfield-rehearsal-registry.yml'
-      - '.github/workflows/greenfield-weekly-rehearsal.yml'
+      - '.github/workflows/greenfield-monthly-drill.yml'
       - 'infra/scripts/rehearsal-*.sh'
       - 'infra/scripts/release-*.sh'
       - 'infra/scripts/render-deployment-role-policy.sh'
@@ -145,18 +181,22 @@ on:
     paths:
       - '.github/workflows/greenfield-release.yml'
       - '.github/workflows/greenfield-rehearsal-registry.yml'
-      - '.github/workflows/greenfield-weekly-rehearsal.yml'
+      - '.github/workflows/greenfield-monthly-drill.yml'
       - 'infra/scripts/rehearsal-*.sh'
       - 'infra/scripts/release-*.sh'
       - 'infra/scripts/render-deployment-role-policy.sh'
       - 'infra/scripts/check-deployment-role.sh'
       - 'infra/policies/**'
-  # The weekly full rehearsal (lane g74). The same five inputs as a dispatch, and three
-  # only the weekly caller sets: the commit it pinned, and the CI run and commit that
-  # built its images. `stage` is a string here because `workflow_call` has no choice
-  # type; the caller passes `full`.
+  # The monthly drill (lane g97; g74's weekly caller before it). The same six inputs as
+  # a dispatch, and three only the monthly caller sets: the commit it pinned, and the CI
+  # run and commit that built its images. `mode` and `stage` are strings here because
+  # `workflow_call` has no choice type; the caller passes `full` for both.
   workflow_call:
     inputs:
+      mode:
+        type: string
+        required: false
+        default: 'schema'
       stage:
         type: string
         required: true
@@ -194,11 +234,10 @@ permissions:
 
 # One rehearsal at a time (G12h, David's condition 7).
 #
-# Two rehearsals overlapping share the account, the two stable ECR repositories and —
-# worse — the production-inventory comparison: each records the inventory before its
-# own run and compares it after, so a second run creating and destroying resources in
-# between makes the first one's comparison meaningless. The teardown is the other
-# half: `if: always()` means a cancelled run still destroys what it made, so
+# Two rehearsals overlapping share the account's quotas and the two stable ECR
+# repositories, and each guard compares only its own run prefix since lane g97, so a
+# second run cannot spoil the first one's comparison — but two Multi-AZ databases and two
+# restore drills at once is spend nobody chose. The teardown is the other half: `if: always()` means a cancelled run still destroys what it made, so
 # `cancel-in-progress` is deliberately **false**. A queued run waits; it does not
 # shoot the one that is already holding the namespace.
 concurrency:
@@ -421,31 +460,32 @@ jobs:
         run: |
           set -euo pipefail
           # The refusal `rehearsal_refuse_production_arguments` makes happens at the
-          # moment a command is issued. A command no pull request ever issues — the
-          # production-inventory read, which only the credentialed `before` and `after`
-          # phases make — was therefore first judged on the first credentialed run, and
-          # it refused itself there (Actions 35548888865, `FAIL: a rehearsal command
-          # names a production resource: Key=Name,Values=fss-prod*`).
+          # moment a command is issued. A command no pull request ever issues — the old
+          # production-inventory read, which only the credentialed phases made — was
+          # therefore first judged on the first credentialed run, and it refused itself
+          # there (Actions 35548888865, `FAIL: a rehearsal command names a production
+          # resource: Key=Name,Values=fss-prod*`).
           #
-          # So the printed plan is re-read here, by the same guard: every planned
-          # command that names production must be the one exempt read-only inventory
-          # query, and that query must be present — a plan that stopped reading the
-          # inventory would satisfy a search for the absence of a string while quietly
-          # turning "teardown could not address production" back into an assertion.
+          # So the printed plan is re-read here, by the same guard. Since lane g97 no
+          # rehearsal command names production at all — the guard reads the run's own
+          # resources, not production's — so any planned line that names production is
+          # a refusal, and the read of the run's own resources must be present: a plan
+          # that stopped reading them would satisfy a search for the absence of a string
+          # while quietly turning "the teardown left nothing behind" into an assertion.
           infra/scripts/rehearsal-prefix-guard.sh fss-rh-dryrun plan '${{ steps.plan.outputs.plan }}'
 
-          # And the guard is tested rather than trusted: three plans it must refuse.
+          # And the guard is tested rather than trusted: four plans it must refuse.
           work="$(mktemp -d "$RUNNER_TEMP/fss-plan-guard.XXXXXX")"
           printf 'PLAN aws resourcegroupstaggingapi get-resources --tag-filters Key=Name,Values=fss-prod* --output json\n' \
-            > "$work/unmarked.json"
-          printf 'PLAN aws rds delete-db-instance --db-instance-identifier fss-prod-pg # exempt-read-only-production-inventory\n' \
+            > "$work/production-read.json"
+          printf 'PLAN aws rds delete-db-instance --db-instance-identifier fss-prod-pg\n' \
             > "$work/mutating.json"
           printf 'PLAN terraform destroy -var=name_prefix=fss-rh-dryrun\n' > "$work/no-read.json"
           {
-            printf 'PLAN aws resourcegroupstaggingapi get-resources --tag-filters Key=Name --output json | select names beginning fss-prod # exempt-read-only-production-inventory\n'
+            printf 'PLAN aws resourcegroupstaggingapi get-resources --tag-filters Key=Name --output json | select names beginning fss-rh-dryrun\n'
             printf 'PLAN terraform destroy -var=name_prefix=fss-prod\n'
           } > "$work/beside.json"
-          for bad in unmarked mutating no-read beside; do
+          for bad in production-read mutating no-read beside; do
             if infra/scripts/rehearsal-prefix-guard.sh fss-rh-dryrun plan "$work/$bad.json" >/dev/null 2>&1; then
               echo "::error::the plan guard accepted the $bad plan"
               exit 1
@@ -658,17 +698,26 @@ jobs:
   # ---------------------------------------------------------------------------
   rehearsal:
     name: Create, deploy, drill and destroy a rehearsal environment
-    # A dispatch, or the weekly caller (whose event this is when it is called: `schedule`,
+    # A dispatch, or the monthly caller (whose event this is when it is called: `schedule`,
     # or `workflow_dispatch` when it was dispatched). Never a push or a pull request.
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     needs: dry-run
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    # Shrunk to fit the mode (lane g97). A `schema` run is about 45 minutes: the create
+    # about 17, the deploy about 12, the bootstrap, the ranges and the smoke about 5, and
+    # the teardown. The long steps carry their own `timeout-minutes`, so a step that hangs
+    # fails itself and still leaves the teardown more than half an hour inside the 90. A
+    # `full` run keeps the 180 it has always had: it adds the release suite and the
+    # restore drill.
+    timeout-minutes: ${{ inputs.mode == 'full' && 180 || 90 }}
     environment: rehearsal
-    # Shared with the deploy job of `greenfield-deploy.yml` (lane g91): this job records
-    # production's Name-tagged inventory before its run and compares it after, and every
-    # revision an app-only deploy registers is a new production ARN. So the two exclude
-    # each other. A job pending in the group is replaced by the next one to queue.
+    # Shared with the deploy job of `greenfield-deploy.yml` (lane g91), so the two exclude
+    # each other. A job pending in the group is replaced by the next one to queue. Lane
+    # g91 added it because this job's guard compared production's Name-tagged inventory
+    # before and after its run, and every revision an app-only deploy registers is a new
+    # production ARN; since lane g97 the guard compares only this run's own resources, so
+    # a deploy during a rehearsal no longer fails it, and whether to keep the exclusion
+    # is g91's to decide.
     concurrency:
       group: fss-production-inventory
       cancel-in-progress: false
@@ -728,9 +777,10 @@ jobs:
             echo "::error::the two digests are identical; one image was pushed under both names"
             exit 1
           fi
-          # The weekly caller pins all three artifacts to one commit (lane g74). A pinned
+          # The monthly caller pins all three artifacts to one commit (lane g74). A pinned
           # run that checked out anything else, or whose desktop stamp is anything else,
-          # would rehearse code the pin never looked at, so it stops here.
+          # would rehearse code the pin never looked at, so it stops here; and a pinned
+          # run is the monthly drill, so it is `stage: full` and `mode: full`.
           pinned='${{ inputs.pinned_commit }}'
           if [ -n "$pinned" ]; then
             if [ "$GITHUB_SHA" != "$pinned" ]; then
@@ -742,7 +792,11 @@ jobs:
               exit 1
             fi
             if [ '${{ inputs.stage }}' != full ]; then
-              echo "::error::a pinned run is the weekly full rehearsal; stage '${{ inputs.stage }}' is not full"
+              echo "::error::a pinned run is the monthly drill; stage '${{ inputs.stage }}' is not full"
+              exit 1
+            fi
+            if [ '${{ inputs.mode }}' != full ]; then
+              echo "::error::a pinned run is the monthly drill; mode '${{ inputs.mode }}' is not full"
               exit 1
             fi
             echo "pinned to $pinned: checkout, desktop stamp and the images' inputs are this commit's"
@@ -816,7 +870,10 @@ jobs:
           echo "TF_VAR_aws_account_id=${account}" >> "$GITHUB_ENV"
           echo "TF_VAR_aws_region=${AWS_REGION}" >> "$GITHUB_ENV"
 
-      - name: Record the production inventory before anything is created
+      - name: Record the run's own resources before anything is created
+        # What carries this run's prefix before the create: nothing, for a fresh run; the
+        # orphan's resources, for a `teardown`. The guard compares against it at the end.
+        timeout-minutes: 5
         run: infra/scripts/rehearsal-prefix-guard.sh "${{ steps.prefix.outputs.prefix }}" before
 
       - name: Read the schema ranges the images accept
@@ -902,6 +959,7 @@ jobs:
 
       - name: Plan the rehearsal environment, and summarise it without values
         if: contains(fromJSON('["plan","create","deploy","full"]'), inputs.stage)
+        timeout-minutes: 15
         working-directory: infra/roots/rehearsal
         run: |
           set -euo pipefail
@@ -1034,6 +1092,7 @@ jobs:
 
       - name: Create the rehearsal environment
         if: contains(fromJSON('["create","deploy","full"]'), inputs.stage)
+        timeout-minutes: 35
         working-directory: infra/roots/rehearsal
         run: |
           set -euo pipefail
@@ -1097,6 +1156,7 @@ jobs:
 
       - name: Fill every secret entry this run's tasks resolve
         if: contains(fromJSON('["deploy","full"]'), inputs.stage)
+        timeout-minutes: 5
         working-directory: infra/roots/rehearsal
         run: |
           set -euo pipefail
@@ -1204,6 +1264,7 @@ jobs:
 
       - name: Migrate forward, then deploy the worker, then the API
         if: contains(fromJSON('["deploy","full"]'), inputs.stage)
+        timeout-minutes: 30
         env:
           FSS_RELEASE_WORKER_DIGEST: ${{ inputs.worker_image_digest }}
         run: |
@@ -1223,6 +1284,7 @@ jobs:
 
       - name: Bootstrap the rehearsal workspace and its admin
         if: contains(fromJSON('["deploy","full"]'), inputs.stage)
+        timeout-minutes: 10
         run: |
           set -euo pipefail
           # A migrated database has no `workspaces` row, and three things then do not
@@ -1245,7 +1307,7 @@ jobs:
             --admin-email rehearsal-admin@usecallie.com
 
       - name: Create the evidence the drill has to reconstruct
-        if: inputs.stage == 'full'
+        if: inputs.stage == 'full' && inputs.mode == 'full'
         env:
           FSS_RELEASE_WORKER_DIGEST: ${{ inputs.worker_image_digest }}
         run: |
@@ -1260,11 +1322,11 @@ jobs:
           # passed for the first time.
           #
           # It runs here, after the workspace exists and before anything measures the
-          # database, and only in `full`: the evidence is for the restore drill, and the
-          # restore drill is a `full` step. Production is never seeded, and the script
-          # has no flag that would let it be: it refuses any prefix that is not
-          # `fss-rh-<run>`, and the tool refuses again inside the container unless
-          # `FSS_DEPENDENCIES` is `recorded`.
+          # database, and only in a `full` run of `mode: full`: the evidence is for the
+          # restore drill, and the restore drill is a `mode: full` step. Production is
+          # never seeded, and the script has no flag that would let it be: it refuses
+          # any prefix that is not `fss-rh-<run>`, and the tool refuses again inside the
+          # container unless `FSS_DEPENDENCIES` is `recorded`.
           #
           # The second half of the evidence — the send and the edit the restore is meant
           # to lose — is written by the drill itself, between reading the restore target
@@ -1276,7 +1338,9 @@ jobs:
             --workspace-slug rehearsal
 
       - name: The declared schema ranges, against the deployed images
+        # Both modes: this is what a schema change is rehearsed for.
         if: inputs.stage == 'full'
+        timeout-minutes: 15
         run: |
           set -euo pipefail
           # Appendix G 22's own half: the reverse cases, which only ECS can answer.
@@ -1290,6 +1354,7 @@ jobs:
 
       - name: Smoke the rehearsal environment with the production smoke script
         if: contains(fromJSON('["deploy","full"]'), inputs.stage)
+        timeout-minutes: 15
         run: |
           set -euo pipefail
           origin="https://${{ secrets.FSS_REHEARSAL_API_HOSTNAME }}"
@@ -1351,7 +1416,9 @@ jobs:
             node scripts/productionSmoke.mjs --origin "$origin" --canary-age-seconds "$age" --json
 
       - name: Release suite (recorded mode, runner)
-        if: inputs.stage == 'full'
+        # `mode: full` only (lane g97): the suite already runs in the pull-request gate
+        # on every commit, so a schema rehearsal would be running it a second time.
+        if: inputs.stage == 'full' && inputs.mode == 'full'
         env:
           # The 42 scenarios run in the runner against the job's own PostgreSQL 16
           # service container, which is what they were built for (`test:greenfield`
@@ -1394,7 +1461,7 @@ jobs:
       #
       # aws-actions/configure-aws-credentials v4, the same pin as the first assumption.
       - name: Renew the session before the restore drill
-        if: inputs.stage == 'full'
+        if: inputs.stage == 'full' && inputs.mode == 'full'
         uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
         with:
           role-to-assume: ${{ secrets.FSS_REHEARSAL_ROLE_ARN }}
@@ -1402,7 +1469,7 @@ jobs:
           role-session-name: ${{ steps.prefix.outputs.prefix }}
 
       - name: The renewed identity is the rehearsal role and nothing else
-        if: inputs.stage == 'full'
+        if: inputs.stage == 'full' && inputs.mode == 'full'
         run: |
           set -euo pipefail
           # The same check the first assumption gets, for the same reason: from here
@@ -1412,7 +1479,7 @@ jobs:
           infra/scripts/rehearsal-caller-identity.sh fss-rh-deploy
 
       - name: Restore drill, Appendix E steps 1 to 9
-        if: inputs.stage == 'full'
+        if: inputs.stage == 'full' && inputs.mode == 'full'
         env:
           FSS_RELEASE_WORKER_DIGEST: ${{ inputs.worker_image_digest }}
           # Its step 7 runs `rehearsal-schema-ranges.sh` again, which launches the API
@@ -1421,7 +1488,7 @@ jobs:
         run: infra/scripts/rehearsal-restore-drill.sh '${{ steps.prefix.outputs.prefix }}'
 
       - name: Suppression journal replay and Gmail reconstruction
-        if: inputs.stage == 'full'
+        if: inputs.stage == 'full' && inputs.mode == 'full'
         env:
           # No real mailbox exists in rehearsal unless David provides a rehearsal
           # Google project, so the Gmail half runs against the recorded fake — chosen
@@ -1446,7 +1513,7 @@ jobs:
           PY
 
       - name: The data carry watermark and the old stack
-        if: inputs.stage == 'full'
+        if: inputs.stage == 'full' && inputs.mode == 'full'
         env:
           # Both optional, and both absent until a cutover is scheduled — an unset
           # secret renders as the empty string. The script skips its export half when
@@ -1481,9 +1548,9 @@ jobs:
         if: ${{ always() }}
         run: |
           set -euo pipefail
-          # The teardown destroys and the guard reads production's inventory, so the
-          # question "which principal is this?" has to be answered again here rather
-          # than inherited from a step an hour ago. `rehearsal-teardown.sh` asks it a
+          # The teardown destroys and the guard reads what is left, so the question
+          # "which principal is this?" has to be answered again here rather than
+          # inherited from a step an hour ago. `rehearsal-teardown.sh` asks it a
           # third time itself, which is the belt this is the braces for.
           infra/scripts/rehearsal-caller-identity.sh fss-rh-deploy
 
@@ -1492,13 +1559,26 @@ jobs:
         working-directory: infra/roots/rehearsal
         run: ../../scripts/rehearsal-teardown.sh '${{ steps.prefix.outputs.prefix }}'
 
+      # What this guard compares changed in lane g97 (25 September 2026). It used to
+      # record the production inventory before the run and diff it afterwards, and that
+      # diff failed a rehearsal that night only because the operator applied production
+      # while the rehearsal ran: a comparison of a thing that moves for reasons of its
+      # own measures the operator, not the rehearsal. It now compares only the resources
+      # carrying this run's own prefix against what stood before creation — every
+      # durable one the run created must be gone — and the production-inventory diff is
+      # dropped. That nothing production's was touched rests on what made it true before
+      # as well: the state it lists names nothing production's, the session is
+      # `fss-rh-deploy`, whose policy cannot address `fss-prod*`, and no command a
+      # rehearsal issues names production (the dry run's plan guard above holds the
+      # printed plan to that on every pull request). `docs/greenfield/release.md` 3,
+      # item 14.
       - name: Nothing with the production prefix was touched
         if: always()
         working-directory: infra/roots/rehearsal
         run: ../../scripts/rehearsal-prefix-guard.sh '${{ steps.prefix.outputs.prefix }}' after
 
       - name: Write the release record, last
-        if: inputs.stage == 'full'
+        if: inputs.stage == 'full' && inputs.mode == 'full'
         run: |
           set -euo pipefail
           infra/scripts/rehearsal-release-record.sh \
@@ -1511,7 +1591,7 @@ jobs:
           cat "$FSS_REHEARSAL_REPORTS/release-record.json" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Write the release manifest beside the record
-        if: inputs.stage == 'full'
+        if: inputs.stage == 'full' && inputs.mode == 'full'
         env:
           # Public: the version the desktop build from this commit carries.
           DESKTOP_APP_VERSION: ${{ vars.FSS_DESKTOP_APP_VERSION }}
@@ -1550,7 +1630,7 @@ jobs:
       # downloads one small thing to promote and deploy, and the freshness check can
       # find the newest green full rehearsal by name.
       - name: Keep the release manifest
-        if: inputs.stage == 'full'
+        if: inputs.stage == 'full' && inputs.mode == 'full'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: fss-release-manifest

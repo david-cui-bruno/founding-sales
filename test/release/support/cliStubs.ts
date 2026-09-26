@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 /**
  * Stand-ins for the three CLIs lane g74's scripts call — `gh`, `aws` and `docker` —
- * for the offline checks in `weeklyRehearsal.check.ts` and `releaseManifest.check.ts`.
+ * for the offline checks in `rehearsalCadence.check.ts` and `releaseManifest.check.ts`.
  *
  * Each is a small Python program, written to a temporary directory, that answers from a
  * JSON state file and appends every call to a log, one JSON line per call. The log is

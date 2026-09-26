@@ -1,18 +1,24 @@
-name: Greenfield weekly full rehearsal
+name: Greenfield monthly restore drill
 
-# The accepted weekly full rehearsal, on a schedule (lane g74, audit O10).
+# The full rehearsal — the restore drill and the release gate — once a month, on a
+# schedule (lane g97; lane g74's weekly rehearsal before it, audit O10).
 #
-# David's release cadence of 25 September keeps a full rehearsal for schema,
-# infrastructure and release-script changes, and a weekly one regardless, so the
-# drill, the teardown and the production-untouched guard are exercised even in a week
-# with no such change. Until g74 "weekly" was a person remembering to dispatch it.
+# David's decision of 25 September 2026 (axiom 1C): a schema, infrastructure or
+# release-script change gets the trimmed `mode: schema` rehearsal of
+# `greenfield-release.yml`, and the full run — the drill's evidence, the release suite,
+# the restore drill, the journal and carry drills, the release record and the manifest —
+# runs on the first Sunday of each month at 06:00 UTC, so the drill, the teardown and the
+# guard are exercised even in a month with no such change. Until g97 this file was the
+# weekly full rehearsal; its weekly schedule is switched off.
 #
 # ## Three jobs
 #
-#   * `slot` — is this hour the slot? GitHub's `schedule` cannot read a variable and
-#     drops events when busy, so this workflow wakes every hour on Sunday (UTC) and
-#     `infra/scripts/ci-schedule.sh slot` decides: Sunday at the repository variable
-#     `FSS_WEEKLY_REHEARSAL_HOUR_UTC` (default 9; `off` pauses it), caught up by a later
+#   * `slot` — is this the slot? GitHub's `schedule` cannot say "the first Sunday of the
+#     month" (a day-of-month and a day-of-week in one cron line match either, not both),
+#     cannot read a variable, and drops events when busy. So this workflow wakes at 06:00
+#     and then hourly on every Sunday (UTC), and `infra/scripts/ci-schedule.sh slot`
+#     decides: the first Sunday of the month (day 1 to 7) at the repository variable
+#     `FSS_MONTHLY_DRILL_HOUR_UTC` (default 6; `off` pauses it), caught up by a later
 #     hour when GitHub dropped the slot's own event, and never twice for one Sunday.
 #   * `pin` — the three artifacts, pinned to the commit this run is at, or nothing runs:
 #       - the API and worker digests CI published for this commit's image inputs
@@ -26,30 +32,43 @@ name: Greenfield weekly full rehearsal
 #     the rehearsal repositories keep — is a refusal and a red run.
 #   * `rehearsal` — `greenfield-release.yml` itself, called at this same commit (a
 #     workflow called as `./.github/...` runs from the caller's commit, so the pin and
-#     the checkout cannot drift apart), with `stage: full`, the pinned digests, the
-#     stamp, and `pinned_commit`, which makes the called run refuse unless it checked
-#     out exactly that commit. Everything the release workflow guards it still guards:
-#     the `rehearsal` environment and `fss-rh-deploy`, the three session renewals, the
-#     teardown and the production-untouched guard on `always()`, the one-at-a-time
-#     concurrency group, and the release record and manifest written only when all of
-#     it passed.
+#     the checkout cannot drift apart), with `stage: full`, `mode: full`, the pinned
+#     digests, the stamp, and `pinned_commit`, which makes the called run refuse unless
+#     it checked out exactly that commit and is a full-mode run. Everything the release
+#     workflow guards it still guards: the `rehearsal` environment and `fss-rh-deploy`,
+#     the three session renewals, the teardown and the guard on `always()`, the
+#     one-at-a-time concurrency group, and the release record and manifest written only
+#     when all of it passed.
 #
 # Production is never touched by this run. The only credential in it is the one the
-# called rehearsal job assumes, `fss-rh-deploy`, which cannot address `fss-prod*`; the
-# production-prefix guard measures that after every run.
+# called rehearsal job assumes, `fss-rh-deploy`, which cannot address `fss-prod*`.
+#
+# ## Running it by hand
 #
 # A manual dispatch defaults to `dry_run`: it runs `slot` and `pin` and prints what it
-# would rehearse, which is how a change to this file is tried before a Sunday.
+# would rehearse, which is how a change to this file is tried before a first Sunday.
+# To run the drill now, at main: Actions → *Greenfield monthly restore drill* → Run
+# workflow, branch `main`, untick `dry_run`; or
+#
+#     gh workflow run greenfield-monthly-drill.yml --ref main -f dry_run=false
+#
+# A dispatch is due whatever the day and hour, and even when the schedule is paused. To
+# drill digests of your own choosing instead, dispatch `greenfield-release.yml` with
+# `mode: full` and `stage: full` (`docs/greenfield/release.md` 3).
 
 on:
   schedule:
-    # Minute 23 of every hour on Sunday, UTC. Not minute 0: GitHub's queue is busiest at
-    # the top of the hour, and the nightly's 09:00 event of 25 September never fired.
+    # The slot itself: 06:00 UTC every Sunday. `slot` keeps only the first Sunday of the
+    # month.
+    - cron: '0 6 * * 0'
+    # The catch-up: minute 23 of every hour on Sunday, UTC, for a dropped 06:00 event or
+    # a slot hour moved by the variable. Not minute 0: GitHub's queue is busiest at the
+    # top of the hour, and the nightly's 09:00 event of 25 September never fired.
     - cron: '23 * * * 0'
   workflow_dispatch:
     inputs:
       dry_run:
-        description: 'Pin the artifacts and print them, but do not run the rehearsal'
+        description: 'Pin the artifacts and print them, but do not run the drill'
         required: false
         type: boolean
         default: true
@@ -57,16 +76,16 @@ on:
 permissions:
   contents: read
 
-# One weekly run at a time. A different group from the release workflow's own
+# One monthly run at a time. A different group from the release workflow's own
 # `greenfield-rehearsal`, which the called run still takes — a caller and a callee in
 # one group would wait for each other forever.
 concurrency:
-  group: greenfield-weekly-rehearsal
+  group: greenfield-monthly-drill
   cancel-in-progress: false
 
 jobs:
   slot:
-    name: Decide whether this hour is the weekly slot
+    name: Decide whether this hour is the monthly slot
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -86,7 +105,7 @@ jobs:
         id: slot
         env:
           GH_TOKEN: ${{ github.token }}
-          FSS_WEEKLY_REHEARSAL_HOUR_UTC: ${{ vars.FSS_WEEKLY_REHEARSAL_HOUR_UTC }}
+          FSS_MONTHLY_DRILL_HOUR_UTC: ${{ vars.FSS_MONTHLY_DRILL_HOUR_UTC }}
         run: |
           set -euo pipefail
           infra/scripts/ci-schedule.sh slot | tee -a "$GITHUB_OUTPUT"
@@ -124,7 +143,7 @@ jobs:
           for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN \
                       AWS_PROFILE AWS_ROLE_ARN AWS_WEB_IDENTITY_TOKEN_FILE; do
             if [ -n "${!name:-}" ]; then
-              echo "::error::$name is set. Pinning the weekly rehearsal's artifacts needs no cloud credential."
+              echo "::error::$name is set. Pinning the monthly drill's artifacts needs no cloud credential."
               exit 1
             fi
           done
@@ -134,7 +153,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$GITHUB_REF" != refs/heads/main ]; then
-            echo "::error::a weekly rehearsal runs at main, not $GITHUB_REF. Dispatch with dry_run to try another branch's pin."
+            echo "::error::the monthly drill runs at main, not $GITHUB_REF. Dispatch with dry_run to try another branch's pin."
             exit 1
           fi
 
@@ -152,7 +171,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::'$GITHUB_SHA' is not a commit"; exit 1; }
-          suffix="wk$(date -u +%Y%m%d%H%M)"
+          suffix="mo$(date -u +%Y%m%d%H%M)"
           # The same guard every rehearsal prefix passes, before anything is called.
           FSS_REHEARSAL_DRY_RUN=1 infra/scripts/rehearsal-prefix-guard.sh "fss-rh-${suffix}" before > /dev/null
           {
@@ -175,7 +194,7 @@ jobs:
           done
           [ "$API_DIGEST" != "$WORKER_DIGEST" ] || { echo "::error::one image under both names"; exit 1; }
           {
-            echo "### Weekly full rehearsal at \`${GITHUB_SHA}\`"
+            echo "### Monthly restore drill (full rehearsal) at \`${GITHUB_SHA}\`"
             echo ''
             echo "- api: \`${API_DIGEST}\`"
             echo "- worker: \`${WORKER_DIGEST}\`"
@@ -189,7 +208,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   rehearsal:
-    name: Full rehearsal at the pinned commit
+    name: Full-mode rehearsal at the pinned commit
     needs: pin
     if: ${{ needs.pin.result == 'success' && !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
     # The called rehearsal job asks for `id-token: write` to assume `fss-rh-deploy`;
@@ -201,6 +220,7 @@ jobs:
     secrets: inherit
     with:
       stage: full
+      mode: full
       api_image_digest: ${{ needs.pin.outputs.api_digest }}
       worker_image_digest: ${{ needs.pin.outputs.worker_digest }}
       desktop_commit_stamp: ${{ github.sha }}

@@ -50,7 +50,7 @@ export const MUTATIONS = [
     name: 'any stage can write a release record',
     file: '.github/workflows/greenfield-release.yml',
     kind: 'wiring',
-    find: "      - name: Write the release record, last\n        if: inputs.stage == 'full'\n",
+    find: "      - name: Write the release record, last\n        if: inputs.stage == 'full' && inputs.mode == 'full'\n",
     replace: '      - name: Write the release record, last\n',
     suite: ['run', 'test:release'],
     because:
@@ -128,14 +128,14 @@ export const MUTATIONS = [
       'Off the pull-request path the check blocks nothing, so a failure is only worth what it tells somebody. With continue-on-error the step goes red, the job goes green, and nobody is told that a trap stopped closing. mutationSchedule.check.ts refuses continue-on-error anywhere in the nightly, so it has to go red.',
   },
   {
-    name: 'the weekly caller stamps the images’ commit instead of its own',
-    file: '.github/workflows/greenfield-weekly-rehearsal.yml',
+    name: 'the monthly caller stamps the images’ commit instead of its own',
+    file: '.github/workflows/greenfield-monthly-drill.yml',
     kind: 'wiring',
     find: '      desktop_commit_stamp: ${{ github.sha }}\n',
     replace: '      desktop_commit_stamp: ${{ needs.pin.outputs.images_commit }}\n',
-    suite: ['run', 'test:release', '--', 'test/release/weeklyRehearsal.check.ts'],
+    suite: ['run', 'test:release', '--', 'test/release/rehearsalCadence.check.ts'],
     because:
-      'The desktop commit stamp is a fact about the commit being released (g13b), and the weekly run pins all three artifacts to the commit it runs at. The images’ commit is often older — a documentation commit on top of the last image change — so a stamp taken from it names a desktop build of code the suite did not run. weeklyRehearsal.check.ts requires the stamp and the pin to be github.sha and has to go red.',
+      'The desktop commit stamp is a fact about the commit being released (g13b), and the monthly run pins all three artifacts to the commit it runs at. The images’ commit is often older — a documentation commit on top of the last image change — so a stamp taken from it names a desktop build of code the suite did not run. rehearsalCadence.check.ts requires the stamp and the pin to be github.sha and has to go red.',
   },
   {
     name: 'a pinned rehearsal stops refusing a checkout that is not its pin',
@@ -143,9 +143,9 @@ export const MUTATIONS = [
     kind: 'wiring',
     find: '            if [ "$GITHUB_SHA" != "$pinned" ]; then\n',
     replace: '            if false; then\n',
-    suite: ['run', 'test:release', '--', 'test/release/weeklyRehearsal.check.ts'],
+    suite: ['run', 'test:release', '--', 'test/release/rehearsalCadence.check.ts'],
     because:
-      'A called workflow runs from its caller’s commit, so today the pin and the checkout agree by construction; the refusal is what keeps that true when somebody later dispatches or calls the release workflow with a pin some other way. weeklyRehearsal.check.ts extracts the digest step, runs it with GITHUB_SHA different from pinned_commit, and has to go red.',
+      'A called workflow runs from its caller’s commit, so today the pin and the checkout agree by construction; the refusal is what keeps that true when somebody later dispatches or calls the release workflow with a pin some other way. rehearsalCadence.check.ts extracts the digest step, runs it with GITHUB_SHA different from pinned_commit, and has to go red.',
   },
   {
     name: 'the images workflow stops publishing when only the certificate bundle changed',
@@ -153,15 +153,15 @@ export const MUTATIONS = [
     kind: 'wiring',
     find: "      - 'certs/**'\n      - 'package.json'\n      - 'package-lock.json'\n      - '.github/workflows/greenfield-images.yml'\n\npermissions:\n",
     replace: "      - 'package.json'\n      - 'package-lock.json'\n      - '.github/workflows/greenfield-images.yml'\n\npermissions:\n",
-    suite: ['run', 'test:release', '--', 'test/release/weeklyRehearsal.check.ts'],
+    suite: ['run', 'test:release', '--', 'test/release/rehearsalCadence.check.ts'],
     because:
-      'Both images COPY certs/rds-global-bundle.pem, and before lane g74 the push paths missed it: a bundle refresh built nothing, and the next release rebuilt it by hand. Now a missing path is a main commit whose images nobody publishes and the weekly pin refuses. weeklyRehearsal.check.ts compares push.paths with release-images.sh inputs and has to go red.',
+      'Both images COPY certs/rds-global-bundle.pem, and before lane g74 the push paths missed it: a bundle refresh built nothing, and the next release rebuilt it by hand. Now a missing path is a main commit whose images nobody publishes and the monthly pin refuses. rehearsalCadence.check.ts compares push.paths with release-images.sh inputs and has to go red.',
   },
   {
     name: 'the release manifest is written by a stage that is not full',
     file: '.github/workflows/greenfield-release.yml',
     kind: 'wiring',
-    find: "      - name: Write the release manifest beside the record\n        if: inputs.stage == 'full'\n",
+    find: "      - name: Write the release manifest beside the record\n        if: inputs.stage == 'full' && inputs.mode == 'full'\n",
     replace: '      - name: Write the release manifest beside the record\n',
     suite: ['run', 'test:release', '--', 'test/release/releaseManifest.check.ts'],
     because:

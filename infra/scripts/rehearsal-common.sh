@@ -130,101 +130,72 @@ rehearsal_aws() {
 }
 
 # ---------------------------------------------------------------------------
-# The one exemption from the refusal above, and the shape that keeps it one.
+# The run's own resources, read by name, and no exemption from the refusal above.
 #
-# Appendix G 39's last clause — "rehearsal teardown cannot address production
-# resources" — is *measured* rather than asserted: `rehearsal-prefix-guard.sh` records
-# the production inventory before the run and compares it afterwards
-# (`docs/greenfield/release.md` 3, step 3). A comparison needs a read, and a read of
-# production names production. The guard above refused it, and that is exactly how far
-# the first credentialed rehearsal got (Actions run 35548888865):
+# Until lane g97 (25 September 2026) Appendix G 39's last clause — "rehearsal teardown
+# cannot address production resources" — was measured by reading the *production*
+# inventory before the run and comparing it afterwards. That read named production, so
+# it needed the one exemption from `rehearsal_refuse_production_arguments` this file
+# used to carry (`rehearsal_read_production_inventory`, G12f). And the comparison
+# measured production, which moves for reasons of its own: on the night of 25 September
+# a rehearsal failed its last step only because the operator applied production while it
+# ran. `docs/greenfield/release.md` 3, item 14, has the whole paragraph.
 #
-#   FAIL: a rehearsal command names a production resource: Key=Name,Values=fss-prod*
+# So the read is of this run's own resources now — every resource whose `Name` tag is
+# the run prefix or begins `<prefix>-` — and it goes through `rehearsal_aws` like every
+# other command, because it names nothing but the run. No rehearsal command names
+# production any more, and `rehearsal-prefix-guard.sh <prefix> plan <file>` holds the
+# printed plan to exactly that on every pull request.
 #
-# The exemption is structural, not an allow-listed string:
-#
-#   1. one function may make the read, `rehearsal_read_production_inventory`;
-#   2. it checks the service and operation it is about to run against a list of
-#      read-only ones, so the constraint is a test over a value rather than a property
-#      of a literal nobody varies — a mutating verb is refused even from in here;
-#   3. it builds the production filter itself and takes no further arguments, so no
-#      caller can push a production name through it;
-#   4. `rehearsal_aws`, `rehearsal_terraform` and `rehearsal_refuse_production_arguments`
-#      are untouched: every other command naming `fss-prod` is still refused.
-#
-# The plan the dry run prints carries `REHEARSAL_INVENTORY_MARKER` on this one line, and
-# `rehearsal-prefix-guard.sh <prefix> plan <file>` re-runs the same refusal over that
-# printed plan — so a rehearsal that would refuse itself is red on the pull request
-# rather than on the next credentialed run.
+# `get-resources` tag-filter values are exact matches and take no wildcard, so the
+# filter asks for every resource that has a `Name` tag and the selection is local.
 
-# Service and operation pairs the production-inventory read may issue. Read-only by
-# name. Paging is the CLI's (`get-resources` auto-paginates), so no second verb is
-# needed; if one ever is, it is added here and nowhere else.
-REHEARSAL_INVENTORY_READ_ONLY='resourcegroupstaggingapi:get-resources'
-
-# The token that marks the one exempt line of a printed plan.
-REHEARSAL_INVENTORY_MARKER='exempt-read-only-production-inventory'
+# The phrase the printed plan carries on the read's line, so the plan guard can find it.
+REHEARSAL_RUN_INVENTORY_MARKER='select names beginning'
 
 # What a dry run records in place of an inventory it never read. The `after` phase
-# refuses to compare a real inventory against this: comparing today's production with a
-# fabricated empty list is the vacuous pass this scenario exists to prevent, and the
-# workflow's own "decide the run prefix" step runs the `before` phase in dry mode.
-REHEARSAL_DRY_RUN_INVENTORY='["dry-run: no production inventory was read"]'
+# refuses to compare against this: the workflow's own "decide the run prefix" step runs
+# the `before` phase in dry mode, and a comparison with a fabricated empty list is the
+# vacuous pass the guard exists to prevent.
+REHEARSAL_DRY_RUN_INVENTORY='["dry-run: no inventory was read"]'
 
-# Read the production inventory. The only rehearsal command that may name production.
+# Print a sorted JSON array of the ARNs of every resource named for this run.
 #
-#   rehearsal_read_production_inventory <service> <operation>
+#   rehearsal_read_run_inventory <fss-rh-run>
 #
-# Prints a sorted JSON array of the ARNs of every resource whose `Name` tag begins with
-# the production prefix. Sorted because the API does not promise an order and an
-# unstable order would fail the before/after comparison for no reason; selected locally
-# because `get-resources` tag-filter values are exact matches and do not accept the
-# `fss-prod*` wildcard the first version passed — which would have made the comparison
-# a comparison of two empty lists.
-rehearsal_read_production_inventory() {
-  local service=${1:-} operation=${2:-} pair allowed matched=0
-  pair="$service:$operation"
-  for allowed in $REHEARSAL_INVENTORY_READ_ONLY; do
-    if [ "$pair" = "$allowed" ]; then matched=1; fi
-  done
-  if [ "$matched" -ne 1 ]; then
-    echo "FAIL: the production inventory read may only issue [$REHEARSAL_INVENTORY_READ_ONLY], not '$pair'" >&2
-    return 1
-  fi
-  shift 2
-  if [ "$#" -ne 0 ]; then
-    echo "FAIL: the production inventory read takes no further arguments; it builds its own filter: $*" >&2
-    return 1
-  fi
-
-  # Dry mode prints the line and reads nothing, like every other rehearsal command:
-  # the caller writes `REHEARSAL_DRY_RUN_INVENTORY` where the answer would have gone,
-  # so the plan on stdout stays a plan and the file stays a file.
+# Sorted because the API promises no order and an unstable order would fail the
+# before/after comparison for no reason.
+rehearsal_read_run_inventory() {
+  local prefix=${1:-}
+  rehearsal_require_prefix "$prefix" || return 1
+  rehearsal_refuse_production_arguments "$prefix" || return 1
+  # Dry mode prints the line and reads nothing, like every other rehearsal command: the
+  # caller writes `REHEARSAL_DRY_RUN_INVENTORY` where the answer would have gone.
   if rehearsal_dry_run; then
-    rehearsal_plan "aws $service $operation --tag-filters Key=Name --output json" \
-      "| select names beginning ${PRODUCTION_PREFIX} # $REHEARSAL_INVENTORY_MARKER"
+    rehearsal_plan "aws resourcegroupstaggingapi get-resources --tag-filters Key=Name --output json" \
+      "| $REHEARSAL_RUN_INVENTORY_MARKER $prefix"
     return 0
   fi
-
-  command "$(rehearsal_aws_command)" "$service" "$operation" \
+  rehearsal_aws resourcegroupstaggingapi get-resources \
     --tag-filters "Key=Name" \
     --query 'ResourceTagMappingList[].{arn:ResourceARN,name:Tags[?Key==`Name`]|[0].Value}' \
-    --output json | rehearsal_select_production_names
+    --output json | rehearsal_select_run_names "$prefix"
 }
 
-# The local half of the read: everything whose Name tag begins with the production
-# prefix, sorted, as a JSON array. An empty result is an empty array, never an error —
-# an account with no production resources yet is a fact, not a failure.
-rehearsal_select_production_names() {
-  FSS_PRODUCTION_PREFIX="$PRODUCTION_PREFIX" python3 -c '
+# The local half of the read: every row whose Name is the prefix or begins `<prefix>-`,
+# sorted, as a JSON array. `fss-rh-2026092506` is not `fss-rh-202609250600`'s, so a bare
+# string prefix is not enough. An empty result is an empty array, never an error.
+rehearsal_select_run_names() {
+  FSS_RUN_PREFIX="${1:?a run prefix}" python3 -c '
 import json, os, sys
 
-prefix = os.environ["FSS_PRODUCTION_PREFIX"]
+prefix = os.environ["FSS_RUN_PREFIX"]
 rows = json.load(sys.stdin) or []
 arns = sorted(
     row["arn"]
     for row in rows
-    if isinstance(row.get("name"), str) and row["name"].startswith(prefix) and row.get("arn")
+    if isinstance(row.get("name"), str) and row.get("arn")
+    and (row["name"] == prefix or row["name"].startswith(prefix + "-"))
 )
 json.dump(arns, sys.stdout, indent=2)
 sys.stdout.write("\n")

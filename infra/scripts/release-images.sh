@@ -46,7 +46,7 @@
 # that may already be expired, and a rehearsal that fails to pull five minutes into a
 # deployment is worse than a refusal here.
 #
-# Seams, for the offline checks (`test/release/weeklyRehearsal.check.ts`):
+# Seams, for the offline checks (`test/release/rehearsalCadence.check.ts`):
 #   FSS_GH_COMMAND       the GitHub CLI (default `gh`); `pin` only
 #   FSS_DOCKER_COMMAND   the Docker CLI (default `docker`); `verify` only
 # Dry run: FSS_REHEARSAL_DRY_RUN=1 makes `verify` print its commands and run none.
