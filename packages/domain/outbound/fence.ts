@@ -838,6 +838,8 @@ export async function claimForDispatch(
     readonly outboundMessageId: string;
     readonly actor?: string | undefined;
     readonly businessDate?: string | undefined;
+    /** Written on the claim's ledger row: which attestation admitted the send (lane g100). */
+    readonly detail?: Readonly<Record<string, unknown>> | undefined;
   },
 ): Promise<SendResult<DispatchClaim>> {
   const { rows } = await context.db.query<FenceDbRow>(
@@ -865,6 +867,7 @@ export async function claimForDispatch(
     toState: 'dispatching',
     attemptToken: token,
     actor: input.actor ?? describeActor(context),
+    ...(input.detail === undefined ? {} : { detail: input.detail }),
   });
   return acceptSend({ fence, attemptToken: token });
 }

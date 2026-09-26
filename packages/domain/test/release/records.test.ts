@@ -2,13 +2,17 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
+import { CI_GATE_MAIN_POLICY } from '@fss/contracts';
 import {
   ECS_METADATA_VARIABLE,
   IMAGE_DIGEST_VARIABLE,
+  bindReleaseAttestation,
   digestFromContainerMetadata,
   discoverImageDigest,
   putReleaseRecord,
+  readCiGateRecordFor,
   readReleaseRecord,
+  releasePolicyBinding,
   releaseRecordBinding,
   type StoredReleaseRecord,
 } from '../../release/index.ts';
@@ -215,6 +219,150 @@ describe('whether a record binds to the image that is asking', () => {
         reason: 'release_record_identity_unknown',
       });
     }
+  });
+});
+
+/**
+ * Lane g100: the attestation may name the release process, `ci-gate:main`, rather than
+ * one record, so an automatic deploy that puts its ci-gate record keeps sending on. Each
+ * refusal differs from the positive control in one fact.
+ */
+describe('the process attestation, ci-gate:main', () => {
+  const ciGate = (suite = 'pass'): StoredReleaseRecord => {
+    const record = fixtureCiGateRecord('41000000201', { suite });
+    return {
+      reference: record.releaseGateReference,
+      recordedAt: '2026-09-25T21:40:12.000Z',
+      suite,
+      apiDigest: FIXTURE_API_DIGEST,
+      workerDigest: FIXTURE_WORKER_DIGEST,
+      desktopCommitStamp: FIXTURE_CI_COMMIT,
+      enablesSending: true,
+      record,
+      putAt: '2026-09-25T22:00:00.000Z',
+    };
+  };
+  const rehearsal: StoredReleaseRecord = {
+    reference: 'fss-rh-fixture-policy',
+    recordedAt: '2026-09-25T07:20:44.000Z',
+    suite: 'pass',
+    apiDigest: FIXTURE_API_DIGEST,
+    workerDigest: FIXTURE_WORKER_DIGEST,
+    desktopCommitStamp: 'd'.repeat(40),
+    enablesSending: false,
+    record: fixtureReleaseRecord('fss-rh-fixture-policy'),
+    putAt: '2026-09-25T08:00:00.000Z',
+  };
+
+  it('admits a passing ci-gate record for each side’s own digest, and says the policy admitted it', () => {
+    expect(releasePolicyBinding(ciGate(), 'worker', FIXTURE_WORKER_DIGEST)).toEqual({
+      ok: true,
+      record: ciGate(),
+      admittedBy: CI_GATE_MAIN_POLICY,
+    });
+    expect(releasePolicyBinding(ciGate(), 'api', FIXTURE_API_DIGEST)).toMatchObject({ ok: true });
+    // A named reference says so too, so the audit line can tell the two apart.
+    expect(releaseRecordBinding(ciGate(), 'worker', FIXTURE_WORKER_DIGEST)).toMatchObject({ ok: true, admittedBy: 'reference' });
+  });
+
+  it('refuses a rehearsal record under the policy, although it names this digest and passed', () => {
+    expect(releasePolicyBinding(rehearsal, 'worker', FIXTURE_WORKER_DIGEST)).toEqual({
+      ok: false,
+      reason: 'release_record_unknown',
+    });
+    // The same record binds under its own reference: only the policy refuses it.
+    expect(releaseRecordBinding(rehearsal, 'worker', FIXTURE_WORKER_DIGEST)).toMatchObject({ ok: true });
+  });
+
+  it('refuses no record, a failed suite, another digest and an unknown identity', () => {
+    expect(releasePolicyBinding(null, 'worker', FIXTURE_WORKER_DIGEST)).toEqual({ ok: false, reason: 'release_record_unknown' });
+    expect(releasePolicyBinding(ciGate('fail'), 'worker', FIXTURE_WORKER_DIGEST)).toEqual({
+      ok: false,
+      reason: 'release_record_not_passing',
+    });
+    expect(releasePolicyBinding(ciGate(), 'worker', fixtureDigest('e'))).toEqual({
+      ok: false,
+      reason: 'release_record_digest_mismatch',
+    });
+    for (const running of ['unknown', '', undefined, null]) {
+      expect(releasePolicyBinding(ciGate(), 'worker', running), String(running)).toEqual({
+        ok: false,
+        reason: 'release_record_identity_unknown',
+      });
+    }
+  });
+
+  describe('against stored records', () => {
+    let database: TestDatabase;
+    const RUNNING = fixtureDigest('3');
+    const REHEARSED_ONLY = fixtureDigest('4');
+    let reference = '';
+
+    beforeAll(async () => {
+      database = await createTestDatabase();
+      // The worker image the CI deploy just rolled, and the record it put for it.
+      const record = fixtureCiGateRecord('41000000211', { worker: RUNNING });
+      expect(await putReleaseRecord({ db: database.session }, record)).toMatchObject({ ok: true });
+      reference = record.releaseGateReference;
+      // An older gate run of the same worker image whose suite failed: never preferred.
+      expect(
+        await putReleaseRecord({ db: database.session }, { ...fixtureCiGateRecord('41000000210', { worker: RUNNING, suite: 'fail' }), recordedAt: '2026-09-26T00:00:00Z' }),
+      ).toMatchObject({ ok: true });
+      // A worker image only a rehearsal certified.
+      expect(
+        await putReleaseRecord({ db: database.session }, fixtureReleaseRecord('fss-rh-fixture-policy-only', { worker: REHEARSED_ONLY })),
+      ).toMatchObject({ ok: true });
+    });
+
+    afterAll(async () => {
+      await database.drop();
+    });
+
+    it('is a name no record may carry, so the policy never means one stored row', async () => {
+      const named = await putReleaseRecord({ db: database.session }, fixtureReleaseRecord(CI_GATE_MAIN_POLICY));
+      expect(named).toMatchObject({ ok: false, reason: 'release_record_invalid' });
+      expect(await readReleaseRecord({ db: database.session }, CI_GATE_MAIN_POLICY)).toBeNull();
+    });
+
+    it('finds the passing ci-gate record for the running worker, and binds under the policy', async () => {
+      expect((await readCiGateRecordFor({ db: database.session }, 'worker', RUNNING))?.reference).toBe(reference);
+      expect(await bindReleaseAttestation({ db: database.session }, CI_GATE_MAIN_POLICY, 'worker', RUNNING)).toMatchObject({
+        ok: true,
+        admittedBy: CI_GATE_MAIN_POLICY,
+        record: { reference, workerDigest: RUNNING },
+      });
+    });
+
+    it('holds a worker no ci-gate record names, including one only a rehearsal record names', async () => {
+      expect(await bindReleaseAttestation({ db: database.session }, CI_GATE_MAIN_POLICY, 'worker', fixtureDigest('e'))).toEqual({
+        ok: false,
+        reason: 'release_record_unknown',
+      });
+      expect(await readCiGateRecordFor({ db: database.session }, 'worker', REHEARSED_ONLY)).toBeNull();
+      expect(await bindReleaseAttestation({ db: database.session }, CI_GATE_MAIN_POLICY, 'worker', REHEARSED_ONLY)).toEqual({
+        ok: false,
+        reason: 'release_record_unknown',
+      });
+      expect(await bindReleaseAttestation({ db: database.session }, CI_GATE_MAIN_POLICY, 'worker', 'unknown')).toEqual({
+        ok: false,
+        reason: 'release_record_identity_unknown',
+      });
+    });
+
+    it('under a named reference, binds only that record: another ci-gate record for this worker admits nothing', async () => {
+      // The attestation names the rehearsal record, whose worker is not the one running;
+      // the ci-gate record that does name the running worker is not what was attested.
+      expect(
+        await bindReleaseAttestation({ db: database.session }, 'fss-rh-fixture-policy-only', 'worker', RUNNING),
+      ).toEqual({ ok: false, reason: 'release_record_digest_mismatch' });
+      expect(
+        await bindReleaseAttestation({ db: database.session }, 'ci-gate-41000000299-cccccccccccc', 'worker', RUNNING),
+      ).toEqual({ ok: false, reason: 'release_record_unknown' });
+      expect(await bindReleaseAttestation({ db: database.session }, reference, 'worker', RUNNING)).toMatchObject({
+        ok: true,
+        admittedBy: 'reference',
+      });
+    });
   });
 });
 

@@ -1,9 +1,13 @@
 export {
   attestedReleaseBinding,
+  bindReleaseAttestation,
   bindReleaseRecord,
   putReleaseRecord,
+  readCiGateRecordFor,
   readReleaseRecord,
+  releasePolicyBinding,
   releaseRecordBinding,
+  type ReleaseAdmission,
   type ReleaseArtifactSide,
   type ReleaseBinding,
   type ReleaseRecordContext,

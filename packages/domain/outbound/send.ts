@@ -370,6 +370,8 @@ async function recheckAndClaim(
     const claim = await claimForDispatch(context, {
       outboundMessageId: fence.id,
       businessDate: plan.day.businessDate,
+      // Lane g100: the audit line of which attestation admitted this send.
+      detail: { releaseAdmission: plan.release },
       ...(deps.actor === undefined ? {} : { actor: deps.actor }),
     });
     if (!claim.ok) {

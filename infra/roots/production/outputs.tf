@@ -38,6 +38,30 @@ output "ci_deploy_role_arn" {
   value       = aws_iam_role.ci_deploy.arn
 }
 
+# The four public identifiers the CI deploy launches the release record's put with
+# (lane g100). The workflow takes them from repository variables, never from state:
+# `gh variable set <NAME> --body "$(terraform output -raw <output>)"`, release.md 4.0.
+
+output "ci_deploy_cluster_name" {
+  description = "Repository variable FSS_PRODUCTION_CLUSTER_NAME: the cluster the release record's put runs in."
+  value       = module.stack.cluster_name
+}
+
+output "ci_deploy_operations_task_family" {
+  description = "Repository variable FSS_PRODUCTION_OPERATIONS_TASK_FAMILY: the task definition family the put runs."
+  value       = module.stack.operations_task_definition_family
+}
+
+output "ci_deploy_task_subnet_ids" {
+  description = "Repository variable FSS_PRODUCTION_TASK_SUBNET_IDS: the one-off task subnets, comma-separated, as task_network_configuration names them."
+  value       = join(",", module.stack.task_network_configuration.subnet_ids)
+}
+
+output "ci_deploy_task_security_group_id" {
+  description = "Repository variable FSS_PRODUCTION_TASK_SECURITY_GROUP_ID: the worker security group a one-off task runs under, which admits nothing inbound."
+  value       = module.stack.task_network_configuration.security_group_id
+}
+
 output "load_balancer_dns_name" {
   description = "Point the API DNS record at this."
   value       = module.stack.load_balancer_dns_name

@@ -1,5 +1,5 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
-import { attestedReleaseBinding } from '../release/records.ts';
+import { attestedReleaseBinding, type ReleaseAdmission } from '../release/records.ts';
 import { effectiveSendingEnabled } from '../settings/effective.ts';
 import { readSetting } from '../settings/store.ts';
 import { firstSuppressed } from '../suppression/effective.ts';
@@ -100,6 +100,14 @@ export interface SendPlan {
   /** 12.7's operational headroom on the claim's business date (lane g87). */
   readonly account: AccountHeadroom;
   readonly guard: DomainGuardDecision;
+  /**
+   * Which attestation admitted this send, and the record it bound (lane g100): the
+   * record's own reference, or the release process `ci-gate:main` with the `ci-gate`
+   * record that named this worker. Written on the claim's ledger row
+   * (`outbound_message_events.detail.releaseAdmission`), so every email that left says
+   * under which statement it did.
+   */
+  readonly release: { readonly attestation: ReleaseAdmission; readonly releaseGateReference: string };
 }
 
 type MailboxRow = {
@@ -181,10 +189,17 @@ export async function decideSend(
   // until somebody rehearses it and attests again — without anybody having to
   // remember to withdraw the old attestation. The detail is the binding's refusal
   // code, which says what to fix and still never names the reference.
+  //
+  // Lane g100: the attestation may name the release process, `ci-gate:main`, instead of
+  // one record. Then the record is whichever `ci-gate` record names this worker, so a
+  // CI deploy that put its record keeps sending on; a worker no ci-gate record names
+  // holds exactly as before (`release_record_unknown`), and so does one only a
+  // rehearsal record names.
   const binding = await attestedReleaseBinding(context, attestation.value, 'worker', deps.workerImageDigest);
   if (binding === null || !binding.ok) {
     return refuseSend('workspace_sending_not_attested', binding === null ? 'workspace' : binding.reason);
   }
+  const release = { attestation: binding.admittedBy, releaseGateReference: binding.record.reference };
 
   const domain = await readPrimarySendingDomain(context);
   if (domain === null) return refuseSend('sending_domain_unknown');
@@ -251,6 +266,7 @@ export async function decideSend(
     cap,
     account,
     guard,
+    release,
   });
 }
 

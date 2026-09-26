@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CI_GATE_MAIN_POLICY,
   RELEASE_RECORD_BINDING_REFUSAL_CODES,
   RELEASE_RECORD_SCHEMA_ID,
   ciGateReleaseReference,
+  releaseAttestationOf,
+  sendingEnabledSettingSchema,
   isImageDigest,
   releaseRecordSchema,
   releaseRecordSource,
@@ -171,5 +174,24 @@ describe('the ci-gate release record', () => {
     ]);
     expect(refusedAt({ commit: COMMIT.slice(0, 12) })).toContain('commit');
     expect(refusedAt({ gateRunId: '0' })).toContain('gateRunId');
+  });
+});
+
+describe('the process attestation, ci-gate:main (lane g100)', () => {
+  it('reads the policy by its exact name, and anything else as one reference', () => {
+    expect(CI_GATE_MAIN_POLICY).toBe('ci-gate:main');
+    expect(releaseAttestationOf('ci-gate:main')).toEqual({ kind: 'policy', policy: 'ci-gate:main' });
+    for (const reference of ['ci-gate-41000000001-c0ffeec0ffee', 'fss-rh-example-2026-09-25T07:20:44Z', 'ci-gate:Main', 'ci-gate:main ']) {
+      expect(releaseAttestationOf(reference), reference).toEqual({ kind: 'reference', reference });
+    }
+  });
+
+  it('is an attestation the settings shape already carries, with nothing new in it', () => {
+    expect(sendingEnabledSettingSchema.safeParse({ enabled: true, releaseGateReference: CI_GATE_MAIN_POLICY }).success).toBe(true);
+  });
+
+  it('is a name no record may carry, so the policy never means one stored row', () => {
+    expect(releaseRecordSchema.safeParse(record({ releaseGateReference: CI_GATE_MAIN_POLICY })).success).toBe(false);
+    expect(releaseRecordSchema.safeParse(record({ releaseGateReference: 'ci-gate:main-2' })).success).toBe(true);
   });
 });

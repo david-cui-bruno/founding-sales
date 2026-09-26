@@ -9,7 +9,7 @@ import {
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { isAdminScope } from '../db/workspaceScope.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
-import { bindReleaseRecord } from '../release/records.ts';
+import { bindReleaseAttestation } from '../release/records.ts';
 import { isKnownTimeZone } from '../src/rules/localClock.ts';
 
 /**
@@ -41,7 +41,8 @@ import { isKnownTimeZone } from '../src/rules/localClock.ts';
  * record's binding refusals, and they are made here for the same reason as the
  * others: a check at the route would be a check a second caller could walk past.
  * `enabled: false` is always accepted, because turning sending off must never need a
- * rehearsal.
+ * rehearsal. Since lane g100 the reference may be the release process, `ci-gate:main`:
+ * the enable then needs a stored, passing `ci-gate` record naming this API's digest.
  */
 
 export const SETTINGS_REFUSAL_CODES = [
@@ -219,12 +220,13 @@ export async function updateSetting(
   }
 
   // 16.2: the reference must be a stored, passing record, and it must name the API
-  // image that is taking this write. The schema has already refused an enable with no
-  // reference at all.
+  // image that is taking this write — or, for the process form `ci-gate:main` (lane
+  // g100), a stored, passing `ci-gate` record must name it. The schema has already
+  // refused an enable with no reference at all.
   if (input.settingKey === 'sending_enabled') {
     const sending = value as SendingEnabledSetting;
     if (sending.enabled) {
-      const binding = await bindReleaseRecord(
+      const binding = await bindReleaseAttestation(
         context,
         sending.releaseGateReference ?? '',
         'api',

@@ -498,7 +498,9 @@ describe('Appendix G 42: the attestation is bound to the release record (lane g7
 
   it('refuses the enable on the API side and the send on the worker side, each with its own digest', () => {
     const store = readRepositoryFile('packages/domain/settings/store.ts');
-    expect(store).toContain("await bindReleaseRecord(");
+    // Lane g100: through the attestation, which binds the named record or, for the
+    // process form `ci-gate:main`, the ci-gate record for the API's own digest.
+    expect(store).toContain("await bindReleaseAttestation(");
     expect(store).toContain("'api',\n        input.runningApiDigest,");
     const gate = readRepositoryFile('packages/domain/outbound/gate.ts');
     expect(gate).toContain("attestedReleaseBinding(context, attestation.value, 'worker', deps.workerImageDigest)");
