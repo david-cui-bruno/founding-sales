@@ -9,16 +9,10 @@ import {
 import { withTransaction, type RepositoryContext, type SessionQueryable } from '@fss/domain/db';
 import { registerMailboxSendingDomain } from '@fss/domain/outbound';
 import { errorFields, type Logger } from '../bootstrap/log.ts';
-import {
-  REFUSAL_STATUS,
-  connectMailboxCommandSchema,
-  contextForPrincipal,
-  disconnectMailboxCommandSchema,
-  mailRouteDeps,
-  membershipScope,
-  redactError,
-  runMailCommand,
-} from './mailSupport.ts';
+import { connectMailboxCommandSchema, disconnectMailboxCommandSchema } from '@fss/contracts';
+import { REFUSAL_STATUS, redactError } from '../limits.ts';
+import { mailRouteDeps, membershipScope } from './mailSupport.ts';
+import { contextForPrincipal, runRouteCommand } from './routeSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**
@@ -129,14 +123,14 @@ export async function routeGmail(request: ApiRequest, options: RoutingOptions): 
 
   switch (request.path) {
     case '/gmail/connect':
-      return await runMailCommand(
+      return await runRouteCommand(
         deps,
         connectMailboxCommandSchema,
         'connect_mailbox',
         async context => await beginGmailGrant(context, mail),
       );
     case '/gmail/disconnect':
-      return await runMailCommand(
+      return await runRouteCommand(
         deps,
         disconnectMailboxCommandSchema,
         'disconnect_mailbox',

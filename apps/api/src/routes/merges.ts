@@ -1,6 +1,7 @@
 import { mergeFirmsCommandSchema } from '@fss/contracts';
 import { mergeFirms } from '@fss/domain/crm';
-import { REFUSAL_STATUS, contextForPrincipal, crmReply, redactError, requirePrincipal } from './crmSupport.ts';
+import { REFUSAL_STATUS, redactError } from '../limits.ts';
+import { commandReply, contextForPrincipal, requirePrincipal } from './routeSupport.ts';
 import { runCommand, type RefusalDetails } from '../auth/index.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
@@ -8,7 +9,7 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  * The firm merge command (specification 7.2, Appendix A "Merge records", Appendix G 37).
  * (`/merges/contacts` had no caller and went in wave 2, S6.)
  *
- * It does not use `runCrmCommand`, for one reason: a merge may refuse with
+ * It does not use `runRouteCommand`, for one reason: a merge may refuse with
  * *conflicts*, and the conflicts have to reach the person so they can resolve them
  * and post again with `resolutions`. A refusal that carried only a code would leave
  * them guessing which field disagreed.
@@ -58,7 +59,7 @@ export async function routeMerges(request: ApiRequest, options: RoutingOptions):
           : { status: 'refused', reason: result.reason, details: { conflicts: result.conflicts } };
       },
     );
-    return withConflicts(crmReply(outcome), outcome);
+    return withConflicts(commandReply(outcome), outcome);
   }
 
   return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };

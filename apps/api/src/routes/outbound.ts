@@ -14,13 +14,9 @@ import {
   setAutomatedSendingEnabled,
   type SendingDomainRow,
 } from '@fss/domain/outbound';
-import {
-  REFUSAL_STATUS,
-  contextForPrincipal,
-  mailRouteDeps,
-  redactError,
-  runMailCommand,
-} from './mailSupport.ts';
+import { REFUSAL_STATUS, redactError } from '../limits.ts';
+import { mailRouteDeps } from './mailSupport.ts';
+import { contextForPrincipal, runRouteCommand } from './routeSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**
@@ -129,7 +125,7 @@ export async function routeOutbound(request: ApiRequest, options: RoutingOptions
   }
 
   if (request.path === '/outbound/resolve') {
-    return await runMailCommand(
+    return await runRouteCommand(
       deps,
       resolveCommandSchema,
       'resolve_outbound_message',
@@ -156,7 +152,7 @@ export async function routeOutbound(request: ApiRequest, options: RoutingOptions
   }
 
   if (request.path === '/outbound/authentication') {
-    return await runMailCommand(
+    return await runRouteCommand(
       deps,
       authenticationCommandSchema,
       'record_sending_authentication',
@@ -184,7 +180,7 @@ export async function routeOutbound(request: ApiRequest, options: RoutingOptions
   }
 
   if (request.path === '/outbound/cap') {
-    return await runMailCommand(deps, capCommandSchema, 'set_mailbox_cap', async (context, body) => {
+    return await runRouteCommand(deps, capCommandSchema, 'set_mailbox_cap', async (context, body) => {
       const outcome = await setAdminCap(context, {
         mailboxId: body.mailboxId,
         adminUserId: deps.principal.userId,
@@ -204,7 +200,7 @@ export async function routeOutbound(request: ApiRequest, options: RoutingOptions
   }
 
   if (request.path === '/outbound/cap/override') {
-    return await runMailCommand(deps, overrideMailboxRaiseCommandSchema, 'override_mailbox_raise', async (context, body) => {
+    return await runRouteCommand(deps, overrideMailboxRaiseCommandSchema, 'override_mailbox_raise', async (context, body) => {
       const outcome = await overrideRaise(context, {
         mailboxId: body.mailboxId,
         adminUserId: deps.principal.userId,

@@ -1,6 +1,7 @@
 import { changeStageCommandSchema, openOpportunityCommandSchema } from '@fss/contracts';
 import { changeStage, openOpportunity } from '@fss/domain/crm';
-import { REFUSAL_STATUS, contextForPrincipal, redactError, requirePrincipal, runCrmCommand } from './crmSupport.ts';
+import { REFUSAL_STATUS, redactError } from '../limits.ts';
+import { contextForPrincipal, requirePrincipal, runRouteCommand } from './routeSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**
@@ -30,11 +31,11 @@ export async function routeOpportunities(request: ApiRequest, options: RoutingOp
 
   switch (request.path) {
     case '/opportunities/open':
-      return await runCrmCommand(deps, openOpportunityCommandSchema, 'opportunity.opened', async (repository, body) =>
+      return await runRouteCommand(deps, openOpportunityCommandSchema, 'opportunity.opened', async (repository, body) =>
         await openOpportunity(repository, { firmId: body.firmId, stageKey: body.stageKey }),
       );
     case '/opportunities/stage':
-      return await runCrmCommand(deps, changeStageCommandSchema, 'opportunity.stage_changed', async (repository, body) =>
+      return await runRouteCommand(deps, changeStageCommandSchema, 'opportunity.stage_changed', async (repository, body) =>
         await changeStage(repository, {
           opportunityId: body.opportunityId,
           toStageKey: body.toStageKey,

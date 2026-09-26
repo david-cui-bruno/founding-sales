@@ -7,7 +7,8 @@ import {
 } from '@fss/contracts';
 import { commitImportRow, previewCsvImport, type ImportPreviewRow } from '@fss/domain/crm';
 import { runCommand } from '../auth/index.ts';
-import { REFUSAL_STATUS, contextForPrincipal, redactError, requirePrincipal } from './crmSupport.ts';
+import { REFUSAL_STATUS, redactError } from '../limits.ts';
+import { contextForPrincipal, requirePrincipal } from './routeSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**

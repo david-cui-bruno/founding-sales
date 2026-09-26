@@ -249,7 +249,7 @@ export const addFirmResultSchema = z.object({
 });
 export type AddFirmResult = z.infer<typeof addFirmResultSchema>;
 
-/** The accepted answer, in the envelope every command answers with (crmSupport). */
+/** The accepted answer, in the envelope every command answers with (routeSupport). */
 export const addFirmAcceptedSchema = z.object({
   status: z.literal('accepted'),
   replayed: z.boolean(),

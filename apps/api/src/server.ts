@@ -286,7 +286,7 @@ const REFUSAL_CODE_SHAPE = /^[a-z][a-z0-9_]{0,79}$/u;
 /**
  * The refusal code a route answered with, or null.
  *
- * Two shapes carry one: a command refusal, `{ status: 'refused', reason }` (`crmReply`,
+ * Two shapes carry one: a command refusal, `{ status: 'refused', reason }` (`commandReply`,
  * `runPolicyCommand`, `contextForPrincipal`), and a redacted error, `{ error, message }`
  * (`redactError`). `reason` is read first, as the desktop's `refusalOf` reads it. A value
  * that is not code-shaped — a sentence, a number, anything with a `+` or a space — is

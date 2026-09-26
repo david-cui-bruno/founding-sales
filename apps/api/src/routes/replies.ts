@@ -7,20 +7,11 @@ import {
   readClassifierSettings,
   readReplyCard,
   updateClassifierSettings,
-  type ClassificationResult,
 } from '@fss/domain/classification';
 import { REPLY_DISPOSITIONS } from '@fss/domain';
-import type { RepositoryContext } from '@fss/domain/db';
 import { businessDateOf } from '@fss/domain/today';
-import { runCommand } from '../auth/index.ts';
-import {
-  REFUSAL_STATUS,
-  contextForPrincipal,
-  crmReply,
-  redactError,
-  requirePrincipal,
-  type CrmRouteDeps,
-} from './crmSupport.ts';
+import { REFUSAL_STATUS, redactError } from '../limits.ts';
+import { contextForPrincipal, requirePrincipal, runRouteCommand, type RouteDeps } from './routeSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**
@@ -110,37 +101,6 @@ const updateSettingsCommandSchema = z
   })
   .strict();
 
-/**
- * Parse, run inside a command receipt, and reply.
- *
- * The same three lines `runCrmCommand` is, over this lane's result type. A shared
- * generic over both would have to widen the refusal union to the union of every
- * lane's codes, which is how a route starts answering with a reason its own domain
- * cannot produce.
- */
-async function runReplyCommand<Schema extends z.ZodType<{ commandId: string; clientVersion: string }>, T>(
-  deps: CrmRouteDeps,
-  schema: Schema,
-  kind: string,
-  work: (context: RepositoryContext, body: z.infer<Schema>) => Promise<ClassificationResult<T>>,
-): Promise<RouteResult> {
-  const parsed = schema.safeParse(deps.request.body);
-  if (!parsed.success) return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };
-  const body = parsed.data;
-  const { commandId, clientVersion, ...payload } = body as { commandId: string; clientVersion: string };
-  const outcome = await runCommand(
-    deps.auth,
-    deps.principal,
-    { commandId, kind, payload, clientVersion },
-    async context => {
-      const result = await work(context, body);
-      if (result.ok) return { status: 'accepted', result: result.value };
-      return { status: 'refused', reason: result.reason };
-    },
-  );
-  return crmReply(outcome);
-}
-
 export async function routeReplies(request: ApiRequest, options: RoutingOptions): Promise<RouteResult | null> {
   if (!REPLY_PATHS.includes(request.path)) return null;
   if (request.method !== 'POST') {
@@ -154,10 +114,10 @@ export async function routeReplies(request: ApiRequest, options: RoutingOptions)
   const scoped = contextForPrincipal(auth, authenticated.principal);
   if (!scoped.ok) return scoped.result;
   const context = scoped.context;
-  const deps: CrmRouteDeps = { auth, request, principal: authenticated.principal };
+  const deps: RouteDeps = { auth, request, principal: authenticated.principal };
 
   if (request.path === '/replies/confirm') {
-    return await runReplyCommand(deps, confirmReplyCommandSchema, 'confirm_reply_disposition', async (scope, body) =>
+    return await runRouteCommand(deps, confirmReplyCommandSchema, 'confirm_reply_disposition', async (scope, body) =>
       await confirmReplyDisposition(scope, {
         messageId: body.messageId,
         disposition: body.disposition,
@@ -173,7 +133,7 @@ export async function routeReplies(request: ApiRequest, options: RoutingOptions)
   }
 
   if (request.path === '/replies/settings/update') {
-    return await runReplyCommand(deps, updateSettingsCommandSchema, 'configure_classifier', async (scope, body) =>
+    return await runRouteCommand(deps, updateSettingsCommandSchema, 'configure_classifier', async (scope, body) =>
       await updateClassifierSettings(scope, {
         ...(body.enabled === undefined ? {} : { enabled: body.enabled }),
         ...(body.modelName === undefined ? {} : { modelName: body.modelName }),

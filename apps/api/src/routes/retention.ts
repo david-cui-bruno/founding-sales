@@ -1,9 +1,10 @@
 import { z } from 'zod';
 import { commandIdSchema, semanticVersionSchema, uuid } from '@fss/contracts';
 import { commitDeletion, previewDeletion } from '@fss/domain/retention';
-import { REFUSAL_STATUS, redactError, requirePrincipal } from './crmSupport.ts';
+import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { runPolicyCommand } from './dialSupport.ts';
-import { laneResultOf } from './retentionSupport.ts';
+import { requirePrincipal } from './routeSupport.ts';
+import { commandResultOf } from './retentionSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**
@@ -77,7 +78,7 @@ export async function routeRetention(request: ApiRequest, options: RoutingOption
         previewSchema,
         'deletion.preview',
         async (context, body) =>
-          laneResultOf(
+          commandResultOf(
             await previewDeletion(context, {
               targetKind: body.targetKind,
               firmId: body.firmId,
@@ -95,7 +96,7 @@ export async function routeRetention(request: ApiRequest, options: RoutingOption
           // to it before its row. A lost journal write throws out of `runCommand`,
           // rolls the receipt back with the deletion, and answers 503 — which is why
           // the tombstones are recorded before anything is deleted.
-          laneResultOf(
+          commandResultOf(
             await commitDeletion(context, {
               requestId: body.requestId,
               previewHash: body.previewHash,

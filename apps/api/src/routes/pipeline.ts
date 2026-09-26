@@ -12,8 +12,9 @@ import {
   reorderPipelineStages,
   retirePipelineStage,
 } from '@fss/domain/crm';
-import { REFUSAL_STATUS, contextForPrincipal, redactError, requirePrincipal } from './crmSupport.ts';
+import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { policyRouteDeps, runPolicyCommand } from './dialSupport.ts';
+import { contextForPrincipal, requirePrincipal } from './routeSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**

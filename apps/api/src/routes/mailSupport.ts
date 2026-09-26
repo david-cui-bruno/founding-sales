@@ -1,35 +1,22 @@
 import { z } from 'zod';
-import { MAIL_COMMAND_ENVELOPE, connectMailboxCommandSchema, disconnectMailboxCommandSchema } from '@fss/contracts';
+import { MAIL_COMMAND_ENVELOPE } from '@fss/contracts';
 import type { RepositoryContext } from '@fss/domain/db';
 import { repositoryContext, workspaceScope } from '@fss/domain/db';
 
-import { runCommand } from '../auth/index.ts';
-import type { AuthDeps, AuthenticatedPrincipal } from '../auth/index.ts';
-import { REFUSAL_STATUS, contextForPrincipal, crmReply, redactError, requirePrincipal } from './crmSupport.ts';
+import type { AuthDeps } from '../auth/index.ts';
+import { REFUSAL_STATUS, redactError } from '../limits.ts';
+import { contextForPrincipal, requirePrincipal, type RouteDeps } from './routeSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**
- * What the three mail route modules share.
- *
- * The same discipline as `crmSupport.ts` and `dialSupport.ts`: every mutation is a
- * `runCommand`, so the receipt, the payload hash, the device and the mutation commit
- * in one transaction (5.3), and no route decides for itself whether a caller owns a
- * mailbox — `disconnectMailbox` does, from the row.
- *
- * The connect and disconnect command schemas moved to `@fss/contracts` (`mail.ts`) in
- * the pull request that gave the Mac its Mailbox row, because the Mac now sends the
- * first of them and a shared contract is the only kind that cannot drift. They are
- * re-exported here so the route modules keep one import. The rest stay here: the Mac
- * does not send them.
+ * What the three mail route modules share: the route deps, the two command schemas the
+ * Mac does not send, and the OAuth callback's membership scope. The connect and
+ * disconnect schemas are `@fss/contracts`' (`mail.ts`), because the Mac sends the first.
  */
-
-const commandEnvelope = MAIL_COMMAND_ENVELOPE;
-
-export { connectMailboxCommandSchema, disconnectMailboxCommandSchema };
 
 export const resolveAmbiguityCommandSchema = z
   .object({
-    ...commandEnvelope,
+    ...MAIL_COMMAND_ENVELOPE,
     messageId: z.string().uuid(),
     selectedOpportunityId: z.string().uuid(),
     /** True only when a person looked at the message and said it was human (12.4). */
@@ -44,17 +31,11 @@ export const listMessagesRequestSchema = z
   })
   .strict();
 
-export interface MailRouteDeps {
-  readonly auth: AuthDeps;
-  readonly request: ApiRequest;
-  readonly principal: AuthenticatedPrincipal;
-}
-
 /** Authenticate and scope, or the refusal to return. */
 export async function mailRouteDeps(
   request: ApiRequest,
   options: RoutingOptions,
-): Promise<{ readonly ok: true; readonly deps: MailRouteDeps } | { readonly ok: false; readonly result: RouteResult }> {
+): Promise<{ readonly ok: true; readonly deps: RouteDeps } | { readonly ok: false; readonly result: RouteResult }> {
   const auth = options.auth;
   if (auth === undefined) {
     return { ok: false, result: { status: REFUSAL_STATUS.not_found, body: redactError('not_found') } };
@@ -64,44 +45,6 @@ export async function mailRouteDeps(
   const scoped = contextForPrincipal(auth, authenticated.principal);
   if (!scoped.ok) return { ok: false, result: scoped.result };
   return { ok: true, deps: { auth, request, principal: authenticated.principal } };
-}
-
-/**
- * What a command's work may answer: a value, or a reason it refused.
- *
- * Deliberately a bare `string` for the reason rather than one lane's refusal union.
- * The mail lane and the outbound lane have different vocabularies — `MailRefusalCode`
- * and `SendRefusalCode` — and both go into the same receipt column, so the shared
- * helper takes the looser type and each caller keeps its own narrow one at its own
- * boundary.
- */
-export type CommandResult<T> =
-  | { readonly ok: true; readonly value: T }
-  | { readonly ok: false; readonly reason: string };
-
-/** Parse, run inside a command receipt, and reply. */
-export async function runMailCommand<Schema extends z.ZodType<{ commandId: string; clientVersion: string }>, T>(
-  deps: MailRouteDeps,
-  schema: Schema,
-  kind: string,
-  work: (context: RepositoryContext, body: z.infer<Schema>) => Promise<CommandResult<T>>,
-): Promise<RouteResult> {
-  const parsed = schema.safeParse(deps.request.body);
-  if (!parsed.success) return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };
-  const body = parsed.data;
-
-  const { commandId, clientVersion, ...payload } = body as { commandId: string; clientVersion: string };
-  const outcome = await runCommand(
-    deps.auth,
-    deps.principal,
-    { commandId, kind, payload, clientVersion },
-    async context => {
-      const result = await work(context, body);
-      if (result.ok) return { status: 'accepted', result: result.value };
-      return { status: 'refused', reason: result.reason };
-    },
-  );
-  return crmReply(outcome);
 }
 
 export interface MembershipScope {
@@ -136,6 +79,3 @@ export async function membershipScope(
     ),
   };
 }
-
-export { REFUSAL_STATUS, contextForPrincipal, redactError };
-export type { ApiRequest, RouteResult, RoutingOptions };

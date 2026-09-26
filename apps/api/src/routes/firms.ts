@@ -1,6 +1,7 @@
 import { recordEvidenceCommandSchema, resolveFirmZoneCommandSchema } from '@fss/contracts';
 import { listFirmsForActor, readFirmForActor, recordEvidence, resolveZoneForFirm } from '@fss/domain/crm';
-import { REFUSAL_STATUS, contextForPrincipal, redactError, requirePrincipal, runCrmCommand } from './crmSupport.ts';
+import { REFUSAL_STATUS, redactError } from '../limits.ts';
+import { contextForPrincipal, requirePrincipal, runRouteCommand } from './routeSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**
@@ -54,11 +55,11 @@ export async function routeFirms(request: ApiRequest, options: RoutingOptions): 
 
   switch (request.path) {
     case '/firms/resolve-zone':
-      return await runCrmCommand(deps, resolveFirmZoneCommandSchema, 'firm.zone_resolved', async (repository, body) =>
+      return await runRouteCommand(deps, resolveFirmZoneCommandSchema, 'firm.zone_resolved', async (repository, body) =>
         await resolveZoneForFirm(repository, { firmId: body.firmId, recordedZone: body.recordedZone }),
       );
     case '/firms/evidence':
-      return await runCrmCommand(deps, recordEvidenceCommandSchema, 'firm.evidence_recorded', async (repository, body) =>
+      return await runRouteCommand(deps, recordEvidenceCommandSchema, 'firm.evidence_recorded', async (repository, body) =>
         await recordEvidence(repository, {
           firmId: body.firmId,
           contactId: body.contactId,
