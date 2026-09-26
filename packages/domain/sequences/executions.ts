@@ -1,8 +1,7 @@
 import type { HoldReasonCode } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { openHold, releaseHoldsOfEvent } from '../policy/index.ts';
-import { composeSendBody, placeEmailSend, type WorkspaceHolidayCalendar } from '../src/index.ts';
-import { readPostalAddress } from '../settings/store.ts';
+import { placeEmailSend, type WorkspaceHolidayCalendar } from '../src/index.ts';
 import { readTemplateVersion, renderTemplateVersion } from '../templates/index.ts';
 import { businessDateOf } from '../today/index.ts';
 import { calendarOfEnrollment, completeEnrollment, stepForCadence, stopEnrollments } from './enrollments.ts';
@@ -454,15 +453,6 @@ async function runEmailStep(
   const route = await usableEmailRoute(context, enrollment.contactId);
   if (route === null) return await holdExecution(context, execution, 'route_missing');
 
-  // Wave 2, S3: with a postal address set, the footer is composed here — sign-off,
-  // address, stop line, exactly once — before the fence below freezes the bytes. Unset,
-  // the approved body already ends with its own footer and nothing is appended.
-  const postalAddress = await readPostalAddress(context);
-  const body =
-    postalAddress === null
-      ? rendered.body
-      : composeSendBody(rendered.body, { signOff: template.footerSignOff, postalAddress });
-
   const request: OutboundEmailRequest = {
     enrollmentId: enrollment.id,
     stepExecutionId: execution.id,
@@ -475,7 +465,7 @@ async function runEmailStep(
     emailAddressId: route.id,
     toAddress: route.address,
     subject: rendered.subject,
-    body,
+    body: rendered.body,
     sendAt: placement.sendAt,
     sourceZone: placement.sourceZone,
     ruleVersion: execution.ruleVersion,

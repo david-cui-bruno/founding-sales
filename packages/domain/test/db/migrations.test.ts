@@ -351,25 +351,25 @@ describe('migration 0019 on a production-shaped schema-18 database', () => {
     expect(snooze.rows[0]?.reason).toBe('snoozed');
   });
 
-  it('deletes the retired settings rows and admits postal_address', async () => {
+  it('deletes the retired settings rows and narrows the key CHECK to the two active keys', async () => {
     expect(
       await countOf(
         database.session,
         "SELECT count(*) AS count FROM workspace_settings WHERE setting_key IN ('alert_thresholds', 'client_version_range')",
       ),
     ).toBe(0);
-    await database.session.query(
-      `INSERT INTO workspace_settings (workspace_id, setting_key, version, value, change_note, changed_by_user_id)
-       VALUES ($1, 'postal_address', 1, '{"address": "1 Example Way, Providence, RI 02903"}'::jsonb, 'set', $2)`,
-      [shape.seeded.alpha.workspaceId, shape.seeded.alpha.admin.userId],
-    );
-    await expect(
-      database.session.query(
-        `INSERT INTO workspace_settings (workspace_id, setting_key, version, value, change_note, changed_by_user_id)
-         VALUES ($1, 'client_version_range', 1, '{}'::jsonb, 'again', $2)`,
-        [shape.seeded.alpha.workspaceId, shape.seeded.alpha.admin.userId],
-      ),
-    ).rejects.toMatchObject({ constraint: 'workspace_settings_key_known' });
+    // A retired key, and the postal address the deferred footer-at-send would have used
+    // (wave 3): neither is a setting on schema 19.
+    for (const key of ['client_version_range', 'postal_address']) {
+      await expect(
+        database.session.query(
+          `INSERT INTO workspace_settings (workspace_id, setting_key, version, value, change_note, changed_by_user_id)
+           VALUES ($1, $2, 1, '{}'::jsonb, 'again', $3)`,
+          [shape.seeded.alpha.workspaceId, key, shape.seeded.alpha.admin.userId],
+        ),
+        key,
+      ).rejects.toMatchObject({ constraint: 'workspace_settings_key_known' });
+    }
   });
 
   it('deletes domain_cap, which nothing references, and keeps dead_job, which a hold still names', async () => {
@@ -449,12 +449,41 @@ describe('migration 0019 refuses (FS019) while a value it drops is stored', () =
 
   it('names the counts, changes nothing and leaves schema 18', async () => {
     const { applyMigrations } = await import('../../db/migrationRunner.ts');
+    // The message names the non-zero counts only (a logged value is cut at 200
+    // characters); the detail names every count.
     await expect(applyMigrations(database.session)).rejects.toMatchObject({
       code: 'FS019',
-      message: expect.stringContaining('0019 refused: linkedin_steps=1 linkedin_executions=0') as unknown as string,
+      message: '0019 refused: linkedin_steps=1',
+      detail: expect.stringContaining('research_pages=0 firm_locations=0') as unknown as string,
     });
     expect(await readAppliedSchemaVersion(database.session)).toBe(18);
     expect(await tableExists(database.session, 'research_settings')).toBe(true);
     expect(await tableExists(database.session, 'record_merge_events')).toBe(true);
+  });
+
+  it("refuses on research's data, never on its seeded configuration, and applies once the data is gone", async () => {
+    const { applyMigrations } = await import('../../db/migrationRunner.ts');
+    await database.session.query("DELETE FROM sequence_steps WHERE channel = 'linkedin_task'");
+    // Both workspaces carry the configuration 0007's trigger seeded; that alone never refuses.
+    expect(await countOf(database.session, 'SELECT count(*) AS count FROM research_providers')).toBe(6);
+    const { rows } = await database.session.query<{ id: string }>('SELECT id FROM workspaces ORDER BY slug LIMIT 1');
+    await database.session.query(
+      `INSERT INTO research_pages (workspace_id, provider_key, query_hash, page_hash, query_text)
+       VALUES ($1, 'places', repeat('a', 64), repeat('b', 64), 'accountants in Providence')`,
+      [rows[0]?.id],
+    );
+
+    await expect(applyMigrations(database.session)).rejects.toMatchObject({
+      code: 'FS019',
+      message: '0019 refused: research_pages=1',
+      detail: expect.stringContaining('research_pages=1 firm_locations=0 research_firm_runs=0 research_suggestions=0 linkedin_steps=0') as unknown as string,
+    });
+    expect(await readAppliedSchemaVersion(database.session)).toBe(18);
+    expect(await countOf(database.session, 'SELECT count(*) AS count FROM research_pages')).toBe(1);
+
+    await database.session.query('DELETE FROM research_pages');
+    await applyMigrations(database.session);
+    expect(await readAppliedSchemaVersion(database.session)).toBe(19);
+    expect(await tableExists(database.session, 'research_providers')).toBe(false);
   });
 });

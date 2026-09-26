@@ -1,5 +1,4 @@
 import { isAdminScope, type RepositoryContext } from '../db/workspaceScope.ts';
-import { readPostalAddress } from '../settings/store.ts';
 import {
   renderTemplate,
   templateContentHash,
@@ -31,8 +30,10 @@ import {
  * decision that there is no web unsubscribe anywhere); the save refuses it first, as
  * `invalid_input`, rather than letting the database answer with a 500.
  *
- * With the workspace's `postal_address` set, the worker composes the footer at send and
- * a body need not end with one (`footerComposedAtSend`); unset, it must, as before.
+ * Every body must end with the footer — the sign-off, then the stop line
+ * (`template_footer_missing`) — at every approval and on every save that keeps or grants
+ * one. Migration 0019 dropped the CHECK that repeated this rule, so the rule is the guard
+ * and nothing waives it.
  */
 
 export const TEMPLATE_REFUSAL_CODES = [
@@ -170,16 +171,12 @@ export interface UpdateTemplateVersionInput extends TemplateTextInput {
 
 const UNSUBSCRIBE = /unsubscribe/iu;
 
-/** The rules a save and an approval apply, with the footer requirement the workspace's postal address decides. */
-async function rulesFor(
-  context: RepositoryContext,
-  input: { readonly footer: FooterConfiguration; readonly requiredVariables: readonly string[] },
-): Promise<TemplateRules> {
-  return {
-    footer: input.footer,
-    allowedVariables: input.requiredVariables,
-    footerComposedAtSend: (await readPostalAddress(context)) !== null,
-  };
+/** The rules a save and an approval apply: the same for every workspace, footer included. */
+function rulesFor(input: {
+  readonly footer: FooterConfiguration;
+  readonly requiredVariables: readonly string[];
+}): TemplateRules {
+  return { footer: input.footer, allowedVariables: input.requiredVariables };
 }
 
 /** Who may approve: an admin who is a person, never the tool. Null when the actor may not. */
@@ -204,7 +201,7 @@ export async function createTemplateVersion(
   const approver = approverOf(context);
   if (input.approve === true && approver === null) return { ok: false, reason: 'admin_only' };
 
-  const issues = templateTextIssues(input, await rulesFor(context, input));
+  const issues = templateTextIssues(input, rulesFor(input));
   if (input.approve === true && issues.length > 0) return { ok: false, reason: 'template_unapproved', issues };
 
   const templateId = input.templateId ?? (await newTemplateId(context));
@@ -279,7 +276,7 @@ export async function updateTemplateVersion(
   if (current === undefined) return { ok: false, reason: 'template_unknown' };
   if (current.retired_at !== null) return { ok: false, reason: 'template_retired' };
 
-  const issues = templateTextIssues(input, await rulesFor(context, input));
+  const issues = templateTextIssues(input, rulesFor(input));
   if (input.approve === true && issues.length > 0) return { ok: false, reason: 'template_unapproved', issues };
 
   const contentHash = templateContentHash({
@@ -345,7 +342,7 @@ export async function approveTemplateVersion(
   const text = { subject: current.subject, body: current.body };
   const issues = templateTextIssues(
     text,
-    await rulesFor(context, { footer: { signOff: current.footer_sign_off }, requiredVariables: current.required_variables }),
+    rulesFor({ footer: { signOff: current.footer_sign_off }, requiredVariables: current.required_variables }),
   );
   if (issues.length > 0) return { ok: false, reason: 'template_unapproved', issues };
 

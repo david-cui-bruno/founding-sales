@@ -13,9 +13,10 @@
 # columns, the retired settings rows and the unreferenced reason codes, and relaxes the
 # edit-in-place triggers and four CHECKs. It **refuses** — raises FS019 and leaves schema
 # 18 as it was — when a LinkedIn marker or an audited enrollment migration it would drop
-# is still stored. Finding that out at step 2 of `release-deploy.sh` means finding it out
-# with both services stopped. This prints the same counts while they are still running,
-# so the coordinator and the owner decide first.
+# is still stored, or when one of research's five data tables holds a row. Finding that
+# out at step 2 of `release-deploy.sh` means finding it out with both services stopped.
+# This prints the same counts while they are still running, and exits 3 when 0019 would
+# refuse, so the release chain stops before release-stop.sh does anything.
 #
 # ## How: the operations task, with this release's worker image
 #
@@ -38,9 +39,15 @@
 # ## What it prints
 #
 # The tool's JSON answer (`counts`, `refuses`), and one summary line in the reports
-# directory as `schema-preflight-0019.txt`. `refuses=true` means 0019 would raise FS019:
-# do not release it; take the blocking counts to the owner, and amend 0019 before it is
-# applied anywhere. It exits 0 either way; a count is not a failure.
+# directory as `schema-preflight-0019.txt`. The summary keeps research's seeded
+# configuration (`research_seed_rows`, dropped without asking) apart from its data
+# (`research_data_rows`, which refuses). `refuses=true` means 0019 would raise FS019: do
+# not release it; take the blocking counts to the owner, and amend 0019 before it is
+# applied anywhere.
+#
+# Exit status: 0 when 0019 would apply; 3 when it would refuse; 1 when anything failed
+# — the launch, the answer, or the deregistration of the preflight's own revision, which
+# wins over 3 because the next plan reads that revision.
 #
 # Dry run: FSS_REHEARSAL_DRY_RUN=1 prints every command and needs no credential.
 
@@ -217,7 +224,8 @@ report = json.load(open(os.environ["FSS_REPORT"], encoding="utf-8"))
 counts = report.get("counts") or {}
 blocking = counts.get("blocking") or {}
 destroyed = counts.get("destroyed") or {}
-research = destroyed.get("research") or {}
+seed = destroyed.get("researchSeed") or {}
+research_data = ("researchProviderLedger", "researchPages", "firmLocations", "researchFirmRuns", "researchSuggestions")
 references = counts.get("reasonCodeReferences") or {}
 relaxed = counts.get("relaxed") or {}
 fields = [
@@ -226,7 +234,8 @@ fields = [
 ]
 fields += [("blocking_" + key, value) for key, value in sorted(blocking.items())]
 fields += [
-    ("research_rows", sum(research.values()) if research else "unknown"),
+    ("research_seed_rows", sum(seed.values()) if seed else "unknown"),
+    ("research_data_rows", sum(blocking.get(key, 0) for key in research_data) if blocking else "unknown"),
     ("record_merge_events_archived", counts.get("archivedMergeEvents", "unknown")),
     ("direct_sent_days", destroyed.get("directSentDays", "unknown")),
     ("guard_columns_changed", destroyed.get("guardColumnsChanged", "unknown")),
@@ -239,11 +248,17 @@ fields += [
 print(" ".join("%s=%s" % (key, value) for key, value in fields))
 ')"
 rehearsal_write_report "schema-preflight-0019.txt" "prefix=$PREFIX environment=$ENVIRONMENT worker_digest=$WORKER_DIGEST $SUMMARY"
-case "$SUMMARY" in
-  *refuses=true*)
+case " $SUMMARY " in
+  *" refuses=false "*)
+    rehearsal_log "0019 needs no decision: nothing it refuses on is stored. $SUMMARY"
+    ;;
+  *" refuses=true "*)
     rehearsal_log "DECISION NEEDED: 0019 would refuse (FS019). Do not release it: take the blocking counts above to the owner, and amend 0019 before it is applied anywhere. $SUMMARY"
+    echo "FAIL: 0019 would refuse (FS019); the release stops here, before anything is stopped. $SUMMARY" >&2
+    exit 3
     ;;
   *)
-    rehearsal_log "0019 needs no decision: nothing it refuses on is stored. $SUMMARY"
+    echo "FAIL: the preflight's answer does not say whether 0019 would refuse. $SUMMARY" >&2
+    exit 1
     ;;
 esac

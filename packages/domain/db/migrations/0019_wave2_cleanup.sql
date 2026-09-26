@@ -9,13 +9,20 @@
 --
 -- `infra/scripts/schema-preflight-0019.sh` (`fss admin schema-preflight 0019`) prints,
 -- read-only and before the stop, every count below: what this file destroys, what it
--- converts, and what would make it refuse.
+-- converts, and what would make it refuse. It exits 3 when this file would refuse, so
+-- the release chain stops before the services do.
 --
 -- ## What goes
 --
 --   (a) Research (deleted from the code by PR 253): its eight tables, the function
 --       that seeded three of them for every workspace and the workspace-insert trigger
---       that called it. The seeded configuration rows go with them.
+--       that called it. The seeded configuration (`research_settings`,
+--       `research_providers`, `research_route_policies`) goes with them without
+--       asking. The other five hold what research did — `research_provider_ledger`,
+--       `research_pages`, `firm_locations`, `research_firm_runs`,
+--       `research_suggestions` — and a row in any of them makes this file refuse
+--       (below) rather than delete it. Production had none (preflight, 26 September
+--       2026).
 --   (b) `record_merge_events` (no writer since PR 262). Its rows are **kept as
 --       history**: each is copied into `audit_events` as `record_merge.archived`, with
 --       every column in the detail, before the table is dropped.
@@ -32,8 +39,9 @@
 --       LinkedIn step, execution or pause when 0018 ran (its preflight, 26 September
 --       2026 01:49 UTC) and nothing can write one since, so these are empty.
 --   (g) The settings keys `alert_thresholds` and `client_version_range` (retired by
---       wave 1): their rows are deleted, and `postal_address` joins the CHECK (S3:
---       the footer composed at send).
+--       wave 1): their rows are deleted, and the CHECK names the two active keys only.
+--       (The postal address and the footer composed at send are deferred to wave 3,
+--       with desktop 1.0.12.)
 --   (h) The hold reason codes `domain_cap` and `dead_job` (nothing opens either since
 --       wave 1), but only a code no row references; a referenced one stays.
 --
@@ -41,10 +49,14 @@
 --
 --   (i) Edit in place (S3). The triggers that froze an approved template version and
 --       the steps of a published sequence version are dropped, and so is the CHECK
---       that an approved body contains the stop line: with a postal address set, the
---       server composes the footer at send, so the template does not carry it. What
---       freezes the bytes of a send is the outbound fence, which stores the rendered
---       subject and body before anything is dispatched.
+--       that an approved body contains the stop line. The application rule is the
+--       guard: the template rules refuse an approval, and drop the approval on any
+--       save, when the body does not end with the sign-off and the stop line
+--       (`template_footer_missing`), and nothing waives it. The CHECK goes all the
+--       same (coordinator's decision, 26 September 2026): the rule covers it, and
+--       wave 3's footer composed at send could not live with it. What freezes the
+--       bytes of a send is the outbound fence, which stores the rendered subject and
+--       body before anything is dispatched.
 --   (j) The four CHECKs W2-S now satisfies with placeholders (PR 262): a snooze's
 --       reason may be absent; a usable phone needs no evidence columns; a verified or
 --       enabled calling identity needs no attestation columns; a posture needs no
@@ -62,11 +74,11 @@
 --
 -- ## The refusal (FS019)
 --
--- (e) and (f) destroy rows only if any exist, and the preflight says there are none.
--- If that has stopped being true by the time this runs, the block below raises FS019
--- with the counts and changes nothing — the release stops with schema 18 intact, and
--- the coordinator decides with David before this file is amended (it has not been
--- applied anywhere then). There is no override switch.
+-- (a)'s five data tables, (e) and (f) destroy rows only if any exist, and the preflight
+-- says there are none. If that has stopped being true by the time this runs, the block
+-- below raises FS019 with the counts and changes nothing — the release stops with
+-- schema 18 intact, and the coordinator decides with David before this file is amended
+-- (it has not been applied anywhere then). There is no override switch.
 --
 -- ## One transaction
 --
@@ -87,6 +99,11 @@ DECLARE
   v_migration_shifts bigint;
   v_migration_superseded bigint;
   v_migration_paused bigint;
+  v_research_ledger bigint;
+  v_research_pages bigint;
+  v_firm_locations bigint;
+  v_research_firm_runs bigint;
+  v_research_suggestions bigint;
 BEGIN
   SELECT count(*) INTO v_linkedin_steps FROM sequence_steps WHERE channel = 'linkedin_task';
   SELECT count(*) INTO v_linkedin_executions FROM step_executions WHERE channel = 'linkedin_task';
@@ -100,18 +117,46 @@ BEGIN
   SELECT count(*) INTO v_migration_shifts FROM step_execution_shifts WHERE reason = 'migration';
   SELECT count(*) INTO v_migration_superseded FROM sequence_enrollments WHERE end_reason = 'migration_superseded';
   SELECT count(*) INTO v_migration_paused FROM sequence_enrollments WHERE migration_paused_at IS NOT NULL;
+  -- Research's data, not its seeded configuration: what research called, fetched and
+  -- suggested. The three configuration tables are dropped without being counted here.
+  SELECT count(*) INTO v_research_ledger FROM research_provider_ledger;
+  SELECT count(*) INTO v_research_pages FROM research_pages;
+  SELECT count(*) INTO v_firm_locations FROM firm_locations;
+  SELECT count(*) INTO v_research_firm_runs FROM research_firm_runs;
+  SELECT count(*) INTO v_research_suggestions FROM research_suggestions;
 
   IF v_linkedin_steps + v_linkedin_executions + v_removed_executions + v_removed_shifts + v_removed_holds
      + v_removed_pauses + v_migrations + v_migration_items + v_migration_shifts + v_migration_superseded
-     + v_migration_paused > 0 THEN
+     + v_migration_paused + v_research_ledger + v_research_pages + v_firm_locations + v_research_firm_runs
+     + v_research_suggestions > 0 THEN
+    -- The message names the non-zero counts only, so it survives the 200-character
+    -- limit on a logged value (`fss migrate` logs it as the refusal's detail); the
+    -- DETAIL carries every count.
     RAISE EXCEPTION USING
       ERRCODE = 'FS019',
-      MESSAGE = format(
-        '0019 refused: linkedin_steps=%s linkedin_executions=%s removed_executions=%s removed_shifts=%s removed_holds=%s removed_pauses=%s enrollment_migrations=%s enrollment_migration_items=%s migration_shifts=%s migration_superseded=%s migration_paused=%s',
+      MESSAGE = '0019 refused: ' || concat_ws(' ',
+        CASE WHEN v_research_ledger > 0 THEN 'research_provider_ledger=' || v_research_ledger END,
+        CASE WHEN v_research_pages > 0 THEN 'research_pages=' || v_research_pages END,
+        CASE WHEN v_firm_locations > 0 THEN 'firm_locations=' || v_firm_locations END,
+        CASE WHEN v_research_firm_runs > 0 THEN 'research_firm_runs=' || v_research_firm_runs END,
+        CASE WHEN v_research_suggestions > 0 THEN 'research_suggestions=' || v_research_suggestions END,
+        CASE WHEN v_linkedin_steps > 0 THEN 'linkedin_steps=' || v_linkedin_steps END,
+        CASE WHEN v_linkedin_executions > 0 THEN 'linkedin_executions=' || v_linkedin_executions END,
+        CASE WHEN v_removed_executions > 0 THEN 'removed_executions=' || v_removed_executions END,
+        CASE WHEN v_removed_shifts > 0 THEN 'removed_shifts=' || v_removed_shifts END,
+        CASE WHEN v_removed_holds > 0 THEN 'removed_holds=' || v_removed_holds END,
+        CASE WHEN v_removed_pauses > 0 THEN 'removed_pauses=' || v_removed_pauses END,
+        CASE WHEN v_migrations > 0 THEN 'enrollment_migrations=' || v_migrations END,
+        CASE WHEN v_migration_items > 0 THEN 'enrollment_migration_items=' || v_migration_items END,
+        CASE WHEN v_migration_shifts > 0 THEN 'migration_shifts=' || v_migration_shifts END,
+        CASE WHEN v_migration_superseded > 0 THEN 'migration_superseded=' || v_migration_superseded END,
+        CASE WHEN v_migration_paused > 0 THEN 'migration_paused=' || v_migration_paused END),
+      DETAIL = format(
+        'Every count: research_provider_ledger=%s research_pages=%s firm_locations=%s research_firm_runs=%s research_suggestions=%s linkedin_steps=%s linkedin_executions=%s removed_executions=%s removed_shifts=%s removed_holds=%s removed_pauses=%s enrollment_migrations=%s enrollment_migration_items=%s migration_shifts=%s migration_superseded=%s migration_paused=%s. 0019 drops research''s data tables only when they are empty, and these vocabulary values and tables only when no row uses them; schema 18 is unchanged.',
+        v_research_ledger, v_research_pages, v_firm_locations, v_research_firm_runs, v_research_suggestions,
         v_linkedin_steps, v_linkedin_executions, v_removed_executions, v_removed_shifts, v_removed_holds,
         v_removed_pauses, v_migrations, v_migration_items, v_migration_shifts, v_migration_superseded,
         v_migration_paused),
-      DETAIL = '0019 drops these vocabulary values and tables only when no row uses them; schema 18 is unchanged.',
       HINT = 'infra/scripts/schema-preflight-0019.sh prints the same counts before the stop. Decide with the owner, then amend 0019 before releasing it.';
   END IF;
 END
@@ -120,9 +165,10 @@ $refuse$;
 -- ---------------------------------------------------------------------------
 -- (a) Research
 --
--- The trigger first, so no workspace insert in this transaction reaches a function
--- that is about to go; then both functions; then the eight tables in one statement,
--- which drops the foreign keys between them with them.
+-- The five data tables are empty here (the refusal above counted them). The trigger
+-- first, so no workspace insert in this transaction reaches a function that is about
+-- to go; then both functions; then the eight tables in one statement, which drops the
+-- foreign keys between them with them.
 -- ---------------------------------------------------------------------------
 DROP TRIGGER IF EXISTS workspaces_seed_research ON workspaces;
 DROP FUNCTION IF EXISTS seed_research_for_new_workspace();
@@ -255,7 +301,7 @@ DELETE FROM workspace_settings WHERE setting_key IN ('alert_thresholds', 'client
 ALTER TABLE workspace_settings DROP CONSTRAINT IF EXISTS workspace_settings_key_known;
 ALTER TABLE workspace_settings
   ADD CONSTRAINT workspace_settings_key_known
-    CHECK (setting_key IN ('business_time_zone', 'postal_address', 'sending_enabled'));
+    CHECK (setting_key IN ('business_time_zone', 'sending_enabled'));
 
 -- ---------------------------------------------------------------------------
 -- (h) The two reason codes nothing opens, where nothing references them

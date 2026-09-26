@@ -113,7 +113,7 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
   mail_message_matches: coverage(['swept', 'retained', 'deletion_removes'], 'Follows its message through the cascade.'),
   mail_message_classifications: coverage(['swept', 'retained', 'deletion_removes'], 'Follows its message through the cascade.'),
   mail_message_effects: coverage(['swept', 'retained', 'deletion_removes'], 'Follows its message through the cascade.'),
-  template_versions: coverage(['operational'], 'Approved immutable template bodies; Callie’s, not a prospect’s.'),
+  template_versions: coverage(['operational'], 'Template bodies, edited in place since migration 0019 (a send keeps the bytes its fence froze); Callie’s, not a prospect’s.'),
 
   // -------------------------------------------------------------- sending
   outbound_messages: coverage(
@@ -147,8 +147,8 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
   // ------------------------------------------------------- sequences (G8)
   workspace_holiday_calendars: coverage(['operational'], 'Versioned holiday sets; Callie’s configuration.'),
   sequences: coverage(['operational'], 'A named cadence Callie wrote.'),
-  sequence_versions: coverage(['operational'], 'An immutable published plan; Callie’s words, not a prospect’s.'),
-  sequence_steps: coverage(['operational'], 'The steps of a published plan.'),
+  sequence_versions: coverage(['operational'], 'A sequence plan’s version; once published only retirement changes the row. Callie’s words, not a prospect’s.'),
+  sequence_steps: coverage(['operational'], 'The steps of a plan, edited in place since migration 0019, published ones included.'),
   sequence_enrollments: coverage(
     ['retained', 'deletion_stops', 'departure_holds'],
     'Business history of who was worked and how: the row stays, its personal fields living on the contact it names. A deletion stops it with `admin_stop`; a departure holds the ones its member was running.',

@@ -14,8 +14,9 @@ import { parseFssCommand } from '../src/tools/fss/commands.ts';
  * ## The vacuous-pass trap
  *
  * A migrate that succeeded because there was nothing to refuse would prove nothing, so
- * the database holds one LinkedIn step, the preflight must count it and say 0019
- * refuses, and the migrate must refuse with the same count before the step is removed.
+ * the database holds one LinkedIn step and one research page (research's data, not its
+ * seeded configuration), the preflight must count both and say 0019 refuses, and the
+ * migrate must refuse with the same counts before they are removed.
  */
 
 let database: TestDatabase;
@@ -85,6 +86,11 @@ beforeAll(async () => {
      VALUES ($1, $2, 1, 'linkedin_task', 'elapsed', 0)`,
     [workspaceId, versionId],
   );
+  await database.session.query(
+    `INSERT INTO research_pages (workspace_id, provider_key, query_hash, page_hash, query_text)
+     VALUES ($1, 'places', repeat('a', 64), repeat('b', 64), 'accountants in Providence')`,
+    [workspaceId],
+  );
 });
 
 afterAll(async () => {
@@ -108,8 +114,19 @@ describe('fss and migration 0019', () => {
       migration: 19,
       refuses: true,
       counts: {
-        blocking: { linkedInSteps: 1, linkedInExecutions: 0, enrollmentMigrations: 0 },
-        destroyed: { research: { research_settings: 1, research_route_policies: 1 }, clientVersionRangeRows: 1 },
+        blocking: {
+          linkedInSteps: 1,
+          linkedInExecutions: 0,
+          enrollmentMigrations: 0,
+          researchPages: 1,
+          researchSuggestions: 0,
+          researchProviderLedger: 0,
+        },
+        // The seeded configuration is counted apart from the data, and never blocks.
+        destroyed: {
+          researchSeed: { research_settings: 1, research_providers: 3, research_route_policies: 1 },
+          clientVersionRangeRows: 1,
+        },
         archivedMergeEvents: 0,
         reviewRequiredEnrollments: 0,
       },
@@ -120,13 +137,16 @@ describe('fss and migration 0019', () => {
     const { code, stderr } = await run(['migrate']);
     expect(code).toBe(20);
     expect(stderr).toContain('migration_refused');
-    expect(stderr).toContain('FS019: 0019 refused: linkedin_steps=1 linkedin_executions=0');
+    // Non-zero counts only, so the whole message fits the 200 characters a logged value keeps.
+    expect(stderr).toContain('"detail":"FS019: 0019 refused: research_pages=1 linkedin_steps=1"');
     const { rows } = await database.session.query<{ version: number }>('SELECT max(version) AS version FROM schema_versions');
     expect(rows[0]?.version).toBe(18);
   });
 
   it('applies once nothing it refuses on is stored, and then has nothing to count', async () => {
     await database.session.query("DELETE FROM sequence_steps WHERE channel = 'linkedin_task'");
+    expect(JSON.parse((await run(['admin', 'schema-preflight', '0019'])).stdout)).toMatchObject({ refuses: true });
+    await database.session.query('DELETE FROM research_pages');
     const preflight = JSON.parse((await run(['admin', 'schema-preflight', '0019'])).stdout) as Record<string, unknown>;
     expect(preflight['refuses']).toBe(false);
 

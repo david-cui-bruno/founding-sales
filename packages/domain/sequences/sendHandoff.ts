@@ -14,9 +14,9 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
  * shape is that it is never created. So this lane renders, and passes finished bytes
  * together with the template version id and its content hash; the sending lane
  * re-checks the hash against `template_versions` and freezes the envelope. The footer
- * is inside the approved body, or — with the workspace's postal address set (wave 2,
- * S3) — composed by `runEmailStep` before this hand-off, so the sending lane appends
- * nothing.
+ * is already inside the approved body (the template rules refuse an approval without
+ * it; migration 0019 dropped the CHECK that repeated them), so nothing is appended at
+ * send time.
  *
  * The fence's *state machine* is G7-2's; driving it is not. Appendix C has no send job
  * kind, so `sequence.action` calls `dispatch` as well — after the step's transaction
@@ -56,7 +56,7 @@ export interface OutboundEmailRequest {
   readonly toAddress: string;
   /** Rendered. A missing variable never reaches here; it holds the step. */
   readonly subject: string;
-  /** Rendered, footer included (composed at send when the workspace has a postal address). */
+  /** Rendered, footer included. */
   readonly body: string;
   /** Where the window rule placed it (11.2, Appendix D). UTC. */
   readonly sendAt: string;

@@ -2,7 +2,6 @@ export {
   DEFAULT_SETTING_CHANGE_NOTE,
   SETTINGS_REFUSAL_CODES,
   readCurrentSettings,
-  readPostalAddress,
   readSetting,
   readSettingHistory,
   updateSetting,

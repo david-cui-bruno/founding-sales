@@ -49,9 +49,10 @@ const text = {
   subject: z.string().trim().min(1).max(160),
   body: z.string().trim().min(1).max(4000),
   footerSignOff: z.string().trim().min(1).max(300),
-  // No `footerPostalAddress`. The object is strict, so a client that sends one is a 400
-  // rather than a field silently dropped: the postal address is the workspace's
-  // `postal_address` setting, composed into the footer at send (wave 2, S3).
+  // No `footerPostalAddress`. The object is strict, so a client that still sends one
+  // is a 400 rather than a field silently dropped: an automated email carries no
+  // postal address (`docs/decisions/g20-automated-email-carries-no-postal-address.md`),
+  // and a caller that believes otherwise should be told.
   requiredVariables: z.array(z.string().trim().min(1).max(60)).max(50),
   approve: z.boolean().optional(),
 };

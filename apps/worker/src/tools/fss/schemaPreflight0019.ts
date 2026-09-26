@@ -10,9 +10,11 @@ import type { AdminInvocation, AdminOutcome } from './admin.ts';
  * `direct_sent`, the guard columns, the retired settings rows and the two dead reason
  * codes, and relaxes the edit-in-place triggers and four CHECKs. It **refuses** (FS019)
  * when a LinkedIn marker or an audited enrollment migration it would drop is still
- * stored. `infra/scripts/schema-preflight-0019.sh` runs this on the operations task as
- * the runtime identity, so the coordinator sees every count — and whether the migration
- * would refuse — while both services are still running.
+ * stored, or when research's data tables hold a row — its seeded configuration is
+ * dropped without asking. `infra/scripts/schema-preflight-0019.sh` runs this on the
+ * operations task as the runtime identity, so the coordinator sees every count — and
+ * whether the migration would refuse — while both services are still running; it exits
+ * 3 when `refuses` is true.
  *
  * Read-only: a READ ONLY transaction, rolled back. On any schema but 18 it refuses,
  * because there is nothing to decide: before 18 the release is not this one, after it
@@ -21,17 +23,27 @@ import type { AdminInvocation, AdminOutcome } from './admin.ts';
 
 export const SCHEMA_PREFLIGHT_0019_MIGRATION = 19;
 
-/** The eight tables migration 0007 created and 0019 drops. */
-export const RESEARCH_TABLES = [
-  'research_settings',
-  'research_providers',
+/**
+ * The three tables `seed_research_configuration` fills for every workspace (migration
+ * 0007). Their rows are configuration nobody wrote, and 0019 drops them without asking.
+ */
+export const RESEARCH_SEED_TABLES = ['research_settings', 'research_providers', 'research_route_policies'] as const;
+
+/**
+ * The five tables that hold what research did: spend, fetched pages, firm coordinates,
+ * runs and suggestions. A row in any of them is real data, and 0019 refuses (FS019)
+ * rather than drop it.
+ */
+export const RESEARCH_DATA_TABLES = [
   'research_provider_ledger',
-  'research_route_policies',
   'research_pages',
   'firm_locations',
   'research_firm_runs',
   'research_suggestions',
 ] as const;
+
+/** The eight tables migration 0007 created and 0019 drops. */
+export const RESEARCH_TABLES = [...RESEARCH_SEED_TABLES, ...RESEARCH_DATA_TABLES] as const;
 
 /** The placeholder W2-S stores for a snooze with no reason (`packages/domain/today/snooze.ts`). */
 const SNOOZE_PLACEHOLDER = 'snoozed';
@@ -93,12 +105,22 @@ export interface Preflight0019Blocking {
   readonly migrationShifts: number;
   readonly migrationSuperseded: number;
   readonly migrationPaused: number;
+  /** Research's data, one count per table (`RESEARCH_DATA_TABLES`). Its seeded configuration is not here. */
+  readonly researchProviderLedger: number;
+  readonly researchPages: number;
+  readonly firmLocations: number;
+  readonly researchFirmRuns: number;
+  readonly researchSuggestions: number;
 }
 
 /** What 0019 destroys without asking. */
 export interface Preflight0019Destroyed {
-  /** Rows in each research table, the seeded configuration included. */
-  readonly research: Readonly<Record<(typeof RESEARCH_TABLES)[number], number>>;
+  /**
+   * Rows in each seeded configuration table (`RESEARCH_SEED_TABLES`), dropped without
+   * asking. Research's data tables are counted under `blocking`, because a row in any of
+   * them makes 0019 refuse.
+   */
+  readonly researchSeed: Readonly<Record<(typeof RESEARCH_SEED_TABLES)[number], number>>;
   /** Mailbox days whose `direct_sent` is not zero, and the sum the column held. */
   readonly directSentDays: number;
   readonly directSentTotal: number;
@@ -169,9 +191,14 @@ export async function readSchemaPreflight0019(session: SessionQueryable): Promis
       migrationShifts: count(row, 'migration_shifts'),
       migrationSuperseded: count(row, 'migration_superseded'),
       migrationPaused: count(row, 'migration_paused'),
+      researchProviderLedger: count(row, 'research_provider_ledger'),
+      researchPages: count(row, 'research_pages'),
+      firmLocations: count(row, 'firm_locations'),
+      researchFirmRuns: count(row, 'research_firm_runs'),
+      researchSuggestions: count(row, 'research_suggestions'),
     };
-    const research = Object.fromEntries(RESEARCH_TABLES.map(table => [table, count(row, table)])) as Record<
-      (typeof RESEARCH_TABLES)[number],
+    const researchSeed = Object.fromEntries(RESEARCH_SEED_TABLES.map(table => [table, count(row, table)])) as Record<
+      (typeof RESEARCH_SEED_TABLES)[number],
       number
     >;
     return {
@@ -182,7 +209,7 @@ export async function readSchemaPreflight0019(session: SessionQueryable): Promis
       counts: {
         blocking,
         destroyed: {
-          research,
+          researchSeed,
           directSentDays: count(row, 'direct_sent_days'),
           directSentTotal: count(row, 'direct_sent_total'),
           guardColumnsChanged: count(row, 'guard_columns_changed'),
@@ -213,8 +240,9 @@ export async function readSchemaPreflight0019(session: SessionQueryable): Promis
 
 /**
  * The admin command. Read-only, as the runtime identity on the operations task, against
- * the database the services are still using. It exits 0 whatever the counts say: a
- * count is an answer, and `refuses` is the decision the coordinator takes to the owner.
+ * the database the services are still using. It exits 0 whatever the counts say, so the
+ * whole answer reaches the log; the release script reads `refuses` from it and exits 3
+ * when it is true, which is what the release chain gates on.
  */
 export async function schemaPreflight0019Command(invocation: AdminInvocation): Promise<AdminOutcome> {
   const preflight = await readSchemaPreflight0019(invocation.session);
