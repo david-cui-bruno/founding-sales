@@ -19,8 +19,9 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  * because of this", the server reads `today_items.automated` and answers with which
  * of the two it did, and the card renders that.
  *
- * `reason` is required by the schema as well as by the domain, so a client that
- * forgot it is told its body is malformed rather than having a blank reason recorded.
+ * `reason` is optional since wave 2 (S4.7): blank or absent is stored as "snoozed", the
+ * non-empty placeholder `today_snoozes_reason_present` (0008) needs until migration 0019.
+ * Desktops up to 1.0.11 always send one.
  */
 export const SNOOZE_PATHS: readonly string[] = ['/today/snooze', '/today/snooze/cancel', '/today/pause/release'];
 
@@ -33,7 +34,7 @@ const snoozeCommandSchema = z.strictObject({
   commandId: commandIdSchema,
   clientVersion: semanticVersionSchema,
   itemId: uuid,
-  reason: z.string().trim().min(1).max(SNOOZE_REASON_MAX),
+  reason: z.string().trim().max(SNOOZE_REASON_MAX).optional(),
   returnAt: instant.optional(),
 });
 
@@ -64,7 +65,7 @@ export async function routeSnooze(request: ApiRequest, options: RoutingOptions):
     return await runPolicyCommand(deps, snoozeCommandSchema, 'snooze_today_item', async (context, body) =>
       await snoozeTodayItem(context, {
         itemId: body.itemId,
-        reason: body.reason,
+        ...(body.reason === undefined ? {} : { reason: body.reason }),
         ...(body.returnAt === undefined ? {} : { returnAt: body.returnAt }),
       }),
     );

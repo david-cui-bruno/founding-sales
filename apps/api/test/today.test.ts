@@ -270,11 +270,14 @@ describe('the Today routes', () => {
     expect(rows[0]?.count).toBe('1');
   });
 
-  it('refuses a snooze with no reason before it reaches the domain at all', async () => {
+  it('takes a snooze with no reason or a blank one to the domain (S4.7: the reason is optional)', async () => {
     const returnAt = new Date(Date.now() + 2 * 86_400_000).toISOString();
-    expect(
-      (await post('/today/snooze', assigneeToken, command({ itemId: manualItemId, reason: '  ', returnAt }))).status,
-    ).toBe(400);
+    // The task is already snoozed, so the domain answers; the shape check no longer refuses.
+    for (const body of [command({ itemId: manualItemId, returnAt }), command({ itemId: manualItemId, reason: '  ', returnAt })]) {
+      const answer = await post('/today/snooze', assigneeToken, body);
+      expect(answer.status).toBe(409);
+      expect(answer.body['reason']).toBe('item_not_open');
+    }
   });
 
   it('holds an automated send rather than snoozing it, and the server decides which', async () => {

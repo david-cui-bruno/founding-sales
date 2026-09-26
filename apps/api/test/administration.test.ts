@@ -340,6 +340,20 @@ describe('the administration surface', () => {
     expect(unknownKey.status).toBe(400);
   });
 
+  it('accepts a save with no note and records "Changed on the Mac" (D5)', async () => {
+    const saved = await call(
+      'POST',
+      '/settings/update',
+      adminToken,
+      command({ settingKey: 'business_time_zone', value: { timeZone: 'America/Phoenix' } }),
+    );
+    expect(saved.status).toBe(200);
+    const history = await call('POST', '/settings/history', adminToken, { settingKey: 'business_time_zone' });
+    const parsed = settingHistoryResponseSchema.parse(history.body);
+    expect(parsed.versions[0]?.changeNote).toBe('Changed on the Mac');
+    expect(parsed.current?.version).toBe(3);
+  });
+
   it('refuses the two retired slices as malformed requests', async () => {
     for (const settingKey of ['alert_thresholds', 'client_version_range']) {
       const history = await call('POST', '/settings/history', adminToken, { settingKey });

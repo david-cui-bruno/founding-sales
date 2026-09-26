@@ -171,10 +171,18 @@ export async function readSettingHistory(
   return rows.map(toVersion);
 }
 
+/**
+ * The change note a save records when the person gave none (wave 2, D5's API half).
+ * `change_note` may be null in 0013, but the history reads better with a sentence; the
+ * Mac already defaults its field to this.
+ */
+export const DEFAULT_SETTING_CHANGE_NOTE = 'Changed on the Mac';
+
 export interface UpdateSettingInput {
   readonly settingKey: ActiveSettingKey;
   readonly value: unknown;
-  readonly changeNote: string;
+  /** Optional since wave 2 (D5): blank or absent records `DEFAULT_SETTING_CHANGE_NOTE`. */
+  readonly changeNote?: string | undefined;
   readonly commandId?: string | undefined;
   /**
    * The digest of the API image making this write, as its bootstrap discovered it
@@ -206,6 +214,7 @@ export async function updateSetting(
   const actor = context.scope.actor;
   if (actor.kind !== 'user') return { ok: false, reason: 'admin_only' };
 
+  const changeNote = input.changeNote?.trim() || DEFAULT_SETTING_CHANGE_NOTE;
   const schema = SETTING_VALUE_SCHEMAS[input.settingKey];
   const parsed = schema.safeParse(input.value);
   if (!parsed.success) return { ok: false, reason: 'invalid_value' };
@@ -281,7 +290,7 @@ export async function updateSetting(
       input.settingKey,
       nextVersion,
       JSON.stringify(value),
-      input.changeNote,
+      changeNote,
       actor.userId,
     ],
   );
@@ -302,7 +311,7 @@ export async function updateSetting(
     action: 'settings.updated',
     subjectKind: 'workspace_setting',
     subjectId: input.settingKey,
-    detail: { version: nextVersion, previousVersion, changeNote: input.changeNote },
+    detail: { version: nextVersion, previousVersion, changeNote },
   });
 
   return {

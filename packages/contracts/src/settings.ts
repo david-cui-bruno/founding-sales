@@ -184,7 +184,11 @@ export const updateSettingCommandSchema = z.strictObject({
   settingKey: activeSettingKeySchema,
   /** Validated by the key's schema on the server, never by a schema the client chose. */
   value: z.unknown(),
-  changeNote: z.string().trim().min(1).max(500),
+  /**
+   * Optional since wave 2 (D5's API half): blank or absent is recorded as "Changed on
+   * the Mac". Desktops up to 1.0.11 always send one.
+   */
+  changeNote: z.string().trim().max(500).optional(),
 });
 export type UpdateSettingCommand = z.infer<typeof updateSettingCommandSchema>;
 

@@ -6,6 +6,7 @@ import { withTransaction } from '../../db/queryable.ts';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
 import {
+  DEFAULT_SETTING_CHANGE_NOTE,
   effectiveSendingEnabled,
   readCurrentSettings,
   readSetting,
@@ -199,6 +200,19 @@ describe('workspace settings', () => {
     // version 1 even though alpha is already on 2.
     expect(beta.value.current.version).toBe(1);
     expect((await readSetting(admin, 'business_time_zone')).version).toBe(2);
+  });
+
+  it('records "Changed on the Mac" when a save carries no note (D5)', async () => {
+    for (const changeNote of [undefined, '   ']) {
+      const saved = await updateSetting(betaAdmin, {
+        settingKey: 'business_time_zone',
+        value: { timeZone: changeNote === undefined ? 'America/Denver' : 'America/Phoenix' },
+        ...(changeNote === undefined ? {} : { changeNote }),
+      });
+      expect(saved.ok).toBe(true);
+      const history = await readSettingHistory(betaAdmin, 'business_time_zone');
+      expect(history[0]?.changeNote).toBe(DEFAULT_SETTING_CHANGE_NOTE);
+    }
   });
 
   it('serializes two admins saving the same slice at the same instant', async () => {

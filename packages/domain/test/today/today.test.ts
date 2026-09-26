@@ -7,6 +7,7 @@ import { completeCallback, createCallback } from '../../dial/index.ts';
 import { reassignFirm } from '../../crm/index.ts';
 import { localParts } from '../../src/rules/localClock.ts';
 import {
+  DEFAULT_SNOOZE_REASON,
   TODAY_ALGORITHM_VERSION,
   buildTodaySnapshot,
   businessDateOf,
@@ -346,10 +347,7 @@ describe('snooze (8.2)', () => {
     });
   });
 
-  it('refuses a snooze with no reason and one with no future return instant', async () => {
-    expect(
-      await snoozeTodayItem(salesperson(), { itemId: manualItemId, reason: '   ', returnAt: inDays(2) }),
-    ).toEqual({ ok: false, reason: 'snooze_reason_required' });
+  it('refuses a snooze with no future return instant', async () => {
     expect(
       await snoozeTodayItem(salesperson(), {
         itemId: manualItemId,
@@ -366,13 +364,13 @@ describe('snooze (8.2)', () => {
     });
   });
 
-  it('snoozes a manual task and takes it off the card until it returns', async () => {
-    const outcome = await snoozeTodayItem(salesperson(), {
-      itemId: manualItemId,
-      reason: 'Waiting on their board',
-      returnAt: inDays(2),
-    });
+  it('snoozes a manual task without a reason (stored as "snoozed") and takes it off the card until it returns', async () => {
+    const outcome = await snoozeTodayItem(salesperson(), { itemId: manualItemId, reason: '   ', returnAt: inDays(2) });
     expect(outcome).toMatchObject({ ok: true, value: { outcome: 'snoozed' } });
+    const stored = await database.session.query<{ reason: string }>(
+      `SELECT reason FROM today_snoozes WHERE item_key = 'step-execution:manual-call' AND cancelled_at IS NULL`,
+    );
+    expect(stored.rows.map(row => row.reason)).toEqual([DEFAULT_SNOOZE_REASON]);
 
     const items = await listTodayItems(salesperson(), { businessDate, firmId: crm.alpha.firmId });
     expect(items.find(item => item.id === manualItemId)?.status).toBe('snoozed');
