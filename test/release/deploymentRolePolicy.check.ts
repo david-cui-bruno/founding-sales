@@ -227,7 +227,7 @@ describe('the deployment-role policy is code, and the Terraform tree judges it',
         expect(action, `${type} names ${action}, which is not a <service>:<Action>`).toMatch(
           /^[a-z0-9-]+:[A-Za-z0-9*]+$/u,
         );
-        expect(action.startsWith(`${entry.service}:`) || ['iam:PassRole', 'kms:CreateGrant', 'kms:DescribeKey', 'kms:GenerateDataKey', 'kms:Decrypt', 'acm:DescribeCertificate', 'secretsmanager:CreateSecret', 'secretsmanager:TagResource'].includes(action), `${type} names ${action} outside its own service without being one of the documented cross-service calls`).toBe(true);
+        expect(action.startsWith(`${entry.service}:`) || ['iam:PassRole', 'kms:CreateGrant', 'kms:DescribeKey', 'kms:GenerateDataKey', 'kms:Encrypt', 'kms:Decrypt', 'acm:DescribeCertificate', 'secretsmanager:CreateSecret', 'secretsmanager:TagResource'].includes(action), `${type} names ${action} outside its own service without being one of the documented cross-service calls`).toBe(true);
       }
     }
   });

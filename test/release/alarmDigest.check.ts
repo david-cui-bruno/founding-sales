@@ -353,4 +353,14 @@ describe('g99: the Terraform around it', () => {
     expect(zipped).toEqual(sources);
     expect(DIGEST_TF).toContain('handler       = "index.handler"');
   });
+
+  it('encrypts the function environment with the namespace key, never the AWS-managed aws/lambda key', () => {
+    // The first production apply of the digest (25 September 2026) was refused
+    // CreateFunction: with no kms_key_arn, Lambda encrypts the environment with aws/lambda in
+    // the caller's session, and the deployment role's KMS deny covers every untagged key.
+    const block = DIGEST_TF.slice(DIGEST_TF.indexOf('resource "aws_lambda_function" "digest" {'));
+    const body = block.slice(0, block.indexOf('\n}\n'));
+    expect(body).toContain('  environment {');
+    expect(body).toContain('  kms_key_arn = local.topic_key_arn\n');
+  });
 });

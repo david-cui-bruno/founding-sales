@@ -532,6 +532,7 @@
     "aws_lambda_function": {
       "service": "lambda",
       "scope": "arn",
+      "deny_carve_out": "NoDeploymentKmsDataAccessOutsideThisNamespaceOrTerraformState",
       "actions": [
         "lambda:CreateFunction",
         "lambda:GetFunction",
@@ -544,7 +545,11 @@
         "lambda:TagResource",
         "lambda:UntagResource",
         "lambda:ListTags",
-        "iam:PassRole"
+        "iam:PassRole",
+        "kms:DescribeKey",
+        "kms:Encrypt",
+        "kms:Decrypt",
+        "kms:CreateGrant"
       ]
     },
     "aws_scheduler_schedule": {

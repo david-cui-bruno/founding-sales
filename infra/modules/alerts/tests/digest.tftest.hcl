@@ -210,6 +210,14 @@ run "the_digest_role_holds_exactly_what_the_digest_does" {
     error_message = "The digest may use the topic's key and no other."
   }
 
+  # The first production apply was refused CreateFunction: with no kms_key_arn, Lambda
+  # encrypts the environment with the untagged aws/lambda key, which the deployment
+  # role's KMS deny covers. The topic's key is the namespace's.
+  assert {
+    condition     = aws_lambda_function.digest.kms_key_arn == aws_kms_key.alerts[0].arn
+    error_message = "The function's environment is encrypted with the topic's customer key, never the AWS-managed aws/lambda key."
+  }
+
   assert {
     condition = alltrue([
       for statement in jsondecode(aws_iam_role_policy.digest.policy).Statement :
@@ -283,5 +291,26 @@ run "with_a_shared_key_the_digest_uses_that_key" {
       contains(statement.Action, "kms:GenerateDataKey") && statement.Resource == "arn:aws:kms:us-east-1:123456789012:key/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
     ])
     error_message = "The digest's KMS grant is the key the topic is encrypted with."
+  }
+
+  assert {
+    condition     = aws_lambda_function.digest.kms_key_arn == "arn:aws:kms:us-east-1:123456789012:key/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+    error_message = "With a shared key, the function's environment is encrypted with that key too."
+  }
+}
+
+# And in a plan, which is what the operator reads before the apply: the argument is
+# set, never left null, because a null one means aws/lambda.
+run "the_environment_key_is_never_left_to_aws_lambda" {
+  command = plan
+
+  variables {
+    create_kms_key = false
+    kms_key_arn    = "arn:aws:kms:us-east-1:123456789012:key/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+  }
+
+  assert {
+    condition     = aws_lambda_function.digest.kms_key_arn != null && aws_lambda_function.digest.kms_key_arn == var.kms_key_arn
+    error_message = "A plan must show the function's environment key; a null one is aws/lambda, which the deployment role may not use."
   }
 }
