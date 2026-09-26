@@ -6,12 +6,12 @@ name: Greenfield deploy
 #   gates      no credential: a green images publish of a push to main; `deploy.sh ci gates`
 #              (the gate green on that push, the commit on main; else `manual`).
 #   deploy     id-token: this file's guard, then only infra/scripts: download, check, record
-#              --before-rollout (the first write), gate, images.sh promote, deploy (worker,
-#              then API), canary. Each write reads the gate again, held to the run gates chose.
+#              --before-rollout (the first write), images.sh promote, deploy (worker, then
+#              API), canary. Each production write reads the gate again, held to gates' run.
 #   smoke      no credential: scripts/productionSmoke.mjs against the public origin.
-#   read-back  id-token, after the smoke: record --after-rollout must answer `existing`.
-# Provenance without a clock (P6): IMMUTABLE rehearsal repositories, a first-attempt tag
-# refusal, a pulled-by-digest check, an artifact bound to its run, digests held to the tag;
+#   read-back  id-token, after the smoke: the deploy job's exact record must answer `existing`.
+# Provenance without a clock (P6): IMMUTABLE rehearsal repositories, a tag reused only as its
+# run's own, a pulled-by-digest check, an artifact bound to its run, digests held to the tag;
 # no ECR repository policy (the rehearsal deploy role's namespace limits who pushes fss-rh-*).
 
 on:
@@ -120,6 +120,7 @@ jobs:
       expect_sending: ${{ steps.deploy.outputs.expect_sending }}
       canary_age: ${{ steps.deploy.outputs.canary_age }}
       record: ${{ steps.record.outputs.release_record_reference }} ${{ steps.record.outputs.release_record_outcome }}
+      release_record: ${{ steps.record.outputs.release_record_base64 }}
     env:
       COMMIT: ${{ needs.gates.outputs.commit }}
       RUN_ID: ${{ needs.gates.outputs.run_id }}
@@ -263,8 +264,7 @@ jobs:
         if: steps.check.outputs.decision == 'deploy'
         run: |
           set -euo pipefail
-          infra/scripts/deploy.sh ci gate --commit "$COMMIT" --gate-run-id "$GATE_RUN_ID" --before 'the promotion'
-          infra/scripts/images.sh promote "$RUNNER_TEMP/image-digests.json"
+          infra/scripts/images.sh promote "$RUNNER_TEMP/image-digests.json" --gate-run-id "$GATE_RUN_ID"
           infra/scripts/deploy.sh ci deploy --digests "$RUNNER_TEMP/image-digests.json" \
             --commit "$COMMIT" --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" --gate-run-id "$GATE_RUN_ID"
           infra/scripts/deploy.sh ci canary
@@ -325,6 +325,7 @@ jobs:
       RUN_ATTEMPT: ${{ needs.gates.outputs.run_attempt }}
       GATE_RUN_ID: ${{ needs.gates.outputs.gate_run_id }}
       GH_TOKEN: ${{ github.token }}
+      RELEASE_RECORD: ${{ needs.deploy.outputs.release_record }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -340,12 +341,13 @@ jobs:
           role-session-name: fss-prod-ci-deploy-${{ github.run_id }}
           role-duration-seconds: 3600
 
-      - name: Read the release record back, which must answer existing
+      - name: Read the release record back, the exact bytes put, which must answer existing
         id: read-back
         run: |
           set -euo pipefail
+          printf '%s' "$RELEASE_RECORD" | base64 -d > "$RUNNER_TEMP/release-record.json"
           infra/scripts/deploy.sh ci download --run-id "$RUN_ID" --commit "$COMMIT" --out "$RUNNER_TEMP/image-digests.json"
-          infra/scripts/deploy.sh ci record --after-rollout --digests "$RUNNER_TEMP/image-digests.json" \
+          infra/scripts/deploy.sh ci record --after-rollout --release-record "$RUNNER_TEMP/release-record.json" --digests "$RUNNER_TEMP/image-digests.json" \
             --commit "$COMMIT" --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" --gate-run-id "$GATE_RUN_ID" --cluster-name "$CLUSTER_NAME" \
             --operations-family "$OPERATIONS_FAMILY" --subnets "$TASK_SUBNETS" --security-group "$TASK_SECURITY_GROUP"
 

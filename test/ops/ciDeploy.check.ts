@@ -23,11 +23,20 @@ import { readRepositoryFile, repositoryPath } from './support/repository.ts';
  * push-time window, and the schema ranges read from the digests artifact, in 400 lines at
  * most.
  *
- * **A gate decision gone stale before a write (review of PRs 273 and 278).** Every write —
- * the put, the promotion and each service update — reads the gate again, held to the run
- * the gates job chose. A stub `gh` whose answer changes between two reads (a newer run of
- * the push, a re-run gone red) stops the put, and stops the API after the worker rolled,
- * deregistering the revision it registered for the API.
+ * **A gate decision gone stale before a write (reviews of PRs 273 and 278).** Every
+ * production write — the put, each image's promotion write (`images.check.ts`), each
+ * registration and each service update — reads the gate again, held to the run the gates
+ * job chose. A stub `gh` whose answer changes between two reads (a newer run of the push, a
+ * re-run gone red) stops the put, stops the worker before its registration, and stops the
+ * API before its registration or, once registered, before its update, deregistering it.
+ *
+ * **An update-service call whose answer was lost.** The stub can fail the call with the
+ * service left where it was, moved to the new revision anyway, or unreadable after it; the
+ * new revision is deregistered only in the first case.
+ *
+ * **A read-back that rebuilds.** The read-back job is handed the exact record the deploy
+ * job put (`release_record_base64`) and puts those bytes, asking GitHub for nothing but
+ * the gate; a record for another images run, gate run or digest is refused before the put.
  *
  * ## The vacuous-pass traps, named
  *
@@ -233,6 +242,9 @@ if args[:2] == ["ecs", "describe-clusters"]:
 if args[:2] == ["ecs", "describe-services"]:
     name = value("--services")
     service = state["services"].get(name)
+    if service is not None and service.get("unreadable"):
+        sys.stderr.write("An error occurred (ThrottlingException) when calling the DescribeServices operation: Rate exceeded\n")
+        sys.exit(254)
     if service is None:
         done({"services": [], "failures": [{"arn": name, "reason": "MISSING"}]})
     deployments = [{"status": "PRIMARY", "taskDefinition": service["taskDefinition"],
@@ -289,6 +301,17 @@ if args[:2] == ["ecs", "update-service"]:
     name = value("--service")
     service = state["services"][name]
     wanted = value("--task-definition")
+    failure = service.get("updateFails")
+    if failure:
+        # refused: nothing changed. lost: accepted, the answer lost. unreadable: lost, and
+        # the service cannot be described afterwards.
+        if failure in ("lost", "unreadable"):
+            service["taskDefinition"] = wanted
+        if failure == "unreadable":
+            service["unreadable"] = True
+        save()
+        sys.stderr.write("An error occurred (ServerException) when calling the UpdateService operation (reached max retries: 2): Service Unavailable\n")
+        sys.exit(254)
     if service.get("fail"):
         service["refused"] = wanted
     else:
@@ -427,6 +450,8 @@ interface WorldOptions {
   readonly rolloutState?: Partial<Record<Service, string>>;
   /** A service one of whose RUNNING tasks reports this digest instead of its revision's. */
   readonly stray?: Partial<Record<Service, string>>;
+  /** An update-service call that fails: refused, accepted with its answer lost, or lost and the service unreadable after. */
+  readonly updateFails?: Partial<Record<Service, 'refused' | 'lost' | 'unreadable'>>;
 }
 
 function world(options: WorldOptions = {}): World {
@@ -452,6 +477,7 @@ function world(options: WorldOptions = {}): World {
     stuck: options.stuck === name,
     ...(options.rolloutState?.[name] === undefined ? {} : { rolloutState: options.rolloutState[name] }),
     ...(options.stray?.[name] === undefined ? {} : { strayDigest: options.stray[name] }),
+    ...(options.updateFails?.[name] === undefined ? {} : { updateFails: options.updateFails[name] }),
   });
   const state = {
     account: ACCOUNT,
@@ -800,27 +826,62 @@ describe('deploy registers the next revisions, rolls the worker then the API, an
     expect(updates.every(call => call.args[call.args.indexOf('--cluster') + 1] === CLUSTER)).toBe(true);
   });
 
-  it('reads the gate again before each service update, and stops before the API when it no longer holds', () => {
-    // The worker rolls under the gate run the gates job chose; then a newer run of the push
-    // appears, and the API is never pointed at its revision, which is deregistered.
-    const superseded = world();
-    const run = runScript('deploy', superseded, { gateScript: [{}, { id: 4200, created_at: '2026-09-25T23:00:00Z' }] });
-    expect(run.code).toBe(1);
-    expect(operations(superseded)).toEqual([
-      'register fss-prod-worker',
-      'update fss-prod-worker',
-      'register fss-prod-api',
-      `deregister ${definitionArn('api', 8)}`,
-    ]);
-    expect(run.output).toContain(`the newest Greenfield gate run of the push is now 4200, not run ${GATE_RUN}, which this deploy was decided on`);
-    expect(run.output).toContain('(the gate was read again before fss-prod-api is rolled)');
-    expect(superseded.state().services['fss-prod-api']?.taskDefinition).toBe(definitionArn('api', 7));
-    // A gate gone red before the first update rolls nothing at all.
+  it('reads the gate again before each registration and each service update, and writes nothing once it no longer holds', () => {
+    // Four reads: before the worker's registration, before its update, before the API's
+    // registration, before its update. A newer run of the push appearing after the n-th
+    // read stops the deploy at the next one.
+    const superseded = (reads: number) => [...Array.from({ length: reads }, () => ({})), { id: 4200, created_at: '2026-09-25T23:00:00Z' }];
+    for (const [reads, expected, moment] of [
+      // A gate gone red before the first write registers nothing at all.
+      [0, [], "before fss-prod-worker's next revision is registered"],
+      [1, ['register fss-prod-worker', `deregister ${definitionArn('worker', 5)}`], 'before fss-prod-worker is rolled'],
+      [2, ['register fss-prod-worker', 'update fss-prod-worker'], "before fss-prod-api's next revision is registered"],
+      [3, ['register fss-prod-worker', 'update fss-prod-worker', 'register fss-prod-api', `deregister ${definitionArn('api', 8)}`], 'before fss-prod-api is rolled'],
+    ] as const) {
+      const stub = world();
+      const run = runScript('deploy', stub, { gateScript: superseded(reads) });
+      expect(run.code, String(reads)).toBe(1);
+      expect(operations(stub), String(reads)).toEqual(expected);
+      expect(run.output).toContain(`the newest Greenfield gate run of the push is now 4200, not run ${GATE_RUN}, which this deploy was decided on`);
+      expect(run.output).toContain(`(the gate was read again ${moment})`);
+      expect(stub.state().services['fss-prod-api']?.taskDefinition).toBe(definitionArn('api', 7));
+    }
+    // A re-run gone red before the first registration: nothing written.
     const red = world();
     const stopped = runScript('deploy', red, { gateScript: [{ conclusion: 'failure' }] });
     expect(stopped.code).toBe(1);
-    expect(operations(red)).toEqual(['register fss-prod-worker', `deregister ${definitionArn('worker', 5)}`]);
+    expect(writes(red)).toEqual([]);
     expect(stopped.output).toContain(`Greenfield gate run ${GATE_RUN} attempt 1 concluded failure`);
+  });
+
+  it('after a failed update-service call, deregisters the new revision only while the service still names the previous one', () => {
+    // Refused: the service still names the previous revision, so the new one goes.
+    const refused = world({ updateFails: { worker: 'refused' } });
+    const run = runScript('deploy', refused);
+    expect(run.code).toBe(1);
+    expect(operations(refused)).toEqual(['register fss-prod-worker', 'update fss-prod-worker', `deregister ${definitionArn('worker', 5)}`]);
+    expect(run.output).toContain(`ECS refused to point fss-prod-worker at ${definitionArn('worker', 5)}; it still runs ${definitionArn('worker', 4)}`);
+    expect(run.outputs['observed_worker_task_definition']).toBe(definitionArn('worker', 4));
+    expect(refused.state().taskDefinitions[definitionArn('worker', 5)]?.taskDefinition.status).toBe('INACTIVE');
+
+    // Accepted with the answer lost: the service names the new revision, which stays.
+    const lost = world({ updateFails: { worker: 'lost' } });
+    const accepted = runScript('deploy', lost);
+    expect(accepted.code).toBe(1);
+    expect(operations(lost)).toEqual(['register fss-prod-worker', 'update fss-prod-worker']);
+    expect(accepted.output).toContain(`fss-prod-worker names ${definitionArn('worker', 5)} all the same`);
+    expect(accepted.output).toContain(`${definitionArn('worker', 5)} is left ACTIVE`);
+    expect(accepted.outputs['observed_worker_task_definition']).toBe(definitionArn('worker', 5));
+    expect(lost.state().taskDefinitions[definitionArn('worker', 5)]?.taskDefinition.status).toBe('ACTIVE');
+
+    // Unreadable after the failure: nothing is known, so nothing is deregistered.
+    const unknown = world({ updateFails: { api: 'unreadable' } });
+    const unread = runScript('deploy', unknown);
+    expect(unread.code).toBe(1);
+    expect(operations(unknown)).toEqual(['register fss-prod-worker', 'update fss-prod-worker', 'register fss-prod-api', 'update fss-prod-api']);
+    expect(unread.output).toContain(`whether it references ${definitionArn('api', 8)} cannot be established, so ${definitionArn('api', 8)} is left ACTIVE`);
+    expect(unread.outputs['observed_api_task_definition']).toBe('unknown');
+    expect(unknown.state().taskDefinitions[definitionArn('api', 8)]?.taskDefinition.status).toBe('ACTIVE');
   });
 
   it('deregisters a registration that differs from the running revision in more than the image, and rolls nothing', () => {
@@ -934,7 +995,7 @@ def value(flag):
     return args[args.index(flag) + 1] if flag in args else None
 one = re.fullmatch(r"repos/[^/]+/[^/]+/actions/runs/([0-9]+)", args[1]) if args[:1] == ["api"] else None
 if one:
-    run = state["runs"].get(one.group(1))
+    run = state["runs"].get(one.group(1)) or next((r for r in state["imagesRuns"] if str(r["id"]) == one.group(1)), None)
     if run is None:
         sys.stderr.write("gh: Not Found (HTTP 404)\n")
         sys.exit(1)
@@ -1037,21 +1098,27 @@ function runRecord(
     /** The gate run the gates job chose; GATE_RUN by default, '' for none. */
     readonly gateRunId?: string;
     readonly gateScript?: readonly Record<string, unknown>[];
+    /** The record file the read-back is handed; after the rollout, the one a put before it printed, by default. '' for none. */
+    readonly releaseRecord?: string;
+    /** The images run the deploy was handed (--run-id); RUN_ID by default. */
+    readonly imagesRun?: string;
   } = {},
 ): Run {
   const outputs = join(mkdtempSync(join(tmpdir(), 'fss-ci-outputs-')), 'github-output');
   writeFileSync(outputs, '');
   const stage = extra.stage ?? 'before';
   const gateRunId = extra.gateRunId ?? GATE_RUN;
+  const releaseRecord = extra.releaseRecord ?? (stage === 'after' ? carriedRecord() : '');
   const args = [
     'record',
     ...(stage === 'none' ? [] : [`--${stage}-rollout`]),
+    ...(releaseRecord === '' ? [] : ['--release-record', releaseRecord]),
     '--digests',
-    digestsFile(),
+    digestsFile(extra.imagesRun === undefined ? {} : { runId: extra.imagesRun }),
     '--commit',
     COMMIT,
     '--run-id',
-    RUN_ID,
+    extra.imagesRun ?? RUN_ID,
     '--run-attempt',
     '1',
     ...(gateRunId === '' ? [] : ['--gate-run-id', gateRunId]),
@@ -1090,6 +1157,26 @@ function runRecord(
   }
   const result = spawnSync(SCRIPT, ['ci', ...args], { encoding: 'utf8', env });
   return { code: result.status ?? 1, output: `${result.stdout}${result.stderr}`, outputs: readOutputs(outputs) };
+}
+
+/**
+ * What the deploy job hands the read-back job: the record a put before the rollout printed
+ * as release_record_base64, decoded to its exact bytes; with `change`, those bytes parsed,
+ * changed and written again.
+ */
+function carriedRecord(change?: (record: Record<string, unknown>) => void): string {
+  const before = runRecord(world());
+  if (before.code !== 0) throw new Error(before.output);
+  const bytes = Buffer.from(before.outputs['release_record_base64'] ?? '', 'base64');
+  const file = join(mkdtempSync(join(tmpdir(), 'fss-ci-carried-')), 'release-record.json');
+  if (change === undefined) {
+    writeFileSync(file, bytes);
+  } else {
+    const record = JSON.parse(bytes.toString('utf8')) as Record<string, unknown>;
+    change(record);
+    writeFileSync(file, JSON.stringify(record, null, 2));
+  }
+  return file;
 }
 
 describe('record puts the ci-gate release record before the rollout, on the operations task, and reads it back after', () => {
@@ -1131,6 +1218,19 @@ describe('record puts the ci-gate release record before the rollout, on the oper
     });
     // It writes nothing else: no registration, no service touched.
     expect(writes(stub)).toEqual([]);
+    // Built from this images run, asked for by id, never the newest run of the commit; and
+    // the exact bytes put are printed for the read-back job.
+    expect(ghCalls(stub)).toContainEqual(['api', `repos/${GH_REPOSITORY}/actions/runs/${RUN_ID}`]);
+    expect(ghCalls(stub).some(call => (call[1] ?? '').includes('greenfield-images.yml/runs?'))).toBe(false);
+    expect(run.outputs['release_record_base64']).toBe(command[4]);
+  });
+
+  it('asks for the images run it deploys by id, and fails rather than take another run of the commit', () => {
+    const stub = world();
+    const newer = runRecord(stub, { imagesRun: '4343' });
+    expect(newer.code).toBe(1);
+    expect(newer.output).toContain('gh could not read images run 4343');
+    expect(runTasks(stub)).toEqual([]);
   });
 
   it('answers existing for a record already stored, which a re-run of the deploy job puts again', () => {
@@ -1139,10 +1239,42 @@ describe('record puts the ci-gate release record before the rollout, on the oper
     expect(run.outputs['release_record_outcome']).toBe('existing');
   });
 
-  it('reads the record back after the rollout: existing, for a production that runs its digests', () => {
-    const run = runRecord(world({ running: NEW, putOutcome: 'existing' }), { stage: 'after' });
+  it('reads the record back after the rollout: the exact bytes put, existing, for a production that runs its digests', () => {
+    const carried = carriedRecord();
+    const stub = world({ running: NEW, putOutcome: 'existing' });
+    const run = runRecord(stub, { stage: 'after', releaseRecord: carried });
     expect(run.code, run.output).toBe(0);
     expect(run.outputs).toMatchObject({ release_record_reference: REFERENCE, release_record_outcome: 'existing' });
+    expect(run.outputs['release_record_base64']).toBeUndefined();
+    const command = stub.state().ranTask?.containerOverrides[0]?.command ?? [];
+    expect(command[4]).toBe(readFileSync(carried).toString('base64'));
+    // Nothing is built again: GitHub is asked for the gate and main, and for no run.
+    expect(ghCalls(stub).map(call => call[1] ?? '').filter(path => !/greenfield\.yml\/runs\?|compare\/main\.\.\./u.test(path))).toEqual([]);
+  });
+
+  it('reads back only the record the deploy job put, handed to it, and refuses another before the put', () => {
+    const missing = world({ running: NEW });
+    const none = runRecord(missing, { stage: 'after', releaseRecord: '' });
+    expect(none.code).toBe(1);
+    expect(none.output).toContain('record --after-rollout reads back the exact record the deploy job put, never one built again');
+    expect(missing.calls()).toEqual([]);
+    for (const [change, expected] of [
+      [(record: Record<string, unknown>) => (record['imagesRunId'] = '4343'), "imagesRunId '4343', not '4242'"],
+      [(record: Record<string, unknown>) => (record['gateRunId'] = '4099'), "gateRunId '4099', not '4100'"],
+      [(record: Record<string, unknown>) => (record['artifacts'] = { api: digest('e'), worker: NEW.worker, desktopCommitStamp: COMMIT }), `the api digest ${digest('e')}, not ${NEW.api}`],
+    ] as const) {
+      const stub = world({ running: NEW, putOutcome: 'existing' });
+      const run = runRecord(stub, { stage: 'after', releaseRecord: carriedRecord(change) });
+      expect(run.code, expected).toBe(1);
+      expect(run.output).toContain('--release-record is not the record this deploy put before the rollout');
+      expect(run.output).toContain(expected);
+      expect(runTasks(stub)).toEqual([]);
+    }
+    const before = world();
+    const handed = runRecord(before, { releaseRecord: carriedRecord() });
+    expect(handed.code).toBe(1);
+    expect(handed.output).toContain('--release-record belongs to --after-rollout');
+    expect(before.calls()).toEqual([]);
   });
 
   it('fails the read-back, with nothing put, when production does not run the deployed digests', () => {
@@ -1274,17 +1406,18 @@ describe('record puts the ci-gate release record before the rollout, on the oper
     expect(text('Put the ci-gate release record')).toContain("if: steps.check.outputs.decision == 'deploy'");
     expect(runBody(text('Put the ci-gate release record'))).toContain('infra/scripts/deploy.sh ci record --before-rollout');
     expect(runBody(text('Put the ci-gate release record'))).toContain('--gate-run-id "$GATE_RUN_ID"');
-    // The gate again before the promotion, then the promotion, then the rollout held to the same run.
+    // The promotion reads the gate before each image's write, then the rollout, held to the same run.
     const rollout = runBody(text('Promote both images')).split('\n').filter(line => line.startsWith('infra/scripts/'));
     expect(rollout.map(line => line.split(' ').slice(0, 3).join(' '))).toEqual([
-      'infra/scripts/deploy.sh ci gate',
       'infra/scripts/images.sh promote "$RUNNER_TEMP/image-digests.json"',
       'infra/scripts/deploy.sh ci deploy',
       'infra/scripts/deploy.sh ci canary',
     ]);
-    expect(rollout[0]).toContain('--gate-run-id "$GATE_RUN_ID"');
+    expect(rollout[0]).toBe('infra/scripts/images.sh promote "$RUNNER_TEMP/image-digests.json" --gate-run-id "$GATE_RUN_ID"');
     expect(runBody(text('Promote both images'))).toContain('--run-attempt "$RUN_ATTEMPT" --gate-run-id "$GATE_RUN_ID"');
     expect(deploy).not.toContain('--after-rollout');
+    // The exact bytes put go to the read-back job, which decodes them and puts nothing else.
+    expect(deploy).toContain('release_record: ${{ steps.record.outputs.release_record_base64 }}');
     // No step before the guard runs anything from the images commit.
     for (const step of steps(deploy).slice(0, at("Protected paths in any commit since production's"))) {
       expect(step.text, step.name).not.toMatch(/infra\/scripts\/|scripts\/|node /u);
@@ -1293,9 +1426,10 @@ describe('record puts the ci-gate release record before the rollout, on the oper
     const readBack = job(DEPLOY_WORKFLOW, 'read-back');
     expect(readBack).toContain('needs: [gates, deploy, smoke]');
     expect(readBack).toContain("if: needs.smoke.result == 'success'");
-    expect(runBody(steps(readBack).find(step => step.name.includes('Read the release record back'))?.text ?? '')).toContain(
-      'infra/scripts/deploy.sh ci record --after-rollout',
-    );
+    const readBackBody = runBody(steps(readBack).find(step => step.name.includes('Read the release record back'))?.text ?? '');
+    expect(readBack).toContain('RELEASE_RECORD: ${{ needs.deploy.outputs.release_record }}');
+    expect(readBackBody).toContain('printf \'%s\' "$RELEASE_RECORD" | base64 -d > "$RUNNER_TEMP/release-record.json"');
+    expect(readBackBody).toContain('infra/scripts/deploy.sh ci record --after-rollout --release-record "$RUNNER_TEMP/release-record.json"');
     expect(job(DEPLOY_WORKFLOW, 'smoke')).toContain('needs: [gates, deploy]\n');
     expect(job(DEPLOY_WORKFLOW, 'summary')).toContain('needs: [gates, deploy, smoke, read-back]');
   });

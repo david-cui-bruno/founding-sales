@@ -7,7 +7,9 @@
 #   infra/scripts/images.sh record  <commit> <run id> <run attempt> <api digest> <worker digest> <out file> \
 #                                   --api-range <min>-<max> --worker-range <min>-<max>
 #   infra/scripts/images.sh pin     <commit> <out file>
-#   infra/scripts/images.sh promote <image-digests.json | image-pin.json> [--app-only]
+#   infra/scripts/images.sh promote <image-digests.json | image-pin.json> [--app-only] [--gate-run-id <id>]
+#   infra/scripts/images.sh pushed   <api|worker> <digest> <directory>
+#   infra/scripts/images.sh attested <api|worker> <digest>
 #
 # The images workflow's `publish` job pushes `fss-rh-<image>:ci-<commit>` on every push
 # to main that changes an image input, pulls it back by digest, runs `verify` on that, and
@@ -36,13 +38,28 @@
 #     one it holds untagged, or that a copy wrapped in an index, is tagged in place from its
 #     own manifest bytes (`put-image --image-digest`), as `ci-<commit>` or `ci-<commit>-image`.
 #     A tag naming another digest is never overwritten (the repositories are IMMUTABLE).
-#     `--app-only` is accepted for the old callers and means nothing.
+#     `--app-only` is accepted for the old callers and means nothing. `--gate-run-id` is
+#     the CI deploy's (review of PR 278): immediately before each write to a production
+#     repository — each copy and each in-place tag — it runs `deploy.sh ci gate`, held to
+#     the gate run the gates job chose, so a gate that changed after the API image was
+#     promoted stops the worker's. It needs GITHUB_REPOSITORY and gh, as `ci gate` does.
+#   * pushed, attested — the publish job's proof that a tag is its run's own (review of
+#     PR 278). `pushed` writes `<directory>/<service>.json` (`fss.image-pushed.v1`: the
+#     commit, run, attempt, repository, tag and digest) the moment an attempt has pushed
+#     and read back a digest, and the job uploads the directory as
+#     `fss-image-pushed-<attempt>` whatever the attempt's end. `attested` answers whether
+#     an EARLIER attempt of this run left such an artifact naming <digest>: the only case
+#     in which the job reuses an existing `ci-<commit>` tag. A first attempt, or an
+#     unattested tag, is refused, and that commit is released by hand. Both read
+#     GITHUB_SHA, GITHUB_RUN_ID and GITHUB_RUN_ATTEMPT; `attested` also GITHUB_REPOSITORY
+#     and gh (actions: read).
 #
 # Seams: FSS_GH_COMMAND (gh), FSS_DOCKER_COMMAND (docker), FSS_REHEARSAL_AWS_COMMAND
 # (aws). FSS_REHEARSAL_DRY_RUN=1 makes verify and promote print their calls and make none.
 
+IMAGES_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=infra/scripts/lib.sh
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+source "$IMAGES_SCRIPTS/lib.sh"
 
 IMAGE_INPUTS=(
   Dockerfile.api
@@ -59,6 +76,8 @@ IMAGE_INPUTS=(
 PIN_SEARCH_DEPTH=25
 PROMOTE_SOURCES='fss-rh-api fss-rh-worker'
 PROMOTE_DESTINATIONS='fss-prod-api fss-prod-worker'
+PROMOTE_GATE_RUN_ID=''
+PROMOTE_COMMIT=''
 
 images_fail() {
   echo "FAIL: $*" >&2
@@ -344,6 +363,19 @@ PY
 # promote
 # ---------------------------------------------------------------------------
 
+# The CI deploy's gate, read again immediately before a production write (review of PR
+# 278): `deploy.sh ci gate`, held to the run the gates job chose; its FAIL line says why,
+# and nothing more is written. The hand path passes no --gate-run-id and holds no gate.
+#   promote_hold <the write about to be made>
+promote_hold() {
+  [ -n "$PROMOTE_GATE_RUN_ID" ] || return 0
+  if rehearsal_dry_run; then
+    rehearsal_plan "deploy.sh ci gate --commit $PROMOTE_COMMIT --gate-run-id $PROMOTE_GATE_RUN_ID --before '$1'"
+    return 0
+  fi
+  "$IMAGES_SCRIPTS/deploy.sh" ci gate --commit "$PROMOTE_COMMIT" --gate-run-id "$PROMOTE_GATE_RUN_ID" --before "$1" >&2
+}
+
 # The only ECR calls promote makes, each against the four literal repositories; every one
 # is a read but put-image, which may only tag a production repository.
 #   promote_aws <describe-images|describe-repositories|batch-get-image|put-image> <repository> [argument...]
@@ -466,6 +498,10 @@ PY
     rm -rf "$work"
     images_fail "ECR did not return the manifest of $repository@$digest"
   fi
+  if ! promote_hold "tagging $repository@$digest as $tag"; then
+    rm -rf "$work"
+    exit 1
+  fi
   if ! promote_aws put-image "$repository" --image-tag "$tag" --image-digest "$digest" \
       --image-manifest "file://$work/manifest.json" --image-manifest-media-type "$media_type" >/dev/null; then
     rm -rf "$work"
@@ -485,6 +521,7 @@ promote_one() {
     promote_aws describe-images "$destination_repository" --image-ids "imageDigest=$digest"
     rehearsal_plan "stop here if $destination_repository already holds $digest under a tag; tag it in place if it holds it under none"
     promote_aws describe-images "$destination_repository" --image-ids "imageTag=$PROMOTE_TAG"
+    promote_hold "the copy of the $service image to $destination_repository"
     images_docker buildx imagetools create --tag "$destination_uri:$PROMOTE_TAG" --prefer-index=false "$source_uri@$digest"
     rehearsal_plan "read $destination_repository:$PROMOTE_TAG back; if it is not $digest, tag $digest itself in place"
     return 0
@@ -509,6 +546,7 @@ promote_one() {
   if [ -n "$existing" ] && [ "$existing" != "None" ] && [ "$existing" != "$digest" ]; then
     images_fail "$destination_repository:$PROMOTE_TAG already names $existing; tags are immutable, so it is not overwritten"
   fi
+  promote_hold "the copy of the $service image to $destination_repository" || exit 1
   images_docker buildx imagetools create --tag "$destination_uri:$PROMOTE_TAG" --prefer-index=false "$source_uri@$digest" >/dev/null
   copied="$(digest_of_tag "$destination_repository" "$PROMOTE_TAG")"
   if [ "$copied" != "$digest" ]; then
@@ -529,12 +567,19 @@ images_promote() {
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --app-only) shift ;;
+      --gate-run-id) PROMOTE_GATE_RUN_ID=${2:-}; shift 2 ;;
       *) images_fail "promote does not take '$1'" ;;
     esac
   done
-  [ -n "$input" ] || images_fail "usage: images.sh promote <image-digests.json | image-pin.json>"
+  [ -n "$input" ] || images_fail "usage: images.sh promote <image-digests.json | image-pin.json> [--gate-run-id <id>]"
   read -r kind api worker commit <<<"$(images_read "$input")"
   [ -n "${commit:-}" ] || exit 1
+  if [ -n "$PROMOTE_GATE_RUN_ID" ]; then
+    [[ "$PROMOTE_GATE_RUN_ID" =~ ^[1-9][0-9]{0,19}$ ]] || images_fail "--gate-run-id '$PROMOTE_GATE_RUN_ID' is not a workflow run id"
+    [ "$kind" = digests ] \
+      || images_fail "--gate-run-id holds the CI deploy's promotion of an images run's digests to its gate; a pin is the hand path's, which holds none"
+    PROMOTE_COMMIT=$commit
+  fi
   PROMOTE_TAG="ci-$commit"
   rehearsal_log "promoting the $kind of $commit: api $api, worker $worker, tagged $PROMOTE_TAG in production"
   source_api="$(repository_uri fss-rh-api)"
@@ -555,6 +600,107 @@ images_promote() {
   rehearsal_log "both images are in production by digest"
 }
 
+# ---------------------------------------------------------------------------
+# pushed and attested (review of PR 278)
+# ---------------------------------------------------------------------------
+
+# The run this is: the commit, run and attempt Actions sets.
+images_run_facts() {
+  require_commit "GITHUB_SHA" "${GITHUB_SHA:-}"
+  [[ "${GITHUB_RUN_ID:-}" =~ ^[1-9][0-9]{0,19}$ ]] || images_fail "GITHUB_RUN_ID '${GITHUB_RUN_ID:-}' is not a workflow run id"
+  [[ "${GITHUB_RUN_ATTEMPT:-}" =~ ^[1-9][0-9]{0,3}$ ]] || images_fail "GITHUB_RUN_ATTEMPT '${GITHUB_RUN_ATTEMPT:-}' is not a run attempt"
+}
+
+images_pushed() {
+  local service=${1:-} digest=${2:-} directory=${3:-}
+  case "$service" in api | worker) ;; *) images_fail "pushed needs the service, api or worker, not '$service'" ;; esac
+  require_digest "the $service digest" "$digest"
+  [ -n "$directory" ] || images_fail "pushed needs the directory the attempt's artifact is uploaded from"
+  images_run_facts
+  mkdir -p "$directory"
+  FSS_SERVICE="$service" FSS_DIGEST="$digest" python3 - >"$directory/$service.json.partial" <<'PY'
+import json, os
+env = os.environ
+print(json.dumps({
+    "schema": "fss.image-pushed.v1",
+    "commit": env["GITHUB_SHA"],
+    "workflowRunId": env["GITHUB_RUN_ID"],
+    "workflowRunAttempt": env["GITHUB_RUN_ATTEMPT"],
+    "service": env["FSS_SERVICE"],
+    "repository": "fss-rh-" + env["FSS_SERVICE"],
+    "tag": "ci-" + env["GITHUB_SHA"],
+    "digest": env["FSS_DIGEST"],
+}, indent=2))
+PY
+  mv "$directory/$service.json.partial" "$directory/$service.json"
+  rehearsal_log "attempt $GITHUB_RUN_ATTEMPT of run $GITHUB_RUN_ID vouches for fss-rh-$service:ci-$GITHUB_SHA = $digest"
+}
+
+images_attested() {
+  local service=${1:-} digest=${2:-} tag work candidates id expected attempt
+  case "$service" in api | worker) ;; *) images_fail "attested needs the service, api or worker, not '$service'" ;; esac
+  require_digest "the $service digest" "$digest"
+  images_run_facts
+  [[ "${GITHUB_REPOSITORY:-}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || images_fail "GITHUB_REPOSITORY '${GITHUB_REPOSITORY:-}' is not owner/name"
+  tag="fss-rh-$service:ci-$GITHUB_SHA"
+  if [ "$GITHUB_RUN_ATTEMPT" = 1 ]; then
+    images_fail "$tag already exists as $digest and this is the first attempt of run $GITHUB_RUN_ID: another writer pushed it, so this run cannot vouch for it. Release the commit by hand (release.md 4)."
+  fi
+  work="$(mktemp -d "${TMPDIR:-/tmp}/fss-attested.XXXXXX")"
+  # shellcheck disable=SC2064 # the path is fixed now
+  trap "rm -rf '$work'" EXIT
+  images_gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" >"$work/artifacts.json" \
+    || images_fail "gh could not list the artifacts of run $GITHUB_RUN_ID, so nothing attests $tag; release the commit by hand (release.md 4)"
+  candidates="$(FSS_FILE="$work/artifacts.json" python3 - <<'PY'
+# images-attested-candidates: the fss-image-pushed-<attempt> artifacts of earlier attempts of this run.
+import json, os, re
+env = os.environ
+listed = (json.load(open(env["FSS_FILE"], encoding="utf-8")) or {}).get("artifacts") or []
+for item in listed:
+    match = re.fullmatch(r"fss-image-pushed-([1-9][0-9]{0,3})", str(item.get("name", "")))
+    source = item.get("workflow_run") or {}
+    if (match and int(match.group(1)) < int(env["GITHUB_RUN_ATTEMPT"]) and item.get("expired") is False
+            and str(source.get("id", "")) == env["GITHUB_RUN_ID"] and source.get("head_sha") == env["GITHUB_SHA"]
+            and re.fullmatch(r"[1-9][0-9]{0,19}", str(item.get("id", "")))
+            and re.fullmatch(r"sha256:[0-9a-f]{64}", str(item.get("digest", "")))):
+        print(item["id"], item["digest"], match.group(1))
+PY
+)" || images_fail "the artifacts of run $GITHUB_RUN_ID could not be read, so nothing attests $tag; release the commit by hand (release.md 4)"
+  while read -r id expected attempt; do
+    [ -n "$id" ] || continue
+    if ! images_gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$id/zip" >"$work/$id.zip"; then
+      rehearsal_log "artifact $id (fss-image-pushed-$attempt) could not be downloaded" >&2
+      continue
+    fi
+    if FSS_ZIP="$work/$id.zip" FSS_EXPECTED="$expected" FSS_ATTEMPT="$attempt" FSS_SERVICE="$service" FSS_DIGEST="$digest" python3 - <<'PY'
+# images-attested-artifact: the bytes GitHub recorded, holding <service>.json for this digest.
+import hashlib, json, os, sys, zipfile
+env = os.environ
+data = open(env["FSS_ZIP"], "rb").read()
+if "sha256:" + hashlib.sha256(data).hexdigest() != env["FSS_EXPECTED"]:
+    sys.exit("the bytes of the artifact are not the digest GitHub lists")
+service = env["FSS_SERVICE"]
+with zipfile.ZipFile(env["FSS_ZIP"]) as archive:
+    names = archive.namelist()
+    if not set(names) <= {"api.json", "worker.json"} or service + ".json" not in names:
+        sys.exit("the artifact holds {}, not {}.json".format(names, service))
+    pushed = json.loads(archive.read(service + ".json"))
+expected = {"schema": "fss.image-pushed.v1", "commit": env["GITHUB_SHA"], "workflowRunId": env["GITHUB_RUN_ID"],
+            "workflowRunAttempt": env["FSS_ATTEMPT"], "service": service, "repository": "fss-rh-" + service,
+            "tag": "ci-" + env["GITHUB_SHA"], "digest": env["FSS_DIGEST"]}
+different = [key for key, value in expected.items() if pushed.get(key) != value]
+if different:
+    sys.exit("it names another push ({})".format(", ".join(different)))
+PY
+    then
+      echo "$tag = $digest, which attempt $attempt of run $GITHUB_RUN_ID pushed (artifact fss-image-pushed-$attempt); reusing it"
+      return 0
+    fi
+    rehearsal_log "artifact fss-image-pushed-$attempt does not attest $tag = $digest (above)" >&2
+  done <<<"$candidates"
+  images_fail "$tag already exists as $digest, and no earlier attempt of run $GITHUB_RUN_ID attests pushing it (no fss-image-pushed-<attempt> artifact names it): another session may have pushed it, so this run cannot vouch for it. Release the commit by hand (release.md 4)."
+}
+
 SUBCOMMAND=${1:-}
 shift || true
 case "$SUBCOMMAND" in
@@ -563,8 +709,10 @@ case "$SUBCOMMAND" in
   record) images_record "$@" ;;
   pin) images_pin "$@" ;;
   promote) images_promote "$@" ;;
+  pushed) images_pushed "$@" ;;
+  attested) images_attested "$@" ;;
   *)
-    echo "usage: $(basename "$0") inputs | verify <image> <api|worker> <min> <max> | record <commit> <run id> <attempt> <api digest> <worker digest> <out> --api-range <min>-<max> --worker-range <min>-<max> | pin <commit> <out> | promote <image-digests.json | image-pin.json>" >&2
+    echo "usage: $(basename "$0") inputs | verify <image> <api|worker> <min> <max> | record <commit> <run id> <attempt> <api digest> <worker digest> <out> --api-range <min>-<max> --worker-range <min>-<max> | pin <commit> <out> | promote <image-digests.json | image-pin.json> [--gate-run-id <id>] | pushed <api|worker> <digest> <directory> | attested <api|worker> <digest>" >&2
     exit 2
     ;;
 esac

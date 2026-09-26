@@ -82,7 +82,8 @@
 #       --run-attempt <n> --origin https://...
 #   deploy.sh ci deploy   <the same, without --origin> --gate-run-id <id>
 #   deploy.sh ci record   --before-rollout|--after-rollout <the same as deploy> \
-#       --cluster-name <name> --operations-family <family> --subnets <a,b> --security-group <sg>
+#       --cluster-name <name> --operations-family <family> --subnets <a,b> --security-group <sg> \
+#       [--release-record <file>]   (after the rollout only, and there required)
 #   deploy.sh ci canary
 #
 # `.github/workflows/greenfield-deploy.yml` runs these; all but `gates` and `gate` as
@@ -94,10 +95,13 @@
 #     decision=pass and gate_run_id, or manual.
 #   * The gate held to one run (review of PRs 273 and 278): record, gate and deploy take
 #     --gate-run-id, the run gates chose, and read the gate again, waiting for nothing,
-#     immediately before every write: before the record is built and again before its
-#     put, before the promotion (`ci gate`), and before each service is rolled. A newer
-#     run of the push, a re-run gone red or the commit off main fails there, with nothing
-#     more written (a revision registered for the service about to roll is deregistered).
+#     immediately before every production write: before the record is built and again
+#     before its put, before each image's promotion write (`images.sh promote
+#     --gate-run-id` runs `ci gate`), and before each service's registration and again
+#     before its update. A newer run of the push, a re-run gone red or the commit off main
+#     fails there, with nothing more written (a revision registered for the service about
+#     to roll is deregistered). The put's check precedes launching its one-off task, not
+#     the insert inside it: the task's startup is a gap no read from here closes.
 #   * download: the images run's own fss-image-digests artifact, held to the digest GitHub
 #     recorded. It carries both digests and the schema range each image declares.
 #   * check, record and deploy first read and judge: the session is exactly the CI role in
@@ -106,25 +110,32 @@
 #     `fss-rh-<image>:ci-<commit>` names; both services run at their declared counts with
 #     one COMPLETED deployment; and the images' ranges equal the running definitions'.
 #     Provenance needs no clock (P6, 27 September 2026): the repositories are IMMUTABLE,
-#     the images run refuses a tag that exists on its first attempt and verifies what it
-#     pulls back by digest, the artifact is bound to the run, and only the rehearsal deploy
+#     the images run refuses a tag that exists unless an earlier attempt of the same run
+#     attests it (its `fss-image-pushed-<attempt>` artifact) and verifies what it pulls
+#     back by digest, the artifact is bound to the run, and only the rehearsal deploy
 #     role, by its namespace, can push `fss-rh-*` (there is no repository policy).
 #   * check: decision=deploy, current (already running) or manual (a schema change, from
 #     the ranges or /health, or a service not at its count); a manual decision exits 0.
 #   * record --before-rollout: the gate read again, then the ci-gate record (record.sh
-#     from-ci) put on the operations task before the promotion, the deploy job's first
-#     write, so no new worker task starts without one. The operations definition is
-#     Terraform's and does not track, so the put runs the worker image of the last apply,
-#     under the worker's roles and log group.
+#     from-ci, held to this images run with --images-run) put on the operations task
+#     before the promotion, the deploy job's first write, so no new worker task starts
+#     without one. The operations definition is Terraform's and does not track, so the
+#     put runs the worker image of the last apply, under the worker's roles and log group.
+#     It prints the record it put as release_record_base64=, for the read-back.
 #   * deploy: the next revision of each running definition with only the image changed,
 #     described back and compared field by field (deregistered otherwise); the worker
 #     rolled, waited on, held to COMPLETED and its digest, and only then the API. A revision
 #     ECS rolled back is deregistered, so the newest ACTIVE revision is the one that runs;
 #     the stopped tasks' stop codes and the event/reason/code fields of their log lines are
-#     printed, never a raw line. No Terraform; nothing from the images commit runs here.
-#   * record --after-rollout: the read-back, in its own job after the smoke. Both services
-#     must run the two digests, the gate is read again, and the same put must answer
-#     `existing`.
+#     printed, never a raw line. An update-service call that fails is followed by a read
+#     of the service: the new revision is deregistered only while the service still names
+#     the previous one, and left ACTIVE, and reported, when it names the new one or cannot
+#     be read. No Terraform; nothing from the images commit runs here.
+#   * record --after-rollout --release-record <file>: the read-back, in its own job after
+#     the smoke, of the exact bytes the deploy job put (never rebuilt: a newer images run
+#     or a gate re-run since would build another record). Both services must run the two
+#     digests, the record must be this deploy's, the gate is read again, and the same put
+#     must answer `existing`.
 #   * canary: the canary age the production smoke judges.
 #
 # Offline seams: FSS_REHEARSAL_AWS_COMMAND, FSS_GH_COMMAND, FSS_CI_CALLER_IDENTITY,
@@ -147,7 +158,7 @@ usage: deploy.sh release   <root> <prefix> [--schema-change] --api-digest D --wo
        deploy.sh bootstrap <root> <prefix> --worker-digest D --slug S --display-name N --admin-email E [--time-zone Z] [--sending-domain DOMAIN] [--environment production]
        deploy.sh current   <prefix> [--var-flags] [--compare <api_image> <worker_image> [--allow-digest-change]]
        deploy.sh ci        gates --commit SHA [--wait-minutes N] | gate --commit SHA --gate-run-id ID [--before WHAT] | download --run-id ID --commit SHA --out F | canary
-       deploy.sh ci        check|deploy|record --digests F --commit SHA --run-id ID --run-attempt N [--origin URL] [--gate-run-id ID] [--before-rollout|--after-rollout --cluster-name NAME --operations-family FAMILY --subnets IDS --security-group ID]
+       deploy.sh ci        check|deploy|record --digests F --commit SHA --run-id ID --run-attempt N [--origin URL] [--gate-run-id ID] [--before-rollout|--after-rollout --release-record F --cluster-name NAME --operations-family FAMILY --subnets IDS --security-group ID]
 USAGE
   exit "${1:-2}"
 }
@@ -616,7 +627,7 @@ deploy_ci() {
     check | deploy | record) ;;
     *) deploy_usage 2 ;;
   esac
-  DIGESTS='' COMMIT='' RUN_ID='' RUN_ATTEMPT='' ORIGIN='' GATE_RUN_ID=''
+  DIGESTS='' COMMIT='' RUN_ID='' RUN_ATTEMPT='' ORIGIN='' GATE_RUN_ID='' RELEASE_RECORD=''
   RECORD_CLUSTER_NAME='' OPERATIONS_FAMILY='' TASK_SUBNETS='' TASK_SECURITY_GROUP='' RECORD_STAGE=''
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -632,6 +643,7 @@ deploy_ci() {
       --run-attempt) RUN_ATTEMPT=${2:-}; shift 2 ;;
       --origin) ORIGIN=${2:-}; shift 2 ;;
       --gate-run-id) GATE_RUN_ID=${2:-}; shift 2 ;;
+      --release-record) RELEASE_RECORD=${2:-}; shift 2 ;;
       *) deploy_fail "deploy.sh ci does not take '$1'" ;;
     esac
   done
@@ -666,10 +678,18 @@ ci_arguments() {
   fi
   if [ "$SUBCOMMAND" != record ]; then
     [ -z "$RECORD_STAGE" ] || deploy_fail "--before-rollout and --after-rollout belong to record, not to $SUBCOMMAND"
+    [ -z "$RELEASE_RECORD" ] || deploy_fail "--release-record belongs to record --after-rollout, not to $SUBCOMMAND"
     return 0
   fi
   [ -n "$RECORD_STAGE" ] \
     || deploy_fail "record needs --before-rollout (the deploy job's put, before its first write) or --after-rollout (the read-back job's put, after the smoke)"
+  if [ "$RECORD_STAGE" = after ]; then
+    [ -n "$RELEASE_RECORD" ] \
+      || deploy_fail "record --after-rollout reads back the exact record the deploy job put, never one built again: pass it with --release-record <file> (the deploy job's release_record_base64, decoded)"
+  else
+    [ -z "$RELEASE_RECORD" ] \
+      || deploy_fail "--release-record belongs to --after-rollout; before the rollout the record is built here, from the gate run and this images run"
+  fi
   # Four public identifiers from repository variables (release.md 4.0); an empty one is a
   # variable nobody set.
   [[ "$RECORD_CLUSTER_NAME" =~ ^${CI_PREFIX}-[a-z0-9-]{1,40}$ ]] \
@@ -977,9 +997,11 @@ ci_session() {
 
 # Provenance (P6, 27 September 2026): each digest is the one the rehearsal repository
 # holds under ci-<commit>. The repositories are IMMUTABLE and the images run refuses a tag
-# that exists on its first attempt, so the image under the tag is the one that run pushed
-# and verified; only the rehearsal deploy role, by its namespace, can push there (there is
-# no repository policy). The push-time window this replaced compared two services' clocks.
+# that exists unless an earlier attempt of the same run attests it (review of PR 278: its
+# fss-image-pushed-<attempt> artifact names the digest), so the image under the tag is the
+# one that run pushed and verified; only the rehearsal deploy role, by its namespace, can
+# push there (there is no repository policy). The push-time window this replaced compared
+# two services' clocks.
 # A read of a rehearsal repository, which release_aws refuses in a production command by
 # design; so the CLI directly, with the two literal names.
 ci_provenance() {
@@ -1036,13 +1058,40 @@ ci_record() {
   fi
   [ "$RECORD_CLUSTER_NAME" = "${CI_PREFIX}-cluster" ] \
     || deploy_fail "the repository variable FSS_PRODUCTION_CLUSTER_NAME names $RECORD_CLUSTER_NAME, and this deploy acts on ${CI_PREFIX}-cluster; set it again from terraform output -raw ci_deploy_cluster_name"
-  ci_gate_holds "before the record is built" || exit 1
-
-  # 1. The record: GitHub only, from the gate run that is green on the images commit.
   reference="ci-gate-${GATE_RUN_ID}-${COMMIT:0:12}"
-  "$DEPLOY_SCRIPTS/record.sh" from-ci "$GATE_RUN_ID" "$COMMIT" "$API_DIGEST" "$WORKER_DIGEST" --out "$CI_WORK/release-record.json" \
-    || deploy_fail "record.sh from-ci wrote no record for gate run $GATE_RUN_ID; its FAIL line above says why"
-  rehearsal_log "release record $reference built from gate run $GATE_RUN_ID (api $API_DIGEST, worker $WORKER_DIGEST)"
+
+  # 1. The record. Before the rollout: GitHub only, from the gate run that is green on the
+  # images commit and from this images run, never the newest one of the commit. After it:
+  # the exact bytes the deploy job put, held to this deploy, and never built again.
+  if [ "$RECORD_STAGE" = after ]; then
+    FSS_FILE="$RELEASE_RECORD" FSS_REFERENCE="$reference" FSS_COMMIT="$COMMIT" FSS_GATE="$GATE_RUN_ID" FSS_RUN="$RUN_ID" \
+      FSS_API="$API_DIGEST" FSS_WORKER="$WORKER_DIGEST" python3 - <<'PY' || exit 1
+# deploy-ci-carried-record
+import json, os, sys
+env = os.environ
+try:
+    record = json.load(open(env["FSS_FILE"], encoding="utf-8"))
+except (OSError, ValueError) as error:
+    sys.exit("FAIL: --release-record cannot be read as JSON: {}".format(error))
+expected = {"schema": "fss.release-record.v1", "source": "ci-gate", "releaseGateReference": env["FSS_REFERENCE"],
+            "commit": env["FSS_COMMIT"], "gateRunId": env["FSS_GATE"], "imagesRunId": env["FSS_RUN"]}
+record = record if isinstance(record, dict) else {}
+artifacts = record.get("artifacts") if isinstance(record.get("artifacts"), dict) else {}
+problems = ["{} {!r}, not {!r}".format(key, record.get(key), value) for key, value in expected.items() if record.get(key) != value]
+problems += ["the {} digest {}, not {}".format(name, artifacts.get(name), env[variable])
+             for name, variable in (("api", "FSS_API"), ("worker", "FSS_WORKER")) if artifacts.get(name) != env[variable]]
+if problems:
+    sys.exit("FAIL: --release-record is not the record this deploy put before the rollout: " + "; ".join(problems))
+PY
+    cp "$RELEASE_RECORD" "$CI_WORK/release-record.json"
+    rehearsal_log "release record $reference: the exact bytes the deploy job put before the rollout (api $API_DIGEST, worker $WORKER_DIGEST)"
+  else
+    ci_gate_holds "before the record is built" || exit 1
+    "$DEPLOY_SCRIPTS/record.sh" from-ci "$GATE_RUN_ID" "$COMMIT" "$API_DIGEST" "$WORKER_DIGEST" --images-run "$RUN_ID" \
+      --out "$CI_WORK/release-record.json" \
+      || deploy_fail "record.sh from-ci wrote no record for gate run $GATE_RUN_ID and images run $RUN_ID; its FAIL line above says why"
+    rehearsal_log "release record $reference built from gate run $GATE_RUN_ID and images run $RUN_ID (api $API_DIGEST, worker $WORKER_DIGEST)"
+  fi
 
   # 2. The operations definition as ECS holds it (the family's newest ACTIVE revision,
   # which Terraform registered), judged against the worker's running one.
@@ -1111,6 +1160,10 @@ json.dump({"subnet_ids": os.environ["FSS_SUBNETS"].split(","), "security_group_i
   fi
   ci_output release_record_reference "$reference"
   ci_output release_record_outcome "$RELEASE_RECORD_OUTCOME"
+  # The exact bytes put, for the read-back job; a record is public identifiers only.
+  if [ "$RECORD_STAGE" = before ]; then
+    ci_output release_record_base64 "$(release_record_base64 "$CI_WORK/release-record.json" "$API_DIGEST" "$WORKER_DIGEST")"
+  fi
   rehearsal_log "release record $reference stored ($RELEASE_RECORD_OUTCOME, ${RECORD_STAGE} the rollout): source ci-gate, api $API_DIGEST, worker $WORKER_DIGEST"
 }
 
@@ -1198,6 +1251,7 @@ definition["containerDefinitions"] = [dict(definition["containerDefinitions"][0]
 definition["tags"] = document.get("tags") or []
 json.dump(definition, open(os.path.join(work, service + "-next.json"), "w", encoding="utf-8"), indent=2)
 PY
+    ci_gate_holds "before $name's next revision is registered" || exit 1
     rehearsal_log "registering the next revision of $name with $digest"
     release_aws "$CI_ENVIRONMENT" ecs register-task-definition --cli-input-json "file://$CI_WORK/$service-next.json" --output json \
       >"$CI_WORK/$service-registered.json" || deploy_fail "ECS refused the next revision of $name; nothing has been rolled"
@@ -1256,8 +1310,10 @@ PY
     ci_gate_holds "before $name is rolled" \
       || { ci_deregister "$revision" "the gate no longer holds"; exit 1; }
     rehearsal_log "rolling $name from $previous to $revision"
-    release_aws "$CI_ENVIRONMENT" ecs update-service --cluster "$CLUSTER_ARN" --service "$name" --task-definition "$revision" \
-      --output json >/dev/null || { ci_deregister "$revision" "ECS refused to roll to it"; deploy_fail "ECS refused to point $name at $revision; it still runs $previous"; }
+    if ! release_aws "$CI_ENVIRONMENT" ecs update-service --cluster "$CLUSTER_ARN" --service "$name" --task-definition "$revision" \
+      --output json >/dev/null; then
+      ci_update_failed "$service" "$revision" "$previous"
+    fi
 
     # Stable, then COMPLETED as ECS calls it, then every RUNNING task read and held to the
     # digest: exactly the declared count, each of the new revision, each reporting it.
@@ -1402,6 +1458,26 @@ import json, sys
 services = (json.load(sys.stdin) or {}).get("services") or []
 print(services[0].get("taskDefinition", "") if services else "")
 ' 2>/dev/null || true
+}
+
+# A failed update-service call is not a refusal until the service says so: an accepted
+# request whose answer was lost leaves the service naming the new revision, and
+# deregistering a revision a service references is what this must never do. So the
+# service is read: the new revision is deregistered only while the service still names
+# the previous one; named, or unreadable, it stays ACTIVE and is reported.
+#   ci_update_failed <service> <revision> <previous>
+ci_update_failed() {
+  local service=$1 name="${CI_PREFIX}-$1" revision=$2 previous=$3 observed
+  observed="$(ci_observed "$service")"
+  ci_output "observed_${service}_task_definition" "${observed:-unknown}"
+  if [ "$observed" = "$previous" ]; then
+    ci_deregister "$revision" "the update-service call failed and $name still names $previous"
+    deploy_fail "ECS refused to point $name at $revision; it still runs $previous. Nothing after it was touched."
+  fi
+  if [ "$observed" = "$revision" ]; then
+    deploy_fail "the update-service call for $name failed, and $name names $revision all the same (the request was accepted and its answer lost): $revision is left ACTIVE and its rollout was not followed. Read $name with aws ecs describe-services before anything else. Nothing after it was touched."
+  fi
+  deploy_fail "the update-service call for $name failed, and $name names ${observed:-a revision ECS did not report}: whether it references $revision cannot be established, so $revision is left ACTIVE. Read $name with aws ecs describe-services; deregister $revision with the admin profile only once no service names it. Nothing after it was touched."
 }
 
 ci_deregister() { # ci_deregister <revision> <why>

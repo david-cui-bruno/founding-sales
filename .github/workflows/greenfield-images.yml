@@ -26,9 +26,12 @@ name: Greenfield images
 #     so no IAM statement and no trust relationship changed, and it cannot write a
 #     production repository: `fss-prod-*` is outside its namespace;
 #   * it builds and pushes each image once, as `fss-rh-<image>:ci-<commit>`. The
-#     repositories are IMMUTABLE, so a re-run of the same run finds the tag and
-#     reuses its digest rather than pushing different bytes under it; a first attempt
-#     that finds the tag already there fails, because another writer pushed it;
+#     repositories are IMMUTABLE, so a tag that already exists is never pushed again.
+#     It is reused only when an EARLIER attempt of this same run attests pushing that
+#     digest (review of PR 278): each attempt uploads `fss-image-pushed-<attempt>`
+#     (`images.sh pushed`), whatever its end, and `images.sh attested` reads the earlier
+#     ones back. A first attempt that finds the tag, or a re-run with no attestation,
+#     fails: another session may have pushed it, and that commit is released by hand;
 #   * it pulls what it pushed **by digest** and runs the same verification against
 #     that, so the digest it publishes is the digest that was verified;
 #   * it writes both digests, and the schema range each image declares and was just
@@ -176,6 +179,7 @@ jobs:
     environment: rehearsal
     permissions:
       contents: read
+      actions: read  # images.sh attested reads this run's earlier attempts' artifacts
       id-token: write
     defaults:
       run:
@@ -250,6 +254,7 @@ jobs:
         env:
           API_REPOSITORY: ${{ secrets.FSS_REHEARSAL_API_REPOSITORY }}
           WORKER_REPOSITORY: ${{ secrets.FSS_REHEARSAL_WORKER_REPOSITORY }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           tag="ci-${GITHUB_SHA}"
@@ -266,23 +271,17 @@ jobs:
             repository="fss-rh-$service"
             uri="$API_REPOSITORY"
             [ "$service" = worker ] && uri="$WORKER_REPOSITORY"
-            # The tag is immutable: a re-run of this commit reuses what the first run
-            # pushed instead of pushing a second build under the same name.
+            # The tag is immutable: it is pushed once, and reused only as this run's own.
             set +e
             existing="$(aws ecr describe-images --repository-name "$repository" --image-ids "imageTag=$tag" \
               --query 'imageDetails[0].imageDigest' --output text 2>&1)"
             status=$?
             set -e
             if [ "$status" -eq 0 ] && [[ "$existing" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-              # Only a re-run of this run may find its own tag (review of PRs 246 and 247,
-              # 26 September 2026): on the first attempt an existing tag was pushed by
-              # somebody else, and this run cannot vouch for it. The CI deploy relies on
-              # this refusal, not on a push time (P6). Release such a commit by hand.
-              if [ "${GITHUB_RUN_ATTEMPT:-1}" = 1 ]; then
-                echo "::error::$repository:$tag already exists as $existing and this is the first attempt of run $GITHUB_RUN_ID: another writer pushed it, so this run cannot vouch for it. Release the commit by hand."
-                exit 1
-              fi
-              echo "$repository:$tag already exists; reusing $existing (attempt $GITHUB_RUN_ATTEMPT of this run)"
+              # Only an earlier attempt of this run's own push may be reused (review of PR
+              # 278): the CI deploy relies on this refusal, not on a push time (P6).
+              infra/scripts/images.sh attested "$service" "$existing" \
+                || { echo "::error::$repository:$tag already exists as $existing and nothing from an earlier attempt of run $GITHUB_RUN_ID attests it. Release the commit by hand."; exit 1; }
               digest="$existing"
             elif [[ "$existing" == *ImageNotFoundException* ]]; then
               docker buildx build \
@@ -308,9 +307,20 @@ jobs:
               exit 1
             fi
             [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::'$digest' is not an image digest"; exit 1; }
+            infra/scripts/images.sh pushed "$service" "$digest" "$RUNNER_TEMP/fss-image-pushed"
             echo "$(printf '%s' "$service" | tr '[:lower:]' '[:upper:]')_DIGEST=$digest" >> "$GITHUB_ENV"
             echo "$repository:$tag = $digest"
           done
+
+      # Whatever this attempt's end, what it pushed: a re-run reuses only a tag this attests.
+      - name: Keep what this attempt pushed
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: fss-image-pushed-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/fss-image-pushed/
+          if-no-files-found: ignore
+          retention-days: 90
 
       - name: Verify the images the registry holds, pulled by digest
         env:
