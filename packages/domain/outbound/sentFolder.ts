@@ -166,11 +166,17 @@ export async function scanSentFolder(
     }
     const at = metadata.internalDateEpochMilliseconds;
     // No usable internal date is not "outside the window": it is a message nobody can
-    // place, so the folder was not read.
+    // place, so the folder was not read. Nor is a date the listing could not have
+    // returned (lane W3-S8 fourth review: `internalDate: "1"` for a message listed in this
+    // window): the listing and the metadata disagree, and neither can be believed.
     if (!Number.isFinite(at) || at <= 0) return settle('malformed_response');
+    if (at < request.afterEpochSeconds * 1000 || at >= (request.beforeEpochSeconds + 1) * 1000) return settle('malformed_response');
     if (!(at >= sinceMs && at <= untilMs)) continue;
     listed += 1;
     const header = (headerValue(metadata.headers, 'Message-ID') ?? '').trim();
+    // Every message sent in the window has exactly one Message-ID (the read refuses two).
+    // Without one, "no FSS marker" would mean "not an FSS send" when it means "unread".
+    if (header.length === 0) return settle('malformed_response');
     const fenceId = fssFenceIdOfSentMessage(header, mailbox.emailAddress);
     if (fenceId === null) continue;
     const recipients = normalizeAddressList(headerValue(metadata.headers, 'To'));

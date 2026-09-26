@@ -394,6 +394,8 @@ describe('the Gmail HTTP client', () => {
       ['no date', { ...good, internalDate: undefined }],
       ['a zero date', { ...good, internalDate: '0' }],
       ['a date that is not a number', { ...good, internalDate: 'yesterday' }],
+      // Lane W3-S8 fourth review: two Message-IDs cannot be told apart once collected.
+      ['two Message-IDs', { ...good, payload: { headers: [{ name: 'Message-ID', value: '<a@example.test>' }, { name: 'Message-Id', value: '<b@example.test>' }] } }],
     ];
     for (const [label, body] of malformed) {
       answer(path, 200, body);
@@ -409,7 +411,8 @@ describe('the Gmail HTTP client', () => {
       internalDateEpochMilliseconds: 1_757_500_000_000,
       headers: { 'Message-ID': '<a@example.test>' },
     });
-    // No headers at all, as a list, is still a message: it has no FSS marker, and says so.
+    // No Message-ID at all is a well-formed answer at this layer; the Sent scan refuses it
+    // for a message in its window (lane W3-S8 fourth review), where it knows the window.
     answer(path, 200, { ...good, payload: { headers: [] } });
     expect(await client.getSentMetadata(access, 'm-7', ['Message-ID'])).toMatchObject({ headers: {} });
     answer(path, 404, { error: { code: 404 } });
