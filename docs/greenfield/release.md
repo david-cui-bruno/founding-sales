@@ -764,6 +764,28 @@ Why a script rather than four commands you can see:
 - **The database never rolls back.** There is no down migration in this repository and there will not be one. `packages/domain/db/migrations` is forward-only and `loadMigrations` refuses a gap.
 - **After a successful migration and a failed deployment there are exactly two paths.** *Forward repair*: fix the code, build a new digest, deploy it. Or *the restore protocol*: `docs/greenfield/restore-drill.md`, all nine steps, with sending and dialing held until step 9. Redeploying the previous digests is only a rollback when their declared ranges accept the current schema version, which after a migration they usually do not — `infra/scripts/rehearsal-schema-ranges.sh` computed that during the rehearsal and told you. What is never a path is undoing the schema.
 
+### 4.1a Rolling back to the previous release (lane R1)
+
+When a release is bad and the previous release's images accept the schema the database is at now, one command puts those images back. It runs from a checkout of main, because a commit from before this lane has no copy of the script. Its first argument is the production root inside a second checkout, at the previous release's commit, initialised as for section 4. The digests are that release's, as recorded in its release record or in the `fss-prod-*` tags.
+
+```bash
+git -C ~/fss-prod checkout --detach <previous release commit>   # then terraform init there, as section 4
+infra/scripts/release-rollback.sh ~/fss-prod/infra/roots/production fss-prod \
+  --api-digest "$PREVIOUS_API_DIGEST" --worker-digest "$PREVIOUS_WORKER_DIGEST"           # plan, print, stop
+infra/scripts/release-rollback.sh ~/fss-prod/infra/roots/production fss-prod \
+  --api-digest "$PREVIOUS_API_DIGEST" --worker-digest "$PREVIOUS_WORKER_DIGEST" --apply   # plan, apply, deploy, smoke
+```
+
+Without `--apply` it saves `rollback.tfplan` in the root, prints each change, and stops so that you can read the plan. With `--apply` it plans again from the same reads and judges the new plan the same way. Then it runs `terraform apply rollback.tfplan`, then `release-deploy.sh` on the rolling path (never `--schema-change`), then the canary age and the six smoke checks. The plan is given the checkout's schema ranges and `bootstrap=false`. Everything else it takes from what production runs now: `FSS_SENDING_ENABLED`, the generation pin, `FSS_PUBLIC_ORIGIN` as `api_hostname`, the HTTPS listener's certificate, and the alert topic's e-mail subscriptions. The smoke expects the same sending state, so **a rollback never switches sending on or off**. `FSS_REHEARSAL_DRY_RUN=1` prints every command and calls nothing.
+
+It refuses in one `FAIL:` line, before anything is written, in these cases:
+- either digest is not an image in `fss-prod-api` or `fss-prod-worker` tagged `ci-<commit>` or `<commit>` for the checked-out commit, or the checkout is not clean. The code that is planned must be the code of the images that will run;
+- the database version the running API reports at `/health` is outside either of the checkout's declared ranges;
+- either service is mid-rollout (`deployed-digests.sh`), or the API and worker disagree about sending or the pin;
+- the plan creates, replaces or destroys anything but an `aws_ecs_task_definition`, or updates anything but the `api` and `worker` services. It names every address and deletes the plan file. A difference in infrastructure between the two commits is the manual path of 4.0, not a rollback.
+
+**The database is not part of a rollback, because it never rolls back (4.1).** No down migration exists. From migration 0006 every range is a strict `{N,N}`, so after a schema release the previous images refuse the database at startup. The version check exists to stop that before the apply rather than after it. After a migration the paths are forward repair or the restore protocol (section 7).
+
 ### 4.2 The release record, from the CI gate (lane g96)
 
 The worker sends only under a stored release record that names its image digest (lane g71). The owner's axiom 10B (25 September 2026) says where that record comes from: the CI gate that was green on the deployed commit, not a full rehearsal. `infra/scripts/release-record-from-ci.sh` writes it. It reads GitHub and nothing else, with no AWS call. It refuses in one `FAIL:` line, writing nothing, unless all of these hold:
@@ -1203,7 +1225,7 @@ Withdraw either half, or deploy other digests: the worker holds every send when 
 
 4.2: "Earlier compatible binaries on the same database, or database restore under the post-restore protocol; the old stack is never a rollback target."
 
-**Preferred.** Deploy the previous image digests, if and only if their declared schema ranges accept the current schema version. Read them from the previous release's checkout; where the ranges do not overlap there is nothing to roll back to, and the honest answer is forward repair. This is exactly what `infra/scripts/rehearsal-schema-ranges.sh` computes, and it will have told you during the rehearsal.
+**Preferred.** Deploy the previous image digests, if and only if their declared schema ranges accept the current schema version. `infra/scripts/release-rollback.sh` does this and refuses otherwise (4.1a). Read them from the previous release's checkout; where the ranges do not overlap there is nothing to roll back to, and the honest answer is forward repair. This is exactly what `infra/scripts/rehearsal-schema-ranges.sh` computes, and it will have told you during the rehearsal.
 
 **If the data is wrong rather than the code.** `docs/greenfield/restore-drill.md`, all nine steps, in production, with sending and dialing held until step 9. There is no faster version.
 
