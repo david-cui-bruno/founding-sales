@@ -2,8 +2,8 @@
 
 Specification revision 3, sections 4 and 13. This is what runs on Fargate: how the
 worker and the API start, what they do every minute, how they stop, what the health
-checks actually check, and which lines of `apps/api/src/server.ts` still have to be
-written once the identity lane has merged.
+checks actually check, and how `apps/api/src/server.ts` wires the routes to the
+database.
 
 ## The shape
 

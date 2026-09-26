@@ -1,15 +1,16 @@
 # `infra/` — FSS greenfield Terraform
 
-Twelve reusable modules, four roots, and the two deployment roles' policies. The
-modules and the roots have been applied once, on 21 September 2026, by a rehearsal that
-reported 25 errors and could not tear itself down (`docs/greenfield/release.md` 8.0d).
+Twelve reusable modules, four roots, and the two deployment roles' policies. Production
+(`infra/roots/production`) has been applied since 23 September 2026 and runs in account
+326255650484; `infra/roots/production-google` holds its Gmail push objects; each rehearsal
+applies and destroys `infra/roots/rehearsal` under its own prefix.
 
 ```
 infra/
   modules/
     network         VPC, two public task subnets, two private RDS subnets, no NAT, the security groups
     database        RDS PostgreSQL 16, Multi-AZ, customer key, 35-day PITR, deletion protection
-    cluster         ECS cluster, API and worker Fargate services, four distinct IAM roles
+    cluster         ECS cluster, API and worker Fargate services, execution and task roles for the API, worker, migration and drill
     edge            ALB, one TLS listener, access logs, optional WAF
     registry        two ECR repositories, immutable tags, scan on push
     secrets         two customer keys and EMPTY Secrets Manager entries
@@ -40,16 +41,17 @@ cd <repo root>
 TERRAFORM=$(command -v terraform) infra/scripts/offline-gate.sh
 ```
 
-Terraform 1.15.8. `fmt`, `init -backend=false`, `validate` and `terraform test` only. No backend is ever configured and no AWS or Google credential is needed or wanted. Most runs are `command = plan` against `mock_provider`; a few are `command = apply`, which under a mocked provider also reaches nothing and is the only way to assert a value that depends on a computed attribute — a rendered bucket policy names the bucket ARN, and a real plan is exactly as blind (`docs/archive/decisions/g12j-mock-providers-keep-computed-values-unknown.md`). See `docs/archive/decisions/g1-terraform-version.md` for why this is not 1.5.7.
+Terraform 1.15.8, exactly: every root pins `required_version = "1.15.8"` and commits its `.terraform.lock.hcl` (darwin_arm64 and linux_amd64). `fmt`, `init -backend=false`, `validate` and `terraform test` only. No backend is ever configured and no AWS or Google credential is needed or wanted. Most runs are `command = plan` against `mock_provider`; a few are `command = apply`, which under a mocked provider also reaches nothing and is the only way to assert a value that depends on a computed attribute — a rendered bucket policy names the bucket ARN, and a real plan is exactly as blind (`docs/archive/decisions/g12j-mock-providers-keep-computed-values-unknown.md`). See `docs/archive/decisions/g1-terraform-version.md` for why this is not 1.5.7.
 
 The policy half of the gate is not here: `infra/policies/**` is judged by `npm run test:release`, because it needs a resource-type walk and an IAM evaluation rather than Terraform.
 
 ## Reading order
 
-1. `docs/greenfield/infra-topology.md` — what gets created and what each line is billed on. David approves this before the first apply.
-2. `docs/greenfield/infra-apply-runbook.md` — what David creates by hand first, the order of applies, the smoke checks.
-3. `docs/greenfield/restore-drill.md` — Appendix E steps 1 to 9 as commands, run in rehearsal.
-4. `docs/archive/decisions/g1-*.md` — every choice the specification left open.
+1. `docs/greenfield/release.md` — how a change reaches production: app-only by CI, schema and infrastructure by hand.
+2. `docs/greenfield/infra-topology.md` — what gets created and what each line is billed on.
+3. `docs/greenfield/infra-apply-runbook.md` — how the stack was built the first time, and how to rebuild it from zero.
+4. `docs/greenfield/restore-drill.md` — Appendix E steps 1 to 9 as commands, run in rehearsal.
+5. `docs/archive/decisions/g1-*.md` — every choice the specification left open.
 
 ## Two rules that hold everywhere in this tree
 

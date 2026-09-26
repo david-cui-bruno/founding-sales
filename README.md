@@ -15,7 +15,7 @@ Callie is a 24/7 maintenance agent for property managers: it handles tenant requ
 | `test/release` | The release suite (specification Appendix G and the checks added since). |
 | `docs/greenfield/` | How each part works and how it is released; `docs/archive/decisions/` has the decisions made along the way. |
 
-At the root: `scripts/` holds the secret scan (`verifySecrets.mjs`), the production smoke and the release mutation check, and `certs/` the RDS CA bundle the images trust. The previous-generation app was deleted in lane g95; the tag `legacy-final` holds its last tree ([`docs/greenfield/legacy.md`](docs/greenfield/legacy.md)).
+At the root: `scripts/` holds the secret scan (`verifySecrets.mjs`) and the production smoke, and `certs/` the RDS CA bundle the images trust. The previous-generation app was deleted in lane g95; the tag `legacy-final` holds its last tree ([`docs/greenfield/legacy.md`](docs/greenfield/legacy.md)).
 
 ## Quick start
 
@@ -41,7 +41,7 @@ The tests run against a real PostgreSQL 16 (embedded locally, a service containe
 
 ## Read next
 
-- `docs/greenfield/release.md`: how a release goes out, and the running record of every one.
+- `docs/greenfield/release.md`: how a release goes out; production has been live since 24 September 2026. The records of the releases before 25 September are in `docs/archive/release-records.md`.
 - `docs/greenfield/processes.md`: what the API and the worker do and how they start and stop.
 - `docs/greenfield/today.md`, `sequences.md`, `sending.md`, `mail.md`, `suppression.md`: the product's rules, one area each.
 - `docs/greenfield/infra-topology.md`, `infra-apply-runbook.md`: the AWS side.

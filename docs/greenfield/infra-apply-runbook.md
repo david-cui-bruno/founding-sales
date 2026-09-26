@@ -2,7 +2,7 @@
 
 **Lane:** G1 · **Roots:** `infra/roots/production`, `infra/roots/rehearsal` · **Audience:** David, running the applies.
 
-Nothing in this repository has ever been applied. This lane had no AWS or Google credentials and ran only `terraform init -backend=false`, `validate`, `fmt` and mocked offline `terraform test`. Everything below is the first time these resources would exist.
+Production was first applied on 23 September 2026 and has run since 24 September, in account 326255650484. This runbook is how the stack was built the first time, and what rebuilding it from zero would follow; the procedure for a release to the running stack is `docs/greenfield/release.md`. The plan commands below are those of the current roots.
 
 Read section 1 in full before running anything in section 3. The order matters: several resources cannot be created until something outside Terraform exists first, and two of them (the ACM certificate and the Google OAuth consent screen) involve waiting on external validation.
 
@@ -10,7 +10,7 @@ Read section 1 in full before running anything in section 3. The order matters: 
 
 | Thing | Value |
 |---|---|
-| Terraform | 1.15.8 locally and in CI (`.github/workflows/greenfield-infra.yml`). The roots declare `>= 1.10.0`; the floor is the S3 native state lock. |
+| Terraform | 1.15.8 locally and in CI (`.github/workflows/greenfield-infra.yml`). The roots require exactly `1.15.8`, and each root commits its `.terraform.lock.hcl` for darwin_arm64 and linux_amd64. |
 | Region | `us-east-1` — `local.aws_region` in each AWS root |
 | Account | `326255650484` — `local.aws_account_id` in each AWS root |
 | State bucket | `callie-sourcing-tfstate-326255650484` (already exists; created once by `cloud/scripts/bootstrap-terraform-state.sh`) — `infra/roots/<root>/backend.hcl`, `FSS_POLICY_STATE_BUCKET` |
@@ -290,17 +290,14 @@ cd infra/roots/production
 terraform init -backend-config=backend.hcl -backend-config="kms_key_id=<state key arn>"
 
 terraform plan -out=production.tfplan \
-  -var="certificate_arn=<production acm arn>" \
-  -var="api_hostname=<production hostname>" \
   -var="api_image=<api digest>" \
   -var="worker_image=<worker digest>" \
   -var='api_schema_range={min=1,max=1}' \
   -var='worker_schema_range={min=1,max=1}' \
-  -var='alert_emails=["<address>"]' \
   -var="bootstrap=true"
 ```
 
-This needs the AWS credential of section 1.1, and no Google credential once the migration of 1.3a is done: the production root no longer has a `gcp_project_id` and refuses one passed to it. The plan file is a read-only artefact here: **nothing in this section applies it.** Section 3.2 is where an apply happens, from a plan you have read.
+This needs the AWS credential of section 1.1 and no Google credential: the production root has no `gcp_project_id` and refuses one passed to it. It takes no `certificate_arn`, `api_hostname`, `alert_emails` or `sending_enabled` either: since 26 September 2026 those are literals in `infra/roots/production/main.tf` (a rebuild from zero edits them there first), and passing one is an "undeclared variable" error. The plan file is a read-only artefact here: **nothing in this section applies it.** Section 3.2 is where an apply happens, from a plan you have read.
 
 A clean first plan shows:
 
@@ -311,7 +308,7 @@ A clean first plan shows:
 - **eight** `aws_secretsmanager_secret` entries and **no** `aws_secretsmanager_secret_version` at all. Terraform creates the entries empty and never holds a value; the offline gate refuses a version resource outright;
 - exactly one `aws_lb_listener`, on port 443. There is no port-80 listener by decision (`docs/archive/decisions/g1-no-plaintext-listener.md`);
 - no `aws_nat_gateway` and no `aws_vpc_endpoint`;
-- four Google resources created — service account, topic, publisher binding, push subscription — and **not** moved. They have never been applied anywhere, so a `moved` line for any of them would mean something has gone wrong.
+- no Google resource at all: the push objects are `infra/roots/production-google`'s.
 
 **Terraform reports every independent plan-time error in one run.** It does not stop at the first: the third rehearsal printed the Google credential failure and the `count` failure together, from different parts of the graph. So when a plan fails, send the **whole** list, not the first paragraph; two errors mean two changes, and fixing one and re-dispatching a rehearsal is how a run gets spent on an error that was already on the screen.
 
@@ -363,13 +360,10 @@ cd infra/roots/production
 terraform init -backend-config=backend.hcl -backend-config="kms_key_id=<state key arn>"
 
 terraform plan -out=production.tfplan \
-  -var="certificate_arn=<production acm arn>" \
-  -var="api_hostname=<production hostname>" \
   -var="api_image=<api digest>" \
   -var="worker_image=<worker digest>" \
   -var='api_schema_range={min=1,max=1}' \
   -var='worker_schema_range={min=1,max=1}' \
-  -var='alert_emails=["<address>"]' \
   -var="bootstrap=true"          # THE FIRST APPLY ONLY. See below.
 
 terraform apply production.tfplan
@@ -568,7 +562,7 @@ A freshly applied stack will show several alarms in `INSUFFICIENT_DATA` until th
 | Widen a schema range | change `api_schema_range` / `worker_schema_range` and apply. Expand, migrate, contract: additive migration first, both binaries accepting the range, backfill, then behaviour. A strict `{N,N}` move is not a widening: plan, `release-stop.sh … --environment production`, apply, `release-deploy.sh --schema-change` (3.2). |
 | Change an alarm threshold | the thresholds are variables in `infra/modules/alerts`; surface the one you need in the root and apply. Spec 13.3 says thresholds are configuration versioned with the release. |
 | Rotate a secret value | `aws secretsmanager put-secret-value`, then `--force-new-deployment`. Terraform is not involved. **Except `app-runtime-database`**, whose value is a live PostgreSQL password: a put on its own leaves a secret the database refuses. Put the new value, then `fss admin database-users ensure --rotate-password` to alter the role to match, then force the deployment — and never re-put it as part of a redeploy (`release.md` 5.1 and 8.0s). |
-| Add an alert recipient | append to `alert_emails`, apply, then confirm the subscription. |
+| Add an alert recipient | append to the `alert_emails` literal in `infra/roots/production/main.tf` in a pull request, plan and apply, then confirm the subscription. |
 | Pin the expected system generation (Appendix E step 1) | read the database's `systemGeneration` with the operations task in `release.md` 7.1, then `terraform plan -var="expected_system_generation=<N>"` with the rest of the section 3.0 list. The plan must replace exactly the `fss-prod-api` and `fss-prod-worker` task definitions, differing only in `FSS_EXPECTED_SYSTEM_GENERATION`, and update the two services in place. No one-off task definition carries it. Code leaves production unpinned (`null`). A wrong value makes the next worker open restore holds and fire the critical alarm; see `release.md` 7.1. **After a restore** the pin is the restored copy's generation plus one, applied with or before the change that points the services at it, never after. **After Appendix E step 9 it does not change:** step 9 lands the database on exactly that number. Confirm the advance's reported `generation` equals the pin (`docs/archive/decisions/g56-restore-holds-are-opened-by-the-generation-check.md`). |
 | Tear down a rehearsal run | The release workflow does it on `always()`, through `infra/scripts/rehearsal-teardown.sh`: caller-identity check, then `terraform destroy` with the same `name_prefix` and `assume_deployment_role=false`. Mind the object-lock caveat in 3.1. |
 
@@ -576,7 +570,7 @@ Never run `terraform destroy` in the production root. Deletion protection on the
 
 ## 6. What this lane could not verify
 
-Every statement about resource behaviour here comes from the Terraform schema and the AWS documentation, checked offline. Nothing has been applied. In particular these are unverified and should be watched on the first apply:
+Written before the first apply, from the Terraform schema and the AWS documentation, checked offline. The list is as it stood then; what the credentialed runs and the first production apply settled is in `docs/archive/release-records.md`, and what is still open is `release.md` 8.1:
 
 1. Whether ALB access-log delivery in `us-east-1` is accepted from the `logdelivery.elasticloadbalancing.amazonaws.com` service principal alone. If the load balancer reports an access-log permission error, set `elb_account_id` to the documented Elastic Load Balancing account for `us-east-1` and re-apply; the bucket policy adds the extra statement.
 2. Whether the RDS parameter group values are all dynamic. `rds.force_ssl` is static and requires a reboot; the first apply creates the instance with the group attached, so it applies at creation.
