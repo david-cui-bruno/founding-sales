@@ -87,7 +87,6 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
   opportunities: coverage(['retained'], 'Business history.'),
   opportunity_stage_events: coverage(['retained'], 'Append-only; DELETE revoked from both roles.'),
   record_aliases: coverage(['deletion_removes'], 'Preserved identifiers of a merged record, which name the prospect.'),
-  record_merge_events: coverage(['retained'], 'Append-only; DELETE revoked.'),
   crm_domain_events: coverage(['retained'], 'Append-only; DELETE revoked.'),
 
   // ---------------------------------------------------------------- policy
@@ -97,16 +96,6 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
   dial_tickets: coverage(['deletion_removes'], 'A one-use ticket naming the route dialled.'),
   call_logs: coverage(['deletion_removes'], 'Call history for the deleted firm, including its notes.'),
   callbacks: coverage(['deletion_removes'], 'A promised call back to the deleted person.'),
-
-  // -------------------------------------------------------------- research
-  research_settings: coverage(['operational'], 'Workspace configuration.'),
-  research_providers: coverage(['operational'], 'Provider configuration and reviewed terms.'),
-  research_provider_ledger: coverage(['operational'], 'Calls and costs; no prospect identity.'),
-  research_route_policies: coverage(['operational'], 'Versioned thresholds; append-only.'),
-  research_pages: coverage(['operational'], 'Provider page bookkeeping keyed by query and page hash.'),
-  firm_locations: coverage(['deletion_removes'], 'Resolved coordinates for a firm.'),
-  research_firm_runs: coverage(['operational'], 'Enrichment run bookkeeping.'),
-  research_suggestions: coverage(['swept', 'deletion_removes'], 'Pointer cleared when its evidence expires; removed with the firm.'),
 
   // ----------------------------------------------------------------- today
   today_snapshots: coverage(['operational'], 'One derived snapshot per workspace business date.'),
@@ -169,8 +158,6 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
     'What was due, when it moved and how it finished. A deletion cancels the unexecuted ones; the executed history stays, because 11.1 requires it preserved.',
   ),
   step_execution_shifts: coverage(['retained'], 'Append-only schedule history; UPDATE and DELETE revoked.'),
-  enrollment_migrations: coverage(['retained'], 'The audited admin command of 11.1 and its approval.'),
-  enrollment_migration_items: coverage(['retained'], 'Which enrollment the migration remapped or refused, and why.'),
   sequence_event_cursors: coverage(['operational'], 'Per-consumer position in the event stream; ids only.'),
 
   // ------------------------------------------------------------- retention

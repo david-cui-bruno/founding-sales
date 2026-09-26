@@ -190,15 +190,11 @@ const rawMime: RetentionTarget = {
  * `retention_days`. So the boundary this sweep uses is database time, and the
  * predicate is the item's own expiry. An item whose terms permit retention has no
  * expiry and stays with the firm, which is the sentence.
- *
- * A research suggestion pointing at an expiring item has its pointer cleared first:
- * the suggestion is Callie's own proposal and outlives the provider's copy, and the
- * foreign key would otherwise refuse the delete.
  */
 const researchEvidence: RetentionTarget = {
   dataKind: 'research_evidence',
   state: 'implemented',
-  tables: ['evidence_items', 'research_suggestions'],
+  tables: ['evidence_items'],
   note: 'Evidence whose provider terms have expired is deleted at its own expiry; evidence whose terms permit retention stays with the firm.',
   sweep: async (context, input) => {
     const expiring = await context.db.query<{ id: string }>(
@@ -211,10 +207,6 @@ const researchEvidence: RetentionTarget = {
     const ids = expiring.rows.map(row => row.id);
     if (ids.length === 0) return empty(input.now);
 
-    const cleared = await context.db.query(
-      'UPDATE research_suggestions SET evidence_id = NULL WHERE workspace_id = $1 AND evidence_id = ANY($2::uuid[])',
-      [context.scope.workspaceId, ids],
-    );
     const deleted = await context.db.query(
       'DELETE FROM evidence_items WHERE workspace_id = $1 AND id = ANY($2::uuid[])',
       [context.scope.workspaceId, ids],
@@ -222,8 +214,8 @@ const researchEvidence: RetentionTarget = {
     return {
       boundaryAt: input.now,
       rowsDeleted: deleted.rowCount ?? 0,
-      rowsRedacted: cleared.rowCount ?? 0,
-      detail: { evidence_items: deleted.rowCount ?? 0, research_suggestions: cleared.rowCount ?? 0 },
+      rowsRedacted: 0,
+      detail: { evidence_items: deleted.rowCount ?? 0 },
     };
   },
 };

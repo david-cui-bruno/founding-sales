@@ -273,9 +273,9 @@ describe('CRM schema', () => {
   });
 
   // -------------------------------------------------------------- append-only
-  it('refuses UPDATE and DELETE of stage events, merge events and CRM domain events as app_runtime', async () => {
+  it('refuses UPDATE and DELETE of stage events and CRM domain events as app_runtime', async () => {
     const runtime = await database.appRuntimeSession();
-    for (const table of ['opportunity_stage_events', 'record_merge_events', 'crm_domain_events']) {
+    for (const table of ['opportunity_stage_events', 'crm_domain_events']) {
       await expect(runtime.query(`UPDATE ${table} SET workspace_id = workspace_id`)).rejects.toMatchObject({
         code: '42501',
       });

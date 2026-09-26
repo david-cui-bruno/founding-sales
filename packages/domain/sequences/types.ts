@@ -16,41 +16,14 @@ import type { SequenceDelay, StepChannel } from '../src/index.ts';
 export type { SequenceDelay, StepChannel };
 
 /**
- * The channels a step may have.
- *
- * LinkedIn was removed on 25 September 2026. Migration 0018 kept `linkedin_task` in
- * `sequence_steps_channel_known` and `step_executions_channel_known` as the stored
- * marker of a removed channel, so that a LinkedIn step and its executions stay as
- * history; a row read from either may carry it. Such a row is unknown: the worker holds
- * it and never runs it, nothing enrols into, publishes or migrates onto a version that
- * has one, and Today does not list it.
+ * The channels a step may have. Migration 0019 took `linkedin_task`, the marker 0018
+ * kept for the removed LinkedIn channel, out of both channel CHECKs (production stored
+ * no LinkedIn step), so a stored step is always one of these.
  */
 export const STEP_CHANNELS = ['email', 'call_task'] as const satisfies readonly StepChannel[];
 
 export function isStepChannel(value: string): value is StepChannel {
   return (STEP_CHANNELS as readonly string[]).includes(value);
-}
-
-/**
- * The channels removed from the product whose stored rows are still read (lane A2).
- *
- * The engine keeps reading the stored value (`linkedin_task`) and refusing it through
- * `isStepChannel`. What a person sees is mapped: a version's step by
- * `sequenceVersionForDisplay` (`definitions.ts`) and a resume review's step by
- * `previewResume` (`resume.ts`), each to channel `removed` with the channel it was and
- * none of what it carried. `@fss/contracts` spells the same list.
- */
-export const REMOVED_STEP_CHANNELS = ['linkedin'] as const;
-export type RemovedStepChannel = (typeof REMOVED_STEP_CHANNELS)[number];
-
-/** The stored channel value of each removed channel: the marker migration 0018 kept in both channel CHECKs. */
-const STORED_REMOVED_CHANNELS: Readonly<Record<string, RemovedStepChannel>> = Object.freeze({
-  linkedin_task: 'linkedin',
-});
-
-/** The removed channel a stored channel value is, or null when it is not one. */
-export function removedChannelOf(stored: string): RemovedStepChannel | null {
-  return STORED_REMOVED_CHANNELS[stored] ?? null;
 }
 
 export const SEQUENCE_VERSION_STATES = ['draft', 'published', 'retired'] as const;
@@ -142,9 +115,7 @@ export const SEQUENCE_REFUSAL_CODES = [
   'execution_not_pending',
   'execution_wrong_channel',
   'still_held',
-  'migration_unknown',
-  'migration_not_approved',
-  'migration_already_applied',
+  'step_in_use',
   'calendar_version_taken',
 ] as const;
 export type SequenceRefusalCode = (typeof SEQUENCE_REFUSAL_CODES)[number];
@@ -170,29 +141,6 @@ export interface SequenceStepRow {
   readonly delay: SequenceDelay;
   readonly onNoAnswer: 'advance' | 'retry_call' | null;
   readonly templateVersionId: string | null;
-}
-
-/**
- * A stored step of a removed channel, as a person is shown it (lane A2): its place and
- * its delay, the channel it was, and nothing it carried — the LinkedIn message is not
- * read at all (`STEP_COLUMNS` in `rows.ts` does not name it).
- */
-export interface RemovedSequenceStep {
-  readonly id: string;
-  readonly sequenceVersionId: string;
-  readonly ordinal: number;
-  readonly channel: 'removed';
-  readonly removedChannel: RemovedStepChannel;
-  readonly delay: SequenceDelay;
-  readonly onNoAnswer: null;
-  readonly templateVersionId: null;
-}
-
-export type DisplayedSequenceStep = SequenceStepRow | RemovedSequenceStep;
-
-/** A version as `/sequences/versions` sends it: every step, a removed one as `RemovedSequenceStep`. */
-export interface DisplayedSequenceVersion extends Omit<SequenceVersionRow, 'steps'> {
-  readonly steps: readonly DisplayedSequenceStep[];
 }
 
 export interface SequenceVersionRow {

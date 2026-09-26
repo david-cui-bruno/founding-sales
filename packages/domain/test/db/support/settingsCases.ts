@@ -85,11 +85,11 @@ export const SETTINGS_CONSTRAINT_CASES: readonly SettingsCase[] = [
   {
     constraint: 'workspace_settings_current',
     run: async f => {
-      await insertCurrent(f, 'client_version_range', 1);
+      await insertCurrent(f, 'postal_address', 1);
       // A second *current* row for the same key, at a different version.
       return await f.session.query(
         `INSERT INTO workspace_settings (workspace_id, setting_key, version, value)
-         VALUES ($1, 'client_version_range', 2, ${VALUE})`,
+         VALUES ($1, 'postal_address', 2, ${VALUE})`,
         [workspace(f)],
       );
     },

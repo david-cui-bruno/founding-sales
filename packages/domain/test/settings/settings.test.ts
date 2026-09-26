@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { DEFAULT_SETTING_VALUES, RETIRED_SETTING_KEYS, SETTING_KEYS } from '@fss/contracts';
+import { DEFAULT_SETTING_VALUES, SETTING_KEYS, SNAPSHOT_SETTING_KEYS } from '@fss/contracts';
 import { withTransaction } from '../../db/queryable.ts';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
@@ -9,6 +9,7 @@ import {
   DEFAULT_SETTING_CHANGE_NOTE,
   effectiveSendingEnabled,
   readCurrentSettings,
+  readPostalAddress,
   readSetting,
   readSettingHistory,
   updateSetting,
@@ -61,9 +62,14 @@ describe('workspace settings', () => {
     await database.drop();
   });
 
-  it('answers with every key at its default before anybody has configured anything', async () => {
+  it('answers with every snapshot key at its default before anybody has configured anything', async () => {
     const current = await readCurrentSettings(admin);
-    expect(current.map(entry => entry.settingKey)).toEqual([...SETTING_KEYS]);
+    // Every key but postal_address, which desktop 1.0.11's strict snapshot parser does
+    // not know (`SNAPSHOT_SETTING_KEYS`).
+    expect(current.map(entry => entry.settingKey)).toEqual([...SNAPSHOT_SETTING_KEYS]);
+    expect(SETTING_KEYS.filter(key => !(SNAPSHOT_SETTING_KEYS as readonly string[]).includes(key))).toEqual([
+      'postal_address',
+    ]);
     for (const entry of current) {
       expect(entry.version, entry.settingKey).toBe(0);
       expect(entry.changedAt, entry.settingKey).toBeNull();
@@ -71,17 +77,23 @@ describe('workspace settings', () => {
     }
   });
 
-  it('answers neither retired slice, even when an old row is stored', async () => {
-    // Migration 0015's CHECK still allows both keys, so a row written before they were
-    // retired can still be in the table. It is never answered.
-    await database.session.query(
-      `INSERT INTO workspace_settings (workspace_id, setting_key, version, value, change_note, changed_by_user_id)
-       VALUES ($1, 'client_version_range', 1, '{"minimum":"1.0.0","maximum":"1.4.0"}'::jsonb, 'old row', $2)`,
-      [seeded.beta.workspaceId, seeded.beta.admin.userId],
-    );
-    const keys = (await readCurrentSettings(betaAdmin)).map(entry => entry.settingKey);
-    expect(keys).toEqual([...SETTING_KEYS]);
-    for (const retired of RETIRED_SETTING_KEYS) expect(keys as readonly string[]).not.toContain(retired);
+  it('sets, reads and unsets the postal address, and refuses one that is not plain text', async () => {
+    expect(await readPostalAddress(admin)).toBeNull();
+    const set = await updateSetting(admin, {
+      settingKey: 'postal_address',
+      value: { address: '1 Example Way\nProvidence, RI 02903' },
+    });
+    expect(set.ok).toBe(true);
+    expect(await readPostalAddress(admin)).toBe('1 Example Way\nProvidence, RI 02903');
+    expect(await readPostalAddress(betaAdmin)).toBeNull();
+    const history = await readSettingHistory(admin, 'postal_address', { limit: 1 });
+    expect(history[0]).toMatchObject({ settingKey: 'postal_address', supersededAt: null });
+
+    const markup = await updateSetting(admin, { settingKey: 'postal_address', value: { address: 'Tab\there' } });
+    expect(markup).toEqual({ ok: false, reason: 'invalid_value' });
+
+    expect((await updateSetting(admin, { settingKey: 'postal_address', value: { address: null } })).ok).toBe(true);
+    expect(await readPostalAddress(admin)).toBeNull();
   });
 
   it('refuses a salesperson and writes nothing', async () => {
@@ -331,12 +343,9 @@ describe('what a sending pause cannot reach', () => {
 describe('the key set', () => {
   it('names only keys the migration s CHECK allows', () => {
     // The *last* migration that writes the CHECK wins, because a later one may narrow
-    // it: migration 0013 created it with five keys and 0015 replaced it with four when
-    // the postal footer stopped being a slice. Two of those four are retired and the
-    // CHECK keeps allowing them until a later migration narrows it, so the active keys
-    // are a subset of the allowance rather than equal to it. Sorting the file names rather than
-    // naming one is also why a renumber during development does not break this: the
-    // coordinator assigns migration numbers.
+    // it: 0013 created it, 0015 and 0019 replaced it. Sorting the file names rather
+    // than naming one is also why a renumber during development does not break this:
+    // the coordinator assigns migration numbers.
     const files = readdirSync(MIGRATION)
       .filter(name => name.endsWith('.sql'))
       .sort();
@@ -347,6 +356,6 @@ describe('the key set', () => {
       .filter((block): block is string => block !== undefined);
     expect(blocks.length, 'no migration declares workspace_settings_key_known').toBeGreaterThan(0);
     const keys = [...(blocks.at(-1) ?? '').matchAll(/'([a-z_]+)'/gu)].map(match => match[1]);
-    for (const key of SETTING_KEYS) expect(keys, key).toContain(key);
+    expect([...keys].sort()).toEqual([...SETTING_KEYS].sort());
   });
 });

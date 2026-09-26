@@ -524,15 +524,6 @@ export const CRM_CONSTRAINT_CASES: readonly CrmCase[] = [
       ),
   },
   {
-    constraint: 'phone_routes_usable_is_evidenced',
-    run: async f =>
-      await f.session.query(
-        `INSERT INTO phone_routes (workspace_id, firm_id, e164, source, retrieved_at, eligibility)
-         VALUES ($1, $2, '+14015550111', 'salesperson', now(), 'usable')`,
-        [workspace(f), await aFirm(f)],
-      ),
-  },
-  {
     constraint: 'phone_routes_policy_version_shape',
     run: async f =>
       await f.session.query(
@@ -1246,103 +1237,6 @@ export const CRM_CONSTRAINT_CASES: readonly CrmCase[] = [
   },
 
   // --------------------------------------------------- record_merge_events
-  {
-    constraint: 'record_merge_events_pkey',
-    run: async f => {
-      const firmId = await aFirm(f);
-      const sourceId = await aFirm(f);
-      const anotherSourceId = await aFirm(f);
-      const { rows } = await f.session.query<{ id: string }>(
-        `INSERT INTO record_merge_events (workspace_id, record_kind, source_id, target_id, firm_id)
-         VALUES ($1, 'firm', $2, $3, $3) RETURNING id`,
-        [workspace(f), sourceId, firmId],
-      );
-      return await f.session.query(
-        `INSERT INTO record_merge_events (workspace_id, id, record_kind, source_id, target_id, firm_id)
-         VALUES ($1, $2, 'firm', $3, $4, $4)`,
-        [workspace(f), rows[0]?.id, anotherSourceId, firmId],
-      );
-    },
-  },
-  {
-    constraint: 'record_merge_events_firm_fkey',
-    run: async f =>
-      await f.session.query(
-        `INSERT INTO record_merge_events (workspace_id, record_kind, source_id, target_id, firm_id)
-         VALUES ($1, 'firm', $2, $3, $4)`,
-        [workspace(f), await aFirm(f), await aFirm(f), MISSING],
-      ),
-  },
-  {
-    constraint: 'record_merge_events_actor_fkey',
-    run: async f => {
-      const firmId = await aFirm(f);
-      return await f.session.query(
-        `INSERT INTO record_merge_events (workspace_id, record_kind, source_id, target_id, firm_id, performed_by_user_id)
-         VALUES ($1, 'firm', $2, $3, $3, $4)`,
-        [workspace(f), await aFirm(f), firmId, otherWorkspaceUser(f)],
-      );
-    },
-  },
-  {
-    constraint: 'record_merge_events_one_per_source',
-    run: async f => {
-      const firmId = await aFirm(f);
-      const sourceId = await aFirm(f);
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        await f.session.query(
-          `INSERT INTO record_merge_events (workspace_id, record_kind, source_id, target_id, firm_id)
-           VALUES ($1, 'firm', $2, $3, $3)`,
-          [workspace(f), sourceId, firmId],
-        );
-      }
-      return null;
-    },
-  },
-  {
-    constraint: 'record_merge_events_record_kind_known',
-    run: async f => {
-      const firmId = await aFirm(f);
-      return await f.session.query(
-        `INSERT INTO record_merge_events (workspace_id, record_kind, source_id, target_id, firm_id)
-         VALUES ($1, 'opportunity', $2, $3, $3)`,
-        [workspace(f), await aFirm(f), firmId],
-      );
-    },
-  },
-  {
-    constraint: 'record_merge_events_distinct',
-    run: async f => {
-      const firmId = await aFirm(f);
-      return await f.session.query(
-        `INSERT INTO record_merge_events (workspace_id, record_kind, source_id, target_id, firm_id)
-         VALUES ($1, 'firm', $2, $2, $2)`,
-        [workspace(f), firmId],
-      );
-    },
-  },
-  {
-    constraint: 'record_merge_events_command_id_shape',
-    run: async f => {
-      const firmId = await aFirm(f);
-      return await f.session.query(
-        `INSERT INTO record_merge_events (workspace_id, record_kind, source_id, target_id, firm_id, command_id)
-         VALUES ($1, 'firm', $2, $3, $3, 'not a command id!')`,
-        [workspace(f), await aFirm(f), firmId],
-      );
-    },
-  },
-  {
-    constraint: 'record_merge_events_preserved_is_object',
-    run: async f => {
-      const firmId = await aFirm(f);
-      return await f.session.query(
-        `INSERT INTO record_merge_events (workspace_id, record_kind, source_id, target_id, firm_id, preserved)
-         VALUES ($1, 'firm', $2, $3, $3, '[]'::jsonb)`,
-        [workspace(f), await aFirm(f), firmId],
-      );
-    },
-  },
 
   // ---------------------------------------------------- crm_domain_events
   {

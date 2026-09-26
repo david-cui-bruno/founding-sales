@@ -366,16 +366,6 @@ export const POLICY_CONSTRAINT_CASES: readonly PolicyCase[] = [
       ),
   },
   {
-    constraint: 'state_postures_review_after_effective',
-    run: async f =>
-      await f.session.query(
-        `INSERT INTO state_postures (workspace_id, state, revision, effective_from, review_at,
-                                     rules_revision, confirmed_statements, confirmed_by_user_id)
-         VALUES ($1, 'HI', 1, ${FROM}, TIMESTAMPTZ '2025-06-01 00:00:00+00', 2, ${STATEMENTS}, $2)`,
-        [workspace(f), admin(f)],
-      ),
-  },
-  {
     constraint: 'state_postures_statements_present',
     run: async f =>
       await f.session.query(

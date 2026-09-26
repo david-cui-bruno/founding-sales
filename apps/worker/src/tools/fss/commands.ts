@@ -79,6 +79,8 @@ export const COMMAND_DEPENDENCIES: Readonly<Record<string, DependencyMode>> = Ob
   // never reads the deployment, so it cannot reach Gmail, KMS or S3.
   'release-record put': 'database',
   'release-record show': 'database',
+  // Lane W2-M. Counts, in a READ ONLY transaction, and nothing else.
+  'schema-preflight 0019': 'database',
   'suppression-journal replay': 'journal',
   // g40. It drives a fence through the real dispatch path and ingests a reply and an
   // opt-out through the real pipeline, so it reaches the Gmail seam and is bound by the
@@ -253,6 +255,16 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     booleanFlags: [],
     requiredFlags: ['--reference'],
     summary: 'the stored release record for one reference, and the digests it binds sending to. Reads only',
+  },
+  {
+    // Lane W2-M. What `infra/scripts/schema-preflight-0019.sh` runs on the operations
+    // task before the schema-19 release stops anything: migration 0019's counts, read
+    // only, and whether it would refuse (FS019).
+    path: ['admin', 'schema-preflight', '0019'],
+    valueFlags: [...REPORTABLE],
+    booleanFlags: [],
+    requiredFlags: [],
+    summary: 'what migration 0019 destroys, archives, relaxes or refuses on, counted read-only on schema 18',
   },
   {
     path: ['admin', 'drill', 'seed-evidence'],

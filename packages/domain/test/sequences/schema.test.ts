@@ -9,7 +9,8 @@ import { seedSequences, type SeededSequences } from './support/sequenceFixtures.
  * What migration 0012 refuses (specification 11.1, 11.2, 11.3, 6, Appendix G 8, 33).
  *
  * Every assertion here is a rule the database keeps whatever the application does:
- * a published version and its steps are immutable, a contact has one live
+ * a published version is immutable (its steps are edited in place since migration
+ * 0019), a contact has one live
  * enrollment, an enrollment cannot mix firms, a shift is append-only, and the
  * reserved personalization columns are reserved *and refused*.
  *
@@ -65,7 +66,7 @@ afterAll(async () => {
   await database.drop();
 });
 
-describe('published versions and their steps are immutable (11.1)', () => {
+describe('a published version is immutable, and its steps are edited in place (11.1; migration 0019)', () => {
   it('refuses an edit to a published version', async () => {
     const message = await refusal(
       `UPDATE sequence_versions SET version = 99 WHERE workspace_id = $1 AND id = $2`,
@@ -92,32 +93,13 @@ describe('published versions and their steps are immutable (11.1)', () => {
     expect(message).toMatch(/immutable/i);
   });
 
-  it('refuses inserting, editing or deleting a step of a published version', async () => {
+  it('lets a step of a published version be edited in place', async () => {
     const workspaceId = seeded.alpha.workspaceId;
-    const versionId = sequences.alpha.publishedVersionId;
-
-    expect(
-      await refusal(
-        `INSERT INTO sequence_steps
-           (workspace_id, sequence_version_id, ordinal, channel, delay_unit, delay_amount, on_no_answer)
-         VALUES ($1, $2, 9, 'call_task', 'elapsed', 1, 'advance')`,
-        [workspaceId, versionId],
-      ),
-    ).toMatch(/immutable/i);
-
-    expect(
-      await refusal(`UPDATE sequence_steps SET delay_amount = 99 WHERE workspace_id = $1 AND id = $2`, [
-        workspaceId,
-        sequences.alpha.emailStepId,
-      ]),
-    ).toMatch(/immutable/i);
-
-    expect(
-      await refusal(`DELETE FROM sequence_steps WHERE workspace_id = $1 AND id = $2`, [
-        workspaceId,
-        sequences.alpha.callStepId,
-      ]),
-    ).toMatch(/immutable/i);
+    const { rowCount } = await database.session.query(
+      'UPDATE sequence_steps SET delay_amount = delay_amount WHERE workspace_id = $1 AND id = $2',
+      [workspaceId, sequences.alpha.emailStepId],
+    );
+    expect(rowCount).toBe(1);
   });
 
   it('lets a draft version change freely', async () => {
@@ -194,13 +176,15 @@ describe('template_versions is extended, not replaced (11.1)', () => {
     ).toMatch(/generated_personalization_disabled|immutable/i);
   });
 
-  it('keeps an approved version immutable across the new columns too', async () => {
+  it('keeps the reserved generated block unreachable on an approved version', async () => {
+    // Migration 0019 dropped the trigger that froze an approved version (edit in place),
+    // so the CHECK is what refuses this now.
     expect(
       await refusal(
         `UPDATE template_versions SET generated_block = 'anything' WHERE workspace_id = $1 AND id = $2`,
         [seeded.alpha.workspaceId, sequences.alpha.template.templateVersionId],
       ),
-    ).toMatch(/immutable/i);
+    ).toMatch(/generated_block_reserved/i);
   });
 
   it('accepts a version that names no postal address, in both workspaces (G20)', async () => {
@@ -226,7 +210,7 @@ describe('template_versions is extended, not replaced (11.1)', () => {
     expect(rows[0]?.count).toBe('1');
   });
 
-  it('still refuses an unsubscribe link and still requires the stop line', async () => {
+  it('still refuses an unsubscribe link', async () => {
     expect(
       await refusal(
         `INSERT INTO template_versions
@@ -400,33 +384,6 @@ describe('step executions and their timing history (11.2)', () => {
       [seeded.alpha.workspaceId, executionId, enrollmentId],
     );
     expect(message).toMatch(/never_earlier/);
-  });
-});
-
-describe('the enrollment migration requires approval before it is applied (11.1)', () => {
-  it('refuses an applied migration that nobody approved', async () => {
-    const message = await refusal(
-      `INSERT INTO enrollment_migrations
-         (workspace_id, from_sequence_version_id, to_sequence_version_id, state, requested_by_user_id, applied_at)
-       VALUES ($1, $2, $3, 'applied', $4, now())`,
-      [
-        seeded.alpha.workspaceId,
-        sequences.alpha.publishedVersionId,
-        sequences.alpha.draftVersionId,
-        seeded.alpha.admin.userId,
-      ],
-    );
-    expect(message).toMatch(/applied_was_approved/);
-  });
-
-  it('refuses a migration from a version to itself', async () => {
-    const message = await refusal(
-      `INSERT INTO enrollment_migrations
-         (workspace_id, from_sequence_version_id, to_sequence_version_id, requested_by_user_id)
-       VALUES ($1, $2, $2, $3)`,
-      [seeded.alpha.workspaceId, sequences.alpha.publishedVersionId, seeded.alpha.admin.userId],
-    );
-    expect(message).toMatch(/not_a_self_migration/);
   });
 });
 

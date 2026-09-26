@@ -249,10 +249,6 @@ export const OUTBOUND_CONSTRAINT_CASES: readonly OutboundCase[] = [
     run: async f => await insertDomain(f, { automated_sending_enabled_at: AT }),
   },
   {
-    constraint: 'sending_domains_guard_bounded',
-    run: async f => await insertDomain(f, { personal_gmail_guard_per_24h: '5001' }),
-  },
-  {
     constraint: 'sending_domains_updated_not_before_created',
     run: async f => await insertDomain(f, { created_at: AT, updated_at: EARLIER }),
   },
@@ -350,7 +346,7 @@ export const OUTBOUND_CONSTRAINT_CASES: readonly OutboundCase[] = [
   },
   {
     constraint: 'mailbox_send_days_counts_not_negative',
-    run: async f => await insertDay(f, { mailbox_id: u(mailbox(f)), direct_sent: '-1' }),
+    run: async f => await insertDay(f, { mailbox_id: u(mailbox(f)), bounces: '-1' }),
   },
   {
     constraint: 'mailbox_send_days_cap_bounded',

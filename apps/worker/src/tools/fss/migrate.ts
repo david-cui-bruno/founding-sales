@@ -35,7 +35,7 @@ import {
  * privilege, and the report says which role actually ran.
  */
 
-export type MigrateRefusal = 'not_migration_role' | 'runs_as_app_runtime' | 'failed';
+export type MigrateRefusal = 'not_migration_role' | 'runs_as_app_runtime' | 'migration_refused' | 'failed';
 
 export interface MigrateRoleReport {
   readonly connectedRole: string;
@@ -121,7 +121,19 @@ export async function runMigrate(session: SessionQueryable, options: MigrateOpti
   }
 
   const schemaVersionBefore = await readAppliedSchemaVersion(session);
-  const applied = await applyMigrations(session);
+  let applied: Awaited<ReturnType<typeof applyMigrations>>;
+  try {
+    applied = await applyMigrations(session);
+  } catch (error) {
+    // A migration's own refusal (SQLSTATE `FS0nn`, such as 0019's FS019) is an answer
+    // for the operator, not a crash: the counts are the message, and the schema is
+    // unchanged because each migration is one transaction.
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === 'string' && /^FS\d{3}$/u.test(code) && error instanceof Error) {
+      return { ok: false, reason: 'migration_refused', detail: `${code}: ${error.message}` };
+    }
+    throw error;
+  }
   const schemaVersionAfter = await readAppliedSchemaVersion(session);
 
   return {

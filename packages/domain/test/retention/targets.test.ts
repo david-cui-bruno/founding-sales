@@ -75,7 +75,7 @@ describe('the registry covers the retention table', () => {
   });
 
   it('never lets a target reach an append-only table', () => {
-    const forbidden = ['audit_events', 'suppression_events', 'opportunity_stage_events', 'record_merge_events', 'crm_domain_events'];
+    const forbidden = ['audit_events', 'suppression_events', 'opportunity_stage_events', 'crm_domain_events'];
     for (const target of RETENTION_TARGETS) {
       for (const table of target.tables) expect(forbidden, `${target.dataKind} names ${table}`).not.toContain(table);
     }
@@ -137,9 +137,9 @@ describe('the declared-pending guard', () => {
   });
 
   it('has already been paid the second time: every table the other lanes brought is classified', async () => {
-    // The guard working at this lane's final merge. These thirteen were declared
-    // pending against G7b, G8 and G9; all thirteen are on main now, the case above
-    // printed all thirteen sentences, and each one is answered in
+    // The guard working at this lane's final merge. These were declared pending
+    // against G7b, G8 and G9 (thirteen, until migration 0019 dropped the two
+    // enrollment-migration tables); they are on main, and each one is answered in
     // `TABLE_RETENTION_COVERAGE`. Naming them here rather than trusting the
     // catalog sweep means a later lane that drops one from the coverage map is told
     // which lane's table it just orphaned.
@@ -153,8 +153,6 @@ describe('the declared-pending guard', () => {
       'sequence_enrollments',
       'step_executions',
       'step_execution_shifts',
-      'enrollment_migrations',
-      'enrollment_migration_items',
       'sequence_event_cursors',
     ];
     const { rows } = await database.session.query<{ table_name: string }>(

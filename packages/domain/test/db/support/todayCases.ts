@@ -359,7 +359,7 @@ export const TODAY_CONSTRAINT_CASES: readonly TodayCase[] = [
     },
   },
   {
-    constraint: 'today_snoozes_reason_present',
+    constraint: 'today_snoozes_reason_bounded',
     run: async f => {
       const firmId = await makeFirm(f, 'Northwind Test Holdings');
       return await insertSnooze(f, firmId, { reason: '   ' });

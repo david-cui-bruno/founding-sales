@@ -36,6 +36,7 @@ import {
 } from './fss/config.ts';
 import { loadS3JournalSource } from './fss/journalSource.ts';
 import { readSchemaVersionReport, runMigrate } from './fss/migrate.ts';
+import { schemaPreflight0019Command } from './fss/schemaPreflight0019.ts';
 import { runVerify } from './fss/verify.ts';
 import { bootstrapWorkspace } from './fss/bootstrapWorkspace.ts';
 import { RUNTIME_SECRET_VARIABLE, ensureRuntimeDatabaseUser } from './fss/databaseUsers.ts';
@@ -179,6 +180,7 @@ const ADMIN_COMMANDS: Readonly<Record<string, AdminRunner>> = Object.freeze({
   'restore-holds open': restoreHoldsOpenCommand,
   'release-record put': releaseRecordPutCommand,
   'release-record show': releaseRecordShowCommand,
+  'schema-preflight 0019': schemaPreflight0019Command,
 });
 
 async function report(path: string | undefined, value: unknown): Promise<void> {

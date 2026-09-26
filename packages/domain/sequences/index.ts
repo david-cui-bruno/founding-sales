@@ -11,7 +11,6 @@
 export {
   ENROLLMENT_END_REASONS,
   ENROLLMENT_STATES,
-  REMOVED_STEP_CHANNELS,
   SEQUENCE_REFUSAL_CODES,
   SEQUENCE_STOP_CONDITIONS,
   SEQUENCE_VERSION_STATES,
@@ -22,14 +21,9 @@ export {
   acceptSequence,
   isStepChannel,
   refuseSequence,
-  removedChannelOf,
-  type DisplayedSequenceStep,
-  type DisplayedSequenceVersion,
   type EnrollmentEndReason,
   type EnrollmentRow,
   type EnrollmentState,
-  type RemovedSequenceStep,
-  type RemovedStepChannel,
   type SequenceDelay,
   type SequenceRefusalCode,
   type SequenceResult,
@@ -66,10 +60,8 @@ export {
   createSequence,
   listSequences,
   publishVersion,
-  replaceDraftSteps,
   retireVersion,
-  sequenceStepForDisplay,
-  sequenceVersionForDisplay,
+  saveSteps,
   type CreateDraftVersionInput,
   type CreateSequenceInput,
   type DraftStepInput,
@@ -182,15 +174,6 @@ export {
 } from './wake.ts';
 
 export { COMPLETION_ANCHOR_RULE_SUFFIX, successorDue, type SuccessorDue, type SuccessorDueInput } from './successor.ts';
-
-export {
-  applyEnrollmentMigration,
-  approveEnrollmentMigration,
-  proposeEnrollmentMigration,
-  type MigrationItemOutcome,
-  type MigrationReport,
-  type ProposeMigrationInput,
-} from './migration.ts';
 
 export {
   TEMPLATE_VARIABLE_NAMES,

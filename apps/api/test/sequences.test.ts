@@ -2,10 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   enrollmentsResponseSchema,
-  resumePreviewResponseSchema,
   sequenceVersionsResponseSchema,
   sequencesResponseSchema,
   templateCommandResultSchema,
+  templateSaveResultSchema,
   templateVersionsResponseSchema,
   wireDrift,
 } from '@fss/contracts';
@@ -317,153 +317,64 @@ describe('the sequence, template and enrollment routes', () => {
     expect(enrollmentsResponseSchema.parse(enrollments.body).enrollments.length).toBeGreaterThan(0);
   });
 
-  it('sends a LinkedIn step stored before 25 September 2026 as a removed step, and reviews its held execution as held (lane A2)', async () => {
-    // Migration 0018 keeps `linkedin_task` as a removed channel's stored marker (and
-    // dropped the message column), so SQL is the only way left to store one: a
-    // published version of a call and then a LinkedIn task.
-    const workspaceId = fixture.alpha.workspaceId;
-    const created = await post('/sequences/create', adminToken, command({ name: 'Stored with LinkedIn' }));
+  it('edits a template in place and saves and approves in one command (wave 2, S3)', async () => {
+    const payload = {
+      templateVersionId,
+      name: 'First touch',
+      subject: 'A question about {firm_name}',
+      body: `Hello {contact_first_name},\n\nA corrected note about {firm_name}.\n\n${SIGN_OFF}\n${SENDING_STOP_LINE}`,
+      footerSignOff: SIGN_OFF,
+      requiredVariables: ['firm_name', 'contact_first_name'],
+    };
+    expect((await post('/templates/update', salespersonToken, command(payload))).body['reason']).toBe('admin_only');
+
+    // A plain save of text that passes keeps the approval; the answer carries warnings and issues.
+    const saved = await post('/templates/update', adminToken, command(payload));
+    expect(saved.status).toBe(200);
+    const result = templateSaveResultSchema.parse(resultOf(saved));
+    expect(result).toMatchObject({ id: templateVersionId, issues: [], warnings: [] });
+    expect(result.approvedAt).not.toBeNull();
+
+    // Save and approve with a rule broken: refused with every issue, and nothing written.
+    const refused = await post(
+      '/templates/update',
+      adminToken,
+      command({ ...payload, body: 'The footer went missing.', approve: true }),
+    );
+    expect(refused.status).toBe(409);
+    expect(refused.body['reason']).toBe('template_unapproved:template_footer_missing');
+    const listed = templateVersionsResponseSchema.parse((await post('/templates', adminToken, {})).body);
+    expect(listed.templates.find(template => template.id === templateVersionId)?.body).toBe(payload.body);
+
+    // A new template saved and approved in one command.
+    const { templateVersionId: _edited, ...text } = payload;
+    const created = await post('/templates/create', adminToken, command({ ...text, name: 'One command', approve: true }));
     expect(created.status).toBe(200);
-    const storedSequenceId = String(resultOf(created)['id']);
-    const { rows: versionRows } = await fixture.db.query<{ id: string }>(
-      'INSERT INTO sequence_versions (workspace_id, sequence_id, version) VALUES ($1, $2, 1) RETURNING id',
-      [workspaceId, storedSequenceId],
-    );
-    const storedVersionId = versionRows[0]?.id ?? '';
-    await fixture.db.query(
-      `INSERT INTO sequence_steps (workspace_id, sequence_version_id, ordinal, channel, delay_unit, delay_amount, on_no_answer)
-       VALUES ($1, $2, 1, 'call_task', 'business_days', 0, 'advance')`,
-      [workspaceId, storedVersionId],
-    );
-    const { rows: stepRows } = await fixture.db.query<{ id: string }>(
-      `INSERT INTO sequence_steps (workspace_id, sequence_version_id, ordinal, channel, delay_unit, delay_amount)
-       VALUES ($1, $2, 2, 'linkedin_task', 'business_days', 2) RETURNING id`,
-      [workspaceId, storedVersionId],
-    );
-    const linkedInStepId = stepRows[0]?.id ?? '';
-    await fixture.db.query(
-      `UPDATE sequence_versions SET state = 'published', published_at = now(), published_by_user_id = $3
-        WHERE workspace_id = $1 AND id = $2`,
-      [workspaceId, storedVersionId, fixture.alpha.admin.userId],
-    );
-
-    const versions = await post('/sequences/versions', adminToken, { sequenceId: storedSequenceId });
-    expect(versions.status).toBe(200);
-    // Before lane A2 this was a `channel` outside the contract, and the Mac refused the answer.
-    expect(wireDrift(sequenceVersionsResponseSchema, versions.body)).toEqual([]);
-    const [version] = sequenceVersionsResponseSchema.parse(versions.body).versions;
-    expect(version?.steps.map(step => step.channel)).toEqual(['call_task', 'removed']);
-    expect(version?.steps[1]).toEqual({
-      id: linkedInStepId,
-      sequenceVersionId: storedVersionId,
-      ordinal: 2,
-      channel: 'removed',
-      removedChannel: 'linkedin',
-      delay: { unit: 'business_days', days: 2 },
-      onNoAnswer: null,
-      templateVersionId: null,
-    });
-    // Nothing the step carried crosses the wire: no message key of any spelling.
-    expect(JSON.stringify(versions.body).toLowerCase()).not.toContain('message');
-
-    // A live enrollment whose LinkedIn execution the worker has held.
-    const storedContactId = await seedContact(fixture, { firmId, fullName: 'Jordan Placeholder' });
-    const { rows: enrollmentRows } = await fixture.db.query<{ id: string }>(
-      `INSERT INTO sequence_enrollments
-         (workspace_id, sequence_version_id, opportunity_id, firm_id, contact_id, assigned_user_id,
-          started_at, firm_time_zone, holiday_calendar_version)
-       VALUES ($1, $2, $3, $4, $5, $6, now() - interval '3 days', 'America/New_York', 'us-federal.2026')
-       RETURNING id`,
-      [workspaceId, storedVersionId, opportunityId, firmId, storedContactId, fixture.alpha.salesperson.userId],
-    );
-    const storedEnrollmentId = enrollmentRows[0]?.id ?? '';
-    const { rows: executionRows } = await fixture.db.query<{ id: string }>(
-      `INSERT INTO step_executions
-         (workspace_id, enrollment_id, step_id, firm_id, contact_id, channel, ordinal, state, hold_reason_code,
-          due_at, not_before, original_due_at, source_zone, rule_version)
-       VALUES ($1, $2, $3, $4, $5, 'linkedin_task', 2, 'held', 'long_hold_review',
-               now() - interval '1 day', now() - interval '1 day', now() - interval '1 day', 'America/New_York', 'business_days.1')
-       RETURNING id`,
-      [workspaceId, storedEnrollmentId, linkedInStepId, firmId, storedContactId],
-    );
-
-    const review = await post('/enrollments/resume/preview', salespersonToken, { enrollmentId: storedEnrollmentId });
-    expect(review.status).toBe(200);
-    expect(wireDrift(resumePreviewResponseSchema, review.body)).toEqual([]);
-    const { preview } = resumePreviewResponseSchema.parse(review.body);
-    expect(preview.steps).toHaveLength(1);
-    expect(preview.steps[0]).toMatchObject({
-      stepExecutionId: executionRows[0]?.id,
-      ordinal: 2,
-      channel: 'removed',
-      removedChannel: 'linkedin',
-      state: 'held',
-      heldReason: 'channel_removed',
-    });
-    expect(preview.steps[0]?.proposedDueAt).toBe(preview.steps[0]?.dueAt);
+    expect(templateSaveResultSchema.parse(resultOf(created)).approvedAt).not.toBeNull();
   });
 
-  it('edits a published version with a stored LinkedIn step as a new draft without it, numbered 1..n (lane D1)', async () => {
-    // "Edit as a new draft" sends `/sequences/versions/draft` with no steps, and the server
-    // copies the newest published version. It used to copy the `linkedin_task` step too
-    // and refuse the whole draft as `invalid_input`, leaving an empty draft behind.
-    const workspaceId = fixture.alpha.workspaceId;
-    const storedVersion = async (name: string, channels: readonly ('call_task' | 'linkedin_task')[]): Promise<string> => {
-      const created = await post('/sequences/create', adminToken, command({ name }));
-      expect(created.status).toBe(200);
-      const storedSequenceId = String(resultOf(created)['id']);
-      const { rows } = await fixture.db.query<{ id: string }>(
-        'INSERT INTO sequence_versions (workspace_id, sequence_id, version) VALUES ($1, $2, 1) RETURNING id',
-        [workspaceId, storedSequenceId],
-      );
-      const versionId = rows[0]?.id ?? '';
-      for (const [index, channel] of channels.entries()) {
-        await fixture.db.query(
-          `INSERT INTO sequence_steps (workspace_id, sequence_version_id, ordinal, channel, delay_unit, delay_amount, on_no_answer)
-           VALUES ($1, $2, $3, $4, 'business_days', $5, $6)`,
-          [workspaceId, versionId, index + 1, channel, index * 2, channel === 'call_task' ? 'advance' : null],
-        );
-      }
-      await fixture.db.query(
-        `UPDATE sequence_versions SET state = 'published', published_at = now(), published_by_user_id = $3
-          WHERE workspace_id = $1 AND id = $2`,
-        [workspaceId, versionId, fixture.alpha.admin.userId],
-      );
-      return storedSequenceId;
-    };
-    const versionsOf = async (storedSequenceId: string) => {
-      const answer = await post('/sequences/versions', adminToken, { sequenceId: storedSequenceId });
-      expect(answer.status).toBe(200);
-      expect(wireDrift(sequenceVersionsResponseSchema, answer.body)).toEqual([]);
-      return sequenceVersionsResponseSchema.parse(answer.body).versions;
-    };
+  it('edits a published version’s steps in place, and refuses to rewrite a step an execution names (wave 2, S3)', async () => {
+    const steps = [
+      { ordinal: 1, channel: 'email', delay: { unit: 'elapsed', hours: 0 }, templateVersionId },
+      { ordinal: 2, channel: 'call_task', delay: { unit: 'business_days', days: 5 }, onNoAnswer: 'advance' },
+    ];
+    const saved = await post('/sequences/versions/steps', adminToken, command({ sequenceVersionId, steps }));
+    expect(saved.status).toBe(200);
+    const versions = sequenceVersionsResponseSchema.parse(
+      (await post('/sequences/versions', adminToken, { sequenceId })).body,
+    ).versions;
+    const version = versions.find(entry => entry.id === sequenceVersionId);
+    expect(version?.state).toBe('published');
+    expect(version?.steps[1]?.delay).toEqual({ unit: 'business_days', days: 5 });
 
-    // LinkedIn, call, LinkedIn, call: the draft is the two calls, at 1 and 2, with their delays.
-    const mixedSequenceId = await storedVersion('LinkedIn between calls', ['linkedin_task', 'call_task', 'linkedin_task', 'call_task']);
-    const draft = await post('/sequences/versions/draft', adminToken, command({ sequenceId: mixedSequenceId }));
-    expect(draft.status).toBe(200);
-    expect(resultOf(draft)['version']).toBe(2);
-    const [newest, published] = await versionsOf(mixedSequenceId);
-    expect(newest?.id).toBe(resultOf(draft)['sequenceVersionId']);
-    expect(newest?.state).toBe('draft');
-    expect(newest?.steps.map(step => [step.ordinal, step.channel, step.delay])).toEqual([
-      [1, 'call_task', { unit: 'business_days', days: 2 }],
-      [2, 'call_task', { unit: 'business_days', days: 6 }],
-    ]);
-    // The published version is as it was: its LinkedIn steps are still shown, greyed.
-    expect(published?.steps.map(step => step.channel)).toEqual(['removed', 'call_task', 'removed', 'call_task']);
-
-    // Only LinkedIn: a draft may be empty, so the draft has no steps; publishing it is
-    // what refuses, for `version_has_no_steps`.
-    const onlySequenceId = await storedVersion('Only LinkedIn', ['linkedin_task']);
-    const empty = await post('/sequences/versions/draft', adminToken, command({ sequenceId: onlySequenceId }));
-    expect(empty.status).toBe(200);
-    const [emptyDraft] = await versionsOf(onlySequenceId);
-    expect(emptyDraft?.state).toBe('draft');
-    expect(emptyDraft?.steps).toEqual([]);
-    const publish = await post('/sequences/versions/publish', adminToken, command({ sequenceVersionId: emptyDraft?.id }));
-    expect(publish.status).toBe(409);
-    expect(publish.body['reason']).toBe('version_has_no_steps');
+    // The enrolment above executed step 1; it keeps its channel.
+    const refused = await post(
+      '/sequences/versions/steps',
+      adminToken,
+      command({ sequenceVersionId, steps: [{ ...steps[1], ordinal: 1 }] }),
+    );
+    expect(refused.status).toBe(409);
+    expect(refused.body['reason']).toBe('step_in_use');
   });
 
   it('leaves no draft behind when it refuses one (lane D1)', async () => {

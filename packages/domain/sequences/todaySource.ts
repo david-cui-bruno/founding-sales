@@ -28,9 +28,8 @@ import { isStepChannel, type StepChannel } from './types.ts';
  * already had, and a worker claiming the job and a card showing the task are
  * demonstrably about the same row.
  *
- * A step whose channel is not one `isStepChannel` knows — a LinkedIn task stored before
- * 25 September 2026 — is nobody's task and is not listed. Migration 0018 deleted the
- * `linkedin_due` items earlier builds made, and the kind is gone from the schema.
+ * A step whose channel is not one `isStepChannel` knows is nobody's task and is not
+ * listed; since migration 0019 none can be stored.
  */
 
 const KIND_OF_CHANNEL: Readonly<Record<StepChannel, TodayItemKind>> = Object.freeze({

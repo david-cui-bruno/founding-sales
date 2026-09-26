@@ -27,13 +27,9 @@ import {
  * column name could be spelled wrongly, and a lane whose tables carry a frozen
  * template version and a frozen zone has a lot of column names.
  *
- * LinkedIn was removed on 25 September 2026, and migration 0018 rewrote what it left:
- * `linkedin_reply` left every version's `stop_conditions`, a `linkedin_reply` end became
- * `human_reply`, and `open_and_copy` and `handed_off` became `removed`, the neutral
- * value the history keeps. The mappers below drop a value their vocabulary does not
- * know, so no reader hands `removed` on as a completion source or result. A stored
- * `linkedin_task` channel — the marker 0018 kept for a removed channel — is kept as it
- * is, because it is what `isStepChannel` refuses on (`types.ts`).
+ * The mappers below drop a value their vocabulary does not know. Since migration 0019
+ * the CHECKs admit no value outside these vocabularies (0018's LinkedIn markers are
+ * gone), so this is a guard rather than a translation.
  */
 
 /** `value` when `vocabulary` knows it, and null otherwise. */

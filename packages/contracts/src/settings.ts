@@ -49,8 +49,17 @@ import { instant, uuid } from './foundationRows.ts';
  * reviewed postmaster — that a jsonb blob cannot express. See
  * `docs/decisions/g9-two-slices-that-belong-to-other-lanes.md`.
  */
-export const SETTING_KEYS = ['business_time_zone', 'sending_enabled'] as const;
+export const SETTING_KEYS = ['business_time_zone', 'sending_enabled', 'postal_address'] as const;
 export type ActiveSettingKey = (typeof SETTING_KEYS)[number];
+
+/**
+ * The keys `GET /settings` lists. `postal_address` (wave 2, S3; migration 0019) is left
+ * out while desktop 1.0.11 is installed: its snapshot parser is strict about the key
+ * vocabulary and would refuse the whole answer. A client reads the address with
+ * `POST /settings/history {settingKey: 'postal_address', limit: 1}` and writes it with
+ * `POST /settings/update`. @deprecated list every key once desktop 1.0.12 is in use.
+ */
+export const SNAPSHOT_SETTING_KEYS = ['business_time_zone', 'sending_enabled'] as const satisfies readonly ActiveSettingKey[];
 
 /**
  * @deprecated Retired 26 Sep 2026. `alert_thresholds` and `client_version_range`
@@ -58,8 +67,8 @@ export type ActiveSettingKey = (typeof SETTING_KEYS)[number];
  * takes its thresholds from Terraform. The server no longer answers, accepts or
  * reports a history for either. The wire vocabulary still names them only because the
  * Mac's settings rows and their tests do; remove this list, `DEFAULT_ALERT_THRESHOLDS`
- * and `AlertThresholds` once the desktop has dropped them. Migration 0015's CHECK
- * still allows both keys until a later migration narrows it.
+ * and `AlertThresholds` once the desktop has dropped them. Migration 0019 deleted their
+ * rows and took both keys out of the table's CHECK.
  */
 export const RETIRED_SETTING_KEYS = ['alert_thresholds', 'client_version_range'] as const;
 
@@ -110,14 +119,29 @@ export const ianaTimeZoneSchema = z
 export const businessTimeZoneSettingSchema = z.strictObject({ timeZone: ianaTimeZoneSchema });
 export type BusinessTimeZoneSetting = z.infer<typeof businessTimeZoneSettingSchema>;
 
-/*
- * 10.1's postal footer was a slice here until 22 September 2026. David decided an
- * automated email carries no postal address, so there is nothing to configure and the
- * slice is gone rather than left empty; migration 0015 removed the key from the
- * table's CHECK. `docs/decisions/g20-automated-email-carries-no-postal-address.md`.
- * 12.6 is unaffected: the footer still ends with the reply-to-stop sentence, and
- * `SENDING_STOP_LINE` in `./templates.ts` is that sentence.
+/** The longest postal address the footer carries (migration 0009's old column bound). */
+export const POSTAL_ADDRESS_MAX_LENGTH = 200;
+
+/**
+ * The postal address an automated email's footer carries (wave 2, S3; migration 0019).
+ *
+ * When it is set, the worker composes the footer at send — the template's sign-off, this
+ * address, then `SENDING_STOP_LINE` — before the outbound fence freezes the bytes, and a
+ * template no longer has to end with a footer of its own. `null` (the default) is unset:
+ * templates carry the sign-off and the stop line themselves, as before. Plain text, one
+ * or more lines; no other control character.
  */
+export const postalAddressSettingSchema = z.strictObject({
+  address: z
+    .string()
+    .trim()
+    .min(1)
+    .max(POSTAL_ADDRESS_MAX_LENGTH)
+    // eslint-disable-next-line no-control-regex -- control characters are exactly what this refuses
+    .refine(value => !/[\x00-\x09\x0b-\x1f\x7f]/u.test(value), { message: 'plain text, lines only' })
+    .nullable(),
+});
+export type PostalAddressSetting = z.infer<typeof postalAddressSettingSchema>;
 
 /**
  * 16.2: "Production sending remains disabled until ... an authenticated admin enables
@@ -156,6 +180,7 @@ export type SendingEnabledSetting = z.infer<typeof sendingEnabledSettingSchema>;
 export const SETTING_VALUE_SCHEMAS = {
   business_time_zone: businessTimeZoneSettingSchema,
   sending_enabled: sendingEnabledSettingSchema,
+  postal_address: postalAddressSettingSchema,
 } as const satisfies Record<ActiveSettingKey, z.ZodType>;
 
 /**
@@ -166,6 +191,7 @@ export const DEFAULT_SETTING_VALUES: Readonly<Record<ActiveSettingKey, unknown> 
   Object.freeze({
     business_time_zone: { timeZone: 'America/New_York' },
     sending_enabled: { enabled: false, releaseGateReference: null },
+    postal_address: { address: null },
   });
 
 // ---------------------------------------------------------------------------

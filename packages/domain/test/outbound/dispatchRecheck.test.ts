@@ -12,7 +12,6 @@ import {
 } from '../../outbound/index.ts';
 import { openHold, releaseHold } from '../../policy/index.ts';
 import { recordHolidayCalendar, stopEnrollments } from '../../sequences/index.ts';
-import { retireTemplateVersion } from '../../templates/index.ts';
 import {
   TEMPLATE_BODY,
   TEMPLATE_SUBJECT,
@@ -87,8 +86,12 @@ describe('S02: the complete eligibility, asked again at the claim', () => {
     const templateVersionId = rows[0]?.id ?? '';
     const fenceId = await prepareFor(world, world.alpha, firm, { templateVersionId, templateContentHash: hash });
 
-    const retired = await retireTemplateVersion(admin(), { templateVersionId });
-    expect(retired.ok).toBe(true);
+    // Nothing retires a version since wave 2 (S3) but a stored row still can be one.
+    const retired = await world.database.session.query(
+      'UPDATE template_versions SET retired_at = now() WHERE workspace_id = $1 AND id = $2',
+      [workspaceId(), templateVersionId],
+    );
+    expect(retired.rowCount).toBe(1);
 
     const { report, sends } = await dispatch(fenceId);
     expect(report.outcome, why(report)).toBe('held');

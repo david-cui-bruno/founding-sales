@@ -16,9 +16,9 @@ import { accept, refuse, type RetentionResult } from './result.ts';
  *
  * ## Why deletion is remove *and* redact
  *
- * Three tables in this schema have `DELETE` revoked from both application roles —
- * `audit_events`, `suppression_events`, `opportunity_stage_events`,
- * `record_merge_events` and `crm_domain_events` — and each of them carries foreign
+ * Four tables in this schema have `DELETE` revoked from both application roles —
+ * `audit_events`, `suppression_events`, `opportunity_stage_events` and
+ * `crm_domain_events` — and each of them carries foreign
  * keys onto `firms`, `contacts` or `opportunities`. A deletion that removed the firm
  * row would have to remove that history first, and it is not allowed to, and it
  * should not be: section 10.3's first row keeps "firms, contacts, opportunities,
@@ -235,20 +235,6 @@ async function measure(
         WHERE c.workspace_id = $1 AND c.firm_id = $3 AND ${CONFIRMATION_IN_SCOPE}`,
       byContact,
     ),
-    research_suggestions: await countOf(
-      context,
-      `SELECT count(*) AS count FROM research_suggestions
-        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
-      byContact,
-    ),
-    firm_locations:
-      contact === null
-        ? await countOf(
-            context,
-            'SELECT count(*) AS count FROM firm_locations WHERE workspace_id = $1 AND firm_id = $2',
-            [workspace, firm],
-          )
-        : 0,
   };
 
   const redacts: Record<string, number> = {
@@ -600,12 +586,6 @@ export async function commitDeletion(
     byContact,
   );
   await remove(
-    'research_suggestions',
-    `DELETE FROM research_suggestions
-      WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
-    byContact,
-  );
-  await remove(
     'evidence_items',
     `DELETE FROM evidence_items WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
     byContact,
@@ -615,12 +595,6 @@ export async function commitDeletion(
     `DELETE FROM record_aliases WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
     byContact,
   );
-  if (scope.contactId === null) {
-    await remove('firm_locations', 'DELETE FROM firm_locations WHERE workspace_id = $1 AND firm_id = $2', [
-      workspace,
-      scope.firmId,
-    ]);
-  }
 
   // The stops, after the removals and before the redactions. `step_executions`
   // first: an execution is the child, and a `pending` one under a `stopped`

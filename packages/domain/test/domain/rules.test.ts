@@ -13,6 +13,7 @@ import {
   canonicalizePhone,
   canonicalizeRoutes,
   classifyReply,
+  composeSendBody,
   decideTemplateApproval,
   evaluateCallingWindow,
   footerBlock,
@@ -419,6 +420,36 @@ describe('templates', () => {
       rules,
     );
     expect(refused).toMatchObject({ approved: false, reason: 'template_unapproved' });
+  });
+
+  it('needs no footer in the body when the footer is composed at send (wave 2, S3)', () => {
+    const bare = { subject: 'A note', body: 'Hi {firm}, just the words.' };
+    expect(templateTextIssues(bare, rules)).toEqual(['template_footer_missing']);
+    expect(templateTextIssues(bare, { ...rules, footerComposedAtSend: true })).toEqual([]);
+    // Every other rule still applies.
+    expect(templateTextIssues({ ...bare, body: '<p>Hi</p>' }, { ...rules, footerComposedAtSend: true })).toEqual([
+      'template_body_markup',
+    ]);
+  });
+
+  it('composes exactly one footer at send, whatever of the old one a body already ends with (wave 2, S3)', () => {
+    const postalAddress = '1 Example Way\nProvidence, RI 02903';
+    const config = { signOff: FOOTER.signOff, postalAddress };
+    const composed = `Hi Acme, a short note.\n\n${FOOTER.signOff}\n${postalAddress}\n${SENDING_STOP_LINE}`;
+    // A body with no footer, a legacy body with the sign-off and stop line, one with the
+    // stop line only, one with the sign-off only, and one already composed: one answer.
+    for (const body of [
+      'Hi Acme, a short note.',
+      `Hi Acme, a short note.\n\n${footerBlock(FOOTER)}`,
+      `Hi Acme, a short note.\n\n${SENDING_STOP_LINE}\n`,
+      `Hi Acme, a short note.\n\n${FOOTER.signOff}`,
+      composed,
+    ]) {
+      expect(composeSendBody(body, config), body).toBe(composed);
+    }
+    // A stop line in the middle is the author's sentence, not a footer: left alone.
+    const middle = `Reply "stop" and I will not email you again. That is a promise.`;
+    expect(composeSendBody(middle, config)).toBe(`${middle}\n\n${FOOTER.signOff}\n${postalAddress}\n${SENDING_STOP_LINE}`);
   });
 
   it('holds on a missing variable rather than rendering an empty string', () => {

@@ -15,9 +15,7 @@ import {
   acceptSequence,
   isStepChannel,
   refuseSequence,
-  removedChannelOf,
   type EnrollmentRow,
-  type RemovedStepChannel,
   type SequenceResult,
   type StepChannel,
   type StepExecutionState,
@@ -187,8 +185,7 @@ async function resumeWindowStart(
 }
 
 /**
- * The channel of the enrollment's next unfinished step, if it has one and this lane
- * knows it. A LinkedIn step stored before 25 September 2026 answers as no channel.
+ * The channel of the enrollment's next unfinished step, if it has one.
  */
 async function nextChannel(context: RepositoryContext, enrollmentId: string): Promise<StepChannel | undefined> {
   const { rows } = await context.db.query<{ channel: string }>(
@@ -313,9 +310,6 @@ export async function resumeEnrollment(
   );
   // A step held for a reason that has now cleared goes back to pending; a step held
   // for `missing_variables`, whose hold this lane opened and nobody released, stays.
-  // So does a step of a removed channel (lane A2): a LinkedIn task stored before 25
-  // September 2026 was held because nothing may run it, and a resume does not change
-  // that. The channel list is the current one, so any channel it does not name stays.
   await context.db.query(
     `UPDATE step_executions
         SET state = 'pending', hold_reason_code = NULL, updated_at = now()
@@ -347,21 +341,11 @@ interface ResumePreviewStepDates {
 /**
  * One unexecuted step as the review shows it: where it is due now, and where a resume
  * puts it.
- *
- * A step of a removed channel (lane A2) is `removed`, held for `channel_removed` and
- * unmoved, whatever its stored state: a resume keeps a held one held and does not shift
- * it, and the worker holds a pending one before it does anything else with it
- * (`runDueStepExecution`). Its stored hold reason is `long_hold_review`; the review
- * names the cause instead.
  */
-export type ResumePreviewStep =
-  | (ResumePreviewStepDates & { readonly channel: StepChannel; readonly state: StepExecutionState })
-  | (ResumePreviewStepDates & {
-      readonly channel: 'removed';
-      readonly removedChannel: RemovedStepChannel;
-      readonly state: 'held';
-      readonly heldReason: 'channel_removed';
-    });
+export type ResumePreviewStep = ResumePreviewStepDates & {
+  readonly channel: StepChannel;
+  readonly state: StepExecutionState;
+};
 
 /** A hold that delayed this enrollment's work in the window the resume would apply. */
 export interface ResumePreviewHold {
@@ -433,17 +417,6 @@ export async function previewResume(
         originalDueAt: execution.originalDueAt,
         dueAt: execution.dueAt,
       };
-      const removed = removedChannelOf(execution.channel);
-      if (removed !== null) {
-        return {
-          ...dates,
-          channel: 'removed',
-          removedChannel: removed,
-          state: 'held',
-          heldReason: 'channel_removed',
-          proposedDueAt: execution.dueAt,
-        };
-      }
       return {
         ...dates,
         channel: execution.channel,

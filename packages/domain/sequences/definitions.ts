@@ -5,9 +5,6 @@ import {
   acceptSequence,
   isStepChannel,
   refuseSequence,
-  removedChannelOf,
-  type DisplayedSequenceStep,
-  type DisplayedSequenceVersion,
   type SequenceDelay,
   type SequenceResult,
   type SequenceRow,
@@ -17,19 +14,17 @@ import {
 } from './types.ts';
 
 /**
- * Sequence definition and publication (specification 11.1).
+ * Sequence definition and publication (specification 11.1; wave 2, S3).
  *
- * `sequences`, immutable `sequence_versions` and ordered `sequence_steps` define email
- * and call-task plans with delays and step-specific behavior. Draft versions may
- * change; published versions and steps are immutable by trigger; editing a published
- * sequence creates a new draft. (The LinkedIn task was removed on 25 September 2026. A
- * stored step with that channel is refused by the draft check and by publication, and a
- * new draft copied from a version that has one leaves it out: `stepsCopiedFrom`.)
- *
- * The immutability is the database's — migration 0012's triggers refuse an edit to a
- * published version and refuse an insert, update or delete of its steps. So this file
- * is about the two things a trigger cannot decide: what a *draft* may contain, and
- * what has to be true before a draft becomes publishable.
+ * `sequences`, `sequence_versions` and ordered `sequence_steps` define email and
+ * call-task plans with delays and step-specific behavior. A draft may change in every
+ * way. Since migration 0019 a published version's steps are edited in place too
+ * (`saveSteps`): the edit reaches every live enrollment on the version, because a step
+ * not yet prepared for sending reads its step and template when it runs, and a send
+ * already prepared keeps the bytes its outbound fence froze. What an in-place edit may
+ * not do is rewrite history: a step that already has executions keeps its channel and
+ * cannot be removed (`step_in_use`). "Edit as a new draft" (`createDraftVersion`) is
+ * kept for desktop 1.0.11 and deprecated.
  *
  * Publication checks three things a CHECK constraint cannot:
  *
@@ -122,9 +117,10 @@ export interface CreateDraftVersionInput {
 }
 
 /**
- * Start a draft. "Editing a published sequence creates a new draft" (11.1), and this
- * is that command: with no steps it copies the newest published version, which is
- * what an editor's "edit" button does ("Edit as a new draft" on the Mac).
+ * Start a draft: with no steps it copies the newest published version ("Edit as a new
+ * draft" on desktop 1.0.11). @deprecated since wave 2 (S3): a published version is
+ * edited in place with `saveSteps`, which reaches its live enrollments; a new version
+ * does not. Kept until desktop 1.0.12 is in use.
  *
  * There is at most one draft per sequence (`sequence_versions_one_draft`), so a second
  * request answers the draft that is already there — with the steps it was given, when
@@ -188,29 +184,15 @@ export async function createDraftVersion(
   return acceptSequence({ sequenceVersionId, version });
 }
 
-/**
- * The steps a new draft copies from a published version (lane D1). A step of a removed
- * channel — a LinkedIn task stored before 25 September 2026, which `removedChannelOf`
- * names and `sequenceStepForDisplay` shows as channel `removed` — is left out, and the
- * rest keep their order and are numbered 1..n by place. That is what saving such a draft
- * on the Mac does (lane A2: the editor holds no removed step, and saves by place).
- *
- * Before this, the copy kept the step and `validateSteps` refused the whole draft as
- * `invalid_input`. A version whose every step was removed copies to no steps: a draft may
- * be empty (a new sequence's first one is), and only publication refuses an empty one,
- * with `version_has_no_steps`. A step of a channel that is neither current nor removed is
- * still copied, and still refused.
- */
+/** The steps a new draft copies from a published version, numbered 1..n by place. */
 function stepsCopiedFrom(steps: readonly SequenceStepRow[]): DraftStepInput[] {
-  return steps
-    .filter(step => removedChannelOf(step.channel) === null)
-    .map((step, index) => ({
-      ordinal: index + 1,
-      channel: step.channel,
-      delay: step.delay,
-      ...(step.onNoAnswer === null ? {} : { onNoAnswer: step.onNoAnswer }),
-      ...(step.templateVersionId === null ? {} : { templateVersionId: step.templateVersionId }),
-    }));
+  return steps.map((step, index) => ({
+    ordinal: index + 1,
+    channel: step.channel,
+    delay: step.delay,
+    ...(step.onNoAnswer === null ? {} : { onNoAnswer: step.onNoAnswer }),
+    ...(step.templateVersionId === null ? {} : { templateVersionId: step.templateVersionId }),
+  }));
 }
 
 export interface ReplaceDraftStepsInput {
@@ -219,15 +201,19 @@ export interface ReplaceDraftStepsInput {
 }
 
 /**
- * Replace a draft's steps wholesale.
+ * Save a version's steps: a draft's wholesale, a published version's in place (wave 2, S3).
  *
- * Wholesale rather than one edit at a time because the ordinals are a sequence and a
- * per-step edit has to renumber its neighbours anyway; doing it in one statement means
- * `sequence_steps_one_per_ordinal` never sees an intermediate state with two steps at
- * ordinal 2. The trigger refuses this entirely on a published version, which is what
- * makes "editing a published sequence creates a new draft" true rather than advised.
+ * The steps are the whole list, numbered 1..n by place, which is what the editor sends.
+ * A retired version refuses. A published one is held to what publication checks — at
+ * least one step, and every email step on an approved, unretired template — and is
+ * matched to its stored steps by ordinal: a step at an ordinal that exists is updated in
+ * place (delay, template, no-answer rule, and channel while it has no executions), a
+ * new ordinal is added, and a trailing step is removed only while nothing has executed
+ * it. Every check runs before anything is written, because a refusal commits with its
+ * receipt. A delay edit moves the steps whose executions do not exist yet; one already
+ * scheduled keeps its due instant.
  */
-export async function replaceDraftSteps(
+export async function saveSteps(
   context: RepositoryContext,
   input: ReplaceDraftStepsInput,
 ): Promise<SequenceResult<{ readonly steps: number }>> {
@@ -235,8 +221,99 @@ export async function replaceDraftSteps(
 
   const version = await readSequenceVersion(context, input.sequenceVersionId);
   if (version === null) return refuseSequence('version_unknown');
-  if (version.state !== 'draft') return refuseSequence('version_not_draft');
+  if (version.state === 'retired') return refuseSequence('version_retired');
+  if (version.state === 'draft') return await replaceDraftSteps(context, input);
 
+  const shape = validateSteps(input.steps);
+  if (shape !== null) return refuseSequence(shape);
+  if (input.steps.length === 0) return refuseSequence('version_has_no_steps');
+  const templates = await refuseUnpublishableTemplates(context, input.steps);
+  if (templates !== null) return refuseSequence(templates);
+
+  const executed = await stepsWithExecutions(context, input.sequenceVersionId);
+  const byOrdinal = new Map(version.steps.map(step => [step.ordinal, step]));
+  const wanted = [...input.steps].sort((left, right) => left.ordinal - right.ordinal);
+  for (const step of version.steps) {
+    const replacement = wanted[step.ordinal - 1];
+    if (!executed.has(step.id)) continue;
+    if (replacement === undefined || replacement.channel !== step.channel) return refuseSequence('step_in_use');
+  }
+
+  for (const step of version.steps) {
+    if (step.ordinal > wanted.length) {
+      await context.db.query('DELETE FROM sequence_steps WHERE workspace_id = $1 AND id = $2', [
+        context.scope.workspaceId,
+        step.id,
+      ]);
+    }
+  }
+  for (const step of wanted) {
+    const stored = byOrdinal.get(step.ordinal);
+    const values = [
+      step.channel,
+      step.delay.unit,
+      step.delay.unit === 'elapsed' ? step.delay.hours : step.delay.days,
+      step.onNoAnswer ?? null,
+      step.templateVersionId ?? null,
+    ];
+    if (stored === undefined) {
+      await context.db.query(
+        `INSERT INTO sequence_steps
+           (workspace_id, sequence_version_id, ordinal, channel, delay_unit, delay_amount,
+            on_no_answer, template_version_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [context.scope.workspaceId, input.sequenceVersionId, step.ordinal, ...values],
+      );
+    } else {
+      await context.db.query(
+        `UPDATE sequence_steps
+            SET channel = $3, delay_unit = $4, delay_amount = $5, on_no_answer = $6, template_version_id = $7
+          WHERE workspace_id = $1 AND id = $2`,
+        [context.scope.workspaceId, stored.id, ...values],
+      );
+    }
+  }
+  return acceptSequence({ steps: wanted.length });
+}
+
+/** The ids of a version's steps that any execution names. */
+async function stepsWithExecutions(context: RepositoryContext, sequenceVersionId: string): Promise<ReadonlySet<string>> {
+  const { rows } = await context.db.query<{ step_id: string }>(
+    `SELECT DISTINCT e.step_id FROM step_executions e
+       JOIN sequence_steps s ON s.workspace_id = e.workspace_id AND s.id = e.step_id
+      WHERE e.workspace_id = $1 AND s.sequence_version_id = $2`,
+    [context.scope.workspaceId, sequenceVersionId],
+  );
+  return new Set(rows.map(row => row.step_id));
+}
+
+/** 12.2 at publication: every email step names an approved, unretired template. Null means fine. */
+async function refuseUnpublishableTemplates(
+  context: RepositoryContext,
+  steps: readonly { readonly templateVersionId?: string | null | undefined }[],
+): Promise<'template_unknown' | 'template_retired' | 'template_unapproved' | null> {
+  for (const step of steps) {
+    if (step.templateVersionId === undefined || step.templateVersionId === null) continue;
+    const template = await readTemplateVersion(context, step.templateVersionId);
+    if (template === null) return 'template_unknown';
+    if (template.retiredAt !== null) return 'template_retired';
+    if (template.approvedAt === null) return 'template_unapproved';
+  }
+  return null;
+}
+
+/**
+ * Replace a draft's steps wholesale.
+ *
+ * Wholesale rather than one edit at a time because the ordinals are a sequence and a
+ * per-step edit has to renumber its neighbours anyway; doing it in one statement means
+ * `sequence_steps_one_per_ordinal` never sees an intermediate state with two steps at
+ * ordinal 2. A draft has no executions, so nothing points at the rows it replaces.
+ */
+async function replaceDraftSteps(
+  context: RepositoryContext,
+  input: ReplaceDraftStepsInput,
+): Promise<SequenceResult<{ readonly steps: number }>> {
   const shape = validateSteps(input.steps);
   if (shape !== null) return refuseSequence(shape);
 
@@ -271,7 +348,6 @@ function validateSteps(steps: readonly DraftStepInput[]): 'invalid_input' | null
   const contiguous = ordinals.every((ordinal, index) => ordinal === index + 1);
   if (!contiguous) return 'invalid_input';
   for (const step of steps) {
-    // A step copied from a version stored before 25 September 2026 may be a LinkedIn task.
     if (!isStepChannel(step.channel)) return 'invalid_input';
     const needsTemplate = step.channel === 'email';
     const needsRetry = step.channel === 'call_task';
@@ -306,13 +382,8 @@ export async function publishVersion(
   if (!ordinals.every((ordinal, index) => ordinal === index + 1)) return refuseSequence('invalid_input');
   if (!version.steps.every(step => isStepChannel(step.channel))) return refuseSequence('invalid_input');
 
-  for (const step of version.steps) {
-    if (step.templateVersionId === null) continue;
-    const template = await readTemplateVersion(context, step.templateVersionId);
-    if (template === null) return refuseSequence('template_unknown');
-    if (template.retiredAt !== null) return refuseSequence('template_retired');
-    if (template.approvedAt === null) return refuseSequence('template_unapproved');
-  }
+  const templates = await refuseUnpublishableTemplates(context, version.steps);
+  if (templates !== null) return refuseSequence(templates);
 
   await context.db.query(
     `UPDATE sequence_versions
@@ -330,8 +401,8 @@ export async function publishVersion(
  *
  * Retiring stops new enrollments and does not touch the ones already running: 11.2
  * freezes an enrollment to its version, and pulling the plan out from under a firm
- * halfway through a cadence is not a thing this system does. The audited migration
- * command of 11.1 is how an admin moves live enrollments off a version.
+ * halfway through a cadence is not a thing this system does. A fix to a plan in use is
+ * an edit in place (`saveSteps`), which reaches the enrollments already on it.
  */
 export async function retireVersion(
   context: RepositoryContext,
@@ -354,32 +425,6 @@ export async function retireVersion(
   const retired = await readSequenceVersion(context, input.sequenceVersionId);
   if (retired === null) return refuseSequence('version_unknown');
   return acceptSequence(retired);
-}
-
-/**
- * One step as a person is shown it (lane A2). A step of a removed channel — a LinkedIn
- * task stored before 25 September 2026 — keeps its id, place and delay and becomes
- * channel `removed`; every other step is itself. Only a reader that shows steps calls
- * this: the engine reads the stored channel, and `isStepChannel` refuses it there.
- */
-export function sequenceStepForDisplay(step: SequenceStepRow): DisplayedSequenceStep {
-  const removed = removedChannelOf(step.channel);
-  if (removed === null) return step;
-  return {
-    id: step.id,
-    sequenceVersionId: step.sequenceVersionId,
-    ordinal: step.ordinal,
-    channel: 'removed',
-    removedChannel: removed,
-    delay: step.delay,
-    onNoAnswer: null,
-    templateVersionId: null,
-  };
-}
-
-/** A version as `/sequences/versions` sends it, each step through `sequenceStepForDisplay`. */
-export function sequenceVersionForDisplay(version: SequenceVersionRow): DisplayedSequenceVersion {
-  return { ...version, steps: version.steps.map(sequenceStepForDisplay) };
 }
 
 export { listSequenceVersions, readSequenceVersion };
