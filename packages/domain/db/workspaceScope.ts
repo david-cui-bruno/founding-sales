@@ -60,8 +60,7 @@ export function isAdminScope(scope: WorkspaceScope): boolean {
 
 /**
  * Everything a repository function is given. There is no second form: a function that
- * takes a bare `Queryable`, or a bare id, is not a repository function and
- * `defineRepository` refuses it.
+ * takes a bare `Queryable`, or a bare id, is not a repository function.
  */
 export interface RepositoryContext {
   readonly scope: WorkspaceScope;
@@ -71,21 +70,4 @@ export interface RepositoryContext {
 /** Build a context. Takes a scope value, so it cannot be called without one either. */
 export function repositoryContext(scope: WorkspaceScope, db: Queryable): RepositoryContext {
   return { scope, db };
-}
-
-/**
- * The shape every repository function has. `...args: never[]` accepts any further
- * parameters (never is assignable to all of them) while pinning the first one, so
- * `(id: string) => ...` is refused: `RepositoryContext` is not assignable to `string`.
- */
-export type RepositoryFunction = (context: RepositoryContext, ...args: never[]) => Promise<unknown>;
-
-/**
- * Declare a repository. Identity at runtime; the work is done by the constraint,
- * which is what the `@ts-expect-error` cases in test/db/workspaceScope.test.ts prove.
- */
-export function defineRepository<Functions extends Readonly<Record<string, RepositoryFunction>>>(
-  functions: Functions,
-): Functions {
-  return functions;
 }

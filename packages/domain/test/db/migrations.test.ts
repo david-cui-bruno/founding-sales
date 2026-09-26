@@ -1,7 +1,28 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
 import { loadMigrations, readAppliedSchemaVersion } from '../../db/migrationRunner.ts';
-import { FOUNDATION_TABLES } from '../../db/lookupKeys.ts';
+
+/** Tables the foundation migration creates, scoped and unscoped alike. */
+const FOUNDATION_TABLES = [
+  'active_holds',
+  'administrative_pauses',
+  'audit_events',
+  'calling_identities',
+  'canary_runs',
+  'command_receipts',
+  'critical_alerts',
+  'daily_counters',
+  'devices',
+  'heartbeats',
+  'hold_reason_codes',
+  'jobs',
+  'retention_policies',
+  'suppression_events',
+  'system_generations',
+  'users',
+  'workspace_memberships',
+  'workspaces',
+] as const;
 
 /**
  * Migrations run against a real PostgreSQL 16, not a mock: every claim here is a
