@@ -525,7 +525,11 @@ resource "aws_ecs_task_definition" "api" {
       }]
 
       healthCheck = {
-        command     = var.api_health_check_command
+        # Liveness, never readiness (lane g81): a database outage must drain this
+        # task at the target group, not restart the container. The path is
+        # LIVENESS_PATH in apps/api/src/bootstrap/readiness.ts, which
+        # test/ops/terraformCrossChecks.check.ts compares with this line.
+        command     = ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:' + (process.env.PORT || '8080') + '/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\""]
         interval    = 15
         timeout     = 5
         retries     = 3
@@ -592,7 +596,8 @@ resource "aws_ecs_task_definition" "worker" {
       }]
 
       healthCheck = {
-        command     = var.worker_health_check_command
+        # The heartbeat file the worker touches each pass.
+        command     = ["CMD-SHELL", "node -e \"require('node:fs').statSync('/tmp/fss-worker-heartbeat')\""]
         interval    = 30
         timeout     = 5
         retries     = 3

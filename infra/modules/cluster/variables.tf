@@ -101,18 +101,6 @@ variable "worker_log_group_name" {
   type        = string
 }
 
-variable "api_health_check_command" {
-  description = "Container-level health check for the API task."
-  type        = list(string)
-  default     = ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:' + (process.env.PORT || '8080') + '/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\""]
-}
-
-variable "worker_health_check_command" {
-  description = "Container-level health check for the worker task."
-  type        = list(string)
-  default     = ["CMD-SHELL", "node -e \"require('node:fs').statSync('/tmp/fss-worker-heartbeat')\""]
-}
-
 variable "environment" {
   description = "Non-secret environment variables added to both tasks. Never put a credential here."
   type        = map(string)
