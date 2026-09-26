@@ -4,7 +4,8 @@
 #
 #   infra/scripts/images.sh inputs
 #   infra/scripts/images.sh verify  <image reference> <api|worker> <schema min> <schema max>
-#   infra/scripts/images.sh record  <commit> <run id> <run attempt> <api digest> <worker digest> <out file>
+#   infra/scripts/images.sh record  <commit> <run id> <run attempt> <api digest> <worker digest> <out file> \
+#                                   --api-range <min>-<max> --worker-range <min>-<max>
 #   infra/scripts/images.sh pin     <commit> <out file>
 #   infra/scripts/images.sh promote <image-digests.json | image-pin.json> [--app-only]
 #
@@ -17,7 +18,9 @@
 #     `push.paths` is this list in glob form.
 #   * verify  — arm64; `--selftest` accepts the declared range and refuses one below it;
 #     runs as node, never uid 0; no test directory and no development dependency.
-#   * record  — `fss.image-digests.v1`: repositories and digests, never a registry host.
+#   * record  — `fss.image-digests.v1`: repositories, digests and the schema range each image
+#     declares (`schemaRange`, the range `verify` just held its `--selftest` to), never a
+#     registry host. The CI deploy reads the ranges from here (P6, 27 September 2026).
 #   * pin     — the images of <commit>: the newest green push run of the images workflow
 #     on main whose commit is an ancestor of <commit> with byte-identical image inputs (so
 #     a script- or docs-only commit pins the last commit that changed an image), and the
@@ -144,8 +147,20 @@ images_verify() {
 # record
 # ---------------------------------------------------------------------------
 images_record() {
-  local commit=${1:-} run_id=${2:-} attempt=${3:-} api=${4:-} worker=${5:-} out=${6:-}
+  local commit=${1:-} run_id=${2:-} attempt=${3:-} api=${4:-} worker=${5:-} out=${6:-} api_range='' worker_range='' range
+  shift 6 2>/dev/null || shift "$#"
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --api-range) api_range=${2:-}; shift 2 ;;
+      --worker-range) worker_range=${2:-}; shift 2 ;;
+      *) images_fail "record does not take '$1'" ;;
+    esac
+  done
   require_commit "the commit" "$commit"
+  for range in "$api_range" "$worker_range"; do
+    [[ "$range" =~ ^[0-9]{1,4}-[0-9]{1,4}$ ]] \
+      || images_fail "record needs --api-range and --worker-range as <min>-<max>, the ranges verify held each image to ('$range')"
+  done
   [[ "$run_id" =~ ^[0-9]+$ ]] || images_fail "the run id '$run_id' is not a number"
   [[ "$attempt" =~ ^[0-9]+$ ]] || images_fail "the run attempt '$attempt' is not a number"
   require_digest "the API digest" "$api"
@@ -154,10 +169,14 @@ images_record() {
   [ -n "$out" ] || images_fail "record needs an output file"
   mkdir -p "$(dirname "$out")"
   FSS_COMMIT="$commit" FSS_RUN_ID="$run_id" FSS_ATTEMPT="$attempt" FSS_API="$api" FSS_WORKER="$worker" \
-  FSS_INPUTS="$(images_inputs)" FSS_RECORDED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)" python3 - > "$out" <<'PY'
+  FSS_API_RANGE="$api_range" FSS_WORKER_RANGE="$worker_range" FSS_INPUTS="$(images_inputs)" FSS_RECORDED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)" python3 - > "$out" <<'PY'
 import json, os
 env = os.environ
 tag = "ci-" + env["FSS_COMMIT"]
+def image(service, digest, variable):
+    minimum, maximum = (int(part) for part in env[variable].split("-"))
+    return {"repository": "fss-rh-" + service, "tag": tag, "digest": digest,
+            "schemaRange": {"minimum": minimum, "maximum": maximum}}
 print(json.dumps({
     "schema": "fss.image-digests.v1",
     "commit": env["FSS_COMMIT"],
@@ -165,8 +184,8 @@ print(json.dumps({
     "workflowRunAttempt": env["FSS_ATTEMPT"],
     "recordedAt": env["FSS_RECORDED_AT"],
     "images": {
-        "api": {"repository": "fss-rh-api", "tag": tag, "digest": env["FSS_API"]},
-        "worker": {"repository": "fss-rh-worker", "tag": tag, "digest": env["FSS_WORKER"]},
+        "api": image("api", env["FSS_API"], "FSS_API_RANGE"),
+        "worker": image("worker", env["FSS_WORKER"], "FSS_WORKER_RANGE"),
     },
     "imageInputs": env["FSS_INPUTS"].split("\n"),
 }, indent=2))
@@ -545,7 +564,7 @@ case "$SUBCOMMAND" in
   pin) images_pin "$@" ;;
   promote) images_promote "$@" ;;
   *)
-    echo "usage: $(basename "$0") inputs | verify <image> <api|worker> <min> <max> | record <commit> <run id> <attempt> <api digest> <worker digest> <out> | pin <commit> <out> | promote <image-digests.json | image-pin.json>" >&2
+    echo "usage: $(basename "$0") inputs | verify <image> <api|worker> <min> <max> | record <commit> <run id> <attempt> <api digest> <worker digest> <out> --api-range <min>-<max> --worker-range <min>-<max> | pin <commit> <out> | promote <image-digests.json | image-pin.json>" >&2
     exit 2
     ;;
 esac

@@ -37,6 +37,45 @@ describe('images.sh inputs is the images workflow’s push paths', () => {
   });
 });
 
+describe('images.sh record writes the digests and the schema range each image declares (P6)', () => {
+  const commit = 'a'.repeat(40);
+  const recorded = (...extra: string[]): { readonly code: number; readonly stderr: string; readonly document: Record<string, unknown> | null } => {
+    const out = join(mkdtempSync(join(tmpdir(), 'fss-record-digests-')), 'image-digests.json');
+    const result = run(['record', commit, '4242', '1', digest('b'), digest('c'), out, ...extra]);
+    let document: Record<string, unknown> | null = null;
+    try {
+      document = JSON.parse(readFileSync(out, 'utf8')) as Record<string, unknown>;
+    } catch {
+      document = null;
+    }
+    return { code: result.code, stderr: result.stderr, document };
+  };
+
+  it('carries both ranges, which the CI deploy reads instead of running code from the images commit', () => {
+    const written = recorded('--api-range', '20-20', '--worker-range', '19-20');
+    expect(written.code, written.stderr).toBe(0);
+    expect(written.document?.['images']).toEqual({
+      api: { repository: 'fss-rh-api', tag: `ci-${commit}`, digest: digest('b'), schemaRange: { minimum: 20, maximum: 20 } },
+      worker: { repository: 'fss-rh-worker', tag: `ci-${commit}`, digest: digest('c'), schemaRange: { minimum: 19, maximum: 20 } },
+    });
+  });
+
+  it('refuses to write a digests file without both ranges', () => {
+    for (const extra of [[], ['--api-range', '20-20'], ['--api-range', '20', '--worker-range', '20-20']]) {
+      const refused = recorded(...extra);
+      expect(refused.code, extra.join(' ')).toBe(1);
+      expect(refused.stderr).toContain('record needs --api-range and --worker-range');
+      expect(refused.document).toBeNull();
+    }
+  });
+
+  it('is what the images workflow records, with the ranges it just verified the images against', () => {
+    const workflow = readRepositoryFile('.github/workflows/greenfield-images.yml');
+    expect(workflow).toContain('--api-range "$API_SCHEMA_MIN-$API_SCHEMA_MAX" --worker-range "$WORKER_SCHEMA_MIN-$WORKER_SCHEMA_MAX"');
+    expect(workflow).not.toContain('release-images.sh');
+  });
+});
+
 // ---------------------------------------------------------------------------
 // pin
 // ---------------------------------------------------------------------------

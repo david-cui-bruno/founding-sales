@@ -5,7 +5,7 @@
 #   deploy.sh bootstrap <root> <prefix> --worker-digest D --slug S --display-name N --admin-email E \
 #                       [--time-zone Z] [--sending-domain DOMAIN] [--environment production]
 #   deploy.sh current   <prefix> [--var-flags] [--compare <api_image> <worker_image> [--allow-digest-change]]
-#   deploy.sh ci        check|deploy|record  (the CI path; flags under "ci" below)
+#   deploy.sh ci        gates|download|check|record|deploy|canary  (the CI path; flags under "ci" below)
 #
 # It replaces release-deploy.sh (release), release-bootstrap-workspace.sh (bootstrap),
 # deployed-digests.sh (current) and ci-deploy-app.sh (ci), which exec it with the same
@@ -73,44 +73,55 @@
 # --allow-digest-change says the release changes them on purpose. Read-only; the task
 # read goes to stderr so stdout stays the four lines.
 #
-# ## ci: an app-only merge, deployed by CI (lane g91; David, 25 September 2026)
+# ## ci: an app-only merge, deployed by CI (lane g91; David, 25 September 2026; P6)
 #
+#   deploy.sh ci gates    --commit <sha> [--wait-minutes N]                  (no credential)
+#   deploy.sh ci download --run-id <id> --commit <sha> --out <image-digests.json>
 #   deploy.sh ci check|deploy --digests <image-digests.json> --commit <sha> --run-id <id> \
-#       --run-attempt <n> --run-started <instant> --run-ended <instant> \
-#       --api-range <min>-<max> --worker-range <min>-<max> [--origin https://...]  (check needs it)
+#       --run-attempt <n> [--origin https://...]                            (check needs it)
 #   deploy.sh ci record --before-rollout|--after-rollout <the same, without --origin> \
-#       --gate-run-id <id> --cluster-name <name> --operations-family <family> \
-#       --subnets <subnet-a,subnet-b> --security-group <sg-id>
+#       --cluster-name <name> --operations-family <family> --subnets <a,b> --security-group <sg>
+#   deploy.sh ci canary
 #
-# `.github/workflows/greenfield-deploy.yml` runs it as `fss-prod-ci-deploy`, after its own
-# guard found no protected path in any commit since production's (this file never
-# classifies paths: a script is itself a protected path). Every subcommand first reads and
-# judges: the session is exactly that role in the production account and region; the
-# cluster is tagged production; the digests file is the images run's own (this commit,
-# run and attempt); each digest is the one `fss-rh-<image>:ci-<commit>` names (immutable
-# tags) and was pushed inside the images run's window (lane A1); both services run at
-# their declared counts with one COMPLETED deployment; and the images' schema ranges equal
-# the running definitions'. Then:
+# `.github/workflows/greenfield-deploy.yml` runs these; all but `gates` as
+# `fss-prod-ci-deploy`, after its own guard found no protected path in any commit since
+# production's (this file never classifies paths: a script is itself a protected path).
 #
+#   * gates: the Greenfield gate green on the push at the commit (its newest run, latest
+#     attempt) and the commit still on main, waiting for a gate still running;
+#     decision=pass or manual.
+#   * download: the images run's own fss-image-digests artifact, held to the digest GitHub
+#     recorded. It carries both digests and the schema range each image declares.
+#   * check, record and deploy first read and judge: the session is exactly the CI role in
+#     the production account and region; the cluster is tagged production; the digests
+#     file is the images run's own (commit, run and attempt); each digest is the one
+#     `fss-rh-<image>:ci-<commit>` names; both services run at their declared counts with
+#     one COMPLETED deployment; and the images' ranges equal the running definitions'.
+#     Provenance needs no clock (P6, 27 September 2026): the repositories are IMMUTABLE,
+#     the images run refuses a tag that exists on its first attempt and verifies what it
+#     pulls back by digest, the artifact is bound to the run, and only the rehearsal deploy
+#     role, by its namespace, can push `fss-rh-*` (there is no repository policy).
 #   * check: decision=deploy, current (already running) or manual (a schema change, from
-#     the ranges or /health, or a service not at its count), to $GITHUB_OUTPUT; a manual
-#     decision exits 0, an error 1.
-#   * record --before-rollout: the ci-gate record (record.sh from-ci) put on the operations
-#     task before the promotion, the deploy job's first write, so no new worker task starts
-#     without one. The operations definition is Terraform's and does not track, so the put
-#     runs the worker image of the last apply, under the worker's roles and log group.
+#     the ranges or /health, or a service not at its count); a manual decision exits 0.
+#   * record --before-rollout: the gate read again, then the ci-gate record (record.sh
+#     from-ci) put on the operations task before the promotion, the deploy job's first
+#     write, so no new worker task starts without one. The operations definition is
+#     Terraform's and does not track, so the put runs the worker image of the last apply,
+#     under the worker's roles and log group.
 #   * deploy: the next revision of each running definition with only the image changed,
 #     described back and compared field by field (deregistered otherwise); the worker
 #     rolled, waited on, held to COMPLETED and its digest, and only then the API. A revision
 #     ECS rolled back is deregistered, so the newest ACTIVE revision is the one that runs;
 #     the stopped tasks' stop codes and the event/reason/code fields of their log lines are
 #     printed, never a raw line. No Terraform; nothing from the images commit runs here.
-#   * record --after-rollout: after the smoke, both services must run the two digests, and
-#     the same put must answer `existing`.
+#   * record --after-rollout: the read-back. Both services must run the two digests, the
+#     gate is read again, and the same put must answer `existing`.
+#   * canary: the canary age the production smoke judges.
 #
-# Offline seams: FSS_REHEARSAL_AWS_COMMAND, FSS_GH_COMMAND (record.sh from-ci),
-# FSS_CI_CALLER_IDENTITY, FSS_CI_HEALTH_JSON, FSS_CI_WAIT_ATTEMPTS, FSS_CI_ROLLOUT_READS,
-# FSS_CI_ROLLOUT_SECONDS, FSS_PRODUCTION_ACCOUNT_ID and lib.sh's FSS_RELEASE_* fixtures.
+# Offline seams: FSS_REHEARSAL_AWS_COMMAND, FSS_GH_COMMAND, FSS_CI_CALLER_IDENTITY,
+# FSS_CI_HEALTH_JSON, FSS_CI_WAIT_ATTEMPTS, FSS_CI_ROLLOUT_READS, FSS_CI_ROLLOUT_SECONDS,
+# FSS_CI_GATE_POLL_SECONDS, FSS_CI_CANARY_READS, FSS_CI_CANARY_SECONDS,
+# FSS_PRODUCTION_ACCOUNT_ID and lib.sh's FSS_RELEASE_* fixtures.
 
 DEPLOY_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=infra/scripts/lib.sh
@@ -126,7 +137,8 @@ deploy_usage() { # deploy_usage [exit code]
 usage: deploy.sh release   <root> <prefix> [--schema-change] --api-digest D --worker-digest D [--release-record F]
        deploy.sh bootstrap <root> <prefix> --worker-digest D --slug S --display-name N --admin-email E [--time-zone Z] [--sending-domain DOMAIN] [--environment production]
        deploy.sh current   <prefix> [--var-flags] [--compare <api_image> <worker_image> [--allow-digest-change]]
-       deploy.sh ci        check|deploy|record --digests F --commit SHA --run-id ID --run-attempt N --run-started T --run-ended T --api-range MIN-MAX --worker-range MIN-MAX [--origin URL] [--before-rollout|--after-rollout --gate-run-id ID --cluster-name NAME --operations-family FAMILY --subnets IDS --security-group ID]
+       deploy.sh ci        gates --commit SHA [--wait-minutes N] | download --run-id ID --commit SHA --out F | canary
+       deploy.sh ci        check|deploy|record --digests F --commit SHA --run-id ID --run-attempt N [--origin URL] [--before-rollout|--after-rollout --cluster-name NAME --operations-family FAMILY --subnets IDS --security-group ID]
 USAGE
   exit "${1:-2}"
 }
@@ -587,14 +599,19 @@ ci_field() { deploy_field "$CI_WORK" "$1" "$2"; }
 deploy_ci() {
   SUBCOMMAND=${1:-}
   shift || true
-  case "$SUBCOMMAND" in check | deploy | record) ;; *) deploy_usage 2 ;; esac
-  DIGESTS='' COMMIT='' RUN_ID='' RUN_ATTEMPT='' RUN_STARTED='' RUN_ENDED='' API_RANGE='' WORKER_RANGE='' ORIGIN=''
-  GATE_RUN_ID='' RECORD_CLUSTER_NAME='' OPERATIONS_FAMILY='' TASK_SUBNETS='' TASK_SECURITY_GROUP='' RECORD_STAGE=''
+  case "$SUBCOMMAND" in
+    gates) ci_gates "$@"; return ;;
+    download) ci_download "$@"; return ;;
+    canary) ci_canary; return ;;
+    check | deploy | record) ;;
+    *) deploy_usage 2 ;;
+  esac
+  DIGESTS='' COMMIT='' RUN_ID='' RUN_ATTEMPT='' ORIGIN=''
+  RECORD_CLUSTER_NAME='' OPERATIONS_FAMILY='' TASK_SUBNETS='' TASK_SECURITY_GROUP='' RECORD_STAGE=''
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --before-rollout) RECORD_STAGE=before; shift ;;
       --after-rollout) RECORD_STAGE=after; shift ;;
-      --gate-run-id) GATE_RUN_ID=${2:-}; shift 2 ;;
       --cluster-name) RECORD_CLUSTER_NAME=${2:-}; shift 2 ;;
       --operations-family) OPERATIONS_FAMILY=${2:-}; shift 2 ;;
       --subnets) TASK_SUBNETS=${2:-}; shift 2 ;;
@@ -603,10 +620,6 @@ deploy_ci() {
       --commit) COMMIT=${2:-}; shift 2 ;;
       --run-id) RUN_ID=${2:-}; shift 2 ;;
       --run-attempt) RUN_ATTEMPT=${2:-}; shift 2 ;;
-      --run-started) RUN_STARTED=${2:-}; shift 2 ;;
-      --run-ended) RUN_ENDED=${2:-}; shift 2 ;;
-      --api-range) API_RANGE=${2:-}; shift 2 ;;
-      --worker-range) WORKER_RANGE=${2:-}; shift 2 ;;
       --origin) ORIGIN=${2:-}; shift 2 ;;
       *) deploy_fail "deploy.sh ci does not take '$1'" ;;
     esac
@@ -628,21 +641,12 @@ deploy_ci() {
 
 # Every argument judged before anything is asked.
 ci_arguments() {
-  local instant range
   if rehearsal_dry_run; then
     deploy_fail "deploy.sh ci has no dry run. Every step of check is a read, and test/ops/ciDeploy.check.ts drives it against a stub CLI."
   fi
   [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || deploy_fail "--commit '$COMMIT' is not a full forty-character commit"
   [[ "$RUN_ID" =~ ^[0-9]{1,20}$ ]] || deploy_fail "--run-id '$RUN_ID' is not a workflow run id"
   [[ "$RUN_ATTEMPT" =~ ^[0-9]{1,4}$ ]] || deploy_fail "--run-attempt '$RUN_ATTEMPT' is not a run attempt"
-  for instant in "$RUN_STARTED" "$RUN_ENDED"; do
-    [[ "$instant" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] \
-      || deploy_fail "'$instant' is not a UTC instant; pass the images run's created_at and updated_at as --run-started and --run-ended"
-  done
-  [[ ! "$RUN_ENDED" < "$RUN_STARTED" ]] || deploy_fail "the images run ended at $RUN_ENDED, before it started at $RUN_STARTED"
-  for range in "$API_RANGE" "$WORKER_RANGE"; do
-    [[ "$range" =~ ^[0-9]{1,4}-[0-9]{1,4}$ ]] || deploy_fail "'$range' is not a schema range; pass <min>-<max>"
-  done
   if [ "$SUBCOMMAND" = check ]; then
     [[ "$ORIGIN" =~ ^https://[A-Za-z0-9.-]+$ ]] || deploy_fail "--origin '$ORIGIN' is not an https origin; production has no port-80 listener"
   fi
@@ -651,10 +655,9 @@ ci_arguments() {
     return 0
   fi
   [ -n "$RECORD_STAGE" ] \
-    || deploy_fail "record needs --before-rollout (the deploy job's put, before its first write) or --after-rollout (the read-back after the smoke)"
-  # Five public identifiers; the last four come from repository variables (release.md 4.0),
-  # and an empty one is a variable nobody set.
-  [[ "$GATE_RUN_ID" =~ ^[1-9][0-9]{0,19}$ ]] || deploy_fail "--gate-run-id '$GATE_RUN_ID' is not a GitHub Actions run id"
+    || deploy_fail "record needs --before-rollout (the deploy job's put, before its first write) or --after-rollout (the read-back after the rollout)"
+  # Four public identifiers from repository variables (release.md 4.0); an empty one is a
+  # variable nobody set.
   [[ "$RECORD_CLUSTER_NAME" =~ ^${CI_PREFIX}-[a-z0-9-]{1,40}$ ]] \
     || deploy_fail "--cluster-name '$RECORD_CLUSTER_NAME' is not a ${CI_PREFIX} cluster name; set the repository variable FSS_PRODUCTION_CLUSTER_NAME (release.md 4.0)"
   [[ "$OPERATIONS_FAMILY" =~ ^${CI_PREFIX}-[a-z0-9-]{1,40}$ ]] \
@@ -665,9 +668,10 @@ ci_arguments() {
     || deploy_fail "--security-group '$TASK_SECURITY_GROUP' is not a security group id; set the repository variable FSS_PRODUCTION_TASK_SECURITY_GROUP_ID (release.md 4.0)"
 }
 
-# The digests file the images run's publish job wrote, for exactly this commit, run and attempt.
+# The digests file the images run's publish job wrote, for exactly this commit, run and
+# attempt: the two digests and the schema range each image declares (images.sh record).
 ci_read_digests() {
-  read -r API_DIGEST WORKER_DIGEST <<<"$(FSS_FILE="$DIGESTS" FSS_COMMIT="$COMMIT" FSS_RUN_ID="$RUN_ID" FSS_RUN_ATTEMPT="$RUN_ATTEMPT" python3 - <<'PY'
+  read -r API_DIGEST WORKER_DIGEST API_RANGE WORKER_RANGE <<<"$(FSS_FILE="$DIGESTS" FSS_COMMIT="$COMMIT" FSS_RUN_ID="$RUN_ID" FSS_RUN_ATTEMPT="$RUN_ATTEMPT" python3 - <<'PY'
 # deploy-ci-read-digests
 import json, os, re, sys
 
@@ -690,7 +694,7 @@ if str(document.get("workflowRunAttempt")) != os.environ["FSS_RUN_ATTEMPT"]:
     fail("the digests file was written by attempt {} of the images run, and its latest attempt is {}".format(
         document.get("workflowRunAttempt"), os.environ["FSS_RUN_ATTEMPT"]))
 images = document.get("images") or {}
-found = []
+digests, ranges = [], []
 for service in ("api", "worker"):
     entry = images.get(service) or {}
     if entry.get("repository") != "fss-rh-" + service:
@@ -700,13 +704,203 @@ for service in ("api", "worker"):
     digest = entry.get("digest")
     if not isinstance(digest, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
         fail("the {} digest '{}' is not an image digest".format(service, digest))
-    found.append(digest)
-if found[0] == found[1]:
+    digests.append(digest)
+    declared = entry.get("schemaRange") or {}
+    bounds = [declared.get("minimum"), declared.get("maximum")]
+    if not all(isinstance(bound, int) and not isinstance(bound, bool) and 0 <= bound <= 9999 for bound in bounds) or bounds[0] > bounds[1]:
+        fail("the digests file names no schema range for the {} image ({}). An images run before 27 September 2026 "
+             "wrote no ranges; release that commit by hand (release.md 4), or let the next app merge publish again".format(service, declared or "none"))
+    ranges.append("{}-{}".format(*bounds))
+if digests[0] == digests[1]:
     fail("the API and worker digests are identical; one image was pushed under both names")
-print(found[0], found[1])
+print(digests[0], digests[1], ranges[0], ranges[1])
 PY
 )"
-  [ -n "${API_DIGEST:-}" ] && [ -n "${WORKER_DIGEST:-}" ] || exit 1
+  [ -n "${API_DIGEST:-}" ] && [ -n "${WORKER_RANGE:-}" ] || exit 1
+}
+
+# The Greenfield gate on <commit>, as GitHub reports it now (lane A1): the newest run of
+# the push of `.github/workflows/greenfield.yml` (by file, never display name) at the
+# commit, as its latest attempt, and main as the API sees it. Prints `green <run id>`,
+# `waiting <why>` or `red <why>`.   ci_gate_verdict <commit>
+ci_gate_verdict() {
+  local commit=$1 work
+  [[ "${GITHUB_REPOSITORY:-}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] \
+    || deploy_fail "GITHUB_REPOSITORY '${GITHUB_REPOSITORY:-}' is not owner/name"
+  work="$(mktemp -d "${TMPDIR:-/tmp}/fss-ci-gates.XXXXXX")"
+  command "${FSS_GH_COMMAND:-gh}" api \
+    "repos/$GITHUB_REPOSITORY/actions/workflows/greenfield.yml/runs?head_sha=$commit&event=push&branch=main&per_page=20" \
+    >"$work/runs.json" || deploy_fail "gh could not list the Greenfield gate runs of $commit"
+  command "${FSS_GH_COMMAND:-gh}" api "repos/$GITHUB_REPOSITORY/compare/main...$commit?per_page=1" \
+    >"$work/compare.json" || deploy_fail "gh could not compare $commit with main"
+  FSS_WORK="$work" FSS_COMMIT="$commit" python3 - <<'PY'
+# deploy-ci-gate-verdict
+import json, os, re
+env = os.environ
+commit, work, path = env["FSS_COMMIT"], env["FSS_WORK"], ".github/workflows/greenfield.yml"
+runs = [run for run in (json.load(open(os.path.join(work, "runs.json"), encoding="utf-8")) or {}).get("workflow_runs") or []
+        if str(run.get("path", "")).split("@")[0] == path and run.get("event") == "push"
+        and run.get("head_branch") == "main" and run.get("head_sha") == commit
+        and (run.get("head_repository") or {}).get("full_name") == env["GITHUB_REPOSITORY"]
+        and re.fullmatch(r"[1-9][0-9]{0,19}", str(run.get("id", "")))]
+red, waiting, green = [], [], ""
+if not runs:
+    waiting.append("no Greenfield gate run ({}) of the push yet".format(path))
+else:
+    run = max(runs, key=lambda run: (str(run.get("created_at", "")), int(run["id"])))
+    seen = "Greenfield gate run {} attempt {}".format(run["id"], run.get("run_attempt"))
+    if run.get("status") != "completed":
+        waiting.append("{} is {}".format(seen, run.get("status")))
+    elif run.get("conclusion") != "success":
+        red.append("{} concluded {}".format(seen, run.get("conclusion")))
+    else:
+        green = str(run["id"])
+compared = json.load(open(os.path.join(work, "compare.json"), encoding="utf-8")) or {}
+if compared.get("status") not in ("behind", "identical"):
+    red.append("it is no longer on main (compare main...{} is {})".format(commit[:12], compared.get("status")))
+print("red " + "; ".join(red) if red else "waiting " + "; ".join(waiting) if waiting else "green " + green)
+PY
+  rm -rf "$work"
+}
+
+# gates: the gates job's answer, with no credential (lane A1). *Greenfield images* can
+# finish before the gate of the same push, so it waits up to --wait-minutes (default 30).
+#   deploy.sh ci gates --commit <sha> [--wait-minutes N]
+# decision=pass and gate_run_id=, or decision=manual and reason= (exit 0): a red gate, one
+# not finished in time, or a commit no longer on main.
+ci_gates() {
+  local commit='' wait=30 minute=0 verdict
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --commit) commit=${2:-}; shift 2 ;;
+      --wait-minutes) wait=${2:-}; shift 2 ;;
+      *) deploy_fail "deploy.sh ci gates does not take '$1'" ;;
+    esac
+  done
+  [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || deploy_fail "--commit '$commit' is not a full forty-character commit"
+  [[ "$wait" =~ ^[0-9]{1,3}$ ]] || deploy_fail "--wait-minutes '$wait' is not a number of minutes"
+  while :; do
+    verdict="$(ci_gate_verdict "$commit")" || exit 1
+    case "$verdict" in
+      green\ *)
+        ci_output decision pass
+        ci_output gate_run_id "${verdict#green }"
+        rehearsal_log "Greenfield gate run ${verdict#green } is green on $commit, which is on main"
+        return 0
+        ;;
+      red\ *) ci_decide manual "the images commit $commit cannot be deployed: ${verdict#red }" ;;
+    esac
+    [ "$minute" -lt "$wait" ] || ci_decide manual "the gate on $commit had not finished after $wait minute(s): ${verdict#waiting }"
+    rehearsal_log "the gate on $commit: ${verdict#waiting }; waiting"
+    sleep "${FSS_CI_GATE_POLL_SECONDS:-60}"
+    minute=$((minute + 1))
+  done
+}
+
+# The gate again, immediately before a write, waiting for nothing: anything but green on
+# main now is a red run with nothing written. Sets GATE_RUN_ID.
+ci_require_gate() {
+  local verdict
+  verdict="$(ci_gate_verdict "$COMMIT")" || exit 1
+  case "$verdict" in
+    green\ *) GATE_RUN_ID=${verdict#green } ;;
+    *) deploy_fail "the images commit $COMMIT cannot be deployed now: ${verdict#* }. Nothing more is written for this commit." ;;
+  esac
+  rehearsal_log "Greenfield gate run $GATE_RUN_ID is green on $COMMIT, which is on main"
+}
+
+# download: the images run's own `fss-image-digests` artifact, found through the run and
+# nowhere else. It must be that run's, of that commit on main, unexpired, its bytes the
+# digest GitHub recorded, and hold image-digests.json alone.
+#   deploy.sh ci download --run-id <id> --commit <sha> --out <file>
+ci_download() {
+  local run_id='' commit='' out='' work artifact expected
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --run-id) run_id=${2:-}; shift 2 ;;
+      --commit) commit=${2:-}; shift 2 ;;
+      --out) out=${2:-}; shift 2 ;;
+      *) deploy_fail "deploy.sh ci download does not take '$1'" ;;
+    esac
+  done
+  [[ "$run_id" =~ ^[0-9]{1,20}$ ]] || deploy_fail "--run-id '$run_id' is not a workflow run id"
+  [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || deploy_fail "--commit '$commit' is not a full forty-character commit"
+  [ -n "$out" ] || deploy_fail "download needs --out <file>"
+  [[ "${GITHUB_REPOSITORY:-}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] \
+    || deploy_fail "GITHUB_REPOSITORY '${GITHUB_REPOSITORY:-}' is not owner/name"
+  work="$(mktemp -d "${TMPDIR:-/tmp}/fss-ci-download.XXXXXX")"
+  # shellcheck disable=SC2064 # the path is fixed now
+  trap "rm -rf '$work'" EXIT
+  command "${FSS_GH_COMMAND:-gh}" api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts?name=fss-image-digests&per_page=100" \
+    >"$work/artifacts.json" || deploy_fail "gh could not list the artifacts of images run $run_id"
+  read -r artifact expected <<<"$(FSS_FILE="$work/artifacts.json" FSS_RUN_ID="$run_id" FSS_COMMIT="$commit" python3 - <<'PY'
+# deploy-ci-artifact
+import json, os, re, sys
+run_id, commit = os.environ["FSS_RUN_ID"], os.environ["FSS_COMMIT"]
+listed = (json.load(open(os.environ["FSS_FILE"], encoding="utf-8")) or {}).get("artifacts") or []
+named = [item for item in listed if isinstance(item, dict) and item.get("name") == "fss-image-digests"]
+if not named:
+    sys.exit("FAIL: images run {} has no fss-image-digests artifact".format(run_id))
+artifact = max(named, key=lambda item: (str(item.get("created_at", "")), str(item.get("id", ""))))
+source = artifact.get("workflow_run") or {}
+problems = []
+if not re.fullmatch(r"[1-9][0-9]{0,19}", str(artifact.get("id", ""))):
+    problems.append("it has no id")
+if artifact.get("expired") is not False:
+    problems.append("it has expired")
+if str(source.get("id", "")) != run_id:
+    problems.append("it was uploaded by run {}, not by images run {}".format(source.get("id"), run_id))
+if source.get("head_sha") != commit or source.get("head_branch") != "main":
+    problems.append("its run built {} on {}, not {} on main".format(source.get("head_sha"), source.get("head_branch"), commit))
+if not re.fullmatch(r"sha256:[0-9a-f]{64}", str(artifact.get("digest", ""))):
+    problems.append("it carries no sha256 digest to hold the download to")
+if problems:
+    sys.exit("FAIL: the fss-image-digests artifact of images run {} is not that run's own: {}".format(run_id, "; ".join(problems)))
+print(artifact["id"], artifact["digest"])
+PY
+)"
+  [ -n "${expected:-}" ] || exit 1
+  command "${FSS_GH_COMMAND:-gh}" api "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact/zip" >"$work/artifact.zip" \
+    || deploy_fail "gh could not download artifact $artifact"
+  mkdir -p "$(dirname "$out")"
+  FSS_ZIP="$work/artifact.zip" FSS_DIGEST="$expected" FSS_OUT="$out" python3 - <<'PY' || exit 1
+# deploy-ci-artifact-bytes
+import hashlib, os, sys, zipfile
+env = os.environ
+data = open(env["FSS_ZIP"], "rb").read()
+actual = "sha256:" + hashlib.sha256(data).hexdigest()
+if actual != env["FSS_DIGEST"]:
+    sys.exit("FAIL: the downloaded artifact is {}, and GitHub lists {} as its digest".format(actual, env["FSS_DIGEST"]))
+with zipfile.ZipFile(env["FSS_ZIP"]) as archive:
+    if archive.namelist() != ["image-digests.json"]:
+        sys.exit("FAIL: the artifact holds {}, not image-digests.json alone".format(archive.namelist()))
+    content = archive.read("image-digests.json")
+if len(content) > 65536:
+    sys.exit("FAIL: image-digests.json is {} bytes, which is not a digests file".format(len(content)))
+open(env["FSS_OUT"], "wb").write(content)
+PY
+  rehearsal_log "artifact $artifact of images run $run_id, $expected"
+  cat "$out"
+}
+
+# canary: the newest CanaryCompletionAgeSeconds of the last hour, which the smoke judges,
+# as canary_age=. Up to five reads a minute apart for a first datapoint.
+ci_canary() {
+  local attempt now age
+  for attempt in $(seq 1 "${FSS_CI_CANARY_READS:-5}"); do
+    now="$(date -u +%s)"
+    age="$(release_aws "$CI_ENVIRONMENT" cloudwatch get-metric-statistics --namespace "FSS/$CI_PREFIX" \
+      --metric-name CanaryCompletionAgeSeconds --statistics Maximum --period 300 \
+      --start-time "$((now - 3600))" --end-time "$now" \
+      --query 'reverse(sort_by(Datapoints,&Timestamp))[0].Maximum' --output text)" || age=''
+    if [[ "$age" =~ ^[0-9]{1,7}(\.[0-9]{1,6})?$ ]]; then
+      ci_output canary_age "$age"
+      return 0
+    fi
+    rehearsal_log "no CanaryCompletionAgeSeconds datapoint yet (read $attempt)"
+    [ "$attempt" -eq "${FSS_CI_CANARY_READS:-5}" ] || sleep "${FSS_CI_CANARY_SECONDS:-60}"
+  done
+  deploy_fail "production published no CanaryCompletionAgeSeconds datapoint in the last hour; the smoke has nothing to judge"
 }
 
 # The session: exactly the CI role, in the production account and region; the cluster
@@ -734,58 +928,23 @@ ci_session() {
   rehearsal_log "cluster $CLUSTER_ARN, tagged Environment=production"
 }
 
-# Provenance (lane A1): each digest is the one the rehearsal repository holds under
-# ci-<commit> (the tags are immutable, so it is the first one pushed there), pushed while
-# the images run was going. A read of a rehearsal repository, which release_aws refuses in
-# a production command by design; so the CLI directly, with the two literal names.
+# Provenance (P6, 27 September 2026): each digest is the one the rehearsal repository
+# holds under ci-<commit>. The repositories are IMMUTABLE and the images run refuses a tag
+# that exists on its first attempt, so the image under the tag is the one that run pushed
+# and verified; only the rehearsal deploy role, by its namespace, can push there (there is
+# no repository policy). The push-time window this replaced compared two services' clocks.
+# A read of a rehearsal repository, which release_aws refuses in a production command by
+# design; so the CLI directly, with the two literal names.
 ci_provenance() {
-  local service expected held pushed
+  local service expected held
   for service in $CI_SERVICES; do
     expected=$API_DIGEST
     if [ "$service" = worker ]; then expected=$WORKER_DIGEST; fi
-    command "$(rehearsal_aws_command)" ecr describe-images --repository-name "fss-rh-$service" --image-ids "imageTag=ci-$COMMIT" \
-      --output json >"$CI_WORK/$service-source.json" || deploy_fail "ECR has no fss-rh-$service:ci-$COMMIT"
-    read -r held pushed <<<"$(FSS_FILE="$CI_WORK/$service-source.json" python3 -c '
-import json, os
-details = (json.load(open(os.environ["FSS_FILE"], encoding="utf-8")) or {}).get("imageDetails") or []
-detail = details[0] if len(details) == 1 else {}
-print(detail.get("imageDigest") or "-", str(detail.get("imagePushedAt") or "-").replace(" ", "T"))
-')"
+    held="$(command "$(rehearsal_aws_command)" ecr describe-images --repository-name "fss-rh-$service" \
+      --image-ids "imageTag=ci-$COMMIT" --query 'imageDetails[0].imageDigest' --output text)" \
+      || deploy_fail "ECR has no fss-rh-$service:ci-$COMMIT"
     [ "$held" = "$expected" ] \
       || deploy_fail "fss-rh-$service:ci-$COMMIT is ${held:-<nothing>}, and the digests file says $expected: the artifact does not name the image its run published"
-    # The CLI prints an ISO instant with an offset (v2) or seconds since the epoch (v1).
-    FSS_PUSHED="$pushed" FSS_STARTED="$RUN_STARTED" FSS_ENDED="$RUN_ENDED" FSS_IMAGE="fss-rh-$service:ci-$COMMIT" python3 - <<'PY' \
-      || deploy_fail "fss-rh-$service:ci-$COMMIT is not an image the images run $RUN_ID pushed"
-# deploy-ci-pushed-within-run
-import os, re, sys
-from datetime import datetime, timezone
-env = os.environ
-
-def instant(text):
-    text = str(text).strip()
-    if re.fullmatch(r"[0-9]{9,11}(\.[0-9]{1,9})?", text):
-        return datetime.fromtimestamp(float(text), tz=timezone.utc)
-    match = re.fullmatch(r"([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(\.[0-9]{1,9})?(Z|[+-][0-9]{2}:?[0-9]{2})", text)
-    if not match:
-        return None
-    zone = "+00:00" if match.group(3) == "Z" else match.group(3)
-    if len(zone) == 5:
-        zone = zone[:3] + ":" + zone[3:]
-    digits = (match.group(2) or ".")[1:7]
-    fraction = "." + digits.ljust(6, "0") if digits else ""
-    return datetime.fromisoformat(match.group(1) + fraction + zone)
-
-pushed = instant(env["FSS_PUSHED"])
-started, ended = instant(env["FSS_STARTED"]), instant(env["FSS_ENDED"])
-if pushed is None:
-    print("FAIL: ECR reports no push time for {} ('{}'), so which run pushed it cannot be told".format(env["FSS_IMAGE"], env["FSS_PUSHED"]), file=sys.stderr)
-    sys.exit(1)
-if not started <= pushed <= ended:
-    print("FAIL: {} was pushed at {}, outside the images run's window {} to {}: that run did not push it".format(
-        env["FSS_IMAGE"], pushed.isoformat(), env["FSS_STARTED"], env["FSS_ENDED"]), file=sys.stderr)
-    sys.exit(1)
-PY
-    rehearsal_log "fss-rh-$service:ci-$COMMIT was pushed at $pushed, inside the images run's window $RUN_STARTED to $RUN_ENDED"
   done
   rehearsal_log "fss-rh-api and fss-rh-worker hold ci-$COMMIT as the two digests the artifact names"
 }
@@ -830,8 +989,11 @@ ci_record() {
   fi
   [ "$RECORD_CLUSTER_NAME" = "${CI_PREFIX}-cluster" ] \
     || deploy_fail "the repository variable FSS_PRODUCTION_CLUSTER_NAME names $RECORD_CLUSTER_NAME, and this deploy acts on ${CI_PREFIX}-cluster; set it again from terraform output -raw ci_deploy_cluster_name"
+  # The gate again, immediately before the put: a re-run gone red, or main moved off the
+  # commit, while the job ran, and nothing is written.
+  ci_require_gate
 
-  # 1. The record: GitHub only, from the gate run that was green on the images commit.
+  # 1. The record: GitHub only, from the gate run that is green on the images commit.
   reference="ci-gate-${GATE_RUN_ID}-${COMMIT:0:12}"
   "$DEPLOY_SCRIPTS/record.sh" from-ci "$GATE_RUN_ID" "$COMMIT" "$API_DIGEST" "$WORKER_DIGEST" --out "$CI_WORK/release-record.json" \
     || deploy_fail "record.sh from-ci wrote no record for gate run $GATE_RUN_ID; its FAIL line above says why"

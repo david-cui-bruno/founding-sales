@@ -12,11 +12,10 @@ name: Greenfield images
 # ## Two jobs, and why the second one holds a credential (lane g74, audit O17)
 #
 # `images` runs on a pull request. It builds with `--load`, verifies the local
-# images with `infra/scripts/release-images.sh verify`, and holds no credential of
-# any kind.
+# images with `infra/scripts/images.sh verify`, and holds no credential of any kind.
 #
 # `publish` runs on a push to main — only when an image input changed, which is
-# what `push.paths` lists and what `release-images.sh inputs` names — and replaces
+# what `push.paths` lists and what `images.sh inputs` names — and replaces
 # the operator's rebuild-and-push. Before g74 the release digests came from a
 # second build on David's Mac, so what CI verified and what production ran were two
 # builds of one commit. Now:
@@ -32,14 +31,15 @@ name: Greenfield images
 #     that finds the tag already there fails, because another writer pushed it;
 #   * it pulls what it pushed **by digest** and runs the same verification against
 #     that, so the digest it publishes is the digest that was verified;
-#   * it writes both digests to the step summary and to the artifact
-#     `fss-image-digests` (`image-digests.json`, `fss.image-digests.v1`), which names
-#     repositories and never a registry host. That artifact is what the weekly
-#     rehearsal pins to and what `infra/scripts/release-promote.sh` copies to
+#   * it writes both digests, and the schema range each image declares and was just
+#     verified against, to the step summary and to the artifact `fss-image-digests`
+#     (`image-digests.json`, `fss.image-digests.v1`), which names repositories and never
+#     a registry host. That artifact is what the CI deploy reads its digests and ranges
+#     from (P6), what `images.sh pin` resolves and what `images.sh promote` copies to
 #     production from. No file is committed.
 #
-# Production is never touched here. Copying to `fss-prod-*` is the operator's
-# `release-promote.sh`, by digest, with the admin profile.
+# Production is never touched here. Copying to `fss-prod-*` is the CI deploy's or the
+# operator's `images.sh promote`, by digest.
 
 on:
   pull_request:
@@ -54,12 +54,13 @@ on:
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/greenfield-images.yml'
-      - 'infra/scripts/release-images.sh'
+      - 'infra/scripts/images.sh'
+      - 'infra/scripts/lib.sh'
   push:
     branches: [main]
-    # Exactly `infra/scripts/release-images.sh inputs`, in glob form; the release suite
+    # Exactly `infra/scripts/images.sh inputs`, in glob form; the release suite
     # compares the two. A path that changes an image and is missing here is a main
-    # commit whose images nobody publishes, and the weekly rehearsal refuses to pin it.
+    # commit whose images nobody publishes, and `images.sh pin` refuses to pin it.
     paths:
       - 'Dockerfile.api'
       - 'Dockerfile.worker'
@@ -162,8 +163,8 @@ jobs:
           # arm64; --selftest accepts the declared range and refuses one below it; runs
           # as node, never uid 0; no test directory and no development dependency. The
           # same script `publish` runs against the pulled-by-digest image on main.
-          infra/scripts/release-images.sh verify fss-api:ci api "$API_SCHEMA_MIN" "$API_SCHEMA_MAX"
-          infra/scripts/release-images.sh verify fss-worker:ci worker "$WORKER_SCHEMA_MIN" "$WORKER_SCHEMA_MAX"
+          infra/scripts/images.sh verify fss-api:ci api "$API_SCHEMA_MIN" "$API_SCHEMA_MAX"
+          infra/scripts/images.sh verify fss-worker:ci worker "$WORKER_SCHEMA_MIN" "$WORKER_SCHEMA_MAX"
 
   publish:
     name: Publish both images to the rehearsal repositories, by digest
@@ -275,8 +276,8 @@ jobs:
             if [ "$status" -eq 0 ] && [[ "$existing" =~ ^sha256:[0-9a-f]{64}$ ]]; then
               # Only a re-run of this run may find its own tag (review of PRs 246 and 247,
               # 26 September 2026): on the first attempt an existing tag was pushed by
-              # somebody else, and the deploy's push-time window would accept it as this
-              # run's build. Release such a commit by hand (release.md 4.0).
+              # somebody else, and this run cannot vouch for it. The CI deploy relies on
+              # this refusal, not on a push time (P6). Release such a commit by hand.
               if [ "${GITHUB_RUN_ATTEMPT:-1}" = 1 ]; then
                 echo "::error::$repository:$tag already exists as $existing and this is the first attempt of run $GITHUB_RUN_ID: another writer pushed it, so this run cannot vouch for it. Release the commit by hand."
                 exit 1
@@ -320,25 +321,26 @@ jobs:
           # Not the build: the bytes a rehearsal and production will run.
           docker pull --platform linux/arm64 "$API_REPOSITORY@$API_DIGEST" > /dev/null
           docker pull --platform linux/arm64 "$WORKER_REPOSITORY@$WORKER_DIGEST" > /dev/null
-          infra/scripts/release-images.sh verify "$API_REPOSITORY@$API_DIGEST" api "$API_SCHEMA_MIN" "$API_SCHEMA_MAX"
-          infra/scripts/release-images.sh verify "$WORKER_REPOSITORY@$WORKER_DIGEST" worker "$WORKER_SCHEMA_MIN" "$WORKER_SCHEMA_MAX"
+          infra/scripts/images.sh verify "$API_REPOSITORY@$API_DIGEST" api "$API_SCHEMA_MIN" "$API_SCHEMA_MAX"
+          infra/scripts/images.sh verify "$WORKER_REPOSITORY@$WORKER_DIGEST" worker "$WORKER_SCHEMA_MIN" "$WORKER_SCHEMA_MAX"
 
       - name: Record the digests
         run: |
           set -euo pipefail
           out="$RUNNER_TEMP/fss-image-digests/image-digests.json"
-          infra/scripts/release-images.sh record "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" \
-            "$API_DIGEST" "$WORKER_DIGEST" "$out"
+          infra/scripts/images.sh record "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" \
+            "$API_DIGEST" "$WORKER_DIGEST" "$out" \
+            --api-range "$API_SCHEMA_MIN-$API_SCHEMA_MAX" --worker-range "$WORKER_SCHEMA_MIN-$WORKER_SCHEMA_MAX"
           cat "$out"
           {
             echo "### Images published for \`${GITHUB_SHA}\`"
             echo ''
-            echo '| image | repository | tag | digest |'
-            echo '|---|---|---|---|'
-            echo "| api | fss-rh-api | ci-${GITHUB_SHA} | \`${API_DIGEST}\` |"
-            echo "| worker | fss-rh-worker | ci-${GITHUB_SHA} | \`${WORKER_DIGEST}\` |"
+            echo '| image | repository | tag | digest | schema |'
+            echo '|---|---|---|---|---|'
+            echo "| api | fss-rh-api | ci-${GITHUB_SHA} | \`${API_DIGEST}\` | ${API_SCHEMA_MIN}-${API_SCHEMA_MAX} |"
+            echo "| worker | fss-rh-worker | ci-${GITHUB_SHA} | \`${WORKER_DIGEST}\` | ${WORKER_SCHEMA_MIN}-${WORKER_SCHEMA_MAX} |"
             echo ''
-            echo 'Artifact `fss-image-digests` holds `image-digests.json`: the weekly rehearsal pins to it, and the operator'"'"'s promotion copies these digests to production by digest.'
+            echo 'Artifact `fss-image-digests` holds `image-digests.json`: the CI deploy reads its digests and ranges, and the promotion copies these digests to production by digest.'
           } >> "$GITHUB_STEP_SUMMARY"
 
       # actions/upload-artifact v4, the pin the rehearsal uses.
