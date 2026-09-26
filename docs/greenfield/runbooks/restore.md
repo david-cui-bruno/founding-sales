@@ -288,8 +288,11 @@ fss_task clear operations --capture "$W/clear.log" -- admin holds release-restor
 delete it checks that `fss-prod-pg` is still the old instance and the copy still the copy,
 each `available` at its pinned address, that each answers SQL (a `schema-version` task
 against each), that the task definitions the running `api` and `worker` services use carry
-the copy's address, and that the final snapshot's name is free (only RDS's
-`DBSnapshotNotFound` counts as free). After the rename it reads the renamed copy's own address rather than assuming the old
+the copy's address — both of them: `live_hosts` is read into a variable as its own link, so
+a failed query ends the chain rather than leaving one line to compare, and the two lines
+must both be the copy's host (`deploy.sh current`, further down, reads those definitions'
+digests and schema ranges and never `FSS_DATABASE_HOST`, so it does not cover this) — and
+that the final snapshot's name is free (only RDS's `DBSnapshotNotFound` counts as free). After the rename it reads the renamed copy's own address rather than assuming the old
 one, and uses it for the check and the migration entry. The check is (c)'s, the other way:
 the task definitions return to the managed address, and the imported instance may change
 only Terraform's own settings (`apply_immediately`, `delete_automated_backups`,
@@ -302,7 +305,8 @@ the link that failed. A failed import is undone with
 begin retired started && FINAL="fss-prod-pg-pre-restore-$(date -u +%Y%m%d%H%M)" \
   && [ "$(rds_state fss-prod-pg)" = "$(printf '%s\t%s\tavailable' "$OLD_DBI" "$OLD_HOST")" ] \
   && [ "$(rds_state "$NEW")" = "$(printf '%s\t%s\tavailable' "$NEW_DBI" "$NEW_HOST")" ] \
-  && [ "$(live_hosts | sort -u)" = "$NEW_HOST" ] && [ "$(task_host)" = "$NEW_HOST" ] \
+  && LIVE_TASK_HOSTS=$(live_hosts) && [ "$LIVE_TASK_HOSTS" = "$(printf '%s\n%s' "$NEW_HOST" "$NEW_HOST")" ] \
+  && [ "$(task_host)" = "$NEW_HOST" ] \
   && fss_task retire-copy operations -- schema-version \
   && fss_task retire-old operations --env "FSS_DATABASE_HOST=$OLD_HOST" -- schema-version \
   && ! snapshot=$(aws rds describe-db-snapshots --db-snapshot-identifier "$FINAL" 2>&1) && [[ $snapshot == *DBSnapshotNotFound* ]] \
@@ -362,3 +366,76 @@ fss_task smoke-sent operations --env "FSS_DATABASE_HOST=$H" -- admin mailbox rec
   --inventory-host "$LIVE" --inventory-marker "$SMOKE_MARKER" --inventory-instance "$LIVE_DBI"
 aws rds delete-db-instance --db-instance-identifier $S --skip-final-snapshot --delete-automated-backups >/dev/null
 ```
+
+## What this procedure does not prove
+
+Seven things a restore rests on that no check here establishes, each with the check that
+narrows it. An operator runs the steps knowing these; none of them is a step to skip.
+
+1. **The marker says a write happened, not which instance took it.** `restore-marker put`
+   writes an audit row with the runtime credential, so anything holding that credential
+   could write the same row on any instance. *The check that narrows it:* (a) pins
+   `fss-prod-pg`'s `DbiResourceId` and address through the RDS API, requires that address
+   to be the one both Terraform and the task definitions name, and binds the marker to `T`
+   and that id; (d) re-reads both pins (`at_dbi`) and requires the marker on the inventory
+   host to carry that binding and to have been written after `T`, and the copy to have
+   none. Instance identity is the operator's RDS pins; the marker only tells the pinned
+   instance from a copy of it.
+
+2. **`FSS_LAUNCHED_BY` is a claim the task cannot verify.** A one-off task cannot see who
+   ran it, so the launcher's ARN is an environment override checked only for shape, and
+   whoever may launch the task may write any ARN into that row. *The check that narrows
+   it:* every release also records the task's own ARN from the ECS metadata endpoint, and
+   refuses without one, so `audit_launch` can require CloudTrail's RunTask event for that
+   task to name the same caller. A release is complete only when `audit_launch` has
+   passed; its NO-GO goes in the running log and to David.
+
+3. **Releasing an unattached-send hold is a person's judgement, and the command permits it
+   while a recorded candidate is still live.** `checked-no-duplicate` is an attestation,
+   not a fact the command checks: it records each recorded enrollment's state and releases
+   either way. Ending those enrollments would be no lasting fence in any case, because a
+   new enrollment of the same contact starts the sequence again, and no table both the
+   send gate and the enrollment path consult can carry a recipient-level "never send this
+   step again" record without a migration (0020, wave 3b). *The check that narrows it:* the
+   hold blocks every action kind for its firm, or the workspace, until someone releases it;
+   the release is audited with the note, the launcher, the task and the state of every
+   recorded enrollment at that moment (`basis: human_attestation`), so a release made with
+   one still live is visible afterwards; and the three questions above under "Clearing a
+   restore hold" are what the note must answer.
+
+4. **A deleted or unreadable old instance ends the restore.** Nothing else can say which
+   mailboxes could have sent since `T`: the copy knows only the mailboxes connected before
+   it, and no typed list is accepted. *The check that narrows it:* (a) refuses unless
+   `fss-prod-pg` is `available` and writes to it before anything stops, so an instance that
+   cannot be read stops the restore before production is touched rather than after; (d)
+   refuses (`inventory_unreadable`) if it becomes unreadable later. Both are NO-GO and
+   escalation, not a fallback.
+
+5. **(g) cannot be rerun once the old instance is deleted.** `begin retired` voids the
+   step's own line, but the delete is not undone by running the chain again. *The check
+   that narrows it:* everything destructive is behind the preflight — both instances
+   `available` at their pinned addresses, both answering SQL, both running services' task
+   definitions pointing at the copy, and the final snapshot name free by
+   `DBSnapshotNotFound` alone — and the state backup (`$W/state-before-import.json`) is
+   taken before both the delete and the import. Past the delete, continue by hand from the
+   link that failed.
+
+6. **What production logs as DDL carries the runtime role's password verifier.** The parameter
+   group logs DDL (`log_statement = ddl`), and `database-users ensure` sends `CREATE ROLE`
+   and `ALTER ROLE` with a verifier rather than the password, so the password is not in
+   the log and the verifier is: it is what `pg_authid` stores, and reading it does not give
+   the password, but it is credential material in CloudWatch. *The check that narrows it:*
+   the verifier is salted per call (a fresh salt on every rotation), so the log of one
+   rotation says nothing about another; the log group's retention and access are the
+   database's own. The oracle test in `fssSurface.test.ts` does put a plain password in SQL
+   text, deliberately: it asks PostgreSQL to hash a password the test generated at runtime,
+   against an embedded cluster, so that the verifier this tool computes can be compared
+   with the server's. No such statement is ever sent to production.
+
+7. **`audit_launch` can refuse an event that was about to arrive.** It queries CloudTrail
+   at 0, 1.5, 3 … 19.5 minutes, then sleeps to 21 minutes and answers NO-GO, so an event
+   that first appears in that last 90 seconds is refused though nothing is wrong. *The
+   check that narrows it:* the refusal is safe in the direction that matters — it never
+   confirms a launcher it did not see — and it is repeatable: run `audit_launch
+   "$W/clear.json"` again before escalating, and only a mismatch, or a second absence, is
+   the finding.
