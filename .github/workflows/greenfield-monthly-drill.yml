@@ -6,7 +6,7 @@ name: Greenfield monthly restore drill
 # David's decision of 25 September 2026 (axiom 1C): a schema, infrastructure or
 # release-script change gets the trimmed `mode: schema` rehearsal of
 # `greenfield-release.yml`, and the full run — the drill's evidence, the release suite,
-# the restore drill, the journal and carry drills, the release record and the manifest —
+# the restore drill, the journal drill, the release record and the manifest —
 # runs on the first Sunday of each month at 06:00 UTC, so the drill, the teardown and the
 # guard are exercised even in a month with no such change. Until g97 this file was the
 # weekly full rehearsal; its weekly schedule is switched off.
@@ -14,12 +14,11 @@ name: Greenfield monthly restore drill
 # ## Three jobs
 #
 #   * `slot` — is this the slot? GitHub's `schedule` cannot say "the first Sunday of the
-#     month" (a day-of-month and a day-of-week in one cron line match either, not both),
-#     cannot read a variable, and drops events when busy. So this workflow wakes at 06:00
-#     and then hourly on every Sunday (UTC), and `infra/scripts/ci-schedule.sh slot`
-#     decides: the first Sunday of the month (day 1 to 7) at the repository variable
-#     `FSS_MONTHLY_DRILL_HOUR_UTC` (default 6; `off` pauses it), caught up by a later
-#     hour when GitHub dropped the slot's own event, and never twice for one Sunday.
+#     month" (a day-of-month and a day-of-week in one cron line match either, not both).
+#     So this workflow wakes at 06:00 UTC on days 1 to 7 of every month, and
+#     `infra/scripts/ci-schedule.sh slot` says `due=true` only on the Sunday among them
+#     (or for a dispatch). A slot whose event GitHub dropped is not caught up; dispatch
+#     the drill by hand instead.
 #   * `pin` — the three artifacts, pinned to the commit this run is at, or nothing runs:
 #       - the API and worker digests CI published for this commit's image inputs
 #         (`infra/scripts/release-images.sh pin`: the newest green `publish` run of
@@ -52,19 +51,14 @@ name: Greenfield monthly restore drill
 #
 #     gh workflow run greenfield-monthly-drill.yml --ref main -f dry_run=false
 #
-# A dispatch is due whatever the day and hour, and even when the schedule is paused. To
+# A dispatch is due whatever the day and hour. To
 # drill digests of your own choosing instead, dispatch `greenfield-release.yml` with
 # `mode: full` and `stage: full` (`docs/greenfield/release.md` 3).
 
 on:
   schedule:
-    # The slot itself: 06:00 UTC every Sunday. `slot` keeps only the first Sunday of the
-    # month.
-    - cron: '0 6 * * 0'
-    # The catch-up: minute 23 of every hour on Sunday, UTC, for a dropped 06:00 event or
-    # a slot hour moved by the variable. Not minute 0: GitHub's queue is busiest at the
-    # top of the hour, and the nightly's 09:00 event of 25 September never fired.
-    - cron: '23 * * * 0'
+    # 06:00 UTC on days 1 to 7; `slot` keeps only the Sunday among them.
+    - cron: '0 6 1-7 * *'
   workflow_dispatch:
     inputs:
       dry_run:
@@ -85,12 +79,11 @@ concurrency:
 
 jobs:
   slot:
-    name: Decide whether this hour is the monthly slot
+    name: Decide whether today is the monthly slot
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: read
-      actions: read
     outputs:
       due: ${{ steps.slot.outputs.due }}
     defaults:
@@ -103,9 +96,6 @@ jobs:
 
       - name: Is this the slot?
         id: slot
-        env:
-          GH_TOKEN: ${{ github.token }}
-          FSS_MONTHLY_DRILL_HOUR_UTC: ${{ vars.FSS_MONTHLY_DRILL_HOUR_UTC }}
         run: |
           set -euo pipefail
           infra/scripts/ci-schedule.sh slot | tee -a "$GITHUB_OUTPUT"
@@ -135,18 +125,6 @@ jobs:
           persist-credentials: false
           # The pin compares this commit's history with the images run's commit.
           fetch-depth: 0
-
-      - name: Refuse any ambient cloud credential
-        run: |
-          set -euo pipefail
-          # Pinning reads GitHub and nothing else.
-          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN \
-                      AWS_PROFILE AWS_ROLE_ARN AWS_WEB_IDENTITY_TOKEN_FILE; do
-            if [ -n "${!name:-}" ]; then
-              echo "::error::$name is set. Pinning the monthly drill's artifacts needs no cloud credential."
-              exit 1
-            fi
-          done
 
       - name: Only main is rehearsed on a schedule
         if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
