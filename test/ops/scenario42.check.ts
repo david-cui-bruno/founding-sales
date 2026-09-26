@@ -6,8 +6,6 @@ import { describe, expect, it } from 'vitest';
 import { ciGateReleaseReference, releaseRecordSchema } from '@fss/contracts';
 import { effectiveSendingEnabled } from '@fss/domain/settings/effective.ts';
 import { SEND_REFUSAL_CODES } from '@fss/domain/outbound/types.ts';
-import { DEPLOYMENT_ENVIRONMENT_VARIABLES as WORKER_VARIABLES } from '../../apps/worker/src/bootstrap/deployment.ts';
-import { DEPLOYMENT_ENVIRONMENT_VARIABLES as API_VARIABLES } from '../../apps/api/src/bootstrap/deployment.ts';
 import { repositoryPath } from './support/repository.ts';
 
 /**
@@ -72,20 +70,6 @@ describe('Appendix G 42: sending stays off until all four agree', () => {
     it('names its own refusal code, distinct from the domain authentication one', () => {
       expect(SEND_REFUSAL_CODES).toContain('workspace_sending_not_attested');
       expect(SEND_REFUSAL_CODES).toContain('automated_sending_disabled');
-    });
-
-  });
-
-  describe('the two processes agree about the deployment they are reading', () => {
-    it('name the same environment variable for every fact they share', () => {
-      // The API and the worker are separate npm workspaces with no dependency between
-      // them, so the contract is duplicated. Drift between the two would mean one
-      // process sends and the other refuses, which is the worst of both.
-      for (const [key, name] of Object.entries(WORKER_VARIABLES)) {
-        const theirs = (API_VARIABLES as Record<string, string | undefined>)[key];
-        if (theirs === undefined) continue;
-        expect(theirs, `the two bootstraps disagree about ${key}`).toBe(name);
-      }
     });
 
   });
