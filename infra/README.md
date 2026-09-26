@@ -17,7 +17,7 @@ infra/
     journal         object-locked S3 suppression journal, deny-first bucket policy
     alerts          SNS topic, every spec 13.3 alarm, the critical and warning composites
     observability   encrypted 90-day log groups and the metric filters behind the alarms
-    updates         private S3 + CloudFront OAC for signed Electron packages
+    updates         private S3 + CloudFront OAC for signed Electron packages (production only)
     pubsub          Google Cloud Pub/Sub Gmail push with an OIDC token and an exact audience
     stack           the composition every root uses, and the environment guard
   roots/

@@ -400,7 +400,7 @@ variable "log_retention_days" {
 }
 
 variable "updates_price_class" {
-  description = "CloudFront price class for the Electron package distribution."
+  description = "CloudFront price class for the Electron package distribution, which only production builds."
   type        = string
   default     = "PriceClass_100"
 }

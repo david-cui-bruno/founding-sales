@@ -141,17 +141,14 @@ variable "worker_schema_range" {
 
 variable "database_multi_az" {
   description = <<-EOT
-    Multi-AZ, like production. G1 defaulted this to false on the reasoning that
-    a rehearsal may be small; G12c changes the default because Appendix E step
-    1 is a point-in-time restore of a *Multi-AZ* instance and that step is what
-    the 180-minute workflow timeout is a guess about. A single-AZ rehearsal
-    measures a restore production will never perform.
-
-    The variable stays, and false is still accepted: a run investigating
-    something unrelated to recovery can be cheaper by saying so.
+    Single-AZ by default (wave 2, 26 September 2026): creating and deleting the
+    standby was among the slowest steps of every run, and a rehearsal needs a
+    database, not a failover. The database module still takes both private
+    subnets. `true` is still accepted, for a run that wants to time a
+    point-in-time restore of a Multi-AZ instance as production would perform it.
   EOT
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "database_instance_class" {

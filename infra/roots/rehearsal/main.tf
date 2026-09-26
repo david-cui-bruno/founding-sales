@@ -116,8 +116,6 @@ module "stack" {
   business_time_zone   = var.business_time_zone
   google_hosted_domain = var.google_hosted_domain
 
-  updates_price_class = "PriceClass_100"
-
   # Both bootstraps call `required()` on all three of these, so an empty value
   # is a rehearsal whose tasks refuse to start, not a rehearsal with push
   # switched off. The audience is real for this hostname; the topic and the push

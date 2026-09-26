@@ -243,8 +243,8 @@ output "log_group_names" {
 }
 
 output "updates_distribution_domain_name" {
-  description = "Hostname the Electron updater points at."
-  value       = module.updates.distribution_domain_name
+  description = "Hostname the Electron updater points at. Null in a rehearsal, which builds no update channel."
+  value       = one(module.updates[*].distribution_domain_name)
 }
 
 # The two Gmail push outputs are gone from this module: it no longer creates the
@@ -288,7 +288,11 @@ output "resource_names" {
       module.database.parameter_group_name,
       module.journal.bucket_name,
       module.edge.access_log_bucket,
-      module.updates.bucket_name,
+    ],
+    # Production only, and in the same place in the list as before wave 2, so
+    # production's output does not reorder.
+    module.updates[*].bucket_name,
+    [
       module.alerts.topic_name,
       module.alerts.critical_composite_alarm_name,
       module.alerts.warning_composite_alarm_name,

@@ -17,7 +17,7 @@ Region assumed throughout: `us-east-1`, the account the repository already names
 
 | Line item | Pricing dimension | Quantity (production default) | Variable | Rehearsal |
 |---|---|---|---|---|
-| RDS PostgreSQL 16 instance | Instance-hour for the class, **doubled by Multi-AZ** | 1 × `db.t4g.small`, Multi-AZ, 730 h/month | `database_instance_class` | 1 × `db.t4g.small`, Multi-AZ, run duration only |
+| RDS PostgreSQL 16 instance | Instance-hour for the class, **doubled by Multi-AZ** | 1 × `db.t4g.small`, Multi-AZ, 730 h/month | `database_instance_class` | 1 × `db.t4g.small`, single-AZ by default (`database_multi_az`), run duration only |
 | RDS storage | GB-month of gp3, **doubled by Multi-AZ** | 50 GiB provisioned, autoscaling to 200 GiB | `database_allocated_storage`, `database_max_allocated_storage` | 20 GiB, no autoscaling |
 | RDS provisioned IOPS / throughput | Only billed above the gp3 baseline | none above baseline at 50 GiB | n/a | none |
 | RDS backup storage | GB-month of backup **beyond** the provisioned storage size | 35-day retention over a 50 GiB instance | fixed at 35 in the production root | 1 day |
@@ -31,7 +31,7 @@ Region assumed throughout: `us-east-1`, the account the repository already names
 
 Cost levers worth David's attention, in order of size:
 
-1. **Multi-AZ doubles both the instance and its storage.** It is not optional in production: spec section 2 and the invariant that PostgreSQL is authoritative both require it. Rehearsal is Multi-AZ by default too (G12c), and pays for it only while a run stands.
+1. **Multi-AZ doubles both the instance and its storage.** It is not optional in production: spec section 2 and the invariant that PostgreSQL is authoritative both require it. Rehearsal is single-AZ by default since wave 2 (26 September 2026); a run may still pass `database_multi_az = true`.
 2. **`cpu_architecture = "ARM64"`** is a materially cheaper Fargate rate for the same vCPU and memory, and it is what both roots run (David, 20 September 2026): CI builds `linux/arm64` images only.
 3. **`api_desired_count = 2`** is for rolling deployment without a gap, not for load. One salesperson does not need two tasks for throughput. Dropping to 1 halves the API compute and means a deployment has a brief window with no API; the Electron cache covers a brief outage by design (spec 4.2).
 
@@ -58,8 +58,8 @@ The no-NAT choice is the largest single saving in the network. A NAT gateway wou
 |---|---|---|---|---|
 | S3 suppression journal | GB-month + PUT/GET requests + object-lock has no separate charge | one small JSON object per suppression event, versioned, retained years | `journal_object_lock_retention_days` | 1-day lock, destroyed with the run |
 | S3 ALB access logs | GB-month + PUT requests + lifecycle transitions | one log file per 5 minutes per node, expired at 365 days | `access_log_retention_days` (module) | expired fast, bucket force-destroyed |
-| S3 Electron packages | GB-month + GET requests | a handful of signed builds, superseded versions expired at 365 days | module default | same |
-| CloudFront | Per GB out to the internet, per 10,000 requests, per price class | `PriceClass_100` | `updates_price_class` | `PriceClass_100` |
+| S3 Electron packages | GB-month + GET requests | a handful of signed builds, superseded versions expired at 365 days | module default | not built (production only since wave 2) |
+| CloudFront | Per GB out to the internet, per 10,000 requests, per price class | `PriceClass_100` | `updates_price_class` | not built (production only since wave 2) |
 | ECR | GB-month of stored images + data transfer | 2 repositories, 30 images retained each, untagged expired at 7 days | module defaults | same, force-deletable |
 | KMS customer keys | Key-month per key + per 10,000 requests | **6 keys**: database, secrets, envelope, journal, logs, alerts | n/a | 6 keys, the same 30-day deletion window |
 | Secrets Manager | Per secret-month + per 10,000 API calls | 7 entries created empty (5 application, 2 database identities) + 1 RDS-managed master user secret = 8 | `secret_names` | 8, zero-day recovery window |

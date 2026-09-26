@@ -248,23 +248,6 @@ jobs:
         shell: bash
     env:
       FSS_REHEARSAL_REPORTS: ${{ github.workspace }}/.rehearsal-reports
-    # The release suite's database, in the runner. PostgreSQL 16, which is the
-    # version `infra/modules/database` provisions and the version
-    # `packages/domain/db/testing` starts locally. It is not the rehearsal database
-    # and nothing here can reach that one; see the suite step below.
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
