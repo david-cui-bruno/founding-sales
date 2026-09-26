@@ -73,6 +73,11 @@ run "production_defaults_are_recoverable_and_protected" {
   }
 
   assert {
+    condition     = aws_db_instance.main.delete_automated_backups == false
+    error_message = "A deleted production instance keeps its automated backups for their retention period."
+  }
+
+  assert {
     condition     = aws_db_instance.main.publicly_accessible == false
     error_message = "RDS is private and reachable only from the two task security groups."
   }
@@ -146,20 +151,39 @@ run "a_protected_instance_may_not_skip_its_final_snapshot" {
   expect_failures = [aws_db_instance.main]
 }
 
+run "a_protected_instance_may_not_delete_its_automated_backups" {
+  command = plan
+
+  variables {
+    deletion_protection      = true
+    delete_automated_backups = true
+  }
+
+  expect_failures = [aws_db_instance.main]
+}
+
 run "rehearsal_may_be_single_az_and_destroyable" {
   command = plan
 
   variables {
-    multi_az              = false
-    deletion_protection   = false
-    skip_final_snapshot   = true
-    backup_retention_days = 1
-    instance_class        = "db.t4g.micro"
+    multi_az                 = false
+    deletion_protection      = false
+    skip_final_snapshot      = true
+    delete_automated_backups = true
+    backup_retention_days    = 1
+    instance_class           = "db.t4g.micro"
   }
 
   assert {
     condition     = aws_db_instance.main.deletion_protection == false && aws_db_instance.main.skip_final_snapshot
     error_message = "A destroyable rehearsal root must be able to tear its database down."
+  }
+
+  # Run 36209569741 (26 September 2026): every deleted rehearsal database had left a
+  # retained automated backup, and the prefix guard found its snapshot.
+  assert {
+    condition     = aws_db_instance.main.delete_automated_backups
+    error_message = "A rehearsal database's teardown takes its automated backups with it."
   }
 
   assert {

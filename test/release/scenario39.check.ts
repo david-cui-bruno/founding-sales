@@ -1186,8 +1186,11 @@ if [ "$n" -eq 0 ]; then echo '[{"arn":"arn:aws:s3:::fss-rh-nothing-updates","nam
  * goes with the task (run 36032732128). Since lane g97 the comparison is of the run's own
  * resources after its teardown, and a teardown leaves more of those shapes behind: a
  * deleted service or cluster is INACTIVE for a while, a deregistered task-definition
- * revision is INACTIVE for good, a KMS key can only be scheduled for deletion, and the
- * database module keeps an instance's automated backups when it is deleted.
+ * revision is INACTIVE for good, a KMS key can only be scheduled for deletion, and a
+ * production database keeps its automated backups when it is deleted. Run 36209569741
+ * (26 September 2026) added two more: the tagging API kept listing a deleted security
+ * group and its eight rules. The same run's other finding was real — the snapshot of a
+ * retained automated backup, `snapshot:rds:<prefix>-pg-<date>` — and is compared.
  *
  * ## The vacuous-pass trap
  *
@@ -1197,7 +1200,9 @@ if [ "$n" -eq 0 ]; then echo '[{"arn":"arn:aws:s3:::fss-rh-nothing-updates","nam
  * listed after the teardown (pass, counted per class), and against each durable resource
  * left behind while those shapes churn beside it (fail, naming it and nothing set aside).
  * The set-aside is by parsed service and resource type, so a bucket whose name contains
- * `task-definition` and a KMS alias are still compared.
+ * `task-definition` and a KMS alias are still compared. A security group is set aside
+ * because a group that really stayed keeps the run's VPC alive, and the VPC is compared;
+ * that is run too.
  */
 describe('Appendix G 39: the run’s own comparison is between durable resources', () => {
   const ACCOUNT = '123456789012';
@@ -1222,11 +1227,18 @@ describe('Appendix G 39: the run’s own comparison is between durable resources
     `arn:aws:elasticloadbalancing:us-east-1:${ACCOUNT}:loadbalancer/app/${RUN}-alb/0a1b2c3d4e5f6071`,
     `arn:aws:logs:us-east-1:${ACCOUNT}:log-group:/fss/${RUN}/worker`,
     `arn:aws:secretsmanager:us-east-1:${ACCOUNT}:secret:${RUN}/session-signing-key-AbCdEf`,
+    // The automated snapshot a retained backup keeps, which run 36209569741 found.
+    `arn:aws:rds:us-east-1:${ACCOUNT}:snapshot:rds:${RUN}-pg-2026-09-26-02-05`,
     ec2('vpc/vpc-0a1b2c3d4e5f60718'),
     ec2('subnet/subnet-0a1b2c3d4e5f60718'),
-    ec2('security-group/sg-0a1b2c3d4e5f60718'),
     `arn:aws:s3:::${RUN}-task-definition-notes`,
+    `arn:aws:s3:::${RUN}-security-group-notes`,
     `arn:aws:kms:us-east-1:${ACCOUNT}:alias/${RUN}-journal`,
+  ];
+  /** What run 36209569741's tagging API still listed of its deleted network: one group, eight rules. */
+  const DELETED_SECURITY_GROUPS: readonly string[] = [
+    ec2('security-group/sg-0a1b2c3d4e5f60718'),
+    ...Array.from({ length: 8 }, (_, index) => ec2(`security-group-rule/sgr-0a1b2c3d4e5f6071${index}`)),
   ];
 
   /** Record `before`, then compare against `after`, the way the workflow does. */
@@ -1285,6 +1297,39 @@ describe('Appendix G 39: the run’s own comparison is between durable resources
       expect(output).not.toContain(':task/');
       expect(output).not.toContain(':network-interface/');
     }
+  });
+
+  it('passes when the tagging API still lists the security groups and rules the teardown deleted (run 36209569741)', () => {
+    const { code, output } = guardAcross([], DELETED_SECURITY_GROUPS);
+
+    expect(code, output).toBe(0);
+    expect(output).toContain('nothing with the production prefix was addressed');
+    expect(output).toContain('set aside 1 security group ARN(s), 8 security group rule ARN(s)');
+  });
+
+  it('fails on a retained automated backup’s snapshot, naming it, while the deleted groups beside it are set aside', () => {
+    // Run 36209569741 exactly: nine deleted security-group ARNs and one real leftover.
+    const snapshot = `arn:aws:rds:us-east-1:${ACCOUNT}:snapshot:rds:${RUN}-pg-2026-09-26-02-05`;
+    const { code, output } = guardAcross([], [...DELETED_SECURITY_GROUPS, snapshot]);
+
+    expect(code, 'a retained automated backup was left behind, and the guard passed').not.toBe(0);
+    expect(output).toContain('left resources named for fss-rh-durable behind');
+    expect(output).toContain(snapshot);
+    expect(output).toContain('set aside 1 security group ARN(s), 8 security group rule ARN(s)');
+    expect(output).not.toContain(':security-group/');
+    expect(output).not.toContain(':security-group-rule/');
+    expect(output).not.toContain('nothing with the production prefix was addressed');
+  });
+
+  it('still fails when a security group really stayed, because the VPC it is in stays with it', () => {
+    // The set-aside is only sound because a VPC cannot be deleted around a group of its
+    // own. So the group that stayed is set aside and its VPC is what the guard names.
+    const vpc = ec2('vpc/vpc-0a1b2c3d4e5f60718');
+    const { code, output } = guardAcross([], [...DELETED_SECURITY_GROUPS, vpc]);
+
+    expect(code, 'a security group and its VPC were left behind, and the guard passed').not.toBe(0);
+    expect(output).toContain(vpc);
+    expect(output).toContain('set aside 1 security group ARN(s), 8 security group rule ARN(s)');
   });
 
   it('passes a teardown run whose orphan was recorded before it, gone or not', () => {

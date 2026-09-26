@@ -65,7 +65,7 @@ SETTLE_SECONDS=${FSS_REHEARSAL_SETTLE_SECONDS:-60}
 #
 #   durable_inventory <which side> < inventory.json
 #
-# The run's own resources, after its teardown, still show up in the tagging API in four
+# The run's own resources, after its teardown, still show up in the tagging API in five
 # shapes that are not leftovers:
 #
 #   * every `ecs` ARN — a stopped task stays visible for about an hour (run 35962272085
@@ -74,16 +74,26 @@ SETTLE_SECONDS=${FSS_REHEARSAL_SETTLE_SECONDS:-60}
 #     bills;
 #   * an `ec2` ARN whose resource part begins `network-interface/` — a Fargate task's
 #     interface carries its propagated tags and goes with the task (run 36032732128);
+#   * an `ec2` ARN whose resource part begins `security-group/` or
+#     `security-group-rule/` — run 36209569741 (26 September 2026) found one group and
+#     eight rules still listed that `describe-security-groups` answered
+#     `InvalidGroup.NotFound` for. Setting them aside measures nothing less: every group
+#     the run creates is in the run's own VPC, a VPC cannot be deleted while a group of
+#     its own is left in it, and a rule cannot outlive its group, so a group that really
+#     stayed leaves the VPC behind with it, and the VPC is compared;
 #   * a `kms` ARN whose resource part begins `key/` — a key cannot be deleted at once,
 #     only scheduled for deletion after its window;
-#   * an `rds` ARN whose resource part begins `auto-backup:` — `infra/modules/database`
-#     keeps an instance's automated backups for their retention period when it is
-#     deleted (`delete_automated_backups = false`).
+#   * an `rds` ARN whose resource part begins `auto-backup:` — a production database
+#     keeps its automated backups for their retention period when it is deleted. A
+#     rehearsal database no longer does (the rehearsal root sets
+#     `database_delete_automated_backups = true`), and a retained backup that did stay
+#     is still caught by its snapshots, `snapshot:rds:<prefix>-pg-<date>`, which are
+#     compared: that is what run 36209569741 found.
 #
 # Parsed rather than matched as a substring, and each class is counted in the log. Every
-# other resource is compared: the database instance and its snapshots, the buckets, the
-# load balancer, the log groups, the alarms, the secrets, the VPC, the subnets and the
-# security groups.
+# other resource is compared: the database instance and its snapshots, automated ones
+# included, the buckets, the load balancer, the log groups, the alarms, the secrets, the
+# VPC and the subnets.
 durable_inventory() {
   FSS_INVENTORY_SIDE="${1:-inventory}" python3 -c '
 import json, os, sys
@@ -112,6 +122,10 @@ def lingering(arn):
         return "ECS"
     if service == "ec2" and resource.startswith("network-interface/"):
         return "network interface"
+    if service == "ec2" and resource.startswith("security-group/"):
+        return "security group"
+    if service == "ec2" and resource.startswith("security-group-rule/"):
+        return "security group rule"
     if service == "kms" and resource.startswith("key/"):
         return "KMS key"
     if service == "rds" and resource.startswith("auto-backup:"):
@@ -194,7 +208,7 @@ case "$PHASE" in
     if rehearsal_dry_run; then
       rehearsal_plan "terraform state list | grep -v '$PREFIX' -> expect empty"
       rehearsal_plan "aws sts get-caller-identity -> expect an fss-rh- role"
-      rehearsal_plan "compare the durable resources named for $PREFIX (ECS, network interfaces, KMS keys and retained backups set aside) with $INVENTORY"
+      rehearsal_plan "compare the durable resources named for $PREFIX (ECS, network interfaces, security groups and their rules, KMS keys and retained backups set aside) with $INVENTORY"
       rehearsal_read_run_inventory "$PREFIX"
     else
       # A state that cannot be listed is the shape a run that created nothing takes:

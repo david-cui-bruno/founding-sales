@@ -112,6 +112,12 @@ variable "database_backup_retention_days" {
   default     = 35
 }
 
+variable "database_delete_automated_backups" {
+  description = "Delete the database's automated backups when the instance is deleted. The rehearsal root hard-codes true and production hard-codes false; the database module refuses true on a deletion-protected instance."
+  type        = bool
+  default     = false
+}
+
 variable "database_performance_insights_enabled" {
   description = "Performance Insights, billed beyond the free retention."
   type        = bool

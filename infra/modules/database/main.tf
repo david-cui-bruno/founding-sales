@@ -161,11 +161,17 @@ resource "aws_db_instance" "main" {
 
   # Automated backups with a non-zero retention are what enable point-in-time
   # recovery. 35 days is the design target and the retention-table commitment.
+  #
+  # A deleted production instance keeps its automated backups for their
+  # retention period. A deleted rehearsal instance does not: every rehearsal
+  # database the teardown removed used to leave a retained automated backup
+  # (20 GB each, nine between 24 and 26 September 2026), and the prefix guard
+  # of run 36209569741 found its snapshot `rds:<prefix>-pg-<date>`.
   backup_retention_period   = var.backup_retention_days
   backup_window             = var.backup_window
   maintenance_window        = var.maintenance_window
   copy_tags_to_snapshot     = true
-  delete_automated_backups  = false
+  delete_automated_backups  = var.delete_automated_backups
   deletion_protection       = var.deletion_protection
   skip_final_snapshot       = var.skip_final_snapshot
   final_snapshot_identifier = var.skip_final_snapshot ? null : "${local.identifier}-final"
@@ -185,6 +191,11 @@ resource "aws_db_instance" "main" {
     precondition {
       condition     = !(var.skip_final_snapshot && var.deletion_protection)
       error_message = "A deletion-protected instance must take a final snapshot. skip_final_snapshot belongs only to a destroyable rehearsal root."
+    }
+
+    precondition {
+      condition     = !(var.delete_automated_backups && var.deletion_protection)
+      error_message = "A deletion-protected instance keeps its automated backups when it is deleted. delete_automated_backups belongs only to a destroyable rehearsal root."
     }
   }
 
