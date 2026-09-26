@@ -12,7 +12,6 @@ export const MAIL_REFUSAL_CODES = [
   'invalid_input',
   'mailbox_unknown',
   'mailbox_inactive',
-  'mailbox_already_connected',
   'mailbox_address_taken',
   'authorization_request_unknown',
   'grant_refused',

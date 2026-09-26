@@ -1181,7 +1181,7 @@ const cases: readonly Case[] = [
     constraint: 'hold_reason_codes_pkey',
     run: async f =>
       await f.session.query(
-        "INSERT INTO hold_reason_codes (code, description, recoverable) VALUES ('dead_job', 'duplicate', true)",
+        "INSERT INTO hold_reason_codes (code, description, recoverable) VALUES ('daily_cap', 'duplicate', true)",
       ),
   },
   {

@@ -283,7 +283,7 @@ describe('the holds that count', () => {
         await hold('alpha', {
           scopeKind: 'firm',
           scopeKey: target.firmId,
-          reasonCode: 'dead_job',
+          reasonCode: 'long_hold_review',
           blockedActionKinds: ['enrollment_advance'],
         });
       },

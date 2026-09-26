@@ -43,7 +43,6 @@ export const TEMPLATE_REFUSAL_CODES = [
   'template_unapproved',
   'template_already_approved',
   'template_retired',
-  'version_taken',
 ] as const;
 export type TemplateRefusalCode = (typeof TEMPLATE_REFUSAL_CODES)[number];
 

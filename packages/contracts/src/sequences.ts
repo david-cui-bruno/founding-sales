@@ -73,7 +73,6 @@ export const ENROLLMENT_END_REASONS = [
   'reassignment',
   'sequence_complete',
   'admin_stop',
-  'migration_superseded',
 ] as const;
 export type EnrollmentEndReason = (typeof ENROLLMENT_END_REASONS)[number];
 

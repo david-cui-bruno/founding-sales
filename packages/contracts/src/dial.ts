@@ -42,7 +42,6 @@ export const DIAL_HOLD_REFUSAL_CODES = [
   'uncertain_reply',
   'ambiguous_match',
   'opportunity_manual',
-  'dead_job',
   'long_hold_review',
   'provider_refusal',
 ] as const;
