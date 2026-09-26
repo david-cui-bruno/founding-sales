@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# The one library every release script sources (P7, 26 September 2026; it replaces
-# release-common.sh and rehearsal-common.sh, which now only source this file).
+# The one library every release script sources (P7, 26 September 2026).
 #
 # Sourced, never executed. It holds:
 #   * the two namespaces and the symmetric refusal: a rehearsal command may not name
@@ -21,9 +20,6 @@ set -euo pipefail
 
 PRODUCTION_PREFIX='fss-prod'
 REHEARSAL_PREFIX_PATTERN='^fss-rh-[a-z0-9-]{3,18}$'
-# The old names.
-RELEASE_PRODUCTION_PREFIX=$PRODUCTION_PREFIX
-RELEASE_REHEARSAL_PREFIX_PATTERN=$REHEARSAL_PREFIX_PATTERN
 
 # One-off task budget, log-stream grace and poll, and the image-pull retry (lane g80).
 RELEASE_DEFAULT_TIMEOUT_SECONDS=1200

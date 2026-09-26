@@ -998,7 +998,7 @@ function describeRecord(record: StoredReleaseRecord): Readonly<Record<string, un
 /**
  * `fss admin release-record put --json <file> | --json-base64 <value>`.
  *
- * Stores the `fss.release-record.v1` the CI gate (`release-record-from-ci.sh`, lane g96)
+ * Stores the `fss.release-record.v1` the CI gate (`record.sh from-ci`, lane g96)
  * or a green rehearsal wrote, so that an admin's
  * `sending_enabled` attestation can name it and both rules can read it: the API
  * compares its own digest with the record's `api` when the enable is saved, and the
@@ -1006,7 +1006,7 @@ function describeRecord(record: StoredReleaseRecord): Readonly<Record<string, un
  * record enables nothing — the record says `enablesSending: false` and the admin's act
  * is still the switch.
  *
- * `--json-base64` is the form `release-deploy.sh` uses, because a one-off task can be
+ * `--json-base64` is the form `deploy.sh release` uses, because a one-off task can be
  * handed nothing but arguments and the record's JSON is braces, quotes and newlines.
  * Idempotent: the same record twice is `existing`; a different one under a reference
  * already stored is refused `release_record_conflict`, and nothing is ever replaced.

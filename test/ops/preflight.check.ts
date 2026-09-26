@@ -8,8 +8,8 @@ import { repositoryPath } from './support/repository.ts';
 /**
  * P7 (27 September 2026): `infra/scripts/preflight.sh <root> <prefix> <migration>` runs
  * `fss admin schema-preflight <migration>` on the operations task before a schema release
- * stops anything, and exits 3 when the migration would refuse. `schema-preflight-0019.sh`
- * (lane W2-M) is its old name for 0019.
+ * stops anything, and exits 3 when the migration would refuse. Lane W2-M wrote the first
+ * of these, for 0019, and this replaced it.
  *
  * ## The vacuous-pass traps, named
  *
@@ -25,12 +25,11 @@ import { repositoryPath } from './support/repository.ts';
  * **A summary line that lost a field when this script replaced 0019's.** 0019's report
  * carries ten fields beyond the schema version, `refuses` and the blocking counts, and the
  * coordinator's release helper greps four of them. A full 0019-shaped report must produce
- * the line `schema-preflight-0019.sh` wrote, field for field and in its order; another
- * migration must get the generic line and none of 0019's.
+ * the line lane W2-M's script wrote, field for field and in its order; another migration
+ * must get the generic line and none of 0019's.
  */
 
 const SCRIPT = repositoryPath('infra/scripts/preflight.sh');
-const OLD_NAME = repositoryPath('infra/scripts/schema-preflight-0019.sh');
 const ACCOUNT = '111111111111';
 const PREFIX = 'fss-rh-pre';
 const REGISTRY = `${ACCOUNT}.dkr.ecr.us-east-1.amazonaws.com/${PREFIX}-worker`;
@@ -160,7 +159,7 @@ function world(options: { readonly running?: string; readonly refuses?: boolean 
   };
 }
 
-function preflight(stub: World, args: readonly string[] = ['infra/roots/rehearsal', PREFIX, '0019', '--worker-digest', RELEASE], script = SCRIPT, extra: Readonly<Record<string, string>> = {}, migration = '0019'): {
+function preflight(stub: World, args: readonly string[] = ['infra/roots/rehearsal', PREFIX, '0019', '--worker-digest', RELEASE], extra: Readonly<Record<string, string>> = {}, migration = '0019'): {
   readonly code: number;
   readonly output: string;
   readonly report: string | null;
@@ -169,7 +168,7 @@ function preflight(stub: World, args: readonly string[] = ['infra/roots/rehearsa
   for (const [name, value] of Object.entries(process.env)) {
     if (value !== undefined && !name.startsWith('FSS_')) env[name] = value;
   }
-  const result = spawnSync(script, [...args], {
+  const result = spawnSync(SCRIPT, [...args], {
     encoding: 'utf8',
     env: {
       ...env,
@@ -253,7 +252,7 @@ describe('preflight.sh counts on the operations task, with the release’s worke
       [['infra/roots/production', PREFIX, '0019', '--worker-digest', RELEASE], {}, 'is not the rehearsal root'],
     ] as const) {
       const stub = world();
-      const run = preflight(stub, args, SCRIPT, extra);
+      const run = preflight(stub, args, extra);
       expect(run.code, args.join(' ')).toBe(1);
       expect(run.output).toContain(expected);
       expect(stub.calls()).toEqual([]);
@@ -294,7 +293,7 @@ describe('preflight.sh counts on the operations task, with the release’s worke
     );
     // The same report for another migration: the generic line, and not one 0019 field.
     const other = world({ counts });
-    const next = preflight(other, ['infra/roots/rehearsal', PREFIX, '0020', '--worker-digest', RELEASE], SCRIPT, {}, '0020');
+    const next = preflight(other, ['infra/roots/rehearsal', PREFIX, '0020', '--worker-digest', RELEASE], {}, '0020');
     expect(next.code, next.output).toBe(0);
     expect(next.report).toBe(
       `prefix=${PREFIX} environment=rehearsal worker_digest=${RELEASE} schema=18 refuses=false ` +
@@ -305,27 +304,5 @@ describe('preflight.sh counts on the operations task, with the release’s worke
     expect((other.calls().find(call => call[1] === 'run-task') ?? []).join(' ')).toContain(
       '"command": ["admin", "schema-preflight", "0020", "--report", "/tmp/fss-preflight.json"]',
     );
-  });
-
-  it('makes the same calls and writes the same report through schema-preflight-0019.sh', () => {
-    // A full 0019 report, so the parity is of the whole line and not of its generic half.
-    const counts = {
-      blocking: { linkedinMarkers: 0, researchPages: 3 },
-      destroyed: { researchSeed: { firms: 7 }, directSentDays: 9, guardColumnsChanged: 2, alertThresholdsRows: 4, clientVersionRangeRows: 1 },
-      archivedMergeEvents: 6,
-      reasonCodeReferences: { domainCap: 8, deadJob: 0 },
-      relaxed: { snoozesWithPlaceholderReason: 12 },
-      reviewRequiredEnrollments: 13,
-    };
-    const now = world({ counts });
-    const old = world({ counts });
-    const current = preflight(now);
-    const legacy = preflight(old, ['infra/roots/rehearsal', PREFIX, '--worker-digest', RELEASE], OLD_NAME);
-    expect(legacy.code, legacy.output).toBe(current.code);
-    // The same calls, but for the name of the temporary directory each run makes.
-    const scrubbed = (calls: ReturnType<World['calls']>): string =>
-      JSON.stringify(calls).replace(/fss-preflight-0019\.[A-Za-z0-9]+/gu, 'fss-preflight-0019.<temporary>');
-    expect(scrubbed(old.calls())).toBe(scrubbed(now.calls()));
-    expect(legacy.report).toBe(current.report);
   });
 });

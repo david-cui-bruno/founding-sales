@@ -93,7 +93,7 @@ output "secret_names" {
 #
 # Every one of these is a public identifier, and every one is read from the
 # plan rather than typed into a shell file, so the guards in
-# `infra/scripts/release-common.sh` compare a launch against what Terraform
+# `infra/scripts/lib.sh` compare a launch against what Terraform
 # actually created rather than against a literal somebody kept up to date.
 # ---------------------------------------------------------------------------
 

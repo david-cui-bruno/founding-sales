@@ -31,7 +31,7 @@ locals {
   # a plan that forgot one used to revert it silently, to no alert subscription, to
   # sending off, or to no plan at all for the two required ones. Changing one is a pull
   # request and a read plan of this root. The API toggle stays the immediate switch for
-  # sending. `infra/scripts/release-rollback.sh` refuses a rollback whose checkout
+  # sending. `infra/scripts/rollback.sh` refuses a rollback whose checkout
   # commits a value other than the one production runs.
   certificate_arn = "arn:aws:acm:us-east-1:326255650484:certificate/3ed7bb99-733e-4f18-a46a-3b17c943ed42"
   api_hostname    = "api.usecallie.com"

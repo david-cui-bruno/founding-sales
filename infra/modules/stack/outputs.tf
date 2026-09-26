@@ -111,7 +111,7 @@ output "app_runtime_database_secret_arn" {
 
 output "deployment_plan" {
   description = <<-EOT
-    Everything `infra/scripts/release-deploy.sh` reads before it launches
+    Everything `infra/scripts/deploy.sh release` reads before it launches
     anything: the two one-off task definitions, the declared and planned
     desired counts, and whether this apply was a bootstrap.
   EOT

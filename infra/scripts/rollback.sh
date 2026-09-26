@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Put production back on a previous release's images, in one command (lane R1; P7, 27
-# September 2026: the old name release-rollback.sh execs this with the same flags).
+# September 2026).
 #
 #   infra/scripts/rollback.sh <root> <prefix> --api-digest D --worker-digest D \
 #       [--active-database-host H] [--apply]

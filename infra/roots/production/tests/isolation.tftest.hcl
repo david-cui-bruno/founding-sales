@@ -169,7 +169,7 @@ run "a_production_bootstrap_creates_both_services_at_zero" {
       && module.stack.deployment_plan.api.declared_desired_count == 2
       && module.stack.deployment_plan.worker.declared_desired_count == 1
     )
-    error_message = "The first apply of a fresh production environment creates both services at desired count zero, and the declared counts survive it: they are what release-deploy.sh scales to."
+    error_message = "The first apply of a fresh production environment creates both services at desired count zero, and the declared counts survive it: they are what deploy.sh release scales to."
   }
 }
 

@@ -13,8 +13,8 @@ import { COMMAND_DEPENDENCIES, parseFssCommand } from '../src/tools/fss/commands
 /**
  * `fss admin release-record put` and `show` (lane g71).
  *
- * `release-deploy.sh --release-record <file>` runs the put on the operations task, so the
- * record the CI gate wrote (`release-record-from-ci.sh`) is in the database for the
+ * `deploy.sh release --release-record <file>` runs the put on the operations task, so the
+ * record the CI gate wrote (`record.sh from-ci`) is in the database for the
  * admin's attestation to name. What is asserted here is the command line: the file and
  * base64 forms, the JSON on stdout, the report file, the exit codes, and the row.
  *
@@ -37,7 +37,7 @@ const digest = (letter: string): string => `sha256:${letter.repeat(64)}`;
 
 const COMMIT = 'c'.repeat(40);
 
-/** The record `release-record-from-ci.sh` writes for gate run `runId`. */
+/** The record `record.sh from-ci` writes for gate run `runId`. */
 const record = (runId: string, worker = digest('b')): Record<string, unknown> => ({
   schema: RELEASE_RECORD_SCHEMA_ID,
   source: 'ci-gate',
@@ -135,7 +135,7 @@ describe('fss admin release-record put', () => {
     expect(JSON.parse(readFileSync(report, 'utf8'))).toEqual(answer);
     expect(await rows(reference)).toBe(1);
 
-    // Again, as the base64 argument release-deploy.sh hands a one-off task: same record.
+    // Again, as the base64 argument deploy.sh release hands a one-off task: same record.
     const encoded = Buffer.from(readFileSync(file)).toString('base64');
     const again = await run(['admin', 'release-record', 'put', '--json-base64', encoded]);
     expect(again.code, again.stderr).toBe(0);
@@ -143,8 +143,8 @@ describe('fss admin release-record put', () => {
     expect(await rows(reference)).toBe(1);
   });
 
-  it('stores a record from the CI gate as release-deploy.sh hands it over, and says it is ci-gate', async () => {
-    // Lane g96: the shape release-record-from-ci.sh writes, which carries no drill evidence.
+  it('stores a record from the CI gate as deploy.sh release hands it over, and says it is ci-gate', async () => {
+    // Lane g96: the shape record.sh from-ci writes, which carries no drill evidence.
     const commit = 'e'.repeat(40);
     const reference = `ci-gate-41000000001-${commit.slice(0, 12)}`;
     const ciRecord = {

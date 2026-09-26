@@ -15,7 +15,7 @@ import {
 /**
  * The release record's wire shape (lanes g71, g96; W3-S8).
  *
- * The CI gate's record (`infra/scripts/release-record-from-ci.sh`) is the only one a put
+ * The CI gate's record (`infra/scripts/record.sh from-ci`) is the only one a put
  * accepts. The record a `full` rehearsal wrote is refused since that mode was deleted;
  * the ones already stored are read back from their columns and `releaseRecordSource`
  * still names them. All data is fictional: the digests are repeated letters.

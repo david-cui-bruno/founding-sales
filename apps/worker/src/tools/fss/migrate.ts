@@ -9,7 +9,7 @@ import { CURRENT_SCHEMA_VERSION, API_SCHEMA_RANGE, WORKER_SCHEMA_RANGE } from '@
  *
  * Nothing in this repository's deployment ever ran a migration. The release
  * workflow's step is named "migrate, then deploy the worker, then the API" and
- * `infra/scripts/rehearsal-schema-ranges.sh` redeploys the two services and nothing
+ * `infra/scripts/rehearsal.sh ranges` redeploys the two services and nothing
  * else, while both binaries refuse to start unless the applied schema version is
  * exactly the one they declare. On a fresh database that is two services that will
  * never start and no command that would fix it. This is the command.

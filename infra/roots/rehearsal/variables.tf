@@ -31,7 +31,7 @@ variable "assume_deployment_role" {
     It does not, and it must not: its trust is the OIDC provider and the subject
     `repo:…:environment:rehearsal` alone (Appendix G 39). So
     `.github/workflows/greenfield-release.yml` and
-    `infra/scripts/rehearsal-teardown.sh` pass
+    `infra/scripts/rehearsal.sh teardown` pass
     `-var="assume_deployment_role=false"`.
 
     The default is nevertheless **true**, like production's. A default of false
@@ -39,7 +39,7 @@ variable "assume_deployment_role" {
     the environment; with the default as it is, a caller who does not say
     otherwise is refused `sts:AssumeRole`, and that refusal is the boundary
     working rather than a fault. The workflows that pass false prove what the
-    session is first, with `infra/scripts/rehearsal-caller-identity.sh`, which
+    session is first, with `infra/scripts/rehearsal.sh identity`, which
     refuses any identity that is not an assumed-role session of
     `fss-rh-deploy`.
     `docs/archive/decisions/g12e-the-provider-does-not-reassume-its-own-session.md`.
@@ -120,7 +120,7 @@ variable "bootstrap" {
     True for a rehearsal run, always, because every rehearsal environment is a
     fresh one: the apply creates it, and its database has no schema until the
     migration task has run. The release workflow passes `true` and then scales
-    through `infra/scripts/release-deploy.sh`.
+    through `infra/scripts/deploy.sh release`.
 
     It is a variable rather than a literal so that the rehearsal and production
     roots take the same input and the shared deploy script has one code path.

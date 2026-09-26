@@ -12,7 +12,7 @@ import type { AdminInvocation, AdminOutcome } from './admin.ts';
  * codes, and relaxes the edit-in-place triggers and four CHECKs. It **refuses** (FS019)
  * when a LinkedIn marker or an audited enrollment migration it would drop is still
  * stored, or when research's data tables hold a row — its seeded configuration is
- * dropped without asking. `infra/scripts/schema-preflight-0019.sh` runs this on the
+ * dropped without asking. `infra/scripts/preflight.sh <root> <prefix> 0019` runs this on the
  * operations task as the runtime identity, so the coordinator sees every count — and
  * whether the migration would refuse — while both services are still running; it exits
  * 3 when `refuses` is true.

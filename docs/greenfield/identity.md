@@ -155,7 +155,7 @@ the callback, again at the claim, and again on every command.
 three rules are circular on a new deployment: sign-in refuses without the workspace,
 refuses again without an active membership, and is the only thing that writes the
 `users` row. `fss admin workspace bootstrap` breaks the circle from outside —
-`infra/scripts/release-bootstrap-workspace.sh`, run as a one-off task under the runtime
+`infra/scripts/deploy.sh bootstrap`, run as a one-off task under the runtime
 credential (release runbook 5.1a) — and creates the workspace, the first admin's `users`
 row and an active `admin` membership in one idempotent transaction. The real Google
 `sub` cannot be known before that person signs in, so the row is written with
