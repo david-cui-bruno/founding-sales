@@ -4,7 +4,8 @@ These are the records that were section 8 of `release.md` until 25 September 202
 each credentialed run proved and refuted, and what each lane's change did. They moved
 here verbatim (lane g93) so that `release.md` is only the runbook, and nothing is added
 to them, except 8.0aw, which lane g90 wrote before the move and which landed after it
-(PR 231). A change is now one line in `changelog.md`.
+(PR 231). A change is now one line in `changelog.md`, added as one fragment file under
+`changelog/`.
 
 A reference anywhere in the repository such as "release.md 8.0u" or "release runbook
 8.0u" names the record of that number below, and one to an item of "8.1" from before

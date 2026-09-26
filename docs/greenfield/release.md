@@ -4,7 +4,7 @@
 
 `docs/greenfield/infra-apply-runbook.md` is how the infrastructure comes into existence. This document is how a **release** happens on top of it: which steps are yours, which are the workflow's, and why the order cannot be rearranged.
 
-This is the runbook and nothing else. What each merged change did is one line in [`changelog.md`](changelog.md), and the records of the credentialed runs and lanes before 25 September 2026 (the numbered references such as 8.0u below) are in [`release-records.md`](release-records.md).
+This is the runbook and nothing else. What each merged change did is one line in [`changelog.md`](changelog.md), added as one fragment file under [`changelog/`](changelog/), and the records of the credentialed runs and lanes before 25 September 2026 (the numbered references such as 8.0u below) are in [`release-records.md`](release-records.md).
 
 Read section 1 before doing anything in section 3. Two steps in it take days of waiting (DNS authentication for sending, and an SNS confirmation click that is easy to forget), and one of them — the `fss-rh-deploy` bypass-governance grant — is the difference between a rehearsal you can tear down today and one that leaves a bucket behind for a day.
 
@@ -1192,8 +1192,9 @@ terraform -chdir=infra/roots/production plan -out=pin.tfplan -var="expected_syst
 The records of what each credentialed run proved and refuted, and of what each lane's
 change did, 8.0 to 8.0aw, are in [`release-records.md`](release-records.md), unchanged. A
 numbered reference such as "8.0u", in this document or anywhere else, names one of them. From
-25 September 2026 a change is one line in [`changelog.md`](changelog.md) instead, and
-this section holds only what is still unverified.
+25 September 2026 a change is one line in [`changelog.md`](changelog.md) instead, added as
+one fragment file under [`changelog/`](changelog/), and this section holds only what is
+still unverified.
 
 ### 8.1 Still unverified
 

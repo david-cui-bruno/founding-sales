@@ -184,9 +184,9 @@ describe('the pull-request gate no longer runs the release mutation check', () =
   it('runs a gate script that does not reach the mutation check either, and the check still runs locally', () => {
     const scripts = (JSON.parse(readRepositoryFile('package.json')) as { scripts: Record<string, string> }).scripts;
     expect(scripts['gate:greenfield']).toBe(
-      'npm run typecheck:greenfield && npm run lint:greenfield && npm run test:greenfield && npm run test:release',
+      'npm run typecheck:greenfield && npm run lint:greenfield && npm run changelog:check && npm run test:greenfield && npm run test:release',
     );
-    for (const part of ['typecheck:greenfield', 'lint:greenfield', 'test:greenfield', 'test:release']) {
+    for (const part of ['typecheck:greenfield', 'lint:greenfield', 'changelog:check', 'test:greenfield', 'test:release']) {
       expect(scripts[part] ?? '', part).not.toMatch(RUNS_THE_CHECK);
     }
     // Locally, exactly as before lane g62.
