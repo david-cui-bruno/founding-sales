@@ -45,7 +45,7 @@ output "critical_composite_alarm_name" {
 }
 
 output "critical_condition_alarm_names" {
-  description = "The composite alarm of each immediately critical condition, keyed by the condition. Each e-mails when its condition trips, even while another is open (lane g81)."
+  description = "The composite alarm of each immediately critical condition, keyed by the condition. Each trips when its condition does, even while another is open (lane g81); none e-mails (lane g99)."
   value       = { for name, alarm in aws_cloudwatch_composite_alarm.critical_condition : name => alarm.alarm_name }
 }
 
@@ -60,6 +60,31 @@ output "alarm_inventory" {
 }
 
 output "subscription_endpoints" {
-  description = "Configured alert recipients, for offline assertions."
+  description = "Configured recipients of the daily alarm digest, for offline assertions."
   value       = sort(var.alert_emails)
+}
+
+output "digest_function_name" {
+  description = "The Lambda function that publishes the daily alarm digest (lane g99)."
+  value       = aws_lambda_function.digest.function_name
+}
+
+output "digest_schedule" {
+  description = "When the digest runs: the Scheduler expression and the zone it is evaluated in."
+  value = {
+    name       = aws_scheduler_schedule.digest.name
+    expression = aws_scheduler_schedule.digest.schedule_expression
+    time_zone  = aws_scheduler_schedule.digest.schedule_expression_timezone
+  }
+}
+
+output "digest_resource_names" {
+  description = "Every name the digest claims: its function, its log group, its two roles and its schedule. Known at plan time, for the roots' namespace assertions."
+  value = [
+    local.digest_name,
+    local.digest_log_group_name,
+    aws_iam_role.digest.name,
+    aws_iam_role.digest_schedule.name,
+    aws_scheduler_schedule.digest.name,
+  ]
 }

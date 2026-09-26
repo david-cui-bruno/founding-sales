@@ -529,6 +529,35 @@
         "sns:ListSubscriptionsByTopic"
       ]
     },
+    "aws_lambda_function": {
+      "service": "lambda",
+      "scope": "arn",
+      "actions": [
+        "lambda:CreateFunction",
+        "lambda:GetFunction",
+        "lambda:GetFunctionConfiguration",
+        "lambda:GetFunctionCodeSigningConfig",
+        "lambda:ListVersionsByFunction",
+        "lambda:UpdateFunctionCode",
+        "lambda:UpdateFunctionConfiguration",
+        "lambda:DeleteFunction",
+        "lambda:TagResource",
+        "lambda:UntagResource",
+        "lambda:ListTags",
+        "iam:PassRole"
+      ]
+    },
+    "aws_scheduler_schedule": {
+      "service": "scheduler",
+      "scope": "arn",
+      "actions": [
+        "scheduler:CreateSchedule",
+        "scheduler:GetSchedule",
+        "scheduler:UpdateSchedule",
+        "scheduler:DeleteSchedule",
+        "iam:PassRole"
+      ]
+    },
     "aws_ecr_repository": {
       "service": "ecr",
       "scope": "arn",

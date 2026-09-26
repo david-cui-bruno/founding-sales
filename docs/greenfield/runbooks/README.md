@@ -17,25 +17,34 @@ property, and clearing it is how a duplicate email or a prohibited call happens.
 
 General facts that apply to every page:
 
-- Alerts arrive by SNS email, which does not depend on any salesperson Gmail grant.
-- **The e-mail comes from a composite alarm, never from the alarm a page is named
-  after** (lanes g62 and g81). Each critical condition has its own composite,
-  `<prefix>-critical-<condition>`, which e-mails when that condition trips — even while
-  another critical condition is already open — and the page to open is the condition in
-  its name. `<prefix>-critical`, over every critical alarm and `all_sequences_held`,
-  sends one e-mail: the all-clear, when every critical condition has cleared.
-  `<prefix>-warning`, over the warnings, sends one e-mail when it goes to `ALARM` and
-  one when it returns to `OK`. The alarms these pages are named after keep their state
-  and send nothing.
-- **A dead worker is one e-mail.** The API, scheduler and mailbox heartbeats and the
-  canary are published by the worker and trip whenever it stops publishing. Their
-  composites stay quiet while `worker_heartbeat_missed` is in `ALARM`, and e-mail five
-  minutes after it clears only if they are still true.
-- **The warning roll-up still stays quiet when a second warning trips**, and sends its
-  `OK` only when every warning has cleared. List what is in `ALARM` now before deciding
-  which page to work:
-  `aws cloudwatch describe-alarms --state-value ALARM --alarm-name-prefix fss-prod
-  --query 'MetricAlarms[].AlarmName'`.
+- **No alarm e-mails when it trips** (lane g99; the owner's decision 11C of
+  25 September 2026). One e-mail arrives a day, the **daily alarm digest**, at
+  **07:00 America/New_York** (EventBridge Scheduler evaluates the time in that zone, so
+  it does not move at the daylight-saving changes). Its subject is
+  `Callie daily alarm digest — <date>`. It lists every alarm whose name starts with
+  `<prefix>-` that is not `OK` now, `ALARM` first and then `INSUFFICIENT_DATA`, each
+  with the time it entered that state; then every state change of the last 24 hours,
+  oldest first, as alarm name, from → to, and the time in New York. A day on which
+  nothing was wrong and nothing changed is one line: `All N alarms OK.` The page to open
+  is the one named after the alarm; a composite in the list,
+  `<prefix>-critical-<condition>`, names its condition.
+- The digest is SNS email on the alert topic, which does not depend on any salesperson
+  Gmail grant, and reaches the addresses in `alert_emails`. It is published by the
+  Lambda function `<prefix>-alarm-digest`, which logs to `/fss/<prefix>/alarm-digest`
+  (14 days). To have it now rather than at 07:00:
+  `aws lambda invoke --function-name fss-prod-alarm-digest /dev/null`.
+- **To read an alarm immediately**, do not wait for the digest. What is in `ALARM` this
+  minute, metric alarms and composites both:
+  `aws cloudwatch describe-alarms --state-value ALARM --alarm-name-prefix fss-prod-
+  --alarm-types MetricAlarm CompositeAlarm --query '[MetricAlarms, CompositeAlarms][].AlarmName'`,
+  or without the flags, `aws cloudwatch describe-alarms --state-value ALARM`, which
+  reads the metric alarms of every environment in the account. One alarm's day:
+  `aws cloudwatch describe-alarm-history --alarm-name <name> --history-item-type StateUpdate`.
+- The alarms keep their names and their state; only the e-mails went. `<prefix>-critical`
+  is in `ALARM` while any critical condition is, `<prefix>-warning` while any warning
+  is, and each critical condition has a composite of its own that changes state when it
+  trips even while another is open (lane g81), so the digest shows a second incident as
+  a transition of its own.
 - Every alarm reads its own environment's CloudWatch namespace, `FSS/<prefix>`:
   `FSS/fss-prod` in production, `FSS/fss-rh-<run>` in a rehearsal. To read a metric
   by hand, name it: `aws cloudwatch get-metric-statistics --namespace FSS/fss-prod
@@ -44,9 +53,8 @@ General facts that apply to every page:
   trip or mask a production alarm.
 - A critical condition repeats while unacknowledged. `POST /admin/alerts/acknowledge`
   stops the repetition; it does not fix anything and it is audited. The repeat is
-  `unacknowledged_critical_alert`, so since lane g62 it reaches the inbox through
-  `<prefix>-warning`, and not at all while another warning holds that composite in
-  `ALARM`.
+  `unacknowledged_critical_alert`, a warning, so since lane g99 it is a line in the next
+  morning's digest like every other alarm.
 - `GET /diagnostics` is the one read that shows schema version, client-version range,
   job health, heartbeats, mailbox health, restore generation and open alerts together.
 - Nothing here authorises editing `infra/`. Threshold changes are a release.

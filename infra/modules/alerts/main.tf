@@ -1,44 +1,38 @@
 # FSS greenfield alerting.
 #
 # Every threshold in spec 13.3 becomes one CloudWatch alarm over a metric the
-# applications emit, and the criticals roll up into one composite alarm so the
-# operator gets one notification for one incident rather than nine.
+# applications emit, and the alarms roll up into composites: <prefix>-critical over
+# every critical condition, <prefix>-warning over every warning, and one
+# <prefix>-critical-<condition> per critical condition, so a second critical condition
+# that trips while the first is open still changes the state of an alarm of its own
+# (lane g81, audit O14).
 #
-# Only composites notify (lane g62). Until then every metric alarm notified the
-# topic on ALARM and on OK beside the composite, so one incident sent the
-# composite's two e-mails plus two for every member it tripped: four to six
-# e-mails per flap on 24 September 2026. The metric alarms keep their state,
-# which is what the composites read, and send nothing themselves. Every metric
-# alarm is a member of exactly one roll-up: severity "critical" and
-# all_sequences_held in <prefix>-critical, severity "warning" in
-# <prefix>-warning. tests/thresholds.tftest.hcl holds both halves.
+# Nothing here e-mails anybody (lane g99; the owner's decision 11C of 25 September
+# 2026). No metric alarm and no composite carries an alarm, OK or insufficient-data
+# action. Until then the composites e-mailed on their transitions (lanes g62 and g81);
+# now the one e-mail is the daily digest in digest.tf, which at 07:00 America/New_York
+# lists every alarm that is not OK and every state change of the last 24 hours. The
+# alarms keep their names and their state, which is what the digest, the dashboard and
+# the CLI read. Every metric alarm is still a member of exactly one roll-up: severity
+# "critical" and all_sequences_held in <prefix>-critical, severity "warning" in
+# <prefix>-warning. tests/thresholds.tftest.hcl holds the membership and
+# tests/digest.tftest.hcl holds the absence of every action.
 #
-# One incident, one e-mail — and a second incident, a second e-mail (lane g81,
-# audit O14). A composite in ALARM does not transition when another member
-# trips, so with one OR composite the first critical condition hid every later
-# one until all of them had cleared. So each critical condition also has a
-# composite of its own, <prefix>-critical-<condition>, whose rule is that one
-# alarm: it e-mails when its condition enters ALARM, whatever else is already
-# open. <prefix>-critical keeps the roll-up and sends the one OK, when every
-# critical condition is clear. A single incident is still two e-mails; each
-# further condition that trips while it is open is one more.
-#
-# The four conditions the worker's own metric loop publishes and that treat
-# missing data as breaching — the API, scheduler and mailbox heartbeats and the
-# canary — go to ALARM whenever the worker stops publishing, whatever their own
-# state. While worker-heartbeat-missed is in ALARM their composites' e-mails are
-# held back (CloudWatch actions suppression); if one is still in ALARM five
-# minutes after the worker recovers it e-mails then. A dead worker is one
-# e-mail, not five. docs/decisions/g81-one-e-mail-per-critical-condition.md.
+# The four conditions the worker's own metric loop publishes and that treat missing
+# data as breaching — the API, scheduler and mailbox heartbeats and the canary — go to
+# ALARM whenever the worker stops publishing. Their per-condition composites still name
+# worker-heartbeat-missed as their actions suppressor. With no action on any composite
+# the suppressor holds nothing back today; it is kept so that giving a composite an
+# action again is one line and a dead worker is still one notification, not five
+# (docs/decisions/g81-one-e-mail-per-critical-condition.md).
 #
 # Which members are in ALARM now is
-# `aws cloudwatch describe-alarms --state-value ALARM --alarm-name-prefix <prefix>`.
+# `aws cloudwatch describe-alarms --state-value ALARM --alarm-name-prefix <prefix>-`.
 #
-# Delivery is SNS email. That path is AWS-native: it does not use a salesperson
-# Gmail grant, so "connected mailbox disconnected for 48 hours" can still be
-# delivered when every mailbox is disconnected. The topic is encrypted with a
-# customer key whose policy lets CloudWatch publish; the AWS-managed SNS key
-# cannot be used by CloudWatch alarms.
+# Delivery of the digest is SNS email. That path is AWS-native: it does not use a
+# salesperson Gmail grant, so "connected mailbox disconnected for 48 hours" can still be
+# delivered when every mailbox is disconnected. The topic is encrypted with a customer
+# key; the digest function's role may use that key and publish to this topic alone.
 
 locals {
   topic_name = "${var.name_prefix}-alerts"
@@ -401,8 +395,8 @@ resource "aws_cloudwatch_metric_alarm" "this" {
   datapoints_to_alarm = each.value.datapoints_to_alarm
   treat_missing_data  = each.value.treat_missing_data
 
-  # A member of one composite, which is what notifies (see the top of this
-  # file). The state is the product; the e-mail is the composite's.
+  # A member of one roll-up, and of its own per-condition composite when critical.
+  # The state is the product; the daily digest (digest.tf) is the only e-mail.
   actions_enabled = true
   alarm_actions   = []
   ok_actions      = []
@@ -454,7 +448,7 @@ resource "aws_cloudwatch_metric_alarm" "all_sequences_held" {
     }
   }
 
-  # A member of the critical composite, which notifies for it.
+  # A member of the critical roll-up; the daily digest reports its state.
   actions_enabled = true
   alarm_actions   = []
   ok_actions      = []
@@ -465,17 +459,12 @@ resource "aws_cloudwatch_metric_alarm" "all_sequences_held" {
   })
 }
 
-# Only composites notify the topic. The two roll-ups name every metric alarm
-# above exactly once between them; each critical condition also has a composite
-# of its own below.
-#
-# <prefix>-critical sends the all-clear and nothing else (lane g81): its ALARM is
-# the per-condition composites' to announce, one e-mail each, and its OK is the
-# one moment the roll-up knows something they do not — that every critical
-# condition is clear.
+# The two roll-ups name every metric alarm above exactly once between them; each
+# critical condition also has a composite of its own below. None of them notifies
+# anything (lane g99): the daily digest reads their state.
 resource "aws_cloudwatch_composite_alarm" "critical" {
   alarm_name        = "${var.name_prefix}-critical"
-  alarm_description = "Every immediately critical FSS condition. E-mails once, when all of them are clear; each condition's own composite e-mails when it trips."
+  alarm_description = "Every immediately critical FSS condition. In ALARM while any of them is; reported by the daily alarm digest, never e-mailed on its own."
 
   alarm_rule = join(" OR ", concat(
     [for name in local.critical_alarm_keys : "ALARM(\"${aws_cloudwatch_metric_alarm.this[name].alarm_name}\")"],
@@ -484,7 +473,7 @@ resource "aws_cloudwatch_composite_alarm" "critical" {
 
   actions_enabled = true
   alarm_actions   = []
-  ok_actions      = [aws_sns_topic.alerts.arn]
+  ok_actions      = []
 
   tags = merge(var.tags, {
     Name     = "${var.name_prefix}-critical"
@@ -494,9 +483,8 @@ resource "aws_cloudwatch_composite_alarm" "critical" {
 
 # One composite per critical condition (lane g81, audit O14). Its rule is the one
 # alarm, so it enters ALARM when that condition does, even while another critical
-# condition already holds <prefix>-critical in ALARM, and e-mails the topic then.
-# It sends no OK: the all-clear is <prefix>-critical's, so a single incident is
-# still one e-mail in and one out.
+# condition already holds <prefix>-critical in ALARM. Since lane g99 it sends
+# nothing; its transitions are lines in the daily digest.
 locals {
   critical_condition_alarms = merge(
     { for name in local.critical_alarm_keys : name => aws_cloudwatch_metric_alarm.this[name].alarm_name },
@@ -508,17 +496,17 @@ resource "aws_cloudwatch_composite_alarm" "critical_condition" {
   for_each = local.critical_condition_alarms
 
   alarm_name        = "${var.name_prefix}-critical-${replace(each.key, "_", "-")}"
-  alarm_description = "One immediately critical FSS condition: ${each.value}. E-mails when it trips, even while another critical condition is open."
+  alarm_description = "One immediately critical FSS condition: ${each.value}. Trips even while another critical condition is open; reported by the daily alarm digest."
   alarm_rule        = "ALARM(\"${each.value}\")"
 
   actions_enabled = true
-  alarm_actions   = [aws_sns_topic.alerts.arn]
+  alarm_actions   = []
   ok_actions      = []
 
   # Held back while the worker's own heartbeat alarm is in ALARM, for the four
   # conditions that trip merely because the worker stopped publishing (see the top
-  # of this file). CloudWatch performs the action afterwards if the condition is
-  # still in ALARM when the extension ends, so nothing true is lost.
+  # of this file). With no action to hold it changes nothing today; it is what keeps
+  # a dead worker one notification should a composite be given an action again.
   dynamic "actions_suppressor" {
     for_each = contains(local.worker_published_breaching_keys, each.key) ? [aws_cloudwatch_metric_alarm.this["worker_heartbeat_missed"].alarm_name] : []
 
@@ -537,13 +525,13 @@ resource "aws_cloudwatch_composite_alarm" "critical_condition" {
 
 resource "aws_cloudwatch_composite_alarm" "warning" {
   alarm_name        = "${var.name_prefix}-warning"
-  alarm_description = "Any FSS warning condition."
+  alarm_description = "Any FSS warning condition. Reported by the daily alarm digest, never e-mailed on its own."
 
   alarm_rule = join(" OR ", [for name in local.warning_alarm_keys : "ALARM(\"${aws_cloudwatch_metric_alarm.this[name].alarm_name}\")"])
 
   actions_enabled = true
-  alarm_actions   = [aws_sns_topic.alerts.arn]
-  ok_actions      = [aws_sns_topic.alerts.arn]
+  alarm_actions   = []
+  ok_actions      = []
 
   tags = merge(var.tags, {
     Name     = "${var.name_prefix}-warning"

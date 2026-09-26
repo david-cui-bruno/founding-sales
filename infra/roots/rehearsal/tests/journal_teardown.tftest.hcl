@@ -103,6 +103,13 @@ mock_provider "aws" {
     }
   }
 
+  # The same, for the daily alarm digest's schedule target (lane g99).
+  mock_resource "aws_lambda_function" {
+    defaults = {
+      arn = "arn:aws:lambda:us-east-1:123456789012:function:mock-alarm-digest"
+    }
+  }
+
   mock_resource "aws_cloudfront_distribution" {
     defaults = {
       arn         = "arn:aws:cloudfront::123456789012:distribution/E111111111111"

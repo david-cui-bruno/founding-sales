@@ -104,6 +104,18 @@
       ]
     },
     {
+      "Sid": "AlarmDigestFunctionAndScheduleInThisNamespace",
+      "Effect": "Allow",
+      "Action": [
+        "lambda:*",
+        "scheduler:*"
+      ],
+      "Resource": [
+        "arn:aws:lambda:${aws_region}:${aws_account_id}:function:${name_prefix}*",
+        "arn:aws:scheduler:${aws_region}:${aws_account_id}:schedule/default/${name_prefix}*"
+      ]
+    },
+    {
       "Sid": "NamedKmsAliasesInThisNamespace",
       "Effect": "Allow",
       "Action": "kms:*",

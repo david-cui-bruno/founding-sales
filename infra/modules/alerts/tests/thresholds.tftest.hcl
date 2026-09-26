@@ -16,6 +16,20 @@ mock_provider "aws" {
       arn = "arn:aws:sns:us-east-1:123456789012:fss-test-alerts"
     }
   }
+
+  # The digest (digest.tf) is applied by the apply runs below too, and the provider
+  # refuses a function role or a schedule target that is not an ARN.
+  mock_resource "aws_iam_role" {
+    defaults = {
+      arn = "arn:aws:iam::123456789012:role/fss-test-alarm-digest"
+    }
+  }
+
+  mock_resource "aws_lambda_function" {
+    defaults = {
+      arn = "arn:aws:lambda:us-east-1:123456789012:function:fss-test-alarm-digest"
+    }
+  }
 }
 
 variables {
@@ -160,8 +174,8 @@ run "no_connected_mailbox_is_not_a_critical_watch" {
 
 # Lane g81. The send path holds an owner's automated email once their mailbox's
 # coverage watermark is fifteen minutes old (packages/domain/mail/coverage.ts). This
-# warning says so from outside the Mac, over the same fifteen minutes, and reaches the
-# inbox through the warning roll-up only.
+# warning says so from outside the Mac, over the same fifteen minutes, and belongs to
+# the warning roll-up only; the daily digest reports it (lane g99).
 run "a_stale_coverage_watermark_is_a_warning" {
   command = plan
 
@@ -185,7 +199,7 @@ run "a_stale_coverage_watermark_is_a_warning" {
       && !strcontains(aws_cloudwatch_composite_alarm.critical.alarm_rule, "fss-test-mailbox-coverage-stale")
       && !contains(keys(aws_cloudwatch_composite_alarm.critical_condition), "mailbox_coverage_stale")
     )
-    error_message = "The coverage warning reaches the inbox through the warning roll-up and nothing else."
+    error_message = "The coverage warning belongs to the warning roll-up and nothing else."
   }
 }
 
@@ -223,13 +237,15 @@ run "every_critical_condition_has_a_composite_of_its_own" {
       !contains(keys(aws_cloudwatch_composite_alarm.critical_condition), name)
       if alarm.severity == "warning"
     ])
-    error_message = "A warning has no per-condition composite; the warning roll-up is its only e-mail."
+    error_message = "A warning has no per-condition composite; the warning roll-up is the only composite over it."
   }
 }
 
 # The four conditions the worker's own metric loop publishes with missing data
-# breaching trip whenever the worker stops publishing. Their e-mails wait while
-# worker-heartbeat-missed is in ALARM; nothing else waits on anything.
+# breaching trip whenever the worker stops publishing. Their composites name
+# worker-heartbeat-missed as actions suppressor; nothing else waits on anything.
+# Since lane g99 no composite has an action for it to hold, and the suppressor is
+# kept so that restoring one keeps a dead worker one notification.
 run "a_dead_worker_is_one_e_mail_not_five" {
   command = plan
 
@@ -260,17 +276,11 @@ run "a_dead_worker_is_one_e_mail_not_five" {
   }
 }
 
-# An apply run, because the routing assertions are about the topic ARN, and an
-# ARN is a value only the apply knows. Mocked providers make the apply offline:
-# no credential, no call, and the values are the mock defaults above. Asserting
-# them during a plan would need `override_during = plan`, which is the setting
-# that hid the rehearsal's error.
-#
-# Lane g62: only the composites notify. Until then every metric alarm notified
-# the topic on ALARM and OK beside its composite, and one flap on 24 September
-# 2026 sent four to six e-mails. The metric alarms now carry no action at all.
-run "criticals_roll_up_into_one_composite_that_notifies_the_topic" {
-  command = apply
+# Lane g99: nothing e-mails when it trips, so what is left of the routing is
+# membership. The absence of every action, on every metric alarm and every
+# composite, is tests/digest.tftest.hcl's, beside the digest that replaced them.
+run "criticals_roll_up_into_one_composite" {
+  command = plan
 
   assert {
     condition     = strcontains(aws_cloudwatch_composite_alarm.critical.alarm_rule, "ALARM(\"fss-test-suppression-journal-failure\")")
@@ -286,58 +296,10 @@ run "criticals_roll_up_into_one_composite_that_notifies_the_topic" {
     condition     = strcontains(aws_cloudwatch_composite_alarm.critical.alarm_rule, "fss-test-oldest-runnable-job-warning") == false
     error_message = "A warning must not raise the critical composite."
   }
-
-  assert {
-    condition = (
-      aws_cloudwatch_composite_alarm.warning.actions_enabled
-      && aws_cloudwatch_composite_alarm.warning.alarm_actions == toset([aws_sns_topic.alerts.arn])
-      && aws_cloudwatch_composite_alarm.warning.ok_actions == toset([aws_sns_topic.alerts.arn])
-    )
-    error_message = "The warning composite notifies the alert topic, and only it, on ALARM and on OK."
-  }
-
-  # Lane g81: the critical roll-up sends the all-clear only, and each critical
-  # condition's own composite sends its ALARM only, so one incident is still one
-  # e-mail in and one out and a second incident is one more in.
-  assert {
-    condition = (
-      aws_cloudwatch_composite_alarm.critical.actions_enabled
-      && length(aws_cloudwatch_composite_alarm.critical.alarm_actions) == 0
-      && aws_cloudwatch_composite_alarm.critical.ok_actions == toset([aws_sns_topic.alerts.arn])
-    )
-    error_message = "The critical roll-up e-mails the topic once, when every critical condition is clear."
-  }
-
-  assert {
-    condition = length(aws_cloudwatch_composite_alarm.critical_condition) > 0 && alltrue([
-      for composite in aws_cloudwatch_composite_alarm.critical_condition :
-      composite.actions_enabled
-      && composite.alarm_actions == toset([aws_sns_topic.alerts.arn])
-      && length(composite.ok_actions) == 0
-      && try(length(composite.insufficient_data_actions), 0) == 0
-    ])
-    error_message = "Each critical condition's composite e-mails the alert topic, and only it, when it trips."
-  }
-
-  assert {
-    condition = alltrue([
-      for alarm in concat(values(aws_cloudwatch_metric_alarm.this), [aws_cloudwatch_metric_alarm.all_sequences_held]) :
-      length(alarm.alarm_actions) == 0
-      && length(alarm.ok_actions) == 0
-      && try(length(alarm.insufficient_data_actions), 0) == 0
-    ])
-    error_message = "No metric alarm notifies anything: the composite it belongs to is the one e-mail per incident."
-  }
-
-  # The floor under the assertion above: it must have read every metric alarm.
-  assert {
-    condition     = length(concat(values(aws_cloudwatch_metric_alarm.this), [aws_cloudwatch_metric_alarm.all_sequences_held])) == length(output.alarm_inventory) + 1
-    error_message = "The routing assertions must cover the whole inventory and the metric-math alarm."
-  }
 }
 
-# A metric alarm that sends nothing and belongs to no composite would be an
-# alarm nobody hears. So every one is named by exactly one roll-up, the one its
+# A metric alarm that belongs to no composite would be an alarm no roll-up
+# reports. So every one is named by exactly one roll-up, the one its
 # severity says, and the roll-ups name nothing else. (A critical one is also named
 # by its own per-condition composite; that run is above.)
 run "every_metric_alarm_feeds_exactly_one_composite" {
@@ -387,7 +349,7 @@ run "delivery_does_not_depend_on_a_gmail_grant" {
 
   assert {
     condition     = alltrue([for subscription in aws_sns_topic_subscription.email : subscription.protocol == "email"])
-    error_message = "Alerts are delivered by the AWS-native SNS email path, never through a connected salesperson mailbox."
+    error_message = "The daily digest is delivered by the AWS-native SNS email path, never through a connected salesperson mailbox."
   }
 
   assert {

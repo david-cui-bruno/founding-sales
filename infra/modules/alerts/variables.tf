@@ -20,10 +20,11 @@ variable "aws_account_id" {
 
 variable "alert_emails" {
   description = <<-EOT
-    Addresses that receive alerts. SNS email delivery is AWS-native and does
-    not touch a salesperson Gmail grant, so a revoked or unhealthy mailbox
-    cannot silence the alarm that says the mailbox is unhealthy. Each address
-    must confirm its subscription by hand once; see the runbook.
+    Addresses that receive the daily alarm digest (digest.tf), the one e-mail
+    this module sends. SNS email delivery is AWS-native and does not touch a
+    salesperson Gmail grant, so a revoked or unhealthy mailbox cannot silence
+    the digest that says the mailbox is unhealthy. Each address must confirm
+    its subscription by hand once; see the runbook.
   EOT
   type        = list(string)
   default     = []

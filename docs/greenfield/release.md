@@ -944,7 +944,7 @@ aws sns publish --topic-arn "$(terraform output -raw alert_topic_arn)" \
   --subject "FSS alert path test" --message "If you are reading this, the independent alert path works."
 ```
 
-**What arrives after that.** Two alarms e-mail: `fss-prod-critical` and `fss-prod-warning`, each once when it goes to `ALARM` and once when it returns to `OK`. The sixteen metric alarms under them keep their state and send nothing, and a composite already in `ALARM` sends nothing more when a second member trips (8.0ac, `docs/greenfield/runbooks/README.md`).
+**What arrives after that.** One e-mail a day and nothing else: the daily alarm digest, `Callie daily alarm digest — <date>`, at 07:00 America/New_York (lane g99). It lists every `fss-prod-` alarm that is not `OK`, then the last 24 hours of state changes in time order, or says `All N alarms OK.` when nothing happened. No alarm e-mails when it trips. To read one immediately: `aws cloudwatch describe-alarms --state-value ALARM --alarm-name-prefix fss-prod- --alarm-types MetricAlarm CompositeAlarm`; to have the digest now, `aws lambda invoke --function-name fss-prod-alarm-digest /dev/null` (`docs/greenfield/runbooks/README.md`).
 
 ### 5.4 The Gmail push grant
 
