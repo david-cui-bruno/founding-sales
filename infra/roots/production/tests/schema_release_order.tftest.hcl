@@ -8,10 +8,10 @@
 #
 # The 25 September 04:41Z deploy of schema 16 applied first and stopped second: the
 # apply pointed both running services at task definitions whose `{16,16}` range
-# refused the schema-15 database, and `release-deploy.sh --schema-change` scaled
+# refused the schema-15 database, and `deploy.sh release --schema-change` scaled
 # them to zero only afterwards (`docs/greenfield/release.md` 8.0af). A schema
-# release is now `release-stop.sh ... --environment production`, then the apply,
-# then `release-deploy.sh --schema-change`, and the apply must not undo the stop.
+# release is now `stop.sh ... --environment production`, then the apply,
+# then `deploy.sh release --schema-change`, and the apply must not undo the stop.
 #
 # `infra/modules/cluster/tests/release_owns_the_count.tftest.hcl` asserts that at the
 # module, starting from zero. This is production's own root, starting from the
@@ -123,7 +123,7 @@ run "a_later_production_apply_moves_the_task_definitions_and_not_the_counts" {
   assert {
     condition = (module.stack.deployment_plan.api.planned_desired_count == 2
     && module.stack.deployment_plan.worker.planned_desired_count == 1)
-    error_message = "A production apply moved a running service's count. The count is release-stop.sh's and release-deploy.sh's after the first apply: both services must carry ignore_changes = [desired_count]."
+    error_message = "A production apply moved a running service's count. The count is stop.sh's and deploy.sh release's after the first apply: both services must carry ignore_changes = [desired_count]."
   }
 
   assert {

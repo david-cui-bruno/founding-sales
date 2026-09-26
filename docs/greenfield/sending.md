@@ -302,7 +302,7 @@ is now the only thing that creates the row. It has three callers:
 | Caller | `registeredBy` | When |
 |---|---|---|
 | The Gmail callback (`apps/api/src/routes/gmail.ts`), after `completeGmailGrant` returns | `mailbox_connect` | Every mailbox connect. This is the zero-step path: the connected address's domain becomes the sending domain. |
-| `fss admin workspace bootstrap --sending-domain <domain>`, through `release-bootstrap-workspace.sh` (release.md 5.1a) | `operator` | A workspace whose mailbox connected before g57. Idempotent, so 5.1a can pass the flag on every re-run. |
+| `fss admin workspace bootstrap --sending-domain <domain>`, through `deploy.sh bootstrap` (release.md 5.1a) | `operator` | A workspace whose mailbox connected before g57. Idempotent, so 5.1a can pass the flag on every re-run. |
 | `POST /outbound/domain` (admin only, `{ domain }`, command receipt `register_sending_domain`) | `admin` | For a future desktop "Add sending domain" control. No desktop build calls it yet. |
 
 It follows four rules, and each has a test:

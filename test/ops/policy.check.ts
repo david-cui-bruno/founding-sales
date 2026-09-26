@@ -9,7 +9,7 @@ import { repositoryPath } from './support/repository.ts';
  * P7 (27 September 2026): `infra/scripts/policy.sh` renders, checks and puts the two
  * deployment roles' inline policy. `deploymentRolePolicy.check.ts` holds what the rendered
  * document allows and how `check` reads the simulator; this holds `put`, which is new, and
- * the old names (`render-deployment-role-policy.sh`, `check-deployment-role.sh`) to the new.
+ * what the simulation plans.
  *
  * ## The vacuous-pass traps, named
  *
@@ -99,12 +99,12 @@ function world(options: { readonly account?: string; readonly held?: unknown; re
   };
 }
 
-function policy(args: readonly string[], environment: Readonly<Record<string, string>> = {}, script = SCRIPT): Run {
+function policy(args: readonly string[], environment: Readonly<Record<string, string>> = {}): Run {
   const env: Record<string, string> = {};
   for (const [name, value] of Object.entries(process.env)) {
     if (value !== undefined && !name.startsWith('FSS_')) env[name] = value;
   }
-  const result = spawnSync(script, [...args], { encoding: 'utf8', env: { ...env, ...environment } });
+  const result = spawnSync(SCRIPT, [...args], { encoding: 'utf8', env: { ...env, ...environment } });
   return { code: result.status ?? 1, output: `${result.stdout}${result.stderr}` };
 }
 
@@ -275,30 +275,20 @@ describe('policy.sh put: the rendered document, put and read back, in the accoun
   });
 });
 
-describe('the old names are policy.sh render and policy.sh check', () => {
-  it('renders the same bytes through render-deployment-role-policy.sh, for both roles and every mode', () => {
-    for (const prefix of ['fss-rh', 'fss-prod']) {
-      for (const mode of ['--pretty', '--compact', '--sids']) {
-        const now = policy(['render', prefix, mode]);
-        const old = policy([prefix, mode], {}, repositoryPath('infra/scripts/render-deployment-role-policy.sh'));
-        expect(now.code).toBe(0);
-        expect(old).toEqual(now);
-      }
-    }
-    expect(policy(['fss'], {}, repositoryPath('infra/scripts/render-deployment-role-policy.sh')).code).toBe(2);
-  });
-
-  it('plans the same simulation, and refuses the same way, through check-deployment-role.sh', () => {
-    const old = repositoryPath('infra/scripts/check-deployment-role.sh');
+describe('what policy.sh check plans, and how much of it', () => {
+  it('refuses a role that is not its namespace’s own, and one that is neither', () => {
+    // The pairing is the point of the check: each role is asked only about its own.
+    expect(policy(['check', 'fss-rh-deploy', 'fss-prod'], { FSS_CHECK_ROLE_DRY_RUN: '1' }).code).toBe(2);
+    expect(policy(['check', 'admin', 'fss-rh'], { FSS_CHECK_ROLE_DRY_RUN: '1' }).code).toBe(2);
     for (const pair of [
       ['fss-rh-deploy', 'fss-rh'],
       ['fss-prod-deploy', 'fss-prod'],
-      ['fss-rh-deploy', 'fss-prod'],
-      ['admin', 'fss-rh'],
     ]) {
-      const now = policy(['check', ...pair], { FSS_CHECK_ROLE_DRY_RUN: '1' });
-      expect(policy(pair, { FSS_CHECK_ROLE_DRY_RUN: '1' }, old), pair.join(' ')).toEqual(now);
+      expect(policy(['check', ...pair], { FSS_CHECK_ROLE_DRY_RUN: '1' }).code, pair.join(' ')).toBe(0);
     }
+  });
+
+  it('plans the drill-free simulation, and the guard’s reads', () => {
     // The drill's actions went with the scripts that made them (W3-S8, P7).
     const plan = policy(['check', 'fss-rh-deploy', 'fss-rh'], { FSS_CHECK_ROLE_DRY_RUN: '1' }).output;
     for (const gone of ['rds:RestoreDBInstanceToPointInTime', 'rds:CreateDBSnapshot', 'cloudwatch:DescribeAlarmHistory']) {

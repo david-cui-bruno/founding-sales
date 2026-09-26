@@ -190,7 +190,7 @@ variable "metric_namespace" {
 variable "bootstrap" {
   description = <<-EOT
     True on the first apply of a fresh environment. Both services are then
-    created at desired count zero and `infra/scripts/release-deploy.sh` scales
+    created at desired count zero and `infra/scripts/deploy.sh release` scales
     them after the migration task and `fss verify` have succeeded, worker
     before API.
 
@@ -202,8 +202,8 @@ variable "bootstrap" {
     It decides the count a service is *created* at and nothing after that.
     Both services carry `ignore_changes = [desired_count]` (lane g70), so a
     later apply, with this true or false, replaces task definitions and leaves
-    the running count to `infra/scripts/release-stop.sh` and
-    `infra/scripts/release-deploy.sh`. Until 25 September there was no
+    the running count to `infra/scripts/stop.sh` and
+    `infra/scripts/deploy.sh release`. Until 25 September there was no
     `ignore_changes`, so that Terraform could scale to zero for a schema
     release; in practice the apply repointed the running services at the new
     task definitions before anything stopped them, which is the defect the

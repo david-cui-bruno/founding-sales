@@ -69,7 +69,7 @@ describe('the fss command line accepts every invocation the release scripts make
       'admin database-users ensure',
       'verify',
       'admin workspace bootstrap',
-      // g71: release-deploy.sh --release-record stores the record the admin attests to.
+      // g71: deploy.sh release --release-record stores the record the admin attests to.
       'admin release-record put',
     ]) {
       expect(commands, `no release script invokes \`fss ${expected}\``).toContain(expected);
@@ -152,7 +152,7 @@ describe('the fss command line accepts every invocation the release scripts make
   });
 });
 
-describe('the commands release-deploy.sh runs on the migration task definition', () => {
+describe('the commands deploy.sh release runs on the migration task definition', () => {
   // That task definition injects MIGRATION_DATABASE_SECRET and FSS_RUNTIME_DATABASE_SECRET_ARN
   // and no DATABASE_SECRET_ARN (infra/modules/cluster/tests/migration_identity.tftest.hcl).
   // A command run there that the tool does not list as a migration-identity command is

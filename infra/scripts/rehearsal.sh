@@ -11,10 +11,6 @@
 #   rehearsal.sh guard    <fss-rh-run>                      after the teardown: nothing left, nothing production's
 #   rehearsal.sh leftovers <fss-rh-run>                     what still carries the run prefix, one line each
 #
-# It replaces rehearsal-caller-identity.sh (identity), rehearsal-run-task.sh (run-task),
-# rehearsal-schema-ranges.sh (ranges), rehearsal-teardown.sh (teardown) and
-# rehearsal-prefix-guard.sh (`before` is prefix, `after` is guard), which exec it.
-#
 # Appendix G 39 is why most of this exists: "production and rehearsal Terraform plans use
 # distinct state keys, roles, secrets and resource namespaces; rehearsal teardown cannot
 # address production resources." Every AWS call goes through lib.sh's rehearsal_aws, which

@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # The two deployment roles' inline policy: render it, check it, put it (P7, 27 September
-# 2026; it replaces render-deployment-role-policy.sh and check-deployment-role.sh, which
-# exec it with the same arguments).
+# 2026).
 #
 #   policy.sh render <fss-rh|fss-prod> [--pretty|--compact|--sids]    no call of any kind
 #   policy.sh check  <fss-rh-deploy|fss-prod-deploy> <fss-rh|fss-prod>  read-only simulation
@@ -96,7 +95,7 @@
 #   FSS_POLICY_AWS=<path>      the CLI, for the offline test's stub
 #
 # `test/ops/deploymentRolePolicy.check.ts` renders and checks; `test/ops/policy.check.ts`
-# puts, and holds the old names to the new.
+# puts, and counts what the simulation plans.
 
 set -euo pipefail
 

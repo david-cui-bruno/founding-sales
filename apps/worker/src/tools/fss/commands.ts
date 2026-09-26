@@ -177,7 +177,7 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
       'the first workspace, its first active admin and optionally its sending domain, in one transaction, idempotently',
   },
   {
-    // Lane g71. What `release-deploy.sh --release-record` runs after the final verify,
+    // Lane g71. What `deploy.sh release --release-record` runs after the final verify,
     // on the operations task. `--json` is a file, for a laptop or a test; a one-off task
     // can be handed nothing but arguments, so the script passes the record as
     // `--json-base64`. Exactly one of the two, and neither is a default.
@@ -199,7 +199,7 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     summary: 'the stored release record for one reference, and the digests it binds sending to. Reads only',
   },
   {
-    // Lane W2-M. What `infra/scripts/schema-preflight-0019.sh` runs on the operations
+    // Lane W2-M. What `infra/scripts/preflight.sh <root> <prefix> 0019` runs on the operations
     // task before the schema-19 release stops anything: migration 0019's counts, read
     // only, and whether it would refuse (FS019).
     path: ['admin', 'schema-preflight', '0019'],

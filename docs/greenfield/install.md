@@ -527,7 +527,7 @@ from a commit that carries lane g60.
 **First, the API, with its migration.** Lane g60 raises `CONTAINER_CLIENT_VERSIONS` to
 `{ minimum: 1.0.0, maximum: 1.0.2 }` and adds migration 0016, so this API is a schema
 release: apply with both schema ranges at `{16, 16}`, then deploy with
-`release-deploy.sh infra/roots/production fss-prod --schema-change`
+`deploy.sh release infra/roots/production fss-prod --schema-change`
 (`docs/greenfield/release.md` 4.1 and 8.0ab). Then confirm it:
 
 ```bash
@@ -563,7 +563,7 @@ list, with the status sidebar, the last seven days and a **Needs you** list
 **First, the API.** Lane g65 raises `CONTAINER_CLIENT_VERSIONS` to
 `{ minimum: 1.0.0, maximum: 1.0.3 }` and adds no migration, so this is an app-only
 release: build both images at the release commit and deploy with
-`release-deploy.sh infra/roots/production fss-prod --api-digest … --worker-digest …`
+`deploy.sh release infra/roots/production fss-prod --api-digest … --worker-digest …`
 and no `--schema-change` (`docs/greenfield/release.md` 2.1, 4.1 and 8.0ad). Smoke, then
 confirm it:
 
@@ -600,7 +600,7 @@ from a commit that carries lane g69.
 **First, the API.** Lane g69 raises `CONTAINER_CLIENT_VERSIONS` to
 `{ minimum: 1.0.0, maximum: 1.0.4 }` and adds no migration, so this is an app-only
 release: build both images at the release commit and deploy with
-`release-deploy.sh infra/roots/production fss-prod --api-digest … --worker-digest …`
+`deploy.sh release infra/roots/production fss-prod --api-digest … --worker-digest …`
 and no `--schema-change` (`docs/greenfield/release.md` 2.1, 4.1 and 8.0ae). Smoke, then
 confirm it:
 
@@ -648,7 +648,7 @@ compatibility ceiling: `CONTAINER_CLIENT_VERSIONS` is
 `{ minimum: 1.0.0, maximum: 1.999.999 }`. The API in production still publishes 1.0.4 as
 its maximum and would refuse 1.0.5 everything, so it goes first. There is no migration,
 so this is an app-only release: build both images at the release commit and deploy with
-`release-deploy.sh infra/roots/production fss-prod --api-digest … --worker-digest …` and
+`deploy.sh release infra/roots/production fss-prod --api-digest … --worker-digest …` and
 no `--schema-change` (`docs/greenfield/release.md` 2.1, 4.1 and 8.0aj). Smoke, then
 confirm it:
 

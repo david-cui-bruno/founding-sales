@@ -10,7 +10,7 @@ import { parseFssCommand } from '../src/tools/fss/commands.ts';
 /**
  * Migration 0019 through the tool the release runs it with (lane W2-M).
  *
- * `fss admin schema-preflight 0019` is what `infra/scripts/schema-preflight-0019.sh`
+ * `fss admin schema-preflight 0019` is what `infra/scripts/preflight.sh <root> <prefix> 0019`
  * launches on the operations task before the stop; `fss migrate` refuses (FS019, exit
  * 20) while a value 0019 drops is stored, and applies once it is not. Each is run through
  * `main`, as the task runs it, against a real schema-18 database.
