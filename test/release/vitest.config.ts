@@ -15,7 +15,6 @@ export default defineConfig({
   resolve: {
     alias: {
       '@fss/contracts': fileURLToPath(new URL('../../packages/contracts/src/index.ts', import.meta.url)),
-      '@fss/domain/db/testing': fileURLToPath(new URL('../../packages/domain/db/testing/index.ts', import.meta.url)),
       '@fss/domain/jobs': fileURLToPath(new URL('../../packages/domain/jobs/index.ts', import.meta.url)),
       '@fss/domain/crm': fileURLToPath(new URL('../../packages/domain/crm/index.ts', import.meta.url)),
       '@fss/domain/policy': fileURLToPath(new URL('../../packages/domain/policy/index.ts', import.meta.url)),
@@ -40,9 +39,7 @@ export default defineConfig({
   },
   test: {
     pool: 'forks',
-    globalSetup: ['packages/domain/db/testing/globalSetup.ts'],
     include: ['test/release/**/*.check.ts'],
     testTimeout: 30_000,
-    hookTimeout: 60_000,
   },
 });

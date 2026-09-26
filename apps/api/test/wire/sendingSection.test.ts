@@ -1,15 +1,15 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { compareVersions, mayMutate, outboundStatusResponseSchema, publishedClientVersions, wireDrift } from '@fss/contracts';
-import { CONTAINER_CLIENT_VERSIONS } from '../../apps/api/src/bootstrap/main.ts';
-import { localNoopSuppressionJournal } from '../../apps/api/src/journal/index.ts';
-import { dispatch, type ApiOptions } from '../../apps/api/src/server.ts';
-import { createAuthFixture, type AuthFixture } from '../../apps/api/test/support/authFixture.ts';
-import { issueSessionFor } from '../../apps/api/test/support/sessionFixture.ts';
-import type { HttpAnswer, HttpSend } from '../../apps/desktop/src/main/apiClient.ts';
-import { createAuthedClient } from '../../apps/desktop/src/main/authedClient.ts';
-import { createAdminBridge } from '../../apps/desktop/src/main/settingsBridge.ts';
-import { adminViewOf } from '../../apps/desktop/src/renderer/settingsView.ts';
-import { outboundRampAnswer, outboundStatusAnswer } from '../../apps/desktop/test/support/outboundStatus.ts';
+import { CONTAINER_CLIENT_VERSIONS } from '../../src/bootstrap/main.ts';
+import { localNoopSuppressionJournal } from '../../src/journal/index.ts';
+import { dispatch, type ApiOptions } from '../../src/server.ts';
+import { createAuthFixture, type AuthFixture } from '../support/authFixture.ts';
+import { issueSessionFor } from '../support/sessionFixture.ts';
+import type { HttpAnswer, HttpSend } from '../../../desktop/src/main/apiClient.ts';
+import { createAuthedClient } from '../../../desktop/src/main/authedClient.ts';
+import { createAdminBridge } from '../../../desktop/src/main/settingsBridge.ts';
+import { adminViewOf } from '../../../desktop/src/renderer/settingsView.ts';
+import { outboundRampAnswer, outboundStatusAnswer } from '../../../desktop/test/support/outboundStatus.ts';
 
 /**
  * Administration's "Sending domain and caps" reads what the API sends (release.md 8.0ae;

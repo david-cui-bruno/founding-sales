@@ -1,15 +1,15 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { ROUTE_ELIGIBILITY_POLICY_VERSION } from '../../packages/domain/crm/routePolicy.ts';
+import { ROUTE_ELIGIBILITY_POLICY_VERSION } from '../../../../packages/domain/crm/routePolicy.ts';
 import { HandlerRegistry } from '@fss/domain/jobs';
 import type { MailDomainResolver, MailExchangeRecord } from '@fss/domain/crm';
-import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from '../../apps/api/test/support/authFixture.ts';
-import { issueSessionFor } from '../../apps/api/test/support/sessionFixture.ts';
-import { createCrmBridge } from '../../apps/desktop/src/main/crmBridge.ts';
-import { EMAIL_VALIDATION_TEXT, emailValidationStateOf } from '../../apps/desktop/src/renderer/firmWorkspaceView.ts';
-import { runOnce } from '../../apps/worker/src/runner/jobRunner.ts';
-import { runSchedulerPass } from '../../apps/worker/src/scheduler/schedulerPass.ts';
-import { routeValidateJobHandler, routeValidationSource } from '../../apps/worker/src/handlers/routeValidate.ts';
-import { desktopClient } from './support/wireThrough.ts';
+import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from '../support/authFixture.ts';
+import { issueSessionFor } from '../support/sessionFixture.ts';
+import { createCrmBridge } from '../../../desktop/src/main/crmBridge.ts';
+import { EMAIL_VALIDATION_TEXT, emailValidationStateOf } from '../../../desktop/src/renderer/firmWorkspaceView.ts';
+import { runOnce } from '../../../worker/src/runner/jobRunner.ts';
+import { runSchedulerPass } from '../../../worker/src/scheduler/schedulerPass.ts';
+import { routeValidateJobHandler, routeValidationSource } from '../../../worker/src/handlers/routeValidate.ts';
+import { desktopClient } from '../support/wireThrough.ts';
 
 /**
  * An address imported or added from the Mac ends `usable` once its domain checks out

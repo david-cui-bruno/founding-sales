@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { mayMutate, mergeRefusalSchema, wireDrift } from '@fss/contracts';
-import { CONTAINER_CLIENT_VERSIONS } from '../../apps/api/src/bootstrap/main.ts';
-import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from '../../apps/api/test/support/authFixture.ts';
-import { issueSessionFor } from '../../apps/api/test/support/sessionFixture.ts';
-import { conflictsOf, createCrmBridge } from '../../apps/desktop/src/main/crmBridge.ts';
-import { MERGE_HEADING, buildFirmWorkspaceView, mergeSubmittable } from '../../apps/desktop/src/renderer/firmWorkspaceView.ts';
-import { DESKTOP_VERSION_UNDER_TEST, desktopClient, routeAnswer } from './support/wireThrough.ts';
+import { CONTAINER_CLIENT_VERSIONS } from '../../src/bootstrap/main.ts';
+import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from '../support/authFixture.ts';
+import { issueSessionFor } from '../support/sessionFixture.ts';
+import { conflictsOf, createCrmBridge } from '../../../desktop/src/main/crmBridge.ts';
+import { MERGE_HEADING, buildFirmWorkspaceView, mergeSubmittable } from '../../../desktop/src/renderer/firmWorkspaceView.ts';
+import { DESKTOP_VERSION_UNDER_TEST, desktopClient, routeAnswer } from '../support/wireThrough.ts';
 
 /**
  * A refused merge reaches the conflict screen (release.md 8.0aj; lane g78, audit item

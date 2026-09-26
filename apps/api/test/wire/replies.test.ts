@@ -8,13 +8,13 @@ import {
   replyListResponseSchema,
   wireDrift,
 } from '@fss/contracts';
-import { CONTAINER_CLIENT_VERSIONS } from '../../apps/api/src/bootstrap/main.ts';
-import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from '../../apps/api/test/support/authFixture.ts';
-import { issueSessionFor } from '../../apps/api/test/support/sessionFixture.ts';
-import { createReplyBridge } from '../../apps/desktop/src/main/replyBridge.ts';
-import { buildReplyView } from '../../apps/desktop/src/renderer/replyView.ts';
-import { classifierSettingsAnswer, confirmReplyResultAnswer } from '../../apps/desktop/test/support/replyAnswers.ts';
-import { DESKTOP_VERSION_UNDER_TEST, desktopClient, routeAnswer, shapeOf } from './support/wireThrough.ts';
+import { CONTAINER_CLIENT_VERSIONS } from '../../src/bootstrap/main.ts';
+import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from '../support/authFixture.ts';
+import { issueSessionFor } from '../support/sessionFixture.ts';
+import { createReplyBridge } from '../../../desktop/src/main/replyBridge.ts';
+import { buildReplyView } from '../../../desktop/src/renderer/replyView.ts';
+import { classifierSettingsAnswer, confirmReplyResultAnswer } from '../../../desktop/test/support/replyAnswers.ts';
+import { DESKTOP_VERSION_UNDER_TEST, desktopClient, routeAnswer, shapeOf } from '../support/wireThrough.ts';
 
 /**
  * The reply window reads the classifier at every effort the server accepts (release.md

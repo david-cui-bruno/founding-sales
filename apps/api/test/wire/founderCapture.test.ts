@@ -1,14 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { mayMutate } from '@fss/contracts';
 import { POSTURE_STATEMENTS } from '@fss/domain';
-import { CONTAINER_CLIENT_VERSIONS } from '../../apps/api/src/bootstrap/main.ts';
-import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from '../../apps/api/test/support/authFixture.ts';
-import { issueSessionFor } from '../../apps/api/test/support/sessionFixture.ts';
-import { createCrmBridge } from '../../apps/desktop/src/main/crmBridge.ts';
-import { createAdminBridge } from '../../apps/desktop/src/main/settingsBridge.ts';
-import { buildFirmWorkspaceView } from '../../apps/desktop/src/renderer/firmWorkspaceView.ts';
-import { adminViewOf } from '../../apps/desktop/src/renderer/settingsView.ts';
-import { DESKTOP_VERSION_UNDER_TEST, desktopClient } from './support/wireThrough.ts';
+import { CONTAINER_CLIENT_VERSIONS } from '../../src/bootstrap/main.ts';
+import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from '../support/authFixture.ts';
+import { issueSessionFor } from '../support/sessionFixture.ts';
+import { createCrmBridge } from '../../../desktop/src/main/crmBridge.ts';
+import { createAdminBridge } from '../../../desktop/src/main/settingsBridge.ts';
+import { buildFirmWorkspaceView } from '../../../desktop/src/renderer/firmWorkspaceView.ts';
+import { adminViewOf } from '../../../desktop/src/renderer/settingsView.ts';
+import { DESKTOP_VERSION_UNDER_TEST, desktopClient } from '../support/wireThrough.ts';
 
 /**
  * A founder adds, imports and permits from the Mac (release.md 8.0aq; lane g84, audit

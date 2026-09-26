@@ -6,12 +6,12 @@ import {
   publishedClientVersions,
   registerCallingIdentityCommandSchema,
 } from '@fss/contracts';
-import { CALLING_IDENTITY_PATHS } from '../../apps/api/src/routes/callingIdentities.ts';
-import { CONTAINER_CLIENT_VERSIONS } from '../../apps/api/src/bootstrap/main.ts';
-import { createAuthedClient } from '../../apps/desktop/src/main/authedClient.ts';
-import type { HttpAnswer } from '../../apps/desktop/src/main/apiClient.ts';
-import { CALLING_NUMBER_API_PATHS, createAdminBridge } from '../../apps/desktop/src/main/settingsBridge.ts';
-import { adminViewOf } from '../../apps/desktop/src/renderer/settingsView.ts';
+import { CALLING_IDENTITY_PATHS } from '../../src/routes/callingIdentities.ts';
+import { CONTAINER_CLIENT_VERSIONS } from '../../src/bootstrap/main.ts';
+import { createAuthedClient } from '../../../desktop/src/main/authedClient.ts';
+import type { HttpAnswer } from '../../../desktop/src/main/apiClient.ts';
+import { CALLING_NUMBER_API_PATHS, createAdminBridge } from '../../../desktop/src/main/settingsBridge.ts';
+import { adminViewOf } from '../../../desktop/src/renderer/settingsView.ts';
 
 /**
  * A salesperson can give Callie the number they call from (9.1; lane g60).

@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { compareVersions, connectMailboxCommandSchema, mayMutate, publishedClientVersions } from '@fss/contracts';
-import { GMAIL_PATHS } from '../../apps/api/src/routes/gmail.ts';
-import { CONTAINER_CLIENT_VERSIONS } from '../../apps/api/src/bootstrap/main.ts';
-import { createAuthedClient } from '../../apps/desktop/src/main/authedClient.ts';
-import type { HttpAnswer } from '../../apps/desktop/src/main/apiClient.ts';
-import { MAILBOX_API_PATHS, createMailboxBridge } from '../../apps/desktop/src/main/mailboxBridge.ts';
-import { CONNECT_GMAIL_LABEL, buildMailboxView } from '../../apps/desktop/src/renderer/viewModel.ts';
+import { GMAIL_PATHS } from '../../src/routes/gmail.ts';
+import { CONTAINER_CLIENT_VERSIONS } from '../../src/bootstrap/main.ts';
+import { createAuthedClient } from '../../../desktop/src/main/authedClient.ts';
+import type { HttpAnswer } from '../../../desktop/src/main/apiClient.ts';
+import { MAILBOX_API_PATHS, createMailboxBridge } from '../../../desktop/src/main/mailboxBridge.ts';
+import { CONNECT_GMAIL_LABEL, buildMailboxView } from '../../../desktop/src/renderer/viewModel.ts';
 
 /**
  * The Mac can connect the mailbox (release.md 8.0x).

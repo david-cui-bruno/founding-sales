@@ -1,8 +1,8 @@
-import { localNoopSuppressionJournal } from '../../../apps/api/src/journal/index.ts';
-import { dispatch, type ApiOptions } from '../../../apps/api/src/server.ts';
-import { CURRENT_CLIENT_VERSION, type AuthFixture } from '../../../apps/api/test/support/authFixture.ts';
-import type { HttpAnswer, HttpSend } from '../../../apps/desktop/src/main/apiClient.ts';
-import { createAuthedClient, type AuthedClient } from '../../../apps/desktop/src/main/authedClient.ts';
+import { localNoopSuppressionJournal } from '../../src/journal/index.ts';
+import { dispatch, type ApiOptions } from '../../src/server.ts';
+import { CURRENT_CLIENT_VERSION, type AuthFixture } from './authFixture.ts';
+import type { HttpAnswer, HttpSend } from '../../../desktop/src/main/apiClient.ts';
+import { createAuthedClient, type AuthedClient } from '../../../desktop/src/main/authedClient.ts';
 
 /**
  * The real API route, in the real desktop transport, with the socket replaced by the
