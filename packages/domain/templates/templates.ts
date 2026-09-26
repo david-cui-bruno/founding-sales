@@ -1,41 +1,38 @@
 import { isAdminScope, type RepositoryContext } from '../db/workspaceScope.ts';
+import { readPostalAddress } from '../settings/store.ts';
 import {
-  decideTemplateApproval,
   renderTemplate,
   templateContentHash,
+  templateTextIssues,
   templateTextWarnings,
   type FooterConfiguration,
   type RenderDecision,
+  type TemplateRules,
   type TemplateWarningCode,
 } from '../src/index.ts';
 
 /**
- * Approved immutable template versions (specification 11.1, 12.6).
+ * Template versions: created, edited in place, approved (specification 11.1, 12.6; wave 2, S3).
  *
- * The table is migration 0009's, created by the mail lane one pull request early;
- * this is the repository over it, and the rules it applies are G0's pure ones in
- * `packages/domain/src/rules/templates.ts`. Nothing here re-implements a rule: the
- * footer requirement, the copy warnings and the content hash are one function that
- * the approval calls and the send later re-checks against.
+ * The table is migration 0009's; this is the repository over it, and the rules it applies
+ * are the pure ones in `packages/domain/src/rules/templates.ts`. Nothing here re-implements
+ * a rule: the footer requirement, the copy warnings and the content hash are one function
+ * that every save and approval calls and the send later re-checks against.
  *
- * Three things are the database's rather than this file's, and are stated here so a
- * reader does not go looking for them:
+ * Since migration 0019 an approved version is edited in place. The edit recomputes the
+ * content hash and re-runs the refusal rules; the approval stays only if they still pass,
+ * and "Save and approve" (`approve: true`) approves in the same command or, when a rule
+ * fails, refuses and writes nothing — so a version in live use keeps sending its old text
+ * until the new text passes. What freezes the bytes of a send is the outbound fence: a
+ * fence already prepared keeps the text it was prepared with; a step not yet prepared
+ * renders the edited text.
  *
- *   * a body or subject containing "unsubscribe" is refused by a CHECK, in any case
- *     (12.6, and David's decision that there is no web unsubscribe anywhere);
- *   * an approved body carries `Reply "stop"`, by a second CHECK;
- *   * an approved row is immutable by trigger, across every column an approver
- *     approved — migration 0012 extended that trigger to the five personalization
- *     columns 11.1 reserves, and migration 0015 removed one column from it.
+ * A body or subject mentioning "unsubscribe" is refused by a CHECK (12.6, and David's
+ * decision that there is no web unsubscribe anywhere); the save refuses it first, as
+ * `invalid_input`, rather than letting the database answer with a 500.
  *
- * The footer a version stores is its sign-off alone. Migration 0015 dropped
- * `footer_postal_address` under David's 22 September decision
- * (`docs/decisions/g20-automated-email-carries-no-postal-address.md`), so the block
- * an approval checks for is the sign-off and then the stop line.
- *
- * So this file can be wrong about a rule and the database will still refuse the row.
- * That is the intended division: 11.1's immutability is a property of the data, not
- * of the code that happens to write it.
+ * With the workspace's `postal_address` set, the worker composes the footer at send and
+ * a body need not end with one (`footerComposedAtSend`); unset, it must, as before.
  */
 
 export const TEMPLATE_REFUSAL_CODES = [
@@ -141,30 +138,74 @@ export async function listTemplateVersions(
   return rows.map(toTemplate);
 }
 
-export interface CreateTemplateVersionInput {
-  /** Absent starts a new template; present adds a version to an existing one. */
-  readonly templateId?: string | undefined;
+/**
+ * A saved version and what its text raises: the copy warnings (never refusing) and the
+ * refusal rules it does not pass, which is why a save left it unapproved.
+ */
+export interface TemplateSaveResult extends TemplateVersionWithWarnings {
+  readonly issues: readonly string[];
+}
+
+export interface TemplateTextInput {
   readonly name: string;
   readonly subject: string;
   readonly body: string;
   readonly footer: FooterConfiguration;
   readonly requiredVariables: readonly string[];
+  /** "Save and approve": approve in the same command, or refuse and write nothing. */
+  readonly approve?: boolean | undefined;
+}
+
+export interface CreateTemplateVersionInput extends TemplateTextInput {
+  /**
+   * Absent starts a new template; present adds a version to an existing one.
+   * @deprecated the "new version" path desktop 1.0.11 uses; edit in place instead.
+   */
+  readonly templateId?: string | undefined;
+}
+
+export interface UpdateTemplateVersionInput extends TemplateTextInput {
+  readonly templateVersionId: string;
+}
+
+const UNSUBSCRIBE = /unsubscribe/iu;
+
+/** The rules a save and an approval apply, with the footer requirement the workspace's postal address decides. */
+async function rulesFor(
+  context: RepositoryContext,
+  input: { readonly footer: FooterConfiguration; readonly requiredVariables: readonly string[] },
+): Promise<TemplateRules> {
+  return {
+    footer: input.footer,
+    allowedVariables: input.requiredVariables,
+    footerComposedAtSend: (await readPostalAddress(context)) !== null,
+  };
+}
+
+/** Who may approve: an admin who is a person, never the tool. Null when the actor may not. */
+function approverOf(context: RepositoryContext): string | null {
+  const actor = context.scope.actor;
+  return isAdminScope(context.scope) && actor.kind === 'user' ? actor.userId : null;
 }
 
 /**
- * Write an unapproved version.
+ * Write a new version — unapproved, or approved in the same command (`approve: true`).
  *
- * Unapproved on purpose: 11.1 makes approval a separate, audited act, and a create
- * that also approved would mean the person who typed the body is the person who
- * approved it. The content hash is computed now anyway, so the editor can show it
- * before an approver commits to it.
+ * Unapproved by default: 11.1 makes approval an act of its own, and the content hash is
+ * computed now anyway, so the editor can show it before an approver commits to it.
  */
 export async function createTemplateVersion(
   context: RepositoryContext,
   input: CreateTemplateVersionInput,
-): Promise<TemplateResult<TemplateVersionWithWarnings>> {
+): Promise<TemplateResult<TemplateSaveResult>> {
   if (!isAdminScope(context.scope)) return { ok: false, reason: 'admin_only' };
   if (input.name.trim().length === 0) return { ok: false, reason: 'invalid_input' };
+  if (UNSUBSCRIBE.test(input.subject) || UNSUBSCRIBE.test(input.body)) return { ok: false, reason: 'invalid_input' };
+  const approver = approverOf(context);
+  if (input.approve === true && approver === null) return { ok: false, reason: 'admin_only' };
+
+  const issues = templateTextIssues(input, await rulesFor(context, input));
+  if (input.approve === true && issues.length > 0) return { ok: false, reason: 'template_unapproved', issues };
 
   const templateId = input.templateId ?? (await newTemplateId(context));
   const { rows: existing } = await context.db.query<{ next: number }>(
@@ -173,18 +214,15 @@ export async function createTemplateVersion(
     [context.scope.workspaceId, templateId],
   );
   const version = Number(existing[0]?.next ?? 1);
-  const contentHash = templateContentHash({
-    templateId,
-    version,
-    subject: input.subject,
-    body: input.body,
-  });
+  const contentHash = templateContentHash({ templateId, version, subject: input.subject, body: input.body });
+  const approvedBy = input.approve === true ? approver : null;
 
   const { rows } = await context.db.query<TemplateDbRow>(
     `INSERT INTO template_versions
        (workspace_id, template_id, version, name, subject, body, content_hash,
-        footer_sign_off, required_variables, personalization_strategy)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::text[], 'deterministic')
+        footer_sign_off, required_variables, personalization_strategy, approved_at, approved_by_user_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::text[], 'deterministic',
+             CASE WHEN $10::uuid IS NULL THEN NULL ELSE now() END, $10::uuid)
      RETURNING ${COLUMNS}`,
     [
       context.scope.workspaceId,
@@ -196,11 +234,12 @@ export async function createTemplateVersion(
       contentHash,
       input.footer.signOff,
       [...input.requiredVariables],
+      approvedBy,
     ],
   );
   const row = rows[0];
   if (row === undefined) return { ok: false, reason: 'invalid_input' };
-  return { ok: true, value: withWarnings(toTemplate(row)) };
+  return { ok: true, value: { ...withWarnings(toTemplate(row)), issues } };
 }
 
 async function newTemplateId(context: RepositoryContext): Promise<string> {
@@ -211,19 +250,88 @@ async function newTemplateId(context: RepositoryContext): Promise<string> {
 }
 
 /**
- * Approve a version, which freezes it.
+ * Edit a version in place (wave 2, S3; migration 0019 dropped the trigger that forbade it).
  *
- * `decideTemplateApproval` returns every issue rather than the first, and they travel
- * back on the refusal, because an author fixing one rule at a time is a worse day
- * than an author fixing four at once. An approved version comes back with its copy
- * warnings, which approve anyway.
+ * Every check runs before anything is written, because a refusal commits with its
+ * receipt. The content hash is recomputed over the new text. The approval:
+ *
+ *   * `approve: true` approves the new text, by this admin, now — or, when a refusal rule
+ *     fails, refuses with every issue and leaves the row as it was;
+ *   * otherwise an approved version stays approved only if the new text passes every
+ *     refusal rule, and becomes unapproved (its steps hold `template_unapproved` at send)
+ *     if it does not; an unapproved one stays unapproved.
+ */
+export async function updateTemplateVersion(
+  context: RepositoryContext,
+  input: UpdateTemplateVersionInput,
+): Promise<TemplateResult<TemplateSaveResult>> {
+  if (!isAdminScope(context.scope)) return { ok: false, reason: 'admin_only' };
+  if (input.name.trim().length === 0) return { ok: false, reason: 'invalid_input' };
+  if (UNSUBSCRIBE.test(input.subject) || UNSUBSCRIBE.test(input.body)) return { ok: false, reason: 'invalid_input' };
+  const approver = approverOf(context);
+  if (input.approve === true && approver === null) return { ok: false, reason: 'admin_only' };
+
+  const { rows: locked } = await context.db.query<TemplateDbRow>(
+    `SELECT ${COLUMNS}, approved_by_user_id FROM template_versions WHERE workspace_id = $1 AND id = $2 FOR UPDATE`,
+    [context.scope.workspaceId, input.templateVersionId],
+  );
+  const current = locked[0];
+  if (current === undefined) return { ok: false, reason: 'template_unknown' };
+  if (current.retired_at !== null) return { ok: false, reason: 'template_retired' };
+
+  const issues = templateTextIssues(input, await rulesFor(context, input));
+  if (input.approve === true && issues.length > 0) return { ok: false, reason: 'template_unapproved', issues };
+
+  const contentHash = templateContentHash({
+    templateId: current.template_id,
+    version: Number(current.version),
+    subject: input.subject,
+    body: input.body,
+  });
+  const keptApprover =
+    current.approved_at !== null && issues.length === 0 ? (current['approved_by_user_id'] as string | null) : null;
+  const approvedBy = input.approve === true ? approver : keptApprover;
+  const approvedAt = input.approve === true ? 'now()' : keptApprover === null ? 'NULL' : 'approved_at';
+
+  const { rows } = await context.db.query<TemplateDbRow>(
+    `UPDATE template_versions
+        SET name = $3, subject = $4, body = $5, content_hash = $6, footer_sign_off = $7,
+            required_variables = $8::text[], approved_at = ${approvedAt}, approved_by_user_id = $9::uuid,
+            updated_at = greatest(now(), created_at)
+      WHERE workspace_id = $1 AND id = $2
+      RETURNING ${COLUMNS}`,
+    [
+      context.scope.workspaceId,
+      input.templateVersionId,
+      input.name.trim(),
+      input.subject,
+      input.body,
+      contentHash,
+      input.footer.signOff,
+      [...input.requiredVariables],
+      approvedBy,
+    ],
+  );
+  const row = rows[0];
+  if (row === undefined) return { ok: false, reason: 'template_unknown' };
+  return { ok: true, value: { ...withWarnings(toTemplate(row)), issues } };
+}
+
+/**
+ * Approve a version as it stands.
+ *
+ * `templateTextIssues` returns every issue rather than the first, and they travel back
+ * on the refusal, because an author fixing one rule at a time is a worse day than an
+ * author fixing four at once. An approved version comes back with its copy warnings,
+ * which approve anyway. @deprecated desktop 1.0.11's route; `updateTemplateVersion` with
+ * `approve: true` saves and approves in one command.
  */
 export async function approveTemplateVersion(
   context: RepositoryContext,
   input: { readonly templateVersionId: string },
 ): Promise<TemplateResult<TemplateVersionWithWarnings>> {
-  if (!isAdminScope(context.scope)) return { ok: false, reason: 'admin_only' };
-  if (context.scope.actor.kind !== 'user') return { ok: false, reason: 'admin_only' };
+  const approver = approverOf(context);
+  if (approver === null) return { ok: false, reason: 'admin_only' };
 
   const { rows: locked } = await context.db.query<TemplateDbRow>(
     `SELECT ${COLUMNS} FROM template_versions WHERE workspace_id = $1 AND id = $2 FOR UPDATE`,
@@ -234,56 +342,23 @@ export async function approveTemplateVersion(
   if (current.retired_at !== null) return { ok: false, reason: 'template_retired' };
   if (current.approved_at !== null) return { ok: false, reason: 'template_already_approved' };
 
-  const decision = decideTemplateApproval(
-    {
-      templateId: current.template_id,
-      version: Number(current.version),
-      subject: current.subject,
-      body: current.body,
-    },
-    {
-      footer: { signOff: current.footer_sign_off },
-      allowedVariables: current.required_variables,
-    },
+  const text = { subject: current.subject, body: current.body };
+  const issues = templateTextIssues(
+    text,
+    await rulesFor(context, { footer: { signOff: current.footer_sign_off }, requiredVariables: current.required_variables }),
   );
-  if (!decision.approved) {
-    return { ok: false, reason: 'template_unapproved', issues: decision.issues };
-  }
+  if (issues.length > 0) return { ok: false, reason: 'template_unapproved', issues };
 
   const { rows } = await context.db.query<TemplateDbRow>(
     `UPDATE template_versions
-        SET approved_at = now(), approved_by_user_id = $3, updated_at = now()
+        SET approved_at = now(), approved_by_user_id = $3, updated_at = greatest(now(), created_at)
       WHERE workspace_id = $1 AND id = $2
       RETURNING ${COLUMNS}`,
-    [context.scope.workspaceId, input.templateVersionId, context.scope.actor.userId],
+    [context.scope.workspaceId, input.templateVersionId, approver],
   );
   const row = rows[0];
   if (row === undefined) return { ok: false, reason: 'template_unknown' };
-  return { ok: true, value: { ...toTemplate(row), warnings: decision.warnings } };
-}
-
-/**
- * Retire a version.
- *
- * Retiring is not a deletion and does not touch an enrollment: 11.2 freezes an
- * enrollment to a sequence version, and that version's steps still name this
- * template. What retiring stops is a *new* published version being built on it, which
- * `publishVersion` checks.
- */
-export async function retireTemplateVersion(
-  context: RepositoryContext,
-  input: { readonly templateVersionId: string },
-): Promise<TemplateResult<TemplateVersionRow>> {
-  if (!isAdminScope(context.scope)) return { ok: false, reason: 'admin_only' };
-  const { rows } = await context.db.query<TemplateDbRow>(
-    `UPDATE template_versions SET retired_at = now(), updated_at = now()
-      WHERE workspace_id = $1 AND id = $2 AND retired_at IS NULL
-      RETURNING ${COLUMNS}`,
-    [context.scope.workspaceId, input.templateVersionId],
-  );
-  const row = rows[0];
-  if (row === undefined) return { ok: false, reason: 'template_unknown' };
-  return { ok: true, value: toTemplate(row) };
+  return { ok: true, value: { ...toTemplate(row), warnings: templateTextWarnings(text) } };
 }
 
 export type { RenderDecision };

@@ -7,9 +7,8 @@ import {
   listSequences,
   publishVersion,
   recordHolidayCalendar,
-  replaceDraftSteps,
   retireVersion,
-  sequenceVersionForDisplay,
+  saveSteps,
 } from '@fss/domain/sequences';
 import {
   REFUSAL_STATUS,
@@ -34,6 +33,11 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  *
  * The two reads are POSTs for the reason in `docs/decisions/g3b-reads-are-posts.md`:
  * a rule that applies to some of a family is a rule somebody gets wrong on the rest.
+ *
+ * `/sequences/versions/steps` saves a draft's steps and, since wave 2 (S3; migration
+ * 0019), a published version's in place (`saveSteps`): the edit reaches the version's
+ * live enrollments. `/sequences/versions/draft` ("Edit as a new draft") is @deprecated:
+ * kept for desktop 1.0.11, removed once 1.0.12 is in use.
  */
 export const SEQUENCE_PATHS: readonly string[] = [
   '/sequences',
@@ -120,10 +124,9 @@ export async function routeSequences(
     }
     const scoped = contextForPrincipal(deps.auth, deps.principal);
     if (!scoped.ok) return scoped.result;
-    // A LinkedIn step stored before 25 September 2026 goes out as channel `removed`
-    // (lane A2): one such step used to make the Mac refuse the whole answer.
-    const versions = await listSequenceVersions(scoped.context, parsed.data.sequenceId);
-    return { status: 200, body: { versions: versions.map(sequenceVersionForDisplay) } };
+    // No step goes out as channel `removed` since migration 0019 (the wire contract keeps
+    // the variant for desktop 1.0.11, which still parses it).
+    return { status: 200, body: { versions: await listSequenceVersions(scoped.context, parsed.data.sequenceId) } };
   }
 
   if (request.path === '/sequences/create') {
@@ -146,7 +149,7 @@ export async function routeSequences(
 
   if (request.path === '/sequences/versions/steps') {
     return await runPolicyCommand(deps, stepsSchema, 'replace_sequence_steps', async (context, body) =>
-      await replaceDraftSteps(context, {
+      await saveSteps(context, {
         sequenceVersionId: body.sequenceVersionId,
         steps: body.steps,
       }),

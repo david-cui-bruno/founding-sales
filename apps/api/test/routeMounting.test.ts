@@ -78,9 +78,6 @@ describe('what the API mounts', () => {
       '/dial/consume',
       '/enrollments',
       '/enrollments/enroll',
-      '/enrollments/migrate/apply',
-      '/enrollments/migrate/approve',
-      '/enrollments/migrate/propose',
       '/enrollments/resume',
       '/enrollments/resume/preview',
       '/enrollments/steps',
@@ -142,6 +139,7 @@ describe('what the API mounts', () => {
       '/templates',
       '/templates/approve',
       '/templates/create',
+      '/templates/update',
       '/today',
       '/today/firm',
       '/today/pause/release',
@@ -220,6 +218,9 @@ describe('what the API mounts', () => {
       '/retention/runs',
       '/search/firms',
       '/templates/retire',
+      '/enrollments/migrate/propose',
+      '/enrollments/migrate/approve',
+      '/enrollments/migrate/apply',
     ]) {
       expect(registry.moduleFor(path), path).toBeUndefined();
     }

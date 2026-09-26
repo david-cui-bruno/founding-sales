@@ -3,27 +3,27 @@ import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
 import { databaseNow } from '../../policy/index.ts';
 import { buildTodaySnapshot, businessDateOf, readTodayFirm, readTodayList } from '../../today/index.ts';
-import { approveTemplateVersion, createTemplateVersion, retireTemplateVersion } from '../../templates/index.ts';
+import { approveTemplateVersion, createTemplateVersion, readTemplateVersion, updateTemplateVersion } from '../../templates/index.ts';
+import { updateSetting } from '../../settings/index.ts';
 import {
   allowAllEligibility,
-  applyEnrollmentMigration,
-  approveEnrollmentMigration,
   completeStepExecution,
   createDraftVersion,
   createSequence,
   dueSequenceWorkSource,
   enrollContact,
   listStepExecutions,
-  proposeEnrollmentMigration,
   publishVersion,
   readSequenceVersion,
   recordHolidayCalendar,
   recordingSendHandoff,
-  replaceDraftSteps,
+  retireVersion,
   runDueStepExecution,
+  saveSteps,
 } from '../../sequences/index.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
+import { SENDING_STOP_LINE } from '@fss/contracts';
 import {
   FIXTURE_SIGN_OFF,
   fixtureBody,
@@ -33,8 +33,8 @@ import {
 
 /**
  * The rest of the lane against a real PostgreSQL: DST, the Today source, the
- * template lifecycle and the audited enrollment migration (specification 11.1, 11.2,
- * 8.2, Appendix D, Appendix G 8 and 32).
+ * template lifecycle and edit in place (specification 11.1, 11.2, 8.2, Appendix D,
+ * Appendix G 8 and 32; wave 2, S3).
  *
  * The scenario file holds the six Appendix G cases this lane is accepted on; this one
  * holds the behaviour those cases assume. Two workspaces with colliding names
@@ -63,8 +63,6 @@ const worker = (workspace: 'alpha' | 'beta' = 'alpha'): RepositoryContext =>
   );
 
 async function clearEnrollments(): Promise<void> {
-  await database.session.query('DELETE FROM enrollment_migration_items');
-  await database.session.query('DELETE FROM enrollment_migrations');
   await database.session.query('DELETE FROM step_execution_shifts');
   await database.session.query('DELETE FROM step_executions');
   await database.session.query('DELETE FROM sequence_enrollments');
@@ -316,11 +314,9 @@ describe('the template lifecycle (11.1, 12.6)', () => {
     });
     expect(approved.ok).toBe(true);
 
-    // Retiring does not unapprove it, and a second approval is refused.
-    const retired = await retireTemplateVersion(contextFor('alpha', 'admin'), {
-      templateVersionId: created.value.id,
-    });
-    expect(retired.ok).toBe(true);
+    // A retired version (nothing retires one since wave 2 but a stored row) refuses a
+    // second approval.
+    await database.session.query('UPDATE template_versions SET retired_at = now() WHERE id = $1', [created.value.id]);
     const again = await approveTemplateVersion(contextFor('alpha', 'admin'), {
       templateVersionId: created.value.id,
     });
@@ -390,106 +386,248 @@ describe('one draft per sequence (11.1)', () => {
   });
 });
 
-describe('the audited enrollment migration (11.1)', () => {
-  it('remaps only unexecuted steps, preserves executed history, and needs approval', async () => {
-    const enrollmentId = await enroll('alpha');
-    const executions = await listStepExecutions(worker(), { enrollmentId });
-    const first = executions[0];
-    expect(first).toBeDefined();
-    if (first === undefined) return;
-    await completeStepExecution(worker(), {
-      stepExecutionId: first.id,
-      completionSource: 'send',
-      result: 'sent',
-    });
-    const executedStepId = first.stepId;
-
-    // The seeded draft, given a longer second delay and published. "Editing a
-    // published sequence creates a new draft" (11.1), and there is only ever one, so
-    // the correction an admin is migrating on to is this row.
-    const draft = { value: { sequenceVersionId: sequences.alpha.draftVersionId } };
-    const rewritten = await replaceDraftSteps(contextFor('alpha', 'admin'), {
-      sequenceVersionId: draft.value.sequenceVersionId,
-      steps: [
-        {
-          ordinal: 1,
-          channel: 'email',
-          delay: { unit: 'elapsed', hours: 0 },
-          templateVersionId: sequences.alpha.template.templateVersionId,
-        },
-        {
-          ordinal: 2,
-          channel: 'call_task',
-          delay: { unit: 'business_days', days: 9 },
-          onNoAnswer: 'advance',
-        },
-      ],
-    });
-    expect(rewritten.ok).toBe(true);
-    const published = await publishVersion(contextFor('alpha', 'admin'), {
-      sequenceVersionId: draft.value.sequenceVersionId,
-    });
-    expect(published.ok).toBe(true);
-
-    const proposed = await proposeEnrollmentMigration(contextFor('alpha', 'admin'), {
-      fromSequenceVersionId: sequences.alpha.publishedVersionId,
-      toSequenceVersionId: draft.value.sequenceVersionId,
-      enrollmentIds: [enrollmentId],
-    });
-    expect(proposed.ok).toBe(true);
-    if (!proposed.ok) return;
-    expect(proposed.value.items[0]?.outcome).toBe('selected');
-
-    // "Require explicit approval": an unapproved migration does not apply.
-    const early = await applyEnrollmentMigration(contextFor('alpha', 'admin'), {
-      migrationId: proposed.value.migrationId,
-    });
-    expect(early).toEqual({ ok: false, reason: 'migration_not_approved' });
-
-    expect(
-      (await approveEnrollmentMigration(contextFor('alpha', 'admin'), {
-        migrationId: proposed.value.migrationId,
-      })).ok,
-    ).toBe(true);
-    const applied = await applyEnrollmentMigration(contextFor('alpha', 'admin'), {
-      migrationId: proposed.value.migrationId,
-    });
-    expect(applied.ok).toBe(true);
-    if (!applied.ok) return;
-    expect(applied.value.items[0]?.executionsRemapped).toBe(1);
-    expect(applied.value.items[0]?.executionsPreserved).toBe(1);
-
-    const after = await listStepExecutions(worker(), { enrollmentId });
-    const executed = after.find(execution => execution.ordinal === 1);
-    const remapped = after.find(execution => execution.ordinal === 2);
-    // Preserved: the executed row still points at the step it actually ran.
-    expect(executed?.stepId).toBe(executedStepId);
-    expect(executed?.state).toBe('completed');
-    // Remapped: the unexecuted row points at the new version's step, with a
-    // recomputed due instant.
-    expect(remapped?.stepId).not.toBe(sequences.alpha.callStepId);
-    expect(Date.parse(remapped?.dueAt ?? '')).toBeGreaterThan(Date.parse(remapped?.originalDueAt ?? ''));
-
-    // A second apply is refused rather than repeated.
-    expect(
-      await applyEnrollmentMigration(contextFor('alpha', 'admin'), {
-        migrationId: proposed.value.migrationId,
-      }),
-    ).toEqual({ ok: false, reason: 'migration_already_applied' });
+describe('templates edit in place (wave 2, S3)', () => {
+  const text = (opening: string) => ({
+    name: 'Edited in place',
+    subject: 'Following up',
+    body: fixtureBody(opening),
+    footer: { signOff: FIXTURE_SIGN_OFF },
+    requiredVariables: [],
   });
 
-  it('refuses an enrollment that is on another version, by name', async () => {
-    const enrollmentId = await enroll('alpha');
-    const proposed = await proposeEnrollmentMigration(contextFor('alpha', 'admin'), {
-      fromSequenceVersionId: sequences.alpha.draftVersionId,
-      toSequenceVersionId: sequences.alpha.publishedVersionId,
-      enrollmentIds: [enrollmentId],
+  async function approvedTemplate(opening: string): Promise<string> {
+    const created = await createTemplateVersion(contextFor('alpha', 'admin'), { ...text(opening), approve: true });
+    if (!created.ok) throw new Error(`the template was refused: ${created.reason}`);
+    expect(created.value.approvedAt).not.toBeNull();
+    return created.value.id;
+  }
+
+  it('saves and approves a new template in one command', async () => {
+    const created = await createTemplateVersion(contextFor('alpha', 'admin'), { ...text('One command.'), approve: true });
+    if (!created.ok) throw new Error(`the template was refused: ${created.reason}`);
+    expect(created.value).toMatchObject({ approvedAt: expect.any(String) as unknown as string, issues: [] });
+    const refused = await createTemplateVersion(contextFor('alpha', 'admin'), {
+      ...text('ignored'),
+      body: 'No footer.',
+      approve: true,
     });
-    expect(proposed.ok).toBe(true);
-    if (!proposed.ok) return;
-    expect(proposed.value.items[0]).toMatchObject({
-      outcome: 'refused',
-      refusalCode: 'version_mismatch',
+    expect(refused).toEqual({ ok: false, reason: 'template_unapproved', issues: ['template_footer_missing'] });
+  });
+
+  it('keeps the approval when the edited text passes every rule, and recomputes the hash', async () => {
+    const id = await approvedTemplate('The first wording.');
+    const before = await readTemplateVersion(contextFor('alpha', 'admin'), id);
+    const edited = await updateTemplateVersion(contextFor('alpha', 'admin'), { ...text('A typo, fixed.'), templateVersionId: id });
+    if (!edited.ok) throw new Error(`the edit was refused: ${edited.reason}`);
+    expect(edited.value).toMatchObject({
+      id,
+      version: before?.version,
+      body: fixtureBody('A typo, fixed.'),
+      approvedAt: before?.approvedAt,
+      issues: [],
+    });
+    expect(edited.value.contentHash).not.toBe(before?.contentHash);
+  });
+
+  it('drops the approval when a plain save breaks a rule, and says which', async () => {
+    const id = await approvedTemplate('Approved wording.');
+    const edited = await updateTemplateVersion(contextFor('alpha', 'admin'), {
+      ...text('ignored'),
+      body: 'The footer went missing.',
+      templateVersionId: id,
+    });
+    if (!edited.ok) throw new Error(`the edit was refused: ${edited.reason}`);
+    expect(edited.value).toMatchObject({ approvedAt: null, issues: ['template_footer_missing'] });
+  });
+
+  it('refuses a save and approve that breaks a rule, and leaves the live text as it was', async () => {
+    const id = await approvedTemplate('Live wording.');
+    const before = await readTemplateVersion(contextFor('alpha', 'admin'), id);
+    const refused = await updateTemplateVersion(contextFor('alpha', 'admin'), {
+      ...text('ignored'),
+      body: 'No footer, {nobody_knows_this}.',
+      templateVersionId: id,
+      approve: true,
+    });
+    expect(refused).toEqual({
+      ok: false,
+      reason: 'template_unapproved',
+      issues: ['template_footer_missing', 'template_unknown_variable'],
+    });
+    expect(await readTemplateVersion(contextFor('alpha', 'admin'), id)).toEqual(before);
+  });
+
+  it('approves an unapproved version with save and approve, and refuses a salesperson, a retired version and an unsubscribe link', async () => {
+    const created = await createTemplateVersion(contextFor('alpha', 'admin'), text('Draft wording.'));
+    if (!created.ok) throw new Error(`the template was refused: ${created.reason}`);
+    expect(created.value.approvedAt).toBeNull();
+    const approved = await updateTemplateVersion(contextFor('alpha', 'admin'), {
+      ...text('Final wording.'),
+      templateVersionId: created.value.id,
+      approve: true,
+    });
+    expect(approved.ok && approved.value.approvedAt !== null).toBe(true);
+
+    expect(
+      await updateTemplateVersion(contextFor('alpha', 'salesperson'), { ...text('x'), templateVersionId: created.value.id }),
+    ).toEqual({ ok: false, reason: 'admin_only' });
+    expect(
+      await updateTemplateVersion(contextFor('alpha', 'admin'), {
+        ...text('Click unsubscribe to stop.'),
+        templateVersionId: created.value.id,
+      }),
+    ).toEqual({ ok: false, reason: 'invalid_input' });
+    await database.session.query('UPDATE template_versions SET retired_at = now() WHERE id = $1', [created.value.id]);
+    expect(
+      await updateTemplateVersion(contextFor('alpha', 'admin'), { ...text('x'), templateVersionId: created.value.id }),
+    ).toEqual({ ok: false, reason: 'template_retired' });
+  });
+
+  it('sends the edited text from a step not yet prepared, and composes one footer when a postal address is set', async () => {
+    const templateVersionId = sequences.alpha.template.templateVersionId;
+    const enrollmentId = await enroll('alpha');
+    // Monday 09:00 New York, inside the window.
+    await setDue('alpha', enrollmentId, '2026-09-21T13:00:00Z');
+
+    // The seeded template is edited in place while the enrollment's first step waits.
+    const edited = await updateTemplateVersion(contextFor('alpha', 'admin'), {
+      name: 'Seeded, edited',
+      subject: 'Hello {firm_name}',
+      body: fixtureBody('Edited after enrolment.'),
+      footer: { signOff: FIXTURE_SIGN_OFF },
+      requiredVariables: ['firm_name'],
+      templateVersionId,
+    });
+    if (!edited.ok) throw new Error(`the edit was refused: ${edited.reason}`);
+    expect(edited.value.approvedAt).not.toBeNull();
+
+    // With a postal address, the footer is composed at send: the legacy body's own
+    // sign-off and stop line are not doubled.
+    const address = '1 Example Way\nProvidence, RI 02903';
+    expect((await updateSetting(contextFor('alpha', 'admin'), { settingKey: 'postal_address', value: { address } })).ok).toBe(true);
+    try {
+      const handoff = recordingSendHandoff();
+      const outcome = await runDueStepExecution(worker(), {
+        enrollmentId,
+        now: '2026-09-21T13:00:00Z',
+        eligibility: allowAllEligibility(),
+        sendHandoff: handoff,
+      });
+      expect(outcome.kind).toBe('handed_to_send');
+      const [request] = handoff.prepared;
+      expect(request?.templateContentHash).toBe(edited.value.contentHash);
+      expect(request?.body).toBe(`Edited after enrolment.\n\n${FIXTURE_SIGN_OFF}\n${address}\n${SENDING_STOP_LINE}`);
+      expect(request?.body.split(SENDING_STOP_LINE)).toHaveLength(2);
+    } finally {
+      await updateSetting(contextFor('alpha', 'admin'), { settingKey: 'postal_address', value: { address: null } });
+    }
+  });
+
+  it('approves a body with no footer while a postal address is set, and not once it is unset', async () => {
+    const address = '1 Example Way, Providence, RI 02903';
+    expect((await updateSetting(contextFor('alpha', 'admin'), { settingKey: 'postal_address', value: { address } })).ok).toBe(true);
+    try {
+      const created = await createTemplateVersion(contextFor('alpha', 'admin'), {
+        ...text('ignored'),
+        body: 'Just the words; the server adds the footer.',
+        approve: true,
+      });
+      expect(created.ok).toBe(true);
+    } finally {
+      await updateSetting(contextFor('alpha', 'admin'), { settingKey: 'postal_address', value: { address: null } });
+    }
+    const refused = await createTemplateVersion(contextFor('alpha', 'admin'), {
+      ...text('ignored'),
+      body: 'Just the words; the server adds the footer.',
+      approve: true,
+    });
+    expect(refused).toEqual({ ok: false, reason: 'template_unapproved', issues: ['template_footer_missing'] });
+  });
+});
+
+describe('published steps edit in place (wave 2, S3)', () => {
+  const emailStep = () => ({
+    ordinal: 1,
+    channel: 'email' as const,
+    delay: { unit: 'elapsed' as const, hours: 0 },
+    templateVersionId: sequences.alpha.template.templateVersionId,
+  });
+  const callStep = (ordinal: number, days: number) => ({
+    ordinal,
+    channel: 'call_task' as const,
+    delay: { unit: 'business_days' as const, days },
+    onNoAnswer: 'advance' as const,
+  });
+
+  async function publishedPlan(): Promise<string> {
+    const sequence = await createSequence(contextFor('alpha', 'admin'), { name: `Edited plan ${String(Date.now())}` });
+    if (!sequence.ok) throw new Error(`the sequence was refused: ${sequence.reason}`);
+    const draft = await createDraftVersion(contextFor('alpha', 'admin'), {
+      sequenceId: sequence.value.id,
+      steps: [emailStep(), callStep(2, 3)],
+    });
+    if (!draft.ok) throw new Error(`the draft was refused: ${draft.reason}`);
+    const published = await publishVersion(contextFor('alpha', 'admin'), { sequenceVersionId: draft.value.sequenceVersionId });
+    if (!published.ok) throw new Error(`the publication was refused: ${published.reason}`);
+    return draft.value.sequenceVersionId;
+  }
+
+  it('updates a published step in place and adds one, keeping the step rows live enrollments point at', async () => {
+    const versionId = await publishedPlan();
+    const before = await readSequenceVersion(contextFor('alpha', 'admin'), versionId);
+    const saved = await saveSteps(contextFor('alpha', 'admin'), {
+      sequenceVersionId: versionId,
+      steps: [emailStep(), callStep(2, 9), callStep(3, 2)],
+    });
+    expect(saved).toEqual({ ok: true, value: { steps: 3 } });
+    const after = await readSequenceVersion(contextFor('alpha', 'admin'), versionId);
+    expect(after?.state).toBe('published');
+    expect(after?.steps.map(step => step.id).slice(0, 2)).toEqual(before?.steps.map(step => step.id));
+    expect(after?.steps[1]?.delay).toEqual({ unit: 'business_days', days: 9 });
+    expect(after?.steps).toHaveLength(3);
+  });
+
+  it('refuses to change the channel of, or remove, a step something has executed', async () => {
+    const enrollmentId = await enroll('alpha');
+    expect(enrollmentId).toBeTruthy();
+    const versionId = sequences.alpha.publishedVersionId;
+    const before = await readSequenceVersion(contextFor('alpha', 'admin'), versionId);
+    // The enrollment's first execution names step 1.
+    expect(
+      await saveSteps(contextFor('alpha', 'admin'), { sequenceVersionId: versionId, steps: [callStep(1, 0), callStep(2, 3)] }),
+    ).toEqual({ ok: false, reason: 'step_in_use' });
+    expect(await readSequenceVersion(contextFor('alpha', 'admin'), versionId)).toEqual(before);
+  });
+
+  it('holds a published edit to what publication checks, and refuses a retired version', async () => {
+    const versionId = await publishedPlan();
+    expect(await saveSteps(contextFor('alpha', 'admin'), { sequenceVersionId: versionId, steps: [] })).toEqual({
+      ok: false,
+      reason: 'version_has_no_steps',
+    });
+    const unapproved = await createTemplateVersion(contextFor('alpha', 'admin'), {
+      name: 'Not yet',
+      subject: 'Hello',
+      body: fixtureBody('Not approved.'),
+      footer: { signOff: FIXTURE_SIGN_OFF },
+      requiredVariables: [],
+    });
+    if (!unapproved.ok) throw new Error(`the template was refused: ${unapproved.reason}`);
+    expect(
+      await saveSteps(contextFor('alpha', 'admin'), {
+        sequenceVersionId: versionId,
+        steps: [{ ...emailStep(), templateVersionId: unapproved.value.id }],
+      }),
+    ).toEqual({ ok: false, reason: 'template_unapproved' });
+    expect(await saveSteps(contextFor('alpha', 'salesperson'), { sequenceVersionId: versionId, steps: [emailStep()] })).toEqual({
+      ok: false,
+      reason: 'admin_only',
+    });
+
+    expect((await retireVersion(contextFor('alpha', 'admin'), { sequenceVersionId: versionId })).ok).toBe(true);
+    expect(await saveSteps(contextFor('alpha', 'admin'), { sequenceVersionId: versionId, steps: [emailStep()] })).toEqual({
+      ok: false,
+      reason: 'version_retired',
     });
   });
 });

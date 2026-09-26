@@ -9,18 +9,19 @@ import { SENDING_STOP_LINE, TEMPLATE_WARNING_CODES, type TemplateWarningCode } f
  *
  *   * the content hash covers the exact text that may be sent — identity, version,
  *     subject and body — so an approval is bound to bytes rather than to a name, and
- *     an edit leaves the approval behind;
- *   * a body may not be approved unless it ends with the footer block.
+ *     an edit in place recomputes it (wave 2, S3);
+ *   * every automated email ends with the footer block.
  *
  * The copy rules — word count, links, price and guarantee wording — are warnings since
  * 26 September 2026 (`TEMPLATE_WARNING_CODES`): an approval reports them and approves.
  *
- * The block is the sign-off and then the stop line. It carried a postal address
- * between the two until 22 September 2026;
- * `docs/decisions/g20-automated-email-carries-no-postal-address.md` records David's
- * decision that it does not, and the three specification lines that deviates from.
- * The stop line stays, so 12.6 still holds in full: every automated template explains
- * how to stop by replying, and no web unsubscribe link is included.
+ * Where the footer comes from depends on the workspace's `postal_address` setting
+ * (wave 2, S3). Unset, the template carries it: its body ends with the sign-off and then
+ * the stop line, and an approval refuses one that does not (`template_footer_missing`).
+ * Set, the worker composes it at send — sign-off, postal address, stop line — before the
+ * outbound fence freezes the bytes (`composeSendBody`), and the template needs none. The
+ * stop line is in every automated email either way, so 12.6 holds in full: every one
+ * explains how to stop by replying, and no web unsubscribe link is included.
  *
  * What does not survive from the old module is its hard-coded sign-off, which carried
  * a real name, phone number and site. The sign-off is workspace configuration here;
@@ -56,6 +57,40 @@ export interface FooterConfiguration {
 /** The footer block a body must end with: the sign-off, then the stop line. Nothing between them. */
 export function footerBlock(configuration: FooterConfiguration): string {
   return `${configuration.signOff.trim()}\n${configuration.stopLine ?? SENDING_STOP_LINE}`;
+}
+
+export interface SendFooterConfiguration extends FooterConfiguration {
+  /** The workspace's `postal_address` setting. */
+  readonly postalAddress: string;
+}
+
+/** The footer composed at send when a postal address is set: sign-off, address, stop line. */
+export function sendFooterBlock(configuration: SendFooterConfiguration): string {
+  return `${configuration.signOff.trim()}\n${configuration.postalAddress.trim()}\n${configuration.stopLine ?? SENDING_STOP_LINE}`;
+}
+
+/**
+ * A rendered body with exactly one composed footer (wave 2, S3).
+ *
+ * A template approved before the postal address was set still ends with its own
+ * sign-off and stop line, and a body may already carry the whole composed footer, so
+ * whatever of it is already at the end — the composed block, the old block, the stop
+ * line, the sign-off — is taken off first and the footer is appended once. Nothing in
+ * the middle of the body is touched.
+ */
+export function composeSendBody(body: string, configuration: SendFooterConfiguration): string {
+  const footer = sendFooterBlock(configuration);
+  const stopLine = configuration.stopLine ?? SENDING_STOP_LINE;
+  const signOff = configuration.signOff.trim();
+  let text = body.trimEnd();
+  if (text.endsWith(footer)) text = text.slice(0, -footer.length).trimEnd();
+  else {
+    const legacy = footerBlock(configuration);
+    if (text.endsWith(legacy)) text = text.slice(0, -legacy.length).trimEnd();
+    else if (text.endsWith(stopLine)) text = text.slice(0, -stopLine.length).trimEnd();
+    if (signOff.length > 0 && text.endsWith(signOff)) text = text.slice(0, -signOff.length).trimEnd();
+  }
+  return text.length === 0 ? footer : `${text}\n\n${footer}`;
 }
 
 export interface TemplateText {
@@ -99,6 +134,11 @@ export interface TemplateRules {
   readonly allowedVariables: readonly string[];
   /** A sentence the approved body must contain, when the workspace requires one. */
   readonly requiredSentence?: string | undefined;
+  /**
+   * True when the workspace has a postal address, so the footer is composed at send and
+   * the body need not end with one (wave 2, S3). Every other rule still applies.
+   */
+  readonly footerComposedAtSend?: boolean | undefined;
 }
 
 /**
@@ -122,9 +162,11 @@ export function templateTextIssues(text: TemplateText, rules: TemplateRules): st
 
   // 12.6: the body ends with the sign-off and then the stop line, so the sentence that
   // says how to stop is the last thing a prospect reads. `endsWith`, not `includes`:
-  // a stop line buried mid-body is not a footer.
-  const footer = footerBlock(rules.footer);
-  if (!body.endsWith(footer)) issues.push('template_footer_missing');
+  // a stop line buried mid-body is not a footer. With a postal address set the worker
+  // appends the footer at send (`composeSendBody`), so the body need not carry it.
+  if (rules.footerComposedAtSend !== true && !body.endsWith(footerBlock(rules.footer))) {
+    issues.push('template_footer_missing');
+  }
   if (rules.requiredSentence !== undefined && !body.includes(rules.requiredSentence)) {
     issues.push('template_required_sentence_missing');
   }

@@ -4,6 +4,8 @@ import {
   approveTemplateVersion,
   createTemplateVersion,
   listTemplateVersions,
+  updateTemplateVersion,
+  type TemplateResult,
 } from '@fss/domain/templates';
 import {
   REFUSAL_STATUS,
@@ -15,44 +17,57 @@ import {
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**
- * Template versions and their approval (specification 11.1, 12.6, 14.1).
+ * Template versions: create, edit in place, approve (specification 11.1, 12.6, 14.1; wave 2, S3).
  *
- * The approval is the endpoint that matters. `approveTemplateVersion` runs G0's
- * `decideTemplateApproval`, whose refusal carries *every* issue rather than the
- * first, and the route passes them through: an author fixing one rule at a time is a
- * worse day than an author fixing four at once. That is why this family does not use
- * `runPolicyCommand`'s plain refusal shape for the approval — the reason code is
- * `template_unapproved` and the issues travel beside it.
+ *   * `POST /templates/update` edits a version in place: the content hash is recomputed
+ *     and the refusal rules re-run, and an approved version stays approved only if they
+ *     pass. `approve: true` is "Save and approve": approved in the same command, or
+ *     refused with every issue and nothing written.
+ *   * `POST /templates/create` writes a new template, and takes `approve: true` too.
+ *   * `POST /templates/approve` approves a version as it stands. @deprecated for desktop
+ *     1.0.11, with `/templates/create`'s `templateId` (a new version of a template); both
+ *     go once 1.0.12 is in use.
  *
- * The copy rules (word count, links, price and guarantee wording) never refuse: a
- * create and an approval answer them as `warnings` on the accepted version
- * (`templateCommandResultSchema` in `@fss/contracts`).
- *
- * There is no endpoint that edits an approved version, and there never will be. The
- * database refuses it by trigger; the absence here is so that nobody has to find that
- * out from a 500.
+ * A refused approval carries *every* issue rather than the first, as
+ * `template_unapproved:<issue>,<issue>`: an author fixing one rule at a time is a worse
+ * day than an author fixing four at once. The copy rules (word count, links, price and
+ * guarantee wording) never refuse: every accepted answer carries them as `warnings`, and
+ * a save also carries `issues`, the refusal rules the text does not pass
+ * (`templateSaveResultSchema` in `@fss/contracts`).
  */
 export const TEMPLATE_PATHS: readonly string[] = [
   '/templates',
   '/templates/create',
+  '/templates/update',
   '/templates/approve',
 ];
 
 const command = { commandId: commandIdSchema, clientVersion: semanticVersionSchema };
 
-const createSchema = z.strictObject({
-  ...command,
-  templateId: uuid.optional(),
+const text = {
   name: z.string().trim().min(1).max(200),
   subject: z.string().trim().min(1).max(160),
   body: z.string().trim().min(1).max(4000),
   footerSignOff: z.string().trim().min(1).max(300),
-  // No `footerPostalAddress`. The object is strict, so a client that still sends one
-  // is a 400 rather than a field silently dropped: an automated email carries no
-  // postal address (`docs/decisions/g20-automated-email-carries-no-postal-address.md`),
-  // and a caller that believes otherwise should be told.
+  // No `footerPostalAddress`. The object is strict, so a client that sends one is a 400
+  // rather than a field silently dropped: the postal address is the workspace's
+  // `postal_address` setting, composed into the footer at send (wave 2, S3).
   requiredVariables: z.array(z.string().trim().min(1).max(60)).max(50),
-});
+  approve: z.boolean().optional(),
+};
+
+const createSchema = z.strictObject({ ...command, templateId: uuid.optional(), ...text });
+
+const updateSchema = z.strictObject({ ...command, templateVersionId: uuid, ...text });
+
+/** The issues are the useful half of a refused approval; `reason` alone would tell an author something is wrong and not what. */
+function withIssues<T>(result: TemplateResult<T>): { readonly ok: true; readonly value: T } | { readonly ok: false; readonly reason: string } {
+  if (result.ok) return result;
+  return {
+    ok: false,
+    reason: result.issues === undefined ? result.reason : `${result.reason}:${result.issues.join(',')}`,
+  };
+}
 
 const versionSchema = z.strictObject({ ...command, templateVersionId: uuid });
 
@@ -92,33 +107,40 @@ export async function routeTemplates(
 
   if (request.path === '/templates/create') {
     return await runPolicyCommand(deps, createSchema, 'create_template_version', async (context, body) =>
-      await createTemplateVersion(context, {
-        ...(body.templateId === undefined ? {} : { templateId: body.templateId }),
-        name: body.name,
-        subject: body.subject,
-        body: body.body,
-        footer: { signOff: body.footerSignOff },
-        requiredVariables: body.requiredVariables,
-      }),
+      withIssues(
+        await createTemplateVersion(context, {
+          ...(body.templateId === undefined ? {} : { templateId: body.templateId }),
+          name: body.name,
+          subject: body.subject,
+          body: body.body,
+          footer: { signOff: body.footerSignOff },
+          requiredVariables: body.requiredVariables,
+          approve: body.approve,
+        }),
+      ),
+    );
+  }
+
+  if (request.path === '/templates/update') {
+    return await runPolicyCommand(deps, updateSchema, 'update_template_version', async (context, body) =>
+      withIssues(
+        await updateTemplateVersion(context, {
+          templateVersionId: body.templateVersionId,
+          name: body.name,
+          subject: body.subject,
+          body: body.body,
+          footer: { signOff: body.footerSignOff },
+          requiredVariables: body.requiredVariables,
+          approve: body.approve,
+        }),
+      ),
     );
   }
 
   if (request.path === '/templates/approve') {
-    return await runPolicyCommand(deps, versionSchema, 'approve_template_version', async (context, body) => {
-      const approved = await approveTemplateVersion(context, {
-        templateVersionId: body.templateVersionId,
-      });
-      if (approved.ok) return approved;
-      // The issues are the useful half of a refused approval; `reason` alone would
-      // tell an author that something is wrong and not what.
-      return {
-        ok: false,
-        reason:
-          approved.issues === undefined
-            ? approved.reason
-            : `${approved.reason}:${approved.issues.join(',')}`,
-      };
-    });
+    return await runPolicyCommand(deps, versionSchema, 'approve_template_version', async (context, body) =>
+      withIssues(await approveTemplateVersion(context, { templateVersionId: body.templateVersionId })),
+    );
   }
 
   return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };

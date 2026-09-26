@@ -196,6 +196,16 @@ export const templateCommandResultSchema = templateVersionDtoSchema.extend({ war
 export type TemplateCommandResult = z.infer<typeof templateCommandResultSchema>;
 
 /**
+ * The accepted result of `POST /templates/update` (edit in place) and of
+ * `POST /templates/create` since wave 2 (S3): the version, its copy warnings, and the
+ * refusal rules its text does not pass — which is why a save left it unapproved
+ * (`approvedAt: null`). A save with `approve: true` is refused instead, as
+ * `template_unapproved:<issue>,…`, and writes nothing.
+ */
+export const templateSaveResultSchema = templateCommandResultSchema.extend({ issues: z.array(z.string()) });
+export type TemplateSaveResult = z.infer<typeof templateSaveResultSchema>;
+
+/**
  * One enrollment, as `toEnrollment` maps it. The four fields a Mac once refused (D02)
  * are the ones that make an enrollment explainable: the opportunity it serves, the
  * salesperson it belongs to, and the zone and holiday calendar frozen onto every due

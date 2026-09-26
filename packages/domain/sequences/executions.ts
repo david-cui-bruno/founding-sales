@@ -1,7 +1,8 @@
 import type { HoldReasonCode } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { openHold, releaseHoldsOfEvent } from '../policy/index.ts';
-import { placeEmailSend, type WorkspaceHolidayCalendar } from '../src/index.ts';
+import { composeSendBody, placeEmailSend, type WorkspaceHolidayCalendar } from '../src/index.ts';
+import { readPostalAddress } from '../settings/store.ts';
 import { readTemplateVersion, renderTemplateVersion } from '../templates/index.ts';
 import { businessDateOf } from '../today/index.ts';
 import { calendarOfEnrollment, completeEnrollment, stepForCadence, stopEnrollments } from './enrollments.ts';
@@ -211,10 +212,8 @@ export async function runDueStepExecution(
   if (enrollment === null) return { kind: 'nothing_to_do' };
   if (enrollment.endedAt !== null) return { kind: 'nothing_to_do' };
 
-  // LinkedIn was removed on 25 September 2026, and migration 0018 kept a stored
-  // `linkedin_task` channel as the marker of a removed channel. A step with a channel
-  // this lane does not know is held for a person — stop the enrollment or migrate it —
-  // and never run.
+  // A channel this lane does not know is held and never run. None can be stored since
+  // migration 0019 took the LinkedIn marker out of the channel CHECKs; this is the guard.
   if (!isStepChannel(loaded.channel)) return await holdExecution(context, loaded, 'long_hold_review');
 
   // What the fence says comes first once there is one. A send that happened, or may
@@ -455,6 +454,15 @@ async function runEmailStep(
   const route = await usableEmailRoute(context, enrollment.contactId);
   if (route === null) return await holdExecution(context, execution, 'route_missing');
 
+  // Wave 2, S3: with a postal address set, the footer is composed here — sign-off,
+  // address, stop line, exactly once — before the fence below freezes the bytes. Unset,
+  // the approved body already ends with its own footer and nothing is appended.
+  const postalAddress = await readPostalAddress(context);
+  const body =
+    postalAddress === null
+      ? rendered.body
+      : composeSendBody(rendered.body, { signOff: template.footerSignOff, postalAddress });
+
   const request: OutboundEmailRequest = {
     enrollmentId: enrollment.id,
     stepExecutionId: execution.id,
@@ -467,7 +475,7 @@ async function runEmailStep(
     emailAddressId: route.id,
     toAddress: route.address,
     subject: rendered.subject,
-    body: rendered.body,
+    body,
     sendAt: placement.sendAt,
     sourceZone: placement.sourceZone,
     ruleVersion: execution.ruleVersion,

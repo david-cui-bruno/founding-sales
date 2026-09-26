@@ -2,13 +2,10 @@ import { z } from 'zod';
 import { commandIdSchema, semanticVersionSchema, uuid } from '@fss/contracts';
 import { databaseNow } from '@fss/domain/policy';
 import {
-  applyEnrollmentMigration,
-  approveEnrollmentMigration,
   enrollContact,
   listEnrollments,
   listStepExecutions,
   previewResume,
-  proposeEnrollmentMigration,
   resumeEnrollment,
   stopEnrollments,
 } from '@fss/domain/sequences';
@@ -22,12 +19,12 @@ import {
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**
- * Enrollment, the hold review and the audited migration (specification 11.2, 4.3,
- * 14.1).
+ * Enrollment and the hold review (specification 11.2, 4.3, 14.1).
  *
  * Every mutation is a command with a receipt. The LinkedIn task card's three paths
- * (`/enrollments/linkedin/complete`, `/undo` and `/result`) went with LinkedIn on 25
- * September 2026.
+ * went with LinkedIn on 25 September 2026, and the audited migration's three
+ * (`/enrollments/migrate/propose`, `/approve`, `/apply`) with wave 2's edit in place
+ * (S3), which reaches live enrollments without moving them to a new version.
  */
 export const ENROLLMENT_PATHS: readonly string[] = [
   '/enrollments',
@@ -36,9 +33,6 @@ export const ENROLLMENT_PATHS: readonly string[] = [
   '/enrollments/steps',
   '/enrollments/resume',
   '/enrollments/resume/preview',
-  '/enrollments/migrate/propose',
-  '/enrollments/migrate/approve',
-  '/enrollments/migrate/apply',
 ];
 
 const command = { commandId: commandIdSchema, clientVersion: semanticVersionSchema };
@@ -59,14 +53,6 @@ const stopSchema = z.strictObject({
 
 const enrollmentSchema = z.strictObject({ ...command, enrollmentId: uuid });
 
-const proposeSchema = z.strictObject({
-  ...command,
-  fromSequenceVersionId: uuid,
-  toSequenceVersionId: uuid,
-  enrollmentIds: z.array(uuid).min(1).max(500),
-});
-
-const migrationSchema = z.strictObject({ ...command, migrationId: uuid });
 
 const listSchema = z.strictObject({
   firmId: uuid.optional(),
@@ -178,29 +164,6 @@ export async function routeEnrollments(
   if (request.path === '/enrollments/resume') {
     return await runPolicyCommand(deps, enrollmentSchema, 'resume_enrollment', async (context, body) =>
       await resumeEnrollment(context, { enrollmentId: body.enrollmentId }),
-    );
-  }
-
-  if (request.path === '/enrollments/migrate/propose') {
-    return await runPolicyCommand(deps, proposeSchema, 'propose_enrollment_migration', async (context, body) =>
-      await proposeEnrollmentMigration(context, {
-        fromSequenceVersionId: body.fromSequenceVersionId,
-        toSequenceVersionId: body.toSequenceVersionId,
-        enrollmentIds: body.enrollmentIds,
-        commandId: body.commandId,
-      }),
-    );
-  }
-
-  if (request.path === '/enrollments/migrate/approve') {
-    return await runPolicyCommand(deps, migrationSchema, 'approve_enrollment_migration', async (context, body) =>
-      await approveEnrollmentMigration(context, { migrationId: body.migrationId }),
-    );
-  }
-
-  if (request.path === '/enrollments/migrate/apply') {
-    return await runPolicyCommand(deps, migrationSchema, 'apply_enrollment_migration', async (context, body) =>
-      await applyEnrollmentMigration(context, { migrationId: body.migrationId }),
     );
   }
 

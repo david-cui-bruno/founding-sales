@@ -78,7 +78,7 @@ export async function enrollContact(
   if (version.state !== 'published') return refuseSequence('version_not_published');
   const firstStep = version.steps[0];
   if (firstStep === undefined) return refuseSequence('version_has_no_steps');
-  // A version stored before 25 September 2026 may have a LinkedIn step, which nothing runs.
+  // A guard: since migration 0019 no stored step has a channel `isStepChannel` refuses.
   if (!version.steps.every(step => isStepChannel(step.channel))) return refuseSequence('step_unknown');
 
   const { rows: firms } = await context.db.query<FirmForEnrollment>(
