@@ -4,41 +4,19 @@
 # table, and the metric filters that turn structured log events into the
 # CloudWatch metrics the alarm module watches.
 #
-# The safety metrics below are the ones the spec calls immediately critical:
-# a suppression journal write failure, a restore-generation mismatch, and an
-# outbound safety invariant failure. They are derived from logs rather than
-# from PutMetricData so that a task which is failing to reach CloudWatch
-# metrics still raises them through its log stream.
+# Every filter below feeds an alarm, and they are the ones the spec calls
+# immediately critical: a suppression journal write failure, a
+# restore-generation mismatch, and an outbound safety invariant failure. They
+# are derived from logs rather than from PutMetricData so that a task which is
+# failing to reach CloudWatch metrics still raises them through its log stream.
+# The five filters no alarm read (API and worker errors, refusals, held steps,
+# dead jobs) went in wave 2 (26 September 2026).
 
 locals {
   log_group_names = { for service in var.services : service => "/fss/${var.name_prefix}/${service}" }
 
   # filter name => { log group service, json pattern, metric name, optional dimensions }
   metric_filters = {
-    api_errors = {
-      service     = "api"
-      pattern     = "{ $.level = \"error\" }"
-      metric_name = "ApiErrors"
-      dimensions  = {}
-    }
-    worker_errors = {
-      service     = "worker"
-      pattern     = "{ $.level = \"error\" }"
-      metric_name = "WorkerErrors"
-      dimensions  = {}
-    }
-    api_refusals = {
-      service     = "api"
-      pattern     = "{ $.event = \"refusal\" }"
-      metric_name = "Refusals"
-      dimensions  = { reason = "$.reason" }
-    }
-    steps_held = {
-      service     = "worker"
-      pattern     = "{ $.event = \"step_held\" }"
-      metric_name = "StepsHeld"
-      dimensions  = { reason = "$.reason" }
-    }
     # Both processes write the journal (10.2): the API for the commands, the worker
     # for the opt-outs mail sync records. Each logs the failure into its own log
     # group, so each group has a filter, and both publish the one metric the alarm
@@ -67,12 +45,6 @@ locals {
       pattern     = "{ $.event = \"outbound_invariant_violation\" }"
       metric_name = "OutboundSafetyInvariantFailures"
       dimensions  = {}
-    }
-    dead_job = {
-      service     = "worker"
-      pattern     = "{ $.event = \"job_dead\" }"
-      metric_name = "DeadJobs"
-      dimensions  = { kind = "$.kind" }
     }
   }
 

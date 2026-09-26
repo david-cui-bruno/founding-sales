@@ -40,10 +40,20 @@ run "the_safety_metrics_the_alarms_need_exist" {
 
   assert {
     condition = alltrue([
-      for required in ["SuppressionJournalWriteFailures", "RestoreGenerationMismatches", "OutboundSafetyInvariantFailures", "DeadJobs"] :
+      for required in ["SuppressionJournalWriteFailures", "RestoreGenerationMismatches", "OutboundSafetyInvariantFailures"] :
       contains(output.metric_names, required)
     ])
     error_message = "Every immediately critical alarm must have a metric filter behind it."
+  }
+
+  # Wave 2 (26 September 2026): a filter no alarm reads is gone, so these four are
+  # every filter there is.
+  assert {
+    condition = (
+      length(aws_cloudwatch_log_metric_filter.this) == 4
+      && output.metric_names == tolist(["OutboundSafetyInvariantFailures", "RestoreGenerationMismatches", "SuppressionJournalWriteFailures"])
+    )
+    error_message = "The module derives only the three safety metrics its alarms read, from four filters."
   }
 
   # Lane g81: the API and the worker both write the suppression journal and both log
