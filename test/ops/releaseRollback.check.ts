@@ -14,7 +14,7 @@ import { repositoryPath } from './support/repository.ts';
  * `curl`, which share one state file (found through `FSS_STUB_HOME`) and log every call: the stub production runs the new
  * digests, the checkout is a real git repository at a commit whose images are the old
  * ones, and the smoke is the checkout's own `scripts/productionSmoke.mjs`, which here
- * records its arguments. `--apply` runs the real `release-deploy.sh` against the same
+ * records its arguments. `--apply` runs the real `deploy.sh release` against the same
  * stubs, so "applies, deploys and smokes in that order" is read from the call log.
  *
  * ## The vacuous-pass traps, named
@@ -665,12 +665,12 @@ describe('release-rollback.sh in a dry run', () => {
     expect(run.code, run.output).toBe(0);
     expect(stub.calls()).toEqual([]);
     expect(run.output).toContain(`PLAN aws ecr describe-images --repository-name fss-prod-api --image-ids imageDigest=${OLD.api}`);
-    expect(run.output).toContain('deployed-digests.sh fss-prod');
+    expect(run.output).toContain('deploy.sh current fss-prod');
     expect(run.output).toContain(`PLAN curl -fsS --max-time 15 https://`);
     expect(run.output).toContain("PLAN refuse unless production's sending_enabled equals the committed false");
     expect(run.output).toContain(`PLAN terraform -chdir=${stub.root} plan -input=false -no-color -out=rollback.tfplan`);
     expect(run.output).toContain(`PLAN terraform -chdir=${stub.root} apply -input=false -no-color rollback.tfplan`);
-    expect(run.output).toContain(`release-deploy.sh ${stub.root} fss-prod --api-digest ${OLD.api} --worker-digest ${OLD.worker}`);
+    expect(run.output).toContain(`deploy.sh release ${stub.root} fss-prod --api-digest ${OLD.api} --worker-digest ${OLD.worker}`);
     expect(run.output).toContain('scripts/productionSmoke.mjs');
     expect(existsSync(join(stub.root, 'rollback.tfplan'))).toBe(false);
   });

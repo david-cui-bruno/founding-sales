@@ -14,9 +14,10 @@ import { readRepositoryFile, repositoryPath } from './support/repository.ts';
  *
  * Three things are driven end to end rather than read: the workflow's inline
  * protected-path guard, in a real git history, against a stub AWS CLI that holds
- * production's images and their tags; `infra/scripts/ci-deploy-app.sh`, against the same
- * stub holding each service, each task definition and the rehearsal repositories; and
- * `infra/scripts/deployed-digests.sh`.
+ * production's images and their tags; `infra/scripts/deploy.sh ci` (P7; the old name
+ * `ci-deploy-app.sh` execs it), against the same stub holding each service, each task
+ * definition and the rehearsal repositories; and `infra/scripts/deploy.sh current` (the old
+ * `deployed-digests.sh`).
  *
  * ## The vacuous-pass traps, named
  *
@@ -48,8 +49,10 @@ import { readRepositoryFile, repositoryPath } from './support/repository.ts';
  * hand path's put (`record.sh put`) is run in `record.check.ts`.
  */
 
-const SCRIPT = repositoryPath('infra/scripts/ci-deploy-app.sh');
-const DEPLOYED = repositoryPath('infra/scripts/deployed-digests.sh');
+const SCRIPT = repositoryPath('infra/scripts/deploy.sh');
+// The old names, thin wrappers until the release helpers have moved (P7).
+const LEGACY_CI = repositoryPath('infra/scripts/ci-deploy-app.sh');
+const LEGACY_CURRENT = repositoryPath('infra/scripts/deployed-digests.sh');
 const WORKFLOW = '.github/workflows/greenfield-deploy.yml';
 const ACCOUNT = '123456789012';
 const REGISTRY = `${ACCOUNT}.dkr.ecr.us-east-1.amazonaws.com`;
@@ -553,6 +556,8 @@ function runScript(
     readonly identity?: string;
     readonly region?: string;
     readonly window?: readonly [string, string];
+    /** Through the old name, `ci-deploy-app.sh`, which must behave exactly the same. */
+    readonly legacy?: boolean;
   } = {},
 ): Run {
   const outputs = join(mkdtempSync(join(tmpdir(), 'fss-ci-outputs-')), 'github-output');
@@ -591,7 +596,9 @@ function runScript(
   };
   delete env['FSS_REHEARSAL_DRY_RUN'];
   delete env['FSS_PRODUCTION_REGION'];
-  const result = spawnSync(SCRIPT, args, { encoding: 'utf8', env });
+  const result = extra.legacy === true
+    ? spawnSync(LEGACY_CI, args, { encoding: 'utf8', env })
+    : spawnSync(SCRIPT, ['ci', ...args], { encoding: 'utf8', env });
   return { code: result.status ?? 1, output: `${result.stdout}${result.stderr}`, outputs: readOutputs(outputs) };
 }
 
@@ -604,6 +611,14 @@ describe('check decides, and writes nothing', () => {
     expect(run.output).toContain(`fss-rh-api and fss-rh-worker hold ci-${COMMIT} as the two digests the artifact names`);
     expect(run.output).toContain('the running API declares 16-16 and the database is at 16');
     expect(writes(stub)).toEqual([]);
+  });
+
+  it('answers the same through the old name, ci-deploy-app.sh, which only execs deploy.sh ci', () => {
+    const now = runScript('check', world());
+    const old = runScript('check', world(), { legacy: true });
+    expect(old.code, old.output).toBe(now.code);
+    expect(old.outputs).toEqual(now.outputs);
+    expect(old.outputs['decision']).toBe('deploy');
   });
 
   it('leaves a service that is not running at its declared count to the operator', () => {
@@ -1056,12 +1071,12 @@ function runRecord(
   ]) {
     delete env[name];
   }
-  const result = spawnSync(SCRIPT, args, { encoding: 'utf8', env });
+  const result = spawnSync(SCRIPT, ['ci', ...args], { encoding: 'utf8', env });
   return { code: result.status ?? 1, output: `${result.stdout}${result.stderr}`, outputs: readOutputs(outputs) };
 }
 
 describe('record puts the ci-gate release record before the rollout, on the operations task, and reads it back after', () => {
-  it('builds the record from the green gate run and puts it before the rollout, the way release-deploy.sh does', () => {
+  it('builds the record from the green gate run and puts it before the rollout, the way record.sh put does', () => {
     // Production still runs the previous digests: the record goes first, so no new worker
     // task starts without one.
     const stub = world();
@@ -1537,8 +1552,12 @@ describe('the schema acceptance rule and the migration runner are protected, wit
   });
 });
 
-describe('deployed-digests.sh prints what an operator plan must be given, and refuses what would roll production back', () => {
-  const deployed = (stub: World, ...args: string[]): { readonly code: number; readonly stdout: string; readonly stderr: string } => {
+describe('deploy.sh current prints what an operator plan must be given, and refuses what would roll production back', () => {
+  const run = (
+    command: readonly string[],
+    stub: World,
+    args: readonly string[],
+  ): { readonly code: number; readonly stdout: string; readonly stderr: string } => {
     const env: Record<string, string> = {
       ...(process.env as Record<string, string>),
       FSS_REHEARSAL_AWS_COMMAND: join(stub.home, 'aws'),
@@ -1546,9 +1565,11 @@ describe('deployed-digests.sh prints what an operator plan must be given, and re
     };
     delete env['FSS_RELEASE_ACCOUNT'];
     delete env['FSS_REHEARSAL_DRY_RUN'];
-    const result = spawnSync(DEPLOYED, ['fss-prod', ...args], { encoding: 'utf8', env });
+    const [script = SCRIPT, ...words] = command;
+    const result = spawnSync(script, [...words, 'fss-prod', ...args], { encoding: 'utf8', env });
     return { code: result.status ?? 1, stdout: result.stdout, stderr: result.stderr };
   };
+  const deployed = (stub: World, ...args: string[]): ReturnType<typeof run> => run([SCRIPT, 'current'], stub, args);
   const apiImage = `${REGISTRY}/fss-prod-api@${OLD.api}`;
   const workerImage = `${REGISTRY}/fss-prod-worker@${OLD.worker}`;
 
@@ -1604,6 +1625,14 @@ describe('deployed-digests.sh prints what an operator plan must be given, and re
     expect(ahead.stdout).toBe('');
     expect(ahead.stderr).toContain(`its family's newest ACTIVE revision is ${definitionArn('worker', 5)}`);
     expect(ahead.stderr).toContain(`aws ecs deregister-task-definition --task-definition ${definitionArn('worker', 5)}`);
+  });
+
+  it('prints the same through the old name, deployed-digests.sh, which only execs deploy.sh current', () => {
+    const now = deployed(world(), '--var-flags');
+    const old = run([LEGACY_CURRENT], world(), ['--var-flags']);
+    expect(old.code, old.stderr).toBe(0);
+    expect(old.stdout).toBe(now.stdout);
+    expect(old.stdout.split('\n')).toHaveLength(5);
   });
 
   it('compares a saved plan’s images with the running ones before an apply, unless the release changes them on purpose', () => {

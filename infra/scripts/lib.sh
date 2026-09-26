@@ -1118,6 +1118,90 @@ if handle is not None:
 }
 
 # ---------------------------------------------------------------------------
+# A standing stack, read from its root (deploy.sh and stop.sh)
+# ---------------------------------------------------------------------------
+
+# The root's outputs a release step reads, as globals. Refuses a root that is not the
+# prefix's environment: a production root under a rehearsal prefix would read a
+# rehearsal plan and act on production, and the reverse would point CI at production.
+# With a named environment and a phrase, release_require_named_environment runs before
+# anything is read.
+#   release_read_root <root> <prefix> [<named environment> <what the step does>]
+release_read_root() {
+  ROOT_DIRECTORY=$1
+  PREFIX=$2
+  ENVIRONMENT="$(release_environment_for_prefix "$PREFIX")" || exit 1
+  case "$ENVIRONMENT:$ROOT_DIRECTORY" in
+    production:*roots/production | rehearsal:*roots/rehearsal) ;;
+    *) echo "FAIL: prefix '$PREFIX' is a $ENVIRONMENT prefix and '$ROOT_DIRECTORY' is not the $ENVIRONMENT root." >&2; exit 1 ;;
+  esac
+  [ "$#" -lt 4 ] || release_require_named_environment "$3" "$4"
+  CLUSTER_ARN="$(release_output "$ROOT_DIRECTORY" cluster_arn)"
+  MIGRATION_TASK_DEFINITION="$(release_output "$ROOT_DIRECTORY" migration_task_definition_arn)"
+  OPERATIONS_TASK_DEFINITION="$(release_output "$ROOT_DIRECTORY" operations_task_definition_arn)"
+  RUNTIME_SECRET_ARN="$(release_output "$ROOT_DIRECTORY" app_runtime_database_secret_arn)"
+  NETWORK_PLAN="$(release_output "$ROOT_DIRECTORY" task_network_configuration json)"
+  DEPLOYMENT_PLAN="$(release_output "$ROOT_DIRECTORY" deployment_plan json)"
+  LOG_GROUP="$(release_output "$ROOT_DIRECTORY" worker_log_group_name)"
+  DATABASE_HOST="$(release_json_path "${NETWORK_PLAN:-}" "database_host")"
+  API_SERVICE="$(release_json_path "${DEPLOYMENT_PLAN:-}" "api.service_name" "${PREFIX}-api")"
+  WORKER_SERVICE="$(release_json_path "${DEPLOYMENT_PLAN:-}" "worker.service_name" "${PREFIX}-worker")"
+  API_TARGET="$(release_json_path "${DEPLOYMENT_PLAN:-}" "api.declared_desired_count" "1")"
+  WORKER_TARGET="$(release_json_path "${DEPLOYMENT_PLAN:-}" "worker.declared_desired_count" "1")"
+  BOOTSTRAP="$(release_json_path "${DEPLOYMENT_PLAN:-}" "bootstrap" "false")"
+  ACCOUNT="${FSS_RELEASE_ACCOUNT:-$(release_caller_account)}"
+  REGION="${AWS_REGION:-us-east-1}"
+}
+
+# Before the first call that changes a service: the credentials are this release's
+# account, the cluster is a full ARN in this account, region and namespace, both service
+# names are this environment's, nothing names the other one, and the cluster's own
+# Environment tag agrees.   release_guard_services <what this is, for the message>
+release_guard_services() {
+  local what=$1 caller tag service
+  if [ -n "${FSS_RELEASE_ACCOUNT:-}" ]; then
+    caller="$(release_caller_account)"
+    if [ -n "$caller" ] && [ "$caller" != "$ACCOUNT" ]; then
+      echo "FAIL: these credentials belong to account $caller and this release is in $ACCOUNT" >&2
+      exit 1
+    fi
+  fi
+  # A dry run with no fixture has no ARN to judge, and says so rather than inventing one.
+  if [ -n "$CLUSTER_ARN" ] || ! rehearsal_dry_run; then
+    release_require_arn "the cluster" "$CLUSTER_ARN" ecs "$ACCOUNT" "$REGION" "$PREFIX" || exit 1
+  fi
+  for service in "$API_SERVICE" "$WORKER_SERVICE"; do
+    case "$service" in
+      "$PREFIX"-*) ;;
+      *) echo "FAIL: '$service' is not a service of $PREFIX" >&2; exit 1 ;;
+    esac
+  done
+  release_refuse_foreign_arguments "$ENVIRONMENT" "$CLUSTER_ARN" "$API_SERVICE" "$WORKER_SERVICE" || exit 1
+  tag="$(release_cluster_environment_tag "$ENVIRONMENT" "$CLUSTER_ARN")"
+  if [ -n "$tag" ] && [ "$tag" != "$ENVIRONMENT" ]; then
+    echo "FAIL: the cluster is tagged Environment=$tag and this is a $ENVIRONMENT $what" >&2
+    exit 1
+  fi
+  rehearsal_log "cluster $CLUSTER_ARN"
+}
+
+# Production is named out loud (--environment production) by a step that takes it down
+# or writes its first rows; a rehearsal may name itself, and neither may name the other.
+#   release_require_named_environment <named> <what the step does, for the message>
+release_require_named_environment() {
+  local named=$1 what=$2
+  if [ -n "$named" ] && [ "$named" != "$ENVIRONMENT" ]; then
+    echo "FAIL: --environment $named was given and '$PREFIX' is a $ENVIRONMENT prefix." >&2
+    exit 1
+  fi
+  if [ "$ENVIRONMENT" = production ] && [ "$named" != production ]; then
+    echo "FAIL: '$PREFIX' is the production namespace and this command $what." >&2
+    echo "      So production is named out loud or not at all: re-run with --environment production." >&2
+    exit 1
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # The release record put (lane g71; before the rollout since 26 September 2026)
 # ---------------------------------------------------------------------------
 

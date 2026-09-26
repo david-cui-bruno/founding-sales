@@ -96,7 +96,7 @@ describe('Appendix G 42: sending stays off until all four agree', () => {
  * comparison the software makes, not a sentence an admin reads.
  *
  * The release record is stored (`fss admin release-record put`, run by
- * `release-deploy.sh --release-record`), the API refuses an enable whose record does
+ * `deploy.sh release --release-record`), the API refuses an enable whose record does
  * not pass or does not carry the API's own digest, and the worker refuses to send when
  * the record does not carry the worker's own. The behaviour is asserted in the domain,
  * API and worker suites; this is where the deploy step is held to them.
@@ -134,7 +134,7 @@ describe('Appendix G 42: the attestation is bound to the release record (lane g7
     return record;
   }
 
-  describe('release-deploy.sh --release-record', () => {
+  describe('deploy.sh release --release-record', () => {
     const recordFile = (): { readonly path: string; readonly bytes: Buffer } => {
       const directory = mkdtempSync(join(tmpdir(), 'fss-deploy-record-'));
       const path = join(directory, 'release-record.json');
@@ -150,7 +150,8 @@ describe('Appendix G 42: the attestation is bound to the release record (lane g7
       const result = spawnSync(
         'bash',
         [
-          repositoryPath('infra/scripts/release-deploy.sh'),
+          repositoryPath('infra/scripts/deploy.sh'),
+          'release',
           'infra/roots/production',
           'fss-prod',
           '--worker-digest',
