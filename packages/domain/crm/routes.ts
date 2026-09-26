@@ -5,7 +5,7 @@ import { decideFirmMutation } from './authorization.ts';
 import { recordCrmAuditEvent } from './audit.ts';
 import { emitCrmDomainEvent } from './events.ts';
 import { loadFirmForUpdate } from './firms.ts';
-import { decideRouteEligibility } from './routePolicy.ts';
+import { decidePhoneOnEntry, decideRouteEligibility } from './routePolicy.ts';
 import {
   accept,
   refuse,
@@ -88,13 +88,37 @@ export async function addEmailRoute(
   return await addRoute(context, 'email', input.address.trim().toLowerCase(), input);
 }
 
+interface RouteEvidence {
+  readonly eligibility: RouteEligibility;
+  readonly policyVersion: string | null;
+  readonly technicalValidation: TechnicalValidation;
+  readonly associationConfidence: number | null;
+}
+
 /**
- * Record a route.
+ * What a route is written with: its evidence and the eligibility that evidence makes it.
  *
- * Its eligibility is the policy's decision, never the caller's: a caller may say what
- * it retrieved and how confident it is, and `decideRouteEligibility` says what that
- * makes the route. Research that could name its own routes `usable` would be section
- * 7.4's threshold with extra steps.
+ * A phone number is usable on entry (wave 2, S4.4; `decidePhoneOnEntry`), with the
+ * evidence defaults schema 18's CHECK requires. An email address is the versioned
+ * policy's decision (7.4, `decideRouteEligibility`): a caller may say what it retrieved
+ * and how confident it is, never what that makes the route.
+ */
+function evidenceFor(
+  kind: RouteKind,
+  source: RouteSource,
+  technicalValidation: TechnicalValidation,
+  associationConfidence: number | null,
+): RouteEvidence {
+  if (kind === 'phone') return decidePhoneOnEntry({ technicalValidation, associationConfidence });
+  return {
+    ...decideRouteEligibility({ source, technicalValidation, associationConfidence }),
+    technicalValidation,
+    associationConfidence,
+  };
+}
+
+/**
+ * Record a route, with the evidence and eligibility `evidenceFor` decides.
  */
 async function addRoute(
   context: RepositoryContext,
@@ -108,11 +132,12 @@ async function addRoute(
   if (!decision.permitted) return refuse(decision.reason);
 
   const table = TABLES[kind];
-  const eligibility = decideRouteEligibility({
-    source: input.source,
-    technicalValidation: input.technicalValidation ?? 'unknown',
-    associationConfidence: input.associationConfidence ?? null,
-  });
+  const evidence = evidenceFor(
+    kind,
+    input.source,
+    input.technicalValidation ?? 'unknown',
+    input.associationConfidence ?? null,
+  );
 
   const { rows } = await context.db.query<RouteRow>(
     `INSERT INTO ${table.table}
@@ -128,10 +153,10 @@ async function addRoute(
       value,
       input.source,
       input.retrievedAt ?? null,
-      input.associationConfidence ?? null,
-      input.technicalValidation ?? 'unknown',
-      eligibility.eligibility,
-      eligibility.policyVersion,
+      evidence.associationConfidence,
+      evidence.technicalValidation,
+      evidence.eligibility,
+      evidence.policyVersion,
     ],
   );
   const created = rows[0];
@@ -330,13 +355,9 @@ export async function verifyRoute(
   const confidence =
     input.associationConfidence ??
     (loaded.association_confidence === null ? null : Number(loaded.association_confidence));
-  const eligibility = decideRouteEligibility({
-    source: loaded.source,
-    technicalValidation: input.technicalValidation,
-    associationConfidence: confidence,
-  });
+  const eligibility = evidenceFor(input.routeKind, loaded.source, input.technicalValidation, confidence);
   const changed =
-    eligibility.eligibility !== loaded.eligibility || input.technicalValidation !== loaded.technical_validation;
+    eligibility.eligibility !== loaded.eligibility || eligibility.technicalValidation !== loaded.technical_validation;
 
   const table = TABLES[input.routeKind];
   const { rows } = await context.db.query<RouteRow>(
@@ -352,8 +373,8 @@ export async function verifyRoute(
     [
       context.scope.workspaceId,
       input.routeId,
-      input.technicalValidation,
-      confidence,
+      eligibility.technicalValidation,
+      eligibility.associationConfidence,
       eligibility.eligibility,
       eligibility.policyVersion,
       changed,
@@ -379,6 +400,11 @@ export interface ConfirmPhoneRouteInput {
 
 /**
  * A person confirms a phone number reaches the firm (lane g88).
+ *
+ * @deprecated (remove after desktop 1.0.12) — a phone number is usable on entry since wave
+ * 2 (S4.4), and a dial accepts one an older release left `candidate`. Kept because
+ * desktops up to 1.0.11 offer "Confirm this number" for such a row, and it still makes
+ * that row `usable` in its stored state.
  *
  * Section 7.4 makes a route `usable` only when a versioned provider/source policy
  * satisfies both technical validation and association confidence. For a phone number in

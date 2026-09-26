@@ -274,6 +274,10 @@ export const verifyRouteCommandSchema = z.strictObject({
  * is the whole of that rule on the wire, and `docs/decisions/g88-founder-authoring-and-review.md`
  * says why an email address is not confirmed by hand. `routeVersion` is the version the
  * person was looking at; a route that has moved since is refused `route_version_stale`.
+ *
+ * @deprecated (remove after desktop 1.0.12) — a phone number is usable on entry since
+ * wave 2 (S4.4), and a dial accepts one an older release stored as a candidate. Still
+ * accepted for desktops up to 1.0.11, which offer "Confirm this number" for such a row.
  */
 export const confirmRouteCommandSchema = z.strictObject({
   ...commandEnvelope,

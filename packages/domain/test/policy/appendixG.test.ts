@@ -226,6 +226,27 @@ describe('scenario 17: no replay ever yields a second allow', () => {
   });
 });
 
+describe('wave 2 (S4.3, S4.4): what an older release stored is dialled as it stands', () => {
+  it('authorizes a phone route stored as a candidate with no evidence, from a calling number never attested', async () => {
+    const { rows: route } = await database.session.query<{ id: string; version: number }>(
+      `INSERT INTO phone_routes (workspace_id, firm_id, contact_id, e164, source, retrieved_at)
+       VALUES ($1, $2, $3, '+14015550188', 'import', now()) RETURNING id, version`,
+      [seeded.alpha.workspaceId, crm.alpha.firmId, crm.alpha.contactId],
+    );
+    const { rows: identity } = await database.session.query<{ id: string }>(
+      "INSERT INTO calling_identities (workspace_id, owner_user_id, e164) VALUES ($1, $2, '+14015550189') RETURNING id",
+      [seeded.alpha.workspaceId, seeded.alpha.salesperson.userId],
+    );
+    const decision = await authorizeDial(salespersonContext(), {
+      ...dialInput(),
+      routeId: route[0]?.id ?? '',
+      routeVersion: Number(route[0]?.version ?? 1),
+      callingIdentityId: identity[0]?.id ?? '',
+    });
+    expect(decision).toMatchObject({ allowed: true, evidence: { e164: '+14015550188' } });
+  });
+});
+
 describe('scenario 21: the insert-only protocol refuses everything else', () => {
   it('refuses UPDATE and DELETE on suppression_events for the application role', async () => {
     const app = await database.appRuntimeSession();

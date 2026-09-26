@@ -29,6 +29,7 @@ export const DIAL_HOLD_REFUSAL_CODES = [
   'handle_suppressed',
   'manual_suppression_review',
   'route_missing',
+  /** @deprecated never answered for a dial since wave 2 (S4.4): a phone is usable on entry. */
   'route_candidate',
   'route_invalid',
   'route_retired',

@@ -2,24 +2,23 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
 import { ROUTE_ELIGIBILITY_POLICY_VERSION } from '../../crm/routePolicy.ts';
-import { addPhoneRoute, confirmPhoneRoute, retireRoute } from '../../crm/index.ts';
+import { confirmPhoneRoute, listRoutes, retireRoute } from '../../crm/index.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
 
 /**
- * "Confirm this number" (lane g88): a person confirms a captured phone number reaches the
- * firm, and the route policy makes it usable.
+ * "Confirm this number" (lane g88), kept for desktop 1.0.11 (deprecated by wave 2, S4.4).
  *
- * A firm added or imported from the Mac arrives with `candidate` routes (lane g84), and
- * `authorizeDial` step 3 refuses a candidate — so until g88 a freshly added firm could not
- * be called by anyone. The confirmation is the smallest honest way through: the person
- * vouches for the number, the command records who and when, the policy decides, and the
- * version moves so a card showing the old version is refused.
+ * A phone number is usable on entry since wave 2, so nothing written now needs a
+ * confirmation. A number an older release stored as a `candidate` still exists, and
+ * desktops up to 1.0.11 offer "Confirm this number" for it: the confirmation makes that
+ * stored row usable under the policy, records who and when, and moves the version so a
+ * card showing the old version is refused.
  *
- * **The vacuous-pass trap.** A number added as `salesperson` with a confidence is usable
- * the moment it is added, so a test built on one would pass with no confirmation at all.
- * Every number here is added the way g84's import adds one — `import`, no validation, no
- * confidence — and each assertion starts by requiring it to be a candidate.
+ * **The vacuous-pass trap.** A number added through `addPhoneRoute` is usable at once,
+ * so a test built on one would pass with no confirmation at all. Every number here is
+ * written the way an older release stored an imported one — `import`, no validation, no
+ * confidence, `candidate` — and each assertion starts by requiring it to be a candidate.
  *
  * Numbers are in the NANP 555-01XX fictional block.
  */
@@ -34,16 +33,18 @@ const contextFor = (workspace: 'alpha' | 'beta', who: 'admin' | 'salesperson'): 
     database.session,
   );
 
+/** A number as an older release stored an import: a candidate with no evidence. */
 async function importedNumber(e164: string, extra: { readonly technicalValidation?: 'failed' } = {}) {
-  const added = await addPhoneRoute(contextFor('alpha', 'salesperson'), {
-    firmId: crm.alpha.firmId,
-    contactId: crm.alpha.contactId,
-    e164,
-    source: 'import',
-    ...extra,
-  });
-  if (!added.ok) throw new Error(`the route fixture was refused: ${added.reason}`);
-  return added.value;
+  const failed = extra.technicalValidation === 'failed';
+  await database.session.query(
+    `INSERT INTO phone_routes (workspace_id, firm_id, contact_id, e164, source, retrieved_at, technical_validation, eligibility)
+     VALUES ($1, $2, $3, $4, 'import', now(), $5, $6)`,
+    [seeded.alpha.workspaceId, crm.alpha.firmId, crm.alpha.contactId, e164, failed ? 'failed' : 'unknown', failed ? 'invalid' : 'candidate'],
+  );
+  const listed = await listRoutes(contextFor('alpha', 'salesperson'), 'phone', crm.alpha.firmId);
+  const route = listed.find(entry => entry.value === e164);
+  if (route === undefined) throw new Error('the route fixture was not written');
+  return route;
 }
 
 beforeAll(async () => {
@@ -57,7 +58,7 @@ afterAll(async () => {
 });
 
 describe('confirmPhoneRoute', () => {
-  it('makes an imported candidate usable under the policy, bumps its version, and records who', async () => {
+  it('makes a stored candidate usable under the policy, bumps its version, and records who', async () => {
     const route = await importedNumber('+14015550111');
     expect(route.eligibility).toBe('candidate');
     expect(Number(route.version)).toBe(1);

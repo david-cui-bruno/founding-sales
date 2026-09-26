@@ -156,14 +156,23 @@ describe('lane g88 through the API', () => {
     expect((await post('/enrollments/resume/preview', salespersonToken, { enrollmentId: randomUUID() })).status).toBe(404);
   });
 
-  it('confirms a captured phone number as a command, and refuses an email address at the door', async () => {
+  it('adds a captured phone number usable at once (wave 2, S4.4)', async () => {
     const added = await post(
       '/contacts/routes/add',
       salespersonToken,
-      command({ firmId, contactId, routeKind: 'phone', value: '+14015550141', source: 'import' }),
+      command({ firmId, contactId, routeKind: 'phone', value: '+14015550142', source: 'import' }),
     );
-    const routeId = String(result(added)['id']);
-    expect(result(added)['eligibility']).toBe('candidate');
+    expect(added.status).toBe(200);
+    expect([result(added)['eligibility'], result(added)['version']]).toEqual(['usable', 1]);
+  });
+
+  it('confirms a number an older release stored as a candidate, as a command, and refuses an email address at the door', async () => {
+    const { rows } = await fixture.db.query<{ id: string }>(
+      `INSERT INTO phone_routes (workspace_id, firm_id, contact_id, e164, source, retrieved_at)
+       VALUES ($1, $2, $3, '+14015550141', 'import', now()) RETURNING id`,
+      [fixture.alpha.workspaceId, firmId, contactId],
+    );
+    const routeId = rows[0]?.id ?? '';
 
     const stale = await post('/contacts/routes/confirm', salespersonToken, command({ routeKind: 'phone', routeId, routeVersion: 2 }));
     expect(stale.status).toBe(409);

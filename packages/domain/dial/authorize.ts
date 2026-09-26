@@ -18,7 +18,8 @@ import type { EffectiveSuppression } from '../suppression/effective.ts';
  *   1. Effective firm, number, or relevant contact-handle suppression
  *   2. Active verified calling identity owned by the actor (since wave 2, S4.3: owned
  *      and not retired — a number is attested when it is added)
- *   3. Active unretired usable route at the displayed version
+ *   3. Active unretired usable route at the displayed version (since wave 2, S4.4, a
+ *      stored `candidate` phone counts as usable: numbers are usable on entry)
  *   4. Actor assignment and permission
  *   5. Known firm state and confidently established actual IANA zone
  *   6. Exactly one applicable state posture whose effective range contains database
@@ -88,8 +89,12 @@ interface PhoneRouteRow {
   readonly [column: string]: unknown;
 }
 
-const ELIGIBILITY_REFUSAL: Readonly<Record<'candidate' | 'invalid' | 'retired', DialRefusalCode>> = Object.freeze({
-  candidate: 'route_candidate',
+/**
+ * The phone eligibilities a dial refuses. `candidate` is not one since wave 2 (S4.4): a
+ * number is usable on entry, and one an older release stored as a candidate is dialled
+ * as it stands, so `route_candidate` is never answered.
+ */
+const ELIGIBILITY_REFUSAL: Readonly<Partial<Record<PhoneRouteRow['eligibility'], DialRefusalCode>>> = Object.freeze({
   invalid: 'route_invalid',
   retired: 'route_retired',
 });
@@ -178,7 +183,8 @@ export async function authorizeDial(
   // is looking at a number that has since been replaced or retired, and the honest
   // answer is "your card is out of date", not the new route's state.
   if (route.version !== input.routeVersion) return refused('route_version_stale');
-  if (route.eligibility !== 'usable') return refused(ELIGIBILITY_REFUSAL[route.eligibility]);
+  const ineligible = ELIGIBILITY_REFUSAL[route.eligibility];
+  if (ineligible !== undefined) return refused(ineligible);
   if (input.contactId !== undefined && route.contact_id !== null && route.contact_id !== input.contactId) {
     return refused('route_missing');
   }

@@ -336,28 +336,35 @@ describe('CRM commands', () => {
 
   // --------------------------------------------------------------- routes
   describe('routes', () => {
-    it('adds a weak route as a candidate and only a verified one as usable', async () => {
+    it('adds a phone number usable on entry, with the evidence the CHECK asks for, and a failed one as invalid', async () => {
       await inRolledBackTransaction(assignee, async context => {
-        const weak = await addPhoneRoute(context, {
+        // Wave 2 (S4.4): no confirm step, whatever the source said about its confidence.
+        const entered = await addPhoneRoute(context, {
           firmId: crm.alpha.firmId,
           e164: '+14015550155',
           source: 'research_provider',
           associationConfidence: 0.4,
         });
-        expect(weak).toMatchObject({ ok: true });
-        if (!weak.ok) return;
-        expect(weak.value.eligibility).toBe('candidate');
-
-        const verified = await verifyRoute(context, {
-          routeKind: 'phone',
-          routeId: weak.value.id,
-          technicalValidation: 'passed',
-          associationConfidence: 0.95,
+        expect(entered).toMatchObject({ ok: true });
+        if (!entered.ok) return;
+        expect(entered.value).toMatchObject({
+          eligibility: 'usable',
+          technical_validation: 'passed',
+          eligibility_policy_version: 'phone-on-entry.1',
         });
-        expect(verified).toMatchObject({ ok: true });
-        if (!verified.ok) return;
-        expect(verified.value.eligibility).toBe('usable');
-        expect(verified.value.version).toBe(weak.value.version + 1);
+        expect(Number(entered.value.association_confidence)).toBe(0.4);
+
+        const bare = await addPhoneRoute(context, { firmId: crm.alpha.firmId, e164: '+14015550156', source: 'import' });
+        expect(bare.ok && [bare.value.eligibility, Number(bare.value.association_confidence)]).toEqual(['usable', 1]);
+
+        // A test that says the line is dead still wins: a failure is a new retrieval.
+        const failed = await verifyRoute(context, {
+          routeKind: 'phone',
+          routeId: entered.value.id,
+          technicalValidation: 'failed',
+        });
+        expect(failed.ok && failed.value.eligibility).toBe('invalid');
+        expect(failed.ok && failed.value.version).toBe(entered.value.version + 1);
       });
     });
 
