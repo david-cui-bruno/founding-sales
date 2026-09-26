@@ -19,6 +19,6 @@
 # therefore the loud "Attempted to load application default credentials" refusal
 # at provider configuration, never a quiet apply as some other identity.
 provider "google" {
-  project = var.gcp_project_id
-  region  = var.gcp_region
+  project = local.gcp_project_id
+  region  = local.gcp_region
 }
