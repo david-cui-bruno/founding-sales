@@ -144,7 +144,6 @@ module "secrets" {
   source = "../secrets"
 
   name_prefix          = var.name_prefix
-  secret_names         = var.secret_names
   recovery_window_days = var.destroyable ? 0 : 30
   tags                 = local.tags
 }

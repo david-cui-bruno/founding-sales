@@ -324,27 +324,6 @@ variable "api_hostname" {
 # Secrets, journal, alerts, updates
 # ---------------------------------------------------------------------------
 
-variable "secret_names" {
-  description = <<-EOT
-    Logical names of the Secrets Manager entries, each created empty.
-
-    The last two are the database identities (G12h). They are not optional:
-    `infra/modules/secrets` refuses a list without them, because the cluster's
-    execution-role boundary is drawn along them and a caller who dropped one
-    would otherwise get an index error four modules away.
-  EOT
-  type        = list(string)
-  default = [
-    "google-oidc-client",
-    "google-gmail-oauth-client",
-    "session-signing-key",
-    "device-credential-pepper",
-    "llm-classifier-api-key",
-    "migration-database",
-    "app-runtime-database",
-  ]
-}
-
 variable "journal_object_lock_mode" {
   description = "GOVERNANCE or COMPLIANCE for the suppression journal."
   type        = string
