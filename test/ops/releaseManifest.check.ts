@@ -11,7 +11,7 @@ import { registryStubs } from './support/cliStubs.ts';
  * Lane g74, audit O09: one release manifest per green full rehearsal, binding the
  * checkout, the run, both image digests and where they came from, the desktop stamp and
  * version, the release record — and, after the operator's deploy, what production runs.
- * And O17's other half: production gets those digests by a copy, never a rebuild.
+ * (Promotion by digest is run in `images.check.ts`.)
  *
  * ## The vacuous-pass traps, named
  *
@@ -27,11 +27,6 @@ import { registryStubs } from './support/cliStubs.ts';
  * it: the record the dry run writes still parses, and the manifest carries its reference
  * rather than new fields in it.
  *
- * **A copy that trusts itself.** `release-promote.sh` is run against a stubbed ECR in
- * which the copy changes the digest; it must fail naming both. With a faithful copy it
- * must succeed, never write to a rehearsal repository, and do nothing the second time. A
- * mutation removes the read-back and requires this file to go red.
- *
  * **A deployment nobody compared.** `release-manifest.sh deployed` is run against stubbed
  * ECS answers in which production runs the manifest's digests, and one in which the
  * worker runs another; the second must write nothing.
@@ -39,8 +34,6 @@ import { registryStubs } from './support/cliStubs.ts';
 
 const MANIFEST = repositoryPath('infra/scripts/release-manifest.sh');
 const RECORD = repositoryPath('infra/scripts/rehearsal-release-record.sh');
-const PROMOTE = repositoryPath('infra/scripts/release-promote.sh');
-const IMAGES = repositoryPath('infra/scripts/release-images.sh');
 
 const digest = (letter: string): string => `sha256:${letter.repeat(64)}`;
 
@@ -316,207 +309,4 @@ describe('after the deploy, the manifest records what production runs, or nothin
     }
     expect(aws.calls()).toHaveLength(0);
   });
-});
-
-// ---------------------------------------------------------------------------
-// promote
-// ---------------------------------------------------------------------------
-
-function registry(extra: Readonly<Record<string, unknown>> = {}): Readonly<Record<string, unknown>> {
-  return {
-    repositories: {
-      'fss-rh-api': { digests: [digest('a')], tags: {} },
-      'fss-rh-worker': { digests: [digest('b')], tags: {} },
-      'fss-prod-api': { digests: [], tags: {} },
-      'fss-prod-worker': { digests: [], tags: {} },
-    },
-    ...extra,
-  };
-}
-
-function digestsFile(commit: string, api = digest('a'), worker = digest('b')): string {
-  const directory = mkdtempSync(join(tmpdir(), 'fss-promote-input-'));
-  const out = join(directory, 'image-digests.json');
-  const result = run(IMAGES, ['record', commit, '55', '1', api, worker, out]);
-  expect(result.code, result.stderr).toBe(0);
-  return out;
-}
-
-function promote(
-  input: string,
-  args: readonly string[],
-  state: Readonly<Record<string, unknown>>,
-): { readonly code: number; readonly stdout: string; readonly stderr: string; readonly aws: ReturnType<typeof registryStubs>['aws']; readonly docker: ReturnType<typeof registryStubs>['docker'] } {
-  const { aws, docker } = registryStubs(state);
-  const result = run(PROMOTE, [input, ...args], { FSS_REHEARSAL_AWS_COMMAND: aws.command, FSS_DOCKER_COMMAND: docker.command });
-  return { ...result, aws, docker };
-}
-
-describe('production gets the rehearsed digests by a copy, never a rebuild (O17)', () => {
-  const commit = 'ab'.repeat(20);
-  const tag = `ci-${commit}`;
-
-  it('copies both digests into production and reads each back', () => {
-    const result = promote(digestsFile(commit), ['--app-only'], registry());
-    expect(result.code, result.stderr).toBe(0);
-    const repositories = result.docker.state()['repositories'] as Record<string, { tags: Record<string, string> }>;
-    expect(repositories['fss-prod-api']?.tags[tag]).toBe(digest('a'));
-    expect(repositories['fss-prod-worker']?.tags[tag]).toBe(digest('b'));
-    // Never a write to a rehearsal repository, never a build, never a push by tag.
-    const docker = result.docker.calls().map(call => call.args.join(' '));
-    expect(docker.filter(call => call.startsWith('buildx imagetools create'))).toEqual([
-      `buildx imagetools create --tag 123456789012.dkr.ecr.us-east-1.amazonaws.com/fss-prod-api:${tag} --prefer-index=false 123456789012.dkr.ecr.us-east-1.amazonaws.com/fss-rh-api@${digest('a')}`,
-      `buildx imagetools create --tag 123456789012.dkr.ecr.us-east-1.amazonaws.com/fss-prod-worker:${tag} --prefer-index=false 123456789012.dkr.ecr.us-east-1.amazonaws.com/fss-rh-worker@${digest('b')}`,
-    ]);
-    expect(docker.some(call => /\bbuild\b|\bpush\b/u.test(call.replace('buildx imagetools', '')))).toBe(false);
-    // The login password went through stdin, not an argument.
-    expect(result.docker.calls().find(call => call.args[0] === 'login')?.stdin).toContain('not-a-real-password');
-    for (const call of result.aws.calls()) expect(call.args.join(' ')).not.toContain('put-image');
-  });
-
-  it('fails, naming both, when the copy changed the digest and the image itself is not in production', () => {
-    const result = promote(digestsFile(commit), ['--app-only'], registry({ copyChangesDigest: true }));
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain('the digest changed in the copy');
-    expect(result.stderr).toContain(`${digest('a')} itself is not in fss-prod-api`);
-    expect(result.aws.calls().some(call => call.args.includes('put-image'))).toBe(false);
-  });
-
-  // Lane g86. CI's publish job pushes a bare OCI image manifest, and buildx's default
-  // for one source is to wrap it in a new index, so the tag named another digest and the
-  // promotion of e220f468 was refused on 25 September.
-  const PUT = (calls: readonly { readonly args: readonly string[] }[]) => calls.filter(call => call.args[1] === 'put-image');
-  const option = (args: readonly string[], flag: string): string | undefined => args[args.indexOf(flag) + 1];
-
-  it('copies a bare manifest as itself, so the tag names the digest that passed', () => {
-    const result = promote(digestsFile(commit), ['--app-only'], registry({ realisticBuildx: true }));
-    expect(result.code, result.stderr).toBe(0);
-    const repositories = result.docker.state()['repositories'] as Record<string, { tags: Record<string, string> }>;
-    expect(repositories['fss-prod-api']?.tags).toEqual({ [tag]: digest('a') });
-    expect(repositories['fss-prod-worker']?.tags).toEqual({ [tag]: digest('b') });
-    expect(result.stdout).toContain(`api fss-prod-api ${digest('a')} copied`);
-    expect(PUT(result.aws.calls())).toEqual([]);
-  });
-
-  it('tags the image itself when the copy wraps it in an index, and says which tag', () => {
-    const manifest = '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{},"layers":[]}';
-    const state = registry({ wraps: true });
-    const repositories = state['repositories'] as Record<string, Record<string, unknown>>;
-    for (const name of ['fss-prod-api', 'fss-prod-worker']) repositories[name] = { ...repositories[name], manifests: { [digest('a')]: manifest, [digest('b')]: manifest } };
-    const result = promote(digestsFile(commit), ['--app-only'], state);
-    expect(result.code, result.stderr).toBe(0);
-    const after = result.docker.state()['repositories'] as Record<string, { tags: Record<string, string> }>;
-    // The release's tag is the wrapper's now; the image itself carries `<tag>-image`.
-    expect(after['fss-prod-api']?.tags).toEqual({ [tag]: digest('e'), [`${tag}-image`]: digest('a') });
-    expect(after['fss-prod-worker']?.tags).toEqual({ [tag]: digest('e'), [`${tag}-image`]: digest('b') });
-    expect(result.stdout).toContain(`api fss-prod-api ${digest('a')} copied-and-tagged ${tag}-image`);
-    const puts = PUT(result.aws.calls());
-    expect(puts.map(call => option(call.args, '--repository-name'))).toEqual(['fss-prod-api', 'fss-prod-worker']);
-    expect(puts.map(call => option(call.args, '--image-digest'))).toEqual([digest('a'), digest('b')]);
-    for (const call of puts) {
-      expect(option(call.args, '--image-manifest-media-type')).toBe('application/vnd.oci.image.manifest.v1+json');
-      // The manifest as ECR returned it, byte for byte, so the digest cannot move.
-      expect((call as { readonly files?: Readonly<Record<string, string>> }).files?.['--image-manifest']).toBe(manifest);
-    }
-    const reads = result.aws.calls().filter(call => call.args[1] === 'batch-get-image');
-    expect(reads.map(call => option(call.args, '--repository-name'))).toEqual(['fss-prod-api', 'fss-prod-worker']);
-    expect(reads.every(call => option(call.args, '--accepted-media-types') === 'application/vnd.oci.image.manifest.v1+json')).toBe(true);
-  });
-
-  it('tags an image an earlier wrapping copy left in production untagged, and copies nothing', () => {
-    const state = registry({
-      repositories: {
-        'fss-rh-api': { digests: [digest('a')], tags: {} },
-        'fss-rh-worker': { digests: [digest('b')], tags: {} },
-        'fss-prod-api': { digests: [digest('a'), digest('e')], tags: { [tag]: digest('e') } },
-        'fss-prod-worker': { digests: [digest('b')], tags: { [tag]: digest('b') } },
-      },
-    });
-    const result = promote(digestsFile(commit), ['--app-only'], state);
-    expect(result.code, result.stderr).toBe(0);
-    expect(result.docker.calls().filter(call => call.args[0] === 'buildx')).toHaveLength(0);
-    expect(result.stdout).toContain(`api fss-prod-api ${digest('a')} tagged-in-place ${tag}-image`);
-    expect(result.stdout).toContain(`worker fss-prod-worker ${digest('b')} already-present`);
-    const after = result.docker.state()['repositories'] as Record<string, { tags: Record<string, string> }>;
-    expect(after['fss-prod-api']?.tags[`${tag}-image`]).toBe(digest('a'));
-  });
-
-  it('refuses to tag the image in place when both tags it may use name other images', () => {
-    const state = registry({
-      repositories: {
-        'fss-rh-api': { digests: [digest('a')], tags: {} },
-        'fss-rh-worker': { digests: [digest('b')], tags: {} },
-        'fss-prod-api': { digests: [digest('a'), digest('e'), digest('c')], tags: { [tag]: digest('e'), [`${tag}-image`]: digest('c') } },
-        'fss-prod-worker': { digests: [], tags: {} },
-      },
-    });
-    const result = promote(digestsFile(commit), ['--app-only'], state);
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain('has no free tag');
-    expect(PUT(result.aws.calls())).toEqual([]);
-  });
-
-  it('does nothing the second time', () => {
-    const state = registry({
-      repositories: {
-        'fss-rh-api': { digests: [digest('a')], tags: {} },
-        'fss-rh-worker': { digests: [digest('b')], tags: {} },
-        'fss-prod-api': { digests: [digest('a')], tags: { [tag]: digest('a') } },
-        'fss-prod-worker': { digests: [digest('b')], tags: { [tag]: digest('b') } },
-      },
-    });
-    const result = promote(digestsFile(commit), ['--app-only'], state);
-    expect(result.code, result.stderr).toBe(0);
-    expect(result.stdout).toContain('already-present');
-    expect(result.docker.calls().filter(call => call.args[0] === 'buildx')).toHaveLength(0);
-  });
-
-  it('refuses a digest the rehearsal repository does not hold, and a tag that names another image', () => {
-    const missing = promote(digestsFile(commit, digest('c')), ['--app-only'], registry());
-    expect(missing.code).not.toBe(0);
-    expect(missing.stderr).toContain('fss-rh-api has no image');
-    const taken = registry({
-      repositories: {
-        'fss-rh-api': { digests: [digest('a')], tags: {} },
-        'fss-rh-worker': { digests: [digest('b')], tags: {} },
-        'fss-prod-api': { digests: [digest('e')], tags: { [tag]: digest('e') } },
-        'fss-prod-worker': { digests: [], tags: {} },
-      },
-    });
-    const result = promote(digestsFile(commit), ['--app-only'], taken);
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain('tags are immutable');
-    expect(result.docker.calls().filter(call => call.args[0] === 'buildx')).toHaveLength(0);
-  });
-
-  it('refuses CI digests without --app-only, and --app-only with a rehearsed manifest', () => {
-    const unrehearsed = promote(digestsFile(commit), [], registry());
-    expect(unrehearsed.code).not.toBe(0);
-    expect(unrehearsed.stderr).toContain('no full rehearsal has passed with them');
-    expect(unrehearsed.aws.calls()).toHaveLength(0);
-
-    const { repository, docs } = history();
-    const { reports, record } = releaseRecord(docs);
-    const manifest = join(reports, 'release-manifest.json');
-    expect(write(record, manifest, docs, [], repository).code).toBe(0);
-    expect(promote(manifest, ['--app-only'], registry()).code).not.toBe(0);
-    // A dispatched run's images carry no ci- tag, so the operator names one.
-    expect(promote(manifest, [], registry()).stderr).toContain('name one with --tag');
-    const named = promote(manifest, ['--tag', 'release-2026-09-27'], registry());
-    expect(named.code, named.stderr).toBe(0);
-  });
-
-  it('refuses an input that is neither file, a mutable tag, and one image under both names', () => {
-    const directory = mkdtempSync(join(tmpdir(), 'fss-promote-bad-'));
-    const other = join(directory, 'other.json');
-    writeFileSync(other, JSON.stringify({ schema: 'fss.release-record.v1' }));
-    expect(promote(other, ['--app-only'], registry()).code).not.toBe(0);
-    const tagged = join(directory, 'tagged.json');
-    writeFileSync(tagged, readFileSync(digestsFile(commit), 'utf8').replace(digest('a'), 'fss-rh-api:latest'));
-    expect(promote(tagged, ['--app-only'], registry()).code).not.toBe(0);
-    const same = join(directory, 'same.json');
-    writeFileSync(same, readFileSync(digestsFile(commit), 'utf8').replace(digest('b'), digest('a')));
-    expect(promote(same, ['--app-only'], registry()).code).not.toBe(0);
-  });
-
 });
