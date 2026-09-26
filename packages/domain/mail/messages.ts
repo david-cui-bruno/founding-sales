@@ -69,6 +69,11 @@ function toMessage(row: MessageDbRow): MailMessageRow {
   };
 }
 
+/** `mail_messages_recipients_bounded`: at most this many To and this many Cc addresses. */
+const MAIL_RECIPIENTS_PER_HEADER_LIMIT = 200;
+/** The references, labels and attachment references bounds of migration 0009. */
+const MAIL_LIST_LIMIT = 100;
+
 /** Everything the allowlisted headers say, normalized, before a row exists. */
 export interface NormalizedMetadata {
   readonly providerMessageId: string;
@@ -99,6 +104,11 @@ export interface NormalizedMetadata {
  * message, and refusing it would lose a reply. The address headers are the opposite —
  * an address that does not normalize is dropped, because a half-read address is worse
  * than a missing one for matching.
+ *
+ * Every list is cut to the bound `mail_messages` holds it to (migration 0009's
+ * `*_bounded` CHECKs), for the same reason as the subject: a mail merge to 250
+ * addresses is a real message, and a CHECK violation would fail the whole sync page it
+ * arrived on. A recipient past the 200th is not matched on; the first 200 are.
  */
 export function normalizeMetadata(metadata: GmailMessageMetadata): NormalizedMetadata {
   const headers = metadata.headers;
@@ -113,15 +123,15 @@ export function normalizeMetadata(metadata: GmailMessageMetadata): NormalizedMet
     direction: directionOfLabels(metadata.labelIds),
     internalDate: new Date(metadata.internalDateEpochMilliseconds).toISOString(),
     headerFrom: normalizeAddress(headerValue(headers, 'From')),
-    headerTo: normalizeAddressList(headerValue(headers, 'To')),
-    headerCc: normalizeAddressList(headerValue(headers, 'Cc')),
+    headerTo: normalizeAddressList(headerValue(headers, 'To')).slice(0, MAIL_RECIPIENTS_PER_HEADER_LIMIT),
+    headerCc: normalizeAddressList(headerValue(headers, 'Cc')).slice(0, MAIL_RECIPIENTS_PER_HEADER_LIMIT),
     subject: subject === undefined ? null : subject.slice(0, 998),
-    referenceMessageIds: allReferences.slice(0, 100),
+    referenceMessageIds: allReferences.slice(0, MAIL_LIST_LIMIT),
     inReplyTo,
     autoSubmitted: headerValue(headers, 'Auto-Submitted')?.slice(0, 200) ?? null,
     listId: headerValue(headers, 'List-Id')?.slice(0, 200) ?? null,
-    labelIds: metadata.labelIds.slice(0, 100),
-    attachments: metadata.attachments,
+    labelIds: metadata.labelIds.slice(0, MAIL_LIST_LIMIT),
+    attachments: metadata.attachments.slice(0, MAIL_LIST_LIMIT),
   };
 }
 

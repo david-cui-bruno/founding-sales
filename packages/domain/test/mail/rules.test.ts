@@ -233,6 +233,31 @@ describe('header normalization', () => {
     expect(normalized.direction).toBe('incoming');
   });
 
+  it('cuts To, Cc and the attachment list to what mail_messages holds, so no CHECK can fail a sync page', () => {
+    const addresses = (prefix: string, count: number): string =>
+      Array.from({ length: count }, (_unused, index) => `${prefix}${String(index)}@example.test`).join(', ');
+    const normalized = normalizeMetadata({
+      id: 'm3',
+      threadId: 't3',
+      internalDateEpochMilliseconds: Date.parse('2026-09-10T14:00:00Z'),
+      labelIds: ['INBOX'],
+      headers: { From: 'sender@example.test', To: addresses('to', 250), Cc: addresses('cc', 201) },
+      attachments: Array.from({ length: 120 }, (_unused, index) => ({
+        filename: `file-${String(index)}.pdf`,
+        mimeType: 'application/pdf',
+        sizeBytes: 10,
+        attachmentId: `a${String(index)}`,
+      })),
+      sizeEstimate: 10,
+    });
+    // mail_messages_recipients_bounded and mail_messages_attachments_are_array.
+    expect(normalized.headerTo).toHaveLength(200);
+    expect(normalized.headerTo[0]).toBe('to0@example.test');
+    expect(normalized.headerTo.at(-1)).toBe('to199@example.test');
+    expect(normalized.headerCc).toHaveLength(200);
+    expect(normalized.attachments).toHaveLength(100);
+  });
+
   it('reads the direction from the SENT label rather than from the addresses', () => {
     const outgoing = normalizeMetadata({
       id: 'm2',
