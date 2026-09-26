@@ -343,7 +343,7 @@ terraform apply rehearsal.tfplan
 
 `name_prefix` must be `fss-rh-<run>`, 3 to 18 characters after the prefix. The root refuses `fss-prod` and anything starting with it, and refuses a deployment role outside `fss-rh-`.
 
-Run the Appendix G scenarios and `docs/greenfield/restore-drill.md` here. Then tear the run down:
+Run the Appendix G scenarios here. Then tear the run down:
 
 ```bash
 terraform destroy -var="assume_deployment_role=false" -var="name_prefix=fss-rh-${RUN_ID}" ...same vars...
