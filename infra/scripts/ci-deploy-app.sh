@@ -149,8 +149,8 @@
 # read, and the offline check drives the whole script against a stub CLI instead.
 
 CI_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=infra/scripts/release-common.sh
-source "$CI_SCRIPTS/release-common.sh"
+# shellcheck source=infra/scripts/lib.sh
+source "$CI_SCRIPTS/lib.sh"
 
 CI_PREFIX="$RELEASE_PRODUCTION_PREFIX"
 CI_ENVIRONMENT=production
@@ -559,29 +559,9 @@ if [ "$SUBCOMMAND" = record ]; then
 
   # 1. The record: GitHub only, from the gate run that was green on the images commit.
   RECORD_REFERENCE="ci-gate-${GATE_RUN_ID}-${COMMIT:0:12}"
-  "$CI_SCRIPTS/release-record-from-ci.sh" "$GATE_RUN_ID" "$COMMIT" "$API_DIGEST" "$WORKER_DIGEST" \
+  "$CI_SCRIPTS/record.sh" from-ci "$GATE_RUN_ID" "$COMMIT" "$API_DIGEST" "$WORKER_DIGEST" \
     --out "$CI_WORK/release-record.json" \
-    || ci_fail "release-record-from-ci.sh wrote no record for gate run $GATE_RUN_ID; its FAIL line above says why"
-  # As `release-deploy.sh --release-record` hands it to the task: standard base64, and
-  # only a record that is this deploy's.
-  RECORD_BASE64="$(FSS_RECORD="$CI_WORK/release-record.json" FSS_REFERENCE="$RECORD_REFERENCE" \
-    FSS_API="$API_DIGEST" FSS_WORKER="$WORKER_DIGEST" python3 -c '
-import base64, json, os, sys
-env = os.environ
-raw = open(env["FSS_RECORD"], "rb").read()
-record = json.loads(raw)
-artifacts = record.get("artifacts") or {}
-if record.get("schema") != "fss.release-record.v1" or record.get("source") != "ci-gate":
-    sys.exit("the record is not an fss.release-record.v1 from the CI gate")
-if record.get("releaseGateReference") != env["FSS_REFERENCE"]:
-    sys.exit("the record names {}, not {}".format(record.get("releaseGateReference"), env["FSS_REFERENCE"]))
-if artifacts.get("api") != env["FSS_API"] or artifacts.get("worker") != env["FSS_WORKER"]:
-    sys.exit("the record names other digests than the ones deployed")
-encoded = base64.b64encode(raw).decode("ascii")
-if len(encoded) > 6000:
-    sys.exit("the record is too large to hand to a one-off task as an argument")
-sys.stdout.write(encoded)
-')" || ci_fail "the record release-record-from-ci.sh wrote is not this deploy's"
+    || ci_fail "record.sh from-ci wrote no record for gate run $GATE_RUN_ID; its FAIL line above says why"
   rehearsal_log "release record $RECORD_REFERENCE built from gate run $GATE_RUN_ID (api $API_DIGEST, worker $WORKER_DIGEST)"
 
   # 2. The operations definition as ECS holds it — the family's newest ACTIVE revision,
@@ -635,7 +615,7 @@ PY
   [ "$DATABASE_HOST" != "-" ] || DATABASE_HOST=''
   rehearsal_log "the put runs $OPERATIONS_REVISION (${CI_PREFIX}-worker@$OPERATIONS_DIGEST, the image of the last apply); the record it stores names worker $WORKER_DIGEST"
 
-  # 3. The put, as release-deploy.sh runs it. The network is the one the repository
+  # 3. The put (lib.sh release_record_put, as record.sh runs it). The network is the one the repository
   # variables name; the worker group's zero inbound rules are what the production root's
   # isolation test holds it to.
   NETWORK_PLAN="$(FSS_SUBNETS="$TASK_SUBNETS" FSS_GROUP="$TASK_SECURITY_GROUP" python3 -c '
@@ -644,41 +624,10 @@ json.dump({"subnet_ids": os.environ["FSS_SUBNETS"].split(","), "security_group_i
            "assign_public_ip": "ENABLED", "inbound_rule_count": 0}, sys.stdout)
 ')"
   export FSS_REHEARSAL_REPORTS="${FSS_REHEARSAL_REPORTS:-$CI_WORK/reports}"
-  rehearsal_log "fss admin release-record put --json-base64 \"\$RECORD_BASE64\" on the operations task (the record $RECORD_REFERENCE)"
-  release_run_task \
-    --step release-record-put \
-    --environment "$CI_ENVIRONMENT" \
-    --prefix "$CI_PREFIX" \
-    --account "$ACCOUNT" \
-    --region "$REGION" \
-    --cluster "$CLUSTER_ARN" \
-    --task-definition "$OPERATIONS_REVISION" \
-    --container operations \
-    --network-plan "$NETWORK_PLAN" \
-    --image-digest "$OPERATIONS_DIGEST" \
-    --database-host "$DATABASE_HOST" \
-    --secret-arn "$RUNTIME_SECRET_ARN" \
-    --log-group "$OPERATIONS_LOG_GROUP" \
-    --log-stream-prefix operations \
-    --capture "$CI_WORK/release-record-put.log" \
-    -- admin release-record put --json-base64 "$RECORD_BASE64" --report /tmp/fss-release-record.json \
-    || ci_fail "the operations task did not put the release record $RECORD_REFERENCE"
-  release_captured_report "$CI_WORK/release-record-put.log" "$CI_WORK/release-record-put.json" \
-    || ci_fail "the put's answer could not be read from the operations task's log"
-  RECORD_OUTCOME="$(FSS_FILE="$CI_WORK/release-record-put.json" FSS_REFERENCE="$RECORD_REFERENCE" \
-    FSS_API="$API_DIGEST" FSS_WORKER="$WORKER_DIGEST" python3 -c '
-import json, os, sys
-env = os.environ
-answer = json.load(open(env["FSS_FILE"], encoding="utf-8")) or {}
-if answer.get("outcome") not in ("created", "existing"):
-    sys.exit("the put answered {} ({}): {}".format(answer.get("outcome"), answer.get("reason"), answer.get("detail")))
-expected = {"reference": env["FSS_REFERENCE"], "source": "ci-gate", "suite": "pass",
-            "apiDigest": env["FSS_API"], "workerDigest": env["FSS_WORKER"]}
-different = [key for key, value in expected.items() if answer.get(key) != value]
-if different:
-    sys.exit("the stored record differs from the one put in {}".format(", ".join(different)))
-print(answer["outcome"])
-')" || ci_fail "the operations task did not store the release record $RECORD_REFERENCE as it was put"
+  release_record_put release-record-put "$CI_WORK/release-record.json" "$CI_ENVIRONMENT" "$CI_PREFIX" "$ACCOUNT" "$REGION" \
+    "$CLUSTER_ARN" "$OPERATIONS_REVISION" "$OPERATIONS_DIGEST" "$NETWORK_PLAN" "$DATABASE_HOST" "$RUNTIME_SECRET_ARN" \
+    "$OPERATIONS_LOG_GROUP" || exit 1
+  RECORD_OUTCOME=$RELEASE_RECORD_OUTCOME
   if [ "$RECORD_STAGE" = after ] && [ "$RECORD_OUTCOME" != existing ]; then
     ci_fail "the read-back had to create the release record $RECORD_REFERENCE: it was not stored before the rollout, which the deploy job's put should have done. It is stored now."
   fi
