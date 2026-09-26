@@ -723,15 +723,12 @@ describe('Appendix G 39: the dry run reads the plan it printed, so the rehearsal
     const environment = {
       FSS_REHEARSAL_DRY_RUN: '1',
       FSS_REHEARSAL_REPORTS: reports,
-      FSS_CARRY_WATERMARK: '2026-09-21T00:00:00Z',
-      FSS_CARRY_SOURCE_TABLE: 'rehearsal-old-table',
     };
     const steps: readonly (readonly [string, readonly string[]])[] = [
       ['infra/scripts/rehearsal-caller-identity.sh', ['fss-rh-deploy']],
       [GUARD, ['fss-rh-dryrun', 'before']],
       ['infra/scripts/rehearsal-schema-ranges.sh', ['fss-rh-dryrun']],
       ['infra/scripts/rehearsal-restore-drill.sh', ['fss-rh-dryrun']],
-      ['infra/scripts/rehearsal-carry-watermark.sh', ['fss-rh-dryrun']],
       ['infra/scripts/rehearsal-teardown.sh', ['fss-rh-dryrun']],
       [GUARD, ['fss-rh-dryrun', 'after']],
     ];

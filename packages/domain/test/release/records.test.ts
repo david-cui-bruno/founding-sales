@@ -144,12 +144,12 @@ describe('storing a release record', () => {
   });
 
   it('refuses a rehearsal record without its drill evidence, and a ci-gate record that claims some', async () => {
-    const { carryDrill: _carryDrill, ...undrilled } = fixtureReleaseRecord('fss-rh-fixture-undrilled');
+    const { rehearsalScenarios: _rehearsalScenarios, ...undrilled } = fixtureReleaseRecord('fss-rh-fixture-undrilled');
     const refused = await putReleaseRecord({ db: database.session }, undrilled);
     expect(refused).toMatchObject({ ok: false, reason: 'release_record_invalid' });
-    if (!refused.ok) expect(refused.detail).toContain('carryDrill');
+    if (!refused.ok) expect(refused.detail).toContain('rehearsalScenarios');
 
-    const claiming = { ...fixtureCiGateRecord('41000000005'), carryDrill: 'ran' };
+    const claiming = { ...fixtureCiGateRecord('41000000005'), rehearsalPrefix: 'fss-rh-fixture' };
     expect(await putReleaseRecord({ db: database.session }, claiming)).toMatchObject({
       ok: false,
       reason: 'release_record_invalid',

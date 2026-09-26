@@ -86,7 +86,6 @@ function releaseRecord(stamp: string, api = digest('a'), worker = digest('b')): 
   for (const report of ['restore-drill.txt', 'schema-ranges.txt', 'prefix-guard.txt']) {
     writeFileSync(join(reports, report), 'prefix=fss-rh-case\n');
   }
-  writeFileSync(join(reports, 'carry-watermark.txt'), 'carry_drill=skipped_no_watermark\n');
   const record = join(reports, 'release-record.json');
   const result = run(RECORD, ['fss-rh-case', api, worker, stamp, 'pass', record], {
     FSS_REHEARSAL_REPORTS: reports,

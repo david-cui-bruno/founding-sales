@@ -176,7 +176,6 @@ print(json.dumps({
         "rehearsalPrefix": record.get("rehearsalPrefix"),
         "recordedAt": record.get("recordedAt"),
         "suite": record.get("suite"),
-        "carryDrill": record.get("carryDrill"),
     },
     "checkout": {"commit": checkout},
     "run": {

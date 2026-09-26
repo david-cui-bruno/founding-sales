@@ -131,7 +131,7 @@ describe('Appendix G 42: sending stays off until all four agree', () => {
     });
 
     it('refuses a record for a rehearsal whose drills left no report', () => {
-      for (const report of ['restore-drill.txt', 'carry-watermark.txt', 'schema-ranges.txt', 'prefix-guard.txt']) {
+      for (const report of ['restore-drill.txt', 'schema-ranges.txt', 'prefix-guard.txt']) {
         expect(script).toContain(report);
       }
     });
@@ -406,7 +406,6 @@ describe('Appendix G 42: the inventory exemption did not become a general one', 
     for (const report of ['restore-drill.txt', 'schema-ranges.txt', 'prefix-guard.txt']) {
       writeFileSync(join(reports, report), 'prefix=fss-rh-case\n');
     }
-    writeFileSync(join(reports, 'carry-watermark.txt'), 'carry_drill=skipped_no_watermark\n');
     const out = join(reports, 'release-record.json');
     const result = spawnSync(repositoryPath(record), [...args, out], {
       encoding: 'utf8',
@@ -477,7 +476,6 @@ describe('Appendix G 42: the attestation is bound to the release record (lane g7
     for (const report of ['restore-drill.txt', 'schema-ranges.txt', 'prefix-guard.txt']) {
       writeFileSync(join(reports, report), 'prefix=fss-rh-contract result=pass');
     }
-    writeFileSync(join(reports, 'carry-watermark.txt'), 'prefix=fss-rh-contract carry_drill=skipped_no_watermark');
     const out = join(reports, 'release-record.json');
     const result = spawnSync(
       repositoryPath('infra/scripts/rehearsal-release-record.sh'),

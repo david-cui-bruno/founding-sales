@@ -52,7 +52,6 @@ function recordOf(row: Row): unknown {
     recordedAt: '2026-09-25T07:20:44Z',
     suite: row.suite,
     artifacts: { api: row.api, worker: row.worker, desktopCommitStamp: row.stamp },
-    carryDrill: 'skipped_no_watermark',
     rehearsalScenarios: {},
     enablesSending: row.enablesSending,
   };
