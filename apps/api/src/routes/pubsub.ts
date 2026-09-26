@@ -7,12 +7,13 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 /**
  * The Gmail Pub/Sub webhook (specification 4.1, 12.3, Appendix G 10 and 27).
  *
- * One exact path, and it is `/integrations/gmail/push` because that is what
- * `infra/modules/stack/variables.tf` sets `gmail_push_path` to — and, crucially, the
- * same string is the OIDC *audience* the subscription mints its token for. The path
- * and the audience are one fact; changing one without the other produces a webhook
- * that refuses every notification with `audience_mismatch`, which is the right
- * failure but a confusing one.
+ * One exact path, and it is `/integrations/gmail/push` because that is the tail of
+ * the endpoint `infra/roots/production-google` pushes to (`local.push_endpoint`) and
+ * of the audience `infra/roots/production` derives (`local.push_audience`) — and,
+ * crucially, those two are the same string, which is the OIDC *audience* the
+ * subscription mints its token for. The path and the audience are one fact; changing
+ * one without the other produces a webhook that refuses every notification with
+ * `audience_mismatch`, which is the right failure but a confusing one.
  *
  * The endpoint takes no session, and the push token is its authentication. So it is
  * the one route in this API where the refusal codes are a security surface rather

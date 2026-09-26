@@ -126,18 +126,21 @@ What a commit does:
 * **removes** `mail_reply_confirmations` (first, because they reference callbacks),
   the firm's `mail_messages` and everything cascading from them, `dial_tickets`,
   `call_logs`, `callbacks`, `today_snoozes`, `today_items`, `phone_routes`,
-  `email_addresses`, `research_suggestions`, `evidence_items`,
-  `enrollment_linkedin_results` (written by nothing since LinkedIn was removed on 25
-  September 2026), `record_aliases` and `firm_locations`;
+  `email_addresses`, `evidence_items` and `record_aliases`. Three tables left this list
+  with the schema rather than with the code: `enrollment_linkedin_results`, dropped by
+  migration 0018, and `research_suggestions` and `firm_locations`, dropped by 0019 with
+  the rest of research;
 * **stops** live `sequence_enrollments` with 11.2's `admin_stop` and cancels
   unexecuted `step_executions` — nothing is removed or blanked; what changes is that
   no worker will act on the plan again;
 * **redacts** `contacts` and, for a firm deletion, `firms` — the name becomes
   `[deleted]` and the identifying fields become null — and the subject and body of
   any unsent fence;
-* **retains** `opportunities`, `opportunity_stage_events`, `record_merge_events`,
-  `crm_domain_events`, `audit_events`, `suppression_events` and the executed step
-  history 11.1 requires preserved;
+* **retains** `opportunities`, `opportunity_stage_events`, `crm_domain_events`,
+  `audit_events`, `suppression_events` and the executed step history 11.1 requires
+  preserved. `record_merge_events` was dropped by migration 0019; every stored row was
+  copied into `audit_events` as `record_merge.archived` first, so the history it held is
+  retained where the audit trail is;
 * **inserts** one handle-scoped suppression tombstone per removed handle, and a
   firm-scoped one for a firm deletion, each journalled before its row, each with
   source `deletion_tombstone`;

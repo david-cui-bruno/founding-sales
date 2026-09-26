@@ -10,21 +10,21 @@ Region assumed throughout: `us-east-1`, the account the repository already names
 
 - **Pricing dimension** is the unit AWS or Google actually bills. That is the number to look up.
 - **Quantity** is what the production root provisions at its current defaults.
-- **Variable** is the input in `infra/roots/production/variables.tf` that changes the quantity.
+- **Where it is set** is what a change to the quantity edits. Since wave 1 the production root takes only eight variables — `assume_deployment_role`, the two images, the two schema ranges, `active_database_host`, `journal_administrative_principal_arns` and `bootstrap` — so almost everything below is a literal in a root or a module, and changing it is a pull request and a read plan, not a `-var`.
 - **Rehearsal** is what the rehearsal root does with the same line. Rehearsal environments are created and destroyed by CI, so their cost is hours-per-run, not hours-per-month.
 
 ## 2. Compute and database
 
-| Line item | Pricing dimension | Quantity (production default) | Variable | Rehearsal |
+| Line item | Pricing dimension | Quantity (production default) | Where it is set | Rehearsal |
 |---|---|---|---|---|
-| RDS PostgreSQL 16 instance | Instance-hour for the class, **doubled by Multi-AZ** | 1 × `db.t4g.small`, Multi-AZ, 730 h/month | `database_instance_class` | 1 × `db.t4g.small`, single-AZ by default (`database_multi_az`), run duration only |
-| RDS storage | GB-month of gp3, **doubled by Multi-AZ** | 50 GiB provisioned, autoscaling to 200 GiB | `database_allocated_storage`, `database_max_allocated_storage` | 20 GiB, no autoscaling |
+| RDS PostgreSQL 16 instance | Instance-hour for the class, **doubled by Multi-AZ** | 1 × `db.t4g.small`, Multi-AZ, 730 h/month | `instance_class` on `infra/modules/database`; `infra/modules/stack` passes the literal `db.t4g.small` | 1 × `db.t4g.small`, single-AZ by default (`database_multi_az`), run duration only |
+| RDS storage | GB-month of gp3, **doubled by Multi-AZ** | 50 GiB provisioned, autoscaling to 200 GiB | `database_allocated_storage`, `database_max_allocated_storage` on `infra/modules/stack`, literals in the production root | 20 GiB, no autoscaling |
 | RDS provisioned IOPS / throughput | Only billed above the gp3 baseline | none above baseline at 50 GiB | n/a | none |
 | RDS backup storage | GB-month of backup **beyond** the provisioned storage size | 35-day retention over a 50 GiB instance | fixed at 35 in the production root | 1 day |
 | RDS Performance Insights | vCPU-month beyond the 7-day free retention | off; no switch (deleted in wave 2) | n/a | off |
 | RDS Enhanced Monitoring | CloudWatch Logs ingestion per metric sample | off; no switch (deleted in wave 2) | n/a | off |
-| Fargate API tasks | vCPU-hour + GB-hour, per task, per architecture | 2 tasks × 0.5 vCPU × 1 GiB × 730 h | `api_desired_count`, `api_cpu`, `api_memory`, `cpu_architecture` | 1 task × 0.5 vCPU × 1 GiB |
-| Fargate worker tasks | vCPU-hour + GB-hour | 1 task × 0.5 vCPU × 1 GiB × 730 h | `worker_desired_count`, `worker_cpu`, `worker_memory` | 1 task × 0.5 vCPU × 1 GiB |
+| Fargate API tasks | vCPU-hour + GB-hour, per task, per architecture | 2 tasks × 0.5 vCPU × 1 GiB × 730 h | `api_desired_count` on the stack module, the literal `2` in the production root; cpu, memory and `cpu_architecture = "ARM64"` are literals on every task definition in `infra/modules/cluster` | 1 task × 0.5 vCPU × 1 GiB |
+| Fargate worker tasks | vCPU-hour + GB-hour | 1 task × 0.5 vCPU × 1 GiB × 730 h | literals in `infra/modules/cluster`: `worker_declared_desired_count = 1`, and the same cpu, memory and architecture as the API | 1 task × 0.5 vCPU × 1 GiB |
 | Fargate ephemeral storage | GB-month above the free 20 GiB per task | none above free | n/a | none |
 | ECS cluster | No charge for the cluster itself | 1 | n/a | 1 |
 | ECS Container Insights | Per custom metric and per log ingested | **disabled**, a literal on the cluster | n/a | disabled |
@@ -32,18 +32,18 @@ Region assumed throughout: `us-east-1`, the account the repository already names
 Cost levers worth David's attention, in order of size:
 
 1. **Multi-AZ doubles both the instance and its storage.** It is not optional in production: spec section 2 and the invariant that PostgreSQL is authoritative both require it. Rehearsal is single-AZ by default since wave 2 (26 September 2026); a run may still pass `database_multi_az = true`.
-2. **`cpu_architecture = "ARM64"`** is a materially cheaper Fargate rate for the same vCPU and memory, and it is what both roots run (David, 20 September 2026): CI builds `linux/arm64` images only.
-3. **`api_desired_count = 2`** is for rolling deployment without a gap, not for load. One salesperson does not need two tasks for throughput. Dropping to 1 halves the API compute and means a deployment has a brief window with no API; the Electron cache covers a brief outage by design (spec 4.2).
+2. **`cpu_architecture = "ARM64"`** is a materially cheaper Fargate rate for the same vCPU and memory, and it is what every task definition in `infra/modules/cluster` declares (David, 20 September 2026): CI builds `linux/arm64` images only. It is no longer an input, so there is nothing to pass and nothing to get wrong.
+3. **`api_desired_count = 2`**, the literal the production root passes, is for rolling deployment without a gap, not for load. One salesperson does not need two tasks for throughput. Dropping to 1 halves the API compute and means a deployment has a brief window with no API; the Electron cache covers a brief outage by design (spec 4.2).
 
 **Database connections** are not billed but are bounded by the instance class: each API task holds at most 9 (a request pool of 8 plus its heartbeat, lane g75) and the worker `FSS_WORKER_CONCURRENCY + 2` (3 by default), so even a rolling API deployment at 200 % peaks near 36 + 3 plus a few one-off operations connections, far below a `db.t4g.small`'s default `max_connections` of roughly 200 — the arithmetic is in `docs/archive/decisions/g75-one-connection-per-request.md`.
 
 ## 3. Network and edge
 
-| Line item | Pricing dimension | Quantity | Variable | Rehearsal |
+| Line item | Pricing dimension | Quantity | Where it is set | Rehearsal |
 |---|---|---|---|---|
 | Application Load Balancer | ALB-hour | 1 × 730 h | n/a | 1, run duration |
 | ALB capacity | LCU-hour, the maximum of new connections, active connections, processed bytes and rule evaluations | expected to sit at the 1-LCU floor for one salesperson | n/a | 1-LCU floor |
-| Public IPv4 addresses | Address-hour, charged per public IPv4 in use | ALB (2 subnets) + one per running task; 2 + 3 = 5 addresses at the default counts | falls with `api_desired_count`, `worker_desired_count` | 2 + 2 |
+| Public IPv4 addresses | Address-hour, charged per public IPv4 in use | ALB (2 subnets) + one per running task; 2 + 3 = 5 addresses at the default counts | falls with the two counts above: `api_desired_count`, `worker_desired_count` | 2 + 2 |
 | NAT gateway | **Not used.** Gateway-hour and GB-processed | 0 | — | 0 |
 | VPC interface endpoints | **Not used.** Endpoint-hour per AZ and GB-processed | 0 | — | 0 |
 | Data transfer out to internet | GB out | Gmail and Google API traffic; small | n/a | small |
@@ -54,21 +54,21 @@ The no-NAT choice is the largest single saving in the network. A NAT gateway wou
 
 ## 4. Storage, keys and secrets
 
-| Line item | Pricing dimension | Quantity | Variable | Rehearsal |
+| Line item | Pricing dimension | Quantity | Where it is set | Rehearsal |
 |---|---|---|---|---|
 | S3 suppression journal | GB-month + PUT/GET requests + object-lock has no separate charge | one small JSON object per suppression event, versioned, retained years | `journal_object_lock_retention_days` | 1-day lock, destroyed with the run |
-| S3 ALB access logs | GB-month + PUT requests + lifecycle transitions | one log file per 5 minutes per node, expired at 365 days | `access_log_retention_days` (module) | expired fast, bucket force-destroyed |
+| S3 ALB access logs | GB-month + PUT requests + lifecycle transitions | one log file per 5 minutes per node, expired at 365 days | a 365-day `expiration` rule on the access-log bucket in `infra/modules/edge`, a literal | expired fast, bucket force-destroyed |
 | S3 Electron packages | GB-month + GET requests | a handful of signed builds, superseded versions expired at 365 days | module default | not built (production only since wave 2) |
-| CloudFront | Per GB out to the internet, per 10,000 requests, per price class | `PriceClass_100` | `updates_price_class` | not built (production only since wave 2) |
+| CloudFront | Per GB out to the internet, per 10,000 requests, per price class | `PriceClass_100` | the literal `PriceClass_100` in `infra/modules/updates` | not built (production only since wave 2) |
 | ECR | GB-month of stored images + data transfer | 2 repositories, 30 images retained each, untagged expired at 7 days | module defaults | same, force-deletable |
 | KMS customer keys | Key-month per key + per 10,000 requests | **6 keys**: database, secrets, envelope, journal, logs, alerts | n/a | 6 keys, the same 30-day deletion window |
-| Secrets Manager | Per secret-month + per 10,000 API calls | 7 entries created empty (5 application, 2 database identities) + 1 RDS-managed master user secret = 8 | `secret_names` | 8, zero-day recovery window |
+| Secrets Manager | Per secret-month + per 10,000 API calls | 7 entries created empty (5 application, 2 database identities) + 1 RDS-managed master user secret = 8 | `local.secret_names` in `infra/modules/secrets`, a list of seven names | 8, zero-day recovery window |
 
 Six customer keys is a deliberate choice, not an accident. Spec 4.1 wants the envelope key for refresh tokens separate from application secrets, and separating the journal key from the log key means an operator who can read logs still cannot decrypt suppression history. If David wants the line smaller, the honest consolidation is logs + alerts onto one key; the database, envelope and journal keys should stay separate.
 
 ## 5. Observability and alerting
 
-| Line item | Pricing dimension | Quantity | Variable | Rehearsal |
+| Line item | Pricing dimension | Quantity | Where it is set | Rehearsal |
 |---|---|---|---|---|
 | CloudWatch Logs ingestion | GB ingested | API + worker structured logs, bodies and secrets excluded | application behaviour | small |
 | CloudWatch Logs storage | GB-month archived | 90-day retention | `log_retention_days` (stack) | 7 days |
@@ -82,9 +82,9 @@ Email delivery through SNS is why "connected mailbox disconnected for 48 hours" 
 
 ## 6. Google Cloud
 
-| Line item | Pricing dimension | Quantity | Variable |
+| Line item | Pricing dimension | Quantity | Where it is set |
 |---|---|---|---|
-| Pub/Sub | GB of message throughput, with a monthly free allotment | one small notification per Gmail change; an address and a history id, never business state | `enable_gmail_push` |
+| Pub/Sub | GB of message throughput, with a monthly free allotment | one small notification per Gmail change; an address and a history id, never business state | `infra/roots/production-google`, which owns the four objects outright; `enable_gmail_push` is gone |
 | Pub/Sub push delivery | Included in throughput | one subscription | n/a |
 | Service account, IAM | No charge | 1 service account, 1 topic IAM binding | n/a |
 
@@ -138,16 +138,16 @@ Gmail push objects and nothing else, and its state key is
 lock table. The quantities and pricing dimensions in section 6 are unchanged. Only the
 root that manages them, and the variable column, changed:
 
-| Line item | Root | Variable |
+| Line item | Root | Where it is set |
 |---|---|---|
-| Pub/Sub topic `fss-prod-gmail-push` | `production-google` | none; `name_prefix` is fixed at `fss-prod`, the project is `gcp_project_id` (default `callie-fss`) |
-| Pub/Sub push subscription `fss-prod-gmail-push` | `production-google` | `api_hostname` and `gmail_push_path` build its endpoint and audience |
+| Pub/Sub topic `fss-prod-gmail-push` | `production-google` | nothing: `local.name_prefix` is `fss-prod` and `local.gcp_project_id` is `callie-fss`, both literals in that root |
+| Pub/Sub push subscription `fss-prod-gmail-push` | `production-google` | `local.push_endpoint`, the literal `https://api.usecallie.com/integrations/gmail/push`, which is both the endpoint and the audience; `infra/roots/production` builds the same string from its own `api_hostname` literal, so the two roots agree |
 | Service account `fss-prod-gmail-push`, 1 topic IAM binding | `production-google` | none |
 
 `enable_gmail_push` is gone. The `production` root declares no Google provider and
 creates nothing in Google Cloud. It carries the topic id and the push service account as
-the committed defaults of `gmail_push_topic` and `gmail_push_service_account`, so an
-ordinary production plan needs no Google login (audit O01). The Google root is planned
+literals in its own `locals`, so an ordinary production plan needs no Google login
+(audit O01). The Google root is planned
 only when one of its objects changes, with application-default credentials. The root
 list is now:
 

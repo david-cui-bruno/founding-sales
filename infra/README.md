@@ -27,7 +27,8 @@ infra/
     rehearsal-registry  the two durable rehearsal ECR repositories, applied once, ever
   policies/
     deployment-role-policy.json.tftpl   one template, rendered for fss-rh-deploy and fss-prod-deploy
-    terraform-resource-actions.json     every resource "aws_*" type in this tree and the actions it needs
+    terraform-resource-actions.json     the fifteen AWS services this tree creates resources in, and the
+                                        Deny statements that narrow each deployment role in each of them
   scripts/
     offline-gate.sh                     the same checks CI runs, runnable by hand with no credentials
     policy.sh                           the deployment roles' policy: render (no call), check (read-only

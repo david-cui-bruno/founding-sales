@@ -172,11 +172,13 @@ scheme handler.
 
 The map is now derived from one declaration per window, `BUNDLE_WINDOWS` in
 `apps/desktop/src/main/bundleScheme.ts`, which the esbuild loop and the copy loop in
-`scripts/bundle.ts` read as well. A packaged build therefore serves Today, Replies,
-the firm workspace, the sequence editor and administration, and adding a window is
-one line rather than three lists to keep equal. `bundleScheme.test.ts` asserts that
-every declared page and script resolves and that each page's script tag matches the
-entry its window declares. See `docs/archive/decisions/g9-bundle-scheme-map.md`.
+`scripts/bundle.ts` read as well. Since wave 1 there is **one window**, so the list holds
+one entry — `index.html` and `renderer` — and Today, Replies, Firms, Sequences,
+Administration and the Dashboard are views inside it rather than windows of their own.
+The derivation is kept because it is what makes a declared page reachable by
+construction. `bundleScheme.test.ts` asserts that every declared page and script resolves
+and that each page's script tag matches the entry its window declares. See
+`docs/archive/decisions/g9-bundle-scheme-map.md`.
 
 That derivation makes "a declared window is in the map" true by construction, and it
 cannot say anything about a *bundle*. So `verify:desktop:package` opens the asar and
@@ -289,9 +291,10 @@ That is exactly the request every Mac makes.
 
 The zip first. A manifest naming an object that is not there yet is a manifest every
 Mac refuses — safe, but it looks like an outage. The bucket keeps superseded versions
-for a year (`noncurrent_version_expiration_days`), so an earlier compatible build is
-still reachable if one is needed; the Mac will not install it, because a downgrade is
-refused, but a person can.
+for a year (`noncurrent_version_expiration` on the `expire-superseded-packages` rule in
+`infra/modules/updates/main.tf`, a literal 365 and not an input), so an earlier compatible
+build is still reachable if one is needed; the Mac will not install it, because a
+downgrade is refused, but a person can.
 
 ## Installing on a Mac
 

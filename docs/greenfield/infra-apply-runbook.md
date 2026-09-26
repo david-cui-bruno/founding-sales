@@ -175,7 +175,7 @@ The provider block in `infra/roots/production-google/providers.tf` names only `p
 
 ### 1.4 The secret values
 
-Terraform creates six **empty** Secrets Manager entries. It never holds a value and it never generates one. After the first apply (step 3.3), put the values in with the CLI. These are the entries and what goes in each:
+Terraform creates five **empty** Secrets Manager application entries, and two more for the database identities (3.3). It never holds a value and it never generates one. After the first apply (step 3.3), put the values in with the CLI. These are the entries and what goes in each:
 
 | Entry | Content |
 |---|---|
@@ -184,9 +184,8 @@ Terraform creates six **empty** Secrets Manager entries. It never holds a value 
 | `fss-prod/session-signing-key` | signing material for access sessions |
 | `fss-prod/device-credential-pepper` | server-side pepper for the device credential hash |
 | `fss-prod/llm-classifier-api-key` | reply-classifier provider key |
-| `fss-prod/research-provider-credentials` | nothing: the research feature was deleted on 26 September 2026 and nothing reads it; the empty entry goes with a later infrastructure release |
 
-Nothing else goes in either Google entry. The Pub/Sub topic and the Workspace domain are public identifiers and travel in the task environment (`FSS_GMAIL_PUSH_TOPIC`, `FSS_GOOGLE_HOSTED_DOMAIN`), set by the apply from `module.pubsub` and the `google_hosted_domain` root variable; see `docs/greenfield/release.md` 1.6.
+Nothing else goes in either Google entry. The Pub/Sub topic and the Workspace domain are public identifiers and travel in the task environment (`FSS_GMAIL_PUSH_TOPIC`, `FSS_GOOGLE_HOSTED_DOMAIN`). Neither is an input any more: the topic is the `gmail_push_topic` literal in `infra/roots/production`, which `infra/roots/production-google` owns and outputs, and the domain is the `google_hosted_domain` literal `usecallie.com` in `infra/modules/stack`. See [`docs/archive/release-first.md`](../archive/release-first.md) 1.6.
 
 The RDS master password is **not** in that list. `manage_master_user_password` hands generation, storage and rotation to RDS, which writes it to its own Secrets Manager secret encrypted with the same customer key. Terraform never sees it and it never appears in state.
 
@@ -409,7 +408,7 @@ It runs the migration as a task inside the VPC because there is no other way: th
 
 `assume_deployment_role` is not in that list and must not be: its default is `true`, so the provider assumes `fss-prod-deploy` for you, which is the whole point of a local apply. The flag exists for a session that has *already* assumed its role, which is CI and never you (section 1.1). Passing `false` here would apply as your own admin principal rather than as the scoped deployment role, and nothing in the plan would say so.
 
-`google_hosted_domain` defaults to `usecallie.com` and needs no `-var`; pass one only if the Workspace domain changes. An empty value is refused by variable validation at the root and again in the stack module, because an empty `hd` restriction admits every Google account there is.
+`google_hosted_domain` is not a variable at all since wave 1: `infra/modules/stack` sets it to the literal `usecallie.com`, and `-var="google_hosted_domain=…"` is now an "undeclared variable" error. Changing the Workspace domain is a pull request that edits that literal and a read plan. It may never be empty: an empty `hd` restriction admits every Google account there is.
 
 Read the plan before applying it. Specifically confirm:
 
@@ -431,7 +430,7 @@ aws secretsmanager put-secret-value --secret-id fss-prod/google-oidc-client --se
 
 Use `file:///dev/stdin` rather than `--secret-string '<value>'` so the value never reaches shell history or the process table.
 
-**Two of the eight entries are database identities, and they come first — before 3.2a, because the migration task cannot start without them.**
+**Two of the seven entries are database identities, and they come first — before 3.2a, because the migration task cannot start without them.**
 
 | Entry | What goes in it | Who reads it |
 |---|---|---|

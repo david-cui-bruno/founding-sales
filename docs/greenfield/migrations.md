@@ -41,15 +41,15 @@ stopped using it.
 Both services declare the range of schema versions they accept, in
 `packages/domain/db/schemaRange.ts`:
 
-* `API_SCHEMA_RANGE` and `WORKER_SCHEMA_RANGE` — what this source tree accepts.
-* `PREVIOUS_RELEASE_SCHEMA_RANGE` — what the release before this one declared.
+* `API_SCHEMA_RANGE` and `WORKER_SCHEMA_RANGE` — what this source tree accepts. Both are
+  `{REQUIRED_SCHEMA, REQUIRED_SCHEMA}`, so a release moves the schema by changing
+  `REQUIRED_SCHEMA` and nothing else in that file.
+* `PREVIOUS_RELEASE_SCHEMA_RANGE` — `{1, REQUIRED_SCHEMA}`, the overlap *input* of the
+  rehearsal's `rehearsal.sh ranges` step (Appendix G 22). It is not what the previous
+  release's images accept: those declare the schema before this one and refuse this one.
 
-The deployment order is: widen the range, ship that release, then ship the migration.
-So `PREVIOUS_RELEASE_SCHEMA_RANGE.maximum` must already cover the version the next
-migration produces.
-
-Where the ranges do not overlap, and from migration 0006 every declared range is a
-strict `{N,N}`, there is no rolling path and the order is stop, apply, deploy:
+From migration 0006 every declared range is a strict `{N,N}`, so no two ranges overlap,
+there is never a rolling path across a migration, and the order is stop, apply, deploy:
 `infra/scripts/stop.sh` scales both services to zero **before** the apply that
 registers the new task definitions, the apply replaces them and starts nothing, and
 `infra/scripts/deploy.sh release --schema-change` refuses unless both are still at zero,
@@ -70,16 +70,19 @@ databases on a real PostgreSQL 16:
    rest of the way. This is the case that catches a migration which is only correct on
    an empty table.
 
-It then asserts that `PREVIOUS_RELEASE_SCHEMA_RANGE` still accepts the resulting
-version. That assertion is the gate: adding migration `NNNN` without having widened
-the previous release's range first fails the build.
+It then holds the two service ranges to `{CURRENT_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION}`
+and asserts that the previous release's images — the range `{previous, previous}` — accept
+the seeded database before the migration and refuse it after. That assertion is the gate:
+adding migration `NNNN` without raising `REQUIRED_SCHEMA` fails the build, and so does
+raising it without the migration.
 
 ## Adding a migration: the checklist
 
 1. Write `NNNN_description.sql`. Additive only.
-2. If a service needs the new shape, raise `CURRENT_SCHEMA_VERSION` and both service
-   ranges — and confirm `PREVIOUS_RELEASE_SCHEMA_RANGE` was widened one release ago.
-3. Add a failing-insert case in `test/db/constraints.test.ts` for **every** new
+2. If a service needs the new shape, raise `REQUIRED_SCHEMA` in
+   `packages/domain/db/schemaRange.ts`. Every range in that file derives from it, so
+   there is nothing else to change there.
+3. Add a failing-insert case in `packages/domain/test/db/constraints.test.ts` for **every** new
    constraint. The coverage test at the bottom of that file asks the catalog for the
    enforced set and fails when one has no case, so this is not optional.
 4. Grant privileges explicitly. `GRANT … ON ALL TABLES` in migration 0001 covers only

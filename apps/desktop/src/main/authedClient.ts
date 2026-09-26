@@ -105,7 +105,7 @@ export function createAuthedClient(options: AuthedClientOptions): AuthedClient {
         ...payload,
       });
       if (!answer.ok) return answer;
-      // Every command answers `{ status, replayed, result | reason }` (crmSupport).
+      // Every command answers `{ status, replayed, result | reason }` (routeSupport).
       // A refusal arrives with status 409 and is caught above; this is the accepted
       // shape, and a body that is not it is `unreadable_answer` rather than a guess.
       const envelope = answer.value as { status?: unknown; result?: unknown };

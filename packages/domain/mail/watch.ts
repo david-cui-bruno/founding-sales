@@ -245,8 +245,8 @@ export async function listWatchesDue(db: Queryable, nowIso: string): Promise<rea
  * The hours until the soonest watch expiry, across every connected mailbox, or null
  * when there is nothing to watch.
  *
- * This is `GmailWatchHoursToExpiry` (13.3), and the alarm in
- * `infra/modules/alerts/main.tf` fires below `var.gmail_watch_expiry_hours`. A
+ * This is `GmailWatchHoursToExpiry` (13.3), and the `gmail_watch_expiring` alarm in
+ * `infra/modules/alerts/main.tf` fires below its literal threshold of 48 hours. A
  * mailbox that is connected and has *no* watch at all reports zero rather than
  * nothing: no watch is the state the alarm most needs to fire on, and "no data" is
  * treated as not breaching.

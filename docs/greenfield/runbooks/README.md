@@ -26,8 +26,9 @@ General facts that apply to every page:
   with the time it entered that state; then every state change of the last 24 hours,
   oldest first, as alarm name, from → to, and the time in New York. A day on which
   nothing was wrong and nothing changed is one line: `All N alarms OK.` The page to open
-  is the one named after the alarm; a composite in the list,
-  `<prefix>-critical-<condition>`, names its condition.
+  is the one named after the alarm; the two composites, `<prefix>-critical` and
+  `<prefix>-warning`, name no condition of their own, so read the metric alarms beside
+  them in the same list.
 - The digest is SNS email on the alert topic, which does not depend on any salesperson
   Gmail grant, and reaches the addresses in `alert_emails`. It is published by the
   Lambda function `<prefix>-alarm-digest`, which logs to `/fss/<prefix>/alarm-digest`
@@ -40,11 +41,12 @@ General facts that apply to every page:
   or without the flags, `aws cloudwatch describe-alarms --state-value ALARM`, which
   reads the metric alarms of every environment in the account. One alarm's day:
   `aws cloudwatch describe-alarm-history --alarm-name <name> --history-item-type StateUpdate`.
-- The alarms keep their names and their state; only the e-mails went. `<prefix>-critical`
-  is in `ALARM` while any critical condition is, `<prefix>-warning` while any warning
-  is, and each critical condition has a composite of its own that changes state when it
-  trips even while another is open (lane g81), so the digest shows a second incident as
-  a transition of its own.
+- The alarms keep their names and their state; only the e-mails went. There are exactly
+  two composites: `<prefix>-critical`, in `ALARM` while any critical condition is, and
+  `<prefix>-warning`, in `ALARM` while any warning is. Between them they name every metric
+  alarm exactly once. The thirteen per-condition composites of lane g81 went in wave 2
+  (26 September 2026): with no action on any alarm they only repeated, in the digest, a
+  metric alarm's own state, so a second incident shows as that alarm's own transition.
 - Every alarm reads its own environment's CloudWatch namespace, `FSS/<prefix>`:
   `FSS/fss-prod` in production, `FSS/fss-rh-<run>` in a rehearsal. To read a metric
   by hand, name it: `aws cloudwatch get-metric-statistics --namespace FSS/fss-prod
@@ -57,4 +59,6 @@ General facts that apply to every page:
   morning's digest like every other alarm.
 - `GET /diagnostics` is the one read that shows schema version, client-version range,
   job health, heartbeats, mailbox health and open alerts together.
+- `docs/greenfield/runbooks/operate.md` is the operating runbook: what runs where, how a
+  release happens, and what a red rehearsal guard means.
 - Nothing here authorises editing `infra/`. Threshold changes are a release.
