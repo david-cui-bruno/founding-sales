@@ -108,6 +108,11 @@ run "no_name_production_claims_can_be_a_rehearsal_name" {
     error_message = "No name production claims may fall inside a rehearsal namespace."
   }
 
+  # Wave 2: the desktop update channel is production's alone.
+  assert {
+    condition     = length([for name in output.resource_names : name if startswith(name, "fss-prod-updates-")]) == 1
+    error_message = "Production builds the update channel's package bucket, and its distribution with it."
+  }
 }
 
 # g42, lane g55. Production's metrics, metric filters and alarms live in

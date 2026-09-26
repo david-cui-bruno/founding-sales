@@ -327,14 +327,26 @@ module "alerts" {
   tags = local.tags
 }
 
+# The desktop update channel: production only (wave 2, 26 September 2026). A
+# rehearsal publishes no Electron package, and its CloudFront distribution was
+# the slowest thing every run created, disabled and deleted.
 module "updates" {
   source = "../updates"
+  count  = local.is_production ? 1 : 0
 
   name_prefix    = var.name_prefix
   aws_account_id = var.aws_account_id
   price_class    = var.updates_price_class
   force_destroy  = var.destroyable
   tags           = local.tags
+}
+
+# Production state holds the module at its un-counted address. The move is a
+# state operation inside the plan: every updates resource shows as moved to
+# `module.updates[0]`, and nothing is created, changed or destroyed.
+moved {
+  from = module.updates
+  to   = module.updates[0]
 }
 
 # There is no `module "pubsub"` here any more.

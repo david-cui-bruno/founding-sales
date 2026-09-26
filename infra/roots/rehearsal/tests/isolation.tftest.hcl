@@ -110,6 +110,14 @@ run "no_name_this_run_claims_can_be_a_production_name" {
     error_message = "No name this run claims may fall inside the production namespace."
   }
 
+  # Wave 2: a rehearsal publishes no Electron package, so it builds no update
+  # channel: no package bucket and no CloudFront distribution.
+  assert {
+    condition = (length([for name in output.resource_names : name if strcontains(name, "-updates-")]) == 0
+    && module.stack.updates_distribution_domain_name == null)
+    error_message = "A rehearsal builds neither the updates bucket nor its CloudFront distribution."
+  }
+
 }
 
 # The per-run root creates no ECR repository.
@@ -254,8 +262,8 @@ run "the_topology_answers_are_the_rehearsal_defaults_at_one_plus_one" {
   }
 
   assert {
-    condition     = module.stack.database_shape.multi_az
-    error_message = "Multi-AZ, because Appendix E step 1 restores a Multi-AZ instance in production and that is the step the run is timed by."
+    condition     = module.stack.database_shape.multi_az == false
+    error_message = "Single-AZ by default: a rehearsal needs a database, not a standby (wave 2)."
   }
 
   assert {
@@ -381,21 +389,20 @@ run "an_architecture_that_is_not_one_of_the_two_is_refused" {
   expect_failures = [var.cpu_architecture]
 }
 
-run "rehearsal_may_be_small_and_single_az" {
+run "rehearsal_may_still_ask_for_multi_az" {
   command = plan
 
-  # The default is Multi-AZ (the run above), because the restore drill is the
-  # expensive step and it must restore what production would. Single-AZ stays
-  # *available* for a run investigating something else, and this asserts the
-  # capability rather than the default: production has a stack precondition
-  # refusing single-AZ, and rehearsal deliberately does not.
+  # The default is single-AZ (the run above). Multi-AZ stays available for a run
+  # that times the restore drill against what production would restore; this
+  # asserts the capability rather than the default. Production's stack
+  # precondition refuses single-AZ, and rehearsal deliberately has none.
   variables {
-    database_multi_az = false
+    database_multi_az = true
   }
 
   assert {
-    condition     = module.stack.database_shape.multi_az == false
-    error_message = "A rehearsal run may still ask for single-AZ; only production refuses it."
+    condition     = module.stack.database_shape.multi_az
+    error_message = "A rehearsal run may still ask for Multi-AZ."
   }
 
   assert {
