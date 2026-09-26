@@ -295,8 +295,10 @@ fss schema-version                                 the applied version and both 
 fss verify [--actor <name>] [--note <text>]        version, configured parts, and a rolled-back write
 fss admin database-users ensure [--runtime-secret <VARIABLE>] [--rotate-password]
 fss admin holds list [--reason|--exclude-reason <code>]
+fss admin holds release-restore --admin-user <uuid> --note <text> [--hold <id>]
 fss admin suppression-journal replay --from <instant> [--to <instant>]
-fss admin mailbox reconcile-sent --since <instant> --all-mailboxes | --mailbox <id>
+fss admin mailbox list                             every mailbox, its address and status (read-only)
+fss admin mailbox reconcile-sent --since <instant> --inventory <address>[,<address>...] [--hold-unattached]
 fss admin workspace bootstrap --slug <slug> ...    the first workspace and its admin
 fss admin schema-preflight 0019                    the one-off check before migration 0019
 fss admin release-record put --json <file> | --json-base64 <value>
@@ -314,15 +316,38 @@ read-only check passes against a user who has lost `INSERT`, a full volume and a
 replica, and each of those is a deployment that looks ready and is not.
 
 **`fss admin mailbox reconcile-sent`** (lane W3-S8) is the Sent-folder step of the
-restore runbook, run with both services stopped against the restored copy. It reconciles
-the fences left dispatching, lists each mailbox's Sent folder from `--since` (the restore
-point less ten minutes) and answers each FSS message with `recoverSentFolderMessage`
-(`packages/domain/restore/missingFences.ts`): present, marked sent, tombstoned, unmatched
-or unattached. Its Gmail client is `readOnlyGmail` (`tools/fss/readOnlyGmail.ts`), which
-forwards the token refresh, the listings, the `rfc822msgid:` search and metadata reads and
-refuses a send, a watch, a code exchange, a revocation and a body read, so it runs under
-`FSS_DEPENDENCIES=live` against real mailboxes. It refuses to finish (exit 20, the report
-printed) while a mailbox's folder was not read to the end or a send is unattached.
+restore runbook, run with both services stopped against the restored copy.
+- **Which mailboxes.** The operator's `--inventory`: every address that could have sent
+  since the restore point, taken with `fss admin mailbox list` from the instance being
+  replaced. It is never only the copy's own list, which cannot know a mailbox connected
+  after the restore point. An inventory address the copy has no mailbox for is
+  `mailbox_not_in_copy`. A connected mailbox the inventory leaves out is still read, and
+  is `mailbox_not_in_inventory`. A run that read no mailbox is refused as
+  `reconcile_no_coverage`.
+- **What it does.** It reconciles every fence left dispatching since `--since` (the
+  restore point less ten minutes), a page at a time and never capped. It then lists each
+  Sent folder and answers each FSS message with `recoverSentFolderMessage`
+  (`packages/domain/restore/missingFences.ts`): present, marked sent, tombstoned,
+  unmatched or unattached.
+- **Gmail.** Its client is `readOnlyGmail` (`tools/fss/readOnlyGmail.ts`). That client
+  forwards the token refresh, the listings, the `rfc822msgid:` search and metadata reads.
+  It refuses a send, a watch, a code exchange, a revocation and a body read. So the
+  command runs under `FSS_DEPENDENCIES=live` against real mailboxes.
+- **When it refuses to finish** (exit 20, the report printed):
+  - a folder was not read to the end (`grant_revoked`, `rate_limited`, `truncated`, or
+    `message_vanished` for a message deleted between the listing and its metadata read);
+  - a send is unattached. With `--hold-unattached`, each unattached send instead opens a
+    `restore_in_progress` hold on the firms it could belong to, or on the workspace when
+    it names none. The hold's source is `restore.unattached_send`, keyed by the message's
+    hash, so a rerun opens nothing twice;
+  - an inventory item is unresolved.
+
+**`fss admin holds release-restore`** (lane W3-S8) is the only thing that releases a
+`restore_in_progress` hold since the generation advance went. It needs an active admin
+of the hold's workspace (`--admin-user`) and a `--note`. It releases the open restore
+holds, or the one `--hold` names, through `releaseHold`, and writes one `audit_events`
+row (`hold.restore_released`) per hold in the same transaction. It never touches a hold
+of another reason.
 
 **`fss admin release-record put`** (lane g71) stores the `fss.release-record.v1` the
 CI gate wrote (`infra/scripts/record.sh from-ci`; lane W3-S8 deleted the rehearsal's), so an admin's `sending_enabled` attestation can name it. The API
@@ -388,7 +413,7 @@ otherwise would start a worker every time an operator asked it for a migration.
 | Task definition | Identity | Reads | Runs |
 |---|---|---|---|
 | `<prefix>-migration` | `<prefix>-migration-task` / `<prefix>-migration-exec` | `migration-database` as `MIGRATION_DATABASE_SECRET`, `app-runtime-database` as `FSS_RUNTIME_DATABASE_SECRET_ARN`. **No runtime connection at all** | `migrate`, `admin database-users ensure` |
-| `<prefix>-operations` | the worker task role / worker execution role | `app-runtime-database` as `DATABASE_SECRET_ARN`, plus the application secrets | `verify`, `schema-version`, `admin suppression-journal replay`, `admin mailbox reconcile-sent`, `admin release-record put` |
+| `<prefix>-operations` | the worker task role / worker execution role | `app-runtime-database` as `DATABASE_SECRET_ARN`, plus the application secrets | `verify`, `schema-version`, `admin suppression-journal replay`, `admin mailbox list`, `admin mailbox reconcile-sent`, `admin holds list`, `admin holds release-restore`, `admin release-record put` |
 
 Two rather than one, because of what each needs and what each must not have.
 `verify` runs as the *runtime* identity on purpose: the point of a post-deploy gate is
@@ -430,7 +455,7 @@ succeed because somebody had granted the application more than it needs. It also
 outright when the connected role *is* `app_runtime`, before `--allow-any-role` is read.
 
 **The dependency mode is fixed per command**, as data in `COMMAND_DEPENDENCIES`, not as
-whatever the environment happens to say: `holds list`, `workspace bootstrap`,
+whatever the environment happens to say: `holds list`, `holds release-restore`, `mailbox list`, `workspace bootstrap`,
 `release-record`, `schema-preflight 0019` and `database-users ensure` reach PostgreSQL and
 nothing else — no deployment is read, so they cannot reach Gmail, KMS or S3 in a fully
 configured production task; `suppression-journal replay` reaches the configured journal

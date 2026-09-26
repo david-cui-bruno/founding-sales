@@ -101,13 +101,20 @@ describe('the fss command line accepts every invocation the release scripts make
       ok: false,
       reason: 'flag_value_missing',
     });
-    expect(parseFssCommand(['admin', 'mailbox', 'reconcile-sent', '--all-mailboxes'])).toMatchObject({
+    // There is no --all-mailboxes (lane W3-S8 review): the copy's own mailboxes can miss one.
+    expect(parseFssCommand(['admin', 'mailbox', 'reconcile-sent', '--since', '2026-09-20T00:00:00Z', '--all-mailboxes'])).toMatchObject({
       ok: false,
-      reason: 'flag_missing',
+      reason: 'flag_unknown',
     });
     expect(parseFssCommand(['admin', 'mailbox', 'reconcile-sent', '--since', '2026-09-20T00:00:00Z'])).toMatchObject({
       ok: false,
-      reason: 'selection_missing',
+      reason: 'flag_missing',
+      detail: '--inventory',
+    });
+    expect(parseFssCommand(['admin', 'holds', 'release-restore', '--note', 'checked'])).toMatchObject({
+      ok: false,
+      reason: 'flag_missing',
+      detail: '--admin-user',
     });
   });
 
@@ -167,19 +174,69 @@ describe('the commands release-deploy.sh runs on the migration task definition',
   });
 });
 
-describe('the restore runbook’s commands (lane W3-S8)', () => {
-  it('accepts them as `docs/greenfield/runbooks/restore.md` spells them', () => {
-    for (const argv of [
-      ['schema-version'],
-      ['migrate'],
-      ['admin', 'database-users', 'ensure'],
-      ['admin', 'suppression-journal', 'replay', '--from', '2026-09-20T11:50:00Z'],
-      ['admin', 'mailbox', 'reconcile-sent', '--since', '2026-09-20T11:50:00Z', '--all-mailboxes'],
-      ['admin', 'mailbox', 'reconcile-sent', '--since', '2026-09-20T11:50:00Z', '--mailbox', '00000000-0000-4000-8000-000000000001'],
-      ['admin', 'holds', 'list'],
-      ['admin', 'release-record', 'show', '--reference', 'ci-gate-41000000001-cccccccccccc'],
-    ]) {
-      expect(parseFssCommand(argv), argv.join(' ')).toMatchObject({ ok: true });
+/**
+ * The restore runbook's commands (lane W3-S8), read from the runbook itself.
+ *
+ * They are the ones an operator types under the most pressure, so the runbook's text is
+ * the input, not a copy of it: every `fss_task <step> <kind> [options] -- <words>` in
+ * `docs/greenfield/runbooks/restore.md` is extracted and parsed, and a runbook that
+ * misspells a flag, or stops running one of the named commands, fails here.
+ */
+function runbookCommands(): readonly string[][] {
+  const text = readFileSync(fileURLToPath(new URL('../../../docs/greenfield/runbooks/restore.md', import.meta.url)), 'utf8')
+    .replaceAll('\\\n', ' ');
+  const found: string[][] = [];
+  // One line can run several (`fss_task migrate ... && fss_task users ...`), so each
+  // `fss_task` starts its own segment.
+  const segments = text.split('\n').flatMap(line => line.split('fss_task ').slice(1));
+  for (const segment of segments) {
+    const match = /^\S+\s+(?:migration|operations)\b.*?\s--\s(.+)$/u.exec(segment);
+    if (match === null) continue;
+    let tail = match[1] ?? '';
+    for (const boundary of [' && ', ' ; ', '; ', ' | ', ' >', ' #', '`']) {
+      const at = tail.indexOf(boundary);
+      if (at >= 0) tail = tail.slice(0, at);
     }
+    found.push(
+      tail
+        .split(/\s+/u)
+        .filter(word => word.length > 0)
+        .map(word => word.replaceAll('"', ''))
+        .map(word => (word.includes('$') || word.startsWith('<') ? 'placeholder-value' : word)),
+    );
+  }
+  return found;
+}
+
+describe('the restore runbook’s commands (lane W3-S8)', () => {
+  const commands = runbookCommands();
+
+  it('finds the runbook’s commands, and each one it must run', () => {
+    const names = commands.map(argv => {
+      const flagAt = argv.findIndex(word => word.startsWith('--'));
+      return (flagAt < 0 ? argv : argv.slice(0, flagAt)).join(' ');
+    });
+    for (const expected of [
+      'admin mailbox list',
+      'migrate',
+      'admin database-users ensure',
+      'schema-version',
+      'admin suppression-journal replay',
+      'admin mailbox reconcile-sent',
+      'admin holds list',
+      'admin holds release-restore',
+    ]) {
+      expect(names, `the runbook no longer runs fss ${expected}`).toContain(expected);
+    }
+  });
+
+  it.each(commands.map(argv => [argv.join(' '), argv] as const))('parses %s', (_text, argv) => {
+    expect(parseFssCommand(argv)).toMatchObject({ ok: true });
+  });
+
+  it('runs the reconciliation only with an inventory', () => {
+    const reconciles = commands.filter(argv => argv.join(' ').startsWith('admin mailbox reconcile-sent'));
+    expect(reconciles.length).toBeGreaterThanOrEqual(2);
+    for (const argv of reconciles) expect(argv).toContain('--inventory');
   });
 });
