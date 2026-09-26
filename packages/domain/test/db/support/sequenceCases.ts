@@ -17,9 +17,10 @@ const soon = (): string => new Date(Date.now() + 60 * 60 * 1000).toISOString();
 /**
  * A failing insert for every constraint migration 0012 adds, and for the five it adds
  * to `template_versions` (lane G8: sequences, versions, steps, enrollments, step
- * executions, the audited migration and the holiday calendar). Migration 0018 dropped
- * the LinkedIn results table and the three CHECKs over a step's LinkedIn message, and
- * replaced the vocabularies that admitted a LinkedIn value under the same names.
+ * executions and the holiday calendar). Migration 0018 dropped the LinkedIn results
+ * table and the three CHECKs over a step's LinkedIn message; 0019 dropped the audited
+ * migration's two tables and replaced the vocabularies that still admitted a LinkedIn
+ * marker under the same names.
  *
  * Same rules as `crmCases.ts`, `policyCases.ts` and `todayCases.ts`: their own file so
  * two lanes never edit the middle of one array, each case inside a transaction the
@@ -27,15 +28,9 @@ const soon = (): string => new Date(Date.now() + 60 * 60 * 1000).toISOString();
  * two is reported under whichever constraint PostgreSQL reaches first, and the case
  * would be testing the wrong promise.
  *
- * That last rule shaped the migration twice, and both are worth knowing about:
- *
- *   * `sequence_steps_delay_bounded` does not mention the unit, and a second
- *     constraint bounds business days, because a row with an unknown unit would
- *     otherwise break the bound as well as `delay_unit_known`;
- *   * `assert_sequence_step_version_is_draft` returns rather than raising when the
- *     parent version does not exist at all, so `sequence_steps_version_fkey` is the
- *     thing that refuses a step naming no version — a trigger that spoke first would
- *     hide the foreign key behind a `restrict_violation`.
+ * That last rule is why `sequence_steps_delay_bounded` does not mention the unit and a
+ * second constraint bounds business days: a row with an unknown unit would otherwise
+ * break the bound as well as `delay_unit_known`.
  *
  * The constraints fixture seeds workspaces and members but no CRM rows, so each case
  * builds the chain it needs. No real business name, address or number appears;
@@ -413,81 +408,6 @@ async function insertShift(
       overrides.shift ?? 86_400_000,
       overrides.reason ?? 'hold_union',
       overrides.union ?? null,
-    ],
-  );
-}
-
-async function makeMigration(f: SequenceCaseFixture, from: string, to: string): Promise<string> {
-  return await one(
-    f,
-    `INSERT INTO enrollment_migrations
-       (workspace_id, from_sequence_version_id, to_sequence_version_id, requested_by_user_id)
-     VALUES ($1, $2, $3, $4) RETURNING id`,
-    [workspace(f), from, to, admin(f)],
-  );
-}
-
-async function insertMigration(
-  f: SequenceCaseFixture,
-  from: string,
-  to: string,
-  overrides: {
-    readonly workspaceId?: string;
-    readonly id?: string;
-    readonly state?: string;
-    readonly requester?: string;
-    readonly approver?: string | null;
-    readonly approvedAt?: string | null;
-    readonly appliedAt?: string | null;
-  } = {},
-): Promise<unknown> {
-  return await f.session.query(
-    `INSERT INTO enrollment_migrations
-       (workspace_id, id, from_sequence_version_id, to_sequence_version_id, state,
-        requested_by_user_id, approved_by_user_id, approved_at, applied_at)
-     VALUES ($1, COALESCE($2::uuid, gen_random_uuid()), $3, $4, $5, $6, $7::uuid,
-             $8::timestamptz, $9::timestamptz)`,
-    [
-      overrides.workspaceId ?? workspace(f),
-      overrides.id ?? null,
-      from,
-      to,
-      overrides.state ?? 'proposed',
-      overrides.requester ?? admin(f),
-      overrides.approver ?? null,
-      overrides.approvedAt ?? null,
-      overrides.appliedAt ?? null,
-    ],
-  );
-}
-
-async function insertMigrationItem(
-  f: SequenceCaseFixture,
-  chain: Chain,
-  migrationId: string,
-  overrides: {
-    readonly id?: string;
-    readonly migrationId?: string;
-    readonly enrollmentId?: string;
-    readonly outcome?: string;
-    readonly refusalCode?: string | null;
-    readonly remapped?: number;
-  } = {},
-): Promise<unknown> {
-  return await f.session.query(
-    `INSERT INTO enrollment_migration_items
-       (workspace_id, id, migration_id, enrollment_id, firm_id, outcome, refusal_code,
-        executions_remapped)
-     VALUES ($1, COALESCE($2::uuid, gen_random_uuid()), $3, $4, $5, $6, $7, $8)`,
-    [
-      workspace(f),
-      overrides.id ?? null,
-      overrides.migrationId ?? migrationId,
-      overrides.enrollmentId ?? chain.enrollmentId,
-      chain.firmId,
-      overrides.outcome ?? 'selected',
-      overrides.refusalCode ?? null,
-      overrides.remapped ?? 0,
     ],
   );
 }
@@ -1311,181 +1231,6 @@ export const SEQUENCE_CONSTRAINT_CASES: readonly SequenceCase[] = [
         [workspace(f), chain.enrollmentId, chain.stepId, chain.firmId, chain.contactId],
       );
       return await insertShift(f, chain, executionId, { union: -1 });
-    },
-  },
-
-  // ------------------------------------------------------- enrollment_migrations
-  {
-    constraint: 'enrollment_migrations_workspace_id_fkey',
-    run: async f => {
-      const first = await makeVersion(f, await makeSequence(f, 'One'));
-      const second = await makeVersion(f, await makeSequence(f, 'Two'));
-      return await insertMigration(f, first, second, { workspaceId: MISSING });
-    },
-  },
-  {
-    constraint: 'enrollment_migrations_pkey',
-    run: async f => {
-      const first = await makeVersion(f, await makeSequence(f, 'One'));
-      const second = await makeVersion(f, await makeSequence(f, 'Two'));
-      const id = await makeMigration(f, first, second);
-      return await insertMigration(f, first, second, { id });
-    },
-  },
-  {
-    constraint: 'enrollment_migrations_from_fkey',
-    run: async f =>
-      await insertMigration(f, MISSING, await makeVersion(f, await makeSequence(f))),
-  },
-  {
-    constraint: 'enrollment_migrations_to_fkey',
-    run: async f =>
-      await insertMigration(f, await makeVersion(f, await makeSequence(f)), MISSING),
-  },
-  {
-    constraint: 'enrollment_migrations_requester_fkey',
-    run: async f => {
-      const first = await makeVersion(f, await makeSequence(f, 'One'));
-      const second = await makeVersion(f, await makeSequence(f, 'Two'));
-      return await insertMigration(f, first, second, { requester: outsider(f) });
-    },
-  },
-  {
-    constraint: 'enrollment_migrations_approver_fkey',
-    run: async f => {
-      const first = await makeVersion(f, await makeSequence(f, 'One'));
-      const second = await makeVersion(f, await makeSequence(f, 'Two'));
-      return await insertMigration(f, first, second, {
-        state: 'approved',
-        approver: outsider(f),
-        approvedAt: soon(),
-      });
-    },
-  },
-  {
-    constraint: 'enrollment_migrations_not_a_self_migration',
-    run: async f => {
-      const versionId = await makeVersion(f, await makeSequence(f));
-      return await insertMigration(f, versionId, versionId);
-    },
-  },
-  {
-    constraint: 'enrollment_migrations_state_known',
-    run: async f => {
-      const first = await makeVersion(f, await makeSequence(f, 'One'));
-      const second = await makeVersion(f, await makeSequence(f, 'Two'));
-      return await insertMigration(f, first, second, { state: 'thinking_about_it' });
-    },
-  },
-  {
-    constraint: 'enrollment_migrations_approval_consistent',
-    run: async f => {
-      const first = await makeVersion(f, await makeSequence(f, 'One'));
-      const second = await makeVersion(f, await makeSequence(f, 'Two'));
-      return await insertMigration(f, first, second, {
-        state: 'approved',
-        approvedAt: soon(),
-      });
-    },
-  },
-  {
-    // 11.1: "require explicit approval". An applied migration nobody approved is
-    // unrepresentable rather than merely discouraged.
-    constraint: 'enrollment_migrations_applied_was_approved',
-    run: async f => {
-      const first = await makeVersion(f, await makeSequence(f, 'One'));
-      const second = await makeVersion(f, await makeSequence(f, 'Two'));
-      return await insertMigration(f, first, second, {
-        state: 'applied',
-        appliedAt: soon(),
-      });
-    },
-  },
-  {
-    constraint: 'enrollment_migrations_applied_consistent',
-    run: async f => {
-      const first = await makeVersion(f, await makeSequence(f, 'One'));
-      const second = await makeVersion(f, await makeSequence(f, 'Two'));
-      return await insertMigration(f, first, second, {
-        state: 'approved',
-        approver: admin(f),
-        approvedAt: soon(),
-        appliedAt: soon(),
-      });
-    },
-  },
-
-  // -------------------------------------------------- enrollment_migration_items
-  {
-    constraint: 'enrollment_migration_items_pkey',
-    run: async f => {
-      const chain = await makeChain(f);
-      const other = await makeChain(f, ' two');
-      const migrationId = await makeMigration(f, chain.versionId, other.versionId);
-      await insertMigrationItem(f, chain, migrationId, { id: MISSING });
-      return await insertMigrationItem(f, other, migrationId, { id: MISSING });
-    },
-  },
-  {
-    constraint: 'enrollment_migration_items_migration_fkey',
-    run: async f => await insertMigrationItem(f, await makeChain(f), MISSING),
-  },
-  {
-    constraint: 'enrollment_migration_items_enrollment_fkey',
-    run: async f => {
-      const chain = await makeChain(f);
-      const other = await makeChain(f, ' two');
-      const migrationId = await makeMigration(f, chain.versionId, other.versionId);
-      return await insertMigrationItem(f, chain, migrationId, { enrollmentId: MISSING });
-    },
-  },
-  {
-    constraint: 'enrollment_migration_items_one_per_enrollment',
-    run: async f => {
-      const chain = await makeChain(f);
-      const other = await makeChain(f, ' two');
-      const migrationId = await makeMigration(f, chain.versionId, other.versionId);
-      await insertMigrationItem(f, chain, migrationId);
-      return await insertMigrationItem(f, chain, migrationId);
-    },
-  },
-  {
-    constraint: 'enrollment_migration_items_outcome_known',
-    run: async f => {
-      const chain = await makeChain(f);
-      const other = await makeChain(f, ' two');
-      const migrationId = await makeMigration(f, chain.versionId, other.versionId);
-      return await insertMigrationItem(f, chain, migrationId, { outcome: 'pondered' });
-    },
-  },
-  {
-    constraint: 'enrollment_migration_items_refusal_consistent',
-    run: async f => {
-      const chain = await makeChain(f);
-      const other = await makeChain(f, ' two');
-      const migrationId = await makeMigration(f, chain.versionId, other.versionId);
-      return await insertMigrationItem(f, chain, migrationId, { outcome: 'refused' });
-    },
-  },
-  {
-    constraint: 'enrollment_migration_items_refusal_known',
-    run: async f => {
-      const chain = await makeChain(f);
-      const other = await makeChain(f, ' two');
-      const migrationId = await makeMigration(f, chain.versionId, other.versionId);
-      return await insertMigrationItem(f, chain, migrationId, {
-        outcome: 'refused',
-        refusalCode: 'we_did_not_fancy_it',
-      });
-    },
-  },
-  {
-    constraint: 'enrollment_migration_items_counts_positive',
-    run: async f => {
-      const chain = await makeChain(f);
-      const other = await makeChain(f, ' two');
-      const migrationId = await makeMigration(f, chain.versionId, other.versionId);
-      return await insertMigrationItem(f, chain, migrationId, { remapped: -1 });
     },
   },
 

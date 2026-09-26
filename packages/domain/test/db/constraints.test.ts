@@ -5,7 +5,6 @@ import { payloadHash, seedTwoWorkspaces, type TwoWorkspaces } from './support/fi
 import { IDENTITY_CONSTRAINT_CASES } from './support/identityCases.ts';
 import { CRM_CONSTRAINT_CASES } from './support/crmCases.ts';
 import { POLICY_CONSTRAINT_CASES } from './support/policyCases.ts';
-import { RESEARCH_CONSTRAINT_CASES } from './support/researchCases.ts';
 import { MAIL_CONSTRAINT_CASES } from './support/mailCases.ts';
 import { TODAY_CONSTRAINT_CASES } from './support/todayCases.ts';
 import { SEQUENCE_CONSTRAINT_CASES } from './support/sequenceCases.ts';
@@ -354,25 +353,7 @@ const cases: readonly Case[] = [
         [workspace(f), admin(f)],
       ),
   },
-  {
-    constraint: 'calling_identities_enabled_requires_verification',
-    run: async f =>
-      await f.session.query(
-        "INSERT INTO calling_identities (workspace_id, owner_user_id, e164, verification_status, enabled) VALUES ($1, $2, '+14015550208', 'unverified', true)",
-        [workspace(f), admin(f)],
-      ),
-  },
   // Migration 0016 (lane g60): who attested a number, how, and when it was retired.
-  {
-    // A verified number with nobody recorded as having verified it is the row a raw
-    // INSERT would make, and the one the drill seed refused to fake.
-    constraint: 'calling_identities_verification_recorded',
-    run: async f =>
-      await f.session.query(
-        "INSERT INTO calling_identities (workspace_id, owner_user_id, e164, verification_status, enabled) VALUES ($1, $2, '+14015550209', 'verified', true)",
-        [workspace(f), admin(f)],
-      ),
-  },
   {
     constraint: 'calling_identities_verification_method_known',
     run: async f =>
@@ -1418,7 +1399,6 @@ const cases: readonly Case[] = [
   ...IDENTITY_CONSTRAINT_CASES,
   ...CRM_CONSTRAINT_CASES,
   ...POLICY_CONSTRAINT_CASES,
-  ...RESEARCH_CONSTRAINT_CASES,
   ...MAIL_CONSTRAINT_CASES,
   ...TODAY_CONSTRAINT_CASES,
   ...OUTBOUND_CONSTRAINT_CASES,

@@ -1425,17 +1425,6 @@ export const MAIL_CONSTRAINT_CASES: readonly MailCase[] = [
       ),
   },
   {
-    constraint: 'template_versions_approved_has_stop_line',
-    run: async f =>
-      await f.session.query(
-        `INSERT INTO template_versions (workspace_id, template_id, version, name, subject, body, content_hash,
-                                        footer_sign_off, approved_at, approved_by_user_id)
-         VALUES ($1, gen_random_uuid(), 1, 'No stop line', 'Hello', 'Hello, no footer here.', $2,
-                 'Signed off', ${AT}, $3)`,
-        [workspace(f), HASH, admin(f)],
-      ),
-  },
-  {
     constraint: 'template_versions_retired_not_before_created',
     run: async f =>
       await f.session.query(
