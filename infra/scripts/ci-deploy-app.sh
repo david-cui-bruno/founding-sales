@@ -2,14 +2,20 @@
 # An app-only change, deployed to production by CI (lane g91).
 #
 #   infra/scripts/ci-deploy-app.sh check  --digests <image-digests.json> --commit <sha> \
-#       --run-id <id> --run-attempt <n> --api-range <min>-<max> --worker-range <min>-<max> \
-#       --origin https://api.usecallie.com
+#       --run-id <id> --run-attempt <n> --run-started <instant> --run-ended <instant> \
+#       --api-range <min>-<max> --worker-range <min>-<max> --origin https://api.usecallie.com
 #   infra/scripts/ci-deploy-app.sh deploy --digests <image-digests.json> --commit <sha> \
-#       --run-id <id> --run-attempt <n> --api-range <min>-<max> --worker-range <min>-<max>
+#       --run-id <id> --run-attempt <n> --run-started <instant> --run-ended <instant> \
+#       --api-range <min>-<max> --worker-range <min>-<max>
 #   infra/scripts/ci-deploy-app.sh record --digests <image-digests.json> --commit <sha> \
-#       --run-id <id> --run-attempt <n> --api-range <min>-<max> --worker-range <min>-<max> \
+#       --run-id <id> --run-attempt <n> --run-started <instant> --run-ended <instant> \
+#       --api-range <min>-<max> --worker-range <min>-<max> \
 #       --gate-run-id <id> --cluster-name <name> --operations-family <family> \
 #       --subnets <subnet-a,subnet-b> --security-group <sg-id>
+#
+# `--run-started` and `--run-ended` are the images run's `created_at` and `updated_at`
+# (`YYYY-MM-DDTHH:MM:SSZ`), which the workflow's `run` job read from the GitHub API: the
+# window the run's own push of `fss-rh-<image>:ci-<commit>` must fall in (lane A1).
 #
 # David's decision of 25 September 2026: "I'm a startup, I want to move fast." A merge
 # to main that changes only application code reaches production with nobody in the
@@ -22,6 +28,10 @@
 # script under `infra/scripts/` is itself a protected path and must not be the thing
 # that vouches for its own change. The order is:
 #
+#   the gates (workflow)  the Greenfield gate and the Source security gate green on the
+#                         images commit, by workflow file, and the commit still on main;
+#                         read before the role is assumed and again before the first
+#                         write (lane A1);
 #   the guard (workflow)  every commit since production's, one by one: manual, or pass;
 #   check                 every read and every other guard, and nothing that writes;
 #   release-promote.sh    the two digests copied into fss-prod-*, by digest (--app-only);
@@ -60,13 +70,27 @@
 # The errors: a session that is not exactly `fss-prod-ci-deploy` in the production
 # account and region, a cluster tagged as another environment, a service mid-rollout,
 # a digests file that does not belong to the images run, a digest that is not the one
-# `fss-rh-<image>:ci-<commit>` names, or a production that does not answer `/health`.
+# `fss-rh-<image>:ci-<commit>` names, an image under that tag pushed outside the images
+# run's window, or a production that does not answer `/health`.
+#
+# ## Provenance, and what it does not cover (lane A1)
+#
+# The workflow downloads the digests file from the images run's own artifact, found
+# through that run and held to the digest GitHub recorded for it, and this script holds
+# the file to the run's id and attempt. Each digest must be the one the rehearsal
+# repository holds under `ci-<commit>`, and that image's `imagePushedAt` must fall
+# inside the images run's window, from its creation to its last update. So an image
+# pushed under the tag before the run began, or after it ended, is refused. What is
+# left is another writer to `fss-rh-*` — only `fss-rh-deploy` can write there — pushing
+# the tag while the run is going, and that is accepted (release.md 4.0).
 #
 # ## deploy: what a failure leaves behind
 #
 # Every read and guard of `check` is repeated first, so a production that changed in
 # between is not written to. The worker goes first and is held to its digest before the
-# API is touched. Each registered revision is described back and compared with the
+# API is touched: stable, then its one deployment COMPLETED as ECS calls it with the
+# declared count running and nothing pending, then every RUNNING task read with
+# `list-tasks` and `describe-tasks` and holding the new digest (lane A1). Each registered revision is described back and compared with the
 # running one field by field; anything but the image different, and it is deregistered
 # before any service names it. Each service keeps the deployment circuit breaker with
 # rollback: a revision whose tasks fail is rolled back by ECS, and when the service is
@@ -102,7 +126,8 @@
 #
 # Offline seams, for `test/release/ciDeploy.check.ts`: FSS_REHEARSAL_AWS_COMMAND (the AWS
 # CLI), FSS_CI_CALLER_IDENTITY (the session ARN), FSS_CI_HEALTH_JSON (the `/health`
-# body), FSS_CI_WAIT_ATTEMPTS, and for `record` FSS_GH_COMMAND (the `gh`
+# body), FSS_CI_WAIT_ATTEMPTS, FSS_CI_ROLLOUT_READS and FSS_CI_ROLLOUT_SECONDS, and for
+# `record` FSS_GH_COMMAND (the `gh`
 # `release-record-from-ci.sh` asks). There is no dry run: every step before `deploy` is a
 # read, and the offline check drives the whole script against a stub CLI instead.
 
@@ -121,6 +146,9 @@ CI_REGION="${FSS_PRODUCTION_REGION:-us-east-1}"
 CI_SERVICES='worker api'
 # Three of the CLI's ten-minute waits per service; the workflow's timeout is twice both.
 CI_WAIT_ATTEMPTS="${FSS_CI_WAIT_ATTEMPTS:-3}"
+# After the waiter, up to five minutes for ECS to call the rollout COMPLETED (lane A1).
+CI_ROLLOUT_READS="${FSS_CI_ROLLOUT_READS:-20}"
+CI_ROLLOUT_SECONDS="${FSS_CI_ROLLOUT_SECONDS:-15}"
 
 ci_fail() {
   echo "FAIL: $*" >&2
@@ -155,7 +183,7 @@ shift || true
 case "$SUBCOMMAND" in
   check | deploy | record) ;;
   *)
-    echo "usage: $(basename "$0") <check|deploy|record> --digests <image-digests.json> --commit <sha> --run-id <id> --run-attempt <n> --api-range <min>-<max> --worker-range <min>-<max> [--origin <https url>] [--gate-run-id <id> --cluster-name <name> --operations-family <family> --subnets <ids> --security-group <id>]" >&2
+    echo "usage: $(basename "$0") <check|deploy|record> --digests <image-digests.json> --commit <sha> --run-id <id> --run-attempt <n> --run-started <instant> --run-ended <instant> --api-range <min>-<max> --worker-range <min>-<max> [--origin <https url>] [--gate-run-id <id> --cluster-name <name> --operations-family <family> --subnets <ids> --security-group <id>]" >&2
     exit 2
     ;;
 esac
@@ -164,6 +192,8 @@ DIGESTS=''
 COMMIT=''
 RUN_ID=''
 RUN_ATTEMPT=''
+RUN_STARTED=''
+RUN_ENDED=''
 API_RANGE=''
 WORKER_RANGE=''
 ORIGIN=''
@@ -183,6 +213,8 @@ while [ "$#" -gt 0 ]; do
     --commit) COMMIT=${2:-}; shift 2 ;;
     --run-id) RUN_ID=${2:-}; shift 2 ;;
     --run-attempt) RUN_ATTEMPT=${2:-}; shift 2 ;;
+    --run-started) RUN_STARTED=${2:-}; shift 2 ;;
+    --run-ended) RUN_ENDED=${2:-}; shift 2 ;;
     --api-range) API_RANGE=${2:-}; shift 2 ;;
     --worker-range) WORKER_RANGE=${2:-}; shift 2 ;;
     --origin) ORIGIN=${2:-}; shift 2 ;;
@@ -196,6 +228,11 @@ fi
 [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || ci_fail "--commit '$COMMIT' is not a full forty-character commit"
 [[ "$RUN_ID" =~ ^[0-9]{1,20}$ ]] || ci_fail "--run-id '$RUN_ID' is not a workflow run id"
 [[ "$RUN_ATTEMPT" =~ ^[0-9]{1,4}$ ]] || ci_fail "--run-attempt '$RUN_ATTEMPT' is not a run attempt"
+for instant in "$RUN_STARTED" "$RUN_ENDED"; do
+  [[ "$instant" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] \
+    || ci_fail "'$instant' is not a UTC instant; pass the images run's created_at and updated_at as --run-started and --run-ended"
+done
+[[ ! "$RUN_ENDED" < "$RUN_STARTED" ]] || ci_fail "the images run ended at $RUN_ENDED, before it started at $RUN_STARTED"
 for range in "$API_RANGE" "$WORKER_RANGE"; do
   [[ "$range" =~ ^[0-9]{1,4}-[0-9]{1,4}$ ]] || ci_fail "'$range' is not a schema range; pass <min>-<max>"
 done
@@ -288,7 +325,8 @@ rehearsal_log "cluster $CLUSTER_ARN, tagged Environment=production"
 
 # ---------------------------------------------------------------------------
 # Provenance: the digests are the ones the rehearsal repositories hold under
-# ci-<commit>, which only the images run's publish job pushes (the tags are immutable).
+# ci-<commit>, and each was pushed while the images run was going (lane A1). The tags
+# are immutable, so the image under one is the first one pushed there.
 # ---------------------------------------------------------------------------
 for service in $CI_SERVICES; do
   expected=$API_DIGEST
@@ -298,13 +336,48 @@ for service in $CI_SERVICES; do
   case "$service" in api | worker) ;; *) ci_fail "'$service' is not a service" ;; esac
   command "$(rehearsal_aws_command)" ecr describe-images --repository-name "fss-rh-$service" --image-ids "imageTag=ci-$COMMIT" \
     --output json >"$CI_WORK/$service-source.json" || ci_fail "ECR has no fss-rh-$service:ci-$COMMIT"
-  held="$(FSS_FILE="$CI_WORK/$service-source.json" python3 -c '
+  read -r held pushed <<<"$(FSS_FILE="$CI_WORK/$service-source.json" python3 -c '
 import json, os
 details = (json.load(open(os.environ["FSS_FILE"], encoding="utf-8")) or {}).get("imageDetails") or []
-print(details[0].get("imageDigest", "") if len(details) == 1 else "")
+detail = details[0] if len(details) == 1 else {}
+print(detail.get("imageDigest") or "-", str(detail.get("imagePushedAt") or "-").replace(" ", "T"))
 ')"
   [ "$held" = "$expected" ] \
     || ci_fail "fss-rh-$service:ci-$COMMIT is ${held:-<nothing>}, and the digests file says $expected: the artifact does not name the image its run published"
+  # When it was pushed, against the images run's window: the CLI prints an ISO instant
+  # with an offset (v2) or seconds since the epoch (v1), and both are read.
+  FSS_PUSHED="$pushed" FSS_STARTED="$RUN_STARTED" FSS_ENDED="$RUN_ENDED" FSS_IMAGE="fss-rh-$service:ci-$COMMIT" python3 - <<'PY' \
+    || ci_fail "fss-rh-$service:ci-$COMMIT is not an image the images run $RUN_ID pushed"
+# ci-deploy-pushed-within-run
+import os, re, sys
+from datetime import datetime, timezone
+env = os.environ
+
+def instant(text):
+    text = str(text).strip()
+    if re.fullmatch(r"[0-9]{9,11}(\.[0-9]{1,9})?", text):
+        return datetime.fromtimestamp(float(text), tz=timezone.utc)
+    match = re.fullmatch(r"([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(\.[0-9]{1,9})?(Z|[+-][0-9]{2}:?[0-9]{2})", text)
+    if not match:
+        return None
+    zone = "+00:00" if match.group(3) == "Z" else match.group(3)
+    if len(zone) == 5:
+        zone = zone[:3] + ":" + zone[3:]
+    digits = (match.group(2) or ".")[1:7]
+    fraction = "." + digits.ljust(6, "0") if digits else ""
+    return datetime.fromisoformat(match.group(1) + fraction + zone)
+
+pushed = instant(env["FSS_PUSHED"])
+started, ended = instant(env["FSS_STARTED"]), instant(env["FSS_ENDED"])
+if pushed is None:
+    print("FAIL: ECR reports no push time for {} ('{}'), so which run pushed it cannot be told".format(env["FSS_IMAGE"], env["FSS_PUSHED"]), file=sys.stderr)
+    sys.exit(1)
+if not started <= pushed <= ended:
+    print("FAIL: {} was pushed at {}, outside the images run's window {} to {}: that run did not push it".format(
+        env["FSS_IMAGE"], pushed.isoformat(), env["FSS_STARTED"], env["FSS_ENDED"]), file=sys.stderr)
+    sys.exit(1)
+PY
+  rehearsal_log "fss-rh-$service:ci-$COMMIT was pushed at $pushed, inside the images run's window $RUN_STARTED to $RUN_ENDED"
 done
 rehearsal_log "fss-rh-api and fss-rh-worker hold ci-$COMMIT as the two digests the artifact names"
 
@@ -709,6 +782,56 @@ ci_wait_stable() {
   return 1
 }
 
+# The rollout ECS itself calls finished (lane A1): one PRIMARY deployment, of the new
+# revision, COMPLETED, with the declared count running and nothing pending. The waiter
+# and the task read say the tasks run the digest; a deployment still IN_PROGRESS can
+# yet be rolled back by the circuit breaker, so it is read again until it is COMPLETED,
+# FAILED or not this revision's, for at most CI_ROLLOUT_READS reads.
+ci_rollout_completed() {
+  local service=$1 name="${CI_PREFIX}-$1" revision=$2 desired=$3 attempt verdict
+  for attempt in $(seq 1 "$CI_ROLLOUT_READS"); do
+    release_aws "$CI_ENVIRONMENT" ecs describe-services --cluster "$CLUSTER_ARN" --services "$name" --output json \
+      >"$CI_WORK/$service-rollout.json" || { echo "FAIL: ECS did not describe $name after its rollout" >&2; return 1; }
+    verdict="$(FSS_FILE="$CI_WORK/$service-rollout.json" FSS_NAME="$name" FSS_REVISION="$revision" FSS_DESIRED="$desired" python3 - <<'PY'
+# ci-deploy-rollout-completed
+import json, os
+env = os.environ
+name = env["FSS_NAME"]
+entry = next((s for s in (json.load(open(env["FSS_FILE"], encoding="utf-8")) or {}).get("services") or []
+              if s.get("serviceName") == name), None) or {}
+deployments = entry.get("deployments") or []
+primary = next((d for d in deployments if d.get("status") == "PRIMARY"), {})
+state = primary.get("rolloutState")
+if primary.get("taskDefinition") != env["FSS_REVISION"] or entry.get("taskDefinition") != env["FSS_REVISION"]:
+    print("failed its PRIMARY deployment is {}, not {}".format(primary.get("taskDefinition"), env["FSS_REVISION"]))
+elif state == "FAILED":
+    print("failed its deployment FAILED: {}".format(primary.get("rolloutStateReason") or "no reason given"))
+elif len(deployments) != 1 or state != "COMPLETED":
+    print("pending {} deployment(s), the PRIMARY one {}".format(len(deployments), state))
+elif [entry.get("desiredCount"), entry.get("runningCount"), entry.get("pendingCount")] != [int(env["FSS_DESIRED"]), int(env["FSS_DESIRED"]), 0]:
+    print("failed its COMPLETED rollout runs {} of {} task(s) with {} pending, and {} are declared".format(
+        entry.get("runningCount"), entry.get("desiredCount"), entry.get("pendingCount"), env["FSS_DESIRED"]))
+else:
+    print("completed")
+PY
+)"
+    case "$verdict" in
+      completed)
+        rehearsal_log "$name: its rollout to $revision is COMPLETED, $desired task(s) running and none pending"
+        return 0
+        ;;
+      failed\ *)
+        echo "FAIL: $name: ${verdict#failed }" >&2
+        return 1
+        ;;
+    esac
+    rehearsal_log "$name: ${verdict#pending }; reading it again (read $attempt of $CI_ROLLOUT_READS)"
+    [ "$attempt" -eq "$CI_ROLLOUT_READS" ] || sleep "$CI_ROLLOUT_SECONDS"
+  done
+  echo "FAIL: $name's rollout to $revision is not COMPLETED after $CI_ROLLOUT_READS reads: ${verdict#pending }" >&2
+  return 1
+}
+
 # The revision a service names now, as ECS reports it.
 ci_observed() {
   release_aws "$CI_ENVIRONMENT" ecs describe-services --cluster "$CLUSTER_ARN" --services "${CI_PREFIX}-$1" --output json 2>/dev/null \
@@ -821,7 +944,10 @@ PY
   release_aws "$CI_ENVIRONMENT" ecs update-service --cluster "$CLUSTER_ARN" --service "$name" --task-definition "$revision" \
     --output json >/dev/null || { ci_deregister "$revision" "ECS refused to roll to it"; ci_fail "ECS refused to point $name at $revision; it still runs $previous"; }
 
+  # Stable, then COMPLETED as ECS calls it, then every RUNNING task read and held to the
+  # digest: exactly the declared count, each of the new revision, each reporting it.
   if ci_wait_stable "$name" \
+    && ci_rollout_completed "$service" "$revision" "$(ci_field "$service" desired)" \
     && release_require_running_digest "$CI_ENVIRONMENT" "$CLUSTER_ARN" "$name" "$service" "$digest" "$(ci_field "$service" desired)"; then
     rehearsal_log "$name runs $digest on every task"
     continue

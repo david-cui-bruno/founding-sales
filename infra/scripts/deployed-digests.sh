@@ -38,15 +38,23 @@
 # plan would roll production back. A schema release plans with its own new images on
 # purpose, and says so with `--allow-digest-change`.
 #
-# Two refusals, both exit 1. A service in the middle of a rollout, because "what it runs"
-# has two answers then. And a family whose newest ACTIVE revision is not the one its
-# service runs: `track_latest` makes Terraform read the newest, so a plan would be made
-# against a revision nothing runs. A CI deploy deregisters the revision of a rollout ECS
-# rolled back, so this is a failure somebody must look at; the message names the
-# revision and the command that reconciles it.
+# Three refusals, all exit 1. A service whose rollout is not finished, because "what it
+# runs" has two answers then: it must have one PRIMARY deployment that ECS calls
+# COMPLETED, its declared count running and nothing pending, and every RUNNING task of
+# the service must be of that deployment's revision and report its image digest
+# (lane A1; `release_require_running_digest`, the check the deploy holds every rollout
+# to). One deployment is not enough: ECS reports a lone PRIMARY deployment IN_PROGRESS
+# with nothing running yet. A service stopped for a schema release (desired zero, as
+# `release-stop.sh` leaves it) runs no task, and what it would run is its revision's.
+# Then a family whose newest ACTIVE revision is not the one its service runs:
+# `track_latest` makes Terraform read the newest, so a plan would be made against a
+# revision nothing runs. A CI deploy deregisters the revision of a rollout ECS rolled
+# back, so this is a failure somebody must look at; the message names the revision and
+# the command that reconciles it.
 #
-# Read-only: describe-services and describe-task-definition, with the operator's own
-# credentials.
+# Read-only: describe-services, describe-task-definition, list-tasks and describe-tasks,
+# with the operator's own credentials. What the task read prints goes to stderr, so
+# stdout stays the four lines a plan is given.
 #
 # Offline seams: FSS_REHEARSAL_AWS_COMMAND (the AWS CLI) and FSS_RELEASE_ACCOUNT.
 
@@ -108,9 +116,23 @@ if entry is None or entry.get("status") != "ACTIVE":
 deployments = entry.get("deployments") or []
 if len(deployments) != 1:
     sys.exit("FAIL: {} has {} deployments: a rollout is under way. Read the digests when it has finished.".format(name, len(deployments)))
-print(deployments[0].get("taskDefinition") or entry.get("taskDefinition"))
+deployment = deployments[0]
+if deployment.get("status") != "PRIMARY" or deployment.get("rolloutState") != "COMPLETED":
+    sys.exit("FAIL: {}'s one deployment is {} with its rollout {}: a rollout is under way. Read the digests when it has finished.".format(
+        name, deployment.get("status"), deployment.get("rolloutState")))
+if not deployment.get("taskDefinition") or deployment.get("taskDefinition") != entry.get("taskDefinition"):
+    sys.exit("FAIL: {}'s deployment runs {} and the service names {}".format(name, deployment.get("taskDefinition"), entry.get("taskDefinition")))
+counts = [entry.get(field) for field in ("desiredCount", "runningCount", "pendingCount")]
+if any(not isinstance(count, int) for count in counts):
+    sys.exit("FAIL: ECS did not report all three counts for {}".format(name))
+desired, running, pending = counts
+if running != desired or pending != 0:
+    sys.exit("FAIL: {} runs {} of {} task(s) with {} pending: a rollout is under way, or an outage. Read the digests when it has finished.".format(
+        name, running, desired, pending))
+print(entry["taskDefinition"], desired)
 PY
 )" || exit 1
+  read -r running desired <<<"$running"
   release_aws "$ENVIRONMENT" ecs describe-task-definition --task-definition "$running" --output json \
     >"$WORK/definition.json" || exit 1
   release_aws "$ENVIRONMENT" ecs describe-task-definition --task-definition "$name" --output json \
@@ -143,6 +165,12 @@ if latest.get("taskDefinitionArn") and latest["taskDefinitionArn"] != env["FSS_R
 print("{}_image={} {}_schema_range={{min={},max={}}}".format(service, image, service, minimum, maximum))
 PY
 )" || exit 1
+  # Every RUNNING task of the service, read and held to that image's digest: exactly the
+  # declared count, each of the deployment's revision. What it prints goes to stderr.
+  image="${line%% *}"
+  image="${image#*=}"
+  release_require_running_digest "$ENVIRONMENT" "$CLUSTER_ARN" "$name" "$service" "${image##*@}" "$desired" >&2 \
+    || { echo "FAIL: $name's running tasks are not all $image; read the digests when its rollout has finished" >&2; exit 1; }
   LINES="$LINES $line"
 done
 

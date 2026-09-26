@@ -12,8 +12,9 @@ import { repositoryPath } from './support/coverage.ts';
  * and `infra/scripts/release-record-from-ci.sh` is what writes it.
  *
  * The script is run for real against a stubbed `gh` placed first on PATH, the way an
- * operator's shell finds the real one. The stub answers `run view`, `run list` and
- * `run download` from a state file and logs every call. An `aws` stub sits beside it and
+ * operator's shell finds the real one. The stub answers `api` for one run and for the
+ * images workflow's runs of a commit, in the REST shapes, and `run download`, from a
+ * state file, and logs every call. An `aws` stub sits beside it and
  * logs anything that reaches it, so "no AWS call" is a count, not a reading of the code.
  *
  * ## The vacuous-pass traps, named
@@ -25,9 +26,15 @@ import { repositoryPath } from './support/coverage.ts';
  *
  * **A refusal that refuses everything.** A script that always failed would pass every
  * refusal case. So each refusal starts from the one world the positive control writes a
- * record in and changes exactly one fact — the gate's conclusion, its workflow, its
- * commit, its event; the images run's presence and conclusion; the artifact's commit and
- * each digest — and each must answer one `FAIL:` line, exit non-zero and leave no file.
+ * record in and changes exactly one fact — the gate's conclusion, its workflow file, its
+ * commit, its event, its repository; the images run's presence, workflow file and
+ * conclusion; the artifact's commit and each digest — and each must answer one `FAIL:`
+ * line, exit non-zero and leave no file.
+ *
+ * **A gate known by its name (lane A1).** A second workflow can carry the display name
+ * *Greenfield gate* and pass on the same push while the real gate fails. So the run is
+ * judged by its `path`, and a green run of another file named *Greenfield gate* is
+ * refused, while the real file under another display name is accepted.
  *
  * **Arguments judged after the fact.** A malformed argument is refused before `gh` is
  * asked anything, which the call log shows as zero calls.
@@ -44,7 +51,7 @@ const API = digest('a');
 const WORKER = digest('b');
 
 const GH_PROGRAM = `#!/usr/bin/env python3
-import json, os, sys
+import json, os, re, sys
 here = os.path.dirname(os.path.abspath(__file__))
 state = json.load(open(os.path.join(here, "state.json")))
 args = sys.argv[1:]
@@ -52,17 +59,22 @@ with open(os.path.join(here, "calls-gh.jsonl"), "a") as handle:
     handle.write(json.dumps(args) + "\\n")
 def value(flag):
     return args[args.index(flag) + 1] if flag in args else None
-if args[:2] == ["run", "view"]:
-    run = (state.get("runs") or {}).get(args[2])
-    if run is None:
-        sys.stderr.write("could not find any workflow run with ID " + args[2] + "\\n")
-        sys.exit(1)
-    print(json.dumps(run))
-    sys.exit(0)
-if args[:2] == ["run", "list"]:
-    # GitHub filters by commit on the server; the script filters again.
-    print(json.dumps([run for run in state.get("imagesRuns") or [] if run.get("headSha") == value("--commit")]))
-    sys.exit(0)
+if args[:1] == ["api"]:
+    endpoint = args[1]
+    one = re.fullmatch(r"repos/[^/]+/[^/]+/actions/runs/([0-9]+)", endpoint)
+    if one:
+        run = (state.get("runs") or {}).get(one.group(1))
+        if run is None:
+            sys.stderr.write("gh: Not Found (HTTP 404)\\n")
+            sys.exit(1)
+        print(json.dumps(run))
+        sys.exit(0)
+    listed = re.fullmatch(r"repos/[^/]+/[^/]+/actions/workflows/greenfield-images\\.yml/runs\\?(.*)", endpoint)
+    if listed:
+        # GitHub filters by commit on the server; the script filters again.
+        query = dict(part.split("=", 1) for part in listed.group(1).split("&"))
+        print(json.dumps({"workflow_runs": [run for run in state.get("imagesRuns") or [] if run.get("head_sha") == query.get("head_sha")]}))
+        sys.exit(0)
 if args[:2] == ["run", "download"]:
     content = (state.get("downloads") or {}).get(args[2])
     if content is None:
@@ -93,32 +105,38 @@ interface World {
   downloads: Record<string, string>;
 }
 
+/** A run as `GET /repos/{owner}/{repo}/actions/runs/{id}` describes it. */
 function gateRun(overrides: Run = {}): Run {
   return {
-    databaseId: Number(GATE_RUN),
-    workflowName: 'Greenfield gate',
+    id: Number(GATE_RUN),
+    name: 'Greenfield gate',
+    path: '.github/workflows/greenfield.yml',
     status: 'completed',
     conclusion: 'success',
-    headSha: COMMIT,
-    headBranch: 'main',
+    run_attempt: 1,
+    head_sha: COMMIT,
+    head_branch: 'main',
+    head_repository: { full_name: REPOSITORY },
     event: 'push',
-    url: `https://github.com/${REPOSITORY}/actions/runs/${GATE_RUN}`,
-    updatedAt: '2026-09-25T21:40:12Z',
+    html_url: `https://github.com/${REPOSITORY}/actions/runs/${GATE_RUN}`,
+    updated_at: '2026-09-25T21:40:12Z',
     ...overrides,
   };
 }
 
 function imagesRun(overrides: Run = {}): Run {
   return {
-    databaseId: Number(IMAGES_RUN),
-    workflowName: 'Greenfield images',
+    id: Number(IMAGES_RUN),
+    name: 'Greenfield images',
+    path: '.github/workflows/greenfield-images.yml',
     status: 'completed',
     conclusion: 'success',
-    headSha: COMMIT,
-    headBranch: 'main',
+    head_sha: COMMIT,
+    head_branch: 'main',
+    head_repository: { full_name: REPOSITORY },
     event: 'push',
-    url: `https://github.com/${REPOSITORY}/actions/runs/${IMAGES_RUN}`,
-    createdAt: '2026-09-25T21:31:00Z',
+    html_url: `https://github.com/${REPOSITORY}/actions/runs/${IMAGES_RUN}`,
+    created_at: '2026-09-25T21:31:00Z',
     ...overrides,
   };
 }
@@ -146,7 +164,7 @@ function greenWorld(): World {
     imagesRuns: [
       imagesRun(),
       // A pull-request run of the same commit, which published nothing: passed over.
-      imagesRun({ databaseId: 41000000003, event: 'pull_request', headBranch: 'g96/branch', conclusion: 'failure' }),
+      imagesRun({ id: 41000000003, event: 'pull_request', head_branch: 'g96/branch', conclusion: 'failure' }),
     ],
     downloads: { [IMAGES_RUN]: imageDigests() },
   };
@@ -235,17 +253,16 @@ describe('release-record-from-ci.sh writes the record from a green gate and its 
     const outcome = run(greenWorld(), GREEN_ARGS, { GITHUB_REPOSITORY: REPOSITORY });
     expect(outcome.status, outcome.stderr).toBe(0);
     expect(outcome.aws).toBe(0);
-    expect(outcome.gh.map(args => args.slice(0, 3))).toEqual([
-      ['run', 'view', GATE_RUN],
-      ['run', 'list', '--repo'],
-      ['run', 'download', IMAGES_RUN],
+    expect(outcome.gh).toEqual([
+      ['api', `repos/${REPOSITORY}/actions/runs/${GATE_RUN}`],
+      ['api', `repos/${REPOSITORY}/actions/workflows/greenfield-images.yml/runs?head_sha=${COMMIT}&event=push&branch=main&per_page=20`],
+      expect.arrayContaining(['run', 'download', IMAGES_RUN, '--repo', REPOSITORY, '--name', 'fss-image-digests']),
     ]);
-    const [view, list, download] = outcome.gh;
-    expect(view).toEqual(expect.arrayContaining(['--repo', REPOSITORY, '--json']));
-    expect(list).toEqual(
-      expect.arrayContaining(['--workflow', 'greenfield-images.yml', '--commit', COMMIT, '--event', 'push', '--branch', 'main']),
-    );
-    expect(download).toEqual(expect.arrayContaining(['--repo', REPOSITORY, '--name', 'fss-image-digests']));
+    // Without GITHUB_REPOSITORY, gh fills the repository from the checkout's remote.
+    const local = run(greenWorld(), GREEN_ARGS);
+    expect(local.status, local.stderr).toBe(0);
+    expect(local.gh[0]).toEqual(['api', `repos/{owner}/{repo}/actions/runs/${GATE_RUN}`]);
+    expect(local.gh[2]).not.toContain('--repo');
   });
 
   it('says enablesSending only when told to, and writes the same bytes twice to --out', () => {
@@ -276,14 +293,36 @@ describe('release-record-from-ci.sh refuses, in one line, anything that does not
     refuse(world => (world.runs[GATE_RUN] = gateRun({ status: 'in_progress', conclusion: '' })), 'not completed/success');
   });
 
-  it('refuses a green run of another workflow', () => {
-    refuse(world => (world.runs[GATE_RUN] = gateRun({ workflowName: 'Greenfield images' })), 'not the Greenfield gate workflow');
+  it('refuses a green run of another workflow file, even one named Greenfield gate', () => {
+    refuse(
+      world => (world.runs[GATE_RUN] = gateRun({ path: '.github/workflows/greenfield-images.yml', name: 'Greenfield images' })),
+      "not of .github/workflows/greenfield.yml, the Greenfield gate workflow",
+    );
+    refuse(
+      world => (world.runs[GATE_RUN] = gateRun({ path: '.github/workflows/impostor.yml', name: 'Greenfield gate' })),
+      "is a run of '.github/workflows/impostor.yml' (named 'Greenfield gate')",
+    );
+  });
+
+  it('accepts the gate file under another display name, and a path with a ref', () => {
+    for (const change of [{ name: 'Renamed gate' }, { path: '.github/workflows/greenfield.yml@refs/heads/main' }]) {
+      const world = greenWorld();
+      world.runs[GATE_RUN] = gateRun(change);
+      const outcome = run(world, GREEN_ARGS);
+      expect(outcome.status, outcome.stderr).toBe(0);
+    }
+  });
+
+  it('refuses a gate run of a fork, or in another repository than the one asked for', () => {
+    refuse(world => (world.runs[GATE_RUN] = gateRun({ head_repository: { full_name: 'someone/fork' } })), "built someone/fork's commit");
+    const world = greenWorld();
+    expectRefusal(run(world, [...GREEN_ARGS, '--out', '<out>'], { GITHUB_REPOSITORY: 'other-owner/other-repo' }), 'not other-owner/other-repo');
   });
 
   it('refuses a gate run on another commit, or not a push to main', () => {
-    refuse(world => (world.runs[GATE_RUN] = gateRun({ headSha: OTHER_COMMIT })), `ran on ${OTHER_COMMIT}`);
+    refuse(world => (world.runs[GATE_RUN] = gateRun({ head_sha: OTHER_COMMIT })), `ran on ${OTHER_COMMIT}`);
     refuse(
-      world => (world.runs[GATE_RUN] = gateRun({ event: 'pull_request', headBranch: 'g96/branch' })),
+      world => (world.runs[GATE_RUN] = gateRun({ event: 'pull_request', head_branch: 'g96/branch' })),
       'not a push to main',
     );
   });
@@ -295,6 +334,10 @@ describe('release-record-from-ci.sh refuses, in one line, anything that does not
   it('refuses a commit with no green images run of its own', () => {
     refuse(world => (world.imagesRuns = []), 'no Greenfield images run pushed to main');
     refuse(world => (world.imagesRuns = [imagesRun({ conclusion: 'failure' })]), 'not completed/success');
+    refuse(
+      world => (world.imagesRuns = [imagesRun({ path: '.github/workflows/impostor.yml' })]),
+      'no Greenfield images run pushed to main',
+    );
   });
 
   it('refuses digests the images run did not publish for this commit', () => {
