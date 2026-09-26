@@ -8,7 +8,9 @@
 
 export {
   deterministicEventId,
+  journalObjectBody,
   journalObjectKey,
+  SUPPRESSION_JOURNAL_SCHEMA,
   recordingSuppressionJournal,
   SuppressionJournalError,
   type DeterministicEventIdInput,
@@ -50,7 +52,6 @@ export {
 export { suppressionFinalizeHandler } from './handler.ts';
 
 export {
-  SUPPRESSION_JOURNAL_SCHEMA,
   parseSuppressionJournalRecord,
   replaySuppressionJournal,
   type JournalParseRefusal,

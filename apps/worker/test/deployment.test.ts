@@ -1,13 +1,8 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { RECORDED_SEAM_ENCRYPTION_CONTEXT, type KmsTransport } from '@fss/domain/mail';
-import {
-  DEPLOYMENT_ENVIRONMENT_VARIABLES,
-  DeploymentConfigError,
-  describeDeployment,
-  readGoogleClientBundle,
-  readWorkerDeployment,
-} from '../src/bootstrap/deployment.ts';
+import { DeploymentConfigError, readGoogleClientBundle } from '@fss/domain/release/deployment.ts';
+import { DEPLOYMENT_ENVIRONMENT_VARIABLES, describeDeployment, readWorkerDeployment } from '../src/bootstrap/deployment.ts';
 import { composeHandlers } from '../src/bootstrap/main.ts';
 
 /**

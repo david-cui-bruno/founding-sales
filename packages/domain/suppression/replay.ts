@@ -8,7 +8,7 @@ import { openHold } from '../policy/holds.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { claimFinalization } from './finalize.ts';
 import { readSuppressionEvent } from './events.ts';
-import type { SuppressionJournalRecord } from './journal.ts';
+import { SUPPRESSION_JOURNAL_SCHEMA, type SuppressionJournalRecord } from './journal.ts';
 
 /**
  * Appendix E step 2: "replay the suppression journal from the restore point minus one
@@ -41,16 +41,12 @@ export type JournalParseResult =
   | { readonly ok: true; readonly value: SuppressionJournalRecord }
   | { readonly ok: false; readonly reason: JournalParseRefusal; readonly detail: string };
 
-/** The schema both writers stamp on a journal object (`fss.suppression.v1`). */
-export const SUPPRESSION_JOURNAL_SCHEMA = 'fss.suppression.v1';
-
 /**
  * One journal object's body, as a record.
  *
- * The parser is strict and total: `apps/api/src/journal/index.ts` and
- * `apps/worker/src/bootstrap/deployment.ts` both write this shape and
- * `test/release/scenario11.check.ts` asserts the two agree field for field, so a body
- * that does not carry a field is a corrupt object rather than a default to invent.
+ * The parser is strict and total: both processes write this shape with
+ * `journalObjectBody`, so a body that does not carry a field is a corrupt object rather
+ * than a default to invent.
  * The only optional fields are the four the writers emit as `null`.
  */
 export function parseSuppressionJournalRecord(body: string): JournalParseResult {

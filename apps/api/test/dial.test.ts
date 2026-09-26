@@ -2,11 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dialCheckResponseSchema, loggedCallResultSchema, wireDrift } from '@fss/contracts';
 import { POSTURE_STATEMENT_KEYS } from '@fss/domain';
-import { recordingSuppressionJournal, type RecordingSuppressionJournal } from '@fss/domain/suppression';
+import { journalObjectBody, recordingSuppressionJournal, type RecordingSuppressionJournal } from '@fss/domain/suppression';
 import { dispatch, type ApiRequest } from '../src/server.ts';
 import {
   createS3SuppressionJournal,
-  journalBody,
   localNoopSuppressionJournal,
   requireDurableJournal,
   resolveSuppressionJournal,
@@ -770,7 +769,7 @@ describe('the suppression journal client', () => {
 
   it('puts nothing in the body that is not an identifier or a code', () => {
     const body = JSON.parse(
-      journalBody({
+      journalObjectBody({
         eventId: 'sup_jkl',
         workspaceId: '11111111-1111-4111-8111-111111111111',
         scope: 'handle',

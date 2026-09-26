@@ -22,7 +22,8 @@
     "./dashboard": "./dashboard/index.ts",
     "./retention": "./retention/index.ts",
     "./restore": "./restore/index.ts",
-    "./release": "./release/index.ts"
+    "./release": "./release/index.ts",
+    "./*": "./*"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",

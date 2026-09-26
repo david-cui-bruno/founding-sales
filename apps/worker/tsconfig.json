@@ -4,6 +4,7 @@
     "baseUrl": ".",
     "paths": {
       "@fss/contracts": ["../../packages/contracts/src/index.ts"],
+      "@fss/domain/*": ["../../packages/domain/*"],
       "@fss/domain": ["../../packages/domain/src/index.ts"],
       "@fss/domain/mail": ["../../packages/domain/mail/index.ts"],
       "@fss/domain/classification": ["../../packages/domain/classification/index.ts"],

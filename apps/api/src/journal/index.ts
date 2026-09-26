@@ -1,5 +1,6 @@
 import {
   SuppressionJournalError,
+  journalObjectBody,
   journalObjectKey,
   type SuppressionJournal,
   type SuppressionJournalRecord,
@@ -55,24 +56,6 @@ export interface S3JournalOptions {
   readonly putObject: JournalPutObject;
 }
 
-/** The body of a journal object. Identifiers and codes; never a name or a note. */
-export function journalBody(record: SuppressionJournalRecord): string {
-  return JSON.stringify({
-    schema: 'fss.suppression.v1',
-    eventId: record.eventId,
-    workspaceId: record.workspaceId,
-    scope: record.scope,
-    canonicalKey: record.canonicalKey,
-    canonicalizerVersion: record.canonicalizerVersion,
-    source: record.source,
-    actorUserId: record.actorUserId,
-    commandId: record.commandId,
-    supersedesEventId: record.supersedesEventId,
-    supersessionReason: record.supersessionReason,
-    recordedAt: record.recordedAt,
-  });
-}
-
 export function createS3SuppressionJournal(options: S3JournalOptions): SuppressionJournal {
   return {
     async append(record: SuppressionJournalRecord): Promise<void> {
@@ -80,7 +63,7 @@ export function createS3SuppressionJournal(options: S3JournalOptions): Suppressi
         await options.putObject({
           bucket: options.bucket,
           key: journalObjectKey(record),
-          body: journalBody(record),
+          body: journalObjectBody(record),
           contentType: 'application/json',
           ifNoneMatch: '*',
         });
