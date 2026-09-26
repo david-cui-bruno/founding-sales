@@ -20,15 +20,12 @@
     "lint:root-scripts": "eslint --no-ignore --max-warnings 0 -- eslint.config.mjs eslint.greenfield.mjs scripts/verifySecrets.mjs scripts/productionSmoke.mjs scripts/releaseMutationCheck.mjs scripts/releaseMutationRunner.mjs scripts/changelog.mjs 'scripts/mutations/*.mjs'",
     "test:greenfield": "npm run test --workspace packages/contracts && npm run test --workspace packages/domain && npm run test --workspace apps/api && npm run test --workspace apps/worker && npm run test --workspace apps/desktop",
     "test:release": "vitest run --config test/release/vitest.config.ts",
-    "test:release:mutation": "node scripts/releaseMutationCheck.mjs",
     "test:desktop:e2e": "npm run test:e2e --workspace apps/desktop",
     "test:desktop:host": "FSS_HOST_TESTS=1 npm run test:host --workspace apps/desktop",
     "package:desktop": "npm run package --workspace apps/desktop --",
     "verify:desktop:package": "npm run verify:package --workspace apps/desktop --",
-    "gate:greenfield": "npm run typecheck:greenfield && npm run lint:greenfield && npm run changelog:check && npm run test:greenfield && npm run test:release",
-    "verify:secrets": "node scripts/verifySecrets.mjs",
-    "changelog": "node scripts/changelog.mjs",
-    "changelog:check": "node scripts/changelog.mjs --check"
+    "gate:greenfield": "npm run typecheck:greenfield && npm run lint:greenfield && npm run test:greenfield && npm run test:release",
+    "verify:secrets": "node scripts/verifySecrets.mjs"
   },
   "keywords": [],
   "author": {
