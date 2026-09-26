@@ -148,3 +148,27 @@ jobs:
               exit 1
               ;;
           esac
+  changelog:
+    # The changelog check of the greenfield gate, once a day on main as well (lane a3),
+    # so a pull request merged past the gate cannot leave docs/greenfield/changelog.md
+    # saying something its fragments do not, or a malformed fragment, unreported. A
+    # fragment that is only not folded in yet is listed and does not fail the run:
+    # merged fragments wait for `npm run changelog`, and a red run here would make
+    # greenfield-freshness.yml call the mutation check stale. Its own job, so neither
+    # check can skip the other.
+    #
+    # No install: scripts/changelog.mjs uses only node's own modules.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.20.0'
+      - name: Changelog check
+        run: npm run changelog:check

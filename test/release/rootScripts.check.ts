@@ -41,6 +41,10 @@ const scripts = manifest.scripts;
 
 /** Every root script. */
 const SCRIPTS = [
+  // The changelog's fragments (lane a3): `changelog` folds them into docs/greenfield/changelog.md,
+  // and `changelog:check`, a step of `gate:greenfield`, checks the file against them.
+  'changelog',
+  'changelog:check',
   'gate:greenfield',
   'lint',
   'lint:greenfield',
@@ -92,8 +96,10 @@ describe('the repository root is the greenfield workspace root', () => {
     expect(scripts['test']).toBe('npm run test:greenfield && npm run test:release');
     // What `.github/workflows/greenfield.yml` runs.
     expect(scripts['gate:greenfield']).toBe(
-      'npm run typecheck:greenfield && npm run lint:greenfield && npm run test:greenfield && npm run test:release',
+      'npm run typecheck:greenfield && npm run lint:greenfield && npm run changelog:check && npm run test:greenfield && npm run test:release',
     );
+    expect(scripts['changelog:check']).toBe('node scripts/changelog.mjs --check');
+    expect(scripts['lint:root-scripts']).toContain(' scripts/changelog.mjs ');
   });
 
   it('has exactly the named scripts: no start, no legacy: script', () => {
@@ -115,6 +121,7 @@ describe('the repository root is the greenfield workspace root', () => {
     expect(rootTargets(scripts['gate:greenfield'] ?? '')).toEqual([
       'typecheck:greenfield',
       'lint:greenfield',
+      'changelog:check',
       'test:greenfield',
       'test:release',
     ]);

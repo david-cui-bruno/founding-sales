@@ -38,9 +38,10 @@ CI does not need the rebuild: it uses a `postgres:16` service container instead.
 ## The gate
 
 ```
-npm run gate:greenfield     # typecheck + lint + tests, every greenfield package
+npm run gate:greenfield     # typecheck + lint + changelog check + tests, every greenfield package
 npm run typecheck:greenfield
 npm run lint:greenfield
+npm run changelog:check     # docs/greenfield/changelog.md against its fragments
 npm run test:greenfield
 npm run test:desktop:e2e    # the window, in chromium; not part of the gate
 ```

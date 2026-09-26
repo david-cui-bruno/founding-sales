@@ -2,11 +2,11 @@
 // nothing in the product reads it.
 //
 // `npm run lint:root-scripts` runs it over an explicit file list with --no-ignore:
-// eslint.greenfield.mjs, scripts/productionSmoke.mjs, scripts/releaseMutationCheck.mjs,
-// scripts/releaseMutationRunner.mjs and scripts/mutations/*.mjs. The greenfield
-// workspace (apps/, packages/, test/release/) has its own config, eslint.greenfield.mjs,
-// run by `npm run lint:greenfield`; this one ignores those directories, so the two
-// never lint the same file.
+// eslint.greenfield.mjs, scripts/verifySecrets.mjs, scripts/productionSmoke.mjs,
+// scripts/releaseMutationCheck.mjs, scripts/releaseMutationRunner.mjs, scripts/changelog.mjs
+// and scripts/mutations/*.mjs. The greenfield workspace (apps/, packages/, test/release/)
+// has its own config, eslint.greenfield.mjs, run by `npm run lint:greenfield`; this one
+// ignores those directories, so the two never lint the same file.
 import js from '@eslint/js';
 // The typescript-eslint packages publish only an `exports` map, which the node
 // resolver of eslint-plugin-import cannot read.
