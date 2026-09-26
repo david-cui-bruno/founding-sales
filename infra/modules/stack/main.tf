@@ -116,9 +116,8 @@ module "registry" {
   source = "../registry"
   count  = var.create_registry ? 1 : 0
 
-  name_prefix  = var.name_prefix
-  force_delete = var.destroyable
-  tags         = local.tags
+  name_prefix = var.name_prefix
+  tags        = local.tags
 }
 
 # Production state already holds this module at its un-counted address.

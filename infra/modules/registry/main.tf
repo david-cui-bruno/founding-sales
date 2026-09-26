@@ -3,9 +3,14 @@
 # Tags are immutable, so a digest that passed the rehearsal gate cannot later
 # point at different bytes. Services are deployed by digest, not by tag; the
 # tag exists only so a human can read the release history.
+#
+# A repository that still holds images refuses to be deleted, in both places this
+# module is used: production's registry holds the images every release is
+# identified by, and the durable fss-rh pair (infra/roots/rehearsal-registry) the
+# images every past release was rehearsed on. A rehearsal run creates none.
 
 locals {
-  repositories = { for name in var.repositories : name => "${var.name_prefix}-${name}" }
+  repositories = { for name in ["api", "worker"] : name => "${var.name_prefix}-${name}" }
 }
 
 resource "aws_ecr_repository" "this" {
@@ -13,15 +18,14 @@ resource "aws_ecr_repository" "this" {
 
   name                 = each.value
   image_tag_mutability = "IMMUTABLE"
-  force_delete         = var.force_delete
+  force_delete         = false
 
   image_scanning_configuration {
     scan_on_push = true
   }
 
   encryption_configuration {
-    encryption_type = var.kms_key_arn == null ? "AES256" : "KMS"
-    kms_key         = var.kms_key_arn
+    encryption_type = "AES256"
   }
 
   tags = merge(var.tags, { Name = each.value })
@@ -41,7 +45,7 @@ resource "aws_ecr_lifecycle_policy" "this" {
           tagStatus   = "untagged"
           countType   = "sinceImagePushed"
           countUnit   = "days"
-          countNumber = var.untagged_expiry_days
+          countNumber = 7
         }
         action = { type = "expire" }
       },
@@ -51,7 +55,7 @@ resource "aws_ecr_lifecycle_policy" "this" {
         selection = {
           tagStatus   = "any"
           countType   = "imageCountMoreThan"
-          countNumber = var.retained_image_count
+          countNumber = 30
         }
         action = { type = "expire" }
       },
