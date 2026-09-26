@@ -97,7 +97,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "access_logs" {
     filter {}
 
     expiration {
-      days = var.access_log_retention_days
+      days = 365
     }
 
     noncurrent_version_expiration {
@@ -126,7 +126,7 @@ resource "aws_lb" "main" {
   subnets            = var.subnet_ids
   security_groups    = var.security_group_ids
 
-  idle_timeout                     = var.idle_timeout_seconds
+  idle_timeout                     = 60
   enable_deletion_protection       = var.enable_deletion_protection
   drop_invalid_header_fields       = true
   enable_cross_zone_load_balancing = true
@@ -154,14 +154,17 @@ resource "aws_lb_target_group" "api" {
 
   deregistration_delay = 30
 
-  # `/readyz` by default (lane g81): 200 only when this task can serve, 503 when it
-  # is alive and must not. The matcher is 200 alone, so the 503 is unhealthy. Two
+  # `/readyz` (lane g81): 200 only when this task can serve, 503 when it is alive
+  # and must not; it needs no authentication and touches no business state.
+  # `/healthz` stays the container health check, so a database outage drains
+  # traffic rather than restarting tasks. The matcher is 200 alone, so the 503 is
+  # unhealthy. test/ops/terraformCrossChecks.check.ts ties the path to the API. Two
   # passes fifteen seconds apart put a new task in service in about thirty seconds,
   # inside the service's sixty-second grace; three failures take it out in
   # forty-five. docs/archive/decisions/g81-the-load-balancer-asks-readiness.md.
   health_check {
     enabled             = true
-    path                = var.health_check_path
+    path                = "/readyz"
     protocol            = "HTTP"
     matcher             = "200"
     interval            = 15
@@ -186,7 +189,7 @@ resource "aws_lb_listener" "https" {
   load_balancer_arn = aws_lb.main.arn
   port              = 443
   protocol          = "HTTPS"
-  ssl_policy        = var.ssl_policy
+  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06" # TLS 1.2 is the floor
   certificate_arn   = var.certificate_arn
 
   default_action {
