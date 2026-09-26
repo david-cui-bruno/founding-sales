@@ -17,7 +17,9 @@ import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
 import { seedPolicy, type SeededPolicy } from '../db/support/policyFixtures.ts';
 
 /**
- * Calling identities: register, attest, retire (specification 9.1; lane g60).
+ * Calling identities: register, attest, retire (specification 9.1; lane g60). Since
+ * wave 2 (S4.3) registering is the attestation, and a number an older release left
+ * unattested is usable as it stands; the attest command stays for desktop 1.0.11.
  *
  * Until this lane nothing inserted a `calling_identities` row or verified one, so no
  * salesperson could be authorized to dial and the restore drill's dial probe had no
@@ -72,6 +74,15 @@ async function aMember(role: 'admin' | 'salesperson', status: 'active' | 'inacti
   return userId;
 }
 
+/** A number as an older release registered it: unverified, not enabled, not retired. */
+async function unattestedRow(ownerUserId: string, e164: string): Promise<string> {
+  const { rows } = await database.session.query<{ id: string }>(
+    'INSERT INTO calling_identities (workspace_id, owner_user_id, e164) VALUES ($1, $2, $3) RETURNING id',
+    [seeded.alpha.workspaceId, ownerUserId, e164],
+  );
+  return rows[0]?.id ?? '';
+}
+
 const dialWith = (callingIdentityId: string): Parameters<typeof authorizeDial>[1] => ({
   firmId: crm.alpha.firmId,
   contactId: crm.alpha.contactId,
@@ -122,7 +133,7 @@ describe('normalizeCallingNumber', () => {
 });
 
 describe('registerCallingIdentity', () => {
-  it('creates the owner’s number unverified and disabled, once, and audits it', async () => {
+  it('creates the owner’s number attested, once, audits it, and the dial is authorized with it at once', async () => {
     const created = await registerCallingIdentity(salesperson(), { e164: '+1 401 555 0131', label: '  Mobile ' });
     expect(created.ok, JSON.stringify(created)).toBe(true);
     if (!created.ok) return;
@@ -131,14 +142,20 @@ describe('registerCallingIdentity', () => {
       ownerUserId: seeded.alpha.salesperson.userId,
       e164: '+14015550131',
       label: 'Mobile',
-      verificationStatus: 'unverified',
-      enabled: false,
-      verifiedAt: null,
-      verifiedByUserId: null,
-      verificationMethod: null,
+      verificationStatus: 'verified',
+      enabled: true,
+      verifiedByUserId: seeded.alpha.salesperson.userId,
+      verificationMethod: 'owner_attestation',
       disabledAt: null,
-      usedForCalls: false,
+      usedForCalls: true,
     });
+    expect(created.value.identity.verifiedAt).not.toBeNull();
+    // Read back from the table: the who, how and when 0016's CHECK requires.
+    const stored = await database.session.query<{ verification_status: string; enabled: boolean; verified: boolean }>(
+      'SELECT verification_status, enabled, verified_at IS NOT NULL AS verified FROM calling_identities WHERE id = $1',
+      [created.value.identity.id],
+    );
+    expect(stored.rows[0]).toEqual({ verification_status: 'verified', enabled: true, verified: true });
     expect(await countOf("SELECT count(*)::text AS count FROM calling_identities WHERE e164 = '+14015550131'")).toBe(1);
     expect(
       await countOf(
@@ -153,10 +170,22 @@ describe('registerCallingIdentity', () => {
     );
     expect(detail.rows[0]?.detail).not.toContain('5550131');
 
-    // Unverified is refused at 9.2's second step, exactly as before this lane.
-    expect(await authorizeDial(salesperson(), dialWith(created.value.identity.id))).toEqual({
-      allowed: false,
-      reason: 'identity_unverified',
+    // No separate attestation before a dial (wave 2, S4.3).
+    expect(await authorizeDial(salesperson(), dialWith(created.value.identity.id))).toMatchObject({
+      allowed: true,
+      evidence: { callingIdentityId: created.value.identity.id },
+    });
+  });
+
+  it('dials from a number an older release registered and nobody attested, and a registration attests it', async () => {
+    const id = await unattestedRow(seeded.alpha.salesperson.userId, '+14015550140');
+    expect(await authorizeDial(salesperson(), dialWith(id))).toMatchObject({ allowed: true });
+    expect(await currentCallingIdentityId(salesperson(), seeded.alpha.salesperson.userId)).toBe(id);
+
+    const registered = await registerCallingIdentity(salesperson(), { e164: '+14015550140' });
+    expect(registered).toMatchObject({
+      ok: true,
+      value: { outcome: 'verified', identity: { id, verificationStatus: 'verified', enabled: true } },
     });
   });
 
@@ -225,11 +254,9 @@ describe('registerCallingIdentity', () => {
   });
 });
 
-describe('verifyCallingIdentity', () => {
-  it('records the owner’s attestation, enables the number, and the dial is authorized with it', async () => {
-    const registered = await registerCallingIdentity(salesperson(), { e164: '+14015550134' });
-    if (!registered.ok) throw new Error(registered.reason);
-    const id = registered.value.identity.id;
+describe('verifyCallingIdentity (deprecated: kept for desktop 1.0.11)', () => {
+  it('records the owner’s attestation on a number an older release left unattested, and enables it', async () => {
+    const id = await unattestedRow(seeded.alpha.salesperson.userId, '+14015550134');
 
     const attested = await verifyCallingIdentity(salesperson(), { identityId: id });
     expect(attested.ok, JSON.stringify(attested)).toBe(true);
@@ -244,73 +271,43 @@ describe('verifyCallingIdentity', () => {
       usedForCalls: true,
     });
     expect(attested.value.identity.verifiedAt).not.toBeNull();
-
-    // Read back from the table, not from the function's own answer.
-    const stored = await database.session.query<{
-      verification_status: string;
-      enabled: boolean;
-      verified_by_user_id: string;
-      verification_method: string;
-      verified: boolean;
-    }>(
-      `SELECT verification_status, enabled, verified_by_user_id, verification_method, verified_at IS NOT NULL AS verified
-         FROM calling_identities WHERE id = $1`,
-      [id],
-    );
-    expect(stored.rows[0]).toEqual({
-      verification_status: 'verified',
-      enabled: true,
-      verified_by_user_id: seeded.alpha.salesperson.userId,
-      verification_method: 'owner_attestation',
-      verified: true,
-    });
     expect(
       await countOf(
         "SELECT count(*)::text AS count FROM audit_events WHERE action = 'calling_identity.attested' AND subject_id = $1",
         [id],
       ),
     ).toBe(1);
-
-    // 9.2 step 2 now passes, and with the seeded posture inside the window so does
-    // everything after it: this is the first dial the product path could authorize.
-    expect(await authorizeDial(salesperson(), dialWith(id))).toMatchObject({
-      allowed: true,
-      evidence: { callingIdentityId: id },
-    });
-    // The most recently attested number is the one Today dials from.
-    expect(await currentCallingIdentityId(salesperson(), seeded.alpha.salesperson.userId)).toBe(id);
+    expect(await authorizeDial(salesperson(), dialWith(id))).toMatchObject({ allowed: true, evidence: { callingIdentityId: id } });
   });
 
-  it('is idempotent: a second attestation moves nothing and writes no second audit event', async () => {
+  it('is a no-op for a number registered since wave 2: existing, nothing moved, no audit event', async () => {
     const registered = await registerCallingIdentity(salesperson(), { e164: '+14015550135' });
     if (!registered.ok) throw new Error(registered.reason);
     const id = registered.value.identity.id;
-    const first = await verifyCallingIdentity(salesperson(), { identityId: id });
-    const second = await verifyCallingIdentity(salesperson(), { identityId: id });
-    expect(second).toMatchObject({ ok: true, value: { outcome: 'existing' } });
-    if (!first.ok || !second.ok) return;
-    expect(second.value.identity.verifiedAt).toBe(first.value.identity.verifiedAt);
+    const again = await verifyCallingIdentity(salesperson(), { identityId: id });
+    expect(again).toMatchObject({ ok: true, value: { outcome: 'existing' } });
+    if (!again.ok) return;
+    expect(again.value.identity.verifiedAt).toBe(registered.value.identity.verifiedAt);
     expect(
       await countOf(
         "SELECT count(*)::text AS count FROM audit_events WHERE action = 'calling_identity.attested' AND subject_id = $1",
         [id],
       ),
-    ).toBe(1);
-    // And a re-registration after the attestation does not undo it.
+    ).toBe(0);
+    // And a re-registration does not move it either.
     expect(await registerCallingIdentity(salesperson(), { e164: '+14015550135' })).toMatchObject({
       ok: true,
-      value: { outcome: 'existing', identity: { verificationStatus: 'verified', enabled: true } },
+      value: { outcome: 'existing', identity: { verifiedAt: registered.value.identity.verifiedAt } },
     });
   });
 
-  it('records an admin’s statement on a member’s behalf as a different method', async () => {
+  it('records an admin’s registration on a member’s behalf as a different method', async () => {
     const member = await aMember('salesperson');
     const registered = await registerCallingIdentity(admin(), { e164: '+14015550136', ownerUserId: member });
-    if (!registered.ok) throw new Error(registered.reason);
-    const attested = await verifyCallingIdentity(admin(), { identityId: registered.value.identity.id });
-    expect(attested).toMatchObject({
+    expect(registered).toMatchObject({
       ok: true,
       value: {
+        outcome: 'created',
         identity: {
           ownerUserId: member,
           verifiedByUserId: seeded.alpha.admin.userId,
@@ -376,8 +373,6 @@ describe('disableCallingIdentity', () => {
     const registered = await registerCallingIdentity(salesperson(), { e164: '+14015550139' });
     if (!registered.ok) throw new Error(registered.reason);
     const id = registered.value.identity.id;
-    const attested = await verifyCallingIdentity(salesperson(), { identityId: id });
-    if (!attested.ok) throw new Error(attested.reason);
 
     // A call placed from it, which the retirement must not orphan.
     await database.session.query(
@@ -436,32 +431,30 @@ describe('disableCallingIdentity', () => {
 });
 
 describe('which number a person dials from', () => {
-  it('is the most recently attested of their verified, enabled numbers, and the list says so', async () => {
+  it('is the most recently added or attested of their numbers still in use, and the list says so', async () => {
     const member = await aMember('salesperson');
     const theirs = contextFor(seeded.alpha.workspaceId, member, 'salesperson');
     expect(await currentCallingIdentityId(theirs, member)).toBeNull();
     expect(await listOwnCallingIdentities(theirs)).toEqual([]);
 
     const first = await registerCallingIdentity(theirs, { e164: '+14015550141', label: 'Desk' });
-    const second = await registerCallingIdentity(theirs, { e164: '+14015550143', label: 'Mobile' });
-    if (!first.ok || !second.ok) throw new Error('registration refused');
-    // Registered is not enough.
-    expect(await currentCallingIdentityId(theirs, member)).toBeNull();
-
-    await verifyCallingIdentity(theirs, { identityId: second.value.identity.id });
-    await verifyCallingIdentity(theirs, { identityId: first.value.identity.id });
+    if (!first.ok) throw new Error(first.reason);
+    // Registered is enough since wave 2 (S4.3).
     expect(await currentCallingIdentityId(theirs, member)).toBe(first.value.identity.id);
+    const second = await registerCallingIdentity(theirs, { e164: '+14015550143', label: 'Mobile' });
+    if (!second.ok) throw new Error(second.reason);
+    expect(await currentCallingIdentityId(theirs, member)).toBe(second.value.identity.id);
 
     const listed = await listOwnCallingIdentities(theirs);
     expect(listed.map(entry => [entry.label, entry.usedForCalls])).toEqual([
-      ['Desk', true],
-      ['Mobile', false],
+      ['Desk', false],
+      ['Mobile', true],
     ]);
     // Only their own: nobody else's number is in the list.
     expect(listed.every(entry => entry.ownerUserId === member)).toBe(true);
     expect(await listOwnCallingIdentities(worker())).toEqual([]);
 
-    await disableCallingIdentity(theirs, { identityId: first.value.identity.id });
-    expect(await currentCallingIdentityId(theirs, member)).toBe(second.value.identity.id);
+    await disableCallingIdentity(theirs, { identityId: second.value.identity.id });
+    expect(await currentCallingIdentityId(theirs, member)).toBe(first.value.identity.id);
   });
 });

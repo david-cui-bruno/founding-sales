@@ -13,6 +13,21 @@ import { isAdminScope, type RepositoryContext } from '../db/workspaceScope.ts';
  * one to `verified`. Production's only salesperson could not place a call from Today,
  * and the restore drill's dial probe had no subject.
  *
+ * ## Attested when added (wave 2, S4.3)
+ *
+ * Registering your own number is the attestation: `registerCallingIdentity` writes the
+ * row verified and enabled, with who, how and when, in one insert — the fields
+ * `calling_identities_verification_recorded` (0016) requires. There is no separate step
+ * before a dial any more. `verifyCallingIdentity` stays because installed desktops up to
+ * 1.0.11 still send `POST /calling-identities/attest`: for a number registered by an
+ * older release, still unverified, it attests it as before; for any other it answers
+ * `existing` and changes nothing.
+ *
+ * A number an older release registered and nobody attested is usable anyway: a dial asks
+ * only that the number is the actor's own and usable (`USABLE_CALLING_IDENTITY_SQL`,
+ * `authorizeDial` step 2), and `currentCallingIdentityId` offers it on the Today card. So
+ * no stored row waits for an attestation it no longer needs.
+ *
  * ## What "verified" means in version one
  *
  * There is no telephony provider in this stack: a call is a `tel:` handoff from the
@@ -143,14 +158,23 @@ function normalizeLabel(
 }
 
 /**
+ * Whether a calling identity may be dialled from, as SQL over `calling_identities`
+ * (wave 2, S4.3): not retired, and not a verified number somebody switched off. An
+ * unverified row — registered by an older release, never attested — has no switch to be
+ * off and is usable. Verification itself is not asked: a number is attested when added.
+ */
+export const USABLE_CALLING_IDENTITY_SQL =
+  "(disabled_at IS NULL AND (enabled OR verification_status = 'unverified'))";
+
+/**
  * The number an owner's Today cards dial from, or null (9.1: "active and owned by the
  * acting salesperson").
  *
- * The most recently attested of their verified, enabled numbers. An attestation says
- * "this is the number I place calls from", so the latest one is the current answer: a
- * person who attests a new number has said which line they are on now, without having
- * to retire the old one first. `readTodayFirm` asks this and so does the list below,
- * so the card and the settings page cannot disagree about which number is in use.
+ * The most recently added or attested of their numbers that are not retired. Adding a
+ * number says "this is the number I place calls from", so the latest one is the current
+ * answer: a person who adds a new number has said which line they are on now, without
+ * having to retire the old one first. `readTodayFirm` asks this and so does the list
+ * below, so the card and the settings page cannot disagree about which number is in use.
  */
 export async function currentCallingIdentityId(
   context: RepositoryContext,
@@ -158,9 +182,8 @@ export async function currentCallingIdentityId(
 ): Promise<string | null> {
   const { rows } = await context.db.query<{ id: string }>(
     `SELECT id FROM calling_identities
-      WHERE workspace_id = $1 AND owner_user_id = $2 AND enabled = true
-        AND verification_status = 'verified'
-      ORDER BY verified_at DESC NULLS LAST, created_at DESC, id
+      WHERE workspace_id = $1 AND owner_user_id = $2 AND ${USABLE_CALLING_IDENTITY_SQL}
+      ORDER BY coalesce(verified_at, created_at) DESC, created_at DESC, id
       LIMIT 1`,
     [context.scope.workspaceId, ownerUserId],
   );
@@ -238,22 +261,27 @@ export interface RegisterCallingIdentityInput {
 const REGISTRATION_PASSES = 2;
 
 /**
- * Register a number, unverified and disabled.
+ * Register a number, attested: verified and enabled, with who, how and when (wave 2,
+ * S4.3). The method is decided by who acts, as `verifyCallingIdentity` decides it: the
+ * owner's own registration is `owner_attestation`, an admin's on a member's behalf
+ * `admin_attestation`.
  *
  * Idempotent on the workspace and the number, which is the table's own unique key: a
- * second registration by the same owner returns the row exactly as it is — its
- * verification, its enable and its label untouched, because a retry must never undo an
- * attestation — and a registration of a number somebody else already holds is refused
- * rather than moved. Ownership never changes here.
+ * second registration by the same owner returns the row — attested now if an older
+ * release left it unverified or it had been retired, and otherwise exactly as it is,
+ * so a retry never moves `verified_at` — and a registration of a number somebody else
+ * already holds is refused rather than moved. Ownership never changes here.
  */
 export async function registerCallingIdentity(
   context: RepositoryContext,
   input: RegisterCallingIdentityInput,
-): Promise<CallingIdentityResult<CallingIdentityChange<'created' | 'existing'>>> {
+): Promise<CallingIdentityResult<CallingIdentityChange<'created' | 'existing' | 'verified'>>> {
   const actor = context.scope.actor;
   if (actor.kind !== 'user') return refuse('admin_only');
   const ownerUserId = input.ownerUserId ?? actor.userId;
   if (ownerUserId !== actor.userId && !isAdminScope(context.scope)) return refuse('admin_only');
+  const method: CallingIdentityVerificationMethod =
+    ownerUserId === actor.userId ? 'owner_attestation' : 'admin_attestation';
 
   const number = normalizeCallingNumber(input.e164);
   if (!number.ok) return refuse('number_invalid');
@@ -269,18 +297,24 @@ export async function registerCallingIdentity(
     const found = existing.rows[0];
     if (found !== undefined) {
       if (found.owner_user_id !== ownerUserId) return refuse('number_registered_to_another');
-      return accept({ outcome: 'existing', identity: await toRow(context, found) });
+      if (found.verification_status === 'verified' && found.enabled) {
+        return accept({ outcome: 'existing', identity: await toRow(context, found) });
+      }
+      const locked = await lockIdentity(context, found.id);
+      if (locked === null) continue;
+      return accept({ outcome: 'verified', identity: await toRow(context, await attest(context, locked, method)) });
     }
 
-    // `verification_status` and `enabled` take their defaults, `unverified` and false:
-    // a registration is a claim nobody has attested yet, and `authorizeDial` refuses it
-    // at step 2 until somebody does.
+    // Attested in the insert (wave 2, S4.3): adding your number is the statement that it
+    // is the line you call from, recorded with who, how and when as 0016 requires.
     const inserted = await context.db.query<IdentityDbRow>(
-      `INSERT INTO calling_identities (workspace_id, owner_user_id, e164, label)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO calling_identities
+         (workspace_id, owner_user_id, e164, label, verification_status, enabled,
+          verified_at, verified_by_user_id, verification_method)
+       VALUES ($1, $2, $3, $4, 'verified', true, now(), $5, $6)
        ON CONFLICT (workspace_id, e164) DO NOTHING
        RETURNING ${IDENTITY_COLUMNS}`,
-      [context.scope.workspaceId, ownerUserId, number.e164, label.label],
+      [context.scope.workspaceId, ownerUserId, number.e164, label.label, actor.userId, method],
     );
     const row = inserted.rows[0];
     if (row === undefined) continue;
@@ -289,7 +323,7 @@ export async function registerCallingIdentity(
       action: 'calling_identity.registered',
       subjectKind: 'calling_identity',
       subjectId: row.id,
-      detail: { ownerUserId, onBehalf: ownerUserId !== actor.userId },
+      detail: { ownerUserId, onBehalf: ownerUserId !== actor.userId, method },
     });
     return accept({ outcome: 'created', identity: await toRow(context, row) });
   }
@@ -297,8 +331,48 @@ export async function registerCallingIdentity(
 }
 
 /**
+ * Verify and enable a locked row, recording who, how and when, and audit it. The one
+ * statement both registration and the attest command write.
+ */
+async function attest(
+  context: RepositoryContext,
+  row: IdentityDbRow,
+  method: CallingIdentityVerificationMethod,
+): Promise<IdentityDbRow> {
+  const actor = context.scope.actor;
+  const { rows } = await context.db.query<IdentityDbRow>(
+    `UPDATE calling_identities
+        SET verification_status = 'verified',
+            enabled = true,
+            verified_at = now(),
+            verified_by_user_id = $3,
+            verification_method = $4,
+            disabled_at = NULL,
+            disabled_by_user_id = NULL,
+            updated_at = now()
+      WHERE workspace_id = $1 AND id = $2
+      RETURNING ${IDENTITY_COLUMNS}`,
+    [context.scope.workspaceId, row.id, actor.kind === 'user' ? actor.userId : null, method],
+  );
+  const updated = rows[0];
+  if (updated === undefined) throw new Error(`the calling identity ${row.id} vanished under its own row lock`);
+  await recordCrmAuditEvent(context, {
+    action: 'calling_identity.attested',
+    subjectKind: 'calling_identity',
+    subjectId: updated.id,
+    detail: { ownerUserId: row.owner_user_id, method, reenabled: row.disabled_at !== null },
+  });
+  return updated;
+}
+
+/**
  * Attest a number: "this is the number I place calls from" (9.1's verification, in
  * version one). Verifies and enables it, recording who, how and when.
+ *
+ * @deprecated (remove after desktop 1.0.12) — a number is attested when it is registered
+ * (wave 2, S4.3), and an unattested one is usable anyway. Kept because installed
+ * desktops up to 1.0.11 still send `POST /calling-identities/attest`; for a number that
+ * is already verified and enabled it is a no-op answering `existing`.
  *
  * The method is decided by who acts, not asked for: the owner's own statement is
  * `owner_attestation`; an admin's on a member's behalf is `admin_attestation`; anybody
@@ -332,31 +406,7 @@ export async function verifyCallingIdentity(
   if (row.verification_status === 'verified' && row.enabled) {
     return accept({ outcome: 'existing', identity: await toRow(context, row) });
   }
-
-  const { rows } = await context.db.query<IdentityDbRow>(
-    `UPDATE calling_identities
-        SET verification_status = 'verified',
-            enabled = true,
-            verified_at = now(),
-            verified_by_user_id = $3,
-            verification_method = $4,
-            disabled_at = NULL,
-            disabled_by_user_id = NULL,
-            updated_at = now()
-      WHERE workspace_id = $1 AND id = $2
-      RETURNING ${IDENTITY_COLUMNS}`,
-    [context.scope.workspaceId, row.id, actor.userId, method],
-  );
-  const updated = rows[0];
-  if (updated === undefined) return refuse('identity_unknown');
-
-  await recordCrmAuditEvent(context, {
-    action: 'calling_identity.attested',
-    subjectKind: 'calling_identity',
-    subjectId: updated.id,
-    detail: { ownerUserId: owner, method, reenabled: row.disabled_at !== null },
-  });
-  return accept({ outcome: 'verified', identity: await toRow(context, updated) });
+  return accept({ outcome: 'verified', identity: await toRow(context, await attest(context, row, method)) });
 }
 
 /**

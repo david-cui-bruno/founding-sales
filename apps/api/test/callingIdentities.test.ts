@@ -197,7 +197,7 @@ describe('the calling-number routes', () => {
     ).toBe(400);
   });
 
-  it('takes a salesperson from no Call button to an authorized dial, through these routes alone', async () => {
+  it('takes a salesperson from no Call button to an authorized dial with one registration (wave 2, S4.3)', async () => {
     // Where production was: no number, and a card with nothing to call from.
     expect((await send('GET', '/calling-identities', salespersonToken)).body).toEqual({ identities: [] });
     expect(await expandedIdentity()).toBeNull();
@@ -212,46 +212,19 @@ describe('the calling-number routes', () => {
     // The Mac reads a calling-number change with `@fss/contracts`' schema since lane g78.
     expect(wireDrift(callingIdentityChangeResultSchema, resultOf(registered))).toEqual([]);
     const identity = identityOf(registered);
+    // Attested as it is added: verified and enabled, with who and how.
     expect(identity).toMatchObject({
       ownerUserId: salespersonUserId,
       e164: '+14015550150',
       label: 'Mobile',
-      verificationStatus: 'unverified',
-      enabled: false,
-      usedForCalls: false,
-    });
-    // Registered is not verified: still no Call button, and the dial is refused at step 2.
-    expect(await expandedIdentity()).toBeNull();
-    const early = await post(
-      '/dial/authorize',
-      salespersonToken,
-      command({ firmId, contactId, routeId, routeVersion, callingIdentityId: identity.id }),
-    );
-    expect(early.status).toBe(409);
-    expect(early.body['reason']).toBe('identity_unverified');
-
-    const attestCommand = command({ identityId: identity.id, attested: true });
-    const attested = await post('/calling-identities/attest', salespersonToken, attestCommand);
-    expect(attested.status, JSON.stringify(attested.body)).toBe(200);
-    expect(wireDrift(callingIdentityChangeResultSchema, resultOf(attested))).toEqual([]);
-    expect(identityOf(attested)).toMatchObject({
       verificationStatus: 'verified',
       enabled: true,
       verifiedByUserId: salespersonUserId,
       verificationMethod: 'owner_attestation',
       usedForCalls: true,
     });
-    // A retried press is the same command: the receipt answers, nothing is attested twice.
-    const replay = await post('/calling-identities/attest', salespersonToken, attestCommand);
-    expect(replay.status).toBe(200);
-    expect(replay.body['replayed']).toBe(true);
-    const audits = await fixture.db.query<{ count: string }>(
-      "SELECT count(*)::text AS count FROM audit_events WHERE action = 'calling_identity.attested' AND subject_id = $1",
-      [identity.id],
-    );
-    expect(audits.rows[0]?.count).toBe('1');
 
-    // The card now carries the number, and 9.2 gets past its second step.
+    // The card carries the number at once, and 9.2 gets past its second step.
     expect(await expandedIdentity()).toBe(identity.id);
     const dial = await post(
       '/dial/authorize',
@@ -266,6 +239,22 @@ describe('the calling-number routes', () => {
       expect(dial.status).toBe(409);
       expect(dial.body['reason']).toBe('outside_calling_window');
     }
+
+    // Desktop 1.0.11 still presses Attest: the deprecated route answers `existing`, and a
+    // retried press is the same command, so nothing is attested twice.
+    const attestCommand = command({ identityId: identity.id, attested: true });
+    const attested = await post('/calling-identities/attest', salespersonToken, attestCommand);
+    expect(attested.status, JSON.stringify(attested.body)).toBe(200);
+    expect(wireDrift(callingIdentityChangeResultSchema, resultOf(attested))).toEqual([]);
+    expect(resultOf(attested)['outcome']).toBe('existing');
+    const replay = await post('/calling-identities/attest', salespersonToken, attestCommand);
+    expect(replay.status).toBe(200);
+    expect(replay.body['replayed']).toBe(true);
+    const audits = await fixture.db.query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM audit_events WHERE action = 'calling_identity.attested' AND subject_id = $1",
+      [identity.id],
+    );
+    expect(audits.rows[0]?.count).toBe('0');
 
     const listed = callingIdentityListSchema.parse((await send('GET', '/calling-identities', salespersonToken)).body);
     expect(listed.identities.map(entry => [entry.id, entry.usedForCalls])).toEqual([[identity.id, true]]);

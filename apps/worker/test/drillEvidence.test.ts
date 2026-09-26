@@ -277,7 +277,8 @@ describe('fss admin drill seed-evidence', () => {
         verification_method: 'owner_attestation',
       },
     ]);
-    expect(await countOf('audit_events', "action IN ('calling_identity.registered', 'calling_identity.attested')")).toBe(2);
+    // One event: registration attests since wave 2 (S4.3), and the attest call is a no-op.
+    expect(await countOf('audit_events', "action IN ('calling_identity.registered', 'calling_identity.attested')")).toBe(1);
     // The route's firm is assigned to the identity's owner: together they are a subject
     // the step 1 dial probe can ask about.
     expect(

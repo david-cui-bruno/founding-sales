@@ -1145,7 +1145,9 @@ async function ensureCallingIdentity(
   if (!identity.enabled || identity.verificationStatus !== 'verified') {
     throw new EvidenceRefusal('calling_identity', 'the attested calling identity is not verified and enabled');
   }
-  const created = registered.value.outcome === 'created' || attested.value.outcome === 'verified';
+  // Registration attests since wave 2 (S4.3), so the second call answers `existing`; it
+  // stays for a row an older release registered and left unattested.
+  const created = registered.value.outcome !== 'existing' || attested.value.outcome === 'verified';
   return { id: identity.id, outcome: created ? 'created' : 'existing' };
 }
 

@@ -35,6 +35,7 @@ export const DIAL_HOLD_REFUSAL_CODES = [
   'outside_calling_window',
   'posture_missing',
   'posture_overlapping',
+  /** @deprecated never answered since wave 2 (S4.2): a posture has no yearly expiry. */
   'posture_overdue',
   'scoped_pause',
   'restore_in_progress',
@@ -59,6 +60,7 @@ export const DIAL_REQUEST_REFUSAL_CODES = [
   'route_version_stale',
   'identity_missing',
   'identity_not_owned',
+  /** @deprecated never answered since wave 2 (S4.3): a number is attested when added. */
   'identity_unverified',
   'identity_disabled',
   'identity_shared_line_disabled',
@@ -136,8 +138,9 @@ export const callingIdentityDtoSchema = z.strictObject({
   disabledAt: instant.nullable(),
   /**
    * Whether this is the number the owner's Today cards dial from: the most recently
-   * attested of their verified, enabled numbers, chosen by the server so the Mac shows
-   * the choice rather than re-deriving it.
+   * added or attested of their numbers that are not retired (wave 2, S4.3: a number is
+   * attested when added, and one an older release left unverified is usable), chosen by
+   * the server so the Mac shows the choice rather than re-deriving it.
    */
   usedForCalls: z.boolean(),
   createdAt: instant,
@@ -652,7 +655,8 @@ export const completeCallbackCommandSchema = z.strictObject({
 });
 
 /**
- * Register a calling number (lane g60).
+ * Register a calling number (lane g60). Since wave 2 (S4.3) the number is attested as it
+ * is added: verified and enabled, with who and when, and usable for calls at once.
  *
  * The number travels as typed — trimmed, and at most 32 characters — and is
  * normalized by the domain, which strips spaces, dots, hyphens and parentheses after a
@@ -670,6 +674,11 @@ export const registerCallingIdentityCommandSchema = z.strictObject({
  * The attestation: "this is the number I place calls from". `attested` is a literal
  * `true` so that no client can verify a number without sending the statement; the
  * method recorded is decided by who sends it, never by the body.
+ *
+ * @deprecated (remove after desktop 1.0.12) — `POST /calling-identities/register` attests
+ * the number it adds (wave 2, S4.3), and no dial asks for an attestation. Still accepted
+ * for desktops up to 1.0.11: it attests a number an older release left unverified, and
+ * answers `existing` for any other.
  */
 export const attestCallingIdentityCommandSchema = z.strictObject({
   ...commandEnvelope,
