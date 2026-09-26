@@ -1,38 +1,24 @@
 name: Greenfield deploy
 
-# Deploys an app-only change to production by itself (lane g91; P6, 27 September 2026).
-# David, 25 September 2026: "I'm a startup, I want to move fast." When *Greenfield images*
-# publishes a push to main, this deploys it, unless a commit since the one production's
-# images were built from is a schema, infrastructure, release-script or workflow change,
-# which keeps the manual path (docs/greenfield/release.md 4).
-#
-#   gates    no credential: the images run is a green publish of a push to main; then
-#            `deploy.sh ci gates` (images commit): the Greenfield gate green on that push,
-#            newest run and latest attempt, and the commit still on main; it waits up to
-#            thirty minutes, and red, unfinished or off main is `manual`.
-#   deploy   `id-token: write`, environment `production-deploy`. Nothing from the images
-#            commit runs before this file's own guard has found no protected path in any
-#            commit since production's; then only `infra/scripts/`, never Node: `deploy.sh
-#            ci download` (the run's own artifact, held to its recorded digest: digests and
-#            schema ranges), `check`, `record --before-rollout` (the first write: the gate
-#            again, then the ci-gate record, so no new worker task starts without one),
-#            `images.sh promote` and `deploy` (worker, then API, each held to COMPLETED and
-#            its digest), `record --after-rollout` (the read-back: `existing`), `canary`.
-#   smoke    no credential: `scripts/productionSmoke.mjs` against the public origin.
-#   summary  one line, whatever happened.
-#
-# Provenance without a clock (P6): the rehearsal repositories are IMMUTABLE, the images run
-# refuses a `ci-<commit>` tag that exists on its first attempt and verifies what it pulls
-# back by digest, the artifact is bound to its run, and `check` holds each digest to the one
-# the tag names. There is no ECR repository policy; the rehearsal deploy role's namespace
-# limits who can push `fss-rh-*`. One concurrency group, never cancelled in progress.
+# Deploys an app-only change to production by itself (lane g91; P6, 27 September 2026),
+# unless a commit since production's is a schema, infrastructure, release-script or
+# workflow change, which keeps the manual path (docs/greenfield/release.md 4).
+#   gates      no credential: a green images publish of a push to main; `deploy.sh ci gates`
+#              (the gate green on that push, the commit on main; else `manual`).
+#   deploy     id-token: this file's guard, then only infra/scripts: download, check, record
+#              --before-rollout (the first write), gate, images.sh promote, deploy (worker,
+#              then API), canary. Each write reads the gate again, held to the run gates chose.
+#   smoke      no credential: scripts/productionSmoke.mjs against the public origin.
+#   read-back  id-token, after the smoke: record --after-rollout must answer `existing`.
+# Provenance without a clock (P6): IMMUTABLE rehearsal repositories, a first-attempt tag
+# refusal, a pulled-by-digest check, an artifact bound to its run, digests held to the tag;
+# no ECR repository policy (the rehearsal deploy role's namespace limits who pushes fss-rh-*).
 
 on:
   workflow_run:
     workflows: [Greenfield images]
     types: [completed]
     branches: [main]
-  # The first deploy, and any re-run: the operator names the images run.
   workflow_dispatch:
     inputs:
       images_run_id:
@@ -42,29 +28,28 @@ on:
 
 permissions:
   contents: read
-
 concurrency:
   group: fss-production-deploy
   cancel-in-progress: false
-
 defaults:
   run:
     shell: bash
-
 env:
   AWS_REGION: ${{ vars.FSS_AWS_REGION || 'us-east-1' }}
   FSS_PRODUCTION_ORIGIN: ${{ vars.FSS_PRODUCTION_ORIGIN || 'https://api.usecallie.com' }}
+  CLUSTER_NAME: ${{ vars.FSS_PRODUCTION_CLUSTER_NAME }}
+  OPERATIONS_FAMILY: ${{ vars.FSS_PRODUCTION_OPERATIONS_TASK_FAMILY }}
+  TASK_SUBNETS: ${{ vars.FSS_PRODUCTION_TASK_SUBNET_IDS }}
+  TASK_SECURITY_GROUP: ${{ vars.FSS_PRODUCTION_TASK_SECURITY_GROUP_ID }}
 
 jobs:
   gates:
     name: The images run, the gate on its commit, and main
+    # Any dispatch, so one from another ref fails below with the reason rather than skipping.
     if: >-
-      (github.event_name == 'workflow_run'
-        && github.event.workflow_run.conclusion == 'success'
-        && github.event.workflow_run.event == 'push'
-        && github.event.workflow_run.head_branch == 'main'
-        && github.event.workflow_run.head_repository.full_name == github.repository)
-      || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+      github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success'
+      && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main'
+      && github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     permissions:
@@ -76,6 +61,7 @@ jobs:
       run_attempt: ${{ steps.run.outputs.run_attempt }}
       decision: ${{ steps.gates.outputs.decision }}
       reason: ${{ steps.gates.outputs.reason }}
+      gate_run_id: ${{ steps.gates.outputs.gate_run_id }}
     steps:
       - name: The images run is a green publish of a push to main
         id: run
@@ -84,6 +70,8 @@ jobs:
           RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || inputs.images_run_id }}
         run: |
           set -euo pipefail
+          [ "${GITHUB_EVENT_NAME:-}" != workflow_dispatch ] || [ "${GITHUB_REF:-}" = refs/heads/main ] \
+            || { echo "::error::dispatched from ${GITHUB_REF:-an unknown ref}: only a dispatch from main deploys (production-deploy admits main alone). Nothing was read or deployed."; exit 1; }
           [[ "$RUN_ID" =~ ^[0-9]{1,20}$ ]] || { echo "::error::'$RUN_ID' is not a workflow run id"; exit 1; }
           fields="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" --jq \
             '[.path, .event, .head_branch, .conclusion, .head_repository.full_name, .head_sha, .run_attempt] | map(if . == null or . == "" then "-" else tostring end) | @tsv')"
@@ -98,7 +86,6 @@ jobs:
           [ -z "$problems" ] || { echo "::error::the images run cannot be deployed: ${problems#; }"; exit 1; }
           printf 'commit=%s\nrun_id=%s\nrun_attempt=%s\n' "$commit" "$RUN_ID" "$attempt" | tee -a "$GITHUB_OUTPUT"
 
-      # Only the release scripts, and no credential: the deploy job reads the gate again.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: ${{ steps.run.outputs.commit }}
@@ -117,9 +104,7 @@ jobs:
     needs: gates
     if: needs.gates.outputs.decision == 'pass'
     runs-on: ubuntu-24.04
-    # Two rollouts of up to three ten-minute waits, two puts of up to twenty minutes.
-    timeout-minutes: 170
-    # The one OIDC subject fss-prod-ci-deploy trusts; its deployment-branch rule is main.
+    timeout-minutes: 110  # a put of up to 20 minutes, two rollouts of up to 3 ten-minute waits
     environment: production-deploy
     permissions:
       contents: read
@@ -133,18 +118,14 @@ jobs:
       previous: ${{ steps.deploy.outputs.previous_worker_task_definition }} ${{ steps.deploy.outputs.previous_api_task_definition }}
       observed: ${{ steps.deploy.outputs.observed_worker_task_definition }} ${{ steps.deploy.outputs.observed_api_task_definition }}
       expect_sending: ${{ steps.deploy.outputs.expect_sending }}
-      canary_age: ${{ steps.read-back.outputs.canary_age }}
+      canary_age: ${{ steps.deploy.outputs.canary_age }}
       record: ${{ steps.record.outputs.release_record_reference }} ${{ steps.record.outputs.release_record_outcome }}
-      read_back: ${{ steps.read-back.outputs.release_record_outcome }}
     env:
       COMMIT: ${{ needs.gates.outputs.commit }}
       RUN_ID: ${{ needs.gates.outputs.run_id }}
       RUN_ATTEMPT: ${{ needs.gates.outputs.run_attempt }}
+      GATE_RUN_ID: ${{ needs.gates.outputs.gate_run_id }}
       GH_TOKEN: ${{ github.token }}
-      CLUSTER_NAME: ${{ vars.FSS_PRODUCTION_CLUSTER_NAME }}
-      OPERATIONS_FAMILY: ${{ vars.FSS_PRODUCTION_OPERATIONS_TASK_FAMILY }}
-      TASK_SUBNETS: ${{ vars.FSS_PRODUCTION_TASK_SUBNET_IDS }}
-      TASK_SECURITY_GROUP: ${{ vars.FSS_PRODUCTION_TASK_SECURITY_GROUP_ID }}
     steps:
       - name: Refuse any ambient cloud credential, and scalars that are not what they claim
         run: |
@@ -152,8 +133,8 @@ jobs:
           for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_PROFILE AWS_ROLE_ARN AWS_WEB_IDENTITY_TOKEN_FILE; do
             [ -z "${!name:-}" ] || { echo "::error::$name is set before the production CI deploy role was assumed."; exit 1; }
           done
-          [[ "$COMMIT" =~ ^[0-9a-f]{40}$ && "$RUN_ID" =~ ^[0-9]{1,20}$ && "$RUN_ATTEMPT" =~ ^[0-9]{1,4}$ ]] \
-            || { echo "::error::the gates job's commit, run or attempt is malformed"; exit 1; }
+          [[ "$COMMIT" =~ ^[0-9a-f]{40}$ && "$RUN_ID" =~ ^[0-9]{1,20}$ && "$RUN_ATTEMPT" =~ ^[0-9]{1,4}$ && "$GATE_RUN_ID" =~ ^[1-9][0-9]{0,19}$ ]] \
+            || { echo "::error::the gates job's commit, run, attempt or gate run is malformed"; exit 1; }
 
       # The images commit and its history. Nothing in it runs before the guard has passed.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -183,10 +164,7 @@ jobs:
           [ "$identity" = "arn:aws:sts::${BASH_REMATCH[1]}:assumed-role/fss-prod-ci-deploy/fss-prod-ci-deploy-${GITHUB_RUN_ID}" ] \
             || { echo "::error::the session is $identity, not this run's session of $ROLE_ARN"; exit 1; }
 
-      # The protected-path guard, this file's code: the commit production's images were built
-      # from (the ci-<commit> tag on each running digest in fss-prod-*), and every commit
-      # since, one by one with renames off (a reverted change and both paths of a move are
-      # seen); a merge is judged against its first parent.
+      # Production's commit (its digests' ci-<commit> tags), then each commit since, renames off.
       - name: Protected paths in any commit since production's
         id: guard
         run: |
@@ -232,16 +210,13 @@ jobs:
           done
           sort -u "$work/paths" | sed '/^$/d' > "$work/touched"
           echo "$(wc -l < "$work/touched" | tr -d ' ') path(s) touched by the commits since production's"
-          # Application code deploys; everything else, including a path this list has never
-          # met, takes the manual path.
+          # Application code deploys; everything else, an unknown path included, is manual.
           : > "$work/protected"
           while IFS= read -r path; do
             case "$path" in
               infra/*) why='infrastructure, and every release script in infra/scripts' ;;
               packages/domain/db/migrations/*) why='a migration, which is a schema change' ;;
-              # The schema acceptance rule and the migration runner, and what they read
-              # (lane A1): check compares declared ranges, so a change to how a version is
-              # accepted, read or applied would pass it unseen.
+              # Lane A1: check compares ranges, so how a version is accepted is protected too.
               packages/domain/db/schemaRange.ts) why='the schema acceptance rule' ;;
               packages/domain/db/migrationRunner.ts) why='the migration runner, which schema acceptance reads the version through' ;;
               packages/domain/db/queryable.ts) why='the session helpers the migration runner applies migrations with' ;;
@@ -273,44 +248,25 @@ jobs:
           infra/scripts/deploy.sh ci check --digests "$RUNNER_TEMP/image-digests.json" --commit "$COMMIT" \
             --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" --origin "$FSS_PRODUCTION_ORIGIN"
 
-      # The first write: the worker sends only under a stored record naming its digest, so
-      # the record goes in before any new worker task starts (inert if the rollout fails).
+      # The first write: a worker sends only under a stored record naming its digest.
       - name: Put the ci-gate release record, before the rollout
         id: record
         if: steps.check.outputs.decision == 'deploy'
         run: |
           set -euo pipefail
           infra/scripts/deploy.sh ci record --before-rollout --digests "$RUNNER_TEMP/image-digests.json" \
-            --commit "$COMMIT" --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" --cluster-name "$CLUSTER_NAME" \
+            --commit "$COMMIT" --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" --gate-run-id "$GATE_RUN_ID" --cluster-name "$CLUSTER_NAME" \
             --operations-family "$OPERATIONS_FAMILY" --subnets "$TASK_SUBNETS" --security-group "$TASK_SECURITY_GROUP"
 
-      - name: Promote both images, then roll the worker and then the API, each held to its digest
+      - name: Promote both images, roll the worker and then the API to their digests, read the canary
         id: deploy
         if: steps.check.outputs.decision == 'deploy'
         run: |
           set -euo pipefail
+          infra/scripts/deploy.sh ci gate --commit "$COMMIT" --gate-run-id "$GATE_RUN_ID" --before 'the promotion'
           infra/scripts/images.sh promote "$RUNNER_TEMP/image-digests.json"
           infra/scripts/deploy.sh ci deploy --digests "$RUNNER_TEMP/image-digests.json" \
-            --commit "$COMMIT" --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT"
-
-      # A fresh session for the read-back: the rollouts may have used most of the first.
-      - name: Assume the production CI deploy role again
-        if: steps.deploy.outcome == 'success'
-        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
-        with:
-          role-to-assume: ${{ secrets.FSS_PRODUCTION_CI_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-          role-session-name: fss-prod-ci-deploy-${{ github.run_id }}
-          role-duration-seconds: 3600
-
-      - name: Read the release record back, which must answer existing, then the canary age
-        id: read-back
-        if: steps.deploy.outcome == 'success'
-        run: |
-          set -euo pipefail
-          infra/scripts/deploy.sh ci record --after-rollout --digests "$RUNNER_TEMP/image-digests.json" \
-            --commit "$COMMIT" --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" --cluster-name "$CLUSTER_NAME" \
-            --operations-family "$OPERATIONS_FAMILY" --subnets "$TASK_SUBNETS" --security-group "$TASK_SECURITY_GROUP"
+            --commit "$COMMIT" --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" --gate-run-id "$GATE_RUN_ID"
           infra/scripts/deploy.sh ci canary
 
   smoke:
@@ -349,9 +305,53 @@ jobs:
           echo "::error::the production smoke did not pass. The new revisions are running; the summary names them."
           exit 1
 
+  # After the smoke. The deploy job's guard showed infra/scripts unchanged since production's.
+  read-back:
+    name: Read the release record back, after the smoke
+    needs: [gates, deploy, smoke]
+    if: needs.smoke.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: production-deploy
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    outputs:
+      read_back: ${{ steps.read-back.outputs.release_record_outcome }}
+    env:
+      COMMIT: ${{ needs.gates.outputs.commit }}
+      RUN_ID: ${{ needs.gates.outputs.run_id }}
+      RUN_ATTEMPT: ${{ needs.gates.outputs.run_attempt }}
+      GATE_RUN_ID: ${{ needs.gates.outputs.gate_run_id }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ needs.gates.outputs.commit }}
+          sparse-checkout: infra/scripts
+          persist-credentials: false
+
+      - name: Assume the production CI deploy role
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
+        with:
+          role-to-assume: ${{ secrets.FSS_PRODUCTION_CI_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: fss-prod-ci-deploy-${{ github.run_id }}
+          role-duration-seconds: 3600
+
+      - name: Read the release record back, which must answer existing
+        id: read-back
+        run: |
+          set -euo pipefail
+          infra/scripts/deploy.sh ci download --run-id "$RUN_ID" --commit "$COMMIT" --out "$RUNNER_TEMP/image-digests.json"
+          infra/scripts/deploy.sh ci record --after-rollout --digests "$RUNNER_TEMP/image-digests.json" \
+            --commit "$COMMIT" --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" --gate-run-id "$GATE_RUN_ID" --cluster-name "$CLUSTER_NAME" \
+            --operations-family "$OPERATIONS_FAMILY" --subnets "$TASK_SUBNETS" --security-group "$TASK_SECURITY_GROUP"
+
   summary:
     name: One line
-    needs: [gates, deploy, smoke]
+    needs: [gates, deploy, smoke, read-back]
     if: always() && needs.gates.result != 'skipped'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -365,6 +365,7 @@ jobs:
           GATES_REASON: ${{ needs.gates.outputs.reason }}
           DEPLOY_RESULT: ${{ needs.deploy.result }}
           SMOKE_RESULT: ${{ needs.smoke.result }}
+          READ_BACK_RESULT: ${{ needs.read-back.result }}
           DECISION: ${{ needs.deploy.outputs.decision }}
           REASON: ${{ needs.deploy.outputs.reason }}
           WORKER: ${{ needs.deploy.outputs.worker }}
@@ -372,22 +373,22 @@ jobs:
           PREVIOUS: ${{ needs.deploy.outputs.previous }}
           OBSERVED: ${{ needs.deploy.outputs.observed }}
           RECORD: ${{ needs.deploy.outputs.record }}
-          READ_BACK: ${{ needs.deploy.outputs.read_back }}
+          READ_BACK: ${{ needs.read-back.outputs.read_back }}
         run: |
           set -euo pipefail
           short="${COMMIT:0:8}"
           level=notice
           if [ "$GATES_RESULT" = success ] && [ "$GATES_DECISION" = manual ]; then
             line="Not deployed: $GATES_REASON. The manual path applies (docs/greenfield/release.md 4)."
-          elif [ "$DEPLOY_RESULT" != success ] || { [ "$DECISION" = deploy ] && [ "$SMOKE_RESULT" != success ]; }; then
+          elif [ "$DEPLOY_RESULT" != success ] || { [ "$DECISION" = deploy ] && [ "$SMOKE_RESULT $READ_BACK_RESULT" != 'success success' ]; }; then
             level=error
-            line="Production deploy of ${short:-an unknown commit} FAILED (gates ${GATES_RESULT:-not run}, deploy ${DEPLOY_RESULT:-not run}, smoke ${SMOKE_RESULT:-not run}, decision ${DECISION:-none})."
+            line="Production deploy of ${short:-an unknown commit} FAILED (gates ${GATES_RESULT:-not run}, deploy ${DEPLOY_RESULT:-not run}, smoke ${SMOKE_RESULT:-not run}, read-back ${READ_BACK_RESULT:-not run}, decision ${DECISION:-none})."
             [ -z "${PREVIOUS// /}" ] || line="$line Before: $PREVIOUS."
             [ -z "${OBSERVED// /}" ] || line="$line Observed after the failure: $OBSERVED."
-            [ -z "${RECORD// /}" ] || line="$line Release record: $RECORD before the rollout, ${READ_BACK:-not read back} after it."
+            [ -z "${RECORD// /}" ] || line="$line Release record: $RECORD before the rollout, ${READ_BACK:-not read back} after the smoke."
           else
             case "$DECISION" in
-              deploy) line="Deployed $short to production: release record $RECORD before the rollout and $READ_BACK after it, worker ${WORKER##*/}, api ${API##*/}, each held to its digest, smoke passed." ;;
+              deploy) line="Deployed $short to production: release record $RECORD before the rollout and $READ_BACK after the smoke passed, worker ${WORKER##*/}, api ${API##*/}, each held to its digest." ;;
               current) line="Production already runs $short. Nothing deployed." ;;
               manual) line="Not deployed: $REASON. The manual path applies (docs/greenfield/release.md 4)." ;;
               *) line="Nothing decided." ;;

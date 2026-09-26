@@ -5,7 +5,7 @@
 #   deploy.sh bootstrap <root> <prefix> --worker-digest D --slug S --display-name N --admin-email E \
 #                       [--time-zone Z] [--sending-domain DOMAIN] [--environment production]
 #   deploy.sh current   <prefix> [--var-flags] [--compare <api_image> <worker_image> [--allow-digest-change]]
-#   deploy.sh ci        gates|download|check|record|deploy|canary  (the CI path; flags under "ci" below)
+#   deploy.sh ci        gates|gate|download|check|record|deploy|canary  (the CI path; flags under "ci" below)
 #
 # It replaces release-deploy.sh (release), release-bootstrap-workspace.sh (bootstrap),
 # deployed-digests.sh (current) and ci-deploy-app.sh (ci), which exec it with the same
@@ -76,20 +76,28 @@
 # ## ci: an app-only merge, deployed by CI (lane g91; David, 25 September 2026; P6)
 #
 #   deploy.sh ci gates    --commit <sha> [--wait-minutes N]                  (no credential)
+#   deploy.sh ci gate     --commit <sha> --gate-run-id <id> [--before <what>]
 #   deploy.sh ci download --run-id <id> --commit <sha> --out <image-digests.json>
-#   deploy.sh ci check|deploy --digests <image-digests.json> --commit <sha> --run-id <id> \
-#       --run-attempt <n> [--origin https://...]                            (check needs it)
-#   deploy.sh ci record --before-rollout|--after-rollout <the same, without --origin> \
+#   deploy.sh ci check    --digests <image-digests.json> --commit <sha> --run-id <id> \
+#       --run-attempt <n> --origin https://...
+#   deploy.sh ci deploy   <the same, without --origin> --gate-run-id <id>
+#   deploy.sh ci record   --before-rollout|--after-rollout <the same as deploy> \
 #       --cluster-name <name> --operations-family <family> --subnets <a,b> --security-group <sg>
 #   deploy.sh ci canary
 #
-# `.github/workflows/greenfield-deploy.yml` runs these; all but `gates` as
+# `.github/workflows/greenfield-deploy.yml` runs these; all but `gates` and `gate` as
 # `fss-prod-ci-deploy`, after its own guard found no protected path in any commit since
 # production's (this file never classifies paths: a script is itself a protected path).
 #
 #   * gates: the Greenfield gate green on the push at the commit (its newest run, latest
 #     attempt) and the commit still on main, waiting for a gate still running;
-#     decision=pass or manual.
+#     decision=pass and gate_run_id, or manual.
+#   * The gate held to one run (review of PRs 273 and 278): record, gate and deploy take
+#     --gate-run-id, the run gates chose, and read the gate again, waiting for nothing,
+#     immediately before every write: before the record is built and again before its
+#     put, before the promotion (`ci gate`), and before each service is rolled. A newer
+#     run of the push, a re-run gone red or the commit off main fails there, with nothing
+#     more written (a revision registered for the service about to roll is deregistered).
 #   * download: the images run's own fss-image-digests artifact, held to the digest GitHub
 #     recorded. It carries both digests and the schema range each image declares.
 #   * check, record and deploy first read and judge: the session is exactly the CI role in
@@ -114,8 +122,9 @@
 #     ECS rolled back is deregistered, so the newest ACTIVE revision is the one that runs;
 #     the stopped tasks' stop codes and the event/reason/code fields of their log lines are
 #     printed, never a raw line. No Terraform; nothing from the images commit runs here.
-#   * record --after-rollout: the read-back. Both services must run the two digests, the
-#     gate is read again, and the same put must answer `existing`.
+#   * record --after-rollout: the read-back, in its own job after the smoke. Both services
+#     must run the two digests, the gate is read again, and the same put must answer
+#     `existing`.
 #   * canary: the canary age the production smoke judges.
 #
 # Offline seams: FSS_REHEARSAL_AWS_COMMAND, FSS_GH_COMMAND, FSS_CI_CALLER_IDENTITY,
@@ -137,8 +146,8 @@ deploy_usage() { # deploy_usage [exit code]
 usage: deploy.sh release   <root> <prefix> [--schema-change] --api-digest D --worker-digest D [--release-record F]
        deploy.sh bootstrap <root> <prefix> --worker-digest D --slug S --display-name N --admin-email E [--time-zone Z] [--sending-domain DOMAIN] [--environment production]
        deploy.sh current   <prefix> [--var-flags] [--compare <api_image> <worker_image> [--allow-digest-change]]
-       deploy.sh ci        gates --commit SHA [--wait-minutes N] | download --run-id ID --commit SHA --out F | canary
-       deploy.sh ci        check|deploy|record --digests F --commit SHA --run-id ID --run-attempt N [--origin URL] [--before-rollout|--after-rollout --cluster-name NAME --operations-family FAMILY --subnets IDS --security-group ID]
+       deploy.sh ci        gates --commit SHA [--wait-minutes N] | gate --commit SHA --gate-run-id ID [--before WHAT] | download --run-id ID --commit SHA --out F | canary
+       deploy.sh ci        check|deploy|record --digests F --commit SHA --run-id ID --run-attempt N [--origin URL] [--gate-run-id ID] [--before-rollout|--after-rollout --cluster-name NAME --operations-family FAMILY --subnets IDS --security-group ID]
 USAGE
   exit "${1:-2}"
 }
@@ -601,12 +610,13 @@ deploy_ci() {
   shift || true
   case "$SUBCOMMAND" in
     gates) ci_gates "$@"; return ;;
+    gate) ci_gate "$@"; return ;;
     download) ci_download "$@"; return ;;
     canary) ci_canary; return ;;
     check | deploy | record) ;;
     *) deploy_usage 2 ;;
   esac
-  DIGESTS='' COMMIT='' RUN_ID='' RUN_ATTEMPT='' ORIGIN=''
+  DIGESTS='' COMMIT='' RUN_ID='' RUN_ATTEMPT='' ORIGIN='' GATE_RUN_ID=''
   RECORD_CLUSTER_NAME='' OPERATIONS_FAMILY='' TASK_SUBNETS='' TASK_SECURITY_GROUP='' RECORD_STAGE=''
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -621,6 +631,7 @@ deploy_ci() {
       --run-id) RUN_ID=${2:-}; shift 2 ;;
       --run-attempt) RUN_ATTEMPT=${2:-}; shift 2 ;;
       --origin) ORIGIN=${2:-}; shift 2 ;;
+      --gate-run-id) GATE_RUN_ID=${2:-}; shift 2 ;;
       *) deploy_fail "deploy.sh ci does not take '$1'" ;;
     esac
   done
@@ -649,13 +660,16 @@ ci_arguments() {
   [[ "$RUN_ATTEMPT" =~ ^[0-9]{1,4}$ ]] || deploy_fail "--run-attempt '$RUN_ATTEMPT' is not a run attempt"
   if [ "$SUBCOMMAND" = check ]; then
     [[ "$ORIGIN" =~ ^https://[A-Za-z0-9.-]+$ ]] || deploy_fail "--origin '$ORIGIN' is not an https origin; production has no port-80 listener"
+    [ -z "$GATE_RUN_ID" ] || deploy_fail "--gate-run-id belongs to record and deploy, which write; check only reads"
+  else
+    ci_require_gate_run_id
   fi
   if [ "$SUBCOMMAND" != record ]; then
     [ -z "$RECORD_STAGE" ] || deploy_fail "--before-rollout and --after-rollout belong to record, not to $SUBCOMMAND"
     return 0
   fi
   [ -n "$RECORD_STAGE" ] \
-    || deploy_fail "record needs --before-rollout (the deploy job's put, before its first write) or --after-rollout (the read-back after the rollout)"
+    || deploy_fail "record needs --before-rollout (the deploy job's put, before its first write) or --after-rollout (the read-back job's put, after the smoke)"
   # Four public identifiers from repository variables (release.md 4.0); an empty one is a
   # variable nobody set.
   [[ "$RECORD_CLUSTER_NAME" =~ ^${CI_PREFIX}-[a-z0-9-]{1,40}$ ]] \
@@ -797,16 +811,49 @@ ci_gates() {
   done
 }
 
-# The gate again, immediately before a write, waiting for nothing: anything but green on
-# main now is a red run with nothing written. Sets GATE_RUN_ID.
-ci_require_gate() {
-  local verdict
-  verdict="$(ci_gate_verdict "$COMMIT")" || exit 1
+# --gate-run-id: the gate run the gates job chose. Every check before a write must find it
+# again, the newest run of the push and green, with the commit on main.
+ci_require_gate_run_id() {
+  [[ "$GATE_RUN_ID" =~ ^[1-9][0-9]{0,19}$ ]] \
+    || deploy_fail "--gate-run-id '$GATE_RUN_ID' is not a workflow run id: $SUBCOMMAND needs the Greenfield gate run the gates job chose, which every check before a write must find again"
+}
+
+# The gate again, waiting for nothing, immediately before a write: the put, the promotion
+# and each service update (review of PRs 273 and 278). A newer gate run of the push, a
+# re-run gone red or main moved off the commit since the last check, and it returns 1
+# with one FAIL line, so the caller writes nothing more.   ci_gate_holds <moment>
+ci_gate_holds() {
+  local verdict why
+  verdict="$(ci_gate_verdict "$COMMIT")" || return 1
   case "$verdict" in
-    green\ *) GATE_RUN_ID=${verdict#green } ;;
-    *) deploy_fail "the images commit $COMMIT cannot be deployed now: ${verdict#* }. Nothing more is written for this commit." ;;
+    "green $GATE_RUN_ID")
+      rehearsal_log "$1: Greenfield gate run $GATE_RUN_ID is still the newest on $COMMIT and green, and $COMMIT is on main"
+      return 0
+      ;;
+    green\ *) why="the newest Greenfield gate run of the push is now ${verdict#green }, not run $GATE_RUN_ID, which this deploy was decided on" ;;
+    *) why=${verdict#* } ;;
   esac
-  rehearsal_log "Greenfield gate run $GATE_RUN_ID is green on $COMMIT, which is on main"
+  echo "FAIL: the images commit $COMMIT cannot be deployed now: $why. Nothing more is written for this commit (the gate was read again $1)." >&2
+  return 1
+}
+
+# gate: the same check as a step of its own, for the write that is not this script's
+# (the promotion, images.sh promote).
+#   deploy.sh ci gate --commit <sha> --gate-run-id <id> [--before <what>]
+ci_gate() {
+  local before='now'
+  COMMIT='' GATE_RUN_ID='' SUBCOMMAND=gate
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --commit) COMMIT=${2:-}; shift 2 ;;
+      --gate-run-id) GATE_RUN_ID=${2:-}; shift 2 ;;
+      --before) before="before ${2:-}"; shift 2 ;;
+      *) deploy_fail "deploy.sh ci gate does not take '$1'" ;;
+    esac
+  done
+  [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || deploy_fail "--commit '$COMMIT' is not a full forty-character commit"
+  ci_require_gate_run_id
+  ci_gate_holds "$before" || exit 1
 }
 
 # download: the images run's own `fss-image-digests` artifact, found through the run and
@@ -989,9 +1036,7 @@ ci_record() {
   fi
   [ "$RECORD_CLUSTER_NAME" = "${CI_PREFIX}-cluster" ] \
     || deploy_fail "the repository variable FSS_PRODUCTION_CLUSTER_NAME names $RECORD_CLUSTER_NAME, and this deploy acts on ${CI_PREFIX}-cluster; set it again from terraform output -raw ci_deploy_cluster_name"
-  # The gate again, immediately before the put: a re-run gone red, or main moved off the
-  # commit, while the job ran, and nothing is written.
-  ci_require_gate
+  ci_gate_holds "before the record is built" || exit 1
 
   # 1. The record: GitHub only, from the gate run that is green on the images commit.
   reference="ci-gate-${GATE_RUN_ID}-${COMMIT:0:12}"
@@ -1058,6 +1103,7 @@ json.dump({"subnet_ids": os.environ["FSS_SUBNETS"].split(","), "security_group_i
            "assign_public_ip": "ENABLED", "inbound_rule_count": 0}, sys.stdout)
 ')"
   export FSS_REHEARSAL_REPORTS="${FSS_REHEARSAL_REPORTS:-$CI_WORK/reports}"
+  ci_gate_holds "immediately before the put" || exit 1
   release_record_put release-record-put "$CI_WORK/release-record.json" "$CI_ENVIRONMENT" "$CI_PREFIX" "$ACCOUNT" "$REGION" \
     "$CLUSTER_ARN" "$revision" "$operations_digest" "$network_plan" "$database_host" "$secret_arn" "$log_group" || exit 1
   if [ "$RECORD_STAGE" = after ] && [ "$RELEASE_RECORD_OUTCOME" != existing ]; then
@@ -1207,6 +1253,8 @@ PY
     fi
     ci_output "${service}_task_definition" "$revision"
 
+    ci_gate_holds "before $name is rolled" \
+      || { ci_deregister "$revision" "the gate no longer holds"; exit 1; }
     rehearsal_log "rolling $name from $previous to $revision"
     release_aws "$CI_ENVIRONMENT" ecs update-service --cluster "$CLUSTER_ARN" --service "$name" --task-definition "$revision" \
       --output json >/dev/null || { ci_deregister "$revision" "ECS refused to roll to it"; deploy_fail "ECS refused to point $name at $revision; it still runs $previous"; }

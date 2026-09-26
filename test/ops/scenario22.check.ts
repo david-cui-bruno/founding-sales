@@ -437,6 +437,8 @@ interface OrderOptions {
   readonly fixtures?: Readonly<Record<string, string>>;
   /** What every one-off task's log stream holds, as `logs get-log-events` answers it. */
   readonly logEvents?: string;
+  /** The report file judged; release-stop.txt or release-deploy.txt by default. */
+  readonly report?: string;
 }
 
 function runOrder(
@@ -517,7 +519,7 @@ function runOrder(
       running: Number(read(`${ORDER_PREFIX}-${name}.running`) ?? 'NaN'),
     };
   }
-  const report = join(reports, script.endsWith('stop.sh') ? 'release-stop.txt' : 'release-deploy.txt');
+  const report = join(reports, options.report ?? (script.endsWith('stop.sh') ? 'release-stop.txt' : 'release-deploy.txt'));
   return {
     code: result.status ?? 1,
     output: `${result.stdout}${result.stderr}`,
@@ -913,5 +915,49 @@ describe('P7: deploy.sh release reads the record back, and the old names are the
       expect(legacy.calls).toEqual(current.calls);
       expect(legacy.report).toEqual(current.report);
     }
+  });
+
+  it('bootstraps through release-bootstrap-workspace.sh with the same calls, report and exit status, refusal included', () => {
+    const OLD = 'infra/scripts/release-bootstrap-workspace.sh';
+    const flags = ['--slug', 'rehearsal', '--display-name', 'Rehearsal', '--admin-email', 'rehearsal-admin@usecallie.com'];
+    const args = ['infra/roots/rehearsal', ORDER_PREFIX, '--worker-digest', ORDER_WORKER_DIGEST, ...flags];
+    const workspace = '0b6f7d2e-1c3a-4e5f-8a9b-0c1d2e3f4a5b';
+    const options = {
+      oneOffsPass: true,
+      report: 'bootstrap-workspace.txt',
+      fixtures: { FSS_RELEASE_RUN_ID: 'bootstrap-parity' },
+      logEvents: JSON.stringify({
+        events: [
+          {
+            message: JSON.stringify({
+              workspace: { id: workspace, slug: 'rehearsal', outcome: 'created' },
+              admin: { outcome: 'created' },
+              membership: { outcome: 'created', role: 'admin' },
+            }),
+          },
+        ],
+      }),
+    };
+    const current = runOrder(DEPLOY, ['bootstrap', ...args], RUNNING, options);
+    const legacy = runOrder(OLD, args, RUNNING, options);
+    expect(current.code, current.output).toBe(0);
+    expect(legacy.code, legacy.output).toBe(0);
+    expect(launched(current.calls), 'one one-off task: the bootstrap').toHaveLength(1);
+    expect(legacy.calls).toEqual(current.calls);
+    expect(legacy.report).toEqual(current.report);
+    expect(current.report).toContain(`workspace_id=${workspace} slug=rehearsal workspace=created admin=created membership=created role=admin`);
+
+    // A refusal: the same exit status, the same FAIL line, and nothing asked, both ways.
+    const failLines = (run: OrderRun): readonly string[] => run.output.split('\n').filter(line => line.startsWith('FAIL:'));
+    const refusedNow = runOrder(DEPLOY, ['bootstrap', 'infra/roots/rehearsal', ORDER_PREFIX, ...flags], RUNNING, options);
+    const refusedOld = runOrder(OLD, ['infra/roots/rehearsal', ORDER_PREFIX, ...flags], RUNNING, options);
+    expect(refusedNow.code).toBe(1);
+    expect(refusedOld.code).toBe(1);
+    expect(failLines(refusedNow)).toHaveLength(1);
+    expect(failLines(refusedNow)[0]).toContain('--worker-digest is required');
+    expect(failLines(refusedOld)).toEqual(failLines(refusedNow));
+    expect(refusedNow.calls).toEqual([]);
+    expect(refusedOld.calls).toEqual([]);
+    expect(refusedNow.report).toBeNull();
   });
 });

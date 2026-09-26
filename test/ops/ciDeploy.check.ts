@@ -18,9 +18,16 @@ import { readRepositoryFile, repositoryPath } from './support/repository.ts';
  * `ci-deploy-app.sh` execs it), against the same stub holding each service, each task
  * definition and the rehearsal repositories, and against stub `gh`s for its `gates` and
  * `download`; and `infra/scripts/deploy.sh current` (the old `deployed-digests.sh`). The
- * workflow itself is held to P6's shape (27 September 2026): four jobs, one gates job, the
- * record's put and read-back inside the deploy job, no push-time window, and the schema
- * ranges read from the digests artifact, in 400 lines at most.
+ * workflow itself is held to P6's shape (27 September 2026): five jobs, one gates job, the
+ * record's put in the deploy job and its read-back in a job of its own after the smoke, no
+ * push-time window, and the schema ranges read from the digests artifact, in 400 lines at
+ * most.
+ *
+ * **A gate decision gone stale before a write (review of PRs 273 and 278).** Every write —
+ * the put, the promotion and each service update — reads the gate again, held to the run
+ * the gates job chose. A stub `gh` whose answer changes between two reads (a newer run of
+ * the push, a re-run gone red) stops the put, and stops the API after the worker rolled,
+ * deregistering the revision it registered for the API.
  *
  * ## The vacuous-pass traps, named
  *
@@ -560,6 +567,8 @@ function runScript(
     readonly region?: string;
     /** Through the old name, `ci-deploy-app.sh`, which must behave exactly the same. */
     readonly legacy?: boolean;
+    /** What each successive read of the gate's runs changes in the gate run (deploy only). */
+    readonly gateScript?: readonly Record<string, unknown>[];
   } = {},
 ): Run {
   const outputs = join(mkdtempSync(join(tmpdir(), 'fss-ci-outputs-')), 'github-output');
@@ -576,9 +585,12 @@ function runScript(
     '1',
   ];
   if (subcommand === 'check') args.push('--origin', 'https://api.example.invalid');
+  if (subcommand === 'deploy') args.push('--gate-run-id', GATE_RUN);
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),
     FSS_REHEARSAL_AWS_COMMAND: join(stub.home, 'aws'),
+    FSS_GH_COMMAND: ghWorld(stub, 'success', 'behind', extra.gateScript),
+    GITHUB_REPOSITORY: GH_REPOSITORY,
     FSS_CI_CALLER_IDENTITY: extra.identity ?? IDENTITY,
     FSS_CI_HEALTH_JSON: extra.health ?? HEALTH(),
     FSS_PRODUCTION_ACCOUNT_ID: ACCOUNT,
@@ -788,6 +800,29 @@ describe('deploy registers the next revisions, rolls the worker then the API, an
     expect(updates.every(call => call.args[call.args.indexOf('--cluster') + 1] === CLUSTER)).toBe(true);
   });
 
+  it('reads the gate again before each service update, and stops before the API when it no longer holds', () => {
+    // The worker rolls under the gate run the gates job chose; then a newer run of the push
+    // appears, and the API is never pointed at its revision, which is deregistered.
+    const superseded = world();
+    const run = runScript('deploy', superseded, { gateScript: [{}, { id: 4200, created_at: '2026-09-25T23:00:00Z' }] });
+    expect(run.code).toBe(1);
+    expect(operations(superseded)).toEqual([
+      'register fss-prod-worker',
+      'update fss-prod-worker',
+      'register fss-prod-api',
+      `deregister ${definitionArn('api', 8)}`,
+    ]);
+    expect(run.output).toContain(`the newest Greenfield gate run of the push is now 4200, not run ${GATE_RUN}, which this deploy was decided on`);
+    expect(run.output).toContain('(the gate was read again before fss-prod-api is rolled)');
+    expect(superseded.state().services['fss-prod-api']?.taskDefinition).toBe(definitionArn('api', 7));
+    // A gate gone red before the first update rolls nothing at all.
+    const red = world();
+    const stopped = runScript('deploy', red, { gateScript: [{ conclusion: 'failure' }] });
+    expect(stopped.code).toBe(1);
+    expect(operations(red)).toEqual(['register fss-prod-worker', `deregister ${definitionArn('worker', 5)}`]);
+    expect(stopped.output).toContain(`Greenfield gate run ${GATE_RUN} attempt 1 concluded failure`);
+  });
+
   it('deregisters a registration that differs from the running revision in more than the image, and rolls nothing', () => {
     const stub = world({ tamper: true });
     const run = runScript('deploy', stub);
@@ -906,7 +941,14 @@ if one:
     print(json.dumps(run))
     sys.exit(0)
 if args[:1] == ["api"] and "/actions/workflows/greenfield.yml/runs?head_sha=" in args[1]:
-    print(json.dumps({"workflow_runs": list(state["runs"].values())}))
+    # gateScript: what the n-th read of the gate's runs changes in the gate run (the last
+    # entry holds from then on), so a gate can go red or be superseded between two reads.
+    counter = os.path.join(here, "gh-gate-reads")
+    reads = int(open(counter).read()) if os.path.exists(counter) else 0
+    open(counter, "w").write(str(reads + 1))
+    script = state.get("gateScript") or [{}]
+    change = script[min(reads, len(script) - 1)]
+    print(json.dumps({"workflow_runs": [dict(run, **change) for run in state["runs"].values()]}))
     sys.exit(0)
 if args[:1] == ["api"] and "/compare/main..." in args[1]:
     print(json.dumps({"status": state["compare"]}))
@@ -923,7 +965,7 @@ sys.stderr.write("the gh stub does not know: " + " ".join(args) + "\n")
 sys.exit(2)
 `;
 
-function ghWorld(stub: World, gateConclusion = 'success', compare = 'behind'): string {
+function ghWorld(stub: World, gateConclusion = 'success', compare = 'behind', gateScript: readonly Record<string, unknown>[] = []): string {
   const runPage = (id: string): string => `https://github.com/${GH_REPOSITORY}/actions/runs/${id}`;
   writeFileSync(
     join(stub.home, 'gh-state.json'),
@@ -946,6 +988,7 @@ function ghWorld(stub: World, gateConclusion = 'success', compare = 'behind'): s
         },
       },
       compare,
+      gateScript,
       imagesRuns: [
         {
           id: Number(RUN_ID),
@@ -991,11 +1034,15 @@ function runRecord(
     readonly family?: string;
     readonly subnets?: string;
     readonly securityGroup?: string;
+    /** The gate run the gates job chose; GATE_RUN by default, '' for none. */
+    readonly gateRunId?: string;
+    readonly gateScript?: readonly Record<string, unknown>[];
   } = {},
 ): Run {
   const outputs = join(mkdtempSync(join(tmpdir(), 'fss-ci-outputs-')), 'github-output');
   writeFileSync(outputs, '');
   const stage = extra.stage ?? 'before';
+  const gateRunId = extra.gateRunId ?? GATE_RUN;
   const args = [
     'record',
     ...(stage === 'none' ? [] : [`--${stage}-rollout`]),
@@ -1007,6 +1054,7 @@ function runRecord(
     RUN_ID,
     '--run-attempt',
     '1',
+    ...(gateRunId === '' ? [] : ['--gate-run-id', gateRunId]),
     '--cluster-name',
     extra.clusterName ?? 'fss-prod-cluster',
     '--operations-family',
@@ -1019,7 +1067,7 @@ function runRecord(
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),
     FSS_REHEARSAL_AWS_COMMAND: join(stub.home, 'aws'),
-    FSS_GH_COMMAND: ghWorld(stub, extra.gateConclusion, extra.compare),
+    FSS_GH_COMMAND: ghWorld(stub, extra.gateConclusion, extra.compare, extra.gateScript),
     FSS_CI_CALLER_IDENTITY: IDENTITY,
     FSS_PRODUCTION_ACCOUNT_ID: ACCOUNT,
     GITHUB_OUTPUT: outputs,
@@ -1153,6 +1201,30 @@ describe('record puts the ci-gate release record before the rollout, on the oper
     }
   });
 
+  it('reads the gate again immediately before the put, held to the gate run the gates job chose', () => {
+    for (const [extra, expected, moment] of [
+      // A newer run of the push appeared after the record was built.
+      [{ gateScript: [{}, { id: 4200, created_at: '2026-09-25T23:00:00Z' }] }, `the newest Greenfield gate run of the push is now 4200, not run ${GATE_RUN}`, 'immediately before the put'],
+      // The chosen run was re-run and went red between the two reads.
+      [{ gateScript: [{}, { conclusion: 'failure' }] }, `Greenfield gate run ${GATE_RUN} attempt 1 concluded failure`, 'immediately before the put'],
+      // The gates job chose another run than the newest.
+      [{ gateRunId: '4099' }, `the newest Greenfield gate run of the push is now ${GATE_RUN}, not run 4099`, 'before the record is built'],
+    ] as const) {
+      const stub = world({ running: NEW });
+      const run = runRecord(stub, extra);
+      expect(run.code, JSON.stringify(extra)).toBe(1);
+      expect(run.output).toContain(expected);
+      expect(run.output).toContain(`(the gate was read again ${moment})`);
+      expect(runTasks(stub)).toEqual([]);
+    }
+    // Without the gate run the gates job chose, nothing is asked at all.
+    const none = world({ running: NEW });
+    const run = runRecord(none, { gateRunId: '' });
+    expect(run.code).toBe(1);
+    expect(run.output).toContain("--gate-run-id '' is not a workflow run id");
+    expect(none.calls()).toEqual([]);
+  });
+
   it('refuses an operations definition that is not the worker image under the worker’s roles and log group', () => {
     for (const [operations, expected] of [
       [{ image: `${REGISTRY}/fss-prod-api@${OLD.api}` }, `which is not ${REGISTRY}/fss-prod-worker by digest`],
@@ -1189,7 +1261,7 @@ describe('record puts the ci-gate release record before the rollout, on the oper
     expect(runTasks(elsewhere)).toEqual([]);
   });
 
-  it('is the deploy job’s first write, after the guard and the check, and its read-back follows the rollout in the same job', () => {
+  it('is the deploy job’s first write, after the guard and the check; the read-back is a job of its own, after the smoke', () => {
     const deploy = job(DEPLOY_WORKFLOW, 'deploy');
     const names = steps(deploy).map(step => step.name);
     const at = (fragment: string): number => names.findIndex(name => name.includes(fragment));
@@ -1197,17 +1269,35 @@ describe('record puts the ci-gate release record before the rollout, on the oper
     expect(at("Protected paths in any commit since production's")).toBeGreaterThan(-1);
     expect(at('Download the digests and decide')).toBeGreaterThan(at("Protected paths in any commit since production's"));
     expect(put).toBeGreaterThan(at('Download the digests and decide'));
-    expect(at('Promote both images, then roll')).toBeGreaterThan(put);
-    expect(at('Read the release record back')).toBeGreaterThan(at('Promote both images, then roll'));
+    expect(at('Promote both images')).toBeGreaterThan(put);
     const text = (fragment: string): string => steps(deploy)[at(fragment)]?.text ?? '';
     expect(text('Put the ci-gate release record')).toContain("if: steps.check.outputs.decision == 'deploy'");
     expect(runBody(text('Put the ci-gate release record'))).toContain('infra/scripts/deploy.sh ci record --before-rollout');
-    expect(runBody(text('Read the release record back'))).toContain('infra/scripts/deploy.sh ci record --after-rollout');
-    expect(text('Read the release record back')).toContain("if: steps.deploy.outcome == 'success'");
+    expect(runBody(text('Put the ci-gate release record'))).toContain('--gate-run-id "$GATE_RUN_ID"');
+    // The gate again before the promotion, then the promotion, then the rollout held to the same run.
+    const rollout = runBody(text('Promote both images')).split('\n').filter(line => line.startsWith('infra/scripts/'));
+    expect(rollout.map(line => line.split(' ').slice(0, 3).join(' '))).toEqual([
+      'infra/scripts/deploy.sh ci gate',
+      'infra/scripts/images.sh promote "$RUNNER_TEMP/image-digests.json"',
+      'infra/scripts/deploy.sh ci deploy',
+      'infra/scripts/deploy.sh ci canary',
+    ]);
+    expect(rollout[0]).toContain('--gate-run-id "$GATE_RUN_ID"');
+    expect(runBody(text('Promote both images'))).toContain('--run-attempt "$RUN_ATTEMPT" --gate-run-id "$GATE_RUN_ID"');
+    expect(deploy).not.toContain('--after-rollout');
     // No step before the guard runs anything from the images commit.
     for (const step of steps(deploy).slice(0, at("Protected paths in any commit since production's"))) {
       expect(step.text, step.name).not.toMatch(/infra\/scripts\/|scripts\/|node /u);
     }
+    // The read-back runs only once the credential-free smoke has passed, and the summary waits for it.
+    const readBack = job(DEPLOY_WORKFLOW, 'read-back');
+    expect(readBack).toContain('needs: [gates, deploy, smoke]');
+    expect(readBack).toContain("if: needs.smoke.result == 'success'");
+    expect(runBody(steps(readBack).find(step => step.name.includes('Read the release record back'))?.text ?? '')).toContain(
+      'infra/scripts/deploy.sh ci record --after-rollout',
+    );
+    expect(job(DEPLOY_WORKFLOW, 'smoke')).toContain('needs: [gates, deploy]\n');
+    expect(job(DEPLOY_WORKFLOW, 'summary')).toContain('needs: [gates, deploy, smoke, read-back]');
   });
 });
 
@@ -1618,15 +1708,15 @@ describe('deploy.sh current prints what an operator plan must be given, and refu
   });
 });
 
-describe('the deploy workflow, P6: four jobs, one gates job, the record in the deploy job, 400 lines at most', () => {
+describe('the deploy workflow, P6: five jobs, one gates job, the read-back after the smoke, 400 lines at most', () => {
   const workflow = DEPLOY_WORKFLOW;
 
-  it('is 400 lines or fewer, has four jobs, and only the deploy job can assume a role', () => {
+  it('is 400 lines or fewer, has five jobs, and only the deploy and read-back jobs can assume a role', () => {
     expect(workflow.split('\n').length).toBeLessThanOrEqual(401);
     const jobs = [...workflow.slice(workflow.indexOf('\njobs:\n')).matchAll(/^ {2}([a-z-]+):\n/gmu)].map(match => match[1]);
-    expect(jobs).toEqual(['gates', 'deploy', 'smoke', 'summary']);
+    expect(jobs).toEqual(['gates', 'deploy', 'smoke', 'read-back', 'summary']);
     for (const name of ['gates', 'smoke', 'summary']) expect(job(workflow, name), name).not.toContain('id-token: write');
-    expect(job(workflow, 'deploy')).toContain('id-token: write');
+    for (const name of ['deploy', 'read-back']) expect(job(workflow, name), name).toContain('id-token: write');
     // The push-time window and the old entry points are gone; the ranges come from the artifact.
     for (const gone of ['run_started', 'run-started', 'imagePushedAt', 'ci-deploy-app.sh', 'release-promote.sh', "import('./packages/domain/db/schemaRange.ts')", 'ranges:']) {
       expect(workflow, gone).not.toContain(gone);
@@ -1656,13 +1746,23 @@ describe('the deploy workflow, P6: four jobs, one gates job, the record in the d
       'Not deployed: the gate on x had not finished. The manual path applies (docs/greenfield/release.md 4).\n',
     );
     expect(line({ GATES_RESULT: 'failure', DEPLOY_RESULT: 'skipped' })).toContain('FAILED (gates failure, deploy skipped');
-    const passed = { GATES_RESULT: 'success', GATES_DECISION: 'pass', DEPLOY_RESULT: 'success', SMOKE_RESULT: 'success', DECISION: 'deploy', RECORD: `${REFERENCE} created` };
+    const passed = {
+      GATES_RESULT: 'success',
+      GATES_DECISION: 'pass',
+      DEPLOY_RESULT: 'success',
+      SMOKE_RESULT: 'success',
+      READ_BACK_RESULT: 'success',
+      DECISION: 'deploy',
+      RECORD: `${REFERENCE} created`,
+    };
     expect(line({ ...passed, READ_BACK: 'existing', WORKER: definitionArn('worker', 5), API: definitionArn('api', 8) })).toContain(
-      `release record ${REFERENCE} created before the rollout and existing after it, worker fss-prod-worker:5, api fss-prod-api:8`,
+      `release record ${REFERENCE} created before the rollout and existing after the smoke passed, worker fss-prod-worker:5, api fss-prod-api:8`,
     );
-    expect(line({ ...passed, DEPLOY_RESULT: 'failure', SMOKE_RESULT: 'skipped' })).toContain(
-      `Release record: ${REFERENCE} created before the rollout, not read back after it.`,
+    expect(line({ ...passed, DEPLOY_RESULT: 'failure', SMOKE_RESULT: 'skipped', READ_BACK_RESULT: 'skipped' })).toContain(
+      `Release record: ${REFERENCE} created before the rollout, not read back after the smoke.`,
     );
+    // A smoke that passed and a read-back that failed is a failed deploy, not a green one.
+    expect(line({ ...passed, READ_BACK_RESULT: 'failure' })).toContain('FAILED (gates success, deploy success, smoke success, read-back failure');
   });
 
   it('checks the images run it was handed: a green push to main of the images workflow, and nothing else', () => {
@@ -1677,7 +1777,7 @@ describe('the deploy workflow, P6: four jobs, one gates job, the record in the d
       run_attempt: 2,
       created_at: RUN_CREATED,
     };
-    const attempt = (run: Record<string, unknown>, runId = RUN_ID): Run => {
+    const attempt = (run: Record<string, unknown>, runId = RUN_ID, dispatch: Record<string, string> = {}): Run => {
       const bin = mkdtempSync(join(tmpdir(), 'fss-gh-run-'));
       writeFileSync(join(bin, 'run.json'), JSON.stringify(run));
       // gh api <path> --jq <filter>, as jq -r answers it.
@@ -1687,7 +1787,7 @@ describe('the deploy workflow, P6: four jobs, one gates job, the record in the d
       writeFileSync(outputs, '');
       const result = spawnSync('bash', ['-c', script], {
         encoding: 'utf8',
-        env: { ...process.env, PATH: `${bin}:${process.env['PATH'] ?? ''}`, RUN_ID: runId, GITHUB_REPOSITORY: GH_REPOSITORY, GITHUB_OUTPUT: outputs },
+        env: { ...process.env, PATH: `${bin}:${process.env['PATH'] ?? ''}`, RUN_ID: runId, GITHUB_REPOSITORY: GH_REPOSITORY, GITHUB_OUTPUT: outputs, ...dispatch },
       });
       return { code: result.status ?? 1, output: `${result.stdout}${result.stderr}`, outputs: readOutputs(outputs) };
     };
@@ -1708,6 +1808,12 @@ describe('the deploy workflow, P6: four jobs, one gates job, the record in the d
       expect(refused.outputs['commit']).toBeUndefined();
     }
     expect(attempt(good, '42; rm -rf /').code).not.toBe(0);
+    // Any dispatch starts the gates job, so one from another ref says why it deploys nothing.
+    const elsewhere = attempt(good, RUN_ID, { GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_REF: 'refs/heads/feature' });
+    expect(elsewhere.code).not.toBe(0);
+    expect(elsewhere.output).toContain('dispatched from refs/heads/feature: only a dispatch from main deploys');
+    expect(elsewhere.outputs['commit']).toBeUndefined();
+    expect(attempt(good, RUN_ID, { GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_REF: 'refs/heads/main' }).code).toBe(0);
   });
 });
 
@@ -1792,6 +1898,55 @@ describe('deploy.sh ci gates, download and canary', () => {
       expect(refused.outputs['reason']).toContain('no Greenfield gate run (.github/workflows/greenfield.yml) of the push yet');
     }
     expect(attempt({ gate: [{ ...gate, name: 'Renamed' }] }).outputs['decision']).toBe('pass');
+  });
+
+  it('holds the promotion to the gate run the gates job chose: ci gate passes on that run alone', () => {
+    const gate = (extra: {
+      readonly conclusion?: string;
+      readonly compare?: string;
+      readonly gateRunId?: string;
+      readonly gateScript?: readonly Record<string, unknown>[];
+    }): Run => {
+      const stub = world();
+      const result = spawnSync(
+        SCRIPT,
+        ['ci', 'gate', '--commit', COMMIT, '--gate-run-id', extra.gateRunId ?? GATE_RUN, '--before', 'the promotion'],
+        {
+          encoding: 'utf8',
+          env: { ...process.env, FSS_GH_COMMAND: ghWorld(stub, extra.conclusion, extra.compare, extra.gateScript), GITHUB_REPOSITORY: GH_REPOSITORY },
+        },
+      );
+      return { code: result.status ?? 1, output: `${result.stdout}${result.stderr}`, outputs: {} };
+    };
+    const passed = gate({});
+    expect(passed.code, passed.output).toBe(0);
+    expect(passed.output).toContain(`before the promotion: Greenfield gate run ${GATE_RUN} is still the newest on ${COMMIT} and green`);
+    for (const [extra, expected] of [
+      [{ gateRunId: '4099' }, `the newest Greenfield gate run of the push is now ${GATE_RUN}, not run 4099`],
+      [{ gateScript: [{ id: 4200, created_at: '2026-09-25T23:00:00Z' }] }, `is now 4200, not run ${GATE_RUN}`],
+      [{ conclusion: 'failure' }, `Greenfield gate run ${GATE_RUN} attempt 1 concluded failure`],
+      [{ compare: 'diverged' }, 'it is no longer on main'],
+    ] as const) {
+      const refused = gate(extra);
+      expect(refused.code, JSON.stringify(extra)).toBe(1);
+      expect(refused.output).toContain(expected);
+      expect(refused.output).toContain('Nothing more is written for this commit (the gate was read again before the promotion)');
+    }
+    expect(gate({ gateRunId: 'x' }).output).toContain("--gate-run-id 'x' is not a workflow run id");
+  });
+
+  it('needs the gate run on deploy and record, which write, and refuses it on check, which only reads', () => {
+    const judged = (args: readonly string[]): Run => {
+      const result = spawnSync(SCRIPT, ['ci', ...args, '--digests', '/nonexistent', '--commit', COMMIT, '--run-id', RUN_ID, '--run-attempt', '1'], {
+        encoding: 'utf8',
+        env: { ...process.env, FSS_REHEARSAL_AWS_COMMAND: '/nonexistent/aws', FSS_GH_COMMAND: '/nonexistent/gh' },
+      });
+      return { code: result.status ?? 1, output: `${result.stdout}${result.stderr}`, outputs: {} };
+    };
+    expect(judged(['deploy']).output).toContain("--gate-run-id '' is not a workflow run id: deploy needs the Greenfield gate run the gates job chose");
+    const check = judged(['check', '--origin', 'https://api.example.invalid', '--gate-run-id', GATE_RUN]);
+    expect(check.code).toBe(1);
+    expect(check.output).toContain('--gate-run-id belongs to record and deploy, which write; check only reads');
   });
 
   it('downloads the digests from the images run’s own artifact, held to the digest GitHub recorded', () => {
