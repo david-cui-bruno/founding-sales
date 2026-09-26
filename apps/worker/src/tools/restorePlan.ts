@@ -20,7 +20,8 @@ import { readFileSync } from 'node:fs';
  *   which is the plan's host in one and the reference's in the other, in every container
  *   that carries it (and at least one does);
  * - the two services (`api`, `worker`), each updated in place, with nothing changing but
- *   `task_definition`, which is the replaced definition's ARN, unknown until the apply;
+ *   `task_definition`, which is the replaced definition's ARN, unknown until the apply,
+ *   and planned identically in both;
  * - for `retire` only, the database instance, updated in place, changing only the
  *   attributes in `RETIREMENT_DATABASE_ATTRIBUTES`, and planned identically in both.
  *
@@ -257,6 +258,20 @@ export function checkRestorePlan(input: RestorePlanInput): RestorePlanVerdict {
       );
     }
     changes[address] = ['FSS_DATABASE_HOST'];
+  }
+  // The services too are planned identically in both (lane W3-S8 third review): the only
+  // input between the two plans is the host, and it reaches no service.
+  for (const address of RESTORE_SERVICES) {
+    const mine = plan.get(address);
+    const theirs = reference.get(address);
+    if (mine === undefined || theirs === undefined) continue;
+    if (
+      !deepEqual(mine.before ?? null, theirs.before ?? null) ||
+      !deepEqual(mine.after ?? null, theirs.after ?? null) ||
+      !deepEqual(mine.afterUnknown ?? null, theirs.afterUnknown ?? null)
+    ) {
+      problems.push(`${address}: planned differently in the plan and the reference, though only the task definitions' host differs between them`);
+    }
   }
   const mine = plan.get(RESTORE_DATABASE);
   const theirs = reference.get(RESTORE_DATABASE);

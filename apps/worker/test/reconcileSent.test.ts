@@ -26,6 +26,7 @@ import {
   inDoubtFenceIds,
   mailboxListCommand,
   mailboxReconcileSentCommand,
+  restoreMarkerPutCommand,
   type AdminInvocation,
   type ElsewhereSession,
   type LaunchIdentity,
@@ -67,6 +68,8 @@ import { GmailCallRefused, readOnlyGmail } from '../src/tools/fss/readOnlyGmail.
 const COPY_HOST = 'fss-prod-pg-r0926.example.test';
 const OLD_HOST = 'fss-prod-pg.example.test';
 const copyDatabaseUrl = `postgresql://fss@${COPY_HOST}:5432/fss`;
+/** The marker (a) writes to the instance being replaced; the views below answer for it. */
+const MARKER = '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d';
 const LAUNCH: LaunchIdentity = {
   launchedBy: 'arn:aws:sts::123456789012:assumed-role/AWSReservedSSO_Admin_0123456789abcdef/david',
   taskArn: 'arn:aws:ecs:us-east-1:123456789012:task/fss-prod/0123456789abcdef0123456789abcdef',
@@ -94,10 +97,16 @@ function mailboxView(
     readonly audited?: readonly { readonly workspaceId: string; readonly mailboxId: string; readonly address: string }[];
     /** Without the real `mailbox.connected` rows (the world's own connections write them). */
     readonly hideAudit?: boolean;
+    /** Whether it has the marker (a) wrote: the instance being replaced does, a copy does not. */
+    readonly marked?: boolean;
   },
 ): SessionQueryable {
   return {
     async query<Row extends QueryResultRowLike = QueryResultRowLike>(text: string, values?: readonly unknown[]) {
+      if (/FROM audit_events WHERE action = \$1 AND subject_kind = 'restore'/u.test(text)) {
+        const count = change.marked === true && values?.[1] === MARKER ? '1' : '0';
+        return { rows: [{ count }] as unknown as Row[], rowCount: 1 };
+      }
       const result = await real.query<Row>(text, values);
       if (/FROM audit_events\s+WHERE action = 'mailbox.connected'/u.test(text)) {
         const rows = [
@@ -181,6 +190,8 @@ describe('fss admin mailbox reconcile-sent', () => {
     /** The copy the command runs against: the test database by default. */
     readonly copy?: SessionQueryable;
     readonly switches?: readonly string[];
+    /** `--inventory-marker`: the one (a) wrote, unless a test says otherwise. */
+    readonly marker?: string;
   }
 
   /** Every host `connectElsewhere` was asked for, and how many sessions were closed. */
@@ -189,12 +200,12 @@ describe('fss admin mailbox reconcile-sent', () => {
 
   function invocation(gmail: GmailClient, since: string, setup: Setup = {}): AdminInvocation {
     const sync = world.syncDeps(world.alpha);
-    const source = setup.source === undefined ? world.database.session : setup.source;
+    const source = setup.source === undefined ? mailboxView(world.database.session, { marked: true }) : setup.source;
     return {
       session: setup.copy ?? world.database.session,
       config: readToolConfig({ DATABASE_URL: copyDatabaseUrl }),
       environment: {},
-      options: { '--since': since, '--inventory-host': setup.host ?? OLD_HOST },
+      options: { '--since': since, '--inventory-host': setup.host ?? OLD_HOST, '--inventory-marker': setup.marker ?? MARKER },
       switches: new Set(setup.switches ?? []),
       mail: {
         gmail,
@@ -304,7 +315,7 @@ describe('fss admin mailbox reconcile-sent', () => {
     // Gmail listed it, then deleted it: the metadata read answers nothing.
     const gmail: GmailClient = {
       ...recorded,
-      getMetadata: async (access, id, headers) => (id === gone.id ? null : await recorded.getMetadata(access, id, headers)),
+      getSentMetadata: async (access, id, headers) => (id === gone.id ? null : await recorded.getSentMetadata(access, id, headers)),
     };
 
     const outcome = await mailboxReconcileSentCommand(invocation(gmail, tenMinutesBefore(at)));
@@ -347,6 +358,47 @@ describe('fss admin mailbox reconcile-sent', () => {
     }
   });
 
+  it('refuses a Sent message whose live metadata Gmail answered 200 without its headers', async () => {
+    // Lane W3-S8 third review: a metadata read with an id, a thread and a date but no
+    // payload.headers became a message with no headers, so no FSS marker, so `scanned`.
+    // Listing and metadata here are the production client's own, over one fetch.
+    const at = String(Date.parse('2026-09-24T12:00:00Z'));
+    const live = (metadata: unknown) =>
+      createGmailHttpClient({
+        apiBaseUrl: 'https://gmail.example.test',
+        fetch: async url =>
+          await Promise.resolve({
+            status: 200,
+            headers: {},
+            body: JSON.stringify(url.includes('/messages/') ? metadata : { messages: [{ id: 'm-7', threadId: 't-7' }] }),
+          }),
+      });
+    const through = (metadata: unknown): GmailClient => {
+      const client = live(metadata);
+      return { ...world.clientWith(world.alpha, {}), listSentMessageIds: client.listSentMessageIds, getSentMetadata: client.getSentMetadata };
+    };
+    for (const metadata of [
+      { id: 'm-7', threadId: 't-7', internalDate: at },
+      { id: 'm-7', threadId: 't-7', internalDate: at, payload: {} },
+      { id: 'm-7', threadId: 't-7', internalDate: at, payload: { headers: { 'Message-ID': '<x@example.test>' } } },
+      { id: 'm-8', threadId: 't-7', internalDate: at, payload: { headers: [] } },
+    ]) {
+      const outcome = await mailboxReconcileSentCommand(invocation(through(metadata), '2026-09-24T00:00:00Z'));
+      expect(outcome, JSON.stringify(metadata)).toMatchObject({ ok: false, reason: 'reconcile_unresolved' });
+      if (outcome.ok) return;
+      expect(outcome.report?.['unresolved']).toEqual(
+        expect.arrayContaining([
+          { kind: 'sent_folder_unscanned', workspaceId: workspaceId(), mailboxId: world.alpha.mailboxId, outcome: 'malformed_response' },
+        ]),
+      );
+    }
+    // The same message read properly, with headers and no FSS marker, is a clean scan.
+    const clean = await mailboxReconcileSentCommand(
+      invocation(through({ id: 'm-7', threadId: 't-7', internalDate: at, payload: { headers: [{ name: 'Subject', value: 'Lunch' }] } }), '2026-09-24T00:00:00Z'),
+    );
+    expect(clean).toMatchObject({ ok: true, value: { sent_folder_listed: 2, sent_folder_fss_messages: 0, unresolved: [] } });
+  });
+
   it('refuses a mailbox the instance being replaced has and the copy lacks, and one it knows by another address', async () => {
     const gmail = world.clientWith(world.alpha, {});
     // Connected after the restore point: the old instance has it, the copy cannot.
@@ -360,6 +412,7 @@ describe('fss admin mailbox reconcile-sent', () => {
     // Beta renamed since, on an instance whose trail (unlike the world's) never recorded
     // beta's first address: the copy's beta is then in no inventory at all.
     const source = mailboxView(world.database.session, {
+      marked: true,
       add: [later],
       rename: { [world.beta.mailboxId]: 'renamed.since@example.test' },
       hideAudit: true,
@@ -375,7 +428,7 @@ describe('fss admin mailbox reconcile-sent', () => {
     // The mailbox the inventory named differently is still read, so nothing it sent is missed.
     expect(outcome.report?.['mailboxes_scanned']).toBe(2);
     // With the trail, beta's first address is in the inventory and beta is read under it.
-    const trailed = mailboxView(world.database.session, { add: [later], rename: { [world.beta.mailboxId]: 'renamed.since@example.test' } });
+    const trailed = mailboxView(world.database.session, { marked: true, add: [later], rename: { [world.beta.mailboxId]: 'renamed.since@example.test' } });
     const withTrail = await mailboxReconcileSentCommand(invocation(gmail, '2026-09-24T00:00:00Z', { source: trailed }));
     expect(withTrail.ok ? [] : withTrail.report?.['unresolved']).toEqual([
       { kind: 'mailbox_not_in_copy', address: 'connected.later@example.test' },
@@ -387,6 +440,7 @@ describe('fss admin mailbox reconcile-sent', () => {
     const gmail = world.clientWith(world.alpha, {});
     // Alpha's row says one address; the trail says it was once connected as another.
     const source = mailboxView(world.database.session, {
+      marked: true,
       audited: [
         { workspaceId: workspaceId(), mailboxId: world.alpha.mailboxId, address: world.alpha.address },
         { workspaceId: workspaceId(), mailboxId: world.alpha.mailboxId, address: 'earlier.account@example.test' },
@@ -458,20 +512,21 @@ describe('fss admin mailbox reconcile-sent', () => {
       ok: false,
       reason: 'inventory_host_is_the_copy',
     });
-    const empty = mailboxView(world.database.session, { drop: [world.alpha.mailboxId, world.beta.mailboxId] });
+    const empty = mailboxView(world.database.session, { marked: true, drop: [world.alpha.mailboxId, world.beta.mailboxId] });
     expect(await mailboxReconcileSentCommand(invocation(gmail, since, { source: empty }))).toMatchObject({
       ok: false,
       reason: 'inventory_empty',
     });
     // The application never deletes a mailbox row, so an instance without one the copy
     // has was damaged, and its list cannot be the whole list.
-    const damaged = mailboxView(world.database.session, { drop: [world.beta.mailboxId] });
+    const damaged = mailboxView(world.database.session, { marked: true, drop: [world.beta.mailboxId] });
     const incomplete = await mailboxReconcileSentCommand(invocation(gmail, since, { source: damaged }));
     expect(incomplete).toMatchObject({ ok: false, reason: 'inventory_source_incomplete' });
     if (!incomplete.ok) expect(incomplete.detail).toContain(world.beta.mailboxId);
     // Nor may it lack one its own append-only audit trail records connecting.
     const vanishedRow = randomUUID();
     const unaudited = mailboxView(world.database.session, {
+      marked: true,
       audited: [{ workspaceId: workspaceId(), mailboxId: vanishedRow, address: 'row.deleted@example.test' }],
     });
     const trail = await mailboxReconcileSentCommand(invocation(gmail, since, { source: unaudited }));
@@ -480,6 +535,56 @@ describe('fss admin mailbox reconcile-sent', () => {
     expect(await mailboxReconcileSentCommand(invocation(gmail, 'yesterday'))).toMatchObject({
       ok: false,
       reason: 'since_invalid',
+    });
+  });
+
+  it('tells the instance being replaced from the copy by the marker (a) wrote, not by its name', async () => {
+    // Lane W3-S8 third review: a hostname that resolves to the copy passed a text check.
+    const gmail = world.clientWith(world.alpha, {});
+    const since = '2026-09-24T00:00:00Z';
+    // Another name for the copy: it lacks the marker, so it is not the instance (a) marked.
+    const theCopyAgain = mailboxView(world.database.session, {});
+    expect(await mailboxReconcileSentCommand(invocation(gmail, since, { source: theCopyAgain }))).toMatchObject({
+      ok: false,
+      reason: 'inventory_marker_missing',
+    });
+    // A "copy" that has the marker is the marked instance itself, or a copy from after (a).
+    const marked = mailboxView(world.database.session, { marked: true });
+    expect(await mailboxReconcileSentCommand(invocation(gmail, since, { copy: marked }))).toMatchObject({
+      ok: false,
+      reason: 'inventory_marker_in_copy',
+    });
+    for (const marker of ['', 'not-a-uuid', 'fss-prod-pg']) {
+      expect(await mailboxReconcileSentCommand(invocation(gmail, since, { marker })), marker).toMatchObject({
+        ok: false,
+        reason: 'inventory_marker_invalid',
+      });
+    }
+  });
+
+  it('writes the marker once per workspace, and a rerun writes nothing', async () => {
+    const marker = randomUUID();
+    const put = (value: string) =>
+      restoreMarkerPutCommand({ ...invocation(world.clientWith(world.alpha, {}), '2026-09-24T00:00:00Z'), options: { '--marker': value } });
+    const runtime = await world.database.appRuntimeSession();
+    const first = await restoreMarkerPutCommand({
+      ...invocation(world.clientWith(world.alpha, {}), '2026-09-24T00:00:00Z'),
+      session: runtime,
+      options: { '--marker': marker.toUpperCase() },
+    });
+    expect(first).toMatchObject({ ok: true, value: { marker, workspaces: 2, written: 2, existing: 0 } });
+    expect(await put(marker)).toMatchObject({ ok: true, value: { written: 0, existing: 2 } });
+    const { rows } = await world.database.session.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM audit_events WHERE action = 'restore.inventory_marker' AND subject_id = $1`,
+      [marker],
+    );
+    expect(rows[0]?.count).toBe('2');
+    expect(await put('yesterday')).toMatchObject({ ok: false, reason: 'marker_invalid' });
+    // And the database that has it is refused as the copy.
+    const gmail = world.clientWith(world.alpha, {});
+    expect(await mailboxReconcileSentCommand(invocation(gmail, '2026-09-24T00:00:00Z', { marker }))).toMatchObject({
+      ok: false,
+      reason: 'inventory_marker_in_copy',
     });
   });
 
@@ -540,25 +645,41 @@ describe('fss admin mailbox reconcile-sent', () => {
     );
     expect(openings.rows[0]?.count).toBe('1');
 
-    // Released only by id, with the resolution, and "ended the duplicate" is checked.
+    // Released only by id, with the resolution, and "ended every candidate" is checked:
+    // ending the duplicate alone leaves the other enrollment able to send it again (lane
+    // W3-S8 third review).
     const release = (options: Record<string, string>): AdminInvocation => ({
       ...invocation(gmail, tenMinutesBefore(at)),
-      options: { '--note': 'read the Sent message; the second enrollment was a duplicate', ...options },
+      options: { '--note': 'read the Sent message; both enrollments for the desk are ended', ...options },
       launch: LAUNCH,
     });
     const runtime = await world.database.appRuntimeSession();
     const bulk = await holdsReleaseRestoreCommand({ ...release({}), session: runtime });
     expect(bulk).toMatchObject({ ok: true, value: { released: 0, needsResolution: [holdId] } });
     expect(await holdsReleaseRestoreCommand(release({ '--hold': holdId }))).toMatchObject({ ok: false, reason: 'resolution_missing' });
+    const endEnrollment = async (enrollmentId: string): Promise<void> => {
+      await session.query(
+        `UPDATE sequence_enrollments SET state = 'stopped', ended_at = now(), end_reason = 'admin_stop' WHERE workspace_id = $1 AND id = $2`,
+        [workspaceId(), enrollmentId],
+      );
+    };
+    const everyCandidate = { '--hold': holdId, '--resolution': 'ended-every-candidate' };
+    expect(await holdsReleaseRestoreCommand(release(everyCandidate))).toMatchObject({ ok: false, reason: 'resolution_unverified' });
+    // One of the two ended is not enough: the other can still wake and send it again.
+    await endEnrollment(two.enrollmentId);
+    const halfway = await holdsReleaseRestoreCommand(release(everyCandidate));
+    expect(halfway).toMatchObject({ ok: false, reason: 'resolution_unverified' });
+    if (!halfway.ok) {
+      expect(halfway.detail).toContain(one.enrollmentId);
+      expect(halfway.detail).not.toContain(two.enrollmentId);
+    }
     expect(
-      await holdsReleaseRestoreCommand(release({ '--hold': holdId, '--resolution': 'ended-duplicate-enrollment' })),
-    ).toMatchObject({ ok: false, reason: 'resolution_unverified' });
-    await session.query(
-      `UPDATE sequence_enrollments SET state = 'stopped', ended_at = now(), end_reason = 'admin_stop' WHERE workspace_id = $1 AND id = $2`,
-      [workspaceId(), two.enrollmentId],
-    );
+      (await session.query<{ released_at: Date | null }>('SELECT released_at FROM active_holds WHERE workspace_id = $1 AND id = $2', [workspaceId(), holdId]))
+        .rows[0]?.released_at,
+    ).toBeNull();
+    await endEnrollment(one.enrollmentId);
     const done = await holdsReleaseRestoreCommand({
-      ...release({ '--hold': holdId, '--resolution': 'ended-duplicate-enrollment' }),
+      ...release(everyCandidate),
       session: runtime,
     });
     expect(done).toMatchObject({ ok: true, value: { outcome: 'released', released: 1, holds: [expect.objectContaining({ holdId })] } });
@@ -569,14 +690,15 @@ describe('fss admin mailbox reconcile-sent', () => {
     expect(audit.rows).toEqual([
       {
         detail: expect.objectContaining({
-          resolution: 'ended-duplicate-enrollment',
+          resolution: 'ended-every-candidate',
+          basis: 'every_candidate_enrollment_ended',
           source: UNATTACHED_SEND_HOLD_SOURCE,
           launchedBy: LAUNCH.launchedBy,
           taskArn: LAUNCH.taskArn,
         }),
       },
     ]);
-    expect(await holdsReleaseRestoreCommand(release({ '--hold': holdId, '--resolution': 'ended-duplicate-enrollment' }))).toMatchObject({
+    expect(await holdsReleaseRestoreCommand(release(everyCandidate))).toMatchObject({
       ok: true,
       value: { outcome: 'already_released', released: 0, alreadyReleased: [holdId] },
     });
@@ -738,6 +860,39 @@ describe('fss admin holds release-restore and holds list', () => {
     });
   });
 
+  it('releases a workspace hold for an unreadable recipient only on a person’s attestation', async () => {
+    // No enrollment was recorded, so "every candidate ended" proves nothing and is refused;
+    // checked-no-duplicate is a human attestation, recorded as such with its note.
+    await world.clearHolds(world.alpha.workspace.workspaceId);
+    const workspace = world.alpha.workspace.workspaceId;
+    const { rows } = await world.database.session.query<{ id: string }>(
+      `INSERT INTO active_holds (workspace_id, scope_kind, reason_code, blocked_action_kinds, source_event_kind, source_event_id, recovery_action)
+       VALUES ($1, 'workspace', 'restore_in_progress', ARRAY['email_send', 'dial_authorization']::text[], 'restore.unattached_send', 'abc123', 'resolve_ambiguity')
+       RETURNING id`,
+      [workspace],
+    );
+    const hold = rows[0]?.id ?? '';
+    await world.database.session.query(
+      `INSERT INTO audit_events (workspace_id, actor_kind, action, subject_kind, subject_id, detail)
+       VALUES ($1, 'system', 'hold.restore_opened', 'hold', $2, $3::jsonb)`,
+      [workspace, hold, JSON.stringify({ reason: 'recipient_unreadable', enrollmentIds: [] })],
+    );
+    const note = 'read the Sent message at 16:02; the recipient has no live enrollment in the app';
+    expect(await holdsReleaseRestoreCommand(invoke({ '--note': note, '--hold': hold, '--resolution': 'ended-every-candidate' }))).toMatchObject({
+      ok: false,
+      reason: 'resolution_unverified',
+    });
+    expect(await holdsReleaseRestoreCommand(invoke({ '--note': note, '--hold': hold, '--resolution': 'checked-no-duplicate' }))).toMatchObject({
+      ok: true,
+      value: { outcome: 'released', released: 1 },
+    });
+    const audit = await world.database.session.query<{ detail: Record<string, unknown> }>(
+      `SELECT detail FROM audit_events WHERE workspace_id = $1 AND action = 'hold.restore_released' AND subject_id = $2`,
+      [workspace, hold],
+    );
+    expect(audit.rows).toEqual([{ detail: expect.objectContaining({ resolution: 'checked-no-duplicate', basis: 'human_attestation', note }) }]);
+  });
+
   it('lists holds by a known reason only, and refuses a reason that is not one', async () => {
     expect(await holdsListCommand(invoke({ '--reason': 'restore_in_progress' }))).toMatchObject({ ok: true, value: { reason: 'restore_in_progress' } });
     for (const options of [{ '--reason': 'restore-in-progress' }, { '--reason': 'RESTORE_IN_PROGRESS' }, { '--exclude-reason': 'restored' }]) {
@@ -766,6 +921,7 @@ describe('the Gmail client the reconciliation acts through', () => {
     listHistory: answer('listHistory'),
     listMessageIds: answer('listMessageIds'),
     getMetadata: answer('getMetadata'),
+    getSentMetadata: answer('getSentMetadata'),
     getBody: answer('getBody'),
     sendMessage: answer('sendMessage'),
     searchSentByMessageId: answer('searchSentByMessageId'),
@@ -781,6 +937,7 @@ describe('the Gmail client the reconciliation acts through', () => {
     expect(await client.listHistory(access, {} as never)).toBe('listHistory');
     expect(await client.listMessageIds(access, {} as never)).toBe('listMessageIds');
     expect(await client.getMetadata(access, 'id', ['Message-ID'])).toBe('getMetadata');
+    expect(await client.getSentMetadata(access, 'id', ['Message-ID'])).toBe('getSentMetadata');
     expect(await client.searchSentByMessageId(access, '<a@example.test>')).toBe('searchSentByMessageId');
     expect(await client.listSentMessageIds(access, {} as never)).toBe('listSentMessageIds');
   });

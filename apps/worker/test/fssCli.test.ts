@@ -108,6 +108,10 @@ describe('the fss command line accepts every invocation the release scripts make
       reason: 'flag_missing',
       detail: '--inventory-host',
     });
+    expect(
+      parseFssCommand(['admin', 'mailbox', 'reconcile-sent', '--since', '2026-09-20T00:00:00Z', '--inventory-host', 'old.example.test']),
+    ).toMatchObject({ ok: false, reason: 'flag_missing', detail: '--inventory-marker' });
+    expect(parseFssCommand(['admin', 'restore-marker', 'put'])).toMatchObject({ ok: false, reason: 'flag_missing', detail: '--marker' });
     // Lane W3-S8 second review: no typed inventory, and no caller-named admin.
     expect(
       parseFssCommand(['admin', 'mailbox', 'reconcile-sent', '--since', '2026-09-20T00:00:00Z', '--inventory', 'a@example.test']),
@@ -268,9 +272,11 @@ function scanRunbook(markdown: string): RunbookScan {
   for (const { line, text } of logical) {
     // The helper's own definition is not a call.
     if (/^fss_task\(\)/u.test(text.trim())) continue;
-    const starts = [...text.matchAll(/(?:^|[\s;&|({!])fss_task\s/gu)].map(match => (match.index ?? 0) + match[0].length);
+    // The command word itself, followed by a space or by nothing: a bare `fss_task` at the
+    // end of a line is a call with no arguments, and is reported rather than skipped.
+    const starts = [...text.matchAll(/(?:^|[\s;&|({!])fss_task(?=\s|$)/gu)].map(match => (match.index ?? 0) + match[0].length);
     for (const start of starts) {
-      const segment = text.slice(start);
+      const segment = text.slice(start).trimStart();
       const parsed = call.exec(segment);
       if (parsed === null) {
         unreadable.push({ line, text: `fss_task ${segment}` });
@@ -310,6 +316,7 @@ describe('the restore runbook’s commands (lane W3-S8)', () => {
         'fss_task a operatons -- schema-version',
         'need && fss_task b operations schema-version',
         'fss_task c operations --report x -- schema-version',
+        'need && fss_task',
         'fss_task d operations \\',
         '  --capture "$W/d.log" -- admin holds list --reason restore_in_progress && report d',
         '```',
@@ -318,8 +325,8 @@ describe('the restore runbook’s commands (lane W3-S8)', () => {
         '```',
       ].join('\n'),
     );
-    expect(probe.unreadable.map(found => found.line)).toEqual([3, 4, 5]);
-    expect(probe.calls).toEqual([{ line: 6, argv: ['admin', 'holds', 'list', '--reason', 'restore_in_progress'] }]);
+    expect(probe.unreadable.map(found => found.line)).toEqual([3, 4, 5, 6]);
+    expect(probe.calls).toEqual([{ line: 7, argv: ['admin', 'holds', 'list', '--reason', 'restore_in_progress'] }]);
   });
 
   it('finds, in its bash fences, each command it must run', () => {
@@ -330,6 +337,7 @@ describe('the restore runbook’s commands (lane W3-S8)', () => {
       'schema-version',
       'admin suppression-journal replay',
       'admin mailbox reconcile-sent',
+      'admin restore-marker put',
       'admin holds list',
       'admin holds release-restore',
     ]) {
@@ -349,6 +357,7 @@ describe('the restore runbook’s commands (lane W3-S8)', () => {
     expect(reconciles.length).toBeGreaterThanOrEqual(2);
     for (const argv of reconciles) {
       expect(argv).toContain('--inventory-host');
+      expect(argv).toContain('--inventory-marker');
       expect(argv).not.toContain('--inventory');
     }
   });

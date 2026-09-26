@@ -298,7 +298,8 @@ fss admin holds list [--reason|--exclude-reason <code>]
 fss admin holds release-restore --note <text> [--hold <id> [--resolution <how>]]
 fss admin suppression-journal replay --from <instant> [--to <instant>]
 fss admin mailbox list                             every mailbox, its address and status (read-only)
-fss admin mailbox reconcile-sent --since <instant> --inventory-host <host> [--hold-unattached]
+fss admin mailbox reconcile-sent --since <instant> --inventory-host <host> --inventory-marker <uuid> [--hold-unattached]
+fss admin restore-marker put --marker <uuid>       the restore's mark on the instance it replaces
 fss admin workspace bootstrap --slug <slug> ...    the first workspace and its admin
 fss admin schema-preflight 0019                    the one-off check before migration 0019
 fss admin release-record put --json <file> | --json-base64 <value>
@@ -322,7 +323,12 @@ restore runbook, run with both services stopped against the restored copy.
   host changed): every mailbox address it has, in any status, and every address its
   append-only audit trail (`mailbox.connected`) says was ever connected. It is never only
   the copy's own list, which cannot know a mailbox connected after the restore point, and
-  never a typed one (the second W3-S8 review). It refuses the copy's own host
+  never a typed one (the second W3-S8 review). A hostname does not say which instance
+  answers it, so the instance is identified by `--inventory-marker` (third review): the
+  runbook writes that UUID into the old instance's audit trail with `fss admin
+  restore-marker put` in (a), before anything stops, and the command refuses a copy that
+  has it (`inventory_marker_in_copy`) and an inventory host that lacks it
+  (`inventory_marker_missing`). It refuses the copy's own host
   (`inventory_host_is_the_copy`), a host it cannot read, which is the deleted-source case
   (`inventory_unreadable`), an instance with no mailbox, and one that lacks a mailbox the
   copy has or its trail records (`inventory_source_incomplete`). An inventory address
@@ -342,7 +348,10 @@ restore runbook, run with both services stopped against the restored copy.
   - a folder was not read to the end (`grant_revoked`, `rate_limited`, `truncated`,
     `message_vanished` for a message deleted between the listing and its metadata read, or
     `malformed_response` for a listing page or metadata read Gmail answered 200 with
-    something that is not one — never read as a page of no messages);
+    something that is not one — never read as a page of no messages, or as a message
+    without FSS's marker. The Sent scan reads metadata with `getSentMetadata`, which
+    requires the requested id, a thread, a decimal `internalDate` and a `payload.headers`
+    list of name and value strings; the sync's `getMetadata` keeps its reading);
   - a send is unattached. With `--hold-unattached`, each unattached send instead opens a
     `restore_in_progress` hold on the firms it could belong to, or on the workspace when
     it names none. The hold's source is `restore.unattached_send`, keyed by the message's
@@ -353,12 +362,15 @@ restore runbook, run with both services stopped against the restored copy.
 **`fss admin holds release-restore`** (lane W3-S8) is the only thing that releases a
 `restore_in_progress` hold since the generation advance went. It is attributed to the
 launcher the task was given (`FSS_LAUNCHED_BY`, which the runbook's `fss_task` takes from
-`aws sts get-caller-identity`) and the task's own ARN from the ECS metadata endpoint, so
-CloudTrail's RunTask event for that task confirms both; it refuses without a principal
-ARN, and inside ECS without the task ARN. It needs a `--note`. Without `--hold` it
-releases the open restore holds from before a restore; a hold `--hold-unattached` opened
-is released only by id, with `--resolution ended-duplicate-enrollment` (checked: one of
-the enrollments recorded when it opened has ended) or `checked-no-duplicate`. Each goes
+`aws sts get-caller-identity`) and the task's own ARN from the ECS metadata endpoint. The
+launcher is an auditable claim, checked for ARN syntax only: the task ARN is what lets the
+runbook's `audit_launch` confirm it against CloudTrail's RunTask event for that task. It
+refuses without a principal ARN, and inside ECS without the task ARN. It needs a
+`--note`. Without `--hold` it releases the open restore holds from before a restore; a
+hold `--hold-unattached` opened is released only by id, with `--resolution
+ended-every-candidate` (checked: every enrollment recorded when it opened has ended,
+because any one still live could send it again) or `checked-no-duplicate` (a human
+attestation, recorded as `basis: human_attestation`). Each goes
 through `releaseHold` with the reason in the releasing `UPDATE`, and one `audit_events`
 row (`hold.restore_released`, `actor_kind = 'system'`) per hold in the same transaction.
 A named hold already released answers `already_released`. It never touches a hold of
@@ -429,7 +441,7 @@ otherwise would start a worker every time an operator asked it for a migration.
 | Task definition | Identity | Reads | Runs |
 |---|---|---|---|
 | `<prefix>-migration` | `<prefix>-migration-task` / `<prefix>-migration-exec` | `migration-database` as `MIGRATION_DATABASE_SECRET`, `app-runtime-database` as `FSS_RUNTIME_DATABASE_SECRET_ARN`. **No runtime connection at all** | `migrate`, `admin database-users ensure` |
-| `<prefix>-operations` | the worker task role / worker execution role | `app-runtime-database` as `DATABASE_SECRET_ARN`, plus the application secrets | `verify`, `schema-version`, `admin suppression-journal replay`, `admin mailbox list`, `admin mailbox reconcile-sent`, `admin holds list`, `admin holds release-restore`, `admin release-record put` |
+| `<prefix>-operations` | the worker task role / worker execution role | `app-runtime-database` as `DATABASE_SECRET_ARN`, plus the application secrets | `verify`, `schema-version`, `admin suppression-journal replay`, `admin mailbox list`, `admin restore-marker put`, `admin mailbox reconcile-sent`, `admin holds list`, `admin holds release-restore`, `admin release-record put` |
 
 Two rather than one, because of what each needs and what each must not have.
 `verify` runs as the *runtime* identity on purpose: the point of a post-deploy gate is
@@ -463,7 +475,7 @@ That is how a one-off task's report reaches the operator.
 | `FSS_RUNTIME_DATABASE_SECRET_ARN` | `database-users ensure` | the runtime credential's secret value, whose `username` and `password` the command creates the login user from. `--runtime-secret` names a different variable |
 | `FSS_DATABASE_HOST` | every command | the host the task definition names (`active_database_host`), or a scratch copy's in the quarterly restore smoke. It replaces the host of a connection assembled from a secret; a `DATABASE_URL` that names a different host is a refusal rather than an override |
 | `FSS_DEPENDENCIES` | `mailbox reconcile-sent` | `live` or `recorded`, or it refuses; the Gmail client is read-only either way |
-| `FSS_LAUNCHED_BY` | `holds release-restore` | the principal ARN of whoever launched the task, which `fss_task` in the restore runbook passes from `aws sts get-caller-identity`; without it the release refuses |
+| `FSS_LAUNCHED_BY` | `holds release-restore` | the principal ARN whoever launched the task claims, which `fss_task` in the restore runbook passes from `aws sts get-caller-identity`; checked for shape only, audited against CloudTrail's RunTask by the runbook's `audit_launch`; without it the release refuses |
 | `ECS_CONTAINER_METADATA_URI_V4` | `holds release-restore` | set by ECS; the task's ARN is read from it, and an endpoint that does not answer is a refusal |
 | `FSS_JOURNAL_BUCKET`, `AWS_REGION` | `suppression-journal replay` | what the journal is replayed from; without them it refuses rather than replaying nothing |
 
@@ -473,7 +485,7 @@ succeed because somebody had granted the application more than it needs. It also
 outright when the connected role *is* `app_runtime`, before `--allow-any-role` is read.
 
 **The dependency mode is fixed per command**, as data in `COMMAND_DEPENDENCIES`, not as
-whatever the environment happens to say: `holds list`, `holds release-restore`, `mailbox list`, `workspace bootstrap`,
+whatever the environment happens to say: `holds list`, `holds release-restore`, `mailbox list`, `restore-marker put`, `workspace bootstrap`,
 `release-record`, `schema-preflight 0019` and `database-users ensure` reach PostgreSQL and
 nothing else — no deployment is read, so they cannot reach Gmail, KMS or S3 in a fully
 configured production task (`holds release-restore` also reads the task's own ECS
