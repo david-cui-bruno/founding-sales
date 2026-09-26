@@ -235,20 +235,6 @@ async function measure(
         WHERE c.workspace_id = $1 AND c.firm_id = $3 AND ${CONFIRMATION_IN_SCOPE}`,
       byContact,
     ),
-    // G8. A recorded LinkedIn reply is the prospect's own response — the one row in
-    // the sequence tables that holds their words rather than the plan's. LinkedIn was
-    // removed on 25 September 2026 and nothing writes this table now, but it is still in
-    // the schema (migration 0012) and a row from before then is still removed, and still
-    // has to go before its enrollment can.
-    enrollment_linkedin_results: await countOf(
-      context,
-      `SELECT count(*) AS count FROM enrollment_linkedin_results r
-        WHERE r.workspace_id = $1 AND r.firm_id = $3 AND EXISTS (
-          SELECT 1 FROM sequence_enrollments e
-           WHERE e.workspace_id = r.workspace_id AND e.id = r.enrollment_id
-             AND ${contactPredicate('e.contact_id', '$2')})`,
-      byContact,
-    ),
     research_suggestions: await countOf(
       context,
       `SELECT count(*) AS count FROM research_suggestions
@@ -625,15 +611,6 @@ export async function commitDeletion(
     byContact,
   );
   await remove(
-    'enrollment_linkedin_results',
-    `DELETE FROM enrollment_linkedin_results r
-      WHERE r.workspace_id = $1 AND r.firm_id = $3 AND EXISTS (
-        SELECT 1 FROM sequence_enrollments e
-         WHERE e.workspace_id = r.workspace_id AND e.id = r.enrollment_id
-           AND ${contactPredicate('e.contact_id', '$2')})`,
-    byContact,
-  );
-  await remove(
     'record_aliases',
     `DELETE FROM record_aliases WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
     byContact,
@@ -683,7 +660,7 @@ export async function commitDeletion(
 
   const contacts = await context.db.query(
     `UPDATE contacts
-        SET full_name = $4, title = NULL, linkedin_url = NULL, status = 'inactive', is_primary = false,
+        SET full_name = $4, title = NULL, status = 'inactive', is_primary = false,
             updated_at = now()
       WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('id', '$2')} AND status <> 'merged'`,
     [...byContact, REDACTED_NAME],

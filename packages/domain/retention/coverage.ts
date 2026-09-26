@@ -79,7 +79,7 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
 
   // ------------------------------------------------------------------- CRM
   firms: coverage(['retained', 'deletion_redacts'], 'Business history; a deletion clears the identifying fields and keeps the row the append-only history references.'),
-  contacts: coverage(['retained', 'deletion_redacts'], 'Business history; a deletion clears the person’s name, title and LinkedIn URL and keeps the row the append-only history references.'),
+  contacts: coverage(['retained', 'deletion_redacts'], 'Business history; a deletion clears the person’s name and title (which carries the LinkedIn URL migration 0018 kept) and keeps the row the append-only history references.'),
   phone_routes: coverage(['deletion_removes'], 'A normalized personal handle; a deletion removes it and leaves a suppression tombstone.'),
   email_addresses: coverage(['deletion_removes'], 'A normalized personal handle; a deletion removes it and leaves a suppression tombstone for the same key.'),
   evidence_items: coverage(['swept', 'deletion_removes'], 'Deleted at the provider’s own expiry, and with the firm on deletion.'),
@@ -169,10 +169,6 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
     'What was due, when it moved and how it finished. A deletion cancels the unexecuted ones; the executed history stays, because 11.1 requires it preserved.',
   ),
   step_execution_shifts: coverage(['retained'], 'Append-only schedule history; UPDATE and DELETE revoked.'),
-  enrollment_linkedin_results: coverage(
-    ['deletion_removes'],
-    'The prospect’s own response, recorded by hand — the one row in the sequence tables holding their words, so a deletion removes it. Nothing writes it since LinkedIn was removed on 25 September 2026.',
-  ),
   enrollment_migrations: coverage(['retained'], 'The audited admin command of 11.1 and its approval.'),
   enrollment_migration_items: coverage(['retained'], 'Which enrollment the migration remapped or refused, and why.'),
   sequence_event_cursors: coverage(['operational'], 'Per-consumer position in the event stream; ids only.'),

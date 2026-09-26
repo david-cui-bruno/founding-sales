@@ -304,10 +304,10 @@ describe('the sequence, template and enrollment routes', () => {
   });
 
   it('sends a LinkedIn step stored before 25 September 2026 as a removed step, and reviews its held execution as held (lane A2)', async () => {
-    // Schema 17 still admits `linkedin_task`, so SQL is the only way left to store one:
-    // a published version of a call and then a LinkedIn task with its message.
+    // Migration 0018 keeps `linkedin_task` as a removed channel's stored marker (and
+    // dropped the message column), so SQL is the only way left to store one: a
+    // published version of a call and then a LinkedIn task.
     const workspaceId = fixture.alpha.workspaceId;
-    const MESSAGE = 'A LinkedIn note stored before the removal.';
     const created = await post('/sequences/create', adminToken, command({ name: 'Stored with LinkedIn' }));
     expect(created.status).toBe(200);
     const storedSequenceId = String(resultOf(created)['id']);
@@ -322,9 +322,9 @@ describe('the sequence, template and enrollment routes', () => {
       [workspaceId, storedVersionId],
     );
     const { rows: stepRows } = await fixture.db.query<{ id: string }>(
-      `INSERT INTO sequence_steps (workspace_id, sequence_version_id, ordinal, channel, delay_unit, delay_amount, linkedin_message)
-       VALUES ($1, $2, 2, 'linkedin_task', 'business_days', 2, $3) RETURNING id`,
-      [workspaceId, storedVersionId, MESSAGE],
+      `INSERT INTO sequence_steps (workspace_id, sequence_version_id, ordinal, channel, delay_unit, delay_amount)
+       VALUES ($1, $2, 2, 'linkedin_task', 'business_days', 2) RETURNING id`,
+      [workspaceId, storedVersionId],
     );
     const linkedInStepId = stepRows[0]?.id ?? '';
     await fixture.db.query(
@@ -349,8 +349,8 @@ describe('the sequence, template and enrollment routes', () => {
       onNoAnswer: null,
       templateVersionId: null,
     });
-    // What the step carried stays in the database.
-    expect(JSON.stringify(versions.body)).not.toContain(MESSAGE);
+    // Nothing the step carried crosses the wire: no message key of any spelling.
+    expect(JSON.stringify(versions.body).toLowerCase()).not.toContain('message');
 
     // A live enrollment whose LinkedIn execution the worker has held.
     const contact = await post('/contacts/create', salespersonToken, command({ firmId, fullName: 'Jordan Placeholder' }));

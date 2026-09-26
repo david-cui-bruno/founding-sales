@@ -18,7 +18,7 @@ export interface SchemaRange {
 }
 
 /** The highest migration version this source tree contains. */
-export const CURRENT_SCHEMA_VERSION = 17;
+export const CURRENT_SCHEMA_VERSION = 18;
 
 /**
  * The range the release before this one declared. Widen this one release ahead of the
@@ -50,8 +50,12 @@ export const CURRENT_SCHEMA_VERSION = 17;
  * Lane g71 widened it for 0017 by the same reasoning. Production declares `{16, 16}`
  * for both services once 0016's release is deployed, no deployed binary accepts 17, and
  * the release that carries 0017 is again a `--schema-change` deploy (release.md 8.0ag).
+ *
+ * Lane A4 widened it for 0018 by the same reasoning: production declares `{17, 17}`,
+ * no deployed binary accepts 18, and the release that carries 0018 is a
+ * `--schema-change` deploy (release.md, "Migration 0018").
  */
-export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 17 };
+export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 18 };
 
 /**
  * Both services need migration 0002's shape: the API's dead-job list reads `dead_at`
@@ -364,8 +368,30 @@ export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum:
  * both ranges at `{17, 17}` and the new digests, then `release-deploy.sh
  * infra/roots/production fss-prod --schema-change` (release.md 8.0ag).
  */
-export const API_SCHEMA_RANGE: SchemaRange = { minimum: 17, maximum: 17 };
-export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 17, maximum: 17 };
+/**
+ * Migration 0018 (lane A4) moves both to 18, and it is contract again, like 0015: it
+ * removes the schema LinkedIn left behind (PR 234 removed the code).
+ *
+ * **Both minima move by G20's rule rather than by arithmetic.** This release's code
+ * only stopped naming things: the retention preview and the deletion no longer count,
+ * delete or redact `enrollment_linkedin_results` and `contacts.linkedin_url`, and
+ * nothing reads `today_snapshots.linkedin_due`. Each of its statements would succeed
+ * on 17 as well, so `{17, 18}` is what "the lowest version on which its first
+ * statement can succeed" gives. It is refused for the reason 0015's paragraph states:
+ * a range is what `rehearsal-schema-ranges.sh` runs the pairs of and what
+ * `verify-schema` gates a production deploy on, and admitting 17 would declare the
+ * pre-contract database — whose rows still carry `linkedin_reply` in every version —
+ * a supported target for this image, a state `release-deploy.sh --schema-change`
+ * exists to prevent.
+ *
+ * **Both maxima move to 18** on the same reasoning as every widening before. The
+ * previous release's binaries declared `{17, 17}`, so no pair overlaps and Appendix
+ * G 22 asserts `database_ahead_of_binary` for the old images against the new schema.
+ * The production deploy is the stop-migrate-start path, with the preflight before the
+ * stop (release.md, "Migration 0018").
+ */
+export const API_SCHEMA_RANGE: SchemaRange = { minimum: 18, maximum: 18 };
+export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 18, maximum: 18 };
 
 export function acceptsSchemaVersion(range: SchemaRange, version: number): boolean {
   return Number.isInteger(version) && version >= range.minimum && version <= range.maximum;

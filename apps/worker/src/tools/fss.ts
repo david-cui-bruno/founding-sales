@@ -23,6 +23,7 @@ import {
   restoreHoldsOpenCommand,
   restoreReportCommand,
   schedulerRunOnceCommand,
+  schemaPreflight0018Command,
   suppressionJournalReplayCommand,
   systemGenerationAdvanceCommand,
   type AdminInvocation,
@@ -181,6 +182,7 @@ const ADMIN_COMMANDS: Readonly<Record<string, AdminRunner>> = Object.freeze({
   'restore-holds open': restoreHoldsOpenCommand,
   'release-record put': releaseRecordPutCommand,
   'release-record show': releaseRecordShowCommand,
+  'schema-preflight 0018': schemaPreflight0018Command,
 });
 
 async function report(path: string | undefined, value: unknown): Promise<void> {
@@ -265,7 +267,10 @@ async function runCommand(
 
   if (path === 'migrate' || path === 'migrate up') {
     if (migrationSession === null) return missingMigrationCredential();
-    const outcome = await runMigrate(migrationSession, { allowAnyRole: switches.has('--allow-any-role') });
+    const outcome = await runMigrate(migrationSession, {
+      allowAnyRole: switches.has('--allow-any-role'),
+      removeLinkedInHistory: switches.has('--remove-linkedin-history'),
+    });
     return outcome.ok ? { ok: true, value: { ...outcome.value } } : { ok: false, reason: outcome.reason, detail: outcome.detail };
   }
   if (path === 'admin database-users ensure') {

@@ -18,8 +18,9 @@ import { accept, refuse, type ContactRow, type CrmResult } from './types.ts';
  * make different contacts primary.
  *
  * `contacts.linkedin_url` (migration 0004) outlived LinkedIn, which was removed on 25
- * September 2026. Nothing here reads or writes it; a deletion still clears it
- * (`retention/deletion.ts`), because a row written before then may hold one.
+ * September 2026. Migration 0018 appended each stored URL to the contact's `title`,
+ * where the desktop shows it and a person can edit it, and dropped the column; a
+ * deletion blanks `title`, so the URL leaves with the person.
  */
 
 const CONTACT_COLUMNS = `id, workspace_id, firm_id, full_name, title, status, is_primary,

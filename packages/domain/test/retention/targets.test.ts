@@ -153,7 +153,6 @@ describe('the declared-pending guard', () => {
       'sequence_enrollments',
       'step_executions',
       'step_execution_shifts',
-      'enrollment_linkedin_results',
       'enrollment_migrations',
       'enrollment_migration_items',
       'sequence_event_cursors',

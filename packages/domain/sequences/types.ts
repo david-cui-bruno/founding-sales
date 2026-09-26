@@ -18,11 +18,12 @@ export type { SequenceDelay, StepChannel };
 /**
  * The channels a step may have.
  *
- * LinkedIn was removed on 25 September 2026. Migration 0012's
- * `sequence_steps_channel_known` and `step_executions_channel_known` still admit
- * `linkedin_task`, so a row read from either may carry a channel this set does not
- * know. Such a row is unknown: the worker holds it and never runs it, nothing enrols
- * into, publishes or migrates onto a version that has one, and Today does not list it.
+ * LinkedIn was removed on 25 September 2026. Migration 0018 kept `linkedin_task` in
+ * `sequence_steps_channel_known` and `step_executions_channel_known` as the stored
+ * marker of a removed channel, so that a LinkedIn step and its executions stay as
+ * history; a row read from either may carry it. Such a row is unknown: the worker holds
+ * it and never runs it, nothing enrols into, publishes or migrates onto a version that
+ * has one, and Today does not list it.
  */
 export const STEP_CHANNELS = ['email', 'call_task'] as const satisfies readonly StepChannel[];
 
@@ -42,7 +43,7 @@ export function isStepChannel(value: string): value is StepChannel {
 export const REMOVED_STEP_CHANNELS = ['linkedin'] as const;
 export type RemovedStepChannel = (typeof REMOVED_STEP_CHANNELS)[number];
 
-/** The stored channel value of each removed channel: the one migration 0012 still admits. */
+/** The stored channel value of each removed channel: the marker migration 0018 kept in both channel CHECKs. */
 const STORED_REMOVED_CHANNELS: Readonly<Record<string, RemovedStepChannel>> = Object.freeze({
   linkedin_task: 'linkedin',
 });
@@ -58,9 +59,9 @@ export type SequenceVersionState = (typeof SEQUENCE_VERSION_STATES)[number];
 /**
  * 11.2's terminal conditions. A version may not opt out of any of them.
  *
- * `sequence_versions_stop_conditions_complete` (migration 0012) still requires
- * `linkedin_reply` in every stored array, and the column's default supplies it, so the
- * reader drops it (`toVersion` in `rows.ts`).
+ * Migration 0018 removed `linkedin_reply` from every stored array, from the column's
+ * default and from both CHECKs; the reader still keeps only these four (`toVersion` in
+ * `rows.ts`).
  */
 export const SEQUENCE_STOP_CONDITIONS = [
   'human_reply',

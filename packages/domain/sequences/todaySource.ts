@@ -29,8 +29,8 @@ import { isStepChannel, type StepChannel } from './types.ts';
  * demonstrably about the same row.
  *
  * A step whose channel is not one `isStepChannel` knows — a LinkedIn task stored before
- * 25 September 2026 — is nobody's task and is not listed; the rebuild cancels the item
- * an earlier build made for it.
+ * 25 September 2026 — is nobody's task and is not listed. Migration 0018 deleted the
+ * `linkedin_due` items earlier builds made, and the kind is gone from the schema.
  */
 
 const KIND_OF_CHANNEL: Readonly<Record<StepChannel, TodayItemKind>> = Object.freeze({

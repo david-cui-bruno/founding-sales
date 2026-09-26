@@ -390,14 +390,6 @@ export const CRM_CONSTRAINT_CASES: readonly CrmCase[] = [
       ]),
   },
   {
-    constraint: 'contacts_linkedin_url_shape',
-    run: async f =>
-      await f.session.query(
-        'INSERT INTO contacts (workspace_id, firm_id, full_name, linkedin_url) VALUES ($1, $2, $3, $4)',
-        [workspace(f), await aFirm(f), 'Insecure Profile', 'http://linkedin.com/in/example'],
-      ),
-  },
-  {
     constraint: 'contacts_status_known',
     run: async f =>
       await f.session.query("INSERT INTO contacts (workspace_id, firm_id, full_name, status) VALUES ($1, $2, $3, 'departed')", [
