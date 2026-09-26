@@ -8,16 +8,28 @@ name: Greenfield deploy
 # schema, infrastructure, release-script or workflow change, which keeps the manual
 # path of `docs/greenfield/release.md` section 4.
 #
-# ## Six jobs, and which of them may hold a credential
+# ## Seven jobs, and which of them may hold a credential
 #
 #   run      no checkout, no credential. The images run is a green publish of a push to
-#            main of this repository; its commit, id and attempt are this job's outputs,
-#            and every later job takes them from here.
+#            main of this repository; its commit, id, attempt and the two instants it ran
+#            between are this job's outputs, and every later job takes them from here.
+#   gates    no checkout, no credential (lane A1). Through the GitHub API only: the
+#            *Greenfield gate* (`.github/workflows/greenfield.yml`) and the *Source
+#            security gate* (`.github/workflows/ci.yml`), each identified by its file,
+#            have a completed, successful run of the push at the images commit, the
+#            newest such run and its latest attempt; and the commit is still on main
+#            (`compare/main...<commit>` is `behind` or `identical`). It waits up to thirty
+#            minutes for a gate still running, then answers `manual` with the reason, as
+#            it does at once for a red gate or a commit no longer on main. The deploy job
+#            starts only after `pass`, and the same step runs again, waiting for nothing,
+#            immediately before its first write and before the record job's put.
 #   ranges   the images commit, no credential. The one job that runs code from it for a
 #            value: the two schema ranges the images declare, emitted as validated
 #            scalars. Anything it prints is re-validated where it is used.
 #   deploy   a job with `id-token: write`, in the `production-deploy` environment.
-#            It checks out the images commit and runs nothing from it until an inline
+#            It downloads the digests from the images run's own `fss-image-digests`
+#            artifact, found by the run and verified against the artifact's digest, then
+#            checks out the images commit and runs nothing from it until an inline
 #            guard — this file's own code, not the repository's — has read the commit
 #            production's images were built from and found no protected path in any
 #            commit between the two. Then only `infra/scripts/`, which that guard has
@@ -27,7 +39,7 @@ name: Greenfield deploy
 #            public origin, with the canary age the deploy job read as a scalar.
 #   record   the other job with `id-token: write`, in the same environment, and only
 #            after a deploy that rolled out and a smoke that passed (lane g100). It
-#            waits for the *Greenfield gate* run on the images commit to be green, then
+#            reads the two gates and main again with the `gates` step, then
 #            runs `infra/scripts/ci-deploy-app.sh record`: the ci-gate release record for
 #            the two digests (`release-record-from-ci.sh`), put with `fss admin
 #            release-record put` on the operations task. Once the owner's attestation
@@ -38,6 +50,9 @@ name: Greenfield deploy
 #
 # ## Where it stops
 #
+#   * `gates`: a gate that is red, or not finished after thirty minutes, or an images
+#     commit no longer on main. The run is green and says `manual` with the reason;
+#     nothing was touched, and no credential was ever assumed;
 #   * the guard: a protected path in any commit of the range, a production image with no
 #     commit tag, or a production commit that is not behind the images commit. The run
 #     is green, says `manual` and names the paths; nothing was touched. The operator
@@ -45,11 +60,16 @@ name: Greenfield deploy
 #     the next app merge deploys itself again (release.md 4.0);
 #   * `ci-deploy-app.sh check`: a different schema, a service not at its declared count,
 #     a session that is not exactly the CI role, a digest that is not the one the
-#     images run published;
+#     images run published, or an image `fss-rh-<svc>:ci-<commit>` names that was pushed
+#     outside the images run's own window;
+#   * the gates again, immediately before the first write: anything but green and on
+#     main now fails the run red, with nothing written;
 #   * `ci-deploy-app.sh deploy`: a registered revision that differs from the running one
-#     in more than the image, or a rollout ECS rolled back. The worker goes first and
-#     the API is not touched after a worker that failed;
-#   * `record`: a gate run that is not green on the images commit, a record
+#     in more than the image, a rollout ECS rolled back or did not call COMPLETED, or a
+#     running task without the new digest. The worker goes first and the API is not
+#     touched after a worker that failed;
+#   * `record`: a gate that is not green on the images commit, or a commit no longer
+#     on main, a record
 #     `release-record-from-ci.sh` refuses to write, or a put the operations task did not
 #     make. The deploy has already rolled out and passed its smoke, so the run is red
 #     with one line: the record was not put, and sending holds for the new worker until
@@ -109,6 +129,8 @@ jobs:
       commit: ${{ steps.images.outputs.commit }}
       run_id: ${{ steps.images.outputs.run_id }}
       run_attempt: ${{ steps.images.outputs.run_attempt }}
+      run_started: ${{ steps.images.outputs.run_started }}
+      run_ended: ${{ steps.images.outputs.run_ended }}
     defaults:
       run:
         shell: bash
@@ -138,13 +160,140 @@ jobs:
               problems.append("it names no commit")
           if not re.fullmatch(r"[0-9]{1,4}", str(run.get("run_attempt", ""))):
               problems.append("it names no attempt")
+          # The window its images were pushed in (lane A1): from the run's creation, which
+          # is its first attempt's, so a re-run that reuses that attempt's push is inside,
+          # to its last update, which for a completed run is when it finished.
+          instant = r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z"
+          started, ended = str(run.get("created_at", "")), str(run.get("updated_at", ""))
+          if not re.fullmatch(instant, started) or not re.fullmatch(instant, ended) or ended < started:
+              problems.append("it reports no window it ran in (created {}, updated {})".format(started, ended))
           if problems:
               sys.exit("the images run cannot be deployed: " + "; ".join(problems))
           print("commit=" + run["head_sha"])
           print("run_id=" + os.environ["RUN_ID"])
           print("run_attempt=" + str(run["run_attempt"]))
+          print("run_started=" + started)
+          print("run_ended=" + ended)
           PY
           cat "$GITHUB_OUTPUT"
+
+  # The two gates and main, before anything holds a credential (lane A1). *Greenfield
+  # images* completes before the gates of the same push may have, so this waits.
+  gates:
+    name: The two gates are green on the images commit, and it is still on main
+    needs: run
+    runs-on: ubuntu-24.04
+    # Thirty minutes of waiting, and the reads.
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      decision: ${{ steps.gates.outputs.decision }}
+      reason: ${{ steps.gates.outputs.reason }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: The two gates on the images commit, green, and the commit still on main
+        id: gates
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ needs.run.outputs.commit }}
+          WAIT_MINUTES: '30'
+          NOT_GREEN: manual
+        run: |
+          set -euo pipefail
+          [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::the images commit is not a commit"; exit 1; }
+          [[ "$WAIT_MINUTES" =~ ^[0-9]{1,3}$ ]] || { echo "::error::WAIT_MINUTES '$WAIT_MINUTES' is not a number of minutes"; exit 1; }
+          case "$NOT_GREEN" in
+            manual | fail) ;;
+            *) echo "::error::NOT_GREEN is '$NOT_GREEN', not manual or fail"; exit 1 ;;
+          esac
+          work="$RUNNER_TEMP/gates"
+          rm -rf "$work"
+          mkdir -p "$work"
+          # Not green: the manual path before the decision; after it, a red run that
+          # writes nothing more.
+          not_green() {
+            if [ "$NOT_GREEN" = fail ]; then
+              echo "::error::$1. Nothing more is written for this commit."
+              exit 1
+            fi
+            echo "decision=manual" >> "$GITHUB_OUTPUT"
+            echo "reason=$1" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Not deployed by CI; the manual path applies::$1"
+            exit 0
+          }
+          minute=0
+          while :; do
+            # Each gate by its workflow file, never by its display name, and main as the
+            # API sees it now.
+            for workflow in greenfield.yml ci.yml; do
+              gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow/runs?head_sha=$COMMIT&event=push&branch=main&per_page=20" \
+                > "$work/$workflow.json"
+            done
+            gh api "repos/$GITHUB_REPOSITORY/compare/main...$COMMIT?per_page=1" > "$work/compare.json"
+            verdict="$(FSS_WORK="$work" python3 - <<'PY'
+          import json, os, re
+          commit, repository, work = os.environ["COMMIT"], os.environ["GITHUB_REPOSITORY"], os.environ["FSS_WORK"]
+          gates = ((".github/workflows/greenfield.yml", "greenfield.yml", "Greenfield gate"),
+                   (".github/workflows/ci.yml", "ci.yml", "Source security gate"))
+          green, waiting, red = [], [], []
+          for path, name, label in gates:
+              runs = (json.load(open(os.path.join(work, name + ".json"), encoding="utf-8")) or {}).get("workflow_runs") or []
+              runs = [run for run in runs
+                      if str(run.get("path", "")).split("@")[0] == path
+                      and run.get("event") == "push" and run.get("head_branch") == "main"
+                      and run.get("head_sha") == commit
+                      and (run.get("head_repository") or {}).get("full_name") == repository
+                      and re.fullmatch(r"[1-9][0-9]{0,19}", str(run.get("id", "")))]
+              if not runs:
+                  waiting.append("no {} run ({}) of the push yet".format(label, path))
+                  continue
+              # The newest run of the push. GitHub reports a run as its latest attempt, so a
+              # re-run still going is waited for and a re-run that failed is red.
+              run = max(runs, key=lambda run: (str(run.get("created_at", "")), int(run["id"])))
+              seen = "{} run {} attempt {}".format(label, run["id"], run.get("run_attempt"))
+              if run.get("status") != "completed":
+                  waiting.append("{} is {}".format(seen, run.get("status")))
+              elif run.get("conclusion") != "success":
+                  red.append("{} concluded {}".format(seen, run.get("conclusion")))
+              else:
+                  green.append(str(run["id"]))
+          compared = json.load(open(os.path.join(work, "compare.json"), encoding="utf-8")) or {}
+          if compared.get("status") not in ("behind", "identical"):
+              red.append("it is no longer on main (compare main...{} is {})".format(commit[:12], compared.get("status")))
+          if red:
+              print("red " + "; ".join(red))
+          elif waiting:
+              print("waiting " + "; ".join(waiting))
+          else:
+              print("green " + " ".join(green))
+          PY
+          )"
+            case "$verdict" in
+              green\ *)
+                read -r _ gate security <<<"$verdict"
+                {
+                  echo "decision=pass"
+                  echo "gate_run_id=$gate"
+                  echo "security_run_id=$security"
+                } >> "$GITHUB_OUTPUT"
+                echo "Greenfield gate run $gate and Source security gate run $security are green on $COMMIT, which is on main"
+                exit 0
+                ;;
+              red\ *)
+                not_green "the images commit $COMMIT cannot be deployed: ${verdict#red }"
+                ;;
+            esac
+            if [ "$minute" -ge "$WAIT_MINUTES" ]; then
+              not_green "the gates on $COMMIT had not finished after $WAIT_MINUTES minute(s): ${verdict#waiting }"
+            fi
+            echo "the gates on $COMMIT: ${verdict#waiting }; waiting"
+            sleep 60
+            minute=$((minute + 1))
+          done
 
   ranges:
     name: Read the schema ranges the images declare, with no credential
@@ -193,7 +342,8 @@ jobs:
 
   deploy:
     name: Deploy an app-only change to production
-    needs: [run, ranges]
+    needs: [run, gates, ranges]
+    if: needs.gates.outputs.decision == 'pass'
     runs-on: ubuntu-24.04
     # Twice the worst rollout (two services, three ten-minute waits each), plus the
     # rehearsal poll, the promotion and the checks. The credential is assumed after the
@@ -239,6 +389,8 @@ jobs:
           COMMIT: ${{ needs.run.outputs.commit }}
           RUN_ID: ${{ needs.run.outputs.run_id }}
           RUN_ATTEMPT: ${{ needs.run.outputs.run_attempt }}
+          RUN_STARTED: ${{ needs.run.outputs.run_started }}
+          RUN_ENDED: ${{ needs.run.outputs.run_ended }}
           API_RANGE: ${{ needs.ranges.outputs.api_range }}
           WORKER_RANGE: ${{ needs.ranges.outputs.worker_range }}
         run: |
@@ -246,6 +398,9 @@ jobs:
           [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::the images commit is not a commit"; exit 1; }
           [[ "$RUN_ID" =~ ^[0-9]{1,20}$ ]] || { echo "::error::the images run id is not a run id"; exit 1; }
           [[ "$RUN_ATTEMPT" =~ ^[0-9]{1,4}$ ]] || { echo "::error::the images run attempt is not an attempt"; exit 1; }
+          for instant in "$RUN_STARTED" "$RUN_ENDED"; do
+            [[ "$instant" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || { echo "::error::'$instant' is not a UTC instant"; exit 1; }
+          done
           for range in "$API_RANGE" "$WORKER_RANGE"; do
             [[ "$range" =~ ^[0-9]{1,4}-[0-9]{1,4}$ ]] || { echo "::error::'$range' is not a schema range"; exit 1; }
           done
@@ -313,15 +468,68 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Download the digests that run published
+      - name: Download the digests the images run published, from its own artifact
         env:
           GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ needs.run.outputs.commit }}
           RUN_ID: ${{ needs.run.outputs.run_id }}
         run: |
           set -euo pipefail
-          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --name fss-image-digests \
-            --dir "$RUNNER_TEMP/fss-image-digests"
-          cat "$RUNNER_TEMP/fss-image-digests/image-digests.json"
+          [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::the images commit is not a commit"; exit 1; }
+          [[ "$RUN_ID" =~ ^[0-9]{1,20}$ ]] || { echo "::error::the images run id is not a run id"; exit 1; }
+          work="$RUNNER_TEMP/fss-image-digests"
+          rm -rf "$work"
+          mkdir -p "$work"
+          # The artifact is found through the images run and nowhere else, and it must say
+          # it was uploaded by that run of that commit on main.
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts?name=fss-image-digests&per_page=100" \
+            > "$work/artifacts.json"
+          read -r artifact expected <<<"$(FSS_FILE="$work/artifacts.json" python3 - <<'PY'
+          import json, os, re, sys
+          run_id, commit = os.environ["RUN_ID"], os.environ["COMMIT"]
+          listed = (json.load(open(os.environ["FSS_FILE"], encoding="utf-8")) or {}).get("artifacts") or []
+          named = [item for item in listed if isinstance(item, dict) and item.get("name") == "fss-image-digests"]
+          if not named:
+              sys.exit("images run {} has no fss-image-digests artifact".format(run_id))
+          artifact = max(named, key=lambda item: (str(item.get("created_at", "")), str(item.get("id", ""))))
+          source = artifact.get("workflow_run") or {}
+          problems = []
+          if not re.fullmatch(r"[1-9][0-9]{0,19}", str(artifact.get("id", ""))):
+              problems.append("it has no id")
+          if artifact.get("expired") is not False:
+              problems.append("it has expired")
+          if str(source.get("id", "")) != run_id:
+              problems.append("it was uploaded by run {}, not by images run {}".format(source.get("id"), run_id))
+          if source.get("head_sha") != commit or source.get("head_branch") != "main":
+              problems.append("its run built {} on {}, not {} on main".format(source.get("head_sha"), source.get("head_branch"), commit))
+          if not re.fullmatch(r"sha256:[0-9a-f]{64}", str(artifact.get("digest", ""))):
+              problems.append("it carries no sha256 digest to hold the download to")
+          if problems:
+              sys.exit("the fss-image-digests artifact of images run {} is not that run's own: {}".format(run_id, "; ".join(problems)))
+          print(artifact["id"], artifact["digest"])
+          PY
+          )"
+          [ -n "${expected:-}" ] || exit 1
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact/zip" > "$work/artifact.zip"
+          # The bytes are the ones the run uploaded, and hold exactly the one file.
+          FSS_ZIP="$work/artifact.zip" FSS_DIGEST="$expected" FSS_OUT="$work/image-digests.json" python3 - <<'PY'
+          import hashlib, os, sys, zipfile
+          env = os.environ
+          data = open(env["FSS_ZIP"], "rb").read()
+          actual = "sha256:" + hashlib.sha256(data).hexdigest()
+          if actual != env["FSS_DIGEST"]:
+              sys.exit("the downloaded artifact is {}, and GitHub lists {} as its digest".format(actual, env["FSS_DIGEST"]))
+          with zipfile.ZipFile(env["FSS_ZIP"]) as archive:
+              if archive.namelist() != ["image-digests.json"]:
+                  sys.exit("the artifact holds {}, not image-digests.json alone".format(archive.namelist()))
+              content = archive.read("image-digests.json")
+          if len(content) > 65536:
+              sys.exit("image-digests.json is {} bytes, which is not a digests file".format(len(content)))
+          open(env["FSS_OUT"], "wb").write(content)
+          PY
+          rm -f "$work/artifact.zip" "$work/artifacts.json"
+          echo "artifact $artifact of images run $RUN_ID, $expected"
+          cat "$work/image-digests.json"
 
       # aws-actions/configure-aws-credentials v4, the pin every other workflow uses.
       - name: Assume the production CI deploy role
@@ -421,6 +629,12 @@ jobs:
             case "$path" in
               infra/*) why='infrastructure, and every release script in infra/scripts' ;;
               packages/domain/db/migrations/*) why='a migration, which is a schema change' ;;
+              # The schema acceptance rule and the migration runner, and what they read
+              # (lane A1): check compares declared ranges, so a change to how a version
+              # is accepted, or how one is read or applied, would pass it unseen.
+              packages/domain/db/schemaRange.ts) why='the schema acceptance rule' ;;
+              packages/domain/db/migrationRunner.ts) why='the migration runner, which schema acceptance reads the version through' ;;
+              packages/domain/db/queryable.ts) why='the session helpers the migration runner applies migrations with' ;;
               .github/*) why='a workflow' ;;
               scripts/productionSmoke.mjs) why='the production smoke this deploy is judged by' ;;
               scripts/releaseMutation*) why='' ;;
@@ -453,6 +667,8 @@ jobs:
           COMMIT: ${{ needs.run.outputs.commit }}
           RUN_ID: ${{ needs.run.outputs.run_id }}
           RUN_ATTEMPT: ${{ needs.run.outputs.run_attempt }}
+          RUN_STARTED: ${{ needs.run.outputs.run_started }}
+          RUN_ENDED: ${{ needs.run.outputs.run_ended }}
           API_RANGE: ${{ needs.ranges.outputs.api_range }}
           WORKER_RANGE: ${{ needs.ranges.outputs.worker_range }}
         run: |
@@ -460,8 +676,113 @@ jobs:
           infra/scripts/ci-deploy-app.sh check \
             --digests "$RUNNER_TEMP/fss-image-digests/image-digests.json" \
             --commit "$COMMIT" --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" \
+            --run-started "$RUN_STARTED" --run-ended "$RUN_ENDED" \
             --api-range "$API_RANGE" --worker-range "$WORKER_RANGE" \
             --origin "$FSS_PRODUCTION_ORIGIN"
+
+      # The gates job's step, waiting for nothing: a gate re-run red, or main moved off
+      # the commit, while this job waited for a rehearsal or ran the check, fails the run
+      # before anything is written.
+      - name: The two gates on the images commit, green, and the commit still on main
+        id: gates
+        if: steps.check.outputs.decision == 'deploy'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ needs.run.outputs.commit }}
+          WAIT_MINUTES: '0'
+          NOT_GREEN: fail
+        run: |
+          set -euo pipefail
+          [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::the images commit is not a commit"; exit 1; }
+          [[ "$WAIT_MINUTES" =~ ^[0-9]{1,3}$ ]] || { echo "::error::WAIT_MINUTES '$WAIT_MINUTES' is not a number of minutes"; exit 1; }
+          case "$NOT_GREEN" in
+            manual | fail) ;;
+            *) echo "::error::NOT_GREEN is '$NOT_GREEN', not manual or fail"; exit 1 ;;
+          esac
+          work="$RUNNER_TEMP/gates"
+          rm -rf "$work"
+          mkdir -p "$work"
+          # Not green: the manual path before the decision; after it, a red run that
+          # writes nothing more.
+          not_green() {
+            if [ "$NOT_GREEN" = fail ]; then
+              echo "::error::$1. Nothing more is written for this commit."
+              exit 1
+            fi
+            echo "decision=manual" >> "$GITHUB_OUTPUT"
+            echo "reason=$1" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Not deployed by CI; the manual path applies::$1"
+            exit 0
+          }
+          minute=0
+          while :; do
+            # Each gate by its workflow file, never by its display name, and main as the
+            # API sees it now.
+            for workflow in greenfield.yml ci.yml; do
+              gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow/runs?head_sha=$COMMIT&event=push&branch=main&per_page=20" \
+                > "$work/$workflow.json"
+            done
+            gh api "repos/$GITHUB_REPOSITORY/compare/main...$COMMIT?per_page=1" > "$work/compare.json"
+            verdict="$(FSS_WORK="$work" python3 - <<'PY'
+          import json, os, re
+          commit, repository, work = os.environ["COMMIT"], os.environ["GITHUB_REPOSITORY"], os.environ["FSS_WORK"]
+          gates = ((".github/workflows/greenfield.yml", "greenfield.yml", "Greenfield gate"),
+                   (".github/workflows/ci.yml", "ci.yml", "Source security gate"))
+          green, waiting, red = [], [], []
+          for path, name, label in gates:
+              runs = (json.load(open(os.path.join(work, name + ".json"), encoding="utf-8")) or {}).get("workflow_runs") or []
+              runs = [run for run in runs
+                      if str(run.get("path", "")).split("@")[0] == path
+                      and run.get("event") == "push" and run.get("head_branch") == "main"
+                      and run.get("head_sha") == commit
+                      and (run.get("head_repository") or {}).get("full_name") == repository
+                      and re.fullmatch(r"[1-9][0-9]{0,19}", str(run.get("id", "")))]
+              if not runs:
+                  waiting.append("no {} run ({}) of the push yet".format(label, path))
+                  continue
+              # The newest run of the push. GitHub reports a run as its latest attempt, so a
+              # re-run still going is waited for and a re-run that failed is red.
+              run = max(runs, key=lambda run: (str(run.get("created_at", "")), int(run["id"])))
+              seen = "{} run {} attempt {}".format(label, run["id"], run.get("run_attempt"))
+              if run.get("status") != "completed":
+                  waiting.append("{} is {}".format(seen, run.get("status")))
+              elif run.get("conclusion") != "success":
+                  red.append("{} concluded {}".format(seen, run.get("conclusion")))
+              else:
+                  green.append(str(run["id"]))
+          compared = json.load(open(os.path.join(work, "compare.json"), encoding="utf-8")) or {}
+          if compared.get("status") not in ("behind", "identical"):
+              red.append("it is no longer on main (compare main...{} is {})".format(commit[:12], compared.get("status")))
+          if red:
+              print("red " + "; ".join(red))
+          elif waiting:
+              print("waiting " + "; ".join(waiting))
+          else:
+              print("green " + " ".join(green))
+          PY
+          )"
+            case "$verdict" in
+              green\ *)
+                read -r _ gate security <<<"$verdict"
+                {
+                  echo "decision=pass"
+                  echo "gate_run_id=$gate"
+                  echo "security_run_id=$security"
+                } >> "$GITHUB_OUTPUT"
+                echo "Greenfield gate run $gate and Source security gate run $security are green on $COMMIT, which is on main"
+                exit 0
+                ;;
+              red\ *)
+                not_green "the images commit $COMMIT cannot be deployed: ${verdict#red }"
+                ;;
+            esac
+            if [ "$minute" -ge "$WAIT_MINUTES" ]; then
+              not_green "the gates on $COMMIT had not finished after $WAIT_MINUTES minute(s): ${verdict#waiting }"
+            fi
+            echo "the gates on $COMMIT: ${verdict#waiting }; waiting"
+            sleep 60
+            minute=$((minute + 1))
+          done
 
       # The same script, waiting for nothing.
       - name: Still no rehearsal job in progress, immediately before the first write
@@ -533,6 +854,8 @@ jobs:
           COMMIT: ${{ needs.run.outputs.commit }}
           RUN_ID: ${{ needs.run.outputs.run_id }}
           RUN_ATTEMPT: ${{ needs.run.outputs.run_attempt }}
+          RUN_STARTED: ${{ needs.run.outputs.run_started }}
+          RUN_ENDED: ${{ needs.run.outputs.run_ended }}
           API_RANGE: ${{ needs.ranges.outputs.api_range }}
           WORKER_RANGE: ${{ needs.ranges.outputs.worker_range }}
         run: |
@@ -540,6 +863,7 @@ jobs:
           infra/scripts/ci-deploy-app.sh deploy \
             --digests "$RUNNER_TEMP/fss-image-digests/image-digests.json" \
             --commit "$COMMIT" --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" \
+            --run-started "$RUN_STARTED" --run-ended "$RUN_ENDED" \
             --api-range "$API_RANGE" --worker-range "$WORKER_RANGE"
 
       # The release record for these digests is put by the `record` job, after the
@@ -680,6 +1004,8 @@ jobs:
           COMMIT: ${{ needs.run.outputs.commit }}
           RUN_ID: ${{ needs.run.outputs.run_id }}
           RUN_ATTEMPT: ${{ needs.run.outputs.run_attempt }}
+          RUN_STARTED: ${{ needs.run.outputs.run_started }}
+          RUN_ENDED: ${{ needs.run.outputs.run_ended }}
           API_RANGE: ${{ needs.ranges.outputs.api_range }}
           WORKER_RANGE: ${{ needs.ranges.outputs.worker_range }}
         run: |
@@ -687,63 +1013,112 @@ jobs:
           [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::the images commit is not a commit"; exit 1; }
           [[ "$RUN_ID" =~ ^[0-9]{1,20}$ ]] || { echo "::error::the images run id is not a run id"; exit 1; }
           [[ "$RUN_ATTEMPT" =~ ^[0-9]{1,4}$ ]] || { echo "::error::the images run attempt is not an attempt"; exit 1; }
+          for instant in "$RUN_STARTED" "$RUN_ENDED"; do
+            [[ "$instant" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || { echo "::error::'$instant' is not a UTC instant"; exit 1; }
+          done
           for range in "$API_RANGE" "$WORKER_RANGE"; do
             [[ "$range" =~ ^[0-9]{1,4}-[0-9]{1,4}$ ]] || { echo "::error::'$range' is not a schema range"; exit 1; }
           done
 
-      # The deploy starts when the images run completes, and the gate on the same push
-      # may still be running then. No credential is held while it waits.
-      - name: The gate run on the images commit, green
-        id: gate
+      # The gates job's step again. They were green before the deploy; a re-run since
+      # that is red, or main moved off the commit, and no record is put. No credential is
+      # held while it waits for a re-run still going.
+      - name: The two gates on the images commit, green, and the commit still on main
+        id: gates
         env:
           GH_TOKEN: ${{ github.token }}
           COMMIT: ${{ needs.run.outputs.commit }}
           WAIT_MINUTES: '30'
+          NOT_GREEN: fail
         run: |
           set -euo pipefail
           [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::the images commit is not a commit"; exit 1; }
+          [[ "$WAIT_MINUTES" =~ ^[0-9]{1,3}$ ]] || { echo "::error::WAIT_MINUTES '$WAIT_MINUTES' is not a number of minutes"; exit 1; }
+          case "$NOT_GREEN" in
+            manual | fail) ;;
+            *) echo "::error::NOT_GREEN is '$NOT_GREEN', not manual or fail"; exit 1 ;;
+          esac
+          work="$RUNNER_TEMP/gates"
+          rm -rf "$work"
+          mkdir -p "$work"
+          # Not green: the manual path before the decision; after it, a red run that
+          # writes nothing more.
+          not_green() {
+            if [ "$NOT_GREEN" = fail ]; then
+              echo "::error::$1. Nothing more is written for this commit."
+              exit 1
+            fi
+            echo "decision=manual" >> "$GITHUB_OUTPUT"
+            echo "reason=$1" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Not deployed by CI; the manual path applies::$1"
+            exit 0
+          }
           minute=0
           while :; do
-            gh api "repos/$GITHUB_REPOSITORY/actions/workflows/greenfield.yml/runs?head_sha=$COMMIT&event=push&branch=main&per_page=20" \
-              > "$RUNNER_TEMP/gate-runs.json"
-            verdict="$(FSS_FILE="$RUNNER_TEMP/gate-runs.json" python3 - <<'PY'
+            # Each gate by its workflow file, never by its display name, and main as the
+            # API sees it now.
+            for workflow in greenfield.yml ci.yml; do
+              gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow/runs?head_sha=$COMMIT&event=push&branch=main&per_page=20" \
+                > "$work/$workflow.json"
+            done
+            gh api "repos/$GITHUB_REPOSITORY/compare/main...$COMMIT?per_page=1" > "$work/compare.json"
+            verdict="$(FSS_WORK="$work" python3 - <<'PY'
           import json, os, re
-          commit, repository = os.environ["COMMIT"], os.environ["GITHUB_REPOSITORY"]
-          runs = (json.load(open(os.environ["FSS_FILE"], encoding="utf-8")) or {}).get("workflow_runs") or []
-          runs = [run for run in runs
-                  if str(run.get("path", "")).split("@")[0] == ".github/workflows/greenfield.yml"
-                  and run.get("event") == "push" and run.get("head_branch") == "main"
-                  and run.get("head_sha") == commit
-                  and (run.get("head_repository") or {}).get("full_name") == repository
-                  and re.fullmatch(r"[1-9][0-9]{0,19}", str(run.get("id", "")))]
-          if not runs:
-              print("none")
-          else:
+          commit, repository, work = os.environ["COMMIT"], os.environ["GITHUB_REPOSITORY"], os.environ["FSS_WORK"]
+          gates = ((".github/workflows/greenfield.yml", "greenfield.yml", "Greenfield gate"),
+                   (".github/workflows/ci.yml", "ci.yml", "Source security gate"))
+          green, waiting, red = [], [], []
+          for path, name, label in gates:
+              runs = (json.load(open(os.path.join(work, name + ".json"), encoding="utf-8")) or {}).get("workflow_runs") or []
+              runs = [run for run in runs
+                      if str(run.get("path", "")).split("@")[0] == path
+                      and run.get("event") == "push" and run.get("head_branch") == "main"
+                      and run.get("head_sha") == commit
+                      and (run.get("head_repository") or {}).get("full_name") == repository
+                      and re.fullmatch(r"[1-9][0-9]{0,19}", str(run.get("id", "")))]
+              if not runs:
+                  waiting.append("no {} run ({}) of the push yet".format(label, path))
+                  continue
+              # The newest run of the push. GitHub reports a run as its latest attempt, so a
+              # re-run still going is waited for and a re-run that failed is red.
               run = max(runs, key=lambda run: (str(run.get("created_at", "")), int(run["id"])))
+              seen = "{} run {} attempt {}".format(label, run["id"], run.get("run_attempt"))
               if run.get("status") != "completed":
-                  print("waiting {}".format(run["id"]))
-              elif run.get("conclusion") == "success":
-                  print("green {}".format(run["id"]))
+                  waiting.append("{} is {}".format(seen, run.get("status")))
+              elif run.get("conclusion") != "success":
+                  red.append("{} concluded {}".format(seen, run.get("conclusion")))
               else:
-                  print("red {} {}".format(run["id"], run.get("conclusion")))
+                  green.append(str(run["id"]))
+          compared = json.load(open(os.path.join(work, "compare.json"), encoding="utf-8")) or {}
+          if compared.get("status") not in ("behind", "identical"):
+              red.append("it is no longer on main (compare main...{} is {})".format(commit[:12], compared.get("status")))
+          if red:
+              print("red " + "; ".join(red))
+          elif waiting:
+              print("waiting " + "; ".join(waiting))
+          else:
+              print("green " + " ".join(green))
           PY
           )"
             case "$verdict" in
               green\ *)
-                echo "gate_run_id=${verdict#green }" >> "$GITHUB_OUTPUT"
-                echo "Greenfield gate run ${verdict#green } is green on $COMMIT"
+                read -r _ gate security <<<"$verdict"
+                {
+                  echo "decision=pass"
+                  echo "gate_run_id=$gate"
+                  echo "security_run_id=$security"
+                } >> "$GITHUB_OUTPUT"
+                echo "Greenfield gate run $gate and Source security gate run $security are green on $COMMIT, which is on main"
                 exit 0
                 ;;
               red\ *)
-                echo "::error::the Greenfield gate on $COMMIT did not pass (run and conclusion: ${verdict#red }). No record is put for a commit the gate did not pass."
-                exit 1
+                not_green "the images commit $COMMIT cannot be deployed: ${verdict#red }"
                 ;;
             esac
             if [ "$minute" -ge "$WAIT_MINUTES" ]; then
-              echo "::error::no green Greenfield gate run on $COMMIT after $WAIT_MINUTES minutes (last seen: $verdict)"
-              exit 1
+              not_green "the gates on $COMMIT had not finished after $WAIT_MINUTES minute(s): ${verdict#waiting }"
             fi
-            echo "the Greenfield gate on $COMMIT: $verdict; waiting"
+            echo "the gates on $COMMIT: ${verdict#waiting }; waiting"
             sleep 60
             minute=$((minute + 1))
           done
@@ -755,15 +1130,68 @@ jobs:
           ref: ${{ needs.run.outputs.commit }}
           persist-credentials: false
 
-      - name: Download the digests that run published
+      - name: Download the digests the images run published, from its own artifact
         env:
           GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ needs.run.outputs.commit }}
           RUN_ID: ${{ needs.run.outputs.run_id }}
         run: |
           set -euo pipefail
-          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --name fss-image-digests \
-            --dir "$RUNNER_TEMP/fss-image-digests"
-          cat "$RUNNER_TEMP/fss-image-digests/image-digests.json"
+          [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::the images commit is not a commit"; exit 1; }
+          [[ "$RUN_ID" =~ ^[0-9]{1,20}$ ]] || { echo "::error::the images run id is not a run id"; exit 1; }
+          work="$RUNNER_TEMP/fss-image-digests"
+          rm -rf "$work"
+          mkdir -p "$work"
+          # The artifact is found through the images run and nowhere else, and it must say
+          # it was uploaded by that run of that commit on main.
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts?name=fss-image-digests&per_page=100" \
+            > "$work/artifacts.json"
+          read -r artifact expected <<<"$(FSS_FILE="$work/artifacts.json" python3 - <<'PY'
+          import json, os, re, sys
+          run_id, commit = os.environ["RUN_ID"], os.environ["COMMIT"]
+          listed = (json.load(open(os.environ["FSS_FILE"], encoding="utf-8")) or {}).get("artifacts") or []
+          named = [item for item in listed if isinstance(item, dict) and item.get("name") == "fss-image-digests"]
+          if not named:
+              sys.exit("images run {} has no fss-image-digests artifact".format(run_id))
+          artifact = max(named, key=lambda item: (str(item.get("created_at", "")), str(item.get("id", ""))))
+          source = artifact.get("workflow_run") or {}
+          problems = []
+          if not re.fullmatch(r"[1-9][0-9]{0,19}", str(artifact.get("id", ""))):
+              problems.append("it has no id")
+          if artifact.get("expired") is not False:
+              problems.append("it has expired")
+          if str(source.get("id", "")) != run_id:
+              problems.append("it was uploaded by run {}, not by images run {}".format(source.get("id"), run_id))
+          if source.get("head_sha") != commit or source.get("head_branch") != "main":
+              problems.append("its run built {} on {}, not {} on main".format(source.get("head_sha"), source.get("head_branch"), commit))
+          if not re.fullmatch(r"sha256:[0-9a-f]{64}", str(artifact.get("digest", ""))):
+              problems.append("it carries no sha256 digest to hold the download to")
+          if problems:
+              sys.exit("the fss-image-digests artifact of images run {} is not that run's own: {}".format(run_id, "; ".join(problems)))
+          print(artifact["id"], artifact["digest"])
+          PY
+          )"
+          [ -n "${expected:-}" ] || exit 1
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact/zip" > "$work/artifact.zip"
+          # The bytes are the ones the run uploaded, and hold exactly the one file.
+          FSS_ZIP="$work/artifact.zip" FSS_DIGEST="$expected" FSS_OUT="$work/image-digests.json" python3 - <<'PY'
+          import hashlib, os, sys, zipfile
+          env = os.environ
+          data = open(env["FSS_ZIP"], "rb").read()
+          actual = "sha256:" + hashlib.sha256(data).hexdigest()
+          if actual != env["FSS_DIGEST"]:
+              sys.exit("the downloaded artifact is {}, and GitHub lists {} as its digest".format(actual, env["FSS_DIGEST"]))
+          with zipfile.ZipFile(env["FSS_ZIP"]) as archive:
+              if archive.namelist() != ["image-digests.json"]:
+                  sys.exit("the artifact holds {}, not image-digests.json alone".format(archive.namelist()))
+              content = archive.read("image-digests.json")
+          if len(content) > 65536:
+              sys.exit("image-digests.json is {} bytes, which is not a digests file".format(len(content)))
+          open(env["FSS_OUT"], "wb").write(content)
+          PY
+          rm -f "$work/artifact.zip" "$work/artifacts.json"
+          echo "artifact $artifact of images run $RUN_ID, $expected"
+          cat "$work/image-digests.json"
 
       # One hour: the put is one one-off task of up to twenty minutes.
       - name: Assume the production CI deploy role
@@ -800,9 +1228,11 @@ jobs:
           COMMIT: ${{ needs.run.outputs.commit }}
           RUN_ID: ${{ needs.run.outputs.run_id }}
           RUN_ATTEMPT: ${{ needs.run.outputs.run_attempt }}
+          RUN_STARTED: ${{ needs.run.outputs.run_started }}
+          RUN_ENDED: ${{ needs.run.outputs.run_ended }}
           API_RANGE: ${{ needs.ranges.outputs.api_range }}
           WORKER_RANGE: ${{ needs.ranges.outputs.worker_range }}
-          GATE_RUN_ID: ${{ steps.gate.outputs.gate_run_id }}
+          GATE_RUN_ID: ${{ steps.gates.outputs.gate_run_id }}
           CLUSTER_NAME: ${{ vars.FSS_PRODUCTION_CLUSTER_NAME }}
           OPERATIONS_FAMILY: ${{ vars.FSS_PRODUCTION_OPERATIONS_TASK_FAMILY }}
           TASK_SUBNETS: ${{ vars.FSS_PRODUCTION_TASK_SUBNET_IDS }}
@@ -812,6 +1242,7 @@ jobs:
           infra/scripts/ci-deploy-app.sh record \
             --digests "$RUNNER_TEMP/fss-image-digests/image-digests.json" \
             --commit "$COMMIT" --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" \
+            --run-started "$RUN_STARTED" --run-ended "$RUN_ENDED" \
             --api-range "$API_RANGE" --worker-range "$WORKER_RANGE" \
             --gate-run-id "$GATE_RUN_ID" --cluster-name "$CLUSTER_NAME" \
             --operations-family "$OPERATIONS_FAMILY" \
@@ -827,7 +1258,7 @@ jobs:
 
   summary:
     name: One line
-    needs: [run, ranges, deploy, smoke, record]
+    needs: [run, gates, ranges, deploy, smoke, record]
     # Not for an images run that failed or was not a push to main: nothing was asked.
     if: always() && needs.run.result != 'skipped'
     runs-on: ubuntu-24.04
@@ -840,6 +1271,9 @@ jobs:
       - name: One line
         env:
           COMMIT: ${{ needs.run.outputs.commit }}
+          GATES_RESULT: ${{ needs.gates.result }}
+          GATES_DECISION: ${{ needs.gates.outputs.decision }}
+          GATES_REASON: ${{ needs.gates.outputs.reason }}
           DEPLOY_RESULT: ${{ needs.deploy.result }}
           SMOKE_RESULT: ${{ needs.smoke.result }}
           DECISION: ${{ needs.deploy.outputs.decision }}
@@ -855,8 +1289,12 @@ jobs:
         run: |
           set -euo pipefail
           short="${COMMIT:0:8}"
-          if [ "$DEPLOY_RESULT" != success ] || { [ "$DECISION" = deploy ] && [ "$SMOKE_RESULT" != success ]; }; then
-            line="Production deploy of ${short:-an unknown commit} FAILED (deploy ${DEPLOY_RESULT:-not run}, smoke ${SMOKE_RESULT:-not run}, decision ${DECISION:-none})."
+          if [ "$GATES_RESULT" = success ] && [ "$GATES_DECISION" = manual ]; then
+            # The gates answered before anything held a credential; the deploy job never ran.
+            line="Not deployed: $GATES_REASON. The manual path applies (docs/greenfield/release.md 4)."
+            echo "::notice::$line"
+          elif [ "$DEPLOY_RESULT" != success ] || { [ "$DECISION" = deploy ] && [ "$SMOKE_RESULT" != success ]; }; then
+            line="Production deploy of ${short:-an unknown commit} FAILED (gates ${GATES_RESULT:-not run}, deploy ${DEPLOY_RESULT:-not run}, smoke ${SMOKE_RESULT:-not run}, decision ${DECISION:-none})."
             [ -z "$PREVIOUS_API$PREVIOUS_WORKER" ] || line="$line Before: worker ${PREVIOUS_WORKER##*/}, api ${PREVIOUS_API##*/}."
             [ -z "$OBSERVED" ] || line="$line Observed now: $OBSERVED."
             echo "::error::$line"
