@@ -18,7 +18,8 @@ import { repositoryPath } from './support/repository.ts';
  * phase obey schema ranges."
  *
  * Rehearsal-only, because an image either starts against a database or it does not, and
- * nothing on a laptop can ask it that. `infra/scripts/rehearsal-schema-ranges.sh` runs
+ * nothing on a laptop can ask it that. `infra/scripts/rehearsal.sh ranges` (P7; the old
+ * name `rehearsal-schema-ranges.sh` execs it) runs
  * the declared deploy order — migrate, then worker, then API — and then the reverse
  * cases through `--selftest`.
  *
@@ -98,7 +99,8 @@ describe('Appendix G 22: the declared ranges decide, and a non-overlap is the re
  * it exits anything else (it stopped for some other reason).
  */
 
-const SCHEMA_RANGES = 'infra/scripts/rehearsal-schema-ranges.sh';
+const SCHEMA_RANGES = 'infra/scripts/rehearsal.sh';
+const SCHEMA_RANGES_LEGACY = 'infra/scripts/rehearsal-schema-ranges.sh';
 const CHECK_PREFIX = 'fss-rh-check';
 const CHECK_API_DIGEST = `sha256:${'a'.repeat(64)}`;
 const CHECK_WORKER_DIGEST = `sha256:${'b'.repeat(64)}`;
@@ -111,6 +113,8 @@ interface RunOptions {
   readonly previousRegistered?: boolean;
   /** What the overlap case's container exits with, when there is one to run. */
   readonly previousExit?: number;
+  /** Through the old name, `rehearsal-schema-ranges.sh`, which only execs `rehearsal.sh ranges`. */
+  readonly legacy?: boolean;
 }
 
 interface SchemaRangeRun {
@@ -194,8 +198,8 @@ function runSchemaRanges(options: RunOptions): SchemaRangeRun {
   const directory = mkdtempSync(join(tmpdir(), 'fss-schema-ranges-'));
   const reports = mkdtempSync(join(tmpdir(), 'fss-schema-reports-'));
   const result = spawnSync(
-    repositoryPath(SCHEMA_RANGES),
-    [CHECK_PREFIX, '--api-digest', CHECK_API_DIGEST, '--worker-digest', CHECK_WORKER_DIGEST],
+    repositoryPath(options.legacy === true ? SCHEMA_RANGES_LEGACY : SCHEMA_RANGES),
+    [...(options.legacy === true ? [] : ['ranges']), CHECK_PREFIX, '--api-digest', CHECK_API_DIGEST, '--worker-digest', CHECK_WORKER_DIGEST],
     {
       encoding: 'utf8',
       env: {
@@ -278,6 +282,15 @@ describe('Appendix G 22 (g38): the refusal cases measure the container, not the 
     const run = runSchemaRanges({ staleExit: 1 });
     expect(run.code).not.toBe(0);
     expect(run.output).toContain('exited 1 and this step requires exit 12');
+  });
+
+  it('answers the same through the old name, rehearsal-schema-ranges.sh', () => {
+    for (const options of [{ staleExit: 12, previousRegistered: true, previousExit: 0 }, { staleExit: 0 }]) {
+      const current = runSchemaRanges(options);
+      const legacy = runSchemaRanges({ ...options, legacy: true });
+      expect(legacy.code, legacy.output).toBe(current.code);
+      expect(legacy.report).toBe(current.report);
+    }
   });
 });
 

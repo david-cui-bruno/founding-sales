@@ -5,6 +5,12 @@
 #   deploy.sh bootstrap <root> <prefix> --worker-digest D --slug S --display-name N --admin-email E \
 #                       [--time-zone Z] [--sending-domain DOMAIN] [--environment production]
 #   deploy.sh current   <prefix> [--var-flags] [--compare <api_image> <worker_image> [--allow-digest-change]]
+#       prints api_image=, worker_image=, api_schema_range=, worker_schema_range= — the four
+#       a plan is made from, in that order and with nothing among them — and then
+#       api_database_host= and worker_database_host=, FSS_DATABASE_HOST as each service
+#       runs it (the managed instance, or a restored copy between steps (f) and (g) of
+#       runbooks/restore.md; release.md 4.1). --var-flags prints the first four alone, as
+#       -var= flags: there is no per-service host variable.
 #   deploy.sh ci        gates|gate|download|check|record|deploy|canary  (the CI path; flags under "ci" below)
 #
 # It replaces release-deploy.sh (release), release-bootstrap-workspace.sh (bootstrap),
@@ -268,6 +274,7 @@ json.dump({
     "digest": match.group(1),
     "schema": [minimum, maximum],
     "sendingEnabled": environment.get("FSS_SENDING_ENABLED"),
+    "databaseHost": environment.get("FSS_DATABASE_HOST") or "",
 }, open(os.path.join(work, service + ".json"), "w", encoding="utf-8"))
 PY
 }
@@ -533,6 +540,7 @@ deploy_current() {
   done
   if [ "$allow" = 1 ] && [ -z "$compare_api" ]; then current_usage; fi
   local environment account region cluster work service name latest image schema lines='' pair differs='' key
+  local api_database_host='' worker_database_host=''
   environment="$(release_environment_for_prefix "$prefix")" || exit 2
   if rehearsal_dry_run; then
     echo "FAIL: deploy.sh current only reads, and what it reads is the answer; there is nothing to dry-run" >&2
@@ -561,6 +569,8 @@ deploy_current() {
       || deploy_fail "$name's running tasks are not all $image; read the digests when its rollout has finished"
     schema="$(deploy_field "$work" "$service" schema)"
     lines="$lines ${service}_image=$image ${service}_schema_range={min=${schema%-*},max=${schema#*-}}"
+    # bash 3.2: no associative array, so the two are named.
+    printf -v "${service}_database_host" '%s' "$(deploy_field "$work" "$service" databaseHost)"
   done
 
   if [ -n "$compare_api" ]; then
@@ -578,7 +588,8 @@ deploy_current() {
       deploy_fail "the plan's images are not the ones production runs:$differs. Applying it would put other images on the services; plan again from this script's output, or pass --allow-digest-change for a release that changes them on purpose."
     fi
   fi
-  # Images first, then ranges, one per line.
+  # Images first, then ranges, one per line. These four lines are what a plan is made
+  # from and what the coordinator's helpers read, so nothing is ever inserted among them.
   for key in api_image worker_image api_schema_range worker_schema_range; do
     for pair in $lines; do
       case "$pair" in
@@ -586,6 +597,13 @@ deploy_current() {
       esac
     done
   done
+  # Then the database host each service runs on, after them and never as a -var: it is one
+  # root variable (active_database_host) and two readings of it, and a restore is the only
+  # time they are not the managed instance's address (release.md 4.1).
+  if [ "$form" != --var-flags ]; then
+    printf 'api_database_host=%s\n' "${api_database_host:-<none>}"
+    printf 'worker_database_host=%s\n' "${worker_database_host:-<none>}"
+  fi
 }
 
 # ===========================================================================

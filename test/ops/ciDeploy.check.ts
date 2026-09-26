@@ -115,7 +115,7 @@ const TAGS = [
 ];
 
 /** A running task definition, with the read-only fields ECS returns. */
-function runningDefinition(service: Service, revision: number, image: string, schema = 16): Record<string, unknown> {
+function runningDefinition(service: Service, revision: number, image: string, schema = 16, databaseHost = DATABASE_HOST): Record<string, unknown> {
   return {
     taskDefinition: {
       taskDefinitionArn: definitionArn(service, revision),
@@ -146,7 +146,7 @@ function runningDefinition(service: Service, revision: number, image: string, sc
             { name: 'FSS_SCHEMA_MIN', value: String(schema) },
             { name: 'FSS_SCHEMA_MAX', value: String(schema) },
             { name: 'FSS_SENDING_ENABLED', value: 'false' },
-            { name: 'FSS_DATABASE_HOST', value: DATABASE_HOST },
+            { name: 'FSS_DATABASE_HOST', value: databaseHost },
           ],
           secrets: [{ name: 'DATABASE_SECRET_ARN', valueFrom: RUNTIME_SECRET }],
           logConfiguration: {
@@ -500,6 +500,8 @@ interface WorldOptions {
   readonly rolloutState?: Partial<Record<Service, string>>;
   /** A service one of whose RUNNING tasks reports this digest instead of its revision's. */
   readonly stray?: Partial<Record<Service, string>>;
+  /** FSS_DATABASE_HOST on both running definitions; the managed instance's by default. */
+  readonly databaseHost?: string;
   /**
    * An update-service call that fails: refused; accepted with its answer lost; lost and the
    * service unreadable after; refused with a deployment of the new revision listed (half);
@@ -528,8 +530,8 @@ function world(options: WorldOptions = {}): World {
   const home = mkdtempSync(join(tmpdir(), 'fss-ci-deploy-stub-'));
   const running = options.running ?? OLD;
   const taskDefinitions: Record<string, unknown> = {
-    [definitionArn('api', 7)]: runningDefinition('api', 7, running.api, options.schema),
-    [definitionArn('worker', 4)]: runningDefinition('worker', 4, running.worker, options.schema),
+    [definitionArn('api', 7)]: runningDefinition('api', 7, running.api, options.schema, options.databaseHost),
+    [definitionArn('worker', 4)]: runningDefinition('worker', 4, running.worker, options.schema, options.databaseHost),
     [OPERATIONS_REVISION]: operationsDefinition(options.operations),
   };
   if (options.newerRevision !== undefined) {
@@ -1894,20 +1896,39 @@ describe('deploy.sh current prints what an operator plan must be given, and refu
   const apiImage = `${REGISTRY}/fss-prod-api@${OLD.api}`;
   const workerImage = `${REGISTRY}/fss-prod-worker@${OLD.worker}`;
 
-  it('prints the running images and ranges, as values and as -var flags', () => {
+  it('prints the running images and ranges, then the database host each service runs on, and only the first four as -var flags', () => {
     const values = deployed(world());
     expect(values.code, values.stderr).toBe(0);
     expect(values.stdout).toBe(
       [
+        // The four a plan is made from, in this order and with nothing among them: the
+        // coordinator's helpers read them by position as well as by name.
         `api_image=${apiImage}`,
         `worker_image=${workerImage}`,
         'api_schema_range={min=16,max=16}',
         'worker_schema_range={min=16,max=16}',
+        // Then FSS_DATABASE_HOST as each service runs it (W3-S8: the restore runbook's
+        // step (g) had to read ECS itself for this).
+        `api_database_host=${DATABASE_HOST}`,
+        `worker_database_host=${DATABASE_HOST}`,
         '',
       ].join('\n'),
     );
+    // A restored copy reads through as itself, which is what the runbook needs.
+    const restored = deployed(world({ databaseHost: 'fss-prod-pg-r20261001.example.invalid' }));
+    expect(restored.stdout).toContain('api_database_host=fss-prod-pg-r20261001.example.invalid');
+    expect(restored.stdout).toContain('worker_database_host=fss-prod-pg-r20261001.example.invalid');
+    // There is no per-service host variable, so the flags are the four and nothing else.
     const flags = deployed(world(), '--var-flags');
-    expect(flags.stdout.split('\n')[0]).toBe(`-var=api_image=${apiImage}`);
+    expect(flags.stdout).toBe(
+      [
+        `-var=api_image=${apiImage}`,
+        `-var=worker_image=${workerImage}`,
+        '-var=api_schema_range={min=16,max=16}',
+        '-var=worker_schema_range={min=16,max=16}',
+        '',
+      ].join('\n'),
+    );
   });
 
   it('refuses a lone deployment ECS has not called COMPLETED, a count short, and a running task on another image', () => {

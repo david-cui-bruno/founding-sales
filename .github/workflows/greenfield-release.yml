@@ -7,7 +7,8 @@ name: Greenfield release rehearsal
 # migrates and deploys the two images by digest (migrate, then worker, then API),
 # bootstraps the workspace, checks the declared schema ranges against the deployed images
 # (Appendix G 22), runs the production smoke script against it, tears the run down, and
-# asserts that every durable resource carrying the run's prefix is gone (Appendix G 39).
+# asserts that the run's state is empty and its database gone (Appendix G 39). Every script
+# step is infra/scripts/rehearsal.sh, deploy.sh or stop.sh (P7, 27 September 2026).
 #
 # `stage` stops early or only cleans: `plan` plans and summarises and creates nothing;
 # `create` adds the apply; `deploy` adds the entries, the deploy, the bootstrap and the
@@ -69,9 +70,9 @@ permissions:
 # One rehearsal at a time (G12h, David's condition 7).
 #
 # Two rehearsals overlapping share the account's quotas and the two stable ECR
-# repositories, and each guard compares only its own run prefix since lane g97, so a
-# second run cannot spoil the first one's comparison — but two Multi-AZ databases at once
-# is spend nobody chose. The teardown is the other half: `if: always()` means a cancelled
+# repositories, and each guard reads only its own run's state and database, so a second
+# run cannot spoil the first one's — but two Multi-AZ databases at once is spend nobody
+# chose. The teardown is the other half: `if: always()` means a cancelled
 # run still destroys what it made, so `cancel-in-progress` is deliberately **false**. A
 # queued run waits; it does not shoot the one that is already holding the namespace.
 concurrency:
@@ -153,8 +154,8 @@ jobs:
           fi
           [ -n "$suffix" ] || suffix="$(date -u +%Y%m%d%H%M)"
           prefix="fss-rh-${suffix}"
-          # The same guard the scripts use, applied before anything is created.
-          FSS_REHEARSAL_DRY_RUN=1 infra/scripts/rehearsal-prefix-guard.sh "$prefix" before
+          # The same refusal the scripts use, applied before anything is created.
+          infra/scripts/rehearsal.sh prefix "$prefix"
           echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
           echo "run prefix: $prefix"
 
@@ -179,7 +180,7 @@ jobs:
           # acts as, so the script refuses any identity that is not an assumed-role
           # session of `fss-rh-deploy` — a user, another role, or a role whose name
           # merely starts the same way.
-          infra/scripts/rehearsal-caller-identity.sh fss-rh-deploy
+          infra/scripts/rehearsal.sh identity fss-rh-deploy
 
       - name: The account this rehearsal is in, from the session that was just verified
         env:
@@ -205,12 +206,6 @@ jobs:
           fi
           echo "TF_VAR_aws_account_id=${account}" >> "$GITHUB_ENV"
           echo "TF_VAR_aws_region=${AWS_REGION}" >> "$GITHUB_ENV"
-
-      - name: Record the run's own resources before anything is created
-        # What carries this run's prefix before the create: nothing, for a fresh run; the
-        # orphan's resources, for a `teardown`. The guard compares against it at the end.
-        timeout-minutes: 5
-        run: infra/scripts/rehearsal-prefix-guard.sh "${{ steps.prefix.outputs.prefix }}" before
 
       - name: Read the schema ranges the images accept
         run: |
@@ -248,7 +243,7 @@ jobs:
           prefix='${{ steps.prefix.outputs.prefix }}'
           # Every value the root requires, written to `run.auto.tfvars.json` beside the
           # root as well as passed as `-var`s below. `terraform destroy` requires the
-          # same variables as `apply`, and it runs in `rehearsal-teardown.sh` on
+          # same variables as `apply`, and it runs in `rehearsal.sh teardown` on
           # `always()`, after this shell and its values are gone; the teardown refuses
           # to destroy without this file rather than fail on a missing variable and
           # leave the environment standing. `infra/.gitignore` ignores `*.tfvars.json`,
@@ -306,14 +301,14 @@ jobs:
           # `assume_deployment_role=false`: the root's default is to assume
           # `fss-rh-deploy`, and this job's session already is it. The step that
           # printed the caller identity is what makes turning the assumption off safe;
-          # `infra/scripts/rehearsal-teardown.sh` repeats both, because the teardown
+          # `infra/scripts/rehearsal.sh teardown` repeats both, because the teardown
           # runs on `always()` and must not destroy anything as a principal nobody
           # checked.
           #
           # `bootstrap=true`: every rehearsal environment is a fresh one, its database
           # has no schema, and both binaries refuse to start unless the applied schema
           # version is exactly the range they declare. So the apply creates both
-          # services at desired count zero and `infra/scripts/release-deploy.sh`
+          # services at desired count zero and `infra/scripts/deploy.sh release`
           # scales them after the migration task and `fss verify` have succeeded
           # (G12h; David's conditions 1 and 2).
           #
@@ -452,7 +447,7 @@ jobs:
           # the migration, which is what the 25 September production deploy did
           # (`docs/greenfield/release.md` 8.0af). Both services ignore changes to
           # their count, so once stopped the apply cannot start them again, and
-          # `release-deploy.sh` refuses to migrate unless they are at zero. A fresh
+          # `deploy.sh release` refuses to migrate unless they are at zero. A fresh
           # stack has nothing to stop: the apply creates both services at zero. The
           # plan above says which of the two this is, from its addresses and actions.
           prefix='${{ steps.prefix.outputs.prefix }}'
@@ -484,7 +479,7 @@ jobs:
           services="$(cat "$RUNNER_TEMP/rehearsal-services.txt")"
           if [ "$services" = standing ]; then
             echo "both services already stand in this run's state; stopping them before the apply"
-            "$GITHUB_WORKSPACE/infra/scripts/release-stop.sh" "$GITHUB_WORKSPACE/infra/roots/rehearsal" "$prefix"
+            "$GITHUB_WORKSPACE/infra/scripts/stop.sh" "$GITHUB_WORKSPACE/infra/roots/rehearsal" "$prefix"
           else
             echo "a fresh stack: the apply creates both services at zero, so there is nothing to stop"
           fi
@@ -610,7 +605,7 @@ jobs:
           # one-off task inside the VPC, `fss admin database-users ensure`, `fss
           # verify`, worker, API, verify again. Never beside each other: the API's
           # declared schema range needs the migration to have run.
-          infra/scripts/release-deploy.sh infra/roots/rehearsal \
+          infra/scripts/deploy.sh release infra/roots/rehearsal \
             '${{ steps.prefix.outputs.prefix }}' \
             --schema-change \
             --api-digest '${{ inputs.api_image_digest }}' \
@@ -633,7 +628,7 @@ jobs:
           # rehearsed is the step itself, and the production command differs only in
           # its root, its prefix, its three values and the `--environment production`
           # this one does not need.
-          infra/scripts/release-bootstrap-workspace.sh infra/roots/rehearsal \
+          infra/scripts/deploy.sh bootstrap infra/roots/rehearsal \
             '${{ steps.prefix.outputs.prefix }}' \
             --worker-digest '${{ inputs.worker_image_digest }}' \
             --slug rehearsal \
@@ -651,7 +646,7 @@ jobs:
           # the API and the worker task definitions as one-off `--selftest` tasks
           # through the same wrapper, and that wrapper refuses to launch a task whose
           # registered image is not the digest this release is about.
-          infra/scripts/rehearsal-schema-ranges.sh '${{ steps.prefix.outputs.prefix }}' \
+          infra/scripts/rehearsal.sh ranges '${{ steps.prefix.outputs.prefix }}' \
             --api-digest '${{ inputs.api_image_digest }}' \
             --worker-digest '${{ inputs.worker_image_digest }}'
 
@@ -744,30 +739,27 @@ jobs:
           set -euo pipefail
           # The teardown destroys and the guard reads what is left, so the question
           # "which principal is this?" has to be answered again here rather than
-          # inherited from a step an hour ago. `rehearsal-teardown.sh` asks it a
+          # inherited from a step an hour ago. `rehearsal.sh teardown` asks it a
           # third time itself, which is the belt this is the braces for.
-          infra/scripts/rehearsal-caller-identity.sh fss-rh-deploy
+          infra/scripts/rehearsal.sh identity fss-rh-deploy
 
       - name: Tear the rehearsal run down
         if: always()
         working-directory: infra/roots/rehearsal
-        run: ../../scripts/rehearsal-teardown.sh '${{ steps.prefix.outputs.prefix }}'
+        run: ../../scripts/rehearsal.sh teardown '${{ steps.prefix.outputs.prefix }}'
 
-      # What this guard compares changed in lane g97 (25 September 2026). It used to
-      # record the production inventory before the run and diff it afterwards, and that
-      # diff failed a rehearsal that night only because the operator applied production
-      # while the rehearsal ran: a comparison of a thing that moves for reasons of its
-      # own measures the operator, not the rehearsal. It now compares only the resources
-      # carrying this run's own prefix against what stood before creation — every
-      # durable one the run created must be gone — and the production-inventory diff is
-      # dropped. That nothing production's was touched rests on what made it true before
-      # as well: the state it lists names nothing production's, the session is
-      # `fss-rh-deploy`, whose policy cannot address `fss-prod*`, and no command a
-      # rehearsal issues names production. `docs/greenfield/release.md` 3, item 14.
-      - name: Nothing with the production prefix was touched
+      # Four facts, since the review of PR 292 (27 September 2026): the run's state is
+      # empty, the session is `fss-rh-deploy` (whose policy cannot address `fss-prod*`),
+      # nothing in the cloud still carries the run prefix, and neither lock record of the
+      # run's state key is left. The third reads the tagging API, RDS, CloudFront and the
+      # log groups, and asks each candidate of a settling class what state it is really in.
+      # What P7 removed was the comparison with a recorded inventory, not the reading. No
+      # rehearsal command names production; lib.sh refuses one at the call.
+      # `docs/greenfield/release.md` 3, item 14.
+      - name: Nothing of the run is left, and nothing production's was touched
         if: always()
         working-directory: infra/roots/rehearsal
-        run: ../../scripts/rehearsal-prefix-guard.sh '${{ steps.prefix.outputs.prefix }}' after
+        run: ../../scripts/rehearsal.sh guard '${{ steps.prefix.outputs.prefix }}'
 
       # actions/upload-artifact v4
       - name: Keep the reports
