@@ -1,7 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { repositoryContext, workspaceScope } from '@fss/domain/db';
 import { openHold, releaseHold } from '@fss/domain/policy';
-import { resumeEnrollment } from '@fss/domain/sequences';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from '../support/authFixture.ts';
 import { issueSessionFor } from '../support/sessionFixture.ts';
 import { createCrmBridge } from '../../../desktop/src/main/crmBridge.ts';
@@ -129,21 +128,18 @@ describe('8.0au: a founder authors, enrols, confirms a number and reviews a resu
     if (page?.visibility !== 'assigned_or_admin' || page.read.visibility !== 'assigned_or_admin') throw new Error('no detail');
     firmId = page.read.firm.id;
     contactId = page.read.firm.contacts[0]?.id ?? '';
+    // Usable on entry since wave 2 (S4.4): no confirmation needed.
     const number = page.read.firm.phoneRoutes[0];
-    expect([number?.eligibility, number?.version]).toEqual(['candidate', 1]);
+    expect([number?.eligibility, number?.version]).toEqual(['usable', 1]);
 
+    // The installed desktop's Confirm still answers, and moves nothing.
     state = await bridge.confirmRoute({ routeId: number?.id ?? '', routeVersion: 1 });
     expect(state.notice).toBe('route_confirmed');
     const { rows: routes } = await fixture.db.query<{ eligibility: string; version: number; technical_validation: string }>(
       'SELECT eligibility, version, technical_validation FROM phone_routes WHERE workspace_id = $1 AND id = $2',
       [fixture.alpha.workspaceId, number?.id],
     );
-    expect(routes[0]).toEqual({ eligibility: 'usable', version: 2, technical_validation: 'passed' });
-    const { rows: audit } = await fixture.db.query<{ actor_user_id: string }>(
-      `SELECT actor_user_id FROM audit_events WHERE workspace_id = $1 AND action = 'route.phone.confirmed' AND subject_id = $2`,
-      [fixture.alpha.workspaceId, number?.id],
-    );
-    expect(audit.map(row => row.actor_user_id)).toEqual([fixture.alpha.admin.userId]);
+    expect(routes[0]).toEqual({ eligibility: 'usable', version: 1, technical_validation: 'passed' });
 
     // No opportunity yet: the page offers "Add to pipeline", and enrolling is refused here.
     expect(state.firm?.visibility === 'assigned_or_admin' ? state.firm.opportunity : 'redacted').toBeNull();
@@ -180,8 +176,9 @@ describe('8.0au: a founder authors, enrols, confirms a number and reviews a resu
   });
 
   it('shows the dates a resume gives the steps after a long hold, and resumes only when confirmed', async () => {
-    // Ten days in, a nine-day pause of the firm, released; the automatic reconsideration
-    // sends the enrollment to review, as the scheduler's wake would.
+    // Ten days in, a nine-day pause of the firm, released; an older release's automatic
+    // reconsideration left the enrollment in review. Since wave 2 (S4.1) the scheduler
+    // resumes such a row on its own; the installed desktop's review still works on it.
     await fixture.db.query(`UPDATE sequence_enrollments SET started_at = now() - interval '10 days' WHERE id = $1`, [enrollmentId]);
     const admin = repositoryContext(
       workspaceScope(fixture.alpha.workspaceId, { kind: 'user', userId: fixture.alpha.admin.userId, role: 'admin' }),
@@ -196,8 +193,10 @@ describe('8.0au: a founder authors, enrols, confirms a number and reviews a resu
     });
     await fixture.db.query(`UPDATE active_holds SET started_at = now() - interval '9 days' WHERE id = $1`, [hold]);
     await releaseHold(admin, hold);
-    const decided = await resumeEnrollment(admin, { enrollmentId });
-    expect(decided.ok && decided.value.kind).toBe('review_required');
+    await fixture.db.query(
+      `UPDATE sequence_enrollments SET state = 'review_required', review_union_milliseconds = $2 WHERE id = $1`,
+      [enrollmentId, 9 * 86_400_000],
+    );
 
     const bridge = sequences();
     let state = await bridge.state();
@@ -208,7 +207,7 @@ describe('8.0au: a founder authors, enrols, confirms a number and reviews a resu
     expect(state.resumeReview?.preview.enrollmentId).toBe(enrollmentId);
     expect(state.heldEnrollments.map(entry => entry.id)).toEqual([enrollmentId]);
     const review = state.resumeReview?.preview;
-    expect(review?.kind).toBe('review_required');
+    expect(review?.kind).toBe('resume');
     const proposed = review?.steps.map(step => step.proposedDueAt) ?? [];
     expect(proposed).toHaveLength(1);
     const moved = Date.parse(proposed[0] ?? '') - Date.parse(review?.steps[0]?.dueAt ?? '');

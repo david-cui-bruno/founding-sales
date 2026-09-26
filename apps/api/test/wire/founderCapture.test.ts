@@ -93,10 +93,11 @@ describe('8.0aq: Add firm, Import and the postures form reach the real routes (l
       website: 'https://aspen.example.test',
       time_zone: 'America/Chicago',
     });
-    // Typed by a person is not verified by anything: both routes are candidates (7.4).
+    // The address waits for the worker's check (7.4); the phone number is usable on entry
+    // (wave 2, S4.4). The address is listed first.
     expect(await routesOf(firmId)).toEqual([
       { eligibility: 'candidate', source: 'salesperson' },
-      { eligibility: 'candidate', source: 'salesperson' },
+      { eligibility: 'usable', source: 'salesperson' },
     ]);
 
     // A firm with no stage yet is on the pipeline, under "Not in the pipeline yet".
