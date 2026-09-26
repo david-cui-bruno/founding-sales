@@ -1,4 +1,3 @@
-import { DEFAULT_ALERT_THRESHOLDS } from '@fss/contracts';
 import type { AdminState } from '../../../src/renderer/settingsContract.ts';
 import { settingHistoryAnswer } from '../../support/settingHistory.ts';
 import type { Call } from './appServer.ts';
@@ -23,8 +22,8 @@ export function settingsSnapshot(overrides: Record<string, unknown> = {}): NonNu
   return {
     settings: [
       {
-        settingKey: 'alert_thresholds',
-        value: DEFAULT_ALERT_THRESHOLDS,
+        settingKey: 'sending_enabled',
+        value: { enabled: false, releaseGateReference: null },
         version: 0,
         changedAt: null,
         changedByUserId: null,

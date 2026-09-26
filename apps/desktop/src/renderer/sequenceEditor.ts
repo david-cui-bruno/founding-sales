@@ -1,3 +1,4 @@
+import { busyFor } from './busy.ts';
 import { SENDING_STOP_LINE, TEMPLATE_VARIABLE_NAMES } from '@fss/contracts';
 import { button, element } from './firmDom.ts';
 import type {
@@ -62,7 +63,7 @@ const PUBLISH_REFUSAL_SENTENCES: Readonly<Record<string, string>> = Object.freez
   step_channel_removed: 'This draft still has a LinkedIn step, and LinkedIn was removed. Save the draft without it, then publish.',
   not_a_draft: 'Only a draft can be published. Editing a published version creates a new draft.',
   admin_only: 'Publishing a sequence is an administrator action.',
-  offline: 'Offline. Nothing can be published until the connection comes back.',
+  upgrade_required: 'Update Callie to publish.',
 });
 
 const bridge = (): SequenceBridge => {
@@ -87,10 +88,13 @@ let editing: { readonly versionId: string; readonly steps: readonly DraftStep[] 
 /** The template form, while open (lane g88). Null is closed. */
 let templateForm: TemplateDraft | null = null;
 
+/** Read-only while a command is on the wire, so a second press sends nothing (wave 1). */
+const busy = busyFor(() => container);
+
 function apply(next: Promise<SequenceState>, after?: (state: SequenceState) => void): void {
   const mine = generation;
   void (async () => {
-    const state = await next;
+    const state = await busy.run(next);
     if (mine !== generation) return;
     after?.(state);
     render(state);
@@ -771,6 +775,7 @@ export function render(state: SequenceState): void {
 
 /** Renders the last answer (or the empty screen), then whatever the bridge says now. */
 export function mount(target: HTMLElement): void {
+  busy.reset();
   generation += 1;
   container = target;
   render(lastState);
@@ -778,6 +783,7 @@ export function mount(target: HTMLElement): void {
 }
 
 export function unmount(): void {
+  busy.reset();
   generation += 1;
   container = null;
 }

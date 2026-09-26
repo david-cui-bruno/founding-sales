@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_ALERT_THRESHOLDS, type DashboardResponse } from '@fss/contracts';
+import type { DashboardResponse } from '@fss/contracts';
 import {
   CHECKING,
   FIGURES_LABEL,
@@ -96,6 +96,7 @@ function desktop(role: 'admin' | 'salesperson' = 'admin', overrides: Partial<Des
     mayMutate: true,
     notice: null,
     today: { workspaceId: WORKSPACE, snapshotDate: '2026-09-25', businessTimeZone: 'America/New_York', cards: [...CARDS] },
+    rememberedWorkspace: { workspaceId: WORKSPACE, deviceLabel: 'Test Mac' },
     ...overrides,
   };
 }
@@ -143,7 +144,7 @@ function admin(overrides: Partial<AdminState> = {}): AdminState {
     notice: null,
     settings: {
       settings: [
-        { settingKey: 'alert_thresholds', value: DEFAULT_ALERT_THRESHOLDS, version: 0, changedAt: null, changedByUserId: null, changeNote: null },
+        { settingKey: 'business_time_zone', value: { timeZone: 'America/New_York' }, version: 0, changedAt: null, changedByUserId: null, changeNote: null },
       ],
       elsewhere: [],
       holidayCalendar: { version: 'none.1', dates: [] },
@@ -280,7 +281,7 @@ describe('the lanes and the line of counts', () => {
     );
     expect(view.notices.map(notice => notice.text)).toEqual([
       'Callie cannot reach the server.',
-      'This list is from an earlier read, at 2026-09-25T09:05:00.000Z. Nothing here can be changed until Callie reconnects.',
+      'This list is from an earlier read, at 2026-09-25T09:05:00.000Z. Changes will fail until Callie reconnects.',
       'Snoozed.',
       'It has been thirty days. Sign in with Google again.',
     ]);

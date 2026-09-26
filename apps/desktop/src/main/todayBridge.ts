@@ -92,7 +92,8 @@ export interface TodayBridgeDeps {
       readonly stale: boolean;
       readonly asOf: string | null;
       readonly mayMutate: boolean;
-      readonly device: { readonly role: 'admin' | 'salesperson' } | null;
+      /** `deviceId` names whose expansions the in-memory cache holds (wave 1). */
+      readonly device: { readonly role: 'admin' | 'salesperson'; readonly deviceId?: string } | null;
       readonly today: { readonly snapshotDate: string; readonly businessTimeZone: string; readonly cards: readonly TodayCard[] } | null;
     }>;
     refreshToday(): Promise<unknown>;
@@ -150,10 +151,50 @@ export function localToInstant(local: string, zone: string): string | null {
   return callbackInstant(match[1] ?? '', match[2] ?? '', zone);
 }
 
+/** How many firms' expansions the in-memory cache keeps: more than a day's list. */
+const EXPANSION_CACHE_LIMIT = 200;
+
 export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
   let expanded: TodayFirm | null = null;
   let notice: string | null = null;
   let lastCall: LastCall | null = null;
+  /**
+   * The last expansion read for each firm, in memory only (wave 1). Until then a card
+   * opened while the Mac was offline read the network, failed, and closed: the list was
+   * on screen from the cache and nothing on it could be opened. It is never written to
+   * disk — the offline cache holds the list and nothing more (5.3) — and it belongs to
+   * one device: another sign-in starts it empty.
+   */
+  const expansions = new Map<string, TodayFirm>();
+  let expansionsOwner: string | null = null;
+
+  const remember = (page: TodayFirm): void => {
+    expansions.delete(page.firmId);
+    expansions.set(page.firmId, page);
+    if (expansions.size > EXPANSION_CACHE_LIMIT) {
+      const oldest = expansions.keys().next().value;
+      if (oldest !== undefined) expansions.delete(oldest);
+    }
+  };
+
+  /** The card as the cached list has it, opened with nothing that needs the server. */
+  const fromList = (
+    today: Awaited<ReturnType<TodayBridgeDeps['session']['state']>>['today'],
+    firmId: string,
+  ): TodayFirm | null => {
+    const card = today?.cards.find(entry => entry.firmId === firmId);
+    if (today === null || card === undefined) return null;
+    return {
+      firmId: card.firmId,
+      firmName: card.firmName,
+      snapshotDate: today.snapshotDate,
+      lane: card.lane,
+      counts: card.counts,
+      tasks: [],
+      routes: [],
+      callingIdentityId: null,
+    };
+  };
 
   const snapshot = async (): Promise<TodayState> => {
     const session = await deps.session.state();
@@ -187,6 +228,12 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
   };
 
   const loadExpansion = async (firmId: string): Promise<void> => {
+    const session = await deps.session.state();
+    const owner = session.device?.deviceId ?? null;
+    if (owner !== expansionsOwner) {
+      expansions.clear();
+      expansionsOwner = owner;
+    }
     // One read: the tasks, the routes with the versions `authorizeDial` will compare,
     // and the actor's own calling identity, all at one instant (9.2 step 3).
     // `cardVersion: 2` asks for each task's callback, step, needs-a-time call and pause
@@ -196,11 +243,23 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
       cardVersion: TODAY_CARD_VERSION,
     });
     if (!page.ok) {
-      expanded = null;
       note(page, null);
+      // A read that did not get an answer — the network, or a server that failed —
+      // keeps what this Mac last read for the firm, or the list's own card, with the
+      // notice saying why it could not read again (wave 1). A refusal is an answer:
+      // `not_found` is a firm that left today's list and `not_assigned` one that is no
+      // longer this person's, so its card closes and its cached page goes.
+      const unanswered = page.offline || page.reason === 'unreadable_answer' || /^http_5\d\d$/u.test(page.reason);
+      if (!unanswered) {
+        expansions.delete(firmId);
+        expanded = null;
+        return;
+      }
+      expanded = expansions.get(firmId) ?? fromList(session.today, firmId);
       return;
     }
     expanded = page.value;
+    remember(page.value);
     notice = null;
   };
 

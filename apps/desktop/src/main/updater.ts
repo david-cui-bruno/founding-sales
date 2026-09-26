@@ -109,6 +109,10 @@ export function startUpdateWatch(options: UpdateWatchOptions): UpdateWatch {
     await updater.restartToUpdate();
     return updater.status();
   });
+  ipcMain.handle(UPDATE_IPC_CHANNELS.checkNow, async (): Promise<UpdateStatus> => {
+    await updater.periodic();
+    return updater.status();
+  });
 
   const launch = updater.atLaunch();
   const timer = setInterval(() => {

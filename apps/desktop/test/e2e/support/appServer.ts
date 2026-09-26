@@ -36,6 +36,15 @@ import { signedInState, signedOutState } from './sessionFixtures.ts';
 
 const rendererDirectory = fileURLToPath(new URL('../../../src/renderer/', import.meta.url));
 
+/**
+ * `FSS_E2E_RENDERER_BUNDLE`: a directory holding a packaged build's `index.html`,
+ * `renderer.js` and `styles.css`, extracted from its `app.asar`. Set, every spec runs
+ * against those bytes rather than the source, so a packaged build's renderer can be
+ * put through the same harness (wave 1). Unset, the source is bundled here.
+ */
+const packagedBundle = process.env['FSS_E2E_RENDERER_BUNDLE'];
+const pageDirectory = packagedBundle === undefined ? rendererDirectory : `${packagedBundle.replace(/\/$/u, '')}/`;
+
 export interface Call {
   readonly method: string;
   readonly argument: unknown;
@@ -69,6 +78,10 @@ export interface AppServerOptions {
   readonly sequencesScripted?: Readonly<Partial<Record<string, SequenceState>>>;
   /** Install `callieUpdate`, answering this. Absent: the page has no update bridge. */
   readonly update?: UpdateStatus;
+  /** What `callie.signIn` answers. Absent: signed in. */
+  readonly signInAnswer?: DesktopState;
+  /** What Update now finds: a version a blocked build installs at once. Absent: nothing. */
+  readonly updateFound?: string;
   /** Bridges the page is built without, as a page without the preload would be. */
   readonly without?: readonly Optional[];
 }
@@ -195,6 +208,7 @@ let transpiled: Promise<string> | null = null;
 
 /** The one renderer bundle, built once per spec run. */
 async function transpile(): Promise<string> {
+  if (packagedBundle !== undefined) return await readFile(`${pageDirectory}renderer.js`, 'utf8');
   transpiled ??= build({
     entryPoints: [`${rendererDirectory}renderer.ts`],
     bundle: true,
@@ -223,7 +237,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
   const installed = ['callie', 'mailbox', 'today', 'crm', 'replies', 'sequences', 'admin', ...(options.update === undefined ? [] : ['update'])].filter(
     name => !without.has(METHODS[name]?.global ?? ''),
   );
-  const html = (await readFile(`${rendererDirectory}index.html`, 'utf8'))
+  const html = (await readFile(`${pageDirectory}index.html`, 'utf8'))
     .replace('<script type="module"', '<script src="./bridge.js"></script>\n    <script type="module"')
     // The shipped page has `connect-src 'none'` because the real renderer talks to the
     // main process across an IPC bridge, which CSP does not see. Here the bridges are
@@ -231,7 +245,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     // document only; the file on disk stays strict. `replaceAll`: the phrase is in the
     // page's comment as well as in the policy.
     .replaceAll("connect-src 'none'", "connect-src 'self'");
-  const styles = await readFile(`${rendererDirectory}styles.css`, 'utf8');
+  const styles = await readFile(`${pageDirectory}styles.css`, 'utf8');
 
   const calls: Call[] = [];
   const held = new Map<string, Promise<void>>();
@@ -257,7 +271,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     const [bridge = '', name = ''] = method.split('.');
     const mine = of(bridge);
     if (bridge === 'callie') {
-      if (name === 'signIn') desktop = signedInState();
+      if (name === 'signIn') desktop = options.signInAnswer ?? signedInState();
       if (name === 'signOut') desktop = signedOutState({ notice: 'signed_out' });
       return desktop;
     }
@@ -270,6 +284,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     if (bridge === 'update') {
       // The real main process installs and relaunches; the page sees the install begin.
       if (name === 'restart' && update.kind === 'ready') update = { kind: 'installing', version: update.version };
+      if (name === 'checkNow' && options.updateFound !== undefined) update = { kind: 'installing', version: options.updateFound };
       return update;
     }
     if (bridge === 'today') {

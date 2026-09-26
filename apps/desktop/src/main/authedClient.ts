@@ -23,6 +23,12 @@ export interface AuthedClientOptions {
   readonly send: HttpSend;
   /** The live access token, renewed by the session manager. Null when signed out. */
   readonly accessToken: () => Promise<string | null>;
+  /**
+   * What each call found about the connection (wave 1): true when the server answered
+   * anything — a refusal is an answer — and false only when it could not be reached.
+   * The session manager keeps it as `online`, so the next answer clears the banner.
+   */
+  readonly onConnection?: (reachable: boolean) => void;
 }
 
 export interface AuthedClient {
@@ -62,6 +68,7 @@ export function createAuthedClient(options: AuthedClientOptions): AuthedClient {
         headers,
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
+      options.onConnection?.(true);
       if (answer.status < 200 || answer.status >= 300) {
         // The body travels with the code (lane g78, D05). A refused merge's conflicts
         // are the screen a person resolves; reducing the answer to its reason here is
@@ -72,7 +79,8 @@ export function createAuthedClient(options: AuthedClientOptions): AuthedClient {
       return { ok: true, value: answer.body };
     } catch {
       // The network, the DNS, the load balancer: all one thing from here. The window
-      // may show its unexpired cache marked stale and may mutate nothing (4.2).
+      // shows its unexpired cache marked stale, with a banner; nothing is disabled for it.
+      options.onConnection?.(false);
       return { ok: false, reason: 'offline', offline: true };
     }
   };

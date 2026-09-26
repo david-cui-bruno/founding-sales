@@ -66,7 +66,6 @@ export const POSTURE_HINT =
 
 /** Why the form is inert, in words; a read that failed says so on its own line instead. */
 const INERT_SENTENCES: Readonly<Record<string, string>> = Object.freeze({
-  offline: 'Callie is offline. A posture can be recorded once it is back online.',
   upgrade_required: 'Update Callie to record or revoke a posture.',
   admin_only: 'Only an admin can record or revoke a posture.',
 });
@@ -113,7 +112,8 @@ function statusOf(posture: StatePostureView, now: number, zone: string): Posture
 export function postureSection(state: AdminState, zone: string, now: Date = new Date()): PosturesSectionView | null {
   const postures = state.postures;
   if (postures === undefined || postures === null) return null;
-  const reason = !state.online ? 'offline' : !state.mayMutate ? 'upgrade_required' : state.role !== 'admin' ? 'admin_only' : null;
+  // Offline is the page's banner, not a reason (wave 1).
+  const reason = !state.mayMutate ? 'upgrade_required' : state.role !== 'admin' ? 'admin_only' : null;
   const reference = postures.reference;
   const records = postures.records ?? [];
   const names = new Map((reference?.states ?? []).map(entry => [entry.state, entry.name] as const));

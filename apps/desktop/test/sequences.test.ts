@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { SENDING_STOP_LINE } from '@fss/contracts';
-import { createAuthedClient, type AuthedClient } from '../src/main/authedClient.ts';
+import { createAuthedClient } from '../src/main/authedClient.ts';
 import { createSequenceBridge } from '../src/main/sequenceBridge.ts';
 import type { SequenceState, SequenceStep, TemplateVersion } from '../src/renderer/sequenceContract.ts';
 import {
@@ -56,7 +56,7 @@ const emailStep = (templateVersionId: string | null, ordinal = 1): SequenceStep 
   emailStepAnswer(templateVersionId, ordinal);
 
 describe('what the editor will and will not let a person publish (11.1)', () => {
-  const options = { isAdmin: true, online: true };
+  const options = { isAdmin: true, mayMutate: true };
 
   it('refuses an empty draft, a gap in the ordinals, and an unapproved template', () => {
     expect(publishRefusalFor(draftVersion([]), [], options)).toBe('version_has_no_steps');
@@ -79,10 +79,10 @@ describe('what the editor will and will not let a person publish (11.1)', () => 
     expect(publishRefusalFor(draftVersion([emailStep(template().id)]), [template()], options)).toBeNull();
   });
 
-  it('refuses a salesperson and an offline window before it looks at the steps', () => {
+  it('refuses a salesperson and an unsupported version before it looks at the steps, and never offline', () => {
     const good = draftVersion([emailStep(template().id)]);
-    expect(publishRefusalFor(good, [template()], { isAdmin: false, online: true })).toBe('admin_only');
-    expect(publishRefusalFor(good, [template()], { isAdmin: true, online: false })).toBe('offline');
+    expect(publishRefusalFor(good, [template()], { isAdmin: false, mayMutate: true })).toBe('admin_only');
+    expect(publishRefusalFor(good, [template()], { isAdmin: true, mayMutate: false })).toBe('upgrade_required');
   });
 
   it('never offers an edit on a published version, because the trigger refuses one', () => {
@@ -166,23 +166,40 @@ describe('the hold review screen (4.3, G 31)', () => {
 });
 
 describe('the bridge while offline (4.2)', () => {
-  const api: AuthedClient = {
-    read: async () => await Promise.resolve({ ok: false, reason: 'not_found', offline: false }),
-    command: async () => await Promise.resolve({ ok: false, reason: 'refused', offline: false }),
-  };
-
-  it('shows nothing and refuses everything while offline (4.2)', async () => {
+  it('says offline when the read cannot reach the server (4.2)', async () => {
     const host = createSequenceBridge({
-      api,
+      api: {
+        read: async () => await Promise.resolve({ ok: false, reason: 'offline', offline: true } as const),
+        command: async () => await Promise.resolve({ ok: false, reason: 'offline', offline: true } as const),
+      },
       session: {
-        state: async () =>
-          await Promise.resolve({ online: false, mayMutate: false, device: { role: 'admin' as const } }),
+        state: async () => await Promise.resolve({ online: false, mayMutate: true, device: { role: 'admin' as const } }),
       },
     });
     const state = await host.state();
     expect(state.online).toBe(false);
     expect(state.sequences).toEqual([]);
     expect(sequenceScreen(state).banner).toContain('Offline');
+  });
+
+  it('asks the server even when the session last found it away, so a returned connection is seen (wave 1)', async () => {
+    const paths: string[] = [];
+    const host = createSequenceBridge({
+      api: {
+        read: async (path: string) => {
+          paths.push(path);
+          return await Promise.resolve({ ok: false, reason: 'not_found', offline: false } as const);
+        },
+        command: async () => await Promise.resolve({ ok: false, reason: 'refused', offline: false } as const),
+      },
+      session: {
+        state: async () => await Promise.resolve({ online: false, mayMutate: true, device: { role: 'admin' as const } }),
+      },
+    });
+    const state = await host.state();
+    expect(paths[0]).toBe('/sequences');
+    expect(state.online).toBe(true);
+    expect(sequenceScreen(state).banner).toBeNull();
   });
 });
 
@@ -345,7 +362,7 @@ describe('a LinkedIn step stored before 25 September 2026 (lane A2)', () => {
     expect(stepsForWire(held).map(step => step['channel'])).toEqual(['call_task']);
     // Saving is how the stored step leaves the draft, so the draft always reads as changed.
     expect(draftChanged(draft, held)).toBe(true);
-    expect(publishRefusalFor(draft, [], { isAdmin: true, online: true })).toBe('step_channel_removed');
+    expect(publishRefusalFor(draft, [], { isAdmin: true, mayMutate: true })).toBe('step_channel_removed');
   });
 
   it('reviews a held LinkedIn execution as held for channel_removed, greyed and unmoved', () => {

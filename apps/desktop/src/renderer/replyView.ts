@@ -219,7 +219,9 @@ export function buildReplyCardView(
   // it. Not a disabled form — no form. A body they cannot see and six buttons they
   // cannot press is an invitation to ask somebody to read it out to them.
   const answerable = card.nextAction === 'confirm_disposition' && card.visibility === 'assigned_or_admin';
-  const mayAct = state.mayMutate && state.online;
+  // Offline is a banner, not a disabled form (wave 1): a confirmation sent offline fails
+  // with its own notice.
+  const mayAct = state.mayMutate;
 
   if (card.visibility === 'any_active_member') {
     banners.push({ tone: 'warning', text: replyNotice('not_assigned') });

@@ -51,6 +51,7 @@ export function desktopState(overrides: Partial<DesktopState> = {}): DesktopStat
       businessTimeZone: 'America/New_York',
       cards: todayState().cards.map(card => ({ ...card })),
     },
+    rememberedWorkspace: { workspaceId: WORKSPACE_ID, deviceLabel: "David's MacBook" },
     ...overrides,
   };
 }

@@ -220,8 +220,10 @@ describe('the reply card view model', () => {
     expect(view.banners.some(banner => banner.text.includes('Callie had suggested something else'))).toBe(true);
   });
 
-  it('fails closed when the cloud is unreachable or the client may not mutate', () => {
-    expect(buildReplyCardView(state({ online: false }), card(), 'interested').confirmEnabled).toBe(false);
+  it('fails closed when the client may not mutate, and offline is a banner rather than a disabled form (wave 1)', () => {
+    const offline = buildReplyCardView(state({ online: false }), card(), 'interested');
+    expect(offline.confirmEnabled).toBe(true);
+    expect(offline.banners.some(banner => banner.text === replyNotice('offline'))).toBe(true);
     expect(buildReplyCardView(state({ mayMutate: false }), card(), 'interested').confirmEnabled).toBe(false);
     // Nothing is cached, so an outage is an empty lane rather than a stale card.
     const view = buildReplyView(state({ online: false, cards: [], open: null }), null);

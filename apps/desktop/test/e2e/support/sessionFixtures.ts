@@ -22,6 +22,7 @@ export function signedOutState(overrides: Partial<DesktopState> = {}): DesktopSt
     mayMutate: false,
     notice: null,
     today: null,
+    rememberedWorkspace: null,
     ...overrides,
   };
 }

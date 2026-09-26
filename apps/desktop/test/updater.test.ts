@@ -147,19 +147,29 @@ describe('startUpdateWatch', () => {
     await watch.restart();
   });
 
-  it('answers the page’s two channels, which take no argument', async () => {
+  it('answers the page’s three channels, which take no argument', async () => {
+    let checks = 0;
     const watch = startUpdateWatch({
       currentVersion: '1.0.5',
       channelBaseUrl: CHANNEL,
       publicKey: 'compiled-in',
       blocked: async () => await Promise.resolve(false),
-      check: async () => await Promise.resolve({ kind: 'up_to_date' } as const),
+      check: async () => {
+        checks += 1;
+        return await Promise.resolve({ kind: 'up_to_date' } as const);
+      },
     });
     try {
       await watch.launch;
-      expect([...electron.handlers.keys()].sort()).toEqual([UPDATE_IPC_CHANNELS.restart, UPDATE_IPC_CHANNELS.state].sort());
+      expect([...electron.handlers.keys()].sort()).toEqual(
+        [UPDATE_IPC_CHANNELS.restart, UPDATE_IPC_CHANNELS.state, UPDATE_IPC_CHANNELS.checkNow].sort(),
+      );
       expect(await electron.handlers.get(UPDATE_IPC_CHANNELS.state)?.({}, { anything: 'ignored' })).toEqual({ kind: 'none' });
       expect(await electron.handlers.get(UPDATE_IPC_CHANNELS.restart)?.({}, { version: '9.9.9' })).toEqual({ kind: 'none' });
+      // Wave 1's "Update now": the channel is asked at once, and the answer is the state.
+      expect(checks).toBe(1);
+      expect(await electron.handlers.get(UPDATE_IPC_CHANNELS.checkNow)?.({}, { version: '9.9.9' })).toEqual({ kind: 'none' });
+      expect(checks).toBe(2);
       expect(electron.relaunch).not.toHaveBeenCalled();
     } finally {
       watch.stop();

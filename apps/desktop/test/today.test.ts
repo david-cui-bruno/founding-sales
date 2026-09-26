@@ -111,15 +111,21 @@ describe('the Today view model', () => {
     expect(countsLabel({ replies: 0, emailsDue: 0, callsDue: 0 })).toBe('Nothing outstanding');
   });
 
-  it('shows a stale list and lets nothing on it be pressed', () => {
-    const view = buildTodayView(state({ stale: true, expanded: firmPage() }));
+  it('shows a stale list with a banner and disables nothing for it (wave 1)', () => {
+    const view = buildTodayView(state({ stale: true, online: false, expanded: firmPage() }));
     expect(view.cards).toHaveLength(2);
     expect(view.showingCachedList).toBe(true);
+    expect(view.actionsEnabled).toBe(true);
+    expect(view.tasks.some(task => task.enabled)).toBe(true);
+    expect(view.banners.map(banner => banner.tone)).toContain('warning');
+    expect(view.banners.map(banner => banner.text).join(' ')).toContain('Changes will fail until Callie reconnects.');
+  });
+
+  it('disables actions only below the supported version or signed out', () => {
+    const view = buildTodayView(state({ mayMutate: false, expanded: firmPage() }));
     expect(view.actionsEnabled).toBe(false);
-    expect(view.expandEnabled).toBe(false);
     expect(view.tasks.every(task => !task.enabled)).toBe(true);
     expect(view.dialableRoutes).toEqual([]);
-    expect(view.banners.map(banner => banner.tone)).toContain('warning');
   });
 
   it('says the offline reason in one fixed sentence', () => {
@@ -271,6 +277,100 @@ describe('the Today bridge', () => {
   const accepted = (result: unknown): HttpAnswer => ({
     status: 200,
     body: { status: 'accepted', replayed: false, result },
+  });
+
+  describe('an expansion while the server is away (wave 1)', () => {
+    const handoff = {
+      checkSetup: async () => await Promise.resolve({ ready: true as const }),
+      dial: async () => await Promise.resolve({ status: 'opened' as const, e164: '+14015550187' }),
+    };
+    /** `/today/firm` answering, down, or refusing, as the test says. */
+    function switchable(): { readonly api: ReturnType<typeof createAuthedClient>; mode: 'up' | 'down' | 'not_found' | 'failing' } {
+      const world = {
+        mode: 'up' as 'up' | 'down' | 'not_found' | 'failing',
+        api: createAuthedClient({
+          baseUrl: 'https://api.example.test/',
+          clientVersion: '1.4.0',
+          accessToken: async () => await Promise.resolve('token-value'),
+          send: async () => {
+            if (world.mode === 'down') throw new Error('the server did not answer');
+            if (world.mode === 'not_found') return await Promise.resolve({ status: 404, body: { error: 'not_found' } });
+            if (world.mode === 'failing') return await Promise.resolve({ status: 503, body: {} });
+            return await Promise.resolve({ status: 200, body: firmPage() });
+          },
+        }),
+      };
+      return world;
+    }
+
+    it('opens the card this Mac last read, and keeps it when the read fails', async () => {
+      const world = switchable();
+      const bridge = createTodayBridge({
+        api: world.api,
+        handoff,
+        session: { state: async () => await Promise.resolve(sessionState()), refreshToday: async () => await Promise.resolve(null) },
+      });
+      expect((await bridge.expand({ firmId: FIRM_ID })).expanded?.tasks).toHaveLength(2);
+      await bridge.collapse();
+
+      world.mode = 'down';
+      const offline = await bridge.expand({ firmId: FIRM_ID });
+      expect(offline.expanded?.firmId).toBe(FIRM_ID);
+      expect(offline.expanded?.tasks).toHaveLength(2);
+      expect(offline.notice).toBe('offline');
+      // A refresh that fails again keeps it open, rather than closing the card.
+      expect((await bridge.refresh()).expanded?.tasks).toHaveLength(2);
+
+      world.mode = 'failing';
+      expect((await bridge.expand({ firmId: FIRM_ID })).expanded?.tasks).toHaveLength(2);
+    });
+
+    it('opens the list’s own card when this Mac never read the firm, with nothing to dial', async () => {
+      const world = switchable();
+      world.mode = 'down';
+      const bridge = createTodayBridge({
+        api: world.api,
+        handoff,
+        session: { state: async () => await Promise.resolve(sessionState()), refreshToday: async () => await Promise.resolve(null) },
+      });
+      const answer = await bridge.expand({ firmId: OTHER_FIRM_ID });
+      expect(answer.expanded).toMatchObject({ firmId: OTHER_FIRM_ID, firmName: 'Larkspur Test Foundry', tasks: [], routes: [], callingIdentityId: null });
+      expect(buildTodayView(answer).dialableRoutes).toEqual([]);
+    });
+
+    it('closes the card and forgets it when the server says the firm is not found', async () => {
+      const world = switchable();
+      const bridge = createTodayBridge({
+        api: world.api,
+        handoff,
+        session: { state: async () => await Promise.resolve(sessionState()), refreshToday: async () => await Promise.resolve(null) },
+      });
+      await bridge.expand({ firmId: FIRM_ID });
+      world.mode = 'not_found';
+      const gone = await bridge.expand({ firmId: FIRM_ID });
+      expect(gone.expanded).toBeNull();
+      expect(gone.notice).toBe('not_found');
+      world.mode = 'down';
+      // Forgotten: offline now, it is the list's card, not the page read before.
+      expect((await bridge.expand({ firmId: FIRM_ID })).expanded?.tasks).toEqual([]);
+    });
+
+    it('starts empty for another sign-in on the same Mac', async () => {
+      const world = switchable();
+      let deviceId = '33333333-3333-4333-8333-333333333333';
+      const bridge = createTodayBridge({
+        api: world.api,
+        handoff,
+        session: {
+          state: async () => await Promise.resolve(sessionState({ device: { role: 'salesperson' as const, deviceId } })),
+          refreshToday: async () => await Promise.resolve(null),
+        },
+      });
+      await bridge.expand({ firmId: FIRM_ID });
+      deviceId = '44444444-4444-4444-8444-444444444444';
+      world.mode = 'down';
+      expect((await bridge.expand({ firmId: FIRM_ID })).expanded?.tasks).toEqual([]);
+    });
   });
 
   it('never puts a token, a ticket or a command id in the state it returns', async () => {
@@ -612,7 +712,8 @@ describe('the Today bridge', () => {
       session: { state: async () => await Promise.resolve(sessionState({ online: false, stale: true })), refreshToday: async () => await Promise.resolve(null) },
     });
     const answer = await bridge.expand({ firmId: FIRM_ID });
-    expect(answer.expanded).toBeNull();
+    // The card opens from the cached list (wave 1), with nothing on it to dial.
+    expect(answer.expanded).toMatchObject({ firmId: FIRM_ID, tasks: [], routes: [] });
     expect(answer.notice).toBe('offline');
     expect(answer.cards).toHaveLength(2);
   });

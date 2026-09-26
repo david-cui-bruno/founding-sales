@@ -1,8 +1,8 @@
+import { busyFor } from './busy.ts';
 import { localParts } from '@fss/contracts';
 import { element } from './firmDom.ts';
 import { POSTURES_HEADING, POSTURE_HINT, postureFormIssues, type PosturesSectionView } from './postureView.ts';
 import {
-  ADVANCED_SETTINGS,
   BUSINESS_ZONE_CHOICES,
   SENDING_CHECK_LABELS,
   adminViewOf,
@@ -57,15 +57,19 @@ let generation = 0;
 /** Where Needs you asked this mount to scroll, until the first answer is drawn. */
 let scrollTo: AdminSection | null = null;
 
+/** Read-only while a command is on the wire, so a second press sends nothing (wave 1). */
+const busy = busyFor(() => container);
+
 function apply(next: Promise<AdminState>): void {
   const mine = generation;
   void (async () => {
-    const state = await next;
+    const state = await busy.run(next);
     if (mine === generation) render(state);
   })();
 }
 
 export function mount(target: HTMLElement, route: Route): void {
+  busy.reset();
   generation += 1;
   container = target;
   lastState = null;
@@ -76,6 +80,7 @@ export function mount(target: HTMLElement, route: Route): void {
 }
 
 export function unmount(): void {
+  busy.reset();
   generation += 1;
   container = null;
   scrollTo = null;
@@ -157,21 +162,9 @@ function renderSettings(root: HTMLElement, view: ReturnType<typeof adminViewOf>)
     root.append(element('p', { className: 'sending', text: view.sending.line, testId: 'sending' }));
   }
 
-  const routine = view.settings.filter(row => !ADVANCED_SETTINGS.includes(row.settingKey));
-  const advanced = view.settings.filter(row => ADVANCED_SETTINGS.includes(row.settingKey));
   const list = element('ul', { className: 'settings', testId: 'settings' });
-  for (const row of routine) list.append(renderSettingRow(row, view));
+  for (const row of view.settings) list.append(renderSettingRow(row, view));
   root.append(list);
-  if (advanced.length > 0) {
-    // Alarm thresholds and the supported versions are the release's business more than
-    // the founder's day, so they are one click further away (lane g88).
-    const more = element('details', { className: 'settings-advanced', testId: 'settings-advanced' });
-    more.append(element('summary', { text: 'Advanced: alarm thresholds and supported Callie versions' }));
-    const advancedList = element('ul', { className: 'settings', testId: 'settings-advanced-list' });
-    for (const row of advanced) advancedList.append(renderSettingRow(row, view));
-    more.append(advancedList);
-    root.append(more);
-  }
 
   const stages = element('ul', { className: 'stages', testId: 'stages' });
   for (const stage of view.stages) {
@@ -262,21 +255,10 @@ function renderField(parent: HTMLElement, settingKey: string, field: SettingFiel
   input.id = id;
   input.disabled = !editable;
   input.autocomplete = 'off';
-  if (field.kind === 'number') {
-    input.type = 'number';
-    input.min = String(field.min);
-    input.max = String(field.max);
-    input.step = String(field.step);
-    input.value = String(field.value);
-  } else if (field.kind === 'time') {
-    input.type = 'time';
-    input.value = field.value;
-  } else {
-    input.type = 'text';
-    input.value = field.value;
-  }
+  input.type = 'text';
+  input.value = field.value;
   wrapper.append(label, input);
-  if (field.kind === 'text' && field.hint !== null) wrapper.append(element('p', { className: 'hint', text: field.hint }));
+  if (field.hint !== null) wrapper.append(element('p', { className: 'hint', text: field.hint }));
   parent.append(wrapper);
   return () => input.value;
 }
@@ -314,7 +296,7 @@ function renderSettingRow(row: SettingRowView, view: ReturnType<typeof adminView
 
   const note = document.createElement('input');
   note.type = 'text';
-  note.placeholder = 'Why are you changing this?';
+  note.placeholder = 'Why (optional)';
   note.disabled = !row.editable;
   note.dataset['testid'] = `note-${row.settingKey}`;
   item.append(note);
@@ -764,8 +746,10 @@ function renderSendingAdmin(root: HTMLElement, view: ReturnType<typeof adminView
   const block = element('section', { className: 'sending-admin', testId: 'sending-admin' });
   block.append(element('h2', { text: 'Sending domain and caps' }));
   block.append(element('p', { text: section.domainLine, testId: 'sending-domain' }));
-  block.append(element('p', { className: 'inert', text: section.guard.line, testId: 'sending-guard' }));
-  block.append(element('p', { className: 'inert', text: section.guard.readOnlyBecause }));
+  if (section.guard.line !== null) {
+    block.append(element('p', { className: 'inert', text: section.guard.line, testId: 'sending-guard' }));
+    block.append(element('p', { className: 'inert', text: section.guard.readOnlyBecause }));
+  }
 
   if (section.domain !== null) {
     const domain = section.domain;

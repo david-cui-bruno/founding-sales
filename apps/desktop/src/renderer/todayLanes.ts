@@ -66,7 +66,7 @@ function renderCard(item: HTMLElement, entry: CardView, view: TodayScreenView, h
     navigate({ name: 'firm', firmId: entry.card.firmId });
   });
   actions.append(firm);
-  const toggle = button(entry.expanded ? 'Close' : 'Open', 'card-expand', view.expandEnabled);
+  const toggle = button(entry.expanded ? 'Close' : 'Open', 'card-expand', true);
   toggle.className = 'btn';
   toggle.addEventListener('click', () => {
     host.apply(entry.expanded ? host.bridge.collapse() : host.bridge.expand({ firmId: entry.card.firmId }));

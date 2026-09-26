@@ -1,3 +1,4 @@
+import { busyFor } from './busy.ts';
 import { button, element, orDash } from './firmDom.ts';
 import type { ReplyBridge, ReplyDisposition, ReplyState } from './replyContract.ts';
 import { buildReplyView, candidateLabel, replyNotice, type ReplyCardView } from './replyView.ts';
@@ -35,21 +36,26 @@ let container: HTMLElement | null = null;
 /** Bumped by every mount and unmount, so an answer to an earlier one is dropped. */
 let generation = 0;
 
+/** Read-only while a command is on the wire, so a second press sends nothing (wave 1). */
+const busy = busyFor(() => container);
+
 function apply(next: Promise<ReplyState>): void {
   const mine = generation;
   void (async () => {
-    const state = await next;
+    const state = await busy.run(next);
     if (mine === generation) render(state);
   })();
 }
 
 export function mount(target: HTMLElement): void {
+  busy.reset();
   generation += 1;
   container = target;
   apply(bridge().state());
 }
 
 export function unmount(): void {
+  busy.reset();
   generation += 1;
   container = null;
 }

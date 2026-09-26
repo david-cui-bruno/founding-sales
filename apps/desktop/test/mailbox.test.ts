@@ -279,7 +279,6 @@ describe('the Mailbox bridge: connect', () => {
   it('asks the API nothing when this Mac may not mutate, and says why', async () => {
     for (const [session, reason] of [
       [{ online: true, mayMutate: false, device: null }, 'not_signed_in'],
-      [{ online: false, mayMutate: false, device: { role: 'admin' } }, 'offline'],
       [{ online: true, mayMutate: false, device: { role: 'admin' } }, 'client_upgrade_required'],
     ] as const) {
       const mac = world({ [MAILBOX_API_PATHS.connect]: [started()] }, { session: { ...session } });

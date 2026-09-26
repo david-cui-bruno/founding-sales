@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -6,6 +6,7 @@ import {
   DEVICE_FILE,
   DEVICE_SECRET_ACCOUNT,
   REFRESH_CREDENTIAL_ACCOUNT,
+  WORKSPACE_FILE,
   createDeviceStore,
   createOfflineCache,
   createMemoryVault,
@@ -109,6 +110,110 @@ describe('sign-in through the system browser', () => {
     expect(state.screen).toBe('sign_in');
     expect(state.notice).toBe('membership_required');
     expect(state.device).toBeNull();
+  });
+});
+
+describe('the remembered workspace (wave 1)', () => {
+  it('signs in again after Sign out without asking for the workspace or the name', async () => {
+    const mac = await started();
+    await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: "David's MacBook" });
+    const out = await mac.manager.signOut();
+    expect(out.device).toBeNull();
+    // Sign out removes device.json and both secrets, and leaves workspace.json.
+    await expect(readFile(join(mac.directory, DEVICE_FILE), 'utf8')).rejects.toThrow();
+    expect(out.rememberedWorkspace).toEqual({ workspaceId: mac.workspaceId, deviceLabel: "David's MacBook" });
+    const onDisk = await readFile(join(mac.directory, WORKSPACE_FILE), 'utf8');
+    expect(JSON.parse(onDisk)).toEqual({ workspaceId: mac.workspaceId, deviceLabel: "David's MacBook" });
+    for (const value of mac.vault.entries.values()) expect(onDisk).not.toContain(value);
+
+    const again = await mac.manager.signIn({});
+    expect(again.screen).toBe('today');
+    expect(again.device?.workspaceId).toBe(mac.workspaceId);
+    expect(again.device?.deviceLabel).toBe("David's MacBook");
+  });
+
+  it('asks for the workspace on a Mac that has never signed in, and starts nothing', async () => {
+    const mac = await started();
+    const state = await mac.manager.signIn({});
+    expect(state.screen).toBe('sign_in');
+    expect(state.notice).toBe('workspace_required');
+    expect(state.rememberedWorkspace).toBeNull();
+    expect(mac.openedUrls).toEqual([]);
+  });
+
+  it('remembers a Mac registered before wave 1 from its device.json, on first load', async () => {
+    const mac = await started();
+    await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'Old Mac' });
+    await rm(join(mac.directory, WORKSPACE_FILE));
+    const reopened = createSessionManager({
+      api: mac.api,
+      store: createDeviceStore({ directory: mac.directory, vault: mac.vault }),
+      cache: createOfflineCache({ directory: mac.directory, vault: mac.vault, now: () => new Date('2026-09-21T10:00:01.000Z') }),
+      clientVersion: CLIENT_VERSION,
+      now: () => new Date('2026-09-21T10:00:01.000Z'),
+      openInBrowser: async () => {
+        await Promise.resolve();
+      },
+    });
+    expect((await reopened.state()).rememberedWorkspace).toEqual({ workspaceId: mac.workspaceId, deviceLabel: 'Old Mac' });
+    expect(JSON.parse(await readFile(join(mac.directory, WORKSPACE_FILE), 'utf8'))).toMatchObject({ deviceLabel: 'Old Mac' });
+  });
+});
+
+describe('online follows every call (wave 1)', () => {
+  it('a bridge call that reaches the server clears offline at once, without a Home refresh', async () => {
+    const mac = await started();
+    await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
+    mac.script.offline(true);
+    await mac.manager.refreshToday();
+    expect((await mac.manager.state()).online).toBe(false);
+
+    let reachable = false;
+    const client = createAuthedClient({
+      baseUrl: 'https://api.fss.test',
+      clientVersion: CLIENT_VERSION,
+      accessToken: async () => await Promise.resolve('token'),
+      send: async () => {
+        if (!reachable) throw new Error('the server did not answer');
+        // A refusal is an answer: the server was reached.
+        return await Promise.resolve({ status: 409, body: { status: 'refused', reason: 'not_found' } });
+      },
+      onConnection: online => {
+        mac.manager.noteConnection(online);
+      },
+    });
+    await client.read('/anything', value => value);
+    expect((await mac.manager.state()).online).toBe(false);
+    reachable = true;
+    const answer = await client.read('/anything', value => value);
+    expect(answer.ok).toBe(false);
+    const state = await mac.manager.state();
+    expect(state.online).toBe(true);
+    expect(state.mayMutate).toBe(true);
+  });
+
+  it('reports true on any HTTP answer and false only when the server cannot be reached', async () => {
+    const seen: boolean[] = [];
+    let mode: 'ok' | 'refused' | 'error' | 'down' = 'ok';
+    const client = createAuthedClient({
+      baseUrl: 'https://api.fss.test',
+      clientVersion: CLIENT_VERSION,
+      accessToken: async () => await Promise.resolve('token'),
+      send: async () => {
+        if (mode === 'down') throw new Error('unreachable');
+        const status = mode === 'ok' ? 200 : mode === 'refused' ? 409 : 500;
+        return await Promise.resolve({ status, body: mode === 'ok' ? { status: 'accepted', replayed: false, result: {} } : {} });
+      },
+      onConnection: online => {
+        seen.push(online);
+      },
+    });
+    for (const next of ['ok', 'refused', 'error', 'down'] as const) {
+      mode = next;
+      await client.read('/x', value => value);
+      await client.command('/y', {}, value => value);
+    }
+    expect(seen).toEqual([true, true, true, true, true, true, false, false]);
   });
 });
 
@@ -252,12 +357,14 @@ describe('the encrypted offline cache', () => {
     expect(state.online).toBe(false);
     expect(state.stale).toBe(true);
     expect(state.today?.cards).toHaveLength(2);
-    expect(state.mayMutate).toBe(false);
+    // Offline is a banner, not a gate (wave 1): nothing is disabled for it.
+    expect(state.mayMutate).toBe(true);
 
     const view = buildScreenView(state);
     expect(view.showingCachedList).toBe(true);
-    expect(view.actionsEnabled).toBe(false);
+    expect(view.actionsEnabled).toBe(true);
     expect(view.banners.some(banner => banner.text.includes('earlier read'))).toBe(true);
+    expect(view.banners.some(banner => banner.text === 'Callie cannot reach the server.')).toBe(true);
   });
 
   it('shows nothing at all once the cache is more than twenty-four hours old', async () => {
@@ -318,6 +425,27 @@ describe('the encrypted offline cache', () => {
   });
 });
 
+describe('the sign-in screen offline (wave 1)', () => {
+  it('says the server cannot be reached once, not once for the connection and again for the press', () => {
+    const state = desktopStateSchema.parse({
+      screen: 'sign_in',
+      clientVersion: CLIENT_VERSION,
+      supportedClientVersions: null,
+      device: null,
+      online: false,
+      stale: false,
+      asOf: null,
+      mayMutate: false,
+      notice: 'offline',
+      today: null,
+      rememberedWorkspace: null,
+    });
+    const view = buildScreenView(state);
+    expect(view.banners.map(banner => banner.text)).toEqual(['Callie cannot reach the server.']);
+    expect(view.signInEnabled).toBe(true);
+  });
+});
+
 describe('the version gate', () => {
   it('shows an outdated Mac the upgrade instruction and nothing it can press', async () => {
     const mac = await started({ clientVersion: '1.0.0' });
@@ -339,14 +467,15 @@ describe('the version gate', () => {
     });
   });
 
-  it('lets a supported Mac mutate and refuses while it is offline', async () => {
+  it('lets a supported Mac mutate, offline or not: a command sent offline fails on its own (wave 1)', async () => {
     const mac = await started();
     await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
     expect(await mac.manager.mayMutateNow()).toEqual({ allowed: true });
 
     mac.script.offline(true);
     await mac.manager.refreshToday();
-    expect(await mac.manager.mayMutateNow()).toEqual({ allowed: false, refusal: 'offline' });
+    expect((await mac.manager.state()).online).toBe(false);
+    expect(await mac.manager.mayMutateNow()).toEqual({ allowed: true });
   });
 
   it('blocks mutation when the minimum rises under a running client', async () => {

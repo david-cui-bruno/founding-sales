@@ -128,13 +128,14 @@ test('the current main contact cannot be asked to become the main contact again'
   await expect(page.getByTestId('contact-primary').nth(1)).toBeEnabled();
 });
 
-test('an outage leaves the firm readable and nothing editable', async ({ page }) => {
+test('an outage is a banner over the firm, and nothing is disabled for it (wave 1)', async ({ page }) => {
   await openCrm(page, crmState({ online: false }));
 
   await expect(page.getByTestId('banner-warning')).toContainText('cannot reach the server');
+  await expect(page.getByTestId('banner-warning')).toContainText('Changes will fail until it reconnects.');
   await expect(page.getByTestId('firm-identity')).toContainText('Northwind Test Holdings');
-  await expect(page.getByTestId('contact-name').nth(0)).toBeDisabled();
-  await expect(page.getByTestId('contact-save').nth(0)).toBeDisabled();
+  await expect(page.getByTestId('contact-name').nth(0)).toBeEnabled();
+  await expect(page.getByTestId('contact-save').nth(0)).toBeEnabled();
 });
 
 // ------------------------------------------------------------------- pipeline

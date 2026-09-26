@@ -215,6 +215,7 @@ const invokeUpdate = async (channel: string): Promise<UpdateStatus> => {
 const update: UpdateBridge = {
   state: async () => await invokeUpdate(UPDATE_IPC_CHANNELS.state),
   restart: async () => await invokeUpdate(UPDATE_IPC_CHANNELS.restart),
+  checkNow: async () => await invokeUpdate(UPDATE_IPC_CHANNELS.checkNow),
   onChange: listener => {
     ipcRenderer.on(UPDATE_IPC_CHANNELS.changed, () => {
       listener();

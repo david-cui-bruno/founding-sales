@@ -1,6 +1,7 @@
 import { expect, test, type Page } from 'playwright/test';
 import { navigateByMenu, startAppServer, type AppServer } from './support/appServer.ts';
 import { FIRM_ID, crmState, pipelineView } from './support/crmFixtures.ts';
+import { EXAMPLE_WORKSPACE, signedOutState } from './support/sessionFixtures.ts';
 import { REPLY_FIRM_ID } from './support/homeFixtures.ts';
 import { FIRM_ID as REPLY_CARD_FIRM_ID, replyCard, replyState } from './support/replyFixtures.ts';
 
@@ -199,4 +200,31 @@ test('signing out from another view leaves the shell for the sign-in form', asyn
   await page.getByTestId('sign-out').click();
   await expect(page.getByTestId('heading')).toHaveText('Sign in with Google');
   await expect(page.getByTestId('sidebar')).toHaveCount(0);
+});
+
+test('a deep link that arrives before sign-in is where the window opens once signed in', async ({ page }) => {
+  // The main process queues a cold link until the page has loaded (`showRoute`), and the
+  // page keeps it until there is a shell to show it in.
+  server = await startAppServer({ desktop: signedOutState() });
+  await page.goto(server.url());
+  await expect(page.getByTestId('heading')).toHaveText('Sign in with Google');
+  await navigateByMenu(page, 'dashboard');
+  await expect(page.getByTestId('heading')).toHaveText('Sign in with Google');
+
+  await page.getByTestId('workspace-id').fill(EXAMPLE_WORKSPACE);
+  await page.getByTestId('sign-in').click();
+  await expect(page.getByTestId('tab-dashboard')).toHaveClass(/tab-current/u);
+  await expect(page.getByTestId('nav-dashboard')).toHaveAttribute('aria-current', 'page');
+});
+
+test('the route is in the address, so the View menu’s Reload comes back to the same view', async ({ page }) => {
+  server = await startAppServer({ crm: crmState({ screen: 'pipeline', firm: null, pipeline: pipelineView() }) });
+  await page.goto(server.url());
+  await page.getByTestId('nav-firms').click();
+  await expect(page.getByTestId('heading')).toHaveText('Pipeline');
+  expect(new URL(page.url()).hash).toBe('#firms');
+
+  await page.reload();
+  await expect(page.getByTestId('heading')).toHaveText('Pipeline');
+  await expect(page.getByTestId('nav-firms')).toHaveAttribute('aria-current', 'page');
 });

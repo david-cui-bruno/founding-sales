@@ -57,9 +57,11 @@ export interface DesktopConfiguration {
   readonly rendererUrl?: string;
 }
 
+// Both optional (wave 1): a Mac that has signed in before remembers its workspace and
+// its name, and the form sends neither.
 const signInInputSchema = z.strictObject({
-  workspaceId: uuid,
-  deviceLabel: z.string().trim().min(1).max(120),
+  workspaceId: uuid.optional(),
+  deviceLabel: z.string().trim().min(1).max(120).optional(),
 });
 
 export function buildSessionManager(configuration: DesktopConfiguration): SessionManager {
@@ -185,6 +187,9 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
     clientVersion: configuration.clientVersion,
     send: fetchSend,
     accessToken: async () => await manager.accessToken(),
+    onConnection: reachable => {
+      manager.noteConnection(reachable);
+    },
   });
   const session = { state: async () => await manager.state(), refreshToday: async () => await manager.refreshToday() };
 

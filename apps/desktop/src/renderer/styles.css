@@ -1198,3 +1198,38 @@ main.view .candidate-choice {
   color: var(--ink-3);
   font-size: 13px;
 }
+
+/* ------------------------------------------------------------------------- */
+/* Wave 1: read-only moments                                                  */
+/* ------------------------------------------------------------------------- */
+
+/* The launch update being put in place: one grey line across the column. */
+.updating-banner {
+  position: fixed;
+  top: 0;
+  right: 0;
+  left: 220px;
+  z-index: 10;
+  margin: 0;
+  padding: 10px 72px;
+  color: var(--ink-2);
+  font-size: 13.5px;
+  background: #fff;
+  border-bottom: 1px solid var(--line);
+}
+
+/* A command on the wire, or the update: the column stays readable and dims a little. */
+.column[aria-busy='true'] {
+  opacity: 0.72;
+  transition: opacity 120ms ease-in 150ms;
+}
+
+/* The sign-in form's fields, hidden once a workspace is remembered. */
+.sign-in-fields[hidden] {
+  display: none;
+}
+
+.sign-in .btn-quiet {
+  margin-top: 8px;
+  color: var(--ink-2);
+}

@@ -12,6 +12,7 @@ export {
   DEVICE_FILE,
   DEVICE_SECRET_ACCOUNT,
   REFRESH_CREDENTIAL_ACCOUNT,
+  WORKSPACE_FILE,
   type DeviceStore,
 } from './deviceStore.ts';
 export {

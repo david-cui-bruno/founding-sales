@@ -63,6 +63,17 @@ export type SignInHandoff = SignInStartResponse;
 
 export { deviceSecretSchema };
 
+/**
+ * The workspace and the name of the last sign-in on this Mac (wave 1). Public
+ * identifiers, kept in their own file beside `device.json` so that signing out — which
+ * deletes `device.json` — does not make the next sign-in ask for a UUID again.
+ */
+export const rememberedWorkspaceSchema = z.strictObject({
+  workspaceId: uuid,
+  deviceLabel: z.string().trim().min(1).max(120),
+});
+export type RememberedWorkspace = z.infer<typeof rememberedWorkspaceSchema>;
+
 // ---------------------------------------------------------------------------
 // The encrypted offline cache (specification 5.3, 14.2)
 // ---------------------------------------------------------------------------
@@ -129,11 +140,17 @@ export const desktopStateSchema = z.strictObject({
   stale: z.boolean(),
   /** When the shown list was fetched, or null when there is nothing to show. */
   asOf: instant.nullable(),
-  /** Whether a mutating command may be attempted at all. */
+  /**
+   * Whether a mutating command may be attempted at all: signed in, and a version the API
+   * accepts. Not whether the last call reached the server — offline is a banner, and a
+   * command sent offline fails with its own notice (wave 1).
+   */
   mayMutate: z.boolean(),
   /** A stable code, never a sentence composed here. */
   notice: z.string().nullable(),
   today: cachedTodaySchema.nullable(),
+  /** The last sign-in's workspace and name, so sign-in need not ask for them; null on a new Mac. */
+  rememberedWorkspace: rememberedWorkspaceSchema.nullable(),
 });
 export type DesktopState = z.infer<typeof desktopStateSchema>;
 
@@ -154,8 +171,11 @@ export function routeNameOf(value: unknown): RouteName | null {
 
 export interface DesktopBridge {
   state(): Promise<DesktopState>;
-  /** Opens the system browser and waits for the grant. */
-  signIn(input: { readonly workspaceId: string; readonly deviceLabel: string }): Promise<DesktopState>;
+  /**
+   * Opens the system browser and waits for the grant. Either field left out is the
+   * remembered one (wave 1): a Mac that has signed in before sends neither.
+   */
+  signIn(input: { readonly workspaceId?: string | undefined; readonly deviceLabel?: string | undefined }): Promise<DesktopState>;
   signOut(): Promise<DesktopState>;
   refreshToday(): Promise<DesktopState>;
   /**

@@ -1,7 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { deviceSecretSchema, storedDeviceSchema, type StoredDevice } from '../shared/contract.ts';
+import {
+  deviceSecretSchema,
+  rememberedWorkspaceSchema,
+  storedDeviceSchema,
+  type RememberedWorkspace,
+  type StoredDevice,
+} from '../shared/contract.ts';
 import type { SecretVault } from './keychain.ts';
 
 /**
@@ -13,9 +19,14 @@ import type { SecretVault } from './keychain.ts';
  * wrong. The device secret and the refresh credential go to the macOS Keychain and
  * nowhere else, and `forget()` removes both, so signing out of a Mac is one call
  * rather than a list someone has to work through.
+ *
+ * One more file, and deliberately not `device.json`: `workspace.json` holds the workspace
+ * id and the name of the last sign-in (wave 1). `forget()` leaves it, so the next sign-in
+ * on this Mac asks for neither. It is two public identifiers and no secret.
  */
 
 export const DEVICE_FILE = 'device.json';
+export const WORKSPACE_FILE = 'workspace.json';
 export const DEVICE_SECRET_ACCOUNT = 'device-secret';
 export const REFRESH_CREDENTIAL_ACCOUNT = 'refresh-credential';
 
@@ -37,18 +48,23 @@ export interface DeviceStore {
   refreshCredential(): Promise<string | null>;
   saveRefreshCredential(credential: string): Promise<void>;
   deviceSecret(): Promise<string | null>;
+  /** Removes `device.json` and both secrets. The remembered workspace stays. */
   forget(): Promise<void>;
+  /** The last sign-in's workspace and name, or null when this Mac has none. */
+  rememberedWorkspace(): Promise<RememberedWorkspace | null>;
+  rememberWorkspace(value: RememberedWorkspace): Promise<void>;
 }
 
 export function createDeviceStore(options: DeviceStoreOptions): DeviceStore {
   const path = join(options.directory, DEVICE_FILE);
+  const workspacePath = join(options.directory, WORKSPACE_FILE);
 
-  const writeAtomically = async (value: unknown): Promise<void> => {
+  const writeAtomically = async (value: unknown, target: string = path): Promise<void> => {
     await mkdir(options.directory, { recursive: true, mode: 0o700 });
-    const temporary = `${path}.${randomUUID()}.tmp`;
+    const temporary = `${target}.${randomUUID()}.tmp`;
     try {
       await writeFile(temporary, `${JSON.stringify(value)}\n`, { mode: 0o600, flag: 'wx' });
-      await rename(temporary, path);
+      await rename(temporary, target);
     } catch (error) {
       await rm(temporary, { force: true }).catch(() => undefined);
       throw error;
@@ -95,6 +111,18 @@ export function createDeviceStore(options: DeviceStoreOptions): DeviceStore {
       await rm(path, { force: true }).catch(() => undefined);
       await options.vault.remove(DEVICE_SECRET_ACCOUNT);
       await options.vault.remove(REFRESH_CREDENTIAL_ACCOUNT);
+    },
+
+    async rememberedWorkspace() {
+      try {
+        return rememberedWorkspaceSchema.parse(JSON.parse(await readFile(workspacePath, 'utf8')));
+      } catch {
+        return null;
+      }
+    },
+
+    async rememberWorkspace(value) {
+      await writeAtomically(rememberedWorkspaceSchema.parse(value), workspacePath);
     },
   };
 }

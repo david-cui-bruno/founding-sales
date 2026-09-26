@@ -1,3 +1,4 @@
+import { holdInert } from './busy.ts';
 import type { DesktopBridge, DesktopState, MailboxBridge, MailboxState } from '../shared/contract.ts';
 import type { UpdateStatus } from '../shared/updateContract.ts';
 import * as firmWorkspace from './firmWorkspace.ts';
@@ -68,24 +69,49 @@ function element<K extends keyof HTMLElementTagNameMap>(
   return node;
 }
 
-function renderSignIn(root: HTMLElement, busy: boolean, enabled: boolean): void {
+/**
+ * What was typed into the sign-in fields, kept across the form being drawn again — the
+ * waiting state, and an answer that did not sign in (offline, no membership) — so a
+ * press that failed does not also empty the form. Forgotten once signed in.
+ */
+let signInDraft: { readonly workspaceId: string; readonly deviceLabel: string } | null = null;
+
+/**
+ * The sign-in form. A Mac that has signed in before remembers its workspace and its name
+ * (wave 1, `workspace.json`), so the form is the one button; "Use another workspace"
+ * shows the two fields for the rare other one. A first sign-in shows them from the start.
+ */
+function renderSignIn(
+  root: HTMLElement,
+  busy: boolean,
+  enabled: boolean,
+  remembered: DesktopState['rememberedWorkspace'],
+): void {
   const form = element('form', { className: 'sign-in', testId: 'sign-in-form' });
 
+  const fields = element('div', { className: 'sign-in-fields', testId: 'sign-in-fields' });
   const workspaceLabel = element('label', { text: 'Workspace' });
   const workspace = element('input');
   workspace.name = 'workspaceId';
-  workspace.required = true;
   workspace.autocomplete = 'off';
   workspace.dataset['testid'] = 'workspace-id';
+  workspace.value = signInDraft?.workspaceId ?? '';
   workspaceLabel.append(workspace);
 
   const labelLabel = element('label', { text: 'Name this Mac' });
   const deviceLabel = element('input');
   deviceLabel.name = 'deviceLabel';
-  deviceLabel.required = true;
-  deviceLabel.value = 'This Mac';
+  deviceLabel.value = signInDraft?.deviceLabel ?? remembered?.deviceLabel ?? 'This Mac';
   deviceLabel.dataset['testid'] = 'device-label';
   labelLabel.append(deviceLabel);
+  fields.append(workspaceLabel, labelLabel);
+
+  const showFields = (shown: boolean): void => {
+    fields.hidden = !shown;
+    workspace.required = shown;
+    deviceLabel.required = shown;
+  };
+  showFields(remembered === null || signInDraft !== null);
 
   const submit = element('button', { text: busy ? 'Waiting for your browser…' : 'Sign in with Google' });
   submit.type = 'submit';
@@ -93,11 +119,25 @@ function renderSignIn(root: HTMLElement, busy: boolean, enabled: boolean): void 
   submit.dataset['testid'] = 'sign-in';
   submit.className = 'btn btn-primary';
 
-  form.append(workspaceLabel, labelLabel, submit);
+  form.append(fields, submit);
+  if (remembered !== null && fields.hidden) {
+    const other = element('button', { className: 'btn btn-quiet', text: 'Use another workspace', testId: 'use-another-workspace' });
+    other.type = 'button';
+    other.disabled = busy;
+    other.addEventListener('click', () => {
+      showFields(true);
+      other.remove();
+      workspace.focus();
+    });
+    form.append(other);
+  }
   form.addEventListener('submit', event => {
     event.preventDefault();
+    // Hidden fields send nothing, and the main process signs in to the remembered one.
+    const input = fields.hidden ? {} : { workspaceId: workspace.value.trim(), deviceLabel: deviceLabel.value.trim() };
+    signInDraft = fields.hidden ? null : { workspaceId: workspace.value, deviceLabel: deviceLabel.value };
     void (async () => {
-      render(await bridge().signIn({ workspaceId: workspace.value.trim(), deviceLabel: deviceLabel.value.trim() }));
+      render(await bridge().signIn(input));
       await enterHome();
     })();
     render(null, { busy: true });
@@ -177,7 +217,7 @@ function refreshAll(): void {
       render(await bridge().refreshToday());
     }
   })();
-  void loadHomeAdmin({ figures: true });
+  void loadHomeAdmin({ figures: true, reread: true });
 }
 
 let lastState: DesktopState | null = null;
@@ -204,6 +244,63 @@ async function loadUpdate(): Promise<void> {
   // Drawn again only when the line changes: this runs on every focus, and redrawing the
   // sign-in screen would empty the form the person is typing into.
   if (drawnUpdate(next) !== before) render(null);
+}
+
+/** What the last Update now found, until the next press or a state change. */
+let updateNowNote: string | null = null;
+let updateNowPending = false;
+
+export const UPDATE_NOW_LABEL = 'Update now';
+export const NO_UPDATE_YET = 'No update is available yet. Callie checks again every six hours.';
+
+function renderUpdateNow(root: HTMLElement): void {
+  const update = globalThis.callieUpdate;
+  if (update === undefined || lastUpdate?.kind === 'installing') return;
+  const press = element('button', {
+    className: 'btn btn-primary',
+    text: updateNowPending ? 'Checking…' : UPDATE_NOW_LABEL,
+    testId: 'update-now',
+  });
+  press.disabled = updateNowPending;
+  press.addEventListener('click', () => {
+    updateNowPending = true;
+    updateNowNote = null;
+    render(null);
+    void (async () => {
+      try {
+        lastUpdate = await update.checkNow();
+        updateNowNote = lastUpdate.kind === 'none' ? NO_UPDATE_YET : null;
+      } catch {
+        updateNowNote = 'Callie could not check for an update just now.';
+      } finally {
+        updateNowPending = false;
+        render(null);
+      }
+    })();
+  });
+  root.append(press);
+  if (updateNowNote !== null) root.append(element('p', { className: 'banner banner-info', text: updateNowNote, testId: 'update-now-note' }));
+}
+
+/**
+ * The launch update, while it is being put in place (wave 1): the column is read-only and
+ * one line says why. It installs after the window opens — `confirmLaunch` records this
+ * start first, and that order stays — so for those seconds Home is on screen and nothing
+ * in it can be pressed. Callie restarts by itself when the new build is in place.
+ */
+function showUpdating(root: HTMLElement, shell: Shell): void {
+  const installing = lastUpdate?.kind === 'installing' ? lastUpdate : null;
+  holdInert(shell.column, 'updating', installing !== null);
+  let line = root.querySelector('[data-testid="updating-banner"]');
+  if (installing === null) {
+    line?.remove();
+    return;
+  }
+  if (!(line instanceof HTMLElement)) {
+    line = element('p', { className: 'updating-banner', testId: 'updating-banner' });
+    root.append(line);
+  }
+  line.textContent = `Updating Callie to ${installing.version}… Callie restarts by itself when it is done; until then nothing here can be changed.`;
 }
 
 function restartToUpdate(): void {
@@ -340,12 +437,22 @@ function buildShell(root: HTMLElement): Shell {
 }
 
 /**
+ * The route, in the address as well (`#firms`, `#firm/<id>`): the View menu's Reload
+ * comes back to the same view rather than to Today. The page reads it once, at boot.
+ */
+function remember(next: Route): void {
+  const hash = `#${routeText(next)}`;
+  if (location.hash !== hash) history.replaceState(null, '', hash);
+}
+
+/**
  * Go to `next`. The same route again is a fresh look — the pipeline re-read, Settings
  * shown from the top — except Today, whose lanes may hold what somebody is typing.
  */
 export function navigate(next: Route): void {
   const same = routeText(next) === routeText(route);
   route = next;
+  remember(next);
   const root = document.querySelector('#app');
   const shell = root instanceof HTMLElement ? shellOf(root) : null;
   if (shell === null) return;
@@ -357,6 +464,7 @@ export function navigate(next: Route): void {
 function routeShown(next: Route): void {
   if (routeText(next) === routeText(route)) return;
   route = next;
+  remember(next);
   if (mounted !== null) mounted = { view: mounted.view, route: next };
   const root = document.querySelector('#app');
   const shell = root instanceof HTMLElement ? shellOf(root) : null;
@@ -372,6 +480,7 @@ export function render(state: DesktopState | null, options: { readonly busy?: bo
   const view = buildScreenView(current);
 
   if (view.screen === 'today' && current.device !== null) {
+    signInDraft = null;
     const shell = shellOf(root) ?? buildShell(root);
     renderHome(shell.sidebar, {
       desktop: current,
@@ -386,6 +495,7 @@ export function render(state: DesktopState | null, options: { readonly busy?: bo
       update: lastUpdate,
       restartToUpdate,
     }, route);
+    showUpdating(root, shell);
     return;
   }
 
@@ -416,12 +526,14 @@ export function render(state: DesktopState | null, options: { readonly busy?: bo
   root.append(banners);
 
   if (view.screen === 'upgrade_required') {
-    // The one screen with nothing to press: the upgrade instruction and no controls.
+    // The upgrade instruction and one control (wave 1): Update now, the six-hourly check
+    // run at once. A blocked build installs what it finds and restarts by itself.
     root.append(element('p', { testId: 'upgrade-only', text: 'Callie will work again once this Mac is updated.' }));
+    renderUpdateNow(root);
     return;
   }
   // `signing_in` is a sign-in the browser has not finished: the same form, waiting.
-  renderSignIn(root, (options.busy ?? false) || view.screen === 'signing_in', view.signInEnabled);
+  renderSignIn(root, (options.busy ?? false) || view.screen === 'signing_in', view.signInEnabled, current.rememberedWorkspace);
 }
 
 export async function boot(): Promise<void> {
@@ -435,8 +547,8 @@ export async function boot(): Promise<void> {
     const next = routeOf(name);
     if (next !== null) navigate(next);
   });
-  // A route in the address, for a page loaded straight onto one (the specs do). The
-  // main process loads the window without one, so the app opens on Today.
+  // A route in the address: a Reload, or a page loaded straight onto one (the specs do).
+  // The main process loads the window without one, so the app opens on Today.
   route = routeOf(decodeURIComponent(location.hash.slice(1))) ?? route;
   globalThis.callieUpdate?.onChange(() => {
     void loadUpdate();

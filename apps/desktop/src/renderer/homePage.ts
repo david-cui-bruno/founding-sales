@@ -1,3 +1,4 @@
+import { busyFor } from './busy.ts';
 import type { DesktopState, MailboxState } from '../shared/contract.ts';
 import type { UpdateStatus } from '../shared/updateContract.ts';
 import { button, element } from './firmDom.ts';
@@ -205,14 +206,19 @@ export function startTodayTicker(): void {
  *
  * `state()` is the Administration bridge's cached read — it asks the API only the first
  * time — so it is also what runs when the window regains focus: a number added in
- * Administration a moment ago is on the bridge already. `loadDashboard` is a read and
- * is asked for only here, at sign-in and on Refresh.
+ * Administration a moment ago is on the bridge already. Refresh passes `reread`, and the
+ * settings, the sending status and the calling numbers are read again (wave 1): until
+ * then Refresh re-read the list and the figures and left the sidebar's status as the
+ * first answer of the day. `loadDashboard` is a read and is asked for only here, at
+ * sign-in and on Refresh.
  */
-export async function loadHomeAdmin(options: { readonly figures?: boolean; readonly now?: Date } = {}): Promise<void> {
+export async function loadHomeAdmin(
+  options: { readonly figures?: boolean; readonly reread?: boolean; readonly now?: Date } = {},
+): Promise<void> {
   const bridge = globalThis.callieAdmin;
   if (bridge === undefined) return;
   await keep(
-    async () => await bridge.state(),
+    async () => (options.reread === true ? await bridge.show({ screen: 'settings' }) : await bridge.state()),
     value => {
       admin = value;
     },
@@ -245,8 +251,14 @@ export function forgetHome(): void {
   lanesEdited = false;
 }
 
+/**
+ * A card's command — snooze, dial, record, resume, expand. The column is read-only until
+ * it answers (wave 1), so a second press of the same button sends nothing.
+ */
+const todayBusy = busyFor(() => column);
+
 function applyToday(next: Promise<TodayState>): void {
-  void keepToday(async () => await next);
+  void keepToday(async () => await todayBusy.run(next));
 }
 
 // ---------------------------------------------------------------------------
@@ -476,6 +488,7 @@ function skeleton(root: HTMLElement): void {
  * once, and reads it again only if the last read is a minute old.
  */
 export function mount(container: HTMLElement): void {
+  todayBusy.reset();
   column = container;
   skeleton(container);
   autoRefreshToday('focus');
@@ -483,6 +496,7 @@ export function mount(container: HTMLElement): void {
 
 /** Stop drawing the column. The reads keep Home's state current for the sidebar. */
 export function unmount(): void {
+  todayBusy.reset();
   column = null;
   lanesDrawnFrom = undefined;
 }

@@ -7,6 +7,7 @@ import {
   diagnosticsResponseSchema,
   outboundStatusResponseSchema,
   pipelineStagesResponseSchema,
+  sendingDomainStatusSchema,
   postureReferenceResponseSchema,
   settingHistoryResponseSchema,
   settingsSnapshotSchema,
@@ -125,6 +126,30 @@ export function recordPostureBody(input: RecordPostureInput, zone: string): Read
  * way down, which is how `personalGmailRecipients` could be read as a number for two
  * releases while unchecked fields rode along (release.md 8.0ae, D07).
  */
+
+/**
+ * `/outbound/status` as this Mac reads it (wave 1): the contract's schema with the
+ * personal-Gmail guard's three fields optional — the domain's `personalGmailGuardPer24h`,
+ * the `guard` decision and `personalGmailRecipients`. The server keeps sending them for
+ * now; lane W1-C removes them once this build is the one in use. A strict reader would
+ * turn that removal into "could not read the sending status" on every open, so this one
+ * shows the rest of the section and leaves the guard's line out.
+ */
+export const outboundStatusReadSchema = outboundStatusResponseSchema
+  .partial({ guard: true, personalGmailRecipients: true })
+  .extend({ domain: sendingDomainStatusSchema.partial({ personalGmailGuardPer24h: true }).nullable() });
+
+/**
+ * The note a setting change carries when nobody wrote one (wave 1). The note is optional
+ * on the Mac; the server's history keeps one per version, so a Save with the field left
+ * empty is sent with this rather than refused before it leaves.
+ */
+export const DEFAULT_CHANGE_NOTE = 'Changed on the Mac';
+
+export function changeNoteOf(typed: string): string {
+  const trimmed = typed.trim();
+  return trimmed === '' ? DEFAULT_CHANGE_NOTE : trimmed;
+}
 
 export interface AdminBridgeDeps {
   readonly api: AuthedClient;
@@ -256,7 +281,7 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
     // `read` sends GET when it is given no body, and the API answered that with 405 on every
     // Administration open in production (25 September 2026), so this section never rendered.
     // The empty body is what makes it the POST the route expects.
-    const status = await deps.api.read('/outbound/status', value => outboundStatusResponseSchema.parse(value), {});
+    const status = await deps.api.read('/outbound/status', value => outboundStatusReadSchema.parse(value), {});
     if (!status.ok) {
       sendingAdmin = null;
       sendingReadError = status.reason;
@@ -273,7 +298,7 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
     }[] = [];
     if (report.ok) {
       for (const mailbox of report.value.mailboxes) {
-        const one = await deps.api.read('/outbound/status', value => outboundStatusResponseSchema.parse(value), {
+        const one = await deps.api.read('/outbound/status', value => outboundStatusReadSchema.parse(value), {
           mailboxId: mailbox.mailboxId,
         });
         if (one.ok && one.value.ramp !== null) {
@@ -300,11 +325,11 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
               postmasterReviewedAt: status.value.domain.postmasterReviewedAt,
               authenticationPasses: status.value.domain.authenticationPasses,
               automatedSendingEnabled: status.value.domain.automatedSendingEnabled,
-              personalGmailGuardPer24h: status.value.domain.personalGmailGuardPer24h,
+              personalGmailGuardPer24h: status.value.domain.personalGmailGuardPer24h ?? null,
             },
       // The whole guard: FSS's own sends and the direct ones the sync imported (12.7,
       // "All outgoing Gmail messages, including direct sends, count").
-      personalGmailRecipients: status.value.personalGmailRecipients.total,
+      personalGmailRecipients: status.value.personalGmailRecipients?.total ?? null,
       ramps: collected,
     };
     sendingReadError = null;
@@ -427,7 +452,7 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
     async saveSetting(input) {
       const outcome = await deps.api.command(
         '/settings/update',
-        { settingKey: input.settingKey, value: input.value, changeNote: input.changeNote },
+        { settingKey: input.settingKey, value: input.value, changeNote: changeNoteOf(input.changeNote) },
         value => value,
       );
       return await afterCommand(outcome, loadSettings);

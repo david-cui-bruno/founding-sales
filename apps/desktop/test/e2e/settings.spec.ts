@@ -30,7 +30,11 @@ test('an admin sees every slice, its provenance, and an editor for each', async 
   await openAdmin(page, adminState());
 
   await expect(page.getByTestId('heading')).toHaveText('Administration');
-  await expect(page.getByTestId('setting-alert_thresholds')).toContainText('Default, never configured');
+  await expect(page.getByTestId('setting-sending_enabled')).toContainText('Default, never configured');
+  // Wave 1: the alarm thresholds and the supported versions are gone from the page.
+  await expect(page.getByTestId('setting-alert_thresholds')).toHaveCount(0);
+  await expect(page.getByTestId('setting-client_version_range')).toHaveCount(0);
+  await expect(page.getByTestId('settings-advanced')).toHaveCount(0);
   await expect(page.getByTestId('setting-business_time_zone')).toContainText('Version 2');
   await expect(page.getByTestId('value-business_time_zone')).toBeEnabled();
   await expect(page.getByTestId('save-business_time_zone')).toBeEnabled();
@@ -147,13 +151,13 @@ test('a salesperson sees the same page with every control inert and a reason', a
   await expect(page.getByTestId('setting-business_time_zone')).toContainText('Version 2');
 });
 
-test('offline is said once, at the top, and every control is inert', async ({ page }) => {
+test('offline is said once, at the top, and nothing is disabled for it (wave 1)', async ({ page }) => {
   await openAdmin(page, adminState({ online: false }));
 
-  await expect(page.getByTestId('banner-offline')).toContainText('Offline');
-  await expect(page.getByTestId('save-alert_thresholds')).toBeDisabled();
-  // Offline comes first: an admin who is offline is told that, not "admin only".
-  await expect(page.getByTestId('setting-alert_thresholds')).toContainText('Offline: nothing here can be changed');
+  await expect(page.getByTestId('banner-offline')).toContainText('cannot reach the server');
+  await expect(page.getByTestId('save-business_time_zone')).toBeEnabled();
+  await expect(page.getByTestId('field-business_time_zone-timeZone')).toBeEnabled();
+  await expect(page.getByTestId('setting-business_time_zone')).not.toContainText('Offline:');
 });
 
 test('a terminal stage is listed and offers no administration', async ({ page }) => {
@@ -261,12 +265,17 @@ test('a setting is changed with a typed control, and its JSON and provenance are
     .poll(() => server.calls.find(entry => entry.method === 'saveSetting')?.argument)
     .toEqual({ settingKey: 'business_time_zone', value: { timeZone: 'America/Denver' }, changeNote: 'the office moved' });
 
-  // The thresholds are numbers, one click further away; one that is not a number is marked and not sent.
-  await page.getByText('Advanced: alarm thresholds and supported Callie versions').click();
-  await page.getByTestId('field-alert_thresholds-canaryStaleSeconds').fill('');
-  await page.getByTestId('save-alert_thresholds').click();
-  await expect(page.getByTestId('field-alert_thresholds-canaryStaleSeconds')).toHaveAttribute('aria-invalid', 'true');
-  expect(server.calls.filter(entry => entry.method === 'saveSetting')).toHaveLength(1);
+  // The note is optional (wave 1): a Save with it left empty is sent, never dropped,
+  // and the main process gives it "Changed on the Mac".
+  await expect(page.getByTestId('note-business_time_zone')).toHaveAttribute('placeholder', 'Why (optional)');
+  // The first Save has answered and the page has drawn it: the column is not read-only.
+  await expect(page.getByTestId('column')).not.toHaveAttribute('aria-busy', 'true');
+  await page.getByTestId('field-business_time_zone-timeZone').selectOption('America/Los_Angeles');
+  await page.getByTestId('note-business_time_zone').fill('');
+  await page.getByTestId('save-business_time_zone').click();
+  await expect
+    .poll(() => server.calls.filter(entry => entry.method === 'saveSetting').at(-1)?.argument)
+    .toEqual({ settingKey: 'business_time_zone', value: { timeZone: 'America/Los_Angeles' }, changeNote: '' });
 
   // Where the other settings live, and which lane owns them, is support detail.
   await expect(page.getByTestId('elsewhere-details')).not.toHaveAttribute('open', '');

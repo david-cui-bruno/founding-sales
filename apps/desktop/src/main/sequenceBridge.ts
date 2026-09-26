@@ -126,11 +126,13 @@ export function createSequenceBridge(deps: SequenceBridgeDeps): SequenceBridgeHo
   const compose = async (): Promise<SequenceState> => {
     const session = await deps.session.state();
     const isAdmin = session.device?.role === 'admin';
-    if (!session.online) {
-      return { ...EMPTY_SEQUENCE_STATE, isAdmin, notice, resumeReview: null };
-    }
-
+    // Always asked, even when the session last found the server away (wave 1). Until
+    // then an offline session skipped the reads, so nothing here could find out the
+    // connection was back and the view stayed empty until Home refreshed.
     const sequences = await deps.api.read('/sequences', value => sequencesResponseSchema.parse(value));
+    if (!sequences.ok && sequences.offline) {
+      return { ...EMPTY_SEQUENCE_STATE, isAdmin, mayMutate: session.mayMutate, notice, resumeReview: null };
+    }
     const list = sequences.ok ? sequences.value.sequences : [];
     const chosen = selectedSequenceId ?? list[0]?.id ?? null;
 

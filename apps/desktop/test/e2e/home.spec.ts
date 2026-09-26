@@ -518,30 +518,29 @@ test('“do not call” says how wide the suppression is before it is recorded',
   await expect(page.getByTestId('outcome-warning')).toContainText('stops Callie calling this number');
 });
 
-test('an outage leaves Home readable and nothing on it pressable', async ({ page }) => {
+test('an outage is a banner over Home, and nothing on it is disabled for it (wave 1)', async ({ page }) => {
   server = await startAppServer({
-    desktop: desktopState({ online: false, stale: true, mayMutate: false }),
-    today: todayState({ online: false, stale: true, mayMutate: false, expanded: expandedFirm() }),
-    mailbox: notConnectedMailbox({ mayConnect: false, notice: 'offline' }),
+    desktop: desktopState({ online: false, stale: true }),
+    today: todayState({ online: false, stale: true, expanded: expandedFirm() }),
+    mailbox: notConnectedMailbox({ notice: 'offline' }),
   });
   await page.goto(server.url());
 
   // The existing sentences, as quiet lines at the top of the column.
   await expect(page.getByTestId('banner-warning').nth(0)).toContainText('cannot reach the server');
   await expect(page.getByTestId('banner-warning').nth(1)).toContainText('from an earlier read');
+  await expect(page.getByTestId('banner-warning').nth(1)).toContainText('Changes will fail until Callie reconnects.');
   await expect(page.getByTestId('status-system')).toHaveText('Callie 1.0.3 · offline');
 
   await expect(page.getByTestId('today-card')).toHaveCount(4);
   await expect(page.getByTestId('card-counts').nth(1)).toHaveText('3 emails, 1 call');
   await expect(page.getByTestId('today-task')).toHaveCount(5);
 
-  for (const index of [0, 1, 2, 3]) await expect(page.getByTestId('card-expand').nth(index)).toBeDisabled();
-  for (const index of [0, 1, 2, 3, 4]) await expect(page.getByTestId('snooze-submit').nth(index)).toBeDisabled();
-  await expect(page.getByTestId('snooze-reason').nth(0)).toBeDisabled();
-  await expect(page.getByTestId('dial')).toHaveCount(0);
-  await expect(page.getByTestId('outcome-select')).toBeDisabled();
-  await expect(page.getByTestId('outcome-submit')).toBeDisabled();
-  await expect(page.getByTestId('needs-connect')).toBeDisabled();
+  // Until wave 1 every one of these was greyed out until somebody pressed Refresh.
+  for (const index of [0, 1, 2, 3]) await expect(page.getByTestId('card-expand').nth(index)).toBeEnabled();
+  await expect(page.getByTestId('snooze-reason').nth(0)).toBeEnabled();
+  await expect(page.getByTestId('outcome-select')).toBeEnabled();
+  await expect(page.getByTestId('needs-connect')).toBeEnabled();
 });
 
 test('an empty list says what to do next in one grey line', async ({ page }) => {

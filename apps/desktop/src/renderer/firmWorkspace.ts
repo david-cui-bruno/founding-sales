@@ -1,3 +1,4 @@
+import { busyFor } from './busy.ts';
 import { renderAddFirmForm } from './addFirmForm.ts';
 import { button, element } from './firmDom.ts';
 import { renderFirmMerge } from './firmMerge.ts';
@@ -38,15 +39,19 @@ let container: HTMLElement | null = null;
 /** Bumped by every mount and unmount, so an answer to an earlier one is dropped. */
 let generation = 0;
 
+/** Read-only while a command is on the wire, so a second press sends nothing (wave 1). */
+const busy = busyFor(() => container);
+
 function apply(next: Promise<CrmState>): void {
   const mine = generation;
   void (async () => {
-    const state = await next;
+    const state = await busy.run(next);
     if (mine === generation) render(state);
   })();
 }
 
 export function mount(target: HTMLElement, route: Route): void {
+  busy.reset();
   generation += 1;
   container = target;
   lastState = null;
@@ -65,6 +70,7 @@ export function mount(target: HTMLElement, route: Route): void {
 }
 
 export function unmount(): void {
+  busy.reset();
   generation += 1;
   container = null;
 }

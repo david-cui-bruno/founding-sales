@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_ALERT_THRESHOLDS } from '@fss/contracts';
 import { createAuthedClient } from '../src/main/authedClient.ts';
-import { ADMIN_IPC_CHANNELS, createAdminBridge } from '../src/main/settingsBridge.ts';
+import { ADMIN_IPC_CHANNELS, DEFAULT_CHANGE_NOTE, createAdminBridge } from '../src/main/settingsBridge.ts';
 import { adminViewOf } from '../src/renderer/settingsView.ts';
 import type { AdminState, CallingNumberView } from '../src/renderer/settingsContract.ts';
 import { outboundRampAnswer, outboundStatusAnswer } from './support/outboundStatus.ts';
@@ -56,8 +55,8 @@ const session = (overrides: Record<string, unknown> = {}) => ({
 const settingsBody = (overrides: Record<string, unknown> = {}) => ({
   settings: [
     {
-      settingKey: 'alert_thresholds',
-      value: DEFAULT_ALERT_THRESHOLDS,
+      settingKey: 'sending_enabled',
+      value: { enabled: false, releaseGateReference: null },
       version: 0,
       changedAt: null,
       changedByUserId: null,
@@ -188,7 +187,7 @@ describe('the administration bridge', () => {
     expect(state.callingNumbers).toBeNull();
     expect(state.notice).toBeNull();
     expect(state.settings?.settings.map(entry => entry.settingKey)).toEqual([
-      'alert_thresholds',
+      'sending_enabled',
       'business_time_zone',
     ]);
     expect(state.stages.map(stage => stage.key)).toEqual(['new', 'won']);
@@ -285,14 +284,29 @@ describe('the administration bridge', () => {
     const bridge = createAdminBridge({ api, session: { state: async () => await Promise.resolve(session()) } });
     await bridge.state();
     const refused = await bridge.saveSetting({
-      settingKey: 'alert_thresholds',
-      value: DEFAULT_ALERT_THRESHOLDS,
+      settingKey: 'business_time_zone',
+      value: { timeZone: 'America/Denver' },
       changeNote: 'trying it on',
     });
     expect(refused.notice).toBe('admin_only');
     // A refused command re-reads nothing: the state on screen is still the one the
     // server last gave, rather than one the client edited optimistically.
     expect(calls.filter(call => call.path === '/settings')).toHaveLength(1);
+  });
+
+  it('sends a Save with no note as "Changed on the Mac", never dropping it (wave 1)', async () => {
+    const { api, calls } = scriptedApi({
+      '/settings': { status: 200, body: settingsBody() },
+      '/pipeline/stages': { status: 200, body: stagesBody },
+      '/settings/update': { status: 200, body: { status: 'accepted', replayed: false, result: {} } },
+    });
+    const bridge = createAdminBridge({ api, session: { state: async () => await Promise.resolve(session()) } });
+    await bridge.state();
+    await bridge.saveSetting({ settingKey: 'business_time_zone', value: { timeZone: 'America/Denver' }, changeNote: '' });
+    await bridge.saveSetting({ settingKey: 'business_time_zone', value: { timeZone: 'America/Denver' }, changeNote: '  moved  ' });
+    const notes = calls.filter(call => call.path === '/settings/update').map(call => (call.body as Record<string, unknown>)['changeNote']);
+    expect(notes).toEqual([DEFAULT_CHANGE_NOTE, 'moved']);
+    expect(DEFAULT_CHANGE_NOTE).toBe('Changed on the Mac');
   });
 
   it('re-reads the slice after an accepted command', async () => {
@@ -332,6 +346,30 @@ describe('the administration bridge', () => {
       'callie:admin:record-posture',
       'callie:admin:revoke-posture',
     ]);
+  });
+
+  it('reads the sending status once the server stops sending the guard, and draws the section without it (wave 1)', async () => {
+    const withoutGuard = (body: Readonly<Record<string, unknown>>): Record<string, unknown> => {
+      const { guard: _guard, personalGmailRecipients: _recipients, ...rest } = body;
+      const domain = rest['domain'] as Record<string, unknown> | null;
+      if (domain === null) return rest;
+      const { personalGmailGuardPer24h: _per24h, ...keptDomain } = domain;
+      return { ...rest, domain: keptDomain };
+    };
+    const { api } = scriptedApi({
+      '/settings': { status: 200, body: settingsBody() },
+      '/pipeline/stages': { status: 200, body: stagesBody },
+      '/outbound/status': { status: 200, body: withoutGuard(outboundStatusAnswer()) },
+      '/diagnostics': { status: 200, body: diagnosticsBody(MAILBOX_ID) },
+    });
+    const state = await createAdminBridge({ api, session: { state: async () => await Promise.resolve(session()) } }).state();
+    expect(state.sendingReadError).toBeNull();
+    expect(state.sendingAdmin?.domain?.domain).toBe('sending.example.test');
+    expect(state.sendingAdmin?.domain?.personalGmailGuardPer24h).toBeNull();
+    expect(state.sendingAdmin?.personalGmailRecipients).toBeNull();
+    const section = adminViewOf(state).sendingAdmin;
+    expect(section?.domainLine).toContain('sending.example.test');
+    expect(section?.guard.line).toBeNull();
   });
 
   it("reads G7-2's sending posture for an admin, and not at all for a salesperson", async () => {
@@ -835,9 +873,10 @@ describe('the administration view', () => {
     expect(salesperson.settings[0]?.notEditableBecause).toBe('admin_only');
 
     const offline = adminViewOf(emptyState({ online: false, settings: settingsBody() as never }));
-    // Offline comes first: an admin who is offline is told that, not "admin only".
-    expect(offline.settings[0]?.notEditableBecause).toBe('offline');
-    expect(offline.banner).toContain('Offline');
+    // Offline is the banner and nothing else (wave 1): the rows stay editable, and a
+    // save sent offline fails with its own notice.
+    expect(offline.settings.every(row => row.editable)).toBe(true);
+    expect(offline.banner).toContain('cannot reach the server');
 
     const outdated = adminViewOf(emptyState({ mayMutate: false, settings: settingsBody() as never }));
     expect(outdated.settings[0]?.notEditableBecause).toBe('upgrade_required');
@@ -847,6 +886,24 @@ describe('the administration view', () => {
     const view = adminViewOf(withSettings());
     expect(view.settings[0]?.provenance).toBe('Default, never configured');
     expect(view.settings[1]?.provenance).toContain('Version 2');
+  });
+
+  it('shows no row for the two slices wave 1 deleted, even from a server that still lists them', () => {
+    const retired = (settingKey: string) => ({
+      settingKey,
+      value: {},
+      version: 0,
+      changedAt: null,
+      changedByUserId: null,
+      changeNote: null,
+    });
+    const body = settingsBody();
+    const view = adminViewOf(
+      emptyState({
+        settings: { ...body, settings: [retired('alert_thresholds'), ...body.settings, retired('client_version_range')] } as never,
+      }),
+    );
+    expect(view.settings.map(row => row.settingKey)).toEqual(['sending_enabled', 'business_time_zone']);
   });
 
   it('reads the sending switch out rather than recomputing it', () => {
@@ -1031,15 +1088,15 @@ describe('the administration view', () => {
 
 
 describe('Your calling number (lane g60)', () => {
-  it('is offered to a salesperson as well as an admin, and is inert only offline or out of date', () => {
+  it('is offered to a salesperson as well as an admin, and is inert only out of date, never for offline', () => {
     for (const role of ['admin', 'salesperson'] as const) {
       const section = adminViewOf(emptyState({ role, callingNumbers: [] })).callingNumber;
       expect(section.canAdd, role).toBe(true);
       expect(section.notEditableBecause, role).toBeNull();
     }
     expect(adminViewOf(emptyState({ online: false, callingNumbers: [] })).callingNumber).toMatchObject({
-      canAdd: false,
-      notEditableBecause: 'offline',
+      canAdd: true,
+      notEditableBecause: null,
     });
     expect(adminViewOf(emptyState({ mayMutate: false, callingNumbers: [] })).callingNumber).toMatchObject({
       canAdd: false,

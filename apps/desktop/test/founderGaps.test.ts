@@ -454,7 +454,6 @@ describe('Settings has typed controls, not JSON (audit G08)', () => {
       ['business_time_zone', { timeZone: 'America/Chicago' }],
       ['sending_enabled', { enabled: true, releaseGateReference: 'release-2026-09-25' }],
       ['sending_enabled', { enabled: false, releaseGateReference: null }],
-      ['client_version_range', { minimum: '1.0.5', maximum: '1.999.999' }],
     ];
     for (const [key, value] of cases) {
       const fields = settingFields(key, value) ?? [];
@@ -463,14 +462,9 @@ describe('Settings has typed controls, not JSON (audit G08)', () => {
     }
   });
 
-  it('writes the ten thresholds as numbers, and names the one that is not a number', () => {
-    const fields = settingFields('alert_thresholds', undefined) ?? [];
-    expect(fields).toHaveLength(10);
-    const values = Object.fromEntries(fields.map(field => [field.key, String(field.value)]));
-    const written = settingValueFrom('alert_thresholds', values);
-    expect(written.ok && (written.value as Record<string, unknown>)['heartbeatMissedChecks']).toBe(3);
-    expect(written.ok && (written.value as Record<string, unknown>)['todaySnapshotDeadlineLocalTime']).toBe('05:10');
-    expect(settingValueFrom('alert_thresholds', { ...values, canaryStaleSeconds: 'soon' })).toEqual({ ok: false, field: 'canaryStaleSeconds' });
+  it('has no controls for the two slices wave 1 deleted on the server', () => {
+    expect(settingFields('alert_thresholds', {})).toBeNull();
+    expect(settingFields('client_version_range', {})).toBeNull();
   });
 
   it('leaves a slice it does not know to JSON, and says why a control is inert in words', () => {
