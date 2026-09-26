@@ -51,8 +51,8 @@
 #
 # Dry run: FSS_REHEARSAL_DRY_RUN=1 prints every command and needs no credential.
 
-# shellcheck source=infra/scripts/release-common.sh
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/release-common.sh"
+# shellcheck source=infra/scripts/lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 ROOT_DIRECTORY=${1:-}
 PREFIX=${2:-}

@@ -42,15 +42,15 @@
 #
 # The same code path in both environments, like `release-deploy.sh`: the environment
 # comes from the prefix, the root must agree with it, every AWS call goes through the
-# symmetric refusal in `release-common.sh`, and the cluster must be a full ARN in this
+# symmetric refusal in `lib.sh`, and the cluster must be a full ARN in this
 # account, region and namespace, tagged as this environment. And one extra word, as
 # `release-bootstrap-workspace.sh` asks: this command takes production down, so it is
 # named out loud (`--environment production`) or refused.
 #
 # Dry run: FSS_REHEARSAL_DRY_RUN=1 prints every command and needs no credential.
 
-# shellcheck source=infra/scripts/release-common.sh
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/release-common.sh"
+# shellcheck source=infra/scripts/lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 ROOT_DIRECTORY=${1:-}
 PREFIX=${2:-}

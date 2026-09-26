@@ -35,7 +35,7 @@
 #
 # Like `infra/scripts/release-deploy.sh`, this runs the same code for the rehearsal and
 # for production: the difference is the credentials in the shell and the root in
-# argument one, and `release-common.sh` refuses a rehearsal command that names
+# argument one, and `lib.sh` refuses a rehearsal command that names
 # production and a production command that names a rehearsal run.
 #
 # It asks for one thing that script does not: `--environment production`. Every other
@@ -65,8 +65,8 @@
 #
 # Dry run: FSS_REHEARSAL_DRY_RUN=1 prints every command and needs no credential.
 
-# shellcheck source=infra/scripts/release-common.sh
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/release-common.sh"
+# shellcheck source=infra/scripts/lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 ROOT_DIRECTORY=${1:-}
 PREFIX=${2:-}

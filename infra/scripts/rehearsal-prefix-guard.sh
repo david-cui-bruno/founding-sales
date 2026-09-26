@@ -48,7 +48,8 @@
 #
 # Dry run: FSS_REHEARSAL_DRY_RUN=1 prints the plan and needs no credential.
 
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rehearsal-common.sh"
+# shellcheck source=infra/scripts/lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 PREFIX=${1:-}
 PHASE=${2:-after}

@@ -5,9 +5,8 @@
 #
 #   infra/scripts/rehearsal-run-task.sh fss-rh-0921 drill operations -- drill --from 2 --to 9
 #
-# The engine is `infra/scripts/release-common.sh`, which sources
-# `infra/scripts/rehearsal-common.sh` for the production-name refusal, the dry-run
-# mode and the reports directory, and which the production path uses unchanged. This
+# The engine is `infra/scripts/lib.sh` (`release_run_task`), which the production path
+# uses unchanged. This
 # file is the rehearsal's front door to it: it resolves the run's task definitions,
 # cluster and network from `infra/roots/rehearsal`'s own outputs, and refuses a prefix
 # that is not a rehearsal prefix before anything is addressed.
@@ -21,8 +20,8 @@
 #
 # Dry run: FSS_REHEARSAL_DRY_RUN=1 prints every call and needs no credential.
 
-# shellcheck source=infra/scripts/release-common.sh
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/release-common.sh"
+# shellcheck source=infra/scripts/lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 PREFIX=${1:-}
 STEP=${2:-}
