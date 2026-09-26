@@ -35,15 +35,17 @@ describe('enabling production sending', () => {
   let seeded: TwoWorkspaces;
   let admin: RepositoryContext;
 
-  const PASSING = 'fss-rh-enable-2026-09-25T07:20:44Z';
-  const FAILED = 'fss-rh-enable-failed-2026-09-25T07:20:44Z';
+  /** The references of two CI-gate records, one passing and one not, set in `beforeAll`. */
+  let passing = '';
+  let failed = '';
 
-  const enable = async (reference: string, runningApiDigest?: string) =>
+  const enable = async (reference: string, runningApiDigest?: string, production?: boolean) =>
     await updateSetting(admin, {
       settingKey: 'sending_enabled',
       value: { enabled: true, releaseGateReference: reference },
-      changeNote: `rehearsal ${reference} passed; digests match production`,
+      changeNote: `release ${reference} passed; digests match production`,
       ...(runningApiDigest === undefined ? {} : { runningApiDigest }),
+      ...(production === undefined ? {} : { production }),
     });
 
   beforeAll(async () => {
@@ -53,8 +55,8 @@ describe('enabling production sending', () => {
       workspaceScope(seeded.alpha.workspaceId, { kind: 'user', userId: seeded.alpha.admin.userId, role: 'admin' }),
       database.session,
     );
-    await storeFixtureRecord(database.session, PASSING);
-    await storeFixtureRecord(database.session, FAILED, { suite: 'fail' });
+    passing = await storeFixtureCiGateRecord(database.session, '41000000121');
+    failed = await storeFixtureCiGateRecord(database.session, '41000000122', { suite: 'fail' });
   });
 
   afterAll(async () => {
@@ -62,11 +64,11 @@ describe('enabling production sending', () => {
   });
 
   it('accepts a passing record whose API digest is the running API’s', async () => {
-    const outcome = await enable(PASSING, FIXTURE_API_DIGEST);
+    const outcome = await enable(passing, FIXTURE_API_DIGEST);
     expect(outcome).toMatchObject({ ok: true, value: { current: { settingKey: 'sending_enabled', version: 1 } } });
     expect((await readSetting(admin, 'sending_enabled')).value).toEqual({
       enabled: true,
-      releaseGateReference: PASSING,
+      releaseGateReference: passing,
     });
   });
 
@@ -80,21 +82,21 @@ describe('enabling production sending', () => {
   });
 
   it('refuses a record whose suite did not pass', async () => {
-    expect(await enable(FAILED, FIXTURE_API_DIGEST)).toEqual({ ok: false, reason: 'release_record_not_passing' });
+    expect(await enable(failed, FIXTURE_API_DIGEST)).toEqual({ ok: false, reason: 'release_record_not_passing' });
   });
 
-  it('refuses when the running API is not the image the rehearsal certified', async () => {
-    expect(await enable(PASSING, fixtureDigest('e'))).toEqual({ ok: false, reason: 'release_record_digest_mismatch' });
+  it('refuses when the running API is not the image the CI gate certified', async () => {
+    expect(await enable(passing, fixtureDigest('e'))).toEqual({ ok: false, reason: 'release_record_digest_mismatch' });
     // The worker's digest is not the API's: each side compares its own half.
-    expect(await enable(PASSING, FIXTURE_WORKER_DIGEST)).toEqual({
+    expect(await enable(passing, FIXTURE_WORKER_DIGEST)).toEqual({
       ok: false,
       reason: 'release_record_digest_mismatch',
     });
   });
 
   it('refuses, failing closed, when the API cannot say which image it is running', async () => {
-    expect(await enable(PASSING, 'unknown')).toEqual({ ok: false, reason: 'release_record_identity_unknown' });
-    expect(await enable(PASSING)).toEqual({ ok: false, reason: 'release_record_identity_unknown' });
+    expect(await enable(passing, 'unknown')).toEqual({ ok: false, reason: 'release_record_identity_unknown' });
+    expect(await enable(passing)).toEqual({ ok: false, reason: 'release_record_identity_unknown' });
   });
 
   it('always accepts turning sending off, whatever the API is running', async () => {
@@ -120,7 +122,7 @@ describe('enabling production sending', () => {
     expect(
       await updateSetting(salesperson, {
         settingKey: 'sending_enabled',
-        value: { enabled: true, releaseGateReference: PASSING },
+        value: { enabled: true, releaseGateReference: passing },
         changeNote: 'trying it on',
         runningApiDigest: FIXTURE_API_DIGEST,
       }),
@@ -150,6 +152,21 @@ describe('enabling production sending', () => {
       enabled: true,
       releaseGateReference: CI_GATE_MAIN_POLICY,
     });
+  });
+
+  it('in production refuses a passing rehearsal record as a reference nobody stored; a rehearsal stack accepts it', async () => {
+    // A record a `full` rehearsal stored before W3-S8: passing, naming the running API.
+    const rehearsal = 'fss-rh-enable-2026-09-24T10:00:00Z';
+    await storeFixtureRecord(database.session, rehearsal);
+    const before = (await readSetting(admin, 'sending_enabled')).version;
+    expect(await enable(rehearsal, FIXTURE_API_DIGEST, true)).toEqual({ ok: false, reason: 'release_record_unknown' });
+    // An API that does not say which deployment it is counts as production.
+    expect(await enable(rehearsal, FIXTURE_API_DIGEST)).toEqual({ ok: false, reason: 'release_record_unknown' });
+    expect((await readSetting(admin, 'sending_enabled')).version).toBe(before);
+
+    expect(await enable(rehearsal, FIXTURE_API_DIGEST, false)).toMatchObject({ ok: true });
+    // And a passing ci-gate record, by its reference, is accepted in production.
+    expect(await enable(passing, FIXTURE_API_DIGEST, true)).toMatchObject({ ok: true });
   });
 
   it('names all four binding refusals among the settings refusal codes', () => {

@@ -74,6 +74,17 @@ export interface SendGateDeps {
    * (`release_record_identity_unknown`), never a pass.
    */
   readonly workerImageDigest?: string | undefined;
+  /**
+   * Whether this worker is a production deployment (`FSS_ENVIRONMENT=production`,
+   * `isProductionEnvironmentName`). Production binds only records the CI gate wrote,
+   * so an attestation naming a rehearsal's record holds every send as a reference
+   * nobody stored does (`release_record_unknown`); a rehearsal stack still binds its
+   * rehearsal records by their reference. An argument for the reason the digest is one.
+   *
+   * Absent means **production**: a composition that forgot it binds only the CI gate's
+   * records, which is the direction that holds.
+   */
+  readonly production?: boolean | undefined;
 }
 
 export interface SendPlan {
@@ -178,7 +189,13 @@ export async function decideSend(
   // CI deploy that put its record keeps sending on; a worker no ci-gate record names
   // holds exactly as before (`release_record_unknown`), and so does one only a
   // rehearsal record names.
-  const binding = await attestedReleaseBinding(context, attestation.value, 'worker', deps.workerImageDigest);
+  //
+  // And in production the reference form binds only a `ci-gate` record too: a passing
+  // rehearsal record the attestation names is answered `release_record_unknown`, the
+  // refusal and the hold of a record that is not there.
+  const binding = await attestedReleaseBinding(context, attestation.value, 'worker', deps.workerImageDigest, {
+    production: deps.production ?? true,
+  });
   if (binding === null || !binding.ok) {
     return refuseSend('workspace_sending_not_attested', binding === null ? 'workspace' : binding.reason);
   }

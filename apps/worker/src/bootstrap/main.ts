@@ -6,6 +6,7 @@ import { createCloudWatchSink, loadCloudWatchTransport } from '@fss/domain/jobs/
 import { defaultTodaySources } from '@fss/domain/today/build.ts';
 import { dueSequenceWorkSource } from '@fss/domain/sequences/todaySource.ts';
 import { discoverImageDigest } from '@fss/domain/release/identity.ts';
+import { isProductionEnvironmentName } from '@fss/domain/release/deployment.ts';
 import { WORKER_EXIT_CODES } from '../index.ts';
 import {
   classifyHandlers,
@@ -244,6 +245,8 @@ export async function composeHandlers(
       // And the image this worker is, which the attested release record must name
       // (lane g71). Same default, same direction: absent holds every send.
       workerImageDigest: options.imageDigest,
+      // And whether this is production, where only the CI gate's release records bind.
+      production: isProductionEnvironmentName(deployment.environmentName),
     },
   };
 }

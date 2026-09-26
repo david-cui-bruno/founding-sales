@@ -12,6 +12,7 @@ import {
   type ApiDeployment,
 } from './deployment.ts';
 import { discoverImageDigest } from '@fss/domain/release/identity.ts';
+import { isProductionEnvironmentName } from '@fss/domain/release/deployment.ts';
 import type { AuthDeps } from '../auth/config.ts';
 import { JournalConfigurationError } from '../journal/index.ts';
 import { createRequestPool, poolConnections, verifyPoolConnectivity } from './connections.ts';
@@ -205,6 +206,8 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
     // says otherwise — so an unset deployment is a deployment that cannot send.
     sendingEnabled: deployment.sendingEnabled,
     imageDigest: identity.digest,
+    // And whether this is production, where only the CI gate's release records bind.
+    production: isProductionEnvironmentName(deployment.environmentName),
     // 10.2: a live deployment has a durable one or `readApiDeployment` refused above.
     suppressionJournal: deployment.suppressionJournal,
     ...(deployment.mail === undefined ? {} : { mail: deployment.mail }),

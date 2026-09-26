@@ -149,6 +149,20 @@ describe('the live deployment', () => {
     expect(unknown.send?.workerImageDigest).toBeUndefined();
   });
 
+  it('tells the send gate whether this is production, from FSS_ENVIRONMENT', async () => {
+    // Production binds only the CI gate's release records; a rehearsal stack also binds
+    // a rehearsal's by its reference. The same comparison the dependency switch makes.
+    for (const [name, production] of [['production', true], [' Production ', true], ['rehearsal', false]] as const) {
+      const deployment = await readWorkerDeployment(liveEnvironment({ [V.environmentName]: name }), {
+        loadKms: loadKms as never,
+      });
+      const composed = await composeHandlers(deployment, undefined, {
+        journal: { append: async () => await Promise.resolve() },
+      });
+      expect(composed.send?.production, name).toBe(production);
+    }
+  });
+
   for (const missing of [
     V.region,
     V.publicOrigin,
