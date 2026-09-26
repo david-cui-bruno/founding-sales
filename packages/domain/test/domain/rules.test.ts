@@ -1,39 +1,43 @@
 import { describe, expect, it } from 'vitest';
+import { resolveStepDue, type SequenceStep } from '../../src/rules/cadence.ts';
+import { evaluateCallingWindow, narrowCallingWindow } from '../../src/rules/callingWindow.ts';
 import {
-  CANONICALIZER_VERSION,
-  FEDERAL_CITATIONS,
-  MANUAL_SUPPRESSION_CORRECTION_MILLISECONDS,
-  POSTURE_STATEMENTS,
-  STATE_POSTURE_RULES,
-  SENDING_STOP_LINE,
   applyModelSuggestion,
   authoredText,
+  classifyReply,
+  type ReplyMessage,
+} from '../../src/rules/replyClassification.ts';
+import {
+  FEDERAL_CITATIONS,
+  POSTURE_STATEMENTS,
+  STATE_POSTURE_RULES,
+  isMultiZoneState,
+  postureReviewAt,
+  resolveFirmZone,
+  selectApplicablePosture,
+  stateDefaultZone,
+  type FirmZoneSource,
+  type StatePostureRecord,
+} from '../../src/rules/statePosture.ts';
+import {
+  CANONICALIZER_VERSION,
+  MANUAL_SUPPRESSION_CORRECTION_MILLISECONDS,
   canonicalizeEmail,
   canonicalizeHandle,
   canonicalizePhone,
   canonicalizeRoutes,
-  classifyReply,
-  decideTemplateApproval,
-  evaluateCallingWindow,
-  footerBlock,
-  isMultiZoneState,
   isSupportedCanonicalizerVersion,
   mayCorrectSuppression,
-  narrowCallingWindow,
-  postureReviewAt,
+} from '../../src/rules/suppressionCanonicalization.ts';
+import {
+  SENDING_STOP_LINE,
+  decideTemplateApproval,
+  footerBlock,
   renderTemplate,
-  resolveStepDue,
-  resolveFirmZone,
-  selectApplicablePosture,
-  stateDefaultZone,
   templateContentHash,
   templateTextIssues,
   templateTextWarnings,
-  type FirmZoneSource,
-  type ReplyMessage,
-  type SequenceStep,
-  type StatePostureRecord,
-} from '../../src/index.ts';
+} from '../../src/rules/templates.ts';
 
 const NEW_YORK = 'America/New_York';
 

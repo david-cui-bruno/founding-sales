@@ -1,4 +1,4 @@
-import { readClassifierSettings } from '../classification/index.ts';
+import { readClassifierSettings } from '../classification/settings.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import type {
   ClassifierFacts,

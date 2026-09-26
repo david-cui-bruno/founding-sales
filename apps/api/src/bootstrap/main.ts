@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import type { Server } from 'node:http';
 import pg from 'pg';
-import type { QueryResultRowLike, SessionQueryable } from '@fss/domain/db';
+import type { QueryResultRowLike, SessionQueryable } from '@fss/domain/db/queryable.ts';
 import { clientVersionPolicySchema, type ClientVersionPolicy } from '@fss/contracts';
 import { ApiConfigError, describeApiConfig, readApiConfig, type ApiConfig } from './config.ts';
 import {
@@ -11,8 +11,8 @@ import {
   readApiDeployment,
   type ApiDeployment,
 } from './deployment.ts';
-import { discoverImageDigest } from '@fss/domain/release';
-import type { AuthDeps } from '../auth/index.ts';
+import { discoverImageDigest } from '@fss/domain/release/identity.ts';
+import type { AuthDeps } from '../auth/config.ts';
 import { JournalConfigurationError } from '../journal/index.ts';
 import { createRequestPool, poolConnections, verifyPoolConnectivity } from './connections.ts';
 import { startApiHeartbeat } from './heartbeat.ts';

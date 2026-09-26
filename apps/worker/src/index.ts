@@ -1,5 +1,5 @@
-import type { SessionQueryable } from '@fss/domain/db';
-import { WORKER_SCHEMA_RANGE, checkSchemaRange } from '@fss/domain/db';
+import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
+import { WORKER_SCHEMA_RANGE, checkSchemaRange } from '@fss/domain/db/schemaRange.ts';
 
 /**
  * The worker skeleton (specification 4.2 and Appendix G 22).

@@ -1,6 +1,7 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
-import { resolveStepDue, type WorkspaceHolidayCalendar } from '../src/index.ts';
+import { type WorkspaceHolidayCalendar } from '../src/rules/businessDays.ts';
+import { resolveStepDue } from '../src/rules/cadence.ts';
 import { currentHolidayCalendar, holidayCalendarByVersion } from './calendars.ts';
 import { listEnrollments, readEnrollment, readSequenceVersion, toEnrollment } from './rows.ts';
 import {

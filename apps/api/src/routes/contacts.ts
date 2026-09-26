@@ -6,16 +6,9 @@ import {
   updateContactCommandSchema,
   verifyRouteCommandSchema,
 } from '@fss/contracts';
-import {
-  addEmailRoute,
-  addPhoneRoute,
-  confirmPhoneRoute,
-  listContacts,
-  requestEmailRouteValidation,
-  retireRoute,
-  updateContact,
-  verifyRoute,
-} from '@fss/domain/crm';
+import { listContacts, updateContact } from '@fss/domain/crm/contacts.ts';
+import { requestEmailRouteValidation } from '@fss/domain/crm/routeValidation.ts';
+import { addEmailRoute, addPhoneRoute, confirmPhoneRoute, retireRoute, verifyRoute } from '@fss/domain/crm/routes.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { contextForPrincipal, requirePrincipal, runRouteCommand } from './routeSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';

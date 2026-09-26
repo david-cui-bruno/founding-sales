@@ -1,7 +1,7 @@
 import type { z } from 'zod';
-import type { RepositoryContext } from '@fss/domain/db';
-import type { SuppressionJournal } from '@fss/domain/suppression';
-import { SuppressionJournalError } from '@fss/domain/suppression';
+import type { RepositoryContext } from '@fss/domain/db/workspaceScope.ts';
+import type { SuppressionJournal } from '@fss/domain/suppression/journal.ts';
+import { SuppressionJournalError } from '@fss/domain/suppression/journal.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { contextForPrincipal, requirePrincipal, runRouteCommand, type CommandResult, type RouteDeps } from './routeSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';

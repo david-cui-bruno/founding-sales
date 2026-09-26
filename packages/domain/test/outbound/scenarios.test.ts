@@ -1,17 +1,16 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { recordSuppression } from '../../suppression/index.ts';
+import { recordSuppression } from '../../suppression/events.ts';
 import {
   claimForDispatch,
-  dispatchOutboundMessage,
-  listMailboxesToReconcile,
-  outboundRecoveryFloor,
   readFence,
   readFenceEvents,
   readOutboundOutcome,
-  reconcileOutboundMessage,
   resolveUnknownTerminal,
-  setAdminCap,
-} from '../../outbound/index.ts';
+} from '../../outbound/fence.ts';
+import { setAdminCap } from '../../outbound/ramp.ts';
+import { listMailboxesToReconcile, reconcileOutboundMessage } from '../../outbound/reconcile.ts';
+import { outboundRecoveryFloor } from '../../outbound/recoveryFloor.ts';
+import { dispatchOutboundMessage } from '../../outbound/send.ts';
 import {
   CLOSED_INSTANT,
   FIXTURE_BUSINESS_DATE,

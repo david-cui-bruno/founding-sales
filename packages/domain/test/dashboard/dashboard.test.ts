@@ -1,14 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
+import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
-import {
-  readDashboard,
-  readDiagnostics,
-  unavailableDashboardSources,
-  type DashboardSources,
-} from '../../dashboard/index.ts';
-import { raiseCriticalAlert, recordHeartbeat } from '../../jobs/index.ts';
+import { readDashboard } from '../../dashboard/aggregate.ts';
+import { readDiagnostics } from '../../dashboard/diagnostics.ts';
+import { unavailableDashboardSources, type DashboardSources } from '../../dashboard/sources.ts';
+import { raiseCriticalAlert } from '../../jobs/criticalAlerts.ts';
+import { recordHeartbeat } from '../../jobs/heartbeats.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { seedCrm, stageIdByKey, type SeededCrm } from '../db/support/crmFixtures.ts';
 import { seedMail, type SeededMail } from '../db/support/mailFixtures.ts';

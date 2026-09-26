@@ -1,5 +1,5 @@
 import { changeStageCommandSchema, openOpportunityCommandSchema } from '@fss/contracts';
-import { changeStage, openOpportunity } from '@fss/domain/crm';
+import { changeStage, openOpportunity } from '@fss/domain/crm/pipeline.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { contextForPrincipal, requirePrincipal, runRouteCommand } from './routeSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';

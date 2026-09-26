@@ -1,18 +1,13 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { connectMailboxCommandSchema, gmailConnectResultSchema, gmailStatusSchema } from '@fss/contracts';
-import {
-  GMAIL_SCOPES,
-  fixturePushTokens,
-  localEnvelopeCipher,
-  recordedGmailClient,
-  signGrantState,
-  staticSecretProvider,
-  type GmailFixture,
-  type MailPublicConfig,
-  type PushTokenClaims,
-  type RecordedGmailClient,
-} from '@fss/domain/mail';
+import { type MailPublicConfig } from '@fss/domain/mail/config.ts';
+import { localEnvelopeCipher } from '@fss/domain/mail/envelope.ts';
+import { recordedGmailClient, type GmailFixture, type RecordedGmailClient } from '@fss/domain/mail/gmailClientFake.ts';
+import { signGrantState } from '@fss/domain/mail/oauth.ts';
+import { fixturePushTokens, type PushTokenClaims } from '@fss/domain/mail/pushToken.ts';
+import { staticSecretProvider } from '@fss/domain/mail/secretProvider.ts';
+import { GMAIL_SCOPES } from '@fss/domain/mail/types.ts';
 import { dispatch, type ApiRequest } from '../src/server.ts';
 import type { MailRoutingDeps } from '../src/routes/types.ts';
 import {

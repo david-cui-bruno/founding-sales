@@ -1,14 +1,9 @@
 import { z } from 'zod';
 import { commandIdSchema, semanticVersionSchema, uuid } from '@fss/contracts';
-import { databaseNow } from '@fss/domain/policy';
-import {
-  enrollContact,
-  listEnrollments,
-  listStepExecutions,
-  previewResume,
-  resumeEnrollment,
-  stopEnrollments,
-} from '@fss/domain/sequences';
+import { databaseNow } from '@fss/domain/policy/clock.ts';
+import { enrollContact, stopEnrollments } from '@fss/domain/sequences/enrollments.ts';
+import { previewResume, resumeEnrollment } from '@fss/domain/sequences/resume.ts';
+import { listEnrollments, listStepExecutions } from '@fss/domain/sequences/rows.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { policyRouteDeps, runPolicyCommand } from './dialSupport.ts';
 import { contextForPrincipal } from './routeSupport.ts';

@@ -4,10 +4,11 @@ import {
   readFenceByStepExecution,
   readFenceForSentMessage,
   markPreDispatchFenceSent,
-  type SentFolderMessage,
-} from '../outbound/index.ts';
-import { completeEmailStep, nextUnfinishedExecution } from '../sequences/index.ts';
-import { businessDateOf } from '../today/index.ts';
+} from '../outbound/fence.ts';
+import { type SentFolderMessage } from '../outbound/sentFolder.ts';
+import { completeEmailStep } from '../sequences/executions.ts';
+import { nextUnfinishedExecution } from '../sequences/rows.ts';
+import { businessDateOf } from '../today/snapshots.ts';
 
 /**
  * The missing fences after a point-in-time restore: what one FSS send found in a Sent

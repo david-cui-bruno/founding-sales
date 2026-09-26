@@ -1,7 +1,8 @@
 import { readdirSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { CLASSIFIER_SECRET_ENVIRONMENT_VARIABLES } from '@fss/domain/classification';
-import { COVERAGE_FRESHNESS_SECONDS, MAILBOX_CHECK_INTERVAL_SECONDS } from '@fss/domain/mail';
+import { CLASSIFIER_SECRET_ENVIRONMENT_VARIABLES } from '@fss/domain/classification/anthropicClient.ts';
+import { COVERAGE_FRESHNESS_SECONDS } from '@fss/domain/mail/coverage.ts';
+import { MAILBOX_CHECK_INTERVAL_SECONDS } from '@fss/domain/mail/mailboxes.ts';
 import {
   DEPLOYMENT_ENVIRONMENT_VARIABLES as API_VARIABLES,
   DeploymentConfigError,

@@ -1,4 +1,5 @@
-import type { TodayItemKind, TodaySource } from '../today/index.ts';
+import type { TodaySource } from '../today/build.ts';
+import type { TodayItemKind } from '../today/types.ts';
 import { isStepChannel, type StepChannel } from './types.ts';
 
 /**

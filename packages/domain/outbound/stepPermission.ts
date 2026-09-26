@@ -1,6 +1,7 @@
 import type { HoldReasonCode } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
-import { placeEmailSend, type WorkspaceHolidayCalendar } from '../src/index.ts';
+import { type WorkspaceHolidayCalendar } from '../src/rules/businessDays.ts';
+import { placeEmailSend } from '../src/rules/sendingWindow.ts';
 import { currentHolidayCalendar, holidayCalendarByVersion } from '../sequences/calendars.ts';
 import { CHANNEL_ACTION_KINDS, composeEligibility } from '../sequences/eligibility.ts';
 import { readEnrollment, readStepExecution } from '../sequences/rows.ts';

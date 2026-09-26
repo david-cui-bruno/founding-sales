@@ -1,15 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { repositoryContext, workspaceScope } from '../../db/index.ts';
-import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
-import { METRIC_OWNERS } from '../../jobs/index.ts';
-import {
-  COVERAGE_FRESHNESS_SECONDS,
-  MAIL_METRIC_NAMES,
-  collectMailMetrics,
-  coverageRefusal,
-  mailboxCoverageAgeSeconds,
-  readMailboxCoverage,
-} from '../../mail/index.ts';
+import { repositoryContext, workspaceScope } from '../../db/workspaceScope.ts';
+import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
+import { METRIC_OWNERS } from '../../jobs/metrics.ts';
+import { COVERAGE_FRESHNESS_SECONDS, coverageRefusal, readMailboxCoverage } from '../../mail/coverage.ts';
+import { MAIL_METRIC_NAMES, collectMailMetrics, mailboxCoverageAgeSeconds } from '../../mail/metrics.ts';
 import { seedTwoWorkspaces } from '../db/support/fixtures.ts';
 
 /**

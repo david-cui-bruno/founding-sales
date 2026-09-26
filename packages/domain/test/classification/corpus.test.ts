@@ -1,11 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import {
-  CLASSIFIER_PROMPT_VERSION,
-  cacheablePrefix,
-  classifyReplyWithModel,
-  listClassifications,
-  readReplyCard,
-} from '../../classification/index.ts';
+import { readReplyCard } from '../../classification/cards.ts';
+import { classifyReplyWithModel } from '../../classification/classify.ts';
+import { cacheablePrefix } from '../../classification/recorded.ts';
+import { listClassifications } from '../../classification/store.ts';
+import { CLASSIFIER_PROMPT_VERSION } from '../../classification/types.ts';
 import { DETERMINISTIC_CASES, MODEL_CASES, REPLY_CORPUS } from '../corpus/replies/cases.ts';
 import {
   RECORDED_MODEL,

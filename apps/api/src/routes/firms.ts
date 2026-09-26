@@ -1,5 +1,7 @@
 import { recordEvidenceCommandSchema, resolveFirmZoneCommandSchema } from '@fss/contracts';
-import { listFirmsForActor, readFirmForActor, recordEvidence, resolveZoneForFirm } from '@fss/domain/crm';
+import { listFirmsForActor, readFirmForActor } from '@fss/domain/crm/dto.ts';
+import { recordEvidence } from '@fss/domain/crm/evidence.ts';
+import { resolveZoneForFirm } from '@fss/domain/crm/firms.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { contextForPrincipal, requirePrincipal, runRouteCommand } from './routeSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';

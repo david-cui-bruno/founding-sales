@@ -1,8 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dialCheckResponseSchema, loggedCallResultSchema, wireDrift } from '@fss/contracts';
-import { POSTURE_STATEMENT_KEYS } from '@fss/domain';
-import { journalObjectBody, recordingSuppressionJournal, type RecordingSuppressionJournal } from '@fss/domain/suppression';
+import { POSTURE_STATEMENT_KEYS } from '@fss/domain/src/rules/statePosture.ts';
+import {
+  journalObjectBody,
+  recordingSuppressionJournal,
+  type RecordingSuppressionJournal,
+} from '@fss/domain/suppression/journal.ts';
 import { dispatch, type ApiRequest } from '../src/server.ts';
 import {
   createS3SuppressionJournal,

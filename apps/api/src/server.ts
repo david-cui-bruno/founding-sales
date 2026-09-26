@@ -1,9 +1,10 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import type { SessionQueryable } from '@fss/domain/db';
+import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 import type { ClientVersionPolicy } from '@fss/contracts';
-import type { SuppressionJournal } from '@fss/domain/suppression';
+import type { SuppressionJournal } from '@fss/domain/suppression/journal.ts';
 import { MAX_REQUEST_BYTES, REFUSAL_STATUS, checkEnvelope, redactError, type RefusalCode } from './limits.ts';
-import { authenticate, type AuthDeps } from './auth/index.ts';
+import { type AuthDeps } from './auth/config.ts';
+import { authenticate } from './auth/sessions.ts';
 import type { VerifiedPrincipal } from './scope.ts';
 import {
   DatabaseBusyError,

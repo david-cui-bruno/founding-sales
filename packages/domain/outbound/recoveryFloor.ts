@@ -1,5 +1,5 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
-import type { RecoveryFloorSource } from '../mail/index.ts';
+import type { RecoveryFloorSource } from '../mail/recover.ts';
 
 /**
  * 12.3's recovery floor, now that there is something to compute it from.

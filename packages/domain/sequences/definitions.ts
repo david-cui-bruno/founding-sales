@@ -1,5 +1,5 @@
 import { isAdminScope, type RepositoryContext } from '../db/workspaceScope.ts';
-import { readTemplateVersion } from '../templates/index.ts';
+import { readTemplateVersion } from '../templates/templates.ts';
 import { listSequenceVersions, readSequenceSteps, readSequenceVersion } from './rows.ts';
 import {
   acceptSequence,

@@ -1,15 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
-import {
-  HEARTBEAT_GRACE_SECONDS,
-  collectJobMetrics,
-  heartbeatIsFresh,
-  readHeartbeats,
-  recordHeartbeat,
-  type MetricDatum,
-} from '../../jobs/index.ts';
-import { MAILBOX_CHECK_INTERVAL_SECONDS, collectMailMetrics, recordMailboxHeartbeat } from '../../mail/index.ts';
+import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
+import { HEARTBEAT_GRACE_SECONDS, heartbeatIsFresh, readHeartbeats, recordHeartbeat } from '../../jobs/heartbeats.ts';
+import { collectJobMetrics, type MetricDatum } from '../../jobs/metrics.ts';
+import { MAILBOX_CHECK_INTERVAL_SECONDS, recordMailboxHeartbeat } from '../../mail/mailboxes.ts';
+import { collectMailMetrics } from '../../mail/metrics.ts';
 import { seedTwoWorkspaces } from '../db/support/fixtures.ts';
 
 /**

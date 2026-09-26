@@ -2,16 +2,11 @@ import {
   settingHistoryRequestSchema,
   updateSettingCommandSchema,
 } from '@fss/contracts';
-import {
-  SETTINGS_ELSEWHERE,
-  effectiveSendingEnabled,
-  readCurrentSettings,
-  readSetting,
-  readSettingHistory,
-  updateSetting,
-} from '@fss/domain/settings';
-import { attestedReleaseBinding } from '@fss/domain/release';
-import { currentHolidayCalendar } from '@fss/domain/sequences';
+import { effectiveSendingEnabled } from '@fss/domain/settings/effective.ts';
+import { SETTINGS_ELSEWHERE } from '@fss/domain/settings/elsewhere.ts';
+import { readCurrentSettings, readSetting, readSettingHistory, updateSetting } from '@fss/domain/settings/store.ts';
+import { attestedReleaseBinding } from '@fss/domain/release/records.ts';
+import { currentHolidayCalendar } from '@fss/domain/sequences/calendars.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { policyRouteDeps, runPolicyCommand } from './dialSupport.ts';
 import { contextForPrincipal } from './routeSupport.ts';

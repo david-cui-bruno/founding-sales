@@ -3,16 +3,16 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DEFAULT_SETTING_VALUES, SETTING_KEYS } from '@fss/contracts';
 import { withTransaction } from '../../db/queryable.ts';
-import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
+import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
+import { effectiveSendingEnabled } from '../../settings/effective.ts';
 import {
   DEFAULT_SETTING_CHANGE_NOTE,
-  effectiveSendingEnabled,
   readCurrentSettings,
   readSetting,
   readSettingHistory,
   updateSetting,
-} from '../../settings/index.ts';
+} from '../../settings/store.ts';
 import { ALL_BLOCKED_ACTION_KINDS, CHANNEL_BLOCKED_ACTION_KINDS } from '../../policy/types.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { FIXTURE_API_DIGEST, storeFixtureRecord } from '../release/support/releaseRecords.ts';

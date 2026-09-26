@@ -1,14 +1,12 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { makeStepExecution } from '@fss/domain/db/testing';
-import {
-  HandlerRegistry,
-  claimJobs,
-  reclaimExpiredLeases,
-  type ClaimedJob,
-} from '@fss/domain/jobs';
-import type { GmailClient, RecordedGmailClient } from '@fss/domain/mail';
-import { readFenceByStepExecution, readFenceEvents, setAdminCap } from '@fss/domain/outbound';
-import { openHold, releaseHold } from '@fss/domain/policy';
+import { makeStepExecution } from '@fss/domain/db/testing/stepExecutions.ts';
+import { HandlerRegistry } from '@fss/domain/jobs/handlerRegistry.ts';
+import { claimJobs, reclaimExpiredLeases, type ClaimedJob } from '@fss/domain/jobs/jobStore.ts';
+import type { GmailClient } from '@fss/domain/mail/gmailClient.ts';
+import type { RecordedGmailClient } from '@fss/domain/mail/gmailClientFake.ts';
+import { readFenceByStepExecution, readFenceEvents } from '@fss/domain/outbound/fence.ts';
+import { setAdminCap } from '@fss/domain/outbound/ramp.ts';
+import { openHold, releaseHold } from '@fss/domain/policy/holds.ts';
 import {
   createOutboundWorld,
   type OutboundWorld,

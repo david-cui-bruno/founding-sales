@@ -1,8 +1,5 @@
-import {
-  parseSuppressionJournalRecord,
-  type SuppressionJournalRecord,
-  type SuppressionJournalSource,
-} from '@fss/domain/suppression';
+import { type SuppressionJournalRecord } from '@fss/domain/suppression/journal.ts';
+import { parseSuppressionJournalRecord, type SuppressionJournalSource } from '@fss/domain/suppression/replay.ts';
 
 /**
  * The object-locked S3 suppression journal, read (Appendix E step 2).

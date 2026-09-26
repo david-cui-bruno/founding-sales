@@ -1,6 +1,7 @@
-import { repositoryContext, withTransaction, workspaceScope, type SessionQueryable } from '@fss/domain/db';
-import { isKnownTimeZone } from '@fss/domain';
-import { normalizeSendingDomain, registerSendingDomain } from '@fss/domain/outbound';
+import { withTransaction, type SessionQueryable } from '@fss/domain/db/queryable.ts';
+import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
+import { isKnownTimeZone } from '@fss/domain/src/rules/localClock.ts';
+import { normalizeSendingDomain, registerSendingDomain } from '@fss/domain/outbound/domainGuard.ts';
 import { PROVISIONAL_GOOGLE_SUB_PREFIX, provisionalGoogleSub } from '@fss/contracts';
 
 /**

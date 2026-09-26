@@ -1,9 +1,5 @@
-import {
-  repositoryContext,
-  withTransaction,
-  type QueryResultRowLike,
-  type RepositoryContext,
-} from '@fss/domain/db';
+import { withTransaction, type QueryResultRowLike } from '@fss/domain/db/queryable.ts';
+import { repositoryContext, type RepositoryContext } from '@fss/domain/db/workspaceScope.ts';
 import { clientCompatibility } from '@fss/contracts';
 import type { AuthDeps } from './config.ts';
 import type { AuthenticatedPrincipal } from './sessions.ts';

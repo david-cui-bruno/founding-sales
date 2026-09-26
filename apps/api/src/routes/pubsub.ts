@@ -1,5 +1,6 @@
-import { pushTokenPolicyOf, receivePushNotification } from '@fss/domain/mail';
-import { bearerOf } from '../auth/index.ts';
+import { pushTokenPolicyOf } from '@fss/domain/mail/config.ts';
+import { receivePushNotification } from '@fss/domain/mail/webhook.ts';
+import { bearerOf } from '../auth/tokens.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 

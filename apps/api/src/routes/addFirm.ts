@@ -1,6 +1,6 @@
 import { addFirmCommandSchema, importIssueSchema, uuid } from '@fss/contracts';
-import { addFirm } from '@fss/domain/crm';
-import { runCommand } from '../auth/index.ts';
+import { addFirm } from '@fss/domain/crm/import.ts';
+import { runCommand } from '../auth/commands.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { requirePrincipal } from './routeSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';

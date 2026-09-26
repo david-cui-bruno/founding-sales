@@ -1,6 +1,8 @@
-import { listMatches, listMessagesForOpportunity, readMessageBody, resolveAmbiguity } from '@fss/domain/mail';
-import { decideFirmRead, readFirm } from '@fss/domain/crm';
-import { readOpportunity } from '@fss/domain/crm';
+import { listMatches, resolveAmbiguity } from '@fss/domain/mail/matching.ts';
+import { listMessagesForOpportunity, readMessageBody } from '@fss/domain/mail/messages.ts';
+import { decideFirmRead } from '@fss/domain/crm/authorization.ts';
+import { readFirm } from '@fss/domain/crm/firms.ts';
+import { readOpportunity } from '@fss/domain/crm/pipeline.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { listMessagesRequestSchema, mailRouteDeps, resolveAmbiguityCommandSchema } from './mailSupport.ts';
 import { contextForPrincipal, runRouteCommand } from './routeSupport.ts';

@@ -3,12 +3,8 @@ import {
   recordSuppressionCommandSchema,
   supersedeSuppressionCommandSchema,
 } from '@fss/contracts';
-import {
-  listEffectiveSuppressions,
-  recordAdminSupersession,
-  recordCorrection,
-  recordSuppression,
-} from '@fss/domain/suppression';
+import { listEffectiveSuppressions } from '@fss/domain/suppression/effective.ts';
+import { recordAdminSupersession, recordCorrection, recordSuppression } from '@fss/domain/suppression/events.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { policyRouteDeps, runPolicyCommand } from './dialSupport.ts';
 import { contextForPrincipal } from './routeSupport.ts';

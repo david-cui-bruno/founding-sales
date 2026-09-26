@@ -1,5 +1,5 @@
 import { openPauseCommandSchema, releasePauseCommandSchema } from '@fss/contracts';
-import { listPauses, openPause, releasePause } from '@fss/domain/policy';
+import { listPauses, openPause, releasePause } from '@fss/domain/policy/pauses.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { policyRouteDeps, runPolicyCommand } from './dialSupport.ts';
 import { contextForPrincipal } from './routeSupport.ts';

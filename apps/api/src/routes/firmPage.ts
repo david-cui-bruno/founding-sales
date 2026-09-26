@@ -1,5 +1,5 @@
 import { FIRM_PAGE_VERSION, firmPageRequestSchema } from '@fss/contracts';
-import { readFirmPage } from '@fss/domain/crm';
+import { readFirmPage } from '@fss/domain/crm/firmPage.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { contextForPrincipal, requirePrincipal } from './routeSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';

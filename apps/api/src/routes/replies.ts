@@ -1,15 +1,10 @@
 import { z } from 'zod';
-import {
-  CLASSIFIER_EFFORTS,
-  CLASSIFIER_MODELS,
-  confirmReplyDisposition,
-  listReplyCards,
-  readClassifierSettings,
-  readReplyCard,
-  updateClassifierSettings,
-} from '@fss/domain/classification';
-import { REPLY_DISPOSITIONS } from '@fss/domain';
-import { businessDateOf } from '@fss/domain/today';
+import { listReplyCards, readReplyCard } from '@fss/domain/classification/cards.ts';
+import { confirmReplyDisposition } from '@fss/domain/classification/confirmations.ts';
+import { readClassifierSettings, updateClassifierSettings } from '@fss/domain/classification/settings.ts';
+import { CLASSIFIER_EFFORTS, CLASSIFIER_MODELS } from '@fss/domain/classification/types.ts';
+import { REPLY_DISPOSITIONS } from '@fss/domain/src/rules/replyClassification.ts';
+import { businessDateOf } from '@fss/domain/today/snapshots.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { contextForPrincipal, requirePrincipal, runRouteCommand, type RouteDeps } from './routeSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';

@@ -1,21 +1,14 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { BlockedActionKind, HoldReasonCode } from '@fss/contracts';
-import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
+import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
-import { openHold, openPause, releaseHold, type OpenHoldInput } from '../../policy/index.ts';
-import {
-  CLOCK_CLEARING_HOLDS,
-  EXPECTED_HOLD_REASONS,
-  allowAllEligibility,
-  collectSequenceMetrics,
-  completeEnrollment,
-  completeStepExecution,
-  countEnrollments,
-  enrollContact,
-  runDueStepExecution,
-  stopEnrollments,
-  unavailableSendHandoff,
-} from '../../sequences/index.ts';
+import { openHold, releaseHold, type OpenHoldInput } from '../../policy/holds.ts';
+import { openPause } from '../../policy/pauses.ts';
+import { allowAllEligibility } from '../../sequences/eligibility.ts';
+import { completeEnrollment, enrollContact, stopEnrollments } from '../../sequences/enrollments.ts';
+import { CLOCK_CLEARING_HOLDS, completeStepExecution, runDueStepExecution } from '../../sequences/executions.ts';
+import { EXPECTED_HOLD_REASONS, collectSequenceMetrics, countEnrollments } from '../../sequences/metrics.ts';
+import { unavailableSendHandoff } from '../../sequences/sendHandoff.ts';
 import { firstStageId } from '../db/support/crmFixtures.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { seedSequences, type SeededSequences } from './support/sequenceFixtures.ts';

@@ -1,4 +1,4 @@
-import type { ClassifierCallOutcome } from '../../../classification/index.ts';
+import type { ClassifierCallOutcome } from '../../../classification/types.ts';
 import type { ReplyClass, ReplyDisposition } from '../../../src/rules/replyClassification.ts';
 
 /**

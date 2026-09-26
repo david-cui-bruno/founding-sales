@@ -1,6 +1,6 @@
 import { writeFile } from 'node:fs/promises';
 import pg from 'pg';
-import type { QueryResultRowLike, SessionQueryable } from '@fss/domain/db';
+import type { QueryResultRowLike, SessionQueryable } from '@fss/domain/db/queryable.ts';
 import { ConfigError } from '../bootstrap/config.ts';
 import { DeploymentConfigError, readWorkerDeployment } from '../bootstrap/deployment.ts';
 import { composeHandlers } from '../bootstrap/main.ts';

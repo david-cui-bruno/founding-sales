@@ -1,7 +1,9 @@
 import type { z } from 'zod';
-import type { RepositoryContext } from '@fss/domain/db';
-import { authenticate, runCommand } from '../auth/index.ts';
-import type { AuthDeps, AuthenticatedPrincipal } from '../auth/index.ts';
+import type { RepositoryContext } from '@fss/domain/db/workspaceScope.ts';
+import { runCommand } from '../auth/commands.ts';
+import { authenticate } from '../auth/sessions.ts';
+import type { AuthDeps } from '../auth/config.ts';
+import type { AuthenticatedPrincipal } from '../auth/sessions.ts';
 import { contextFor, scopeForPrincipal } from '../scope.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import type { ApiRequest, RouteResult } from './types.ts';

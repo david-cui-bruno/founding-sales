@@ -2,18 +2,14 @@ import { z } from 'zod';
 import { overrideMailboxRaiseCommandSchema } from '@fss/contracts';
 import {
   authenticationPasses,
-  outboundDoubtCounts,
-  overrideRaise,
-  readFence,
-  readFenceEvents,
   readPrimarySendingDomain,
-  readRampStanding,
   recordAuthenticationChecklist,
-  resolveUnknownTerminal,
-  setAdminCap,
   setAutomatedSendingEnabled,
   type SendingDomainRow,
-} from '@fss/domain/outbound';
+} from '@fss/domain/outbound/domainGuard.ts';
+import { readFence, readFenceEvents, resolveUnknownTerminal } from '@fss/domain/outbound/fence.ts';
+import { outboundDoubtCounts } from '@fss/domain/outbound/metrics.ts';
+import { overrideRaise, readRampStanding, setAdminCap } from '@fss/domain/outbound/ramp.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { mailRouteDeps } from './mailSupport.ts';
 import { contextForPrincipal, runRouteCommand } from './routeSupport.ts';

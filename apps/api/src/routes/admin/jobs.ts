@@ -1,12 +1,6 @@
-import type { Queryable } from '@fss/domain/db';
-import {
-  acknowledgeCriticalAlert,
-  listDeadJobs,
-  listOpenAlerts,
-  requeueDeadJob,
-  type DeadJob,
-  type OpenAlert,
-} from '@fss/domain/jobs';
+import type { Queryable } from '@fss/domain/db/queryable.ts';
+import { acknowledgeCriticalAlert, listOpenAlerts, type OpenAlert } from '@fss/domain/jobs/criticalAlerts.ts';
+import { listDeadJobs, requeueDeadJob, type DeadJob } from '@fss/domain/jobs/jobStore.ts';
 import { contextFor, scopeForPrincipal, type VerifiedPrincipal } from '../../scope.ts';
 import { REFUSAL_STATUS, redactError, type RedactedError } from '../../limits.ts';
 

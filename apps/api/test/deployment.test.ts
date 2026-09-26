@@ -1,7 +1,8 @@
 import { createSign, generateKeyPairSync, randomBytes, type KeyObject } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_PUSH_TOKEN_POLICY, decidePushToken, type HttpFetch } from '@fss/domain/mail';
-import type { GoogleClient } from '../src/auth/index.ts';
+import { type HttpFetch } from '@fss/domain/mail/gmailClientHttp.ts';
+import { DEFAULT_PUSH_TOKEN_POLICY, decidePushToken } from '@fss/domain/mail/pushToken.ts';
+import type { GoogleClient } from '../src/auth/googleClient.ts';
 import {
   DEPLOYMENT_ENVIRONMENT_VARIABLES,
   DeploymentConfigError,

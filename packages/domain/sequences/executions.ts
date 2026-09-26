@@ -1,9 +1,10 @@
 import type { HoldReasonCode } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
-import { openHold, releaseHoldsOfEvent } from '../policy/index.ts';
-import { placeEmailSend, type WorkspaceHolidayCalendar } from '../src/index.ts';
-import { readTemplateVersion, renderTemplateVersion } from '../templates/index.ts';
-import { businessDateOf } from '../today/index.ts';
+import { openHold, releaseHoldsOfEvent } from '../policy/holds.ts';
+import { type WorkspaceHolidayCalendar } from '../src/rules/businessDays.ts';
+import { placeEmailSend } from '../src/rules/sendingWindow.ts';
+import { readTemplateVersion, renderTemplateVersion } from '../templates/templates.ts';
+import { businessDateOf } from '../today/snapshots.ts';
 import { calendarOfEnrollment, completeEnrollment, stepForCadence, stopEnrollments } from './enrollments.ts';
 import { CHANNEL_ACTION_KINDS, type StepEligibility } from './eligibility.ts';
 import { resumeEnrollment } from './resume.ts';

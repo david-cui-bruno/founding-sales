@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
-import { METRIC_OWNERS, collectJobMetrics, type MetricDatum } from '../../jobs/index.ts';
-import { MAIL_METRIC_NAMES, collectMailMetrics, recordMailboxHeartbeat } from '../../mail/index.ts';
+import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
+import { METRIC_OWNERS, collectJobMetrics, type MetricDatum } from '../../jobs/metrics.ts';
+import { recordMailboxHeartbeat } from '../../mail/mailboxes.ts';
+import { MAIL_METRIC_NAMES, collectMailMetrics } from '../../mail/metrics.ts';
 import { seedTwoWorkspaces } from '../db/support/fixtures.ts';
 
 /**

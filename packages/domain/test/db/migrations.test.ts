@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, makeStepExecution, type TestDatabase } from '../../db/testing/index.ts';
+import { makeStepExecution } from '../../db/testing/stepExecutions.ts';
+import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import { loadMigrations, readAppliedSchemaVersion } from '../../db/migrationRunner.ts';
 import type { SessionQueryable } from '../../db/queryable.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from './support/fixtures.ts';

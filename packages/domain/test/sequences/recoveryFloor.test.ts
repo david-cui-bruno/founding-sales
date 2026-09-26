@@ -1,8 +1,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
+import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
-import { combinedRecoveryFloor } from '../../outbound/index.ts';
-import { enrollContact, enrollmentFloor, stopEnrollments } from '../../sequences/index.ts';
+import { combinedRecoveryFloor } from '../../outbound/recoveryFloor.ts';
+import { enrollContact, stopEnrollments } from '../../sequences/enrollments.ts';
+import { enrollmentFloor } from '../../sequences/recoveryFloor.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
 import { seedMail, type SeededMail } from '../db/support/mailFixtures.ts';

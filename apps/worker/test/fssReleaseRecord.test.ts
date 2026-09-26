@@ -5,8 +5,8 @@ import { join } from 'node:path';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { RELEASE_RECORD_SCHEMA_ID, ciGateReleaseReference } from '@fss/contracts';
-import type { SessionQueryable } from '@fss/domain/db';
-import { CLUSTER_URL_ENVIRONMENT_VARIABLE, asSession } from '@fss/domain/db/testing';
+import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
+import { CLUSTER_URL_ENVIRONMENT_VARIABLE, asSession } from '@fss/domain/db/testing/testDatabase.ts';
 import { main } from '../src/tools/fss.ts';
 import { COMMAND_DEPENDENCIES, parseFssCommand } from '../src/tools/fss/commands.ts';
 

@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
+import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
-import { SETTINGS_REFUSAL_CODES, readSetting, updateSetting } from '../../settings/index.ts';
+import { SETTINGS_REFUSAL_CODES, readSetting, updateSetting } from '../../settings/store.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { CI_GATE_MAIN_POLICY } from '@fss/contracts';
 import {

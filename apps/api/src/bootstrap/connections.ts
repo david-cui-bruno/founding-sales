@@ -1,5 +1,5 @@
 import pg from 'pg';
-import type { QueryResultRowLike, SessionQueryable } from '@fss/domain/db';
+import type { QueryResultRowLike, SessionQueryable } from '@fss/domain/db/queryable.ts';
 import { errorFields, type Logger } from './log.ts';
 
 /**

@@ -1,15 +1,9 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import {
-  GMAIL_SCOPES,
-  METADATA_HEADERS,
-  classifyStatus,
-  createGmailHttpClient,
-  readBodyText,
-  type GmailClient,
-  type GmailOAuthConfig,
-} from '../../mail/index.ts';
+import { type GmailClient, type GmailOAuthConfig } from '../../mail/gmailClient.ts';
+import { classifyStatus, createGmailHttpClient, readBodyText } from '../../mail/gmailClientHttp.ts';
+import { GMAIL_SCOPES, METADATA_HEADERS } from '../../mail/types.ts';
 
 /**
  * The one Gmail implementation that speaks HTTP, against a loopback server.

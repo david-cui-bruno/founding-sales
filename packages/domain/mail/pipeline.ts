@@ -1,6 +1,6 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { fenceForOutgoingMessage } from '../outbound/fence.ts';
-import type { SuppressionJournal } from '../suppression/index.ts';
+import type { SuppressionJournal } from '../suppression/journal.ts';
 import { classifyReply } from '../src/rules/replyClassification.ts';
 import {
   applyClassificationEffects,

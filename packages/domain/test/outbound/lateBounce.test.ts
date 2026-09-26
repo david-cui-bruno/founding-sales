@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { recordBounceAgainstDay } from '../../outbound/index.ts';
+import { recordBounceAgainstDay } from '../../outbound/ramp.ts';
 import { createOutboundWorld, type OutboundWorld } from './support/outboundWorld.ts';
 
 /**

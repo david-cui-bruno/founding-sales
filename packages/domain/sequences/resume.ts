@@ -6,7 +6,7 @@ import {
   shiftDueInstant,
   type HoldRecord,
   type ResumeDecision,
-} from '../src/index.ts';
+} from '../src/rules/holds.ts';
 import { CHANNEL_ACTION_KINDS, CHANNEL_PAUSE_KEYS } from './eligibility.ts';
 import { loadEnrollmentForUpdate, readEnrollment, unexecutedExecutions } from './rows.ts';
 import { rescheduleExecution } from './shifts.ts';

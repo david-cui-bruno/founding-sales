@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing';
-import { CURRENT_SCHEMA_VERSION, WORKER_SCHEMA_RANGE } from '@fss/domain/db';
+import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing/testDatabase.ts';
+import { CURRENT_SCHEMA_VERSION, WORKER_SCHEMA_RANGE } from '@fss/domain/db/schemaRange.ts';
 import { WORKER_EXIT_CODES, checkWorkerStartup, startupLogLine } from '../src/index.ts';
 
 /**

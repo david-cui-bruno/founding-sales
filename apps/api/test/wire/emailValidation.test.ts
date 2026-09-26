@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ROUTE_ELIGIBILITY_POLICY_VERSION } from '../../../../packages/domain/crm/routePolicy.ts';
-import { HandlerRegistry } from '@fss/domain/jobs';
-import type { MailDomainResolver, MailExchangeRecord } from '@fss/domain/crm';
+import { HandlerRegistry } from '@fss/domain/jobs/handlerRegistry.ts';
+import type { MailDomainResolver, MailExchangeRecord } from '@fss/domain/crm/routeValidation.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from '../support/authFixture.ts';
 import { issueSessionFor } from '../support/sessionFixture.ts';
 import { createCrmBridge } from '../../../desktop/src/main/crmBridge.ts';

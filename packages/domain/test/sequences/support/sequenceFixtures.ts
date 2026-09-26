@@ -1,5 +1,5 @@
 import type { SessionQueryable } from '../../../db/queryable.ts';
-import { SENDING_STOP_LINE, templateContentHash } from '../../../src/index.ts';
+import { SENDING_STOP_LINE, templateContentHash } from '../../../src/rules/templates.ts';
 import type { SeededWorkspace, TwoWorkspaces } from '../../db/support/fixtures.ts';
 
 /**

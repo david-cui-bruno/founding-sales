@@ -1,18 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing';
-import type { SessionQueryable } from '@fss/domain/db';
-import {
-  HandlerRegistry,
-  IDEMPOTENCY_PROTECTIONS,
-  canaryHandler,
-  claimJobs,
-  completeJob,
-  enqueueJob,
-  quarterHourOf,
-  reclaimExpiredLeases,
-  runTwiceUnderStolenLease,
-  type JobHandler,
-} from '@fss/domain/jobs';
+import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing/testDatabase.ts';
+import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
+import { runTwiceUnderStolenLease } from '@fss/domain/jobs/atLeastOnce.ts';
+import { canaryHandler } from '@fss/domain/jobs/canary.ts';
+import { HandlerRegistry, type JobHandler } from '@fss/domain/jobs/handlerRegistry.ts';
+import { IDEMPOTENCY_PROTECTIONS, quarterHourOf } from '@fss/domain/jobs/jobKinds.ts';
+import { claimJobs, completeJob, enqueueJob, reclaimExpiredLeases } from '@fss/domain/jobs/jobStore.ts';
 import { runClaimedJob, runOnce } from '../src/runner/jobRunner.ts';
 
 /**

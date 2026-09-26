@@ -1,28 +1,28 @@
 import { randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
+import { envelopeCipher, localEnvelopeCipher } from '../../mail/envelope.ts';
 import {
-  DEFAULT_PUSH_TOKEN_POLICY,
   RECORDED_SEAM_ENCRYPTION_CONTEXT,
   RECORDED_SEAM_KEY_PREFIX,
-  decidePushToken,
-  envelopeCipher,
-  fixturePushTokens,
-  grantCodeChallenge,
-  grantCodeVerifier,
   kmsDataKeyWrapper,
-  localEnvelopeCipher,
   recordedSeamDataKeyWrapper,
   type KmsTransport,
+} from '../../mail/envelopeKms.ts';
+import { normalizeMetadata } from '../../mail/messages.ts';
+import { grantCodeChallenge, grantCodeVerifier, signGrantState, verifyGrantState } from '../../mail/oauth.ts';
+import {
+  DEFAULT_PUSH_TOKEN_POLICY,
+  decidePushToken,
+  fixturePushTokens,
+  readGmailNotification,
+  type PushTokenClaims,
+} from '../../mail/pushToken.ts';
+import {
   normalizeAddress,
   normalizeAddressList,
   normalizeMessageId,
   normalizeMessageIdList,
-  normalizeMetadata,
-  readGmailNotification,
-  signGrantState,
-  verifyGrantState,
-  type PushTokenClaims,
-} from '../../mail/index.ts';
+} from '../../mail/types.ts';
 
 /**
  * The parts of the mail lane that need no database and no network.

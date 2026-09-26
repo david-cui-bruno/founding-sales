@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { mayMutate } from '@fss/contracts';
-import { POSTURE_STATEMENTS } from '@fss/domain';
+import { POSTURE_STATEMENTS } from '@fss/domain/src/rules/statePosture.ts';
 import { CONTAINER_CLIENT_VERSIONS } from '../../src/bootstrap/main.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from '../support/authFixture.ts';
 import { issueSessionFor } from '../support/sessionFixture.ts';

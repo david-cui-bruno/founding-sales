@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { EMPTY_HOLIDAY_CALENDAR, type SequenceStep, type WorkspaceHolidayCalendar } from '../../src/index.ts';
+import { EMPTY_HOLIDAY_CALENDAR, type WorkspaceHolidayCalendar } from '../../src/rules/businessDays.ts';
+import { type SequenceStep } from '../../src/rules/cadence.ts';
 import { COMPLETION_ANCHOR_RULE_SUFFIX, businessDaysAfter, successorDue } from '../../sequences/successor.ts';
 
 /**

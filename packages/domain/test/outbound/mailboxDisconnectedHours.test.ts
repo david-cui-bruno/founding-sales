@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
+import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import { collectOutboundMetrics, mailboxDisconnectedHours } from '../../outbound/metrics.ts';
 import { seedTwoWorkspaces } from '../db/support/fixtures.ts';
 

@@ -1,5 +1,5 @@
 import type { ClientVersionPolicy } from '@fss/contracts';
-import type { SessionQueryable } from '@fss/domain/db';
+import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 import type { Logger } from '../bootstrap/log.ts';
 import type { GoogleClient } from './googleClient.ts';
 

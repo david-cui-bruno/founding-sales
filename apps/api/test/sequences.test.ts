@@ -9,7 +9,7 @@ import {
   templateVersionsResponseSchema,
   wireDrift,
 } from '@fss/contracts';
-import { SENDING_STOP_LINE } from '@fss/domain';
+import { SENDING_STOP_LINE } from '@fss/domain/src/rules/templates.ts';
 import { localNoopSuppressionJournal } from '../src/journal/index.ts';
 import { dispatch, type ApiRequest } from '../src/server.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';

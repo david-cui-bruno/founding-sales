@@ -8,7 +8,7 @@ import {
   type RenderDecision,
   type TemplateRules,
   type TemplateWarningCode,
-} from '../src/index.ts';
+} from '../src/rules/templates.ts';
 
 /**
  * Template versions: created, edited in place, approved (specification 11.1, 12.6; wave 2, S3).

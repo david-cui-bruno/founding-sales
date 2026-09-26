@@ -1,20 +1,16 @@
 import { createPublicKey, type KeyObject } from 'node:crypto';
+import { type MailPublicConfig } from '@fss/domain/mail/config.ts';
+import { envelopeCipher, localDataKeyWrapper } from '@fss/domain/mail/envelope.ts';
+import { kmsDataKeyWrapper, loadKmsTransport } from '@fss/domain/mail/envelopeKms.ts';
+import { recordedGmailClient } from '@fss/domain/mail/gmailClientFake.ts';
+import { createGmailHttpClient, httpFetch, type HttpFetch } from '@fss/domain/mail/gmailClientHttp.ts';
 import {
-  createGmailHttpClient,
-  envelopeCipher,
-  httpFetch,
-  kmsDataKeyWrapper,
-  loadKmsTransport,
-  localDataKeyWrapper,
   publicKeyPushTokenVerifier,
-  recordedGmailClient,
-  staticSecretProvider,
-  type HttpFetch,
-  type MailPublicConfig,
   type PushTokenClaims,
   type PushTokenVerifier,
-} from '@fss/domain/mail';
-import type { SuppressionJournal } from '@fss/domain/suppression';
+} from '@fss/domain/mail/pushToken.ts';
+import { staticSecretProvider } from '@fss/domain/mail/secretProvider.ts';
+import type { SuppressionJournal } from '@fss/domain/suppression/journal.ts';
 import {
   DeploymentConfigError,
   SHARED_DEPLOYMENT_VARIABLES,
@@ -28,13 +24,8 @@ import {
   type DeploymentEnvironment,
   type PublicIdentifierSource,
 } from '@fss/domain/release/deployment.ts';
-import {
-  createGoogleClient,
-  httpFetch as authHttpFetch,
-  type GoogleClient,
-  type GoogleOidcConfig,
-  type SessionPolicy,
-} from '../auth/index.ts';
+import { type GoogleOidcConfig, type SessionPolicy } from '../auth/config.ts';
+import { createGoogleClient, httpFetch as authHttpFetch, type GoogleClient } from '../auth/googleClient.ts';
 import { createLogger, type LogFields, type Logger } from './log.ts';
 import { requireDurableJournal, resolveSuppressionJournal, type JournalPutObject } from '../journal/index.ts';
 import { DEFAULT_UPGRADE_URL, type MailRoutingDeps } from '../routes/types.ts';

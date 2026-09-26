@@ -1,19 +1,12 @@
-import {
-  repositoryContext,
-  withTransaction,
-  workspaceScope,
-  type SessionQueryable,
-} from '@fss/domain/db';
-import { jobIdempotencyKey, type JobHandler, type JobSpecification } from '@fss/domain/jobs';
-import {
-  composeEligibility,
-  dispatchPreparedStep,
-  listStepWakes,
-  runDueStepExecution,
-  unavailableSendHandoff,
-  type SendHandoff,
-  type StepEligibility,
-} from '@fss/domain/sequences';
+import { withTransaction, type SessionQueryable } from '@fss/domain/db/queryable.ts';
+import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
+import { type JobHandler } from '@fss/domain/jobs/handlerRegistry.ts';
+import { jobIdempotencyKey } from '@fss/domain/jobs/jobKinds.ts';
+import { type JobSpecification } from '@fss/domain/jobs/jobStore.ts';
+import { composeEligibility, type StepEligibility } from '@fss/domain/sequences/eligibility.ts';
+import { dispatchPreparedStep, runDueStepExecution } from '@fss/domain/sequences/executions.ts';
+import { unavailableSendHandoff, type SendHandoff } from '@fss/domain/sequences/sendHandoff.ts';
+import { listStepWakes } from '@fss/domain/sequences/wake.ts';
 import type { DueWorkSource } from '../scheduler/schedulerPass.ts';
 
 /**

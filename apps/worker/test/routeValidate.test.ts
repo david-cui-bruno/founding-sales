@@ -1,13 +1,15 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing';
-import { repositoryContext, workspaceScope, type RepositoryContext } from '@fss/domain/db';
-import { HandlerRegistry, jobIdempotencyKey, runTwiceUnderStolenLease } from '@fss/domain/jobs';
+import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing/testDatabase.ts';
+import { repositoryContext, workspaceScope, type RepositoryContext } from '@fss/domain/db/workspaceScope.ts';
+import { runTwiceUnderStolenLease } from '@fss/domain/jobs/atLeastOnce.ts';
+import { HandlerRegistry } from '@fss/domain/jobs/handlerRegistry.ts';
+import { jobIdempotencyKey } from '@fss/domain/jobs/jobKinds.ts';
 import {
   EMAIL_VALIDATION_SWEEP_LIMIT,
-  addEmailRoute,
   type MailDomainResolver,
   type MailExchangeRecord,
-} from '@fss/domain/crm';
+} from '@fss/domain/crm/routeValidation.ts';
+import { addEmailRoute } from '@fss/domain/crm/routes.ts';
 import { runClaimedJob, runOnce } from '../src/runner/jobRunner.ts';
 import { runSchedulerPass } from '../src/scheduler/schedulerPass.ts';
 import { routeValidateJobHandler, routeValidationSource } from '../src/handlers/routeValidate.ts';

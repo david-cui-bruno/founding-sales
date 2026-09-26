@@ -1,7 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing';
-import { repositoryContext, withTransaction, workspaceScope } from '@fss/domain/db';
-import { SuppressionJournalError, recordSuppression, type SuppressionJournalRecord } from '@fss/domain/suppression';
+import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing/testDatabase.ts';
+import { withTransaction } from '@fss/domain/db/queryable.ts';
+import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
+import { recordSuppression } from '@fss/domain/suppression/events.ts';
+import { SuppressionJournalError, type SuppressionJournalRecord } from '@fss/domain/suppression/journal.ts';
 import { journalPutRefusalIsDurable, loadS3SuppressionJournal, type S3JournalSdk } from '../src/bootstrap/deployment.ts';
 import { recordingLogger } from '../src/bootstrap/log.ts';
 

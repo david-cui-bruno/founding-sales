@@ -1,4 +1,4 @@
-import { WORKER_SCHEMA_RANGE } from '@fss/domain/db';
+import { WORKER_SCHEMA_RANGE } from '@fss/domain/db/schemaRange.ts';
 import type { LogFields } from './log.ts';
 
 /**

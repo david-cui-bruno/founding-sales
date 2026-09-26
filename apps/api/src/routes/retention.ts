@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { commandIdSchema, semanticVersionSchema, uuid } from '@fss/contracts';
-import { commitDeletion, previewDeletion } from '@fss/domain/retention';
+import { commitDeletion, previewDeletion } from '@fss/domain/retention/deletion.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { runPolicyCommand } from './dialSupport.ts';
 import { requirePrincipal } from './routeSupport.ts';

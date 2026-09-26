@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { withTransaction, type SessionQueryable } from '../../db/queryable.ts';
-import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
+import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
 import {
   normalizeSendingDomain,
@@ -9,7 +9,7 @@ import {
   registerMailboxSendingDomain,
   registerSendingDomain,
   setAutomatedSendingEnabled,
-} from '../../outbound/index.ts';
+} from '../../outbound/domainGuard.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 
 /**

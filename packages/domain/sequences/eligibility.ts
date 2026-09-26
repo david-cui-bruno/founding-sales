@@ -1,7 +1,7 @@
 import type { BlockedActionKind, HoldReasonCode, PauseChannel } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { coverageRefusal, readMailboxCoverage } from '../mail/coverage.ts';
-import { listApplicableHolds } from '../policy/index.ts';
+import { listApplicableHolds } from '../policy/holds.ts';
 import type { StepChannel, StepExecutionRow } from './types.ts';
 
 /**

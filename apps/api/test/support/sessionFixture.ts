@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { claimSignIn, handleCallback, startSignIn, type SessionGrant } from '../../src/auth/index.ts';
+import { claimSignIn, handleCallback, startSignIn } from '../../src/auth/signIn.ts';
+import { type SessionGrant } from '@fss/contracts';
 import {
   CURRENT_CLIENT_VERSION,
   nonceOf,

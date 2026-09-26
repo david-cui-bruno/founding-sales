@@ -1,5 +1,5 @@
-import { suppressionFinalizeHandler } from '@fss/domain/suppression';
-import type { JobHandler } from '@fss/domain/jobs';
+import { suppressionFinalizeHandler } from '@fss/domain/suppression/handler.ts';
+import type { JobHandler } from '@fss/domain/jobs/handlerRegistry.ts';
 
 /**
  * The worker's registration of `suppression.finalize` (Appendix C, specification

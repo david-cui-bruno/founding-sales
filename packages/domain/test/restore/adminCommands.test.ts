@@ -1,8 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
+import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import { repositoryContext, workspaceScope } from '../../db/workspaceScope.ts';
 import type { SessionQueryable } from '../../db/queryable.ts';
-import { ALL_BLOCKED_ACTION_KINDS, listHoldsByReason, openHold } from '../../policy/index.ts';
+import { listHoldsByReason, openHold } from '../../policy/holds.ts';
+import { ALL_BLOCKED_ACTION_KINDS } from '../../policy/types.ts';
 import { deterministicEventId } from '../../suppression/journal.ts';
 import { parseSuppressionJournalRecord, replaySuppressionJournal } from '../../suppression/replay.ts';
 import { listOpenHolds } from '../../restore/index.ts';

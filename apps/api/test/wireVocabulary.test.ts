@@ -1,9 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import * as wire from '@fss/contracts';
-import { REPLY_CLASSES, REPLY_DISPOSITIONS, type ResumeDecision, type StepChannel } from '@fss/domain';
-import { CLASSIFIER_EFFORTS, CLASSIFIER_MODELS, REPLY_NEXT_ACTIONS } from '@fss/domain/classification';
-import { OUTBOUND_STATES } from '@fss/domain/outbound';
+import { type StepChannel } from '@fss/domain/src/rules/cadence.ts';
+import { type ResumeDecision } from '@fss/domain/src/rules/holds.ts';
+import { REPLY_CLASSES, REPLY_DISPOSITIONS } from '@fss/domain/src/rules/replyClassification.ts';
+import { REPLY_NEXT_ACTIONS } from '@fss/domain/classification/cards.ts';
+import { CLASSIFIER_EFFORTS, CLASSIFIER_MODELS } from '@fss/domain/classification/types.ts';
+import { OUTBOUND_STATES } from '@fss/domain/outbound/types.ts';
 import {
   ENROLLMENT_END_REASONS,
   ENROLLMENT_STATES,
@@ -13,8 +16,8 @@ import {
   STEP_COMPLETION_SOURCES,
   STEP_EXECUTION_STATES,
   STEP_RESULTS,
-} from '@fss/domain/sequences';
-import { TODAY_ITEM_KINDS, TODAY_LANES } from '@fss/domain/today';
+} from '@fss/domain/sequences/types.ts';
+import { TODAY_ITEM_KINDS, TODAY_LANES } from '@fss/domain/today/types.ts';
 
 /**
  * Every closed vocabulary the wire contract declares is the domain's own (lane g78,

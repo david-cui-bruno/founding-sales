@@ -1,7 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing';
-import { HandlerRegistry, SCHEDULER_ADVISORY_LOCK_KEY, canaryHandler, enqueueJob } from '@fss/domain/jobs';
-import { runSchedulerPass, type DueWorkSource } from '../src/scheduler/schedulerPass.ts';
+import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing/testDatabase.ts';
+import { SCHEDULER_ADVISORY_LOCK_KEY, runSchedulerPass, type DueWorkSource } from '../src/scheduler/schedulerPass.ts';
+import { canaryHandler } from '@fss/domain/jobs/canary.ts';
+import { HandlerRegistry } from '@fss/domain/jobs/handlerRegistry.ts';
+import { enqueueJob } from '@fss/domain/jobs/jobStore.ts';
 import { canarySource } from '../src/scheduler/sources.ts';
 import { runOnce } from '../src/runner/jobRunner.ts';
 
@@ -43,7 +45,7 @@ describe('scheduler pass (Appendix G scenario 1)', () => {
   });
 
   it('holds a stable, version-independent advisory key distinct from the migration lock', async () => {
-    const { MIGRATION_ADVISORY_LOCK_KEY } = await import('@fss/domain/db');
+    const { MIGRATION_ADVISORY_LOCK_KEY } = await import('@fss/domain/db/migrationRunner.ts');
     expect(Number.isSafeInteger(SCHEDULER_ADVISORY_LOCK_KEY)).toBe(true);
     expect(SCHEDULER_ADVISORY_LOCK_KEY).not.toBe(MIGRATION_ADVISORY_LOCK_KEY);
   });

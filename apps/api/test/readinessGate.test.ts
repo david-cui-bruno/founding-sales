@@ -1,8 +1,8 @@
 import type { AddressInfo } from 'node:net';
 import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { QueryResultRowLike, SessionQueryable } from '@fss/domain/db';
-import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing';
+import type { QueryResultRowLike, SessionQueryable } from '@fss/domain/db/queryable.ts';
+import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing/testDatabase.ts';
 import { clientVersionPolicySchema } from '@fss/contracts';
 import { createApiServer } from '../src/server.ts';
 import { DatabaseBusyError, poolConnections, type RequestConnections } from '../src/bootstrap/connections.ts';

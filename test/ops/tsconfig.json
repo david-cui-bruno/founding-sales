@@ -4,25 +4,8 @@
     "baseUrl": ".",
     "paths": {
       "@fss/contracts": ["../../packages/contracts/src/index.ts"],
-      "@fss/domain/*": ["../../packages/domain/*"],
-      "@fss/domain": ["../../packages/domain/src/index.ts"],
-      "@fss/domain/mail": ["../../packages/domain/mail/index.ts"],
-      "@fss/domain/classification": ["../../packages/domain/classification/index.ts"],
-      "@fss/domain/outbound": ["../../packages/domain/outbound/index.ts"],
-      "@fss/domain/retention": ["../../packages/domain/retention/index.ts"],
       "@fss/domain/restore": ["../../packages/domain/restore/index.ts"],
-      "@fss/domain/db": ["../../packages/domain/db/index.ts"],
-      "@fss/domain/jobs": ["../../packages/domain/jobs/index.ts"],
-      "@fss/domain/crm": ["../../packages/domain/crm/index.ts"],
-      "@fss/domain/policy": ["../../packages/domain/policy/index.ts"],
-      "@fss/domain/suppression": ["../../packages/domain/suppression/index.ts"],
-      "@fss/domain/dial": ["../../packages/domain/dial/index.ts"],
-      "@fss/domain/today": ["../../packages/domain/today/index.ts"],
-      "@fss/domain/sequences": ["../../packages/domain/sequences/index.ts"],
-      "@fss/domain/templates": ["../../packages/domain/templates/index.ts"],
-      "@fss/domain/settings": ["../../packages/domain/settings/index.ts"],
-      "@fss/domain/dashboard": ["../../packages/domain/dashboard/index.ts"],
-      "@fss/domain/release": ["../../packages/domain/release/index.ts"]
+      "@fss/domain/*": ["../../packages/domain/*"]
     }
   },
   "include": ["**/*.ts"]

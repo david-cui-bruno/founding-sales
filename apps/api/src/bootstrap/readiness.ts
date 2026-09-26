@@ -1,4 +1,4 @@
-import { API_SCHEMA_RANGE, checkSchemaRange } from '@fss/domain/db';
+import { API_SCHEMA_RANGE, checkSchemaRange } from '@fss/domain/db/schemaRange.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { DatabaseBusyError } from './connections.ts';
 import type { BootstrapResponse, ReadinessInputs, RouteModule } from './routeRegistry.ts';

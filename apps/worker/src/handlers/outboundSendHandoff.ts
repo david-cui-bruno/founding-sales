@@ -1,11 +1,7 @@
-import {
-  dispatchOutboundMessage,
-  holdReasonForRefusal,
-  prepareOutboundMessage,
-  readOutboundOutcome,
-  type OutboundSendDeps,
-} from '@fss/domain/outbound';
-import { SEND_HANDOFF_REFUSALS, type SendHandoff, type SendHandoffRefusal } from '@fss/domain/sequences';
+import { prepareOutboundMessage, readOutboundOutcome } from '@fss/domain/outbound/fence.ts';
+import { holdReasonForRefusal } from '@fss/domain/outbound/gate.ts';
+import { dispatchOutboundMessage, type OutboundSendDeps } from '@fss/domain/outbound/send.ts';
+import { SEND_HANDOFF_REFUSALS, type SendHandoff, type SendHandoffRefusal } from '@fss/domain/sequences/sendHandoff.ts';
 
 /**
  * G8's `SendHandoff`, over G7-2's fence (specification 11.2, 12.2, 12.5, Appendix B).

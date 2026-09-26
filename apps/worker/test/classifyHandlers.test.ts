@@ -1,18 +1,12 @@
 import { randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing';
-import type { SessionQueryable } from '@fss/domain/db';
-import {
-  HandlerRegistry,
-  JOB_KIND_PROTECTION,
-  jobIdempotencyKey,
-  runTwiceUnderStolenLease,
-} from '@fss/domain/jobs';
-import {
-  CLASSIFIER_PROMPT_VERSION,
-  recordedAnthropicTransport,
-  type RecordedAnswer,
-} from '@fss/domain/classification';
+import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing/testDatabase.ts';
+import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
+import { runTwiceUnderStolenLease } from '@fss/domain/jobs/atLeastOnce.ts';
+import { HandlerRegistry } from '@fss/domain/jobs/handlerRegistry.ts';
+import { JOB_KIND_PROTECTION, jobIdempotencyKey } from '@fss/domain/jobs/jobKinds.ts';
+import { recordedAnthropicTransport, type RecordedAnswer } from '@fss/domain/classification/recorded.ts';
+import { CLASSIFIER_PROMPT_VERSION } from '@fss/domain/classification/types.ts';
 import { runClaimedJob } from '../src/runner/jobRunner.ts';
 import { runSchedulerPass } from '../src/scheduler/schedulerPass.ts';
 import {

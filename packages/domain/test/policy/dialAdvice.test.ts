@@ -1,10 +1,12 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
+import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
-import { retireRoute } from '../../crm/index.ts';
-import { adviseDial } from '../../dial/index.ts';
-import { openPause, revokeStatePosture } from '../../policy/index.ts';
-import { recordSuppression, recordingSuppressionJournal } from '../../suppression/index.ts';
+import { retireRoute } from '../../crm/routes.ts';
+import { adviseDial } from '../../dial/advise.ts';
+import { openPause } from '../../policy/pauses.ts';
+import { revokeStatePosture } from '../../policy/postures.ts';
+import { recordSuppression } from '../../suppression/events.ts';
+import { recordingSuppressionJournal } from '../../suppression/journal.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
 import { seedPolicy, type SeededPolicy } from '../db/support/policyFixtures.ts';

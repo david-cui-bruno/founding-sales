@@ -1,13 +1,9 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
-import {
-  accessForMailbox,
-  headerValue,
-  normalizeAddressList,
-  readMailbox,
-  type EnvelopeCipher,
-  type GmailClient,
-  type GmailOAuthConfig,
-} from '../mail/index.ts';
+import { type EnvelopeCipher } from '../mail/envelope.ts';
+import { headerValue, type GmailClient, type GmailOAuthConfig } from '../mail/gmailClient.ts';
+import { readMailbox } from '../mail/mailboxes.ts';
+import { accessForMailbox } from '../mail/sync.ts';
+import { normalizeAddressList } from '../mail/types.ts';
 import { fssFenceIdOfSentMessage } from './types.ts';
 
 /**

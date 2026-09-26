@@ -14,7 +14,7 @@ import {
 import { CONTAINER_CLIENT_VERSIONS } from '../src/bootstrap/main.ts';
 import { localNoopSuppressionJournal } from '../src/journal/index.ts';
 import { dispatch, type ApiOptions, type ApiRequest } from '../src/server.ts';
-import type { AuthDeps } from '../src/auth/index.ts';
+import type { AuthDeps } from '../src/auth/config.ts';
 import { createAuthFixture, type AuthFixture } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
 

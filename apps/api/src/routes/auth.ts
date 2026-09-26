@@ -6,7 +6,8 @@ import {
   sessionRenewRequestSchema,
   type ClientVersionNotice,
 } from '@fss/contracts';
-import { authenticate, claimSignIn, endSession, handleCallback, renewSession } from '../auth/index.ts';
+import { authenticate, endSession, renewSession } from '../auth/sessions.ts';
+import { claimSignIn, handleCallback } from '../auth/signIn.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 

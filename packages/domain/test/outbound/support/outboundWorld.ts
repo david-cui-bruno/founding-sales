@@ -1,11 +1,8 @@
 import { createHash } from 'node:crypto';
-import type { GmailFixture, RecordedGmailClient } from '../../../mail/index.ts';
-import {
-  prepareOutboundMessage,
-  type OutboundEmailRequest,
-  type OutboundSendDeps,
-  type ReconcileDeps,
-} from '../../../outbound/index.ts';
+import type { GmailFixture, RecordedGmailClient } from '../../../mail/gmailClientFake.ts';
+import { prepareOutboundMessage, type OutboundEmailRequest } from '../../../outbound/fence.ts';
+import { type ReconcileDeps } from '../../../outbound/reconcile.ts';
+import { type OutboundSendDeps } from '../../../outbound/send.ts';
 import { createMailWorld, type MailWorld, type MailWorldMailbox } from '../../mail/support/mailWorld.ts';
 import { makeStepExecution } from '../../../db/testing/stepExecutions.ts';
 import { FIXTURE_WORKER_DIGEST, storeFixtureRecord } from '../../release/support/releaseRecords.ts';

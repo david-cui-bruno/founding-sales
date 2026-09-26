@@ -1,5 +1,5 @@
-import type { SessionQueryable } from '@fss/domain/db';
-import { API_SCHEMA_RANGE, checkSchemaRange } from '@fss/domain/db';
+import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
+import { API_SCHEMA_RANGE, checkSchemaRange } from '@fss/domain/db/schemaRange.ts';
 import { publishedClientVersions, type ClientVersionPolicy, type ClientVersionRange } from '@fss/contracts';
 
 /**

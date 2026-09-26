@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing';
-import type { SessionQueryable } from '@fss/domain/db';
-import { readHeartbeats } from '@fss/domain/jobs';
+import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing/testDatabase.ts';
+import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
+import { readHeartbeats } from '@fss/domain/jobs/heartbeats.ts';
 import { MAX_REQUEST_BYTES } from '../src/limits.ts';
 import type { VerifiedPrincipal } from '../src/scope.ts';
 import { RouteRegistryError, createRouteRegistry, type RouteModule } from '../src/bootstrap/routeRegistry.ts';

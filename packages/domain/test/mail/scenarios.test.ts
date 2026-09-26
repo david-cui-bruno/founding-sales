@@ -1,25 +1,16 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import {
-  advanceCursor,
-  coalesceMailSync,
-  fixturePushTokens,
-  hoursToSoonestWatchExpiry,
-  listMatches,
-  listMessagesForOpportunity,
-  listWatchesDue,
-  pushTokenPolicyOf,
-  readCurrentWatch,
-  readMailbox,
-  readMessageBody,
-  receivePushNotification,
-  renewWatch,
-  resolveAmbiguity,
-  runMailRecovery,
-  runMailSync,
-  type PushTokenClaims,
-} from '../../mail/index.ts';
+import { coalesceMailSync } from '../../mail/coalesce.ts';
+import { pushTokenPolicyOf } from '../../mail/config.ts';
+import { advanceCursor, readMailbox } from '../../mail/mailboxes.ts';
+import { listMatches, resolveAmbiguity } from '../../mail/matching.ts';
+import { listMessagesForOpportunity, readMessageBody } from '../../mail/messages.ts';
+import { fixturePushTokens, type PushTokenClaims } from '../../mail/pushToken.ts';
+import { runMailRecovery } from '../../mail/recover.ts';
+import { runMailSync } from '../../mail/sync.ts';
+import { hoursToSoonestWatchExpiry, listWatchesDue, readCurrentWatch, renewWatch } from '../../mail/watch.ts';
+import { receivePushNotification } from '../../mail/webhook.ts';
 import { listApplicableHolds } from '../../policy/holds.ts';
-import { isSuppressed } from '../../suppression/index.ts';
+import { isSuppressed } from '../../suppression/effective.ts';
 import {
   createMailWorld,
   fixtureMessage,

@@ -1,12 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import {
-  RAMP_RAISE_HEALTHY_STREAK,
-  dispatchOutboundMessage,
-  readRamp,
-  overrideRaise,
-  setAdminCap,
-  type SendReport,
-} from '../../outbound/index.ts';
+import { RAMP_RAISE_HEALTHY_STREAK, readRamp, overrideRaise, setAdminCap } from '../../outbound/ramp.ts';
+import { dispatchOutboundMessage, type SendReport } from '../../outbound/send.ts';
 import { businessDateOf } from '../../today/snapshots.ts';
 import { createOutboundWorld, type OutboundWorld } from './support/outboundWorld.ts';
 import { prepareFor, seedFirm, type SeededFirm } from './support/dispatchFixtures.ts';

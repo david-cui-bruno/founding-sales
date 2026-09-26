@@ -1,4 +1,4 @@
-import { withTransaction, type QueryResultRowLike } from '@fss/domain/db';
+import { withTransaction, type QueryResultRowLike } from '@fss/domain/db/queryable.ts';
 import { clientCompatibility, publishedClientVersions, type AuthRefusalCode, type SessionRenewal } from '@fss/contracts';
 import type { AuthDeps } from './config.ts';
 import { recordAuditEvent } from './audit.ts';

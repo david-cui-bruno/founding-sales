@@ -1,6 +1,6 @@
 import { TODAY_CARD_VERSION, todayFirmRequestSchema } from '@fss/contracts';
-import { databaseNow } from '@fss/domain/policy';
-import { readTodayFirm, readTodayList, todayFirmVersion1 } from '@fss/domain/today';
+import { databaseNow } from '@fss/domain/policy/clock.ts';
+import { readTodayFirm, readTodayList, todayFirmVersion1 } from '@fss/domain/today/dto.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { policyRouteDeps } from './dialSupport.ts';
 import { contextForPrincipal } from './routeSupport.ts';

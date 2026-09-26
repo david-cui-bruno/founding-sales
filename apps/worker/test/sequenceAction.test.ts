@@ -1,14 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing';
-import { repositoryContext, workspaceScope } from '@fss/domain/db';
-import { HandlerRegistry, runTwiceUnderStolenLease } from '@fss/domain/jobs';
-import { SENDING_STOP_LINE, templateContentHash } from '@fss/domain';
-import {
-  allowAllEligibility,
-  listStepExecutions,
-  recordingSendHandoff,
-  type RecordingSendHandoff,
-} from '@fss/domain/sequences';
+import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing/testDatabase.ts';
+import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
+import { runTwiceUnderStolenLease } from '@fss/domain/jobs/atLeastOnce.ts';
+import { HandlerRegistry } from '@fss/domain/jobs/handlerRegistry.ts';
+import { SENDING_STOP_LINE, templateContentHash } from '@fss/domain/src/rules/templates.ts';
+import { allowAllEligibility } from '@fss/domain/sequences/eligibility.ts';
+import { listStepExecutions } from '@fss/domain/sequences/rows.ts';
+import { recordingSendHandoff, type RecordingSendHandoff } from '@fss/domain/sequences/sendHandoff.ts';
 import { runClaimedJob } from '../src/runner/jobRunner.ts';
 import { runSchedulerPass } from '../src/scheduler/schedulerPass.ts';
 import { sequenceActionJobHandler, sequenceActionSource } from '../src/handlers/sequenceAction.ts';

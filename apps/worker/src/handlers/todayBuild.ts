@@ -1,6 +1,10 @@
-import { repositoryContext, workspaceScope, type SessionQueryable } from '@fss/domain/db';
-import { jobIdempotencyKey, type JobHandler, type JobSpecification } from '@fss/domain/jobs';
-import { TODAY_ALGORITHM_VERSION, buildTodaySnapshot, type TodaySource } from '@fss/domain/today';
+import { type SessionQueryable } from '@fss/domain/db/queryable.ts';
+import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
+import { type JobHandler } from '@fss/domain/jobs/handlerRegistry.ts';
+import { jobIdempotencyKey } from '@fss/domain/jobs/jobKinds.ts';
+import { type JobSpecification } from '@fss/domain/jobs/jobStore.ts';
+import { buildTodaySnapshot, type TodaySource } from '@fss/domain/today/build.ts';
+import { TODAY_ALGORITHM_VERSION } from '@fss/domain/today/types.ts';
 import type { DueWorkSource } from '../scheduler/schedulerPass.ts';
 
 /**

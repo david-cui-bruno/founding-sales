@@ -1,8 +1,12 @@
 import type { HoldReasonCode } from '@fss/contracts';
 import { isRecoverableHoldReason, knownBlockedActionKinds } from '@fss/contracts';
-import { decideFirmRead, readContact, readFirm, readOpportunity } from '../crm/index.ts';
+import { decideFirmRead } from '../crm/authorization.ts';
+import { readContact } from '../crm/contacts.ts';
+import { readFirm } from '../crm/firms.ts';
+import { readOpportunity } from '../crm/pipeline.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
-import { listMatches, readMessage, readMessageBody } from '../mail/index.ts';
+import { listMatches } from '../mail/matching.ts';
+import { readMessage, readMessageBody } from '../mail/messages.ts';
 import type { ReplyDisposition } from '../src/rules/replyClassification.ts';
 import { listClassifications, proposedDispositionOf, type ClassificationRow } from './store.ts';
 import { readConfirmation, type ReplyConfirmationRow } from './confirmations.ts';

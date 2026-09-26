@@ -1,8 +1,8 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing';
-import type { SessionQueryable } from '@fss/domain/db';
-import type { AuthConfig, AuthDeps } from '../../src/auth/index.ts';
-import { createGoogleClient, httpFetch } from '../../src/auth/index.ts';
+import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing/testDatabase.ts';
+import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
+import type { AuthConfig, AuthDeps } from '../../src/auth/config.ts';
+import { createGoogleClient, httpFetch } from '../../src/auth/googleClient.ts';
 import { startGoogleStub, type GoogleStub } from './googleStub.ts';
 
 /**

@@ -1,5 +1,6 @@
 import type { HoldReasonCode } from '@fss/contracts';
-import type { SequenceDelay, StepChannel } from '../src/index.ts';
+import type { SequenceDelay } from '../src/rules/businessDays.ts';
+import type { StepChannel } from '../src/rules/cadence.ts';
 
 /**
  * The sequences vocabulary (specification 11.1, 11.2, 11.3).

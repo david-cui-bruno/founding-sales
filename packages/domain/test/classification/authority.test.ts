@@ -1,13 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import {
-  classifyReplyWithModel,
-  confirmReplyDisposition,
-  listClassifications,
-  readReplyCard,
-} from '../../classification/index.ts';
-import { readOpportunity } from '../../crm/index.ts';
+import { readReplyCard } from '../../classification/cards.ts';
+import { classifyReplyWithModel } from '../../classification/classify.ts';
+import { confirmReplyDisposition } from '../../classification/confirmations.ts';
+import { listClassifications } from '../../classification/store.ts';
+import { readOpportunity } from '../../crm/pipeline.ts';
 import { listApplicableHolds } from '../../policy/holds.ts';
-import { isSuppressed } from '../../suppression/index.ts';
+import { isSuppressed } from '../../suppression/effective.ts';
 import { REPLY_CORPUS } from '../corpus/replies/cases.ts';
 import { createClassifierWorld, type ClassifierWorld } from './support/classifierWorld.ts';
 

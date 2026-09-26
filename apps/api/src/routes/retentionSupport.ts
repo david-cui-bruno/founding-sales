@@ -1,4 +1,4 @@
-import type { RetentionResult } from '@fss/domain/retention';
+import type { RetentionResult } from '@fss/domain/retention/result.ts';
 import type { CommandResult } from './routeSupport.ts';
 
 /**

@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { BLOCKED_ACTION_KINDS, HOLD_REASON_CODES, isRecoverableHoldReason } from '@fss/contracts';
-import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
+import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 
 /**
  * One vocabulary, two places. Migration 0001 seeds `hold_reason_codes` and

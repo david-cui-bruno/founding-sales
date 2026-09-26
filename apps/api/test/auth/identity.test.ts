@@ -1,25 +1,19 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { PROVISIONAL_GOOGLE_SUB_PREFIX, sessionGrantSchema } from '@fss/contracts';
+import { PROVISIONAL_GOOGLE_SUB_PREFIX, sessionGrantSchema, type SessionGrant } from '@fss/contracts';
+import { decideSensitiveRead, recordSensitiveRead } from '../../src/auth/audit.ts';
+import { runCommand } from '../../src/auth/commands.ts';
+import { validateIdToken } from '../../src/auth/idToken.ts';
+import { authenticate, renewSession, type AuthenticatedPrincipal } from '../../src/auth/sessions.ts';
+import { claimSignIn, handleCallback, startSignIn } from '../../src/auth/signIn.ts';
 import {
-  authenticate,
   canonicalJson,
-  claimSignIn,
-  decideSensitiveRead,
-  handleCallback,
   parseAccessToken,
   parseRefreshCredential,
   payloadHashOf,
-  recordSensitiveRead,
-  renewSession,
-  runCommand,
   sha256Hex,
-  startSignIn,
-  validateIdToken,
-  type AuthenticatedPrincipal,
-  type SessionGrant,
-} from '../../src/auth/index.ts';
-import { route } from '../../src/index.ts';
+} from '../../src/auth/tokens.ts';
+import { route } from '../../src/server.ts';
 import {
   CURRENT_CLIENT_VERSION,
   OUTDATED_CLIENT_VERSION,

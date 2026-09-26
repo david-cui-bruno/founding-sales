@@ -1,15 +1,16 @@
-import type { SessionQueryable } from '@fss/domain/db';
+import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
+import { anthropicReplyClassifier, type ReplyClassifierPort } from '@fss/domain/classification/adapter.ts';
 import {
-  anthropicReplyClassifier,
-  classifyReplyHandler,
   environmentClassifierSecrets,
-  listPendingModelClassifications,
   loadAnthropicTransport,
   type AnthropicMessagesTransport,
-  type ClassifierSettings,
-  type ReplyClassifierPort,
-} from '@fss/domain/classification';
-import { jobIdempotencyKey, type JobHandler, type JobSpecification } from '@fss/domain/jobs';
+} from '@fss/domain/classification/anthropicClient.ts';
+import { classifyReplyHandler } from '@fss/domain/classification/handler.ts';
+import { listPendingModelClassifications } from '@fss/domain/classification/store.ts';
+import { type ClassifierSettings } from '@fss/domain/classification/types.ts';
+import { type JobHandler } from '@fss/domain/jobs/handlerRegistry.ts';
+import { jobIdempotencyKey } from '@fss/domain/jobs/jobKinds.ts';
+import { type JobSpecification } from '@fss/domain/jobs/jobStore.ts';
 import type { DueWorkSource } from '../scheduler/schedulerPass.ts';
 
 /**

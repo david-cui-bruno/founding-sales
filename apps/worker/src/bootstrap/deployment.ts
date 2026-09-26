@@ -1,20 +1,11 @@
-import {
-  createGmailHttpClient,
-  envelopeCipher,
-  httpFetch,
-  kmsDataKeyWrapper,
-  loadKmsTransport,
-  localDataKeyWrapper,
-  recordedGmailClient,
-  recordedSeamDataKeyWrapper,
-  staticSecretProvider,
-  type EnvelopeCipher,
-  type GmailClient,
-  type GmailOAuthConfig,
-  type MailPublicConfig,
-  type SecretProvider,
-} from '@fss/domain/mail';
-import { CLASSIFIER_SECRET_ENVIRONMENT_VARIABLES } from '@fss/domain/classification';
+import { type MailPublicConfig } from '@fss/domain/mail/config.ts';
+import { envelopeCipher, localDataKeyWrapper, type EnvelopeCipher } from '@fss/domain/mail/envelope.ts';
+import { kmsDataKeyWrapper, loadKmsTransport, recordedSeamDataKeyWrapper } from '@fss/domain/mail/envelopeKms.ts';
+import { type GmailClient, type GmailOAuthConfig } from '@fss/domain/mail/gmailClient.ts';
+import { recordedGmailClient } from '@fss/domain/mail/gmailClientFake.ts';
+import { createGmailHttpClient, httpFetch } from '@fss/domain/mail/gmailClientHttp.ts';
+import { staticSecretProvider, type SecretProvider } from '@fss/domain/mail/secretProvider.ts';
+import { CLASSIFIER_SECRET_ENVIRONMENT_VARIABLES } from '@fss/domain/classification/anthropicClient.ts';
 import {
   DeploymentConfigError,
   REHEARSAL_MAILBOX_ADDRESS,
@@ -28,7 +19,12 @@ import {
   type DeploymentEnvironment,
   type PublicIdentifierSource,
 } from '@fss/domain/release/deployment.ts';
-import { SuppressionJournalError, journalObjectBody, journalObjectKey, type SuppressionJournal } from '@fss/domain/suppression';
+import {
+  SuppressionJournalError,
+  journalObjectBody,
+  journalObjectKey,
+  type SuppressionJournal,
+} from '@fss/domain/suppression/journal.ts';
 import { createLogger, type LogFields, type Logger } from './log.ts';
 
 /**

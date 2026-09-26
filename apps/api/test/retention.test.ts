@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { recordingSuppressionJournal, type RecordingSuppressionJournal } from '@fss/domain/suppression';
+import { recordingSuppressionJournal, type RecordingSuppressionJournal } from '@fss/domain/suppression/journal.ts';
 import { dispatch, type ApiRequest } from '../src/server.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
 import { seedContact, seedFirm } from './support/crmSeed.ts';

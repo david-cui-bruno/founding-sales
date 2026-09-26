@@ -1,10 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing';
-import { repositoryContext, workspaceScope, type RepositoryContext } from '@fss/domain/db';
-import { HandlerRegistry, runTwiceUnderStolenLease } from '@fss/domain/jobs';
-import { changeStage } from '@fss/domain/crm';
-import { recordSuppression, recordingSuppressionJournal } from '@fss/domain/suppression';
-import { SENDING_STOP_LINE, templateContentHash } from '@fss/domain';
+import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing/testDatabase.ts';
+import { repositoryContext, workspaceScope, type RepositoryContext } from '@fss/domain/db/workspaceScope.ts';
+import { runTwiceUnderStolenLease } from '@fss/domain/jobs/atLeastOnce.ts';
+import { HandlerRegistry } from '@fss/domain/jobs/handlerRegistry.ts';
+import { changeStage } from '@fss/domain/crm/pipeline.ts';
+import { recordSuppression } from '@fss/domain/suppression/events.ts';
+import { recordingSuppressionJournal } from '@fss/domain/suppression/journal.ts';
+import { SENDING_STOP_LINE, templateContentHash } from '@fss/domain/src/rules/templates.ts';
 import { runClaimedJob, runOnce } from '../src/runner/jobRunner.ts';
 import { runSchedulerPass } from '../src/scheduler/schedulerPass.ts';
 import { workerDueWorkSources } from '../src/bootstrap/main.ts';

@@ -7,8 +7,14 @@ import {
   statePostureViewSchema,
   wireDrift,
 } from '@fss/contracts';
-import { POSTURE_RULES_REVISION, POSTURE_STATEMENTS, POSTURE_STATEMENT_KEYS, STATE_POSTURE_RULES, US_STATE_CODES } from '@fss/domain';
-import { recordingSuppressionJournal } from '@fss/domain/suppression';
+import {
+  POSTURE_RULES_REVISION,
+  POSTURE_STATEMENTS,
+  POSTURE_STATEMENT_KEYS,
+  STATE_POSTURE_RULES,
+  US_STATE_CODES,
+} from '@fss/domain/src/rules/statePosture.ts';
+import { recordingSuppressionJournal } from '@fss/domain/suppression/journal.ts';
 import { dispatch } from '../src/server.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';

@@ -1,13 +1,11 @@
-import type { SessionQueryable } from '@fss/domain/db';
-import { jobIdempotencyKey, type JobSpecification } from '@fss/domain/jobs';
-import {
-  coalesceMailSync,
-  listIncompleteRecoveries,
-  listMailboxesDueForSync,
-  listWatchesDue,
-  rearmRecoveryJob,
-} from '@fss/domain/mail';
-import { listMailboxesToReconcile } from '@fss/domain/outbound';
+import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
+import { jobIdempotencyKey } from '@fss/domain/jobs/jobKinds.ts';
+import { type JobSpecification } from '@fss/domain/jobs/jobStore.ts';
+import { coalesceMailSync } from '@fss/domain/mail/coalesce.ts';
+import { listMailboxesDueForSync } from '@fss/domain/mail/mailboxes.ts';
+import { listIncompleteRecoveries, rearmRecoveryJob } from '@fss/domain/mail/recover.ts';
+import { listWatchesDue } from '@fss/domain/mail/watch.ts';
+import { listMailboxesToReconcile } from '@fss/domain/outbound/reconcile.ts';
 import type { DueWorkSource } from './schedulerPass.ts';
 
 /**

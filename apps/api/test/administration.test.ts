@@ -10,7 +10,7 @@ import {
   settingHistoryResponseSchema,
   wireDrift,
 } from '@fss/contracts';
-import { putReleaseRecord } from '@fss/domain/release';
+import { putReleaseRecord } from '@fss/domain/release/records.ts';
 import { dispatch, type ApiRequest } from '../src/server.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';

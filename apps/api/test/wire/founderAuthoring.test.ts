@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { repositoryContext, workspaceScope } from '@fss/domain/db';
-import { openHold, releaseHold } from '@fss/domain/policy';
+import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
+import { openHold, releaseHold } from '@fss/domain/policy/holds.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from '../support/authFixture.ts';
 import { issueSessionFor } from '../support/sessionFixture.ts';
 import { createCrmBridge } from '../../../desktop/src/main/crmBridge.ts';

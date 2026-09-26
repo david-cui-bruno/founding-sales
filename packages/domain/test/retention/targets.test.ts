@@ -1,17 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
-import {
-  COVERAGE_EXEMPT_TABLES,
-  PENDING_RETENTION_TABLES,
-  RETENTION_LEDGER_KINDS,
-  RETENTION_POLICY_KINDS,
-  RETENTION_TARGETS,
-  TABLE_RETENTION_COVERAGE,
-  retentionPeriodOf,
-  retentionTargetFor,
-} from '../../retention/index.ts';
+import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
+import { COVERAGE_EXEMPT_TABLES, TABLE_RETENTION_COVERAGE } from '../../retention/coverage.ts';
+import { RETENTION_LEDGER_KINDS, RETENTION_POLICY_KINDS, retentionPeriodOf } from '../../retention/kinds.ts';
+import { PENDING_RETENTION_TABLES, RETENTION_TARGETS, retentionTargetFor } from '../../retention/targets.ts';
 import { RETENTION_DATA_KINDS } from '@fss/contracts';
 
 /**

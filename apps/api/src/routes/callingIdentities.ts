@@ -9,7 +9,7 @@ import {
   registerCallingIdentity,
   verifyCallingIdentity,
   type CallingIdentityRow,
-} from '@fss/domain/dial';
+} from '@fss/domain/dial/identities.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { policyRouteDeps, runPolicyCommand } from './dialSupport.ts';
 import { contextForPrincipal } from './routeSupport.ts';

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { uuid } from '@fss/contracts';
-import { readAttachmentReferences } from '@fss/domain/retention';
+import { readAttachmentReferences } from '@fss/domain/retention/attachments.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { contextForPrincipal, requirePrincipal } from './routeSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';

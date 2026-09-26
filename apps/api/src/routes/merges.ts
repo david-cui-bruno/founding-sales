@@ -1,8 +1,8 @@
 import { mergeFirmsCommandSchema } from '@fss/contracts';
-import { mergeFirms } from '@fss/domain/crm';
+import { mergeFirms } from '@fss/domain/crm/merges.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { commandReply, contextForPrincipal, requirePrincipal } from './routeSupport.ts';
-import { runCommand, type RefusalDetails } from '../auth/index.ts';
+import { runCommand, type RefusalDetails } from '../auth/commands.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**

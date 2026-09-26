@@ -1,6 +1,7 @@
 import { logCallOutcomeCommandSchema } from '@fss/contracts';
-import { decideFirmRead, readFirm } from '@fss/domain/crm';
-import { listCallLogs, logCallOutcome } from '@fss/domain/dial';
+import { decideFirmRead } from '@fss/domain/crm/authorization.ts';
+import { readFirm } from '@fss/domain/crm/firms.ts';
+import { listCallLogs, logCallOutcome } from '@fss/domain/dial/calls.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { policyRouteDeps, runPolicyCommand } from './dialSupport.ts';
 import { contextForPrincipal } from './routeSupport.ts';

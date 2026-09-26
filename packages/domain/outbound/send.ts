@@ -1,7 +1,9 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { openHold } from '../policy/holds.ts';
 import { lockSendGateForDispatch } from '../policy/sendGate.ts';
-import { accessForMailbox, type EnvelopeCipher, type GmailClient, type GmailOAuthConfig } from '../mail/index.ts';
+import { type EnvelopeCipher } from '../mail/envelope.ts';
+import { type GmailClient, type GmailOAuthConfig } from '../mail/gmailClient.ts';
+import { accessForMailbox } from '../mail/sync.ts';
 import {
   beginReconciling,
   claimForDispatch,

@@ -1,30 +1,27 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, makeStepExecution, type TestDatabase } from '../../db/testing/index.ts';
+import { makeStepExecution } from '../../db/testing/stepExecutions.ts';
+import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import type { SessionQueryable } from '../../db/queryable.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
-import { readOpenOpportunity, retireRoute } from '../../crm/index.ts';
-import {
-  authorizeDialCommand,
-  consumeDialTicket,
-  createCallback,
-  logCallOutcome,
-  scheduleCallbackForCall,
-} from '../../dial/index.ts';
-import { databaseNow, listApplicableHolds, openHold, openPause, releasePause, revokeStatePosture } from '../../policy/index.ts';
-import { enrollContact } from '../../sequences/index.ts';
+import { readOpenOpportunity } from '../../crm/pipeline.ts';
+import { retireRoute } from '../../crm/routes.ts';
+import { createCallback, scheduleCallbackForCall } from '../../dial/callbacks.ts';
+import { logCallOutcome } from '../../dial/calls.ts';
+import { authorizeDialCommand, consumeDialTicket } from '../../dial/tickets.ts';
+import { databaseNow } from '../../policy/clock.ts';
+import { listApplicableHolds, openHold } from '../../policy/holds.ts';
+import { openPause, releasePause } from '../../policy/pauses.ts';
+import { revokeStatePosture } from '../../policy/postures.ts';
+import { enrollContact } from '../../sequences/enrollments.ts';
 import { localInstant } from '../../src/rules/localClock.ts';
-import { recordSuppression, recordingSuppressionJournal } from '../../suppression/index.ts';
-import {
-  buildTodaySnapshot,
-  businessDateOf,
-  callbackTimeNeededItemKey,
-  listTodayItems,
-  upsertTodayItem,
-  readTodayFirm,
-  releaseTodayPause,
-  snoozeTodayItem,
-} from '../../today/index.ts';
+import { recordSuppression } from '../../suppression/events.ts';
+import { recordingSuppressionJournal } from '../../suppression/journal.ts';
+import { buildTodaySnapshot } from '../../today/build.ts';
+import { readTodayFirm } from '../../today/dto.ts';
+import { businessDateOf, listTodayItems, upsertTodayItem } from '../../today/snapshots.ts';
+import { releaseTodayPause, snoozeTodayItem } from '../../today/snooze.ts';
+import { callbackTimeNeededItemKey } from '../../today/types.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { firstStageId, seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
 import { seedPolicy, type SeededPolicy } from '../db/support/policyFixtures.ts';

@@ -4,14 +4,14 @@ import {
   reorderPipelineStagesCommandSchema,
   retirePipelineStageCommandSchema,
 } from '@fss/contracts';
+import { readPipelineBoardForActor } from '@fss/domain/crm/board.ts';
+import { listPipelineStages } from '@fss/domain/crm/pipeline.ts';
 import {
   createPipelineStage,
-  listPipelineStages,
-  readPipelineBoardForActor,
   renamePipelineStage,
   reorderPipelineStages,
   retirePipelineStage,
-} from '@fss/domain/crm';
+} from '@fss/domain/crm/stageAdmin.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { policyRouteDeps, runPolicyCommand } from './dialSupport.ts';
 import { contextForPrincipal, requirePrincipal } from './routeSupport.ts';

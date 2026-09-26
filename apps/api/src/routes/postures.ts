@@ -12,16 +12,15 @@ import {
   US_STATE_CODES,
   US_STATE_NAMES,
   type PostureCitation,
-} from '@fss/domain';
+} from '@fss/domain/src/rules/statePosture.ts';
+import { currentCallingWindow, setCallingWindow } from '@fss/domain/policy/callingWindows.ts';
 import {
   allowCallingStates,
-  currentCallingWindow,
   listStatePostures,
   recordStatePosture,
   revokeStatePosture,
-  setCallingWindow,
-} from '@fss/domain/policy';
-import type { RepositoryContext } from '@fss/domain/db';
+} from '@fss/domain/policy/postures.ts';
+import type { RepositoryContext } from '@fss/domain/db/workspaceScope.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { policyRouteDeps, runPolicyCommand } from './dialSupport.ts';
 import { contextForPrincipal } from './routeSupport.ts';

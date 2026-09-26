@@ -1,4 +1,4 @@
-import type { SessionQueryable } from '@fss/domain/db';
+import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 import { ConfigError } from '../../bootstrap/config.ts';
 import { APP_RUNTIME_ROLE, MIGRATION_ROLE } from './migrate.ts';
 

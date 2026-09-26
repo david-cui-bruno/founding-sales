@@ -1,5 +1,5 @@
 import { completeCallbackCommandSchema, scheduleCallbackCommandSchema } from '@fss/contracts';
-import { completeCallback, listCallbacks, scheduleCallbackForCall } from '@fss/domain/dial';
+import { completeCallback, listCallbacks, scheduleCallbackForCall } from '@fss/domain/dial/callbacks.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { policyRouteDeps, runPolicyCommand } from './dialSupport.ts';
 import { contextForPrincipal } from './routeSupport.ts';

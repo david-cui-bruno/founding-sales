@@ -3,23 +3,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing';
-import { WORKER_SCHEMA_RANGE } from '@fss/domain/db';
-import {
-  HandlerRegistry,
-  JOB_METRIC_NAMES,
-  METRIC_OWNERS,
-  canaryHandler,
-  enqueueJob,
-  raiseCriticalAlert,
-  recordHeartbeat,
-  recordingMetricSink,
-  type MetricOwner,
-} from '@fss/domain/jobs';
-import { MAIL_METRIC_NAMES } from '@fss/domain/mail';
-import { OUTBOUND_METRIC_NAMES } from '@fss/domain/outbound';
-import { SEQUENCE_METRIC_NAMES } from '@fss/domain/sequences';
-import { TODAY_METRIC_NAMES } from '@fss/domain/today';
+import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing/testDatabase.ts';
+import { WORKER_SCHEMA_RANGE } from '@fss/domain/db/schemaRange.ts';
+import { canaryHandler } from '@fss/domain/jobs/canary.ts';
+import { raiseCriticalAlert } from '@fss/domain/jobs/criticalAlerts.ts';
+import { HandlerRegistry } from '@fss/domain/jobs/handlerRegistry.ts';
+import { recordHeartbeat } from '@fss/domain/jobs/heartbeats.ts';
+import { enqueueJob } from '@fss/domain/jobs/jobStore.ts';
+import { JOB_METRIC_NAMES, METRIC_OWNERS, recordingMetricSink, type MetricOwner } from '@fss/domain/jobs/metrics.ts';
+import { MAIL_METRIC_NAMES } from '@fss/domain/mail/metrics.ts';
+import { OUTBOUND_METRIC_NAMES } from '@fss/domain/outbound/metrics.ts';
+import { SEQUENCE_METRIC_NAMES } from '@fss/domain/sequences/metrics.ts';
+import { TODAY_METRIC_NAMES } from '@fss/domain/today/metrics.ts';
 import { canarySource } from '../src/scheduler/sources.ts';
 import { APPLICATION_RAISED_METRICS } from '../src/bootstrap/metricCoverage.ts';
 import { readWorkerConfig } from '../src/bootstrap/config.ts';

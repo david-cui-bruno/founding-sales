@@ -1,9 +1,9 @@
 import { z } from 'zod';
 import { MAIL_COMMAND_ENVELOPE } from '@fss/contracts';
-import type { RepositoryContext } from '@fss/domain/db';
-import { repositoryContext, workspaceScope } from '@fss/domain/db';
+import type { RepositoryContext } from '@fss/domain/db/workspaceScope.ts';
+import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
 
-import type { AuthDeps } from '../auth/index.ts';
+import type { AuthDeps } from '../auth/config.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { contextForPrincipal, requirePrincipal, type RouteDeps } from './routeSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';

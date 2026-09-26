@@ -5,9 +5,10 @@ import {
   disconnectMailbox,
   readOwnMailbox,
   verifyGrantState,
-} from '@fss/domain/mail';
-import { withTransaction, type RepositoryContext, type SessionQueryable } from '@fss/domain/db';
-import { registerMailboxSendingDomain } from '@fss/domain/outbound';
+} from '@fss/domain/mail/oauth.ts';
+import { withTransaction, type SessionQueryable } from '@fss/domain/db/queryable.ts';
+import { type RepositoryContext } from '@fss/domain/db/workspaceScope.ts';
+import { registerMailboxSendingDomain } from '@fss/domain/outbound/domainGuard.ts';
 import { errorFields, type Logger } from '../bootstrap/log.ts';
 import { connectMailboxCommandSchema, disconnectMailboxCommandSchema } from '@fss/contracts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';

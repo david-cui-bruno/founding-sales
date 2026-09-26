@@ -1,26 +1,18 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import {
-  classifyReplyWithModel,
-  confirmReplyDisposition,
-  listReplyCards,
-  readConfirmation,
-  readReplyCard,
-} from '../../classification/index.ts';
+import { listReplyCards, readReplyCard } from '../../classification/cards.ts';
+import { classifyReplyWithModel } from '../../classification/classify.ts';
+import { confirmReplyDisposition, readConfirmation } from '../../classification/confirmations.ts';
 import type { Queryable } from '../../db/queryable.ts';
 import { withTransaction } from '../../db/queryable.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
-import {
-  consumeSuppressionStops,
-  consumeTerminalStops,
-  enrollContact,
-  listStepExecutions,
-  readEnrollment,
-} from '../../sequences/index.ts';
+import { enrollContact } from '../../sequences/enrollments.ts';
+import { listStepExecutions, readEnrollment } from '../../sequences/rows.ts';
+import { consumeSuppressionStops, consumeTerminalStops } from '../../sequences/terminalStops.ts';
 import { seedSequences } from '../sequences/support/sequenceFixtures.ts';
-import { readOpportunity } from '../../crm/index.ts';
+import { readOpportunity } from '../../crm/pipeline.ts';
 import { listApplicableHolds } from '../../policy/holds.ts';
-import { isSuppressed } from '../../suppression/index.ts';
-import { businessDateOf } from '../../today/index.ts';
+import { isSuppressed } from '../../suppression/effective.ts';
+import { businessDateOf } from '../../today/snapshots.ts';
 import { REPLY_CORPUS } from '../corpus/replies/cases.ts';
 import { createClassifierWorld, type ClassifierWorld } from './support/classifierWorld.ts';
 

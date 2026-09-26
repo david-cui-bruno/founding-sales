@@ -4,9 +4,11 @@ import {
   parseRouteValidationPayload,
   runEmailRouteValidation,
   type MailDomainResolver,
-} from '@fss/domain/crm';
-import { repositoryContext, type SessionQueryable } from '@fss/domain/db';
-import type { JobHandler, JobSpecification } from '@fss/domain/jobs';
+} from '@fss/domain/crm/routeValidation.ts';
+import { type SessionQueryable } from '@fss/domain/db/queryable.ts';
+import { repositoryContext } from '@fss/domain/db/workspaceScope.ts';
+import type { JobHandler } from '@fss/domain/jobs/handlerRegistry.ts';
+import type { JobSpecification } from '@fss/domain/jobs/jobStore.ts';
 import type { DueWorkSource } from '../scheduler/schedulerPass.ts';
 
 /**

@@ -1,9 +1,11 @@
 import pg from 'pg';
-import type { QueryResultRowLike, SessionQueryable } from '@fss/domain/db';
-import { HandlerRegistry, canaryHandler, createCloudWatchSink, loadCloudWatchTransport } from '@fss/domain/jobs';
-import { defaultTodaySources } from '@fss/domain/today';
-import { dueSequenceWorkSource } from '@fss/domain/sequences';
-import { discoverImageDigest } from '@fss/domain/release';
+import type { QueryResultRowLike, SessionQueryable } from '@fss/domain/db/queryable.ts';
+import { canaryHandler } from '@fss/domain/jobs/canary.ts';
+import { HandlerRegistry } from '@fss/domain/jobs/handlerRegistry.ts';
+import { createCloudWatchSink, loadCloudWatchTransport } from '@fss/domain/jobs/metricsCloudWatch.ts';
+import { defaultTodaySources } from '@fss/domain/today/build.ts';
+import { dueSequenceWorkSource } from '@fss/domain/sequences/todaySource.ts';
+import { discoverImageDigest } from '@fss/domain/release/identity.ts';
 import { WORKER_EXIT_CODES } from '../index.ts';
 import {
   classifyHandlers,
@@ -12,8 +14,8 @@ import {
   describeClassifier,
   type ClassifyWorkerOptions,
 } from '../handlers/classify.ts';
-import type { OutboundSendDeps } from '@fss/domain/outbound';
-import type { SuppressionJournal } from '@fss/domain/suppression';
+import type { OutboundSendDeps } from '@fss/domain/outbound/send.ts';
+import type { SuppressionJournal } from '@fss/domain/suppression/journal.ts';
 import { mailHandlers, todayReplyPromoter, type MailWorkerOptions } from '../handlers/mail.ts';
 import { outboundSendHandoff } from '../handlers/outboundSendHandoff.ts';
 import { routeValidateJobHandler, routeValidationSource, systemMailDomainResolver } from '../handlers/routeValidate.ts';

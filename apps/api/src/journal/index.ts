@@ -4,7 +4,7 @@ import {
   journalObjectKey,
   type SuppressionJournal,
   type SuppressionJournalRecord,
-} from '@fss/domain/suppression';
+} from '@fss/domain/suppression/journal.ts';
 
 /**
  * The S3 suppression journal, behind an interface (specification 10.2, 4.1,
