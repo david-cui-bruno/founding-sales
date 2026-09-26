@@ -21,6 +21,12 @@ locals {
   aws_account_id = "326255650484"
   aws_region     = "us-east-1"
 
+  # The production namespace, exactly: rehearsal is "fss-rh-<run>", so the two
+  # name spaces are disjoint and no rehearsal apply can address a production
+  # resource. Its deployment role is its own.
+  name_prefix          = "fss-prod"
+  deployment_role_name = "fss-prod-deploy"
+
   # What production runs, committed rather than passed as `-var` (26 September 2026):
   # a plan that forgot one used to revert it silently, to no alert subscription, to
   # sending off, or to no plan at all for the two required ones. Changing one is a pull
@@ -35,15 +41,21 @@ locals {
   # The audience the webhook requires in a push token. A property of this
   # environment's own hostname and route, not of Google, so it is derived here
   # rather than read from the Google root; `infra/roots/production-google`
-  # builds the subscription's push endpoint and token audience with this same
-  # expression, and `test/release/googleRoot.check.ts` compares the two.
-  push_audience = "https://${local.api_hostname}${var.gmail_push_path}"
+  # pushes to, and mints its token for, the same address.
+  push_audience = "https://${local.api_hostname}/integrations/gmail/push"
+
+  # Public identifiers of the objects `infra/roots/production-google` owns: its
+  # `gmail_push_topic_id` and `gmail_push_service_account` outputs, created on
+  # 23 September 2026. They change only when that root's objects do, in the same
+  # pull request.
+  gmail_push_topic           = "projects/callie-fss/topics/fss-prod-gmail-push"
+  gmail_push_service_account = "fss-prod-gmail-push@callie-fss.iam.gserviceaccount.com"
 
   # The role this apply acts as: the same expression the provider's
   # `assume_role` block builds, and the same ARN `aws:PrincipalArn` carries for
   # an assumed-role session of it, which is why the journal's listing exemption
   # can be an exact `ArnNotEquals` rather than a pattern.
-  deployment_role_arn = "arn:aws:iam::${local.aws_account_id}:role/${var.deployment_role_name}"
+  deployment_role_arn = "arn:aws:iam::${local.aws_account_id}:role/${local.deployment_role_name}"
 }
 
 module "stack" {
@@ -52,13 +64,11 @@ module "stack" {
   environment = "production"
   destroyable = false
 
-  name_prefix    = var.name_prefix
-  aws_region     = local.aws_region
+  name_prefix    = local.name_prefix
   aws_account_id = local.aws_account_id
 
-  availability_zones = ["us-east-1a", "us-east-1b"]
+  vpc_cidr = "10.60.0.0/16"
 
-  database_instance_class        = "db.t4g.small"
   database_multi_az              = true
   database_allocated_storage     = 50
   database_max_allocated_storage = 200
@@ -77,8 +87,7 @@ module "stack" {
   api_desired_count = 2
   bootstrap         = var.bootstrap
 
-  dependencies_mode = var.dependencies_mode
-  sending_enabled   = local.sending_enabled
+  sending_enabled = local.sending_enabled
 
   # Null in code: the managed instance. Set only while the restore runbook
   # (docs/greenfield/runbooks/restore.md) has production on a point-in-time copy.
@@ -90,8 +99,8 @@ module "stack" {
   certificate_arn = local.certificate_arn
   api_hostname    = local.api_hostname
 
-  journal_object_lock_mode           = var.journal_object_lock_mode
-  journal_object_lock_retention_days = var.journal_object_lock_retention_days
+  # GOVERNANCE (the stack's), ten years.
+  journal_object_lock_retention_days = 3650
 
   # Nobody, by default. David's decision 4 of 21 September 2026: GOVERNANCE,
   # ten years, and tearing the production suppression journal down stays an act
@@ -110,19 +119,15 @@ module "stack" {
   # `docs/archive/decisions/g37-the-deployer-may-list-the-journal-but-never-read-it.md`.
   journal_listing_principal_arns = [local.deployment_role_arn]
 
-  alert_emails         = local.alert_emails
-  log_retention_days   = 90
-  business_time_zone   = var.business_time_zone
-  google_hosted_domain = var.google_hosted_domain
+  alert_emails       = local.alert_emails
+  log_retention_days = 90
 
   # All three are always supplied, and never empty: both binaries call
   # `required()` on each at start-up, so an empty one is a task that refuses to
-  # start rather than a task with push switched off. The audience is derived
-  # above. The topic and the push identity are public identifiers of objects
-  # `infra/roots/production-google` owns, committed as variable defaults, so no
-  # value here is computed by a Google API and no plan of this root asks Google
-  # for anything.
+  # start rather than a task with push switched off. All three are committed
+  # above, so no value here is computed by a Google API and no plan of this root
+  # asks Google for anything.
   gmail_push_audience        = local.push_audience
-  gmail_push_topic           = var.gmail_push_topic
-  gmail_push_service_account = var.gmail_push_service_account
+  gmail_push_topic           = local.gmail_push_topic
+  gmail_push_service_account = local.gmail_push_service_account
 }

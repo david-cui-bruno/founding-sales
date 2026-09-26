@@ -12,12 +12,27 @@ locals {
 
   is_production = var.environment == "production"
 
-  tags = merge(var.extra_tags, {
+  tags = {
     Project     = "callie-fss"
     Environment = var.environment
     NamePrefix  = var.name_prefix
     ManagedBy   = "terraform"
-  })
+  }
+
+  # What both environments share. The region is the one FSS runs in (the account
+  # stays a root input: offline-gate.sh refuses an account id in a module). The
+  # task subnets are the first two /20s of the VPC range and the database subnets
+  # the ninth and tenth, one of each per availability zone. 8080 is the one port
+  # the API container listens on, the load balancer forwards to and the network
+  # admits. The Workspace domain is Callie's; an empty one would admit every
+  # Google account (5.1, 12.1).
+  aws_region           = "us-east-1"
+  availability_zones   = ["us-east-1a", "us-east-1b"]
+  public_subnet_cidrs  = [cidrsubnet(var.vpc_cidr, 4, 0), cidrsubnet(var.vpc_cidr, 4, 1)]
+  private_subnet_cidrs = [cidrsubnet(var.vpc_cidr, 4, 8), cidrsubnet(var.vpc_cidr, 4, 9)]
+  container_port       = 8080
+  business_time_zone   = "America/New_York"
+  google_hosted_domain = "usecallie.com"
 
   # Role names are derived from the prefix rather than read back from the
   # cluster module, so the journal can name its one permitted writer without
@@ -86,10 +101,10 @@ module "network" {
 
   name_prefix          = var.name_prefix
   vpc_cidr             = var.vpc_cidr
-  availability_zones   = var.availability_zones
-  public_subnet_cidrs  = var.public_subnet_cidrs
-  private_subnet_cidrs = var.private_subnet_cidrs
-  api_container_port   = var.container_port
+  availability_zones   = local.availability_zones
+  public_subnet_cidrs  = local.public_subnet_cidrs
+  private_subnet_cidrs = local.private_subnet_cidrs
+  api_container_port   = local.container_port
   tags                 = local.tags
 }
 
@@ -97,7 +112,7 @@ module "observability" {
   source = "../observability"
 
   name_prefix    = var.name_prefix
-  aws_region     = var.aws_region
+  aws_region     = local.aws_region
   aws_account_id = var.aws_account_id
   retention_days = var.log_retention_days
   # The metric filters publish into this environment's namespace, never bare FSS.
@@ -155,7 +170,7 @@ module "journal" {
   aws_account_id             = var.aws_account_id
   writer_role_names          = [local.api_task_role_name, local.worker_task_role_name]
   reader_role_names          = [local.worker_task_role_name]
-  object_lock_mode           = var.journal_object_lock_mode
+  object_lock_mode           = "GOVERNANCE"
   object_lock_retention_days = var.journal_object_lock_retention_days
   force_destroy              = var.destroyable
 
@@ -179,13 +194,13 @@ module "database" {
   subnet_ids             = module.network.private_subnet_ids
   vpc_security_group_ids = [module.network.security_group_ids["database"]]
 
-  instance_class             = var.database_instance_class
+  instance_class             = "db.t4g.small"
   multi_az                   = var.database_multi_az
   allocated_storage          = var.database_allocated_storage
   max_allocated_storage      = var.database_max_allocated_storage
   backup_retention_days      = var.database_backup_retention_days
   delete_automated_backups   = var.database_delete_automated_backups
-  log_min_duration_statement = var.database_log_min_duration_statement
+  log_min_duration_statement = 1000
   apply_immediately          = var.database_apply_immediately
 
   deletion_protection = !var.destroyable
@@ -204,7 +219,7 @@ module "edge" {
   subnet_ids         = module.network.public_subnet_ids
   security_group_ids = [module.network.security_group_ids["alb"]]
   certificate_arn    = var.certificate_arn
-  container_port     = var.container_port
+  container_port     = local.container_port
 
   enable_deletion_protection = !var.destroyable
   force_destroy_logs         = var.destroyable
@@ -216,7 +231,7 @@ module "cluster" {
   source = "../cluster"
 
   name_prefix = var.name_prefix
-  aws_region  = var.aws_region
+  aws_region  = local.aws_region
 
   subnet_ids                = module.network.public_subnet_ids
   api_security_group_ids    = [module.network.security_group_ids["api_task"]]
@@ -227,7 +242,7 @@ module "cluster" {
   api_schema_range    = var.api_schema_range
   worker_schema_range = var.worker_schema_range
 
-  container_port    = var.container_port
+  container_port    = local.container_port
   api_desired_count = var.api_desired_count
   bootstrap         = var.bootstrap
 
@@ -262,11 +277,12 @@ module "cluster" {
 
   environment = {
     FSS_ENVIRONMENT = var.environment
-    # The three deployment flags of 16.2 and G12's bootstrap. Each is refused, not
-    # defaulted, by the process that reads it.
-    FSS_DEPENDENCIES       = var.dependencies_mode
+    # The deployment flags of 16.2. Each is refused, not defaulted, by the process
+    # that reads it. `live` builds every real adapter, in both environments; no
+    # root selects the recorded fakes any more.
+    FSS_DEPENDENCIES       = "live"
     FSS_SENDING_ENABLED    = tostring(var.sending_enabled)
-    FSS_BUSINESS_TIME_ZONE = var.business_time_zone
+    FSS_BUSINESS_TIME_ZONE = local.business_time_zone
     FSS_DATABASE_HOST      = local.database_host
     FSS_DATABASE_PORT      = tostring(module.database.port)
     FSS_DATABASE_NAME      = module.database.database_name
@@ -286,7 +302,7 @@ module "cluster" {
     FSS_GMAIL_PUSH_AUDIENCE        = var.gmail_push_audience
     FSS_GMAIL_PUSH_SERVICE_ACCOUNT = var.gmail_push_service_account
     FSS_GMAIL_PUSH_TOPIC           = var.gmail_push_topic
-    FSS_GOOGLE_HOSTED_DOMAIN       = var.google_hosted_domain
+    FSS_GOOGLE_HOSTED_DOMAIN       = local.google_hosted_domain
   }
 
   tags = local.tags

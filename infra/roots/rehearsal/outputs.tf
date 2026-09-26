@@ -20,7 +20,7 @@ output "metric_namespace" {
 
 output "deployment_role_name" {
   description = "IAM role this root assumes. Scoped to fss-rh-*."
-  value       = var.deployment_role_name
+  value       = local.deployment_role_name
 }
 
 output "resource_names" {

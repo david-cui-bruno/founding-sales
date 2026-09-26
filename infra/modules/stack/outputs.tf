@@ -18,16 +18,6 @@ output "metric_namespace" {
   value       = local.metric_namespace
 }
 
-output "vpc_id" {
-  description = "VPC identifier."
-  value       = module.network.vpc_id
-}
-
-output "security_group_ids" {
-  description = "Security group identifiers keyed by role."
-  value       = module.network.security_group_ids
-}
-
 output "ingress_rules" {
   description = "The declared ingress inventory from the network module."
   value       = module.network.ingress_rules
@@ -57,16 +47,6 @@ output "database_name" {
 output "task_runtime_platform" {
   description = "Operating system family and CPU architecture each task definition declares."
   value       = module.cluster.task_runtime_platform
-}
-
-output "service_shape" {
-  description = "Task size and desired count per service, read back from the plan."
-  value       = module.cluster.service_shape
-}
-
-output "database_shape" {
-  description = "Instance class, Multi-AZ, storage, retention and what a deletion keeps."
-  value       = module.database.instance_shape
 }
 
 output "load_balancer_dns_name" {
@@ -107,11 +87,6 @@ output "worker_task_role_name" {
 output "cluster_arn" {
   description = "ECS cluster ARN. A one-off task is launched against the ARN, never the name: a bare name resolves against whichever account and region the shell holds."
   value       = module.cluster.cluster_arn
-}
-
-output "migration_task_role_name" {
-  description = "Migration task role name. The identity `fss migrate` runs as, and nothing else in the stack shares it."
-  value       = module.cluster.migration_task_role_name
 }
 
 output "migration_task_definition_arn" {
@@ -169,11 +144,6 @@ output "repository_urls" {
   value       = var.create_registry ? one(module.registry[*].repository_urls) : {}
 }
 
-output "repository_names" {
-  description = "ECR repository names keyed by service short name. Empty when this stack creates no registry."
-  value       = var.create_registry ? one(module.registry[*].repository_names) : {}
-}
-
 output "secret_names" {
   description = "Secrets Manager entry names keyed by logical name. Created empty; values entered by hand."
   value       = module.secrets.secret_names
@@ -220,11 +190,6 @@ output "alarm_names" {
 output "alarm_metric_namespaces" {
   description = "Every CloudWatch namespace this environment's alarms read. Exactly [metric_namespace], so a root test can assert that no alarm here reads another environment's metrics."
   value       = module.alerts.alarm_metric_namespaces
-}
-
-output "critical_composite_alarm_name" {
-  description = "The composite alarm over every immediately critical condition."
-  value       = module.alerts.critical_composite_alarm_name
 }
 
 output "log_group_names" {

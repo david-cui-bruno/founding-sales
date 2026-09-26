@@ -190,8 +190,8 @@ run "a_production_bootstrap_creates_both_services_at_zero" {
   # cannot be launched until the cluster exists, so the only order that works is:
   # create at zero, migrate, verify, scale.
   assert {
-    condition = (module.stack.service_shape.api.desired_count == 0
-    && module.stack.service_shape.worker.desired_count == 0)
+    condition = (module.stack.deployment_plan.api.planned_desired_count == 0
+    && module.stack.deployment_plan.worker.planned_desired_count == 0)
     error_message = "The first apply of a fresh production environment creates both services at desired count zero."
   }
 
@@ -270,41 +270,6 @@ run "the_deployment_flags_reach_both_containers" {
   }
 }
 
-run "a_production_apply_cannot_ask_for_no_dependencies_at_all" {
-  command = plan
-
-  variables {
-    dependencies_mode = "none"
-  }
-
-  # `none` is a real value the bootstraps accept on a laptop. It must not be
-  # typeable into a root that deploys to AWS: both binaries refuse it when
-  # FSS_ENVIRONMENT is production, and a plan is a better place to learn that
-  # than a crash loop.
-  expect_failures = [var.dependencies_mode]
-}
-
-# The mirror of the rehearsal acceptance case.
-run "a_rehearsal_prefix_is_refused" {
-  command = plan
-
-  variables {
-    name_prefix = "fss-rh-sneaky"
-  }
-
-  expect_failures = [var.name_prefix]
-}
-
-run "a_rehearsal_deployment_role_is_refused" {
-  command = plan
-
-  variables {
-    deployment_role_name = "fss-rh-deploy"
-  }
-
-  expect_failures = [var.deployment_role_name]
-}
-
 run "gmail_push_wires_the_audience_the_webhook_must_require" {
   command = plan
 
@@ -372,59 +337,6 @@ run "both_services_are_told_the_workspace_domain" {
     condition     = module.stack.worker_environment["FSS_GOOGLE_HOSTED_DOMAIN"] == "usecallie.com"
     error_message = "The worker reads the same domain, so the two processes cannot disagree about it."
   }
-}
-
-run "an_empty_hosted_domain_is_refused" {
-  command = plan
-
-  variables {
-    google_hosted_domain = ""
-  }
-
-  expect_failures = [var.google_hosted_domain]
-}
-
-# The rehearsal's placeholders are well-formed and unreal, and a production task
-# carrying either would register no watch and accept no push. Each is refused by
-# the variable that would carry it, as is a blank.
-run "the_rehearsal_placeholder_topic_is_refused" {
-  command = plan
-
-  variables {
-    gmail_push_topic = "projects/fss-rehearsal-no-push/topics/fss-rehearsal-no-push"
-  }
-
-  expect_failures = [var.gmail_push_topic]
-}
-
-run "an_empty_topic_is_refused" {
-  command = plan
-
-  variables {
-    gmail_push_topic = ""
-  }
-
-  expect_failures = [var.gmail_push_topic]
-}
-
-run "the_rehearsal_placeholder_service_account_is_refused" {
-  command = plan
-
-  variables {
-    gmail_push_service_account = "gmail-push@fss-rehearsal-no-push.invalid"
-  }
-
-  expect_failures = [var.gmail_push_service_account]
-}
-
-run "another_service_account_is_refused" {
-  command = plan
-
-  variables {
-    gmail_push_service_account = "someone-else@callie-fss.iam.gserviceaccount.com"
-  }
-
-  expect_failures = [var.gmail_push_service_account]
 }
 
 run "only_the_load_balancer_faces_the_internet" {

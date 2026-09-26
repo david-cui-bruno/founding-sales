@@ -19,21 +19,6 @@ variable "name_prefix" {
   }
 }
 
-variable "deployment_role_name" {
-  description = <<-EOT
-    IAM role Terraform assumes for this run. Its policy is scoped to the
-    fss-rh-* namespace, so even a mistaken destroy has no permission to touch
-    a production resource. Production and rehearsal never share a role.
-  EOT
-  type        = string
-  default     = "fss-rh-deploy"
-
-  validation {
-    condition     = startswith(var.deployment_role_name, "fss-rh-") && !startswith(var.deployment_role_name, "fss-prod")
-    error_message = "The rehearsal deployment role must live in the fss-rh- namespace."
-  }
-}
-
 variable "assume_deployment_role" {
   description = <<-EOT
     Whether the provider assumes `deployment_role_name` before it calls AWS, or
@@ -115,88 +100,6 @@ variable "worker_schema_range" {
   })
 }
 
-variable "dependencies_mode" {
-  description = <<-EOT
-    `FSS_DEPENDENCIES` on both task definitions, and the rehearsal default is
-    `live`, the same as production's.
-
-    That is deliberate and it is a change of mind worth stating: an earlier
-    reading of this lane's brief had the rehearsal default to `recorded`. G12b
-    made Google sign-in a start-up requirement, and the rehearsal signs in with
-    the *real* OIDC client under its second registered redirect URI
-    (`api.rehearsal.usecallie.com`), so a `recorded` deployment would not be
-    rehearsing the path production runs. The one step that wants the recorded
-    Gmail fake — the journal replay and Sent reconstruction, where no real
-    rehearsal mailbox exists — sets `FSS_DEPENDENCIES: recorded` on its own
-    workflow step, which is the fake being chosen by name.
-
-    A run against a rehearsal-only Google project can still apply with
-    `recorded`; it is one `-var` and the isolation test asserts it works.
-  EOT
-  type        = string
-  default     = "live"
-
-  validation {
-    condition     = contains(["live", "recorded"], var.dependencies_mode)
-    error_message = "dependencies_mode must be live or recorded. none is the laptop value and a deployed process never reaches its no-op dependencies."
-  }
-}
-
-variable "sending_enabled" {
-  description = <<-EOT
-    `FSS_SENDING_ENABLED` on both rehearsal task definitions. Always false, and
-    nothing in the release workflow passes it: a rehearsal that could send would
-    send to whatever addresses the fixtures hold.
-  EOT
-  type        = bool
-  default     = false
-}
-
-variable "alert_emails" {
-  description = "Addresses that receive rehearsal alerts."
-  type        = list(string)
-  default     = []
-}
-
-variable "journal_object_lock_retention_days" {
-  description = <<-EOT
-    Object lock retention for the rehearsal journal. One day, because an
-    object-locked object refuses deletion until its retention expires and a
-    rehearsal environment has to be able to disappear. Governance mode plus a
-    one-day retention keeps the replay test honest without leaving a bucket
-    that cannot be removed.
-  EOT
-  type        = number
-  default     = 1
-}
-
-variable "log_retention_days" {
-  description = "Rehearsal log retention. Short, because the run is short."
-  type        = number
-  default     = 7
-}
-
-variable "business_time_zone" {
-  description = "Workspace business zone for the Today snapshot date."
-  type        = string
-  default     = "America/New_York"
-}
-
-variable "google_hosted_domain" {
-  description = <<-EOT
-    The Callie Google Workspace domain, the same one production uses: the
-    rehearsal signs in with the same OIDC client under its second registered
-    redirect URI (api.rehearsal.usecallie.com). A public identifier.
-  EOT
-  type        = string
-  default     = "usecallie.com"
-
-  validation {
-    condition     = can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$", var.google_hosted_domain))
-    error_message = "google_hosted_domain must be a domain name and may not be empty."
-  }
-}
-
 # ---------------------------------------------------------------------------
 # Gmail push, without a Google Cloud project.
 #
@@ -211,48 +114,6 @@ variable "google_hosted_domain" {
 # refuses to start; these are the values that let a rehearsal environment boot.
 # `docs/archive/decisions/g12j-the-rehearsal-has-no-google-provider.md`.
 # ---------------------------------------------------------------------------
-
-variable "gmail_push_path" {
-  description = "Path on the API that a push notification would be delivered to. The same route in every environment; the audience below is built from it."
-  type        = string
-  default     = "/integrations/gmail/push"
-
-  validation {
-    condition     = startswith(var.gmail_push_path, "/")
-    error_message = "The push path is a path on the API, beginning with a slash."
-  }
-}
-
-variable "gmail_push_topic" {
-  description = <<-EOT
-    `FSS_GMAIL_PUSH_TOPIC` on both rehearsal task definitions.
-
-    A public identifier naming a Google Cloud project that does not exist, and
-    that is the point: a rehearsal registers no Gmail watch, so nothing ever
-    names this topic to Google. It is well-formed
-    (`projects/<project>/topics/<name>`, which is what `users.watch` takes) so
-    that a rehearsal exercises the same parsing production will, and it is
-    obviously not a real project so that nobody reads a rehearsal log as
-    evidence that push works. Spec 16.2's Gmail path is proved in production,
-    never here: `docs/archive/decisions/g12-what-the-rehearsal-cannot-prove.md`.
-  EOT
-  type        = string
-  default     = "projects/fss-rehearsal-no-push/topics/fss-rehearsal-no-push"
-}
-
-variable "gmail_push_service_account" {
-  description = <<-EOT
-    `FSS_GMAIL_PUSH_SERVICE_ACCOUNT` on both rehearsal task definitions: the one
-    address whose push token the webhook would accept.
-
-    The default is in the reserved `.invalid` domain rather than the
-    `iam.gserviceaccount.com` one, because no such identity exists and Google
-    cannot mint a token for it. A rehearsal that needed a real one would be a
-    rehearsal with its own Google project, which is not a thing this design has.
-  EOT
-  type        = string
-  default     = "gmail-push@fss-rehearsal-no-push.invalid"
-}
 
 variable "bootstrap" {
   description = <<-EOT

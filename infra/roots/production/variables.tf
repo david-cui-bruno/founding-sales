@@ -1,30 +1,3 @@
-variable "name_prefix" {
-  description = <<-EOT
-    The production namespace. It is fixed. The validation below is half of the
-    structural isolation between the two roots: production is exactly
-    "fss-prod" and rehearsal is "fss-rh-<run>", so the two name spaces are
-    disjoint and no rehearsal apply can address a production resource.
-  EOT
-  type        = string
-  default     = "fss-prod"
-
-  validation {
-    condition     = var.name_prefix == "fss-prod"
-    error_message = "The production root owns exactly the fss-prod namespace. Another prefix belongs in another root."
-  }
-}
-
-variable "deployment_role_name" {
-  description = "IAM role Terraform assumes for this root. Production and rehearsal never share one."
-  type        = string
-  default     = "fss-prod-deploy"
-
-  validation {
-    condition     = startswith(var.deployment_role_name, "fss-prod-") && !startswith(var.deployment_role_name, "fss-rh-")
-    error_message = "The production deployment role must live in the fss-prod- namespace."
-  }
-}
-
 variable "assume_deployment_role" {
   description = <<-EOT
     Whether the provider assumes `deployment_role_name` before it calls AWS, or
@@ -82,26 +55,6 @@ variable "worker_schema_range" {
   })
 }
 
-variable "dependencies_mode" {
-  description = <<-EOT
-    `FSS_DEPENDENCIES` on both task definitions. Production is `live`: every
-    real adapter is built from the deployed configuration, and any missing part
-    is a refusal to start rather than a queue that quietly never drains.
-
-    `recorded` is accepted by the validation and refused at run time by both
-    binaries when `FSS_ENVIRONMENT` is production (`PRODUCTION_REQUIRES_LIVE`),
-    so the refusal is not duplicated here. `none` is refused outright: it is the
-    laptop value, and a deployed process must never reach a no-op by omission.
-  EOT
-  type        = string
-  default     = "live"
-
-  validation {
-    condition     = contains(["live", "recorded"], var.dependencies_mode)
-    error_message = "dependencies_mode must be live or recorded. none is the laptop value and a deployed process never reaches its no-op dependencies."
-  }
-}
-
 variable "active_database_host" {
   description = <<-EOT
     FSS_DATABASE_HOST on the api, worker, migration and operations task
@@ -124,18 +77,6 @@ variable "active_database_host" {
     condition     = var.active_database_host == null ? true : can(regex("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$", var.active_database_host))
     error_message = "active_database_host is null or a lower-case DNS hostname with at least one dot, such as a restored instance's endpoint address: no scheme, no port, no path."
   }
-}
-
-variable "journal_object_lock_mode" {
-  description = "GOVERNANCE or COMPLIANCE for the suppression journal."
-  type        = string
-  default     = "GOVERNANCE"
-}
-
-variable "journal_object_lock_retention_days" {
-  description = "Default object lock retention for journal objects."
-  type        = number
-  default     = 3650
 }
 
 variable "journal_administrative_principal_arns" {
@@ -161,31 +102,6 @@ variable "journal_administrative_principal_arns" {
   default     = []
 }
 
-variable "business_time_zone" {
-  description = "Workspace business zone for the Today snapshot date."
-  type        = string
-  default     = "America/New_York"
-}
-
-variable "google_hosted_domain" {
-  description = <<-EOT
-    The Callie Google Workspace domain. Both task definitions carry it: the API
-    refuses an id token whose `hd` differs (5.1) and a mailbox outside it
-    (12.1), and the worker reads the same value so the two cannot disagree.
-    A public identifier, which is why it is here rather than in a secret.
-  EOT
-  type        = string
-  default     = "usecallie.com"
-
-  # Repeated from the stack module deliberately: this is the operator's input,
-  # and a refusal should name the variable they typed rather than one three
-  # modules down. An empty domain would admit every Google account there is.
-  validation {
-    condition     = can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$", var.google_hosted_domain))
-    error_message = "google_hosted_domain must be a domain name and may not be empty."
-  }
-}
-
 # ---------------------------------------------------------------------------
 # Gmail push, without a Google provider (lane g85, audit O01).
 #
@@ -200,68 +116,6 @@ variable "google_hosted_domain" {
 # `-var="gcp_project_id=…"` to this root is now an "undeclared variable" error.
 # `docs/archive/decisions/g85-the-google-provider-has-its-own-root.md`.
 # ---------------------------------------------------------------------------
-
-variable "gmail_push_path" {
-  description = <<-EOT
-    Path on the API that Pub/Sub pushes to. It is the same route in every
-    environment. This root builds the audience the webhook requires from it,
-    and `infra/roots/production-google` builds the subscription's push endpoint
-    and token audience from the same default with the same expression, so the
-    subscription and the task definitions cannot disagree about what the webhook
-    will accept.
-  EOT
-  type        = string
-  default     = "/integrations/gmail/push"
-
-  validation {
-    condition     = startswith(var.gmail_push_path, "/")
-    error_message = "The push path is a path on the API, beginning with a slash."
-  }
-}
-
-variable "gmail_push_topic" {
-  description = <<-EOT
-    `FSS_GMAIL_PUSH_TOPIC` on both task definitions: the fully qualified topic
-    id `users.watch` registers against. The worker renews the watch on it and
-    the API reports it.
-
-    A public identifier of an object this root does not manage. It is
-    `infra/roots/production-google`'s `gmail_push_topic_id` output, and the
-    default is that value, the topic created on 23 September 2026. It changes
-    only when the Google root's topic does, in the same pull request, and
-    `test/release/googleRoot.check.ts` fails when the two disagree. The
-    validation refuses the rehearsal's no-push placeholder and anything that
-    is not the production topic's name in some project.
-  EOT
-  type        = string
-  default     = "projects/callie-fss/topics/fss-prod-gmail-push"
-
-  validation {
-    condition     = can(regex("^projects/[a-z][a-z0-9-]{5,29}/topics/fss-prod-gmail-push$", var.gmail_push_topic))
-    error_message = "gmail_push_topic is the production topic id, projects/<project>/topics/fss-prod-gmail-push: infra/roots/production-google's gmail_push_topic_id output."
-  }
-}
-
-variable "gmail_push_service_account" {
-  description = <<-EOT
-    `FSS_GMAIL_PUSH_SERVICE_ACCOUNT` on both task definitions: the one address
-    whose push token the webhook accepts, compared exactly.
-
-    A public identifier of an object this root does not manage. It is
-    `infra/roots/production-google`'s `gmail_push_service_account` output, and
-    the default is that value. A service account's email is fixed by its id and
-    its project, so it changes only with them, in the same pull request. The
-    validation refuses the rehearsal's `.invalid` placeholder, a blank, and any
-    identity that is not the production push service account.
-  EOT
-  type        = string
-  default     = "fss-prod-gmail-push@callie-fss.iam.gserviceaccount.com"
-
-  validation {
-    condition     = can(regex("^fss-prod-gmail-push@[a-z][a-z0-9-]{5,29}\\.iam\\.gserviceaccount\\.com$", var.gmail_push_service_account))
-    error_message = "gmail_push_service_account is the production push identity, fss-prod-gmail-push@<project>.iam.gserviceaccount.com: infra/roots/production-google's gmail_push_service_account output."
-  }
-}
 
 variable "bootstrap" {
   description = <<-EOT
@@ -296,8 +150,9 @@ variable "desktop_upgrade_url" {
     the desktop reads and, since lane g83, installs from by itself. The
     desktop's upgrade screen shows a sentence and never this address.
 
-    A default rather than a tfvars entry, for the reason `cpu_architecture`
-    gives. The validation refuses a blank, anything but a plain https address,
+    A default rather than a tfvars entry: `infra/.gitignore` ignores `*.tfvars`,
+    so a value written there is one the repository never sees. The validation
+    refuses a blank, anything but a plain https address,
     and the `callie.example` placeholder the API publishes outside production;
     the API refuses to start in production without a value, so both lines hold.
     `docs/archive/decisions/g86-the-upgrade-notice-names-the-update-channel.md`.

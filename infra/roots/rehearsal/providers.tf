@@ -15,7 +15,7 @@ provider "aws" {
     for_each = var.assume_deployment_role ? [1] : []
 
     content {
-      role_arn     = "arn:aws:iam::${local.aws_account_id}:role/${var.deployment_role_name}"
+      role_arn     = "arn:aws:iam::${local.aws_account_id}:role/${local.deployment_role_name}"
       session_name = "fss-rehearsal-terraform"
     }
   }

@@ -136,7 +136,7 @@
 # rule in `docs/greenfield/release.md` 4.0 is to read the deployed digests first.
 
 locals {
-  ci_deploy_role_name = "${var.name_prefix}-ci-deploy"
+  ci_deploy_role_name = "${local.name_prefix}-ci-deploy"
 
   # GitHub's OIDC issuer, the account's provider for it, and the one subject the
   # role trusts. The repository and the environment are literals on purpose: a
@@ -171,14 +171,14 @@ locals {
   ci_deploy_pass_roles = flatten([
     for service in local.ci_deploy_services : [
       "arn:aws:iam::${local.aws_account_id}:role/${local.ci_deploy_task_role[service]}",
-      "arn:aws:iam::${local.aws_account_id}:role/${var.name_prefix}-${service}-exec",
+      "arn:aws:iam::${local.aws_account_id}:role/${local.name_prefix}-${service}-exec",
     ]
   ])
 
   # The rehearsal repositories are the two stable ones `infra/roots/rehearsal-registry`
   # owns, which CI's `publish` job pushes to. Read only.
   ci_deploy_source_repositories      = [for service in local.ci_deploy_services : "arn:aws:ecr:${local.aws_region}:${local.aws_account_id}:repository/fss-rh-${service}"]
-  ci_deploy_destination_repositories = [for service in local.ci_deploy_services : "arn:aws:ecr:${local.aws_region}:${local.aws_account_id}:repository/${var.name_prefix}-${service}"]
+  ci_deploy_destination_repositories = [for service in local.ci_deploy_services : "arn:aws:ecr:${local.aws_region}:${local.aws_account_id}:repository/${local.name_prefix}-${service}"]
 
   ci_deploy_log_groups = flatten([
     for service in local.ci_deploy_services : [
@@ -294,7 +294,7 @@ locals {
           Action   = ["ecs:RegisterTaskDefinition"]
           Resource = ["*"]
           Condition = {
-            StringEquals = { "aws:RequestTag/NamePrefix" = var.name_prefix }
+            StringEquals = { "aws:RequestTag/NamePrefix" = local.name_prefix }
           }
         },
         {
@@ -389,7 +389,7 @@ resource "aws_iam_role" "ci_deploy" {
 
   tags = {
     Name       = local.ci_deploy_role_name
-    NamePrefix = var.name_prefix
+    NamePrefix = local.name_prefix
   }
 }
 
