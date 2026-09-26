@@ -1,10 +1,10 @@
 # FSS greenfield runtime: one ECS cluster and two Fargate services.
 #
 # The API and the worker are separate services with separate task roles and
-# separate execution roles, so the worker's Gmail and research reach is not the
-# API's. Both may append to the suppression journal and neither may delete from
-# it: 10.2 requires the journal write before acknowledgement, and the worker
-# records prospect opt-outs during mail sync.
+# separate execution roles, so the worker's Gmail reach is not the API's. Both
+# may append to the suppression journal and neither may delete from it: 10.2
+# requires the journal write before acknowledgement, and the worker records
+# prospect opt-outs during mail sync.
 #
 # Images are digests. A tag is refused by variable validation, because the
 # release gate compares the digest that passed rehearsal with the digest that
@@ -80,7 +80,7 @@ locals {
     FSS_JOURNAL_ARN = var.journal_bucket_arn
   }, local.generation_environment)
 
-  worker_environment = merge(local.common_environment, var.worker_environment, {
+  worker_environment = merge(local.common_environment, {
     FSS_ROLE       = "worker"
     FSS_SCHEMA_MIN = tostring(var.worker_schema_range.min)
     FSS_SCHEMA_MAX = tostring(var.worker_schema_range.max)
@@ -105,17 +105,12 @@ locals {
   #     not under its logical name (see `secret_environment_names`).
   #   * the operations tool and the drill read `google-gmail-oauth-client` through
   #     the same `readWorkerDeployment` the worker does, and nothing else.
-  #   * nothing reads `research-provider-credentials`: production allows research
-  #     `none` only and no adapter takes a credential. The entry is still created
-  #     and filled (`infra/modules/secrets`), and handed to no task until a process
-  #     reads it.
   #
   # The database entries are not in these lists: they arrive through the two named
   # inputs, as before, and the runtime one is added to each map below.
   api_secret_names        = ["device-credential-pepper", "google-gmail-oauth-client", "google-oidc-client", "session-signing-key"]
   worker_secret_names     = ["google-gmail-oauth-client", "llm-classifier-api-key"]
   operations_secret_names = ["google-gmail-oauth-client"]
-  unread_secret_names     = ["research-provider-credentials"]
 
   # The environment variable a process reads a secret under, where that is not the
   # secret's logical name (lane g81). The ECS `secrets` block names the variable, and
@@ -143,9 +138,8 @@ locals {
   operations_task_secrets = merge({ for name, arn in var.secret_arns : lookup(local.secret_environment_names, name, name) => arn if contains(local.operations_secret_names, name) }, local.runtime_database_secret)
 
   # An application secret no list names would be one nobody gets; a new entry in
-  # `infra/modules/secrets` must be given to the process that reads it, or named as
-  # read by nothing.
-  unassigned_secret_names = sort(setsubtract(keys(var.secret_arns), concat(local.api_secret_names, local.worker_secret_names, local.operations_secret_names, local.unread_secret_names)))
+  # `infra/modules/secrets` must be given to the process that reads it.
+  unassigned_secret_names = sort(setsubtract(keys(var.secret_arns), concat(local.api_secret_names, local.worker_secret_names, local.operations_secret_names)))
 
   # The migration task's two references, with the names the tool reads
   # (`apps/worker/src/tools/fss/config.ts`, `TOOL_ENVIRONMENT_VARIABLES`, and
@@ -215,9 +209,11 @@ locals {
 resource "aws_ecs_cluster" "main" {
   name = "${var.name_prefix}-cluster"
 
+  # Off, and stated rather than left to the account default: Container Insights
+  # is billed per metric. Its switch, never turned on, went in wave 2.
   setting {
     name  = "containerInsights"
-    value = var.container_insights
+    value = "disabled"
   }
 
   tags = merge(var.tags, { Name = "${var.name_prefix}-cluster" })
@@ -690,7 +686,7 @@ resource "aws_ecs_task_definition" "api" {
     # give to its reader. Refused here rather than silently injected into nobody.
     precondition {
       condition     = length(local.unassigned_secret_names) == 0
-      error_message = "Every application secret must be read by some process, or named as read by none: add it to the api, worker, operations or unread list in infra/modules/cluster/main.tf. Unassigned: ${join(", ", local.unassigned_secret_names)}."
+      error_message = "Every application secret must be read by some process: add it to the api, worker or operations list in infra/modules/cluster/main.tf. Unassigned: ${join(", ", local.unassigned_secret_names)}."
     }
   }
 
@@ -929,7 +925,6 @@ resource "aws_ecs_service" "api" {
   propagate_tags  = "SERVICE"
 
   enable_ecs_managed_tags = true
-  enable_execute_command  = var.enable_execute_command
 
   health_check_grace_period_seconds = var.health_check_grace_period_seconds
 
@@ -987,7 +982,6 @@ resource "aws_ecs_service" "worker" {
   propagate_tags  = "SERVICE"
 
   enable_ecs_managed_tags = true
-  enable_execute_command  = var.enable_execute_command
 
   # Replace rather than overlap. Overlapping workers are safe (the scheduler
   # pass takes a transaction advisory lock and every handler is protected by

@@ -768,8 +768,6 @@ jobs:
                 value="$(openssl rand -base64 48 | tr -d '\n')" ;;
               llm-classifier-api-key)
                 value="rehearsal-$(openssl rand -hex 24)" ;;
-              research-provider-credentials)
-                value="$(printf '{"rehearsal":"%s"}' "$(openssl rand -hex 16)")" ;;
               *)
                 echo "::error::secret entry '$name' is in the stack's list and this step does not know how to fill it; a task naming it would not start"
                 exit 1 ;;

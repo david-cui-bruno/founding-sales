@@ -29,18 +29,6 @@ variable "price_class" {
   }
 }
 
-variable "aliases" {
-  description = "Optional custom hostnames. Requires acm_certificate_arn in us-east-1."
-  type        = list(string)
-  default     = []
-}
-
-variable "acm_certificate_arn" {
-  description = "ACM certificate in us-east-1 for the custom hostnames. Null uses the default CloudFront certificate."
-  type        = string
-  default     = null
-}
-
 variable "noncurrent_version_expiration_days" {
   description = "Days a superseded package version is kept. Rollback needs earlier compatible binaries."
   type        = number

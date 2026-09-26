@@ -126,24 +126,6 @@ variable "delete_automated_backups" {
   default     = false
 }
 
-variable "performance_insights_enabled" {
-  description = "Performance Insights. Optional and priced per vCPU beyond the free retention."
-  type        = bool
-  default     = false
-}
-
-variable "performance_insights_retention_period" {
-  description = "Performance Insights retention in days. 7 is the free tier."
-  type        = number
-  default     = 7
-}
-
-variable "monitoring_interval" {
-  description = "Enhanced Monitoring interval in seconds. 0 disables it."
-  type        = number
-  default     = 0
-}
-
 variable "log_min_duration_statement" {
   description = "Milliseconds above which a statement is logged. -1 disables statement duration logging."
   type        = number

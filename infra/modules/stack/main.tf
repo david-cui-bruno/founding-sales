@@ -76,11 +76,6 @@ resource "terraform_data" "environment_guard" {
       condition     = !local.is_production || var.database_backup_retention_days == 35
       error_message = "A production database keeps the full 35-day point-in-time recovery window."
     }
-
-    precondition {
-      condition     = !local.is_production || var.enable_execute_command == false
-      error_message = "ECS Exec into a production task is not a deployment-time option."
-    }
   }
 }
 
@@ -184,15 +179,14 @@ module "database" {
   subnet_ids             = module.network.private_subnet_ids
   vpc_security_group_ids = [module.network.security_group_ids["database"]]
 
-  instance_class               = var.database_instance_class
-  multi_az                     = var.database_multi_az
-  allocated_storage            = var.database_allocated_storage
-  max_allocated_storage        = var.database_max_allocated_storage
-  backup_retention_days        = var.database_backup_retention_days
-  delete_automated_backups     = var.database_delete_automated_backups
-  performance_insights_enabled = var.database_performance_insights_enabled
-  log_min_duration_statement   = var.database_log_min_duration_statement
-  apply_immediately            = var.database_apply_immediately
+  instance_class             = var.database_instance_class
+  multi_az                   = var.database_multi_az
+  allocated_storage          = var.database_allocated_storage
+  max_allocated_storage      = var.database_max_allocated_storage
+  backup_retention_days      = var.database_backup_retention_days
+  delete_automated_backups   = var.database_delete_automated_backups
+  log_min_duration_statement = var.database_log_min_duration_statement
+  apply_immediately          = var.database_apply_immediately
 
   deletion_protection = !var.destroyable
   skip_final_snapshot = var.destroyable
@@ -211,11 +205,9 @@ module "edge" {
   security_group_ids = [module.network.security_group_ids["alb"]]
   certificate_arn    = var.certificate_arn
   container_port     = var.container_port
-  elb_account_id     = var.elb_account_id
 
   enable_deletion_protection = !var.destroyable
   force_destroy_logs         = var.destroyable
-  enable_waf                 = var.enable_waf
 
   tags = local.tags
 }
@@ -272,20 +264,11 @@ module "cluster" {
   # rehearsal worker holding it would call the provider with a key that cannot work.
   worker_reads_classifier_key = local.is_production
 
-  metric_namespace       = local.metric_namespace
-  container_insights     = var.container_insights
-  enable_execute_command = var.enable_execute_command
+  metric_namespace = local.metric_namespace
 
-  # Appendix E step 1 (lane g56). A first-class input rather than an
-  # extra_environment entry, for the reason the deployment flags are: the cluster
-  # refuses it anywhere else, so the plan shows the one place it changes.
+  # Appendix E step 1 (lane g56). A first-class input, so the plan shows the one
+  # place it changes.
   expected_system_generation = var.expected_system_generation
-
-  # FSS_RESEARCH_PROVIDERS is the worker's alone: the API has no research
-  # adapter, and a variable a process never reads is a variable that drifts.
-  worker_environment = {
-    FSS_RESEARCH_PROVIDERS = var.research_providers
-  }
 
   # The upgrade notice's address is the API's alone (lane g86), and absent rather
   # than empty when unset, so the API's own rule decides what an unset one means.
@@ -293,11 +276,10 @@ module "cluster" {
     FSS_DESKTOP_UPGRADE_URL = var.desktop_upgrade_url
   }
 
-  environment = merge(var.extra_environment, {
+  environment = {
     FSS_ENVIRONMENT = var.environment
-    # The three deployment flags of 16.2 and G12's bootstrap. They are first-class
-    # inputs rather than entries in extra_environment because each is refused,
-    # not defaulted, by the process that reads it.
+    # The three deployment flags of 16.2 and G12's bootstrap. Each is refused, not
+    # defaulted, by the process that reads it.
     FSS_DEPENDENCIES       = var.dependencies_mode
     FSS_SENDING_ENABLED    = tostring(var.sending_enabled)
     FSS_BUSINESS_TIME_ZONE = var.business_time_zone
@@ -321,7 +303,7 @@ module "cluster" {
     FSS_GMAIL_PUSH_SERVICE_ACCOUNT = var.gmail_push_service_account
     FSS_GMAIL_PUSH_TOPIC           = var.gmail_push_topic
     FSS_GOOGLE_HOSTED_DOMAIN       = var.google_hosted_domain
-  })
+  }
 
   tags = local.tags
 }

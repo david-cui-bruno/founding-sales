@@ -21,13 +21,13 @@ Region assumed throughout: `us-east-1`, the account the repository already names
 | RDS storage | GB-month of gp3, **doubled by Multi-AZ** | 50 GiB provisioned, autoscaling to 200 GiB | `database_allocated_storage`, `database_max_allocated_storage` | 20 GiB, no autoscaling |
 | RDS provisioned IOPS / throughput | Only billed above the gp3 baseline | none above baseline at 50 GiB | n/a | none |
 | RDS backup storage | GB-month of backup **beyond** the provisioned storage size | 35-day retention over a 50 GiB instance | fixed at 35 in the production root | 1 day |
-| RDS Performance Insights | vCPU-month beyond the 7-day free retention | off | `database_performance_insights_enabled` | off |
-| RDS Enhanced Monitoring | CloudWatch Logs ingestion per metric sample | off (`monitoring_interval = 0`) | module default | off |
+| RDS Performance Insights | vCPU-month beyond the 7-day free retention | off; no switch (deleted in wave 2) | n/a | off |
+| RDS Enhanced Monitoring | CloudWatch Logs ingestion per metric sample | off; no switch (deleted in wave 2) | n/a | off |
 | Fargate API tasks | vCPU-hour + GB-hour, per task, per architecture | 2 tasks × 0.5 vCPU × 1 GiB × 730 h | `api_desired_count`, `api_cpu`, `api_memory`, `cpu_architecture` | 1 task × 0.5 vCPU × 1 GiB |
 | Fargate worker tasks | vCPU-hour + GB-hour | 1 task × 0.5 vCPU × 1 GiB × 730 h | `worker_desired_count`, `worker_cpu`, `worker_memory` | 1 task × 0.5 vCPU × 1 GiB |
 | Fargate ephemeral storage | GB-month above the free 20 GiB per task | none above free | n/a | none |
 | ECS cluster | No charge for the cluster itself | 1 | n/a | 1 |
-| ECS Container Insights | Per custom metric and per log ingested | **disabled** | `container_insights` | disabled |
+| ECS Container Insights | Per custom metric and per log ingested | **disabled**, a literal on the cluster | n/a | disabled |
 
 Cost levers worth David's attention, in order of size:
 
@@ -47,7 +47,7 @@ Cost levers worth David's attention, in order of size:
 | NAT gateway | **Not used.** Gateway-hour and GB-processed | 0 | — | 0 |
 | VPC interface endpoints | **Not used.** Endpoint-hour per AZ and GB-processed | 0 | — | 0 |
 | Data transfer out to internet | GB out | Gmail and Google API traffic; small | n/a | small |
-| WAFv2 | Web-ACL-month + rule-month + per million requests | **off** | `enable_waf` | off |
+| WAFv2 | Web-ACL-month + rule-month + per million requests | **not built**; the switch was deleted in wave 2 | — | not built |
 | ACM certificate | No charge for a public certificate on an ALB | 1 | n/a | 1 |
 
 The no-NAT choice is the largest single saving in the network. A NAT gateway would be billed per hour **and** per GB processed, for every ECR pull and every Gmail call. Public addresses on the tasks cost per address-hour only, and the security groups mean nothing can reach the tasks from outside: the API admits only the ALB, the worker admits nothing at all. `infra/modules/network/tests/security_groups.tftest.hcl` asserts exactly that.
@@ -62,7 +62,7 @@ The no-NAT choice is the largest single saving in the network. A NAT gateway wou
 | CloudFront | Per GB out to the internet, per 10,000 requests, per price class | `PriceClass_100` | `updates_price_class` | `PriceClass_100` |
 | ECR | GB-month of stored images + data transfer | 2 repositories, 30 images retained each, untagged expired at 7 days | module defaults | same, force-deletable |
 | KMS customer keys | Key-month per key + per 10,000 requests | **6 keys**: database, secrets, envelope, journal, logs, alerts | n/a | 6 keys, the same 30-day deletion window |
-| Secrets Manager | Per secret-month + per 10,000 API calls | 6 empty entries + 1 RDS-managed master user secret = 7 | `secret_names` | 7, zero-day recovery window |
+| Secrets Manager | Per secret-month + per 10,000 API calls | 7 entries created empty (5 application, 2 database identities) + 1 RDS-managed master user secret = 8 | `secret_names` | 8, zero-day recovery window |
 
 Six customer keys is a deliberate choice, not an accident. Spec 4.1 wants the envelope key for refresh tokens separate from application secrets, and separating the journal key from the log key means an operator who can read logs still cannot decrypt suppression history. If David wants the line smaller, the honest consolidation is logs + alerts onto one key; the database, envelope and journal keys should stay separate.
 

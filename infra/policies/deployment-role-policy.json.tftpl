@@ -55,9 +55,7 @@
         "secretsmanager:ListSecrets",
         "sns:List*",
         "sts:GetCallerIdentity",
-        "tag:GetResources",
-        "wafv2:Get*",
-        "wafv2:List*"
+        "tag:GetResources"
       ],
       "Resource": "*"
     },
@@ -74,8 +72,7 @@
         "rds:*",
         "s3:*",
         "secretsmanager:*",
-        "sns:*",
-        "wafv2:*"
+        "sns:*"
       ],
       "Resource": [
         "arn:aws:cloudwatch:${aws_region}:${aws_account_id}:alarm:${name_prefix}*",
@@ -99,8 +96,7 @@
         "arn:aws:s3:::${name_prefix}*/*",
         "arn:aws:secretsmanager:${aws_region}:${aws_account_id}:secret:${name_prefix}*",
         "arn:aws:sns:${aws_region}:${aws_account_id}:${name_prefix}*",
-        "arn:aws:sns:${aws_region}:${aws_account_id}:${name_prefix}*:*",
-        "arn:aws:wafv2:${aws_region}:${aws_account_id}:regional/webacl/${name_prefix}*/*"
+        "arn:aws:sns:${aws_region}:${aws_account_id}:${name_prefix}*:*"
       ]
     },
     {
@@ -276,8 +272,7 @@
       "Condition": {
         "ArnNotEquals": {
           "iam:PolicyARN": [
-            "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy",
-            "arn:aws:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole"
+            "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
           ]
         }
       }

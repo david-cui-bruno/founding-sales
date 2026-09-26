@@ -85,7 +85,6 @@ resource "aws_cloudfront_distribution" "updates" {
   is_ipv6_enabled = true
   comment         = "${var.name_prefix} Electron package distribution."
   price_class     = var.price_class
-  aliases         = var.aliases
 
   origin {
     origin_id                = "s3-updates"
@@ -119,18 +118,11 @@ resource "aws_cloudfront_distribution" "updates" {
     }
   }
 
+  # The *.cloudfront.net hostname and certificate. The custom-hostname inputs,
+  # never used, went in wave 2 (26 September 2026).
   viewer_certificate {
-    cloudfront_default_certificate = var.acm_certificate_arn == null
-    acm_certificate_arn            = var.acm_certificate_arn
-    ssl_support_method             = var.acm_certificate_arn == null ? null : "sni-only"
-    minimum_protocol_version       = var.acm_certificate_arn == null ? "TLSv1" : "TLSv1.2_2021"
-  }
-
-  lifecycle {
-    precondition {
-      condition     = length(var.aliases) == 0 || var.acm_certificate_arn != null
-      error_message = "A custom hostname needs an ACM certificate in us-east-1."
-    }
+    cloudfront_default_certificate = true
+    minimum_protocol_version       = "TLSv1"
   }
 
   tags = merge(var.tags, { Name = "${var.name_prefix}-updates" })

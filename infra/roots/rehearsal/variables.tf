@@ -259,12 +259,6 @@ variable "dependencies_mode" {
   }
 }
 
-variable "research_providers" {
-  description = "`FSS_RESEARCH_PROVIDERS` on the rehearsal worker. `none`, as in production: a rehearsal must not reach a paid provider."
-  type        = string
-  default     = "none"
-}
-
 variable "sending_enabled" {
   description = <<-EOT
     `FSS_SENDING_ENABLED` on both rehearsal task definitions. Always false, and
@@ -292,30 +286,6 @@ variable "expected_system_generation" {
     condition     = var.expected_system_generation == null ? true : (var.expected_system_generation >= 1 && floor(var.expected_system_generation) == var.expected_system_generation)
     error_message = "expected_system_generation is a positive whole number, or null for unpinned. The bootstraps refuse anything else at startup."
   }
-}
-
-variable "extra_environment" {
-  description = "Any further non-secret environment variable both rehearsal tasks need. Never a credential."
-  type        = map(string)
-  default     = {}
-}
-
-variable "enable_execute_command" {
-  description = "Allow ECS Exec into a rehearsal task while investigating a scenario."
-  type        = bool
-  default     = false
-}
-
-variable "enable_waf" {
-  description = "Attach a WAFv2 web ACL."
-  type        = bool
-  default     = false
-}
-
-variable "elb_account_id" {
-  description = "Region-specific Elastic Load Balancing account id, only needed in older regions."
-  type        = string
-  default     = ""
 }
 
 variable "alert_emails" {

@@ -182,17 +182,6 @@ variable "api_environment" {
   }
 }
 
-variable "worker_environment" {
-  description = "Non-secret environment variables for the worker task only."
-  type        = map(string)
-  default     = {}
-
-  validation {
-    condition     = !contains(keys(var.worker_environment), "FSS_EXPECTED_SYSTEM_GENERATION")
-    error_message = "FSS_EXPECTED_SYSTEM_GENERATION is set by expected_system_generation and nowhere else, so there is one control and a plan that shows it."
-  }
-}
-
 variable "expected_system_generation" {
   description = <<-EOT
     Appendix E step 1's operator-controlled expected generation, as
@@ -309,23 +298,6 @@ variable "metric_namespace" {
     condition     = can(regex("^FSS/[a-z][a-z0-9-]{2,31}$", var.metric_namespace))
     error_message = "metric_namespace must be FSS/<name_prefix>, one namespace per environment. The bare FSS namespace is shared by every environment in the account, so a rehearsal publishing there feeds production's alarms."
   }
-}
-
-variable "container_insights" {
-  description = "enabled, enhanced or disabled. Container Insights is billed per metric."
-  type        = string
-  default     = "disabled"
-
-  validation {
-    condition     = contains(["enabled", "enhanced", "disabled"], var.container_insights)
-    error_message = "container_insights must be enabled, enhanced or disabled."
-  }
-}
-
-variable "enable_execute_command" {
-  description = "Allow ECS Exec into a running task. Off in production; a rehearsal root may turn it on."
-  type        = bool
-  default     = false
 }
 
 variable "bootstrap" {

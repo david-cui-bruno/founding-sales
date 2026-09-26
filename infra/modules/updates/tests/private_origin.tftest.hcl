@@ -52,16 +52,6 @@ run "the_origin_is_private_and_reached_only_through_the_distribution" {
   }
 }
 
-run "a_custom_hostname_without_a_certificate_is_refused" {
-  command = plan
-
-  variables {
-    aliases = ["updates.example.invalid"]
-  }
-
-  expect_failures = [aws_cloudfront_distribution.updates]
-}
-
 # Which distribution the bucket policy admits, asserted where the value exists.
 #
 # The condition names `aws_cloudfront_distribution.updates.arn`, a computed

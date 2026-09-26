@@ -95,14 +95,6 @@ run "access_logs_are_enabled_and_private" {
     ]) == 1
     error_message = "Plain HTTP to the log bucket must be denied."
   }
-
-  assert {
-    condition = length([
-      for statement in jsondecode(output.access_log_policy_json).Statement :
-      statement if statement.Sid == "AllowRegionalElbAccount"
-    ]) == 0
-    error_message = "The regional ELB account statement appears only when elb_account_id is set."
-  }
 }
 
 run "the_health_check_is_unauthenticated_and_cheap" {
@@ -131,28 +123,6 @@ run "the_health_check_is_unauthenticated_and_cheap" {
       && tonumber(aws_lb_target_group.api.deregistration_delay) == 30
     )
     error_message = "The readiness check must put a healthy new task in service well inside the service's grace period."
-  }
-}
-
-run "waf_is_off_by_default_and_attachable" {
-  command = plan
-
-  assert {
-    condition     = length(aws_wafv2_web_acl.main) == 0 && length(aws_wafv2_web_acl_association.main) == 0
-    error_message = "WAF is optional and off."
-  }
-}
-
-run "waf_attaches_when_enabled" {
-  command = plan
-
-  variables {
-    enable_waf = true
-  }
-
-  assert {
-    condition     = length(aws_wafv2_web_acl.main) == 1 && length(aws_wafv2_web_acl_association.main) == 1
-    error_message = "Turning WAF on must create and attach exactly one web ACL."
   }
 }
 

@@ -107,30 +107,6 @@ resource "aws_db_parameter_group" "main" {
   tags = merge(var.tags, { Name = "${var.name_prefix}-pg16" })
 }
 
-resource "aws_iam_role" "enhanced_monitoring" {
-  count = var.monitoring_interval > 0 ? 1 : 0
-
-  name = "${var.name_prefix}-rds-monitoring"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect    = "Allow"
-      Principal = { Service = "monitoring.rds.amazonaws.com" }
-      Action    = "sts:AssumeRole"
-    }]
-  })
-
-  tags = merge(var.tags, { Name = "${var.name_prefix}-rds-monitoring" })
-}
-
-resource "aws_iam_role_policy_attachment" "enhanced_monitoring" {
-  count = var.monitoring_interval > 0 ? 1 : 0
-
-  role       = aws_iam_role.enhanced_monitoring[0].name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole"
-}
-
 resource "aws_db_instance" "main" {
   identifier = local.identifier
 
@@ -176,12 +152,9 @@ resource "aws_db_instance" "main" {
   skip_final_snapshot       = var.skip_final_snapshot
   final_snapshot_identifier = var.skip_final_snapshot ? null : "${local.identifier}-final"
 
-  performance_insights_enabled          = var.performance_insights_enabled
-  performance_insights_kms_key_id       = var.performance_insights_enabled ? aws_kms_key.database.arn : null
-  performance_insights_retention_period = var.performance_insights_enabled ? var.performance_insights_retention_period : null
-
-  monitoring_interval = var.monitoring_interval
-  monitoring_role_arn = var.monitoring_interval > 0 ? aws_iam_role.enhanced_monitoring[0].arn : null
+  # No Performance Insights and no Enhanced Monitoring: both are off at the
+  # provider's defaults, and their switches, never turned on, went in wave 2
+  # (26 September 2026).
 
   enabled_cloudwatch_logs_exports = ["postgresql", "upgrade"]
 

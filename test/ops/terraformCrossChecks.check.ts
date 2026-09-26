@@ -73,7 +73,7 @@ function alarmEntry(alerts: string, key: string): string {
  * deployed worker never had a classifier. The cluster's rename map must name exactly
  * the variable the classifier reads, and the worker's deployment map must say the same;
  * a rehearsal must not be handed the key at all, because the classifier has no recorded
- * seam. `research-provider-credentials` is read by nothing and handed to nothing.
+ * seam.
  */
 
 const CLUSTER = readRepositoryFile('infra/modules/cluster/main.tf');
@@ -105,7 +105,6 @@ const DEFAULT_SECRET_NAMES = ((): string[] => {
 const API = listLocal('api_secret_names');
 const WORKER = listLocal('worker_secret_names');
 const OPERATIONS = listLocal('operations_secret_names');
-const UNREAD = listLocal('unread_secret_names');
 const STACK = readRepositoryFile('infra/modules/stack/main.tf');
 
 describe('g81: every task gets the secrets its process reads', () => {
@@ -113,7 +112,6 @@ describe('g81: every task gets the secrets its process reads', () => {
     expect(API.length).toBeGreaterThan(0);
     expect(WORKER.length).toBeGreaterThan(0);
     expect(OPERATIONS.length).toBeGreaterThan(0);
-    expect(UNREAD.length).toBeGreaterThan(0);
     expect(DEFAULT_SECRET_NAMES).toContain('app-runtime-database');
   });
 
@@ -165,17 +163,10 @@ describe('g81: every task gets the secrets its process reads', () => {
     expect(STACK).toContain('  worker_reads_classifier_key = local.is_production\n');
   });
 
-  it('hands research-provider-credentials, which nothing reads, to no process', () => {
-    expect(UNREAD).toEqual(['research-provider-credentials']);
-    for (const list of [API, WORKER, OPERATIONS]) expect(list).not.toContain('research-provider-credentials');
-    expect(Object.keys(WORKER_VARIABLES)).not.toContain('researchCredentials');
-    expect(Object.keys(API_VARIABLES)).not.toContain('researchCredentials');
-  });
-
   it('names only secrets the secrets module creates, and leaves none unassigned', () => {
     const application = DEFAULT_SECRET_NAMES.filter(name => name !== 'migration-database' && name !== 'app-runtime-database');
-    for (const name of [...API, ...WORKER, ...OPERATIONS, ...UNREAD]) expect(application, name).toContain(name);
-    for (const name of application) expect([...API, ...WORKER, ...OPERATIONS, ...UNREAD], name).toContain(name);
+    for (const name of [...API, ...WORKER, ...OPERATIONS]) expect(application, name).toContain(name);
+    for (const name of application) expect([...API, ...WORKER, ...OPERATIONS], name).toContain(name);
     expect(CLUSTER).toContain('condition     = length(local.unassigned_secret_names) == 0');
   });
 });

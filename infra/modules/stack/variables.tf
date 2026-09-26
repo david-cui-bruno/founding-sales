@@ -118,12 +118,6 @@ variable "database_delete_automated_backups" {
   default     = false
 }
 
-variable "database_performance_insights_enabled" {
-  description = "Performance Insights, billed beyond the free retention."
-  type        = bool
-  default     = false
-}
-
 variable "database_log_min_duration_statement" {
   description = "Milliseconds above which a statement is logged."
   type        = number
@@ -224,18 +218,6 @@ variable "bootstrap" {
   default     = false
 }
 
-variable "container_insights" {
-  description = "enabled, enhanced or disabled."
-  type        = string
-  default     = "disabled"
-}
-
-variable "enable_execute_command" {
-  description = "Allow ECS Exec into a running task."
-  type        = bool
-  default     = false
-}
-
 variable "create_registry" {
   description = <<-EOT
     Whether this stack creates its own ECR repositories.
@@ -268,21 +250,6 @@ variable "dependencies_mode" {
   }
 }
 
-variable "research_providers" {
-  description = <<-EOT
-    `FSS_RESEARCH_PROVIDERS` on the **worker** task definition only; the API
-    has no research adapter. `none` is a declaration that this build ships no
-    live provider, not an accident.
-  EOT
-  type        = string
-  default     = "none"
-
-  validation {
-    condition     = length(trimspace(var.research_providers)) > 0
-    error_message = "research_providers may not be empty. Say none."
-  }
-}
-
 variable "sending_enabled" {
   description = <<-EOT
     `FSS_SENDING_ENABLED` on both task definitions. One of the two switches
@@ -308,18 +275,6 @@ variable "expected_system_generation" {
     condition     = var.expected_system_generation == null ? true : (var.expected_system_generation >= 1 && floor(var.expected_system_generation) == var.expected_system_generation)
     error_message = "expected_system_generation is a positive whole number, or null for unpinned. The bootstraps refuse anything else at startup."
   }
-}
-
-variable "extra_environment" {
-  description = <<-EOT
-    Additional non-secret environment variables for both tasks. The three flags
-    above used to have to travel through here, which is why neither root
-    exposed any of them; it stays for whatever the next release needs before it
-    earns a variable of its own. Never a credential: the root tests assert no
-    environment name looks like one.
-  EOT
-  type        = map(string)
-  default     = {}
 }
 
 variable "business_time_zone" {
@@ -357,18 +312,6 @@ variable "api_hostname" {
   type        = string
 }
 
-variable "elb_account_id" {
-  description = "Region-specific Elastic Load Balancing account id, only needed in older regions."
-  type        = string
-  default     = ""
-}
-
-variable "enable_waf" {
-  description = "Attach a WAFv2 web ACL to the load balancer."
-  type        = bool
-  default     = false
-}
-
 # ---------------------------------------------------------------------------
 # Secrets, journal, alerts, updates
 # ---------------------------------------------------------------------------
@@ -389,7 +332,6 @@ variable "secret_names" {
     "session-signing-key",
     "device-credential-pepper",
     "llm-classifier-api-key",
-    "research-provider-credentials",
     "migration-database",
     "app-runtime-database",
   ]

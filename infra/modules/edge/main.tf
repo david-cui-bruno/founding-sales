@@ -12,47 +12,34 @@ locals {
   access_log_bucket = "${var.name_prefix}-alb-logs-${var.aws_account_id}"
   access_log_prefix = "alb"
 
-  # The log delivery service principal covers regions enabled after August 2022
-  # and, since the 2023 change, the older regions too. elb_account_id is kept
-  # as an escape hatch for a region that still delivers as the ELB account.
-  elb_account_arns = var.elb_account_id == "" ? [] : ["arn:aws:iam::${var.elb_account_id}:root"]
-
+  # us-east-1 delivers access logs as the log delivery service principal. The
+  # regional ELB-account statement that older regions need went with its unused
+  # `elb_account_id` switch in wave 2 (26 September 2026).
   log_policy = {
     Version = "2012-10-17"
-    Statement = concat(
-      [
-        {
-          Sid       = "AllowLogDeliveryServicePrincipal"
-          Effect    = "Allow"
-          Principal = { Service = ["logdelivery.elasticloadbalancing.amazonaws.com"] }
-          Action    = ["s3:PutObject"]
-          Resource  = ["arn:aws:s3:::${local.access_log_bucket}/${local.access_log_prefix}/AWSLogs/${var.aws_account_id}/*"]
-          Condition = {
-            StringEquals = { "s3:x-amz-acl" = ["bucket-owner-full-control"] }
-          }
-        },
-        {
-          Sid       = "DenyUnencryptedTransport"
-          Effect    = "Deny"
-          Principal = { AWS = ["*"] }
-          Action    = ["s3:*"]
-          Resource = [
-            "arn:aws:s3:::${local.access_log_bucket}",
-            "arn:aws:s3:::${local.access_log_bucket}/*",
-          ]
-          Condition = { Bool = { "aws:SecureTransport" = ["false"] } }
-        },
-      ],
-      length(local.elb_account_arns) == 0 ? [] : [
-        {
-          Sid       = "AllowRegionalElbAccount"
-          Effect    = "Allow"
-          Principal = { AWS = local.elb_account_arns }
-          Action    = ["s3:PutObject"]
-          Resource  = ["arn:aws:s3:::${local.access_log_bucket}/${local.access_log_prefix}/AWSLogs/${var.aws_account_id}/*"]
-        },
-      ],
-    )
+    Statement = [
+      {
+        Sid       = "AllowLogDeliveryServicePrincipal"
+        Effect    = "Allow"
+        Principal = { Service = ["logdelivery.elasticloadbalancing.amazonaws.com"] }
+        Action    = ["s3:PutObject"]
+        Resource  = ["arn:aws:s3:::${local.access_log_bucket}/${local.access_log_prefix}/AWSLogs/${var.aws_account_id}/*"]
+        Condition = {
+          StringEquals = { "s3:x-amz-acl" = ["bucket-owner-full-control"] }
+        }
+      },
+      {
+        Sid       = "DenyUnencryptedTransport"
+        Effect    = "Deny"
+        Principal = { AWS = ["*"] }
+        Action    = ["s3:*"]
+        Resource = [
+          "arn:aws:s3:::${local.access_log_bucket}",
+          "arn:aws:s3:::${local.access_log_bucket}/*",
+        ]
+        Condition = { Bool = { "aws:SecureTransport" = ["false"] } }
+      },
+    ]
   }
 }
 
@@ -208,56 +195,4 @@ resource "aws_lb_listener" "https" {
   }
 
   tags = merge(var.tags, { Name = "${var.name_prefix}-https" })
-}
-
-# ---------------------------------------------------------------------------
-# Optional WAF, off by default.
-# ---------------------------------------------------------------------------
-
-resource "aws_wafv2_web_acl" "main" {
-  count = var.enable_waf ? 1 : 0
-
-  name  = "${var.name_prefix}-api"
-  scope = "REGIONAL"
-
-  default_action {
-    allow {}
-  }
-
-  rule {
-    name     = "rate-limit"
-    priority = 1
-
-    action {
-      block {}
-    }
-
-    statement {
-      rate_based_statement {
-        limit              = var.waf_rate_limit_per_five_minutes
-        aggregate_key_type = "IP"
-      }
-    }
-
-    visibility_config {
-      cloudwatch_metrics_enabled = true
-      metric_name                = "${var.name_prefix}-rate-limit"
-      sampled_requests_enabled   = false
-    }
-  }
-
-  visibility_config {
-    cloudwatch_metrics_enabled = true
-    metric_name                = "${var.name_prefix}-api"
-    sampled_requests_enabled   = false
-  }
-
-  tags = merge(var.tags, { Name = "${var.name_prefix}-api" })
-}
-
-resource "aws_wafv2_web_acl_association" "main" {
-  count = var.enable_waf ? 1 : 0
-
-  resource_arn = aws_lb.main.arn
-  web_acl_arn  = aws_wafv2_web_acl.main[0].arn
 }
