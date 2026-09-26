@@ -30,7 +30,6 @@ export const JOB_KINDS = [
   'classify.reply',
   'retention.batch',
   'outbound.close_send_day',
-  'import.batch',
   'canary',
   'route.validate',
 ] as const;
@@ -82,8 +81,6 @@ export const JOB_KIND_PROTECTION: Readonly<Record<JobKind, IdempotencyProtection
   // A ramp that could be advanced twice would reach fifty a day in half the time 12.7
   // allows, which is the outcome the ramp exists to prevent.
   'outbound.close_send_day': 'business_uniqueness',
-  // Command receipt and canonical keys.
-  'import.batch': 'business_uniqueness',
   // The completion timestamp, written once.
   canary: 'business_uniqueness',
   // Lane g90. Appendix C does not name this work, because revision 3's 7.4 says a route
@@ -129,7 +126,6 @@ export const jobIdempotencyKey = Object.freeze({
   closeSendDay: (mailboxId: string, businessDate: string): string =>
     `send-day-close:${mailboxId}:${businessDate}`,
   retentionBatch: (dataKind: string, period: string): string => `retention:${dataKind}:${period}`,
-  importBatch: (batchId: string, rowNumber: number): string => `import:${batchId}:${String(rowNumber)}`,
   canary: (quarterHourIso: string): string => `canary:${quarterHourIso}`,
   classifyReply: (messageId: string): string => `classify-reply:${messageId}`,
   /**
