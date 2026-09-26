@@ -18,8 +18,8 @@ import { CONNECT_GMAIL_LABEL, buildMailboxView } from '../../../desktop/src/rend
  * two production alarms that wait for a mailbox — `fss-prod-mailbox-heartbeat-missed` and
  * `fss-prod-gmail-watch-expiring` — could not be cleared by anything the operator had.
  *
- * This check is the question nobody asked, in the release suite so a build without the
- * answer cannot be the one released.
+ * This check is the question nobody asked, in the gate so a build without the answer
+ * cannot be the one released.
  *
  * ## The vacuous-pass traps, named
  *

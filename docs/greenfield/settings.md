@@ -184,8 +184,8 @@ is gone since wave 1), and a read that fails is no longer silent: for an admin t
 shows one grey line, *Callie could not read the sending status.*, a sentence naming the
 refusal code, and **Retry**, which shows Settings again. The sending read no longer waits
 on `/settings` succeeding, and Home's focus and Refresh ask again while it is failing.
-`test/release/sendingSection.check.ts` runs the real route into the real desktop
-parser, so a change of shape on either side fails the release suite.
+`apps/api/test/wire/sendingSection.test.ts` runs the real route into the real desktop
+parser, so a change of shape on either side fails the API suite.
 
 ## Your calling number
 

@@ -308,9 +308,6 @@ Until lane g58 the sweep asked only for a mailbox five minutes past its last syn
 checks a day), while the heartbeat promised sixty seconds. Production's one mailbox,
 sending off, was fresh only when a push happened to arrive, and the alarm fired in every
 quiet three minutes (24 September 2026, `docs/greenfield/release.md` 8.0z).
-`test/release/mailboxHeartbeatCadence.check.ts` now reads the interval the heartbeat is
-written with, the scheduler's pass interval, the alarm's period and datapoints and the
-grace, and fails if they disagree.
 
 **Not yet per mailbox.** `MailboxCheckHeartbeat` is one datapoint for the component: 1
 if *any* mailbox heartbeat is fresh (`collectJobMetrics`). With one mailbox that is the

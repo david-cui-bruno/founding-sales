@@ -38,9 +38,9 @@ CI does not need the rebuild: it uses a `postgres:16` service container instead.
 ## The gate
 
 ```
-npm run gate:greenfield     # typecheck + lint + tests + the release suite, what CI runs
+npm run gate:greenfield     # typecheck + lint + tests + the ops suite, what CI runs
 npm run typecheck:greenfield
-npm run lint                # one ESLint flat config (eslint.config.mjs) over apps, packages, test/release and scripts
+npm run lint                # one ESLint flat config (eslint.config.mjs) over apps, packages, test/ops and scripts
 npm run test:greenfield
 npm run test:desktop:e2e    # the window, in chromium; not part of the gate
 ```
@@ -50,7 +50,7 @@ npm run test:desktop:e2e    # the window, in chromium; not part of the gate
 `docs/archive/decisions/g2-desktop-test-layers.md`.
 
 `npm run typecheck` is `typecheck:greenfield` and `npm test` is `test:greenfield` plus
-`test:release`.
+`test:ops`.
 
 ## The database harness
 
@@ -58,13 +58,18 @@ Tests run against a real PostgreSQL 16, never a mock or an in-memory substitute.
 
 * One cluster per Vitest run, started by `packages/domain/db/testing/globalSetup.ts`.
   Locally that is `embedded-postgres` in a temporary directory that is removed on
-  stop; in CI it is the service container named by `FSS_TEST_POSTGRES_URL`.
-* One database per test file: `createTestDatabase()` creates it, applies the
-  migrations, and hands back a superuser session. `drop()` removes it.
+  stop; in CI it is the service container named by `FSS_TEST_POSTGRES_URL`. Either
+  way it runs with `fsync`, `synchronous_commit` and `full_page_writes` off: it lives
+  for one run.
+* globalSetup applies the migrations once, to a template database. A failing
+  migration fails the run there.
+* One database per test file: `createTestDatabase()` copies the template
+  (`CREATE DATABASE … TEMPLATE …`) and hands back a superuser session. `drop()`
+  removes it.
 * `database.appRuntimeSession()` gives a session that has done `SET ROLE app_runtime`,
   so a privilege test is subject to the application role rather than the owner.
-* `createTestDatabase({ throughVersion: n })` stops after migration `n`, which is how
-  the compatibility test seeds a previous version.
+* `createTestDatabase({ throughVersion: n })` is not a copy: it starts empty and stops
+  after migration `n`, which is how the compatibility test seeds a previous version.
 
 Set `FSS_TEST_POSTGRES_VERBOSE=1` to see the server's own log.
 

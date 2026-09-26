@@ -6,9 +6,7 @@ import { createAuthedClient, type AuthedClient } from '../../../desktop/src/main
 
 /**
  * The real API route, in the real desktop transport, with the socket replaced by the
- * dispatcher (lane g78). The pattern `sendingSection.check.ts` introduced in lane g69,
- * shared by the four window checks that followed it: `sequences`, `replies`,
- * `settingsHistory` and `crmMerge`.
+ * dispatcher (lane g78), for the checks in `test/wire/`.
  *
  * Everything on both sides is the shipped code: the route over a real PostgreSQL and a
  * real session, and `createAuthedClient` with the parser the bridge names. The one

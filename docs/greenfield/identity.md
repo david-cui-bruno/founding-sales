@@ -90,7 +90,7 @@ The first version of this rule required all three to share the issuer's origin. 
 refused Google's real document, and production's first four real sign-ins were refused
 `token_exchange_failed` (release runbook 8.0u). `apps/api/test/auth/discovery.test.ts`
 now runs against that document's shape, with the production issuer and discovery URL,
-and `test/release/scenario23.check.ts` holds the same rule in the release suite.
+and `apps/api/test/auth/oidcReplay.test.ts` holds the same rule.
 
 **What a failure logs.** Two `warn` lines, through the API's structured log, which
 never carry a code, a verifier, a token, the client secret or a response body:

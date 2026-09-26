@@ -12,7 +12,7 @@ Callie is a 24/7 maintenance agent for property managers: it handles tenant requ
 | `packages/domain` | The rules and the PostgreSQL 16 schema and migrations, shared by the API and the worker. |
 | `packages/contracts` | The zod wire contracts shared by all three apps. |
 | `infra/` | Terraform: the modules, the rehearsal and production roots, the deployment roles' policies and the release scripts (`infra/README.md`). |
-| `test/release` | The release suite (specification Appendix G and the checks added since). |
+| `test/ops` | The ops suite: the release and deploy scripts against stub CLIs, the deployment role policies, the alarm digest and the code-to-Terraform cross-checks. |
 | `docs/greenfield/` | How each part works and how it is released; `docs/archive/decisions/` has the decisions made along the way. |
 
 At the root: `scripts/` holds the secret scan (`verifySecrets.mjs`) and the production smoke, and `certs/` the RDS CA bundle the images trust. The previous-generation app was deleted in lane g95; the tag `legacy-final` holds its last tree ([`docs/greenfield/legacy.md`](docs/greenfield/legacy.md)).
@@ -29,10 +29,10 @@ npx playwright install chromium   # only for the desktop window specs
 ```
 
 ```bash
-npm run gate:greenfield           # typecheck, lint, every workspace's tests and the release suite; what CI runs
+npm run gate:greenfield           # typecheck, lint, every workspace's tests and the ops suite; what CI runs
 npm run typecheck                 # = typecheck:greenfield
-npm run lint                      # one ESLint config over apps, packages, test/release and scripts
-npm test                          # = test:greenfield and test:release
+npm run lint                      # one ESLint config over apps, packages, test/ops and scripts
+npm test                          # = test:greenfield and test:ops
 npm run test:desktop:e2e          # the desktop window in chromium; not part of the gate
 FSS_DESKTOP_PACKAGE_MODE=local-smoke npm run package:desktop -- /tmp/callie-smoke   # an unsigned local bundle
 ```

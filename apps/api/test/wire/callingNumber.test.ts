@@ -22,7 +22,7 @@ import { adminViewOf } from '../../../desktop/src/renderer/settingsView.ts';
  * offers a Call button only when it carries such an identity, and nothing anywhere — no
  * domain function, no route, no control — created or verified one. The restore drill's
  * dial probe had no subject for the same reason. This check is the question nobody
- * asked, in the release suite so a build without the answer cannot be the one released.
+ * asked, in the gate so a build without the answer cannot be the one released.
  *
  * ## The vacuous-pass traps, named
  *
