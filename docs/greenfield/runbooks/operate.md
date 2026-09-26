@@ -20,7 +20,7 @@ Check that the run is green, that its summary names both new revisions, and that
 
 **The `manual` answer.** The workflow reads every commit between production's own commit and the images commit, and answers `manual` — a green run, a notice, nothing touched — when one of them changed `infra/**` (`infra/scripts/` included), a migration, `packages/domain/db/schemaRange.ts`, `migrationRunner.ts`, `queryable.ts`, `scripts/productionSmoke.mjs`, `.github/**`, or a path its list does not know. It also answers `manual` when a running image carries no commit tag, and it keeps answering `manual` until production runs images built after the change.
 
-The hand path is steps 3 to 5 of the next section without `--schema-change` and without the stop: the record, `images.sh promote`, the apply, `deploy.sh release`, the smoke. Release the protected change that way, then the first app merge after it the same way; from the merge after that, CI takes over again.
+The hand path is steps 3 to 5 of the next section without the stop and without `--schema-change`: the record, the plan, `images.sh promote`, the apply, `deploy.sh release`, the smoke. Release the protected change that way, then the first app merge after it the same way; from the merge after that, CI takes over again.
 
 ## A schema or infrastructure release
 
@@ -51,10 +51,31 @@ infra/scripts/record.sh put infra/roots/production fss-prod \
   --release-record /tmp/fss-ci/release-record.json
 ```
 
-**4. Promote, stop, apply, deploy.**
+**4. Plan, promote, stop, apply, deploy.** An infrastructure change that moves no image plans from what production runs, and nothing else:
+
+```bash
+(cd infra/roots/production && terraform plan -out=production.tfplan \
+   $(../../scripts/deploy.sh current fss-prod --var-flags))
+```
+
+A schema release plans with its own four values instead — the release's two digests, against the `fss-prod-api` and `fss-prod-worker` references `terraform output repository_urls` prints, and the two ranges read from the source rather than typed:
+
+```bash
+node --experimental-transform-types --disable-warning=ExperimentalWarning --input-type=module -e "
+  const m = await import('./packages/domain/db/schemaRange.ts');
+  console.log('api', m.API_SCHEMA_RANGE, 'worker', m.WORKER_SCHEMA_RANGE);
+"
+(cd infra/roots/production && terraform plan -out=production.tfplan \
+   -var="api_image=<fss-prod-api repository>@$api_digest" \
+   -var="worker_image=<fss-prod-worker repository>@$worker_digest" \
+   -var='api_schema_range={min=19,max=19}' -var='worker_schema_range={min=19,max=19}')
+```
+
+Read the plan. It must show no change to an ECR repository, and for a schema release exactly the four task definitions replaced and the two services re-pointed. Then:
 
 ```bash
 infra/scripts/images.sh promote /tmp/fss-ci/image-pin.json
+infra/scripts/deploy.sh current fss-prod --compare "<api_image>" "<worker_image>" --allow-digest-change
 infra/scripts/stop.sh infra/roots/production fss-prod --environment production
 (cd infra/roots/production && terraform apply production.tfplan)
 infra/scripts/deploy.sh release infra/roots/production fss-prod --schema-change \
@@ -62,7 +83,7 @@ infra/scripts/deploy.sh release infra/roots/production fss-prod --schema-change 
   --release-record /tmp/fss-ci/release-record.json
 ```
 
-The stop takes the API to zero first, then the worker, each waited on and read back at zero; the apply cannot restart them (`ignore_changes = [desired_count]`); `--schema-change` refuses unless both are still at zero, then migrates, ensures the database users, verifies, starts the worker and then the API, and reads the record back, which must answer `existing`. An infrastructure change that moves no migration takes neither the stop nor the flag. Read both commands first with `FSS_REHEARSAL_DRY_RUN=1`, which prints every call and makes none.
+`--compare` is the last check that no CI deploy landed since the plan; a schema release passes `--allow-digest-change` because its images are new on purpose, and an infrastructure release does not. The stop takes the API to zero first, then the worker, each waited on and read back at zero; the apply cannot restart them (`ignore_changes = [desired_count]`); `--schema-change` refuses unless both are still at zero, then migrates, ensures the database users, verifies, starts the worker and then the API, and reads the record back, which must answer `existing`. An infrastructure change that moves no migration takes neither the stop nor the flag. Read both commands first with `FSS_REHEARSAL_DRY_RUN=1`, which prints every call and makes none.
 
 **5. Smoke.**
 
