@@ -678,7 +678,7 @@ describe('0018 on a schema-17 database holding LinkedIn history', () => {
     expect(await listPauses(contextFor('admin'))).toEqual([]);
   });
 
-  it('refuses to enrol into, publish, copy or migrate onto a version whose step was LinkedIn', async () => {
+  it('refuses to enrol into, publish or migrate onto a version whose step was LinkedIn', async () => {
     expect(
       await enrollContact(contextFor('salesperson'), {
         sequenceVersionId: ids.publishedVersionId,
@@ -691,11 +691,6 @@ describe('0018 on a schema-17 database holding LinkedIn history', () => {
       ok: false,
       reason: 'invalid_input',
     });
-    expect(await createDraftVersion(contextFor('admin'), { sequenceId: ids.publishedOnlySequenceId })).toEqual({
-      ok: false,
-      reason: 'invalid_input',
-    });
-
     const live = await enrollContact(contextFor('salesperson'), {
       sequenceVersionId: sequences.alpha.publishedVersionId,
       opportunityId: crm.alpha.opportunityId,
@@ -711,6 +706,36 @@ describe('0018 on a schema-17 database holding LinkedIn history', () => {
       }),
     ).toEqual({ ok: false, reason: 'step_unknown' });
     await stopEnrollments(worker(), { enrollmentId: live.value.enrollmentId, reason: 'admin_stop' });
+  });
+
+  it('copies a version whose step was LinkedIn to a new draft without it, numbered from 1 (lane D1)', async () => {
+    // "Edit as a new draft" is createDraftVersion with no steps. The mixed version is a
+    // LinkedIn task at 1 and a call at 2; the copy used to keep the LinkedIn task, and
+    // `validateSteps` refused the whole draft as `invalid_input`.
+    const mixed = await createDraftVersion(contextFor('admin'), { sequenceId: ids.mixedSequenceId });
+    if (!mixed.ok) throw new Error(`the draft was refused: ${mixed.reason}`);
+    expect(mixed.value.version).toBe(2);
+    const draft = await readSequenceVersion(contextFor('admin'), mixed.value.sequenceVersionId);
+    expect(draft?.state).toBe('draft');
+    expect(draft?.steps.map(({ ordinal, channel, delay, onNoAnswer, templateVersionId }) => ({ ordinal, channel, delay, onNoAnswer, templateVersionId }))).toEqual([
+      { ordinal: 1, channel: 'call_task', delay: { unit: 'business_days', days: 2 }, onNoAnswer: 'advance', templateVersionId: null },
+    ]);
+    // The published version is untouched: its LinkedIn step is still stored, and still shown.
+    expect((await readSequenceVersion(worker(), ids.mixedVersionId))?.steps.map(step => step.channel)).toEqual([
+      'linkedin_task',
+      'call_task',
+    ]);
+
+    // A version of only a LinkedIn step copies to a draft with no steps. A draft may be
+    // empty; publishing one is what is refused, for `version_has_no_steps`.
+    const only = await createDraftVersion(contextFor('admin'), { sequenceId: ids.publishedOnlySequenceId });
+    if (!only.ok) throw new Error(`the draft was refused: ${only.reason}`);
+    expect(only.value.version).toBe(2);
+    expect((await readSequenceVersion(contextFor('admin'), only.value.sequenceVersionId))?.steps).toEqual([]);
+    expect(await publishVersion(contextFor('admin'), { sequenceVersionId: only.value.sequenceVersionId })).toEqual({
+      ok: false,
+      reason: 'version_has_no_steps',
+    });
   });
 
   it('keeps a held LinkedIn execution held on resume, and returns a current one to pending (lane A2)', async () => {

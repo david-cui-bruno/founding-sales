@@ -23,7 +23,8 @@ import {
  * and call-task plans with delays and step-specific behavior. Draft versions may
  * change; published versions and steps are immutable by trigger; editing a published
  * sequence creates a new draft. (The LinkedIn task was removed on 25 September 2026. A
- * stored step with that channel is refused by the draft check and by publication.)
+ * stored step with that channel is refused by the draft check and by publication, and a
+ * new draft copied from a version that has one leaves it out: `stepsCopiedFrom`.)
  *
  * The immutability is the database's — migration 0012's triggers refuse an edit to a
  * published version and refuse an insert, update or delete of its steps. So this file
@@ -123,11 +124,14 @@ export interface CreateDraftVersionInput {
 /**
  * Start a draft. "Editing a published sequence creates a new draft" (11.1), and this
  * is that command: with no steps it copies the newest published version, which is
- * what an editor's "edit" button does.
+ * what an editor's "edit" button does ("Edit as a new draft" on the Mac).
  *
  * There is at most one draft per sequence, refused by
  * `sequence_versions_one_draft`. Two editors racing get one draft and one refusal
  * rather than two drafts that silently diverge.
+ *
+ * The steps are checked before the version row is written (lane D1): a refusal commits
+ * with its receipt, so a check after the insert left an empty draft behind every time.
  */
 export async function createDraftVersion(
   context: RepositoryContext,
@@ -152,6 +156,11 @@ export async function createDraftVersion(
   const version = Number(next[0]?.next ?? 1);
   const copyFrom = next[0]?.newest_published ?? null;
 
+  const steps =
+    input.steps ?? (copyFrom === null ? [] : stepsCopiedFrom(await readSequenceSteps(context, copyFrom)));
+  const shape = validateSteps(steps);
+  if (shape !== null) return refuseSequence(shape);
+
   const created = await context.db.query<{ id: string }>(
     `INSERT INTO sequence_versions (workspace_id, sequence_id, version) VALUES ($1, $2, $3) RETURNING id`,
     [context.scope.workspaceId, input.sequenceId, version],
@@ -159,21 +168,34 @@ export async function createDraftVersion(
   const sequenceVersionId = created.rows[0]?.id;
   if (sequenceVersionId === undefined) return refuseSequence('invalid_input');
 
-  const steps =
-    input.steps ??
-    (copyFrom === null
-      ? []
-      : (await readSequenceSteps(context, copyFrom)).map(step => ({
-          ordinal: step.ordinal,
-          channel: step.channel,
-          delay: step.delay,
-          ...(step.onNoAnswer === null ? {} : { onNoAnswer: step.onNoAnswer }),
-          ...(step.templateVersionId === null ? {} : { templateVersionId: step.templateVersionId }),
-        })));
-
   const written = await replaceDraftSteps(context, { sequenceVersionId, steps });
   if (!written.ok) return written;
   return acceptSequence({ sequenceVersionId, version });
+}
+
+/**
+ * The steps a new draft copies from a published version (lane D1). A step of a removed
+ * channel — a LinkedIn task stored before 25 September 2026, which `removedChannelOf`
+ * names and `sequenceStepForDisplay` shows as channel `removed` — is left out, and the
+ * rest keep their order and are numbered 1..n by place. That is what saving such a draft
+ * on the Mac does (lane A2: the editor holds no removed step, and saves by place).
+ *
+ * Before this, the copy kept the step and `validateSteps` refused the whole draft as
+ * `invalid_input`. A version whose every step was removed copies to no steps: a draft may
+ * be empty (a new sequence's first one is), and only publication refuses an empty one,
+ * with `version_has_no_steps`. A step of a channel that is neither current nor removed is
+ * still copied, and still refused.
+ */
+function stepsCopiedFrom(steps: readonly SequenceStepRow[]): DraftStepInput[] {
+  return steps
+    .filter(step => removedChannelOf(step.channel) === null)
+    .map((step, index) => ({
+      ordinal: index + 1,
+      channel: step.channel,
+      delay: step.delay,
+      ...(step.onNoAnswer === null ? {} : { onNoAnswer: step.onNoAnswer }),
+      ...(step.templateVersionId === null ? {} : { templateVersionId: step.templateVersionId }),
+    }));
 }
 
 export interface ReplaceDraftStepsInput {
