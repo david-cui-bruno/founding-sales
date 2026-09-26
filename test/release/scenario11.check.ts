@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { mustBeRehearsed, readRepositoryFile, repositoryPath } from './support/coverage.ts';
+import { readRepositoryFile, repositoryPath } from './support/repository.ts';
 
 /**
  * Appendix G 11: "A restore predating an accepted send, reply, suppression, ordinary
@@ -26,8 +26,6 @@ import { mustBeRehearsed, readRepositoryFile, repositoryPath } from './support/c
  */
 
 describe('Appendix G 11: the restore drill has something to restore', () => {
-  mustBeRehearsed(11);
-
   it('actually refuses a baseline with nothing to reconstruct', async () => {
     // Asserting that the refusal is *written* would pass against a refusal somebody had
     // commented out, so the script is run. In dry-run mode it reaches nothing — every

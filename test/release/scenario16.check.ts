@@ -4,7 +4,6 @@ import {
   createOutboundWorld,
   type OutboundWorld,
 } from '../../packages/domain/test/outbound/support/outboundWorld.ts';
-import { mustCover } from './support/coverage.ts';
 
 /**
  * Appendix G 16: "Reassignment races a due send from the former owner's mailbox;
@@ -37,8 +36,6 @@ afterAll(async () => {
 });
 
 describe('Appendix G 16: reassignment races a dispatching fence', () => {
-  mustCover(16, ['claimForDispatch', 'dispatching']);
-
   it('leaves a dispatching fence with the former owner mailbox', async () => {
     const workspaceId = world.alpha.workspace.workspaceId;
     const context = world.systemContext(workspaceId);

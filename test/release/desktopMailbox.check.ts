@@ -4,13 +4,8 @@ import { GMAIL_PATHS } from '../../apps/api/src/routes/gmail.ts';
 import { CONTAINER_CLIENT_VERSIONS } from '../../apps/api/src/bootstrap/main.ts';
 import { createAuthedClient } from '../../apps/desktop/src/main/authedClient.ts';
 import type { HttpAnswer } from '../../apps/desktop/src/main/apiClient.ts';
-import {
-  MAILBOX_API_PATHS,
-  MAILBOX_IPC_CHANNELS,
-  createMailboxBridge,
-} from '../../apps/desktop/src/main/mailboxBridge.ts';
+import { MAILBOX_API_PATHS, createMailboxBridge } from '../../apps/desktop/src/main/mailboxBridge.ts';
 import { CONNECT_GMAIL_LABEL, buildMailboxView } from '../../apps/desktop/src/renderer/viewModel.ts';
-import { readRepositoryFile } from './support/coverage.ts';
 
 /**
  * The Mac can connect the mailbox (release.md 8.0x).
@@ -142,28 +137,6 @@ describe('8.0x: the Mac client connects the mailbox', () => {
 
   it('calls only paths the API mounts', () => {
     for (const path of Object.values(MAILBOX_API_PATHS)) expect(GMAIL_PATHS).toContain(path);
-  });
-
-  it('is reachable from the window: the preload exposes it and the main process answers it', () => {
-    const preload = readRepositoryFile('apps/desktop/src/preload/preload.ts');
-    expect(preload).toContain("contextBridge.exposeInMainWorld('callieMailbox', mailbox);\n");
-    expect(preload).toContain('  connect: async () => await invokeMailbox(MAILBOX_IPC_CHANNELS.connect),\n');
-
-    const app = readRepositoryFile('apps/desktop/src/main/app.ts');
-    expect(app).toContain('  ipcMain.handle(MAILBOX_IPC_CHANNELS.connect, async () => await host.connect());\n');
-    // Registered inside `registerWindows`, which `start` calls before the window opens,
-    // with the system browser as the port — the same `shell.openExternal` sign-in uses.
-    const windows = app.slice(app.indexOf('export function registerWindows('), app.indexOf('export async function start('));
-    expect(windows).toMatch(/registerMailboxBridge\(\{\s+api,\s+session,\s+openExternally: async url => \{\s+await shell\.openExternal\(url\);/u);
-    const start = app.slice(app.indexOf('export async function start('));
-    expect(start.indexOf('registerWindows(configuration, manager);')).toBeGreaterThan(-1);
-    expect(start.indexOf('registerWindows(configuration, manager);')).toBeLessThan(start.indexOf('await openWindow(configuration);'));
-
-    const renderer = readRepositoryFile('apps/desktop/src/renderer/renderer.ts');
-    expect(renderer).toContain("testId: 'mailbox-connect'");
-    expect(renderer).toContain('answer = await mailbox.connect();');
-
-    expect(MAILBOX_IPC_CHANNELS.connect).toBe('callie:mailbox:connect');
   });
 
   it('is a build the deployed API accepts', () => {

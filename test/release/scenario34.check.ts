@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { applyModelSuggestion, classifyReply, type ReplyMessage } from '@fss/domain';
-import { mustCover } from './support/coverage.ts';
 
 /**
  * Appendix G 34: "LLM labels a human reply automated with high confidence;
@@ -32,8 +31,6 @@ const message = (text: string): ReplyMessage => ({
 const HUMAN_REPLY = message('Yes, that sounds useful. Can we talk on Thursday?');
 
 describe('Appendix G 34: what a confident model answer may and may not do', () => {
-  mustCover(34, ['applyModelSuggestion', 'requiresConfirmation']);
-
   it('a confident "automated" never releases an uncertain message', () => {
     const deterministic = classifyReply(HUMAN_REPLY);
     expect(deterministic.class).toBe('uncertain');

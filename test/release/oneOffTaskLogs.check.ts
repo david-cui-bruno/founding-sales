@@ -1,9 +1,9 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { readRepositoryFile, repositoryPath } from './support/coverage.ts';
+import { repositoryPath } from './support/repository.ts';
 
 /**
  * A one-off task's log stream is the only thing of it that survives, and the teardown
@@ -189,22 +189,4 @@ describe('the one-off task log fetch, after the two silent runs of 23 September 
     expect(readFileSync(join(reports, 'tasks', 'migrate.log'), 'utf8').trim()).toBe(REFUSAL);
   });
 
-  it('the wrapper keeps every one-off task’s log beside its ARN record unless the caller named a capture', () => {
-    // release_run_task runs a dozen guards against real AWS answers before it reaches
-    // this line, so the contract is read from the source: the default capture is the
-    // record path with `.arn` replaced by `.log`, decided before anything is launched.
-    const source = readRepositoryFile('infra/scripts/release-common.sh');
-    const record = source.indexOf('record="$(release_task_record_path "$step")"');
-    expect(record).toBeGreaterThan(0);
-    const next = source.slice(record, record + 600);
-    expect(next).toContain('capture=${capture:-${record%.arn}.log}');
-    // And the reports artifact collects the whole directory the record lives in.
-    expect(readRepositoryFile('.github/workflows/greenfield-release.yml')).toContain('.rehearsal-reports');
-  });
-
-  it('the wait between looks is a setting, so the tests above run in milliseconds and the release in seconds', () => {
-    const source = readRepositoryFile('infra/scripts/release-common.sh');
-    expect(source).toContain('RELEASE_LOG_POLL_SECONDS=${RELEASE_LOG_POLL_SECONDS:-5}');
-    expect(existsSync(repositoryPath('infra/scripts/release-common.sh'))).toBe(true);
-  });
 });

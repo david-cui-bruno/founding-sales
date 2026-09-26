@@ -11,8 +11,7 @@
 # refuses *everything* — against a launch it must allow.
 #
 # Every AWS response is supplied through an `FSS_RELEASE_*` variable, so this reaches
-# no network and holds no credential. It is called by the release workflow's
-# credential-free `dry-run` job and by `test/release/scenario22.check.ts`.
+# no network and holds no credential. `test/release/scenario39.check.ts` runs it.
 
 set -uo pipefail
 

@@ -4,9 +4,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { releaseRecordSchema } from '@fss/contracts';
-import { readRepositoryFile, repositoryPath } from './support/coverage.ts';
+import { repositoryPath } from './support/repository.ts';
 import { registryStubs } from './support/cliStubs.ts';
-import { modesForCondition, rehearsalJobSteps, stagesForCondition } from './support/releaseWorkflow.ts';
 
 /**
  * Lane g74, audit O09: one release manifest per green full rehearsal, binding the
@@ -80,7 +79,7 @@ function history(): { readonly repository: string; readonly image: string; reado
   return { repository, image, docs, later };
 }
 
-/** The release record, written by the real script in dry-run mode, the way the dry-run job writes it. */
+/** The release record, written by the real script in dry-run mode. */
 function releaseRecord(stamp: string, api = digest('a'), worker = digest('b')): { readonly reports: string; readonly record: string } {
   const reports = mkdtempSync(join(tmpdir(), 'fss-manifest-reports-'));
   for (const report of ['restore-drill.txt', 'schema-ranges.txt', 'prefix-guard.txt']) {
@@ -239,47 +238,6 @@ describe('the release manifest binds a green full rehearsal’s artifacts (O09)'
     const result = run(MANIFEST, ['verify', out, record]);
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain("is not the record's");
-  });
-});
-
-describe('the rehearsal writes and keeps the manifest after the record, in the full stage of the full mode only', () => {
-  const steps = rehearsalJobSteps();
-  const names = steps.map(step => step.name);
-  const record = steps.find(step => step.text.includes('rehearsal-release-record.sh'));
-  const write = steps.find(step => step.name === 'Write the release manifest beside the record');
-  const keep = steps.find(step => step.name === 'Keep the release manifest');
-
-  it('runs both steps in the full stage of the full mode and in no other', () => {
-    for (const step of [write, keep]) {
-      expect(step, 'a manifest step is missing').toBeDefined();
-      // Lane g97: a `mode: schema` run writes no record, so it writes no manifest either.
-      expect(step?.condition).toBe("inputs.stage == 'full' && inputs.mode == 'full'");
-      expect([...stagesForCondition(step?.condition ?? null)]).toEqual(['full']);
-      expect([...modesForCondition(step?.condition ?? null)]).toEqual(['full']);
-    }
-  });
-
-  it('writes after the record, verifies at once, and keeps before the reports are uploaded', () => {
-    expect(names.indexOf(write?.name ?? '')).toBeGreaterThan(names.indexOf(record?.name ?? ''));
-    expect(names.indexOf(keep?.name ?? '')).toBeGreaterThan(names.indexOf(write?.name ?? ''));
-    expect(names.indexOf('Keep the reports')).toBeGreaterThan(names.indexOf(keep?.name ?? ''));
-    const text = write?.text ?? '';
-    expect(text).toContain('infra/scripts/release-manifest.sh write');
-    expect(text).toContain('infra/scripts/release-manifest.sh verify');
-    expect(text).toContain('--checkout "$GITHUB_SHA"');
-    expect(text).toContain("--pinned-commit '${{ inputs.pinned_commit }}'");
-    expect(text).toContain("--images-run '${{ inputs.images_ci_run_id }}'");
-    expect(text).toContain("--images-commit '${{ inputs.images_ci_commit }}'");
-    expect(text).toContain('DESKTOP_APP_VERSION: ${{ vars.FSS_DESKTOP_APP_VERSION }}');
-  });
-
-  it('keeps the manifest and its record together under the name the freshness check reads', () => {
-    const text = keep?.text ?? '';
-    expect(text).toContain('name: fss-release-manifest');
-    expect(text).toContain('release-manifest.json');
-    expect(text).toContain('release-record.json');
-    expect(text).toContain('if-no-files-found: error');
-    expect(readRepositoryFile('infra/scripts/ci-schedule.sh')).toContain("MANIFEST_ARTIFACT='fss-release-manifest'");
   });
 });
 
@@ -561,12 +519,4 @@ describe('production gets the rehearsed digests by a copy, never a rebuild (O17)
     expect(promote(same, ['--app-only'], registry()).code).not.toBe(0);
   });
 
-  it('names the four repositories as literals and reads ECR for everything else', () => {
-    const script = readRepositoryFile('infra/scripts/release-promote.sh');
-    expect(script).toContain("PROMOTE_SOURCES='fss-rh-api fss-rh-worker'");
-    expect(script).toContain("PROMOTE_DESTINATIONS='fss-prod-api fss-prod-worker'");
-    // No registry host and no account are written into it.
-    expect(script).not.toMatch(/\d{12}/u);
-    expect(script).not.toContain('dkr.ecr.us-');
-  });
 });

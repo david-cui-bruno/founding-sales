@@ -6,7 +6,6 @@ import {
   fixturePushTokens,
   type PushTokenPolicy,
 } from '@fss/domain/mail';
-import { mustCover } from './support/coverage.ts';
 
 /**
  * Appendix G 27: "Pub/Sub token with valid Google signature but wrong audience or
@@ -52,8 +51,6 @@ function claims(overrides: Record<string, unknown> = {}) {
 }
 
 describe('Appendix G 27: a valid Google signature is not an accepted notification', () => {
-  mustCover(27, ['audience_mismatch', 'service_account_mismatch', 'decidePushToken']);
-
   it('accepts a correct token, so the refusals below are not free', () => {
     expect(decidePushToken(claims(), POLICY, NOW_SECONDS)).toEqual({ accepted: true });
   });

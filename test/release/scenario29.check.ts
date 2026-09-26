@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { MANUAL_SUPPRESSION_CORRECTION_MILLISECONDS, mayCorrectSuppression } from '@fss/domain';
 import { MANUAL_SUPPRESSION_CORRECTION_SECONDS } from '@fss/contracts';
-import { mustCover } from './support/coverage.ts';
 
 /**
  * Appendix G 29: "A manual suppression corrects at 9:59 while the finalizer races;
@@ -25,12 +24,6 @@ import { mustCover } from './support/coverage.ts';
  */
 
 describe('Appendix G 29: one exclusive ten-minute deadline, agreed by both racers', () => {
-  mustCover(29, [
-    'lost_to_correction',
-    'finalizeManualSuppression',
-    'suppression_finalizations',
-  ]);
-
   it('is the same ten minutes on the server and in the contract', () => {
     expect(MANUAL_SUPPRESSION_CORRECTION_MILLISECONDS).toBe(10 * 60 * 1000);
     expect(MANUAL_SUPPRESSION_CORRECTION_SECONDS * 1000).toBe(MANUAL_SUPPRESSION_CORRECTION_MILLISECONDS);

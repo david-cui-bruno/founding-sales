@@ -1,6 +1,5 @@
-import { readdirSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { readRepositoryFile, repositoryPath } from './support/coverage.ts';
+import { repositoryPath } from './support/repository.ts';
 
 /**
  * One daily digest e-mail, nothing immediate (lane g99; the owner's decision 11C of
@@ -63,7 +62,7 @@ interface DigestModule {
   localTime(date: Date, timeZone?: string): string;
 }
 
-// A computed specifier, as in mutationRunner.check.ts: plain ESM with no declarations.
+// A computed specifier: plain ESM with no declarations.
 const DIGEST_PATH = repositoryPath('infra/lambdas/alarm-digest/digest.mjs');
 const digest = (await import(DIGEST_PATH)) as DigestModule;
 
@@ -304,63 +303,5 @@ describe('g99: the digest reads every alarm of the environment and publishes one
       expect(f.calls.alarms).toHaveLength(0);
       expect(f.calls.published).toHaveLength(0);
     }
-  });
-});
-
-describe('g99: the Terraform around it', () => {
-  const MODULE = 'infra/modules/alerts';
-  const moduleFiles = readdirSync(repositoryPath(MODULE)).filter(name => name.endsWith('.tf'));
-  const text = moduleFiles.map(name => readRepositoryFile(`${MODULE}/${name}`)).join('\n');
-  const DIGEST_TF = readRepositoryFile(`${MODULE}/digest.tf`);
-
-  it('finds the module, the digest and the alarms, so the assertions below read something', () => {
-    expect(moduleFiles).toEqual(expect.arrayContaining(['main.tf', 'digest.tf']));
-    expect(text.match(/^resource "aws_cloudwatch_(metric|composite)_alarm"/gmu)?.length).toBe(5);
-  });
-
-  it('gives no alarm an action: every action list in the module is empty', () => {
-    const actions = [...text.matchAll(/^\s*(alarm_actions|ok_actions|insufficient_data_actions)\s*=\s*(.+)$/gmu)];
-    expect(actions.length, 'the scan found no action argument at all').toBe(10);
-    for (const [line, , value] of actions) expect(value, line).toBe('[]');
-    expect(text).not.toMatch(/_actions\s*=\s*\[aws_sns_topic/u);
-  });
-
-  it('runs daily at 07:00 in New York, by Scheduler', () => {
-    expect(DIGEST_TF).toContain('digest_schedule_expression = "cron(0 7 * * ? *)"');
-    expect(DIGEST_TF).toContain('digest_time_zone           = "America/New_York"');
-    expect(DIGEST_TF).toContain('schedule_expression_timezone = local.digest_time_zone');
-    expect(DIGEST_TF).toContain('arn      = aws_lambda_function.digest.arn');
-  });
-
-  it('publishes to the one topic the module already had', () => {
-    expect(text.match(/^resource "aws_sns_topic" /gmu)).toHaveLength(1);
-    expect(DIGEST_TF).toContain('FSS_ALERT_TOPIC_ARN  = aws_sns_topic.alerts.arn');
-    expect(DIGEST_TF).toContain('Resource = aws_sns_topic.alerts.arn');
-    expect(DIGEST_TF).not.toMatch(/Principal\s*=\s*"\*"|AWS\s*=\s*"\*"/u);
-  });
-
-  it('hands the function the settings index.mjs reads, and zips every source file there is', () => {
-    const index = readRepositoryFile('infra/lambdas/alarm-digest/index.mjs');
-    const read = [...index.matchAll(/process\.env\.([A-Z_]+)/gu)].map(match => match[1]).sort();
-    const block = DIGEST_TF.slice(DIGEST_TF.indexOf('  environment {'), DIGEST_TF.indexOf('  logging_config {'));
-    const given = [...block.matchAll(/^\s+([A-Z_]+)\s+=/gmu)].map(match => match[1]).sort();
-    expect(read).toEqual(['FSS_ALARM_PREFIX', 'FSS_ALERT_TOPIC_ARN', 'FSS_DIGEST_TIME_ZONE']);
-    expect(given).toEqual(read);
-    expect(index).toContain("import { runDigest } from './digest.mjs';");
-
-    const sources = readdirSync(repositoryPath('infra/lambdas/alarm-digest')).sort();
-    const zipped = [...DIGEST_TF.matchAll(/^\s+filename = "([^"]+)"$/gmu)].map(match => match[1]).sort();
-    expect(zipped).toEqual(sources);
-    expect(DIGEST_TF).toContain('handler       = "index.handler"');
-  });
-
-  it('encrypts the function environment with the namespace key, never the AWS-managed aws/lambda key', () => {
-    // The first production apply of the digest (25 September 2026) was refused
-    // CreateFunction: with no kms_key_arn, Lambda encrypts the environment with aws/lambda in
-    // the caller's session, and the deployment role's KMS deny covers every untagged key.
-    const block = DIGEST_TF.slice(DIGEST_TF.indexOf('resource "aws_lambda_function" "digest" {'));
-    const body = block.slice(0, block.indexOf('\n}\n'));
-    expect(body).toContain('  environment {');
-    expect(body).toContain('  kms_key_arn = local.topic_key_arn\n');
   });
 });

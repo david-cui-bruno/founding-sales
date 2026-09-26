@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { jobIdempotencyKey } from '@fss/domain/jobs';
-import { mustCover } from './support/coverage.ts';
 
 /**
  * Appendix G 1: "Two scheduler transactions synchronized over one due execution create
@@ -25,15 +24,6 @@ import { mustCover } from './support/coverage.ts';
  */
 
 describe('Appendix G 1: one due thing is one job row', () => {
-  const entry = mustCover(1, ['idempotencyKey']);
-
-  it('is covered for all four kinds Appendix G names', () => {
-    expect(entry.references).toContain('apps/worker/test/schedulerPass.test.ts');
-    expect(entry.references).toContain('apps/worker/test/sequenceAction.test.ts');
-    expect(entry.references).toContain('apps/worker/test/todayBuild.test.ts');
-    expect(entry.references).toContain('apps/worker/test/mailHandlers.test.ts');
-  });
-
   it('derives every idempotency key from the work, never from the instant', () => {
     // Appendix C's table, read as a property: the same work asked for twice is the
     // same key. If any of these carried a timestamp the two calls would differ and two

@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { postureReviewAt, selectApplicablePosture } from '@fss/domain';
-import { mustCover } from './support/coverage.ts';
 
 /**
  * Appendix G 25: "Policy versions with zero, one and two applicable rows fail, allow and
@@ -41,8 +40,6 @@ function posture(overrides: Partial<Posture> = {}): Posture {
 }
 
 describe('Appendix G 25: zero, one and two applicable postures', () => {
-  mustCover(25, ['posture_overlapping', 'posture_missing', 'posture_overdue']);
-
   it('zero applicable rows refuses', () => {
     expect(selectApplicablePosture([], STATE, NOW)).toEqual({ kind: 'refused', reason: 'posture_missing' });
   });

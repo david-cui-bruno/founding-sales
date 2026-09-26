@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, writeFil
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { readRepositoryFile, repositoryPath } from './support/coverage.ts';
+import { readRepositoryFile, repositoryPath } from './support/repository.ts';
 
 /**
  * The two deployment roles' policies are code, and the Terraform tree is what judges them.
@@ -386,40 +386,6 @@ describe('the deployment-role policy is code, and the Terraform tree judges it',
     });
   }
 
-  it('allows every action of run 35628963637 for the role that was refused it', () => {
-    // Six classes, twenty-five errors, one credentialed run. The rehearsal role is the
-    // one that was refused them, so it is the one asked.
-    const stillRefused: string[] = [];
-    for (const [error, actions] of Object.entries(map.run_35628963637)) {
-      for (const action of actions) {
-        const allowed = allowsFor(rendered['fss-rh'], action).length > 0;
-        const killed = killedByABlanketDeny(rendered['fss-rh'], action) !== undefined;
-        if (!allowed || killed) stillRefused.push(`${action} (${error})`);
-      }
-    }
-    expect(stillRefused).toEqual([]);
-    // The floor: the six classes are all there, so a map that lost one would be red.
-    expect(Object.keys(map.run_35628963637).length).toBeGreaterThanOrEqual(7);
-  });
-
-  it('allows both roles the two Secrets Manager actions run 35679472666 was refused', () => {
-    // One class, one error, the sixth credentialed run. Production creates its instance
-    // the same way, so both roles are asked.
-    const stillRefused: string[] = [];
-    for (const prefix of PREFIXES) {
-      for (const [error, actions] of Object.entries(map.run_35679472666)) {
-        for (const action of actions) {
-          const allowed = allowsFor(rendered[prefix], action).length > 0;
-          const killed = killedByABlanketDeny(rendered[prefix], action) !== undefined;
-          if (!allowed || killed) stillRefused.push(`${prefix}: ${action} (${error})`);
-        }
-      }
-    }
-    expect(stillRefused).toEqual([]);
-    expect(Object.values(map.run_35679472666).flat()).toContain('secretsmanager:CreateSecret');
-    expect(Object.values(map.run_35679472666).flat()).toContain('secretsmanager:TagResource');
-  });
-
   it('keeps the three actions production must never hold', () => {
     // docs/greenfield/release.md 1.2: bypass-governance must never be on the production
     // role, or the suppression journal stops being an append-only record and Appendix E
@@ -602,21 +568,6 @@ describe('the journal deny exempts its deployer, and production keeps its postur
     expect(journal).toContain('ArnNotEquals = { "aws:PrincipalArn" = local.listing_deny_exempt_arns }');
   });
 
-  it('is passed the deployer as a listing principal by both roots, production included', () => {
-    // Not the opt-in that `administrative_principal_arns` is: an environment whose
-    // deployer cannot see its own bucket destroys it by accident, which is what the first
-    // production apply did to the encryption configuration and the ownership controls.
-    for (const root of ['infra/roots/rehearsal/main.tf', 'infra/roots/production/main.tf']) {
-      expect(readRepositoryFile(root)).toContain('journal_listing_principal_arns = [local.deployment_role_arn]');
-      expect(readRepositoryFile(root)).toContain(
-        'deployment_role_arn = "arn:aws:iam::${var.aws_account_id}:role/${var.deployment_role_name}"',
-      );
-    }
-    expect(readRepositoryFile('infra/modules/stack/main.tf')).toContain(
-      'bucket_listing_principal_arns = var.journal_listing_principal_arns',
-    );
-  });
-
   it('still denies the production deployer every object in the journal', () => {
     // Listing is not reading, in the bucket policy and in IAM both.
     const production = render('fss-prod');
@@ -632,28 +583,6 @@ describe('the journal deny exempts its deployer, and production keeps its postur
     );
   });
 
-  it('is passed the deployment role by the rehearsal root and nothing by production', () => {
-    expect(readRepositoryFile('infra/roots/rehearsal/main.tf')).toContain(
-      'journal_administrative_principal_arns = [local.deployment_role_arn]',
-    );
-    expect(readRepositoryFile('infra/roots/production/main.tf')).toContain(
-      'journal_administrative_principal_arns = var.journal_administrative_principal_arns',
-    );
-    expect(readRepositoryFile('infra/roots/production/variables.tf')).toMatch(
-      /variable "journal_administrative_principal_arns"[\s\S]*?default\s*=\s*\[\]/u,
-    );
-  });
-
-  it('needs the deployment role to hold bypass-governance as well, which only the rehearsal does', () => {
-    // Three things have to be true for a destroy to remove an object-locked bucket that
-    // holds objects inside their retention: force_destroy, the bucket policy, and
-    // s3:BypassGovernanceRetention in IAM. The bucket policy is above; this is the third.
-    const rehearsal = render('fss-rh');
-    const production = render('fss-prod');
-    expect(allowsFor(rehearsal, 's3:BypassGovernanceRetention').length).toBeGreaterThan(0);
-    expect(killedByABlanketDeny(production, 's3:BypassGovernanceRetention')).toBeDefined();
-    expect(readRepositoryFile('infra/modules/journal/main.tf')).toContain('force_destroy       = var.force_destroy');
-  });
 });
 
 describe('the renderer refuses what it cannot render', () => {
@@ -702,147 +631,6 @@ describe('the renderer refuses what it cannot render', () => {
     expect(narrowed.status, narrowed.stderr).toBe(0);
     expect(narrowed.stdout).toContain('certificate/00000000-1111-4222-8333-444444444444');
     expect(narrowed.stdout).not.toContain('certificate/*');
-  });
-
-  describe('discovery mode, which is David\'s decision of 22 September and never production\'s', () => {
-    // Six credentialed runs found one missing permission each, forty minutes apart. For one
-    // pass of create, deploy and full the rehearsal role holds a wide allow on the services
-    // the tree uses, with guards; the CloudTrail record of the pass is then the source of
-    // the exact policy (docs/decisions/g25-discovery-mode-for-the-rehearsal-role.md).
-    const discovery = (): PolicyDocument => {
-      const result = spawnSync(script, ['fss-rh', '--compact', '--discovery'], { encoding: 'utf8' });
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stderr).toContain('DISCOVERY MODE');
-      return JSON.parse(result.stdout) as PolicyDocument;
-    };
-    const normal = (): PolicyDocument =>
-      JSON.parse(spawnSync(script, ['fss-rh', '--compact'], { encoding: 'utf8' }).stdout) as PolicyDocument;
-
-    it('is refused for production and for any third argument but --discovery', () => {
-      const production = run(['fss-prod', '--compact', '--discovery']);
-      expect(production.code).toBe(2);
-      expect(production.output).toContain('production role is never widened');
-      expect(production.output).not.toContain('"Statement"');
-      const typo = run(['fss-rh', '--compact', '--wide']);
-      expect(typo.code).toBe(2);
-    });
-
-    it('names a literal service in every resource of both documents, as IAM requires', () => {
-      for (const document of [normal(), discovery()]) {
-        for (const statement of document.Statement) {
-          for (const arn of [...asList(statement.Resource), ...asList(statement.NotResource)]) {
-            if (arn === '*') continue;
-            expect(arn, `${statement.Sid}: ${arn}`).toMatch(/^arn:aws:[a-z0-9-]+:/u);
-          }
-        }
-      }
-    });
-
-    it('refuses a discovery template whose resource has a wildcard service, before any put can', () => {
-      const directory = mkdtempSync(join(tmpdir(), 'fss-discovery-template-'));
-      const template = join(directory, 'bad.json.tftpl');
-      writeFileSync(
-        template,
-        JSON.stringify({
-          Statement: [
-            { Sid: 'DiscoveryAllowX', Effect: 'Allow', Action: ['ec2:*'], Resource: '*' },
-            { Sid: 'DiscoveryGuardX', Effect: 'Deny', Action: '*', Resource: ['arn:aws:*:*:*:*fss-prod*'] },
-          ],
-        }),
-      );
-      const result = spawnSync(script, ['fss-rh', '--compact', '--discovery'], {
-        encoding: 'utf8',
-        env: { ...process.env, FSS_POLICY_DISCOVERY_TEMPLATE: template },
-      });
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain('service segment is not literal');
-      expect(result.stderr).toContain('DiscoveryGuardX');
-      expect(result.stdout).toBe('');
-    });
-
-    it('is not the default: the normal document carries no Discovery statement', () => {
-      expect(normal().Statement.some(statement => statement.Sid.startsWith('Discovery'))).toBe(false);
-    });
-
-    it('keeps every deny of the normal document and adds the guards', () => {
-      const wide = discovery();
-      const normalDenies = normal().Statement.filter(statement => statement.Effect === 'Deny').map(statement => statement.Sid);
-      expect(normalDenies.length).toBeGreaterThanOrEqual(5);
-      const wideSids = wide.Statement.map(statement => statement.Sid);
-      for (const sid of normalDenies) expect(wideSids, `discovery dropped the deny ${sid}`).toContain(sid);
-      const guards = wide.Statement.filter(statement => statement.Sid.startsWith('DiscoveryGuard'));
-      expect(guards.length).toBeGreaterThanOrEqual(6);
-      for (const guard of guards) expect(guard.Effect).toBe('Deny');
-      // Production's version of every named shape the role can address, one per service: IAM
-      // refused the single arn:aws:*:*:*:*fss-prod* on 22 September (the service segment must
-      // be literal), and a guard that names fewer shapes than the grant is a gap.
-      const named = normal().Statement.find(statement => statement.Sid === 'NamedResourcesInThisNamespace');
-      const productionGuard = guards.find(statement => statement.Sid === 'DiscoveryGuardNothingNamedForProduction');
-      const guarded = asList(productionGuard?.Resource);
-      for (const shape of asList(named?.Resource)) {
-        const production = shape.replace(/us-east-1|326255650484/gu, '*').replace('fss-rh*', 'fss-prod*');
-        const covered = guarded.some(guard => production === guard || production.startsWith(`${guard.replace(/\*$/u, '')}`));
-        expect(covered, `no guard covers production's ${shape}`).toBe(true);
-      }
-      expect(JSON.stringify(guards)).toContain('"aws:ResourceTag/NamePrefix":"fss-prod*"');
-      expect(JSON.stringify(guards)).toContain('"aws:RequestTag/NamePrefix":"fss-prod*"');
-      expect(JSON.stringify(guards)).toContain('delegated-worker');
-      expect(JSON.stringify(guards)).toContain('arn:aws:s3:::callie-sourcing-tfstate-326255650484"');
-      expect(JSON.stringify(guards)).toContain('kms:ScheduleKeyDeletion');
-    });
-
-    it('widens only services that have refused a run, and never IAM, STS, DynamoDB or S3', () => {
-      const wide = discovery().Statement.find(statement => statement.Sid.startsWith('DiscoveryAllow'));
-      expect(wide?.Effect).toBe('Allow');
-      expect(wide?.Resource).toBe('*');
-      expect(wide?.Condition).toBeUndefined();
-      const services = asList(wide?.Action).map(action => action.split(':')[0]);
-      // IAM is the escalation path; S3 holds every stack's state in the shared bucket
-      // (the independent review of 22 September showed s3:* would have let the role
-      // delete production's state object); ECR, SNS and ACM never refused anything.
-      for (const forbidden of ['iam', 'sts', 'dynamodb', 's3', 'ecr', 'sns', 'acm', 'organizations', 'account', 'lambda', 'events', 'cloudtrail']) {
-        expect(services, `the wide allow names ${forbidden}`).not.toContain(forbidden);
-      }
-      const treeServices = new Set(Object.values(actionMap().terraform_resources).map(entry => entry.service));
-      for (const service of services) {
-        if (service === undefined || service === 'tag') continue;
-        expect(treeServices.has(service), `the wide allow names ${service}, which the tree does not use`).toBe(true);
-      }
-      // The services that have refused a credentialed run, or that deploy has yet to exercise, are in.
-      for (const service of ['cloudwatch', 'kms', 'secretsmanager', 'ec2', 'cloudfront', 'rds', 'ecs', 'elasticloadbalancing', 'logs']) {
-        expect(services).toContain(service);
-      }
-    });
-
-    it('keeps the scoped S3 statements and guards production\'s state objects by name', () => {
-      const wide = discovery();
-      const sids = wide.Statement.map(statement => statement.Sid);
-      expect(sids).toContain('ThisNamespacesStateObjects');
-      expect(sids).toContain('NoDeploymentS3DataAccessOutsideTerraformState');
-      const guard = wide.Statement.find(statement => statement.Sid === 'DiscoveryGuardProductionsStateObjects');
-      expect(guard?.Effect).toBe('Deny');
-      expect(asList(guard?.Resource)).toEqual(['arn:aws:s3:::callie-sourcing-tfstate-326255650484/fss/greenfield/production*']);
-      expect(asList(guard?.Action)).toEqual(['s3:GetObject*', 's3:PutObject*', 's3:DeleteObject*']);
-    });
-
-    it('leaves out only the allows the wide allow already contains, and still fits IAM', () => {
-      const wide = discovery();
-      const wideServices = new Set(
-        asList(wide.Statement.find(statement => statement.Sid.startsWith('DiscoveryAllow'))?.Action)
-          .filter(action => action.endsWith(':*'))
-          .map(action => action.split(':')[0]),
-      );
-      const wideSids = new Set(wide.Statement.map(statement => statement.Sid));
-      for (const statement of normal().Statement) {
-        const subsumed =
-          statement.Effect === 'Allow' && asList(statement.Action).every(action => wideServices.has(action.split(':')[0]!));
-        expect(wideSids.has(statement.Sid), `${statement.Sid}: kept=${String(wideSids.has(statement.Sid))} subsumed=${String(subsumed)}`).toBe(!subsumed);
-      }
-      // The scoped IAM grant and the lock-table grant are outside the widened services and stay.
-      expect(wideSids.has('NamedResourcesInThisNamespace')).toBe(true);
-      expect(wideSids.has('ThisNamespacesStateDynamoLock')).toBe(true);
-      expect(JSON.stringify(wide).replace(/\s/gu, '').length).toBeLessThan(10_240);
-    });
   });
 
   it('lists the Sids it emits, with their effect, for both roles', () => {

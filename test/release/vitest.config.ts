@@ -2,19 +2,13 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
 /**
- * The Appendix G release suite (`npm run test:release`).
+ * The release suite (`npm run test:release`): the checks that run the release scripts,
+ * the deploy workflow's own shell, and the code-to-Terraform cross-checks.
  *
- * Two things about this file are deliberate and worth reading before changing either.
- *
- * **The files are `*.check.ts`, not `*.test.ts`.** The suffix kept them out of the
- * previous-generation app's root `vitest run`, which collected every `**\/*.test.ts`
- * outside a workspace package; that app was deleted in lane g95, and the suffix stays
- * so that no other runner picks the suite up by the default pattern. See
- * `docs/decisions/g12-where-the-release-suite-lives.md`.
- *
- * **The aliases mirror the workspace packages.** `test/release` is not an npm
- * workspace member, so `@fss/domain/...` resolves through these rather than through a
- * package `exports` map. They are the same targets `apps/api/vitest.config.ts` uses.
+ * The files are `*.check.ts`, not `*.test.ts`, so no workspace runner picks them up by
+ * the default pattern. `test/release` is not an npm workspace member, so `@fss/domain/...`
+ * resolves through the aliases below rather than a package `exports` map; they are the
+ * same targets `apps/api/vitest.config.ts` uses.
  */
 export default defineConfig({
   root: fileURLToPath(new URL('../../', import.meta.url)),

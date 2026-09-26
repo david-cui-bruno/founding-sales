@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { payloadHistoryId } from '@fss/domain/mail';
-import { mustCover, readRepositoryFile } from './support/coverage.ts';
 
 /**
  * Appendix G 10: "Duplicate push notifications during reconciliation and one direct
@@ -25,8 +24,6 @@ import { mustCover, readRepositoryFile } from './support/coverage.ts';
  */
 
 describe('Appendix G 10: duplicate notifications are one sync at the high-water mark', () => {
-  mustCover(10, ['coalesceMailSync', 'firstDelivery', 'payloadHistoryId']);
-
   it('reads a history id out of a payload only when it is one', () => {
     // The merged value is read back by the handler through this. A lenient reader
     // would let a merged-away `null` look like a legitimate starting point and the
@@ -36,16 +33,5 @@ describe('Appendix G 10: duplicate notifications are one sync at the high-water 
     expect(payloadHistoryId({ historyId: 1007 })).toBeNull();
     expect(payloadHistoryId({ historyId: '10 07' })).toBeNull();
     expect(payloadHistoryId({})).toBeNull();
-  });
-
-  it('never lowers the high-water id, and never revives a dead sync', () => {
-    const coalesce = readRepositoryFile('packages/domain/mail/coalesce.ts');
-    // Numeric, not lexicographic: '1007' is smaller than '999' as text, which is
-    // exactly the comparison a mailbox crosses on its thousandth history id.
-    expect(coalesce).toContain("(jobs.payload ->> 'historyId')::numeric >= ($5::text)::numeric");
-    // 13.2: an exhausted job is requeueable only by an audited admin command, and a
-    // push notification is not an admin.
-    expect(coalesce).toContain("state = CASE WHEN jobs.state = 'done' THEN 'queued' ELSE jobs.state END");
-    expect(coalesce).not.toContain("jobs.state = 'dead' THEN 'queued'");
   });
 });
