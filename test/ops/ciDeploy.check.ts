@@ -35,8 +35,10 @@ import { readRepositoryFile, repositoryPath } from './support/repository.ts';
  * service still on the previous revision, with the right name and ARN — so nothing on that
  * path is deregistered at all. The stub fails the call in five ways, and each leaves the
  * revision ACTIVE. A revision goes only on ECS's own rejection: the circuit breaker rolled
- * the service back and the answer lists a FAILED deployment of that revision. A rollback
- * whose answer does not list it, and one whose deployments cannot all be read, leave it.
+ * the service back and the answer lists exactly one deployment of that revision, FAILED.
+ * A rollback whose answer does not list it, one that lists a second deployment of it in
+ * any other state, and one whose deployments cannot all be read — an entry that is not an
+ * object, or that carries no taskDefinition or no rolloutState — all leave it.
  *
  * **A put that launches twice.** The task runner relaunches after an image-pull failure;
  * the CI put must launch exactly one task and fail on a pull failure, even when the
@@ -265,8 +267,18 @@ if args[:2] == ["ecs", "describe-services"]:
         deployments.append({"status": "ACTIVE", "taskDefinition": service["refused"], "rolloutState": "FAILED"})
     if service.get("halfUpdated"):
         deployments.append({"status": "ACTIVE", "taskDefinition": service["halfUpdated"], "rolloutState": "IN_PROGRESS"})
-    if service.get("unreadableDeployment") and service.get("refused"):
-        deployments.append(None)
+    extra = service.get("extraDeployment")
+    if extra and service.get("refused"):
+        # One more entry in the answer after the rollback, each of which must make it
+        # ambiguous: unreadable, incomplete, or a second deployment of the same revision.
+        if extra == "null":
+            deployments.append(None)
+        elif extra == "no-task-definition":
+            deployments.append({"status": "ACTIVE", "rolloutState": "FAILED"})
+        elif extra == "no-rollout-state":
+            deployments.append({"status": "ACTIVE", "taskDefinition": service["refused"]})
+        elif extra == "in-progress":
+            deployments.append({"status": "ACTIVE", "taskDefinition": service["refused"], "rolloutState": "IN_PROGRESS"})
     arn = "arn:aws:ecs:us-east-1:" + account + ":service/fss-prod-cluster/" + name
     if service.get("stale"):
         # An answer for the same name in another cluster: not the service asked for.
@@ -487,8 +499,11 @@ interface WorldOptions {
   readonly updateFails?: Partial<Record<Service, 'refused' | 'lost' | 'unreadable' | 'half' | 'stale'>>;
   /** A circuit-breaker rollback whose answer lists no deployment of the revision it failed. */
   readonly forgetsFailed?: Service;
-  /** A service one of whose deployment entries is not an object, so they cannot all be read. */
-  readonly unreadableDeployment?: Service;
+  /** One more deployment entry in a rolled-back service's answer, which must make it ambiguous. */
+  readonly extraDeployment?: {
+    readonly service: Service;
+    readonly kind: 'null' | 'no-task-definition' | 'no-rollout-state' | 'in-progress';
+  };
   /** The one-off operations task stops before any container ran: its image could not be pulled. */
   readonly pullFailure?: boolean;
 }
@@ -518,7 +533,7 @@ function world(options: WorldOptions = {}): World {
     ...(options.stray?.[name] === undefined ? {} : { strayDigest: options.stray[name] }),
     ...(options.updateFails?.[name] === undefined ? {} : { updateFails: options.updateFails[name] }),
     forgetsFailed: options.forgetsFailed === name,
-    unreadableDeployment: options.unreadableDeployment === name,
+    ...(options.extraDeployment?.service === name ? { extraDeployment: options.extraDeployment.kind } : {}),
   });
   const state = {
     account: ACCOUNT,
@@ -938,14 +953,18 @@ describe('deploy registers the next revisions, rolls the worker then the API, an
     expect(forgotten.state().taskDefinitions[definitionArn('worker', 5)]?.taskDefinition.status).toBe('ACTIVE');
     expect(forgotten.state().services['fss-prod-api']?.taskDefinition).toBe(definitionArn('api', 7));
 
-    // The failed deployment is listed, but one entry is not an object: "every deployment"
-    // cannot be judged over entries that cannot be read, so it stays too.
-    const unreadable = world({ fail: { worker: true }, unreadableDeployment: 'worker' });
-    const ambiguous = runScript('deploy', unreadable);
-    expect(ambiguous.code).toBe(1);
-    expect(operations(unreadable)).toEqual(['register fss-prod-worker', 'update fss-prod-worker']);
-    expect(ambiguous.output).toContain(`and ${definitionArn('worker', 5)} is left ACTIVE`);
-    expect(unreadable.state().taskDefinitions[definitionArn('worker', 5)]?.taskDefinition.status).toBe('ACTIVE');
+    // The failed deployment is listed, and one more entry makes the answer unjudgeable:
+    // not an object; an object missing either field it would be judged by; or a second
+    // deployment of the same revision, which ECS is still holding.
+    for (const kind of ['null', 'no-task-definition', 'no-rollout-state', 'in-progress'] as const) {
+      const stub = world({ fail: { worker: true }, extraDeployment: { service: 'worker', kind } });
+      const ambiguous = runScript('deploy', stub);
+      expect(ambiguous.code, kind).toBe(1);
+      expect(operations(stub), kind).toEqual(['register fss-prod-worker', 'update fss-prod-worker']);
+      expect(ambiguous.output, kind).toContain(`and ${definitionArn('worker', 5)} is left ACTIVE`);
+      expect(stub.state().taskDefinitions[definitionArn('worker', 5)]?.taskDefinition.status, kind).toBe('ACTIVE');
+      expect(stub.state().services['fss-prod-api']?.taskDefinition, kind).toBe(definitionArn('api', 7));
+    }
   });
 
   it('deregisters a registration that differs from the running revision in more than the image, and rolls nothing', () => {

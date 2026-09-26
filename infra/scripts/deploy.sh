@@ -1465,15 +1465,19 @@ PY
 # a service that never moved from a snapshot taken before an accepted update became
 # visible. So there is one affirmative answer and everything else is `unknown`:
 #
-#   rejected  ECS saw the revision and rejected it. The answer is exactly the service
-#             asked for, by name and by ARN in this cluster; one of its deployments names
-#             the revision in a terminal FAILED state (the circuit breaker); and its one
+#   rejected  ECS saw the revision and rejected it, and nothing of it is left running. All
+#             of: the answer is exactly the service asked for, by name and by ARN in this
+#             cluster; every deployment entry is an object carrying a taskDefinition and a
+#             rolloutState, both strings; exactly one deployment names the revision and its
+#             rolloutState is FAILED, so none names it in any other state; and the one
 #             PRIMARY deployment and the service itself name <previous>. Only this
 #             deregisters.
-#   unknown   anything else: a service still naming the revision, an answer for another
-#             service, an unreadable one, and one whose deployments cannot all be read
-#             (an entry that is not an object makes "every deployment" unjudgeable, so it
-#             is ambiguous, never a pass).
+#   unknown   anything else: a service still naming the revision, a second deployment of
+#             it in any other state (IN_PROGRESS above all: ECS is still trying it), an
+#             answer for another service, an unreadable one, and one whose deployments
+#             cannot all be read — an entry that is not an object, or that carries no
+#             taskDefinition or no rolloutState, makes "every deployment" unjudgeable, so
+#             it is ambiguous, never a pass.
 #
 # CI_OBSERVED is the service's own taskDefinition when the answer was that service's, and
 # empty otherwise.   ci_references <service> <revision> <previous>
@@ -1497,12 +1501,18 @@ verdict, current = "unknown", ""
 if entry.get("serviceName") == env["FSS_NAME"] and entry.get("serviceArn") == wanted:
     current = str(entry.get("taskDefinition") or "")
     deployments = entry.get("deployments")
-    # Every entry readable, or nothing is judged over them.
-    if isinstance(deployments, list) and deployments and all(isinstance(item, dict) for item in deployments):
+    # Every entry readable and whole, or nothing is judged over them: an entry missing
+    # either field could be the one that still names the revision.
+    readable = (isinstance(deployments, list) and deployments
+                and all(isinstance(item, dict) and isinstance(item.get("taskDefinition"), str)
+                        and isinstance(item.get("rolloutState"), str) for item in deployments))
+    if readable:
         primary = [item for item in deployments if item.get("status") == "PRIMARY"]
-        failed = [item for item in deployments
-                  if item.get("taskDefinition") == env["FSS_REVISION"] and item.get("rolloutState") == "FAILED"]
-        if (failed and len(primary) == 1 and primary[0].get("taskDefinition") == env["FSS_PREVIOUS"]
+        # Exactly one deployment of the revision, and it is the failed one: a second, in
+        # any other state, is ECS still holding it.
+        named = [item for item in deployments if item["taskDefinition"] == env["FSS_REVISION"]]
+        if (len(named) == 1 and named[0]["rolloutState"] == "FAILED"
+                and len(primary) == 1 and primary[0]["taskDefinition"] == env["FSS_PREVIOUS"]
                 and current == env["FSS_PREVIOUS"]):
             verdict = "rejected"
 print(verdict, current or "-")
