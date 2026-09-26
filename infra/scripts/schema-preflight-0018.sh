@@ -103,16 +103,22 @@ fi
 release_refuse_foreign_arguments "$ENVIRONMENT" "$CLUSTER_ARN" "$OPERATIONS_TASK_DEFINITION" || exit 1
 
 TEMPORARY_REVISION=''
+# On exit, whatever happened. A deregistration ECS refuses leaves the revision as the
+# family's newest ACTIVE one, which the next plan reads, so the script fails then even
+# after a successful count (review of PRs 246 and 247, 26 September 2026).
 deregister_temporary() {
+  local status=$?
   if [ -n "$TEMPORARY_REVISION" ]; then
     if release_aws "$ENVIRONMENT" ecs deregister-task-definition --task-definition "$TEMPORARY_REVISION" --output json >/dev/null; then
       rehearsal_log "deregistered $TEMPORARY_REVISION, the preflight's own revision"
     else
-      echo "FAIL: could not deregister $TEMPORARY_REVISION. It is the newest ACTIVE revision of the operations family, which the next plan reads; deregister it with the admin profile before the apply." >&2
+      echo "FAIL: could not deregister $TEMPORARY_REVISION. It is the newest ACTIVE revision of the operations family, which the next plan reads; deregister it with the admin profile before the apply: aws ecs deregister-task-definition --task-definition $TEMPORARY_REVISION" >&2
+      status=1
     fi
     TEMPORARY_REVISION=''
   fi
   rm -rf "$WORK"
+  exit "$status"
 }
 trap deregister_temporary EXIT
 

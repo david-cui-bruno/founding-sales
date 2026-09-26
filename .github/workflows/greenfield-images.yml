@@ -27,8 +27,9 @@ name: Greenfield images
 #     so no IAM statement and no trust relationship changed, and it cannot write a
 #     production repository: `fss-prod-*` is outside its namespace;
 #   * it builds and pushes each image once, as `fss-rh-<image>:ci-<commit>`. The
-#     repositories are IMMUTABLE, so a re-run of the same commit finds the tag and
-#     reuses its digest rather than pushing different bytes under it;
+#     repositories are IMMUTABLE, so a re-run of the same run finds the tag and
+#     reuses its digest rather than pushing different bytes under it; a first attempt
+#     that finds the tag already there fails, because another writer pushed it;
 #   * it pulls what it pushed **by digest** and runs the same verification against
 #     that, so the digest it publishes is the digest that was verified;
 #   * it writes both digests to the step summary and to the artifact
@@ -286,7 +287,15 @@ jobs:
             status=$?
             set -e
             if [ "$status" -eq 0 ] && [[ "$existing" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-              echo "$repository:$tag already exists; reusing $existing"
+              # Only a re-run of this run may find its own tag (review of PRs 246 and 247,
+              # 26 September 2026): on the first attempt an existing tag was pushed by
+              # somebody else, and the deploy's push-time window would accept it as this
+              # run's build. Release such a commit by hand (release.md 4.0).
+              if [ "${GITHUB_RUN_ATTEMPT:-1}" = 1 ]; then
+                echo "::error::$repository:$tag already exists as $existing and this is the first attempt of run $GITHUB_RUN_ID: another writer pushed it, so this run cannot vouch for it. Release the commit by hand."
+                exit 1
+              fi
+              echo "$repository:$tag already exists; reusing $existing (attempt $GITHUB_RUN_ATTEMPT of this run)"
               digest="$existing"
             elif [[ "$existing" == *ImageNotFoundException* ]]; then
               docker buildx build \
