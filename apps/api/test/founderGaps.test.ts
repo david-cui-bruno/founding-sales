@@ -136,7 +136,8 @@ describe('lane g88 through the API', () => {
     expect(answer.status).toBe(200);
     expect(wireDrift(resumePreviewResponseSchema, answer.body)).toEqual([]);
     const { preview } = resumePreviewResponseSchema.parse(answer.body);
-    expect(preview.kind).toBe('review_required');
+    // A long hold resumes on its own since wave 2 (S4.1); the review says so.
+    expect(preview.kind).toBe('resume');
     expect(preview.steps).toHaveLength(1);
     const moved = Date.parse(preview.steps[0]?.proposedDueAt ?? '') - Date.parse(preview.steps[0]?.dueAt ?? '');
     expect(moved / 86_400_000).toBeGreaterThan(8.9);

@@ -81,8 +81,9 @@ export { rescheduleExecution, type RescheduleInput } from './shifts.ts';
  *   `held` — nothing ever reached Gmail — are handed to the dispatch path again, which
  *   rechecks everything under the send gate and claims atomically or not at all;
  * * a held step is resumed first (`resumeEnrollment`): 4.3's shift by the union of the
- *   holds that just cleared, or the seven-day review, and then the fresh eligibility
- *   check in the same transaction (audit C05).
+ *   holds that just cleared, and then the fresh eligibility check in the same
+ *   transaction (audit C05). So is any step of an enrollment an older release left in
+ *   `review_required`: a long hold resumes on its own since wave 2 (S4.1).
  *
  * Two more answers follow from that: `completed`, when the fence says the step is
  * done, and a `handed_to_send` for a fence that already existed.
@@ -218,11 +219,6 @@ export async function runDueStepExecution(
   if (settled !== null) return settled;
 
   // From here nothing was ever handed to Gmail: the fence is absent, prepared or held.
-  if (enrollment.state === 'review_required') {
-    // 4.3: "the enrollment remains held for salesperson review and explicit resume".
-    return await holdExecution(context, loaded, 'long_hold_review');
-  }
-
   if (loaded.state !== 'dispatched' && Date.parse(loaded.notBefore) > Date.parse(input.now)) {
     return { kind: 'not_due', stepExecutionId: loaded.id, notBefore: loaded.notBefore };
   }
@@ -237,7 +233,10 @@ export async function runDueStepExecution(
     );
     execution = { ...execution, state: 'pending' };
   }
-  if (execution.state === 'held') {
+  // An enrollment an older release sent to `review_required` resumes through the same
+  // path as a held step (wave 2, S4.1): its holds are asked again, and the work shifts
+  // once by the union and runs, or stays held by what is still open.
+  if (execution.state === 'held' || enrollment.state === 'review_required') {
     const resumed = await resumeHeldStep(context, execution, input.now);
     if (resumed.kind === 'stopped') return resumed.outcome;
     execution = resumed.execution;
@@ -337,7 +336,7 @@ type ResumedStep =
 /**
  * 4.3 for a held step the scheduler woke (audit C05): the enrollment's holds are
  * reconsidered before anything else, so a released hold shifts the unexecuted steps by
- * the union it blocked for, or sends the enrollment to review past seven days.
+ * the union it blocked for, however long it was (wave 2, S4.1).
  *
  * `still_held` holds the step with the reason of the oldest hold still open — the wake
  * and the resume ask the same scopes, so this is the rare case of a hold opened between
@@ -358,14 +357,13 @@ async function resumeHeldStep(
       outcome: await holdExecution(context, execution, reason ?? execution.holdReasonCode ?? 'scoped_pause'),
     };
   }
-  if (resumed.value.kind === 'review_required') {
-    return { kind: 'stopped', outcome: await holdExecution(context, execution, 'long_hold_review') };
-  }
   const current = await loadStepExecutionForUpdate(context, execution.id);
-  if (current === null || (current.state !== 'pending' && current.state !== 'held')) {
+  // `dispatched` too: a step of an enrollment an older release sent to review may carry a
+  // prepared fence, which the dispatch path takes from here.
+  if (current === null || (current.state !== 'pending' && current.state !== 'held' && current.state !== 'dispatched')) {
     return { kind: 'stopped', outcome: { kind: 'nothing_to_do' } };
   }
-  if (Date.parse(current.notBefore) > Date.parse(now)) {
+  if (current.state !== 'dispatched' && Date.parse(current.notBefore) > Date.parse(now)) {
     return { kind: 'stopped', outcome: { kind: 'not_due', stepExecutionId: current.id, notBefore: current.notBefore } };
   }
   return { kind: 'resumed', execution: current };

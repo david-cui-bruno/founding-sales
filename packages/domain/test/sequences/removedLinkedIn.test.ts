@@ -12,7 +12,7 @@ import {
   publishVersion,
   readSequenceVersion,
   recordingSendHandoff,
-  resumeAfterReview,
+  resumeEnrollment,
   runDueStepExecution,
   sequenceVersionForDisplay,
   stopEnrollments,
@@ -347,7 +347,7 @@ describe('a step or an execution whose channel was LinkedIn', () => {
     const linkedIn = await held(ids.mixedLinkedInStepId, 'linkedin_task', 1);
     const call = await held(ids.mixedCallStepId, 'call_task', 2);
 
-    const resumed = await resumeAfterReview(contextFor('salesperson'), { enrollmentId });
+    const resumed = await resumeEnrollment(contextFor('salesperson'), { enrollmentId });
     expect(resumed).toMatchObject({ ok: true, value: { kind: 'resume' } });
     const { rows } = await database.session.query<{ id: string; state: string; hold_reason_code: string | null }>(
       'SELECT id, state, hold_reason_code FROM step_executions WHERE workspace_id = $1 AND enrollment_id = $2 ORDER BY ordinal',

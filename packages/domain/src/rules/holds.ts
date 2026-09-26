@@ -7,19 +7,20 @@ import { isRecoverableHoldReason } from '@fss/contracts';
  * "Automation is eligible only when the opportunity is automated and no applicable
  * active hold exists. Clearing one hold never clears another. When the final
  * applicable hold clears, unfinished due times shift by the union of all blocking
- * intervals, so overlapping holds are not double-counted. If the union exceeds seven
- * calendar days, the enrollment remains held for salesperson review and explicit
- * resume."
+ * intervals, so overlapping holds are not double-counted."
  *
  * The union, not the sum, is the whole point: two holds that ran side by side for a
  * day delayed the work by a day, and adding them would push a firm two days out for a
  * single day of trouble. The property tests in test/domain/holds.test.ts check that
  * the union is never larger than the sum, never smaller than the longest single hold,
  * and independent of the order the holds are given in.
+ *
+ * A union longer than seven days used to leave the enrollment `review_required` until a
+ * person resumed it by hand (wave 2, S4.1). It no longer does: when the last hold
+ * clears, however long it ran, the work shifts once by the union and resumes after the
+ * fresh eligibility check, which is where suppression, coverage, reply and window
+ * safety live. How long it was held is shown on the Today card instead.
  */
-
-export const LONG_HOLD_REVIEW_DAYS = 7;
-export const LONG_HOLD_REVIEW_MILLISECONDS = LONG_HOLD_REVIEW_DAYS * 24 * 60 * 60 * 1000;
 
 export interface HoldRecord {
   readonly id: string;
@@ -74,11 +75,6 @@ export interface HoldComposition {
   readonly openHoldIds: readonly string[];
   /** The union of every blocking interval, in milliseconds. Never the sum. */
   readonly unionMilliseconds: number;
-  /**
-   * True when the union exceeded seven calendar days. The enrollment stays held for
-   * salesperson review even after the last hold clears.
-   */
-  readonly requiresReview: boolean;
   /** The reason codes a control may clear, out of the open ones. */
   readonly recoverableReasonCodes: readonly HoldReasonCode[];
 }
@@ -118,32 +114,23 @@ export function composeHolds(input: ComposeHoldsInput): HoldComposition {
     openReasonCodes,
     openHoldIds: open.map(hold => hold.id).sort(),
     unionMilliseconds,
-    requiresReview: unionMilliseconds > LONG_HOLD_REVIEW_MILLISECONDS,
     recoverableReasonCodes: openReasonCodes.filter(code => isRecoverableHoldReason(code)),
   };
 }
 
 export type ResumeDecision =
   | { readonly kind: 'still_held'; readonly openHoldIds: readonly string[] }
-  | { readonly kind: 'review_required'; readonly unionMilliseconds: number; readonly reviewDays: number }
   | { readonly kind: 'resume'; readonly shiftMilliseconds: number };
 
 /**
  * What happens to unexecuted work when the holds are reconsidered.
  *
- * Three answers and no fourth: something is still open, or the union was long enough
- * that a person has to look at the rendered future steps first, or the work shifts by
- * the union and resumes after a fresh eligibility check.
+ * Two answers: something is still open, or the work shifts by the union and resumes
+ * after a fresh eligibility check. The length of the union no longer decides anything
+ * (wave 2, S4.1): a week's pause resumes on its own like a day's.
  */
 export function decideResume(composition: HoldComposition): ResumeDecision {
   if (composition.blocked) return { kind: 'still_held', openHoldIds: composition.openHoldIds };
-  if (composition.requiresReview) {
-    return {
-      kind: 'review_required',
-      unionMilliseconds: composition.unionMilliseconds,
-      reviewDays: LONG_HOLD_REVIEW_DAYS,
-    };
-  }
   return { kind: 'resume', shiftMilliseconds: composition.unionMilliseconds };
 }
 

@@ -68,8 +68,8 @@ describe('the wire vocabularies are the domain’s', () => {
     expect(new Set(wire.STEP_CHANNELS).size).toBe(wire.STEP_CHANNELS.length);
   });
 
-  it('RESUME_DECISION_KINDS is decideResume’s three answers (lane g88)', () => {
-    const same: Same<(typeof wire.RESUME_DECISION_KINDS)[number], ResumeDecision['kind']> = true;
+  it('RESUME_DECISION_KINDS is decideResume’s answers and the deprecated review_required (lane g88, wave 2 S4.1)', () => {
+    const same: Same<Exclude<(typeof wire.RESUME_DECISION_KINDS)[number], 'review_required'>, ResumeDecision['kind']> = true;
     expect(same).toBe(true);
     expect(new Set(wire.RESUME_DECISION_KINDS).size).toBe(wire.RESUME_DECISION_KINDS.length);
   });

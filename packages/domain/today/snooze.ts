@@ -264,8 +264,8 @@ export async function snoozeTodayItem(
 export interface ReleasedTodayPause {
   readonly holdId: string;
   readonly releasedAt: string;
-  /** What the enrollment did next (4.3): resumed and shifted, still held, or sent to review. */
-  readonly resume: 'resume' | 'still_held' | 'review_required' | 'not_applicable';
+  /** What the enrollment did next (4.3): resumed and shifted, or still held. */
+  readonly resume: 'resume' | 'still_held' | 'not_applicable';
 }
 
 /**
@@ -276,8 +276,8 @@ export interface ReleasedTodayPause {
  * pause on the same work is out of reach of this control by construction — the
  * `source_event_kind` is the filter. The enrollment is then asked to resume in the
  * same transaction, which shifts its unexecuted steps by the union of the intervals
- * that blocked it, leaves it held if something else still does, or sends a pause
- * longer than seven days to review.
+ * that blocked it, or leaves it held if something else still does. A pause longer
+ * than seven days resumes like a short one (wave 2, S4.1).
  */
 export async function releaseTodayPause(
   context: RepositoryContext,
