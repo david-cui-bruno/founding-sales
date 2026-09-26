@@ -44,11 +44,6 @@ output "critical_composite_alarm_name" {
   value       = aws_cloudwatch_composite_alarm.critical.alarm_name
 }
 
-output "critical_condition_alarm_names" {
-  description = "The composite alarm of each immediately critical condition, keyed by the condition. Each trips when its condition does, even while another is open (lane g81); none e-mails (lane g99)."
-  value       = { for name, alarm in aws_cloudwatch_composite_alarm.critical_condition : name => alarm.alarm_name }
-}
-
 output "warning_composite_alarm_name" {
   description = "Composite alarm over every warning condition."
   value       = aws_cloudwatch_composite_alarm.warning.alarm_name

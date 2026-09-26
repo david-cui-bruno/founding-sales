@@ -197,82 +197,8 @@ run "a_stale_coverage_watermark_is_a_warning" {
     condition = (
       strcontains(aws_cloudwatch_composite_alarm.warning.alarm_rule, "ALARM(\"fss-test-mailbox-coverage-stale\")")
       && !strcontains(aws_cloudwatch_composite_alarm.critical.alarm_rule, "fss-test-mailbox-coverage-stale")
-      && !contains(keys(aws_cloudwatch_composite_alarm.critical_condition), "mailbox_coverage_stale")
     )
     error_message = "The coverage warning belongs to the warning roll-up and nothing else."
-  }
-}
-
-# Lane g81, audit O14. One OR composite in ALARM hides every later critical
-# condition, so each critical condition has a composite of its own whose rule is
-# that one alarm, and nothing else does.
-run "every_critical_condition_has_a_composite_of_its_own" {
-  command = plan
-
-  assert {
-    condition = length(aws_cloudwatch_composite_alarm.critical_condition) == length([
-      for name, alarm in output.alarm_inventory : name if alarm.severity == "critical"
-    ]) + 1
-    error_message = "One composite per critical metric alarm, and one for all_sequences_held."
-  }
-
-  assert {
-    condition = alltrue([
-      for name, alarm in output.alarm_inventory :
-      aws_cloudwatch_composite_alarm.critical_condition[name].alarm_rule == "ALARM(\"fss-test-${replace(name, "_", "-")}\")"
-      && aws_cloudwatch_composite_alarm.critical_condition[name].alarm_name == "fss-test-critical-${replace(name, "_", "-")}"
-      if alarm.severity == "critical"
-    ])
-    error_message = "Each critical condition's composite reads exactly its own alarm, so it trips whatever else is open."
-  }
-
-  assert {
-    condition     = aws_cloudwatch_composite_alarm.critical_condition["all_sequences_held"].alarm_rule == "ALARM(\"fss-test-all-sequences-held\")"
-    error_message = "The metric-math alarm has a composite of its own too."
-  }
-
-  assert {
-    condition = alltrue([
-      for name, alarm in output.alarm_inventory :
-      !contains(keys(aws_cloudwatch_composite_alarm.critical_condition), name)
-      if alarm.severity == "warning"
-    ])
-    error_message = "A warning has no per-condition composite; the warning roll-up is the only composite over it."
-  }
-}
-
-# The four conditions the worker's own metric loop publishes with missing data
-# breaching trip whenever the worker stops publishing. Their composites name
-# worker-heartbeat-missed as actions suppressor; nothing else waits on anything.
-# Since lane g99 no composite has an action for it to hold, and the suppressor is
-# kept so that restoring one keeps a dead worker one notification.
-run "a_dead_worker_is_one_e_mail_not_five" {
-  command = plan
-
-  assert {
-    condition = sort([
-      for name, composite in aws_cloudwatch_composite_alarm.critical_condition : name
-      if length(composite.actions_suppressor) > 0
-    ]) == tolist(["api_heartbeat_missed", "canary_stale", "mailbox_heartbeat_missed", "scheduler_heartbeat_missed"])
-    error_message = "Exactly the API, scheduler and mailbox heartbeats and the canary are held back while the worker is down."
-  }
-
-  assert {
-    condition = alltrue(flatten([
-      for composite in aws_cloudwatch_composite_alarm.critical_condition : [
-        for suppressor in composite.actions_suppressor :
-        suppressor.alarm == "fss-test-worker-heartbeat-missed" && suppressor.wait_period == 120 && suppressor.extension_period == 300
-      ]
-    ]))
-    error_message = "The suppressor is the worker's heartbeat alarm, with a two-minute wait and a five-minute extension."
-  }
-
-  assert {
-    condition = alltrue([
-      for name in ["worker_heartbeat_missed", "suppression_journal_failure", "restore_generation_mismatch", "outbound_invariant_failure", "all_sequences_held"] :
-      length(aws_cloudwatch_composite_alarm.critical_condition[name].actions_suppressor) == 0
-    ])
-    error_message = "The worker's own alarm and the safety conditions are never held back."
   }
 }
 
@@ -300,8 +226,7 @@ run "criticals_roll_up_into_one_composite" {
 
 # A metric alarm that belongs to no composite would be an alarm no roll-up
 # reports. So every one is named by exactly one roll-up, the one its
-# severity says, and the roll-ups name nothing else. (A critical one is also named
-# by its own per-condition composite; that run is above.)
+# severity says, and the roll-ups name nothing else.
 run "every_metric_alarm_feeds_exactly_one_composite" {
   command = plan
 

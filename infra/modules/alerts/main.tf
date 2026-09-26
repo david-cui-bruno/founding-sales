@@ -1,11 +1,10 @@
 # FSS greenfield alerting.
 #
 # Every threshold in spec 13.3 becomes one CloudWatch alarm over a metric the
-# applications emit, and the alarms roll up into composites: <prefix>-critical over
-# every critical condition, <prefix>-warning over every warning, and one
-# <prefix>-critical-<condition> per critical condition, so a second critical condition
-# that trips while the first is open still changes the state of an alarm of its own
-# (lane g81, audit O14).
+# applications emit, and the alarms roll up into two composites: <prefix>-critical over
+# every critical condition and <prefix>-warning over every warning. The thirteen
+# per-condition composites of lane g81 went in wave 2 (26 September 2026): with no
+# action on any alarm they only repeated, in the digest, a metric alarm's own state.
 #
 # Nothing here e-mails anybody (lane g99; the owner's decision 11C of 25 September
 # 2026). No metric alarm and no composite carries an alarm, OK or insufficient-data
@@ -17,14 +16,6 @@
 # "critical" and all_sequences_held in <prefix>-critical, severity "warning" in
 # <prefix>-warning. tests/thresholds.tftest.hcl holds the membership and
 # tests/digest.tftest.hcl holds the absence of every action.
-#
-# The four conditions the worker's own metric loop publishes and that treat missing
-# data as breaching — the API, scheduler and mailbox heartbeats and the canary — go to
-# ALARM whenever the worker stops publishing. Their per-condition composites still name
-# worker-heartbeat-missed as their actions suppressor. With no action on any composite
-# the suppressor holds nothing back today; it is kept so that giving a composite an
-# action again is one line and a dead worker is still one notification, not five
-# (docs/archive/decisions/g81-one-e-mail-per-critical-condition.md).
 #
 # Which members are in ALARM now is
 # `aws cloudwatch describe-alarms --state-value ALARM --alarm-name-prefix <prefix>-`.
@@ -262,22 +253,6 @@ locals {
   critical_alarm_keys = sort([for name, alarm in local.alarms : name if alarm.severity == "critical"])
   warning_alarm_keys  = sort([for name, alarm in local.alarms : name if alarm.severity == "warning"])
 
-  # The worker's metric loop publishes every metric above that is not log-derived,
-  # so a critical alarm that treats missing data as breaching trips whenever that
-  # loop stops, whatever its own condition is doing. Those are the ones held back
-  # while worker-heartbeat-missed, which is the loop stopping, is in ALARM.
-  worker_published_breaching_keys = sort([
-    for name, alarm in local.alarms : name
-    if alarm.severity == "critical" && alarm.treat_missing_data == "breaching" && name != "worker_heartbeat_missed"
-  ])
-
-  # How long a held-back composite waits for the worker alarm to trip (the two
-  # evaluate the same missing minutes, so within one or two of each other), and how
-  # long after the worker recovers it waits for its own condition to clear before
-  # it e-mails what is still true.
-  worker_suppression_wait_seconds      = 120
-  worker_suppression_extension_seconds = 300
-
   topic_key_policy = {
     Version = "2012-10-17"
     Statement = [
@@ -395,8 +370,8 @@ resource "aws_cloudwatch_metric_alarm" "this" {
   datapoints_to_alarm = each.value.datapoints_to_alarm
   treat_missing_data  = each.value.treat_missing_data
 
-  # A member of one roll-up, and of its own per-condition composite when critical.
-  # The state is the product; the daily digest (digest.tf) is the only e-mail.
+  # A member of one roll-up. The state is the product; the daily digest (digest.tf)
+  # is the only e-mail.
   actions_enabled = true
   alarm_actions   = []
   ok_actions      = []
@@ -459,9 +434,8 @@ resource "aws_cloudwatch_metric_alarm" "all_sequences_held" {
   })
 }
 
-# The two roll-ups name every metric alarm above exactly once between them; each
-# critical condition also has a composite of its own below. None of them notifies
-# anything (lane g99): the daily digest reads their state.
+# The two roll-ups name every metric alarm above exactly once between them. Neither
+# notifies anything (lane g99): the daily digest reads their state.
 resource "aws_cloudwatch_composite_alarm" "critical" {
   alarm_name        = "${var.name_prefix}-critical"
   alarm_description = "Every immediately critical FSS condition. In ALARM while any of them is; reported by the daily alarm digest, never e-mailed on its own."
@@ -477,48 +451,6 @@ resource "aws_cloudwatch_composite_alarm" "critical" {
 
   tags = merge(var.tags, {
     Name     = "${var.name_prefix}-critical"
-    Severity = "critical"
-  })
-}
-
-# One composite per critical condition (lane g81, audit O14). Its rule is the one
-# alarm, so it enters ALARM when that condition does, even while another critical
-# condition already holds <prefix>-critical in ALARM. Since lane g99 it sends
-# nothing; its transitions are lines in the daily digest.
-locals {
-  critical_condition_alarms = merge(
-    { for name in local.critical_alarm_keys : name => aws_cloudwatch_metric_alarm.this[name].alarm_name },
-    { all_sequences_held = aws_cloudwatch_metric_alarm.all_sequences_held.alarm_name },
-  )
-}
-
-resource "aws_cloudwatch_composite_alarm" "critical_condition" {
-  for_each = local.critical_condition_alarms
-
-  alarm_name        = "${var.name_prefix}-critical-${replace(each.key, "_", "-")}"
-  alarm_description = "One immediately critical FSS condition: ${each.value}. Trips even while another critical condition is open; reported by the daily alarm digest."
-  alarm_rule        = "ALARM(\"${each.value}\")"
-
-  actions_enabled = true
-  alarm_actions   = []
-  ok_actions      = []
-
-  # Held back while the worker's own heartbeat alarm is in ALARM, for the four
-  # conditions that trip merely because the worker stopped publishing (see the top
-  # of this file). With no action to hold it changes nothing today; it is what keeps
-  # a dead worker one notification should a composite be given an action again.
-  dynamic "actions_suppressor" {
-    for_each = contains(local.worker_published_breaching_keys, each.key) ? [aws_cloudwatch_metric_alarm.this["worker_heartbeat_missed"].alarm_name] : []
-
-    content {
-      alarm            = actions_suppressor.value
-      wait_period      = local.worker_suppression_wait_seconds
-      extension_period = local.worker_suppression_extension_seconds
-    }
-  }
-
-  tags = merge(var.tags, {
-    Name     = "${var.name_prefix}-critical-${replace(each.key, "_", "-")}"
     Severity = "critical"
   })
 }
