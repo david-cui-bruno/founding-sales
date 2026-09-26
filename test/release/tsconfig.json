@@ -13,8 +13,6 @@
       "@fss/domain/db": ["../../packages/domain/db/index.ts"],
       "@fss/domain/jobs": ["../../packages/domain/jobs/index.ts"],
       "@fss/domain/crm": ["../../packages/domain/crm/index.ts"],
-      "@fss/domain/research": ["../../packages/domain/research/index.ts"],
-      "@fss/domain/research/testing": ["../../packages/domain/research/testing/fixtures.ts"],
       "@fss/domain/policy": ["../../packages/domain/policy/index.ts"],
       "@fss/domain/suppression": ["../../packages/domain/suppression/index.ts"],
       "@fss/domain/dial": ["../../packages/domain/dial/index.ts"],
