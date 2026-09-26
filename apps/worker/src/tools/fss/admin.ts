@@ -109,8 +109,24 @@ export async function holdsListCommand(invocation: AdminInvocation): Promise<Adm
 /** An IAM or STS principal ARN: what `aws sts get-caller-identity` answers. */
 const PRINCIPAL_ARN = /^arn:aws:(sts|iam)::\d{12}:(assumed-role|user|role)\/[\w+=,.@/-]+$/u;
 
-/** How an unattached-send hold was settled, as `holds release-restore --resolution` says. */
-export const UNATTACHED_RESOLUTIONS = ['ended-every-candidate', 'checked-no-duplicate'] as const;
+/** An ECS task ARN: what the task metadata endpoint's `TaskARN` is. */
+const TASK_ARN = /^arn:aws:ecs:[a-z0-9-]+:\d{12}:task\/[\w-]+\/[A-Za-z0-9]+$/u;
+
+/**
+ * How an unattached-send hold may be settled, as `holds release-restore --resolution`
+ * says: by a person, and only by a person (lane W3-S8 fourth review).
+ *
+ * `ended-every-candidate` went. Ending the enrollments recorded when the hold opened is
+ * not a lasting fence: they are only those whose routes matched at reconciliation, and a
+ * new enrollment of the same contact is allowed once none is live (the one-live-enrollment
+ * index covers live rows only), and would start the sequence again. A durable
+ * recipient-level "never send this step again" record needs a table the send gate and the
+ * enrollment path both consult, and none exists without a migration: a fence belongs to
+ * one step execution, a suppression or an inactive contact stops every future email to
+ * the person, and a hold has no contact scope. So the release is a human decision,
+ * recorded as `basis: human_attestation`, with what the runbook says to verify.
+ */
+export const UNATTACHED_RESOLUTIONS = ['checked-no-duplicate'] as const;
 
 /** What the opening audit row of an unattached-send hold recorded (`holdUnattachedSend`). */
 async function unattachedHoldOpening(
@@ -129,6 +145,23 @@ async function unattachedHoldOpening(
   return { enrollmentIds: ids };
 }
 
+/** The enrollments recorded when an unattached-send hold opened, and whether each has ended now. */
+async function candidateStates(
+  session: SessionQueryable,
+  hold: { readonly workspaceId: string; readonly id: string },
+): Promise<readonly { readonly enrollmentId: string; readonly ended: boolean }[]> {
+  const ids = (await unattachedHoldOpening(session, hold))?.enrollmentIds ?? [];
+  if (ids.length === 0) return [];
+  const { rows } = await session.query<{ id: string; ended: boolean }>(
+    `SELECT c.id::text AS id, COALESCE(e.ended_at IS NOT NULL, false) AS ended
+       FROM unnest($2::uuid[]) AS c(id)
+       LEFT JOIN sequence_enrollments e ON e.workspace_id = $1 AND e.id = c.id
+      ORDER BY c.id`,
+    [hold.workspaceId, [...ids]],
+  );
+  return rows.map(row => ({ enrollmentId: row.id, ended: row.ended }));
+}
+
 /**
  * `fss admin holds release-restore --note <text> [--hold <id>] [--resolution <how>]`.
  *
@@ -143,16 +176,16 @@ async function unattachedHoldOpening(
  * principal is checked for ARN syntax only: it is an auditable claim, not a verified
  * identity, and what makes it auditable is the task ARN, whose CloudTrail RunTask event
  * names the real caller (the runbook's `audit_launch` compares the two). It refuses
- * without a principal. Each audit row names both in its detail, with
+ * without a principal, and without a task ARN. Each audit row names both in its detail, with
  * `actor_kind = 'system'`, because the tool is never a user.
  *
  * **Which.** Without `--hold`, every open restore hold from before, but never one a
  * restore opened for an unattached send: those are released one at a time, by id, with
  * `--resolution`, and they are reported under `needsResolution` otherwise.
- * `ended-every-candidate` is checked: every enrollment the send could belong to (recorded
- * when the hold opened) must have ended, since any one still live could send it again.
- * `checked-no-duplicate` is a human attestation, not a checked fact, and the note has to
- * say what was checked.
+ * The only resolution is `checked-no-duplicate` (`UNATTACHED_RESOLUTIONS` says why): a
+ * human attestation, not a checked fact, whose note says what was verified. The audit row
+ * records it as `basis: human_attestation`, with the enrollments recorded when the hold
+ * opened and whether each had ended at release.
  *
  * **How.** `releaseHold` with the reason in the UPDATE itself, and one `audit_events` row
  * (`hold.restore_released`) per hold in the same transaction. A named hold already
@@ -167,6 +200,15 @@ export async function holdsReleaseRestoreCommand(invocation: AdminInvocation): P
       'the task names no verified launcher: fss_task passes FSS_LAUNCHED_BY from `aws sts get-caller-identity`, and a release is attributed to nobody else',
     );
   }
+  // Every release is tied to the task that made it (fourth review): without the task ARN
+  // nothing can check the launcher's claim against CloudTrail, so a run outside ECS, or
+  // one whose metadata endpoint named no task, releases nothing.
+  if (taskArn === null || !TASK_ARN.test(taskArn)) {
+    return refuse(
+      'task_unknown',
+      'the release names no ECS task, so its launcher cannot be checked against CloudTrail: run it as a one-off task (fss_task), where the metadata endpoint names the task',
+    );
+  }
   const note = (invocation.options['--note'] ?? '').trim();
   if (note.length === 0 || note.length > 500) {
     return refuse('note_invalid', '--note says why the hold is released, in at most 500 characters');
@@ -176,6 +218,7 @@ export async function holdsReleaseRestoreCommand(invocation: AdminInvocation): P
     return refuse('resolution_unknown', `--resolution is one of ${UNATTACHED_RESOLUTIONS.join(', ')}`);
   }
   const named = invocation.options['--hold'];
+  let candidatesAtRelease: readonly { readonly enrollmentId: string; readonly ended: boolean }[] = [];
 
   const open = await listOpenHolds(invocation.session, { reason: 'restore_in_progress' });
   let chosen: readonly (typeof open)[number][];
@@ -199,33 +242,7 @@ export async function holdsReleaseRestoreCommand(invocation: AdminInvocation): P
       if (resolution === undefined) {
         return refuse('resolution_missing', `a hold opened for an unattached send is released with --resolution ${UNATTACHED_RESOLUTIONS.join(' | ')}, once the send is settled`);
       }
-      if (resolution === 'ended-every-candidate') {
-        // Every enrollment the send could belong to, not one of them (lane W3-S8 third
-        // review): the send has no fence, so any candidate still live can wake and send
-        // the same step again. Ending the duplicate alone leaves the other one able to.
-        const opening = await unattachedHoldOpening(invocation.session, hold);
-        const candidates = opening?.enrollmentIds ?? [];
-        if (candidates.length === 0) {
-          return refuse(
-            'resolution_unverified',
-            'no enrollment was recorded for this send (its recipient was unreadable), so there is nothing to have ended: settle it by hand and say checked-no-duplicate and why',
-          );
-        }
-        const { rows: live } = await invocation.session.query<{ id: string }>(
-          `SELECT c.id::text AS id
-             FROM unnest($2::uuid[]) AS c(id)
-             LEFT JOIN sequence_enrollments e ON e.workspace_id = $1 AND e.id = c.id
-            WHERE e.id IS NULL OR e.ended_at IS NULL
-            ORDER BY c.id`,
-          [hold.workspaceId, [...candidates]],
-        );
-        if (live.length > 0) {
-          return refuse(
-            'resolution_unverified',
-            `${String(live.length)} of the ${String(candidates.length)} enrollments this send could belong to can still send it again (${live.map(row => row.id).join(', ')}): end every one in the app first, or settle it by hand and say checked-no-duplicate and why`,
-          );
-        }
-      }
+      candidatesAtRelease = await candidateStates(invocation.session, hold);
     }
   }
   const needsResolution =
@@ -248,9 +265,9 @@ export async function holdsReleaseRestoreCommand(invocation: AdminInvocation): P
             launchedBy,
             taskArn,
             source: hold.sourceEventKind,
-            // What the release rests on: a check the command made, or a person's word.
+            // What the release rests on: a person's word, and what they had in front of them.
             ...(hold.sourceEventKind === UNATTACHED_SEND_HOLD_SOURCE
-              ? { resolution, basis: resolution === 'ended-every-candidate' ? 'every_candidate_enrollment_ended' : 'human_attestation' }
+              ? { resolution, basis: 'human_attestation', candidatesAtRelease }
               : {}),
             startedAt: done.startedAt,
             releasedAt: done.releasedAt,
@@ -384,17 +401,47 @@ export async function mailboxListCommand(invocation: AdminInvocation): Promise<A
 const RESTORE_MARKER_ACTION = 'restore.inventory_marker';
 const MARKER = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
-/** How many audit rows on this instance carry the marker. */
-async function markerRows(session: SessionQueryable, marker: string): Promise<number> {
-  const { rows } = await session.query<{ count: string }>(
-    `SELECT count(*)::text AS count FROM audit_events WHERE action = $1 AND subject_kind = 'restore' AND subject_id = $2`,
+/** An RDS instance's `DbiResourceId`, which a rename does not change. */
+const DBI_RESOURCE_ID = /^db-[A-Z0-9]{8,}$/u;
+
+/** What a restore marker binds: the restore point and the instance it was written to. */
+interface MarkerBinding {
+  readonly restorePoint: string;
+  readonly instance: string;
+}
+
+/** Every audit row on this instance carrying the marker, with what it was bound to and when. */
+async function markerRows(
+  session: SessionQueryable,
+  marker: string,
+): Promise<readonly { readonly restorePoint: unknown; readonly instance: unknown; readonly occurredAt: string }[]> {
+  const { rows } = await session.query<{ detail: { restorePoint?: unknown; instance?: unknown }; occurred_at: Date | string }>(
+    `SELECT detail, occurred_at FROM audit_events WHERE action = $1 AND subject_kind = 'restore' AND subject_id = $2`,
     [RESTORE_MARKER_ACTION, marker],
   );
-  return Number(rows[0]?.count ?? '0');
+  return rows.map(row => ({
+    restorePoint: row.detail.restorePoint,
+    instance: row.detail.instance,
+    occurredAt: new Date(row.occurred_at).toISOString(),
+  }));
+}
+
+/** The binding options of `restore-marker put` and `reconcile-sent`, checked; or why not. */
+function readBinding(
+  restorePoint: string | undefined,
+  instance: string | undefined,
+): { readonly ok: true; readonly binding: MarkerBinding } | { readonly ok: false; readonly detail: string } {
+  const at = Date.parse(restorePoint ?? '');
+  if (!Number.isFinite(at)) return { ok: false, detail: '--restore-point is the restore point T, an ISO instant' };
+  if (!DBI_RESOURCE_ID.test(instance ?? '')) {
+    return { ok: false, detail: 'the instance is the DbiResourceId (db-...) the runbook pinned for the instance being replaced' };
+  }
+  return { ok: true, binding: { restorePoint: new Date(at).toISOString(), instance: instance ?? '' } };
 }
 
 /**
- * `fss admin restore-marker put --marker <uuid>` (lane W3-S8 third review).
+ * `fss admin restore-marker put --marker <uuid> --restore-point <T> --instance <dbi>`
+ * (lane W3-S8 third and fourth reviews).
  *
  * A text hostname does not say which RDS instance answers it, and a restored copy is a
  * physical copy with the same system identifier and the same roles. What tells the
@@ -402,13 +449,25 @@ async function markerRows(session: SessionQueryable, marker: string): Promise<nu
  * the runbook runs this in (a), on the operations task, against the instance production
  * still points at and whose `DbiResourceId` it pinned, before anything stops (so it is
  * also the proof that the runtime login works there). It inserts one audit row per
- * workspace, `restore.inventory_marker` with the marker as its subject, which no
- * application role can delete; a rerun adds nothing. `reconcile-sent --inventory-marker`
- * then requires the marker on the inventory host and its absence from the copy.
+ * workspace, `restore.inventory_marker`, bound to this restore's point and that
+ * `DbiResourceId`; a rerun adds nothing, and a marker already bound to another restore is
+ * refused (`marker_reused`), so every restore writes its own.
+ *
+ * It is a state witness, not an identity: anything holding the runtime credential could
+ * write such a row. The identity is the runbook's, which pins both instances through the
+ * RDS API; the marker is what lets this command tell, from inside the database, that the
+ * inventory host received a write after the restore point and the copy did not.
  */
 export async function restoreMarkerPutCommand(invocation: AdminInvocation): Promise<AdminOutcome> {
   const marker = (invocation.options['--marker'] ?? '').trim().toLowerCase();
   if (!MARKER.test(marker)) return refuse('marker_invalid', '--marker is a UUID the runbook generated for this restore');
+  const bound = readBinding(invocation.options['--restore-point'], invocation.options['--instance']);
+  if (!bound.ok) return refuse('marker_invalid', bound.detail);
+  const { binding } = bound;
+  const prior = await markerRows(invocation.session, marker);
+  if (prior.some(row => row.restorePoint !== binding.restorePoint || row.instance !== binding.instance)) {
+    return refuse('marker_reused', 'this marker is already bound to another restore point or instance: every restore writes a fresh one');
+  }
   let written = 0;
   let existing = 0;
   const workspaces = await listWorkspaceIds(invocation.session);
@@ -419,13 +478,13 @@ export async function restoreMarkerPutCommand(invocation: AdminInvocation): Prom
        SELECT $1, 'system', NULL, $2, 'restore', $3, $4::jsonb
         WHERE NOT EXISTS (
           SELECT 1 FROM audit_events WHERE workspace_id = $1 AND action = $2 AND subject_kind = 'restore' AND subject_id = $3)`,
-      [workspaceId, RESTORE_MARKER_ACTION, marker, JSON.stringify({ marker, via: 'fss admin restore-marker put' })],
+      [workspaceId, RESTORE_MARKER_ACTION, marker, JSON.stringify({ marker, ...binding, via: 'fss admin restore-marker put' })],
     );
     if ((inserted.rowCount ?? 0) > 0) written += 1;
     else existing += 1;
   }
   const { rows } = await invocation.session.query<{ at: string }>(`SELECT to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS at`);
-  return accept({ marker, workspaces: workspaces.length, written, existing, at: rows[0]?.at ?? null });
+  return accept({ marker, ...binding, workspaces: workspaces.length, written, existing, at: rows[0]?.at ?? null });
 }
 
 /** A DNS hostname as `active_database_host` takes one: lower case, at least one dot, no port. */
@@ -496,13 +555,20 @@ async function readInventory(
       ),
     };
   }
-  // Which instance, not which name (lane W3-S8 third review): the copy must lack the
-  // marker (a) wrote after the restore point, and the inventory host must have it.
+  // Which instance, not which name (lane W3-S8 third and fourth reviews): the copy must
+  // lack the marker (a) wrote, and the inventory host must have it, bound to this
+  // restore's point and the pinned instance, and written after that point.
   const marker = (invocation.options['--inventory-marker'] ?? '').trim().toLowerCase();
   if (!MARKER.test(marker)) {
     return { ok: false, outcome: refuse('inventory_marker_invalid', '--inventory-marker is the UUID (a) wrote with restore-marker put') };
   }
-  if ((await markerRows(invocation.session, marker)) > 0) {
+  const bound = readBinding(invocation.options['--restore-point'], invocation.options['--inventory-instance']);
+  if (!bound.ok) return { ok: false, outcome: refuse('inventory_marker_invalid', bound.detail) };
+  const { binding } = bound;
+  if (Date.parse(invocation.options['--since'] ?? '') > Date.parse(binding.restorePoint)) {
+    return { ok: false, outcome: refuse('since_after_restore_point', '--since is the restore point less ten minutes, never after it') };
+  }
+  if ((await markerRows(invocation.session, marker)).length > 0) {
     return {
       ok: false,
       outcome: refuse(
@@ -521,7 +587,7 @@ async function readInventory(
   if (invocation.connectElsewhere === undefined) return unreadable('this invocation cannot reach another host');
   let source: readonly RestoreMailbox[];
   let audited: Awaited<ReturnType<typeof auditedConnections>>;
-  let marked: number;
+  let marked: Awaited<ReturnType<typeof markerRows>>;
   try {
     const elsewhere = await invocation.connectElsewhere(host);
     try {
@@ -535,12 +601,27 @@ async function readInventory(
     const code = (error as { readonly code?: unknown }).code;
     return unreadable(typeof code === 'string' ? code : error instanceof Error ? error.name : 'error');
   }
-  if (marked === 0) {
+  if (marked.length === 0) {
     return {
       ok: false,
       outcome: refuse(
         'inventory_marker_missing',
         `the instance at ${host} does not have the marker (a) wrote to the instance being replaced, so it is not that instance`,
+      ),
+    };
+  }
+  const matching = marked.filter(
+    row =>
+      row.restorePoint === binding.restorePoint &&
+      row.instance === binding.instance &&
+      Date.parse(row.occurredAt) > Date.parse(binding.restorePoint),
+  );
+  if (matching.length === 0) {
+    return {
+      ok: false,
+      outcome: refuse(
+        'inventory_marker_mismatch',
+        `the marker at ${host} is not bound to restore point ${binding.restorePoint} and instance ${binding.instance}, or was written before that point`,
       ),
     };
   }
@@ -709,7 +790,7 @@ function missingFenceLine(workspaceId: string, mailboxId: string, message: strin
 }
 
 /**
- * `fss admin mailbox reconcile-sent --since <instant> --inventory-host <host> --inventory-marker <uuid> [--hold-unattached]`.
+ * `fss admin mailbox reconcile-sent --since <instant> --restore-point <T> --inventory-host <host> --inventory-marker <uuid> --inventory-instance <dbi> [--hold-unattached]`.
  *
  * After a point-in-time restore, against the restored copy, with both services stopped
  * (`docs/greenfield/runbooks/restore.md`). A send made after the restore point is a
@@ -857,6 +938,8 @@ export async function mailboxReconcileSentCommand(invocation: AdminInvocation): 
     until,
     inventory_host: (invocation.options['--inventory-host'] ?? '').trim().toLowerCase(),
     inventory_marker: (invocation.options['--inventory-marker'] ?? '').trim().toLowerCase(),
+    inventory_instance: invocation.options['--inventory-instance'] ?? '',
+    restore_point: invocation.options['--restore-point'] ?? '',
     inventory,
     mailboxes_scanned: mailboxes.length,
     fences_reconciled: fencesReconciled,

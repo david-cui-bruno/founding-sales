@@ -380,6 +380,10 @@ describe('the fss admin commands a restore runs', () => {
       'fss-prod-pg.example.test',
       '--inventory-marker',
       '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d',
+      '--restore-point',
+      '2026-09-20T00:10:00Z',
+      '--inventory-instance',
+      'db-OLDINSTANCE4TESTS0000000000',
     ]);
     expect(reconcile.code).toBe(20);
   });

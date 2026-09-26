@@ -70,6 +70,9 @@ const OLD_HOST = 'fss-prod-pg.example.test';
 const copyDatabaseUrl = `postgresql://fss@${COPY_HOST}:5432/fss`;
 /** The marker (a) writes to the instance being replaced; the views below answer for it. */
 const MARKER = '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d';
+/** The restore point and the pinned instance the marker is bound to (fourth review). */
+const RESTORE_POINT = '2026-09-25T00:00:00.000Z';
+const OLD_DBI = 'db-OLDINSTANCE4TESTS0000000000';
 const LAUNCH: LaunchIdentity = {
   launchedBy: 'arn:aws:sts::123456789012:assumed-role/AWSReservedSSO_Admin_0123456789abcdef/david',
   taskArn: 'arn:aws:ecs:us-east-1:123456789012:task/fss-prod/0123456789abcdef0123456789abcdef',
@@ -97,15 +100,21 @@ function mailboxView(
     readonly audited?: readonly { readonly workspaceId: string; readonly mailboxId: string; readonly address: string }[];
     /** Without the real `mailbox.connected` rows (the world's own connections write them). */
     readonly hideAudit?: boolean;
-    /** Whether it has the marker (a) wrote: the instance being replaced does, a copy does not. */
-    readonly marked?: boolean;
+    /**
+     * Whether it has the marker (a) wrote: the instance being replaced does (bound to this
+     * restore's point and instance, unless a test binds it otherwise), a copy does not.
+     */
+    readonly marked?: boolean | { readonly restorePoint: string; readonly instance: string; readonly occurredAt?: Date };
   },
 ): SessionQueryable {
   return {
     async query<Row extends QueryResultRowLike = QueryResultRowLike>(text: string, values?: readonly unknown[]) {
       if (/FROM audit_events WHERE action = \$1 AND subject_kind = 'restore'/u.test(text)) {
-        const count = change.marked === true && values?.[1] === MARKER ? '1' : '0';
-        return { rows: [{ count }] as unknown as Row[], rowCount: 1 };
+        const binding = change.marked === true ? { restorePoint: RESTORE_POINT, instance: OLD_DBI } : change.marked;
+        const rows = binding !== undefined && binding !== false && values?.[1] === MARKER
+          ? [{ detail: { marker: MARKER, ...binding }, occurred_at: binding.occurredAt ?? new Date() }]
+          : [];
+        return { rows: rows as unknown as Row[], rowCount: rows.length };
       }
       const result = await real.query<Row>(text, values);
       if (/FROM audit_events\s+WHERE action = 'mailbox.connected'/u.test(text)) {
@@ -205,7 +214,13 @@ describe('fss admin mailbox reconcile-sent', () => {
       session: setup.copy ?? world.database.session,
       config: readToolConfig({ DATABASE_URL: copyDatabaseUrl }),
       environment: {},
-      options: { '--since': since, '--inventory-host': setup.host ?? OLD_HOST, '--inventory-marker': setup.marker ?? MARKER },
+      options: {
+        '--since': since,
+        '--restore-point': RESTORE_POINT,
+        '--inventory-host': setup.host ?? OLD_HOST,
+        '--inventory-marker': setup.marker ?? MARKER,
+        '--inventory-instance': OLD_DBI,
+      },
       switches: new Set(setup.switches ?? []),
       mail: {
         gmail,
@@ -382,6 +397,17 @@ describe('fss admin mailbox reconcile-sent', () => {
       { id: 'm-7', threadId: 't-7', internalDate: at, payload: {} },
       { id: 'm-7', threadId: 't-7', internalDate: at, payload: { headers: { 'Message-ID': '<x@example.test>' } } },
       { id: 'm-8', threadId: 't-7', internalDate: at, payload: { headers: [] } },
+      // Lane W3-S8 fourth review: well-formed answers that still say nothing about the send.
+      { id: 'm-7', threadId: 't-7', internalDate: at, payload: { headers: [] } },
+      { id: 'm-7', threadId: 't-7', internalDate: at, payload: { headers: [{ name: 'Subject', value: 'Lunch' }] } },
+      { id: 'm-7', threadId: 't-7', internalDate: at, payload: { headers: [{ name: 'Message-ID', value: '  ' }] } },
+      {
+        id: 'm-7',
+        threadId: 't-7',
+        internalDate: at,
+        payload: { headers: [{ name: 'Message-ID', value: '<a@mail.example.test>' }, { name: 'Message-Id', value: '<b@mail.example.test>' }] },
+      },
+      { id: 'm-7', threadId: 't-7', internalDate: '1', payload: { headers: [{ name: 'Message-ID', value: '<a@mail.example.test>' }] } },
     ]) {
       const outcome = await mailboxReconcileSentCommand(invocation(through(metadata), '2026-09-24T00:00:00Z'));
       expect(outcome, JSON.stringify(metadata)).toMatchObject({ ok: false, reason: 'reconcile_unresolved' });
@@ -392,9 +418,17 @@ describe('fss admin mailbox reconcile-sent', () => {
         ]),
       );
     }
-    // The same message read properly, with headers and no FSS marker, is a clean scan.
+    // The same message read properly, with one Message-ID that is not FSS's, is a clean scan.
     const clean = await mailboxReconcileSentCommand(
-      invocation(through({ id: 'm-7', threadId: 't-7', internalDate: at, payload: { headers: [{ name: 'Subject', value: 'Lunch' }] } }), '2026-09-24T00:00:00Z'),
+      invocation(
+        through({
+          id: 'm-7',
+          threadId: 't-7',
+          internalDate: at,
+          payload: { headers: [{ name: 'Message-ID', value: '<lunch.1@mail.example.test>' }, { name: 'Subject', value: 'Lunch' }] },
+        }),
+        '2026-09-24T00:00:00Z',
+      ),
     );
     expect(clean).toMatchObject({ ok: true, value: { sent_folder_listed: 2, sent_folder_fss_messages: 0, unresolved: [] } });
   });
@@ -560,26 +594,55 @@ describe('fss admin mailbox reconcile-sent', () => {
         reason: 'inventory_marker_invalid',
       });
     }
+    // Lane W3-S8 fourth review: bound to this restore, not merely present. A marker for
+    // another restore point, another instance, or written before the restore point is refused.
+    for (const marked of [
+      { restorePoint: '2026-09-20T00:00:00.000Z', instance: OLD_DBI },
+      { restorePoint: RESTORE_POINT, instance: 'db-ANOTHERINSTANCE000000000000' },
+      { restorePoint: RESTORE_POINT, instance: OLD_DBI, occurredAt: new Date('2026-09-24T12:00:00Z') },
+    ]) {
+      const source = mailboxView(world.database.session, { marked });
+      expect(await mailboxReconcileSentCommand(invocation(gmail, since, { source })), JSON.stringify(marked)).toMatchObject({
+        ok: false,
+        reason: 'inventory_marker_mismatch',
+      });
+    }
+    expect(
+      await mailboxReconcileSentCommand({
+        ...invocation(gmail, since),
+        options: { ...invocation(gmail, since).options, '--inventory-instance': 'fss-prod-pg' },
+      }),
+    ).toMatchObject({ ok: false, reason: 'inventory_marker_invalid' });
+    expect(await mailboxReconcileSentCommand(invocation(gmail, '2026-09-25T00:10:00Z'))).toMatchObject({
+      ok: false,
+      reason: 'since_after_restore_point',
+    });
   });
 
-  it('writes the marker once per workspace, and a rerun writes nothing', async () => {
+  it('writes the marker once per workspace, bound to one restore, and a rerun writes nothing', async () => {
     const marker = randomUUID();
-    const put = (value: string) =>
-      restoreMarkerPutCommand({ ...invocation(world.clientWith(world.alpha, {}), '2026-09-24T00:00:00Z'), options: { '--marker': value } });
+    const bound = { '--restore-point': RESTORE_POINT, '--instance': OLD_DBI };
+    const put = (options: Record<string, string>) =>
+      restoreMarkerPutCommand({ ...invocation(world.clientWith(world.alpha, {}), '2026-09-24T00:00:00Z'), options });
     const runtime = await world.database.appRuntimeSession();
     const first = await restoreMarkerPutCommand({
       ...invocation(world.clientWith(world.alpha, {}), '2026-09-24T00:00:00Z'),
       session: runtime,
-      options: { '--marker': marker.toUpperCase() },
+      options: { '--marker': marker.toUpperCase(), ...bound },
     });
-    expect(first).toMatchObject({ ok: true, value: { marker, workspaces: 2, written: 2, existing: 0 } });
-    expect(await put(marker)).toMatchObject({ ok: true, value: { written: 0, existing: 2 } });
+    expect(first).toMatchObject({ ok: true, value: { marker, restorePoint: RESTORE_POINT, instance: OLD_DBI, workspaces: 2, written: 2, existing: 0 } });
+    expect(await put({ '--marker': marker, ...bound })).toMatchObject({ ok: true, value: { written: 0, existing: 2 } });
+    // A marker is one restore's: reused for another point or instance, it is refused.
+    expect(await put({ '--marker': marker, ...bound, '--restore-point': '2026-09-25T06:00:00Z' })).toMatchObject({ ok: false, reason: 'marker_reused' });
+    expect(await put({ '--marker': marker, ...bound, '--instance': 'db-ANOTHERINSTANCE000000000000' })).toMatchObject({ ok: false, reason: 'marker_reused' });
+    expect(await put({ '--marker': randomUUID(), '--restore-point': 'yesterday', '--instance': OLD_DBI })).toMatchObject({ ok: false, reason: 'marker_invalid' });
+    expect(await put({ '--marker': randomUUID(), ...bound, '--instance': 'fss-prod-pg' })).toMatchObject({ ok: false, reason: 'marker_invalid' });
     const { rows } = await world.database.session.query<{ count: string }>(
       `SELECT count(*)::text AS count FROM audit_events WHERE action = 'restore.inventory_marker' AND subject_id = $1`,
       [marker],
     );
     expect(rows[0]?.count).toBe('2');
-    expect(await put('yesterday')).toMatchObject({ ok: false, reason: 'marker_invalid' });
+    expect(await put({ '--marker': 'yesterday', ...bound })).toMatchObject({ ok: false, reason: 'marker_invalid' });
     // And the database that has it is refused as the copy.
     const gmail = world.clientWith(world.alpha, {});
     expect(await mailboxReconcileSentCommand(invocation(gmail, '2026-09-24T00:00:00Z', { marker }))).toMatchObject({
@@ -645,43 +708,33 @@ describe('fss admin mailbox reconcile-sent', () => {
     );
     expect(openings.rows[0]?.count).toBe('1');
 
-    // Released only by id, with the resolution, and "ended every candidate" is checked:
-    // ending the duplicate alone leaves the other enrollment able to send it again (lane
-    // W3-S8 third review).
+    // Released only by id, and only on a person's word (lane W3-S8 fourth review): ending
+    // the recorded enrollments is no lasting fence, since a new enrollment of the same
+    // contact is allowed once none is live, so the command no longer offers it.
     const release = (options: Record<string, string>): AdminInvocation => ({
       ...invocation(gmail, tenMinutesBefore(at)),
-      options: { '--note': 'read the Sent message; both enrollments for the desk are ended', ...options },
+      options: { '--note': 'read the Sent message at 20:00; ended both enrollments of the desk; not to be re-enrolled', ...options },
       launch: LAUNCH,
     });
     const runtime = await world.database.appRuntimeSession();
     const bulk = await holdsReleaseRestoreCommand({ ...release({}), session: runtime });
     expect(bulk).toMatchObject({ ok: true, value: { released: 0, needsResolution: [holdId] } });
     expect(await holdsReleaseRestoreCommand(release({ '--hold': holdId }))).toMatchObject({ ok: false, reason: 'resolution_missing' });
-    const endEnrollment = async (enrollmentId: string): Promise<void> => {
-      await session.query(
-        `UPDATE sequence_enrollments SET state = 'stopped', ended_at = now(), end_reason = 'admin_stop' WHERE workspace_id = $1 AND id = $2`,
-        [workspaceId(), enrollmentId],
-      );
-    };
-    const everyCandidate = { '--hold': holdId, '--resolution': 'ended-every-candidate' };
-    expect(await holdsReleaseRestoreCommand(release(everyCandidate))).toMatchObject({ ok: false, reason: 'resolution_unverified' });
-    // One of the two ended is not enough: the other can still wake and send it again.
-    await endEnrollment(two.enrollmentId);
-    const halfway = await holdsReleaseRestoreCommand(release(everyCandidate));
-    expect(halfway).toMatchObject({ ok: false, reason: 'resolution_unverified' });
-    if (!halfway.ok) {
-      expect(halfway.detail).toContain(one.enrollmentId);
-      expect(halfway.detail).not.toContain(two.enrollmentId);
-    }
+    expect(await holdsReleaseRestoreCommand(release({ '--hold': holdId, '--resolution': 'ended-every-candidate' }))).toMatchObject({
+      ok: false,
+      reason: 'resolution_unknown',
+    });
     expect(
       (await session.query<{ released_at: Date | null }>('SELECT released_at FROM active_holds WHERE workspace_id = $1 AND id = $2', [workspaceId(), holdId]))
         .rows[0]?.released_at,
     ).toBeNull();
-    await endEnrollment(one.enrollmentId);
-    const done = await holdsReleaseRestoreCommand({
-      ...release(everyCandidate),
-      session: runtime,
-    });
+    // What the person saw is recorded with their word: one enrollment ended, one not.
+    await session.query(
+      `UPDATE sequence_enrollments SET state = 'stopped', ended_at = now(), end_reason = 'admin_stop' WHERE workspace_id = $1 AND id = $2`,
+      [workspaceId(), two.enrollmentId],
+    );
+    const attested = { '--hold': holdId, '--resolution': 'checked-no-duplicate' };
+    const done = await holdsReleaseRestoreCommand({ ...release(attested), session: runtime });
     expect(done).toMatchObject({ ok: true, value: { outcome: 'released', released: 1, holds: [expect.objectContaining({ holdId })] } });
     const audit = await session.query<{ detail: Record<string, unknown> }>(
       `SELECT detail FROM audit_events WHERE workspace_id = $1 AND action = 'hold.restore_released' AND subject_id = $2`,
@@ -690,15 +743,19 @@ describe('fss admin mailbox reconcile-sent', () => {
     expect(audit.rows).toEqual([
       {
         detail: expect.objectContaining({
-          resolution: 'ended-every-candidate',
-          basis: 'every_candidate_enrollment_ended',
+          resolution: 'checked-no-duplicate',
+          basis: 'human_attestation',
+          candidatesAtRelease: [
+            { enrollmentId: one.enrollmentId, ended: false },
+            { enrollmentId: two.enrollmentId, ended: true },
+          ].sort((left, right) => left.enrollmentId.localeCompare(right.enrollmentId)),
           source: UNATTACHED_SEND_HOLD_SOURCE,
           launchedBy: LAUNCH.launchedBy,
           taskArn: LAUNCH.taskArn,
         }),
       },
     ]);
-    expect(await holdsReleaseRestoreCommand(release(everyCandidate))).toMatchObject({
+    expect(await holdsReleaseRestoreCommand(release(attested))).toMatchObject({
       ok: true,
       value: { outcome: 'already_released', released: 0, alreadyReleased: [holdId] },
     });
@@ -861,8 +918,7 @@ describe('fss admin holds release-restore and holds list', () => {
   });
 
   it('releases a workspace hold for an unreadable recipient only on a person’s attestation', async () => {
-    // No enrollment was recorded, so "every candidate ended" proves nothing and is refused;
-    // checked-no-duplicate is a human attestation, recorded as such with its note.
+    // checked-no-duplicate is the only release, a human attestation recorded as such.
     await world.clearHolds(world.alpha.workspace.workspaceId);
     const workspace = world.alpha.workspace.workspaceId;
     const { rows } = await world.database.session.query<{ id: string }>(
@@ -878,10 +934,13 @@ describe('fss admin holds release-restore and holds list', () => {
       [workspace, hold, JSON.stringify({ reason: 'recipient_unreadable', enrollmentIds: [] })],
     );
     const note = 'read the Sent message at 16:02; the recipient has no live enrollment in the app';
-    expect(await holdsReleaseRestoreCommand(invoke({ '--note': note, '--hold': hold, '--resolution': 'ended-every-candidate' }))).toMatchObject({
-      ok: false,
-      reason: 'resolution_unverified',
-    });
+    // Without the task it ran as, nothing can check the launcher against CloudTrail.
+    expect(
+      await holdsReleaseRestoreCommand(invoke({ '--note': note, '--hold': hold, '--resolution': 'checked-no-duplicate' }, { launch: { launchedBy: LAUNCH.launchedBy, taskArn: null } })),
+    ).toMatchObject({ ok: false, reason: 'task_unknown' });
+    expect(
+      await holdsReleaseRestoreCommand(invoke({ '--note': note, '--hold': hold, '--resolution': 'checked-no-duplicate' }, { launch: { launchedBy: LAUNCH.launchedBy, taskArn: 'task-1' } })),
+    ).toMatchObject({ ok: false, reason: 'task_unknown' });
     expect(await holdsReleaseRestoreCommand(invoke({ '--note': note, '--hold': hold, '--resolution': 'checked-no-duplicate' }))).toMatchObject({
       ok: true,
       value: { outcome: 'released', released: 1 },
@@ -890,7 +949,9 @@ describe('fss admin holds release-restore and holds list', () => {
       `SELECT detail FROM audit_events WHERE workspace_id = $1 AND action = 'hold.restore_released' AND subject_id = $2`,
       [workspace, hold],
     );
-    expect(audit.rows).toEqual([{ detail: expect.objectContaining({ resolution: 'checked-no-duplicate', basis: 'human_attestation', note }) }]);
+    expect(audit.rows).toEqual([
+      { detail: expect.objectContaining({ resolution: 'checked-no-duplicate', basis: 'human_attestation', candidatesAtRelease: [], note }) },
+    ]);
   });
 
   it('lists holds by a known reason only, and refuses a reason that is not one', async () => {

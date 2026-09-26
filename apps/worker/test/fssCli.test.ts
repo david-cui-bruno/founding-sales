@@ -109,9 +109,10 @@ describe('the fss command line accepts every invocation the release scripts make
       detail: '--inventory-host',
     });
     expect(
-      parseFssCommand(['admin', 'mailbox', 'reconcile-sent', '--since', '2026-09-20T00:00:00Z', '--inventory-host', 'old.example.test']),
+      parseFssCommand(['admin', 'mailbox', 'reconcile-sent', '--since', '2026-09-20T00:00:00Z', '--restore-point', '2026-09-20T00:10:00Z', '--inventory-host', 'old.example.test']),
     ).toMatchObject({ ok: false, reason: 'flag_missing', detail: '--inventory-marker' });
     expect(parseFssCommand(['admin', 'restore-marker', 'put'])).toMatchObject({ ok: false, reason: 'flag_missing', detail: '--marker' });
+    expect(parseFssCommand(['admin', 'restore-marker', 'put', '--marker', 'x'])).toMatchObject({ ok: false, reason: 'flag_missing', detail: '--restore-point' });
     // Lane W3-S8 second review: no typed inventory, and no caller-named admin.
     expect(
       parseFssCommand(['admin', 'mailbox', 'reconcile-sent', '--since', '2026-09-20T00:00:00Z', '--inventory', 'a@example.test']),
@@ -358,6 +359,8 @@ describe('the restore runbook’s commands (lane W3-S8)', () => {
     for (const argv of reconciles) {
       expect(argv).toContain('--inventory-host');
       expect(argv).toContain('--inventory-marker');
+      expect(argv).toContain('--inventory-instance');
+      expect(argv).toContain('--restore-point');
       expect(argv).not.toContain('--inventory');
     }
   });

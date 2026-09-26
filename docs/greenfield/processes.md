@@ -298,8 +298,9 @@ fss admin holds list [--reason|--exclude-reason <code>]
 fss admin holds release-restore --note <text> [--hold <id> [--resolution <how>]]
 fss admin suppression-journal replay --from <instant> [--to <instant>]
 fss admin mailbox list                             every mailbox, its address and status (read-only)
-fss admin mailbox reconcile-sent --since <instant> --inventory-host <host> --inventory-marker <uuid> [--hold-unattached]
-fss admin restore-marker put --marker <uuid>       the restore's mark on the instance it replaces
+fss admin mailbox reconcile-sent --since <instant> --restore-point <T> --inventory-host <host>
+    --inventory-marker <uuid> --inventory-instance <DbiResourceId> [--hold-unattached]
+fss admin restore-marker put --marker <uuid> --restore-point <T> --instance <DbiResourceId>
 fss admin workspace bootstrap --slug <slug> ...    the first workspace and its admin
 fss admin schema-preflight 0019                    the one-off check before migration 0019
 fss admin release-record put --json <file> | --json-base64 <value>
@@ -350,8 +351,10 @@ restore runbook, run with both services stopped against the restored copy.
     `malformed_response` for a listing page or metadata read Gmail answered 200 with
     something that is not one — never read as a page of no messages, or as a message
     without FSS's marker. The Sent scan reads metadata with `getSentMetadata`, which
-    requires the requested id, a thread, a decimal `internalDate` and a `payload.headers`
-    list of name and value strings; the sync's `getMetadata` keeps its reading);
+    requires the requested id, a thread, a decimal `internalDate`, a `payload.headers`
+    list of name and value strings and at most one Message-ID; and the scan itself
+    requires one non-empty Message-ID on every message in its window, and a date the
+    listing could have returned. The sync's `getMetadata` keeps its reading);
   - a send is unattached. With `--hold-unattached`, each unattached send instead opens a
     `restore_in_progress` hold on the firms it could belong to, or on the workspace when
     it names none. The hold's source is `restore.unattached_send`, keyed by the message's
@@ -364,13 +367,15 @@ restore runbook, run with both services stopped against the restored copy.
 launcher the task was given (`FSS_LAUNCHED_BY`, which the runbook's `fss_task` takes from
 `aws sts get-caller-identity`) and the task's own ARN from the ECS metadata endpoint. The
 launcher is an auditable claim, checked for ARN syntax only: the task ARN is what lets the
-runbook's `audit_launch` confirm it against CloudTrail's RunTask event for that task. It
-refuses without a principal ARN, and inside ECS without the task ARN. It needs a
-`--note`. Without `--hold` it releases the open restore holds from before a restore; a
-hold `--hold-unattached` opened is released only by id, with `--resolution
-ended-every-candidate` (checked: every enrollment recorded when it opened has ended,
-because any one still live could send it again) or `checked-no-duplicate` (a human
-attestation, recorded as `basis: human_attestation`). Each goes
+runbook's `audit_launch` confirm it against CloudTrail's RunTask event for that task, so
+it refuses without a principal ARN and without a task ARN (a run outside ECS releases
+nothing). It needs a `--note`. Without `--hold` it releases the open restore holds from
+before a restore; a hold `--hold-unattached` opened is released only by id, with
+`--resolution checked-no-duplicate`: a human attestation, recorded as
+`basis: human_attestation` with the enrollments recorded at opening and whether each had
+ended. There is no checked resolution (lane W3-S8 fourth review): ending those
+enrollments is no lasting fence, since a new enrollment of the same contact starts the
+sequence again, and a recipient-level no-repeat record needs a migration. Each goes
 through `releaseHold` with the reason in the releasing `UPDATE`, and one `audit_events`
 row (`hold.restore_released`, `actor_kind = 'system'`) per hold in the same transaction.
 A named hold already released answers `already_released`. It never touches a hold of
@@ -400,7 +405,10 @@ so every later `fss migrate` passes its membership check for a reason. It report
 `created|altered|unchanged` for the user and `granted|already` for the membership, sets
 a password only when it creates the user or when `--rotate-password` says so, and
 refuses when `app_runtime` or `migration` does not exist — which means `fss migrate` has
-not run.
+not run. The password never reaches the server: the statement carries a SCRAM-SHA-256
+verifier computed by the tool, which PostgreSQL stores as given, so the DDL the
+parameter group logs (`log_statement = ddl`) shows the verifier and not the password. The
+password must therefore be printable ASCII.
 
 **Two invocation forms, and no third.** Locally, or on a CI runner with a route to
 the database:
