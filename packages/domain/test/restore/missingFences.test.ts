@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { makeStepExecution } from '../../db/testing/stepExecutions.ts';
-import { GmailClientError } from '../../mail/gmailClient.ts';
+import { GmailClientError, type GmailMessageMetadata } from '../../mail/gmailClient.ts';
 import {
   recordedSentMessageId,
   recordedSentThreadId,
@@ -561,6 +561,27 @@ describe('sends whose fence a point-in-time restore lost (lane g73)', () => {
       listSentMessageIds: async () => await Promise.reject(new GmailClientError('unexpected_status', 'the listing failed', 500)),
     };
     await expect(scan(failing)).rejects.toMatchObject({ code: 'unexpected_status' });
+    // Lane W3-S8 fourth review: well-formed metadata that still cannot answer the question.
+    const reshaped = (change: (metadata: GmailMessageMetadata) => GmailMessageMetadata): RecordedGmailClient => ({
+      ...recorded,
+      getSentMetadata: async (access, id, headers) => {
+        const metadata = await recorded.getSentMetadata(access, id, headers);
+        return metadata === null ? null : change(metadata);
+      },
+    });
+    // No Message-ID, or an empty one, on a message sent in the window: unread, not "not FSS's".
+    expect(await scan(reshaped(metadata => ({ ...metadata, headers: {} })))).toMatchObject({ outcome: 'malformed_response' });
+    expect(await scan(reshaped(metadata => ({ ...metadata, headers: { Subject: 'Lunch' } })))).toMatchObject({ outcome: 'malformed_response' });
+    expect(await scan(reshaped(metadata => ({ ...metadata, headers: { 'Message-ID': ' ' } })))).toMatchObject({ outcome: 'malformed_response' });
+    // A date the listing could not have returned: the two answers disagree.
+    expect(await scan(reshaped(metadata => ({ ...metadata, internalDateEpochMilliseconds: 1 })))).toMatchObject({ outcome: 'malformed_response' });
+    expect(
+      await scan(reshaped(metadata => ({ ...metadata, internalDateEpochMilliseconds: Date.parse(window.until) + 5_000 }))),
+    ).toMatchObject({ outcome: 'malformed_response' });
+    // A message listed at the window's edge but outside it is skipped, Message-ID or not.
+    expect(
+      await scan(reshaped(metadata => ({ ...metadata, headers: {}, internalDateEpochMilliseconds: Date.parse(window.since) - 500 }))),
+    ).toMatchObject({ outcome: 'scanned', listed: 0 });
     // And the same client read properly is a clean scan.
     expect(await scan(recorded)).toMatchObject({ outcome: 'scanned', listed: 1 });
   });

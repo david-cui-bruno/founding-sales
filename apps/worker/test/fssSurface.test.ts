@@ -10,7 +10,7 @@ import { CLUSTER_URL_ENVIRONMENT_VARIABLE, asSession } from '@fss/domain/db/test
 import { connectElsewhere, main } from '../src/tools/fss.ts';
 import { COMMAND_DEPENDENCIES, FSS_COMMANDS } from '../src/tools/fss/commands.ts';
 import { readToolConfig } from '../src/tools/fss/config.ts';
-import { ensureRuntimeDatabaseUser } from '../src/tools/fss/databaseUsers.ts';
+import { ensureRuntimeDatabaseUser, scramSha256Verifier } from '../src/tools/fss/databaseUsers.ts';
 import { runVerify } from '../src/tools/fss/verify.ts';
 
 /**
@@ -211,6 +211,47 @@ describe('fss admin database-users ensure', () => {
     }
   });
 
+  it('sends PostgreSQL a SCRAM verifier, never the password, and the verifier is the server’s own', async () => {
+    // Lane W3-S8 fourth review: `log_statement = ddl` logs CREATE and ALTER ROLE with their
+    // text, so the statement must not carry the password. The stored secret is the verifier
+    // this tool computed, and it verifies the password as PostgreSQL computes it.
+    const stored = async (role: string): Promise<string> =>
+      (await session.query<{ secret: string }>('SELECT rolpassword AS secret FROM pg_authid WHERE rolname = $1', [role])).rows[0]?.secret ?? '';
+    const verifier = await stored(runtimeUser);
+    const shape = /^SCRAM-SHA-256\$(\d+):([A-Za-z0-9+/=]+)\$([A-Za-z0-9+/=]+):([A-Za-z0-9+/=]+)$/u.exec(verifier);
+    expect(shape, 'the role has a SCRAM verifier').not.toBeNull();
+    expect(scramSha256Verifier(password, Buffer.from(shape?.[2] ?? '', 'base64'), Number(shape?.[1]))).toBe(verifier);
+
+    // The algorithm against PostgreSQL's own: a role given the plain password by the
+    // server, whose salt then reproduces the server's verifier exactly.
+    const probe = `fss_scram_${randomUUID().replaceAll('-', '').slice(0, 12)}`;
+    try {
+      await session.query("SET password_encryption = 'scram-sha-256'");
+      await session.query(`CREATE ROLE "${probe}" LOGIN PASSWORD '${password}'`);
+      const server = await stored(probe);
+      const parts = /^SCRAM-SHA-256\$(\d+):([^$]+)\$/u.exec(server);
+      expect(scramSha256Verifier(password, Buffer.from(parts?.[2] ?? '', 'base64'), Number(parts?.[1]))).toBe(server);
+    } finally {
+      await session.query(`DROP ROLE IF EXISTS "${probe}"`);
+    }
+
+    // A rotation sets a fresh verifier (a new salt) for the same password.
+    const rotated = await ensureRuntimeDatabaseUser(session, { secretValue: secretValue(), rotatePassword: true });
+    expect(rotated).toMatchObject({ ok: true, value: { user: { outcome: 'altered', passwordSet: true } } });
+    const after = await stored(runtimeUser);
+    expect(after).not.toBe(verifier);
+    const again = /^SCRAM-SHA-256\$(\d+):([^$]+)\$/u.exec(after);
+    expect(scramSha256Verifier(password, Buffer.from(again?.[2] ?? '', 'base64'), Number(again?.[1]))).toBe(after);
+  });
+
+  it('refuses a password that is not printable ASCII, whose verifier this tool could not compute exactly', async () => {
+    const outcome = await ensureRuntimeDatabaseUser(session, {
+      secretValue: JSON.stringify({ username: runtimeUser, password: `p\u00e9${randomUUID()}` }),
+      rotatePassword: true,
+    });
+    expect(outcome).toMatchObject({ ok: false, reason: 'secret_malformed' });
+  });
+
   it('grants migration to the connected user, and says whether it had to', async () => {
     const outcome = await ensureRuntimeDatabaseUser(session, { secretValue: secretValue() });
     expect(outcome).toMatchObject({ ok: true });
@@ -260,7 +301,7 @@ describe('the dependency mode is fixed per command', () => {
   });
 
   it('refuses the Gmail-reading command in a deployment that names no Gmail seam', async () => {
-    const none = await run(['admin', 'mailbox', 'reconcile-sent', '--since', '2026-09-20T00:00:00Z', '--inventory-host', 'fss-prod-pg.example.test', '--inventory-marker', '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'], {
+    const none = await run(['admin', 'mailbox', 'reconcile-sent', '--since', '2026-09-20T00:00:00Z', '--inventory-host', 'fss-prod-pg.example.test', '--inventory-marker', '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d', '--restore-point', '2026-09-20T00:10:00Z', '--inventory-instance', 'db-OLDINSTANCE4TESTS0000000000'], {
       FSS_DEPENDENCIES: 'none',
     });
     expect(none.code).toBe(20);
@@ -271,7 +312,7 @@ describe('the dependency mode is fixed per command', () => {
     // The reason, not only the exit code. This live environment is missing the Gmail
     // variables, so the refusal must come from the deployment reader one step later —
     // proof that `live` itself is not what refused it, which it was until lane W3-S8.
-    const live = await run(['admin', 'mailbox', 'reconcile-sent', '--since', '2026-09-20T00:00:00Z', '--inventory-host', 'fss-prod-pg.example.test', '--inventory-marker', '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'], {
+    const live = await run(['admin', 'mailbox', 'reconcile-sent', '--since', '2026-09-20T00:00:00Z', '--inventory-host', 'fss-prod-pg.example.test', '--inventory-marker', '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d', '--restore-point', '2026-09-20T00:10:00Z', '--inventory-instance', 'db-OLDINSTANCE4TESTS0000000000'], {
       FSS_DEPENDENCIES: 'live',
     });
     expect(live.code).toBe(20);
@@ -282,7 +323,7 @@ describe('the dependency mode is fixed per command', () => {
     // A recorded deployment with no journal bucket registers no mail handler (composeHandlers),
     // so the command gets as far as asking for one.
     const recorded = await run(
-      ['admin', 'mailbox', 'reconcile-sent', '--since', '2026-09-20T00:00:00Z', '--inventory-host', 'fss-prod-pg.example.test', '--inventory-marker', '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'],
+      ['admin', 'mailbox', 'reconcile-sent', '--since', '2026-09-20T00:00:00Z', '--inventory-host', 'fss-prod-pg.example.test', '--inventory-marker', '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d', '--restore-point', '2026-09-20T00:10:00Z', '--inventory-instance', 'db-OLDINSTANCE4TESTS0000000000'],
       recordedEnvironment(),
     );
     expect(recorded.code).toBe(20);

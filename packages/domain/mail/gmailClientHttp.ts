@@ -342,11 +342,16 @@ export function createGmailHttpClient(options: GmailHttpOptions): GmailClient {
       if (typeof part !== 'object' || part === null || Array.isArray(part)) malformed('had no payload');
       const members = (part as Json)['headers'];
       if (!Array.isArray(members)) malformed('had no header list');
+      let messageIds = 0;
       for (const member of members as unknown[]) {
         const name = typeof member === 'object' && member !== null ? (member as Json)['name'] : undefined;
         const value = typeof member === 'object' && member !== null ? (member as Json)['value'] : undefined;
         if (typeof name !== 'string' || name.length === 0 || typeof value !== 'string') malformed('had a header that is not a name and a value');
+        if ((name as string).toLowerCase() === 'message-id') messageIds += 1;
       }
+      // Two Message-IDs cannot be told apart once collected into one map (fourth review);
+      // none is the scan's to judge, against its window.
+      if (messageIds > 1) malformed('had more than one Message-ID');
     }
     const collected: Record<string, string> = {};
     for (const member of Array.isArray((payload as Json | undefined)?.['headers'])

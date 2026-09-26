@@ -148,11 +148,11 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
   },
   {
     path: ['admin', 'restore-marker', 'put'],
-    valueFlags: ['--marker', ...REPORTABLE],
+    valueFlags: ['--marker', '--restore-point', '--instance', ...REPORTABLE],
     booleanFlags: [],
-    requiredFlags: ['--marker'],
+    requiredFlags: ['--marker', '--restore-point', '--instance'],
     summary:
-      'write a restore marker (a UUID) into every workspace\'s audit trail on the instance this task reaches: the restore writes it before anything stops, and reconcile-sent requires it on the inventory host and its absence from the copy',
+      'write a restore marker (a UUID bound to the restore point and the pinned instance) into every workspace\'s audit trail on the instance this task reaches: the restore writes a fresh one before anything stops, and reconcile-sent requires it, bound the same way, on the inventory host and absent from the copy',
   },
   {
     // Lane W3-S8 reviews: the mailboxes are every one the instance being replaced has,
@@ -160,9 +160,9 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     // cannot know a mailbox connected after the restore point) and never a list somebody
     // typed. There is no --all-mailboxes and no --inventory.
     path: ['admin', 'mailbox', 'reconcile-sent'],
-    valueFlags: ['--since', '--inventory-host', '--inventory-marker', ...REPORTABLE],
+    valueFlags: ['--since', '--restore-point', '--inventory-host', '--inventory-marker', '--inventory-instance', ...REPORTABLE],
     booleanFlags: ['--hold-unattached'],
-    requiredFlags: ['--since', '--inventory-host', '--inventory-marker'],
+    requiredFlags: ['--since', '--inventory-host', '--inventory-marker', '--inventory-instance', '--restore-point'],
     summary:
       'after a point-in-time restore: read the Sent folder of every mailbox the replaced instance has (read-only Gmail) and record the sends the restored copy lost; refuses while anything could let a send repeat',
   },

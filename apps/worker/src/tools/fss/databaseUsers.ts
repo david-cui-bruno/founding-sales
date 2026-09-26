@@ -1,3 +1,4 @@
+import { createHash, createHmac, pbkdf2Sync, randomBytes } from 'node:crypto';
 import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 import { ConfigError } from '../../bootstrap/config.ts';
 import { APP_RUNTIME_ROLE, MIGRATION_ROLE } from './migrate.ts';
@@ -30,9 +31,13 @@ import { APP_RUNTIME_ROLE, MIGRATION_ROLE } from './migrate.ts';
  *   holding, and one that never set it could not create the user in the first place.
  *   The report says which happened.
  *
- * Nothing here logs, prints or returns the password, including in an error: the
- * statement text carries it, so a failure is re-raised with the error's class and
- * nothing else.
+ * Nothing here logs, prints or returns the password, including in an error, and the
+ * password itself never reaches the server (lane W3-S8 fourth review): the production
+ * parameter group logs DDL (`log_statement = ddl`), and `CREATE ROLE … PASSWORD` and
+ * `ALTER ROLE … PASSWORD` are DDL, logged with their text. So the statement carries a
+ * SCRAM-SHA-256 verifier computed here (`scramSha256Verifier`), which PostgreSQL stores
+ * as given, as `createuser` and psql's `\password` do; the log shows the verifier, never
+ * the password. A failure is still re-raised with the error's class and nothing else.
  *
  * ## The second thing it does, and why it is here rather than in a migration
  *
@@ -123,7 +128,30 @@ export function readRuntimeCredential(raw: string): RuntimeCredential {
   if (!/^[a-z][a-z0-9_]{2,62}$/u.test(username)) {
     throw new ConfigError('INVALID', 'the runtime database user name is not a plain lower-case identifier');
   }
-  return { username, password: field('password') };
+  const password = field('password');
+  // Printable ASCII, so that the verifier computed here is the one PostgreSQL would
+  // compute (SASLprep changes nothing in that range).
+  if (!/^[\x20-\x7e]+$/u.test(password)) {
+    throw new ConfigError('INVALID', 'the runtime database password is not printable ASCII, so no verifier for it can be computed here');
+  }
+  return { username, password };
+}
+
+/**
+ * A SCRAM-SHA-256 verifier for `password`, in the form `pg_authid.rolpassword` stores and
+ * `CREATE ROLE … PASSWORD` accepts as already encrypted (RFC 5802 and 7677; PostgreSQL's
+ * `scram_build_secret`): `SCRAM-SHA-256$<iterations>:<salt>$<StoredKey>:<ServerKey>`.
+ *
+ * PostgreSQL SASLprep-normalises a password before hashing it; for printable ASCII that
+ * is the identity, so the password must be printable ASCII (`readRuntimeCredential`
+ * refuses anything else) and the verifier is then exactly the server's own.
+ */
+export function scramSha256Verifier(password: string, salt: Buffer = randomBytes(16), iterations = 4096): string {
+  const salted = pbkdf2Sync(Buffer.from(password, 'utf8'), salt, iterations, 32, 'sha256');
+  const clientKey = createHmac('sha256', salted).update('Client Key').digest();
+  const storedKey = createHash('sha256').update(clientKey).digest();
+  const serverKey = createHmac('sha256', salted).update('Server Key').digest();
+  return `SCRAM-SHA-256$${String(iterations)}:${salt.toString('base64')}$${storedKey.toString('base64')}:${serverKey.toString('base64')}`;
 }
 
 /**
@@ -219,7 +247,7 @@ export async function ensureRuntimeDatabaseUser(
       session,
       await formatted(session, 'CREATE ROLE %I LOGIN PASSWORD %L IN ROLE %I', [
         credential.username,
-        credential.password,
+        scramSha256Verifier(credential.password),
         APP_RUNTIME_ROLE,
       ]),
       'creating the runtime database user',
@@ -250,7 +278,7 @@ export async function ensureRuntimeDatabaseUser(
     await executeOpaque(
       session,
       rotate
-        ? await formatted(session, 'ALTER ROLE %I WITH LOGIN PASSWORD %L', [credential.username, credential.password])
+        ? await formatted(session, 'ALTER ROLE %I WITH LOGIN PASSWORD %L', [credential.username, scramSha256Verifier(credential.password)])
         : await formatted(session, 'ALTER ROLE %I WITH LOGIN', [credential.username]),
       'altering the runtime database user',
     );

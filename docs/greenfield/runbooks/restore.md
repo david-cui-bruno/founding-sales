@@ -9,10 +9,13 @@ release, node 24, the admin profile. Nothing starts the API or the worker before
 
 **Only while the instance being replaced can be read.** (d) reads from it every mailbox it
 has and every mailbox its audit trail says was ever connected, to know whose Sent folder to
-read. It is identified by instance, not by name: (a) pins its `DbiResourceId` and writes a
-marker into it before anything stops, and (d) requires the marker there and its absence
-from the copy. If `fss-prod-pg` is gone or cannot be read, (a) or (d) answers NO-GO:
-escalate. Nothing else can say which mailboxes could have sent since `T`, and no list is typed.
+read. It is identified by instance, not by name: (a) pins its `DbiResourceId` through the
+RDS API and writes a fresh marker into it before anything stops, bound to `T` and that id,
+and (d) requires the marker there, bound the same way and written after `T`, and its
+absence from the copy. The marker is a state witness (anything holding the runtime
+credential could write one); the RDS pins are the identity. If `fss-prod-pg` is gone or
+cannot be read, (a) or (d) answers NO-GO: escalate. Nothing else can say which mailboxes
+could have sent since `T`, and no list is typed.
 
 **How it stops.** Each step is one `&&` chain that begins `begin <step> <earlier steps>` and
 ends `pass <step>`. A pass is a line in the ledger `$W/go` naming this restore: a
@@ -45,7 +48,16 @@ pass() { local id; id=$(restore_id) && echo "$1 $id $(date -u +%FT%TZ)" >> "$W/g
 digests() { API=$(sed -n 's/^-var=api_image=.*@//p' "${1:-$W/vars}") && WORKER=$(sed -n 's/^-var=worker_image=.*@//p' "${1:-$W/vars}") \
   && [ -n "$API" ] && [ -n "$WORKER" ]; }
 at_dbi() { aws rds describe-db-instances --filters "Name=dbi-resource-id,Values=$1" --query 'DBInstances[0].Endpoint.Address' --output text; }
+rds_state() { aws rds describe-db-instances --db-instance-identifier "$1" --query 'DBInstances[0].[DbiResourceId,Endpoint.Address,DBInstanceStatus]' --output text; }
 task_host() { release_json_path "$(release_output $R task_network_configuration json)" database_host; }   # what the task definitions reach
+live_hosts() ( # FSS_DATABASE_HOST in the task definitions the running api and worker services use, one line each
+  cluster=$(release_output $R cluster_arn) || exit 1
+  for s in api worker; do
+    td=$(aws ecs describe-services --cluster "$cluster" --services "fss-prod-$s" --query 'services[0].taskDefinition' --output text) \
+      && aws ecs describe-task-definition --task-definition "$td" --output text \
+        --query "taskDefinition.containerDefinitions[?name=='$s'] | [0].environment[?name=='FSS_DATABASE_HOST'] | [0].value" || exit 1
+  done
+)
 report() ( rm -f "$W/$1.json"; release_captured_report "$W/$1.log" "$W/$1.json" )
 fss_task() ( # fss_task <step> <migration|operations> [--capture F] [--env NAME=VALUE]... -- <fss words>...
   step=$1 kind=$2; shift 2; [ "${1:-}" != --capture ] || rm -f "$2"
@@ -73,46 +85,56 @@ check_plans() ( # check_plans <repoint|retire> <plan> <reference plan> <plan's h
   node --experimental-strip-types --disable-warning=ExperimentalWarning apps/worker/src/tools/restorePlan.ts "$1" \
     --plan <(terraform -chdir=$R show -json "$2") --reference <(terraform -chdir=$R show -json "$3") --plan-host "$4" --reference-host "$5"
 )
-audit_launch() ( # audit_launch <release report>: CloudTrail's RunTask for the report's task names the launcher it claims
+audit_launch() ( # audit_launch <release report>: waits up to 21 minutes for CloudTrail's RunTask for the report's task, which must name the launcher it claims
   task=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["taskArn"])' "$1") \
-    && who=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["launchedBy"])' "$1") \
-    && aws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=RunTask \
-      --start-time "$(date -u -v-1d +%FT%TZ)" --output json \
-    | python3 -c 'import json, sys
+    && who=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["launchedBy"])' "$1") || exit 1
+  for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14; do
+    verdict=$(aws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=RunTask \
+      --start-time "$(date -u -v-1d +%FT%TZ)" --output json | python3 -c 'import json, sys
 task, who = sys.argv[1:3]; events = [json.loads(e["CloudTrailEvent"]) for e in json.load(sys.stdin)["Events"]]
 hit = [e for e in events if any(t.get("taskArn") == task for t in (e.get("responseElements") or {}).get("tasks") or [])]
-sys.exit(0 if len(hit) == 1 and hit[0]["userIdentity"]["arn"] == who else "NO-GO: CloudTrail does not show %s launching %s" % (who, task))' "$task" "$who"
+print("match" if len(hit) == 1 and hit[0]["userIdentity"]["arn"] == who else "mismatch" if hit else "absent")' "$task" "$who") || verdict=unreadable
+    case $verdict in
+      match) echo "GO: CloudTrail shows $who launching $task"; exit 0 ;;
+      mismatch) echo "NO-GO: CloudTrail shows another caller launching $task, not $who" >&2; exit 1 ;;
+    esac
+    echo "waiting for CloudTrail's RunTask ($attempt of 14: $verdict)" >&2; sleep 90
+  done
+  echo "NO-GO: CloudTrail has no RunTask for $task after 21 minutes" >&2; exit 1
 )
 ```
 
 **(a) Fix the restore, mark the old instance, and stop.** Set `T` first
 (`T=2026-09-26T11:50:00Z`: UTC, just before the damage). This fixes `T`, the copy's name
-`$NEW`, the marker, and the old instance by `DbiResourceId` and address (which must be the
+`$NEW`, a fresh marker (every run of (a) makes a new one; a marker already bound to another
+restore is refused), and the old instance by `DbiResourceId` and address (which must be the
 host the task definitions reach), refusing unless `fss-prod-pg` is available. Then, before
 anything stops, it writes the marker into the old instance through the operations task,
-which is also the proof that the runtime login works there. To change `T` or the copy
-later, `unset NEW MARKER`, set `T`, and run (a) again: nothing passed before counts.
+bound to `T` and that id, which is also the proof by SQL that the runtime login works
+there. To change `T` or the copy later, `unset NEW`, set `T`, and run (a) again: nothing
+passed before counts.
 
 ```bash
 begin stopped && { [ -n "${T:-}" ] || { echo "NO-GO: set T first" >&2; false; }; } && keep T "$T" \
-  && keep NEW "${NEW:-fss-prod-pg-r$(date -u +%m%d%H%M)}" && keep MARKER "${MARKER:-$(uuidgen | tr '[:upper:]' '[:lower:]')}" \
+  && keep NEW "${NEW:-fss-prod-pg-r$(date -u +%m%d%H%M)}" && MARKER=$(uuidgen | tr '[:upper:]' '[:lower:]') && keep MARKER "$MARKER" \
   && SINCE=$(date -u -j -v-10M -f %Y-%m-%dT%H:%M:%SZ "$T" +%Y-%m-%dT%H:%M:%SZ) && keep SINCE "$SINCE" \
-  && read -r OLD_DBI OLD_HOST OLD_STATUS <<<"$(aws rds describe-db-instances --db-instance-identifier fss-prod-pg \
-    --query 'DBInstances[0].[DbiResourceId,Endpoint.Address,DBInstanceStatus]' --output text)" \
+  && read -r OLD_DBI OLD_HOST OLD_STATUS <<<"$(rds_state fss-prod-pg)" \
   && [[ $OLD_DBI == db-* ]] && [ "$OLD_STATUS" = available ] \
   && [ "$OLD_HOST" = "$(release_output $R database_endpoint | cut -d: -f1)" ] && [ "$OLD_HOST" = "$(task_host)" ] \
   && keep OLD_DBI "$OLD_DBI" && keep OLD_HOST "$OLD_HOST" \
   && infra/scripts/deploy.sh current fss-prod --var-flags > "$W/vars" && digests \
-  && fss_task marker operations --capture "$W/marker.log" -- admin restore-marker put --marker "$MARKER" && report marker \
+  && fss_task marker operations --capture "$W/marker.log" -- admin restore-marker put --marker "$MARKER" --restore-point "$T" \
+    --instance "$OLD_DBI" && report marker \
   && infra/scripts/stop.sh $R fss-prod --environment production && pass stopped
 ```
 
 **(b) Restore to a new instance.** `T` must lie in exactly one restorable window of
-`fss-prod-pg`'s automated backups. The copy is told everything the module sets that a
+`fss-prod-pg`'s automated backups, and that backup must be the pinned old instance's own
+(its `DbiResourceId` is `$OLD_DBI`), not a retained one of an instance since replaced. The copy is told everything the module sets that a
 restore does not carry over, so (g) finds only tags and Terraform's own settings to change,
 and is then read back: its own `DbiResourceId` (pinned, and not the old one), its address,
 and both KMS keys (storage and the managed master secret) as the module's key.
-A rerun refuses while `$NEW` exists: delete it, or `unset NEW MARKER` and start again from (a).
+A rerun refuses while `$NEW` exists: delete it, or `unset NEW` and start again from (a).
 
 ```bash
 begin restored stopped \
@@ -122,6 +144,7 @@ p = lambda v: d.datetime.fromisoformat(v.replace("Z", "+00:00")); t = p(sys.argv
 w = [b for b in json.load(open(sys.argv[1]))["DBInstanceAutomatedBackups"] if "EarliestTime" in b.get("RestoreWindow", {})
      and p(b["RestoreWindow"]["EarliestTime"]) <= t <= min(now, p(b["RestoreWindow"].get("LatestTime", now.isoformat())))]
 print(w[0]["DbiResourceId"]) if len(w) == 1 else sys.exit("NO-GO: T is in %d restorable windows, not one" % len(w))' "$W/backups.json" "$T") \
+  && { [ "$DBI" = "$OLD_DBI" ] || { echo "NO-GO: T is in the backups of $DBI, not of the pinned $OLD_DBI" >&2; false; }; } \
   && SG=$(aws ec2 describe-security-groups --filters Name=group-name,Values=fss-prod-database \
     --query 'SecurityGroups[0].GroupId' --output text) && [[ $SG == sg-* ]] \
   && KEY=$(aws kms describe-key --key-id alias/fss-prod-database --query KeyMetadata.Arn --output text) && [[ $KEY == arn:aws:kms:* ]] \
@@ -172,28 +195,29 @@ both succeeded.
 ```bash
 begin reconciled pointed && [ "$(at_dbi "$OLD_DBI")" = "$OLD_HOST" ] && [ "$(at_dbi "$NEW_DBI")" = "$NEW_HOST" ] \
   && [ "$(task_host)" = "$NEW_HOST" ] && fss_task journal operations -- admin suppression-journal replay --from "$SINCE" \
-  && { fss_task sent operations --capture "$W/sent.log" -- admin mailbox reconcile-sent --since "$SINCE" --inventory-host "$OLD_HOST" --inventory-marker "$MARKER"
+  && { fss_task sent operations --capture "$W/sent.log" -- admin mailbox reconcile-sent --since "$SINCE" --restore-point "$T" --inventory-host "$OLD_HOST" --inventory-marker "$MARKER" --inventory-instance "$OLD_DBI"
        ran=$?; report sent && [ "$ran" -eq 0 ]; } && pass reconciled
 ```
 
-The reconcile requires the marker on `$OLD_HOST` and its absence from the copy, then reads
+The reconcile requires the marker on `$OLD_HOST`, bound to `T` and `$OLD_DBI` and written after
+`T`, and its absence from the copy, then reads
 from the old instance every mailbox address it has and every one its audit trail (which no
 application role can delete from) says was connected, then each of those mailboxes' Sent
 folders through a Gmail client that cannot send, watch or read a body, refusing any listing
 page or message metadata that is not exactly one, and tombstones each FSS send the copy
 lost. A refusal is a no-go until a rerun passes:
 
-- `inventory_unreadable`, `inventory_marker_missing`, `inventory_marker_in_copy`,
-  `inventory_empty`, `inventory_source_incomplete`, or `mailbox_not_in_inventory` in
+- `inventory_unreadable`, `inventory_marker_missing`, `inventory_marker_mismatch`,
+  `inventory_marker_in_copy`, `inventory_empty`, `inventory_source_incomplete`, or `mailbox_not_in_inventory` in
   `unresolved`: the old instance cannot give the whole list, or is not the one (a) marked.
   Stop and escalate; abandoning (below) keeps production on the old instance.
 - `sent_folder_unscanned` `rate_limited` or `message_vanished`: rerun. `malformed_response`:
   rerun once, then escalate. `truncated`: stop and escalate.
 - `sent_folder_unscanned` `grant_revoked`, or `mailbox_not_in_copy`: this copy cannot prove what
   that mailbox sent. Restore again to a later `T` at which the mailbox had the grant it has now
-  (`unset NEW MARKER`, set `T`, from (a)), or abandon.
+  (`unset NEW`, set `T`, from (a)), or abandon.
 - `unattached_sent_message`: a send no single step can be named for. Rerun (d) with
-  `--hold-unattached` after `"$MARKER"`: each firm it names (or the workspace, when none)
+  `--hold-unattached` after `"$OLD_DBI"`: each firm it names (or the workspace, when none)
   gets a `restore_in_progress` hold, audited with the enrollments it could belong to, and
   after (f) an admin settles it and releases the hold as below.
 
@@ -210,11 +234,11 @@ begin recorded reconciled && digests && { [ -n "${GATE_RUN:-}" ] && [ -n "${COMM
   && fss_task holds operations --capture "$W/holds.log" -- admin holds list --reason restore_in_progress && report holds \
   && python3 -c 'import json, sys
 sent, holds = json.load(open(sys.argv[1])), json.load(open(sys.argv[2]))
-if (sent.get("since"), sent.get("inventory_host"), sent.get("inventory_marker"), sent.get("unresolved")) != (sys.argv[3], sys.argv[4], sys.argv[5], []):
+if (sent.get("since"), sent.get("inventory_host"), sent.get("inventory_marker"), sent.get("inventory_instance"), sent.get("restore_point"), sent.get("unresolved")) != (*sys.argv[3:8], []):
     sys.exit("NO-GO: sent.json is not the passing reconciliation of this restore")
 held = {i for line in sent["unattached_held"] for i in line["holdIds"]}; now = {h["id"] for h in holds["holds"]}
 sys.exit(0 if held == now else "NO-GO: released early %s; from before the restore %s" % (sorted(held - now), sorted(now - held)))' \
-    "$W/sent.json" "$W/holds.json" "$SINCE" "$OLD_HOST" "$MARKER" && pass recorded
+    "$W/sent.json" "$W/holds.json" "$SINCE" "$OLD_HOST" "$MARKER" "$OLD_DBI" "$T" && pass recorded
 ```
 
 **(f) Start**, then release.md 6's smoke. Log `T`, `$NEW`, the ledger and `$W/sent.json` in
@@ -227,37 +251,45 @@ begin started reconciled recorded && digests \
 ```
 
 **Clearing a restore hold** (audited; nothing else releases one since the generation check
-went). Set `WHY` to what was checked. The first line lists the holds; the second releases
+went). Set `WHY` to what was verified. The first line lists the holds; the second releases
 every restore hold from before the restore, for (e) to pass on a rerun; the third releases
-one hold (d) opened, after (f), with `HOLD` its id from `$W/holds.json` and `HOW` either:
+one hold (d) opened for an unattached send, after (f), with `HOLD` its id from
+`$W/holds.json`. That release is a human decision, and the only one: `checked-no-duplicate`
+is an attestation the command cannot check, recorded as `basis: human_attestation` with the
+enrollments recorded when the hold opened and whether each had ended. Ending those
+enrollments is no lasting fence, because a new enrollment of the same contact starts the
+sequence again, so before releasing, verify and write into `WHY`:
 
-- `ended-every-candidate`, once every enrollment the send could belong to is ended in the
-  app. The command checks all of them, because any one still live could send it again;
-  ending only the duplicate is refused.
-- `checked-no-duplicate`, which is a human attestation, not a checked fact: `WHY` says what
-  was read and why nothing can repeat the send. It is the only choice for a workspace hold,
-  whose recipient was unreadable, and the audit row records it as `human_attestation`.
+1. The Sent message at the hold's `sentAt` in that mailbox: whom it went to and which step
+   it was (for a workspace hold, whose recipient was unreadable, this is the only way to know).
+2. That every enrollment of that contact that could send the same step again is ended in
+   the app: the recorded ones (`hold.restore_opened` lists them) and any other.
+3. What re-enrollment of that contact is allowed: a new enrollment starts at the first step,
+   so if the send was a step of that sequence, the contact is not re-enrolled in it.
 
 A firm hold shows on that firm's page in the Mac app. A workspace hold shows on no Firm page:
 it is counted under `restore_in_progress` in the dashboard's holds and listed below.
 Each release writes a `hold.restore_released` row with the note, the launcher's ARN and the
-task's ARN, and a rerun answers `already_released`. The launcher's ARN is a claim:
+task's ARN, and a rerun answers `already_released`; it refuses outside an ECS task, since
+without the task ARN nothing can check the launcher. The launcher's ARN is a claim:
 `fss_task` takes it from `aws sts get-caller-identity`, but the task only checks its shape.
-The task ARN is what makes it auditable: a quarter of an hour later, when CloudTrail has
-the event, the last line checks that CloudTrail's RunTask for that task names the same
-caller, and a NO-GO there goes in the running log and to David.
+So a release is complete only when `audit_launch` has found CloudTrail's RunTask for that
+task naming the same caller: it waits up to 21 minutes for the event, and its NO-GO (another
+caller, or no event) goes in the running log and to David.
 
 ```bash
 fss_task holds operations --capture "$W/holds.log" -- admin holds list --reason restore_in_progress && report holds
-fss_task clear operations --capture "$W/clear.log" -- admin holds release-restore --note "$WHY" && report clear
-fss_task clear operations --capture "$W/clear.log" -- admin holds release-restore --hold "$HOLD" --resolution "$HOW" --note "$WHY" && report clear
-audit_launch "$W/clear.json"
+fss_task clear operations --capture "$W/clear.log" -- admin holds release-restore --note "$WHY" && report clear && audit_launch "$W/clear.json"
+fss_task clear operations --capture "$W/clear.log" -- admin holds release-restore --hold "$HOLD" --resolution checked-no-duplicate \
+  --note "$WHY" && report clear && audit_launch "$W/clear.json"
 ```
 
 **(g) Later, on a quiet day, retire the old instance** (a short second outage). Before the
-delete it checks that `fss-prod-pg` is still the old instance, that the copy still answers
-at its address, that production reaches the copy, and that the final snapshot's name is
-free. After the rename it reads the renamed copy's own address rather than assuming the old
+delete it checks that `fss-prod-pg` is still the old instance and the copy still the copy,
+each `available` at its pinned address, that each answers SQL (a `schema-version` task
+against each), that the task definitions the running `api` and `worker` services use carry
+the copy's address, and that the final snapshot's name is free (only RDS's
+`DBSnapshotNotFound` counts as free). After the rename it reads the renamed copy's own address rather than assuming the old
 one, and uses it for the check and the migration entry. The check is (c)'s, the other way:
 the task definitions return to the managed address, and the imported instance may change
 only Terraform's own settings (`apply_immediately`, `delete_automated_backups`,
@@ -268,9 +300,12 @@ the link that failed. A failed import is undone with
 
 ```bash
 begin retired started && FINAL="fss-prod-pg-pre-restore-$(date -u +%Y%m%d%H%M)" \
-  && [ "$(aws rds describe-db-instances --db-instance-identifier fss-prod-pg --query 'DBInstances[0].DbiResourceId' --output text)" = "$OLD_DBI" ] \
-  && [ "$(at_dbi "$OLD_DBI")" = "$OLD_HOST" ] && [ "$(at_dbi "$NEW_DBI")" = "$NEW_HOST" ] && [ "$(task_host)" = "$NEW_HOST" ] \
-  && ! aws rds describe-db-snapshots --db-snapshot-identifier "$FINAL" >/dev/null 2>&1 \
+  && [ "$(rds_state fss-prod-pg)" = "$(printf '%s\t%s\tavailable' "$OLD_DBI" "$OLD_HOST")" ] \
+  && [ "$(rds_state "$NEW")" = "$(printf '%s\t%s\tavailable' "$NEW_DBI" "$NEW_HOST")" ] \
+  && [ "$(live_hosts | sort -u)" = "$NEW_HOST" ] && [ "$(task_host)" = "$NEW_HOST" ] \
+  && fss_task retire-copy operations -- schema-version \
+  && fss_task retire-old operations --env "FSS_DATABASE_HOST=$OLD_HOST" -- schema-version \
+  && ! snapshot=$(aws rds describe-db-snapshots --db-snapshot-identifier "$FINAL" 2>&1) && [[ $snapshot == *DBSnapshotNotFound* ]] \
   && infra/scripts/deploy.sh current fss-prod --var-flags > "$W/vars.retire" && digests "$W/vars.retire" \
   && infra/scripts/stop.sh $R fss-prod --environment production \
   && terraform -chdir=$R state pull > "$W/state-before-import.json" \
@@ -310,18 +345,20 @@ copy has served production, and abandoning it would lose what it recorded: resto
 
 ## Quarterly hand smoke (after the setup, with no restore in progress; writes only to a scratch copy)
 
-The marker is written to production after the scratch copy exists, so the copy cannot have it.
+The marker is written to production after the scratch copy exists, bound to a point taken
+before the restore began, so the copy cannot have it and production's is written after it.
 
 ```bash
-S=fss-prod-pg-smoke; SMOKE_SINCE=$(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ); LIVE=$(release_output $R database_endpoint | cut -d: -f1)
-SMOKE_MARKER=$(uuidgen | tr '[:upper:]' '[:lower:]')
+S=fss-prod-pg-smoke; SMOKE_SINCE=$(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ); SMOKE_POINT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+SMOKE_MARKER=$(uuidgen | tr '[:upper:]' '[:lower:]'); read -r LIVE_DBI LIVE _ <<<"$(rds_state fss-prod-pg)"
 SG=$(aws ec2 describe-security-groups --filters Name=group-name,Values=fss-prod-database --query 'SecurityGroups[0].GroupId' --output text)
 aws rds restore-db-instance-to-point-in-time --source-db-instance-identifier fss-prod-pg --target-db-instance-identifier $S \
   --use-latest-restorable-time --db-subnet-group-name fss-prod-db --db-parameter-group-name fss-prod-pg16 \
   --vpc-security-group-ids "$SG" --no-multi-az --no-publicly-accessible >/dev/null && aws rds wait db-instance-available --db-instance-identifier $S
 H=$(aws rds describe-db-instances --db-instance-identifier $S --query 'DBInstances[0].Endpoint.Address' --output text)
-fss_task smoke-marker operations -- admin restore-marker put --marker "$SMOKE_MARKER"
+fss_task smoke-marker operations -- admin restore-marker put --marker "$SMOKE_MARKER" --restore-point "$SMOKE_POINT" --instance "$LIVE_DBI"
 fss_task smoke-schema operations --env "FSS_DATABASE_HOST=$H" -- schema-version
-fss_task smoke-sent operations --env "FSS_DATABASE_HOST=$H" -- admin mailbox reconcile-sent --since "$SMOKE_SINCE" --inventory-host "$LIVE" --inventory-marker "$SMOKE_MARKER"
+fss_task smoke-sent operations --env "FSS_DATABASE_HOST=$H" -- admin mailbox reconcile-sent --since "$SMOKE_SINCE" --restore-point "$SMOKE_POINT" \
+  --inventory-host "$LIVE" --inventory-marker "$SMOKE_MARKER" --inventory-instance "$LIVE_DBI"
 aws rds delete-db-instance --db-instance-identifier $S --skip-final-snapshot --delete-automated-backups >/dev/null
 ```

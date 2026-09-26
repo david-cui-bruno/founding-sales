@@ -270,7 +270,8 @@ export async function connectElsewhere(
  * launcher's shell (the runbook's `fss_task` passes it as a container override), and the
  * task ARN comes from the ECS metadata endpoint, so CloudTrail's RunTask event for that
  * ARN shows the same caller and the same override. Inside ECS a metadata endpoint that
- * does not answer is a refusal, not a null ARN; outside ECS (the tests) the ARN is null.
+ * does not answer is a refusal, not a null ARN; outside ECS the ARN is null, and the
+ * release then refuses (`task_unknown`): nothing could check its launcher.
  */
 export async function launchIdentity(
   environment: Readonly<Record<string, string | undefined>>,
