@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { makeStepExecution } from '../../db/testing/stepExecutions.ts';
+import { GmailClientError } from '../../mail/gmailClient.ts';
 import {
   recordedSentMessageId,
   recordedSentThreadId,
@@ -405,9 +406,14 @@ describe('sends whose fence a point-in-time restore lost (lane g73)', () => {
     const { recoveries } = await pass(gmail, around(at));
     expect(recoveries).toEqual([
       { outcome: 'unmatched', reason: 'no_live_enrollment' },
-      { outcome: 'unattached', reason: 'several_live_enrollments', firmIds: [world.crm.alpha.firmId] },
-      { outcome: 'unattached', reason: 'open_step_has_fence', firmIds: [world.crm.alpha.firmId] },
-      { outcome: 'unattached', reason: 'recipient_unreadable', firmIds: [] },
+      {
+        outcome: 'unattached',
+        reason: 'several_live_enrollments',
+        firmIds: [world.crm.alpha.firmId],
+        enrollmentIds: [one.enrollmentId, two.enrollmentId].sort(),
+      },
+      { outcome: 'unattached', reason: 'open_step_has_fence', firmIds: [world.crm.alpha.firmId], enrollmentIds: [busy.enrollmentId] },
+      { outcome: 'unattached', reason: 'recipient_unreadable', firmIds: [], enrollmentIds: [] },
     ]);
     for (const step of [one, two]) {
       expect(await readOutboundOutcome(context(), step.stepExecutionId)).toMatchObject({ state: 'absent' });
@@ -515,6 +521,48 @@ describe('sends whose fence a point-in-time restore lost (lane g73)', () => {
     const scan = await scanSentFolder(context(), scanDeps(gmail), { mailboxId: world.alpha.mailboxId, ...around(at) });
     expect(scan).toMatchObject({ outcome: 'message_vanished', vanished: 1, listed: 1 });
     expect(scan.messages.map(message => message.providerMessageId)).toEqual([kept.id]);
+  });
+
+  it('reports a Sent page or message it could not parse as malformed, never as nothing sent', async () => {
+    // Lane W3-S8 review: the live client read a malformed 200 listing as an empty page.
+    // It now refuses the page (`malformed_response`), and the scan says the folder was not read.
+    const at = '2026-09-24T19:45:00.000Z';
+    const window = around(at);
+    const recorded = world.clientWith(world.alpha, {
+      sentMessages: [sentMessage({ header: fssHeader(), to: 'parsed.later@northwind.example.test', at })],
+    });
+    const scan = async (gmail: RecordedGmailClient) =>
+      await scanSentFolder(context(), scanDeps(gmail), { mailboxId: world.alpha.mailboxId, ...window });
+    const malformed = (): never => {
+      throw new GmailClientError('malformed_response', 'a listed message had no id', 200);
+    };
+
+    expect(await scan({ ...recorded, listSentMessageIds: async () => await Promise.resolve(malformed()) })).toEqual({
+      outcome: 'malformed_response',
+      listed: 0,
+      messages: [],
+      vanished: 0,
+    });
+    expect(await scan({ ...recorded, getMetadata: async () => await Promise.resolve(malformed()) })).toMatchObject({
+      outcome: 'malformed_response',
+      messages: [],
+    });
+    const undated: RecordedGmailClient = {
+      ...recorded,
+      getMetadata: async (access, id, headers) => {
+        const metadata = await recorded.getMetadata(access, id, headers);
+        return metadata === null ? null : { ...metadata, internalDateEpochMilliseconds: Number.NaN };
+      },
+    };
+    expect(await scan(undated)).toMatchObject({ outcome: 'malformed_response', messages: [] });
+    // Any other failure is still a failure, not an outcome.
+    const failing: RecordedGmailClient = {
+      ...recorded,
+      listSentMessageIds: async () => await Promise.reject(new GmailClientError('unexpected_status', 'the listing failed', 500)),
+    };
+    await expect(scan(failing)).rejects.toMatchObject({ code: 'unexpected_status' });
+    // And the same client read properly is a clean scan.
+    expect(await scan(recorded)).toMatchObject({ outcome: 'scanned', listed: 1 });
   });
 
   describe('the sequence engine and a tombstoned step', () => {

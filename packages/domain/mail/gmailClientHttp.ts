@@ -243,12 +243,20 @@ export function createGmailHttpClient(options: GmailHttpOptions): GmailClient {
    * One page of message ids matching `q`, bounded by epoch seconds (Appendix D: never an
    * ambiguous date string). `prefix` narrows the search; the bounds are always the
    * request's own.
+   *
+   * `strict` (the Sent listing, lane W3-S8 review): a 200 whose body is not a JSON
+   * object, whose `messages` is present and not an array, one of whose entries is not an
+   * object with an id, or whose `nextPageToken` is present and not a string, is
+   * `malformed_response` — never a page of no messages, because the restore's Sent
+   * reconciliation reads "no messages" as "nothing was sent". An absent `messages` is
+   * Google's own empty page and stays one. The sync's listing keeps its old reading.
    */
   const listIds = async (
     access: GmailAccessGrant,
     prefix: string,
     request: GmailListRequest,
     failure: string,
+    strict = false,
   ): Promise<GmailListOutcome> => {
     const response = await api(
       access,
@@ -267,6 +275,21 @@ export function createGmailHttpClient(options: GmailHttpOptions): GmailClient {
       throw new GmailClientError('unexpected_status', failure, response.status);
     }
     const json = parseJson(response.body);
+    if (strict) {
+      const malformed = (why: string): never => {
+        throw new GmailClientError('malformed_response', `${failure}: ${why}`, response.status);
+      };
+      if (json === null) malformed('the page was not a JSON object');
+      const members = json?.['messages'];
+      if (members !== undefined && !Array.isArray(members)) malformed('messages was not a list');
+      const token = json?.['nextPageToken'];
+      if (token !== undefined && token !== null && typeof token !== 'string') malformed('nextPageToken was not a string');
+      for (const member of (members ?? []) as unknown[]) {
+        if (typeof member !== 'object' || member === null || asString((member as Json)['id']) === null) {
+          malformed('a listed message had no id');
+        }
+      }
+    }
     const messageIds: string[] = [];
     for (const member of Array.isArray(json?.['messages']) ? (json['messages'] as unknown[]) : []) {
       if (typeof member !== 'object' || member === null) continue;
@@ -461,7 +484,7 @@ export function createGmailHttpClient(options: GmailHttpOptions): GmailClient {
     // (`includeSpamTrash`), because a salesperson who deleted an FSS email from Sent did
     // not unsend it, and Appendix E step 3 is looking for sends, not for tidy folders.
     listSentMessageIds: async (access, request: GmailListRequest): Promise<GmailListOutcome> =>
-      await listIds(access, 'in:sent ', request, 'the Gmail Sent folder listing failed'),
+      await listIds(access, 'in:sent ', request, 'the Gmail Sent folder listing failed', true),
 
     getMetadata: async (access, messageId, headers): Promise<GmailMessageMetadata | null> => {
       const response = await api(

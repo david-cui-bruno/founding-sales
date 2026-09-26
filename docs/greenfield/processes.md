@@ -295,10 +295,10 @@ fss schema-version                                 the applied version and both 
 fss verify [--actor <name>] [--note <text>]        version, configured parts, and a rolled-back write
 fss admin database-users ensure [--runtime-secret <VARIABLE>] [--rotate-password]
 fss admin holds list [--reason|--exclude-reason <code>]
-fss admin holds release-restore --admin-user <uuid> --note <text> [--hold <id>]
+fss admin holds release-restore --note <text> [--hold <id> [--resolution <how>]]
 fss admin suppression-journal replay --from <instant> [--to <instant>]
 fss admin mailbox list                             every mailbox, its address and status (read-only)
-fss admin mailbox reconcile-sent --since <instant> --inventory <address>[,<address>...] [--hold-unattached]
+fss admin mailbox reconcile-sent --since <instant> --inventory-host <host> [--hold-unattached]
 fss admin workspace bootstrap --slug <slug> ...    the first workspace and its admin
 fss admin schema-preflight 0019                    the one-off check before migration 0019
 fss admin release-record put --json <file> | --json-base64 <value>
@@ -317,13 +317,18 @@ replica, and each of those is a deployment that looks ready and is not.
 
 **`fss admin mailbox reconcile-sent`** (lane W3-S8) is the Sent-folder step of the
 restore runbook, run with both services stopped against the restored copy.
-- **Which mailboxes.** The operator's `--inventory`: every address that could have sent
-  since the restore point, taken with `fss admin mailbox list` from the instance being
-  replaced. It is never only the copy's own list, which cannot know a mailbox connected
-  after the restore point. An inventory address the copy has no mailbox for is
-  `mailbox_not_in_copy`. A connected mailbox the inventory leaves out is still read, and
-  is `mailbox_not_in_inventory`. A run that read no mailbox is refused as
-  `reconcile_no_coverage`.
+- **Which mailboxes.** The inventory, which the command reads itself from the instance
+  being replaced (`--inventory-host`, with the task's own runtime credential and only the
+  host changed): every mailbox address it has, in any status, and every address its
+  append-only audit trail (`mailbox.connected`) says was ever connected. It is never only
+  the copy's own list, which cannot know a mailbox connected after the restore point, and
+  never a typed one (the second W3-S8 review). It refuses the copy's own host
+  (`inventory_host_is_the_copy`), a host it cannot read, which is the deleted-source case
+  (`inventory_unreadable`), an instance with no mailbox, and one that lacks a mailbox the
+  copy has or its trail records (`inventory_source_incomplete`). An inventory address
+  the copy has no mailbox for is `mailbox_not_in_copy`. A connected mailbox whose address
+  the inventory lacks is still read, and is `mailbox_not_in_inventory`. A run that read no
+  mailbox is refused as `reconcile_no_coverage`.
 - **What it does.** It reconciles every fence left dispatching since `--since` (the
   restore point less ten minutes), a page at a time and never capped. It then lists each
   Sent folder and answers each FSS message with `recoverSentFolderMessage`
@@ -334,20 +339,31 @@ restore runbook, run with both services stopped against the restored copy.
   It refuses a send, a watch, a code exchange, a revocation and a body read. So the
   command runs under `FSS_DEPENDENCIES=live` against real mailboxes.
 - **When it refuses to finish** (exit 20, the report printed):
-  - a folder was not read to the end (`grant_revoked`, `rate_limited`, `truncated`, or
-    `message_vanished` for a message deleted between the listing and its metadata read);
+  - a folder was not read to the end (`grant_revoked`, `rate_limited`, `truncated`,
+    `message_vanished` for a message deleted between the listing and its metadata read, or
+    `malformed_response` for a listing page or metadata read Gmail answered 200 with
+    something that is not one — never read as a page of no messages);
   - a send is unattached. With `--hold-unattached`, each unattached send instead opens a
     `restore_in_progress` hold on the firms it could belong to, or on the workspace when
     it names none. The hold's source is `restore.unattached_send`, keyed by the message's
-    hash, so a rerun opens nothing twice;
+    hash, so a rerun opens nothing twice, and its opening is audited
+    (`hold.restore_opened`) with the enrollments the send could belong to;
   - an inventory item is unresolved.
 
 **`fss admin holds release-restore`** (lane W3-S8) is the only thing that releases a
-`restore_in_progress` hold since the generation advance went. It needs an active admin
-of the hold's workspace (`--admin-user`) and a `--note`. It releases the open restore
-holds, or the one `--hold` names, through `releaseHold`, and writes one `audit_events`
-row (`hold.restore_released`) per hold in the same transaction. It never touches a hold
-of another reason.
+`restore_in_progress` hold since the generation advance went. It is attributed to the
+launcher the task was given (`FSS_LAUNCHED_BY`, which the runbook's `fss_task` takes from
+`aws sts get-caller-identity`) and the task's own ARN from the ECS metadata endpoint, so
+CloudTrail's RunTask event for that task confirms both; it refuses without a principal
+ARN, and inside ECS without the task ARN. It needs a `--note`. Without `--hold` it
+releases the open restore holds from before a restore; a hold `--hold-unattached` opened
+is released only by id, with `--resolution ended-duplicate-enrollment` (checked: one of
+the enrollments recorded when it opened has ended) or `checked-no-duplicate`. Each goes
+through `releaseHold` with the reason in the releasing `UPDATE`, and one `audit_events`
+row (`hold.restore_released`, `actor_kind = 'system'`) per hold in the same transaction.
+A named hold already released answers `already_released`. It never touches a hold of
+another reason. **`fss admin holds list`** refuses a reason that is not a hold reason
+code rather than listing nothing.
 
 **`fss admin release-record put`** (lane g71) stores the `fss.release-record.v1` the
 CI gate wrote (`infra/scripts/record.sh from-ci`; lane W3-S8 deleted the rehearsal's), so an admin's `sending_enabled` attestation can name it. The API
@@ -447,6 +463,8 @@ That is how a one-off task's report reaches the operator.
 | `FSS_RUNTIME_DATABASE_SECRET_ARN` | `database-users ensure` | the runtime credential's secret value, whose `username` and `password` the command creates the login user from. `--runtime-secret` names a different variable |
 | `FSS_DATABASE_HOST` | every command | the host the task definition names (`active_database_host`), or a scratch copy's in the quarterly restore smoke. It replaces the host of a connection assembled from a secret; a `DATABASE_URL` that names a different host is a refusal rather than an override |
 | `FSS_DEPENDENCIES` | `mailbox reconcile-sent` | `live` or `recorded`, or it refuses; the Gmail client is read-only either way |
+| `FSS_LAUNCHED_BY` | `holds release-restore` | the principal ARN of whoever launched the task, which `fss_task` in the restore runbook passes from `aws sts get-caller-identity`; without it the release refuses |
+| `ECS_CONTAINER_METADATA_URI_V4` | `holds release-restore` | set by ECS; the task's ARN is read from it, and an endpoint that does not answer is a refusal |
 | `FSS_JOURNAL_BUCKET`, `AWS_REGION` | `suppression-journal replay` | what the journal is replayed from; without them it refuses rather than replaying nothing |
 
 **`migrate` never uses the runtime credential**, and there is no fallback: the runtime
@@ -458,9 +476,11 @@ outright when the connected role *is* `app_runtime`, before `--allow-any-role` i
 whatever the environment happens to say: `holds list`, `holds release-restore`, `mailbox list`, `workspace bootstrap`,
 `release-record`, `schema-preflight 0019` and `database-users ensure` reach PostgreSQL and
 nothing else — no deployment is read, so they cannot reach Gmail, KMS or S3 in a fully
-configured production task; `suppression-journal replay` reaches the configured journal
+configured production task (`holds release-restore` also reads the task's own ECS
+metadata endpoint for its ARN); `suppression-journal replay` reaches the configured journal
 bucket and nothing else; `mailbox reconcile-sent` reaches Gmail through the read-only
-client and nothing else, so a command line can never send mail.
+client, and the instance `--inventory-host` names with the task's own credential, and
+nothing else, so a command line can never send mail.
 
 It does **not** read `FSS_SCHEMA_MIN`/`FSS_SCHEMA_MAX`: `fss migrate` is the command
 that makes those agree, so requiring them to agree first would make it unusable for its

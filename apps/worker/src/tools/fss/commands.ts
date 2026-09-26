@@ -123,11 +123,11 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
   },
   {
     path: ['admin', 'holds', 'release-restore'],
-    valueFlags: ['--admin-user', '--note', '--hold', ...REPORTABLE],
+    valueFlags: ['--note', '--hold', '--resolution', ...REPORTABLE],
     booleanFlags: [],
-    requiredFlags: ['--admin-user', '--note'],
+    requiredFlags: ['--note'],
     summary:
-      'release the open restore_in_progress holds (or the one --hold names), attributed to an active admin, with an audit row each',
+      'release restore_in_progress holds from before (or the one --hold names; an unattached-send hold needs --resolution), attributed to the verified launcher, with an audit row each',
   },
   {
     path: ['admin', 'suppression-journal', 'replay'],
@@ -144,16 +144,16 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     summary: 'every mailbox, its address and its status (read-only; the restore runbook reads its inventory from it)',
   },
   {
-    // Lane W3-S8 review: the mailboxes come from the operator's inventory, never from
-    // the restored copy alone, which cannot know a mailbox connected after the restore
-    // point. There is no --all-mailboxes: "every mailbox the copy knows" is exactly the
-    // selection that can miss one.
+    // Lane W3-S8 reviews: the mailboxes are every one the instance being replaced has,
+    // read by the command from --inventory-host, never the restored copy's alone (which
+    // cannot know a mailbox connected after the restore point) and never a list somebody
+    // typed. There is no --all-mailboxes and no --inventory.
     path: ['admin', 'mailbox', 'reconcile-sent'],
-    valueFlags: ['--since', '--inventory', ...REPORTABLE],
+    valueFlags: ['--since', '--inventory-host', ...REPORTABLE],
     booleanFlags: ['--hold-unattached'],
-    requiredFlags: ['--since', '--inventory'],
+    requiredFlags: ['--since', '--inventory-host'],
     summary:
-      'after a point-in-time restore: read the Sent folder of every inventory mailbox (read-only Gmail) and record the sends the restored copy lost; refuses while anything could let a send repeat',
+      'after a point-in-time restore: read the Sent folder of every mailbox the replaced instance has (read-only Gmail) and record the sends the restored copy lost; refuses while anything could let a send repeat',
   },
   {
     path: ['admin', 'workspace', 'bootstrap'],

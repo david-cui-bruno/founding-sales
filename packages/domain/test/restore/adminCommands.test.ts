@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import { repositoryContext, workspaceScope } from '../../db/workspaceScope.ts';
 import type { SessionQueryable } from '../../db/queryable.ts';
-import { listHoldsByReason, openHold } from '../../policy/holds.ts';
+import { listHoldsByReason, openHold, releaseHold } from '../../policy/holds.ts';
 import { ALL_BLOCKED_ACTION_KINDS } from '../../policy/types.ts';
 import { deterministicEventId } from '../../suppression/journal.ts';
 import { parseSuppressionJournalRecord, replaySuppressionJournal } from '../../suppression/replay.ts';
@@ -95,6 +95,28 @@ describe('fss admin holds list', () => {
     // The scoped read the release path uses answers only for its own workspace.
     expect(await listHoldsByReason(alpha, { reason: 'scoped_pause' })).toHaveLength(0);
     expect(await listHoldsByReason(beta, { reason: 'scoped_pause' })).toHaveLength(1);
+  });
+});
+
+describe('releaseHold with a reason (holds release-restore; lane W3-S8 review)', () => {
+  it('releases only a hold that still has that reason, in the UPDATE itself', async () => {
+    const alpha = repositoryContext(workspaceScope(world.workspaces.alpha.workspaceId, MIGRATION_SCOPE), world.session);
+    const hold = await openHold(alpha, {
+      scopeKind: 'workspace',
+      reasonCode: 'long_hold_review',
+      blockedActionKinds: ALL_BLOCKED_ACTION_KINDS,
+      sourceEventKind: 'test.reason_guard',
+    });
+    // Read as a restore hold a moment ago, changed since: not released.
+    expect(await releaseHold(alpha, hold, 'restore_in_progress')).toBeNull();
+    const open = await world.session.query<{ released_at: Date | null }>(
+      'SELECT released_at FROM active_holds WHERE workspace_id = $1 AND id = $2',
+      [world.workspaces.alpha.workspaceId, hold],
+    );
+    expect(open.rows[0]?.released_at).toBeNull();
+    // With its own reason, or none, it is released once.
+    expect(await releaseHold(alpha, hold, 'long_hold_review')).toMatchObject({ id: hold });
+    expect(await releaseHold(alpha, hold)).toBeNull();
   });
 });
 

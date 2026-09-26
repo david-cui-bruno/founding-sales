@@ -215,14 +215,24 @@ export async function releaseHoldsOfEvent(
   }));
 }
 
-/** Release one hold by id. Used by the pause release, which knows exactly which one. */
-export async function releaseHold(context: RepositoryContext, holdId: string): Promise<ReleasedHold | null> {
+/**
+ * Release one hold by id. Used by the pause release, which knows exactly which one.
+ *
+ * `reason`, when given, is part of the release itself (lane W3-S8 review): a hold whose
+ * reason is not that one is not released, whatever the caller read a moment before.
+ */
+export async function releaseHold(
+  context: RepositoryContext,
+  holdId: string,
+  reason?: HoldReasonCode,
+): Promise<ReleasedHold | null> {
   const { rows } = await context.db.query<{ id: string; started_at: Date; released_at: Date }>(
     `UPDATE active_holds
         SET released_at = now()
       WHERE workspace_id = $1 AND id = $2 AND released_at IS NULL
+        AND ($3::text IS NULL OR reason_code = $3)
       RETURNING id, started_at, released_at`,
-    [context.scope.workspaceId, holdId],
+    [context.scope.workspaceId, holdId, reason ?? null],
   );
   const row = rows[0];
   return row === null || row === undefined
