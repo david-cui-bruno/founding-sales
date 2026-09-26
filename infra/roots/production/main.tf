@@ -71,6 +71,9 @@ module "stack" {
   database_performance_insights_enabled = var.database_performance_insights_enabled
   database_apply_immediately            = false
 
+  # A deleted production database keeps its automated backups for their 35 days.
+  database_delete_automated_backups = false
+
   api_image           = var.api_image
   worker_image        = var.worker_image
   api_schema_range    = var.api_schema_range

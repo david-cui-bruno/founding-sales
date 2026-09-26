@@ -120,6 +120,12 @@ variable "skip_final_snapshot" {
   default     = false
 }
 
+variable "delete_automated_backups" {
+  description = "Delete the instance's automated backups when it is deleted, rather than keep them for their retention period. Only a destroyable rehearsal root may set true."
+  type        = bool
+  default     = false
+}
+
 variable "performance_insights_enabled" {
   description = "Performance Insights. Optional and priced per vCPU beyond the free retention."
   type        = bool

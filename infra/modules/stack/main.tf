@@ -189,6 +189,7 @@ module "database" {
   allocated_storage            = var.database_allocated_storage
   max_allocated_storage        = var.database_max_allocated_storage
   backup_retention_days        = var.database_backup_retention_days
+  delete_automated_backups     = var.database_delete_automated_backups
   performance_insights_enabled = var.database_performance_insights_enabled
   log_min_duration_statement   = var.database_log_min_duration_statement
   apply_immediately            = var.database_apply_immediately

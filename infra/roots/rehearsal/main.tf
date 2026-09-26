@@ -53,6 +53,11 @@ module "stack" {
   database_performance_insights_enabled = false
   database_apply_immediately            = true
 
+  # The teardown deletes the database, and nothing of it may outlive the run: a
+  # retained automated backup (20 GB each, nine by 26 September 2026) is what
+  # the prefix guard of run 36209569741 found left behind.
+  database_delete_automated_backups = true
+
   api_image           = var.api_image
   worker_image        = var.worker_image
   api_schema_range    = var.api_schema_range

@@ -298,6 +298,11 @@ run "the_topology_answers_are_the_rehearsal_defaults_at_one_plus_one" {
     && module.stack.database_shape.monitoring_interval == 0)
     error_message = "Performance Insights and Enhanced Monitoring stay off."
   }
+
+  assert {
+    condition     = module.stack.database_shape.delete_automated_backups
+    error_message = "The teardown deletes the database's automated backups with it; a retained one is a leftover (run 36209569741)."
+  }
 }
 
 # The same root with the bootstrap off. Without this run the assertions above would be

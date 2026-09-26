@@ -264,6 +264,11 @@ run "the_topology_answers_are_the_production_defaults" {
   }
 
   assert {
+    condition     = module.stack.database_shape.delete_automated_backups == false
+    error_message = "A deleted production database keeps its automated backups for their 35 days."
+  }
+
+  assert {
     condition     = module.stack.container_insights == "disabled"
     error_message = "Container Insights stays off."
   }
