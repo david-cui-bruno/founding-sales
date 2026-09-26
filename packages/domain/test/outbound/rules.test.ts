@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  RAMP_ADMIN_RAISE_LIMIT,
   RAMP_HARD_CEILING,
   RAMP_RAISE_HEALTHY_STREAK,
   RAMP_SETTLED_CAP,
@@ -9,7 +8,6 @@ import {
   deterministicMessageId,
   effectiveDailyCap,
   fenceIdOfMessageId,
-  raiseAllowance,
   raiseRefusal,
   rampHealthFailure,
   reconcileBackoffSeconds,
@@ -62,29 +60,18 @@ describe('the reputation ramp (12.7)', () => {
     expect(effectiveDailyCap(ramp({ healthySendingDays: 0, adminDailyCap: 90 }))).toBe(5);
   });
 
-  it('lets an earned raise replace the schedule, and the minimum still wins', () => {
+  it('lets a raise replace the schedule as written, and the minimum still wins (wave 2, S4.6)', () => {
     const settled = { healthySendingDays: 40, raisedDailyCap: 75 };
-    expect(effectiveDailyCap(ramp(settled), RAMP_RAISE_HEALTHY_STREAK)).toBe(75);
+    expect(effectiveDailyCap(ramp(settled))).toBe(75);
     // An admin who raised last month and lowers today means today.
-    expect(effectiveDailyCap(ramp({ ...settled, adminDailyCap: 10 }), RAMP_RAISE_HEALTHY_STREAK)).toBe(10);
-  });
-
-  it('S06: a stored raise never lifts a mailbox above what the schedule allows it that day', () => {
-    // The bypass, as the audit found it: a raise to 75 on a mailbox's first day.
-    // Whatever the column says, day zero is five.
-    expect(effectiveDailyCap(ramp({ healthySendingDays: 0, raisedDailyCap: 75 }))).toBe(5);
-    expect(effectiveDailyCap(ramp({ healthySendingDays: 0, raisedDailyCap: 75 }), RAMP_RAISE_HEALTHY_STREAK)).toBe(5);
-    // One day short of settling is still the schedule's thirty-five.
-    expect(effectiveDailyCap(ramp({ healthySendingDays: RAMP_SETTLED_DAY - 1, raisedDailyCap: 75 }), 30)).toBe(35);
-    // Settled, but the last sending days were not all healthy: the schedule's fifty.
-    expect(
-      effectiveDailyCap(ramp({ healthySendingDays: 40, raisedDailyCap: 75 }), RAMP_RAISE_HEALTHY_STREAK - 1),
-    ).toBe(RAMP_SETTLED_CAP);
+    expect(effectiveDailyCap(ramp({ ...settled, adminDailyCap: 10 }))).toBe(10);
+    // The raise lock is an override now: a raise on day zero is the admin's decision.
+    expect(effectiveDailyCap(ramp({ healthySendingDays: 0, raisedDailyCap: 75 }))).toBe(75);
     // A "raise" below the schedule is the admin's choice and is honoured as written.
-    expect(effectiveDailyCap(ramp({ healthySendingDays: 12, raisedDailyCap: 10 }), 0)).toBe(10);
+    expect(effectiveDailyCap(ramp({ healthySendingDays: 12, raisedDailyCap: 10 }))).toBe(10);
   });
 
-  it('S06: names the part of the sustained-health rule a raise has not met', () => {
+  it('names the part of the sustained-health rule a raise has not met, which the override answers as a warning', () => {
     expect(RAMP_SETTLED_DAY).toBe(30);
     expect(scheduledCap(RAMP_SETTLED_DAY)).toBe(RAMP_SETTLED_CAP);
     expect(raiseRefusal({ healthySendingDays: 0 }, RAMP_RAISE_HEALTHY_STREAK)).toBe('ramp_not_settled');
@@ -93,16 +80,11 @@ describe('the reputation ramp (12.7)', () => {
       'health_not_sustained',
     );
     expect(raiseRefusal({ healthySendingDays: RAMP_SETTLED_DAY }, RAMP_RAISE_HEALTHY_STREAK)).toBeNull();
-    expect(raiseAllowance({ healthySendingDays: 12 }, 0)).toBe(15);
-    expect(raiseAllowance({ healthySendingDays: 40 }, RAMP_RAISE_HEALTHY_STREAK)).toBe(RAMP_ADMIN_RAISE_LIMIT);
   });
 
-  it('never exceeds 12.7’s hard ceiling, whatever the columns say', () => {
-    // The column's CHECK allows 100; the command allows 75; the cap in force is 75.
-    expect(
-      effectiveDailyCap(ramp({ healthySendingDays: 40, raisedDailyCap: RAMP_HARD_CEILING }), RAMP_RAISE_HEALTHY_STREAK),
-    ).toBe(RAMP_ADMIN_RAISE_LIMIT);
-    expect(RAMP_ADMIN_RAISE_LIMIT).toBeLessThan(RAMP_HARD_CEILING);
+  it('never exceeds 12.7’s hard ceiling of 100, whatever the columns say', () => {
+    expect(effectiveDailyCap(ramp({ healthySendingDays: 40, raisedDailyCap: RAMP_HARD_CEILING }))).toBe(RAMP_HARD_CEILING);
+    expect(effectiveDailyCap(ramp({ healthySendingDays: 40, raisedDailyCap: 250 }))).toBe(RAMP_HARD_CEILING);
   });
 
   it('advances only on 12.7’s health conditions, and names the one that failed', () => {

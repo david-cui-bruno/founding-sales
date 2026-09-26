@@ -32,23 +32,21 @@ import {
  * CHECK on the column, because 12.7 calls it "a hard automated ceiling" and version
  * one should not be able to exceed it by any path at all.
  *
- * **A raise is earned, and it stays earned or it stops counting** (lane g87, audit
- * S06). Before g87 the command accepted `raiseTo: 75` for a mailbox on its first day
- * and `effectiveDailyCap` let it replace the schedule, so the whole ramp was one admin
- * click deep. Now the "sustained healthy results" clause is a rule with two parts,
- * `raiseRefusal`:
+ * **A raise is the admin's decision, with a warning** (wave 2, S4.6). The "sustained
+ * healthy results" clause is still a rule with two parts, `raiseRefusal`:
  *
  *   * the mailbox has finished the schedule — `RAMP_SETTLED_DAY` (30) healthy sending
- *     days, "After six healthy weeks" — refused as `ramp_not_settled` otherwise;
+ *     days, "After six healthy weeks" — `ramp_not_settled` otherwise;
  *   * its last `RAMP_RAISE_HEALTHY_STREAK` (10) closed sending days were all healthy,
- *     with no unhealthy one between them — refused as `health_not_sustained`.
+ *     with no unhealthy one between them — `health_not_sustained`.
  *
- * `setAdminCap` refuses a raise that fails either part. And because a raise is stored
- * and health is not, the gate asks the same question again before every send
- * (`dailyCapInForce`): a stored raise lifts the day's cap only while the rule holds,
- * and otherwise the schedule governs that day. So no path — a raise recorded before
- * this rule, a late bounce that took back the thirtieth day, a bad fortnight after the
- * raise — lets a raise put a mailbox above what the schedule allows it that day.
+ * `overrideRaise` (`POST /outbound/cap/override`) sets any raise up to the hard ceiling
+ * and answers the part of the rule not met as a warning rather than a refusal: it is the
+ * founder's own mailbox and his own risk. `setAdminCap` (`POST /outbound/cap`, desktop
+ * 1.0.11) still refuses an unearned raise and one above 75, exactly as before. A stored
+ * raise is honoured as written at every send — the per-send re-judgement of lane g87 is
+ * gone with the lock — and the daily cap itself is checked exactly as before: the gate
+ * refuses the send that would pass it.
  *
  * When both are set the minimum wins. An admin who raised a mailbox last month and
  * lowers it during an incident today means the incident.
@@ -135,34 +133,13 @@ export function raiseRefusal(
 }
 
 /**
- * The most a stored raise may set the day's cap to: 75 once the raise is earned, and
- * the schedule's own cap for the day until then. "Never above the schedule's
- * allowance for that day" is this function.
+ * The cap in force for one mailbox today: the schedule, or the admin's raise in its
+ * place, then the admin's lowering, then the hard ceiling of 100, in that order. A raise
+ * is honoured as written (wave 2, S4.6); whether it was earned is `raiseRefusal`'s
+ * warning, not a bound on the cap.
  */
-export function raiseAllowance(ramp: Pick<RampRow, 'healthySendingDays'>, healthyStreak: number): number {
-  return raiseRefusal(ramp, healthyStreak) === null
-    ? RAMP_ADMIN_RAISE_LIMIT
-    : scheduledCap(ramp.healthySendingDays);
-}
-
-/**
- * The cap in force for one mailbox today: the schedule, the admin raise (bounded by
- * what the day allows it), the admin lowering, and the hard ceiling, in that order.
- *
- * `healthyStreak` is what the raise is judged on. The gate and the admin surfaces pass
- * it (`dailyCapInForce`, `setAdminCap`, `readRampStanding`); a display that cannot
- * read it may leave it out, and then only the first part of the rule — the settled
- * schedule — bounds the raise. Nothing that decides a send leaves it out.
- */
-export function effectiveDailyCap(ramp: RampRow, healthyStreak?: number): number {
-  const scheduled = scheduledCap(ramp.healthySendingDays);
-  const allowance =
-    healthyStreak === undefined
-      ? ramp.healthySendingDays >= RAMP_SETTLED_DAY
-        ? RAMP_ADMIN_RAISE_LIMIT
-        : scheduled
-      : raiseAllowance(ramp, healthyStreak);
-  const base = ramp.raisedDailyCap === null ? scheduled : Math.min(ramp.raisedDailyCap, allowance);
+export function effectiveDailyCap(ramp: RampRow): number {
+  const base = ramp.raisedDailyCap ?? scheduledCap(ramp.healthySendingDays);
   const lowered = ramp.adminDailyCap === null ? base : Math.min(base, ramp.adminDailyCap);
   return Math.max(Math.min(lowered, RAMP_HARD_CEILING), 0);
 }
@@ -198,24 +175,15 @@ export async function readHealthyStreak(
   return streak;
 }
 
-/**
- * The cap the gate enforces for this mailbox now: `effectiveDailyCap`, with the raise
- * judged on the mailbox's health as it stands (lane g87, S06).
- *
- * The streak is read only when there is a raise to judge, so a mailbox on the plain
- * schedule costs the send path nothing extra.
- */
-export async function dailyCapInForce(context: RepositoryContext, ramp: RampRow): Promise<number> {
-  if (ramp.raisedDailyCap === null) return effectiveDailyCap(ramp, 0);
-  return effectiveDailyCap(ramp, await readHealthyStreak(context, ramp.mailboxId));
-}
-
 /** One mailbox's ramp as an admin sees it: the row, the streak and the cap in force. */
 export interface RampStanding {
   readonly ramp: RampRow;
   readonly healthyStreak: number;
   readonly effectiveCap: number;
-  /** Why a raise would be refused today, or null when one would be accepted. */
+  /**
+   * Why a raise is not earned today, or null when it is: `POST /outbound/cap` refuses
+   * for it, and `POST /outbound/cap/override` answers it as a warning.
+   */
   readonly raiseRefusal: RaiseRefusal | null;
 }
 
@@ -229,7 +197,7 @@ export async function readRampStanding(
   return {
     ramp,
     healthyStreak,
-    effectiveCap: effectiveDailyCap(ramp, healthyStreak),
+    effectiveCap: effectiveDailyCap(ramp),
     raiseRefusal: raiseRefusal(ramp, healthyStreak),
   };
 }
@@ -489,9 +457,8 @@ export async function setAdminCap(
   if (lockedRow === undefined) return { ok: false, reason: 'mailbox_unknown' };
   const current = toRamp(lockedRow);
 
-  const healthyStreak = await readHealthyStreak(context, input.mailboxId);
   if (raiseTo !== null) {
-    const refusal = raiseRefusal(current, healthyStreak);
+    const refusal = raiseRefusal(current, await readHealthyStreak(context, input.mailboxId));
     if (refusal !== null) return { ok: false, reason: refusal };
   }
 
@@ -513,7 +480,58 @@ export async function setAdminCap(
   const row = rows[0];
   if (row === undefined) return { ok: false, reason: 'mailbox_unknown' };
   const ramp = toRamp(row);
-  return { ok: true, ramp, effectiveCap: effectiveDailyCap(ramp, healthyStreak) };
+  return { ok: true, ramp, effectiveCap: effectiveDailyCap(ramp) };
+}
+
+export type OverrideRaiseOutcome =
+  | {
+      readonly ok: true;
+      readonly ramp: RampRow;
+      readonly effectiveCap: number;
+      /** The part of the earned-raise rule the mailbox has not met, or null. Never a refusal. */
+      readonly warning: RaiseRefusal | null;
+    }
+  | { readonly ok: false; readonly reason: 'cap_out_of_range' | 'mailbox_unknown' };
+
+/**
+ * The admin's override of the raise lock (wave 2, S4.6): set the mailbox's raised cap to
+ * any number from 1 to the hard ceiling of 100, or clear it with null, whatever the
+ * mailbox's health — and say so. The answer carries `warning`, the part of the earned
+ * raise rule not met (`ramp_not_settled`, `health_not_sustained`), for the Mac to show
+ * beside the new cap. The admin's lowering is left as it is; the ceiling stays a CHECK
+ * on the column; the daily cap is enforced by the gate at every send exactly as before.
+ */
+export async function overrideRaise(
+  context: RepositoryContext,
+  input: { readonly mailboxId: string; readonly adminUserId: string; readonly raiseTo: number | null },
+): Promise<OverrideRaiseOutcome> {
+  const raiseTo = input.raiseTo;
+  if (raiseTo !== null && (!Number.isInteger(raiseTo) || raiseTo < 1 || raiseTo > RAMP_HARD_CEILING)) {
+    return { ok: false, reason: 'cap_out_of_range' };
+  }
+  const { rows: mailbox } = await context.db.query<{ id: string }>(
+    'SELECT id FROM mailboxes WHERE workspace_id = $1 AND id = $2',
+    [context.scope.workspaceId, input.mailboxId],
+  );
+  if (mailbox[0] === undefined) return { ok: false, reason: 'mailbox_unknown' };
+  await ensureRamp(context, input.mailboxId);
+
+  const { rows } = await context.db.query<RampDbRow>(
+    `UPDATE mailbox_send_ramp
+        SET raised_daily_cap = $3,
+            admin_changed_at = CASE WHEN $3::integer IS NULL AND admin_daily_cap IS NULL THEN NULL ELSE now() END,
+            admin_changed_by_user_id = CASE WHEN $3::integer IS NULL AND admin_daily_cap IS NULL
+                                            THEN NULL ELSE $4::uuid END,
+            updated_at = now()
+      WHERE workspace_id = $1 AND mailbox_id = $2
+      RETURNING ${RAMP_COLUMNS}`,
+    [context.scope.workspaceId, input.mailboxId, raiseTo, input.adminUserId],
+  );
+  const row = rows[0];
+  if (row === undefined) return { ok: false, reason: 'mailbox_unknown' };
+  const ramp = toRamp(row);
+  const warning = raiseTo === null ? null : raiseRefusal(ramp, await readHealthyStreak(context, input.mailboxId));
+  return { ok: true, ramp, effectiveCap: effectiveDailyCap(ramp), warning };
 }
 
 export interface SendDayRow {

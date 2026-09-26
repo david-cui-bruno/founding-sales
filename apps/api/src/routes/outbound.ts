@@ -1,7 +1,9 @@
 import { z } from 'zod';
+import { overrideMailboxRaiseCommandSchema } from '@fss/contracts';
 import {
   authenticationPasses,
   outboundDoubtCounts,
+  overrideRaise,
   readFence,
   readFenceEvents,
   readPrimarySendingDomain,
@@ -35,8 +37,11 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  *     results they may raise a mailbox to 75". The raise is refused, with the part of
  *     the rule not met, unless the mailbox has finished the schedule
  *     (`ramp_not_settled`) and kept its last ten closed sending days healthy
- *     (`health_not_sustained`) — lane g87, audit S06. The refusal is the command's
- *     409 `reason`, like every other;
+ *     (`health_not_sustained`) — lane g87, audit S06. Unchanged for desktop 1.0.11;
+ *   * `/outbound/cap/override` — wave 2 (S4.6): the admin raises a mailbox to any cap up
+ *     to the ceiling of 100, or clears the raise, earned or not, and the answer's
+ *     `warning` names the part of the rule not met. The daily cap is still enforced at
+ *     every send;
  *   * `/outbound/domain` — registers a sending domain (lane g57), so a workspace whose
  *     mailbox connected before the connect path registered one has somewhere to
  *     record the checklist. Idempotent: an existing row comes back unchanged, and the
@@ -61,6 +66,7 @@ export const OUTBOUND_PATHS: readonly string[] = [
   '/outbound/resolve',
   '/outbound/authentication',
   '/outbound/cap',
+  '/outbound/cap/override',
   '/outbound/domain',
   '/outbound/status',
 ];
@@ -211,6 +217,27 @@ export async function routeOutbound(request: ApiRequest, options: RoutingOptions
     });
   }
 
+  if (request.path === '/outbound/cap/override') {
+    return await runMailCommand(deps, overrideMailboxRaiseCommandSchema, 'override_mailbox_raise', async (context, body) => {
+      const outcome = await overrideRaise(context, {
+        mailboxId: body.mailboxId,
+        adminUserId: deps.principal.userId,
+        raiseTo: body.raiseTo,
+      });
+      if (!outcome.ok) return { ok: false, reason: outcome.reason };
+      return {
+        ok: true,
+        value: {
+          mailboxId: body.mailboxId,
+          effectiveCap: outcome.effectiveCap,
+          raisedDailyCap: outcome.ramp.raisedDailyCap,
+          healthySendingDays: outcome.ramp.healthySendingDays,
+          warning: outcome.warning,
+        },
+      };
+    });
+  }
+
   if (request.path === '/outbound/domain') {
     return await runMailCommand(deps, domainCommandSchema, 'register_sending_domain', async (context, body) => {
       const registered = await registerSendingDomain(context, { domain: body.domain, registeredBy: 'admin' });
@@ -238,8 +265,7 @@ export async function routeOutbound(request: ApiRequest, options: RoutingOptions
   const domain = await readPrimarySendingDomain(context);
   const doubt = await outboundDoubtCounts(context.db);
 
-  // The cap in force, with a stored raise judged on the mailbox's health as it stands
-  // (lane g87) — the number the gate enforces, not the column an admin once wrote.
+  // The cap in force — the number the gate enforces — and the ramp's columns.
   const standing =
     parsed.data.mailboxId === undefined ? null : await readRampStanding(context, parsed.data.mailboxId);
   const fence =
