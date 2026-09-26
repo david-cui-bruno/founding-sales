@@ -149,8 +149,10 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     // The Gmail surface. Exact paths again, and two of them are not ours to choose: `/oauth/gmail/callback` is the redirect URI registered in
     // Google's console, and `/integrations/gmail/push` is both the Pub/Sub push
     // endpoint and the OIDC audience the subscription mints its token for
-    // (`infra/modules/stack`, `gmail_push_path`). Renaming either without the other
-    // is a consent screen that errors or a webhook that refuses everything.
+    // (`local.push_endpoint` in `infra/roots/production-google`, `local.push_audience`
+    // in `infra/roots/production`, which must be the same string). Renaming either
+    // without the other is a consent screen that errors or a webhook that refuses
+    // everything.
     moduleOf('gmail', { paths: GMAIL_PATHS }, routeGmail, routing),
     moduleOf('gmail-push', { paths: PUBSUB_PATHS }, routePubSub, routing),
     moduleOf('messages', { paths: MESSAGE_PATHS }, routeMessages, routing),

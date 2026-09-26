@@ -44,7 +44,10 @@ docs/greenfield/runbooks/*.md                      one page per alarm
 production sending attestation. The alarm thresholds and the supported client-version
 range were retired on 26 September 2026 (lane W1-C): the alarms read Terraform's values
 and the API's client-version policy is code, so neither slice was read by anything.
-Their rows stay allowed by the database until migration 0019.
+Migration 0019 deleted every row of both, superseded versions included, and narrowed
+`workspace_settings_key_known` to the two above. Both keys stay in the contract as
+`RETIRED_SETTING_KEYS`, so the wire vocabulary still parses one; a command or a history
+request that names one is refused.
 
 It held a fifth, `postal_footer`, until 22 September 2026. David decided that an
 automated email carries no postal address, so there is nothing to configure: the key
@@ -255,9 +258,11 @@ See `docs/archive/decisions/g9-two-slices-that-belong-to-other-lanes.md`.
 
 **The reference is bound to the release record (lane g71).** `releaseGateReference`
 was once any nonempty string. Now it has to name a row of `release_records` (migration
-0017), which `fss admin release-record put` stores from the rehearsal's
-`release-record.json`. The rule is checked twice, and each process compares its own
-half of the record:
+0017), which `fss admin release-record put` stores from the record `infra/scripts/record.sh
+from-ci` built out of the green CI gate run of the deployed commit. Production binds
+`ci-gate` records alone (PR 279): a rehearsal record stored before W3-S8 binds only under
+its own reference and only outside production, and no new one is accepted. The rule is
+checked twice, and each process compares its own half of the record:
 
 * **Saving** `sending_enabled` with `enabled: true` (`updateSetting`, in the command's
   transaction) is refused unless the record exists, its suite is `pass`, and its

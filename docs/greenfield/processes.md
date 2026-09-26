@@ -200,16 +200,15 @@ startup line names every decision and no credential.
 | `FSS_SCHEDULER_INTERVAL_MS`, `FSS_METRICS_INTERVAL_MS`, `FSS_RUNNER_IDLE_MS`, `FSS_DRAIN_TIMEOUT_MS` | worker | the cadences. Defaults are the specification's. |
 | `FSS_WORKER_LIVENESS_FILE`, `FSS_LIVENESS_FAILURES` | worker | the health-check file and how many consecutive failures remove it. |
 | `PORT`, `FSS_HTTP_PORT` | api | the listening port. Default 8080. |
-| `FSS_DESKTOP_UPGRADE_URL` | api | the `upgradeUrl` `/auth/client-version` publishes (lane g86): in production the signed update manifest, from the root's `desktop_upgrade_url`. Unset elsewhere is the `callie.example` placeholder; unset in production is a refusal to start. |
+| `FSS_DESKTOP_UPGRADE_URL` | api | the `upgradeUrl` `/auth/client-version` publishes (lane g86): in production the signed update manifest, a committed literal in `infra/roots/production/main.tf` and set on the API task definition alone. Unset elsewhere is the `callie.example` placeholder; unset in production is a refusal to start. |
 | `FSS_API_HEARTBEAT_MS`, `FSS_API_SHUTDOWN_TIMEOUT_MS` | api | the heartbeat cadence and the drain budget. |
-| `FSS_ENVIRONMENT`, `FSS_DEPENDENCIES` | ✓ | the deployment switch. `production` refuses anything but `live`, and refuses the switch being unset (`docs/archive/decisions/g12-the-credentialed-bootstrap.md`). |
+| `FSS_ENVIRONMENT`, `FSS_DEPENDENCIES` | ✓ | the deployment switch. `production` refuses anything but `live`, and refuses the switch being unset (`docs/archive/decisions/g12-the-credentialed-bootstrap.md`). `FSS_DEPENDENCIES` is a committed `"live"` in `infra/modules/stack/main.tf`, not a root variable. |
 | `FSS_PUBLIC_ORIGIN` | ✓ | the API's own origin. Both OAuth redirect URIs are derived from it rather than configured twice. |
 | `FSS_JOURNAL_BUCKET`, `FSS_ENVELOPE_KEY_ID` | ✓ | the suppression journal and the refresh-token envelope key. A live process without the bucket refuses (10.2). |
 | `FSS_GMAIL_PUSH_AUDIENCE`, `FSS_GMAIL_PUSH_SERVICE_ACCOUNT` | ✓ | the two claims the webhook checks exactly (Appendix G 27). |
 | `FSS_GMAIL_PUSH_TOPIC` | ✓ | the Pub/Sub topic `users.watch` registers against. In production from the root's `module.pubsub`; the rehearsal carries a placeholder identifier because its Gmail is recorded and it has no Google project (`docs/archive/decisions/g12j-the-rehearsal-has-no-google-provider.md`). |
-| `FSS_GOOGLE_HOSTED_DOMAIN` | ✓ | the Callie Workspace domain. Restricts `hd` at sign-in (5.1) and which mailbox may connect (12.1). |
-| `FSS_SENDING_ENABLED` | ✓ | 16.2's deployment half. False unless the value is exactly `true`; anything else is a refusal, never a send. |
-| `FSS_RESEARCH_PROVIDERS` | worker | Ignored since the research feature was deleted (26 September 2026). Terraform still sets it to `none` until a later infrastructure release removes it. |
+| `FSS_GOOGLE_HOSTED_DOMAIN` | ✓ | the Callie Workspace domain, a committed `"usecallie.com"` in `infra/modules/stack/main.tf`. Restricts `hd` at sign-in (5.1) and which mailbox may connect (12.1). |
+| `FSS_SENDING_ENABLED` | ✓ | 16.2's deployment half, from the committed `sending_enabled` literal in `infra/roots/production/main.tf`. False unless the value is exactly `true`; anything else is a refusal, never a send. |
 
 The last two rows of Google configuration are the ones that moved: `FSS_GMAIL_PUSH_TOPIC`
 and `FSS_GOOGLE_HOSTED_DOMAIN` used to travel inside the operator-written
@@ -224,9 +223,8 @@ Each task definition carries only the secrets its own process reads (lane g81,
 `google-gmail-oauth-client` and, in production only, the classifier key; the operations
 task `google-gmail-oauth-client`. Each arrives under its logical Secrets
 Manager name except the classifier key, which arrives as `FSS_LLM_CLASSIFIER_API_KEY`,
-the name the classifier reads. `research-provider-credentials` reaches no process,
-because none reads it; the empty entry goes with a later infrastructure release. None is ever logged; the startup line reports whether each is
-configured.
+the name the classifier reads. None is ever logged; the startup line reports whether each
+is configured.
 
 ## Metrics, and what is not published
 

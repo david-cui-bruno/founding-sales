@@ -1,10 +1,11 @@
 # syntax=docker/dockerfile:1
 # The FSS worker image (specification 4.1, 13; lane G5b).
 #
-# linux/arm64: David chose ARM64 Fargate, and `infra/modules/cluster` passes
-# `cpu_architecture` into the task definition's `runtime_platform`. An x86 image
-# on an ARM64 task definition fails to start with an exec format error, so the
-# platform is pinned here rather than left to the builder's host.
+# linux/arm64: David chose ARM64 Fargate, and every task definition in
+# `infra/modules/cluster` declares `cpu_architecture = "ARM64"` in its
+# `runtime_platform` as a literal. An x86 image on an ARM64 task definition fails
+# to start with an exec format error, so the platform is pinned here rather than
+# left to the builder's host.
 #
 # There is no build step. The greenfield tree is TypeScript that Node runs
 # directly; `--experimental-transform-types` is required rather than plain

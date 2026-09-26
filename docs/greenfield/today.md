@@ -38,8 +38,8 @@ apps/desktop/src/renderer/today*.ts           the lanes: contract, view model, d
 apps/desktop/src/renderer/home*.ts            Home, the main window that shows them (lane g65)
 apps/desktop/src/main/todayBridge.ts          the main-process half of its bridge
 apps/desktop/src/main/telHandoff.ts           the tel: driver and the two dial commands
-apps/desktop/src/main/crmBridge.ts            G3b's CRM windows, wired
-apps/desktop/src/main/todayWindow.ts          the other windows and their channels; the menu is windowMenu.ts
+apps/desktop/src/main/crmBridge.ts            G3b's CRM views, wired
+apps/desktop/src/main/todayWindow.ts          the Today and CRM channels; the menu is windowMenu.ts
 ```
 
 ## The five rules a reader should carry
@@ -194,9 +194,10 @@ same string, and a test compares them.
 
 ## The Mac
 
-Three windows now: G2's sign-in and device page, G3b's CRM windows, and this lane's
-Today page. Three renderer entry points, one preload script that installs all three
-bridges, and one main process that answers their channels.
+One window since wave 1, with one renderer entry point, one preload script that installs
+every bridge, and one main process that answers their channels. Sign-in, the device page,
+G3b's CRM screens and this lane's Today page are views in it; nothing opens a second
+window.
 
 **Since lane g65 there is no Today window.** The lanes are the main window's signed-in
 screen, Home, beside a status sidebar, the last seven days and a Needs-you list
@@ -267,9 +268,10 @@ renderer code:
   `/opportunities/stage` and `/merges/firms`;
 * `apps/desktop/src/preload/preload.ts` — `callieCrm` and `callieToday` beside G2's
   `callie`;
-* `apps/desktop/src/main/todayWindow.ts` — both windows, their IPC registration, and
-  the application-menu items that open them (a menu rather than a button, because this
-  lane does not own `renderer.ts`);
+* `apps/desktop/src/main/todayWindow.ts` — the Today and CRM bridges' IPC registration.
+  Each of these once fed a window of its own; since wave 1 they feed views of the one
+  window and nothing here opens a window. The Window menu is `windowMenu.ts`, which brings
+  that window forward and shows one view in it;
 * `apps/desktop/scripts/bundle.ts` — the two new renderer entry points and their HTML,
   so a packaged build contains them;
 * `apps/desktop/src/main/sessionManager.ts` — one method, `accessToken()`, which goes

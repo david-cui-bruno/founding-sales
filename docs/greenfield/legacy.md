@@ -57,7 +57,8 @@ and the `secrets` job, `npm run verify:secrets` over the full history and the tr
 tree with Gitleaks 8.30.1 from the `linux_x64` tarball, pinned by its SHA-256. The old
 `ci.yml` ("Source security gate") was folded into it on 26 September 2026. The other
 workflows are the desktop host job and release (`greenfield-desktop.yml`), images,
-deploy, infra, the release rehearsal and the monthly drill.
+deploy, infra and the release rehearsal. The monthly drill workflow was deleted with the
+restore drill on 26 September 2026 (W3-S8).
 
 ## The old worker's AWS resources
 
