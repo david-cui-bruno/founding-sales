@@ -62,7 +62,19 @@ export interface SentFolderMessage {
   readonly sentAt: string;
 }
 
-export type SentFolderScanOutcome = 'scanned' | 'grant_revoked' | 'rate_limited' | 'truncated' | 'mailbox_unknown';
+/**
+ * `message_vanished`: the listing named a message whose metadata Gmail no longer returns
+ * (deleted between the two reads). The folder was not read to the end, because that
+ * message is exactly one nobody can now say was or was not FSS's; the messages that were
+ * read are still returned, and a rerun lists the folder again without it.
+ */
+export type SentFolderScanOutcome =
+  | 'scanned'
+  | 'grant_revoked'
+  | 'rate_limited'
+  | 'truncated'
+  | 'mailbox_unknown'
+  | 'message_vanished';
 
 export interface SentFolderScan {
   readonly outcome: SentFolderScanOutcome;
@@ -70,6 +82,8 @@ export interface SentFolderScan {
   readonly listed: number;
   /** The ones carrying FSS's marker for this mailbox, oldest first. */
   readonly messages: readonly SentFolderMessage[];
+  /** Listed ids whose metadata read found nothing (`message_vanished`). */
+  readonly vanished: number;
 }
 
 export interface SentFolderScanDeps {
@@ -94,9 +108,9 @@ export async function scanSentFolder(
   input: { readonly mailboxId: string; readonly since: string; readonly until: string },
 ): Promise<SentFolderScan> {
   const mailbox = await readMailbox(context, input.mailboxId);
-  if (mailbox === null) return { outcome: 'mailbox_unknown', listed: 0, messages: [] };
+  if (mailbox === null) return { outcome: 'mailbox_unknown', listed: 0, messages: [], vanished: 0 };
   const access = await accessForMailbox(context, deps, mailbox.id);
-  if (!access.ok) return { outcome: 'grant_revoked', listed: 0, messages: [] };
+  if (!access.ok) return { outcome: 'grant_revoked', listed: 0, messages: [], vanished: 0 };
 
   const sinceMs = Date.parse(input.since);
   const untilMs = Date.parse(input.until);
@@ -110,12 +124,12 @@ export async function scanSentFolder(
   let pageToken: string | undefined;
   let pages = 0;
   for (;;) {
-    if (pages >= SENT_SCAN_PAGE_LIMIT) return { outcome: 'truncated', listed: ids.length, messages: [] };
+    if (pages >= SENT_SCAN_PAGE_LIMIT) return { outcome: 'truncated', listed: ids.length, messages: [], vanished: 0 };
     const page = await deps.gmail.listSentMessageIds(access.access, {
       ...request,
       ...(pageToken === undefined ? {} : { pageToken }),
     });
-    if (!page.ok) return { outcome: page.reason, listed: ids.length, messages: [] };
+    if (!page.ok) return { outcome: page.reason, listed: ids.length, messages: [], vanished: 0 };
     ids.push(...page.messageIds);
     pages += 1;
     if (page.nextPageToken === null) break;
@@ -123,11 +137,16 @@ export async function scanSentFolder(
   }
 
   let listed = 0;
+  let vanished = 0;
   const messages: SentFolderMessage[] = [];
   for (const id of [...new Set(ids)]) {
     const metadata = await deps.gmail.getMetadata(access.access, id, SENT_SCAN_HEADERS);
-    // Deleted between the listing and the read: Gmail no longer has it to vouch for.
-    if (metadata === null) continue;
+    // Deleted between the listing and the read: Gmail no longer has it to vouch for, so
+    // the folder was not read to the end (`message_vanished`), and the scan says so.
+    if (metadata === null) {
+      vanished += 1;
+      continue;
+    }
     const at = metadata.internalDateEpochMilliseconds;
     if (!(at >= sinceMs && at <= untilMs)) continue;
     listed += 1;
@@ -149,5 +168,5 @@ export async function scanSentFolder(
     (left, right) =>
       Date.parse(left.sentAt) - Date.parse(right.sentAt) || left.providerMessageId.localeCompare(right.providerMessageId),
   );
-  return { outcome: 'scanned', listed, messages };
+  return { outcome: vanished > 0 ? 'message_vanished' : 'scanned', listed, messages, vanished };
 }

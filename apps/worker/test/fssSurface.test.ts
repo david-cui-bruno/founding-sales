@@ -253,13 +253,13 @@ describe('the dependency mode is fixed per command', () => {
       ['mailbox reconcile-sent', 'gmail-read'],
     ]);
     expect(COMMAND_DEPENDENCIES['suppression-journal replay']).toBe('journal');
-    for (const name of ['holds list', 'release-record put', 'release-record show', 'workspace bootstrap']) {
+    for (const name of ['holds list', 'holds release-restore', 'mailbox list', 'release-record put', 'release-record show', 'workspace bootstrap']) {
       expect(COMMAND_DEPENDENCIES[name], `${name} must not reach anything but the database`).toBe('database');
     }
   });
 
   it('refuses the Gmail-reading command in a deployment that names no Gmail seam', async () => {
-    const none = await run(['admin', 'mailbox', 'reconcile-sent', '--since', '2026-09-20T00:00:00Z', '--all-mailboxes'], {
+    const none = await run(['admin', 'mailbox', 'reconcile-sent', '--since', '2026-09-20T00:00:00Z', '--inventory', 'owner@example.test'], {
       FSS_DEPENDENCIES: 'none',
     });
     expect(none.code).toBe(20);
@@ -270,7 +270,7 @@ describe('the dependency mode is fixed per command', () => {
     // The reason, not only the exit code. This live environment is missing the Gmail
     // variables, so the refusal must come from the deployment reader one step later —
     // proof that `live` itself is not what refused it, which it was until lane W3-S8.
-    const live = await run(['admin', 'mailbox', 'reconcile-sent', '--since', '2026-09-20T00:00:00Z', '--all-mailboxes'], {
+    const live = await run(['admin', 'mailbox', 'reconcile-sent', '--since', '2026-09-20T00:00:00Z', '--inventory', 'owner@example.test'], {
       FSS_DEPENDENCIES: 'live',
     });
     expect(live.code).toBe(20);
@@ -281,7 +281,7 @@ describe('the dependency mode is fixed per command', () => {
     // A recorded deployment with no journal bucket registers no mail handler (composeHandlers),
     // so the command gets as far as asking for one.
     const recorded = await run(
-      ['admin', 'mailbox', 'reconcile-sent', '--since', '2026-09-20T00:00:00Z', '--all-mailboxes'],
+      ['admin', 'mailbox', 'reconcile-sent', '--since', '2026-09-20T00:00:00Z', '--inventory', 'owner@example.test'],
       recordedEnvironment(),
     );
     expect(recorded.code).toBe(20);

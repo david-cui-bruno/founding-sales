@@ -376,7 +376,8 @@ describe('the fss admin commands a restore runs', () => {
       'reconcile-sent',
       '--since',
       '2026-09-20T00:00:00Z',
-      '--all-mailboxes',
+      '--inventory',
+      'owner@example.test',
     ]);
     expect(reconcile.code).toBe(20);
   });

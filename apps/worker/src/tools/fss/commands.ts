@@ -22,9 +22,8 @@ export interface FssCommandSpec {
   readonly requiredFlags: readonly FssFlag[];
   /**
    * A closed set of which exactly one must be present, or the command refuses with
-   * `selection_missing`. `--all-mailboxes` versus `--mailbox <id>`: "every mailbox"
-   * is a decision an operator makes out loud, never a default a tool reaches by
-   * omission, and neither is a mailbox it guessed.
+   * `selection_missing`. `--json` versus `--json-base64`: one record, from exactly one
+   * place, never a default a tool reaches by omission.
    */
   readonly oneOf?: readonly FssFlag[];
   readonly summary: string;
@@ -57,6 +56,10 @@ export type DependencyMode = 'database' | 'journal' | 'gmail-read';
 export const COMMAND_DEPENDENCIES: Readonly<Record<string, DependencyMode>> = Object.freeze({
   'database-users ensure': 'database',
   'holds list': 'database',
+  // Lane W3-S8: the audited clearance of a restore hold left from before, and the
+  // read-only mailbox listing the restore runbook takes its inventory from.
+  'holds release-restore': 'database',
+  'mailbox list': 'database',
   'workspace bootstrap': 'database',
   // Lane g71. The release record lives in PostgreSQL and nowhere else; the command
   // never reads the deployment, so it cannot reach Gmail, KMS or S3.
@@ -119,6 +122,14 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     summary: 'every open hold, by reason code',
   },
   {
+    path: ['admin', 'holds', 'release-restore'],
+    valueFlags: ['--admin-user', '--note', '--hold', ...REPORTABLE],
+    booleanFlags: [],
+    requiredFlags: ['--admin-user', '--note'],
+    summary:
+      'release the open restore_in_progress holds (or the one --hold names), attributed to an active admin, with an audit row each',
+  },
+  {
     path: ['admin', 'suppression-journal', 'replay'],
     valueFlags: ['--from', '--to', ...REPORTABLE],
     booleanFlags: [],
@@ -126,13 +137,23 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     summary: 'insert every journalled suppression the database is missing, idempotently',
   },
   {
+    path: ['admin', 'mailbox', 'list'],
+    valueFlags: [...REPORTABLE],
+    booleanFlags: [],
+    requiredFlags: [],
+    summary: 'every mailbox, its address and its status (read-only; the restore runbook reads its inventory from it)',
+  },
+  {
+    // Lane W3-S8 review: the mailboxes come from the operator's inventory, never from
+    // the restored copy alone, which cannot know a mailbox connected after the restore
+    // point. There is no --all-mailboxes: "every mailbox the copy knows" is exactly the
+    // selection that can miss one.
     path: ['admin', 'mailbox', 'reconcile-sent'],
-    valueFlags: ['--since', '--mailbox', ...REPORTABLE],
-    booleanFlags: ['--all-mailboxes'],
-    requiredFlags: ['--since'],
-    oneOf: ['--all-mailboxes', '--mailbox'],
+    valueFlags: ['--since', '--inventory', ...REPORTABLE],
+    booleanFlags: ['--hold-unattached'],
+    requiredFlags: ['--since', '--inventory'],
     summary:
-      'after a point-in-time restore: read every Sent folder (read-only Gmail) and record the sends the restored copy lost; refuses while any send is unscanned or unattached',
+      'after a point-in-time restore: read the Sent folder of every inventory mailbox (read-only Gmail) and record the sends the restored copy lost; refuses while anything could let a send repeat',
   },
   {
     path: ['admin', 'workspace', 'bootstrap'],
