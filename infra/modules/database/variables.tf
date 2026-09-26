@@ -23,44 +23,6 @@ variable "vpc_security_group_ids" {
   type        = list(string)
 }
 
-variable "engine_version" {
-  description = <<-EOT
-    PostgreSQL engine version, **by major**. The design targets PostgreSQL 16
-    and the default is the bare major, `"16"`.
-
-    It was `"16.8"` until David's fourth credentialed rehearsal, which reached
-    AWS and was refused:
-
-        InvalidParameterCombination: Cannot find version 16.8 for postgres
-
-    AWS had retired 16.8. The versions available in `us-east-1` on 21 September
-    2026 were 16.3, 16.4, 16.9, 16.10, 16.11, 16.12, 16.13, 16.14 and 16.15, and
-    a pinned minor goes away on AWS's schedule rather than ours. Nothing offline
-    can see it: no `terraform validate`, no mocked `terraform test` and no plan
-    ever asks RDS which versions exist, so a pinned minor is discovered by an
-    apply — and an apply is the most expensive place in this release to learn
-    anything.
-
-    With `auto_minor_version_upgrade = true`, which `main.tf` sets, the AWS
-    provider treats a major-only `engine_version` as a prefix: it records the
-    full version AWS chose in state and suppresses the diff for as long as the
-    running version still begins with the configured string. So `"16"` plans as
-    no change against 16.9 or 16.15, and `"16.8"` planned as a change against
-    anything. `docs/archive/decisions/g16-postgresql-is-pinned-by-major.md`.
-
-    A minor **may** still be pinned — to reproduce a bug, or to hold a restored
-    instance at the source's version — and the validation below accepts one.
-    What it refuses is a different major, which is a spec change.
-  EOT
-  type        = string
-  default     = "16"
-
-  validation {
-    condition     = can(regex("^16(\\.[0-9]+)?$", var.engine_version))
-    error_message = "The design targets PostgreSQL 16, as the bare major \"16\" or as 16.<minor>. A different major version is a spec change."
-  }
-}
-
 variable "instance_class" {
   description = "RDS instance class. Priced per hour and doubled by Multi-AZ."
   type        = string
@@ -96,18 +58,6 @@ variable "backup_retention_days" {
   }
 }
 
-variable "backup_window" {
-  description = "Daily UTC backup window, outside the workspace business day."
-  type        = string
-  default     = "07:30-08:00"
-}
-
-variable "maintenance_window" {
-  description = "Weekly UTC maintenance window, outside the workspace business day."
-  type        = string
-  default     = "sun:08:30-sun:09:30"
-}
-
 variable "deletion_protection" {
   description = "Refuse deletion of the instance. Production sets true and cannot set false."
   type        = bool
@@ -132,40 +82,16 @@ variable "log_min_duration_statement" {
   default     = 1000
 }
 
-variable "database_name" {
-  description = "Initial database name."
-  type        = string
-  default     = "fss"
-}
-
-variable "master_username" {
-  description = "Master user name. Not a secret. The password is generated and rotated by RDS in Secrets Manager and never appears in Terraform."
-  type        = string
-  default     = "fss_admin"
-}
-
 variable "port" {
   description = "PostgreSQL port."
   type        = number
   default     = 5432
 }
 
-variable "kms_deletion_window_days" {
-  description = "Waiting period before the customer key is destroyed."
-  type        = number
-  default     = 30
-}
-
 variable "apply_immediately" {
   description = "Apply modifications outside the maintenance window."
   type        = bool
   default     = false
-}
-
-variable "ca_cert_identifier" {
-  description = "RDS certificate authority for TLS connections."
-  type        = string
-  default     = "rds-ca-rsa2048-g1"
 }
 
 variable "tags" {

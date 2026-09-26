@@ -17,7 +17,7 @@ locals {
 resource "aws_kms_key" "database" {
   description             = "${var.name_prefix} RDS PostgreSQL storage, snapshots, logs and master user secret."
   enable_key_rotation     = true
-  deletion_window_in_days = var.kms_deletion_window_days
+  deletion_window_in_days = 30
 
   tags = merge(var.tags, { Name = "${var.name_prefix}-database" })
 }
@@ -110,15 +110,19 @@ resource "aws_db_parameter_group" "main" {
 resource "aws_db_instance" "main" {
   identifier = local.identifier
 
+  # By major. With auto_minor_version_upgrade the provider treats "16" as a prefix
+  # of the running version, so a plan against 16.9 or 16.15 shows no change. A
+  # pinned minor retires on AWS's schedule: "16.8" was refused at apply in David's
+  # fourth credentialed rehearsal (docs/archive/decisions/g16-postgresql-is-pinned-by-major.md).
   engine                      = "postgres"
-  engine_version              = var.engine_version
+  engine_version              = "16"
   allow_major_version_upgrade = false
   auto_minor_version_upgrade  = true
   instance_class              = var.instance_class
   multi_az                    = var.multi_az
 
-  db_name                       = var.database_name
-  username                      = var.master_username
+  db_name                       = "fss"
+  username                      = "fss_admin"
   manage_master_user_password   = true
   master_user_secret_kms_key_id = aws_kms_key.database.arn
   port                          = var.port
@@ -133,7 +137,7 @@ resource "aws_db_instance" "main" {
   parameter_group_name   = aws_db_parameter_group.main.name
   vpc_security_group_ids = var.vpc_security_group_ids
   publicly_accessible    = false
-  ca_cert_identifier     = var.ca_cert_identifier
+  ca_cert_identifier     = "rds-ca-rsa2048-g1"
 
   # Automated backups with a non-zero retention are what enable point-in-time
   # recovery. 35 days is the design target and the retention-table commitment.
@@ -143,9 +147,10 @@ resource "aws_db_instance" "main" {
   # database the teardown removed used to leave a retained automated backup
   # (20 GB each, nine between 24 and 26 September 2026), and the prefix guard
   # of run 36209569741 found its snapshot `rds:<prefix>-pg-<date>`.
-  backup_retention_period   = var.backup_retention_days
-  backup_window             = var.backup_window
-  maintenance_window        = var.maintenance_window
+  backup_retention_period = var.backup_retention_days
+  # UTC, outside the workspace business day.
+  backup_window             = "07:30-08:00"
+  maintenance_window        = "sun:08:30-sun:09:30"
   copy_tags_to_snapshot     = true
   delete_automated_backups  = var.delete_automated_backups
   deletion_protection       = var.deletion_protection
