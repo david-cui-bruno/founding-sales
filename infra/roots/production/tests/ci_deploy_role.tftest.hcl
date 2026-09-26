@@ -7,30 +7,26 @@
 #
 # ## What is asserted, and the vacuous passes it closes
 #
-# **The trust.** Exactly one statement: the account's GitHub OIDC provider, the
-# `AssumeRoleWithWebIdentity` action, and `StringEquals` on the audience and on the
-# one subject `repo:david-cui-bruno@196666240/founding-sales@1351406527:environment:production-deploy`.
-# "The subject is right" is true of a policy that also carries a `StringLike` beside
-# it, so the condition operators are compared as a whole, and a wildcard anywhere in
-# the subject fails.
+# **The trust.** Exactly one statement, compared whole: the account's GitHub OIDC
+# provider, `AssumeRoleWithWebIdentity`, and `StringEquals` alone on the audience and
+# on the one subject. "The subject is right" is true of a policy that also carries a
+# `StringLike` beside it, so the condition is compared as a map rather than read key
+# by key, which also refuses a wildcard in the subject.
 #
 # **The permissions.** The distinct actions are compared with an exact list, so a
-# statement that grows one — a state read, a secret, `iam:PutRolePolicy` — is red
-# here rather than in a review. `Resource: "*"` appears on six statements and no
-# others: three read or sign-in actions that take no resource, the deregistration
-# that takes none either, and two writes that carry a condition naming this
-# namespace. `UpdateService` is compared as a plain `ArnLike` on its own family, so a
-# call that names no task definition — `--desired-count 0` alone — is refused. Everything else names its resources, and
-# every one of them is `fss-prod` except the two rehearsal repositories, which only
-# the read statement names. A test over no statements passes every `alltrue`, so the
-# statement count is asserted too.
+# statement that grows one — a state read, a secret, `iam:PutRolePolicy` — is red here
+# rather than in a review. `Resource: "*"` appears on exactly six statements, each
+# exactly `["*"]`, and the four that carry no condition are reads or the sign-in.
+# Everything else names its resources, all `fss-prod` but the two rehearsal
+# repositories the read statement names. `UpdateService` is granted once per service
+# under a plain `ArnLike` on that service's own family, so a call naming no task
+# definition — `--desired-count 0` alone — is refused. A test over no statements passes
+# every `alltrue`, so the statement count is asserted too.
 #
 # **The release record's put (lane g100).** `ecs:RunTask` appears once, on the
-# operations family's revisions, under `ArnEquals` on the production cluster, so a call
-# naming another family or no cluster is refused; its tags are a `TagResource` only as
-# part of `RunTask`, on that cluster's tasks. The operations task runs as the worker's
-# two roles and logs to the worker's group, and the assertions below hold the put to
-# the `iam:PassRole` and the log read the role already had: no fifth role, no new group.
+# operations family's revisions, under `ArnEquals` on the production cluster; its tags
+# are a `TagResource` only as part of a create. The put reuses the `iam:PassRole` and
+# the log read the role already had: no fifth role, no new group.
 
 mock_provider "aws" {
   override_during = apply
@@ -91,23 +87,14 @@ run "the_role_is_production_s_own_and_is_not_the_terraform_role" {
   command = plan
 
   assert {
-    condition     = aws_iam_role.ci_deploy.max_session_duration == 7200
-    error_message = "Two hours: a promotion and two rollouts of up to thirty minutes each, inside a job whose timeout is twice the worst rollout."
-  }
-
-  assert {
-    condition     = aws_iam_role.ci_deploy.name == "fss-prod-ci-deploy"
-    error_message = "The CI deploy role is fss-prod-ci-deploy."
-  }
-
-  assert {
-    condition     = output.ci_deploy_role_name == "fss-prod-ci-deploy" && output.deployment_role_name == "fss-prod-deploy"
-    error_message = "The role CI assumes and the role Terraform assumes are two different roles."
-  }
-
-  assert {
-    condition     = contains(output.resource_names, "fss-prod-ci-deploy")
-    error_message = "The role is a name this root claims, so it belongs in the inventory the isolation test walks."
+    condition = (
+      aws_iam_role.ci_deploy.name == "fss-prod-ci-deploy"
+      && output.ci_deploy_role_name == "fss-prod-ci-deploy"
+      && output.deployment_role_name == "fss-prod-deploy"
+      && contains(output.resource_names, "fss-prod-ci-deploy")
+      && aws_iam_role.ci_deploy.max_session_duration == 7200
+    )
+    error_message = "The role CI assumes and the role Terraform assumes are two different roles; CI's is a name this root claims, and its session lasts the two hours of a promotion and two rollouts."
   }
 }
 
@@ -115,39 +102,19 @@ run "the_role_trusts_one_github_subject_and_nothing_else" {
   command = plan
 
   assert {
-    condition     = length(jsondecode(aws_iam_role.ci_deploy.assume_role_policy).Statement) == 1
-    error_message = "The trust policy has exactly one statement."
-  }
-
-  assert {
-    condition = (
-      jsondecode(aws_iam_role.ci_deploy.assume_role_policy).Statement[0].Effect == "Allow"
-      && jsondecode(aws_iam_role.ci_deploy.assume_role_policy).Statement[0].Action == "sts:AssumeRoleWithWebIdentity"
-    )
-    error_message = "The one statement allows AssumeRoleWithWebIdentity and nothing else: no sts:AssumeRole, so no AWS principal can chain into it."
-  }
-
-  assert {
-    condition     = jsondecode(aws_iam_role.ci_deploy.assume_role_policy).Statement[0].Principal == { Federated = "arn:aws:iam::326255650484:oidc-provider/token.actions.githubusercontent.com" }
-    error_message = "The only principal is this account's GitHub Actions OIDC provider: no AWS principal, no service, and never Principal *."
-  }
-
-  assert {
-    condition     = keys(jsondecode(aws_iam_role.ci_deploy.assume_role_policy).Statement[0].Condition) == ["StringEquals"]
-    error_message = "The trust is compared with StringEquals alone. A StringLike beside it would be a pattern, and a pattern is how a wildcard subject gets in."
-  }
-
-  assert {
-    condition = jsondecode(aws_iam_role.ci_deploy.assume_role_policy).Statement[0].Condition.StringEquals == {
-      "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-      "token.actions.githubusercontent.com:sub" = "repo:david-cui-bruno@196666240/founding-sales@1351406527:environment:production-deploy"
-    }
-    error_message = "The audience is sts.amazonaws.com and the subject is exactly this repository's production-deploy environment."
-  }
-
-  assert {
-    condition     = !can(regex("[*?]", jsondecode(aws_iam_role.ci_deploy.assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"]))
-    error_message = "The trusted subject carries no wildcard."
+    condition = jsondecode(aws_iam_role.ci_deploy.assume_role_policy).Statement == [{
+      Sid       = "GitHubActionsInTheProductionDeployEnvironmentOnly"
+      Effect    = "Allow"
+      Action    = "sts:AssumeRoleWithWebIdentity"
+      Principal = { Federated = "arn:aws:iam::326255650484:oidc-provider/token.actions.githubusercontent.com" }
+      Condition = {
+        StringEquals = {
+          "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+          "token.actions.githubusercontent.com:sub" = "repo:david-cui-bruno@196666240/founding-sales@1351406527:environment:production-deploy"
+        }
+      }
+    }]
+    error_message = "The trust is one statement, compared whole: this account's GitHub OIDC provider alone, AssumeRoleWithWebIdentity alone — no sts:AssumeRole, so no AWS principal can chain into it — and StringEquals alone on the audience and this repository's production-deploy subject. A StringLike beside it would be a pattern, and a pattern is how a wildcard subject gets in."
   }
 }
 
@@ -155,13 +122,11 @@ run "the_role_holds_exactly_the_actions_the_deploy_uses" {
   command = plan
 
   assert {
-    condition     = length(jsondecode(aws_iam_role_policy.ci_deploy.policy).Statement) >= 12
-    error_message = "The policy has its statements; an assertion over none would pass anything."
-  }
-
-  assert {
-    condition     = alltrue([for statement in jsondecode(aws_iam_role_policy.ci_deploy.policy).Statement : statement.Effect == "Allow"])
-    error_message = "Every statement is an Allow; the role needs no deny because it is granted nothing a deny would take away."
+    condition = (
+      length(jsondecode(aws_iam_role_policy.ci_deploy.policy).Statement) >= 12
+      && alltrue([for statement in jsondecode(aws_iam_role_policy.ci_deploy.policy).Statement : statement.Effect == "Allow"])
+    )
+    error_message = "The policy has its statements — an assertion over none would pass anything — and every one is an Allow: the role needs no deny because it is granted nothing a deny would take away."
   }
 
   assert {
@@ -191,74 +156,48 @@ run "the_role_holds_exactly_the_actions_the_deploy_uses" {
       "logs:FilterLogEvents",
       "logs:GetLogEvents",
     ])
-    error_message = "The role holds exactly the promote, register, roll, watch, smoke and record-put actions. Anything more is a change to this test first."
-  }
-
-  assert {
-    condition = !anytrue([
-      for action in flatten([for statement in jsondecode(aws_iam_role_policy.ci_deploy.policy).Statement : statement.Action]) :
-      can(regex("^(s3|secretsmanager|rds|kms|dynamodb|ssm|sts):", action)) || strcontains(action, "*") || (startswith(action, "iam:") && action != "iam:PassRole")
-    ])
-    error_message = "No Terraform state (s3, dynamodb, kms), no secret, no database, no IAM write, and no wildcard action."
+    error_message = "The role holds exactly the promote, register, roll, watch, smoke and record-put actions: no Terraform state, no secret, no database, no IAM write but PassRole, no wildcard. Anything more is a change to this test first."
   }
 }
 
 run "resource_star_only_where_there_is_no_resource_to_name" {
   command = plan
 
-  # The five statements with Resource *, and nothing else. Each is exactly ["*"]:
-  # a wildcard mixed into a list of ARNs would make the ARNs decoration.
+  # Each is exactly ["*"]: a wildcard mixed into a list of ARNs would make the ARNs
+  # decoration.
   assert {
-    condition = sort([for statement in jsondecode(aws_iam_role_policy.ci_deploy.policy).Statement : statement.Sid if contains(statement.Resource, "*")]) == tolist([
-      "DeregisterWhichTakesNoResource",
-      "ListTasksInTheProductionCluster",
-      "ReadTaskDefinitionsWhichTakeNoResource",
-      "ReadTheCanaryMetric",
-      "RegisterRevisionsCarryingThisNamespace",
-      "SignInToTheRegistry",
-    ])
-    error_message = "Resource * appears on the sign-in, the task-definition read, the deregistration, the canary read, the conditioned registration and the conditioned task listing, and on nothing else."
+    condition = (
+      sort([for statement in jsondecode(aws_iam_role_policy.ci_deploy.policy).Statement : statement.Sid if contains(statement.Resource, "*")]) == tolist([
+        "DeregisterWhichTakesNoResource",
+        "ListTasksInTheProductionCluster",
+        "ReadTaskDefinitionsWhichTakeNoResource",
+        "ReadTheCanaryMetric",
+        "RegisterRevisionsCarryingThisNamespace",
+        "SignInToTheRegistry",
+      ])
+      && alltrue([
+        for statement in jsondecode(aws_iam_role_policy.ci_deploy.policy).Statement :
+        statement.Resource == ["*"] if contains(statement.Resource, "*")
+      ])
+    )
+    error_message = "Resource * appears on the sign-in, the task-definition read, the deregistration, the canary read, the conditioned registration and the conditioned task listing, on nothing else, and never beside a named ARN."
   }
 
+  # Unconditioned *, read or sign-in only; the two writes carry a condition that names
+  # this namespace or its cluster.
   assert {
-    condition = alltrue([
-      for statement in jsondecode(aws_iam_role_policy.ci_deploy.policy).Statement :
-      statement.Resource == ["*"] if contains(statement.Resource, "*")
-    ])
-    error_message = "A statement with Resource * names nothing else."
-  }
-
-  # Unconditioned *, read or sign-in only.
-  assert {
-    condition = sort(flatten([
-      for statement in jsondecode(aws_iam_role_policy.ci_deploy.policy).Statement :
-      statement.Action if contains(statement.Resource, "*") && try(statement.Condition, null) == null
-    ])) == tolist(["cloudwatch:GetMetricStatistics", "ecr:GetAuthorizationToken", "ecs:DeregisterTaskDefinition", "ecs:DescribeTaskDefinition"])
-    error_message = "With no condition, Resource * carries only ecr:GetAuthorizationToken, two reads and the deregistration, none of which takes a resource. Every other action names its resources or a condition naming this namespace."
-  }
-
-  assert {
-    condition = flatten([
-      for statement in jsondecode(aws_iam_role_policy.ci_deploy.policy).Statement :
-      [for action in statement.Action : action if startswith(action, "ecr:")] if contains(statement.Resource, "*")
-    ]) == ["ecr:GetAuthorizationToken"]
-    error_message = "ecr:GetAuthorizationToken is the only registry action on Resource *; every image read and write names its repositories."
-  }
-
-  assert {
-    condition = alltrue([
-      for statement in jsondecode(aws_iam_role_policy.ci_deploy.policy).Statement :
-      statement.Condition == { StringEquals = { "aws:RequestTag/NamePrefix" = "fss-prod" } } if statement.Sid == "RegisterRevisionsCarryingThisNamespace"
-    ])
-    error_message = "Registration takes no resource, so it is conditioned on the request carrying this namespace's NamePrefix tag."
-  }
-
-  assert {
-    condition = alltrue([
-      for statement in jsondecode(aws_iam_role_policy.ci_deploy.policy).Statement :
-      statement.Condition == { ArnEquals = { "ecs:cluster" = "arn:aws:ecs:us-east-1:326255650484:cluster/fss-prod-cluster" } } if statement.Sid == "ListTasksInTheProductionCluster"
-    ])
-    error_message = "Listing tasks is conditioned on the production cluster's ARN."
+    condition = (
+      sort(flatten([
+        for statement in jsondecode(aws_iam_role_policy.ci_deploy.policy).Statement :
+        statement.Action if contains(statement.Resource, "*") && try(statement.Condition, null) == null
+      ])) == tolist(["cloudwatch:GetMetricStatistics", "ecr:GetAuthorizationToken", "ecs:DeregisterTaskDefinition", "ecs:DescribeTaskDefinition"])
+      && alltrue([
+        for statement in jsondecode(aws_iam_role_policy.ci_deploy.policy).Statement :
+        (statement.Sid == "RegisterRevisionsCarryingThisNamespace" ? statement.Condition == { StringEquals = { "aws:RequestTag/NamePrefix" = "fss-prod" } } : true)
+        && (statement.Sid == "ListTasksInTheProductionCluster" ? statement.Condition == { ArnEquals = { "ecs:cluster" = "arn:aws:ecs:us-east-1:326255650484:cluster/fss-prod-cluster" } } : true)
+      ])
+    )
+    error_message = "With no condition, Resource * carries only the sign-in and three reads, none of which takes a resource; registration is conditioned on this namespace's NamePrefix tag and task listing on the production cluster's ARN."
   }
 }
 
@@ -275,75 +214,65 @@ run "every_named_resource_is_production_s_but_the_two_images_it_reads" {
     error_message = "Every resource the role names is in the fss-prod namespace, except fss-rh-api and fss-rh-worker, which only the read statement names."
   }
 
+  # The copy writes into production alone, and PassRole is the two services' four
+  # roles for ECS: never the migration or drill roles, never a deployment role.
   assert {
     condition = alltrue([
       for statement in jsondecode(aws_iam_role_policy.ci_deploy.policy).Statement :
-      statement.Resource == ["arn:aws:ecr:us-east-1:326255650484:repository/fss-prod-api", "arn:aws:ecr:us-east-1:326255650484:repository/fss-prod-worker"]
-      if contains(statement.Action, "ecr:PutImage")
-    ])
-    error_message = "The copy writes into the two production repositories and never into a rehearsal one."
-  }
-
-  assert {
-    condition = alltrue([
-      for statement in jsondecode(aws_iam_role_policy.ci_deploy.policy).Statement :
-      statement.Resource == [
+      (contains(statement.Action, "ecr:PutImage") ? statement.Resource == [
+        "arn:aws:ecr:us-east-1:326255650484:repository/fss-prod-api",
+        "arn:aws:ecr:us-east-1:326255650484:repository/fss-prod-worker",
+      ] : true)
+      && (contains(statement.Action, "iam:PassRole") ? statement.Resource == [
         "arn:aws:iam::326255650484:role/fss-prod-api-task",
         "arn:aws:iam::326255650484:role/fss-prod-api-exec",
         "arn:aws:iam::326255650484:role/fss-prod-worker-task",
         "arn:aws:iam::326255650484:role/fss-prod-worker-exec",
-      ] && statement.Condition == { StringEquals = { "iam:PassedToService" = "ecs-tasks.amazonaws.com" } }
-      if contains(statement.Action, "iam:PassRole")
+      ] && statement.Condition == { StringEquals = { "iam:PassedToService" = "ecs-tasks.amazonaws.com" } } : true)
     ])
-    error_message = "PassRole names the two services' task and execution roles, only for ECS. Never the migration or drill roles, and never a deployment role."
+    error_message = "The copy writes into the two production repositories and never a rehearsal one, and PassRole names the two services' task and execution roles, only for ECS."
   }
 
   # The migration and drill families, their roles and Terraform's own backend are not
   # CI's. The operations family is named once, by the release record's put.
   assert {
-    condition     = !can(regex("migration|drill|fss-prod-deploy|tfstate|tflock|secret", aws_iam_role_policy.ci_deploy.policy))
-    error_message = "The policy names no migration or drill family or role, not the Terraform deployment role, not the state bucket or lock table, and no secret."
-  }
-
-  assert {
-    condition = [
-      for statement in jsondecode(aws_iam_role_policy.ci_deploy.policy).Statement :
-      statement.Sid if strcontains(jsonencode(statement), "operations")
-    ] == ["RunTheOperationsTaskInTheProductionCluster"]
-    error_message = "The operations family appears in one statement, the release record's put, and nowhere else."
+    condition = (
+      !can(regex("migration|drill|fss-prod-deploy|tfstate|tflock|secret", aws_iam_role_policy.ci_deploy.policy))
+      && [
+        for statement in jsondecode(aws_iam_role_policy.ci_deploy.policy).Statement :
+        statement.Sid if strcontains(jsonencode(statement), "operations")
+      ] == ["RunTheOperationsTaskInTheProductionCluster"]
+    )
+    error_message = "The policy names no migration or drill family or role, not the Terraform deployment role, not the state bucket or lock table, no secret, and the operations family only in the release record's put."
   }
 
   # Each service may be pointed at its own family and nothing else, and only by a call
-  # that names a task definition: ArnLike, never ArnLikeIfExists, alone in its statement.
+  # that names a task definition: ArnLike, never ArnLikeIfExists, alone in its
+  # statement. DescribeServices has a statement of its own, so no condition there
+  # weakens this one.
   assert {
-    condition = alltrue([
-      for statement in jsondecode(aws_iam_role_policy.ci_deploy.policy).Statement :
-      statement.Action == ["ecs:UpdateService"] && keys(statement.Condition) == ["ArnLike"] && keys(statement.Condition.ArnLike) == ["ecs:task-definition"]
-      if contains(statement.Action, "ecs:UpdateService")
-    ])
-    error_message = "UpdateService stands alone in its statement under a plain ArnLike on ecs:task-definition. IfExists would admit a call with no task definition, such as a bare desired count of zero."
-  }
-
-  assert {
-    condition = [
-      for statement in jsondecode(aws_iam_role_policy.ci_deploy.policy).Statement :
-      statement.Resource if contains(statement.Action, "ecs:DescribeServices")
-      ] == [[
-        "arn:aws:ecs:us-east-1:326255650484:service/fss-prod-cluster/fss-prod-api",
-        "arn:aws:ecs:us-east-1:326255650484:service/fss-prod-cluster/fss-prod-worker",
-    ]]
-    error_message = "DescribeServices has a statement of its own, on the two services, with no condition to weaken the UpdateService one."
-  }
-
-  assert {
-    condition = [
-      for statement in jsondecode(aws_iam_role_policy.ci_deploy.policy).Statement :
-      [statement.Resource, statement.Condition.ArnLike["ecs:task-definition"]] if contains(statement.Action, "ecs:UpdateService")
-      ] == [
-      [["arn:aws:ecs:us-east-1:326255650484:service/fss-prod-cluster/fss-prod-api"], "arn:aws:ecs:us-east-1:326255650484:task-definition/fss-prod-api:*"],
-      [["arn:aws:ecs:us-east-1:326255650484:service/fss-prod-cluster/fss-prod-worker"], "arn:aws:ecs:us-east-1:326255650484:task-definition/fss-prod-worker:*"],
-    ]
-    error_message = "UpdateService is granted once per service, each bound to its own task-definition family."
+    condition = (
+      alltrue([
+        for statement in jsondecode(aws_iam_role_policy.ci_deploy.policy).Statement :
+        statement.Action == ["ecs:UpdateService"] && keys(statement.Condition) == ["ArnLike"] && keys(statement.Condition.ArnLike) == ["ecs:task-definition"]
+        if contains(statement.Action, "ecs:UpdateService")
+      ])
+      && [
+        for statement in jsondecode(aws_iam_role_policy.ci_deploy.policy).Statement :
+        [statement.Resource, statement.Condition.ArnLike["ecs:task-definition"]] if contains(statement.Action, "ecs:UpdateService")
+        ] == [
+        [["arn:aws:ecs:us-east-1:326255650484:service/fss-prod-cluster/fss-prod-api"], "arn:aws:ecs:us-east-1:326255650484:task-definition/fss-prod-api:*"],
+        [["arn:aws:ecs:us-east-1:326255650484:service/fss-prod-cluster/fss-prod-worker"], "arn:aws:ecs:us-east-1:326255650484:task-definition/fss-prod-worker:*"],
+      ]
+      && [
+        for statement in jsondecode(aws_iam_role_policy.ci_deploy.policy).Statement :
+        statement.Resource if contains(statement.Action, "ecs:DescribeServices")
+        ] == [[
+          "arn:aws:ecs:us-east-1:326255650484:service/fss-prod-cluster/fss-prod-api",
+          "arn:aws:ecs:us-east-1:326255650484:service/fss-prod-cluster/fss-prod-worker",
+      ]]
+    )
+    error_message = "UpdateService is granted once per service, alone in its statement under a plain ArnLike on that service's own family — IfExists would admit a call with no task definition, such as a bare desired count of zero — and DescribeServices stands apart on the two services."
   }
 
   # The names the policy builds are the names the stack creates.
@@ -389,28 +318,23 @@ run "the_release_record_put_runs_the_operations_task_in_the_production_cluster_a
     error_message = "TagResource is granted only as part of a create: the two service revisions it registers, and the tasks it runs in the production cluster. Never a tag on anything that already exists."
   }
 
+  # The put's task is read back, and its answer is read out of the worker's log group,
+  # with the DescribeTasks and the log read the role already had. The cluster and the
+  # family are root outputs, for the repository variables the workflow launches with.
   assert {
-    condition = [
-      for statement in jsondecode(aws_iam_role_policy.ci_deploy.policy).Statement :
-      statement.Resource if contains(statement.Action, "ecs:DescribeTasks")
-    ] == [["arn:aws:ecs:us-east-1:326255650484:task/fss-prod-cluster/*"]]
-    error_message = "The put's task is read back with the DescribeTasks the role already had, on the production cluster's tasks."
-  }
-
-  # The operations task writes to the worker's log group, which the role already reads.
-  assert {
-    condition = alltrue([
-      for statement in jsondecode(aws_iam_role_policy.ci_deploy.policy).Statement :
-      contains(statement.Resource, "arn:aws:logs:us-east-1:326255650484:log-group:/fss/fss-prod/worker:*")
-      if contains(statement.Action, "logs:GetLogEvents")
-    ])
-    error_message = "logs:GetLogEvents covers the worker log group's streams, where the operations task writes its put's answer."
-  }
-
-  # The four identifiers the workflow launches the put with, from outputs rather than
-  # state. The two network ids are known only after an apply.
-  assert {
-    condition     = output.ci_deploy_cluster_name == "fss-prod-cluster" && output.ci_deploy_operations_task_family == "fss-prod-operations"
-    error_message = "The cluster and the operations family are root outputs for the repository variables FSS_PRODUCTION_CLUSTER_NAME and FSS_PRODUCTION_OPERATIONS_TASK_FAMILY."
+    condition = (
+      [
+        for statement in jsondecode(aws_iam_role_policy.ci_deploy.policy).Statement :
+        statement.Resource if contains(statement.Action, "ecs:DescribeTasks")
+      ] == [["arn:aws:ecs:us-east-1:326255650484:task/fss-prod-cluster/*"]]
+      && alltrue([
+        for statement in jsondecode(aws_iam_role_policy.ci_deploy.policy).Statement :
+        contains(statement.Resource, "arn:aws:logs:us-east-1:326255650484:log-group:/fss/fss-prod/worker:*")
+        if contains(statement.Action, "logs:GetLogEvents")
+      ])
+      && output.ci_deploy_cluster_name == "fss-prod-cluster"
+      && output.ci_deploy_operations_task_family == "fss-prod-operations"
+    )
+    error_message = "The put reads its task back on the production cluster's tasks and its answer from the worker log group's streams, and the cluster and operations family are root outputs for FSS_PRODUCTION_CLUSTER_NAME and FSS_PRODUCTION_OPERATIONS_TASK_FAMILY."
   }
 }
