@@ -22,12 +22,18 @@
 #
 # Delivery of the digest is SNS email. That path is AWS-native: it does not use a
 # salesperson Gmail grant, so "connected mailbox disconnected for 48 hours" can still be
-# delivered when every mailbox is disconnected. The topic is encrypted with a customer
-# key; the digest function's role may use that key and publish to this topic alone.
+# delivered when every mailbox is disconnected. The topic is encrypted with the customer
+# key the caller gives (the stack's log key, shared with alerts: CloudWatch cannot
+# publish through the AWS-managed SNS key); the digest function's role may use that
+# key and publish to this topic alone.
 
 locals {
   topic_name = "${var.name_prefix}-alerts"
 
+  # The spec 13.3 values, versioned with the release (a change is a pull request and
+  # a plan). canary_stale and mailbox_coverage_stale still read their variables,
+  # which test/ops/terraformCrossChecks.check.ts compares with the code.
+  #
   # severity: critical rolls into the critical composite, warning into the
   # warning composite. treat_missing_data is chosen per metric: "breaching"
   # for a metric that must arrive on a schedule, "notBreaching" for a metric
@@ -39,8 +45,8 @@ locals {
       comparison          = "LessThanThreshold"
       threshold           = 1
       period              = 60
-      evaluation_periods  = var.heartbeat_missed_checks
-      datapoints_to_alarm = var.heartbeat_missed_checks
+      evaluation_periods  = 3
+      datapoints_to_alarm = 3
       treat_missing_data  = "breaching"
       severity            = "critical"
       description         = "Three missed one-minute API heartbeats."
@@ -51,8 +57,8 @@ locals {
       comparison          = "LessThanThreshold"
       threshold           = 1
       period              = 60
-      evaluation_periods  = var.heartbeat_missed_checks
-      datapoints_to_alarm = var.heartbeat_missed_checks
+      evaluation_periods  = 3
+      datapoints_to_alarm = 3
       treat_missing_data  = "breaching"
       severity            = "critical"
       description         = "Three missed one-minute scheduler passes. No new due jobs are being created."
@@ -63,8 +69,8 @@ locals {
       comparison          = "LessThanThreshold"
       threshold           = 1
       period              = 60
-      evaluation_periods  = var.heartbeat_missed_checks
-      datapoints_to_alarm = var.heartbeat_missed_checks
+      evaluation_periods  = 3
+      datapoints_to_alarm = 3
       treat_missing_data  = "breaching"
       severity            = "critical"
       description         = "Three missed one-minute worker heartbeats."
@@ -75,8 +81,8 @@ locals {
       comparison          = "LessThanThreshold"
       threshold           = 1
       period              = 60
-      evaluation_periods  = var.heartbeat_missed_checks
-      datapoints_to_alarm = var.heartbeat_missed_checks
+      evaluation_periods  = 3
+      datapoints_to_alarm = 3
       treat_missing_data  = "breaching"
       severity            = "critical"
       description         = "Three missed one-minute mailbox checks."
@@ -102,7 +108,7 @@ locals {
       metric_name         = "OldestRunnableJobAgeSeconds"
       statistic           = "Maximum"
       comparison          = "GreaterThanThreshold"
-      threshold           = var.oldest_job_age_warning_seconds
+      threshold           = 300
       period              = 60
       evaluation_periods  = 1
       datapoints_to_alarm = 1
@@ -114,7 +120,7 @@ locals {
       metric_name         = "OldestRunnableJobAgeSeconds"
       statistic           = "Maximum"
       comparison          = "GreaterThanThreshold"
-      threshold           = var.oldest_job_age_critical_seconds
+      threshold           = 900
       period              = 60
       evaluation_periods  = 1
       datapoints_to_alarm = 1
@@ -132,7 +138,7 @@ locals {
       metric_name         = "GmailWatchHoursToExpiry"
       statistic           = "Minimum"
       comparison          = "LessThanThreshold"
-      threshold           = var.gmail_watch_expiry_hours
+      threshold           = 48
       period              = 300
       evaluation_periods  = 2
       datapoints_to_alarm = 2
@@ -156,7 +162,7 @@ locals {
       metric_name         = "DeadJobOldestAgeSeconds"
       statistic           = "Maximum"
       comparison          = "GreaterThanThreshold"
-      threshold           = var.dead_job_unresolved_seconds
+      threshold           = 3600
       period              = 300
       evaluation_periods  = 2
       datapoints_to_alarm = 2
@@ -168,7 +174,7 @@ locals {
       metric_name         = "MailboxDisconnectedHours"
       statistic           = "Maximum"
       comparison          = "GreaterThanOrEqualToThreshold"
-      threshold           = var.mailbox_disconnected_hours
+      threshold           = 48
       period              = 900
       evaluation_periods  = 1
       datapoints_to_alarm = 1
@@ -222,7 +228,7 @@ locals {
       metric_name         = "UnacknowledgedCriticalAlertAgeSeconds"
       statistic           = "Maximum"
       comparison          = "GreaterThanThreshold"
-      threshold           = var.unacknowledged_critical_seconds
+      threshold           = 3600
       period              = 300
       evaluation_periods  = 1
       datapoints_to_alarm = 1
@@ -234,29 +240,6 @@ locals {
 
   critical_alarm_keys = sort([for name, alarm in local.alarms : name if alarm.severity == "critical"])
   warning_alarm_keys  = sort([for name, alarm in local.alarms : name if alarm.severity == "warning"])
-
-  topic_key_policy = {
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid       = "AccountAdministration"
-        Effect    = "Allow"
-        Principal = { AWS = ["arn:aws:iam::${var.aws_account_id}:root"] }
-        Action    = ["kms:*"]
-        Resource  = ["*"]
-      },
-      {
-        Sid       = "CloudWatchAlarmsPublish"
-        Effect    = "Allow"
-        Principal = { Service = ["cloudwatch.amazonaws.com", "events.amazonaws.com"] }
-        Action    = ["kms:GenerateDataKey*", "kms:Decrypt"]
-        Resource  = ["*"]
-        Condition = {
-          StringEquals = { "aws:SourceAccount" = [var.aws_account_id] }
-        }
-      },
-    ]
-  }
 
   topic_policy = {
     Version = "2012-10-17"
@@ -290,32 +273,10 @@ locals {
   }
 }
 
-resource "aws_kms_key" "alerts" {
-  count = var.create_kms_key ? 1 : 0
-
-  description             = "${var.name_prefix} alert topic."
-  enable_key_rotation     = true
-  deletion_window_in_days = var.kms_deletion_window_days
-  policy                  = jsonencode(local.topic_key_policy)
-
-  tags = merge(var.tags, { Name = local.topic_name })
-}
-
-resource "aws_kms_alias" "alerts" {
-  count = var.create_kms_key ? 1 : 0
-
-  name          = "alias/${local.topic_name}"
-  target_key_id = aws_kms_key.alerts[0].key_id
-}
-
-locals {
-  topic_key_arn = var.create_kms_key ? aws_kms_key.alerts[0].arn : var.kms_key_arn
-}
-
 resource "aws_sns_topic" "alerts" {
   name              = local.topic_name
   display_name      = "FSS alerts"
-  kms_master_key_id = local.topic_key_arn
+  kms_master_key_id = var.kms_key_arn
 
   tags = merge(var.tags, { Name = local.topic_name })
 }
