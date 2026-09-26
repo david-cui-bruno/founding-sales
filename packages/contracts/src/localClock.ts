@@ -202,7 +202,7 @@ export function localInstant(date: string, time: LocalTimeOfDay, zone: string): 
  * rather than inventing "Tuesday at 9". One constant, read by the Mac that computes the
  * instant it shows and the server that checks the instant it is sent.
  */
-export const CALLBACK_DATE_ONLY_LOCAL_TIME = '09:00';
+const CALLBACK_DATE_ONLY_LOCAL_TIME = '09:00';
 
 /**
  * A callback's wall clock as a UTC instant, or null when any part of it is not one.

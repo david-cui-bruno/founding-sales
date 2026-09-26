@@ -46,7 +46,7 @@ export const holdReasonCodeSchema = z.enum(HOLD_REASON_CODES);
 export type HoldReasonCode = z.infer<typeof holdReasonCodeSchema>;
 
 /** Which codes a control may clear. Everything absent from this set is not recoverable. */
-export const RECOVERABLE_HOLD_REASON_CODES: ReadonlySet<HoldReasonCode> = new Set([
+const RECOVERABLE_HOLD_REASON_CODES: ReadonlySet<HoldReasonCode> = new Set([
   'scoped_pause',
   'mailbox_disconnected',
   'coverage_incomplete',
@@ -95,7 +95,7 @@ export function knownBlockedActionKinds(values: readonly string[]): BlockedActio
 }
 
 /** The recovery controls a hold may expose. `null` means the hold exposes none. */
-export const HOLD_RECOVERY_ACTIONS = [
+const HOLD_RECOVERY_ACTIONS = [
   'resume_after_review',
   'reconnect_mailbox',
   'confirm_reply',
@@ -105,10 +105,9 @@ export const HOLD_RECOVERY_ACTIONS = [
   'advance_generation',
 ] as const;
 export const holdRecoveryActionSchema = z.enum(HOLD_RECOVERY_ACTIONS);
-export type HoldRecoveryAction = z.infer<typeof holdRecoveryActionSchema>;
 
 /** The scopes a hold may cover (specification 4.3). */
-export const HOLD_SCOPE_KINDS = [
+const HOLD_SCOPE_KINDS = [
   'workspace',
   'owner',
   'mailbox',
@@ -118,4 +117,3 @@ export const HOLD_SCOPE_KINDS = [
   'channel',
 ] as const;
 export const holdScopeKindSchema = z.enum(HOLD_SCOPE_KINDS);
-export type HoldScopeKind = z.infer<typeof holdScopeKindSchema>;

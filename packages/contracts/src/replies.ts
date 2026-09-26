@@ -43,8 +43,8 @@ export const REPLY_NEXT_ACTIONS = [
 ] as const;
 export type ReplyNextAction = (typeof REPLY_NEXT_ACTIONS)[number];
 
-export const REPLY_SUGGESTION_SOURCES = ['deterministic', 'model', 'none'] as const;
-export const REPLY_SIGNAL_LAYERS = ['deterministic', 'model'] as const;
+const REPLY_SUGGESTION_SOURCES = ['deterministic', 'model', 'none'] as const;
+const REPLY_SIGNAL_LAYERS = ['deterministic', 'model'] as const;
 
 /**
  * What a confirmation actually did, and nothing it did not
@@ -71,7 +71,7 @@ export type ClassifierEffort = (typeof CLASSIFIER_EFFORTS)[number];
 // The card
 // ---------------------------------------------------------------------------
 
-export const replyHoldDtoSchema = z.object({
+const replyHoldDtoSchema = z.object({
   holdId: uuid,
   opportunityId: uuid,
   reasonCode: holdReasonCodeSchema,
@@ -82,7 +82,7 @@ export const replyHoldDtoSchema = z.object({
 });
 export type ReplyHoldDto = z.infer<typeof replyHoldDtoSchema>;
 
-export const replySignalDtoSchema = z.object({
+const replySignalDtoSchema = z.object({
   /** A rule name. Open, because the model layer names its own signals. */
   rule: z.string().min(1),
   /**
@@ -94,7 +94,7 @@ export const replySignalDtoSchema = z.object({
 });
 export type ReplySignalDto = z.infer<typeof replySignalDtoSchema>;
 
-export const replyCandidateDtoSchema = z.object({
+const replyCandidateDtoSchema = z.object({
   opportunityId: uuid,
   firmId: uuid,
   /** Empty when the candidate firm could not be read; a firm name is at most 300 characters. */
@@ -103,7 +103,7 @@ export const replyCandidateDtoSchema = z.object({
 });
 export type ReplyCandidateDto = z.infer<typeof replyCandidateDtoSchema>;
 
-export const replyConfirmationDtoSchema = z.object({
+const replyConfirmationDtoSchema = z.object({
   id: uuid,
   messageId: uuid,
   firmId: uuid,
@@ -180,7 +180,6 @@ export const replyListResponseSchema = z.object({
   businessDate: z.iso.date(),
   cards: z.array(replyCardDtoSchema),
 });
-export type ReplyListResponse = z.infer<typeof replyListResponseSchema>;
 
 /** `POST /replies/settings`: `ClassifierSettings` in `packages/domain/classification/types.ts`. */
 export const classifierSettingsResponseSchema = z.object({

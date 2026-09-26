@@ -59,43 +59,29 @@ export const CRM_REFUSAL_CODES = [
   'merge_already_performed',
   'invalid_input',
 ] as const;
-export const crmRefusalCodeSchema = z.enum(CRM_REFUSAL_CODES);
-export type CrmRefusalCode = z.infer<typeof crmRefusalCodeSchema>;
+export type CrmRefusalCode = (typeof CRM_REFUSAL_CODES)[number];
 
 // ---------------------------------------------------------------------------
 // Shared field shapes
 // ---------------------------------------------------------------------------
 
-/** A US state or territory code. Shape only; `@fss/domain` knows the list. */
-export const regionCodeSchema = z.string().regex(/^[A-Z]{2}$/, 'a two-letter region code');
-export const postalCodeSchema = z
-  .string()
-  .regex(/^[A-Za-z0-9][A-Za-z0-9 -]{1,11}$/, 'a postal code');
-export const websiteSchema = z.url().max(500).startsWith('http');
-export const firmNameSchema = z.string().trim().min(1).max(300);
-export const contactNameSchema = z.string().trim().min(1).max(200);
-export const emailAddressSchema = z
-  .string()
-  .max(320)
-  .regex(/^[^@\s]+@[^@\s]+\.[^@\s]+$/u, 'an email address');
-export const reasonSchema = z.string().trim().min(1).max(500);
+const firmNameSchema = z.string().trim().min(1).max(300);
+const contactNameSchema = z.string().trim().min(1).max(200);
+const reasonSchema = z.string().trim().min(1).max(500);
 
 export const routeEligibilitySchema = z.enum(['candidate', 'usable', 'invalid', 'retired']);
-export type RouteEligibility = z.infer<typeof routeEligibilitySchema>;
 
-export const routeKindSchema = z.enum(['phone', 'email']);
-export type RouteKind = z.infer<typeof routeKindSchema>;
+const routeKindSchema = z.enum(['phone', 'email']);
 
-export const routeSourceSchema = z.enum(['research_provider', 'salesperson', 'import', 'website', 'reply']);
-export const technicalValidationSchema = z.enum(['unknown', 'passed', 'failed']);
+const routeSourceSchema = z.enum(['research_provider', 'salesperson', 'import', 'website', 'reply']);
+const technicalValidationSchema = z.enum(['unknown', 'passed', 'failed']);
 
-export const controlModeSchema = z.enum(['automated', 'manual']);
-export type ControlMode = z.infer<typeof controlModeSchema>;
+const controlModeSchema = z.enum(['automated', 'manual']);
 
-export const opportunityStatusSchema = z.enum(['open', 'won', 'lost']);
+const opportunityStatusSchema = z.enum(['open', 'won', 'lost']);
 
 /** Why a firm has no established zone. `authorizeDial` refuses every one of them (9.2). */
-export const zoneUnresolvedReasonSchema = z.enum([
+const zoneUnresolvedReasonSchema = z.enum([
   'no_location',
   'state_spans_zones',
   'state_unknown',
@@ -124,7 +110,7 @@ export const firmIdentityDtoSchema = z.strictObject({
 });
 export type FirmIdentityDto = z.infer<typeof firmIdentityDtoSchema>;
 
-export const contactDtoSchema = z.strictObject({
+const contactDtoSchema = z.strictObject({
   id: uuid,
   fullName: contactNameSchema,
   title: z.string().nullable(),
@@ -168,9 +154,8 @@ export const firmReadDtoSchema = z.discriminatedUnion('visibility', [
   z.strictObject({ visibility: z.literal('any_active_member'), firm: firmIdentityDtoSchema }),
   z.strictObject({ visibility: z.literal('assigned_or_admin'), firm: firmDetailDtoSchema }),
 ]);
-export type FirmReadDto = z.infer<typeof firmReadDtoSchema>;
 
-export const pipelineStageDtoSchema = z.strictObject({
+const pipelineStageDtoSchema = z.strictObject({
   id: uuid,
   key: z.string(),
   displayName: z.string(),
@@ -297,7 +282,7 @@ export const recordEvidenceCommandSchema = z.strictObject({
 });
 
 /** A merge conflict shown for resolution rather than decided (7.2). */
-export const mergeConflictSchema = z.strictObject({
+const mergeConflictSchema = z.strictObject({
   field: z.string(),
   source: z.string().nullable(),
   target: z.string().nullable(),
@@ -314,11 +299,9 @@ export type MergeConflict = z.infer<typeof mergeConflictSchema>;
 
 /** `GET /pipeline/stages`. */
 export const pipelineStagesResponseSchema = z.object({ stages: z.array(pipelineStageDtoSchema) });
-export type PipelineStagesResponse = z.infer<typeof pipelineStagesResponseSchema>;
 
 /** `GET /firms`: Appendix F row 1 for every firm the caller may list. */
 export const firmListResponseSchema = z.object({ firms: z.array(firmIdentityDtoSchema) });
-export type FirmListResponse = z.infer<typeof firmListResponseSchema>;
 
 /** `POST /pipeline/board`: `PipelineBoardDto` in `packages/domain/crm/board.ts`. */
 export const pipelineBoardResponseSchema = z.object({
@@ -327,7 +310,6 @@ export const pipelineBoardResponseSchema = z.object({
   opportunityIdByFirmId: z.record(uuid, uuid),
   unplacedFirms: z.array(firmIdentityDtoSchema),
 });
-export type PipelineBoardResponse = z.infer<typeof pipelineBoardResponseSchema>;
 
 /**
  * A refused `POST /merges/firms` or `/merges/contacts` (audit item D05).
@@ -342,7 +324,6 @@ export const mergeRefusalSchema = z.object({
   reason: z.string().min(1).max(80),
   conflicts: z.array(mergeConflictSchema).optional(),
 });
-export type MergeRefusal = z.infer<typeof mergeRefusalSchema>;
 
 /** Kept exported so a caller can assert a value is really an E.164 route. */
 export { e164 as phoneRouteValueSchema };

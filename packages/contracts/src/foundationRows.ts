@@ -42,18 +42,6 @@ export const workspaceSchema = z.strictObject({
   createdAt: instant,
   updatedAt: instant,
 });
-export type Workspace = z.infer<typeof workspaceSchema>;
-
-export const userSchema = z.strictObject({
-  id: uuid,
-  /** The durable identifier. Email is display data and is deliberately not unique. */
-  googleSub: z.string().min(1).max(255),
-  email: z.string().max(320),
-  displayName: z.string().trim().min(1).max(200),
-  createdAt: instant,
-  updatedAt: instant,
-});
-export type User = z.infer<typeof userSchema>;
 
 /**
  * The `google_sub` a bootstrapped admin's `users` row carries until that person has
@@ -82,19 +70,6 @@ export function provisionalGoogleSub(email: string): string {
 }
 
 export const membershipRoleSchema = z.enum(['admin', 'salesperson']);
-export type MembershipRole = z.infer<typeof membershipRoleSchema>;
-
-export const workspaceMembershipSchema = z.strictObject({
-  id: uuid,
-  workspaceId: uuid,
-  userId: uuid,
-  role: membershipRoleSchema,
-  status: z.enum(['active', 'inactive']),
-  createdAt: instant,
-  updatedAt: instant,
-  deactivatedAt: instant.nullable(),
-});
-export type WorkspaceMembership = z.infer<typeof workspaceMembershipSchema>;
 
 export const deviceSchema = z.strictObject({
   id: uuid,
@@ -110,7 +85,6 @@ export const deviceSchema = z.strictObject({
   lastSeenAt: instant.nullable(),
   revokedAt: instant.nullable(),
 });
-export type Device = z.infer<typeof deviceSchema>;
 
 export const callingIdentitySchema = z
   .strictObject({
@@ -126,7 +100,6 @@ export const callingIdentitySchema = z
   })
   .refine(row => row.ownerUserId !== null || !row.enabled, 'a shared calling identity stays disabled')
   .refine(row => !row.enabled || row.verificationStatus === 'verified', 'an enabled identity is verified');
-export type CallingIdentity = z.infer<typeof callingIdentitySchema>;
 
 export const commandReceiptSchema = z.strictObject({
   workspaceId: uuid,
@@ -138,20 +111,6 @@ export const commandReceiptSchema = z.strictObject({
   result: z.unknown().nullable(),
   createdAt: instant,
 });
-export type CommandReceipt = z.infer<typeof commandReceiptSchema>;
-
-export const auditEventSchema = z.strictObject({
-  id: uuid,
-  workspaceId: uuid,
-  occurredAt: instant,
-  actorKind: z.enum(['user', 'admin', 'system', 'worker']),
-  actorUserId: uuid.nullable(),
-  action: z.string().trim().min(1).max(120),
-  subjectKind: z.string().trim().min(1).max(80),
-  subjectId: z.string().max(200).nullable(),
-  detail: z.record(z.string(), z.unknown()),
-});
-export type AuditEvent = z.infer<typeof auditEventSchema>;
 
 export const suppressionEventSchema = z.strictObject({
   workspaceId: uuid,
@@ -175,7 +134,6 @@ export const suppressionEventSchema = z.strictObject({
   supersedesEventId: z.string().max(200).nullable(),
   supersessionReason: z.enum(['mistaken_entry', 'correction', 'documented_reconsent']).nullable(),
 });
-export type SuppressionEvent = z.infer<typeof suppressionEventSchema>;
 
 export const activeHoldSchema = z
   .strictObject({
@@ -193,32 +151,6 @@ export const activeHoldSchema = z
     recoveryAction: holdRecoveryActionSchema.nullable(),
   })
   .refine(row => (row.scopeKind === 'workspace') === (row.scopeKey === null), 'a workspace hold names no scope key');
-export type ActiveHold = z.infer<typeof activeHoldSchema>;
-
-export const administrativePauseSchema = z.strictObject({
-  id: uuid,
-  workspaceId: uuid,
-  scopeKind: z.enum(['workspace', 'owner', 'mailbox', 'opportunity', 'channel', 'all_automation']),
-  scopeKey: z.string().max(200).nullable(),
-  channel: z.enum(['email', 'call', 'research']).nullable(),
-  reasonCode: holdReasonCodeSchema,
-  reasonNote: z.string().trim().min(1).max(500).nullable(),
-  holdId: uuid,
-  createdByUserId: uuid,
-  createdAt: instant,
-  releasedByUserId: uuid.nullable(),
-  releasedAt: instant.nullable(),
-});
-export type AdministrativePause = z.infer<typeof administrativePauseSchema>;
-
-export const systemGenerationSchema = z.strictObject({
-  generation: z.number().int().min(1),
-  reason: z.enum(['initial', 'restore_completed', 'operator_advance']),
-  establishedAt: instant,
-  establishedByUserId: uuid.nullable(),
-  notes: z.string().trim().min(1).max(1000).nullable(),
-});
-export type SystemGeneration = z.infer<typeof systemGenerationSchema>;
 
 export const RETENTION_DATA_KINDS = [
   'business_records',
@@ -233,20 +165,7 @@ export const RETENTION_DATA_KINDS = [
   'database_backups',
 ] as const;
 
-export const retentionPolicySchema = z.strictObject({
-  id: uuid,
-  workspaceId: uuid,
-  dataKind: z.enum(RETENTION_DATA_KINDS),
-  /** An ISO 8601 duration, or null for the indefinite dispositions. */
-  retentionInterval: z.string().max(60).nullable(),
-  disposition: z.enum(['delete', 'tombstone', 'retain_indefinitely', 'retain_with_business_record']),
-  effectiveFrom: instant,
-  updatedAt: instant,
-});
-export type RetentionPolicy = z.infer<typeof retentionPolicySchema>;
-
-export const jobStateSchema = z.enum(['queued', 'running', 'retryable', 'done', 'dead']);
-export type JobState = z.infer<typeof jobStateSchema>;
+const jobStateSchema = z.enum(['queued', 'running', 'retryable', 'done', 'dead']);
 
 export const jobSchema = z
   .strictObject({
@@ -271,20 +190,6 @@ export const jobSchema = z
     row => (row.state === 'running') === (row.leaseOwner !== null && row.leaseExpiresAt !== null),
     'a running job holds a lease and nothing else does',
   );
-export type Job = z.infer<typeof jobSchema>;
-
-export const dailyCounterSchema = z.strictObject({
-  workspaceId: uuid,
-  subjectKind: z.enum(['workspace', 'owner', 'mailbox', 'domain']),
-  subjectKey: z.string().trim().min(1).max(320),
-  counterKind: z.string().regex(/^[a-z][a-z0-9_]{2,63}$/),
-  businessDate,
-  /** The zone that produced the business date, stored beside it (Appendix D). */
-  businessTimeZone: ianaTimeZone,
-  count: z.number().int().min(0),
-  updatedAt: instant,
-});
-export type DailyCounter = z.infer<typeof dailyCounterSchema>;
 
 export const heartbeatSchema = z
   .strictObject({
@@ -299,4 +204,3 @@ export const heartbeatSchema = z
     row => (row.component === 'mailbox') === (row.workspaceId !== null),
     'a mailbox heartbeat is a workspace\'s; a service heartbeat is not',
   );
-export type Heartbeat = z.infer<typeof heartbeatSchema>;

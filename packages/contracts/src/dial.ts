@@ -25,7 +25,7 @@ import { STEP_NO_ANSWER_ACTIONS } from './sequences.ts';
  * of these is also a `hold_reason_codes` row, spelled identically, so a refusal and
  * the hold that caused it never say the same thing in two words.
  */
-export const DIAL_HOLD_REFUSAL_CODES = [
+const DIAL_HOLD_REFUSAL_CODES = [
   'firm_suppressed',
   'handle_suppressed',
   'manual_suppression_review',
@@ -55,7 +55,7 @@ export const DIAL_HOLD_REFUSAL_CODES = [
  * control that clears "this calling identity is not yours". See
  * `docs/decisions/g4-dial-refusal-codes.md`.
  */
-export const DIAL_REQUEST_REFUSAL_CODES = [
+const DIAL_REQUEST_REFUSAL_CODES = [
   'firm_unknown',
   'not_assigned',
   'zone_unresolved',
@@ -72,8 +72,8 @@ export const DIAL_REQUEST_REFUSAL_CODES = [
   'already_consumed',
 ] as const;
 
-export const DIAL_REFUSAL_CODES = [...DIAL_HOLD_REFUSAL_CODES, ...DIAL_REQUEST_REFUSAL_CODES] as const;
-export const dialRefusalCodeSchema = z.enum(DIAL_REFUSAL_CODES);
+const DIAL_REFUSAL_CODES = [...DIAL_HOLD_REFUSAL_CODES, ...DIAL_REQUEST_REFUSAL_CODES] as const;
+const dialRefusalCodeSchema = z.enum(DIAL_REFUSAL_CODES);
 export type DialRefusalCode = z.infer<typeof dialRefusalCodeSchema>;
 
 // ---------------------------------------------------------------------------
@@ -91,8 +91,8 @@ export type DialRefusalCode = z.infer<typeof dialRefusalCodeSchema>;
  * different evidence. A later call-back code would be a third value here and a third
  * branch in the CHECK. See `docs/decisions/g60-calling-identities-are-attested-in-version-one.md`.
  */
-export const CALLING_IDENTITY_VERIFICATION_METHODS = ['owner_attestation', 'admin_attestation'] as const;
-export const callingIdentityVerificationMethodSchema = z.enum(CALLING_IDENTITY_VERIFICATION_METHODS);
+const CALLING_IDENTITY_VERIFICATION_METHODS = ['owner_attestation', 'admin_attestation'] as const;
+const callingIdentityVerificationMethodSchema = z.enum(CALLING_IDENTITY_VERIFICATION_METHODS);
 export type CallingIdentityVerificationMethod = z.infer<typeof callingIdentityVerificationMethodSchema>;
 
 /**
@@ -108,23 +108,20 @@ export type CallingIdentityVerificationMethod = z.infer<typeof callingIdentityVe
  * the reason a colleague's Today card is `not_found`: the difference would tell them
  * what exists.
  */
-export const CALLING_IDENTITY_REFUSAL_CODES = [
+export type CallingIdentityRefusalCode =
   /** Not `+`, a country code and 8 to 15 digits in all. No country is ever assumed. */
-  'number_invalid',
+  | 'number_invalid'
   /** The label is empty after trimming or longer than 80 characters. */
-  'label_invalid',
+  | 'label_invalid'
   /** The owner is not an active member of this workspace. */
-  'owner_not_member',
+  | 'owner_not_member'
   /** Registering, attesting or retiring somebody else's number is an admin's act. */
-  'admin_only',
+  | 'admin_only'
   /** The number is already registered in this workspace to somebody else. */
-  'number_registered_to_another',
-  'identity_unknown',
+  | 'number_registered_to_another'
+  | 'identity_unknown'
   /** A null-owner row is the deferred shared line and stays disabled (9.1). */
-  'identity_shared_line_disabled',
-] as const;
-export const callingIdentityRefusalCodeSchema = z.enum(CALLING_IDENTITY_REFUSAL_CODES);
-export type CallingIdentityRefusalCode = z.infer<typeof callingIdentityRefusalCodeSchema>;
+  | 'identity_shared_line_disabled';
 
 /** One calling identity as the API hands it out: to its owner, or to an admin. */
 export const callingIdentityDtoSchema = z.strictObject({
@@ -153,7 +150,6 @@ export type CallingIdentityDto = z.infer<typeof callingIdentityDtoSchema>;
 export const callingIdentityListSchema = z.strictObject({
   identities: z.array(callingIdentityDtoSchema),
 });
-export type CallingIdentityList = z.infer<typeof callingIdentityListSchema>;
 
 /**
  * What a calling-number command returns inside the command envelope: the outcome and
@@ -161,12 +157,11 @@ export type CallingIdentityList = z.infer<typeof callingIdentityListSchema>;
  * outcomes are the four `registerCallingIdentity`, `verifyCallingIdentity` and
  * `disableCallingIdentity` in `packages/domain/dial/identities.ts` can return.
  */
-export const CALLING_IDENTITY_CHANGE_OUTCOMES = ['created', 'existing', 'verified', 'disabled'] as const;
+const CALLING_IDENTITY_CHANGE_OUTCOMES = ['created', 'existing', 'verified', 'disabled'] as const;
 export const callingIdentityChangeResultSchema = z.object({
   outcome: z.enum(CALLING_IDENTITY_CHANGE_OUTCOMES),
   identity: callingIdentityDtoSchema,
 });
-export type CallingIdentityChangeResult = z.infer<typeof callingIdentityChangeResultSchema>;
 
 // ---------------------------------------------------------------------------
 // Call outcomes (specification 9.1)
@@ -189,64 +184,58 @@ export const CALL_OUTCOMES = [
   'busy',
   'policy_or_technical_failure',
 ] as const;
-export const callOutcomeSchema = z.enum(CALL_OUTCOMES);
+const callOutcomeSchema = z.enum(CALL_OUTCOMES);
 export type CallOutcome = z.infer<typeof callOutcomeSchema>;
 
 /** What the outcome does to the sequence step. The sequences lane reads the recorded value. */
-export const CALL_STEP_EFFECTS = ['complete_and_advance', 'advance', 'retry_call', 'none'] as const;
-export const callStepEffectSchema = z.enum(CALL_STEP_EFFECTS);
+const CALL_STEP_EFFECTS = ['complete_and_advance', 'advance', 'retry_call', 'none'] as const;
+const callStepEffectSchema = z.enum(CALL_STEP_EFFECTS);
 export type CallStepEffect = z.infer<typeof callStepEffectSchema>;
 
 /** What a step configured for a no-answer does next, when the sequence says (9.1). */
-export const callRetryBehaviourSchema = z.enum(STEP_NO_ANSWER_ACTIONS);
+const callRetryBehaviourSchema = z.enum(STEP_NO_ANSWER_ACTIONS);
 
 // ---------------------------------------------------------------------------
 // Suppression (specification 10.2)
 // ---------------------------------------------------------------------------
 
-export const SUPPRESSION_SCOPES = ['firm', 'handle'] as const;
-export const suppressionScopeSchema = z.enum(SUPPRESSION_SCOPES);
+const SUPPRESSION_SCOPES = ['firm', 'handle'] as const;
+const suppressionScopeSchema = z.enum(SUPPRESSION_SCOPES);
 export type SuppressionScope = z.infer<typeof suppressionScopeSchema>;
 
-export const SUPPRESSION_SOURCES = [
-  'prospect_opt_out',
-  'prospect_do_not_call',
-  'salesperson_manual',
-  'import',
+export type SuppressionSource =
+  | 'prospect_opt_out'
+  | 'prospect_do_not_call'
+  | 'salesperson_manual'
+  | 'import'
   // 10.3's deletion tombstone. Terminal on commit and never salesperson-reversible,
   // exactly like the two prospect-originated sources, but with its own name so the
   // audit trail does not claim a prospect opted out when an admin ran a deletion.
   // Deliberately absent from `recordSuppressionCommandSchema` below: only
   // `commitDeletion` writes one, and no client may mint one through the ordinary
   // suppression endpoint.
-  'deletion_tombstone',
-  'mistaken_entry_correction',
-  'admin_supersession',
-] as const;
-export const suppressionSourceSchema = z.enum(SUPPRESSION_SOURCES);
-export type SuppressionSource = z.infer<typeof suppressionSourceSchema>;
+  | 'deletion_tombstone'
+  | 'mistaken_entry_correction'
+  | 'admin_supersession';
 
 /** The two reasons an admin may supersede after the ten minutes (10.2). */
-export const ADMIN_SUPERSESSION_REASONS = ['correction', 'documented_reconsent'] as const;
-export const adminSupersessionReasonSchema = z.enum(ADMIN_SUPERSESSION_REASONS);
+const ADMIN_SUPERSESSION_REASONS = ['correction', 'documented_reconsent'] as const;
+const adminSupersessionReasonSchema = z.enum(ADMIN_SUPERSESSION_REASONS);
 
-export const SUPPRESSION_REFUSAL_CODES = [
-  'suppression_unknown',
-  'not_your_event',
-  'not_salesperson_originated',
-  'window_expired',
-  'already_finalized',
-  'already_superseded',
-  'canonicalizer_unsupported',
-  'handle_uncanonical',
-  'firm_unknown',
-  'not_assigned',
-  'admin_only',
-  'journal_unavailable',
-  'invalid_input',
-] as const;
-export const suppressionRefusalCodeSchema = z.enum(SUPPRESSION_REFUSAL_CODES);
-export type SuppressionRefusalCode = z.infer<typeof suppressionRefusalCodeSchema>;
+export type SuppressionRefusalCode =
+  | 'suppression_unknown'
+  | 'not_your_event'
+  | 'not_salesperson_originated'
+  | 'window_expired'
+  | 'already_finalized'
+  | 'already_superseded'
+  | 'canonicalizer_unsupported'
+  | 'handle_uncanonical'
+  | 'firm_unknown'
+  | 'not_assigned'
+  | 'admin_only'
+  | 'journal_unavailable'
+  | 'invalid_input';
 
 /** Ten minutes of database time (10.2). The client shows it; the server enforces it. */
 export const MANUAL_SUPPRESSION_CORRECTION_SECONDS = 600;
@@ -255,12 +244,12 @@ export const MANUAL_SUPPRESSION_CORRECTION_SECONDS = 600;
 // Pauses (specification 10.1)
 // ---------------------------------------------------------------------------
 
-export const PAUSE_SCOPE_KINDS = ['workspace', 'owner', 'mailbox', 'opportunity', 'channel', 'all_automation'] as const;
-export const pauseScopeKindSchema = z.enum(PAUSE_SCOPE_KINDS);
+const PAUSE_SCOPE_KINDS = ['workspace', 'owner', 'mailbox', 'opportunity', 'channel', 'all_automation'] as const;
+const pauseScopeKindSchema = z.enum(PAUSE_SCOPE_KINDS);
 export type PauseScopeKind = z.infer<typeof pauseScopeKindSchema>;
 
 export const PAUSE_CHANNELS = ['email', 'call', 'research'] as const;
-export const pauseChannelSchema = z.enum(PAUSE_CHANNELS);
+const pauseChannelSchema = z.enum(PAUSE_CHANNELS);
 export type PauseChannel = z.infer<typeof pauseChannelSchema>;
 
 // ---------------------------------------------------------------------------
@@ -299,20 +288,6 @@ export const consumedTicketDtoSchema = z.strictObject({
 });
 export type ConsumedTicketDto = z.infer<typeof consumedTicketDtoSchema>;
 
-export const statePostureDtoSchema = z.strictObject({
-  id: uuid,
-  state: z.string().regex(/^[A-Z]{2}$/u),
-  revision: z.number().int().min(1),
-  effectiveFrom: instant,
-  effectiveTo: instant.nullable(),
-  reviewAt: instant,
-  rulesRevision: z.number().int().min(1),
-  confirmedStatements: z.array(z.string().min(1).max(80)),
-  sources: z.array(z.strictObject({ title: z.string().max(400), url: z.url().max(500) })),
-  revokedAt: instant.nullable(),
-});
-export type StatePostureDto = z.infer<typeof statePostureDtoSchema>;
-
 /*
  * What the postures form reads (lane g84, audit item G04). `statePostureDtoSchema`
  * above is strict and has no `confirmedByUserId`, which `listStatePostures` has always
@@ -339,9 +314,8 @@ export type StatePostureView = z.infer<typeof statePostureViewSchema>;
 
 /** `GET /postures`. */
 export const statePostureListResponseSchema = z.object({ postures: z.array(statePostureViewSchema) });
-export type StatePostureListResponse = z.infer<typeof statePostureListResponseSchema>;
 
-export const postureCitationSchema = z.object({ title: z.string(), url: z.string(), quote: z.string() });
+const postureCitationSchema = z.object({ title: z.string(), url: z.string(), quote: z.string() });
 export type PostureCitationDto = z.infer<typeof postureCitationSchema>;
 
 /**
@@ -368,31 +342,6 @@ export const postureReferenceResponseSchema = z.object({
 });
 export type PostureReferenceResponse = z.infer<typeof postureReferenceResponseSchema>;
 
-export const callbackDtoSchema = z.strictObject({
-  id: uuid,
-  firmId: uuid,
-  contactId: uuid.nullable(),
-  assignedUserId: uuid,
-  requestedLocalDate: z.iso.date(),
-  requestedLocalTime: z.string().max(8).nullable(),
-  sourceTimeZone: z.string().max(64),
-  dueAt: instant,
-  status: z.enum(['open', 'completed', 'cancelled']),
-});
-export type CallbackDto = z.infer<typeof callbackDtoSchema>;
-
-/** Appendix F row 1: a call outcome without its note is visible to any active member. */
-export const callLogDtoSchema = z.strictObject({
-  id: uuid,
-  firmId: uuid,
-  contactId: uuid.nullable(),
-  outcome: callOutcomeSchema,
-  stepEffect: callStepEffectSchema,
-  occurredAt: instant,
-  actorUserId: uuid,
-});
-export type CallLogDto = z.infer<typeof callLogDtoSchema>;
-
 // ---------------------------------------------------------------------------
 // Command bodies
 // ---------------------------------------------------------------------------
@@ -408,7 +357,6 @@ export const dialCheckRequestSchema = z.strictObject({
   firmId: uuid,
   routeId: uuid.optional(),
 });
-export type DialCheckRequest = z.infer<typeof dialCheckRequestSchema>;
 
 /**
  * The advice: `callable`, and every reason that applies (not only the first), in 9.2's
@@ -416,7 +364,7 @@ export type DialCheckRequest = z.infer<typeof dialCheckRequestSchema>;
  * and logs the call afterwards with `POST /calls/log`, which needs no ticket. `telUri`
  * is null whenever `callable` is false, so a refused call has nothing to open.
  */
-export const dialAdviceSchema = z.object({
+const dialAdviceSchema = z.object({
   firmId: uuid,
   callable: z.boolean(),
   reasons: z.array(dialRefusalCodeSchema),
@@ -428,11 +376,9 @@ export const dialAdviceSchema = z.object({
   firmLocalTime: z.string().max(5).nullable(),
   at: instant,
 });
-export type DialAdvice = z.infer<typeof dialAdviceSchema>;
 
 /** `POST /dial/check`'s answer. */
 export const dialCheckResponseSchema = z.object({ advice: dialAdviceSchema });
-export type DialCheckResponse = z.infer<typeof dialCheckResponseSchema>;
 
 /**
  * @deprecated (remove after desktop 1.0.12) — the ticket pair `/dial/authorize` and
@@ -531,10 +477,9 @@ export const CALL_OCCURRED_AT_TOLERANCE_SECONDS = 120;
  *  * `effects_not_applied` — applying the outcome was refused part-way. Every effect
  *    was rolled back to a savepoint; the call itself is recorded.
  */
-export const CALL_FOLLOW_UP_KINDS = ['callback_time_needed', 'route_not_named', 'effects_not_applied'] as const;
-export type CallFollowUpKind = (typeof CALL_FOLLOW_UP_KINDS)[number];
+const CALL_FOLLOW_UP_KINDS = ['callback_time_needed', 'route_not_named', 'effects_not_applied'] as const;
 
-export const callFollowUpSchema = z.object({
+const callFollowUpSchema = z.object({
   kind: z.enum(CALL_FOLLOW_UP_KINDS),
   /** A stable code: `no_instant`, `instant_mismatch`, `instant_invalid`, or the refusal. */
   reason: z.string().max(80),
@@ -552,7 +497,7 @@ export type CallFollowUp = z.infer<typeof callFollowUpSchema>;
  *  * `not_completed` — wrong number or a failure to place the call: the task stays.
  *  * `not_open` — the step had already finished; the call is history only.
  */
-export const CALL_STEP_APPLICATIONS = [
+const CALL_STEP_APPLICATIONS = [
   'completed',
   'completed_and_stopped',
   'retry_scheduled',
@@ -664,7 +609,6 @@ export const allowCallingStatesResultSchema = z.object({
   added: z.array(z.string().regex(/^[A-Z]{2}$/u)),
   alreadyAllowed: z.array(z.string().regex(/^[A-Z]{2}$/u)),
 });
-export type AllowCallingStatesResult = z.infer<typeof allowCallingStatesResultSchema>;
 
 export const revokeStatePostureCommandSchema = z.strictObject({
   ...commandEnvelope,

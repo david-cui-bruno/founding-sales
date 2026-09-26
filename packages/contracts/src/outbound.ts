@@ -15,7 +15,7 @@ import { instant, uuid } from './foundationRows.ts';
  */
 
 /** Appendix B's state machine (`OUTBOUND_STATES`, `packages/domain/outbound/types.ts`). */
-export const OUTBOUND_STATES = ['prepared', 'held', 'dispatching', 'reconciling', 'sent', 'unknown_terminal'] as const;
+const OUTBOUND_STATES = ['prepared', 'held', 'dispatching', 'reconciling', 'sent', 'unknown_terminal'] as const;
 export type OutboundState = (typeof OUTBOUND_STATES)[number];
 
 /** `describeDomain` in the route: the checklist and the enable. */
@@ -36,13 +36,12 @@ export const sendingDomainStatusSchema = z.object({
   /** @deprecated Always `true`; see `personalGmailGuardPer24h`. */
   replyOnlyOptOut: z.boolean(),
 });
-export type SendingDomainStatus = z.infer<typeof sendingDomainStatusSchema>;
 
 /**
  * @deprecated The guard was deleted on 26 Sep 2026; the API answers a constant decision
  * that always allows. Kept for desktops up to 1.0.10; remove in wave 2.
  */
-export const domainGuardDecisionSchema = z.object({
+const domainGuardDecisionSchema = z.object({
   allowed: z.boolean(),
   applies: z.boolean(),
   used: z.number().int().min(0),
@@ -54,20 +53,20 @@ export const domainGuardDecisionSchema = z.object({
  * @deprecated The recipient count went with the guard on 26 Sep 2026; the API answers
  * zeros. Kept for desktops up to 1.0.10; remove in wave 2.
  */
-export const personalGmailRecipientsSchema = z.object({
+const personalGmailRecipientsSchema = z.object({
   automated: z.number().int().min(0),
   direct: z.number().int().min(0),
   total: z.number().int().min(0),
 });
 
 /** `outboundDoubtCounts`. */
-export const outboundDoubtSchema = z.object({
+const outboundDoubtSchema = z.object({
   reconciling: z.number().int().min(0),
   unresolvedTerminal: z.number().int().min(0),
 });
 
 /** One mailbox's ramp, present only when the read named a `mailboxId`. */
-export const mailboxRampStatusSchema = z.object({
+const mailboxRampStatusSchema = z.object({
   mailboxId: uuid,
   healthySendingDays: z.number().int().min(0),
   effectiveCap: z.number().int().min(0),
@@ -75,10 +74,9 @@ export const mailboxRampStatusSchema = z.object({
   raisedDailyCap: z.number().int().min(0).nullable(),
   lastHealthFailure: z.string().nullable(),
 });
-export type MailboxRampStatus = z.infer<typeof mailboxRampStatusSchema>;
 
 /** One fence, present only when the read named an `outboundMessageId`. Never a subject or body. */
-export const outboundFenceStatusSchema = z.object({
+const outboundFenceStatusSchema = z.object({
   id: uuid,
   state: z.enum(OUTBOUND_STATES),
   recipientAddress: z.string(),
@@ -109,7 +107,6 @@ export const outboundStatusResponseSchema = z.object({
   ramp: mailboxRampStatusSchema.nullable(),
   fence: outboundFenceStatusSchema.nullable(),
 });
-export type OutboundStatusResponse = z.infer<typeof outboundStatusResponseSchema>;
 
 /**
  * `POST /outbound/cap/override` (wave 2, S4.6): the admin raises a mailbox's daily cap to
@@ -123,7 +120,6 @@ export const overrideMailboxRaiseCommandSchema = z.strictObject({
   mailboxId: uuid,
   raiseTo: z.number().int().min(1).max(100).nullable(),
 });
-export type OverrideMailboxRaiseCommand = z.infer<typeof overrideMailboxRaiseCommandSchema>;
 
 /**
  * What the override answers inside the command envelope. `warning` is the part of the
@@ -138,4 +134,3 @@ export const overrideMailboxRaiseResultSchema = z.object({
   healthySendingDays: z.number().int().min(0),
   warning: z.enum(['ramp_not_settled', 'health_not_sustained']).nullable(),
 });
-export type OverrideMailboxRaiseResult = z.infer<typeof overrideMailboxRaiseResultSchema>;

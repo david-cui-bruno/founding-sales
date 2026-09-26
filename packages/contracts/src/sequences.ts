@@ -42,9 +42,9 @@ export const REMOVED_STEP_CHANNELS = ['linkedin'] as const;
 export type RemovedStepChannel = (typeof REMOVED_STEP_CHANNELS)[number];
 
 /** Why a removed step is held, on the resume review. Not a `hold_reason_codes` row. */
-export const REMOVED_STEP_HELD_REASON = 'channel_removed' as const;
+const REMOVED_STEP_HELD_REASON = 'channel_removed' as const;
 
-export const SEQUENCE_VERSION_STATES = ['draft', 'published', 'retired'] as const;
+const SEQUENCE_VERSION_STATES = ['draft', 'published', 'retired'] as const;
 export type SequenceVersionState = (typeof SEQUENCE_VERSION_STATES)[number];
 
 /** 11.2's terminal conditions. A version may not opt out of any of them. */
@@ -63,7 +63,7 @@ export const STEP_NO_ANSWER_ACTIONS = ['advance', 'retry_call'] as const;
  * than seven days, and the scheduler resumes such an enrollment once its holds clear
  * (wave 2, S4.1). @deprecated value `review_required` (remove after migration 0019).
  */
-export const ENROLLMENT_STATES = ['active', 'review_required', 'completed', 'stopped'] as const;
+const ENROLLMENT_STATES = ['active', 'review_required', 'completed', 'stopped'] as const;
 export type EnrollmentState = (typeof ENROLLMENT_STATES)[number];
 
 export const ENROLLMENT_END_REASONS = [
@@ -101,7 +101,7 @@ export type StepResult = (typeof STEP_RESULTS)[number];
  * column is null for every template today and a second CHECK refuses `generated`
  * until 11.1's generator exists; the vocabulary is the column's.
  */
-export const PERSONALIZATION_STRATEGIES = ['deterministic', 'generated'] as const;
+const PERSONALIZATION_STRATEGIES = ['deterministic', 'generated'] as const;
 
 // ---------------------------------------------------------------------------
 // The DTOs
@@ -115,7 +115,7 @@ export const sequenceDelaySchema = z.discriminatedUnion('unit', [
 export type SequenceDelay = z.infer<typeof sequenceDelaySchema>;
 
 /** One step of a current channel, as `toStep` in `packages/domain/sequences/rows.ts` maps it. */
-export const currentSequenceStepDtoSchema = z.object({
+const currentSequenceStepDtoSchema = z.object({
   id: uuid,
   /** On every step, because the step table is keyed by it. D01 was a Mac that forbade it. */
   sequenceVersionId: uuid,
@@ -131,7 +131,7 @@ export const currentSequenceStepDtoSchema = z.object({
  * and what it was, and nothing it carried. `sequenceVersionForDisplay` in
  * `packages/domain/sequences/definitions.ts` maps it.
  */
-export const removedSequenceStepDtoSchema = z.object({
+const removedSequenceStepDtoSchema = z.object({
   id: uuid,
   sequenceVersionId: uuid,
   ordinal: z.number().int().min(1),
@@ -195,7 +195,6 @@ export type TemplateVersionDto = z.infer<typeof templateVersionDtoSchema>;
  * an older Mac refuse the answer.
  */
 export const templateCommandResultSchema = templateVersionDtoSchema.extend({ warnings: z.array(z.string()) });
-export type TemplateCommandResult = z.infer<typeof templateCommandResultSchema>;
 
 /**
  * The accepted result of `POST /templates/update` (edit in place) and of
@@ -205,7 +204,6 @@ export type TemplateCommandResult = z.infer<typeof templateCommandResultSchema>;
  * `template_unapproved:<issue>,…`, and writes nothing.
  */
 export const templateSaveResultSchema = templateCommandResultSchema.extend({ issues: z.array(z.string()) });
-export type TemplateSaveResult = z.infer<typeof templateSaveResultSchema>;
 
 /**
  * One enrollment, as `toEnrollment` maps it. The four fields a Mac once refused (D02)
@@ -237,25 +235,21 @@ export type EnrollmentDto = z.infer<typeof enrollmentDtoSchema>;
 
 /** `GET /sequences`. */
 export const sequencesResponseSchema = z.object({ sequences: z.array(sequenceSummaryDtoSchema) });
-export type SequencesResponse = z.infer<typeof sequencesResponseSchema>;
 
 /** `POST /sequences/versions`: every version of one sequence, newest first, with its steps. */
 export const sequenceVersionsResponseSchema = z.object({ versions: z.array(sequenceVersionDtoSchema) });
-export type SequenceVersionsResponse = z.infer<typeof sequenceVersionsResponseSchema>;
 
 /** `POST /templates`. */
 export const templateVersionsResponseSchema = z.object({ templates: z.array(templateVersionDtoSchema) });
-export type TemplateVersionsResponse = z.infer<typeof templateVersionsResponseSchema>;
 
 /** `POST /enrollments`. `asOf` is database time — an instant, not merely a string. */
 export const enrollmentsResponseSchema = z.object({ asOf: instant, enrollments: z.array(enrollmentDtoSchema) });
-export type EnrollmentsResponse = z.infer<typeof enrollmentsResponseSchema>;
 
 // ---------------------------------------------------------------------------
 // The resume review (lane g88, audit G06)
 // ---------------------------------------------------------------------------
 
-export const STEP_EXECUTION_STATES = ['pending', 'held', 'dispatched', 'completed', 'cancelled'] as const;
+const STEP_EXECUTION_STATES = ['pending', 'held', 'dispatched', 'completed', 'cancelled'] as const;
 export type StepExecutionState = (typeof STEP_EXECUTION_STATES)[number];
 
 /**
@@ -264,10 +258,9 @@ export type StepExecutionState = (typeof STEP_EXECUTION_STATES)[number];
  * and is never sent. @deprecated value `review_required` (remove after desktop 1.0.12).
  */
 export const RESUME_DECISION_KINDS = ['still_held', 'review_required', 'resume'] as const;
-export type ResumeDecisionKind = (typeof RESUME_DECISION_KINDS)[number];
 
 /** One unexecuted step: where it is due now, and where a confirmed resume puts it. */
-export const currentResumePreviewStepSchema = z.object({
+const currentResumePreviewStepSchema = z.object({
   stepExecutionId: uuid,
   ordinal: z.number().int().min(1),
   channel: z.enum(STEP_CHANNELS),
@@ -282,7 +275,7 @@ export const currentResumePreviewStepSchema = z.object({
  * a resume leaves it held and unmoved (`proposedDueAt` is `dueAt`), and the worker holds
  * one that is still pending before it does anything else with it.
  */
-export const removedResumePreviewStepSchema = z.object({
+const removedResumePreviewStepSchema = z.object({
   stepExecutionId: uuid,
   ordinal: z.number().int().min(1),
   channel: z.literal('removed'),
@@ -298,7 +291,6 @@ export const resumePreviewStepSchema = z.discriminatedUnion('channel', [
   currentResumePreviewStepSchema,
   removedResumePreviewStepSchema,
 ]);
-export type ResumePreviewStepDto = z.infer<typeof resumePreviewStepSchema>;
 
 export const resumePreviewSchema = z.object({
   enrollmentId: uuid,
@@ -323,4 +315,3 @@ export type ResumePreviewDto = z.infer<typeof resumePreviewSchema>;
  * time it was computed at. A read; the confirmation is `/enrollments/resume`.
  */
 export const resumePreviewResponseSchema = z.object({ asOf: instant, preview: resumePreviewSchema });
-export type ResumePreviewResponse = z.infer<typeof resumePreviewResponseSchema>;

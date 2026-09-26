@@ -30,12 +30,11 @@ export type TodayItemKind = (typeof TODAY_ITEM_KINDS)[number];
 
 const firmName = z.string().min(1).max(300);
 
-export const todayCountsSchema = z.object({
+const todayCountsSchema = z.object({
   replies: z.number().int().min(0),
   emailsDue: z.number().int().min(0),
   callsDue: z.number().int().min(0),
 });
-export type TodayCounts = z.infer<typeof todayCountsSchema>;
 
 export const todayCardDtoSchema = z.object({
   firmId: uuid,
@@ -53,9 +52,8 @@ export const todayListResponseSchema = z.object({
   businessTimeZone: ianaTimeZone,
   cards: z.array(todayCardDtoSchema),
 });
-export type TodayListResponse = z.infer<typeof todayListResponseSchema>;
 
-export const todayTaskDtoSchema = z.object({
+const todayTaskDtoSchema = z.object({
   itemId: uuid,
   contactId: uuid.nullable(),
   contactName: z.string().max(200).nullable(),
@@ -104,13 +102,12 @@ export const todayFirmRequestSchema = z.strictObject({
   firmId: uuid,
   cardVersion: z.literal(TODAY_CARD_VERSION).optional(),
 });
-export type TodayFirmRequest = z.infer<typeof todayFirmRequestSchema>;
 
 /**
  * One dialable route on an expanded card (9.1, 9.2). The version is the one
  * `authorizeDial` compares, so a stale card cannot dial a replaced number.
  */
-export const todayRouteDtoSchema = z.object({
+const todayRouteDtoSchema = z.object({
   routeId: uuid,
   contactId: uuid.nullable(),
   e164,
@@ -176,4 +173,3 @@ export const todayPauseReleaseResultSchema = z.object({
   releasedAt: instant,
   resume: z.enum(['resume', 'still_held', 'review_required', 'not_applicable']),
 });
-export type TodayPauseReleaseResult = z.infer<typeof todayPauseReleaseResultSchema>;

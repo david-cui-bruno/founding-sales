@@ -46,10 +46,10 @@ export type ClientVersionRange = z.infer<typeof clientVersionRangeSchema>;
  * promise covers), so a new patch or minor on the line is admitted without the API
  * knowing its number. A build that turns out to be bad is named in `incompatible`.
  */
-export const clientVersionCeilingSchema = z
+const clientVersionCeilingSchema = z
   .string()
   .regex(/^(0|[1-9]\d*)\.((0|[1-9]\d*)\.)?x$/u, 'a release line such as 1.x or 1.4.x');
-export type ClientVersionCeiling = z.infer<typeof clientVersionCeilingSchema>;
+type ClientVersionCeiling = z.infer<typeof clientVersionCeilingSchema>;
 
 /**
  * The largest minor and patch number a line admits.
@@ -58,7 +58,7 @@ export type ClientVersionCeiling = z.infer<typeof clientVersionCeilingSchema>;
  * against that same version, so the API and a 1.0.x Mac reading the published range
  * can never disagree about a version: the ceiling is one number, spelled two ways.
  */
-export const CEILING_COMPONENT_LIMIT = 999;
+const CEILING_COMPONENT_LIMIT = 999;
 
 /** `1.x` → `1.999.999`; `1.4.x` → `1.4.999`. */
 export function ceilingMaximum(ceiling: ClientVersionCeiling): SemanticVersion {
@@ -141,7 +141,7 @@ export function compareVersions(left: SemanticVersion, right: SemanticVersion): 
   return 0;
 }
 
-export type ClientCompatibility =
+type ClientCompatibility =
   | { readonly kind: 'supported'; readonly version: SemanticVersion }
   | { readonly kind: 'upgrade_required'; readonly version: SemanticVersion; readonly minimum: SemanticVersion }
   | { readonly kind: 'api_behind_client'; readonly version: SemanticVersion; readonly maximum: SemanticVersion }
@@ -153,7 +153,7 @@ export type ClientCompatibility =
  * Either half of the gate: the API holds a policy, a Mac holds the range it was
  * published. They decide identically for every version the policy does not list.
  */
-export type ClientVersionGate = ClientVersionRange | ClientVersionPolicy;
+type ClientVersionGate = ClientVersionRange | ClientVersionPolicy;
 
 function rangeOf(gate: ClientVersionGate): ClientVersionRange {
   return 'ceiling' in gate ? publishedClientVersions(gate) : gate;

@@ -27,7 +27,6 @@ export const MAIL_COMMAND_ENVELOPE = Object.freeze({
 
 /** `POST /gmail/connect`: the envelope and nothing else. The scopes are not a parameter. */
 export const connectMailboxCommandSchema = z.object(MAIL_COMMAND_ENVELOPE).strict();
-export type ConnectMailboxCommand = z.infer<typeof connectMailboxCommandSchema>;
 
 /** `POST /gmail/disconnect`. Not offered by the Mac: see `docs/greenfield/mail.md`, the thirty-day rule. */
 export const disconnectMailboxCommandSchema = z
@@ -37,7 +36,6 @@ export const disconnectMailboxCommandSchema = z
     reason: z.string().trim().min(1).max(200),
   })
   .strict();
-export type DisconnectMailboxCommand = z.infer<typeof disconnectMailboxCommandSchema>;
 
 /**
  * What an accepted `connect_mailbox` command returns: Google's consent URL, which the
@@ -49,14 +47,11 @@ export const gmailConnectResultSchema = z.object({
   authorizationUrl: z.url(),
   expiresAt: instant,
 });
-export type GmailConnectResult = z.infer<typeof gmailConnectResultSchema>;
 
 export const MAILBOX_STATUSES = ['connected', 'disconnected', 'revoked'] as const;
-export type MailboxConnectionStatus = (typeof MAILBOX_STATUSES)[number];
 
 /** 12.3: a new mailbox proves a bounded baseline before automation begins. */
 export const MAILBOX_SYNC_STATES = ['baseline_pending', 'ready', 'recovering'] as const;
-export type MailboxSyncStateName = (typeof MAILBOX_SYNC_STATES)[number];
 
 /**
  * `GET /gmail/status`: the caller's own mailbox, or null when they have never connected

@@ -49,7 +49,7 @@ export const IMPORT_COLUMNS = [
   'contact_phone',
   'time_zone',
 ] as const;
-export const importColumnSchema = z.enum(IMPORT_COLUMNS);
+const importColumnSchema = z.enum(IMPORT_COLUMNS);
 export type ImportColumn = z.infer<typeof importColumnSchema>;
 
 /**
@@ -79,7 +79,7 @@ export const IMPORT_ISSUE_CODES = [
   'firm_ambiguous',
   'too_long',
 ] as const;
-export const importIssueCodeSchema = z.enum(IMPORT_ISSUE_CODES);
+const importIssueCodeSchema = z.enum(IMPORT_ISSUE_CODES);
 export type ImportIssueCode = z.infer<typeof importIssueCodeSchema>;
 
 export const importIssueSchema = z.object({ column: importColumnSchema, code: importIssueCodeSchema });
@@ -98,14 +98,13 @@ export const IMPORT_FILE_REFUSALS = [
   'csv_too_many_rows',
 ] as const;
 export type ImportFileRefusal = (typeof IMPORT_FILE_REFUSALS)[number];
-export const importFileRefusalSchema = z.enum(IMPORT_FILE_REFUSALS);
 
 /** One mebibyte of body is the API's limit; a file is bounded well below it. */
 export const importPreviewRequestSchema = z.strictObject({ csv: z.string().min(1).max(512 * 1024) });
 
 /** `create` makes the firm; `attach` adds the row's contact to a firm that is here or made above. */
-export const IMPORT_ROW_OUTCOMES = ['create', 'attach', 'duplicate', 'invalid'] as const;
-export const importRowOutcomeSchema = z.enum(IMPORT_ROW_OUTCOMES);
+const IMPORT_ROW_OUTCOMES = ['create', 'attach', 'duplicate', 'invalid'] as const;
+const importRowOutcomeSchema = z.enum(IMPORT_ROW_OUTCOMES);
 export type ImportRowOutcomeDto = z.infer<typeof importRowOutcomeSchema>;
 
 /**
@@ -114,7 +113,7 @@ export type ImportRowOutcomeDto = z.infer<typeof importRowOutcomeSchema>;
  * earlier row of the same file creates. Scoped like every other read, so a firm in the
  * workspace next door is never a match and never named.
  */
-export const importFirmMatchSchema = z.discriminatedUnion('kind', [
+const importFirmMatchSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('existing'),
     firmId: uuid,
@@ -123,9 +122,8 @@ export const importFirmMatchSchema = z.discriminatedUnion('kind', [
   }),
   z.object({ kind: z.literal('in_file'), rowNumber: z.number().int().min(2), matchedOn: z.enum(['domain', 'name']) }),
 ]);
-export type ImportFirmMatchDto = z.infer<typeof importFirmMatchSchema>;
 
-export const importPreviewRowSchema = z.object({
+const importPreviewRowSchema = z.object({
   rowNumber: z.number().int().min(2),
   outcome: importRowOutcomeSchema,
   issues: z.array(importIssueSchema),
@@ -165,7 +163,6 @@ export const importFileRefusalResponseSchema = z.object({
   column: z.string().max(200).nullable(),
   rowNumber: z.number().int().min(1).nullable(),
 });
-export type ImportFileRefusalResponse = z.infer<typeof importFileRefusalResponseSchema>;
 
 /**
  * The commit.
@@ -192,7 +189,7 @@ export const importCommitRequestSchema = z.strictObject({
  * column: 'contact_email' }`. `outcome` says whether an accepted row made its firm or
  * added a contact to one; a receipt written before lane g84 replays without it.
  */
-export const importCommitResultSchema = z.object({
+const importCommitResultSchema = z.object({
   rowNumber: z.number().int().min(2),
   status: z.enum(['accepted', 'refused']),
   replayed: z.boolean(),
@@ -241,14 +238,12 @@ export const addFirmCommandSchema = z.strictObject({
     })
     .optional(),
 });
-export type AddFirmCommand = z.infer<typeof addFirmCommandSchema>;
 
 export const addFirmResultSchema = z.object({
   firmId: uuid,
   contactId: uuid.nullable(),
   routeIds: z.array(uuid),
 });
-export type AddFirmResult = z.infer<typeof addFirmResultSchema>;
 
 /** The accepted answer, in the envelope every command answers with (routeSupport). */
 export const addFirmAcceptedSchema = z.object({
@@ -269,7 +264,6 @@ export const addFirmRefusalSchema = z.object({
   issues: z.array(importIssueSchema).optional(),
   firmId: uuid.optional(),
 });
-export type AddFirmRefusal = z.infer<typeof addFirmRefusalSchema>;
 
 // ---------------------------------------------------------------------------
 // The Firm page read (7.2, 7.3, 8.1, 15)
@@ -288,7 +282,7 @@ export const firmPageRequestSchema = z.strictObject({
   pageVersion: z.literal(FIRM_PAGE_VERSION).optional(),
 });
 
-export const stageEventDtoSchema = z.strictObject({
+const stageEventDtoSchema = z.strictObject({
   id: uuid,
   occurredAt: z.iso.datetime(),
   fromStageKey: z.string().nullable(),
@@ -297,18 +291,16 @@ export const stageEventDtoSchema = z.strictObject({
   /** Section 8.1: "Lost changes require a reason". Null for every other change. */
   reason: z.string().nullable(),
 });
-export type StageEventDto = z.infer<typeof stageEventDtoSchema>;
 
-export const firmHoldDtoSchema = z.strictObject({
+const firmHoldDtoSchema = z.strictObject({
   id: uuid,
   reasonCode: holdReasonCodeSchema,
   blockedActionKinds: z.array(z.string()),
   startedAt: z.iso.datetime(),
   recoveryAction: z.string().nullable(),
 });
-export type FirmHoldDto = z.infer<typeof firmHoldDtoSchema>;
 
-export const opportunitySummaryDtoSchema = z.strictObject({
+const opportunitySummaryDtoSchema = z.strictObject({
   id: uuid,
   status: z.enum(['open', 'won', 'lost']),
   stageKey: z.string(),

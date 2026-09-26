@@ -70,8 +70,7 @@ export const AUTH_REFUSAL_CODES = [
   'membership_unknown',
   'device_unknown',
 ] as const;
-export const authRefusalCodeSchema = z.enum(AUTH_REFUSAL_CODES);
-export type AuthRefusalCode = z.infer<typeof authRefusalCodeSchema>;
+export type AuthRefusalCode = (typeof AUTH_REFUSAL_CODES)[number];
 
 // ---------------------------------------------------------------------------
 // Token shapes
@@ -99,7 +98,7 @@ export const refreshCredentialSchema = z
   );
 
 /** The one-time secret the desktop app generates to collect the grant its browser earned. */
-export const handoffSecretSchema = z.string().regex(new RegExp(`^${SECRET}$`), 'a sign-in handoff secret');
+const handoffSecretSchema = z.string().regex(new RegExp(`^${SECRET}$`), 'a sign-in handoff secret');
 
 export const deviceSecretSchema = z.string().regex(new RegExp(`^${SECRET}$`), 'a device secret');
 
@@ -107,14 +106,13 @@ export const deviceSecretSchema = z.string().regex(new RegExp(`^${SECRET}$`), 'a
 // Sign-in
 // ---------------------------------------------------------------------------
 
-export const deviceLabelSchema = z.string().trim().min(1).max(120);
+const deviceLabelSchema = z.string().trim().min(1).max(120);
 
 export const signInStartRequestSchema = z.strictObject({
   workspaceId: uuid,
   deviceLabel: deviceLabelSchema,
   clientVersion: semanticVersionSchema,
 });
-export type SignInStartRequest = z.infer<typeof signInStartRequestSchema>;
 
 export const signInStartResponseSchema = z.strictObject({
   /** Opened in the system browser. Never rendered inside the app (specification 5.1). */
@@ -128,7 +126,6 @@ export const signInClaimRequestSchema = z.strictObject({
   handoffSecret: handoffSecretSchema,
   clientVersion: semanticVersionSchema,
 });
-export type SignInClaimRequest = z.infer<typeof signInClaimRequestSchema>;
 
 /**
  * Everything the Mac must store, handed over exactly once. The device secret goes to
@@ -154,7 +151,6 @@ export const sessionRenewRequestSchema = z.strictObject({
   refreshCredential: refreshCredentialSchema,
   clientVersion: semanticVersionSchema,
 });
-export type SessionRenewRequest = z.infer<typeof sessionRenewRequestSchema>;
 
 /** A renewal returns no device secret: the Mac already has one and it does not rotate. */
 export const sessionRenewalSchema = sessionGrantSchema.omit({ deviceSecret: true });
@@ -185,30 +181,6 @@ export type ClientVersionNotice = z.infer<typeof clientVersionNoticeSchema>;
 // ---------------------------------------------------------------------------
 
 export const commandIdSchema = z.string().regex(/^[0-9a-zA-Z_:-]{1,128}$/, 'a command id');
-export const commandKindSchema = z.string().regex(/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/, 'a command kind');
-
-export const commandEnvelopeSchema = z.strictObject({
-  commandId: commandIdSchema,
-  kind: commandKindSchema,
-  clientVersion: semanticVersionSchema,
-  payload: z.unknown(),
-});
-export type CommandEnvelope = z.infer<typeof commandEnvelopeSchema>;
-
-export const commandResultSchema = z.discriminatedUnion('status', [
-  z.strictObject({
-    status: z.literal('accepted'),
-    /** True when this answer came from the receipt rather than from fresh work. */
-    replayed: z.boolean(),
-    result: z.unknown(),
-  }),
-  z.strictObject({
-    status: z.literal('refused'),
-    replayed: z.boolean(),
-    reason: z.string().min(1).max(80),
-  }),
-]);
-export type CommandResult = z.infer<typeof commandResultSchema>;
 
 // ---------------------------------------------------------------------------
 // The audited-read matrix (specification 5.2, Appendix F)
@@ -218,21 +190,19 @@ export type CommandResult = z.infer<typeof commandResultSchema>;
 // so the slice that adds bodies inherits the rule rather than inventing it.
 // ---------------------------------------------------------------------------
 
-export const SENSITIVE_READ_KINDS = [
-  'message_body',
-  'draft',
-  'mailbox_diagnostics',
-  'export',
-  'note',
-  'callback',
-] as const;
-export const sensitiveReadKindSchema = z.enum(SENSITIVE_READ_KINDS);
-export type SensitiveReadKind = z.infer<typeof sensitiveReadKindSchema>;
+export type SensitiveReadKind =
+  | 'message_body'
+  | 'draft'
+  | 'mailbox_diagnostics'
+  | 'export'
+  | 'note'
+  | 'callback';
 
 /** Which column of Appendix F a read falls in. */
-export const READ_VISIBILITY_CLASSES = ['any_active_member', 'assigned_or_admin', 'mailbox_owner_or_admin'] as const;
-export const readVisibilityClassSchema = z.enum(READ_VISIBILITY_CLASSES);
-export type ReadVisibilityClass = z.infer<typeof readVisibilityClassSchema>;
+export type ReadVisibilityClass =
+  | 'any_active_member'
+  | 'assigned_or_admin'
+  | 'mailbox_owner_or_admin';
 
 export const VISIBILITY_OF_READ: Readonly<Record<SensitiveReadKind, ReadVisibilityClass>> = Object.freeze({
   message_body: 'assigned_or_admin',
