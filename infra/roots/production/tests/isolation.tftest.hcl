@@ -60,8 +60,6 @@ mock_provider "aws" {
 # `docs/archive/decisions/g85-the-google-provider-has-its-own-root.md`.
 
 variables {
-  certificate_arn     = "arn:aws:acm:us-east-1:123456789012:certificate/11111111-2222-4333-8444-555555555555"
-  api_hostname        = "api.example.invalid"
   api_image           = "123456789012.dkr.ecr.us-east-1.amazonaws.com/fss-prod-api@sha256:0000000000000000000000000000000000000000000000000000000000000001"
   worker_image        = "123456789012.dkr.ecr.us-east-1.amazonaws.com/fss-prod-worker@sha256:0000000000000000000000000000000000000000000000000000000000000002"
   api_schema_range    = { min = 1, max = 4 }
@@ -354,10 +352,12 @@ run "the_deployment_flags_reach_both_containers" {
     error_message = "A production deployment runs on live dependencies; an unset switch is a refusal to start, so the apply has to set it."
   }
 
+  # Committed, not a variable (26 September 2026): the release gate has passed and David
+  # enabled sending, so a plan that forgets a `-var` can no longer turn it off.
   assert {
-    condition = (module.stack.api_environment["FSS_SENDING_ENABLED"] == "false"
-    && module.stack.worker_environment["FSS_SENDING_ENABLED"] == "false")
-    error_message = "16.2: the deployment flag is false until the release gate has passed on these digests and David flips it."
+    condition = (module.stack.api_environment["FSS_SENDING_ENABLED"] == "true"
+    && module.stack.worker_environment["FSS_SENDING_ENABLED"] == "true")
+    error_message = "16.2: production's deployment flag is committed true in infra/roots/production; turning it off is a change to that literal."
   }
 
   assert {
@@ -373,20 +373,13 @@ run "the_deployment_flags_reach_both_containers" {
   }
 }
 
-run "the_flags_are_settable_and_the_escape_hatch_still_exists" {
+run "the_escape_hatch_still_exists" {
   command = plan
 
   variables {
-    sending_enabled = true
     extra_environment = {
       FSS_SOMETHING_LATER = "value"
     }
-  }
-
-  assert {
-    condition = (module.stack.api_environment["FSS_SENDING_ENABLED"] == "true"
-    && module.stack.worker_environment["FSS_SENDING_ENABLED"] == "true")
-    error_message = "Section 6 step 4 flips this; a variable that could not be set would make the whole run a restatement of its default."
   }
 
   assert {
@@ -435,7 +428,7 @@ run "gmail_push_wires_the_audience_the_webhook_must_require" {
   command = plan
 
   assert {
-    condition     = output.gmail_push_audience == "https://api.example.invalid/integrations/gmail/push"
+    condition     = output.gmail_push_audience == "https://api.usecallie.com/integrations/gmail/push"
     error_message = "The audience the API must require is derived from the API hostname and published as an output."
   }
 

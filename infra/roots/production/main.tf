@@ -21,12 +21,23 @@ locals {
   aws_account_id = "326255650484"
   aws_region     = "us-east-1"
 
+  # What production runs, committed rather than passed as `-var` (26 September 2026):
+  # a plan that forgot one used to revert it silently, to no alert subscription, to
+  # sending off, or to no plan at all for the two required ones. Changing one is a pull
+  # request and a read plan of this root. The API toggle stays the immediate switch for
+  # sending. `infra/scripts/release-rollback.sh` refuses a rollback whose checkout
+  # commits a value other than the one production runs.
+  certificate_arn = "arn:aws:acm:us-east-1:326255650484:certificate/3ed7bb99-733e-4f18-a46a-3b17c943ed42"
+  api_hostname    = "api.usecallie.com"
+  alert_emails    = ["callie@usecallie.com"]
+  sending_enabled = true
+
   # The audience the webhook requires in a push token. A property of this
   # environment's own hostname and route, not of Google, so it is derived here
   # rather than read from the Google root; `infra/roots/production-google`
   # builds the subscription's push endpoint and token audience with this same
   # expression, and `test/release/googleRoot.check.ts` compares the two.
-  push_audience = "https://${var.api_hostname}${var.gmail_push_path}"
+  push_audience = "https://${local.api_hostname}${var.gmail_push_path}"
 
   # The role this apply acts as: the same expression the provider's
   # `assume_role` block builds, and the same ARN `aws:PrincipalArn` carries for
@@ -76,7 +87,7 @@ module "stack" {
 
   dependencies_mode  = var.dependencies_mode
   research_providers = var.research_providers
-  sending_enabled    = var.sending_enabled
+  sending_enabled    = local.sending_enabled
   extra_environment  = var.extra_environment
 
   expected_system_generation = var.expected_system_generation
@@ -84,8 +95,8 @@ module "stack" {
   # Lane g86: the address `/auth/client-version` publishes, on the API alone.
   desktop_upgrade_url = var.desktop_upgrade_url
 
-  certificate_arn = var.certificate_arn
-  api_hostname    = var.api_hostname
+  certificate_arn = local.certificate_arn
+  api_hostname    = local.api_hostname
   elb_account_id  = var.elb_account_id
   enable_waf      = var.enable_waf
 
@@ -109,7 +120,7 @@ module "stack" {
   # `docs/archive/decisions/g37-the-deployer-may-list-the-journal-but-never-read-it.md`.
   journal_listing_principal_arns = [local.deployment_role_arn]
 
-  alert_emails         = var.alert_emails
+  alert_emails         = local.alert_emails
   log_retention_days   = 90
   business_time_zone   = var.business_time_zone
   google_hosted_domain = var.google_hosted_domain

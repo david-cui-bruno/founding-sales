@@ -62,16 +62,6 @@ variable "availability_zones" {
   default     = ["us-east-1a", "us-east-1b"]
 }
 
-variable "certificate_arn" {
-  description = "ACM certificate for the API hostname. Created and DNS-validated by hand before the first apply."
-  type        = string
-}
-
-variable "api_hostname" {
-  description = "Public API hostname."
-  type        = string
-}
-
 variable "api_image" {
   description = "Immutable API image digest that passed the rehearsal gate."
   type        = string
@@ -208,18 +198,6 @@ variable "research_providers" {
   default     = "none"
 }
 
-variable "sending_enabled" {
-  description = <<-EOT
-    `FSS_SENDING_ENABLED` on both task definitions: the deployment half of
-    16.2's send gate. False until the rehearsal gate has passed on the deployed
-    digests; `docs/greenfield/release.md` section 6 step 4 is where it becomes
-    true, and step 5 is the admin attestation that is the other half. Neither
-    alone sends anything.
-  EOT
-  type        = bool
-  default     = false
-}
-
 variable "expected_system_generation" {
   description = <<-EOT
     Appendix E step 1: the generation the API and worker services expect the
@@ -261,12 +239,6 @@ variable "elb_account_id" {
   description = "Region-specific Elastic Load Balancing account id, only needed in older regions."
   type        = string
   default     = ""
-}
-
-variable "alert_emails" {
-  description = "Addresses that receive alerts. Each must confirm its subscription once by hand."
-  type        = list(string)
-  default     = []
 }
 
 variable "journal_object_lock_mode" {

@@ -1,7 +1,8 @@
 terraform {
-  # 1.10 for the S3 native lock file beside the DynamoDB lock table, as in every
-  # other root. `import` blocks with an expression `id` need 1.6.
-  required_version = ">= 1.10.0"
+  # Exactly the version the workflows install (TERRAFORM_VERSION in
+  # .github/workflows), which wrote the committed .terraform.lock.hcl. The backend's
+  # S3 native lock file needs 1.10 or newer.
+  required_version = "1.15.8"
 
   required_providers {
     google = {

@@ -29,8 +29,10 @@
 #     prints the current values beside, so the plan's image diff reads as intended.
 #
 #   (cd infra/roots/production && terraform plan -out=production.tfplan \
-#      $(../../scripts/deployed-digests.sh fss-prod --var-flags) \
-#      -var="certificate_arn=…" -var="api_hostname=api.usecallie.com" …)
+#      $(../../scripts/deployed-digests.sh fss-prod --var-flags))
+#
+# The certificate, the hostname, the alert addresses and sending are committed in the
+# root (26 September 2026) and are no longer passed.
 #
 # `--compare` is the check immediately before `terraform apply production.tfplan`: give
 # it the two images the saved plan was made with, and it exits 1 when either is not the

@@ -81,8 +81,6 @@ mock_provider "aws" {
 }
 
 variables {
-  certificate_arn     = "arn:aws:acm:us-east-1:326255650484:certificate/11111111-2222-4333-8444-555555555555"
-  api_hostname        = "api.example.invalid"
   api_image           = "326255650484.dkr.ecr.us-east-1.amazonaws.com/fss-prod-api@sha256:0000000000000000000000000000000000000000000000000000000000000001"
   worker_image        = "326255650484.dkr.ecr.us-east-1.amazonaws.com/fss-prod-worker@sha256:0000000000000000000000000000000000000000000000000000000000000002"
   api_schema_range    = { min = 16, max = 16 }

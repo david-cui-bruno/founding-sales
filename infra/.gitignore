@@ -5,9 +5,11 @@
 crash.log
 crash.*.log
 
-# Provider lock files stay out of the repository until a deployment lock file is
-# reviewed and pinned for every target platform. See docs/archive/decisions/g1-provider-lock-files.md.
-.terraform.lock.hcl
+# The four roots' provider lock files are committed, for darwin_arm64 and linux_amd64
+# (`terraform providers lock`, 26 September 2026): a laptop and CI resolve the same
+# providers. A module's lock file is only what the offline gate's `init -backend=false`
+# leaves behind, and is not kept.
+modules/**/.terraform.lock.hcl
 
 # State never belongs in the repository. It lives in the S3 backend.
 *.tfstate

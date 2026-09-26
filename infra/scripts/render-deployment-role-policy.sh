@@ -26,11 +26,11 @@
 #   FSS_POLICY_STATE_KMS_KEY_ARN default the key id above, in this account and region
 #   FSS_POLICY_CERTIFICATE_ARN   default every certificate in the account and region
 #
-# The certificate default is a wildcard on purpose. The exact ARNs are the `rehearsal`
-# environment secret `FSS_REHEARSAL_CERTIFICATE_ARN` and its production counterpart, and
-# a repository that shipped them would be a repository holding a value the workflow
-# deliberately keeps out of it. `acm:DescribeCertificate` is read-only. To keep the
-# narrower scoping David's hand-written policy had, pass the ARN:
+# The certificate default is a wildcard: the rendered document is the same for both
+# roles' certificates (the rehearsal's is the `rehearsal` environment secret
+# `FSS_REHEARSAL_CERTIFICATE_ARN`, production's is committed in `infra/roots/production`),
+# and `acm:DescribeCertificate` is read-only. To keep the narrower scoping David's
+# hand-written policy had, pass the ARN:
 #
 #   FSS_POLICY_CERTIFICATE_ARN=arn:aws:acm:us-east-1:326255650484:certificate/<id> \
 #     infra/scripts/render-deployment-role-policy.sh fss-rh
