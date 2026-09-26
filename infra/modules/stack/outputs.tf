@@ -307,7 +307,6 @@ output "resource_names" {
     values(module.secrets.secret_names),
     values(module.observability.log_group_names),
     module.alerts.alarm_names,
-    values(module.alerts.critical_condition_alarm_names),
     module.alerts.digest_resource_names,
     module.cluster.one_off_task_families,
   )

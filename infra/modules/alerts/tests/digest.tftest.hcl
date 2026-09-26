@@ -78,24 +78,18 @@ run "no_alarm_has_an_action" {
 
   assert {
     condition = alltrue([
-      for composite in concat(
-        [aws_cloudwatch_composite_alarm.critical, aws_cloudwatch_composite_alarm.warning],
-        values(aws_cloudwatch_composite_alarm.critical_condition),
-      ) :
+      for composite in [aws_cloudwatch_composite_alarm.critical, aws_cloudwatch_composite_alarm.warning] :
       length(composite.alarm_actions) == 0
       && length(composite.ok_actions) == 0
       && try(length(composite.insufficient_data_actions), 0) == 0
     ])
-    error_message = "A composite carries an action. Neither roll-up nor any per-condition composite may e-mail; the digest reports them."
+    error_message = "A composite carries an action. Neither roll-up may e-mail; the digest reports them."
   }
 
-  # The floor under the two assertions above: they read every alarm there is.
+  # The floor under the first assertion above: it reads every metric alarm there is.
   assert {
-    condition = (
-      length(concat(values(aws_cloudwatch_metric_alarm.this), [aws_cloudwatch_metric_alarm.all_sequences_held])) == length(output.alarm_inventory) + 1
-      && length(aws_cloudwatch_composite_alarm.critical_condition) > 10
-    )
-    error_message = "The action assertions must cover the whole inventory, the metric-math alarm and every per-condition composite."
+    condition     = length(concat(values(aws_cloudwatch_metric_alarm.this), [aws_cloudwatch_metric_alarm.all_sequences_held])) == length(output.alarm_inventory) + 1
+    error_message = "The action assertions must cover the whole inventory and the metric-math alarm."
   }
 }
 

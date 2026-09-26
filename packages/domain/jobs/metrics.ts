@@ -148,11 +148,6 @@ export const METRIC_OWNERS: Readonly<Record<string, MetricOwner>> = Object.freez
   SuppressionJournalWriteFailures: 'log_derived',
   RestoreGenerationMismatches: 'log_derived',
   OutboundSafetyInvariantFailures: 'log_derived',
-  ApiErrors: 'log_derived',
-  WorkerErrors: 'log_derived',
-  Refusals: 'log_derived',
-  StepsHeld: 'log_derived',
-  DeadJobs: 'log_derived',
 });
 
 /** The metric names this lane actually publishes. */
