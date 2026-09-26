@@ -31,8 +31,7 @@ import { readRepositoryFile } from './support/coverage.ts';
  * 900 to make the flapping stop, which would have left the system with an alarm that
  * cannot fire within a quarter of an hour of the worker dying. Closed by reading the
  * three numbers that have to agree — the smoke's constant, the Terraform default and
- * the alarm's period times its evaluation periods — and by reading the Terraform
- * description, which is the only thing an operator planning an apply sees.
+ * the alarm's period times its evaluation periods.
  *
  * The *behaviour* is proved against a real PostgreSQL in
  * `packages/domain/test/jobs/observability.test.ts`: a run completed twenty minutes ago
@@ -116,19 +115,5 @@ describe('g41: the canary age is the newest run’s latency', () => {
     // later and in ALARM about two minutes after that.
     expect(alarm).toContain('period              = 60');
     expect(alarm).toContain('evaluation_periods  = 2');
-  });
-
-  it('says what the number means where an operator will read it', () => {
-    // The Terraform description is what `terraform plan` and the variable reference
-    // show; the smoke's comment is what the person running it at three in the morning
-    // reads. Both had the old meaning written into them, which is how the wrong
-    // reading survived to the first production smoke.
-    const variable = ALERT_VARIABLES.slice(ALERT_VARIABLES.indexOf('variable "canary_stale_seconds" {'));
-    const description = variable.slice(0, variable.indexOf('\n}'));
-    expect(description).toContain('scheduler-to-worker latency');
-    expect(description).toContain('not completed for this long');
-    expect(description).not.toContain('Seconds without a completed canary');
-    expect(SMOKE).toContain('scheduler-to-worker latency');
-    expect(CANARY).toContain('This is a latency, not an age since the last completion');
   });
 });

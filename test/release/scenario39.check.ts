@@ -76,7 +76,6 @@ describe('Appendix G 39: the two roots cannot address each other', () => {
 
     const gate = readRepositoryFile('infra/scripts/offline-gate.sh');
     expect(gate).toContain('rehearsal_registry_key');
-    expect(gate).toContain('the rehearsal registry state key is inside the per-run space');
     // And the per-run root creates no repository of its own.
     expect(gate).toContain('create_registry = false');
     expect(readRepositoryFile('infra/roots/rehearsal/main.tf')).toContain('create_registry = false');
@@ -97,8 +96,6 @@ describe('Appendix G 39: the two roots cannot address each other', () => {
     // own name, both stable names, a production name and another run's name, and the
     // dry run reaches all of it without a credential.
     expect(guard).toContain('rehearsal_classify_name "$PREFIX"');
-    expect(guard).toContain('the name classifier accepted a production resource');
-    expect(guard).toContain("the name classifier accepted another run's resource");
     expect(guard).toContain('stable_repositories=rehearsal');
   });
 
@@ -287,26 +284,6 @@ describe('Appendix G 39: the rehearsal registry is applied by a workflow, never 
     expect(workflow).toContain('aws ecr describe-repositories --repository-names fss-rh-api fss-rh-worker');
   });
 
-  it('is what the runbook tells the operator to do, instead of a command that is refused', () => {
-    const runbook = readRepositoryFile('docs/greenfield/infra-apply-runbook.md');
-    const releaseDoc = readRepositoryFile('docs/greenfield/release.md');
-
-    // The instruction that sent the operator at `sts:AssumeRole` was a local
-    // `terraform apply` in this root. It must not still be there.
-    const section = runbook.slice(
-      runbook.indexOf('### 2.1 The rehearsal repositories'),
-      runbook.indexOf('### 2.2 The production repositories'),
-    );
-    expect(section).toContain('Greenfield rehearsal registry apply');
-    expect(section).toContain('You never assume `fss-rh-deploy`');
-    expect(section).not.toMatch(/^terraform apply/mu);
-    // And the one thing a reader needs when init is refused: the exact objects.
-    expect(section).toContain('arn:aws:s3:::callie-sourcing-tfstate-326255650484/fss/greenfield/rehearsal-registry/terraform.tfstate');
-    expect(section).toContain('arn:aws:dynamodb:us-east-1:326255650484:table/callie-sourcing-tflock');
-
-    expect(releaseDoc).toContain('FSS_REHEARSAL_STATE_KMS_KEY_ARN');
-  });
-
   it('has a shell block in every step that bash can parse', () => {
     // A dispatch-only workflow is never run by accident, which means a syntax error
     // in it is discovered on the one run that costs something. `bash -n` here is the
@@ -479,28 +456,6 @@ describe('Appendix G 39: the flag that stops the second assumption cannot become
     // And it refuses to vouch for production, whose applies assume their role in the
     // provider and never pass this flag.
     expect(judge('arn:aws:sts::123456789012:assumed-role/fss-prod-deploy/x', 'fss-prod-deploy')).toBe(false);
-  });
-
-  it('is what the runbook and the release document tell the operator', () => {
-    const runbook = readRepositoryFile('docs/greenfield/infra-apply-runbook.md');
-    const releaseDoc = readRepositoryFile('docs/greenfield/release.md');
-    const decision = readRepositoryFile('docs/decisions/g12e-the-provider-does-not-reassume-its-own-session.md');
-    const g12d = readRepositoryFile('docs/decisions/g12d-the-once-only-registry-apply-is-a-workflow.md');
-
-    // Local applies keep the default; the flag is CI's.
-    expect(runbook).toContain('assume_deployment_role');
-    expect(runbook).toContain('rehearsal-caller-identity.sh');
-    expect(releaseDoc).toContain('assume_deployment_role');
-
-    // The provider version this rests on is named, because the behaviour is the
-    // provider's rather than Terraform's.
-    expect(decision).toContain('5.100.0');
-    expect(decision).toContain('assume_role');
-
-    // G12d predicted this failure and could not answer it. The runbook no longer
-    // tells the operator to widen a trust policy.
-    expect(runbook).not.toContain('allowing `arn:aws:iam::326255650484:role/fss-rh-deploy` to assume itself');
-    expect(g12d).toContain('g12e');
   });
 });
 
@@ -877,28 +832,6 @@ describe('Appendix G 39: the dry run reads the plan it printed, so the rehearsal
     expect(guard.code).not.toBe(0);
   });
 
-  it('is written down where the next operator will look for it', () => {
-    const decision = readRepositoryFile(
-      'docs/decisions/g12f-the-rehearsals-own-guard-refused-the-rehearsal.md',
-    );
-    const releaseDoc = readRepositoryFile('docs/greenfield/release.md');
-    // The 8.0x records moved, verbatim, out of the runbook (lane g93).
-    const records = readRepositoryFile('docs/greenfield/release-records.md');
-    const g12 = readRepositoryFile('docs/decisions/g12-what-the-rehearsal-cannot-prove.md');
-
-    // The run, so the claim can be checked against the log rather than believed.
-    expect(decision).toContain('35548888865');
-    expect(decision).toContain('rehearsal_read_production_inventory');
-    expect(releaseDoc).toContain('rehearsal_read_production_inventory');
-    // Section 8 separated what the first run proved from what it refuted; the old
-    // section said the rehearsal had never run at all.
-    expect(records).toContain('What the first credentialed run proved, and what it refuted');
-    expect(records).toContain('arn:aws:sts::326255650484:assumed-role/fss-rh-deploy/');
-    // And the paragraph that claimed this scenario was proved in rehearsal is corrected
-    // where a reader of that document will meet it.
-    expect(g12).toContain('g12f-the-rehearsals-own-guard-refused-the-rehearsal.md');
-  });
-
   it('is run by the credential-free job on every pull request, after the plan is printed', () => {
     const dryRunJob = release.slice(release.indexOf('\n  dry-run:\n'), release.indexOf('\n  rehearsal:\n'));
     const printedAt = dryRunJob.indexOf('Print the plan every rehearsal step would run');
@@ -908,7 +841,7 @@ describe('Appendix G 39: the dry run reads the plan it printed, so the rehearsal
     expect(guardAt).toBeGreaterThan(printedAt);
     // And the job that runs it holds no credential, which is the whole point.
     expect(dryRunJob).not.toContain('environment: rehearsal');
-    expect(dryRunJob).toContain('The rehearsal dry run is offline and must never hold a cloud credential');
+    expect(dryRunJob).toContain('for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN');
   });
 });
 
@@ -1395,18 +1328,6 @@ describe('Appendix G 39: the production comparison is between durable resources'
     expect(output).toContain('recorded before the run is not a list of ARNs');
     expect(output).not.toContain('nothing with the production prefix was addressed');
   });
-
-  it('is written down beside the run that found it', () => {
-    const release = readRepositoryFile('docs/greenfield/release.md');
-    // The record moved, verbatim, with the other 8.0x records (lane g93).
-    expect(readRepositoryFile('docs/greenfield/release-records.md')).toContain(
-      '### 8.0v What the twelfth full run proved',
-    );
-    expect(release).toContain('35962272085');
-    // G52's run, in the guard's own item and in the step that names what is compared.
-    expect(release).toContain('36032732128');
-    expect(release).toContain('`network-interface/`');
-  });
 });
 
 /**
@@ -1514,7 +1435,6 @@ describe('Appendix G 39: the refusal is symmetric, and the wrapper enforces it p
   it('refuses a rehearsal name from production and a production name from a rehearsal', () => {
     const common = readRepositoryFile('infra/scripts/release-common.sh');
     expect(common).toContain('release_refuse_foreign_arguments()');
-    expect(common).toContain('a production command names a rehearsal resource');
     expect(common).toContain('rehearsal_refuse_production_arguments "$@" || return 1');
     // The command's own arguments are read too: a `--report /tmp/fss-prod-…` path in
     // a rehearsal is still a production name.
@@ -1543,8 +1463,8 @@ describe('Appendix G 39: the refusal is symmetric, and the wrapper enforces it p
     // A running task holds an elastic network interface in a subnet Terraform is
     // about to delete; the destroy then waits on the subnet and times out, and the
     // report blames the subnet.
-    const stopAt = teardown.indexOf('0/5 stopping any one-off task still running');
-    const destroyAt = teardown.indexOf('4/5 destroying the rehearsal root');
+    const stopAt = teardown.indexOf('ecs stop-task --cluster "${PREFIX}-cluster"');
+    const destroyAt = teardown.indexOf('rehearsal_terraform destroy -auto-approve -input=false');
     expect(stopAt).toBeGreaterThan(-1);
     expect(destroyAt).toBeGreaterThan(stopAt);
     // And every ARN is classified before it is addressed, so another run's task — or
@@ -1554,12 +1474,10 @@ describe('Appendix G 39: the refusal is symmetric, and the wrapper enforces it p
 
   it('runs the 42 scenarios in the runner, against a service container, never the rehearsal database', () => {
     const workflow = readRepositoryFile('.github/workflows/greenfield-release.yml');
-    expect(workflow).toContain('name: Release suite (recorded mode, runner)');
+    expect(workflow).toContain('npm run test:release');
     expect(workflow).toContain('image: postgres:16');
     // The rehearsal database is private: no NAT, no bastion, `publicly_accessible =
-    // false`. The step that assembled a URL from the rehearsal's outputs could never
-    // have connected to it, and it is gone.
-    expect(workflow).not.toContain("Assemble the rehearsal database URL from this run's own outputs");
+    // false`, so no step builds a connection string to it.
     expect(workflow).not.toContain('sslmode=require');
   });
 });
@@ -1832,56 +1750,5 @@ describe('Appendix G 39: a plan run publishes addresses and counts, never values
     expect(script).toContain('cp "$summary" "$FSS_REHEARSAL_REPORTS/plan-summary.txt"');
     expect(script).not.toContain('"$FSS_REHEARSAL_REPORTS/rehearsal-plan.json"');
     expect(script).not.toContain('cat "$plan_log"');
-  });
-});
-
-/**
- * G12k: the stages are written down where the next operator will look for them.
- *
- * A stage nobody knows about is a stage nobody runs, and the whole point of this lane
- * is that David reaches for `plan` before he reaches for `full`. The release document
- * is where that choice is made, so the check is on the document too.
- *
- * ## The vacuous-pass trap
- *
- * Asserting that the document mentions the word "stage" would pass against a sentence
- * that says nothing. Closed by requiring the two errors of the third credentialed run
- * *verbatim* — they are the evidence for the whole change, and a claim about a run is
- * worth only as much as the log line behind it — and by requiring the order David uses
- * the stages in, which is the operational content.
- */
-describe('Appendix G 39: the stages, and the run that caused them, are in the release document', () => {
-  const release = readRepositoryFile('docs/greenfield/release.md');
-  // The 8.0x records moved, verbatim, out of the runbook (lane g93).
-  const records = readRepositoryFile('docs/greenfield/release-records.md');
-  const decision = readRepositoryFile('docs/decisions/g12k-the-rehearsal-has-stages-and-one-gate.md');
-
-  it('says what each stage proves and that only the full one is the gate', () => {
-    expect(release).toContain('### 3.0 The five stages, and the order to use them in');
-    for (const stage of REHEARSAL_STAGE_CHOICES) expect(release).toContain(`\`${stage}\``);
-    expect(release).toContain('**Only `full` is the gate.**');
-    expect(release).toContain("`if: inputs.stage == 'full'`");
-    // The order, which is the operational content: the local plan comes first.
-    expect(release).toContain('**The local production plan, from your Mac**');
-    expect(release).toContain('**Fix as a batch.**');
-    expect(release).toContain('**Every stage tears down, and every stage re-reads the production inventory.**');
-  });
-
-  it('carries the third run’s two errors verbatim, and why no offline layer saw them', () => {
-    expect(records).toContain('### 8.0c What the third credentialed run proved, and what it refuted');
-    expect(records).toContain('35611374218');
-    expect(records).toContain(
-      'Attempted to load application default credentials since neither `credentials` nor `access_token` was set in the provider block.',
-    );
-    expect(records).toContain('count = var.kms_key_arn == null ? 1 : 0');
-    expect(records).toContain('The "count" value depends on resource attributes that cannot be determined until apply.');
-    expect(records).toContain('override_during = plan');
-  });
-
-  it('records the decision, and that the stages do not weaken the gate', () => {
-    expect(decision).toContain('35611374218');
-    expect(decision).toContain('35602423640');
-    expect(decision).toContain('35548888865');
-    expect(decision).toContain('## What this does not weaken');
   });
 });

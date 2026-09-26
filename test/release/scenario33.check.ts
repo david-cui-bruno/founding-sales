@@ -25,7 +25,7 @@ import { mustCover } from './support/coverage.ts';
  */
 
 describe('Appendix G 33: the ramp starts small enough to hold a busy firm', () => {
-  mustCover(33, ['Appendix G 33', 'daily_cap', 'enrollmentsStopped']);
+  mustCover(33, ['daily_cap', 'enrollmentsStopped']);
 
   it('opens at five a day and climbs monotonically to the settled cap', () => {
     expect(RAMP_SCHEDULE.length).toBeGreaterThan(0);

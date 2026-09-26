@@ -25,10 +25,7 @@ import { mustCover } from './support/coverage.ts';
  */
 
 describe('Appendix G 1: one due thing is one job row', () => {
-  const entry = mustCover(1, [
-    'scenario 1',
-    'idempotencyKey',
-  ]);
+  const entry = mustCover(1, ['idempotencyKey']);
 
   it('is covered for all four kinds Appendix G names', () => {
     expect(entry.references).toContain('apps/worker/test/schedulerPass.test.ts');

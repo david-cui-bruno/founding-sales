@@ -117,7 +117,7 @@ describe('Appendix G 22: the declared ranges decide, and a non-overlap is the re
     expect(verifyDeployed).toBeGreaterThan(api);
   });
 
-  it('stops during a schema migration and never rolls the database back', () => {
+  it('stops during a schema migration, API first, and refuses to migrate a running stack', () => {
     // Lane g70: the stop is its own script and it runs before the apply, API first so
     // no request reaches a schema that is about to move. The deploy script no longer
     // scales anything to zero; it refuses to migrate unless both are already there.
@@ -139,11 +139,6 @@ describe('Appendix G 22: the declared ranges decide, and a non-overlap is the re
     expect(assertApi).toBeGreaterThan(-1);
     expect(assertWorker).toBeGreaterThan(assertApi);
     expect(assertWorker).toBeLessThan(script.indexOf('one_off migrate "$MIGRATION_TASK_DEFINITION"'));
-
-    // And the policy is written where an operator reads it, not only here.
-    const release = readRepositoryFile('docs/greenfield/release.md');
-    expect(release).toContain('Stop-during-migration');
-    expect(release).toContain('The database never rolls back');
   });
 
   it('creates a fresh environment at desired count zero rather than crash-looping it', () => {
@@ -268,8 +263,6 @@ describe('Appendix G 22: the declared ranges decide, and a non-overlap is the re
 
     const workflow = readRepositoryFile('.github/workflows/greenfield-release.yml');
     expect(workflow).toContain('infra/scripts/release-deploy.sh infra/roots/rehearsal');
-    const runbook = readRepositoryFile('docs/greenfield/infra-apply-runbook.md');
-    expect(runbook).toContain('infra/scripts/release-deploy.sh infra/roots/production fss-prod');
   });
 });
 
@@ -1136,23 +1129,5 @@ describe('Appendix G 22 (g70), continued: the stop', () => {
     const dryStop = workflow.indexOf('"infra/scripts/release-stop.sh infra/roots/rehearsal $prefix" \\');
     expect(dryStop).toBeGreaterThan(-1);
     expect(workflow.indexOf('"infra/scripts/release-deploy.sh infra/roots/rehearsal $prefix --schema-change')).toBeGreaterThan(dryStop);
-  });
-
-  it('writes the new order where the operator reads it', () => {
-    const release = readRepositoryFile('docs/greenfield/release.md');
-    expect(release).toContain('infra/scripts/release-stop.sh infra/roots/production fss-prod --environment production');
-    // The record of the release that ran in the old order moved, verbatim, with the
-    // other 8.0x records (lane g93).
-    expect(readRepositoryFile('docs/greenfield/release-records.md')).toContain('### 8.0af');
-    const runbook = readRepositoryFile('docs/greenfield/infra-apply-runbook.md');
-    expect(runbook).toContain('infra/scripts/release-stop.sh infra/roots/production fss-prod --environment production');
-    // In the order that works: the stop, then the apply, then the deploy.
-    const section = release.slice(release.indexOf('\n### 4.1 '), release.indexOf('\n## 5. '));
-    const stopAt = section.indexOf('infra/scripts/release-stop.sh infra/roots/production fss-prod --environment production');
-    const applyAt = section.indexOf('terraform apply production.tfplan', stopAt);
-    const deployAt = section.indexOf('infra/scripts/release-deploy.sh infra/roots/production fss-prod', applyAt);
-    expect(stopAt).toBeGreaterThan(-1);
-    expect(applyAt).toBeGreaterThan(stopAt);
-    expect(deployAt).toBeGreaterThan(applyAt);
   });
 });

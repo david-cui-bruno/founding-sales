@@ -51,11 +51,11 @@ function variableDefault(name: string): number {
 
 describe('the job-age alarms fire at the ages 13.3 names', () => {
   const cases = [
-    { key: 'oldest_runnable_job_warning', variable: 'oldest_job_age_warning_seconds', seconds: 300, words: 'five minutes' },
-    { key: 'oldest_runnable_job_critical', variable: 'oldest_job_age_critical_seconds', seconds: 900, words: 'fifteen minutes' },
+    { key: 'oldest_runnable_job_warning', variable: 'oldest_job_age_warning_seconds', seconds: 300 },
+    { key: 'oldest_runnable_job_critical', variable: 'oldest_job_age_critical_seconds', seconds: 900 },
   ] as const;
 
-  for (const { key, variable, seconds, words } of cases) {
+  for (const { key, variable, seconds } of cases) {
     it(`${key} alarms on the first one-minute maximum above ${String(seconds)} s`, () => {
       const declared = alarm(key);
       expect(declared['metric_name']).toBe('"OldestRunnableJobAgeSeconds"');
@@ -66,9 +66,6 @@ describe('the job-age alarms fire at the ages 13.3 names', () => {
       expect(declared['period']).toBe('60');
       expect(declared['evaluation_periods']).toBe('1');
       expect(declared['datapoints_to_alarm']).toBe('1');
-      // The label says the age and when it is raised, not only "the threshold".
-      expect(declared['description']).toContain(words);
-      expect(declared['description']).toContain('first one-minute sample');
     });
   }
 

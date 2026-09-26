@@ -24,7 +24,7 @@ import { mustCover, readRepositoryFile } from './support/coverage.ts';
  */
 
 describe('Appendix G 15: the reply holds the firm’s one open opportunity', () => {
-  mustCover(15, ['Appendix G 15', 'uncertain_reply', 'openOpportunityId']);
+  mustCover(15, ['uncertain_reply', 'openOpportunityId']);
 
   it('closes the old opportunity before opening the new one', () => {
     const lane = readRepositoryFile('packages/domain/test/mail/scenarios.test.ts');

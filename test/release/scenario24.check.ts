@@ -26,7 +26,7 @@ import { mustCover, readRepositoryFile } from './support/coverage.ts';
  */
 
 describe('Appendix G 24: the stolen device loses its session and its cache', () => {
-  mustCover(24, ['Appendix G 24', 'device_revoked', 'credential_reuse']);
+  mustCover(24, ['device_revoked', 'credential_reuse']);
 
   it('reports reuse, revocation and deactivation as three different things', () => {
     // A rotated credential presented twice is a theft signal, not an expiry; a

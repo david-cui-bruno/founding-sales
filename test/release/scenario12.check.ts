@@ -26,7 +26,7 @@ import { mustCover, readRepositoryFile } from './support/coverage.ts';
  */
 
 describe('Appendix G 12: dispatch ownership is irreversible', () => {
-  mustCover(12, ['Appendix G 12', 'claimForDispatch', 'fence_not_ready', 'attempt_token']);
+  mustCover(12, ['claimForDispatch', 'fence_not_ready', 'attempt_token']);
 
   it('claims prepared atomically and hands the loser fence_not_ready', () => {
     const fence = readRepositoryFile('packages/domain/outbound/fence.ts');

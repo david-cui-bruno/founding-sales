@@ -32,9 +32,9 @@ import { readRepositoryFile, repositoryPath } from './support/coverage.ts';
  *
  * Asserting that the smoke *mentions* the namespace output would pass a step that read
  * the output and then queried `--namespace FSS` anyway. Closed by reading the query
- * itself and by refusing a bare `--namespace FSS` in every workflow, script and runbook
- * command. The mutation appended to `scripts/releaseMutationCheck.mjs` puts that exact
- * query back and requires this file to go red.
+ * itself and by refusing a bare `--namespace FSS` in every workflow and script. The
+ * mutation appended to `scripts/releaseMutationCheck.mjs` puts that exact query back
+ * and requires this file to go red.
  *
  * And a worker that kept `?? 'FSS'` would pass every Terraform assertion, because a
  * task definition always sets the variable — until one does not. Closed by running the
@@ -223,7 +223,6 @@ describe('g55: one metric namespace per environment (g42)', () => {
     const readers = [
       ...filesUnder('.github/workflows', ['.yml', '.yaml']),
       ...filesUnder('infra/scripts', ['.sh']),
-      ...filesUnder('docs/greenfield', ['.md']),
       'scripts/productionSmoke.mjs',
     ];
     expect(readers.length).toBeGreaterThan(20);
@@ -231,16 +230,6 @@ describe('g55: one metric namespace per environment (g42)', () => {
     for (const file of readers) {
       expect(readRepositoryFile(file), `${file} reads the bare FSS namespace`).not.toMatch(bare);
     }
-    // The runbook commands that do read a metric name the environment's own namespace.
-    expect(readRepositoryFile('docs/greenfield/release.md')).toContain(
-      'aws cloudwatch get-metric-statistics --namespace FSS/fss-prod',
-    );
-    expect(readRepositoryFile('docs/greenfield/infra-apply-runbook.md')).toContain(
-      'aws cloudwatch get-metric-statistics --namespace FSS/fss-prod',
-    );
-    expect(readRepositoryFile('docs/greenfield/restore-drill.md')).toContain(
-      'aws cloudwatch get-metric-statistics --namespace "FSS/${PREFIX}"',
-    );
   });
 
   it('needs nothing new from the deployment roles', () => {

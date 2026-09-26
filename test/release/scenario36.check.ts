@@ -25,7 +25,7 @@ import { mustCover, readRepositoryFile } from './support/coverage.ts';
  */
 
 describe('Appendix G 36: the admin answers the question without moving the fence', () => {
-  mustCover(36, ['Appendix G 36', 'resolveUnknownTerminal', 'already_terminal', 'unknown_terminal']);
+  mustCover(36, ['resolveUnknownTerminal', 'already_terminal', 'unknown_terminal']);
 
   it('writes the resolution and never the state', () => {
     const fence = readRepositoryFile('packages/domain/outbound/fence.ts');

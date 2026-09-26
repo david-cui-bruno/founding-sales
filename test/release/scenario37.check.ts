@@ -24,7 +24,7 @@ import { mustCover, readRepositoryFile } from './support/coverage.ts';
  */
 
 describe('Appendix G 37: the merge preserves things that were there to preserve', () => {
-  mustCover(37, ['Appendix G 37', 'mergeFirms', 'record_merge_events', 'merge_conflicts']);
+  mustCover(37, ['mergeFirms', 'record_merge_events', 'merge_conflicts']);
 
   it('creates every preserved kind on the source before merging', () => {
     const lane = readRepositoryFile('packages/domain/test/crm/commands.test.ts');

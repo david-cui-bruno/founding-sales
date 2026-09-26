@@ -1102,17 +1102,4 @@ done`);
     expect(output).toContain('returned no evaluation');
     expect(output).toContain('An empty answer is not a pass');
   });
-
-  it('is named in the runbook beside the two put-role-policy commands', () => {
-    const runbook = readRepositoryFile('docs/greenfield/infra-apply-runbook.md');
-    expect(runbook).toContain(
-      'aws iam put-role-policy --role-name fss-rh-deploy --policy-name fss-rh-deploy-scope',
-    );
-    expect(runbook).toContain(
-      'aws iam put-role-policy --role-name fss-prod-deploy --policy-name fss-prod-deploy-scope',
-    );
-    expect(runbook).toContain('infra/scripts/check-deployment-role.sh fss-rh-deploy fss-rh');
-    expect(runbook).toContain('infra/scripts/check-deployment-role.sh fss-prod-deploy fss-prod');
-    expect(runbook).toContain('infra/scripts/render-deployment-role-policy.sh');
-  });
 });

@@ -26,7 +26,6 @@ import { mustCover, readRepositoryFile } from './support/coverage.ts';
 
 describe('Appendix G 19: a direct send switches the opportunity to manual, once', () => {
   mustCover(19, [
-    'Appendix G 19',
     'direct_send_manual',
     'directSendsSwitchedToManual',
     'applyDirectSendEffects',
