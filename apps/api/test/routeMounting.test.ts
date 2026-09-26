@@ -76,6 +76,7 @@ describe('what the API mounts', () => {
       '/dashboard',
       '/diagnostics',
       '/dial/authorize',
+      '/dial/check',
       '/dial/consume',
       '/enrollments',
       '/enrollments/enroll',

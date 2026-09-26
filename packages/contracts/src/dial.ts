@@ -399,6 +399,44 @@ export type CallLogDto = z.infer<typeof callLogDtoSchema>;
 
 const commandEnvelope = { commandId: commandIdSchema, clientVersion: semanticVersionSchema };
 
+/**
+ * `POST /dial/check` (wave 2, S4.5): is this firm callable now, and through which number.
+ * A read — no command envelope, no receipt, nothing written. `routeId` names the number
+ * the card would dial; without it the answer is about the firm alone.
+ */
+export const dialCheckRequestSchema = z.strictObject({
+  firmId: uuid,
+  routeId: uuid.optional(),
+});
+export type DialCheckRequest = z.infer<typeof dialCheckRequestSchema>;
+
+/**
+ * The advice: `callable`, and every reason that applies (not only the first), in 9.2's
+ * order. The Mac shows the reasons, opens `telUri` itself when the person presses Call,
+ * and logs the call afterwards with `POST /calls/log`, which needs no ticket.
+ */
+export const dialAdviceSchema = z.object({
+  firmId: uuid,
+  callable: z.boolean(),
+  reasons: z.array(dialRefusalCodeSchema),
+  routeId: uuid.nullable(),
+  e164: e164.nullable(),
+  telUri: z.string().regex(/^tel:\+[1-9][0-9]{7,14}$/u, 'a tel: URI for an E.164 number').nullable(),
+  firmTimeZone: z.string().max(64).nullable(),
+  firmLocalTime: z.string().max(5).nullable(),
+  at: instant,
+});
+export type DialAdvice = z.infer<typeof dialAdviceSchema>;
+
+/** `POST /dial/check`'s answer. */
+export const dialCheckResponseSchema = z.object({ advice: dialAdviceSchema });
+export type DialCheckResponse = z.infer<typeof dialCheckResponseSchema>;
+
+/**
+ * @deprecated (remove after desktop 1.0.12) — the ticket pair `/dial/authorize` and
+ * `/dial/consume` stays for desktops up to 1.0.11; a newer Mac asks `POST /dial/check`,
+ * opens `tel:` and logs the call (wave 2, S4.5).
+ */
 export const authorizeDialCommandSchema = z.strictObject({
   ...commandEnvelope,
   firmId: uuid,
@@ -409,6 +447,7 @@ export const authorizeDialCommandSchema = z.strictObject({
   callingIdentityId: uuid,
 });
 
+/** @deprecated (remove after desktop 1.0.12) — see `authorizeDialCommandSchema`. */
 export const consumeDialTicketCommandSchema = z.strictObject({
   ...commandEnvelope,
   ticketId: uuid,

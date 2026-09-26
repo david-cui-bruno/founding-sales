@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { loggedCallResultSchema, wireDrift } from '@fss/contracts';
+import { dialCheckResponseSchema, loggedCallResultSchema, wireDrift } from '@fss/contracts';
 import { POSTURE_STATEMENT_KEYS } from '@fss/domain';
 import { recordingSuppressionJournal, type RecordingSuppressionJournal } from '@fss/domain/suppression';
 import { dispatch, type ApiRequest } from '../src/server.ts';
@@ -185,6 +185,7 @@ describe('policy, suppression and dialing routes', () => {
   it('refuses every path in this lane without a session', async () => {
     for (const path of [
       '/dial/authorize',
+      '/dial/check',
       '/dial/consume',
       '/suppressions/record',
       '/postures/record',
@@ -194,6 +195,36 @@ describe('policy, suppression and dialing routes', () => {
     ]) {
       expect((await post(path, null, command())).status).toBe(401);
     }
+  });
+
+  it('advises on a call without a ticket, and the call is then logged without one (wave 2, S4.5)', async () => {
+    const checked = await post('/dial/check', assigneeToken, { firmId, routeId });
+    expect(checked.status).toBe(200);
+    expect(wireDrift(dialCheckResponseSchema, checked.body)).toEqual([]);
+    const { advice } = dialCheckResponseSchema.parse(checked.body);
+    expect(advice).toMatchObject({ firmId, routeId, telUri: `tel:${advice.e164 ?? ''}` });
+    // The calling window depends on the clock the suite runs at, and is tested in
+    // `@fss/domain` where the instant is a parameter; nothing else stands in the way here.
+    expect(advice.reasons.filter(reason => reason !== 'outside_calling_window')).toEqual([]);
+    expect(advice.callable).toBe(advice.reasons.length === 0);
+
+    // Nothing was written: a read, with no receipt.
+    const receipts = await fixture.db.query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM command_receipts WHERE command_kind LIKE '%dial%'",
+    );
+    const before = receipts.rows[0]?.count;
+    await post('/dial/check', assigneeToken, { firmId });
+    const after = await fixture.db.query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM command_receipts WHERE command_kind LIKE '%dial%'",
+    );
+    expect(after.rows[0]?.count).toBe(before);
+
+    // The Mac opens tel: itself and logs what happened, naming no ticket and no identity.
+    const logged = await post('/calls/log', assigneeToken, command({ firmId, contactId, routeId, outcome: 'no_answer' }));
+    expect(logged.status).toBe(200);
+
+    expect((await post('/dial/check', strangerToken, { firmId })).status).toBe(404);
+    expect((await post('/dial/check', assigneeToken, { firmId: 'not-a-uuid' })).status).toBe(400);
   });
 
   it('answers a dial authorization replay with already_consumed, never a second allow', async () => {

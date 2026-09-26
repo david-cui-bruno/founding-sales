@@ -42,7 +42,7 @@ async function importedNumber(e164: string, extra: { readonly technicalValidatio
     [seeded.alpha.workspaceId, crm.alpha.firmId, crm.alpha.contactId, e164, failed ? 'failed' : 'unknown', failed ? 'invalid' : 'candidate'],
   );
   const listed = await listRoutes(contextFor('alpha', 'salesperson'), 'phone', crm.alpha.firmId);
-  const route = listed.find(entry => entry.value === e164);
+  const route = listed.find(entry => entry['value'] === e164);
   if (route === undefined) throw new Error('the route fixture was not written');
   return route;
 }

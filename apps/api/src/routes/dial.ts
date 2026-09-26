@@ -1,7 +1,20 @@
-import { authorizeDialCommandSchema, consumeDialTicketCommandSchema } from '@fss/contracts';
-import { authorizeDialCommand, consumeDialTicket, type DialResult, type IssuedDialTicket } from '@fss/domain/dial';
+import { authorizeDialCommandSchema, consumeDialTicketCommandSchema, dialCheckRequestSchema } from '@fss/contracts';
+import {
+  adviseDial,
+  authorizeDialCommand,
+  consumeDialTicket,
+  type DialResult,
+  type IssuedDialTicket,
+} from '@fss/domain/dial';
 import { runCommand } from '../auth/index.ts';
-import { REFUSAL_STATUS, policyRouteDeps, redactError, runPolicyCommand, type PolicyRouteDeps } from './dialSupport.ts';
+import {
+  REFUSAL_STATUS,
+  contextForPrincipal,
+  policyRouteDeps,
+  redactError,
+  runPolicyCommand,
+  type PolicyRouteDeps,
+} from './dialSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**
@@ -14,17 +27,22 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  */
 export const DIAL_PATHS: readonly string[] = [
   '/dial/authorize',
+  '/dial/check',
   '/dial/consume',
 ];
 
 /**
- * Dial authorization and ticket consumption (specification 9.2, 5.3).
+ * Dial advice, and the ticket pair desktops up to 1.0.11 still use (specification 9.2,
+ * 5.3; wave 2, S4.5).
  *
- * Two commands and no reads. There is deliberately no "would this be allowed"
- * endpoint: section 9.2 makes `authorizeDial` "the only FSS source of an
- * allow/refuse decision", and an endpoint that answered the question without
- * minting a ticket would be a second source — one a client could cache, or poll
- * until the window opened, or use to enumerate which firms are suppressed.
+ * `POST /dial/check` is the advisory read: callable yes or no, with every reason, for a
+ * firm and optionally the number the card would dial (`adviseDial`). It writes nothing;
+ * the Mac opens `tel:` itself and logs the call afterwards with `POST /calls/log`. It
+ * answers only about firms the caller may see — a colleague's is `not_found` — so it
+ * cannot be used to learn which firms are suppressed.
+ *
+ * `/dial/authorize` and `/dial/consume` are deprecated (remove after desktop 1.0.12) and
+ * unchanged for the installed desktop, which asks for a ticket before it opens `tel:`.
  *
  * The replay rule of 5.3 is enforced in three places, and all three have to agree:
  *
@@ -47,6 +65,18 @@ export async function routeDial(request: ApiRequest, options: RoutingOptions): P
   }
 
   switch (request.path) {
+    case '/dial/check': {
+      const parsed = dialCheckRequestSchema.safeParse(request.body);
+      if (!parsed.success) return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };
+      const scoped = contextForPrincipal(deps.auth, deps.principal);
+      if (!scoped.ok) return scoped.result;
+      const advice = await adviseDial(scoped.context, {
+        firmId: parsed.data.firmId,
+        ...(parsed.data.routeId === undefined ? {} : { routeId: parsed.data.routeId }),
+      });
+      if (advice === null) return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };
+      return { status: 200, body: { advice } };
+    }
     case '/dial/authorize':
       return await authorize(deps, request);
     case '/dial/consume':

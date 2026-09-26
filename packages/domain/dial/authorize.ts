@@ -109,10 +109,10 @@ const refused = (reason: DialRefusalCode): DialDecision => ({ allowed: false, re
  * one that is easy to miss: a prospect who asked to stop on their mobile has not
  * given permission for their desk line, and both are the same person.
  */
-async function suppressionKeys(
+export async function suppressionKeys(
   context: RepositoryContext,
   firm: FirmRow,
-  route: PhoneRouteRow | null,
+  route: Pick<PhoneRouteRow, 'e164' | 'contact_id'> | null,
   contactId: string | undefined,
 ): Promise<readonly { readonly scope: 'firm' | 'handle'; readonly canonicalKey: string }[]> {
   const keys: { scope: 'firm' | 'handle'; canonicalKey: string }[] = [

@@ -2,8 +2,9 @@
  * Dial authorization, tickets, call outcomes, callbacks and the calling identities a
  * dial is placed from (specification 9.1, 9.2).
  *
- * `authorizeDial` is the only allow/refuse decision in the system, and nothing here
- * dials: the Mac opens a `tel:` URI with a ticket this package minted and consumed.
+ * Nothing here dials. Since wave 2 (S4.5) the Mac asks `adviseDial` whether a firm is
+ * callable and why not, opens `tel:` itself, and logs the call afterwards; the ticket
+ * pair (`authorizeDial`, `consumeDialTicket`) stays for desktops up to 1.0.11.
  * See `docs/greenfield/policy.md`.
  */
 
@@ -13,6 +14,8 @@ export {
   type DialDecision,
   type DialEvidence,
 } from './authorize.ts';
+
+export { adviseDial, type DialAdvice } from './advise.ts';
 
 export {
   DIAL_TICKET_SECONDS,
