@@ -23,6 +23,7 @@ import {
   fixtureCiGateRecord,
   fixtureDigest,
   fixtureReleaseRecord,
+  storeFixtureRecord,
 } from './support/releaseRecords.ts';
 
 /**
@@ -49,26 +50,28 @@ describe('storing a release record', () => {
     await database.drop();
   });
 
-  it('stores the record the rehearsal wrote, from its JSON text, and reads it back', async () => {
-    const record = fixtureReleaseRecord('fss-rh-fixture-2026-09-25T07:20:44Z');
-    const stored = await putReleaseRecord({ db: database.session }, JSON.stringify(record, null, 2));
-    expect(stored).toMatchObject({ ok: true, value: { outcome: 'created' } });
+  it('refuses the record a full rehearsal wrote, now that the mode is gone, and still reads one stored before', async () => {
+    const reference = 'fss-rh-fixture-2026-09-25T07:20:44Z';
+    const refused = await putReleaseRecord({ db: database.session }, JSON.stringify(fixtureReleaseRecord(reference), null, 2));
+    expect(refused).toMatchObject({ ok: false, reason: 'release_record_invalid' });
+    expect(await readReleaseRecord({ db: database.session }, reference)).toBeNull();
 
-    const read = await readReleaseRecord({ db: database.session }, record.releaseGateReference);
+    await storeFixtureRecord(database.session, reference);
+    const read = await readReleaseRecord({ db: database.session }, reference);
     expect(read).toMatchObject({
-      reference: record.releaseGateReference,
+      reference,
       suite: 'pass',
       apiDigest: FIXTURE_API_DIGEST,
       workerDigest: FIXTURE_WORKER_DIGEST,
-      desktopCommitStamp: record.artifacts.desktopCommitStamp,
+      desktopCommitStamp: 'd'.repeat(40),
       enablesSending: false,
       recordedAt: '2026-09-25T07:20:44.000Z',
     });
-    expect(read?.record).toEqual(record);
+    expect(read?.record).toEqual(fixtureReleaseRecord(reference));
   });
 
   it('answers existing for the same record again, however it is formatted', async () => {
-    const record = fixtureReleaseRecord('fss-rh-fixture-same');
+    const record = fixtureCiGateRecord('41000000101');
     expect(await putReleaseRecord({ db: database.session }, record)).toMatchObject({
       ok: true,
       value: { outcome: 'created' },
@@ -80,25 +83,29 @@ describe('storing a release record', () => {
       value: { outcome: 'existing' },
     });
     const count = await database.session.query<{ count: string }>(
-      "SELECT count(*)::text AS count FROM release_records WHERE reference = 'fss-rh-fixture-same'",
+      'SELECT count(*)::text AS count FROM release_records WHERE reference = $1',
+      [record.releaseGateReference],
     );
     expect(count.rows[0]?.count).toBe('1');
   });
 
   it('refuses a different record under a reference that is taken, and keeps the first', async () => {
-    const reference = 'fss-rh-fixture-conflict';
-    await putReleaseRecord({ db: database.session }, fixtureReleaseRecord(reference));
+    const first = fixtureCiGateRecord('41000000102');
+    await putReleaseRecord({ db: database.session }, first);
     const other = await putReleaseRecord(
       { db: database.session },
-      fixtureReleaseRecord(reference, { worker: fixtureDigest('e') }),
+      fixtureCiGateRecord('41000000102', { worker: fixtureDigest('e') }),
     );
     expect(other).toMatchObject({ ok: false, reason: 'release_record_conflict' });
-    expect((await readReleaseRecord({ db: database.session }, reference))?.workerDigest).toBe(FIXTURE_WORKER_DIGEST);
+    expect((await readReleaseRecord({ db: database.session }, first.releaseGateReference))?.workerDigest).toBe(
+      FIXTURE_WORKER_DIGEST,
+    );
   });
 
   it('refuses what the contract refuses, and names the field', async () => {
-    const reference = 'fss-rh-fixture-invalid';
-    const tagged = { ...fixtureReleaseRecord(reference), artifacts: { api: 'latest', worker: FIXTURE_WORKER_DIGEST, desktopCommitStamp: 'x' } };
+    const valid = fixtureCiGateRecord('41000000103');
+    const reference = valid.releaseGateReference;
+    const tagged = { ...valid, artifacts: { ...valid.artifacts, api: 'latest' } };
     const refused = await putReleaseRecord({ db: database.session }, tagged);
     expect(refused).toMatchObject({ ok: false, reason: 'release_record_invalid' });
     if (!refused.ok) expect(refused.detail).toContain('artifacts.api');
@@ -107,9 +114,10 @@ describe('storing a release record', () => {
       ok: false,
       reason: 'release_record_invalid',
     });
-    expect(
-      await putReleaseRecord({ db: database.session }, { ...fixtureReleaseRecord(reference), extra: true }),
-    ).toMatchObject({ ok: false, reason: 'release_record_invalid' });
+    expect(await putReleaseRecord({ db: database.session }, { ...valid, extra: true })).toMatchObject({
+      ok: false,
+      reason: 'release_record_invalid',
+    });
     expect(await readReleaseRecord({ db: database.session }, reference)).toBeNull();
   });
 
@@ -142,26 +150,21 @@ describe('storing a release record', () => {
     });
   });
 
-  it('refuses a rehearsal record without its drill evidence, and a ci-gate record that claims some', async () => {
-    const { rehearsalScenarios: _rehearsalScenarios, ...undrilled } = fixtureReleaseRecord('fss-rh-fixture-undrilled');
-    const refused = await putReleaseRecord({ db: database.session }, undrilled);
-    expect(refused).toMatchObject({ ok: false, reason: 'release_record_invalid' });
-    if (!refused.ok) expect(refused.detail).toContain('rehearsalScenarios');
-
+  it('refuses a ci-gate record that claims drill evidence', async () => {
     const claiming = { ...fixtureCiGateRecord('41000000005'), rehearsalPrefix: 'fss-rh-fixture' };
     expect(await putReleaseRecord({ db: database.session }, claiming)).toMatchObject({
       ok: false,
       reason: 'release_record_invalid',
     });
-    expect(await readReleaseRecord({ db: database.session }, 'fss-rh-fixture-undrilled')).toBeNull();
     expect(await readReleaseRecord({ db: database.session }, claiming.releaseGateReference)).toBeNull();
   });
 
   it('is append-only for the runtime role: no UPDATE, no DELETE, no TRUNCATE', async () => {
-    const reference = 'fss-rh-fixture-append-only';
+    const record = fixtureCiGateRecord('41000000104');
+    const reference = record.releaseGateReference;
     const runtime = await database.appRuntimeSession();
     // The runtime role can put one — that is how `fss admin release-record put` runs.
-    expect(await putReleaseRecord({ db: runtime }, fixtureReleaseRecord(reference))).toMatchObject({ ok: true });
+    expect(await putReleaseRecord({ db: runtime }, record)).toMatchObject({ ok: true });
     await expect(
       runtime.query("UPDATE release_records SET worker_digest = $1 WHERE reference = $2", [fixtureDigest('e'), reference]),
     ).rejects.toMatchObject({ code: '42501' });
@@ -307,10 +310,8 @@ describe('the process attestation, ci-gate:main', () => {
       expect(
         await putReleaseRecord({ db: database.session }, { ...fixtureCiGateRecord('41000000210', { worker: RUNNING, suite: 'fail' }), recordedAt: '2026-09-26T00:00:00Z' }),
       ).toMatchObject({ ok: true });
-      // A worker image only a rehearsal certified.
-      expect(
-        await putReleaseRecord({ db: database.session }, fixtureReleaseRecord('fss-rh-fixture-policy-only', { worker: REHEARSED_ONLY })),
-      ).toMatchObject({ ok: true });
+      // A worker image only a rehearsal certified, in a row stored before lane W3-S8.
+      await storeFixtureRecord(database.session, 'fss-rh-fixture-policy-only', { worker: REHEARSED_ONLY });
     });
 
     afterAll(async () => {
@@ -318,7 +319,10 @@ describe('the process attestation, ci-gate:main', () => {
     });
 
     it('is a name no record may carry, so the policy never means one stored row', async () => {
-      const named = await putReleaseRecord({ db: database.session }, fixtureReleaseRecord(CI_GATE_MAIN_POLICY));
+      const named = await putReleaseRecord({ db: database.session }, {
+        ...fixtureCiGateRecord('41000000212'),
+        releaseGateReference: CI_GATE_MAIN_POLICY,
+      });
       expect(named).toMatchObject({ ok: false, reason: 'release_record_invalid' });
       expect(await readReleaseRecord({ db: database.session }, CI_GATE_MAIN_POLICY)).toBeNull();
     });

@@ -5,7 +5,6 @@ import {
   releaseRecordSchema,
   releaseRecordSource,
   sendingEnabledSettingSchema,
-  type ReleaseRecord,
   type ReleaseRecordBindingRefusal,
   type ReleaseRecordPutRefusal,
 } from '@fss/contracts';
@@ -19,13 +18,12 @@ import type { Queryable } from '../db/queryable.ts';
  * passed, "the deployed commit/image digests match the rehearsal artifacts", and an
  * authenticated admin enabled sending. A record of the first is written by the CI gate
  * since lane g96 (`infra/scripts/release-record-from-ci.sh`, `source: "ci-gate"`, the
- * owner's axiom 10B) and by a green `full` rehearsal before it
- * (`infra/scripts/rehearsal-release-record.sh`); the admin's attestation names that
- * record's `releaseGateReference`, and this file is what makes the middle clause a
- * comparison rather than a sentence: a stored record, compared with the digest of the
- * image that is asking. The rule reads the reference, the suite and the two digests,
- * which both kinds of record carry, and never the rehearsal's drill fields, so a
- * `ci-gate` record binds exactly as a rehearsal's does.
+ * owner's axiom 10B); a green `full` rehearsal wrote them before it, and the rows it
+ * stored are still read by their reference. The admin's attestation names that record's
+ * `releaseGateReference`, and this file is what makes the middle clause a comparison
+ * rather than a sentence: a stored record, compared with the digest of the image that is
+ * asking. The rule reads the reference, the suite and the two digests — columns every
+ * row has — and never anything else in the stored JSON.
  *
  * Two moments ask, and each compares its own half of the record:
  *
@@ -71,7 +69,12 @@ export interface StoredReleaseRecord {
   readonly workerDigest: string;
   readonly desktopCommitStamp: string;
   readonly enablesSending: boolean;
-  readonly record: ReleaseRecord;
+  /**
+   * The stored JSON, as stored: a `ci-gate` record, or — for a row put before lane
+   * W3-S8 deleted the rehearsal's `full` mode — a rehearsal's. Never re-parsed; the rules
+   * read the columns above, and `releaseRecordSource` reads its `source`.
+   */
+  readonly record: Readonly<Record<string, unknown>>;
   readonly putAt: string;
 }
 
@@ -90,7 +93,7 @@ interface ReleaseRecordRow {
   readonly worker_digest: string;
   readonly desktop_commit_stamp: string;
   readonly enables_sending: boolean;
-  readonly record: ReleaseRecord;
+  readonly record: Readonly<Record<string, unknown>>;
   readonly put_at: Date;
   readonly [column: string]: unknown;
 }
