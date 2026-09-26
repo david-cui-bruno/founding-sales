@@ -119,17 +119,51 @@ describe('scenario 17: no replay ever yields a second allow', () => {
     });
     if (!issued.ok) throw new Error(`expected a ticket, got ${issued.reason}`);
 
+    // Consumption re-runs `authorizeDial` (lane g79, S10), calling window included, so
+    // it takes the same pinned instant as the authorization. Left to database time it
+    // passed only on weekdays 08:00-20:00 Providence time, and failed from 20:00 on
+    // Friday 25 Sep 2026, 00:00Z (lane g101). The replay is asked at the same
+    // in-window instant, so its refusal cannot be the window's.
     const consumed = await consumeDialTicket(context, {
       ticketId: issued.value.ticketId,
       deviceId: seeded.alpha.salesperson.deviceId,
+      at: policy.insideWindow,
     });
     expect(consumed.ok).toBe(true);
 
     const again = await consumeDialTicket(context, {
       ticketId: issued.value.ticketId,
       deviceId: seeded.alpha.salesperson.deviceId,
+      at: policy.insideWindow,
     });
     expect(again).toEqual({ ok: false, reason: 'already_consumed' });
+  });
+
+  it('re-decides the calling window at consumption, and a refused ticket stays unconsumed', async () => {
+    // 23:59:30Z and 00:00:10Z on a Wednesday are 19:59:30 and 20:00:10 in
+    // America/New_York: the window's end falls between issue and consumption. The
+    // window is the firm's local clock, not a UTC date, so this refusal is the rule.
+    const context = salespersonContext();
+    const issued = await authorizeDialCommand(context, {
+      ...dialInput(),
+      at: '2026-09-16T23:59:30.000Z',
+      deviceId: seeded.alpha.salesperson.deviceId,
+      commandId: 'cmd-dial-window-close',
+    });
+    if (!issued.ok) throw new Error(`expected a ticket, got ${issued.reason}`);
+
+    const input = { ticketId: issued.value.ticketId, deviceId: seeded.alpha.salesperson.deviceId };
+    expect(await consumeDialTicket(context, { ...input, at: '2026-09-17T00:00:10.000Z' })).toEqual({
+      ok: false,
+      reason: 'outside_calling_window',
+    });
+    // The refusal wrote nothing, so the ticket is still decided on its merits once,
+    // and then never again.
+    expect((await consumeDialTicket(context, { ...input, at: policy.insideWindow })).ok).toBe(true);
+    expect(await consumeDialTicket(context, { ...input, at: policy.insideWindow })).toEqual({
+      ok: false,
+      reason: 'already_consumed',
+    });
   });
 
   it('refuses after a firm suppression, a retired route and an expired posture', async () => {
