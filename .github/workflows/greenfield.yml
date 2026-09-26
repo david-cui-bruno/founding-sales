@@ -43,6 +43,19 @@ jobs:
         # --ignore-scripts: the root postinstall fetches the Electron binary, which this
         # job never runs. embedded-postgres is unused here because the service container is.
         run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: No durability for the throwaway database
+        # The container lives for this job, so waiting on disk flushes buys nothing; a
+        # local run starts its embedded cluster with the same three settings
+        # (packages/domain/db/testing/embeddedPostgres.ts).
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          docker exec "$POSTGRES_CONTAINER" psql -U postgres -v ON_ERROR_STOP=1 \
+            -c 'ALTER SYSTEM SET fsync = off' \
+            -c 'ALTER SYSTEM SET synchronous_commit = off' \
+            -c 'ALTER SYSTEM SET full_page_writes = off' \
+            -c 'SELECT pg_reload_conf()'
       - name: Greenfield gate
         run: npm run gate:greenfield
 
