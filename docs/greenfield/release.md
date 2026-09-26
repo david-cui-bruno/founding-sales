@@ -21,7 +21,7 @@ The first release's one-off steps (sections 1, 2.0, part of 3.0 and 5) are in [`
 | **Promote the images of a schema or infrastructure release** | **David, with the admin profile** | `infra/scripts/release-promote.sh release-manifest.json` copies the two digests of a green full rehearsal from `fss-rh-*` to `fss-prod-*` and reads production back (2.1). |
 | **Apply the rehearsal registry — once, ever** (done) | **CI, by a workflow deleted on 26 September 2026** (`infra-apply-runbook.md` 2.1) | Same reason as the row below: `fss-rh-deploy` is assumable only from the `rehearsal` environment. `infra-apply-runbook.md` 2.1. |
 | Run the rehearsal | CI (`greenfield-release.yml`) | It needs the `fss-rh-deploy` role, which only the OIDC provider may assume, and it must tear the environment down even when a step fails. |
-| Write the release record | David, from CI's results (`release-record-from-ci.sh`, 4.2); the CI deploy once g91's follow-up lands | Since lane g96 (the owner's axiom 10B) it comes from the *Greenfield gate* run that was green on the deployed commit, not from a rehearsal. The script reads only GitHub and refuses unless the gate and the images run of that commit are green and name the digests, so a record can only exist for a commit CI passed. |
+| Write the release record | The CI deploy, before each rollout (4.0); David by hand for a manual release (`release-record-from-ci.sh`, 4.2) | Since lane g96 (the owner's axiom 10B) it comes from the *Greenfield gate* run that was green on the deployed commit, not from a rehearsal. The script reads only GitHub and refuses unless the gate and the images run of that commit are green and name the digests, so a record can only exist for a commit CI passed. |
 | Apply production Terraform | David | A plan should be read by a person before it is applied. |
 | Put the secret values in | David | Terraform creates empty secrets and never holds a value. |
 | Create the DNS ALIAS | David | It points at a load balancer that does not exist until the first apply. |
@@ -364,14 +364,14 @@ There is also `extra_environment` (`map(string)`, empty) on both roots, for what
 David's decision of 25 September 2026: *"I'm a startup, I want to move fast."* When *Greenfield images* publishes the images of a push to main, *Greenfield deploy* (`.github/workflows/greenfield-deploy.yml`) deploys them to production as `fss-prod-ci-deploy`, the role `infra/roots/production/ci_deploy.tf` declares. It trusts one OIDC subject, this repository's `production-deploy` environment, and holds no state, secret, database or IAM write.
 
 ```
-run (no credential) → gates (no credential) → ranges (images commit, no credential) → deploy (credential): artifact → guard → check → gates again → promote → worker → API → canary age → smoke (images commit, no credential) → record (credential): gates again → build → put → one line
+run (no credential) → gates (no credential) → ranges (images commit, no credential) → deploy (credential): artifact → guard → check → gates again → record: build → put → promote → worker → API → canary age → smoke (images commit, no credential) → record (credential): gates again → build → put again, `existing` → one line
 ```
 
 - **gates** (lane A1) holds no credential and checks nothing out. It asks the GitHub API two things about the images commit, and the deploy job starts only when both hold:
   - the *Greenfield gate* has a run of the push to main at that commit, found by its workflow file `.github/workflows/greenfield.yml` and never by its display name, and the newest such run is `completed`/`success`. GitHub reports a run as its latest attempt, so a re-run still going is waited for and a re-run that failed is red;
   - the commit is still on main: `GET /repos/{owner}/{repo}/compare/main...<commit>` answers `behind` or `identical`, so a commit force-pushed off main is never deployed.
 
-  It waits up to thirty minutes for a gate that is still running or has not started. Then, or at once for a red gate or a commit no longer on main, it answers `manual` with the reason: a green run, a notice, nothing touched, no role assumed. The deploy job runs the same step again, waiting for nothing, after `check` and before its first write, and the record job runs it before the put. Either of those fails the run red, writing nothing more, when the answer has changed.
+  It waits up to thirty minutes for a gate that is still running or has not started. Then, or at once for a red gate or a commit no longer on main, it answers `manual` with the reason: a green run, a notice, nothing touched, no role assumed. The deploy job runs the same step again, waiting for nothing, after `check` and before its first write (the record's put), and the record job runs it before its read-back. Either of those fails the run red, writing nothing more, when the answer has changed.
 - **Two jobs hold a credential, deploy and record, and neither runs code from the images commit before the deploy's guard.** The schema ranges are read from the images commit by a job with no `id-token`, and reach the credentialed jobs as two validated scalars. The smoke runs from the images commit in another job without a credential; it is handed the canary age as a scalar. Both credentialed jobs check out the images commit exactly — never main's tip — run only `infra/scripts/`, and run no Node at all. The record job starts only after the deploy decided `deploy`, so the guard has already proved `infra/scripts/` unchanged.
 - **The guard** is the workflow's own inline code and runs before any of the repository's. It reads the commit production's images were built from: the `ci-<commit>` tag the promotion gave each running digest in `fss-prod-*`, or the bare commit an operator's own push was tagged with. Then it lists what every commit between that commit and the images commit touched. It reads commit by commit, so a change that was later reverted still counts. Rename detection is off, so a moved file counts at both its paths, and a merge is judged against its first parent. It answers `manual` — a notice and a list of paths in the summary, a green run, nothing touched — when any of these paths appears:
   - `infra/**`, every script in `infra/scripts/` included;
@@ -393,23 +393,24 @@ run (no credential) → gates (no credential) → ranges (images commit, no cred
   - either digest differs from the one `fss-rh-<image>:ci-<commit>` names;
   - that image's `imagePushedAt` is outside the images run's window, from the run's `created_at` to its `updated_at` (lane A1). The window starts at the run's creation, so a re-run that reuses its first attempt's push is inside it;
   - `/health` does not answer.
+- **The release record, before the rollout** (26 September 2026). The worker admits a send only while a stored record names its own digest. Until this date the record was put after the smoke, so every new worker task that started during the rollout found none, and a step due then was refused `release_record_unknown` and waited up to an hour. Now the deploy job's first write, after `check` decided `deploy` and the gate was read again, is `infra/scripts/ci-deploy-app.sh record --before-rollout`. It repeats every read and guard of `check` and builds the ci-gate record with `release-record-from-ci.sh`, without `--enables-sending`. It puts the record with `fss admin release-record put --json-base64` on the operations task, reading the task's answer back from its log. The operations definition is Terraform's and carries the worker image of the last apply, so the put runs that image, and the record it stores names this deploy's digests. When it fails the run is red and nothing was promoted or deployed. A record stored for a rollout that then fails is inert: no running process has its digests.
 - **deploy** repeats every read and guard first. It registers the next revision of each service's running task definition with only the image digest changed, describes it back and compares it with the running one field by field. Anything but the image different, and it deregisters the revision before any service names it. It then points the service at the revision: the worker first, waited on until ECS calls its one deployment `COMPLETED` with the declared count running and nothing pending, and held to its digest on every running task, read with `list-tasks` and `describe-tasks`; only then the API. The circuit breaker stays on. When ECS rolls a revision back, the deploy fails, nothing after it is touched, and the rolled-back revision is deregistered, so the newest ACTIVE revision is again the one that runs. The run prints the stopped tasks' stop and exit codes, and only the `event`, `reason` and `code` fields of their structured log lines, never a raw line. It never changes a count.
 - **smoke** is `scripts/productionSmoke.mjs` at the images commit, with the canary age from `FSS/fss-prod`, expecting the sending state the task definition carries.
-- **record** (lane g100) runs only after a deploy that rolled out and a smoke that passed. With no credential, it runs the gates job's step again: both gates green on the images commit and the commit still on main, waiting up to thirty minutes for a re-run still going. It fails, putting nothing, on any other answer. Then it assumes the role for an hour and runs `infra/scripts/ci-deploy-app.sh record`, which repeats every read and guard of `check` and refuses unless both services run exactly the two digests. It builds the ci-gate record with `release-record-from-ci.sh`, without `--enables-sending`, and puts it the way `release-deploy.sh --release-record` does: `fss admin release-record put --json-base64` on the operations task, reading the task's answer back from its log. The operations definition is Terraform's and carries the worker image of the last apply, so the put runs that image. The record it stores names this deploy's digests.
+- **record** runs only after a deploy that rolled out and a smoke that passed, and reads the record back. With no credential, it runs the gates job's step again: the gate green on the images commit and the commit still on main, waiting up to thirty minutes for a re-run still going. It fails, putting nothing, on any other answer. Then it assumes the role for an hour and runs `infra/scripts/ci-deploy-app.sh record --after-rollout`. That repeats every read and guard of `check`, refuses unless both services run exactly the two digests, builds the same record from the same gate run and puts it again, and requires `existing`.
 
 **What this lane accepts.** A job holding the role can register a revision of `fss-prod-api` or `fss-prod-worker` with any image in their two repositories and roll it out. IAM has no condition on a task definition's contents, and a main-branch workflow can deploy whatever main contains; that is the price of continuous deployment, and the script narrows it by deriving every revision from the running one. The limits are the `production-deploy` environment restricted to main, no `id-token` in a job that runs images-commit code, the exact OIDC subject, ECR writes only to the two `fss-prod` repositories, and unchanged task roles, because `iam:PassRole` names only the two services' existing four. `UpdateService` needs a task definition of the service's own family, so a bare `--desired-count 0` is refused; IAM cannot also forbid a count on a call that names one, and the script never sends one.
 
 **Provenance, and what is left (lane A1).** A deploy runs only images whose digests came from the images run's own artifact, which `fss-rh-<image>:ci-<commit>` names, and which were pushed while that run was going. That refuses an image pushed under the tag before the run began or after it ended. What is left is another writer to the `fss-rh` repositories pushing the tag while the run is going. Only `fss-rh-deploy` can write there: the images run's publish job, the rehearsal workflows and an operator session that assumes it. A commit pushed to main a second time, which starts a second images run that reuses the first one's tag, fails that deploy on the window; release it by hand.
 
-**Merges and rehearsals.** Deploys share one concurrency group (`fss-production-deploy`) and a running one always finishes; a waiting run replaced by a newer one is covered by the newer one's range. A rehearsal running at the same time does not matter: its guard compares only its own run's resources (lane g97), so the shared group and the rehearsal polls were deleted on 26 September 2026. The job allows 150 minutes and the credential two hours, twice the worst rollout of three ten-minute waits per service. A failed run's summary names the revisions each service had before and the ones it names now, as observed. `aws ecs update-service --cluster fss-prod-cluster --service fss-prod-<api|worker> --task-definition <previous>` puts one back.
+**Merges and rehearsals.** Deploys share one concurrency group (`fss-production-deploy`) and a running one always finishes; a waiting run replaced by a newer one is covered by the newer one's range. A rehearsal running at the same time does not matter: its guard compares only its own run's resources (lane g97), so the shared group and the rehearsal polls were deleted on 26 September 2026. The job allows 170 minutes: twice the worst rollout of three ten-minute waits per service, plus up to twenty for the record's put. The credential lasts two hours. A failed run's summary names the revisions each service had before and the ones it names now, as observed. `aws ecs update-service --cluster fss-prod-cluster --service fss-prod-<api|worker> --task-definition <previous>` puts one back.
 
 **After a protected change, the next release is by hand.** A protected change in the range keeps answering `manual` until production runs images built after it. An infrastructure-only merge builds no images. So the rule is: apply the infrastructure change by the manual path, then release the first app merge after it by hand — `release-promote.sh image-digests.json --app-only` with the admin profile, and the rolling path of 4.1. Production's commit tag is then past the change, and the next app merge deploys itself again. There is no switch that tells CI a change was applied.
 
-**CI puts the release record, and sending stays on (lane g100).** Once section 6 has run, the worker holds every send unless a stored record names its image. The record job puts one for every worker it deploys. Under the process form of the attestation (6, step 5: `ci-gate:main`), that record is all the new worker needs, and nobody attests again. Under an attestation that names one reference, a new worker still holds until the owner attests to its record.
+**CI puts the release record, and sending stays on (lane g100).** Once section 6 has run, the worker holds every send unless a stored record names its image. The deploy job puts one for every worker it deploys, before the rollout starts it. Under the process form of the attestation (6, step 5: `ci-gate:main`), that record is all the new worker needs, and nobody attests again. Under an attestation that names one reference, a new worker still holds until the owner attests to its record.
 
-**When the record is not put.** A gate may have been re-run red since the deploy, or not finish within thirty minutes, the commit may have left main, `release-record-from-ci.sh` may refuse, or the put may be refused. By then the deploy has rolled out and passed its smoke, so nothing is undone. The run goes red with one line: *the release record was NOT put, and sending holds for the new worker until the operator puts its record by hand (4.2)*. The fix, once the cause is gone, is one of these:
-1. Re-run the failed `record` job from the run's page. It is idempotent: the same gate run builds the same record, and a second put answers `existing`.
-2. Put it by hand, as the admin profile. Build the record with the 4.2 commands for the deployed commit, then run the put-alone command of 6, step 2, which runs on the operations definition as it is. Do not use `release-deploy.sh --release-record` here: its put holds the operations task to the new worker digest, and the operations definition carries the last apply's image until the next apply.
+**When the record is not put.** `release-record-from-ci.sh` may refuse, or the put may be refused. The put is the deploy job's first write, so the run goes red with *the release record … was NOT put before the rollout, so nothing was promoted or deployed*. Once the cause is gone, re-run the deploy job. The put is idempotent: the same gate run builds the same record, and a second put answers `existing`.
+
+**When the read-back fails.** A gate may have been re-run red since the deploy, or not finish within thirty minutes, the commit may have left main, production may not run the two digests, or the put may have had to create the record. The record was stored before the rollout, so sending does not hold. The run goes red with one line naming what the read-back found. Read the stored record with `fss admin release-record show --reference <reference>` (6, step 2), or re-run the record job, which is idempotent. To put the record by hand, as the admin profile, build it with the 4.2 commands for the deployed commit and run `release-deploy.sh … --record-only` (4.2). That runs on the operations definition as it is.
 
 **The role's grant for the put.** `ecs:RunTask` on `fss-prod-operations:*`, conditioned on `ecs:cluster` being the production cluster. `ecs:TagResource` on the production cluster's tasks, only under `ecs:CreateAction = RunTask`, because the wrapper propagates the definition's tags onto the task. Nothing else is new. The operations task runs as the worker's task and execution roles, which `iam:PassRole` already names. It logs to `/fss/fss-prod/worker` under the prefix `operations`, which the log read already covers, and `ecs:DescribeTasks` was already there. IAM cannot condition a task's command, so a job holding the role could run any `fss` command on that task, as the worker's task role. It could already reach that identity by rolling a worker revision.
 
@@ -440,7 +441,7 @@ The two manual paths:
 1. Apply the role from a plan of this root, given the deployed digests. The plan should create `aws_iam_role.ci_deploy` and `aws_iam_role_policy.ci_deploy`, set `track_latest` in place on `aws_ecs_task_definition.api` and `.worker`, change the outputs, and replace nothing. A plan that replaces a task definition or touches a service is not this change.
 2. Create the `production-deploy` environment with `main` as its only deployment branch.
 3. Give it the secret `FSS_PRODUCTION_CI_ROLE_ARN`: the public ARN that `terraform output -raw ci_deploy_role_arn` prints.
-4. Set the four repository variables the record job launches the put with (lane g100). They are public identifiers, read from the production root's outputs after the apply that adds them, and never from state in CI:
+4. Set the four repository variables the deploy and record jobs launch the put with (lane g100). They are public identifiers, read from the production root's outputs after the apply that adds them, and never from state in CI:
 
    ```bash
    cd infra/roots/production   # initialised as for section 4
@@ -486,10 +487,10 @@ infra/scripts/release-stop.sh infra/roots/production fss-prod --environment prod
 
 `release-stop.sh` asks for `--environment production` because it takes production down on purpose, the same extra word `release-bootstrap-workspace.sh` asks for, and it refuses a root that is not the prefix's, a cluster in another account, region or namespace, and a cluster tagged as the other environment. Run twice, it does nothing the second time. Plan before the stop and apply after it: the plan does not depend on the counts, and the outage starts at step 1, so keep steps 1 to 3 together. A first apply (`bootstrap=true`) needs no stop, because it creates both services at zero.
 
-**An app-only release is CI's (4.0).** By hand — only when that workflow cannot run — it is the rolling path (8.0am): `release-promote.sh image-digests.json --app-only`, no stop, the apply with the release's digests, then `release-deploy.sh` without `--schema-change`:
+**An app-only release is CI's (4.0).** By hand — only when that workflow cannot run — it is the rolling path (8.0am). Store the release record first with `release-deploy.sh … --record-only` (4.2). Then run `release-promote.sh image-digests.json --app-only`, no stop, the apply with the release's digests, and `release-deploy.sh … --release-record <file>` without `--schema-change`:
 
 ```
-terraform apply  →  worker count  →  API count  →  one wait  →  running-digest check
+record (--record-only)  →  terraform apply  →  worker count  →  API count  →  one wait  →  running-digest check  →  the record again (existing)
 ```
 
 **You do not type the steps after the apply.** They are one script, and it is the same script CI runs for the rehearsal — the only differences are the root in argument one and the credentials in your shell:
@@ -522,7 +523,9 @@ Why a script rather than four commands you can see:
 
 `--schema-change` is the flag that makes it refuse unless both services are already at desired, running and pending zero. It no longer stops them itself: by the time it runs, the apply has registered the new task definitions, and a stop there is the defect 8.0af records. The refusal names the `release-stop.sh` command to run. Leave the flag off for a release that moves no migration: that is the rolling path. The apply replaces the two service task definitions and ECS rolls each service on to its new one at its current count. The script then launches no one-off task. It sets the worker's and then the API's declared count with `update-service --desired-count`, forcing no second deployment, waits once for both, and runs the running-digest check: each service has one deployment that did not fail, exactly its declared number of running tasks, every one on that deployment's task definition, and the release's digest in its container. A release that adds a migration but is deployed without `--schema-change` fails that check. Both `--api-digest` and `--worker-digest` are required on either path, and `bootstrap=true` without `--schema-change` is refused.
 
-`--release-record <release-record.json>` (lane g71) is optional. When given, after the final verify the script runs `fss admin release-record put` on the operations task and prints the stored record. Pass the record `release-record-from-ci.sh` wrote for these same digests (4.2, lane g96). Without it nothing about the deploy changes. Section 6 is where it matters: an enable of sending is refused unless its reference is a stored record naming the running API's digest.
+`--release-record <release-record.json>` (lane g71) is optional. When given, after the final verify the script runs `fss admin release-record put` on the operations task, prints the stored record, and fails unless the answer is `created` or `existing` for this release's digests. Pass the record `release-record-from-ci.sh` wrote for these same digests (4.2, lane g96): a record naming other digests is refused before anything else runs. Without it nothing about the deploy changes. Section 6 is where it matters: an enable of sending is refused unless its reference is a stored record naming the running API's digest.
+
+**The record goes in before the apply (26 September 2026).** The worker admits a send only while a stored record names its own digest, and new worker tasks start as soon as the apply re-points the service. So store the record first, with `--record-only` (4.2). It does the put and nothing else, on the operations definition the root outputs now. That is the running release's definition, so the task is held to that definition's own worker image, and the record it stores names the new digests. The put at the end of the deploy then answers `existing`. `--record-only` refuses without `--release-record`, together with `--schema-change`, without both digests, on a `bootstrap=true` plan, and when the operations definition is not a worker image by digest.
 
 **The policy, and it is not negotiable.**
 
@@ -607,23 +610,33 @@ export WORKER_DIGEST="$(jq -r .images.worker.digest /tmp/fss-ci/image-digests.js
 GITHUB_REPOSITORY="$REPO" infra/scripts/release-record-from-ci.sh \
   "$GATE_RUN_ID" "$COMMIT" "$API_DIGEST" "$WORKER_DIGEST" --out /tmp/fss-ci/release-record.json
 
-# 2. The deploy, which puts the record after the final verify (4.1 says when --schema-change applies).
+# 2. Store it before anything changes: the put alone, on the operations definition as it runs now.
+infra/scripts/release-deploy.sh infra/roots/production fss-prod --record-only \
+  --api-digest "$API_DIGEST" --worker-digest "$WORKER_DIGEST" \
+  --release-record /tmp/fss-ci/release-record.json
+
+# 3. The plan and the apply: release-promote.sh first for an app-only release, release-stop.sh
+#    first for a schema change (4.1).
+
+# 4. The deploy, which puts the record again after the final verify and must answer existing.
 infra/scripts/release-deploy.sh infra/roots/production fss-prod [--schema-change] \
   --api-digest "$API_DIGEST" --worker-digest "$WORKER_DIGEST" \
   --release-record /tmp/fss-ci/release-record.json
+
+# 5. The production smoke (6, step 1).
 ```
 
 The script prints the reference to stderr. The put prints it back as `reference`, with `source: "ci-gate"`. Section 6 step 5's attestation names it.
 
 **What the put trusts.** A schema-valid `ci-gate` record put by whoever can run the operations task is trusted: `fss admin release-record put` checks the record's shape and stores it, and does not verify its GitHub evidence (the gate run, the images run, the artifact). CI's record job or an admin who can run that task can therefore store one, and its provenance is not independently verified. The script above is what makes a record true, not the put.
 
-**The CI deploy does this itself (lane g100).** After the rollout and the smoke, the `record` job of `greenfield-deploy.yml` runs the three steps below, with no `--enables-sending` (4.0):
+**The CI deploy does this itself (lane g100; before the rollout since 26 September 2026).** The deploy job of `greenfield-deploy.yml` runs the three steps below, after `check` and before its first write, with no `--enables-sending` (4.0). The `record` job runs them again after the smoke and requires `existing`:
 
-1. Read the two gates and main again, as the `gates` job did before the deploy (4.0): the *Greenfield gate* green on the images commit, by its workflow file, and the commit still on main. It waits up to thirty minutes for a re-run still going, and puts nothing on any other answer.
+1. Read the gate and main again, as the `gates` job did (4.0): the *Greenfield gate* green on the images commit, by its workflow file, and the commit still on main. In the deploy job it waits for nothing; in the record job it waits up to thirty minutes for a re-run still going. It puts nothing on any other answer.
 2. Run `release-record-from-ci.sh <gate run id> <images commit> <api digest> <worker digest> --out "$RUNNER_TEMP/release-record.json"`, without `--enables-sending`. Actions already sets `GITHUB_REPOSITORY`, and the record job already has the `actions: read` that `gh api` and `gh run download` need.
-3. Put the record, as `release-deploy.sh --release-record` does: `fss admin release-record put --json-base64` on the operations task. The network comes from four repository variables, and nothing reads Terraform state. `fss-prod-ci-deploy` holds `ecs:RunTask` on the operations family for this.
+3. Put the record, as `release-deploy.sh --record-only` does: `fss admin release-record put --json-base64` on the operations task, held to that definition's own worker image. The network comes from four repository variables, and nothing reads Terraform state. `fss-prod-ci-deploy` holds `ecs:RunTask` on the operations family for this.
 
-The commands above are the hand fallback when the record job fails (4.0, "When the record is not put"), and the path for a manual release. Switching sending on uses them too.
+The commands above are the path for a manual release and the hand fallback when a read-back fails (4.0). Switching sending on uses them too.
 
 ---
 
@@ -656,42 +669,17 @@ Six lines, all `PASS`. The sixth reads `PASS sending_disabled (sendingEnabled=fa
 
 **2. Put the release record, then check the digests match.** Since lane g71 (8.0ag) the software makes the comparison. You still read it before you attest.
 
-Since lane g96 (the owner's axiom 10B) the record comes from the CI gate that was green on the deployed commit, not from a rehearsal. Build it with `release-record-from-ci.sh` and pass it to the deploy. 4.2 has the commands that find the gate run, the images run and the digests:
+Since lane g96 (the owner's axiom 10B) the record comes from the CI gate that was green on the deployed commit, not from a rehearsal. Build it with `release-record-from-ci.sh` and store it with `release-deploy.sh --record-only`, from a checkout at the commit production runs, as the admin profile, with the production root initialised as for section 4. 4.2 has the commands that find the gate run, the images run and the digests:
 
 ```bash
 GITHUB_REPOSITORY=david-cui-bruno/founding-sales infra/scripts/release-record-from-ci.sh \
   "$GATE_RUN_ID" "$COMMIT" "$API_DIGEST" "$WORKER_DIGEST" --enables-sending --out /tmp/fss-ci/release-record.json
-infra/scripts/release-deploy.sh infra/roots/production fss-prod [--schema-change] \
+infra/scripts/release-deploy.sh infra/roots/production fss-prod --record-only \
   --api-digest "$API_DIGEST" --worker-digest "$WORKER_DIGEST" \
   --release-record /tmp/fss-ci/release-record.json
 ```
 
-After the final verify, the script runs `fss admin release-record put` on the operations task. It prints the stored record: the reference, `source` (`ci-gate`), `suite`, `apiDigest`, `workerDigest`, and `outcome` (`created`, or `existing` on a re-run). A different record under the same reference is refused `release_record_conflict`. Records are never replaced. The put enables nothing.
-
-If production is already running the record's digests, you do not have to redeploy to store the record. Run the put alone, from a checkout at the commit production runs, as the admin profile, with the production root initialised as for section 4:
-
-```bash
-export AWS_REGION=us-east-1
-export WORKER_DIGEST="$(aws ecs describe-task-definition --task-definition fss-prod-operations \
-  --query 'taskDefinition.containerDefinitions[0].image' --output text | sed 's/.*@//')"
-export RECORD_BASE64="$(python3 -c 'import base64,sys; print(base64.b64encode(open(sys.argv[1],"rb").read()).decode())' /tmp/fss-ci/release-record.json)"
-bash -c 'set -euo pipefail
-source infra/scripts/release-common.sh
-root=infra/roots/production
-network=$(release_output "$root" task_network_configuration json)
-release_run_task --step release-record-put --environment production --prefix fss-prod \
-  --account "$(release_caller_account)" --region "$AWS_REGION" \
-  --cluster "$(release_output "$root" cluster_arn)" \
-  --task-definition "$(release_output "$root" operations_task_definition_arn)" \
-  --container operations --network-plan "$network" --image-digest "$WORKER_DIGEST" \
-  --database-host "$(release_json_path "$network" database_host)" \
-  --secret-arn "$(release_output "$root" app_runtime_database_secret_arn)" \
-  --log-group "$(release_output "$root" worker_log_group_name)" --log-stream-prefix operations \
-  --capture /tmp/fss-release-record-put.log \
-  -- admin release-record put --json-base64 "$RECORD_BASE64"
-release_captured_report /tmp/fss-release-record-put.log /tmp/fss-release-record-put.json'
-cat /tmp/fss-release-record-put.json
-```
+`--record-only` runs `fss admin release-record put` on the operations task as its definition is now, and deploys nothing, so it serves both a production already running the record's digests and a release about to deploy them (4.2). It prints the stored record: the reference, `source` (`ci-gate`), `suite`, `apiDigest`, `workerDigest`, and `outcome` (`created`, or `existing` on a re-run). It refuses a record naming other digests than the two given. A different record under the same reference is refused `release_record_conflict`. Records are never replaced. The put enables nothing. A deploy given the same file with `--release-record` puts it again after its final verify and answers `existing`.
 
 A one-off task can only be handed arguments, so the record travels as base64. That also keeps a rehearsal record's `fss-rh-` text out of the arguments the production guard reads, which would otherwise read it as a rehearsal resource the command is about to act on. `fss admin release-record show --reference <reference>` reads a stored record back the same way.
 
@@ -749,10 +737,10 @@ Turning sending off (`enabled: false`) is always accepted.
 POST /settings/update
 { "settingKey": "sending_enabled",
   "value": { "enabled": true, "releaseGateReference": "ci-gate:main" },
-  "changeNote": "I attest to the release process: a worker may send under any ci-gate release record for a commit on main, put by the CI deploy after its rollout and smoke passed" }
+  "changeNote": "I attest to the release process: a worker may send under any ci-gate release record for a commit on main, put by the CI deploy before its rollout" }
 ```
 
-`ci-gate:main` means any stored record with `source: "ci-gate"`. Only `release-record-from-ci.sh` writes one, and only from a green *Greenfield gate* run of a push to main at the record's commit. The CI deploy puts one after every rollout and smoke; the operator puts one by hand only as its fallback (4.0). Each process still compares its own half:
+`ci-gate:main` means any stored record with `source: "ci-gate"`. Only `release-record-from-ci.sh` writes one, and only from a green *Greenfield gate* run of a push to main at the record's commit. The CI deploy puts one before every rollout; the operator puts one by hand only for a manual release (4.2). Each process still compares its own half:
 - the enable needs a stored, passing `ci-gate` record naming the running API's digest;
 - the worker sends only while a stored, passing `ci-gate` record names its digest.
 
@@ -860,4 +848,4 @@ Production is live: applied, deployed, bootstrapped and smoked at `66203322` on 
     - whether `--propagate-tags TASK_DEFINITION` makes `RunTask` a tag-on-create at all. The grant of `ecs:TagResource` under `ecs:CreateAction = RunTask` is there in case it does. If a run shows it is not needed, it can go;
     - that `RunTask` needs no `iam:PassRole` beyond the worker's two roles;
     - that the four repository variables hold what the outputs print. No apply has created those outputs yet;
-    - that the last apply's operations image accepts a `ci-gate` record. Only images built at or after PR 235 know the `source: "ci-gate"` shape, so the first put needs an apply after that.
+    - that the last apply's operations image accepts a `ci-gate` record. Only images built at or after PR 235 know the `source: "ci-gate"` shape, so the first put needs an apply after that. Since 26 September 2026 the put comes before the rollout, so a refusal there stops the deploy instead of following it.

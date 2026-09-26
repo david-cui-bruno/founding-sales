@@ -353,8 +353,11 @@ and the worker refuses to send when the record does not carry its own
 idempotent by reference: the same record is `existing`, and a different record under a
 stored reference is refused `release_record_conflict`. It runs on the operations task,
 as the runtime identity, which may insert into `release_records` and read it, and do
-nothing else. `release-deploy.sh --release-record <file>` runs it after the final
-verify. `--json-base64` is that form, because a one-off task is handed only arguments.
+nothing else. `release-deploy.sh --record-only --release-record <file>` runs it alone,
+before the apply, and `release-deploy.sh --release-record <file>` runs it again after the
+final verify, where it answers `existing`; the CI deploy puts it before the rollout
+(`docs/greenfield/release.md` 4.0). `--json-base64` is that form, because a one-off task
+is handed only arguments.
 `show --reference` reads a stored record back.
 
 **`fss admin database-users ensure`** runs on the migration task. It creates or alters
