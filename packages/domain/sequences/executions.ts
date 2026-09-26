@@ -10,6 +10,7 @@ import { resumeEnrollment } from './resume.ts';
 import {
   loadEnrollmentForUpdate,
   loadStepExecutionForUpdate,
+  lockStepWithEnrollment,
   nextUnfinishedExecution,
   readSequenceVersion,
   readStepExecution,
@@ -189,12 +190,17 @@ export async function runDueStepExecution(
   context: RepositoryContext,
   input: RunDueStepInput,
 ): Promise<StepRunOutcome> {
-  const loaded =
-    input.stepExecutionId !== undefined
-      ? await loadStepExecutionForUpdate(context, input.stepExecutionId)
-      : input.enrollmentId === undefined
-        ? null
-        : await nextUnfinishedExecution(context, input.enrollmentId);
+  // The enrollment is locked before the step, the order the resume command takes too
+  // (`lockStepWithEnrollment`): the scheduler resumes `review_required` enrollments
+  // since wave 2, and two orders on one enrollment could deadlock.
+  let loaded: StepExecutionRow | null = null;
+  let enrollment: EnrollmentRow | null = null;
+  if (input.stepExecutionId !== undefined) {
+    ({ execution: loaded, enrollment } = await lockStepWithEnrollment(context, input.stepExecutionId));
+  } else if (input.enrollmentId !== undefined) {
+    enrollment = await loadEnrollmentForUpdate(context, input.enrollmentId);
+    loaded = enrollment === null ? null : await nextUnfinishedExecution(context, input.enrollmentId);
+  }
   if (loaded === null) return { kind: 'nothing_to_do' };
   // `dispatched` is runnable since lane g82 (audit C03): its fence may still be
   // `prepared` because the worker that prepared it died before the claim.
@@ -202,7 +208,6 @@ export async function runDueStepExecution(
     return { kind: 'nothing_to_do' };
   }
 
-  const enrollment = await loadEnrollmentForUpdate(context, loaded.enrollmentId);
   if (enrollment === null) return { kind: 'nothing_to_do' };
   if (enrollment.endedAt !== null) return { kind: 'nothing_to_do' };
 
@@ -700,12 +705,12 @@ export async function completeStepExecution(
   context: RepositoryContext,
   input: CompleteStepInput,
 ): Promise<SequenceResult<CompletedStep>> {
-  const execution = await loadStepExecutionForUpdate(context, input.stepExecutionId);
+  // Enrollment first, then the step: the one lock order (`lockStepWithEnrollment`).
+  const { execution, enrollment } = await lockStepWithEnrollment(context, input.stepExecutionId);
   if (execution === null) return refuseSequence('execution_unknown');
   if (execution.state === 'completed' || execution.state === 'cancelled') {
     return refuseSequence('execution_not_pending');
   }
-  const enrollment = await loadEnrollmentForUpdate(context, execution.enrollmentId);
   if (enrollment === null) return refuseSequence('enrollment_unknown');
   if (enrollment.endedAt !== null) return refuseSequence('enrollment_not_live');
 

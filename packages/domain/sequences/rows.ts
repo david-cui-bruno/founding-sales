@@ -319,7 +319,36 @@ export async function readStepExecution(
   return row === undefined ? null : toExecution(row);
 }
 
-/** The execution, locked. Every completion, undo and cancellation takes this first. */
+/**
+ * A step execution and its enrollment, locked in the one order every path takes: the
+ * enrollment first, then the step (wave 2 batch review, P1).
+ *
+ * The resume command locks the enrollment and then every unfinished step
+ * (`resumeEnrollment`, `unexecutedExecutions`). The scheduler, the call log and a
+ * completion used to lock the step first and the enrollment second, and the scheduler
+ * now resumes `review_required` enrollments too, so the two orders could meet on one
+ * enrollment and deadlock. The enrollment id is read unlocked first; it never changes
+ * on an execution.
+ */
+export async function lockStepWithEnrollment(
+  context: RepositoryContext,
+  stepExecutionId: string,
+): Promise<{ readonly execution: StepExecutionRow | null; readonly enrollment: EnrollmentRow | null }> {
+  const { rows } = await context.db.query<{ enrollment_id: string }>(
+    'SELECT enrollment_id FROM step_executions WHERE workspace_id = $1 AND id = $2',
+    [context.scope.workspaceId, stepExecutionId],
+  );
+  const enrollmentId = rows[0]?.enrollment_id;
+  if (enrollmentId === undefined) return { execution: null, enrollment: null };
+  const enrollment = await loadEnrollmentForUpdate(context, enrollmentId);
+  const execution = await loadStepExecutionForUpdate(context, stepExecutionId);
+  return { execution, enrollment };
+}
+
+/**
+ * The execution, locked. A path that also needs the enrollment takes
+ * `lockStepWithEnrollment` instead, which locks the two in the one order.
+ */
 export async function loadStepExecutionForUpdate(
   context: RepositoryContext,
   stepExecutionId: string,
