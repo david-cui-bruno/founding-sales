@@ -288,17 +288,6 @@ run "the_topology_answers_are_the_rehearsal_defaults_at_one_plus_one" {
   }
 
   assert {
-    condition     = module.stack.container_insights == "disabled" && module.stack.waf_enabled == false
-    error_message = "The billed-per-metric options stay off in rehearsal too."
-  }
-
-  assert {
-    condition = (module.stack.database_shape.performance_insights_enabled == false
-    && module.stack.database_shape.monitoring_interval == 0)
-    error_message = "Performance Insights and Enhanced Monitoring stay off."
-  }
-
-  assert {
     condition     = module.stack.database_shape.delete_automated_backups
     error_message = "The teardown deletes the database's automated backups with it; a retained one is a leftover (run 36209569741)."
   }
@@ -348,11 +337,6 @@ run "the_rehearsal_deploys_on_live_dependencies_with_sending_off" {
     condition = (module.stack.api_environment["FSS_SENDING_ENABLED"] == "false"
     && module.stack.worker_environment["FSS_SENDING_ENABLED"] == "false")
     error_message = "A rehearsal never sends. Nothing in the workflow sets this true and the default is the refusal."
-  }
-
-  assert {
-    condition     = module.stack.worker_environment["FSS_RESEARCH_PROVIDERS"] == "none"
-    error_message = "The rehearsal worker ships no live research adapter either."
   }
 
   # Lane g81. Live dependencies, and still no classifier: the rehearsal fills the

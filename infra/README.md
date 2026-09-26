@@ -11,7 +11,7 @@ infra/
     network         VPC, two public task subnets, two private RDS subnets, no NAT, the security groups
     database        RDS PostgreSQL 16, Multi-AZ, customer key, 35-day PITR, deletion protection
     cluster         ECS cluster, API and worker Fargate services, execution and task roles for the API, worker, migration and drill
-    edge            ALB, one TLS listener, access logs, optional WAF
+    edge            ALB, one TLS listener, access logs
     registry        two ECR repositories, immutable tags, scan on push
     secrets         two customer keys and EMPTY Secrets Manager entries
     journal         object-locked S3 suppression journal, deny-first bucket policy

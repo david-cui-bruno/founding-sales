@@ -337,27 +337,6 @@
         "acm:DescribeCertificate"
       ]
     },
-    "aws_wafv2_web_acl": {
-      "service": "wafv2",
-      "scope": "arn",
-      "actions": [
-        "wafv2:CreateWebACL",
-        "wafv2:GetWebACL",
-        "wafv2:UpdateWebACL",
-        "wafv2:DeleteWebACL",
-        "wafv2:ListTagsForResource",
-        "wafv2:TagResource"
-      ]
-    },
-    "aws_wafv2_web_acl_association": {
-      "service": "wafv2",
-      "scope": "arn",
-      "actions": [
-        "wafv2:AssociateWebACL",
-        "wafv2:DisassociateWebACL",
-        "wafv2:GetWebACLForResource"
-      ]
-    },
     "aws_s3_bucket": {
       "service": "s3",
       "scope": "arn",

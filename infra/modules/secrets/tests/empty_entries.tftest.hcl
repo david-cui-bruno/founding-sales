@@ -17,15 +17,15 @@ run "entries_are_namespaced_and_customer_encrypted" {
   command = plan
 
   assert {
-    condition     = length(aws_secretsmanager_secret.this) == 8
-    error_message = "The default secret set is the six application entries plus the two database entries G12h added."
+    condition     = length(aws_secretsmanager_secret.this) == 7
+    error_message = "The default secret set is the five application entries plus the two database entries G12h added."
   }
 
   # G12h, David's condition of 21 September. Two entries rather than one, because
   # the whole point is that the identity that may read one may not read the other:
   # `infra/modules/cluster` gives `migration-database` to the migration execution
   # role alone and `app-runtime-database` to the two services. Both are created
-  # empty here, like the other six, and Terraform never holds either value.
+  # empty here, like the other five, and Terraform never holds either value.
   assert {
     condition     = contains(keys(aws_secretsmanager_secret.this), "migration-database")
     error_message = "The migration user's credentials live in their own entry, not inside another one."

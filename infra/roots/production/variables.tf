@@ -106,12 +106,6 @@ variable "database_max_allocated_storage" {
   default     = 200
 }
 
-variable "database_performance_insights_enabled" {
-  description = "Performance Insights, billed beyond the free retention."
-  type        = bool
-  default     = false
-}
-
 variable "api_cpu" {
   description = "Fargate CPU units for the API task."
   type        = number
@@ -192,12 +186,6 @@ variable "dependencies_mode" {
   }
 }
 
-variable "research_providers" {
-  description = "`FSS_RESEARCH_PROVIDERS` on the worker task definition. `none` says this build ships no live research adapter; it is a declaration, not an accident."
-  type        = string
-  default     = "none"
-}
-
 variable "expected_system_generation" {
   description = <<-EOT
     Appendix E step 1: the generation the API and worker services expect the
@@ -215,30 +203,6 @@ variable "expected_system_generation" {
     condition     = var.expected_system_generation == null ? true : (var.expected_system_generation >= 1 && floor(var.expected_system_generation) == var.expected_system_generation)
     error_message = "expected_system_generation is a positive whole number, or null for unpinned. The bootstraps refuse anything else at startup."
   }
-}
-
-variable "extra_environment" {
-  description = "Any further non-secret environment variable both tasks need. Never a credential: secrets reach a container only as a Secrets Manager reference."
-  type        = map(string)
-  default     = {}
-}
-
-variable "container_insights" {
-  description = "enabled, enhanced or disabled. Billed per metric."
-  type        = string
-  default     = "disabled"
-}
-
-variable "enable_waf" {
-  description = "Attach a WAFv2 web ACL to the load balancer."
-  type        = bool
-  default     = false
-}
-
-variable "elb_account_id" {
-  description = "Region-specific Elastic Load Balancing account id, only needed in older regions."
-  type        = string
-  default     = ""
 }
 
 variable "journal_object_lock_mode" {

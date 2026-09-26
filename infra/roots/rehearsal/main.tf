@@ -50,13 +50,12 @@ module "stack" {
   public_subnet_cidrs  = var.public_subnet_cidrs
   private_subnet_cidrs = var.private_subnet_cidrs
 
-  database_instance_class               = var.database_instance_class
-  database_multi_az                     = var.database_multi_az
-  database_allocated_storage            = var.database_allocated_storage
-  database_max_allocated_storage        = 0
-  database_backup_retention_days        = var.database_backup_retention_days
-  database_performance_insights_enabled = false
-  database_apply_immediately            = true
+  database_instance_class        = var.database_instance_class
+  database_multi_az              = var.database_multi_az
+  database_allocated_storage     = var.database_allocated_storage
+  database_max_allocated_storage = 0
+  database_backup_retention_days = var.database_backup_retention_days
+  database_apply_immediately     = true
 
   # The teardown deletes the database, and nothing of it may outlive the run: a
   # retained automated backup (20 GB each, nine by 26 September 2026) is what
@@ -68,32 +67,26 @@ module "stack" {
   api_schema_range    = var.api_schema_range
   worker_schema_range = var.worker_schema_range
 
-  api_cpu                = var.api_cpu
-  api_memory             = var.api_memory
-  worker_cpu             = var.worker_cpu
-  worker_memory          = var.worker_memory
-  cpu_architecture       = var.cpu_architecture
-  api_desired_count      = var.api_desired_count
-  worker_desired_count   = var.worker_desired_count
-  bootstrap              = var.bootstrap
-  container_insights     = "disabled"
-  enable_execute_command = var.enable_execute_command
+  api_cpu              = var.api_cpu
+  api_memory           = var.api_memory
+  worker_cpu           = var.worker_cpu
+  worker_memory        = var.worker_memory
+  cpu_architecture     = var.cpu_architecture
+  api_desired_count    = var.api_desired_count
+  worker_desired_count = var.worker_desired_count
+  bootstrap            = var.bootstrap
 
   # A run deploys from the stable rehearsal repositories, which exist before it
   # does and outlive it. infra/roots/rehearsal-registry owns them.
   create_registry = false
 
-  dependencies_mode  = var.dependencies_mode
-  research_providers = var.research_providers
-  sending_enabled    = var.sending_enabled
-  extra_environment  = var.extra_environment
+  dependencies_mode = var.dependencies_mode
+  sending_enabled   = var.sending_enabled
 
   expected_system_generation = var.expected_system_generation
 
   certificate_arn = var.certificate_arn
   api_hostname    = var.api_hostname
-  elb_account_id  = var.elb_account_id
-  enable_waf      = var.enable_waf
 
   journal_object_lock_mode           = "GOVERNANCE"
   journal_object_lock_retention_days = var.journal_object_lock_retention_days

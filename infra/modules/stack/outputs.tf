@@ -65,18 +65,8 @@ output "service_shape" {
 }
 
 output "database_shape" {
-  description = "Instance class, Multi-AZ, storage, retention and the two per-metric billed options."
+  description = "Instance class, Multi-AZ, storage, retention and what a deletion keeps."
   value       = module.database.instance_shape
-}
-
-output "container_insights" {
-  description = "Container Insights setting on the cluster. Billed per metric; David's answer is off."
-  value       = var.container_insights
-}
-
-output "waf_enabled" {
-  description = "Whether a WAFv2 web ACL is attached to the load balancer. David's answer is off."
-  value       = var.enable_waf
 }
 
 output "load_balancer_dns_name" {

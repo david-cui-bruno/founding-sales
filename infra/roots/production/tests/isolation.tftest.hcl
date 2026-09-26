@@ -246,33 +246,12 @@ run "the_topology_answers_are_the_production_defaults" {
     error_message = "Two API tasks and one worker task."
   }
 
-  # Answer 5: the five billed-per-metric options stay off. Enhanced Monitoring is not a
-  # root input at all (the database module's monitoring_interval defaults to 0) and
-  # there is no flow-log resource anywhere in infra (docs/archive/decisions/g1-no-flow-logs.md),
-  # so those two are asserted here as the absence they are.
-  assert {
-    condition     = module.stack.database_shape.performance_insights_enabled == false
-    error_message = "Performance Insights stays off."
-  }
-
-  assert {
-    condition     = module.stack.database_shape.monitoring_interval == 0
-    error_message = "Enhanced Monitoring stays off; a non-zero interval would also create a monitoring role."
-  }
-
+  # Answer 5's billed-per-metric options (Performance Insights, Enhanced Monitoring,
+  # Container Insights, WAF, flow logs) have no switch any more: wave 2 deleted the
+  # ones that were never turned on.
   assert {
     condition     = module.stack.database_shape.delete_automated_backups == false
     error_message = "A deleted production database keeps its automated backups for their 35 days."
-  }
-
-  assert {
-    condition     = module.stack.container_insights == "disabled"
-    error_message = "Container Insights stays off."
-  }
-
-  assert {
-    condition     = module.stack.waf_enabled == false
-    error_message = "No WAFv2 web ACL."
   }
 }
 
@@ -334,15 +313,12 @@ run "each_production_task_carries_only_the_secrets_its_process_reads" {
       && module.stack.task_secret_names.operations == tolist(["DATABASE_SECRET_ARN", "google-gmail-oauth-client"])
       && module.stack.task_secret_names.drill == tolist(["DATABASE_SECRET_ARN", "MIGRATION_DATABASE_SECRET", "google-gmail-oauth-client"])
     )
-    error_message = "Every production task definition carries the secrets its own process reads: the authentication secrets reach the API alone, the classifier key reaches the worker as FSS_LLM_CLASSIFIER_API_KEY, and research-provider-credentials reaches nothing."
+    error_message = "Every production task definition carries the secrets its own process reads: the authentication secrets reach the API alone, and the classifier key reaches the worker as FSS_LLM_CLASSIFIER_API_KEY."
   }
 }
 
 # The three deployment flags both binaries refuse to start without, or refuse to
-# guess at. `infra/modules/stack` had `extra_environment` and neither root exposed
-# it, so there was no way to set them from an apply at all: the runbook told the
-# operator to put them "in `extra_environment` or the plan review" and neither
-# existed. See docs/archive/decisions/g12c-the-deployment-flags-are-root-variables.md.
+# guess at. See docs/archive/decisions/g12c-the-deployment-flags-are-root-variables.md.
 run "the_deployment_flags_reach_both_containers" {
   command = plan
 
@@ -358,34 +334,6 @@ run "the_deployment_flags_reach_both_containers" {
     condition = (module.stack.api_environment["FSS_SENDING_ENABLED"] == "true"
     && module.stack.worker_environment["FSS_SENDING_ENABLED"] == "true")
     error_message = "16.2: production's deployment flag is committed true in infra/roots/production; turning it off is a change to that literal."
-  }
-
-  assert {
-    condition     = module.stack.worker_environment["FSS_RESEARCH_PROVIDERS"] == "none"
-    error_message = "The worker is told, by name, that this build ships no live research adapter."
-  }
-
-  # Worker only. The API has no research adapter and a variable it never reads is a
-  # variable that will drift.
-  assert {
-    condition     = !contains(keys(module.stack.api_environment), "FSS_RESEARCH_PROVIDERS")
-    error_message = "FSS_RESEARCH_PROVIDERS belongs to the worker alone."
-  }
-}
-
-run "the_escape_hatch_still_exists" {
-  command = plan
-
-  variables {
-    extra_environment = {
-      FSS_SOMETHING_LATER = "value"
-    }
-  }
-
-  assert {
-    condition = (module.stack.api_environment["FSS_SOMETHING_LATER"] == "value"
-    && module.stack.worker_environment["FSS_SOMETHING_LATER"] == "value")
-    error_message = "extra_environment exists on the stack module and must be reachable from the root."
   }
 }
 

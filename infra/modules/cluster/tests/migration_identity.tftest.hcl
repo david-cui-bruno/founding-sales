@@ -480,7 +480,7 @@ run "each_one_off_task_definition_carries_the_identity_it_is_for" {
 }
 
 # Lane g81, audit S17: each task definition carries the application secrets its own
-# process reads and no others. The six names are the secrets module's defaults, which
+# process reads and no others. The five names are the secrets module's defaults, which
 # is what the stack hands this module. The worker is not handed the classifier key
 # here: `worker_reads_classifier_key` defaults to false, and the next run sets it.
 run "each_task_definition_carries_only_the_secrets_its_process_reads" {
@@ -488,12 +488,11 @@ run "each_task_definition_carries_only_the_secrets_its_process_reads" {
 
   variables {
     secret_arns = {
-      "device-credential-pepper"      = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/device-credential-pepper-dddddd"
-      "google-gmail-oauth-client"     = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/google-gmail-oauth-client-eeeeee"
-      "google-oidc-client"            = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/google-oidc-client-ffffff"
-      "llm-classifier-api-key"        = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/llm-classifier-api-key-gggggg"
-      "research-provider-credentials" = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/research-provider-credentials-hhhhhh"
-      "session-signing-key"           = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/session-signing-key-aaaaaa"
+      "device-credential-pepper"  = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/device-credential-pepper-dddddd"
+      "google-gmail-oauth-client" = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/google-gmail-oauth-client-eeeeee"
+      "google-oidc-client"        = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/google-oidc-client-ffffff"
+      "llm-classifier-api-key"    = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/llm-classifier-api-key-gggggg"
+      "session-signing-key"       = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/session-signing-key-aaaaaa"
     }
   }
 
@@ -506,17 +505,6 @@ run "each_task_definition_carries_only_the_secrets_its_process_reads" {
       && output.task_secret_names.migration == tolist(["FSS_RUNTIME_DATABASE_SECRET_ARN", "MIGRATION_DATABASE_SECRET"])
     )
     error_message = "Each process gets the secrets it reads: the API its sign-in and session material, and the worker, the operations tool and the drill the Gmail client."
-  }
-
-  # Read by nothing, so handed to nothing.
-  assert {
-    condition = alltrue(flatten([
-      for definition in [aws_ecs_task_definition.api, aws_ecs_task_definition.worker, aws_ecs_task_definition.operations, aws_ecs_task_definition.drill] : [
-        for reference in jsondecode(definition.container_definitions)[0].secrets :
-        !strcontains(reference.valueFrom, "research-provider-credentials")
-      ]
-    ]))
-    error_message = "No task definition carries research-provider-credentials, which no process reads."
   }
 
   # Read from the definitions themselves, so the output cannot say one thing while
@@ -554,10 +542,9 @@ run "the_worker_reads_the_classifier_key_under_the_name_the_classifier_reads" {
   variables {
     worker_reads_classifier_key = true
     secret_arns = {
-      "google-gmail-oauth-client"     = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/google-gmail-oauth-client-eeeeee"
-      "llm-classifier-api-key"        = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/llm-classifier-api-key-gggggg"
-      "research-provider-credentials" = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/research-provider-credentials-hhhhhh"
-      "session-signing-key"           = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/session-signing-key-aaaaaa"
+      "google-gmail-oauth-client" = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/google-gmail-oauth-client-eeeeee"
+      "llm-classifier-api-key"    = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/llm-classifier-api-key-gggggg"
+      "session-signing-key"       = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-test/session-signing-key-aaaaaa"
     }
   }
 

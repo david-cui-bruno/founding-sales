@@ -84,22 +84,6 @@ variable "access_log_retention_days" {
   default     = 365
 }
 
-variable "elb_account_id" {
-  description = <<-EOT
-    Region-specific Elastic Load Balancing account id, a public AWS-documented
-    constant. Older regions deliver access logs as this account rather than as
-    the logdelivery service principal. Leave empty to rely on the service
-    principal alone; see the runbook.
-  EOT
-  type        = string
-  default     = ""
-
-  validation {
-    condition     = var.elb_account_id == "" || can(regex("^[0-9]{12}$", var.elb_account_id))
-    error_message = "elb_account_id must be empty or twelve digits."
-  }
-}
-
 variable "enable_deletion_protection" {
   description = "Refuse deletion of the load balancer. Only a destroyable rehearsal root sets false."
   type        = bool
@@ -110,18 +94,6 @@ variable "force_destroy_logs" {
   description = "Allow Terraform to empty the access-log bucket on destroy."
   type        = bool
   default     = false
-}
-
-variable "enable_waf" {
-  description = "Attach a WAFv2 web ACL. Off by default; WAF is billed per ACL, per rule and per request."
-  type        = bool
-  default     = false
-}
-
-variable "waf_rate_limit_per_five_minutes" {
-  description = "Requests per five minutes per source address before the WAF rate rule blocks. Only used when enable_waf is true."
-  type        = number
-  default     = 2000
 }
 
 variable "tags" {

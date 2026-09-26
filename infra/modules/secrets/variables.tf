@@ -21,7 +21,6 @@ variable "secret_names" {
     "session-signing-key",
     "device-credential-pepper",
     "llm-classifier-api-key",
-    "research-provider-credentials",
     # The two database identities (G12h, David's condition of 21 September).
     # Separate entries because the point is that the identity which may read one
     # may not read the other: `infra/modules/cluster` gives the first to the

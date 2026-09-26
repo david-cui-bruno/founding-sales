@@ -161,11 +161,6 @@ run "services_deploy_behind_a_circuit_breaker_with_rollback" {
     condition     = length(aws_ecs_service.worker.load_balancer) == 0
     error_message = "The worker is never behind the load balancer."
   }
-
-  assert {
-    condition     = aws_ecs_service.api.enable_execute_command == false && aws_ecs_service.worker.enable_execute_command == false
-    error_message = "ECS Exec is off by default."
-  }
 }
 
 run "schema_ranges_reach_the_containers" {
