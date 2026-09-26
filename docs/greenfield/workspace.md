@@ -38,10 +38,9 @@ CI does not need the rebuild: it uses a `postgres:16` service container instead.
 ## The gate
 
 ```
-npm run gate:greenfield     # typecheck + lint + changelog check + tests, every greenfield package
+npm run gate:greenfield     # typecheck + lint + tests + the release suite, what CI runs
 npm run typecheck:greenfield
-npm run lint:greenfield
-npm run changelog:check     # docs/greenfield/changelog.md against its fragments
+npm run lint                # one ESLint flat config (eslint.config.mjs) over apps, packages, test/release and scripts
 npm run test:greenfield
 npm run test:desktop:e2e    # the window, in chromium; not part of the gate
 ```
@@ -50,9 +49,8 @@ npm run test:desktop:e2e    # the window, in chromium; not part of the gate
 `npx playwright install chromium` provides and no `npm` install fetches. See
 `docs/archive/decisions/g2-desktop-test-layers.md`.
 
-`npm run typecheck`, `npm run lint` and `npm test` are the greenfield defaults:
-`typecheck:greenfield`; `lint:greenfield` plus `lint:root-scripts` (the scripts at the
-root, under `eslint.config.mjs`); and `test:greenfield` plus `test:release`.
+`npm run typecheck` is `typecheck:greenfield` and `npm test` is `test:greenfield` plus
+`test:release`.
 
 ## The database harness
 

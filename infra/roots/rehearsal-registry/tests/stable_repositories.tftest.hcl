@@ -87,9 +87,9 @@ run "a_production_deployment_role_is_refused" {
   expect_failures = [var.deployment_role_name]
 }
 
-# G12e: this root's only apply is a workflow run whose session is already
-# `fss-rh-deploy`, so `.github/workflows/greenfield-rehearsal-registry.yml`
-# plans with `assume_deployment_role=false` — the provider must not ask STS to
+# G12e: this root's only apply was a workflow run (deleted on 26 September 2026)
+# whose session already was `fss-rh-deploy`, so it planned with
+# `assume_deployment_role=false` — the provider must not ask STS to
 # assume the role the session already holds, because that role trusts the OIDC
 # provider and nothing else, least of all itself.
 #

@@ -268,7 +268,10 @@ refusal_for() { # refusal_for <binary minimum> <binary maximum> <schema version>
 # The overlap case: the previous release's range accepts the current schema, so the
 # previous image really can run against it — if one is registered.
 overlap_case() { # overlap_case <service>
-  local service=$1 family="${PREFIX}-${service}-previous" definition image digest
+  # Two `local`s: a word of one `local` is expanded before any of its assignments takes
+  # effect, so `${service}` here would be the caller's variable, not this `$1` (SC2318).
+  local service=$1
+  local family="${PREFIX}-${service}-previous" definition image digest
   if rehearsal_dry_run; then
     rehearsal_plan "aws ecs describe-task-definition --task-definition $family --query taskDefinition"
     rehearsal_plan "if it is registered: launch $family --selftest through release_run_task and require the container to exit 0"
@@ -311,7 +314,8 @@ overlap_case() { # overlap_case <service>
 # The forward case that must always refuse: a task definition declaring a range one
 # below the image's minimum is a stale deployment, whatever the numbers become.
 stale_case() { # stale_case <service> <stale version> <image digest>
-  local service=$1 stale=$2 digest=$3 family="${PREFIX}-${service}" definition
+  local service=$1 stale=$2 digest=$3
+  local family="${PREFIX}-${service}" definition
   rehearsal_log "$service: a task definition declaring {$stale,$stale} must be refused at startup"
   if rehearsal_dry_run; then
     rehearsal_plan "aws ecs describe-task-definition --task-definition $family --query taskDefinition"

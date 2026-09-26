@@ -157,6 +157,7 @@ REHEARSAL_RUN_INVENTORY_MARKER='select names beginning'
 # refuses to compare against this: the workflow's own "decide the run prefix" step runs
 # the `before` phase in dry mode, and a comparison with a fabricated empty list is the
 # vacuous pass the guard exists to prevent.
+# shellcheck disable=SC2034 # read by rehearsal-prefix-guard.sh, which sources this file
 REHEARSAL_DRY_RUN_INVENTORY='["dry-run: no inventory was read"]'
 
 # Print a sorted JSON array of the ARNs of every resource named for this run.

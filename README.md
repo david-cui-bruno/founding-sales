@@ -31,7 +31,7 @@ npx playwright install chromium   # only for the desktop window specs
 ```bash
 npm run gate:greenfield           # typecheck, lint, every workspace's tests and the release suite; what CI runs
 npm run typecheck                 # = typecheck:greenfield
-npm run lint                      # = lint:greenfield, plus the greenfield scripts at the root
+npm run lint                      # one ESLint config over apps, packages, test/release and scripts
 npm test                          # = test:greenfield and test:release
 npm run test:desktop:e2e          # the desktop window in chromium; not part of the gate
 FSS_DESKTOP_PACKAGE_MODE=local-smoke npm run package:desktop -- /tmp/callie-smoke   # an unsigned local bundle

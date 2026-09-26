@@ -33,17 +33,15 @@ decisions behind it.
 ## What stays at the root
 
 - `package.json`, the npm workspace root. Its scripts are the greenfield ones and
-  `verify:secrets`; `test/release/rootScripts.check.ts` holds the exact list, and holds
-  the root devDependencies to the lint and test tooling those scripts run. The
+  `verify:secrets`. The
   `postinstall` is still `install-electron --no`: the desktop host tests need the
   Electron binary (`docs/greenfield/install.md`), and `electron` itself now comes from
   `apps/desktop`.
 - The root scripts: `scripts/verifySecrets.mjs` (the Gitleaks scan of the history and
   the tracked tree; its old `--package` mode scanned the old app's packaged bundle and
-  is gone), `scripts/productionSmoke.mjs`, `scripts/releaseMutationCheck.mjs`,
-  `scripts/releaseMutationRunner.mjs` and `scripts/mutations/*.mjs`.
-- `eslint.config.mjs`, now only the config `npm run lint:root-scripts` uses for those
-  scripts, and `eslint.greenfield.mjs` for the workspace.
+  is gone) and `scripts/productionSmoke.mjs`. The mutation check was deleted on
+  26 September 2026.
+- `eslint.config.mjs`, one flat config for the workspace and those scripts.
 - `.gitleaks.toml`, unchanged apart from comments. Its two appended exceptions pinned to
   deleted files (`cloud/scripts/bootstrap-terraform-state.sh` and
   `tests/integration/appleSpikePreload.test.ts`) stay, because the history scan reads
@@ -53,15 +51,13 @@ decisions behind it.
 
 ## In CI
 
-`.github/workflows/ci.yml` ("Source security gate") has two jobs, both on every push
-and pull request, on Linux:
-
-- `secrets`: `npm run verify:secrets` over the full history and the tracked tree, with
-  Gitleaks 8.30.1 from the `linux_x64` tarball, pinned by its SHA-256.
-- `root-scripts`: `npm run lint:root-scripts`.
-
-Everything else is the `greenfield*.yml` workflows: the gate (`greenfield.yml`), the
-desktop host job (`greenfield-desktop.yml`), images, infra, release, nightly and weekly.
+The gate is `.github/workflows/greenfield.yml`, on every push and pull request, on
+Linux: the `greenfield` job (typecheck, lint, the workspace tests and the release suite)
+and the `secrets` job, `npm run verify:secrets` over the full history and the tracked
+tree with Gitleaks 8.30.1 from the `linux_x64` tarball, pinned by its SHA-256. The old
+`ci.yml` ("Source security gate") was folded into it on 26 September 2026. The other
+workflows are the desktop host job and release (`greenfield-desktop.yml`), images,
+deploy, infra, the release rehearsal and the monthly drill.
 
 ## The old worker's AWS resources
 

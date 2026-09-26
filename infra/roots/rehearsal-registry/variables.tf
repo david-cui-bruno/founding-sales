@@ -19,10 +19,9 @@ variable "assume_deployment_role" {
     Whether the provider assumes `deployment_role_name` before it calls AWS, or
     uses the credentials the caller already holds.
 
-    This root's one apply is a workflow run
-    (`.github/workflows/greenfield-rehearsal-registry.yml`,
-    `docs/greenfield/infra-apply-runbook.md` 2.1) whose session already *is*
-    `fss-rh-deploy`, so that workflow plans with
+    This root's one apply was a workflow run (its workflow was deleted on
+    26 September 2026; `docs/greenfield/infra-apply-runbook.md` 2.1) whose
+    session already *was* `fss-rh-deploy`, so it planned with
     `-var=assume_deployment_role=false`. Asking STS to assume the role the
     session already holds would need the role to trust itself, and its trust is
     the GitHub OIDC provider and the subject `repo:…:environment:rehearsal`

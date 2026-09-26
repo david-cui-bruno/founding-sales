@@ -45,7 +45,7 @@ Create two roles in `326255650484`:
 | `fss-prod-deploy` | David's admin principal (and, later, the release workflow's OIDC provider) | may act on resources whose name begins `fss-prod`, plus the account-wide services that have no resource namespace |
 | `fss-rh-deploy` | the CI rehearsal workflow's OIDC provider | **may act only on resources whose name begins `fss-rh-`** |
 
-**You never assume `fss-rh-deploy`.** It trusts the GitHub OIDC provider and the subject `repo:david-cui-bruno/founding-sales:environment:rehearsal` alone, so every apply and every teardown in the `fss-rh-` namespace is a workflow run in the `rehearsal` environment: the release rehearsal (`greenfield-release.yml`) and the one registry apply (`greenfield-rehearsal-registry.yml`, section 2.1). A local `terraform apply` against either rehearsal root is refused `sts:AssumeRole`, and that refusal is the boundary working. `fss-prod-deploy`, by contrast, is yours: section 3.2's production applies are local commands.
+**You never assume `fss-rh-deploy`.** It trusts the GitHub OIDC provider and the subject `repo:david-cui-bruno/founding-sales:environment:rehearsal` alone, so every apply and every teardown in the `fss-rh-` namespace is a workflow run in the `rehearsal` environment: the release rehearsal (`greenfield-release.yml`) and, once, the registry apply (section 2.1), whose workflow was deleted on 26 September 2026. A local `terraform apply` against either rehearsal root is refused `sts:AssumeRole`, and that refusal is the boundary working. `fss-prod-deploy`, by contrast, is yours: section 3.2's production applies are local commands.
 
 The scoping on `fss-rh-deploy` is what makes Appendix G scenario 39 true in the cloud rather than only in the plan. The `fss-rh` condition belongs on every statement that supports a resource ARN, including `iam:DeleteRole`, `rds:DeleteDBInstance`, `s3:DeleteBucket`, `ecs:DeleteService`, `secretsmanager:DeleteSecret` and `kms:ScheduleKeyDeletion`. Where a service has no resource-level permission, use a `aws:ResourceTag/NamePrefix` condition against the tag the stack sets on every resource.
 
@@ -279,7 +279,7 @@ The reason is arithmetic rather than caution. Three credentialed runs have now b
 
 | Run | Stopped on | Why offline could not see it |
 |---|---|---|
-| 35602423640 | `The root module input variable "api_schema_range" is not set` | `terraform test` supplies its own variables; the dry-run job never runs Terraform |
+| 35602423640 | `The root module input variable "api_schema_range" is not set` | `terraform test` supplies its own variables; the dry-run job (deleted 26 September 2026) never ran Terraform |
 | 35611374218 | `provider["registry.terraform.io/hashicorp/google"]` had no credentials | `mock_provider` *replaces* the provider configuration, so no test can exercise one |
 | 35611374218 | `Invalid count argument` on `count = var.kms_key_arn == null ? 1 : 0` | `validate` never evaluates a `count`, and the module's tests passed a literal ARN |
 
@@ -318,7 +318,7 @@ A release that touches schema, sending, suppression, Gmail, restore or job fenci
 
 **This is a workflow run, not a command you type.** `fss-rh-deploy` is assumable only from the `rehearsal` environment (section 1.1), so the commands below are what `.github/workflows/greenfield-release.yml` runs, written out so you can read them; typed on your Mac they are refused `sts:AssumeRole`, and that refusal is the boundary working. Dispatch the workflow instead: `docs/greenfield/release.md` section 3.
 
-Two differences between what the workflow runs and what is written here. It passes **`-var="assume_deployment_role=false"`** on the apply and on the teardown's destroy, because its session already *is* `fss-rh-deploy` and the provider must not assume the role it already holds (section 1.1); and it runs `infra/scripts/rehearsal-caller-identity.sh fss-rh-deploy` first, which prints the session ARN and refuses anything that is not an assumed-role session of that role. Both appear in the credential-free plan every pull request prints.
+Two differences between what the workflow runs and what is written here. It passes **`-var="assume_deployment_role=false"`** on the apply and on the teardown's destroy, because its session already *is* `fss-rh-deploy` and the provider must not assume the role it already holds (section 1.1); and it runs `infra/scripts/rehearsal-caller-identity.sh fss-rh-deploy` first, which prints the session ARN and refuses anything that is not an assumed-role session of that role. Both appear in the credential-free plan `FSS_REHEARSAL_DRY_RUN=1` prints.
 
 ```bash
 cd infra/roots/rehearsal

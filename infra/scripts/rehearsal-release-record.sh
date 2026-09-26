@@ -38,10 +38,10 @@
 # enable whose record's `api` digest is not its own, and the worker refuses to send
 # when the record's `worker` digest is not its own. The admin still reads both before
 # attesting — that is the person taking the responsibility — but no longer alone
-# (`docs/decisions/g71-sending-gate-is-bound-to-the-release-record.md`).
+# (`docs/archive/decisions/g71-sending-gate-is-bound-to-the-release-record.md`).
 #
 # Dry run: FSS_REHEARSAL_DRY_RUN=1 still writes the record to the given path, because
-# the record is a local file and writing it is how the workflow's dry run is checked.
+# the record is a local file and writing it is how the release suite checks the script.
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rehearsal-common.sh"
 

@@ -28,8 +28,8 @@
 # script under `infra/scripts/` is itself a protected path and must not be the thing
 # that vouches for its own change. The order is:
 #
-#   the gates (workflow)  the Greenfield gate and the Source security gate green on the
-#                         images commit, by workflow file, and the commit still on main;
+#   the gate (workflow)   the Greenfield gate (greenfield.yml) green on the images
+#                         commit, by workflow file, and the commit still on main;
 #                         read before the role is assumed and again before the first
 #                         write (lane A1);
 #   the guard (workflow)  every commit since production's, one by one: manual, or pass;
