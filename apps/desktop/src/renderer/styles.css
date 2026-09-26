@@ -1133,6 +1133,12 @@ input.narrow {
   margin: 8px 0;
 }
 
+/* Lane A2: a stored step of a removed channel, greyed and without controls. */
+.step.removed,
+.resume-review li.removed {
+  color: var(--ink-3);
+}
+
 /* The review is indented under its row with a rule, never boxed. */
 .resume-review {
   margin: 4px 0 12px;

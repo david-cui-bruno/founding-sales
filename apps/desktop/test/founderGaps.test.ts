@@ -285,7 +285,9 @@ describe('"Review and resume" shows the review first (audit G06)', () => {
     expect(reviewing.resumeReview?.preview.enrollmentId).toBe(SEQUENCE_IDS.enrollment);
 
     const panel = sequenceScreen(reviewing).resumeReview;
-    expect(panel?.steps).toEqual([{ label: 'Step 2 · Email (held)', from: 'Thu, Sep 17, 9:00 AM', to: 'Sat, Sep 26, 9:00 AM', moved: true }]);
+    expect(panel?.steps).toEqual([
+      { label: 'Step 2 · Email (held)', from: 'Thu, Sep 17, 9:00 AM', to: 'Sat, Sep 26, 9:00 AM', moved: true, removed: false },
+    ]);
     expect(panel?.summary).toContain('9 days later');
     expect(panel?.holdLines).toEqual(['scoped pause: Thu, Sep 10, 9:00 AM to Sat, Sep 19, 9:00 AM']);
     expect(panel?.canConfirm).toBe(true);

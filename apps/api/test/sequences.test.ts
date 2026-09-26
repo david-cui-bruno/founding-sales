@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   enrollmentsResponseSchema,
+  resumePreviewResponseSchema,
   sequenceVersionsResponseSchema,
   sequencesResponseSchema,
   templateVersionsResponseSchema,
@@ -300,6 +301,94 @@ describe('the sequence, template and enrollment routes', () => {
     expect(enrollments.status).toBe(200);
     expect(wireDrift(enrollmentsResponseSchema, enrollments.body)).toEqual([]);
     expect(enrollmentsResponseSchema.parse(enrollments.body).enrollments.length).toBeGreaterThan(0);
+  });
+
+  it('sends a LinkedIn step stored before 25 September 2026 as a removed step, and reviews its held execution as held (lane A2)', async () => {
+    // Schema 17 still admits `linkedin_task`, so SQL is the only way left to store one:
+    // a published version of a call and then a LinkedIn task with its message.
+    const workspaceId = fixture.alpha.workspaceId;
+    const MESSAGE = 'A LinkedIn note stored before the removal.';
+    const created = await post('/sequences/create', adminToken, command({ name: 'Stored with LinkedIn' }));
+    expect(created.status).toBe(200);
+    const storedSequenceId = String(resultOf(created)['id']);
+    const { rows: versionRows } = await fixture.db.query<{ id: string }>(
+      'INSERT INTO sequence_versions (workspace_id, sequence_id, version) VALUES ($1, $2, 1) RETURNING id',
+      [workspaceId, storedSequenceId],
+    );
+    const storedVersionId = versionRows[0]?.id ?? '';
+    await fixture.db.query(
+      `INSERT INTO sequence_steps (workspace_id, sequence_version_id, ordinal, channel, delay_unit, delay_amount, on_no_answer)
+       VALUES ($1, $2, 1, 'call_task', 'business_days', 0, 'advance')`,
+      [workspaceId, storedVersionId],
+    );
+    const { rows: stepRows } = await fixture.db.query<{ id: string }>(
+      `INSERT INTO sequence_steps (workspace_id, sequence_version_id, ordinal, channel, delay_unit, delay_amount, linkedin_message)
+       VALUES ($1, $2, 2, 'linkedin_task', 'business_days', 2, $3) RETURNING id`,
+      [workspaceId, storedVersionId, MESSAGE],
+    );
+    const linkedInStepId = stepRows[0]?.id ?? '';
+    await fixture.db.query(
+      `UPDATE sequence_versions SET state = 'published', published_at = now(), published_by_user_id = $3
+        WHERE workspace_id = $1 AND id = $2`,
+      [workspaceId, storedVersionId, fixture.alpha.admin.userId],
+    );
+
+    const versions = await post('/sequences/versions', adminToken, { sequenceId: storedSequenceId });
+    expect(versions.status).toBe(200);
+    // Before lane A2 this was a `channel` outside the contract, and the Mac refused the answer.
+    expect(wireDrift(sequenceVersionsResponseSchema, versions.body)).toEqual([]);
+    const [version] = sequenceVersionsResponseSchema.parse(versions.body).versions;
+    expect(version?.steps.map(step => step.channel)).toEqual(['call_task', 'removed']);
+    expect(version?.steps[1]).toEqual({
+      id: linkedInStepId,
+      sequenceVersionId: storedVersionId,
+      ordinal: 2,
+      channel: 'removed',
+      removedChannel: 'linkedin',
+      delay: { unit: 'business_days', days: 2 },
+      onNoAnswer: null,
+      templateVersionId: null,
+    });
+    // What the step carried stays in the database.
+    expect(JSON.stringify(versions.body)).not.toContain(MESSAGE);
+
+    // A live enrollment whose LinkedIn execution the worker has held.
+    const contact = await post('/contacts/create', salespersonToken, command({ firmId, fullName: 'Jordan Placeholder' }));
+    expect(contact.status).toBe(200);
+    const storedContactId = String(resultOf(contact)['id']);
+    const { rows: enrollmentRows } = await fixture.db.query<{ id: string }>(
+      `INSERT INTO sequence_enrollments
+         (workspace_id, sequence_version_id, opportunity_id, firm_id, contact_id, assigned_user_id,
+          started_at, firm_time_zone, holiday_calendar_version)
+       VALUES ($1, $2, $3, $4, $5, $6, now() - interval '3 days', 'America/New_York', 'us-federal.2026')
+       RETURNING id`,
+      [workspaceId, storedVersionId, opportunityId, firmId, storedContactId, fixture.alpha.salesperson.userId],
+    );
+    const storedEnrollmentId = enrollmentRows[0]?.id ?? '';
+    const { rows: executionRows } = await fixture.db.query<{ id: string }>(
+      `INSERT INTO step_executions
+         (workspace_id, enrollment_id, step_id, firm_id, contact_id, channel, ordinal, state, hold_reason_code,
+          due_at, not_before, original_due_at, source_zone, rule_version)
+       VALUES ($1, $2, $3, $4, $5, 'linkedin_task', 2, 'held', 'long_hold_review',
+               now() - interval '1 day', now() - interval '1 day', now() - interval '1 day', 'America/New_York', 'business_days.1')
+       RETURNING id`,
+      [workspaceId, storedEnrollmentId, linkedInStepId, firmId, storedContactId],
+    );
+
+    const review = await post('/enrollments/resume/preview', salespersonToken, { enrollmentId: storedEnrollmentId });
+    expect(review.status).toBe(200);
+    expect(wireDrift(resumePreviewResponseSchema, review.body)).toEqual([]);
+    const { preview } = resumePreviewResponseSchema.parse(review.body);
+    expect(preview.steps).toHaveLength(1);
+    expect(preview.steps[0]).toMatchObject({
+      stepExecutionId: executionRows[0]?.id,
+      ordinal: 2,
+      channel: 'removed',
+      removedChannel: 'linkedin',
+      state: 'held',
+      heldReason: 'channel_removed',
+    });
+    expect(preview.steps[0]?.proposedDueAt).toBe(preview.steps[0]?.dueAt);
   });
 
   it('answers a path nobody mounted under these roots with not_found', async () => {

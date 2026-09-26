@@ -9,6 +9,7 @@ import {
   recordHolidayCalendar,
   replaceDraftSteps,
   retireVersion,
+  sequenceVersionForDisplay,
 } from '@fss/domain/sequences';
 import {
   REFUSAL_STATUS,
@@ -119,10 +120,10 @@ export async function routeSequences(
     }
     const scoped = contextForPrincipal(deps.auth, deps.principal);
     if (!scoped.ok) return scoped.result;
-    return {
-      status: 200,
-      body: { versions: await listSequenceVersions(scoped.context, parsed.data.sequenceId) },
-    };
+    // A LinkedIn step stored before 25 September 2026 goes out as channel `removed`
+    // (lane A2): one such step used to make the Mac refuse the whole answer.
+    const versions = await listSequenceVersions(scoped.context, parsed.data.sequenceId);
+    return { status: 200, body: { versions: versions.map(sequenceVersionForDisplay) } };
   }
 
   if (request.path === '/sequences/create') {

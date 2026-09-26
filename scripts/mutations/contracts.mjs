@@ -20,8 +20,8 @@ export const MUTATIONS = [
   {
     name: 'the sequence step schema forbids sequenceVersionId again',
     file: 'packages/contracts/src/sequences.ts',
-    find: 'export const sequenceStepDtoSchema = z.object({\n  id: uuid,\n  /** On every step, because the step table is keyed by it. D01 was a Mac that forbade it. */\n  sequenceVersionId: uuid,\n',
-    replace: 'export const sequenceStepDtoSchema = z.strictObject({\n  id: uuid,\n',
+    find: 'export const currentSequenceStepDtoSchema = z.object({\n  id: uuid,\n  /** On every step, because the step table is keyed by it. D01 was a Mac that forbade it. */\n  sequenceVersionId: uuid,\n',
+    replace: 'export const currentSequenceStepDtoSchema = z.strictObject({\n  id: uuid,\n',
     suite: ['run', 'test:release', '--', 'test/release/sequences.check.ts'],
     because:
       'This is desktop 1.0.4’s step schema: strict, and without the key toStep puts on every step, so every populated version was unreadable_answer and the editor drew a sequence with no versions (D01). The unit fixture agreed with it, so only the real route’s answer through the real bridge could see it. sequences.check.ts renders a published two-step version from the route and has to go red.',

@@ -7,6 +7,7 @@ import { OUTBOUND_STATES } from '@fss/domain/outbound';
 import {
   ENROLLMENT_END_REASONS,
   ENROLLMENT_STATES,
+  REMOVED_STEP_CHANNELS,
   SEQUENCE_STOP_CONDITIONS,
   SEQUENCE_VERSION_STATES,
   STEP_CHANNELS,
@@ -43,6 +44,8 @@ describe('the wire vocabularies are the domain’s', () => {
     ['ENROLLMENT_STATES', wire.ENROLLMENT_STATES, ENROLLMENT_STATES],
     ['ENROLLMENT_END_REASONS', wire.ENROLLMENT_END_REASONS, ENROLLMENT_END_REASONS],
     ['STEP_CHANNELS', wire.STEP_CHANNELS, STEP_CHANNELS],
+    // Lane A2: the channels a stored step may have been, sent as channel `removed`.
+    ['REMOVED_STEP_CHANNELS', wire.REMOVED_STEP_CHANNELS, REMOVED_STEP_CHANNELS],
     ['STEP_COMPLETION_SOURCES', wire.STEP_COMPLETION_SOURCES, STEP_COMPLETION_SOURCES],
     ['STEP_RESULTS', wire.STEP_RESULTS, STEP_RESULTS],
     // Lane g88: the resume review names each unexecuted step's state.

@@ -1,10 +1,10 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { readRepositoryFile, repositoryPath } from './support/coverage.ts';
-import { rehearsalJobSteps, stagesForCondition, stepScript } from './support/releaseWorkflow.ts';
+import { embeddedPythonProgram, rehearsalJobSteps, stagesForCondition, stepScript } from './support/releaseWorkflow.ts';
 
 /**
  * The drill has something to reconstruct (g40).
@@ -362,4 +362,118 @@ describe('g40: the drill waits for the restore target to pass the evidence', () 
     expect(launches[0]).toContain('"--phase", "in-flight"');
     expect(launches[0]).toContain('{"name": "FSS_DEPENDENCIES", "value": "recorded"}');
   });
+});
+
+/**
+ * What the drill's report must show before the release calls it a pass (PR 237 took
+ * these away with the prose checks; lane A2 puts them back as behaviour).
+ *
+ * The runner decides from the report, not the tool (`rehearsal-restore-drill.sh`'s
+ * last `python3` program), so a later edit could drop one of its refusals and every
+ * check above would still pass. Here the program is taken from the script as it is and
+ * run against a report that passes, then against that report with one thing the drill
+ * must reproduce taken away. Each of those must be refused by an assertion — a crash on
+ * a missing key would also exit non-zero and prove nothing about the gate — and none of
+ * it depends on how the refusal is worded.
+ */
+describe('A2: the drill report is refused unless the restore was reproduced', () => {
+  const EXPECTED_GENERATION = 7;
+  const program = embeddedPythonProgram(readRepositoryFile(DRILL_SCRIPT), 'expected_generation = int(sys.argv[3])');
+
+  type Bodies = Record<string, Record<string, unknown>>;
+
+  /** A report every assertion accepts: each required step ran, and each shows its effect. */
+  const passing = (): Bodies => ({
+    'step1a-generation-check': { expectedGeneration: EXPECTED_GENERATION, mismatch: true, restoreHoldsInForce: 1 },
+    'step1-restore-holds': { count: 1 },
+    'step1-dial-refused': { allowed: false, reason: 'restore_in_progress', holds: ['restore_in_progress'] },
+    'step2-journal-replay': { inserted: 3 },
+    'step2-journal-replay-second': { inserted: 0 },
+    'step3-reconcile-sent': {
+      resent: 0,
+      tombstones: 1,
+      missing_fences_tombstoned: 1,
+      mailboxes_unscanned: 0,
+      missing_fences_unattached: 0,
+    },
+    'step3-missing-fence-tombstoned': {
+      tombstones: [{ state: 'sent', reconciledFrom: 'sent_folder_missing_fence', fencesForStep: 1 }],
+    },
+    'step4-inbox-recover': { replies: 1, opt_outs: 1 },
+    'step5-no-second-send': {
+      sends: 0,
+      tombstones: [{ fencesForStep: 1, fencesToRecipient: 1, fencesToRecipientAtStep3: 1 }],
+    },
+    'step6-coverage': { mailboxes: [{ complete: true }] },
+    'step7-migrate': {},
+    'step8-restore-report': {
+      sends_repeated: 0,
+      suppressions_before: 2,
+      suppressions_after: 2,
+      suppressions_at_failure: 2,
+      crm_rpo_seconds: 40,
+    },
+    'step9-system-generation-advance': { otherHoldsBefore: 1, otherHoldsAfter: 1 },
+    'step9-generation-reconciled': {
+      generation: EXPECTED_GENERATION,
+      mismatch: false,
+      holdsOpened: 0,
+      restoreHoldsInForce: 0,
+    },
+  });
+
+  function judge(bodies: Bodies): { readonly status: number | null; readonly output: string } {
+    const directory = mkdtempSync(join(tmpdir(), 'fss-drill-report-'));
+    const reportPath = join(directory, 'drill-report.json');
+    const report = {
+      stoppedAt: null,
+      unanswered: [],
+      steps: Object.entries(bodies).map(([step, body]) => ({ step, ok: true, report: body })),
+    };
+    writeFileSync(reportPath, JSON.stringify(report));
+    const result = spawnSync('python3', ['-', reportPath, directory, String(EXPECTED_GENERATION)], {
+      encoding: 'utf8',
+      input: program,
+    });
+    return { status: result.status, output: `${result.stdout}${result.stderr}` };
+  }
+
+  /** The report with one step's body changed. */
+  function without(step: string, change: Record<string, unknown>, remove: readonly string[] = []): Bodies {
+    const bodies = passing();
+    const body = { ...(bodies[step] ?? {}), ...change };
+    for (const key of remove) delete body[key];
+    return { ...bodies, [step]: body };
+  }
+
+  it('accepts a report that shows every reproduction (the fixture is not refused for itself)', () => {
+    const verdict = judge(passing());
+    expect(verdict.status, verdict.output).toBe(0);
+  });
+
+  // Each row: the step, and the one change that means the drill did not reproduce it.
+  type Refusal = readonly [what: string, step: string, change: Record<string, unknown>, remove?: readonly string[]];
+  const refusals: readonly Refusal[] = [
+    ['the restored copy opened a restore hold', 'step1-restore-holds', { count: 0 }],
+    ['a dial is refused during the restore', 'step1-dial-refused', { allowed: true }],
+    ['the refusal is the restore hold’s', 'step1-dial-refused', { holds: ['posture_missing'] }],
+    ['the first journal replay reinserted something', 'step2-journal-replay', { inserted: 0 }],
+    ['the second journal replay reinserted nothing', 'step2-journal-replay-second', { inserted: 1 }],
+    ['a send was reconstructed', 'step3-reconcile-sent', { tombstones: 0 }],
+    ['a reply reapplied its effect', 'step4-inbox-recover', { replies: 0 }],
+    ['an opt-out reapplied', 'step4-inbox-recover', { opt_outs: 0 }],
+    ['every mailbox finished its coverage', 'step6-coverage', { mailboxes: [{ complete: true }, { complete: false }] }],
+    ['no suppression was lost', 'step8-restore-report', { suppressions_after: 1 }],
+    ['the CRM recovery point is reported', 'step8-restore-report', {}, ['crm_rpo_seconds']],
+    ['another hold existed to show selectivity', 'step9-system-generation-advance', { otherHoldsBefore: 0, otherHoldsAfter: 0 }],
+  ];
+
+  for (const [what, step, change, remove] of refusals) {
+    it(`refuses a report unless ${what}`, () => {
+      const verdict = judge(without(step, change, remove ?? []));
+      expect(verdict.status, verdict.output).not.toBe(0);
+      // Refused by the gate's own assertion, not by a crash on the fixture's shape.
+      expect(verdict.output).toContain('AssertionError');
+    });
+  }
 });

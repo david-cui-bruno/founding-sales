@@ -314,7 +314,10 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
       for (const version of versions.value.versions) {
         const label = `${sequence.name} v${String(version.version)}`;
         labels.set(version.id, label);
-        if (version.state === 'published') published.push({ sequenceVersionId: version.id, label });
+        // A version with a LinkedIn step stored before 25 September 2026 (lane A2) is not
+        // offered: `enrollContact` refuses it (`step_unknown`).
+        const enrollable = version.state === 'published' && version.steps.every(step => step.channel !== 'removed');
+        if (enrollable) published.push({ sequenceVersionId: version.id, label });
       }
     }
     sequences = {

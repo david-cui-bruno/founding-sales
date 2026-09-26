@@ -5,9 +5,13 @@ import {
   acceptSequence,
   isStepChannel,
   refuseSequence,
+  removedChannelOf,
+  type DisplayedSequenceStep,
+  type DisplayedSequenceVersion,
   type SequenceDelay,
   type SequenceResult,
   type SequenceRow,
+  type SequenceStepRow,
   type SequenceVersionRow,
   type StepChannel,
 } from './types.ts';
@@ -313,6 +317,32 @@ export async function retireVersion(
   const retired = await readSequenceVersion(context, input.sequenceVersionId);
   if (retired === null) return refuseSequence('version_unknown');
   return acceptSequence(retired);
+}
+
+/**
+ * One step as a person is shown it (lane A2). A step of a removed channel — a LinkedIn
+ * task stored before 25 September 2026 — keeps its id, place and delay and becomes
+ * channel `removed`; every other step is itself. Only a reader that shows steps calls
+ * this: the engine reads the stored channel, and `isStepChannel` refuses it there.
+ */
+export function sequenceStepForDisplay(step: SequenceStepRow): DisplayedSequenceStep {
+  const removed = removedChannelOf(step.channel);
+  if (removed === null) return step;
+  return {
+    id: step.id,
+    sequenceVersionId: step.sequenceVersionId,
+    ordinal: step.ordinal,
+    channel: 'removed',
+    removedChannel: removed,
+    delay: step.delay,
+    onNoAnswer: null,
+    templateVersionId: null,
+  };
+}
+
+/** A version as `/sequences/versions` sends it, each step through `sequenceStepForDisplay`. */
+export function sequenceVersionForDisplay(version: SequenceVersionRow): DisplayedSequenceVersion {
+  return { ...version, steps: version.steps.map(sequenceStepForDisplay) };
 }
 
 export { listSequenceVersions, readSequenceVersion };

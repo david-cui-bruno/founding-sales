@@ -10,7 +10,11 @@ import {
   describeClientVersionMaximum,
   mayMutate,
   publishedClientVersions,
+  REMOVED_STEP_CHANNELS,
+  resumePreviewStepSchema,
   sequenceStepDtoSchema,
+  sequenceVersionsResponseSchema,
+  STEP_CHANNELS,
   wireDrift,
 } from '../src/index.ts';
 
@@ -129,5 +133,76 @@ describe('wireDrift: exact at the route, tolerant on the Mac (D07)', () => {
       });
       expect(parsed.success, effort).toBe(true);
     }
+  });
+});
+
+describe('a stored step of a removed channel is readable and not authorable (lane A2)', () => {
+  const current = {
+    id: '11111111-1111-4111-8111-111111111111',
+    sequenceVersionId: '22222222-2222-4222-8222-222222222222',
+    ordinal: 1,
+    channel: 'call_task',
+    delay: { unit: 'business_days', days: 0 },
+    onNoAnswer: 'advance',
+    templateVersionId: null,
+  };
+  const removed = {
+    id: '33333333-3333-4333-8333-333333333333',
+    sequenceVersionId: '22222222-2222-4222-8222-222222222222',
+    ordinal: 2,
+    channel: 'removed',
+    removedChannel: 'linkedin',
+    delay: { unit: 'business_days', days: 2 },
+    onNoAnswer: null,
+    templateVersionId: null,
+  };
+  const version = {
+    id: '22222222-2222-4222-8222-222222222222',
+    sequenceId: '44444444-4444-4444-8444-444444444444',
+    version: 1,
+    state: 'published',
+    stopConditions: ['human_reply', 'engaged_call', 'opt_out_or_suppression', 'stage_closed'],
+    publishedAt: '2026-09-01T13:00:00.000Z',
+    retiredAt: null,
+  };
+
+  it('parses a versions answer holding a removed step, where it once refused the whole answer', () => {
+    expect(wireDrift(sequenceVersionsResponseSchema, { versions: [{ ...version, steps: [current, removed] }] })).toEqual([]);
+    expect(wireDrift(sequenceStepDtoSchema, removed)).toEqual([]);
+  });
+
+  it('carries the channel it was and none of what it carried', () => {
+    expect(wireDrift(sequenceStepDtoSchema, { ...removed, linkedinMessage: 'Hello' })).toEqual([
+      'linkedinMessage: not declared by the contract',
+    ]);
+    expect(sequenceStepDtoSchema.safeParse({ ...removed, templateVersionId: current.id }).success).toBe(false);
+    expect(sequenceStepDtoSchema.safeParse({ ...removed, onNoAnswer: 'advance' }).success).toBe(false);
+    expect(sequenceStepDtoSchema.safeParse({ ...removed, removedChannel: 'fax' }).success).toBe(false);
+  });
+
+  it('still refuses the stored value itself, and draft authoring knows only the current channels', () => {
+    expect(sequenceStepDtoSchema.safeParse({ ...current, channel: 'linkedin_task' }).success).toBe(false);
+    expect(sequenceStepDtoSchema.safeParse({ ...current, channel: 'linkedin' }).success).toBe(false);
+    expect([...STEP_CHANNELS]).toEqual(['email', 'call_task']);
+    expect([...REMOVED_STEP_CHANNELS]).toEqual(['linkedin']);
+  });
+
+  it('reviews a removed step as held for channel_removed, and only so', () => {
+    const step = {
+      stepExecutionId: '55555555-5555-4555-8555-555555555555',
+      ordinal: 2,
+      channel: 'removed',
+      removedChannel: 'linkedin',
+      state: 'held',
+      heldReason: 'channel_removed',
+      originalDueAt: '2026-09-20T13:00:00.000Z',
+      dueAt: '2026-09-20T13:00:00.000Z',
+      proposedDueAt: '2026-09-20T13:00:00.000Z',
+    };
+    expect(wireDrift(resumePreviewStepSchema, step)).toEqual([]);
+    expect(resumePreviewStepSchema.safeParse({ ...step, state: 'pending' }).success).toBe(false);
+    const { heldReason: _dropped, ...withoutReason } = step;
+    expect(resumePreviewStepSchema.safeParse(withoutReason).success).toBe(false);
+    expect(resumePreviewStepSchema.safeParse({ ...step, channel: 'linkedin_task' }).success).toBe(false);
   });
 });

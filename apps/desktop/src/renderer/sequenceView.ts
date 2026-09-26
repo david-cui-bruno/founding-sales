@@ -1,4 +1,4 @@
-import { SENDING_STOP_LINE, TEMPLATE_VARIABLE_NAMES } from '@fss/contracts';
+import { SENDING_STOP_LINE, TEMPLATE_VARIABLE_NAMES, type RemovedStepChannel } from '@fss/contracts';
 import { readErrorSentence } from './readError.ts';
 import type {
   DraftStep,
@@ -32,12 +32,15 @@ import type {
  * a window whose save always failed, because the trigger refuses it.
  *
  * The LinkedIn task card and its undo deadline went with LinkedIn on 25 September 2026.
+ * A LinkedIn step stored before then arrives as channel `removed` (lane A2) and is shown
+ * as one greyed row with no control: nothing may edit, publish or enrol with it.
  */
 
 export type PublishRefusal =
   | 'version_has_no_steps'
   | 'ordinals_not_contiguous'
   | 'email_step_needs_approved_template'
+  | 'step_channel_removed'
   | 'not_a_draft'
   | 'admin_only'
   | 'offline';
@@ -49,6 +52,8 @@ export interface StepRow {
   readonly detail: string;
   /** Set when an email step names a template that cannot be published on. */
   readonly problem: string | null;
+  /** A stored step of a removed channel (lane A2): drawn greyed, with no control. */
+  readonly removed: boolean;
 }
 
 export interface VersionPanel {
@@ -139,7 +144,16 @@ function delayLabel(step: Pick<SequenceStep, 'delay'>): string {
     : `${String(step.delay.days)} business days after enrollment`;
 }
 
+/**
+ * What a stored step of a removed channel is called (lane A2). The whole row: it has no
+ * channel, template or call behaviour a person could act on.
+ */
+export const REMOVED_STEP_LABELS: Readonly<Record<RemovedStepChannel, string>> = Object.freeze({
+  linkedin: 'LinkedIn step (channel removed 25 Sep 2026)',
+});
+
 function stepDetail(step: SequenceStep): string {
+  if (step.channel === 'removed') return REMOVED_STEP_LABELS[step.removedChannel];
   if (step.channel === 'email') return 'Template email';
   return step.onNoAnswer === 'retry_call' ? 'Call task (try again on no answer)' : 'Call task (move on if nobody answers)';
 }
@@ -159,6 +173,8 @@ export function publishRefusalFor(
   if (version.steps.length === 0) return 'version_has_no_steps';
   const ordinals = [...version.steps].map(step => step.ordinal).sort((left, right) => left - right);
   if (!ordinals.every((ordinal, index) => ordinal === index + 1)) return 'ordinals_not_contiguous';
+  // The server refuses a version with a step it cannot run (`publishVersion`).
+  if (version.steps.some(step => step.channel === 'removed')) return 'step_channel_removed';
   for (const step of version.steps) {
     if (step.templateVersionId === null) continue;
     const template = templates.find(candidate => candidate.id === step.templateVersionId);
@@ -198,6 +214,7 @@ function versionPanel(
         delayLabel: delayLabel(step),
         detail: stepDetail(step),
         problem,
+        removed: step.channel === 'removed',
       };
     });
 
@@ -341,10 +358,14 @@ export const NO_ANSWER_LABELS: Readonly<Record<'advance' | 'retry_call', string>
   retry_call: 'Try the call again',
 });
 
-/** A version's steps as the editor holds them, in their order. */
+/**
+ * A version's steps as the editor holds them, in their order. A step of a removed channel
+ * is not one (lane A2): the editor cannot author it, so a saved draft leaves it out.
+ */
 export function draftStepsOf(version: SequenceVersion): DraftStep[] {
   return [...version.steps]
     .sort((left, right) => left.ordinal - right.ordinal)
+    .flatMap(step => (step.channel === 'removed' ? [] : [step]))
     .map(step => ({
       channel: step.channel,
       delay: step.delay.unit === 'elapsed' ? { unit: 'elapsed', hours: step.delay.hours } : { unit: 'business_days', days: step.delay.days },
@@ -465,8 +486,12 @@ export function stepsForWire(steps: readonly DraftStep[]): readonly Readonly<Rec
   }));
 }
 
-/** Whether the editor holds something other than what the draft has saved. */
+/**
+ * Whether the editor holds something other than what the draft has saved. A saved draft
+ * with a removed step always differs (lane A2): saving is how that step leaves it.
+ */
 export function draftChanged(version: SequenceVersion, steps: readonly DraftStep[]): boolean {
+  if (version.steps.some(step => step.channel === 'removed')) return true;
   return JSON.stringify(draftStepsOf(version)) !== JSON.stringify(steps);
 }
 
@@ -619,6 +644,8 @@ export interface ResumeReviewStepRow {
   readonly from: string;
   readonly to: string;
   readonly moved: boolean;
+  /** A held step of a removed channel (lane A2): drawn greyed, and a resume leaves it held. */
+  readonly removed: boolean;
 }
 
 export interface ResumeReviewPanel {
@@ -650,6 +677,11 @@ export function firmClock(instant: string, zone: string): string {
     return instant;
   }
 }
+
+/** Why the review shows a removed step held (lane A2). */
+const REMOVED_HELD_REASONS: Readonly<Record<'channel_removed', string>> = Object.freeze({
+  channel_removed: 'channel removed; resuming leaves it held',
+});
 
 function daysText(milliseconds: number): string {
   const days = milliseconds / DAY_MILLISECONDS;
@@ -687,10 +719,14 @@ export function resumeReviewPanel(review: ResumeReview, state: SequenceState): R
         }`,
     ),
     steps: preview.steps.map(step => ({
-      label: `Step ${String(step.ordinal)} · ${CHANNEL_LABELS[step.channel]}${step.state === 'held' ? ' (held)' : ''}`,
+      label:
+        step.channel === 'removed'
+          ? `Step ${String(step.ordinal)} · ${REMOVED_STEP_LABELS[step.removedChannel]} (held: ${REMOVED_HELD_REASONS[step.heldReason]})`
+          : `Step ${String(step.ordinal)} · ${CHANNEL_LABELS[step.channel]}${step.state === 'held' ? ' (held)' : ''}`,
       from: firmClock(step.dueAt, zone),
       to: firmClock(step.proposedDueAt, zone),
       moved: step.proposedDueAt !== step.dueAt,
+      removed: step.channel === 'removed',
     })),
     canConfirm: !stillHeld && state.online && state.mayMutate,
     confirmLabel: 'Resume with these dates',
