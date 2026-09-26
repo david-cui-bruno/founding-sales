@@ -26,15 +26,16 @@ import type { LogFields } from '../../bootstrap/log.ts';
  * `MIGRATION_DATABASE_SECRET` — or `FSS_MIGRATION_DATABASE_URL` on a laptop. When
  * neither is present, `fss migrate` refuses; it never falls back to `DATABASE_URL`.
  *
- * ## The restored endpoint arrives in the environment
+ * ## The endpoint arrives in the environment
  *
- * Appendix E step 1 creates a *new* instance, so the endpoint the drill must talk to is
- * not the one any secret names. `FSS_DATABASE_HOST` overrides the host of a connection
- * assembled from a secret value, which is exactly the case it is for: the credential is
- * still the secret's, the endpoint moved. A connection given as a whole URL already
- * names a host, and a `FSS_DATABASE_HOST` that disagrees with it is refused rather than
- * silently preferred — two sources naming two hosts is not a choice a tool may make
- * when one of them might be production.
+ * `FSS_DATABASE_HOST` is Terraform's `active_database_host`: the managed instance's
+ * address, or a point-in-time copy's while the restore runbook
+ * (`docs/greenfield/runbooks/restore.md`) has pointed every task at it. It overrides the
+ * host of a connection assembled from a secret value — the credential is still the
+ * secret's, the endpoint moved — for the migration credential as well as the runtime one.
+ * A connection given as a whole URL already names a host, and a `FSS_DATABASE_HOST` that
+ * disagrees with it is refused rather than silently preferred — two sources naming two
+ * hosts is not a choice a tool may make when one of them might be production.
  *
  * What it deliberately does **not** read is `FSS_SCHEMA_MIN`/`FSS_SCHEMA_MAX`. The
  * worker refuses to start unless the database's schema version is exactly the range it
@@ -50,10 +51,8 @@ export const TOOL_ENVIRONMENT_VARIABLES = Object.freeze({
   /** The migration user's connection. Its own secret, never the runtime one. */
   migrationDatabaseUrl: 'FSS_MIGRATION_DATABASE_URL',
   migrationDatabaseSecret: 'MIGRATION_DATABASE_SECRET',
-  /** Appendix E step 1: the restored instance's endpoint. */
+  /** `active_database_host`: the instance every task connects to. */
   databaseHost: 'FSS_DATABASE_HOST',
-  /** The admin `system-generation advance` is attributed to. */
-  adminUser: 'FSS_ADMIN_USER_ID',
 } as const);
 
 const V = TOOL_ENVIRONMENT_VARIABLES;
@@ -97,7 +96,7 @@ const trimmed = (environment: Environment, name: string): string | undefined => 
  * Apply `FSS_DATABASE_HOST` to a connection, or refuse.
  *
  * A URL's host wins and a disagreement is a refusal; a secret's host is replaced,
- * because that is the restore case the override exists for.
+ * because that is what `active_database_host` is for.
  */
 export function applyHostOverride(
   connectionString: string,

@@ -10,29 +10,24 @@ import {
 import { MIGRATION_IDENTITY_COMMANDS } from '../src/tools/fss.ts';
 
 /**
- * The operations command line's argument surface (lane G12g; rewired by G12h).
+ * The operations command line's argument surface (lane G12g; rewired by G12h; the drill
+ * deleted by W3-S8).
  *
  * The shell scripts are the callers that matter, and they called a tool this
  * repository did not have. This suite is the contract in both directions — the parser
  * accepts what they send, and nothing else.
  *
- * ## What changed in G12h, and what did not
+ * ## What W3-S8 changed
  *
- * The drill used to make fourteen `fss admin` calls from the runner. It cannot: the
- * rehearsal database is private and a GitHub runner has no route to it. So the
- * database work is now two one-off ECS tasks — `fss admin counts` for the baseline and
- * `fss drill` for steps 1 to 9 — and `infra/scripts/release-deploy.sh` makes three
- * more (`migrate`, `admin database-users ensure`, `verify`). The fourteen admin
- * commands still run; they run *inside* `fss drill`, which calls them as functions, so
- * `apps/worker/test/fssSurface.test.ts` is where their behaviour is asserted and this
- * is where their spelling on a command line is.
- *
- * Both scripts are read, because both now invoke the tool and a floor drawn from one
- * of them would go quiet the moment the other grew a command.
+ * The restore drill and its evidence seeder are deleted with `fss drill`,
+ * `fss admin counts` and `fss admin drill seed-evidence`; the restore is a runbook
+ * (`docs/greenfield/runbooks/restore.md`), whose commands are spelled out at the end of
+ * this file. Every script that still invokes the tool is read, because a floor drawn
+ * from one of them would go quiet the moment another grew a command.
  *
  * ## The vacuous-pass trap, named
  *
- * A test that asserted "the parser accepts `fss admin counts --as-of X`" would pass
+ * A test that asserted "the parser accepts `fss migrate`" would pass
  * against a parser that accepts everything, which is the one behaviour that makes a
  * misspelt flag in a script silently do nothing at three in the morning. So the
  * scripts' own text is the input — extracted rather than retyped, so a script that
@@ -42,16 +37,11 @@ import { MIGRATION_IDENTITY_COMMANDS } from '../src/tools/fss.ts';
  */
 
 const CALLERS = [
-  'infra/scripts/rehearsal-restore-drill.sh',
   'infra/scripts/release-deploy.sh',
   // g39: the step between the deploy and the schema ranges. It is here for the same
   // reason the other two are — it names a command, and a script naming a command the
   // tool does not have is a step that fails inside a container nobody is watching.
   'infra/scripts/release-bootstrap-workspace.sh',
-  // g40: the step that writes the activity the drill reconstructs. Same reason again —
-  // a script naming a command the tool does not have is a one-off task that fails
-  // inside a container nobody is watching, minutes after the runner moved on.
-  'infra/scripts/release-seed-drill-evidence.sh',
 ] as const;
 
 const INVOCATIONS = CALLERS.flatMap(relative =>
@@ -59,34 +49,29 @@ const INVOCATIONS = CALLERS.flatMap(relative =>
 );
 
 describe('the fss command line accepts every invocation the release scripts make', () => {
-  it('finds every `fss` invocation in both scripts, planned and real', () => {
+  it('finds every `fss` invocation in the scripts', () => {
     // A floor on purpose: an extractor that silently found none would make every case
-    // below vacuous, and the scripts are the specification here. Eight is the number of
-    // distinct commands the release actually issues — `admin counts`, `drill`,
-    // `migrate`, `admin database-users ensure`, `verify`, `admin workspace bootstrap`
-    // since g39, `admin drill seed-evidence` since g40 and `admin release-record put`
-    // since g71 — and each appears at least once in a planned line and once in a real
-    // one.
-    expect(INVOCATIONS.length).toBeGreaterThanOrEqual(8);
-    expect(INVOCATIONS.some(invocation => invocation.planned)).toBe(true);
+    // below vacuous, and the scripts are the specification here. Five is the number of
+    // distinct commands the release actually issues — `migrate`,
+    // `admin database-users ensure`, `verify`, `admin workspace bootstrap` since g39 and
+    // `admin release-record put` since g71. The planned lines went with the drill script
+    // (W3-S8); the calls left are real ones.
+    expect(INVOCATIONS.length).toBeGreaterThanOrEqual(5);
     expect(INVOCATIONS.some(invocation => !invocation.planned)).toBe(true);
 
-    // And the seven are named, so a script that stopped calling one of them — which is
+    // And the five are named, so a script that stopped calling one of them — which is
     // how "nothing migrates the database" happened in the first place — fails here.
-    // The words before the first flag: `['admin','counts','--as-of','…']` is
-    // `admin counts`. A flag's *value* is not part of the command's name.
+    // The words before the first flag: `['admin','workspace','bootstrap','--slug','…']`
+    // is `admin workspace bootstrap`. A flag's *value* is not part of the command's name.
     const commands = INVOCATIONS.map(invocation => {
       const flagAt = invocation.argv.findIndex(word => word.startsWith('--'));
       return (flagAt < 0 ? invocation.argv : invocation.argv.slice(0, flagAt)).join(' ');
     });
     for (const expected of [
-      'admin counts',
-      'drill',
       'migrate',
       'admin database-users ensure',
       'verify',
       'admin workspace bootstrap',
-      'admin drill seed-evidence',
       // g71: release-deploy.sh --release-record stores the record the admin attests to.
       'admin release-record put',
     ]) {
@@ -104,26 +89,44 @@ describe('the fss command line accepts every invocation the release scripts make
         expect(parsed.reason, invocation.text).toBe('flag_missing');
         return;
       }
-      expect(parsed, `the drill calls ${invocation.text} and the tool refused it`).toMatchObject({ ok: true });
+      expect(parsed, `a release script calls ${invocation.text} and the tool refused it`).toMatchObject({ ok: true });
     },
   );
 
-  it('refuses what the drill never sends', () => {
+  it('refuses what no caller sends', () => {
     expect(parseFssCommand([])).toMatchObject({ ok: false, reason: 'command_missing' });
     expect(parseFssCommand(['admin', 'holds', 'burn'])).toMatchObject({ ok: false, reason: 'command_unknown' });
-    expect(parseFssCommand(['admin', 'counts', '--asof', 'x'])).toMatchObject({ ok: false, reason: 'flag_unknown' });
-    expect(parseFssCommand(['admin', 'counts', '--as-of'])).toMatchObject({
+    expect(parseFssCommand(['admin', 'holds', 'list', '--resaon', 'x'])).toMatchObject({ ok: false, reason: 'flag_unknown' });
+    expect(parseFssCommand(['admin', 'suppression-journal', 'replay', '--from'])).toMatchObject({
       ok: false,
       reason: 'flag_value_missing',
     });
-    expect(parseFssCommand(['admin', 'mailbox', 'recover', '--all-mailboxes'])).toMatchObject({
+    expect(parseFssCommand(['admin', 'mailbox', 'reconcile-sent', '--all-mailboxes'])).toMatchObject({
       ok: false,
       reason: 'flag_missing',
     });
-    expect(parseFssCommand(['admin', 'mailbox', 'recover', '--since', '2026-09-20T00:00:00Z'])).toMatchObject({
+    expect(parseFssCommand(['admin', 'mailbox', 'reconcile-sent', '--since', '2026-09-20T00:00:00Z'])).toMatchObject({
       ok: false,
       reason: 'selection_missing',
     });
+  });
+
+  it('no longer has the restore drill or the nine-step protocol (lane W3-S8)', () => {
+    for (const argv of [
+      ['drill', '--reports', '/tmp/x', '--as-of', '2026-09-20T00:00:00Z'],
+      ['admin', 'counts'],
+      ['admin', 'restore-holds', 'open', '--expected-generation', '2'],
+      ['admin', 'system-generation', 'advance', '--report', '/tmp/x'],
+      ['admin', 'restore-report', '--out', '/tmp/x'],
+      ['admin', 'drill', 'seed-evidence', '--workspace-slug', 'x', '--phase', 'before'],
+      ['admin', 'mailbox', 'recover', '--since', '2026-09-20T00:00:00Z', '--all-mailboxes'],
+      ['admin', 'mailbox', 'watch-renew', '--all-mailboxes'],
+      ['admin', 'jobs', 'discard-runnable'],
+      ['admin', 'scheduler', 'run-once'],
+      ['admin', 'dial-authorize', '--any'],
+    ]) {
+      expect(parseFssCommand(argv), argv.join(' ')).toMatchObject({ ok: false, reason: 'command_unknown' });
+    }
   });
 
   it('describes every command it has, so `fss` with no arguments is usable', () => {
@@ -164,67 +167,19 @@ describe('the commands release-deploy.sh runs on the migration task definition',
   });
 });
 
-/**
- * Lane g53: where the drill's step 0 comes from, and the launch that decides it.
- *
- * The thirteenth full run (24 September 2026) launched `fss drill --as-of <restore
- * target>` against the restored instance, so the drill measured its baseline again on
- * the restored copy while the baseline measured on the source sat in the runner's
- * reports. The drill now takes the source baseline as a value, `--baseline-json`.
- *
- * ## The vacuous-pass trap
- *
- * The drill script's real launches go through `drill_task` and never spell `fss`, so
- * an extractor that read only `fss …` lines saw the planned line and nothing else: the
- * plan could say `--baseline-json` while the real launch still passed `--as-of`. So the
- * extractor reads the launcher too, and the real launch is asserted here, not the plan.
- */
-describe('fss drill takes its baseline from exactly one place (lane g53)', () => {
-  const reports = ['--reports', '/tmp/fss-drill'];
-  const handed = '{"asOf":"2026-09-21T00:00:00Z","sends":1,"replies":1,"suppressions":1,"crm_edits":1,"migrations":1}';
-
-  it('accepts the baseline handed over as a value, braces and quotes included', () => {
-    const parsed = parseFssCommand(['drill', ...reports, '--baseline-json', handed, '--all-mailboxes']);
-    expect(parsed).toMatchObject({ ok: true });
-    if (parsed.ok) expect(parsed.value.options['--baseline-json']).toBe(handed);
-  });
-
-  it('refuses any two of --baseline, --as-of and --baseline-json, and none of them', () => {
-    for (const pair of [
-      ['--as-of', '2026-09-21T00:00:00Z', '--baseline-json', handed],
-      ['--baseline', '/tmp/before.json', '--baseline-json', handed],
-      ['--baseline', '/tmp/before.json', '--as-of', '2026-09-21T00:00:00Z'],
+describe('the restore runbook’s commands (lane W3-S8)', () => {
+  it('accepts them as `docs/greenfield/runbooks/restore.md` spells them', () => {
+    for (const argv of [
+      ['schema-version'],
+      ['migrate'],
+      ['admin', 'database-users', 'ensure'],
+      ['admin', 'suppression-journal', 'replay', '--from', '2026-09-20T11:50:00Z'],
+      ['admin', 'mailbox', 'reconcile-sent', '--since', '2026-09-20T11:50:00Z', '--all-mailboxes'],
+      ['admin', 'mailbox', 'reconcile-sent', '--since', '2026-09-20T11:50:00Z', '--mailbox', '00000000-0000-4000-8000-000000000001'],
+      ['admin', 'holds', 'list'],
+      ['admin', 'release-record', 'show', '--reference', 'ci-gate-41000000001-cccccccccccc'],
     ]) {
-      expect(parseFssCommand(['drill', ...reports, ...pair]), pair.join(' ')).toMatchObject({
-        ok: false,
-        reason: 'selection_missing',
-      });
-    }
-    expect(parseFssCommand(['drill', ...reports])).toMatchObject({ ok: false, reason: 'selection_missing' });
-    expect(parseFssCommand(['drill', ...reports, '--baseline-json'])).toMatchObject({
-      ok: false,
-      reason: 'flag_value_missing',
-    });
-  });
-
-  it('reads the drill script’s real launches, not only its plan', () => {
-    const drill = drillInvocations(
-      readFileSync(fileURLToPath(new URL('../../../infra/scripts/rehearsal-restore-drill.sh', import.meta.url)), 'utf8'),
-    );
-    const real = drill.filter(invocation => !invocation.planned).map(invocation => invocation.argv.slice(0, 2).join(' '));
-    expect(real, 'the baseline task on the source is launched through drill_task').toContain('admin counts');
-    expect(real, 'and so is the drill against the restored instance').toContain('drill --reports');
-  });
-
-  it('launches the drill with the source baseline, never an instant to measure the restored copy at', () => {
-    const launches = drillInvocations(
-      readFileSync(fileURLToPath(new URL('../../../infra/scripts/rehearsal-restore-drill.sh', import.meta.url)), 'utf8'),
-    ).filter(invocation => invocation.argv[0] === 'drill');
-    expect(launches.filter(invocation => !invocation.planned).length).toBeGreaterThanOrEqual(1);
-    for (const launch of launches) {
-      expect(launch.argv, launch.text).toContain('--baseline-json');
-      expect(launch.argv, launch.text).not.toContain('--as-of');
-      expect(launch.argv, launch.text).not.toContain('--baseline');
+      expect(parseFssCommand(argv), argv.join(' ')).toMatchObject({ ok: true });
     }
   });
 });

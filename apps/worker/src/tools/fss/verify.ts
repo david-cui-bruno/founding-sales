@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readSystemGeneration, type SessionQueryable } from '@fss/domain/db';
+import type { SessionQueryable } from '@fss/domain/db';
 import { readSchemaVersionReport } from './migrate.ts';
 import { describeToolConfig, type ToolConfig } from './config.ts';
 
@@ -19,8 +19,8 @@ import { describeToolConfig, type ToolConfig } from './config.ts';
  * A read-only check passes against a user who has lost `INSERT`, against a full
  * volume, and against a read replica somebody pointed the tool at by mistake. Each of
  * those is a deployment that looks ready and is not. So the check writes — and then
- * rolls back, so a verification can never be mistaken for activity by the counts the
- * restore drill compares, and repeated verification leaves nothing behind. The row is
+ * rolls back, so a verification can never be mistaken for activity, and repeated
+ * verification leaves nothing behind. The row is
  * then read back *after* the rollback as well, and `persisted` being false is part of
  * the report rather than an assumption.
  *
@@ -44,7 +44,6 @@ export interface VerifyReport {
   readonly apiAccepts: boolean;
   readonly workerAccepts: boolean;
   readonly pending: readonly number[];
-  readonly systemGeneration: number | null;
   readonly connectedRole: string;
   /** The table the write check used, so a report says what it proved. */
   readonly writeCheckTable: 'heartbeats';
@@ -74,11 +73,9 @@ export async function runVerify(
   options: VerifyOptions = {},
 ): Promise<VerifyResult> {
   let schema;
-  let generation: number | null;
   let connectedRole = 'unknown';
   try {
     schema = await readSchemaVersionReport(session);
-    generation = await readSystemGeneration(session);
     const role = await session.query<{ role: string }>('SELECT current_user AS role');
     connectedRole = role.rows[0]?.role ?? 'unknown';
   } catch (error) {
@@ -143,7 +140,6 @@ export async function runVerify(
       apiAccepts: schema.apiAccepts,
       workerAccepts: schema.workerAccepts,
       pending: schema.pending,
-      systemGeneration: generation,
       connectedRole,
       writeCheckTable: 'heartbeats',
       write,

@@ -10,8 +10,8 @@ import { completeEmailStep, nextUnfinishedExecution } from '../sequences/index.t
 import { businessDateOf } from '../today/index.ts';
 
 /**
- * Appendix E step 3's missing fences: what one FSS send found in a Sent folder means to
- * the restored database (lane g73).
+ * The missing fences after a point-in-time restore: what one FSS send found in a Sent
+ * folder means to the restored database (lane g73; `docs/greenfield/runbooks/restore.md`).
  *
  * A point-in-time restore loses every write after the restore point, and a send is two
  * things only one of which a restore can lose: the fence, in PostgreSQL, and the message,
@@ -26,7 +26,7 @@ import { businessDateOf } from '../today/index.ts';
  *
  *   * `present` — the restored copy has its fence in a dispatched or terminal state.
  *     The in-doubt ones are the existing reconciliation's (`reconcileOutboundMessage`),
- *     which step 3 runs first; nothing to do.
+ *     which `fss admin mailbox reconcile-sent` runs first; nothing to do.
  *   * `pre_dispatch_marked_sent` — the copy has the fence, but still `prepared` or
  *     `held`: the restore point fell between preparation and dispatch. It is recorded as
  *     sent from Gmail's evidence, or the dispatch path would send it a second time.
@@ -43,9 +43,10 @@ import { businessDateOf } from '../today/index.ts';
  *     step can be named: two live enrollments reach the address, the one enrollment's
  *     next step is not an email or already has a fence under another Message-ID, or the
  *     To header is not one readable address. There is no row a
- *     tombstone could hang from without guessing — the table requires an origin — so the
- *     restore report lists it as an unresolved exception and step 9 refuses to release
- *     the restore holds until an operator has dealt with it. Fail closed, never guess.
+ *     tombstone could hang from without guessing — the table requires an origin — so
+ *     `fss admin mailbox reconcile-sent` lists it and refuses to finish until an operator
+ *     has dealt with it, and the runbook does not restart the services before then. Fail
+ *     closed, never guess.
  *
  * Two lost sends of one enrollment are the ordinary case of the same rule, because the
  * messages are answered oldest first: the first completes its step, which creates the
@@ -62,8 +63,8 @@ import { businessDateOf } from '../today/index.ts';
  */
 
 /**
- * How far before the restore point the Sent folder is read: Appendix E.3's "restore
- * point minus ten minutes".
+ * How far before the restore point the Sent folder is read: "restore point minus ten
+ * minutes" (the runbook's `--since`).
  *
  * The folder is dated by Gmail and the fence by PostgreSQL, and the fence is written
  * after the one Gmail call returns. A message Gmail stamped a few seconds before the

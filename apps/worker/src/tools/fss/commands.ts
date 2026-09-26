@@ -1,28 +1,18 @@
 /**
  * The `fss` command line's grammar, as data (lane G12g).
  *
- * `infra/scripts/rehearsal-restore-drill.sh` calls a tool this repository did not
- * have. The drill is the specification: every flag below is one the drill passes, in
- * the spelling it passes it, and `drillInvocations` extracts them from the script so
- * the two cannot drift. A flag nobody calls is not here.
- *
  * Parsing is separated from doing so that the whole argument surface is testable
- * without a database, a cloud credential or a file, and an operator's typo is refused by name rather than
- * silently treated as a default.
+ * without a database, a cloud credential or a file, and an operator's typo is refused by
+ * name rather than silently treated as a default. A flag nobody passes is not here.
  *
- * ## Two output conventions, because the drill parses both
- *
- * Most commands print one JSON object on stdout, and `--report <path>` writes the
- * same bytes to a file. `holds list --count` prints a bare integer, because the drill
- * does `held="$(fss admin holds list --reason restore_in_progress --count)"` and then
- * compares it with `-lt 1`. Printing JSON there would make the comparison a shell
- * error, so the convention is the caller's, not ours.
+ * Every command prints one JSON object on stdout, and `--report <path>` writes the same
+ * bytes to a file.
  */
 
 export type FssFlag = string;
 
 export interface FssCommandSpec {
-  /** `['admin', 'mailbox', 'recover']`. The words before the first `--flag`. */
+  /** `['admin', 'mailbox', 'reconcile-sent']`. The words before the first `--flag`. */
   readonly path: readonly string[];
   /** Flags that take the next argument as their value. */
   readonly valueFlags: readonly FssFlag[];
@@ -55,25 +45,18 @@ const REPORTABLE = [REPORT_FLAG] as const;
  *   * `database` — PostgreSQL and nothing else. The command never reads the deployment,
  *     so it cannot reach Gmail, KMS or S3 even if the whole configuration is present.
  *   * `journal` — the configured suppression-journal bucket, read only, and nothing else.
- *   * `recorded` — may reach the Gmail seam, and only through the recorded client:
- *     `FSS_DEPENDENCIES` must be exactly `recorded` or the command refuses. A restore
- *     reconstruction that sent live Gmail traffic from a command line is not something
- *     this tool does, and the way to be sure of that is to refuse `live` here rather
- *     than to trust that nothing downstream sends.
+ *   * `gmail-read` — the Gmail seam the deployment names (`FSS_DEPENDENCIES=live` in
+ *     production, `recorded` in a test), and only through `readOnlyGmail`, which refuses
+ *     every call that sends, watches, revokes, exchanges a code or reads a body. The
+ *     restore runbook runs `mailbox reconcile-sent` against production's real mailboxes
+ *     (`docs/greenfield/runbooks/restore.md`), so "it cannot send" is a property of the
+ *     client it is handed, not a promise about what the code downstream happens to call.
  */
-export type DependencyMode = 'database' | 'journal' | 'recorded';
+export type DependencyMode = 'database' | 'journal' | 'gmail-read';
 
 export const COMMAND_DEPENDENCIES: Readonly<Record<string, DependencyMode>> = Object.freeze({
-  counts: 'database',
   'database-users ensure': 'database',
   'holds list': 'database',
-  'dial-authorize': 'database',
-  'jobs discard-runnable': 'database',
-  'scheduler run-once': 'database',
-  'restore-report': 'database',
-  'system-generation advance': 'database',
-  'restore-holds open': 'database',
-  'mailbox coverage': 'database',
   'workspace bootstrap': 'database',
   // Lane g71. The release record lives in PostgreSQL and nowhere else; the command
   // never reads the deployment, so it cannot reach Gmail, KMS or S3.
@@ -82,14 +65,7 @@ export const COMMAND_DEPENDENCIES: Readonly<Record<string, DependencyMode>> = Ob
   // Lane W2-M. Counts, in a READ ONLY transaction, and nothing else.
   'schema-preflight 0019': 'database',
   'suppression-journal replay': 'journal',
-  // g40. It drives a fence through the real dispatch path and ingests a reply and an
-  // opt-out through the real pipeline, so it reaches the Gmail seam and is bound by the
-  // same rule `fss drill` is: recorded, or refused. A seed that sent live mail from a
-  // command line is the one thing this mode exists to make impossible.
-  'drill seed-evidence': 'recorded',
-  'mailbox reconcile-sent': 'recorded',
-  'mailbox recover': 'recorded',
-  'mailbox watch-renew': 'recorded',
+  'mailbox reconcile-sent': 'gmail-read',
 });
 
 export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
@@ -105,7 +81,7 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     valueFlags: [...REPORTABLE],
     booleanFlags: ['--allow-any-role'],
     requiredFlags: [],
-    summary: 'the same thing, spelled the way docs/greenfield/restore-drill.md step 7 spells it',
+    summary: 'the same thing, spelled the long way',
   },
   {
     path: ['migrate', 'status'],
@@ -129,42 +105,6 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     summary: 'schema version, configured parts, and one committed write and read. No business rows',
   },
   {
-    path: ['drill'],
-    valueFlags: [
-      '--baseline',
-      '--as-of',
-      '--baseline-json',
-      '--reports',
-      '--from',
-      '--since',
-      '--admin-user',
-      // Lane g56: the generation to pin the restored copy against, which the runner
-      // derives as the source baseline's `systemGeneration` plus one. Step 1a runs
-      // `admin restore-holds open` with it.
-      '--expected-generation',
-      // Lane g59: the counts at the moment of failure, which step 8 reads as
-      // `--at-failure`, and what the rehearsal's recorded mailbox holds, which steps 3,
-      // 4 and 6 run against. Both handed over as values, like `--baseline-json`.
-      '--at-failure-json',
-      '--mailbox-recording-json',
-      ...REPORTABLE,
-    ],
-    booleanFlags: ['--all-mailboxes'],
-    requiredFlags: ['--reports'],
-    // Where step 0 comes from, and exactly one: a file, an instant to measure at, or
-    // (lane g53) the source baseline handed over as a value, which is the rehearsal's
-    // form because a one-off task can be handed nothing else.
-    oneOf: ['--baseline', '--as-of', '--baseline-json'],
-    summary: 'Appendix E steps 1 to 9, in one process, stopping at the first step that fails',
-  },
-  {
-    path: ['admin', 'counts'],
-    valueFlags: ['--as-of', ...REPORTABLE],
-    booleanFlags: [],
-    requiredFlags: [],
-    summary: 'the five protected kinds Appendix G 11 counts, as of an instant',
-  },
-  {
     path: ['admin', 'database-users', 'ensure'],
     valueFlags: ['--runtime-secret', ...REPORTABLE],
     booleanFlags: ['--rotate-password'],
@@ -174,16 +114,9 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
   {
     path: ['admin', 'holds', 'list'],
     valueFlags: ['--reason', '--exclude-reason', ...REPORTABLE],
-    booleanFlags: ['--count'],
+    booleanFlags: [],
     requiredFlags: [],
-    summary: 'every open hold, by reason code. `--count` prints a bare integer',
-  },
-  {
-    path: ['admin', 'dial-authorize'],
-    valueFlags: ['--firm', '--route', '--contact', '--identity', ...REPORTABLE],
-    booleanFlags: ['--any'],
-    requiredFlags: [],
-    summary: 'run authorizeDial and report its decision. `--any` picks a dialable subject',
+    summary: 'every open hold, by reason code',
   },
   {
     path: ['admin', 'suppression-journal', 'replay'],
@@ -198,31 +131,8 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     booleanFlags: ['--all-mailboxes'],
     requiredFlags: ['--since'],
     oneOf: ['--all-mailboxes', '--mailbox'],
-    summary: 'search every Sent folder for FSS Message-IDs and tombstone the missing fences',
-  },
-  {
-    path: ['admin', 'mailbox', 'recover'],
-    valueFlags: ['--since', '--mailbox', ...REPORTABLE],
-    booleanFlags: ['--all-mailboxes'],
-    requiredFlags: ['--since'],
-    oneOf: ['--all-mailboxes', '--mailbox'],
-    summary: 'bounded recovery sync, so replies, opt-outs, direct sends and bounces reapply',
-  },
-  {
-    path: ['admin', 'mailbox', 'watch-renew'],
-    valueFlags: ['--mailbox', ...REPORTABLE],
-    booleanFlags: ['--all-mailboxes'],
-    requiredFlags: [],
-    oneOf: ['--all-mailboxes', '--mailbox'],
-    summary: 're-issue users.watch against this environment’s own Pub/Sub topic',
-  },
-  {
-    path: ['admin', 'mailbox', 'coverage'],
-    valueFlags: ['--mailbox', ...REPORTABLE],
-    booleanFlags: ['--all-mailboxes'],
-    requiredFlags: [],
-    oneOf: ['--all-mailboxes', '--mailbox'],
-    summary: 'the coverage watermark of every mailbox, and whether it is complete',
+    summary:
+      'after a point-in-time restore: read every Sent folder (read-only Gmail) and record the sends the restored copy lost; refuses while any send is unscanned or unattached',
   },
   {
     path: ['admin', 'workspace', 'bootstrap'],
@@ -265,54 +175,6 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     booleanFlags: [],
     requiredFlags: [],
     summary: 'what migration 0019 destroys, archives, relaxes or refuses on, counted read-only on schema 18',
-  },
-  {
-    path: ['admin', 'drill', 'seed-evidence'],
-    valueFlags: ['--workspace-slug', '--phase', ...REPORTABLE],
-    booleanFlags: [],
-    // `--phase` is required rather than defaulted for the reason `--all-mailboxes` is
-    // not a default: "before the restore target" and "after it" are opposite halves of
-    // section 0.1, and a phase reached by omission is a seed that silently did the
-    // other one.
-    requiredFlags: ['--workspace-slug', '--phase'],
-    summary: 'the evidence restore-drill.md 0.1 needs, by phase (before, in-flight, after), through the real paths. Rehearsal only',
-  },
-  {
-    path: ['admin', 'jobs', 'discard-runnable'],
-    valueFlags: [...REPORTABLE],
-    booleanFlags: [],
-    requiredFlags: [],
-    summary: 'discard queued, running and retryable jobs. Dead jobs are kept (13.2)',
-  },
-  {
-    path: ['admin', 'scheduler', 'run-once'],
-    valueFlags: [...REPORTABLE],
-    booleanFlags: [],
-    requiredFlags: [],
-    summary: 'one bounded scheduler pass, which rematerialises what is genuinely due',
-  },
-  {
-    path: ['admin', 'restore-report'],
-    valueFlags: ['--before', '--at-failure', '--journal', '--sent', '--inbox', '--out'],
-    booleanFlags: [],
-    requiredFlags: ['--out'],
-    summary: 'Appendix E step 8: the reconciliation counts and the unresolved exceptions',
-  },
-  {
-    // Lane g56. Appendix E step 1 by hand, and `fss drill`'s step 1a: the worker's own
-    // startup check, run against whatever database this task was pointed at.
-    path: ['admin', 'restore-holds', 'open'],
-    valueFlags: ['--expected-generation', ...REPORTABLE],
-    booleanFlags: [],
-    requiredFlags: ['--expected-generation'],
-    summary: 'Appendix E step 1: hold every workspace when the database is not on the expected generation',
-  },
-  {
-    path: ['admin', 'system-generation', 'advance'],
-    valueFlags: ['--report', '--admin-user', '--notes'],
-    booleanFlags: [],
-    requiredFlags: ['--report'],
-    summary: 'Appendix E step 9. `--report` is the step 8 report it refuses without',
   },
 ]);
 
@@ -404,7 +266,7 @@ export function describeCommands(): string {
 }
 
 export interface DrillInvocation {
-  /** The command as the drill writes it, with shell variables replaced. */
+  /** The command as the script writes it, with shell variables replaced. */
   readonly text: string;
   readonly argv: readonly string[];
   /** True when the line is a `rehearsal_plan` line rather than a real call. */
@@ -413,43 +275,29 @@ export interface DrillInvocation {
 
 /** Where a command ends and prose, redirection or shell syntax begins. */
 // `' ('` is here for the same reason `' -> '` is: a planned line says what the command
-// would do and then, in parentheses, where it would run — `(in-VPC task, drill,
-// FSS_DATABASE_HOST=…)` since G12h. That is prose about the launch, not an argument.
+// would do and then, in parentheses, where it would run. That is prose about the
+// launch, not an argument.
 const TAIL = [' -> ', ' > ', ' >> ', ' >&2', ' | ', ' && ', ' ; ', ' (', ')', '#'];
 
 /**
- * Lines that mention `fss` without calling it.
- *
- * Two kinds, both added by G12f: the precondition that asks whether the executable
- * exists at all, and the `echo` that says it does not. Neither is an invocation, and
- * treating them as one would make this check fail on a drill that is correct — which
- * is worse than useless, because the next lane would relax the check rather than fix
- * the script.
+ * Lines that mention `fss` without calling it: a precondition that asks whether the
+ * executable exists at all, and the `echo` that says it does not. Treating either as an
+ * invocation would make the check fail on a script that is correct.
  */
 const NOT_AN_INVOCATION = /(^|\s)(echo|printf)\s/u;
 const LOOKUP_BEFORE = /(-v|which|type)\s*$/u;
 
 /**
- * The restore drill's own launcher, `drill_task <step> <kind> <capture> <word>...`.
+ * Every `fss` invocation in a release script (the name is the restore drill's, which
+ * was its first caller; the drill was deleted by lane W3-S8).
  *
- * The drill's real calls never spell `fss`: they hand the command words to
- * `rehearsal-run-task.sh` through this function, so until lane g53 only their planned
- * twins were read and a real call could pass a flag the plan did not. The words after
- * the three launcher arguments are the command, exactly as the task receives it.
- */
-const LAUNCHER = /^drill_task\s+\S+\s+\S+\s+\S+\s+(.*)$/u;
-
-/**
- * Every `fss` invocation in the restore drill script.
+ * The extractor is deliberately literal: it takes the text after each `fss` word, cuts
+ * at the first shell or prose boundary, and replaces every `$VARIABLE` with a
+ * placeholder, because what is being checked is the command and its flag *names* — the
+ * values are instants and paths the script computes at run time.
  *
- * The extractor is deliberately literal: it takes the text after each `fss` word (and
- * after each `drill_task` launcher's three arguments, see `LAUNCHER`), cuts at the
- * first shell or prose boundary, and replaces every `$VARIABLE` with a
- * placeholder, because what is being checked is the command and its flag *names* —
- * the values are instants and paths the drill computes at run time.
- *
- * It lives beside the grammar rather than in the test so that `fss` itself can be
- * asked "does this script only call things you have?" without vitest.
+ * It lives beside the grammar rather than in the test so that `fss` itself can be asked
+ * "does this script only call things you have?" without vitest.
  */
 export function drillInvocations(script: string): readonly DrillInvocation[] {
   const joined = script.replaceAll('\\\n', ' ');
@@ -459,14 +307,9 @@ export function drillInvocations(script: string): readonly DrillInvocation[] {
     if (line.startsWith('#')) continue;
     if (NOT_AN_INVOCATION.test(line)) continue;
     const planned = line.includes('rehearsal_plan');
-    const tails: string[] = [];
-    const launched = LAUNCHER.exec(line);
-    if (launched !== null) tails.push(launched[1] ?? '');
     for (const match of line.matchAll(/(?:^|[\s"'($])fss\s+(.*)$/gu)) {
       if (LOOKUP_BEFORE.test(line.slice(0, match.index))) continue;
-      tails.push(match[1] ?? '');
-    }
-    for (let tail of tails) {
+      let tail = match[1] ?? '';
       for (const boundary of TAIL) {
         const at = tail.indexOf(boundary);
         if (at >= 0) tail = tail.slice(0, at);
