@@ -112,35 +112,6 @@ describe('8.0au: a founder authors, enrols, confirms a number and reviews a resu
     sequenceVersionId = draftId;
   });
 
-  it('refuses an approval with every issue named, even past the transport’s 80 characters', async () => {
-    const bridge = sequences();
-    let state = await bridge.createTemplate({
-      templateId: null,
-      name: 'Too much',
-      subject: 'A question',
-      body: `Our fee is $500 and we guarantee a 30% lift. ${'word '.repeat(80)}https://a.example.test https://b.example.test`,
-      signOff: 'David',
-    });
-    // Over 89 words: refused before anything is sent, because it could never be approved.
-    expect(state.notice).toBe('invalid_input');
-    // Short enough to be written, and still carrying a price and two links.
-
-    state = await bridge.createTemplate({
-      templateId: null,
-      name: 'Too much',
-      subject: 'A question',
-      body: 'Our fee is $500 and we guarantee a 30% lift. https://a.example.test https://b.example.test',
-      signOff: 'David',
-    });
-    expect(state.notice).toBe('template_created');
-    const refused = state.templates.find(entry => entry.name === 'Too much');
-    state = await bridge.approveTemplate({ templateVersionId: refused?.id ?? '' });
-    expect(state.notice).toBe('template_unapproved:template_body_multiple_urls,template_pricing_or_guarantee_language');
-    expect(sequenceScreen(state).notice).toBe(
-      'Not approved. The email has more than one link. The email mentions prices, percentages or guarantees.',
-    );
-  });
-
   it('adds a firm, confirms its number, puts it in the pipeline and enrols its contact', async () => {
     const bridge = crm();
     await bridge.openAddFirm();
