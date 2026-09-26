@@ -747,15 +747,15 @@ jobs:
             --secret-string "$runtime_json" --query 'VersionId' --output text > /dev/null
           echo "both database entries filled for ${database} at ${endpoint%%:*}"
 
-          # The other six. Terraform creates every entry empty, and an ECS task whose
+          # The other five. Terraform creates every entry empty, and an ECS task whose
           # `secrets` block names an entry with no value does not start at all:
           # run 35891175510 (23 September 2026) stopped at `fss verify` with
           # "ResourceInitializationError … can't find the specified secret value for
           # staging label: AWSCURRENT" on device-credential-pepper, because only the
-          # two database entries were filled. Every task definition but the
-          # migration's names all eight, so all eight are filled here — the six with
-          # rehearsal fixtures of the shape the code parses, never a real credential
-          # (dependencies are `recorded`; nothing reaches Google or a provider). The
+          # two database entries were filled. So every entry the stack creates, seven
+          # in all, is filled here — the five below with rehearsal fixtures of the
+          # shape the code parses, never a real credential (dependencies are
+          # `recorded`; nothing reaches Google or a provider). The
           # list comes from the stack, and a name this step does not know is a
           # failure rather than an entry left empty.
           prefix='${{ steps.prefix.outputs.prefix }}'
@@ -937,17 +937,6 @@ jobs:
         # on every commit, so a schema rehearsal would be running it a second time.
         if: inputs.stage == 'full' && inputs.mode == 'full'
         env:
-          # The 42 scenarios run in the runner against the job's own PostgreSQL 16
-          # service container, which is what they were built for (`test:greenfield`
-          # uses an embedded PG 16 locally and a service container in CI). They do
-          # not touch the rehearsal database and must not: it is private —
-          # `publicly_accessible = false`, no NAT, no bastion — so a GitHub-hosted
-          # runner cannot reach it, and the step that used to assemble a URL from the
-          # rehearsal's outputs could never have connected (G12h; the decision record
-          # of 21 September, 2.3). What runs against the rehearsal database is
-          # `fss verify` and `fss drill`, inside the VPC.
-          #
-          FSS_TEST_POSTGRES_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
           FSS_DEPENDENCIES: recorded
         run: |
           set -euo pipefail
