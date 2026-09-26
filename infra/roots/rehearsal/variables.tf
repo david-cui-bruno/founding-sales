@@ -63,30 +63,6 @@ variable "assume_deployment_role" {
   default     = true
 }
 
-variable "availability_zones" {
-  description = "Exactly two availability zones. Both subnets pairs are spread across them even when the database is single-AZ."
-  type        = list(string)
-  default     = ["us-east-1a", "us-east-1b"]
-}
-
-variable "vpc_cidr" {
-  description = "IPv4 CIDR block. A rehearsal run may use a different range from production."
-  type        = string
-  default     = "10.70.0.0/16"
-}
-
-variable "public_subnet_cidrs" {
-  description = "Two CIDR blocks for the public task subnets."
-  type        = list(string)
-  default     = ["10.70.0.0/20", "10.70.16.0/20"]
-}
-
-variable "private_subnet_cidrs" {
-  description = "Two CIDR blocks for the private database subnets."
-  type        = list(string)
-  default     = ["10.70.128.0/20", "10.70.144.0/20"]
-}
-
 variable "certificate_arn" {
   description = "ACM certificate for the rehearsal API hostname."
   type        = string

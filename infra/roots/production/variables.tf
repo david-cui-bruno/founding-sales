@@ -56,12 +56,6 @@ variable "assume_deployment_role" {
   default     = true
 }
 
-variable "availability_zones" {
-  description = "Exactly two availability zones."
-  type        = list(string)
-  default     = ["us-east-1a", "us-east-1b"]
-}
-
 variable "api_image" {
   description = "Immutable API image digest that passed the rehearsal gate."
   type        = string

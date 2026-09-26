@@ -50,12 +50,6 @@ variable "api_container_port" {
   default     = 8080
 }
 
-variable "database_port" {
-  description = "PostgreSQL port."
-  type        = number
-  default     = 5432
-}
-
 variable "tags" {
   description = "Tags merged into every resource in this module."
   type        = map(string)

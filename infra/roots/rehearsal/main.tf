@@ -45,10 +45,11 @@ module "stack" {
   aws_region     = local.aws_region
   aws_account_id = local.aws_account_id
 
-  vpc_cidr             = var.vpc_cidr
-  availability_zones   = var.availability_zones
-  public_subnet_cidrs  = var.public_subnet_cidrs
-  private_subnet_cidrs = var.private_subnet_cidrs
+  # A range of its own, apart from production's 10.60.0.0/16.
+  vpc_cidr             = "10.70.0.0/16"
+  availability_zones   = ["us-east-1a", "us-east-1b"]
+  public_subnet_cidrs  = ["10.70.0.0/20", "10.70.16.0/20"]
+  private_subnet_cidrs = ["10.70.128.0/20", "10.70.144.0/20"]
 
   database_instance_class        = var.database_instance_class
   database_multi_az              = var.database_multi_az
