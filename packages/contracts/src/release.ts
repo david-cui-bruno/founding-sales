@@ -85,7 +85,7 @@ export function releaseAttestationOf(releaseGateReference: string): ReleaseAttes
  * `<prefix>-<recordedAt>`. Bounded at 200 characters, which is the bound
  * `sendingEnabledSettingSchema` already puts on the reference an admin types.
  */
-const releaseGateReferenceSchema = z
+export const releaseGateReferenceSchema = z
   .string()
   .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u, 'a release gate reference')
   // The process attestation's name is not a record's (lane g100): an attestation that
@@ -195,7 +195,6 @@ export type CiGateReleaseRecord = z.infer<typeof ciGateReleaseRecordSchema>;
 
 /** The record `fss admin release-record put` accepts: the CI gate's, and nothing else. */
 export const releaseRecordSchema = ciGateReleaseRecordSchema;
-export type ReleaseRecord = z.infer<typeof releaseRecordSchema>;
 
 /**
  * `ci-gate` or `rehearsal`, for a stored record. Read from the stored JSON rather than
