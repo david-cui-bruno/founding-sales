@@ -30,9 +30,16 @@ import { readRepositoryFile, repositoryPath } from './support/repository.ts';
  * re-run gone red) stops the put, stops the worker before its registration, and stops the
  * API before its registration or, once registered, before its update, deregistering it.
  *
- * **An update-service call whose answer was lost.** The stub can fail the call with the
- * service left where it was, moved to the new revision anyway, or unreadable after it; the
- * new revision is deregistered only in the first case.
+ * **An update-service call whose answer was lost, and a read that is stale.** The stub
+ * can fail the call with the service left where it was, moved to the new revision anyway,
+ * left where it was with a deployment of the new revision, answering for another service,
+ * or unreadable after it; and a circuit-breaker rollback can leave the failed deployment
+ * listed. The new revision is deregistered only when one read of the service asked for
+ * shows the previous revision everywhere and the new one nowhere.
+ *
+ * **A put that launches twice.** The task runner relaunches after an image-pull failure;
+ * the CI put must launch exactly one task and fail on a pull failure, even when the
+ * environment asks for three attempts.
  *
  * **A read-back that rebuilds.** The read-back job is handed the exact record the deploy
  * job put (`release_record_base64`) and puts those bytes, asking GitHub for nothing but
@@ -251,7 +258,16 @@ if args[:2] == ["ecs", "describe-services"]:
                     "rolloutState": service.get("rolloutState", "COMPLETED")}]
     if service.get("rolling"):
         deployments.append({"status": "ACTIVE", "taskDefinition": "older", "rolloutState": "IN_PROGRESS"})
-    done({"services": [{"serviceName": name, "status": "ACTIVE", "desiredCount": service["desired"],
+    if service.get("lingering") and service.get("refused"):
+        # The circuit breaker rolled back, and the failed deployment is still listed.
+        deployments.append({"status": "ACTIVE", "taskDefinition": service["refused"], "rolloutState": "FAILED"})
+    if service.get("halfUpdated"):
+        deployments.append({"status": "ACTIVE", "taskDefinition": service["halfUpdated"], "rolloutState": "IN_PROGRESS"})
+    arn = "arn:aws:ecs:us-east-1:" + account + ":service/fss-prod-cluster/" + name
+    if service.get("stale"):
+        # An answer for the same name in another cluster: not the service asked for.
+        arn = "arn:aws:ecs:us-east-1:" + account + ":service/fss-rh-cluster/" + name
+    done({"services": [{"serviceName": name, "serviceArn": arn, "status": "ACTIVE", "desiredCount": service["desired"],
                         "runningCount": service.get("running", service["desired"]),
                         "pendingCount": service.get("pending", 0),
                         "taskDefinition": service["taskDefinition"], "deployments": deployments}]})
@@ -309,6 +325,10 @@ if args[:2] == ["ecs", "update-service"]:
             service["taskDefinition"] = wanted
         if failure == "unreadable":
             service["unreadable"] = True
+        if failure == "half":
+            service["halfUpdated"] = wanted
+        if failure == "stale":
+            service["stale"] = True
         save()
         sys.stderr.write("An error occurred (ServerException) when calling the UpdateService operation (reached max retries: 2): Service Unavailable\n")
         sys.exit(254)
@@ -347,6 +367,11 @@ if args[:2] == ["ecs", "describe-tasks"]:
     tasks = []
     for arn in arns:
         task_id = arn.rsplit("/", 1)[1]
+        if task_id.startswith("ops-") and state.get("pullFailure"):
+            tasks.append({"taskArn": arn, "lastStatus": "STOPPED", "stopCode": "TaskFailedToStart",
+                          "stoppedReason": "CannotPullContainerError: pull image manifest has been retried 5 time(s)",
+                          "containers": [{"name": "operations", "reason": "CannotPullContainerError: ref pull has been retried"}]})
+            continue
         if task_id.startswith("ops-"):
             tasks.append({"taskArn": arn, "lastStatus": "STOPPED", "stopCode": "EssentialContainerExited",
                           "stoppedReason": "Essential container in task exited",
@@ -450,8 +475,16 @@ interface WorldOptions {
   readonly rolloutState?: Partial<Record<Service, string>>;
   /** A service one of whose RUNNING tasks reports this digest instead of its revision's. */
   readonly stray?: Partial<Record<Service, string>>;
-  /** An update-service call that fails: refused, accepted with its answer lost, or lost and the service unreadable after. */
-  readonly updateFails?: Partial<Record<Service, 'refused' | 'lost' | 'unreadable'>>;
+  /**
+   * An update-service call that fails: refused; accepted with its answer lost; lost and the
+   * service unreadable after; refused with a deployment of the new revision listed (half);
+   * or refused with every later read answering for the same name in another cluster (stale).
+   */
+  readonly updateFails?: Partial<Record<Service, 'refused' | 'lost' | 'unreadable' | 'half' | 'stale'>>;
+  /** A circuit-breaker rollback that still lists the failed deployment. */
+  readonly lingering?: Service;
+  /** The one-off operations task stops before any container ran: its image could not be pulled. */
+  readonly pullFailure?: boolean;
 }
 
 function world(options: WorldOptions = {}): World {
@@ -478,6 +511,7 @@ function world(options: WorldOptions = {}): World {
     ...(options.rolloutState?.[name] === undefined ? {} : { rolloutState: options.rolloutState[name] }),
     ...(options.stray?.[name] === undefined ? {} : { strayDigest: options.stray[name] }),
     ...(options.updateFails?.[name] === undefined ? {} : { updateFails: options.updateFails[name] }),
+    lingering: options.lingering === name,
   });
   const state = {
     account: ACCOUNT,
@@ -486,6 +520,7 @@ function world(options: WorldOptions = {}): World {
     tamper: options.tamper ?? false,
     runTaskRefused: options.runTaskRefused ?? false,
     putRefusal: options.putRefusal ?? false,
+    pullFailure: options.pullFailure ?? false,
     ...(options.storedWorker === undefined ? {} : { storedWorker: options.storedWorker }),
     ...(options.putOutcome === undefined ? {} : { putOutcome: options.putOutcome }),
     clusterTags: [{ key: 'Environment', value: options.clusterEnvironment ?? 'production' }],
@@ -869,7 +904,7 @@ describe('deploy registers the next revisions, rolls the worker then the API, an
     const accepted = runScript('deploy', lost);
     expect(accepted.code).toBe(1);
     expect(operations(lost)).toEqual(['register fss-prod-worker', 'update fss-prod-worker']);
-    expect(accepted.output).toContain(`fss-prod-worker names ${definitionArn('worker', 5)} all the same`);
+    expect(accepted.output).toContain(`fss-prod-worker or one of its deployments names ${definitionArn('worker', 5)} all the same`);
     expect(accepted.output).toContain(`${definitionArn('worker', 5)} is left ACTIVE`);
     expect(accepted.outputs['observed_worker_task_definition']).toBe(definitionArn('worker', 5));
     expect(lost.state().taskDefinitions[definitionArn('worker', 5)]?.taskDefinition.status).toBe('ACTIVE');
@@ -882,6 +917,37 @@ describe('deploy registers the next revisions, rolls the worker then the API, an
     expect(unread.output).toContain(`whether it references ${definitionArn('api', 8)} cannot be established, so ${definitionArn('api', 8)} is left ACTIVE`);
     expect(unread.outputs['observed_api_task_definition']).toBe('unknown');
     expect(unknown.state().taskDefinitions[definitionArn('api', 8)]?.taskDefinition.status).toBe('ACTIVE');
+
+    // Refused, but a deployment of the new revision is listed: it is referenced, so it stays.
+    const half = world({ updateFails: { worker: 'half' } });
+    const listed = runScript('deploy', half);
+    expect(listed.code).toBe(1);
+    expect(operations(half)).toEqual(['register fss-prod-worker', 'update fss-prod-worker']);
+    expect(listed.output).toContain(`fss-prod-worker or one of its deployments names ${definitionArn('worker', 5)} all the same`);
+    expect(listed.output).toContain('before the next production plan');
+    expect(half.state().taskDefinitions[definitionArn('worker', 5)]?.taskDefinition.status).toBe('ACTIVE');
+
+    // Refused, and the read answers for the same name in another cluster: not the service
+    // asked for, so nothing is known and nothing is deregistered, though it names the previous revision.
+    const stale = world({ updateFails: { worker: 'stale' } });
+    const other = runScript('deploy', stale);
+    expect(other.code).toBe(1);
+    expect(operations(stale)).toEqual(['register fss-prod-worker', 'update fss-prod-worker']);
+    expect(other.output).toContain(`whether it references ${definitionArn('worker', 5)} cannot be established`);
+    expect(other.outputs['observed_worker_task_definition']).toBe('unknown');
+    expect(stale.state().taskDefinitions[definitionArn('worker', 5)]?.taskDefinition.status).toBe('ACTIVE');
+  });
+
+  it('leaves a rolled-back revision ACTIVE while the failed deployment is still listed, and says to reconcile it', () => {
+    const stub = world({ fail: { worker: true }, lingering: 'worker' });
+    const run = runScript('deploy', stub);
+    expect(run.code).toBe(1);
+    expect(operations(stub)).toEqual(['register fss-prod-worker', 'update fss-prod-worker']);
+    expect(run.output).toContain(`and ${definitionArn('worker', 5)} is left ACTIVE`);
+    expect(run.output).toContain(`once none names ${definitionArn('worker', 5)}, deregister it with the admin profile`);
+    expect(run.outputs['observed_worker_task_definition']).toBe(definitionArn('worker', 4));
+    expect(stub.state().taskDefinitions[definitionArn('worker', 5)]?.taskDefinition.status).toBe('ACTIVE');
+    expect(stub.state().services['fss-prod-api']?.taskDefinition).toBe(definitionArn('api', 7));
   });
 
   it('deregisters a registration that differs from the running revision in more than the image, and rolls nothing', () => {
@@ -1102,6 +1168,8 @@ function runRecord(
     readonly releaseRecord?: string;
     /** The images run the deploy was handed (--run-id); RUN_ID by default. */
     readonly imagesRun?: string;
+    /** More environment for the script. */
+    readonly env?: Readonly<Record<string, string>>;
   } = {},
 ): Run {
   const outputs = join(mkdtempSync(join(tmpdir(), 'fss-ci-outputs-')), 'github-output');
@@ -1141,6 +1209,7 @@ function runRecord(
     GITHUB_REPOSITORY: GH_REPOSITORY,
     AWS_REGION: 'us-east-1',
     RELEASE_LOG_POLL_SECONDS: '0',
+    ...extra.env,
   };
   for (const name of [
     'FSS_REHEARSAL_DRY_RUN',
@@ -1318,6 +1387,17 @@ describe('record puts the ci-gate release record before the rollout, on the oper
     const different = runRecord(world({ running: NEW, storedWorker: digest('e') }));
     expect(different.code).toBe(1);
     expect(different.output).toContain('the stored record differs from the one put in workerDigest');
+  });
+
+  it('launches the put exactly once, and fails on an image-pull failure rather than launch again unchecked', () => {
+    // The runner would relaunch after a pause; asked for three attempts, the CI put still makes one.
+    const stub = world({ running: NEW, pullFailure: true });
+    const run = runRecord(stub, { env: { RELEASE_PULL_ATTEMPTS: '3', RELEASE_PULL_BACKOFF_SECONDS: '0' } });
+    expect(run.code).toBe(1);
+    expect(runTasks(stub)).toHaveLength(1);
+    expect(run.output).toContain('the image could not be pulled on any of 1 attempt(s)');
+    expect(run.output).toContain(`FAIL: the operations task did not put the release record ${REFERENCE}`);
+    expect(run.outputs['release_record_reference']).toBeUndefined();
   });
 
   it('reads the gate again first, and puts nothing when it is not green on main now', () => {

@@ -101,7 +101,10 @@
 #     before its update. A newer run of the push, a re-run gone red or the commit off main
 #     fails there, with nothing more written (a revision registered for the service about
 #     to roll is deregistered). The put's check precedes launching its one-off task, not
-#     the insert inside it: the task's startup is a gap no read from here closes.
+#     the insert inside it: the task's startup is a gap no read from here closes. The put
+#     launches exactly one task (RELEASE_PULL_ATTEMPTS=1): the runner's relaunch after an
+#     image-pull failure would follow a pause with no fresh read, so a pull failure fails
+#     the step instead, and a re-run of the job reads the gate again.
 #   * download: the images run's own fss-image-digests artifact, held to the digest GitHub
 #     recorded. It carries both digests and the schema range each image declares.
 #   * check, record and deploy first read and judge: the session is exactly the CI role in
@@ -127,10 +130,12 @@
 #     rolled, waited on, held to COMPLETED and its digest, and only then the API. A revision
 #     ECS rolled back is deregistered, so the newest ACTIVE revision is the one that runs;
 #     the stopped tasks' stop codes and the event/reason/code fields of their log lines are
-#     printed, never a raw line. An update-service call that fails is followed by a read
-#     of the service: the new revision is deregistered only while the service still names
-#     the previous one, and left ACTIVE, and reported, when it names the new one or cannot
-#     be read. No Terraform; nothing from the images commit runs here.
+#     printed, never a raw line. After a failed update-service call, and after a rollout
+#     ECS rolled back, the new revision is deregistered only when one read of the service
+#     asked for (by name and ARN) shows the previous revision on the service and on every
+#     deployment, PRIMARY and ACTIVE alike, and the new one on none. Anything else, an
+#     unreadable or stale answer included, leaves it ACTIVE and says to reconcile it before
+#     the next plan. No Terraform; nothing from the images commit runs here.
 #   * record --after-rollout --release-record <file>: the read-back, in its own job after
 #     the smoke, of the exact bytes the deploy job put (never rebuilt: a newer images run
 #     or a gate re-run since would build another record). Both services must run the two
@@ -1152,6 +1157,10 @@ json.dump({"subnet_ids": os.environ["FSS_SUBNETS"].split(","), "security_group_i
            "assign_public_ip": "ENABLED", "inbound_rule_count": 0}, sys.stdout)
 ')"
   export FSS_REHEARSAL_REPORTS="${FSS_REHEARSAL_REPORTS:-$CI_WORK/reports}"
+  # Exactly one launch (review of PR 278): the task runner relaunches after an image-pull
+  # failure, after a pause, and that launch would put the record with no fresh read of
+  # the gate. A pull failure fails the put; re-running the job reads the gate again.
+  RELEASE_PULL_ATTEMPTS=1
   ci_gate_holds "immediately before the put" || exit 1
   release_record_put release-record-put "$CI_WORK/release-record.json" "$CI_ENVIRONMENT" "$CI_PREFIX" "$ACCOUNT" "$REGION" \
     "$CLUSTER_ARN" "$revision" "$operations_digest" "$network_plan" "$database_host" "$secret_arn" "$log_group" || exit 1
@@ -1218,7 +1227,7 @@ PY
 
 # deploy: the worker, then the API, each held to its digest before the next is touched.
 ci_deploy() {
-  local service name previous digest image revision difference observed expect_sending=disabled
+  local service name previous digest image revision difference expect_sending=disabled
   if [ "$ALREADY_RUNNING" -eq 1 ]; then
     rehearsal_log "production already runs api $API_DIGEST and worker $WORKER_DIGEST; nothing to register"
   fi
@@ -1324,13 +1333,13 @@ PY
       continue
     fi
     ci_diagnose "$service" "$revision"
-    observed="$(ci_observed "$service")"
-    ci_output "observed_${service}_task_definition" "${observed:-unknown}"
-    if [ "$observed" = "$previous" ]; then
-      ci_deregister "$revision" "ECS rolled $name back to $previous"
+    ci_references "$service" "$revision" "$previous"
+    ci_output "observed_${service}_task_definition" "${CI_OBSERVED:-unknown}"
+    if [ "$CI_REFERENCES" = previous ]; then
+      ci_deregister "$revision" "ECS rolled $name back to $previous, and no deployment names it"
       deploy_fail "$name was rolled back by ECS to $previous and does not run $digest. Nothing after it was touched."
     fi
-    deploy_fail "$name names ${observed:-an unknown revision} and does not run $digest on every task; read its events with aws ecs describe-services. Nothing after it was touched."
+    deploy_fail "$name names ${CI_OBSERVED:-a revision no clean read of it reported} and does not run $digest on every task, and $revision is left ACTIVE: $(ci_reconcile "$service" "$revision") Read its events with aws ecs describe-services. Nothing after it was touched."
   done
   if [ "$(ci_field api sendingEnabled)" = true ]; then expect_sending=enabled; fi
   ci_output expect_sending "$expect_sending"
@@ -1450,34 +1459,72 @@ PY
   return 1
 }
 
-# The revision a service names now, as ECS reports it.
-ci_observed() {
-  release_aws "$CI_ENVIRONMENT" ecs describe-services --cluster "$CLUSTER_ARN" --services "${CI_PREFIX}-$1" --output json 2>/dev/null \
-    | python3 -c '
-import json, sys
-services = (json.load(sys.stdin) or {}).get("services") or []
-print(services[0].get("taskDefinition", "") if services else "")
-' 2>/dev/null || true
+# What a service references, from one read judged whole (review of PR 278): exactly the
+# service asked for, by name and by ARN in this cluster, its taskDefinition and every
+# deployment's, PRIMARY and ACTIVE alike. Sets CI_REFERENCES to `previous` only when all of
+# them are <previous> (none is <revision>), `revision` when any names <revision>, and
+# `unknown` for anything else, an unreadable or stale answer included; and CI_OBSERVED to
+# the service's taskDefinition when the answer was that service's, else empty.
+#   ci_references <service> <revision> <previous>
+ci_references() {
+  local name="${CI_PREFIX}-$1" answer verdict
+  answer="$(release_aws "$CI_ENVIRONMENT" ecs describe-services --cluster "$CLUSTER_ARN" --services "$name" --output json 2>/dev/null)" \
+    || answer=''
+  verdict="$(FSS_JSON="$answer" FSS_NAME="$name" FSS_CLUSTER="$CLUSTER_ARN" FSS_REVISION="$2" FSS_PREVIOUS="$3" python3 - <<'PY'
+# deploy-ci-references
+import json, os
+env = os.environ
+try:
+    services = (json.loads(env["FSS_JSON"] or "{}") or {}).get("services") or []
+except ValueError:
+    services = []
+head, _, cluster = env["FSS_CLUSTER"].partition(":cluster/")
+wanted = "{}:service/{}/{}".format(head, cluster, env["FSS_NAME"])
+entry = services[0] if len(services) == 1 and isinstance(services[0], dict) else {}
+if entry.get("serviceName") != env["FSS_NAME"] or entry.get("serviceArn") != wanted:
+    print("unknown -")
+else:
+    current = str(entry.get("taskDefinition") or "")
+    deployments = [d for d in entry.get("deployments") or [] if isinstance(d, dict)]
+    named = [current] + [str(d.get("taskDefinition") or "") for d in deployments]
+    if env["FSS_REVISION"] in named:
+        verdict = "revision"
+    elif current and deployments and all(value == env["FSS_PREVIOUS"] for value in named):
+        verdict = "previous"
+    else:
+        verdict = "unknown"
+    print(verdict, current or "-")
+PY
+)" || verdict='unknown -'
+  read -r CI_REFERENCES CI_OBSERVED <<<"$verdict"
+  if [ "${CI_OBSERVED:--}" = "-" ]; then CI_OBSERVED=''; fi
+}
+
+# What to do with a revision left ACTIVE, which the next production plan would read.
+ci_reconcile() { # ci_reconcile <service> <revision>
+  printf '%s' "Terraform reads the newest ACTIVE revision of ${CI_PREFIX}-$1, so before the next production plan read the service's deployments with aws ecs describe-services and, once none names $2, deregister it with the admin profile."
 }
 
 # A failed update-service call is not a refusal until the service says so: an accepted
 # request whose answer was lost leaves the service naming the new revision, and
 # deregistering a revision a service references is what this must never do. So the
-# service is read: the new revision is deregistered only while the service still names
-# the previous one; named, or unreadable, it stays ACTIVE and is reported.
+# new revision is deregistered only when ci_references says `previous`; otherwise it
+# stays ACTIVE and is reported.
 #   ci_update_failed <service> <revision> <previous>
 ci_update_failed() {
-  local service=$1 name="${CI_PREFIX}-$1" revision=$2 previous=$3 observed
-  observed="$(ci_observed "$service")"
-  ci_output "observed_${service}_task_definition" "${observed:-unknown}"
-  if [ "$observed" = "$previous" ]; then
-    ci_deregister "$revision" "the update-service call failed and $name still names $previous"
-    deploy_fail "ECS refused to point $name at $revision; it still runs $previous. Nothing after it was touched."
-  fi
-  if [ "$observed" = "$revision" ]; then
-    deploy_fail "the update-service call for $name failed, and $name names $revision all the same (the request was accepted and its answer lost): $revision is left ACTIVE and its rollout was not followed. Read $name with aws ecs describe-services before anything else. Nothing after it was touched."
-  fi
-  deploy_fail "the update-service call for $name failed, and $name names ${observed:-a revision ECS did not report}: whether it references $revision cannot be established, so $revision is left ACTIVE. Read $name with aws ecs describe-services; deregister $revision with the admin profile only once no service names it. Nothing after it was touched."
+  local service=$1 name="${CI_PREFIX}-$1" revision=$2 previous=$3
+  ci_references "$service" "$revision" "$previous"
+  ci_output "observed_${service}_task_definition" "${CI_OBSERVED:-unknown}"
+  case "$CI_REFERENCES" in
+    previous)
+      ci_deregister "$revision" "the update-service call failed, and $name and every deployment of it still name $previous"
+      deploy_fail "ECS refused to point $name at $revision; it still runs $previous. Nothing after it was touched."
+      ;;
+    revision)
+      deploy_fail "the update-service call for $name failed, and $name or one of its deployments names $revision all the same (the request was accepted and its answer lost): $revision is left ACTIVE and its rollout was not followed. $(ci_reconcile "$service" "$revision") Nothing after it was touched."
+      ;;
+  esac
+  deploy_fail "the update-service call for $name failed, and no clean read of $name says what it references (it names ${CI_OBSERVED:-nothing ECS reported for it}): whether it references $revision cannot be established, so $revision is left ACTIVE. $(ci_reconcile "$service" "$revision") Nothing after it was touched."
 }
 
 ci_deregister() { # ci_deregister <revision> <why>
