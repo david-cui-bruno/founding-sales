@@ -650,7 +650,13 @@ describe('Appendix G 39: rehearsal.sh guard, after the teardown: an empty state,
       // The CLI's merged answer: an Items member and nothing else. The reader asks for one
       // page so that it can check the count and the truncation (review of PR 292d).
       ['the CLI’s own merged pages', `  "cloudfront list-distributions") echo '{"Items":[{"Id":"E123"}]}'; exit 0 ;;`, 'CloudFront answered a distribution list with no readable IsTruncated'],
-      ['a page that says there are more', `  "cloudfront list-distributions") echo '{"IsTruncated":true,"Items":[],"Quantity":0}'; exit 0 ;;`, 'more than one page of distributions; the guard cannot read them all'],
+      // A page that would pass but for the truncation: one distribution, somebody else's.
+      [
+        'a page that says there are more',
+        `  "cloudfront list-distributions") echo '{"IsTruncated":true,"Marker":"","MaxItems":1,"Quantity":1,"Items":[${JSON.stringify(distribution('E444', 'somebody else'))}]}'; exit 0 ;;`,
+        'more than one page of distributions; the guard cannot read them all',
+      ],
+      ['a list that is there and null', `  "cloudfront list-distributions") echo '{"IsTruncated":false,"Quantity":0,"Items":null}'; exit 0 ;;`, 'CloudFront answered a distribution list whose Items is null'],
       ['a count of one and no distribution listed', `  "cloudfront list-distributions") echo '{"IsTruncated":false,"Quantity":1}'; exit 0 ;;`, 'CloudFront says it has 1 distribution(s) and listed none of them'],
       ['a count of one and an empty list', `  "cloudfront list-distributions") echo '{"IsTruncated":false,"Quantity":1,"Items":[]}'; exit 0 ;;`, 'CloudFront says it has 1 distribution(s) and listed 0'],
       [

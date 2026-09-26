@@ -946,7 +946,8 @@ rehearsal_cloudfront_leftovers() {
   FSS_JSON="$listed" FSS_PREFIX="$prefix" python3 - <<'PY' || return 1
 # rehearsal-cloudfront-leftovers: one page of the distribution list, read whole. It must
 # say it is the only page, count what it lists, and list what it counts. An account with no
-# distribution answers Quantity 0 and an empty or absent Items, which is the one legitimate
+# distribution answers Quantity 0 and an empty or absent Items (absent or [], never null),
+# which is the one legitimate
 # empty; anything else that does not hold together is a reading that failed, not an empty
 # one (reviews of PR 292c and 292d). A list that says it has one distribution and names
 # none, or names one that is somebody else's, would otherwise pass for nothing left behind.
@@ -968,6 +969,10 @@ if truncated:
 quantity = listed.get("Quantity")
 if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity < 0:
     sys.exit("FAIL: CloudFront answered a distribution list with no readable Quantity: " + raw[:200])
+if "Items" in listed and listed["Items"] is None:
+    # An absent Items member is how an account with no distribution answers; an Items
+    # member that is there and null is a list nobody read (review of PR 292g).
+    sys.exit("FAIL: CloudFront answered a distribution list whose Items is null: " + raw[:200])
 items = listed.get("Items")
 if quantity > 0:
     if not isinstance(items, list):
