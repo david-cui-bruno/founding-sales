@@ -41,10 +41,11 @@
 # every action the next apply and the release scripts need, against sample ARNs of the
 # namespace that need not exist. The table below is this script's own list: every action
 # of that run, at least one per service the Terraform tree uses, and the actions the
-# release scripts make outside Terraform. The table is 25 groups, 115 action entries over
-# 108 distinct actions, for production; the rehearsal adds one group (116 entries, the same
-# 108 actions) for the master secret under the service tag key. `test/ops/policy.check.ts`
-# counts the plan, so a row added or lost without a word here fails the gate.
+# release scripts make outside Terraform. The table is 24 groups, 115 action entries over
+# 108 distinct actions, for production; the rehearsal adds three groups (27 groups, 118
+# entries, 110 distinct actions) for the master secret under the service tag key and for
+# the two lock records the guard reads after a teardown. `test/ops/policy.check.ts` counts
+# the plan, so a row added or lost without a word here fails the gate.
 # What keeps the rendered policy in step with the
 # Terraform tree is a different check, `test/ops/deploymentRolePolicy.check.ts` over
 # `infra/policies/terraform-resource-actions.json` (W3-T owns both).
@@ -74,9 +75,23 @@
 # under Effect Allow, a Deny that is gone, and a change that adds an action or a resource
 # to an Allow or takes one from a Deny are each a refusal that names the Sid. Narrowing —
 # an Allow removed, a Deny added, an action dropped from an Allow — is put without
-# ceremony, and so is the first put of all: a role that holds no `<prefix>-deploy-scope`
-# yet has nothing to widen. `--allow-widening` is how a widening is put on purpose, and the
-# line it prints says what was widened, so a release record can carry it.
+# ceremony. A statement that changes from `Resource` to `NotResource` (or `Action` to
+# `NotAction`) is a widening too: the two forms are opposites, and nothing can call the
+# change narrower. So is any change to a `Condition` that is not proved to narrow — the
+# same operator over a subset of its values for an Allow, the reverse for a Deny — which
+# includes a Condition added to a Deny and one loosened on an Allow.
+# `--allow-widening` is how a widening is put on purpose, and the line it prints says what
+# was widened, so a release record can carry it.
+#
+# **The first put of all is judged against nothing.** A role that holds no
+# `<prefix>-deploy-scope` yet has no baseline to compare with, so the whole document goes
+# on without the widening stop; the line says so. Read the document (`render --pretty`)
+# before the first put, and after it use `check`.
+#
+# **The read-back detects a mismatch; it does not undo one.** If what the role holds after
+# the put is not what was put, IAM has already replaced the policy: the command fails and
+# says so, and putting the intended document again is the operator's move. There is no
+# previous document to restore — `put-role-policy` replaces, and nothing here keeps a copy.
 #
 #   FSS_POLICY_AWS=<path>      the CLI, for the offline test's stub
 #
@@ -271,6 +286,10 @@ ROLE=${1:-}
 PREFIX=${2:-}
 ACCOUNT=${FSS_CHECK_ROLE_ACCOUNT_ID:-326255650484}
 REGION=${FSS_CHECK_ROLE_REGION:-us-east-1}
+# The backend the rehearsal's own statements name; the sample key is one run's.
+STATE_BUCKET=${FSS_CHECK_ROLE_STATE_BUCKET:-callie-sourcing-tfstate-326255650484}
+LOCK_TABLE=${FSS_CHECK_ROLE_LOCK_TABLE:-callie-sourcing-tflock}
+STATE_KEY="fss/greenfield/rehearsal/${PREFIX}-example/terraform.tfstate"
 
 case "$ACCOUNT" in
   [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;
@@ -355,7 +374,9 @@ CHECK_TABLE
 # while allowing the request-tag rows beside it.
 if [ "$PREFIX" = "fss-rh" ]; then
   CHECK_GROUPS="${CHECK_GROUPS}
-the master secret once it exists, which the deploy stage describes (refused under the service tag key, 22 Sep)|secretsmanager:DescribeSecret|arn:aws:secretsmanager:${REGION}:${ACCOUNT}:secret:rds!db-11111111-2222-4333-8444-555555555555-AbCdEf|aws:ResourceTag/aws:rds:primaryDBInstanceArn=arn:aws:rds:${REGION}:${ACCOUNT}:db:${PREFIX}-example-pg"
+the master secret once it exists, which the deploy stage describes (refused under the service tag key, 22 Sep)|secretsmanager:DescribeSecret|arn:aws:secretsmanager:${REGION}:${ACCOUNT}:secret:rds!db-11111111-2222-4333-8444-555555555555-AbCdEf|aws:ResourceTag/aws:rds:primaryDBInstanceArn=arn:aws:rds:${REGION}:${ACCOUNT}:db:${PREFIX}-example-pg
+the state lock object, which the guard reads after a teardown (review of PR 292)|s3:GetObject|arn:aws:s3:::${STATE_BUCKET}/${STATE_KEY}.tflock|
+the state lock item, which the guard reads after a teardown (review of PR 292)|dynamodb:GetItem|arn:aws:dynamodb:${REGION}:${ACCOUNT}:table/${LOCK_TABLE}|dynamodb:LeadingKeys[]=${STATE_BUCKET}/${STATE_KEY}"
 fi
 
 # Some actions are authorized against a resource type that is not the group's sample, or
@@ -455,7 +476,15 @@ while IFS='|' read -r name actions resource context; do
       entries=()
       while IFS= read -r entry; do
         [ -n "$entry" ] || continue
-        entries+=("ContextKeyName=${entry%%=*},ContextKeyType=string,ContextKeyValues=${entry#*=}")
+        # `key[]=value` is a list-valued context key. The simulator judges a ForAllValues:
+        # or ForAnyValue: operator against a set, and a set key supplied as a string is a
+        # key it cannot evaluate, which it reports as an implicit deny.
+        entry_key=${entry%%=*}
+        entry_type=string
+        case "$entry_key" in
+          *'[]') entry_key=${entry_key%'[]'}; entry_type=stringList ;;
+        esac
+        entries+=("ContextKeyName=${entry_key},ContextKeyType=${entry_type},ContextKeyValues=${entry#*=}")
       done <<<"$(printf '%s\n' "$action_context" | tr ';' '\n')"
       simulate_arguments+=(--context-entries "${entries[@]}")
     fi
@@ -593,6 +622,48 @@ def listed(statement, field):
     return set(value) if isinstance(value, list) else {value}
 
 
+def selector(statement, plain, negated):
+    # Which form a statement selects with. Resource and NotResource are opposites, so a
+    # statement that changes from one to the other has not grown or shrunk: it means
+    # something else entirely, and nothing here can call that narrower.
+    if plain in statement:
+        return plain
+    if negated in statement:
+        return negated
+    return None
+
+
+def values_of(value):
+    if isinstance(value, list):
+        return set(str(item) for item in value)
+    return {str(value)}
+
+
+def condition_narrows(effect, older, newer):
+    # An Allow is narrowed by constraining more, a Deny by constraining less. Narrowing is
+    # proved only in the plain case: every operator the looser side names is on the tighter
+    # side too, unchanged, or over a subset of its values. A negating or IfExists operator
+    # inverts what a subset means, so a change under one is never proved here; it is a
+    # widening to be put on purpose with --allow-widening.
+    if older == newer:
+        return True
+    tighter, looser = (newer, older) if effect == "Allow" else (older, newer)
+    if not isinstance(tighter, dict) or not isinstance(looser, dict):
+        return False
+    for operator, entries in looser.items():
+        matching = tighter.get(operator)
+        if matching == entries:
+            continue
+        if "Not" in operator or "Unlike" in operator or "IfExists" in operator:
+            return False
+        if not isinstance(matching, dict) or not isinstance(entries, dict):
+            return False
+        for key, value in entries.items():
+            if key not in matching or not values_of(matching[key]) <= values_of(value):
+                return False
+    return True
+
+
 # Widening is judged against what the role holds, so a role that holds no policy yet has
 # nothing to widen: the first put is the whole document by definition.
 widening = []
@@ -607,16 +678,25 @@ for sid in [] if first else changed:
     if effect != old[sid].get("Effect"):
         widening.append("changes the effect of {} from {} to {}".format(sid, old[sid].get("Effect"), effect))
         continue
-    for field in ("Action", "Resource", "NotAction", "NotResource"):
-        gained = listed(new[sid], field) - listed(old[sid], field)
-        lost = listed(old[sid], field) - listed(new[sid], field)
+    for plain, negated in (("Action", "NotAction"), ("Resource", "NotResource")):
+        was, now = selector(old[sid], plain, negated), selector(new[sid], plain, negated)
+        if was != now:
+            widening.append("{} of {} becomes {}".format(was or "no " + plain, sid, now or "no " + plain))
+            continue
+        if was is None:
+            continue
+        gained = listed(new[sid], was) - listed(old[sid], was)
+        lost = listed(old[sid], was) - listed(new[sid], was)
         # An Allow grows by gaining; a Deny grows by losing. NotResource and NotAction are
         # the other way round, because they say what the statement does NOT cover.
-        grew = lost if (effect == "Deny") != field.startswith("Not") else gained
+        grew = lost if (effect == "Deny") != was.startswith("Not") else gained
         if grew:
-            widening.append("{} of {} gains {}".format(field, sid, ", ".join(sorted(grew))))
-    if not new[sid].get("Condition") and old[sid].get("Condition"):
+            widening.append("{} of {} gains {}".format(was, sid, ", ".join(sorted(grew))))
+    older, newer = old[sid].get("Condition") or {}, new[sid].get("Condition") or {}
+    if effect == "Allow" and older and not newer:
         widening.append("{} loses its Condition".format(sid))
+    elif not condition_narrows(effect, older, newer):
+        widening.append("the Condition of {} changes, and the change is not proved to narrow the role".format(sid))
 if widening and os.environ["FSS_ALLOW_WIDENING"] != "1":
     sys.exit("FAIL: this put would widen the role: {}. Nothing was put. A document that grants more "
              "than the role holds is a review, not a re-put: read it, and if the widening is the "

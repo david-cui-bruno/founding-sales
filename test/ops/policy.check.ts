@@ -63,9 +63,11 @@ interface Run {
 interface Statement {
   readonly Sid: string;
   readonly Effect: string;
-  readonly Action?: string | readonly string[];
-  readonly Resource?: string | readonly string[];
-  readonly Condition?: Record<string, unknown>;
+  readonly Action?: string | readonly string[] | undefined;
+  readonly NotAction?: string | readonly string[] | undefined;
+  readonly Resource?: string | readonly string[] | undefined;
+  readonly NotResource?: string | readonly string[] | undefined;
+  readonly Condition?: Record<string, Record<string, string | readonly string[]>> | undefined;
 }
 
 function world(options: { readonly account?: string; readonly held?: unknown; readonly tampered?: unknown } = {}): {
@@ -131,11 +133,28 @@ describe('policy.sh put: the rendered document, put and read back, in the accoun
   it('names what changes against the policy the role holds, and nothing when it holds this document', () => {
     // A narrowing: the role holds an Allow this document does not, so the put removes it.
     const document = JSON.parse(rendered('fss-rh')) as { readonly Statement: Statement[] };
+    const deniedWithCondition = document.Statement.find(statement => statement.Effect === 'Deny' && statement.Condition !== undefined);
+    if (deniedWithCondition === undefined) throw new Error('the rendered document has no conditioned Deny');
     const extra = { Sid: 'AnOldStatement', Effect: 'Allow', Action: 's3:GetObject', Resource: '*' };
     const held = { ...document, Statement: [...document.Statement, extra] };
     const narrowing = policy(['put', 'fss-rh'], { FSS_POLICY_AWS: world({ held }).aws });
     expect(narrowing.code, narrowing.output).toBe(0);
     expect(narrowing.output).toContain('removes AnOldStatement');
+    // A Deny that loses its Condition denies more, which narrows the role: it goes through.
+    const wider = policy(['put', 'fss-rh'], {
+      FSS_POLICY_AWS: world({
+        held: {
+          ...document,
+          Statement: document.Statement.map(statement =>
+            statement.Sid === deniedWithCondition.Sid
+              ? { ...statement, Condition: { ...statement.Condition, StringEquals: { 'aws:RequestedRegion': 'us-west-2' } } }
+              : statement,
+          ),
+        },
+      }).aws,
+    });
+    expect(wider.code, wider.output).toBe(0);
+    expect(wider.output).toContain(`changes ${deniedWithCondition.Sid}`);
     const same = policy(['put', 'fss-rh'], { FSS_POLICY_AWS: world({ held: document }).aws });
     expect(same.code, same.output).toBe(0);
     expect(same.output).toContain('the role already holds this document; putting it again changes nothing');
@@ -147,10 +166,24 @@ describe('policy.sh put: the rendered document, put and read back, in the accoun
     const document = JSON.parse(rendered('fss-rh')) as { readonly Statement: Statement[] };
     const allow = document.Statement.find(statement => statement.Effect === 'Allow' && Array.isArray(statement.Action));
     const deny = document.Statement.find(statement => statement.Effect === 'Deny');
-    const unconditioned = document.Statement.find(statement => statement.Condition === undefined);
-    if (allow === undefined || deny === undefined || unconditioned === undefined) throw new Error('the rendered document lost its shapes');
+    const unconditioned = document.Statement.find(statement => statement.Effect === 'Allow' && statement.Condition === undefined);
+    const conditioned = document.Statement.find(statement => statement.Effect === 'Allow' && statement.Condition !== undefined);
+    const conditionedDeny = document.Statement.find(statement => statement.Effect === 'Deny' && statement.Condition !== undefined);
+    if (allow === undefined || deny === undefined || unconditioned === undefined || conditioned === undefined || conditionedDeny === undefined) {
+      throw new Error('the rendered document lost its shapes');
+    }
+    /** The same operators and keys over one value the document does not name: for an Allow, looser. */
+    const narrower = (statement: Statement): Record<string, Record<string, readonly string[]>> =>
+      Object.fromEntries(
+        Object.entries(statement.Condition ?? {}).map(([operator, entries]) => [
+          operator,
+          Object.fromEntries(Object.keys(entries).map(key => [key, ['a-value-the-document-does-not-name']])),
+        ]),
+      );
     const without = (sid: string): Statement[] => document.Statement.filter(statement => statement.Sid !== sid);
-    const replacing = (sid: string, change: Partial<Statement>): Statement[] =>
+    // `undefined` takes the member off the statement: JSON.stringify drops it, which is
+    // how a held document without an Action or a Condition is written.
+    const replacing = (sid: string, change: Partial<Pick<Statement, 'Effect' | 'Action' | 'NotAction' | 'Resource' | 'NotResource' | 'Condition'>>): Statement[] =>
       document.Statement.map(statement => (statement.Sid === sid ? { ...statement, ...change } : statement));
     for (const [what, held, named] of [
       // The role holds neither this Allow nor this Deny's removal yet.
@@ -172,6 +205,28 @@ describe('policy.sh put: the rendered document, put and read back, in the accoun
         `${unconditioned.Sid} loses its Condition`,
       ],
       ['an Allow that was a Deny', { ...document, Statement: replacing(allow.Sid, { Effect: 'Deny' }) }, `changes the effect of ${allow.Sid} from Deny to Allow`],
+      // Resource and NotResource are opposites: the change is not a growth, and nothing
+      // can call it a narrowing either (review of PR 292b).
+      [
+        'a NotResource that becomes a Resource',
+        { ...document, Statement: replacing(allow.Sid, { Resource: undefined, NotResource: ['arn:aws:s3:::somewhere-else'] }) },
+        `NotResource of ${allow.Sid} becomes Resource`,
+      ],
+      [
+        'a NotAction that becomes an Action',
+        { ...document, Statement: replacing(allow.Sid, { Action: undefined, NotAction: ['s3:*'] }) },
+        `NotAction of ${allow.Sid} becomes Action`,
+      ],
+      [
+        'an Allow Condition the document loosens',
+        { ...document, Statement: replacing(conditioned.Sid, { Condition: narrower(conditioned) }) },
+        `the Condition of ${conditioned.Sid} changes, and the change is not proved to narrow the role`,
+      ],
+      [
+        'a Condition the document adds to a Deny',
+        { ...document, Statement: replacing(conditionedDeny.Sid, { Condition: undefined }) },
+        `the Condition of ${conditionedDeny.Sid} changes, and the change is not proved to narrow the role`,
+      ],
     ] as const) {
       const stub = world({ held });
       const refused = policy(['put', 'fss-rh'], { FSS_POLICY_AWS: stub.aws });
@@ -251,27 +306,40 @@ describe('the old names are policy.sh render and policy.sh check', () => {
     }
     // The rehearsal guard reads what the run left behind, so the check asks about those
     // reads too; dropping them from the table was the P1 of the review of PR 292.
-    for (const read of ['tag:GetResources', 'rds:DescribeDBInstances', 'rds:DescribeDBSnapshots', 'cloudfront:ListDistributions', 'logs:DescribeLogGroups']) {
+    for (const read of [
+      'tag:GetResources',
+      'rds:DescribeDBInstances',
+      'rds:DescribeDBSnapshots',
+      'cloudfront:ListDistributions',
+      'logs:DescribeLogGroups',
+      's3:GetObject',
+      'dynamodb:GetItem',
+    ]) {
       expect(plan, read).toContain(`plan:   ${read}`);
     }
+    // A set-valued condition key is simulated as a set: a ForAllValues: operator cannot
+    // evaluate a key supplied as a string, and reports an implicit deny.
+    expect(plan).toContain('with dynamodb:LeadingKeys[]=');
   });
 
   it('asks about as many actions as the header says, for each role', () => {
     // The header of policy.sh names the table's size. A row added or lost without a word
     // there is a table nobody can reason about from the outside (review of PR 292).
     const header = readFileSync(repositoryPath('infra/scripts/policy.sh'), 'utf8');
-    expect(header).toContain('The table is 25 groups, 115 action entries over');
-    expect(header).toContain('108 distinct actions, for production; the rehearsal adds one group (116 entries, the same');
+    expect(header).toContain('The table is 24 groups, 115 action entries over');
+    expect(header).toContain('108 distinct actions, for production; the rehearsal adds three groups (27 groups, 118');
+    expect(header).toContain('entries, 110 distinct actions)');
     const counted = (prefix: string): { groups: number; entries: number; distinct: number } => {
       const lines = policy(['check', `${prefix}-deploy`, prefix], { FSS_CHECK_ROLE_DRY_RUN: '1' }).output.split('\n');
       const actions = lines.flatMap(line => /^plan: {3}([a-z0-9-]+:[A-Za-z]+)$/.exec(line)?.slice(1) ?? []);
-      return {
-        groups: lines.filter(line => /^plan: [a-z]/.test(line) && line !== 'plan: no call was made').length,
-        entries: actions.length,
-        distinct: new Set(actions).size,
-      };
+      // A group is a `plan: ` line an action line follows: neither the header the plan
+      // opens with nor the line it closes on is one (review of PR 292b).
+      const groups = lines.filter(
+        (line, index) => /^plan: [^ ]/.test(line) && /^plan: {3}[a-z0-9-]+:/.test(lines[index + 1] ?? ''),
+      );
+      return { groups: groups.length, entries: actions.length, distinct: new Set(actions).size };
     };
-    expect(counted('fss-prod')).toEqual({ groups: 25, entries: 115, distinct: 108 });
-    expect(counted('fss-rh')).toEqual({ groups: 26, entries: 116, distinct: 108 });
+    expect(counted('fss-prod')).toEqual({ groups: 24, entries: 115, distinct: 108 });
+    expect(counted('fss-rh')).toEqual({ groups: 27, entries: 118, distinct: 110 });
   });
 });

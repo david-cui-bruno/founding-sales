@@ -498,14 +498,33 @@ rehearsal_teardown() {
 #   5. the two lock records of this run's state key: the S3 `<key>.tflock` object and the
 #      DynamoDB item, either of which blocks the next run of the same prefix.
 #
-# Set aside, with a line saying so: what AWS keeps listing after it has accepted the
-# deletion. Every `ecs` ARN (a stopped task for about an hour, a deleted service or
-# cluster while INACTIVE, a deregistered task-definition revision for good); an `ec2`
-# `network-interface/` (a Fargate task's interface goes with its task); `ec2`
-# `security-group/` and `security-group-rule/` (run 36209569741 found one group and eight
-# rules still listed that `describe-security-groups` answered `InvalidGroup.NotFound`);
-# `kms` `key/` (a key is only ever scheduled for deletion); and `rds` `auto-backup:`.
-# A security group that really stayed keeps the run's VPC, and the VPC is compared.
+# Six classes AWS keeps listing after it has accepted the deletion are candidates to be
+# set aside — an `ecs` service, cluster, task or task-definition; an `ec2`
+# `network-interface/`, `security-group/` or `security-group-rule/`; a `kms` `key/`; an
+# `rds` `auto-backup:` — but **the class is not the evidence** (review of PR 292b). Being
+# listed is not being there, and being of a settling class is not being settled, so each
+# candidate is asked of its own service what state it is in, and only what is gone,
+# inactive, draining to nothing or pending deletion is set aside:
+#
+#   * an ECS service INACTIVE, or DRAINING with no task running or pending; a cluster
+#     INACTIVE; a task STOPPED; a task definition INACTIVE (a deregistered revision);
+#   * a network interface EC2 no longer has;
+#   * a security group EC2 no longer has, or whose VPC is gone, or which holds no rule
+#     and no interface; a security group rule EC2 no longer has;
+#   * a KMS key PendingDeletion, PendingReplicaDeletion or Disabled;
+#   * an automated backup retained or deleting.
+#
+# Anything else of those classes is a leftover like any other, reported with the state it
+# was read in. An ACTIVE service, an Enabled key or a live security group is exactly what
+# a failed teardown leaves. A security group that really stayed keeps the run's VPC, and
+# a VPC is not a candidate at all. Run 36209569741 found one group and eight rules still
+# listed that `describe-security-groups` answered `InvalidGroup.NotFound` for: that is the
+# reading, not the class, and it is what this makes.
+#
+# **A reading that cannot be made is not an absence.** Every response is checked for the
+# shape it must have — a projection that is not a list of the expected rows is a failed
+# reading, not an empty one — and every reader's failure stops the whole answer, so no
+# later empty reading can turn an earlier parse failure into a pass.
 #
 # It prints `<class> <identifier>` per leftover and exits 0 whatever it finds; the caller
 # decides. `guard` and `teardown` both call it.   rehearsal_leftovers <fss-rh-run>
@@ -530,54 +549,232 @@ rehearsal_state_location() {
   esac
 }
 
-# The tagging API's wide net, with the settling classes set aside.
+# One AWS reading whose absence is an answer. Sets REHEARSAL_READ_OUTPUT and
+# REHEARSAL_READ_ABSENT (yes|no); stops everything when the reading fails for any other
+# reason, because "it is gone" and "I was not allowed to look" are different answers.
+#   rehearsal_read_or_absent <what> <aws argument>...
+REHEARSAL_GONE_ERROR_CODES="InvalidGroup.NotFound InvalidGroupId.NotFound InvalidGroup.Malformed InvalidNetworkInterfaceID.NotFound InvalidSecurityGroupRuleId.NotFound InvalidVpcID.NotFound NotFoundException DBInstanceAutomatedBackupNotFound"
+rehearsal_read_or_absent() {
+  local what=$1 status code
+  shift
+  REHEARSAL_READ_OUTPUT=''
+  REHEARSAL_READ_ABSENT=no
+  # Tested by `||`, so `set -e` neither stops us here nor has to be turned off and on
+  # again: this runs inside a command substitution whose -e state belongs to its caller.
+  REHEARSAL_READ_OUTPUT="$(rehearsal_aws "$@" 2>&1)" && status=0 || status=$?
+  [ "$status" -ne 0 ] || return 0
+  for code in $REHEARSAL_ABSENCE_ERROR_CODES $REHEARSAL_GONE_ERROR_CODES; do
+    case "$REHEARSAL_READ_OUTPUT" in
+      *"($code)"*) REHEARSAL_READ_ABSENT=yes; REHEARSAL_READ_OUTPUT=''; return 0 ;;
+    esac
+  done
+  printf '%s\n' "$REHEARSAL_READ_OUTPUT" >&2
+  rehearsal_fail "$what could not be read, and not because it is gone; the guard cannot say whether the run left it behind"
+}
+
+# Is this candidate really settled? Sets REHEARSAL_SETTLED (yes|no) and
+# REHEARSAL_STATE_DETAIL, the state it was read in, which a leftover line carries.
+#   rehearsal_settling_state <class> <arn>
+rehearsal_settling_state() {
+  local kind=$1 arn=$2 resource cluster identifier state running pending vpc rules egress
+  resource="${arn#arn:*:*:*:*:}"
+  identifier="${resource#*/}"
+  REHEARSAL_SETTLED=no
+  REHEARSAL_STATE_DETAIL=unknown
+  case "$kind" in
+    ecs-service)
+      cluster="${identifier%%/*}"
+      rehearsal_read_or_absent "the ECS service $arn" ecs describe-services --cluster "$cluster" --services "$arn" \
+        --query 'services[0].[status,runningCount,pendingCount]' --output text || return 1
+      case "$REHEARSAL_READ_ABSENT:$REHEARSAL_READ_OUTPUT" in
+        yes:* | *:'' | *:None)
+          REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="ECS has no such service"; return 0 ;;
+      esac
+      read -r state running pending <<EOF
+$REHEARSAL_READ_OUTPUT
+EOF
+      REHEARSAL_STATE_DETAIL="$state, ${running:-?} running, ${pending:-?} pending"
+      case "$state" in
+        INACTIVE) REHEARSAL_SETTLED=yes ;;
+        DRAINING) if [ "$running" = 0 ] && [ "$pending" = 0 ]; then REHEARSAL_SETTLED=yes; fi ;;
+      esac
+      ;;
+    ecs-cluster)
+      rehearsal_read_or_absent "the ECS cluster $arn" ecs describe-clusters --clusters "$arn" \
+        --query 'clusters[0].status' --output text || return 1
+      state=$REHEARSAL_READ_OUTPUT
+      REHEARSAL_STATE_DETAIL="${state:-absent}"
+      case "$REHEARSAL_READ_ABSENT:$state" in
+        yes:* | *:'' | *:None | *:INACTIVE) REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="INACTIVE or gone" ;;
+      esac
+      ;;
+    ecs-task)
+      cluster="${identifier%%/*}"
+      rehearsal_read_or_absent "the ECS task $arn" ecs describe-tasks --cluster "$cluster" --tasks "$arn" \
+        --query 'tasks[0].lastStatus' --output text || return 1
+      state=$REHEARSAL_READ_OUTPUT
+      REHEARSAL_STATE_DETAIL="${state:-absent}"
+      case "$REHEARSAL_READ_ABSENT:$state" in
+        yes:* | *:'' | *:None | *:STOPPED) REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="STOPPED or gone" ;;
+      esac
+      ;;
+    ecs-task-definition)
+      rehearsal_read_or_absent "the task definition $arn" ecs describe-task-definition --task-definition "$arn" \
+        --query 'taskDefinition.status' --output text || return 1
+      state=$REHEARSAL_READ_OUTPUT
+      REHEARSAL_STATE_DETAIL="${state:-absent}"
+      case "$REHEARSAL_READ_ABSENT:$state" in
+        yes:* | *:'' | *:None | *:INACTIVE) REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="deregistered" ;;
+      esac
+      ;;
+    network-interface)
+      rehearsal_read_or_absent "the network interface $identifier" ec2 describe-network-interfaces \
+        --network-interface-ids "$identifier" --query 'NetworkInterfaces[0].Status' --output text || return 1
+      state=$REHEARSAL_READ_OUTPUT
+      case "$REHEARSAL_READ_ABSENT:$state" in
+        yes:* | *:'' | *:None) REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="EC2 has no such interface" ;;
+        *) REHEARSAL_STATE_DETAIL="still there, $state" ;;
+      esac
+      ;;
+    security-group)
+      rehearsal_read_or_absent "the security group $identifier" ec2 describe-security-groups --group-ids "$identifier" \
+        --query 'SecurityGroups[0].[VpcId,length(IpPermissions),length(IpPermissionsEgress)]' --output text || return 1
+      case "$REHEARSAL_READ_ABSENT:$REHEARSAL_READ_OUTPUT" in
+        yes:* | *:'' | *:None)
+          REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="EC2 has no such group"; return 0 ;;
+      esac
+      read -r vpc rules egress <<EOF
+$REHEARSAL_READ_OUTPUT
+EOF
+      REHEARSAL_STATE_DETAIL="still there in ${vpc:-no vpc}, ${rules:-?} ingress and ${egress:-?} egress rule(s)"
+      if [ -n "$vpc" ] && [ "$vpc" != None ]; then
+        rehearsal_read_or_absent "the VPC $vpc of security group $identifier" ec2 describe-vpcs --vpc-ids "$vpc" \
+          --query 'Vpcs[0].VpcId' --output text || return 1
+        case "$REHEARSAL_READ_ABSENT:$REHEARSAL_READ_OUTPUT" in
+          yes:* | *:'' | *:None) REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="its VPC $vpc is gone"; return 0 ;;
+        esac
+      fi
+      if [ "$rules" = 0 ] && [ "$egress" = 0 ]; then
+        rehearsal_read_or_absent "the interfaces of security group $identifier" ec2 describe-network-interfaces \
+          --filters "Name=group-id,Values=$identifier" --query 'NetworkInterfaces[].NetworkInterfaceId' --output text || return 1
+        case "$REHEARSAL_READ_ABSENT:$REHEARSAL_READ_OUTPUT" in
+          yes:* | *:'' | *:None) REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="no rule and no interface" ;;
+          *) REHEARSAL_STATE_DETAIL="no rule, but interface(s) $REHEARSAL_READ_OUTPUT" ;;
+        esac
+      fi
+      ;;
+    security-group-rule)
+      rehearsal_read_or_absent "the security group rule $identifier" ec2 describe-security-group-rules \
+        --security-group-rule-ids "$identifier" --query 'SecurityGroupRules[0].SecurityGroupRuleId' --output text || return 1
+      case "$REHEARSAL_READ_ABSENT:$REHEARSAL_READ_OUTPUT" in
+        yes:* | *:'' | *:None) REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="EC2 has no such rule" ;;
+        *) REHEARSAL_STATE_DETAIL="still there" ;;
+      esac
+      ;;
+    kms-key)
+      rehearsal_read_or_absent "the KMS key $arn" kms describe-key --key-id "$arn" \
+        --query 'KeyMetadata.KeyState' --output text || return 1
+      state=$REHEARSAL_READ_OUTPUT
+      REHEARSAL_STATE_DETAIL="${state:-absent}"
+      case "$REHEARSAL_READ_ABSENT:$state" in
+        yes:* | *:'' | *:None) REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="KMS has no such key" ;;
+        *:PendingDeletion | *:PendingReplicaDeletion | *:Disabled) REHEARSAL_SETTLED=yes ;;
+      esac
+      ;;
+    rds-auto-backup)
+      rehearsal_read_or_absent "the automated backup $arn" rds describe-db-instance-automated-backups \
+        --db-instance-automated-backups-arn "$arn" --query 'DBInstanceAutomatedBackups[0].Status' --output text || return 1
+      state=$REHEARSAL_READ_OUTPUT
+      REHEARSAL_STATE_DETAIL="${state:-absent}"
+      case "$REHEARSAL_READ_ABSENT:$state" in
+        yes:* | *:'' | *:None) REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="no such backup" ;;
+        *:retained | *:deleting) REHEARSAL_SETTLED=yes ;;
+      esac
+      ;;
+    *)
+      REHEARSAL_STATE_DETAIL="no status reader for $kind, so it counts as still there"
+      ;;
+  esac
+  return 0
+}
+
+# The tagging API's wide net. Every row is judged; a row of a settling class is asked of
+# its own service what state it is in before it is set aside.
 rehearsal_tagged_leftovers() {
-  local prefix=$1 listed
+  local prefix=$1 listed judged verdict kind arn aside='' summary
   # shellcheck disable=SC2016 # a JMESPath expression, not a shell one
   listed="$(rehearsal_aws resourcegroupstaggingapi get-resources --tag-filters "Key=Name" \
     --query 'ResourceTagMappingList[].{arn:ResourceARN,name:Tags[?Key==`Name`]|[0].Value}' --output json)" \
     || rehearsal_fail "the resources tagged for $prefix could not be listed; the guard cannot say the run left nothing"
-  FSS_JSON="$listed" FSS_PREFIX="$prefix" python3 - <<'PY'
-# rehearsal-tagged-leftovers
+  judged="$(FSS_JSON="$listed" FSS_PREFIX="$prefix" python3 - <<'PY'
+# rehearsal-tagged-leftovers: one line per row of this run, either
+#   leftover tagged <arn>            nothing about it settles; it is left behind
+#   candidate <class> <arn>          a class AWS keeps listing; its state decides
 import json, os, sys
 env = os.environ
 prefix = env["FSS_PREFIX"]
-rows = json.loads(env["FSS_JSON"] or "[]") or []
-SETTLING = (
-    ("ecs", "", "ECS"),
-    ("ec2", "network-interface/", "network interface"),
-    ("ec2", "security-group/", "security group"),
-    ("ec2", "security-group-rule/", "security group rule"),
-    ("kms", "key/", "KMS key"),
-    ("rds", "auto-backup:", "retained automated backup"),
-)
+raw = env["FSS_JSON"]
+try:
+    rows = json.loads(raw) if raw.strip() else None
+except ValueError:
+    rows = None
+if not isinstance(rows, list):
+    sys.exit("FAIL: the tagging API answered something that is not a list of resources, "
+             "so the guard cannot say the run left nothing: " + raw[:200])
+SETTLING_ECS = ("service", "cluster", "task", "task-definition")
+SETTLING_EC2 = ("network-interface", "security-group", "security-group-rule")
 
-def settling(arn):
+
+def candidate(arn):
     parts = arn.split(":", 5)
     if len(parts) != 6 or parts[0] != "arn":
         return None
     service, resource = parts[2], parts[5]
-    for wanted, start, kind in SETTLING:
-        if service == wanted and resource.startswith(start):
-            return kind
+    head = resource.split("/", 1)[0]
+    if service == "ecs" and head in SETTLING_ECS:
+        return "ecs-" + head
+    if service == "ec2" and head in SETTLING_EC2:
+        return head
+    if service == "kms" and head == "key":
+        return "kms-key"
+    if service == "rds" and resource.startswith("auto-backup:"):
+        return "rds-auto-backup"
     return None
 
-counts = {}
+
 for row in rows:
-    name, arn = row.get("name"), row.get("arn")
-    if not isinstance(name, str) or not isinstance(arn, str):
-        continue
+    if not isinstance(row, dict):
+        sys.exit("FAIL: the tagging API listed something that is not a resource: " + repr(row)[:200])
+    arn, name = row.get("arn"), row.get("name")
+    if not isinstance(arn, str) or arn == "" or not isinstance(name, str):
+        sys.exit("FAIL: the tagging API listed a resource without an ARN or a Name tag: " + repr(row)[:200])
     if name != prefix and not name.startswith(prefix + "-"):
         continue
-    kind = settling(arn)
-    if kind is None:
-        print("tagged " + arn)
-    else:
-        counts[kind] = counts.get(kind, 0) + 1
-if counts:
-    sys.stderr.write("set aside, because AWS keeps listing them after it accepted the deletion: "
-                     + ", ".join("%d %s" % (counts[kind], kind) for kind in sorted(counts)) + "\n")
+    kind = candidate(arn)
+    print("leftover tagged " + arn if kind is None else "candidate {} {}".format(kind, arn))
 PY
+)" || return 1
+  while read -r verdict kind arn; do
+    [ -n "$arn" ] || continue
+    if [ "$verdict" = leftover ]; then
+      echo "$kind $arn"
+      continue
+    fi
+    rehearsal_settling_state "$kind" "$arn" || return 1
+    if [ "$REHEARSAL_SETTLED" = yes ]; then
+      aside="$aside$kind
+"
+    else
+      echo "$kind $arn ($REHEARSAL_STATE_DETAIL)"
+    fi
+  done <<EOF
+$judged
+EOF
+  if [ -n "$aside" ]; then
+    summary="$(printf '%s' "$aside" | sort | uniq -c \
+      | awk '{ printf "%s%s %s", separator, $1, $2; separator = ", " } END { printf "\n" }')"
+    rehearsal_log "set aside, read as gone, inactive or pending deletion: $summary" >&2
+  fi
 }
 
 # RDS by identifier: an instance being created carries no tag yet.
@@ -588,14 +785,21 @@ rehearsal_rds_leftovers() {
   snapshots="$(rehearsal_aws rds describe-db-snapshots --snapshot-type manual \
     --query 'DBSnapshots[].DBSnapshotIdentifier' --output json)" \
     || rehearsal_fail "the RDS snapshots could not be listed; the guard cannot say the run left none"
-  FSS_INSTANCES="$instances" FSS_SNAPSHOTS="$snapshots" FSS_PREFIX="$prefix" python3 - <<'PY'
+  FSS_INSTANCES="$instances" FSS_SNAPSHOTS="$snapshots" FSS_PREFIX="$prefix" python3 - <<'PY' || return 1
 # rehearsal-rds-leftovers
-import json, os
+import json, os, sys
 env = os.environ
 prefix = env["FSS_PREFIX"]
-for variable, kind in (("FSS_INSTANCES", "database"), ("FSS_SNAPSHOTS", "snapshot")):
-    for name in json.loads(env[variable] or "[]") or []:
-        if isinstance(name, str) and (name == prefix or name.startswith(prefix + "-")):
+for variable, kind, what in (("FSS_INSTANCES", "database", "instances"), ("FSS_SNAPSHOTS", "snapshot", "snapshots")):
+    raw = env[variable]
+    try:
+        names = json.loads(raw) if raw.strip() else None
+    except ValueError:
+        names = None
+    if not isinstance(names, list) or not all(isinstance(name, str) for name in names):
+        sys.exit("FAIL: the RDS {} answered something that is not a list of identifiers: {}".format(what, raw[:200]))
+    for name in names:
+        if name == prefix or name.startswith(prefix + "-"):
             print("{} {}".format(kind, name))
 PY
 }
@@ -603,21 +807,37 @@ PY
 # CloudFront: a distribution is visible the moment it exists, tagged or not.
 rehearsal_cloudfront_leftovers() {
   local prefix=$1 listed
-  listed="$(rehearsal_aws cloudfront list-distributions \
-    --query 'DistributionList.Items[].{id:Id,comment:Comment,origins:Origins.Items[].DomainName}' --output json)" \
+  listed="$(rehearsal_aws cloudfront list-distributions --query 'DistributionList' --output json)" \
     || rehearsal_fail "the CloudFront distributions could not be listed; the guard cannot say the run left none"
-  FSS_JSON="$listed" FSS_PREFIX="$prefix" python3 - <<'PY'
-# rehearsal-cloudfront-leftovers
-import json, os
+  FSS_JSON="$listed" FSS_PREFIX="$prefix" python3 - <<'PY' || return 1
+# rehearsal-cloudfront-leftovers: an account with no distribution answers a list without
+# an Items member, which is empty; anything else that is not a list of distributions is a
+# reading that failed.
+import json, os, sys
 env = os.environ
 prefix = env["FSS_PREFIX"]
-for item in json.loads(env["FSS_JSON"] or "[]") or []:
-    if not isinstance(item, dict):
-        continue
-    comment = item.get("comment") or ""
-    origins = [value for value in item.get("origins") or [] if isinstance(value, str)]
-    if prefix in comment or any(origin.startswith(prefix + "-") or origin.startswith(prefix + ".") for origin in origins):
-        print("distribution {}".format(item.get("id") or "<no id>"))
+raw = env["FSS_JSON"]
+try:
+    listed = json.loads(raw) if raw.strip() else False
+except ValueError:
+    listed = False
+if not isinstance(listed, dict):
+    sys.exit("FAIL: CloudFront answered something that is not a distribution list: " + raw[:200])
+items = listed.get("Items")
+if items is None:
+    items = []
+if not isinstance(items, list):
+    sys.exit("FAIL: CloudFront answered a distribution list whose Items is not a list: " + raw[:200])
+for item in items:
+    if not isinstance(item, dict) or not isinstance(item.get("Id"), str):
+        sys.exit("FAIL: CloudFront listed something that is not a distribution: " + repr(item)[:200])
+    comment = item.get("Comment") or ""
+    origins = (item.get("Origins") or {}).get("Items") or []
+    if not isinstance(comment, str) or not isinstance(origins, list):
+        sys.exit("FAIL: CloudFront listed a distribution with no readable comment or origins: " + repr(item)[:200])
+    names = [origin.get("DomainName") for origin in origins if isinstance(origin, dict)]
+    if prefix in comment or any(isinstance(name, str) and (name.startswith(prefix + "-") or name.startswith(prefix + ".")) for name in names):
+        print("distribution {}".format(item["Id"]))
 PY
 }
 
@@ -628,12 +848,19 @@ rehearsal_log_group_leftovers() {
     listed="$(rehearsal_aws logs describe-log-groups --log-group-name-prefix "$start" \
       --query 'logGroups[].logGroupName' --output json)" \
       || rehearsal_fail "the log groups beginning $start could not be listed; the guard cannot say the run left none"
-    FSS_JSON="$listed" python3 -c '
-import json, os
-for name in json.loads(os.environ["FSS_JSON"] or "[]") or []:
-    if isinstance(name, str):
-        print("log group " + name)
-'
+    FSS_JSON="$listed" FSS_START="$start" python3 -c '
+import json, os, sys
+raw = os.environ["FSS_JSON"]
+try:
+    names = json.loads(raw) if raw.strip() else None
+except ValueError:
+    names = None
+if not isinstance(names, list) or not all(isinstance(name, str) for name in names):
+    sys.exit("FAIL: the log groups beginning " + os.environ["FSS_START"]
+             + " answered something that is not a list of names: " + raw[:200])
+for name in names:
+    print("log group " + name)
+' || return 1
   done
 }
 
@@ -664,15 +891,18 @@ rehearsal_lock_leftovers() {
   esac
 }
 
+# Every reader, and every reader's failure. `set -e` is off inside the command
+# substitution this runs in, so each one is checked by hand: a reading that failed must
+# not be followed by empty ones and reported as nothing left.
 rehearsal_leftovers() {
   local prefix=${1:-}
   rehearsal_require_prefix "$prefix" || exit 1
   rehearsal_refuse_production_arguments "$prefix" || exit 1
-  rehearsal_tagged_leftovers "$prefix"
-  rehearsal_rds_leftovers "$prefix"
-  rehearsal_cloudfront_leftovers "$prefix"
-  rehearsal_log_group_leftovers "$prefix"
-  rehearsal_lock_leftovers "$prefix"
+  rehearsal_tagged_leftovers "$prefix" || return 1
+  rehearsal_rds_leftovers "$prefix" || return 1
+  rehearsal_cloudfront_leftovers "$prefix" || return 1
+  rehearsal_log_group_leftovers "$prefix" || return 1
+  rehearsal_lock_leftovers "$prefix" || return 1
 }
 
 # The same reading, up to FSS_REHEARSAL_SETTLING_READS times a minute apart, because the
@@ -681,6 +911,11 @@ rehearsal_leftovers() {
 rehearsal_require_nothing_left() {
   local prefix=$1 who=$2 reads attempt left='' status
   reads=${FSS_REHEARSAL_SETTLING_READS:-5}
+  # No reading at all is not a pass: a count of zero would make the whole assertion vacuous.
+  case "$reads" in
+    '' | *[!0-9]*) rehearsal_fail "FSS_REHEARSAL_SETTLING_READS is '$reads'; it must be a whole number of readings, at least one" ;;
+  esac
+  [ "$reads" -ge 1 ] || rehearsal_fail "FSS_REHEARSAL_SETTLING_READS is $reads; nothing can be asserted without reading at least once"
   for attempt in $(seq 1 "$reads"); do
     # A reading runs in a subshell, so its refusal is a status, not an exit: "it is gone"
     # and "I was not allowed to look" must not report the same thing.

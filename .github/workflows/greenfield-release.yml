@@ -748,11 +748,14 @@ jobs:
         working-directory: infra/roots/rehearsal
         run: ../../scripts/rehearsal.sh teardown '${{ steps.prefix.outputs.prefix }}'
 
-      # Since P7 (27 September 2026) the guard is three facts rather than a comparison of
-      # the run's tagged resources, which had to learn every shape AWS keeps listing after a
-      # deletion: the run's state is empty, the session is `fss-rh-deploy` (whose policy
-      # cannot address `fss-prod*`), and `<prefix>-pg` is gone. No rehearsal command names
-      # production; lib.sh refuses one at the call. `docs/greenfield/release.md` 3, item 14.
+      # Four facts, since the review of PR 292 (27 September 2026): the run's state is
+      # empty, the session is `fss-rh-deploy` (whose policy cannot address `fss-prod*`),
+      # nothing in the cloud still carries the run prefix, and neither lock record of the
+      # run's state key is left. The third reads the tagging API, RDS, CloudFront and the
+      # log groups, and asks each candidate of a settling class what state it is really in.
+      # What P7 removed was the comparison with a recorded inventory, not the reading. No
+      # rehearsal command names production; lib.sh refuses one at the call.
+      # `docs/greenfield/release.md` 3, item 14.
       - name: Nothing of the run is left, and nothing production's was touched
         if: always()
         working-directory: infra/roots/rehearsal

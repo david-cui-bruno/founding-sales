@@ -880,7 +880,10 @@ done`);
     expect(describes(production.output)).toBe(1);
     expect(production.output).not.toContain('aws:ResourceTag/aws:rds:primaryDBInstanceArn');
     const rows = (output: string): number => output.split('\n').filter(line => /^plan: {3}[a-z0-9-]+:[A-Za-z]/u.test(line)).length;
-    expect(rows(rehearsal.output) - rows(production.output)).toBe(1);
+    // Three rows the rehearsal asks and production does not: the master secret it reads,
+    // and the two lock records of its own Terraform state that the guard reads after a
+    // teardown (review of PR 292; production keeps no state statements at all).
+    expect(rows(rehearsal.output) - rows(production.output)).toBe(3);
   });
 
   it('fails rather than passes when the simulation answers nothing', () => {

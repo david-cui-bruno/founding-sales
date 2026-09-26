@@ -155,21 +155,53 @@ const STATE_BUCKET = 'callie-sourcing-tfstate-326255650484';
 const LOCK_TABLE = 'callie-sourcing-tflock';
 const STATE_KEY = 'fss/greenfield/rehearsal/fss-rh-nothing/terraform.tfstate';
 
+/** `<code>` in the shape the CLI reports it. */
+const notFound = (code: string): string => `echo "An error occurred (${code}) when calling it" >&2; exit 254`;
+
 /**
- * The five readings `leftovers` makes, each answering "nothing of this run". A stub that
- * wants one of them to answer otherwise puts its own `case` before this one.
+ * The five readings `leftovers` makes, each answering "nothing of this run", and the
+ * status of a candidate of every settling class, each answering "gone or inactive". A
+ * stub that wants one of them to answer otherwise puts its own `case` before this one.
  */
 const NOTHING_LEFT = [
   'case "$1 $2" in',
   '  "resourcegroupstaggingapi get-resources") echo "[]"; exit 0 ;;',
   '  "rds describe-db-instances") echo "[]"; exit 0 ;;',
   '  "rds describe-db-snapshots") echo "[]"; exit 0 ;;',
-  '  "cloudfront list-distributions") echo "[]"; exit 0 ;;',
+  '  "cloudfront list-distributions") echo \'{"Quantity":0}\'; exit 0 ;;',
   '  "logs describe-log-groups") echo "[]"; exit 0 ;;',
   '  "s3api head-object") echo "An error occurred (404) when calling the HeadObject operation: Not Found" >&2; exit 254 ;;',
   '  "dynamodb get-item") echo "None"; exit 0 ;;',
+  '  "ecs describe-services") printf "INACTIVE\\t0\\t0\\n"; exit 0 ;;',
+  '  "ecs describe-clusters") echo "INACTIVE"; exit 0 ;;',
+  '  "ecs describe-tasks") echo "STOPPED"; exit 0 ;;',
+  '  "ecs describe-task-definition") echo "INACTIVE"; exit 0 ;;',
+  `  "ec2 describe-network-interfaces") ${notFound('InvalidNetworkInterfaceID.NotFound')} ;;`,
+  `  "ec2 describe-security-groups") ${notFound('InvalidGroup.NotFound')} ;;`,
+  `  "ec2 describe-security-group-rules") ${notFound('InvalidSecurityGroupRuleId.NotFound')} ;;`,
+  '  "kms describe-key") echo "PendingDeletion"; exit 0 ;;',
+  '  "rds describe-db-instance-automated-backups") echo "retained"; exit 0 ;;',
   'esac',
 ].join('\n');
+
+/** The tagging API answers with exactly these resources, all of this run. */
+const taggedWith = (...arns: readonly string[]): string =>
+  `  "resourcegroupstaggingapi get-resources") echo '${JSON.stringify(arns.map(arn => ({ arn, name: 'fss-rh-nothing' })))}'; exit 0 ;;`;
+
+/** A `case` block placed before NOTHING_LEFT. */
+const answering = (...lines: readonly string[]): string => ['case "$1 $2" in', ...lines, 'esac'].join('\n');
+
+const ARN = {
+  service: 'arn:aws:ecs:us-east-1:123456789012:service/fss-rh-nothing-cluster/fss-rh-nothing-api',
+  cluster: 'arn:aws:ecs:us-east-1:123456789012:cluster/fss-rh-nothing-cluster',
+  task: 'arn:aws:ecs:us-east-1:123456789012:task/fss-rh-nothing-cluster/0a',
+  definition: 'arn:aws:ecs:us-east-1:123456789012:task-definition/fss-rh-nothing-api:3',
+  interface: 'arn:aws:ec2:us-east-1:123456789012:network-interface/eni-0a',
+  group: 'arn:aws:ec2:us-east-1:123456789012:security-group/sg-0a',
+  rule: 'arn:aws:ec2:us-east-1:123456789012:security-group-rule/sgr-0a',
+  key: 'arn:aws:kms:us-east-1:123456789012:key/11111111-2222-4333-8444-555555555555',
+  backup: 'arn:aws:rds:us-east-1:123456789012:auto-backup:ab-0a',
+} as const;
 
 describe('Appendix G 39: rehearsal.sh teardown tears down a run that created nothing, and one that created everything', () => {
   /** Everything absent, as it is after a run whose creation step never ran. */
@@ -325,6 +357,20 @@ echo "unexpected: $*" >&2; exit 9`;
     expect(somebody.output).toContain('which is not an assumed-role session of fss-rh-deploy');
     expect(somebody.calls, 'nothing is asked or deleted as somebody else').toEqual([]);
   });
+
+  it('fails, and writes no report, when the destroy left something behind', () => {
+    // A destroy that left something standing is a failed teardown, not a passing one with
+    // a failing guard after it (review of PR 292b).
+    const left = teardown({
+      aws: NOTHING_EXISTS,
+      terraform: NEVER_INITIALISED,
+      leftovers: answering(taggedWith(ARN.key), '  "kms describe-key") echo "Enabled"; exit 0 ;;'),
+    });
+    expect(left.code, left.output).toBe(1);
+    expect(left.output).toContain(`the teardown: 1 resource(s) still carry fss-rh-nothing`);
+    expect(left.output).toContain(`kms-key ${ARN.key} (Enabled)`);
+    expect(existsSync(join(left.reports, 'teardown.txt')), 'no teardown.txt claiming nothing_left=true').toBe(false);
+  });
 });
 
 describe('Appendix G 39: rehearsal.sh guard, after the teardown: an empty state, nothing left in the cloud, the rehearsal role', () => {
@@ -401,7 +447,7 @@ describe('Appendix G 39: rehearsal.sh guard, after the teardown: an empty state,
       ['a manual snapshot', `  "rds describe-db-snapshots") echo '["fss-rh-nothing-pg-final"]'; exit 0 ;;`, 'snapshot fss-rh-nothing-pg-final'],
       [
         'a distribution, by its comment',
-        `  "cloudfront list-distributions") echo '[{"id":"E111","comment":"fss-rh-nothing Electron package distribution.","origins":[]}]'; exit 0 ;;`,
+        `  "cloudfront list-distributions") echo '{"Quantity":1,"Items":[{"Id":"E111","Comment":"fss-rh-nothing Electron package distribution.","Origins":{"Items":[]}}]}'; exit 0 ;;`,
         'distribution E111',
       ],
       ['a log group, by name', `  "logs describe-log-groups") echo '["/fss/fss-rh-nothing/worker"]'; exit 0 ;;`, 'log group /fss/fss-rh-nothing/worker'],
@@ -430,35 +476,75 @@ describe('Appendix G 39: rehearsal.sh guard, after the teardown: an empty state,
     expect(dynamo.output).toContain(`state lock dynamodb:${LOCK_TABLE}/${STATE_BUCKET}/${STATE_KEY}`);
   });
 
-  it('sets aside what AWS keeps listing after it accepted the deletion, and says which', () => {
-    // An ECS task, a Fargate interface, a security group and its rule, a key scheduled for
-    // deletion, a retained backup. A group that really stayed keeps the VPC, which is not set aside.
-    const settling = [
-      'arn:aws:ecs:us-east-1:123456789012:task/fss-rh-nothing-cluster/0a',
-      'arn:aws:ec2:us-east-1:123456789012:network-interface/eni-0a',
-      'arn:aws:ec2:us-east-1:123456789012:security-group/sg-0a',
-      'arn:aws:ec2:us-east-1:123456789012:security-group-rule/sgr-0a',
-      'arn:aws:kms:us-east-1:123456789012:key/11111111-2222-4333-8444-555555555555',
-      'arn:aws:rds:us-east-1:123456789012:auto-backup:ab-0a',
-    ].map(arn => ({ arn, name: 'fss-rh-nothing' }));
-    const aside = guard({
-      terraform: 'exit 0',
-      leftovers: ['case "$1 $2" in', `  "resourcegroupstaggingapi get-resources") echo '${JSON.stringify(settling)}'; exit 0 ;;`, 'esac'].join('\n'),
-    });
+  it('sets aside a candidate its own service reports gone, inactive or pending deletion, and says which', () => {
+    // A task STOPPED, an interface EC2 has forgotten, a group and a rule it has forgotten,
+    // a key scheduled for deletion, a backup retained. Each was read, not assumed.
+    const aside = guard({ terraform: 'exit 0', leftovers: answering(taggedWith(ARN.task, ARN.interface, ARN.group, ARN.rule, ARN.key, ARN.backup)) });
     expect(aside.code, aside.output).toBe(0);
-    expect(aside.output).toContain('set aside, because AWS keeps listing them after it accepted the deletion');
-    expect(aside.output).toContain('1 ECS, 1 KMS key, 1 network interface');
-    // A VPC carrying the prefix is not set aside: a group that really stayed keeps it.
-    const vpc = guard({
-      terraform: 'exit 0',
-      leftovers: [
-        'case "$1 $2" in',
-        `  "resourcegroupstaggingapi get-resources") echo '[{"arn":"arn:aws:ec2:us-east-1:123456789012:vpc/vpc-0a","name":"fss-rh-nothing"}]'; exit 0 ;;`,
-        'esac',
-      ].join('\n'),
-    });
+    expect(aside.output).toContain('set aside, read as gone, inactive or pending deletion');
+    expect(aside.output).toContain('1 ecs-task, 1 kms-key, 1 network-interface, 1 rds-auto-backup, 1 security-group, 1 security-group-rule');
+    // Every one of them was asked of its own service.
+    expect(aside.calls.map(call => call.split(' ').slice(1, 3).join(' '))).toEqual(
+      expect.arrayContaining(['ecs describe-tasks', 'ec2 describe-network-interfaces', 'ec2 describe-security-groups', 'ec2 describe-security-group-rules', 'kms describe-key', 'rds describe-db-instance-automated-backups']),
+    );
+    // A VPC carrying the prefix is not a candidate at all: a group that really stayed keeps it.
+    const vpc = guard({ terraform: 'exit 0', leftovers: answering(taggedWith('arn:aws:ec2:us-east-1:123456789012:vpc/vpc-0a')) });
     expect(vpc.code).toBe(1);
     expect(vpc.output).toContain('tagged arn:aws:ec2:us-east-1:123456789012:vpc/vpc-0a');
+  });
+
+  it('reports a candidate that is still live, in every class, with the state it was read in', () => {
+    // The P1 of the review of PR 292b: being of a settling class is not being settled.
+    // An ACTIVE service, an Enabled key or a live security group is what a failed teardown leaves.
+    for (const [what, arn, answers, named] of [
+      ['an ACTIVE service', ARN.service, ['  "ecs describe-services") printf "ACTIVE\\t2\\t0\\n"; exit 0 ;;'], `ecs-service ${ARN.service} (ACTIVE, 2 running, 0 pending)`],
+      ['a service draining with a task still on it', ARN.service, ['  "ecs describe-services") printf "DRAINING\\t1\\t0\\n"; exit 0 ;;'], `ecs-service ${ARN.service} (DRAINING, 1 running, 0 pending)`],
+      ['an ACTIVE cluster', ARN.cluster, ['  "ecs describe-clusters") echo "ACTIVE"; exit 0 ;;'], `ecs-cluster ${ARN.cluster} (ACTIVE)`],
+      ['a task still running', ARN.task, ['  "ecs describe-tasks") echo "RUNNING"; exit 0 ;;'], `ecs-task ${ARN.task} (RUNNING)`],
+      ['a task definition still ACTIVE', ARN.definition, ['  "ecs describe-task-definition") echo "ACTIVE"; exit 0 ;;'], `ecs-task-definition ${ARN.definition} (ACTIVE)`],
+      ['an interface EC2 still has', ARN.interface, ['  "ec2 describe-network-interfaces") echo "in-use"; exit 0 ;;'], `network-interface ${ARN.interface} (still there, in-use)`],
+      [
+        'a group with rules, in a VPC that is still there',
+        ARN.group,
+        ['  "ec2 describe-security-groups") printf "vpc-0a\\t1\\t1\\n"; exit 0 ;;', '  "ec2 describe-vpcs") echo "vpc-0a"; exit 0 ;;'],
+        `security-group ${ARN.group} (still there in vpc-0a, 1 ingress and 1 egress rule(s))`,
+      ],
+      [
+        'a ruleless group whose interfaces are still attached',
+        ARN.group,
+        [
+          '  "ec2 describe-security-groups") printf "vpc-0a\\t0\\t0\\n"; exit 0 ;;',
+          '  "ec2 describe-vpcs") echo "vpc-0a"; exit 0 ;;',
+          '  "ec2 describe-network-interfaces") echo "eni-0b"; exit 0 ;;',
+        ],
+        `security-group ${ARN.group} (no rule, but interface(s) eni-0b)`,
+      ],
+      ['a rule EC2 still has', ARN.rule, ['  "ec2 describe-security-group-rules") echo "sgr-0a"; exit 0 ;;'], `security-group-rule ${ARN.rule} (still there)`],
+      ['an Enabled key', ARN.key, ['  "kms describe-key") echo "Enabled"; exit 0 ;;'], `kms-key ${ARN.key} (Enabled)`],
+      ['an active automated backup', ARN.backup, ['  "rds describe-db-instance-automated-backups") echo "active"; exit 0 ;;'], `rds-auto-backup ${ARN.backup} (active)`],
+    ] as const) {
+      const live = guard({ terraform: 'exit 0', leftovers: answering(taggedWith(arn), ...answers) });
+      expect(live.code, `${what}: ${live.output}`).toBe(1);
+      expect(live.output, what).toContain(named);
+      expect(live.output, what).toContain('resource(s) still carry fss-rh-nothing');
+      expect(live.report, what).toBeNull();
+    }
+    // A group whose VPC has gone, and a ruleless group with no interface, are settled.
+    for (const [what, answers] of [
+      ['its VPC is gone', ['  "ec2 describe-security-groups") printf "vpc-0a\\t1\\t1\\n"; exit 0 ;;', `  "ec2 describe-vpcs") ${notFound('InvalidVpcID.NotFound')} ;;`]],
+      [
+        'no rule and no interface',
+        [
+          '  "ec2 describe-security-groups") printf "vpc-0a\\t0\\t0\\n"; exit 0 ;;',
+          '  "ec2 describe-vpcs") echo "vpc-0a"; exit 0 ;;',
+          '  "ec2 describe-network-interfaces") echo "None"; exit 0 ;;',
+        ],
+      ],
+    ] as const) {
+      const settled = guard({ terraform: 'exit 0', leftovers: answering(taggedWith(ARN.group), ...answers) });
+      expect(settled.code, `${what}: ${settled.output}`).toBe(0);
+      expect(settled.output, what).toContain('1 security-group');
+    }
   });
 
   it('reads again while the tagging API settles, and passes when the leftover has gone', () => {
@@ -521,6 +607,36 @@ describe('Appendix G 39: rehearsal.sh guard, after the teardown: an empty state,
     expect(somebody.code).toBe(1);
     expect(somebody.output).toContain('which is not an assumed-role session of fss-rh-deploy');
     expect(somebody.calls).toEqual([]);
+  });
+
+  it('fails an answer it cannot read as the shape it asked for, rather than reading it as empty', () => {
+    // Every one of these parses, and every one would otherwise be followed by four empty
+    // readings and reported as a pass (review of PR 292b).
+    for (const [what, answer, phrase] of [
+      ['a null projection', '  "resourcegroupstaggingapi get-resources") echo "null"; exit 0 ;;', 'the tagging API answered something that is not a list of resources'],
+      ['an empty answer', '  "resourcegroupstaggingapi get-resources") exit 0 ;;', 'the tagging API answered something that is not a list of resources'],
+      ['a row with no ARN', `  "resourcegroupstaggingapi get-resources") echo '[{"name":"fss-rh-nothing"}]'; exit 0 ;;`, 'listed a resource without an ARN or a Name tag'],
+      ['a row that is not an object', `  "resourcegroupstaggingapi get-resources") echo '["fss-rh-nothing-alb"]'; exit 0 ;;`, 'listed something that is not a resource'],
+      ['an RDS answer that is not a list', `  "rds describe-db-instances") echo '{"DBInstances":[]}'; exit 0 ;;`, 'the RDS instances answered something that is not a list of identifiers'],
+      ['an RDS list of something other than names', `  "rds describe-db-snapshots") echo '[{"id":"x"}]'; exit 0 ;;`, 'the RDS snapshots answered something that is not a list of identifiers'],
+      ['a CloudFront answer that is not a distribution list', '  "cloudfront list-distributions") echo "[]"; exit 0 ;;', 'CloudFront answered something that is not a distribution list'],
+      ['a distribution with no id', `  "cloudfront list-distributions") echo '{"Items":[{"Comment":"fss-rh-nothing"}]}'; exit 0 ;;`, 'CloudFront listed something that is not a distribution'],
+      ['a log-group answer that is not a list of names', '  "logs describe-log-groups") echo "[1]"; exit 0 ;;', 'answered something that is not a list of names'],
+    ] as const) {
+      const malformed = guard({ terraform: 'exit 0', leftovers: answering(answer) });
+      expect(malformed.code, `${what}: ${malformed.output}`).toBe(1);
+      expect(malformed.output, what).toContain(phrase);
+      expect(malformed.report, what).toBeNull();
+    }
+  });
+
+  it('refuses to assert anything on no reading at all', () => {
+    const none = guard({ terraform: 'exit 0', reads: '0' });
+    expect(none.code).toBe(1);
+    expect(none.output).toContain('nothing can be asserted without reading at least once');
+    const nonsense = guard({ terraform: 'exit 0', reads: 'twice' });
+    expect(nonsense.code).toBe(1);
+    expect(nonsense.output).toContain("FSS_REHEARSAL_SETTLING_READS is 'twice'");
   });
 });
 
