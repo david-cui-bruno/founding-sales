@@ -603,6 +603,28 @@ export const scheduleCallbackCommandSchema = z.strictObject({
   dueAt: instant.optional(),
 });
 
+export const recordSuppressionCommandSchema = z.strictObject({
+  ...commandEnvelope,
+  scope: suppressionScopeSchema,
+  /** Required for a firm suppression; context for a handle one. */
+  firmId: uuid.optional(),
+  /** Required for a handle suppression: the raw number or address, canonicalized server-side. */
+  value: z.string().trim().min(3).max(320).optional(),
+  source: z.enum(['prospect_opt_out', 'prospect_do_not_call', 'salesperson_manual', 'import']),
+  reason: z.string().trim().min(1).max(500).optional(),
+});
+
+export const correctSuppressionCommandSchema = z.strictObject({
+  ...commandEnvelope,
+  eventId: z.string().min(1).max(200),
+});
+
+export const supersedeSuppressionCommandSchema = z.strictObject({
+  ...commandEnvelope,
+  eventId: z.string().min(1).max(200),
+  reason: adminSupersessionReasonSchema,
+});
+
 /**
  * Record one state's posture with its statements ticked one by one.
  * @deprecated (remove after desktop 1.0.12) — `allowCallingStatesCommandSchema` puts

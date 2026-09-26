@@ -185,6 +185,7 @@ describe('policy, suppression and dialing routes', () => {
       '/dial/authorize',
       '/dial/check',
       '/dial/consume',
+      '/suppressions/record',
       '/postures/record',
       '/pauses/open',
       '/calls/log',
@@ -350,6 +351,80 @@ describe('policy, suppression and dialing routes', () => {
     const retried = await post('/calls/log', assigneeToken, body);
     expect(retried.status).toBe(200);
     expect(retried.body['replayed']).toBe(false);
+  });
+
+  // The manual record command, restored by the wave 2 batch review: the one durable way
+  // to record a stop request that did not arrive by Gmail, a reply or a call.
+  it('writes the journal before it acknowledges a manually recorded suppression', async () => {
+    const before = journal.appended.length;
+    const recorded = await post(
+      '/suppressions/record',
+      assigneeToken,
+      command({ scope: 'handle', value: '+1 401 555 0192', firmId, source: 'salesperson_manual' }),
+    );
+    expect(recorded.status).toBe(200);
+    expect(journal.appended.length).toBe(before + 1);
+
+    const appended = journal.appended.at(-1);
+    expect(appended?.eventId).toBe(resultOf(recorded)['eventId']);
+    // Canonicalized server-side: the caller typed spaces and got E.164.
+    expect(appended?.canonicalKey).toBe('+14015550192');
+    expect(appended?.canonicalizerVersion).toBe('e164-lower.1');
+
+    const listed = await get('/suppressions', assigneeToken);
+    expect(listed.status).toBe(200);
+    const suppressions = listed.body['suppressions'] as { canonicalKey: string }[];
+    expect(suppressions.some(row => row.canonicalKey === '+14015550192')).toBe(true);
+  });
+
+  it('fails a manual record and leaves the id free when the journal write fails', async () => {
+    const commandId = randomUUID();
+    const body = {
+      commandId,
+      clientVersion: CURRENT_CLIENT_VERSION,
+      scope: 'handle' as const,
+      value: '+14015550193',
+      firmId,
+      source: 'salesperson_manual' as const,
+    };
+    journal.failNext();
+    const failed = await post('/suppressions/record', assigneeToken, body);
+    expect(failed.status).toBe(503);
+    expect(failed.body['error']).toBe('journal_unavailable');
+
+    const receipts = await fixture.db.query<{ count: string }>(
+      'SELECT count(*) AS count FROM command_receipts WHERE workspace_id = $1 AND command_id = $2',
+      [fixture.alpha.workspaceId, commandId],
+    );
+    expect(Number(receipts.rows[0]?.count)).toBe(0);
+
+    // The same id, once the bucket is back.
+    const retried = await post('/suppressions/record', assigneeToken, body);
+    expect(retried.status).toBe(200);
+    expect(retried.body['replayed']).toBe(false);
+  });
+
+  it('corrects a mistaken entry by its author and lets an admin supersede one', async () => {
+    const mistaken = await post(
+      '/suppressions/record',
+      assigneeToken,
+      command({ scope: 'handle', value: '+14015550196', firmId, source: 'salesperson_manual' }),
+    );
+    expect(mistaken.status).toBe(200);
+    const corrected = await post('/suppressions/correct', assigneeToken, command({ eventId: resultOf(mistaken)['eventId'] }));
+    expect(corrected.status, JSON.stringify(corrected.body)).toBe(200);
+
+    const reconsented = await post(
+      '/suppressions/record',
+      assigneeToken,
+      command({ scope: 'handle', value: '+14015550197', firmId, source: 'salesperson_manual' }),
+    );
+    expect(reconsented.status).toBe(200);
+    const eventId = resultOf(reconsented)['eventId'];
+    // Supersession is an admin's alone (10.2).
+    expect((await post('/suppressions/supersede', assigneeToken, command({ eventId, reason: 'documented_reconsent' }))).status).toBe(409);
+    const superseded = await post('/suppressions/supersede', adminToken, command({ eventId, reason: 'documented_reconsent' }));
+    expect(superseded.status, JSON.stringify(superseded.body)).toBe(200);
   });
 
   it('records a call outcome and hides the note from a member who is not the assignee', async () => {
