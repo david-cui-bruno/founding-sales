@@ -16,7 +16,7 @@ import {
   type RouteSource,
   type TechnicalValidation,
 } from './types.ts';
-import { type CrmRefusalCode } from '@fss/contracts';
+import type { CrmRefusalCode } from '@fss/contracts';
 
 /**
  * Phone routes and email addresses (specification 7.2, 7.4, 9.1).
@@ -174,7 +174,7 @@ async function addRoute(
     subjectId: created.id,
     detail: { firmId: input.firmId, eligibility: created.eligibility, source: input.source },
   });
-  // Lane g90: an address nobody has checked is checked by the worker, in this
+  // An address nobody has checked is checked by the worker, in this
   // transaction's commit or not at all — an import row refused after this point takes
   // its job back with it. A caller that brought its own verdict (`passed`, `failed`)
   // is not second-guessed here.
@@ -188,7 +188,7 @@ async function addRoute(
 }
 
 // ---------------------------------------------------------------------------
-// Lane g90: email technical validation — the job, and the one write it makes.
+// Email technical validation — the job, and the one write it makes.
 // The rules are `routeValidation.ts`; `docs/decisions/g90-email-technical-validation.md`
 // says why they are these.
 // ---------------------------------------------------------------------------
@@ -246,7 +246,7 @@ export type RecordEmailValidationOutcome =
 
 /**
  * Record a technical validation on an email route that nobody has checked yet
- * (specification 7.4; lane g90).
+ * (specification 7.4).
  *
  * A compare-and-set. It writes only while the route is still `candidate`, still
  * `technical_validation = 'unknown'` and still at `routeVersion`, under the route's row
@@ -399,7 +399,7 @@ export interface ConfirmPhoneRouteInput {
 }
 
 /**
- * A person confirms a phone number reaches the firm (lane g88).
+ * A person confirms a phone number reaches the firm.
  *
  * @deprecated (remove after desktop 1.0.12) — a phone number is usable on entry since wave
  * 2 (S4.4), and a dial accepts one an older release left `candidate`. Kept because

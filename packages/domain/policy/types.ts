@@ -21,7 +21,7 @@ export const POLICY_REFUSAL_CODES = [
   'callback_not_open',
   'window_not_narrower',
   'invalid_input',
-  // Lane g79: calls and callbacks. Each is a fact about the request, decided before
+  // Calls and callbacks. Each is a fact about the request, decided before
   // anything is written, so a refusal never leaves a partial write behind (C14).
   /** The supplied `dueAt` is not what the local date, time and zone resolve to (C18). */
   'callback_instant_mismatch',

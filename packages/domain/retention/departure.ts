@@ -212,7 +212,7 @@ export async function commitDeparture(
 
   const workspace = context.scope.workspaceId;
   // A departure revokes the owner's mailbox and holds their firms and enrollments:
-  // stop facts, so the send gate first (lane g77, `policy/sendGate.ts`).
+  // stop facts, so the send gate first (`policy/sendGate.ts`).
   await lockSendGateForStopFact(context);
   const membership = await loadMembership(context, input.userId);
   if (membership === null) return refuse('membership_unknown');

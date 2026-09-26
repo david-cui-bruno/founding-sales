@@ -7,7 +7,7 @@ import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts
 import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
 
 /**
- * "Confirm this number" (lane g88), kept for desktop 1.0.11 (deprecated by wave 2, S4.4).
+ * "Confirm this number", kept for desktop 1.0.11 (deprecated by wave 2, S4.4).
  *
  * A phone number is usable on entry since wave 2, so nothing written now needs a
  * confirmation. A number an older release stored as a `candidate` still exists, and

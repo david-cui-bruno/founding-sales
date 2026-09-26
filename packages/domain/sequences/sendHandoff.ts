@@ -4,9 +4,9 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
  * The seam between a due email step and the send (specification 11.2, 12.2, 12.5,
  * Appendix B).
  *
- * Lane G7-2 owns `outbound_messages`, the at-most-once fence, the Gmail call, the
- * reputation ramp and the domain guard. This lane owns everything up to the moment
- * the bytes are decided, and hands them over.
+ * `packages/domain/outbound` owns `outbound_messages`, the at-most-once fence, the Gmail
+ * call and the reputation ramp. The sequences code owns everything up to the moment the
+ * bytes are decided, and hands them over.
  *
  * The division is not arbitrary. 11.1 says "Missing required variables hold the
  * step", so substitution has to happen *before* a fence exists — a fence prepared for
@@ -121,7 +121,7 @@ export interface OutboundFenceOutcome {
   readonly dispatchedAt: string | null;
   readonly heldReason: string | null;
   /**
-   * The fence's own id, once one exists (lane g82).
+   * The fence's own id, once one exists.
    *
    * A step woken again — its cap cleared, its pause released, or its worker died between
    * the step's transaction and the claim (audit C02, C03) — already has a fence, and the
@@ -131,7 +131,7 @@ export interface OutboundFenceOutcome {
    */
   readonly outboundMessageId?: string | null | undefined;
   /**
-   * An administrator's answer to an `unknown_terminal` fence (12.5, Appendix B; lane g82).
+   * An administrator's answer to an `unknown_terminal` fence (12.5, Appendix B).
    *
    * `delivered` continues the sequence from the original dispatch time, `skipped` stops
    * the enrollment. Absent or null while nobody has answered.

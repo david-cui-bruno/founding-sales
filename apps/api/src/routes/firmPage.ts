@@ -37,7 +37,7 @@ export async function routeFirmPage(request: ApiRequest, options: RoutingOptions
   const parsed = firmPageRequestSchema.safeParse(request.body);
   if (!parsed.success) return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };
 
-  // Lane g90: `pageVersion: 2` puts each route's technical validation on it. Without it
+  // `pageVersion: 2` puts each route's technical validation on it. Without it
   // the answer is the shape an installed 1.0.5 parses strictly.
   const page = await readFirmPage(scoped.context, {
     firmId: parsed.data.firmId,

@@ -1,7 +1,7 @@
 import { isImageDigest } from '@fss/contracts';
 
 /**
- * Which image this process is running (lane g71).
+ * Which image this process is running.
  *
  * The release-record rule compares a stored digest with the running one, so each
  * service has to know its own. ECS already says: every task gets

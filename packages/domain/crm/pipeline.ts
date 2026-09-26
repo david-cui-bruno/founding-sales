@@ -155,7 +155,7 @@ export async function changeStage(
   input: ChangeStageInput,
 ): Promise<CrmResult<OpportunityRow>> {
   // Won and Lost stop automation (8.1), so a stage change is a potential stop fact and
-  // takes the send gate before the opportunity's row (lane g77, `policy/sendGate.ts`).
+  // takes the send gate before the opportunity's row (`policy/sendGate.ts`).
   await lockSendGateForStopFact(context);
   const opportunity = await loadOpportunityForUpdate(context, input.opportunityId);
   if (opportunity === null) return refuse('opportunity_unknown');
@@ -228,7 +228,7 @@ export async function changeStage(
  * and only a person's explicit reopen or a new enrollment moves the other way, which
  * is why there is no `manual → automated` path here at all.
  *
- * `origin` is required and is not the same thing as `reason` (lane G22). The reason is
+ * `origin` is required and is not the same thing as `reason`. The reason is
  * a sentence a person reads; the origin is one of `MANUAL_MODE_ORIGINS`, the fact the
  * terminal-stop consumer turns into an `end_reason`. It is required rather than
  * defaulted so that a new caller has to say which of 7.3's four ways in it is, instead
@@ -245,7 +245,7 @@ export async function setManualControlMode(
   },
 ): Promise<CrmResult<OpportunityRow>> {
   // 7.3's manual mode is the confirmed reply's stop, so it takes the send gate before
-  // any row (lane g77, `policy/sendGate.ts`): a send whose claim is in flight commits
+  // any row (`policy/sendGate.ts`): a send whose claim is in flight commits
   // first, and one that has not claimed yet reads `manual` and does not.
   await lockSendGateForStopFact(context);
   const opportunity = await loadOpportunityForUpdate(context, input.opportunityId);

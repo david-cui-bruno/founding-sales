@@ -1,14 +1,14 @@
 import type { JobHandler } from '@fss/domain/jobs/handlerRegistry.ts';
-import { type EnvelopeCipher } from '@fss/domain/mail/envelope.ts';
-import { type GmailClient, type GmailOAuthConfig } from '@fss/domain/mail/gmailClient.ts';
+import type { EnvelopeCipher } from '@fss/domain/mail/envelope.ts';
+import type { GmailClient, GmailOAuthConfig } from '@fss/domain/mail/gmailClient.ts';
 import {
   MAIL_LEASE_SECONDS,
   mailRecoveryHandler,
   mailSyncHandler,
   watchRenewalHandler,
 } from '@fss/domain/mail/handlers.ts';
-import { type RecoveryFloorSource } from '@fss/domain/mail/recover.ts';
-import { type ReplyPromoter } from '@fss/domain/mail/replyLane.ts';
+import type { RecoveryFloorSource } from '@fss/domain/mail/recover.ts';
+import type { ReplyPromoter } from '@fss/domain/mail/replyLane.ts';
 import type { SuppressionJournal } from '@fss/domain/suppression/journal.ts';
 import { mailReconcileHandler } from '@fss/domain/outbound/handlers.ts';
 import { combinedRecoveryFloor, outboundRecoveryFloor } from '@fss/domain/outbound/recoveryFloor.ts';

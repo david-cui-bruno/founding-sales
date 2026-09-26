@@ -1,8 +1,8 @@
 import type { Queryable } from '../db/queryable.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { openHold, releaseHoldsOfEvent } from '../policy/holds.ts';
-import { type EnvelopeCipher } from '../mail/envelope.ts';
-import { type GmailClient, type GmailOAuthConfig } from '../mail/gmailClient.ts';
+import type { EnvelopeCipher } from '../mail/envelope.ts';
+import type { GmailClient, GmailOAuthConfig } from '../mail/gmailClient.ts';
 import { accessForMailbox } from '../mail/sync.ts';
 import {
   beginReconciling,

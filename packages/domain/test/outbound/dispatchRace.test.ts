@@ -31,7 +31,7 @@ import {
 } from './support/dispatchFixtures.ts';
 
 /**
- * Appendix G 3 and 6 with the race window actually entered (lane g77: S01, T02, C25).
+ * Appendix G 3 and 6 with the race window actually entered (S01, T02, C25).
  *
  * Appendix G 3: "Worker pauses after eligibility read, reply commits, worker resumes: no
  * external action after the reply linearizes." The release check that stood for it

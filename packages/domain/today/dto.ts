@@ -2,7 +2,7 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { currentCallingIdentityId } from '../dial/identities.ts';
 import { businessDateOf, listTodayCards, listTodayItems, workspaceBusinessTimeZone } from './snapshots.ts';
 import { TODAY_PAUSE_SOURCE_EVENT_KIND, callLogIdOfItemKey, type TodayCounts, type TodayItemRow } from './types.ts';
-import { type TodayItemKind, type TodayLane } from '@fss/contracts';
+import type { TodayItemKind, TodayLane } from '@fss/contracts';
 
 /**
  * What the API returns and the Mac shows (specification 8.2, 14.1, Appendix F).
@@ -53,7 +53,7 @@ export interface TodayTaskDto {
 }
 
 /**
- * A task as the expanded card's second version carries it (lane g79).
+ * A task as the expanded card's second version carries it.
  *
  * Four identities G6's task dropped, each of which a control needs:
  *
@@ -117,15 +117,15 @@ export interface TodayFirmDto<Task extends TodayTaskDto = TodayTaskDtoV2> {
    * there is nothing here for the client to choose and no reason for it to hold a
    * list. Null is a card with no Call button, which is the honest state for an actor
    * who has not attested a number. With several, it is the most recently attested
-   * (`currentCallingIdentityId`, lane g60).
+   * (`currentCallingIdentityId`).
    */
   readonly callingIdentityId: string | null;
 }
 
 /**
- * The expanded card in G6's first shape: every task without the four identities of
+ * The expanded card in its first shape: every task without the four identities of
  * `TodayTaskDtoV2`. What `/today/firm` answers a client that did not ask for version 2,
- * so a desktop released before lane g79 keeps parsing the card it always parsed.
+ * so an older desktop keeps parsing the card it always parsed.
  */
 export function todayFirmVersion1(page: TodayFirmDto): TodayFirmDto<TodayTaskDto> {
   return {
@@ -318,7 +318,7 @@ export async function readTodayFirm(
     [context.scope.workspaceId, input.firmId],
   );
 
-  // The same choice the settings page shows as "used for calls" (lane g60): the most
+  // The same choice the settings page shows as "used for calls": the most
   // recently attested of the actor's verified, enabled numbers. One function, so the
   // card and the page cannot disagree about which line a call will leave on.
   const actor = context.scope.actor;

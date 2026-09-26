@@ -6,7 +6,7 @@ import {
   type TodayItemStatus,
   type TodaySourceKind,
 } from './types.ts';
-import { type TodayItemKind, type TodayLane } from '@fss/contracts';
+import type { TodayItemKind, TodayLane } from '@fss/contracts';
 
 /**
  * Reading and writing the Today tables (specification 8.2).
@@ -267,7 +267,7 @@ export async function completeTodayItem(
 }
 
 /**
- * Finish every open task with this key at this firm, on any date (lane g79).
+ * Finish every open task with this key at this firm, on any date.
  *
  * A needs-a-time callback and a sequence step's task are both carried from day to day
  * under one key, and what finishes them — a scheduled callback, a recorded call — is

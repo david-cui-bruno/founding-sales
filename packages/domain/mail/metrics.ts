@@ -28,22 +28,17 @@ import { hoursToSoonestWatchExpiry } from './watch.ts';
  * so G7-2 supplies it and the metric starts being published in the same commit.
  *
  * **`MailboxCheckHeartbeat`** is "three missed one-minute mailbox checks", and it asks
- * about the mailboxes that are supposed to be checked: the connected ones (lane g81,
- * audit O15). Until then the job lane published it from every mailbox heartbeat row,
- * so a workspace that had never connected a mailbox published nothing — which the
- * alarm treats as breaching — and a mailbox its owner had disconnected left a row that
- * aged into a zero. Either way an environment with no mailbox on purpose sat in
- * critical ALARM, and held the critical composite there. It is published on every pass
- * now: 1 when every connected mailbox's check is on time, including when none is
+ * about the mailboxes that are supposed to be checked: the connected ones (audit O15),
+ * so an environment with no mailbox on purpose does not sit in critical ALARM. It is
+ * published on every pass: 1 when every connected mailbox's check is on time, including when none is
  * connected, and 0 when any connected mailbox's check is late or has never happened.
  * A revoked grant is not a missed check either — it is 12.6's
  * `MailboxDisconnectedHours`, with its 48 hours.
  *
  * **`MailboxCoverageAgeSeconds`** is how long ago the stalest connected, `ready`
- * mailbox's coverage was last proved (lane g81). Since lane g77 the send path holds
- * every automated email for an owner whose watermark is older than
- * `COVERAGE_FRESHNESS_SECONDS` (`coverage.ts`), and until this gauge nothing outside
- * the Mac showed whether sync was advancing: the heartbeat says a check *ran*, and a
+ * mailbox's coverage was last proved. The send path holds every automated email for an
+ * owner whose watermark is older than `COVERAGE_FRESHNESS_SECONDS` (`coverage.ts`), and
+ * this gauge is what shows outside the Mac whether sync is advancing: the heartbeat says a check *ran*, and a
  * rate-limited check runs and proves nothing. The warning `mailbox_coverage_stale`
  * alarms above the same fifteen minutes. See `mailboxCoverageAgeSeconds` for how it
  * agrees with the gate.

@@ -2,7 +2,7 @@ import type { SessionQueryable } from '../../../db/queryable.ts';
 import type { TwoWorkspaces } from './fixtures.ts';
 
 /**
- * A failing insert for every constraint migration 0004 adds (lane G3a: firms,
+ * A failing insert for every constraint migration 0004 adds (firms,
  * contacts, routes, evidence, pipeline stages, opportunities, stage history, aliases,
  * merges and the CRM domain-event outbox).
  *

@@ -4,8 +4,7 @@ import type { StepChannel } from '@fss/contracts';
 
 /**
  * When a step execution is owed another look, and the job key that look runs under
- * (specification 4.3, 11.2, 13.1, Appendix B, Appendix C; lane g82, audit C02, C03,
- * C05 and C10).
+ * (specification 4.3, 11.2, 13.1, Appendix B, Appendix C; audit C02, C03, C05 and C10).
  *
  * ## The defect this file exists for
  *

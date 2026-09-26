@@ -1,8 +1,8 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { openHold } from '../policy/holds.ts';
 import { lockSendGateForDispatch } from '../policy/sendGate.ts';
-import { type EnvelopeCipher } from '../mail/envelope.ts';
-import { type GmailClient, type GmailOAuthConfig } from '../mail/gmailClient.ts';
+import type { EnvelopeCipher } from '../mail/envelope.ts';
+import type { GmailClient, GmailOAuthConfig } from '../mail/gmailClient.ts';
 import { accessForMailbox } from '../mail/sync.ts';
 import {
   beginReconciling,
@@ -31,7 +31,7 @@ import { RECONCILE_WINDOW_HOURS, type SendRefusalCode } from './types.ts';
  *   3. OAuth: exchange the refresh token for an access token. The one slow, networked
  *      step before the send, and it happens *before* the claim transaction opens, so
  *      no lock is ever held across a network call.
- *   4. Recheck and claim, in **one transaction** (lane g77):
+ *   4. Recheck and claim, in **one transaction**:
  *        a. take the send gate SHARED (`policy/sendGate.ts`) — every reply, opt-out,
  *           hold and manual-mode change takes it EXCLUSIVE before it commits;
  *        b. lock the fence and its enrollment `FOR UPDATE`;
@@ -47,12 +47,10 @@ import { RECONCILE_WINDOW_HOURS, type SendRefusalCode } from './types.ts';
  *
  * ## Why the recheck and the claim share a transaction and a lock
  *
- * Before lane g77 the gate read, the counter moved, OAuth ran, and a state-only UPDATE
- * claimed — four autocommit statements with a token refresh in the middle. A reply
- * that committed during the refresh was never read, and the claim succeeded anyway:
- * Appendix G 3 with a real window, and the release suite never entered it
- * (`packages/domain/test/outbound/dispatchRace.test.ts` does now). Inside one
- * transaction the recheck sees everything committed before the gate was granted, and
+ * Four autocommit statements with a token refresh in the middle would let a reply that
+ * committed during the refresh go unread while the claim succeeded anyway: Appendix
+ * G 3 with a real window (`packages/domain/test/outbound/dispatchRace.test.ts`). Inside
+ * one transaction the recheck sees everything committed before the gate was granted, and
  * nothing that stops a send can commit between the recheck and the claim, because
  * committing one needs the gate the claim is holding.
  *
@@ -245,7 +243,7 @@ export async function dispatchOutboundMessage(
   // it is where the day learns it. Counted whether Gmail refused or went quiet: the
   // ramp's question is whether the day went well, and a day whose sends went into
   // doubt did not. The counter feeds `rampHealthFailure`'s `provider_warning`, which
-  // is why that rule takes `providerErrors` and not only a boolean (lane G15).
+  // is why that rule takes `providerErrors` and not only a boolean.
   await recordDaySignal(context, {
     mailboxId: plan.mailbox.id,
     businessDate: plan.day.businessDate,
@@ -303,7 +301,7 @@ type ClaimOutcome =
 
 /**
  * Step 4: the recheck, the reservation and the claim, in one transaction under the
- * send gate (lane g77). See the file header for why each is here.
+ * send gate. See the file header for why each is here.
  *
  * The locks, in order: the gate (shared), the fence, the enrollment. Nothing is locked
  * before the gate, which is the order every stop-fact writer is asked to keep
@@ -372,7 +370,7 @@ async function recheckAndClaim(
     const claim = await claimForDispatch(context, {
       outboundMessageId: fence.id,
       businessDate: plan.day.businessDate,
-      // Lane g100: the audit line of which attestation admitted this send.
+      // The audit line of which attestation admitted this send.
       detail: { releaseAdmission: plan.release },
       ...(deps.actor === undefined ? {} : { actor: deps.actor }),
     });

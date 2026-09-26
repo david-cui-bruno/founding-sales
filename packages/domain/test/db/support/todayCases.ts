@@ -2,7 +2,7 @@ import type { SessionQueryable } from '../../../db/queryable.ts';
 import type { TwoWorkspaces } from './fixtures.ts';
 
 /**
- * A failing insert for every constraint migration 0008 adds (lane G6: the Today
+ * A failing insert for every constraint migration 0008 adds (the Today
  * snapshot, its contact tasks and their snoozes).
  *
  * Same rules as `crmCases.ts` and `policyCases.ts`: their own file so two lanes never

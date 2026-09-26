@@ -140,7 +140,7 @@ describe('8.0x: the Mac client connects the mailbox', () => {
   });
 
   it('is a build the deployed API accepts', () => {
-    // Since lane g78 the container holds a policy — a minimum, a `1.x` ceiling and a
+    // The container holds a policy — a minimum, a `1.x` ceiling and a
     // list of known-bad builds — and publishes the range derived from it. The build with
     // the row is inside the published range and not on the incompatible list.
     expect(compareVersions(publishedClientVersions(CONTAINER_CLIENT_VERSIONS).maximum, FIRST_VERSION_WITH_THE_ROW)).toBeGreaterThanOrEqual(0);

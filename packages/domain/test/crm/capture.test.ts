@@ -21,7 +21,7 @@ import {
 } from '../../crm/import.ts';
 
 /**
- * Capturing firms from the desktop (lane g84, audit item G02): one row per contact, the
+ * Capturing firms from the desktop (audit item G02): one row per contact, the
  * duplicate rules, and the Add firm form that is one row of an import.
  *
  * `import.test.ts` keeps Appendix G 38's four defects in one file. This file is about

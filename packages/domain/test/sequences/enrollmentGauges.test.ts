@@ -15,7 +15,7 @@ import { seedSequences, type SeededSequences } from './support/sequenceFixtures.
 
 /**
  * `ActiveEnrollments` and `HeldEnrollments` against a real PostgreSQL (specification
- * 4.3, 11.2, 13.3; lane g72).
+ * 4.3, 11.2, 13.3).
  *
  * The alarm is `IF(active > 0, held / active, 0) >= 1`, so the two numbers are one
  * claim — "every live enrollment is blocked by something nobody chose" — and each case

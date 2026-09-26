@@ -6,7 +6,7 @@ import type { SeededMail } from './mailFixtures.ts';
 import { FIXTURE_TOPIC_NAME } from './mailFixtures.ts';
 
 /**
- * A failing insert for every constraint migration 0009 adds (lane G7: mailboxes,
+ * A failing insert for every constraint migration 0009 adds (mailboxes,
  * envelope-encrypted tokens, watches, recoveries, push notifications, messages,
  * bodies, matches, classifications, effects and the minimal template version).
  *

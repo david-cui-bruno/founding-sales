@@ -2,15 +2,15 @@ import { readFileSync } from 'node:fs';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../../db/workspaceScope.ts';
 import { promoteReply } from '../../../today/promotions.ts';
 import { runMailRecovery } from '../../../mail/recover.ts';
-import { type ReplyPromoter } from '../../../mail/replyLane.ts';
+import type { ReplyPromoter } from '../../../mail/replyLane.ts';
 import { anthropicReplyClassifier, type ReplyClassifierPort } from '../../../classification/adapter.ts';
-import { type ClassifyReplyDeps } from '../../../classification/classify.ts';
+import type { ClassifyReplyDeps } from '../../../classification/classify.ts';
 import {
   recordedAnthropicTransport,
   type RecordedAnswer,
   type RecordedAnthropicTransport,
 } from '../../../classification/recorded.ts';
-import { type ClassifierSettings } from '../../../classification/types.ts';
+import type { ClassifierSettings } from '../../../classification/types.ts';
 import {
   createMailWorld,
   fixtureMessage,

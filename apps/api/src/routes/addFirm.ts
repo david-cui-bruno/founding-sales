@@ -6,7 +6,7 @@ import { requirePrincipal } from './routeSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**
- * `POST /crm/firms/add`: the Add firm form (lane g84, audit item G02).
+ * `POST /crm/firms/add`: the Add firm form (audit item G02).
  *
  * An empty workspace could not be filled from the Mac: the CRM window opened and edited
  * firms that already existed, and nothing created one. This is the form's command. It is
@@ -21,7 +21,7 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  *
  * A refusal names its fields. `issues` is every field at fault, by the import column the
  * form's field stands for, and `firmId` is the firm a `duplicate_in_workspace` matched.
- * Both are kept on the receipt (lane g78's refusal details), so a replay answers the same.
+ * Both are kept on the receipt as the refusal's details, so a replay answers the same.
  */
 
 export const ADD_FIRM_PATHS = ['/crm/firms/add'] as const;

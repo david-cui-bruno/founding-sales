@@ -1,7 +1,7 @@
 import type { HoldReasonCode } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { openHold, releaseHoldsOfEvent } from '../policy/holds.ts';
-import { type WorkspaceHolidayCalendar } from '../src/rules/businessDays.ts';
+import type { WorkspaceHolidayCalendar } from '../src/rules/businessDays.ts';
 import { placeEmailSend } from '../src/rules/sendingWindow.ts';
 import { readTemplateVersion, renderTemplateVersion } from '../templates/templates.ts';
 import { businessDateOf } from '../today/snapshots.ts';
@@ -35,7 +35,7 @@ import {
   type SequenceVersionRow,
   type StepExecutionRow,
 } from './types.ts';
-import { type StepChannel, type StepCompletionSource, type StepResult } from '@fss/contracts';
+import type { StepChannel, StepCompletionSource, StepResult } from '@fss/contracts';
 import { templateVariablesFor } from './variables.ts';
 
 export { rescheduleExecution, type RescheduleInput } from './shifts.ts';
@@ -67,7 +67,7 @@ export { rescheduleExecution, type RescheduleInput } from './shifts.ts';
  * (`docs/decisions/g8-this-lane-dispatches.md`), and in `completeEmailStep`, which is
  * what an administrator's unknown-terminal resolution lands in.
  *
- * ## A step is run more than once (lane g82)
+ * ## A step is run more than once
  *
  * The scheduler wakes a step again whenever its row has moved and it is due: a held
  * step whose `not_before` has passed and that no open hold blocks, and a `dispatched`
@@ -121,14 +121,14 @@ export const CLOCK_CLEARING_HOLDS: Partial<Record<HoldReasonCode, number>> = {
 
 /**
  * How long a step held for any *other* reason waits before it is asked again, when no
- * open hold row explains it (lane g82).
+ * open hold row explains it.
  *
  * A step held because an open hold blocks it is not asked at all until that hold is
  * released — `holdExecution` leaves its `not_before` where it was and the wake skips it
  * while the hold is open. The reasons no hold row stands behind — a route that is
  * missing, a template not yet approved, coverage that went stale for a moment, a
- * mailbox never connected — have nobody to release them, and before lane g82 a step
- * held for one of them waited for ever. It is asked again after this long instead.
+ * mailbox never connected — have nobody to release them, so a step held for one of
+ * them is asked again after this long.
  *
  * `send_unknown_terminal` is shorter because the thing it waits for is an
  * administrator's answer, and the step should continue soon after it is given.
@@ -201,7 +201,7 @@ export async function runDueStepExecution(
     loaded = enrollment === null ? null : await nextUnfinishedExecution(context, input.enrollmentId);
   }
   if (loaded === null) return { kind: 'nothing_to_do' };
-  // `dispatched` is runnable since lane g82 (audit C03): its fence may still be
+  // `dispatched` is runnable (audit C03): its fence may still be
   // `prepared` because the worker that prepared it died before the claim.
   if (loaded.state !== 'pending' && loaded.state !== 'held' && loaded.state !== 'dispatched') {
     return { kind: 'nothing_to_do' };
@@ -526,7 +526,7 @@ export async function dispatchPreparedStep(
   if (execution === null || execution.state !== 'dispatched') return { kind: 'nothing_to_do' };
 
   let fence = await input.sendHandoff.readOutcome(context, execution.id);
-  // `held` as well as `prepared` since lane g82: a step woken after its cap, window or
+  // `held` as well as `prepared`: a step woken after its cap, window or
   // pause cleared carries a held fence, and the dispatch path is what releases it and
   // decides again (`g7-held-returns-to-prepared`). Neither state ever entered
   // `dispatching`, so neither can have reached Gmail, and the claim is still the one
@@ -614,7 +614,7 @@ async function holdExecution(
   reasonCode: HoldReasonCode,
   options: { readonly openHoldRow?: boolean; readonly detail?: readonly string[] } = {},
 ): Promise<StepRunOutcome> {
-  // The hold row first, so the `not_before` decision below sees it (lane g82).
+  // The hold row first, so the `not_before` decision below sees it.
   if (options.openHoldRow === true) {
     const { rows } = await context.db.query<{ id: string }>(
       `SELECT id FROM active_holds
@@ -635,7 +635,7 @@ async function holdExecution(
     }
   }
 
-  // When the scheduler may ask again (lane g82, `wake.ts`). A step an open hold blocks
+  // When the scheduler may ask again (`wake.ts`). A step an open hold blocks
   // keeps its `not_before`: the wake skips it while the hold is open and takes it on
   // the first pass after the release, which is 4.3's resume. Any other held step —
   // its own fence's cap or window, a reason no hold row stands behind — waits out the
@@ -694,7 +694,7 @@ export interface CompletedStep {
  * enrollment began, G0's start anchor (`packages/domain/src/rules/cadence.ts`) and what
  * the editor shows as "N business days after enrollment" — unless this step ran late,
  * in which case it is the plan's gap between the two steps counted from when this one
- * actually happened (lane g82, audit C11; `successor.ts`). On time the two agree, so a
+ * actually happened (audit C11; `successor.ts`). On time the two agree, so a
  * firm that sat in a queue before its first step still keeps its cadence; late, the
  * next step keeps its spacing instead of falling due the same hour.
  */

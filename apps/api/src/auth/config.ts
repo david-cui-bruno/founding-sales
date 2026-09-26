@@ -43,8 +43,8 @@ export interface AuthConfig {
   readonly oidc: GoogleOidcConfig;
   readonly sessions: SessionPolicy;
   /**
-   * What this API admits: a minimum, a compatibility ceiling and the known-bad builds
-   * (lane g78). Every check reads the policy; every answer publishes the range derived
+   * What this API admits: a minimum, a compatibility ceiling and the known-bad builds.
+   * Every check reads the policy; every answer publishes the range derived
    * from it (`publishedClientVersions`), because that is what a 1.0.x Mac parses.
    */
   readonly supportedClientVersions: ClientVersionPolicy;

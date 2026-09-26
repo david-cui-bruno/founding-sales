@@ -28,7 +28,7 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  *     results they may raise a mailbox to 75". The raise is refused, with the part of
  *     the rule not met, unless the mailbox has finished the schedule
  *     (`ramp_not_settled`) and kept its last ten closed sending days healthy
- *     (`health_not_sustained`) — lane g87, audit S06. Unchanged for desktop 1.0.11;
+ *     (`health_not_sustained`) — audit S06. Unchanged for desktop 1.0.11;
  *   * `/outbound/cap/override` — wave 2 (S4.6): the admin raises a mailbox to any cap up
  *     to the ceiling of 100, or clears the raise, earned or not, and the answer's
  *     `warning` names the part of the rule not met. The daily cap is still enforced at

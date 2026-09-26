@@ -3,7 +3,7 @@ import type { TwoWorkspaces } from './fixtures.ts';
 import { payloadHash } from './fixtures.ts';
 
 /**
- * A failing insert for every constraint migration 0003 adds (lane G2: sessions,
+ * A failing insert for every constraint migration 0003 adds (sessions,
  * device refresh credentials, one-time OpenID Connect authorization requests, and
  * one command id per workspace).
  *

@@ -26,8 +26,8 @@ import {
 import { DESKTOP_VERSION_UNDER_TEST, desktopClient, routeAnswer, shapeOf } from '../support/wireThrough.ts';
 
 /**
- * The sequence editor reads what the API sends (release.md 8.0aj; lane g78, audit items
- * D01, D02, D06, T04).
+ * The sequence editor reads what the API sends (release.md 8.0aj; audit items D01, D02,
+ * D06, T04).
  *
  * Desktop 1.0.4 could not read a single populated version or enrollment list. The API
  * puts `sequenceVersionId` on every step (`toStep`, `packages/domain/sequences/rows.ts`)
@@ -56,7 +56,7 @@ import { DESKTOP_VERSION_UNDER_TEST, desktopClient, routeAnswer, shapeOf } from 
 const SIGN_OFF = 'Sam Example\nCallie';
 const NINE_DAYS = 9 * 86_400_000;
 
-describe('8.0aj: the sequence editor reads a populated version and its enrollments (lane g78)', () => {
+describe('8.0aj: the sequence editor reads a populated version and its enrollments', () => {
   let fixture: AuthFixture;
   let adminToken = '';
   let salespersonToken = '';

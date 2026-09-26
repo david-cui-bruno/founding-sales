@@ -2,8 +2,7 @@ import type { SessionQueryable } from '../../../db/queryable.ts';
 import type { TwoWorkspaces } from './fixtures.ts';
 
 /**
- * A failing insert for every constraint migration 0013 adds (lane G9:
- * `workspace_settings`).
+ * A failing insert for every constraint migration 0013 adds (`workspace_settings`).
  *
  * Same rules as `todayCases.ts`: its own file so two lanes never edit the middle of
  * one array, each case inside a transaction the caller rolls back, and each row

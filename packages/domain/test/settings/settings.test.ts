@@ -214,7 +214,7 @@ describe('workspace settings', () => {
 
     // `sending_enabled` is the one slice no earlier test in this file has written, so
     // the two saves really are version 1 and version 2. It was `postal_footer` until
-    // migration 0015 removed that slice. Since lane g71 an enable names a stored,
+    // migration 0015 removed that slice. An enable names a stored,
     // passing release record bound to the running API, so both references are stored
     // first and both saves say which API image they are.
     await storeFixtureRecord(database.session, 'rehearsal-2026-09-20-a');

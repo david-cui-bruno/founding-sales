@@ -8,7 +8,7 @@ import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts
 import { firstStageId, stageIdByKey } from '../db/support/crmFixtures.ts';
 
 /**
- * Lane 4 is for firms nobody has worked yet (8.2; lane g88, audit C19).
+ * Lane 4 is for firms nobody has worked yet (8.2; audit C19).
  *
  * The new-firm query joined only the open opportunity, so a firm whose opportunity was
  * Won or Lost read as a firm with no opportunity at all and came back the next morning

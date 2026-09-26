@@ -7,7 +7,7 @@
  * digits. JavaScript's `Number` is exact only to 2^53 - 1, so `Number('9007199254740993')`
  * is `9007199254740992` and two different ids compare equal. Every comparison of two
  * history ids in this lane goes through `compareHistoryIds`, which is `BigInt`, and
- * nothing converts one to a `Number` (lane g76, audit item C08).
+ * nothing converts one to a `Number` (audit item C08).
  *
  * `mailboxes.history_id` is `text` with `CHECK (history_id ~ '^[0-9]{1,20}$')`
  * (migration 0009), so the database stores exactly what Gmail sent. `HISTORY_ID_PATTERN`

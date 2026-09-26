@@ -45,7 +45,7 @@ export const workspaceSchema = z.strictObject({
 
 /**
  * The `google_sub` a bootstrapped admin's `users` row carries until that person has
- * signed in for the first time (lane g39).
+ * signed in for the first time.
  *
  * `fss admin workspace bootstrap` has to create the first `users` row before anybody
  * has ever presented an id token, and `google_sub` is `NOT NULL UNIQUE` because it is

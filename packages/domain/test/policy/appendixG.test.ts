@@ -117,10 +117,10 @@ describe('scenario 17: no replay ever yields a second allow', () => {
     });
     if (!issued.ok) throw new Error(`expected a ticket, got ${issued.reason}`);
 
-    // Consumption re-runs `authorizeDial` (lane g79, S10), calling window included, so
+    // Consumption re-runs `authorizeDial` (S10), calling window included, so
     // it takes the same pinned instant as the authorization. Left to database time it
     // passed only on weekdays 08:00-20:00 Providence time, and failed from 20:00 on
-    // Friday 25 Sep 2026, 00:00Z (lane g101). The replay is asked at the same
+    // Friday 25 Sep 2026, 00:00Z. The replay is asked at the same
     // in-window instant, so its refusal cannot be the window's.
     const consumed = await consumeDialTicket(context, {
       ticketId: issued.value.ticketId,

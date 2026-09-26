@@ -1,6 +1,6 @@
 import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 import { withTransaction } from '@fss/domain/db/queryable.ts';
-import { type JobRunOutcome } from '@fss/domain/jobs/atLeastOnce.ts';
+import type { JobRunOutcome } from '@fss/domain/jobs/atLeastOnce.ts';
 import { DEFAULT_BACKOFF, type BackoffPolicy } from '@fss/domain/jobs/backoff.ts';
 import { scopeForJob, type HandlerRegistry, type JobHandler } from '@fss/domain/jobs/handlerRegistry.ts';
 import { recordHeartbeat } from '@fss/domain/jobs/heartbeats.ts';

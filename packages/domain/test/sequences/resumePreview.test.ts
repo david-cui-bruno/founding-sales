@@ -10,7 +10,7 @@ import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
 import { seedSequences, type SeededSequences } from './support/sequenceFixtures.ts';
 
 /**
- * "Review and resume" shows the review (lane g88, audit G06; specification 4.3).
+ * "Review and resume" shows the review (audit G06; specification 4.3).
  *
  * Installed desktops up to 1.0.11 show `previewResume` before they confirm a resume, for
  * an enrollment an older release left in `review_required` (a long hold resumes on its

@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { connectMailboxCommandSchema, gmailConnectResultSchema, gmailStatusSchema } from '@fss/contracts';
-import { type MailPublicConfig } from '@fss/domain/mail/config.ts';
+import type { MailPublicConfig } from '@fss/domain/mail/config.ts';
 import { localEnvelopeCipher } from '@fss/domain/mail/envelope.ts';
 import { recordedGmailClient, type GmailFixture, type RecordedGmailClient } from '@fss/domain/mail/gmailClientFake.ts';
 import { signGrantState } from '@fss/domain/mail/oauth.ts';

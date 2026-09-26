@@ -5,7 +5,7 @@ import {
   readFenceForSentMessage,
   markPreDispatchFenceSent,
 } from '../outbound/fence.ts';
-import { type SentFolderMessage } from '../outbound/sentFolder.ts';
+import type { SentFolderMessage } from '../outbound/sentFolder.ts';
 import { completeEmailStep } from '../sequences/executions.ts';
 import { nextUnfinishedExecution } from '../sequences/rows.ts';
 import { businessDateOf } from '../today/snapshots.ts';

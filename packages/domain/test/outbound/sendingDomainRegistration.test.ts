@@ -13,7 +13,7 @@ import {
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 
 /**
- * `registerSendingDomain`, the only creator of a `sending_domains` row (lane g57).
+ * `registerSendingDomain`, the only creator of a `sending_domains` row.
  *
  * Until it existed, `recordAuthenticationChecklist` answered `domain_unknown` in every
  * real workspace, because the row it updates was written by nothing but the tests and

@@ -28,7 +28,7 @@ import { payloadHashOf } from './tokens.ts';
 
 /**
  * What a refusal may carry beside its code: the typed facts a person needs to act on
- * it, such as a merge's conflicts (lane g78, audit item D05). Kept on the receipt with
+ * it, such as a merge's conflicts (audit item D05). Kept on the receipt with
  * the reason, so a replay of the same command id answers with the same details rather
  * than with a bare code the Mac cannot draw a screen from.
  */
@@ -43,9 +43,9 @@ export type CommandOutcome<T> =
   | { readonly status: 'refused'; readonly reason: string; readonly replayed: boolean; readonly details?: RefusalDetails };
 
 /**
- * The receipt's `result` for a refusal: the reason as a JSON string, as every receipt
- * before lane g78 stored it, or `{ reason, details }` when the refusal carried details.
- * Both are read back by `refusalOfReceipt`, so the old receipts replay unchanged.
+ * The receipt's `result` for a refusal: the reason as a JSON string, as older receipts
+ * stored it, or `{ reason, details }` when the refusal carried details. Both are read
+ * back by `refusalOfReceipt`, so the old receipts replay unchanged.
  */
 function storedRefusal(reason: string, details: RefusalDetails | undefined): string {
   return JSON.stringify(details === undefined ? reason : { reason, details });

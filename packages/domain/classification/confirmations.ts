@@ -10,7 +10,7 @@ import { recordDaySignal } from '../outbound/ramp.ts';
 import { releaseHoldsOfEvent } from '../policy/holds.ts';
 import { applyManualModeStop } from '../sequences/terminalStops.ts';
 import { recordSuppression } from '../suppression/events.ts';
-import { type SuppressionJournal } from '../suppression/journal.ts';
+import type { SuppressionJournal } from '../suppression/journal.ts';
 import { businessDateOf, completeTodayItem } from '../today/snapshots.ts';
 import type { ReplyDisposition } from '@fss/contracts';
 import { REPLY_DISPOSITIONS } from '@fss/contracts';
@@ -276,8 +276,8 @@ export async function confirmReplyDisposition(
     suppressionRecorded = handle.value.eventId;
     consequences.push('handle_suppressed');
 
-    // 12.7's ramp reads the day's opt-outs, and a confirmed `opt_out` is one
-    // (lane G15). Counted here rather than inside `recordSuppression`, because most
+    // 12.7's ramp reads the day's opt-outs, and a confirmed `opt_out` is one.
+    // Counted here rather than inside `recordSuppression`, because most
     // suppressions have no mailbox and no day: an import and a do-not-call from a
     // phone call are not deliverability signals about a mailbox's sending.
     //

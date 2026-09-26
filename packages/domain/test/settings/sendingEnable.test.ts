@@ -14,7 +14,7 @@ import {
 
 /**
  * Enabling production sending names a release record that binds to this API
- * (specification 16.2; lane g71).
+ * (specification 16.2).
  *
  * Until g71 `sending_enabled = { enabled: true, releaseGateReference: <anything> }`
  * was accepted: "the deployed commit/image digests match the rehearsal artifacts" was
@@ -127,7 +127,7 @@ describe('enabling production sending', () => {
     ).toEqual({ ok: false, reason: 'admin_only' });
   });
 
-  it('accepts the process form, ci-gate:main, only from an API a passing ci-gate record names (lane g100)', async () => {
+  it('accepts the process form, ci-gate:main, only from an API a passing ci-gate record names', async () => {
     // Its own API digests, so the records the other cases stored cannot answer for it.
     const ciApi = fixtureDigest('5');
     const rehearsedApi = fixtureDigest('6');

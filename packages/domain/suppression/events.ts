@@ -172,7 +172,7 @@ export async function recordSuppression(
   const actorUserId = actor.kind === 'user' ? actor.userId : null;
 
   // A suppression is the strongest stop fact there is, so it takes the send gate
-  // before anything else (lane g77, `policy/sendGate.ts`): a dispatch claim that is
+  // before anything else (`policy/sendGate.ts`): a dispatch claim that is
   // re-checking right now finishes first, and one that starts after this commits sees
   // the suppression. Before the firm lock, because the gate comes before rows.
   await lockSendGateForStopFact(context);

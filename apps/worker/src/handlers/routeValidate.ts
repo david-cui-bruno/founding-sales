@@ -5,7 +5,7 @@ import {
   runEmailRouteValidation,
   type MailDomainResolver,
 } from '@fss/domain/crm/routeValidation.ts';
-import { type SessionQueryable } from '@fss/domain/db/queryable.ts';
+import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 import { repositoryContext } from '@fss/domain/db/workspaceScope.ts';
 import type { JobHandler } from '@fss/domain/jobs/handlerRegistry.ts';
 import type { JobSpecification } from '@fss/domain/jobs/jobStore.ts';
@@ -13,7 +13,7 @@ import type { DueWorkSource } from '../scheduler/schedulerPass.ts';
 
 /**
  * The `route.validate` job and the sweep that retries it (specification 7.4, 13.1,
- * 13.2; lane g90).
+ * 13.2).
  *
  * The rules — what `technical_validation = 'passed'` means for an address — are
  * `packages/domain/crm/routeValidation.ts`, beside the route they decide, for the reason

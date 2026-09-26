@@ -14,7 +14,7 @@ import { instant, uuid } from './foundationRows.ts';
  * not — and the route's test holds its real answer to it through `wireDrift`.
  */
 
-/** Appendix B's state machine (`OUTBOUND_STATES`, `packages/domain/outbound/types.ts`). */
+/** Appendix B's state machine; the domain's send path imports it from here. */
 const OUTBOUND_STATES = ['prepared', 'held', 'dispatching', 'reconciling', 'sent', 'unknown_terminal'] as const;
 export type OutboundState = (typeof OUTBOUND_STATES)[number];
 

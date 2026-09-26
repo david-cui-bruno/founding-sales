@@ -233,7 +233,7 @@ describe('admin job and alert routes', () => {
     });
     expect(acknowledged?.status).toBe(200);
     expect(acknowledged?.body).toEqual({ acknowledged: true, alertKey: 'dead_job_unresolved' });
-    // The Mac reads this answer with `@fss/contracts`' schema since lane g78.
+    // The Mac reads this answer with `@fss/contracts`' schema.
     expect(wireDrift(alertAcknowledgedResponseSchema, acknowledged?.body)).toEqual([]);
 
     const audit = await database.session.query<{ count: string }>(

@@ -3,7 +3,7 @@ import type { QueryResultRowLike, SessionQueryable } from '@fss/domain/db/querya
 import { errorFields, type Logger } from './log.ts';
 
 /**
- * One database connection per request (lane g75).
+ * One database connection per request.
  *
  * Until this lane the API served every request on one `pg.Client`. node-postgres
  * serializes *statements* on a client, but not *transactions*: `withTransaction`

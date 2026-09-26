@@ -6,7 +6,7 @@ import { CLOCK_CLEARING_HOLDS } from './executions.ts';
 
 /**
  * The sequences lane's two gauges, `ActiveEnrollments` and `HeldEnrollments`
- * (specification 4.3, 11.2, 13.3; lane g72).
+ * (specification 4.3, 11.2, 13.3).
  *
  * 13.3 alarms when "all active sequences [are] unexpectedly held". The alarm in
  * `infra/modules/alerts/main.tf`, `all_sequences_held`, is metric math:

@@ -167,7 +167,7 @@ export const clientVersionNoticeSchema = z.strictObject({
   supported: clientVersionRangeSchema,
   /**
    * Where the current build is published. A public URL, never a signed one; in
-   * production the signed update manifest the desktop reads (lane g86), so it is
+   * production the signed update manifest the desktop reads, so it is
    * machine-facing and the Mac never shows it: the person reads `instruction`.
    */
   upgradeUrl: z.url(),

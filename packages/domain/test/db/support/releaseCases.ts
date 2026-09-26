@@ -1,8 +1,7 @@
 import type { SessionQueryable } from '../../../db/queryable.ts';
 
 /**
- * A failing insert for every constraint migration 0017 adds (lane g71:
- * `release_records`).
+ * A failing insert for every constraint migration 0017 adds (`release_records`).
  *
  * Same rules as the other case files: its own file so two lanes never edit the middle
  * of one array, each case inside a transaction the caller rolls back, and each row

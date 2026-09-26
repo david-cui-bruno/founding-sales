@@ -31,7 +31,7 @@ export const CRM_REFUSAL_CODES = [
   'contact_merged',
   'route_unknown',
   'route_retired',
-  // Lane g88: `/contacts/routes/confirm` on a number that changed since it was shown,
+  // `/contacts/routes/confirm` on a number that changed since it was shown,
   // or on one whose validation failed.
   'route_version_stale',
   'route_invalid',
@@ -127,7 +127,7 @@ export const routeDtoSchema = z.strictObject({
   /** The version the card shows; `authorize_dial` compares against it (9.1). */
   version: z.number().int().min(1),
   /*
-   * Lane g90: the route's technical validation (7.4), sent only in the Firm page's
+   * The route's technical validation (7.4), sent only in the Firm page's
    * second version (`pageVersion: 2`). Optional so the first version still parses: a
    * desktop released before g90 (1.0.5) parses this object strictly with a schema of its
    * own, and the API answers it without the key.
@@ -212,7 +212,7 @@ export const verifyRouteCommandSchema = z.strictObject({
 });
 
 /**
- * A person confirms a phone number reaches the firm (lane g88). Phone only: the literal
+ * A person confirms a phone number reaches the firm. Phone only: the literal
  * is the whole of that rule on the wire, and `docs/decisions/g88-founder-authoring-and-review.md`
  * says why an email address is not confirmed by hand. `routeVersion` is the version the
  * person was looking at; a route that has moved since is refused `route_version_stale`.
@@ -229,7 +229,7 @@ export const confirmRouteCommandSchema = z.strictObject({
 });
 
 /**
- * "Check again" on an address nobody has checked yet (lane g90): one more `route.validate`
+ * "Check again" on an address nobody has checked yet: one more `route.validate`
  * job for the email route at the version the person was looking at. Email only — a number
  * is confirmed by a person, not checked by the worker — and it changes nothing about the
  * route itself; the worker's answer does. A route that has moved since is refused
@@ -290,7 +290,7 @@ const mergeConflictSchema = z.strictObject({
 export type MergeConflict = z.infer<typeof mergeConflictSchema>;
 
 // ---------------------------------------------------------------------------
-// What the Mac parses back (lane g78)
+// What the Mac parses back
 //
 // The wrappers around the DTOs above. The CRM window and Administration each declared
 // their own copy of the first three; the board's id map was a record of any strings.
@@ -314,8 +314,8 @@ export const pipelineBoardResponseSchema = z.object({
 /**
  * A refused `POST /merges/firms` or `/merges/contacts` (audit item D05).
  *
- * `conflicts` is present when the refusal is `merge_conflicts`, on the first answer and,
- * since lane g78, on a replay too: the receipt keeps the conflicts beside the reason, so
+ * `conflicts` is present when the refusal is `merge_conflicts`, on the first answer and
+ * on a replay too: the receipt keeps the conflicts beside the reason, so
  * a Mac that retries the same command id still reaches the conflict screen.
  */
 export const mergeRefusalSchema = z.object({

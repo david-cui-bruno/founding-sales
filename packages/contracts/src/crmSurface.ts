@@ -21,17 +21,17 @@ import { firmReadDtoSchema } from './crm.ts';
  */
 
 // ---------------------------------------------------------------------------
-// Admin CSV import (Appendix G 38) and Add firm (lane g84, audit item G02)
+// Admin CSV import (Appendix G 38) and Add firm (audit item G02)
 // ---------------------------------------------------------------------------
 
 /**
  * The columns a file may have. The header row names them, in any order and any subset;
  * `firm_name` is the one every row needs. One row is one contact, with the firm's
- * columns repeated on each of that firm's rows (lane g84): the first row that names a
+ * columns repeated on each of that firm's rows: the first row that names a
  * firm creates it, and the rows after it add their contacts to it.
  *
- * `time_zone` joined in lane g84, at the end, so a file written to the old list is
- * still a file this one reads. The header is read case-insensitively and a space or a
+ * `time_zone` is last, so a file written to the twelve-column list is still a file
+ * this one reads. The header is read case-insensitively and a space or a
  * hyphen reads as an underscore, so `Firm name` is `firm_name`.
  */
 export const IMPORT_COLUMNS = [
@@ -62,7 +62,6 @@ export type ImportColumn = z.infer<typeof importColumnSchema>;
  * contact (`attach`). `firm_ambiguous` is a row whose website or name matches two firms
  * here, which only a merge can settle; `time_zone_invalid` is a zone this runtime cannot
  * place on a clock; `too_long` is a cell longer than the column the database keeps it in.
- * The last three joined in lane g84.
  */
 export const IMPORT_ISSUE_CODES = [
   'firm_name_missing',
@@ -156,7 +155,7 @@ export const importPreviewResponseSchema = z.object({
 });
 export type ImportPreviewResponse = z.infer<typeof importPreviewResponseSchema>;
 
-/** A file refused whole, at the preview or the commit (lane g84). 409, like every refusal. */
+/** A file refused whole, at the preview or the commit. 409, like every refusal. */
 export const importFileRefusalResponseSchema = z.object({
   status: z.literal('refused'),
   reason: z.string().min(1).max(80),
@@ -185,9 +184,9 @@ export const importCommitRequestSchema = z.strictObject({
 
 /**
  * One row's answer. A refusal names the row, its code and, where one field is at fault,
- * the column (lane g84): `{ rowNumber: 7, status: 'refused', reason: 'email_invalid',
+ * the column: `{ rowNumber: 7, status: 'refused', reason: 'email_invalid',
  * column: 'contact_email' }`. `outcome` says whether an accepted row made its firm or
- * added a contact to one; a receipt written before lane g84 replays without it.
+ * added a contact to one; an older receipt replays without it.
  */
 const importCommitResultSchema = z.object({
   rowNumber: z.number().int().min(2),
@@ -211,7 +210,7 @@ export type ImportCommitResponse = z.infer<typeof importCommitResponseSchema>;
 
 /**
  * `POST /crm/firms/add`: the Add firm form, which is one row of an import typed into a
- * form (lane g84). The same draft, the same validation, the same duplicate rules and
+ * form. The same draft, the same validation, the same duplicate rules and
  * the same commit as a CSV row, under one receipt. Every value is a string as the person
  * typed it; the domain trims, canonicalizes and refuses, and a refusal names each field
  * by its import column so the form marks the one at fault.
@@ -270,7 +269,7 @@ export const addFirmRefusalSchema = z.object({
 // ---------------------------------------------------------------------------
 
 /**
- * The Firm page read's second version (lane g90): each route carries its
+ * The Firm page read's second version: each route carries its
  * `technicalValidation`. Without `pageVersion` the answer is the first version exactly,
  * which is what an installed 1.0.5 asks for and parses strictly; any other version is a
  * malformed request rather than a guess.

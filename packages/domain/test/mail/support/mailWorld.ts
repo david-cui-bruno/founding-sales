@@ -4,7 +4,7 @@ import { createTestDatabase, type TestDatabase } from '../../../db/testing/testD
 import { seedTwoWorkspaces, type SeededWorkspace, type TwoWorkspaces } from '../../db/support/fixtures.ts';
 import { seedCrm, firstStageId, type SeededCrm } from '../../db/support/crmFixtures.ts';
 import { recordingSuppressionJournal, type RecordingSuppressionJournal } from '../../../suppression/journal.ts';
-import { type MailPublicConfig } from '../../../mail/config.ts';
+import type { MailPublicConfig } from '../../../mail/config.ts';
 import { localEnvelopeCipher, type EnvelopeCipher } from '../../../mail/envelope.ts';
 import {
   recordedGmailClient,
@@ -15,7 +15,7 @@ import {
 import { completeGmailGrant, signGrantState } from '../../../mail/oauth.ts';
 import { recordingReplyPromoter } from '../../../mail/replyLane.ts';
 import { staticSecretProvider } from '../../../mail/secretProvider.ts';
-import { type MailSyncDeps } from '../../../mail/sync.ts';
+import type { MailSyncDeps } from '../../../mail/sync.ts';
 
 /**
  * One connected mailbox in each of two workspaces, on a real PostgreSQL, with a

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { type SessionQueryable } from '@fss/domain/db/queryable.ts';
+import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 import { CURRENT_SCHEMA_VERSION } from '@fss/domain/db/schemaRange.ts';
 import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
 import { CLUSTER_URL_ENVIRONMENT_VARIABLE, asSession } from '@fss/domain/db/testing/testDatabase.ts';

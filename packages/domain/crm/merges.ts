@@ -340,7 +340,7 @@ async function preserveFirmSuppressions(
   targetFirmId: string,
   commandId: string | undefined,
 ): Promise<void> {
-  // The target inherits a stop fact, so the insert takes the send gate (lane g77).
+  // The target inherits a stop fact, so the insert takes the send gate.
   await lockSendGateForStopFact(context);
   await context.db.query(
     `INSERT INTO suppression_events

@@ -1,5 +1,5 @@
 import { createPublicKey, type KeyObject } from 'node:crypto';
-import { type MailPublicConfig } from '@fss/domain/mail/config.ts';
+import type { MailPublicConfig } from '@fss/domain/mail/config.ts';
 import { envelopeCipher, localDataKeyWrapper } from '@fss/domain/mail/envelope.ts';
 import { kmsDataKeyWrapper, loadKmsTransport } from '@fss/domain/mail/envelopeKms.ts';
 import { recordedGmailClient } from '@fss/domain/mail/gmailClientFake.ts';
@@ -24,7 +24,7 @@ import {
   type DeploymentEnvironment,
   type PublicIdentifierSource,
 } from '@fss/domain/release/deployment.ts';
-import { type GoogleOidcConfig, type SessionPolicy } from '../auth/config.ts';
+import type { GoogleOidcConfig, SessionPolicy } from '../auth/config.ts';
 import { createGoogleClient, httpFetch as authHttpFetch, type GoogleClient } from '../auth/googleClient.ts';
 import { createLogger, type LogFields, type Logger } from './log.ts';
 import { requireDurableJournal, resolveSuppressionJournal, type JournalPutObject } from '../journal/index.ts';
@@ -234,7 +234,7 @@ export type UpgradeUrlSource = 'environment' | 'placeholder';
 export interface ApiDeployment {
   readonly environmentName: string;
   readonly dependencies: DependencySelection;
-  /** What `/auth/client-version` publishes as `upgradeUrl` (lane g86). */
+  /** What `/auth/client-version` publishes as `upgradeUrl`. */
   readonly upgradeUrl: string;
   readonly upgradeUrlSource: UpgradeUrlSource;
   /** Absent when `dependencies` is `none`; the four mail paths then answer not_found. */
@@ -255,14 +255,14 @@ export interface ApiDeployment {
 }
 
 /**
- * The upgrade notice's address (lane g86).
+ * The upgrade notice's address.
  *
  * Until this lane every API published `https://callie.example/downloads/mac`, a
  * placeholder nobody could download from. The production root now sets
  * `FSS_DESKTOP_UPGRADE_URL` to the signed update manifest the desktop reads
  * (`docs/decisions/g86-the-upgrade-notice-names-the-update-channel.md`). It is
- * machine-facing: since lane g83 the Mac installs from that manifest itself, and the
- * upgrade screen shows a sentence, never this address.
+ * machine-facing: the Mac installs from that manifest itself, and the upgrade screen
+ * shows a sentence, never this address.
  *
  * Unset outside production is the placeholder, which is what a laptop and a rehearsal
  * publish. Unset in production is a refusal to start, the rule this file keeps for every
@@ -514,7 +514,7 @@ export interface S3JournalSdk {
  * A `412 PreconditionFailed` is success: `IfNoneMatch: '*'` means a replayed
  * deterministic id does not overwrite an object that is already durable, and the key
  * *is* that id, so an object at it is this event. A `409 ConditionalRequestConflict`
- * is not (audit S12, lane g81). It says another write to the same key was in flight,
+ * is not (audit S12). It says another write to the same key was in flight,
  * and that write may yet fail, so it proves nothing is durable. Until this lane both
  * were `already_present`, which let a conflict acknowledge a suppression no object
  * recorded. It now throws like any other refusal, `createS3SuppressionJournal` turns

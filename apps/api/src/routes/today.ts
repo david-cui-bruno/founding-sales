@@ -29,9 +29,9 @@ export const TODAY_PATHS: readonly string[] = ['/today', '/today/firm'];
 
 /*
  * `cardVersion: 2` (`todayFirmRequestSchema` in `@fss/contracts`) asks for the tasks
- * with the identities lane g79 added: the callback, the step execution, the call that
- * needs a callback time, and the pause. Without it the card is G6's shape exactly,
- * because a desktop released before g79 parses the card with a strict schema and
+ * with their identities: the callback, the step execution, the call that needs a
+ * callback time, and the pause. Without it the card is the first shape exactly,
+ * because an older desktop parses the card with a strict schema and
  * would refuse a field it has never heard of.
  */
 

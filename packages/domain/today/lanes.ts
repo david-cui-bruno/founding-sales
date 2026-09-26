@@ -1,4 +1,4 @@
-import { type TodayCounts } from './types.ts';
+import type { TodayCounts } from './types.ts';
 import { TODAY_LANES, type TodayItemKind, type TodayLane } from '@fss/contracts';
 
 /**

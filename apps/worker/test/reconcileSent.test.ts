@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { makeStepExecution } from '@fss/domain/db/testing/stepExecutions.ts';
-import { type GmailClient } from '@fss/domain/mail/gmailClient.ts';
+import type { GmailClient } from '@fss/domain/mail/gmailClient.ts';
 import {
   recordedSentMessageId,
   recordedSentThreadId,

@@ -1,8 +1,8 @@
 import { withTransaction, type SessionQueryable } from '@fss/domain/db/queryable.ts';
 import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
-import { type JobHandler } from '@fss/domain/jobs/handlerRegistry.ts';
+import type { JobHandler } from '@fss/domain/jobs/handlerRegistry.ts';
 import { jobIdempotencyKey } from '@fss/domain/jobs/jobKinds.ts';
-import { type JobSpecification } from '@fss/domain/jobs/jobStore.ts';
+import type { JobSpecification } from '@fss/domain/jobs/jobStore.ts';
 import { composeEligibility, type StepEligibility } from '@fss/domain/sequences/eligibility.ts';
 import { dispatchPreparedStep, runDueStepExecution } from '@fss/domain/sequences/executions.ts';
 import { unavailableSendHandoff, type SendHandoff } from '@fss/domain/sequences/sendHandoff.ts';
@@ -15,8 +15,8 @@ import type { DueWorkSource } from '../scheduler/schedulerPass.ts';
  *
  * Appendix C: "Sequence action | `step-execution:{id}` | Execution state and outbound
  * fence". Both halves of that protection are real. The key is the execution's id and
- * the wake it is for — `step-execution:{id}:{wake}`, the row's version (lane g82,
- * `packages/domain/sequences/wake.ts`) — and `UNIQUE (workspace_id, enrollment_id,
+ * the wake it is for — `step-execution:{id}:{wake}`, the row's version
+ * (`packages/domain/sequences/wake.ts`) — and `UNIQUE (workspace_id, enrollment_id,
  * step_id)` in migration 0012 means there is one execution per step of an enrollment
  * to build it from; the fence is G7-2's, and it is what makes the protection
  * `outbound_fence` rather than `business_uniqueness`. A step is looked at again when
@@ -117,7 +117,7 @@ export function sequenceActionJobHandler(options: SequenceActionHandlerOptions =
 /**
  * The due-work source (13.1).
  *
- * `listStepWakes` decides what is owed a look (lane g82, audit C02, C03, C05, C10):
+ * `listStepWakes` decides what is owed a look (audit C02, C03, C05, C10):
  *
  * * due `pending` work;
  * * `held` work whose `not_before` has passed and that no open hold blocks — every
@@ -127,9 +127,8 @@ export function sequenceActionJobHandler(options: SequenceActionHandlerOptions =
  * * `dispatched` work that has sat for ten minutes, whose worker died between the step's
  *   transaction and the claim, so its prepared fence goes to the dispatch path again.
  *
- * Each becomes one job keyed by the row's version. Before lane g82 the key was the
- * execution's id alone and only four clock-clearing reasons were materialized out of
- * `held` — and even those never ran again, because the first job's key was `done`.
+ * Each becomes one job keyed by the row's version, so a step woken again runs again
+ * rather than colliding with its first job's `done` key.
  */
 export function sequenceActionSource(): DueWorkSource {
   return {

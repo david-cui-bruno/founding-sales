@@ -2,7 +2,7 @@ import type { HoldReasonCode } from '@fss/contracts';
 import type { Queryable } from '../db/queryable.ts';
 import { repositoryContext, workspaceScope } from '../db/workspaceScope.ts';
 import { listHoldsByReason } from '../policy/holds.ts';
-import { type OpenHold } from '../policy/types.ts';
+import type { OpenHold } from '../policy/types.ts';
 
 /**
  * `fss admin holds list`: every open hold in the database, workspace by workspace.

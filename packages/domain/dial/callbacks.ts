@@ -24,13 +24,9 @@ import { acceptPolicy, refusePolicy, type PolicyResult } from '../policy/types.t
  * later, after a zone change or across a DST boundary, without recomputing a
  * different answer.
  *
- * ## The instant is the server's resolution (lane g79, audit item C18)
+ * ## The instant is the server's resolution (audit item C18)
  *
- * Until lane g79 the caller resolved the local fields to `dueAt` and this function
- * stored whatever it was given, so a Mac that resolved a DST gap differently from the
- * domain committed a callback an hour away from the one the person confirmed, and the
- * four stored columns disagreed with each other. Now the local date, time and zone are
- * resolved here through `callbackInstant` — the one calendar clock, shared with the
+ * The local date, time and zone are resolved here through `callbackInstant` — the one calendar clock, shared with the
  * Mac through `@fss/contracts` — and a supplied `dueAt` must equal that resolution or
  * the callback is refused as `callback_instant_mismatch`. The client's `dueAt` is
  * what it showed the person; refusing a disagreement is what makes "the instant the
@@ -168,8 +164,7 @@ export async function createCallback(
  * Complete a callback (Appendix A "Callback confirm/complete").
  *
  * The Today task is finished by `callbacks_today_promotion`, in this statement's
- * transaction. Since lane g79 the firm is locked and the CRM's assignment rule is
- * applied first: completing a colleague's callback is a mutation of their firm
+ * transaction. The firm is locked and the CRM's assignment rule is applied first: completing a colleague's callback is a mutation of their firm
  * (Appendix G 7), and `logCallOutcome` now completes callbacks too.
  */
 export async function completeCallback(
@@ -218,7 +213,7 @@ export interface ScheduleCallbackForCallInput {
 }
 
 /**
- * Give a recorded "call me back" its confirmed instant, later (lane g79, audit C13).
+ * Give a recorded "call me back" its confirmed instant, later (audit C13).
  *
  * `logCallOutcome` records a callback request that arrived without an instant — or
  * with one the server resolved differently — and puts "Callback — needs a time" on

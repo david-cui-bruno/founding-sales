@@ -7,7 +7,7 @@ import {
   verifyGrantState,
 } from '@fss/domain/mail/oauth.ts';
 import { withTransaction, type SessionQueryable } from '@fss/domain/db/queryable.ts';
-import { type RepositoryContext } from '@fss/domain/db/workspaceScope.ts';
+import type { RepositoryContext } from '@fss/domain/db/workspaceScope.ts';
 import { registerMailboxSendingDomain } from '@fss/domain/outbound/domainGuard.ts';
 import { errorFields, type Logger } from '../bootstrap/log.ts';
 import { connectMailboxCommandSchema, disconnectMailboxCommandSchema } from '@fss/contracts';
@@ -144,7 +144,7 @@ export async function routeGmail(request: ApiRequest, options: RoutingOptions): 
 }
 
 /**
- * A connected mailbox's domain is the workspace's sending domain (lane g57).
+ * A connected mailbox's domain is the workspace's sending domain.
  *
  * Runs after `completeGmailGrant` has returned, so the mailbox, its token and its
  * coverage hold are already written, and nothing here can undo them: a registration

@@ -1,8 +1,8 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { type SessionQueryable } from '@fss/domain/db/queryable.ts';
+import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
-import { type MailPublicConfig } from '@fss/domain/mail/config.ts';
+import type { MailPublicConfig } from '@fss/domain/mail/config.ts';
 import { localEnvelopeCipher } from '@fss/domain/mail/envelope.ts';
 import { recordedGmailClient } from '@fss/domain/mail/gmailClientFake.ts';
 import { signGrantState } from '@fss/domain/mail/oauth.ts';

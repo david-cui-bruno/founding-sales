@@ -22,7 +22,7 @@ import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts
 import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
 
 /**
- * Email technical validation (specification 7.4; lane g90): the decision table of
+ * Email technical validation (specification 7.4): the decision table of
  * `email-validation.1`, and the one write it makes.
  *
  * Before g90 an address added or imported from the Mac was `unknown` and `candidate` for

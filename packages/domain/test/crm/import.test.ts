@@ -40,8 +40,7 @@ describe('CSV import', () => {
 
   const context = (scope: WorkspaceScope): RepositoryContext => repositoryContext(scope, session);
 
-  // The twelve columns the file had before lane g84 added `time_zone`: a file written to
-  // the old list is still a file this one reads, because a header may name any subset.
+  // The twelve columns before `time_zone`: a file written to the old list is still a file this one reads, because a header may name any subset.
   const csv = (...rows: readonly string[]): string =>
     [IMPORT_COLUMNS.filter(column => column !== 'time_zone').join(','), ...rows].join('\n');
 
@@ -209,7 +208,7 @@ describe('CSV import', () => {
       expect(committed.ok, String(row.rowNumber)).toBe(false);
       if (!committed.ok) reasons.push([committed.rowNumber, committed.reason, committed.column]);
     }
-    // Lane g84: the refusal is the row's own fault, where it is, rather than `invalid_input`.
+    // The refusal is the row's own fault, where it is, rather than `invalid_input`.
     expect(reasons).toEqual([
       [2, 'firm_name_missing', 'firm_name'],
       [3, 'duplicate_in_workspace', 'firm_name'],

@@ -17,7 +17,7 @@ export const SENDING_STOP_LINE = 'Reply "stop" and I will not email you again.';
  * The variables a template may name, and the only ones (specification 11.1: "Launch
  * templates support deterministic variables from eligible CRM data").
  *
- * Here since lane g88, for the reason the stop line is: the domain fills them
+ * Here for the reason the stop line is: the domain fills them
  * (`templateVariablesFor` in `packages/domain/sequences/variables.ts`, which re-exports
  * this list) and the Mac's template form names them to the person writing one, and a
  * second spelling on the Mac would be a list that drifts from the one that fills them.

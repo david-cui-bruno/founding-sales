@@ -1,6 +1,6 @@
 import type { HoldReasonCode } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
-import { type WorkspaceHolidayCalendar } from '../src/rules/businessDays.ts';
+import type { WorkspaceHolidayCalendar } from '../src/rules/businessDays.ts';
 import { placeEmailSend } from '../src/rules/sendingWindow.ts';
 import { currentHolidayCalendar, holidayCalendarByVersion } from '../sequences/calendars.ts';
 import { CHANNEL_ACTION_KINDS, composeEligibility } from '../sequences/eligibility.ts';
@@ -11,19 +11,16 @@ import { acceptSend, refuseSend, type SendRefusalCode, type SendResult } from '.
 
 /**
  * The step's whole permission to send, re-asked for a prepared fence immediately
- * before the dispatch claim (specification 11.2, 7.3, 12.2, 12.4; lane g77).
+ * before the dispatch claim (specification 11.2, 7.3, 12.2, 12.4).
  *
  * 11.2: "Before every external action, the worker re-reads inside the claiming
  * transaction: control mode; applicable holds; effective suppressions; ownership;
  * route eligibility and version; mailbox health and coverage; template approval;
  * policy; limits; time window; and prerequisites."
  *
- * Before lane g77 the send gate answered five of those itself — suppression, a route
- * check that let a `candidate` through and read the version without comparing it,
- * holds, and a `ready` mailbox — and never asked the enrollment, the control mode, the
- * assignment or the template at all. A reply confirmed between the preparation and the
- * dispatch set the opportunity manual and ended the enrollment, and the fence it left
- * behind still went. So the gate now asks the sequences lane's own composition,
+ * A reply confirmed between the preparation and the dispatch sets the opportunity
+ * manual and ends the enrollment, and the fence it left behind must not go. So the
+ * gate asks the sequences lane's own composition,
  * `composeEligibility`, which is the function `runDueStepExecution` asked when it
  * prepared the fence: one implementation, asked twice, with the fence's frozen
  * envelope the only thing the second asking adds (`FrozenEnvelope`).
@@ -98,13 +95,13 @@ export async function decideStepPermission(
  *
  * The codes that have a refusal of their own keep it — suppression, coverage, the
  * template, the route family, and a disconnected mailbox as `grant_revoked` — so an
- * operator reading a held fence sees the word the step would have shown. Everything else — a reply's hold, a
- * pause, manual mode, a stopped enrollment, a reassignment — is `step_ineligible`, with
- * the section 15 code as the detail. That is new in lane g77: before it, a reply's hold
- * surfaced as `provider_refusal` and opened a second, provider-shaped hold on the firm,
- * although Gmail had never been asked anything. `holdReasonForRefusal` opens no hold for
- * `step_ineligible`, because the thing blocking the step is already somebody's hold or
- * state, and 4.3's "clearing one hold never clears another" needs there to be one.
+ * operator reading a held fence sees the word the step would have shown. Everything
+ * else — a reply's hold, a pause, manual mode, a stopped enrollment, a reassignment —
+ * is `step_ineligible`, with the section 15 code as the detail, never a
+ * provider-shaped refusal: Gmail was never asked anything. `holdReasonForRefusal` opens
+ * no hold for `step_ineligible`, because the thing blocking the step is already
+ * somebody's hold or state, and 4.3's "clearing one hold never clears another" needs
+ * there to be one.
  */
 export function sendRefusalForIneligibility(code: HoldReasonCode): SendRefusalCode {
   switch (code) {
@@ -127,7 +124,7 @@ export function sendRefusalForIneligibility(code: HoldReasonCode): SendRefusalCo
 
 /**
  * The holidays a send on this enrollment's behalf must not fall on (11.2, Appendix D;
- * lane g77, S09).
+ * S09).
  *
  * Both calendars, and deliberately: the version the enrollment froze *and* the
  * workspace's current one. The frozen version exists so that a supersession does not
@@ -154,9 +151,8 @@ export async function dispatchHolidayCalendar(
  *
  * `placeEmailSend` is the placement rule `runEmailStep` used to put the step where it
  * is; asking it about the dispatch instant is asking the same rule, holidays included,
- * whether that instant is a place a send may be. Before lane g77 the gate re-derived
- * weekday and minute by hand and knew nothing of holidays, so a fence held overnight on
- * the eve of one went out on it.
+ * whether that instant is a place a send may be, so a fence held overnight on the eve
+ * of a holiday does not go out on it.
  */
 export function insideSendingWindow(now: Date, zone: string, calendar: WorkspaceHolidayCalendar): boolean {
   return placeEmailSend(now.toISOString(), zone, { calendar }).inPlace;

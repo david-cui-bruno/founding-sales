@@ -6,8 +6,7 @@ import { MAIL_METRIC_NAMES, collectMailMetrics } from '../../mail/metrics.ts';
 import { seedTwoWorkspaces } from '../db/support/fixtures.ts';
 
 /**
- * A mailbox nobody means to have connected is not a critically broken one (audit O15,
- * lane g81).
+ * A mailbox nobody means to have connected is not a critically broken one (audit O15).
  *
  * `mailbox_heartbeat_missed` treats a missing `MailboxCheckHeartbeat` as a missed
  * check, and the job lane used to publish the metric from whatever mailbox heartbeat

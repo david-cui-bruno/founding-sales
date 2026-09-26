@@ -77,7 +77,7 @@ const dialRefusalCodeSchema = z.enum(DIAL_REFUSAL_CODES);
 export type DialRefusalCode = z.infer<typeof dialRefusalCodeSchema>;
 
 // ---------------------------------------------------------------------------
-// Calling identities (specification 9.1; lane g60)
+// Calling identities (specification 9.1)
 // ---------------------------------------------------------------------------
 
 /**
@@ -153,7 +153,7 @@ export const callingIdentityListSchema = z.strictObject({
 
 /**
  * What a calling-number command returns inside the command envelope: the outcome and
- * the row as it now is (`apps/api/src/routes/callingIdentities.ts`; lane g78). The
+ * the row as it now is (`apps/api/src/routes/callingIdentities.ts`). The
  * outcomes are the four `registerCallingIdentity`, `verifyCallingIdentity` and
  * `disableCallingIdentity` in `packages/domain/dial/identities.ts` can return.
  */
@@ -289,7 +289,7 @@ export const consumedTicketDtoSchema = z.strictObject({
 export type ConsumedTicketDto = z.infer<typeof consumedTicketDtoSchema>;
 
 /*
- * What the postures form reads (lane g84, audit item G04). `statePostureDtoSchema`
+ * What the postures form reads (audit item G04). `statePostureDtoSchema`
  * above is strict and has no `confirmedByUserId`, which `listStatePostures` has always
  * answered with; nothing parsed it until now. These are the stripping shapes the rest
  * of the Mac's reads use (g78), and the route test holds the real answers to them with
@@ -319,7 +319,7 @@ const postureCitationSchema = z.object({ title: z.string(), url: z.string(), quo
 export type PostureCitationDto = z.infer<typeof postureCitationSchema>;
 
 /**
- * `GET /postures/reference` (lane g84): the statements a posture confirms and the quoted
+ * `GET /postures/reference`: the statements a posture confirms and the quoted
  * rules, verbatim from `@fss/domain`'s `statePosture.ts`, for the form to show. Invariant
  * 7 — "Software records and enforces legal posture; it does not invent it" — is why the
  * Mac reads these rather than carrying a copy: an edit to a quoted passage is a new
@@ -402,7 +402,7 @@ export const consumeDialTicketCommandSchema = z.strictObject({
 });
 
 /**
- * Log a call (specification 9.1, Appendix A "Log call outcome"; lane g79).
+ * Log a call (specification 9.1, Appendix A "Log call outcome").
  *
  * Four changes from G4's shape, all additive or relaxing, so a desktop that sends the
  * old body is still understood:
@@ -463,7 +463,7 @@ export const logCallOutcomeCommandSchema = z.strictObject({
 export const CALL_OCCURRED_AT_TOLERANCE_SECONDS = 120;
 
 /**
- * What a recorded call still needs from a person (lane g79, audit items C13, C14).
+ * What a recorded call still needs from a person (audit items C13, C14).
  *
  * "Call logging always records what occurred ... it never refuses history." So an
  * outcome whose consequence cannot be applied is recorded anyway, and what could not
@@ -535,7 +535,7 @@ export const loggedCallResultSchema = z.object({
 export type LoggedCallResult = z.infer<typeof loggedCallResultSchema>;
 
 /**
- * Give a recorded "call me back" its time, later (lane g79, audit item C13).
+ * Give a recorded "call me back" its time, later (audit item C13).
  *
  * The call that asked for the callback is already history; this commits the instant
  * the salesperson now confirms, beside that call, exactly as the outcome would have.
@@ -641,7 +641,7 @@ export const completeCallbackCommandSchema = z.strictObject({
 });
 
 /**
- * Register a calling number (lane g60). Since wave 2 (S4.3) the number is attested as it
+ * Register a calling number. Since wave 2 (S4.3) the number is attested as it
  * is added: verified and enabled, with who and when, and usable for calls at once.
  *
  * The number travels as typed — trimmed, and at most 32 characters — and is

@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { EMPTY_HOLIDAY_CALENDAR, type WorkspaceHolidayCalendar } from '../../src/rules/businessDays.ts';
-import { type SequenceStep } from '../../src/rules/cadence.ts';
+import type { SequenceStep } from '../../src/rules/cadence.ts';
 import { COMPLETION_ANCHOR_RULE_SUFFIX, businessDaysAfter, successorDue } from '../../sequences/successor.ts';
 
 /**
- * The successor's anchor (specification 11.2, 12.5, Appendix B; lane g82, audit C11).
+ * The successor's anchor (specification 11.2, 12.5, Appendix B; audit C11).
  *
  * The plan is start-anchored — "N business days after enrollment" — and stays the
  * answer while steps run on time. A step that ran late keeps the plan's spacing from

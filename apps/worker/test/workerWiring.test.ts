@@ -14,7 +14,7 @@ import { terminalStopJobHandler } from '../src/handlers/terminalStop.ts';
 import { sendDayCloseJobHandler } from '../src/handlers/sendDayClose.ts';
 
 /**
- * The three seams lanes G3a, G4 and G7-2 built and nobody wired (lane G15).
+ * The three seams lanes G3a, G4 and G7-2 built and nobody wired.
  *
  * Every case here runs the *real* pass: `workerDueWorkSources()` — the list
  * `bootstrap/main.ts` hands the scheduler and `fss admin scheduler run-once` reruns —

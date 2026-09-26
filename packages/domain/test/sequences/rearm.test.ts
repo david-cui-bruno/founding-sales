@@ -19,7 +19,7 @@ import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
 import { seedSequences, type SeededSequences } from './support/sequenceFixtures.ts';
 
 /**
- * A step run more than once (lane g82: audit C05, C09, C11).
+ * A step run more than once (audit C05, C09, C11).
  *
  * * **C11** — a completed step's successor is the start-anchored plan while steps run on
  *   time, and the plan's spacing counted from when the step actually happened when it

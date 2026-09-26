@@ -66,7 +66,7 @@ describe('the sequence action as a job', () => {
 
   /**
    * How many jobs the scheduler has materialized for one execution — every wake of it
-   * (lane g82: the key is `step-execution:{id}:{wake}`).
+   * (the key is `step-execution:{id}:{wake}`).
    */
   const jobsFor = async (id: string): Promise<number> => {
     const { rows } = await database.session.query<{ count: string }>(

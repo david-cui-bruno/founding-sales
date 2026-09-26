@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing/testDatabase.ts';
-import { type SessionQueryable } from '@fss/domain/db/queryable.ts';
+import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 import { WORKER_SCHEMA_RANGE } from '@fss/domain/db/schemaRange.ts';
 import { canaryHandler } from '@fss/domain/jobs/canary.ts';
 import { raiseCriticalAlert } from '@fss/domain/jobs/criticalAlerts.ts';

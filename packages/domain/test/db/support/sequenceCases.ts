@@ -16,7 +16,7 @@ const soon = (): string => new Date(Date.now() + 60 * 60 * 1000).toISOString();
 
 /**
  * A failing insert for every constraint migration 0012 adds, and for the five it adds
- * to `template_versions` (lane G8: sequences, versions, steps, enrollments, step
+ * to `template_versions` (sequences, versions, steps, enrollments, step
  * executions and the holiday calendar). Migration 0018 dropped the LinkedIn results
  * table and the three CHECKs over a step's LinkedIn message; 0019 dropped the audited
  * migration's two tables and replaced the vocabularies that still admitted a LinkedIn

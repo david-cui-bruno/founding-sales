@@ -15,8 +15,8 @@ import { recordingLogger } from '../src/bootstrap/log.ts';
  * before its row (10.2). With `IfNoneMatch: '*'` on a deterministic key, `412
  * PreconditionFailed` is the object already there — a replay of this event — and is
  * durable. `409 ConditionalRequestConflict` is another write to the key still in
- * flight, which may fail; until lane g81 the worker returned as if it were durable,
- * and the opt-out's row was committed with nothing in the journal behind it.
+ * flight, which may fail, so the worker must not return as if it were durable: the
+ * opt-out's row would commit with nothing in the journal behind it.
  *
  * ## The vacuous-pass trap, named
  *
@@ -25,7 +25,7 @@ import { recordingLogger } from '../src/bootstrap/log.ts';
  * retries the same opt-out once the other writer has landed, which must record it.
  * The SDK is a fake: nothing here reaches AWS.
  *
- * And the failure is loud (lane g81): the refusal logs
+ * And the failure is loud: the refusal logs
  * `suppression_journal_write_failed`, the event the immediately-critical
  * `SuppressionJournalWriteFailures` metric filter counts, which nothing logged before;
  * a success and a `412` log nothing.

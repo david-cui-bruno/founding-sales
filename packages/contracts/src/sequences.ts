@@ -4,25 +4,15 @@ import { holdReasonCodeSchema } from './reasonCodes.ts';
 
 /**
  * The wire contract of the sequence editor's reads: sequences, versions and their
- * steps, template versions and enrollments (specification 11.1, 11.2; lane g78).
+ * steps, template versions and enrollments (specification 11.1, 11.2).
  *
- * Until lane g78 the Mac kept its own copies of these in
- * `apps/desktop/src/renderer/sequenceContract.ts`, and they had drifted in the way
- * that matters most: the step schema was strict and did not know `sequenceVersionId`,
- * which the API puts on every step, so every populated version failed to parse (D01);
- * the enrollment schema was strict and missed four fields the API always sends, so
- * every populated enrollment list failed too (D02). The unit fixture encoded the same
- * wrong shape (T04), so nothing went red.
- *
- * Now each shape is here once. The routes' own tests run their real answers through
+ * Each shape is here once. The routes' own tests run their real answers through
  * `wireDrift` (`./wire.ts`), and the desktop imports these schemas instead of
  * declaring its own. The objects strip rather than refuse an unknown key, for the
  * reason `./wire.ts` gives.
  *
- * The vocabularies are the domain's (`packages/domain/sequences/types.ts`), spelled
- * here because the desktop may not import `@fss/domain` (14.2).
- * `apps/api/test/wireVocabulary.test.ts` compares every one of them with the domain's
- * list, so a value added on one side and not the other is a failing test.
+ * The vocabularies are declared here, once, because the desktop may not import
+ * `@fss/domain` (14.2); the domain imports them from here.
  */
 
 export const STEP_CHANNELS = ['email', 'call_task'] as const;
@@ -246,7 +236,7 @@ export const templateVersionsResponseSchema = z.object({ templates: z.array(temp
 export const enrollmentsResponseSchema = z.object({ asOf: instant, enrollments: z.array(enrollmentDtoSchema) });
 
 // ---------------------------------------------------------------------------
-// The resume review (lane g88, audit G06)
+// The resume review (audit G06)
 // ---------------------------------------------------------------------------
 
 const STEP_EXECUTION_STATES = ['pending', 'held', 'dispatched', 'completed', 'cancelled'] as const;

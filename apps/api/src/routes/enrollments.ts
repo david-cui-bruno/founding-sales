@@ -106,7 +106,7 @@ export async function routeEnrollments(
   }
 
   if (request.path === '/enrollments/resume/preview') {
-    // "Review and resume" (4.3; lane g88, audit G06): the future steps and the dates a
+    // "Review and resume" (4.3; audit G06): the future steps and the dates a
     // confirmation would give them, computed by the function the confirmation runs. A
     // read — nothing is locked or written — so the person can look and walk away.
     const parsed = previewSchema.safeParse(request.body);

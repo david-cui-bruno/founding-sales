@@ -1,12 +1,11 @@
 /**
  * Local clock arithmetic through `Intl` and nothing else, shared by the server and the
- * Mac (specification Appendix D, Appendix G 32; lane g79).
+ * Mac (specification Appendix D, Appendix G 32).
  *
- * Ported from `cloud/lambdas/delegated-worker/src/v1/localClock.ts` by G0, and moved
- * here from `packages/domain/src/rules/localClock.ts` by lane g79. The move is the fix
- * for audit item C18: the Mac turned a callback's wall-clock time into an instant with
- * its own two-step `Intl` correction, which lands New York's 02:30 on 8 March 2026 on
- * 01:30 EST, while the domain resolves the same gap forward to 03:30 EDT
+ * Here rather than in the domain because of audit item C18: the Mac turned a callback's
+ * wall-clock time into an instant with its own two-step `Intl` correction, which lands
+ * New York's 02:30 on 8 March 2026 on 01:30 EST, while the domain resolves the same gap
+ * forward to 03:30 EDT
  * (`docs/decisions/g0-dst-gap-resolution.md`). Two implementations of one rule is how
  * a callback ends up an hour earlier than the person confirmed. `@fss/contracts` is the
  * one package both the domain and the desktop may import, so the rule lives here and

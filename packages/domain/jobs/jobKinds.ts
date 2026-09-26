@@ -45,7 +45,7 @@ export function isJobKind(value: string): value is JobKind {
 export const JOB_KIND_PROTECTION: Readonly<Record<JobKind, IdempotencyProtection>> = Object.freeze({
   // Execution state and the outbound fence; the send itself cannot be rolled back.
   'sequence.action': 'outbound_fence',
-  // Lane G15. Appendix C does not name this work, because revision 3 describes the
+  // Appendix C does not name this work, because revision 3 describes the
   // terminal stop (7.3, 8.1, 10.2) without saying which process performs it. The
   // effect is `stopEnrollments`, which touches only enrollments whose `ended_at IS
   // NULL` and advances its subscriber cursor in the same transaction, so a second run
@@ -66,7 +66,7 @@ export const JOB_KIND_PROTECTION: Readonly<Record<JobKind, IdempotencyProtection
   'today.build': 'business_uniqueness',
   // Event lock and terminal marker.
   'suppression.finalize': 'business_uniqueness',
-  // Lane G7b. Appendix C does not name this work, because revision 3 describes the
+  // Appendix C does not name this work, because revision 3 describes the
   // classification and not the queue it runs on; Appendix A's "Record uncertain or
   // ambiguous reply" row does say where it belongs — "LLM classification may be
   // queued". One model row per message, refused a second time by
@@ -75,7 +75,7 @@ export const JOB_KIND_PROTECTION: Readonly<Record<JobKind, IdempotencyProtection
   'classify.reply': 'business_uniqueness',
   // Deletion tombstone over a bounded range.
   'retention.batch': 'business_uniqueness',
-  // Lane G15. `mailbox_send_days.closed_at` and `mailbox_send_ramp.last_advanced_on`
+  // `mailbox_send_days.closed_at` and `mailbox_send_ramp.last_advanced_on`
   // are the uniqueness: the advance is `WHERE last_advanced_on IS NULL OR
   // last_advanced_on < $date`, so closing the same day twice advances the ramp once.
   // A ramp that could be advanced twice would reach fifty a day in half the time 12.7
@@ -83,7 +83,7 @@ export const JOB_KIND_PROTECTION: Readonly<Record<JobKind, IdempotencyProtection
   'outbound.close_send_day': 'business_uniqueness',
   // The completion timestamp, written once.
   canary: 'business_uniqueness',
-  // Lane g90. Appendix C does not name this work, because revision 3's 7.4 says a route
+  // Appendix C does not name this work, because revision 3's 7.4 says a route
   // needs "technical validation" without saying which process performs it. The effect
   // is one compare-and-set on the route: the handler writes only while the route is
   // still the `candidate` at the version the job names, with `technical_validation =
@@ -96,7 +96,7 @@ export const JOB_KIND_PROTECTION: Readonly<Record<JobKind, IdempotencyProtection
 /** Appendix C, second column. Each builder produces the whole key, dotted prefix and all. */
 export const jobIdempotencyKey = Object.freeze({
   /**
-   * Appendix C's `step-execution:{id}`, and the wake it is for (lane g82, audit C02).
+   * Appendix C's `step-execution:{id}`, and the wake it is for (audit C02).
    *
    * The scheduler always passes the wake — the execution row's version, from
    * `listStepWakes` — so a step held by a cap or a pause, or left `dispatched` by a
@@ -129,7 +129,7 @@ export const jobIdempotencyKey = Object.freeze({
   canary: (quarterHourIso: string): string => `canary:${quarterHourIso}`,
   classifyReply: (messageId: string): string => `classify-reply:${messageId}`,
   /**
-   * One look at one email route at one version (lane g90). The round says which look:
+   * One look at one email route at one version. The round says which look:
    * `new` when the route is created, `sweep-<UTC hour or day>` for the scheduler's retry
    * of a route still unchecked, `check-<hash>` for a person's "Check again". A route that
    * has moved to a new version is a new key, so nothing about an older version can

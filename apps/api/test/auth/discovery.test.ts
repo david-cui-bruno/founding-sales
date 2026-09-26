@@ -1,6 +1,6 @@
 import { createSign, generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { type GoogleOidcConfig } from '../../src/auth/config.ts';
+import type { GoogleOidcConfig } from '../../src/auth/config.ts';
 import {
   createGoogleClient,
   type HttpFetch,

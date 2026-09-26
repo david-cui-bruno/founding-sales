@@ -4,7 +4,7 @@ import { openHold } from '../policy/holds.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { setManualControlMode } from '../crm/pipeline.ts';
 import { recordSuppression } from '../suppression/events.ts';
-import { type SuppressionJournal } from '../suppression/journal.ts';
+import type { SuppressionJournal } from '../suppression/journal.ts';
 import { originatingSend } from '../outbound/fence.ts';
 import { recordBounceAgainstDay, recordDaySignal } from '../outbound/ramp.ts';
 import { businessDateOf } from '../today/snapshots.ts';

@@ -27,7 +27,7 @@ import {
 } from '../../restore/index.ts';
 import { allowAllEligibility } from '../../sequences/eligibility.ts';
 import { dispatchPreparedStep, runDueStepExecution } from '../../sequences/executions.ts';
-import { type SendHandoff } from '../../sequences/sendHandoff.ts';
+import type { SendHandoff } from '../../sequences/sendHandoff.ts';
 import {
   CLOSED_INSTANT,
   OPEN_INSTANT,

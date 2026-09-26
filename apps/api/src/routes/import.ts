@@ -31,7 +31,7 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  * it is why a retry of the whole file is safe, because the rows that landed replay
  * and the rows that did not are attempted again.
  *
- * **Rows in order** (lane g84). A file has a row per contact, and the first row that
+ * **Rows in order**. A file has a row per contact, and the first row that
  * names a firm creates it; the rows after it add their contacts to the firm that row
  * committed. So the rows are committed in row order whatever order they were asked in,
  * and each accepted row's firm id is handed to the rows after it.
@@ -168,7 +168,7 @@ export async function routeImport(request: ApiRequest, options: RoutingOptions):
         reason: null,
         firmId,
         column: null,
-        // A receipt written before lane g84 kept only the firm id.
+        // An older receipt kept only the firm id.
         outcome: result?.outcome === 'created' || result?.outcome === 'attached' ? result.outcome : null,
       });
     } else {

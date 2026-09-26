@@ -243,7 +243,7 @@ export async function reassignFirm(
   input: ReassignFirmInput,
 ): Promise<CrmResult<ReassignFirmOutcome>> {
   // A change of owner holds the firm's automated work, so it is a stop fact and takes
-  // the send gate before the firm's row (lane g77, `policy/sendGate.ts`).
+  // the send gate before the firm's row (`policy/sendGate.ts`).
   await lockSendGateForStopFact(context);
   const firm = await loadFirmForUpdate(context, input.firmId);
   if (firm === null) return refuse('firm_unknown');

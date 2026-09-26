@@ -9,7 +9,7 @@ import { seedTwoWorkspaces } from '../db/support/fixtures.ts';
 
 /**
  * What "fresh" means for each heartbeat, and what the metric the alarms read makes of
- * it (13.3, lane g58).
+ * it (13.3).
  *
  * The api, scheduler and worker beat on their own loops and keep the plain rule, age
  * within the promised interval. The mailbox check is asked for by the scheduler pass
@@ -92,7 +92,7 @@ describe('heartbeat freshness (13.3)', () => {
   });
 
   it('publishes a connected mailbox’s late-but-healthy check as 1 and a missed one as 0', async () => {
-    // Since lane g81 the mail lane publishes this, over connected mailboxes only.
+    // The mail lane publishes this, over connected mailboxes only.
     const mailbox = await database.session.query<{ id: string }>(
       `INSERT INTO mailboxes (workspace_id, owner_user_id, email_address, sync_state, baseline_from_at, baseline_completed_at)
        VALUES ($1, $2, 'freshness@example.test', 'ready', now() - interval '30 days', now())

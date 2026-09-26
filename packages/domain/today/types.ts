@@ -48,7 +48,7 @@ export const TODAY_REFUSAL_CODES = [
   'snooze_return_not_future',
   'snooze_unknown',
   'snooze_already_cancelled',
-  // Lane g79: a manual task's snooze needs its return instant; an automated task's
+  // A manual task's snooze needs its return instant; an automated task's
   // pause does not, and is released by a person rather than by a clock.
   'snooze_return_required',
   'pause_unknown',
@@ -123,7 +123,7 @@ export interface TodaySnoozeRow {
 }
 
 /**
- * A recorded "call me back" that has no confirmed instant yet (lane g79, audit C13).
+ * A recorded "call me back" that has no confirmed instant yet (audit C13).
  *
  * 9.1 creates a callback only "after salesperson confirmation of the instant", and
  * "call logging ... never refuses history". Both hold when a callback request without
@@ -147,7 +147,7 @@ export function callLogIdOfItemKey(itemKey: string): string | null {
 }
 
 /**
- * The `source_event_kind` of the hold a paused automated task opens (8.2, lane g79).
+ * The `source_event_kind` of the hold a paused automated task opens (8.2).
  * One constant, because the pause, its release and the card that shows it must all
  * recognise the same holds and no others.
  */

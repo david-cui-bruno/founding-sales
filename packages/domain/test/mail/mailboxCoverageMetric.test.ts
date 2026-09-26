@@ -7,11 +7,10 @@ import { MAIL_METRIC_NAMES, collectMailMetrics, mailboxCoverageAgeSeconds } from
 import { seedTwoWorkspaces } from '../db/support/fixtures.ts';
 
 /**
- * `MailboxCoverageAgeSeconds` says what the send gate will say (lane g81).
+ * `MailboxCoverageAgeSeconds` says what the send gate will say.
  *
- * Since lane g77 the send path holds every automated email for an owner whose coverage
- * watermark is older than `COVERAGE_FRESHNESS_SECONDS`, and nothing outside the Mac
- * showed whether sync was advancing. The worker now publishes the stalest connected,
+ * The send path holds every automated email for an owner whose coverage watermark is
+ * older than `COVERAGE_FRESHNESS_SECONDS`, so the worker publishes the stalest connected,
  * `ready` mailbox's watermark age, and the warning `mailbox_coverage_stale` alarms
  * above the same fifteen minutes.
  *

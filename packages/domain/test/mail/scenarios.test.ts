@@ -829,7 +829,7 @@ describe('the Gmail watch (12.3, 13.3)', () => {
 });
 
 /**
- * What the import tells 12.7's ramp (lane G15).
+ * What the import tells 12.7's ramp.
  *
  * G7-2 built `recordDaySignal` and no caller. The counters it writes are the whole of
  * `rampHealthFailure`'s evidence, so until this lane every day was judged on zeros.
@@ -999,13 +999,7 @@ describe('the import feeds the reputation ramp (12.7)', () => {
   });
 
   /**
-   * A bounce that arrives after its send day closed (12.7, lane G22, the G15
-   * follow-up).
-   *
-   * G15 counted every bounce against the day it *arrived* and recorded the cost in
-   * `docs/decisions/g15-the-worker-drains-what-the-lanes-left.md`: "a bounce for
-   * yesterday's send, arriving after yesterday's day has been closed, is not counted
-   * against it". A bounce is a fact about the send that caused it, and 12.7's
+   * A bounce that arrives after its send day closed (12.7). A bounce is a fact about the send that caused it, and 12.7's
    * threshold is a proportion of *that day's* automated sends, so counting it on the
    * day the report happened to land both understates yesterday and slanders today.
    *

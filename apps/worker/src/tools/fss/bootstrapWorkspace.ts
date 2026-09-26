@@ -5,7 +5,7 @@ import { normalizeSendingDomain, registerSendingDomain } from '@fss/domain/outbo
 import { PROVISIONAL_GOOGLE_SUB_PREFIX, provisionalGoogleSub } from '@fss/contracts';
 
 /**
- * `fss admin workspace bootstrap` — the first workspace and its first admin (lane g39).
+ * `fss admin workspace bootstrap` — the first workspace and its first admin.
  *
  * ## The gap this closes
  *
@@ -39,7 +39,7 @@ import { PROVISIONAL_GOOGLE_SUB_PREFIX, provisionalGoogleSub } from '@fss/contra
  * two facts that can disagree, and the disagreement would be a workspace whose admin
  * can never sign in.
  *
- * ## The sending domain, when it is asked for (lane g57)
+ * ## The sending domain, when it is asked for
  *
  * `--sending-domain <domain>` registers the workspace's sending domain in the same
  * transaction, through `registerSendingDomain` — the function the Gmail callback calls
@@ -107,7 +107,7 @@ export interface BootstrapOptions {
   readonly adminEmail: string;
   /** Optional. `America/New_York` is what migration 0001 defaults the column to. */
   readonly timeZone?: string | undefined;
-  /** Optional. Registered through `registerSendingDomain`, idempotently (lane g57). */
+  /** Optional. Registered through `registerSendingDomain`, idempotently. */
   readonly sendingDomain?: string | undefined;
 }
 

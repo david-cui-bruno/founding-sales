@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import * as wire from '@fss/contracts';
-import { type ResumeDecision } from '@fss/domain/src/rules/holds.ts';
+import type { ResumeDecision } from '@fss/domain/src/rules/holds.ts';
 
 /**
  * The two wire vocabularies the domain does not import from `@fss/contracts`, held to

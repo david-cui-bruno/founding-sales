@@ -4,17 +4,13 @@ import { blockedActionKindSchema, holdReasonCodeSchema, holdRecoveryActionSchema
 
 /**
  * The wire contract of the reply cards and the classifier settings (specification 8.3,
- * 12.4; lane g78).
+ * 12.4).
  *
  * The Mac kept its own copies of these in `apps/desktop/src/renderer/replyContract.ts`
  * and `apps/desktop/src/main/replyBridge.ts`. They matched the routes except in the
  * place that bit: the classifier's effort stopped at `high`, while the server accepts
  * `xhigh` and `max`, so a workspace configured at either read back as "no classifier"
- * (D03). The vocabularies below are the domain's — `CLASSIFIER_EFFORTS` and
- * `CLASSIFIER_MODELS` from `packages/domain/classification/types.ts`, `REPLY_CLASSES`
- * and `REPLY_DISPOSITIONS` from `packages/domain/src/rules/replyClassification.ts`,
- * `REPLY_NEXT_ACTIONS` from `packages/domain/classification/cards.ts` — and
- * `apps/api/test/wireVocabulary.test.ts` compares each with the domain's own list.
+ * (D03). The vocabularies below are declared once, here, and the domain imports them.
  *
  * The objects strip rather than refuse an unknown key; `./wire.ts` says why, and
  * where the strictness went instead.

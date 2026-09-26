@@ -13,7 +13,7 @@ import { todayBuildJobHandler, todayBuildJobKey, todayBuildSource } from '../src
 
 /**
  * `TodaySnapshotMissing` through the real worker, in production's shape: one
- * workspace, zero firms (specification 8.2, 13.3; lane g67).
+ * workspace, zero firms (specification 8.2, 13.3).
  *
  * The domain tests decide the semantics case by case. This file proves the chain the
  * alarm depends on — the scheduler pass materializes the day's `today.build`, a runner

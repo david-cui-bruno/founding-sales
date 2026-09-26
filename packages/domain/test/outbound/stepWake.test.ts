@@ -15,13 +15,13 @@ import { claimedAutomatedSends, setAdminCap } from '../../outbound/ramp.ts';
 import { dispatchOutboundMessage, type OutboundSendDeps } from '../../outbound/send.ts';
 import { composeEligibility } from '../../sequences/eligibility.ts';
 import { dispatchPreparedStep, runDueStepExecution } from '../../sequences/executions.ts';
-import { type SendHandoff, type SendHandoffRefusal } from '../../sequences/sendHandoff.ts';
+import type { SendHandoff, SendHandoffRefusal } from '../../sequences/sendHandoff.ts';
 import { createOutboundWorld, type OutboundWorld } from './support/outboundWorld.ts';
 import { automatedSent, openExtraSession, seedFirm, type ExtraSession } from './support/dispatchFixtures.ts';
 
 /**
- * A step's second look at its own fence, through the real dispatch path (lane g82:
- * audit C02, C03).
+ * A step's second look at its own fence, through the real dispatch path (audit C02,
+ * C03).
  *
  * The sequence engine used to dispatch a fence only in the job that prepared it. Now a
  * step woken again — its cap cleared, its worker died before the claim — finds the

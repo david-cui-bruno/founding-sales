@@ -3,7 +3,7 @@ import { recordBounceAgainstDay } from '../../outbound/ramp.ts';
 import { createOutboundWorld, type OutboundWorld } from './support/outboundWorld.ts';
 
 /**
- * Counting a bounce against the day that earned it (12.7, lane G22).
+ * Counting a bounce against the day that earned it (12.7).
  *
  * The mail suite proves the attribution end to end — a delivery report whose
  * `References` name an FSS fence is counted against that fence's send day and not

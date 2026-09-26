@@ -1,4 +1,4 @@
-import { type SuppressionJournalRecord } from '@fss/domain/suppression/journal.ts';
+import type { SuppressionJournalRecord } from '@fss/domain/suppression/journal.ts';
 import { parseSuppressionJournalRecord, type SuppressionJournalSource } from '@fss/domain/suppression/replay.ts';
 
 /**

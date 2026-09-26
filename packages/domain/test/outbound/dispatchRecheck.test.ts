@@ -20,7 +20,7 @@ import {
 import { automatedSent, prepareFor, seedFirm } from './support/dispatchFixtures.ts';
 
 /**
- * The dispatch re-asks everything, immediately before the claim (lane g77: S02, S03,
+ * The dispatch re-asks everything, immediately before the claim (S02, S03,
  * S05, S09).
  *
  * Each scenario prepares a fence while the world is sendable, changes one fact the

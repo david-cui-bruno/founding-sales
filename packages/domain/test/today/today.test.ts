@@ -396,7 +396,7 @@ describe('snooze (8.2)', () => {
     );
     expect(rows[0]?.count).toBe('0');
 
-    // Lane g79 (C22): a pause, not a hidden hold. The task stays on the card, marked
+    // C22: a pause, not a hidden hold. The task stays on the card, marked
     // with the hold its Resume control releases, and pressing Pause again answers with
     // the same hold rather than stacking a second one.
     const items = await listTodayItems(salesperson(), { businessDate, firmId: crm.alpha.firmId });

@@ -28,7 +28,7 @@ import { seedPolicy, type SeededPolicy } from '../db/support/policyFixtures.ts';
 import { seedSequences, type SeededSequences } from '../sequences/support/sequenceFixtures.ts';
 
 /**
- * Calls and callbacks, lane g79, against a real PostgreSQL 16.
+ * Calls and callbacks, against a real PostgreSQL 16.
  *
  * One `describe` per item of the 25 September 2026 audit this lane fixes, each written
  * as the defect it closes:

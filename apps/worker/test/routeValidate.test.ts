@@ -16,7 +16,7 @@ import { routeValidateJobHandler, routeValidationSource } from '../src/handlers/
 
 /**
  * The `route.validate` job as the worker runs it (specification 7.4, 13.1, 13.2,
- * Appendix G 2; lane g90).
+ * Appendix G 2).
  *
  * What is proved here and nowhere else: the registry takes the handler under the
  * protection `jobKinds.ts` names; the job an added address enqueues is claimed and

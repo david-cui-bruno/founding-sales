@@ -29,7 +29,7 @@ export const CALL_PATHS: readonly string[] = [
  * write onto whose firm: that is the CRM's usual assignment rule, decided by the
  * domain command under the firm's row lock.
  *
- * Since lane g79 the body may name the Today task the call was placed from (`itemId`),
+ * The body may name the Today task the call was placed from (`itemId`),
  * and the domain applies the outcome to the step or callback behind it; `occurredAt`
  * may be omitted for "just now", which is then the database's clock. The accepted
  * result carries `followUps` — what the call still needs from a person, such as a
@@ -70,7 +70,7 @@ export async function routeCalls(request: ApiRequest, options: RoutingOptions): 
   }
 
   // `retryBehaviour` is parsed so an old body is still understood, and deliberately
-  // not passed on: what a no-answer does is the frozen step's decision (9.1, lane g79).
+  // not passed on: what a no-answer does is the frozen step's decision (9.1).
   return await runPolicyCommand(deps, logCallOutcomeCommandSchema, 'log_call_outcome', async (repository, body) =>
     await logCallOutcome(repository, {
       firmId: body.firmId,

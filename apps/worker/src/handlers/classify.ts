@@ -7,10 +7,10 @@ import {
 } from '@fss/domain/classification/anthropicClient.ts';
 import { classifyReplyHandler } from '@fss/domain/classification/handler.ts';
 import { listPendingModelClassifications } from '@fss/domain/classification/store.ts';
-import { type ClassifierSettings } from '@fss/domain/classification/types.ts';
-import { type JobHandler } from '@fss/domain/jobs/handlerRegistry.ts';
+import type { ClassifierSettings } from '@fss/domain/classification/types.ts';
+import type { JobHandler } from '@fss/domain/jobs/handlerRegistry.ts';
 import { jobIdempotencyKey } from '@fss/domain/jobs/jobKinds.ts';
-import { type JobSpecification } from '@fss/domain/jobs/jobStore.ts';
+import type { JobSpecification } from '@fss/domain/jobs/jobStore.ts';
 import type { DueWorkSource } from '../scheduler/schedulerPass.ts';
 
 /**

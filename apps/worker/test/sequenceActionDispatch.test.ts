@@ -25,7 +25,7 @@ import { sequenceActionJobHandler } from '../src/handlers/sequenceAction.ts';
 import { runClaimedJob } from '../src/runner/jobRunner.ts';
 
 /**
- * The real `sequence.action` handler through the fixed dispatch path (lane g77).
+ * The real `sequence.action` handler through the fixed dispatch path.
  *
  * `sequenceAction.test.ts` proves the job's shape with a recording hand-off. This file
  * wires the one production uses — `outboundSendHandoff` over G7-2's fence, the default

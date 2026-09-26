@@ -1,8 +1,8 @@
 import { z } from 'zod';
 
 /**
- * The supported client-version range (specification 5.3), and since lane g78 the
- * compatibility ceiling the API derives it from.
+ * The supported client-version range (specification 5.3), and the compatibility
+ * ceiling the API derives it from.
  *
  * The API publishes a range; an outdated client may read only the upgrade instruction
  * and cannot mutate. Fails closed: a version string the parser does not recognise is
@@ -32,16 +32,15 @@ export const clientVersionRangeSchema = z
 export type ClientVersionRange = z.infer<typeof clientVersionRangeSchema>;
 
 // ---------------------------------------------------------------------------
-// The compatibility ceiling (lane g78, audit item O04)
+// The compatibility ceiling (audit item O04)
 // ---------------------------------------------------------------------------
 
 /**
  * The highest release line an API promises to serve: `1.x` is every 1.* build,
  * `1.4.x` every 1.4.* build.
  *
- * Until lane g78 the API published the exact latest desktop version as its maximum,
- * so every desktop-only release needed an API deployment first. A line is a promise
- * about the protocol instead: the API keeps every route and every response field an
+ * A line is a promise about the protocol, so a desktop-only release needs no API
+ * deployment first: the API keeps every route and every response field an
  * admitted build reads (`docs/decisions/g78-one-wire-contract.md` says what that
  * promise covers), so a new patch or minor on the line is admitted without the API
  * knowing its number. A build that turns out to be bad is named in `incompatible`.

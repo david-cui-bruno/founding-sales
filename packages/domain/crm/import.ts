@@ -15,7 +15,7 @@ import {
 
 /**
  * Admin CSV import (specification 7.2, Appendix G 38), and the Add firm form that is one
- * row of it (lane g84, audit item G02).
+ * row of it (audit item G02).
  *
  * "Admin-only CSV import validates into a preview and commits through ordinary
  * business commands." Appendix G 38 adds the four cases: "CSV import with
@@ -28,7 +28,7 @@ import {
  * normalizes and checks; it takes no lock and inserts no row, so an admin may run it
  * as often as they like on a file they are still fixing.
  *
- * **One row is one contact** (lane g84). A spreadsheet of prospects has a line per
+ * **One row is one contact**. A spreadsheet of prospects has a line per
  * person, with the firm's columns repeated on each of that firm's lines. So a row is
  * matched to a firm — one already in the workspace, by its external id, then its
  * website's domain, then its name; or one an earlier row of the file creates — and a
@@ -49,7 +49,7 @@ import {
  * **One row is one command, and one command is one transaction.** The API wraps each
  * `commitImportRow` in `runCommand`, so each row gets its own receipt, its own
  * payload hash and its own transaction. Inside it the row's own work runs in a
- * savepoint (lane g84): a row whose contact is refused takes its firm back with it
+ * savepoint: a row whose contact is refused takes its firm back with it
  * while the refusal's receipt still commits, and the rows either side of it are
  * untouched. That is "atomic per row" and "partial failures" in the same sentence.
  * Before the savepoint a refusal part-way through a row committed the part before it
@@ -945,7 +945,7 @@ export interface AddFirmInput {
 
 /**
  * Add a firm, its first contact and that contact's email address and number, from the
- * Add firm form (lane g84, audit item G02).
+ * Add firm form (audit item G02).
  *
  * It is one row of an import typed into a form: the same checks, the same matching and
  * the same commit, so a firm added by hand and a firm imported from a file cannot differ

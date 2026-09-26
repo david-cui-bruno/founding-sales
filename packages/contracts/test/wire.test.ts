@@ -19,7 +19,7 @@ import {
 } from '../src/index.ts';
 
 /**
- * Lane g78's two contracts: the compatibility ceiling and the exactness check the
+ * Two contracts: the compatibility ceiling and the exactness check the
  * routes' tests use. Both are pure, so their rules are here rather than behind a
  * database.
  */

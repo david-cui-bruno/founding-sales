@@ -10,7 +10,7 @@ import {
   type ClassificationResult,
   type ClassifierSettings,
 } from './types.ts';
-import { type ClassifierEffort, type ClassifierModel } from '@fss/contracts';
+import type { ClassifierEffort, ClassifierModel } from '@fss/contracts';
 
 /**
  * Which model, at which effort, and whether the classifier runs at all

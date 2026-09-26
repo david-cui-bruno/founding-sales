@@ -66,8 +66,8 @@ export async function routeMerges(request: ApiRequest, options: RoutingOptions):
 }
 
 /**
- * Attach the conflicts to a refusal body — a fresh one and, since lane g78, a replayed
- * one too (audit item D05).
+ * Attach the conflicts to a refusal body — a fresh one and a replayed one too (audit
+ * item D05).
  *
  * Until g78 a replay answered from the receipt, which kept the reason and not the
  * conflicts, so a Mac that retried the same command id got `merge_conflicts` with

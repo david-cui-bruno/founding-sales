@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { type GmailClient, type GmailHistoryRecord } from '../../mail/gmailClient.ts';
+import type { GmailClient, GmailHistoryRecord } from '../../mail/gmailClient.ts';
 import { createGmailHttpClient, httpFetch } from '../../mail/gmailClientHttp.ts';
 import { compareHistoryIds, historyIdOf, laterHistoryId } from '../../mail/historyIds.ts';
 import { readMailbox } from '../../mail/mailboxes.ts';
@@ -9,7 +9,7 @@ import { runMailSync, takeWholeRecords } from '../../mail/sync.ts';
 import { createMailWorld, fixtureMessage, type MailWorld, type MailWorldMailbox } from './support/mailWorld.ts';
 
 /**
- * The history cursor: what one `mail.sync` may claim to have read (lane g76, audit
+ * The history cursor: what one `mail.sync` may claim to have read (audit
  * items C06, C07 and C08).
  *
  * Three defects lived here together and each hid the next:

@@ -101,7 +101,7 @@ export async function readFirmPage(
   context: RepositoryContext,
   input: {
     readonly firmId: string;
-    /** Lane g90: the second version, whose routes carry their technical validation. */
+    /** The second version, whose routes carry their technical validation. */
     readonly routeValidation?: boolean | undefined;
   },
 ): Promise<CrmResult<FirmPageDto>> {

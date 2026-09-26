@@ -80,7 +80,7 @@ export interface RouteDto {
   readonly version: number;
   /**
    * The route's technical validation (7.4), present only when the read asked for it —
-   * the Firm page's second version (lane g90). An older desktop parses this object
+   * the Firm page's second version. An older desktop parses this object
    * strictly and never asks.
    */
   readonly technicalValidation?: 'unknown' | 'passed' | 'failed';
@@ -130,7 +130,7 @@ export async function readFirmForActor(
   context: RepositoryContext,
   input: {
     readonly firmId: string;
-    /** Lane g90: put each route's `technicalValidation` on it. Absent is the first shape exactly. */
+    /** Put each route's `technicalValidation` on it. Absent is the first shape exactly. */
     readonly routeValidation?: boolean | undefined;
   },
 ): Promise<CrmResult<FirmReadDto>> {

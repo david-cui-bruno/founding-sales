@@ -3,7 +3,7 @@ import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 import type { ClientVersionPolicy } from '@fss/contracts';
 import type { SuppressionJournal } from '@fss/domain/suppression/journal.ts';
 import { MAX_REQUEST_BYTES, REFUSAL_STATUS, checkEnvelope, redactError, type RefusalCode } from './limits.ts';
-import { type AuthDeps } from './auth/config.ts';
+import type { AuthDeps } from './auth/config.ts';
 import { authenticate } from './auth/sessions.ts';
 import type { VerifiedPrincipal } from './scope.ts';
 import {

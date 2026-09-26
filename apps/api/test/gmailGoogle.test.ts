@@ -8,7 +8,7 @@ import {
   GOOGLE_TOKEN_ENDPOINT,
 } from '@fss/domain/mail/config.ts';
 import { localEnvelopeCipher } from '@fss/domain/mail/envelope.ts';
-import { type HttpFetch, type HttpRequest, type HttpResponse } from '@fss/domain/mail/gmailClientHttp.ts';
+import type { HttpFetch, HttpRequest, HttpResponse } from '@fss/domain/mail/gmailClientHttp.ts';
 import { GMAIL_SCOPES } from '@fss/domain/mail/types.ts';
 import { DEPLOYMENT_ENVIRONMENT_VARIABLES, readApiDeployment, type ApiDeployment } from '../src/bootstrap/deployment.ts';
 import type { MailRoutingDeps } from '../src/routes/types.ts';

@@ -1,5 +1,5 @@
 import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
-import { type HandlerRegistry } from '@fss/domain/jobs/handlerRegistry.ts';
+import type { HandlerRegistry } from '@fss/domain/jobs/handlerRegistry.ts';
 import { MetricError, collectJobMetrics, type MetricDatum, type MetricSink } from '@fss/domain/jobs/metrics.ts';
 import { collectMailMetrics } from '@fss/domain/mail/metrics.ts';
 import { collectOutboundMetrics } from '@fss/domain/outbound/metrics.ts';

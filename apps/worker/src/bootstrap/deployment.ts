@@ -1,7 +1,7 @@
-import { type MailPublicConfig } from '@fss/domain/mail/config.ts';
+import type { MailPublicConfig } from '@fss/domain/mail/config.ts';
 import { envelopeCipher, localDataKeyWrapper, type EnvelopeCipher } from '@fss/domain/mail/envelope.ts';
 import { kmsDataKeyWrapper, loadKmsTransport, recordedSeamDataKeyWrapper } from '@fss/domain/mail/envelopeKms.ts';
-import { type GmailClient, type GmailOAuthConfig } from '@fss/domain/mail/gmailClient.ts';
+import type { GmailClient, GmailOAuthConfig } from '@fss/domain/mail/gmailClient.ts';
 import { recordedGmailClient } from '@fss/domain/mail/gmailClientFake.ts';
 import { createGmailHttpClient, httpFetch } from '@fss/domain/mail/gmailClientHttp.ts';
 import { staticSecretProvider, type SecretProvider } from '@fss/domain/mail/secretProvider.ts';

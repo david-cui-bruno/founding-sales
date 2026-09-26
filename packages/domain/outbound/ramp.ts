@@ -44,8 +44,7 @@ import {
  * and answers the part of the rule not met as a warning rather than a refusal: it is the
  * founder's own mailbox and his own risk. `setAdminCap` (`POST /outbound/cap`, desktop
  * 1.0.11) still refuses an unearned raise and one above 75, exactly as before. A stored
- * raise is honoured as written at every send — the per-send re-judgement of lane g87 is
- * gone with the lock — and the daily cap itself is checked exactly as before: the gate
+ * raise is honoured as written at every send, and the daily cap itself is checked exactly as before: the gate
  * refuses the send that would pass it.
  *
  * When both are set the minimum wins. An admin who raised a mailbox last month and
@@ -116,7 +115,7 @@ export const RAMP_SETTLED_DAY: number = RAMP_SCHEDULE[RAMP_SCHEDULE.length - 1]?
  */
 export const RAMP_RAISE_HEALTHY_STREAK = 10;
 
-/** Why a raise is not earned (lane g87, S06). */
+/** Why a raise is not earned (S06). */
 export type RaiseRefusal = 'ramp_not_settled' | 'health_not_sustained';
 
 /**
@@ -400,7 +399,7 @@ export async function closeSendDay(
  * typed 100 meant 100, and telling them the limit is 75 is better than giving them 75
  * and letting them believe they have 100.
  *
- * **A raise must be earned** (lane g87, S06). Any non-null `raiseTo` is refused unless
+ * **A raise must be earned** (S06). Any non-null `raiseTo` is refused unless
  * the mailbox has finished the schedule and its last `RAMP_RAISE_HEALTHY_STREAK`
  * closed sending days were all healthy — `ramp_not_settled` or
  * `health_not_sustained`, the part of the rule it has not met. Clearing a raise
@@ -590,7 +589,7 @@ export async function openSendDay(
  * send — which is Appendix G 33's "mailbox caps hold excess" failing in the one way
  * that matters.
  *
- * It is a *reservation by fence* (lane g77, C25): `send.ts` calls it only inside the
+ * It is a *reservation by fence* (C25): `send.ts` calls it only inside the
  * transaction that claims the fence, on the business date the claim records. The two
  * commit together or not at all, so no count exists without a claimed fence behind it
  * and none can be orphaned by a crash — `claimedAutomatedSends` is the same number
@@ -611,7 +610,7 @@ export async function countAutomatedSend(
 }
 
 /**
- * `automated_sent`, derived from the fences (lane g77, C25).
+ * `automated_sent`, derived from the fences (C25).
  *
  * Every increment of the counter commits in the transaction that claims a fence and
  * writes the same business date onto it, so for any mailbox and date the counter is
@@ -671,11 +670,11 @@ export interface BounceAgainstDay {
 
 /**
  * Count one bounce against a send day, re-judging a day that has already closed
- * (12.7, lane G22).
+ * (12.7).
  *
  * `recordDaySignal` is a bare `UPDATE`, which is right while the day is open and is
- * silent once it is not: lane G15 wrote down that "a bounce arriving after its day has
- * been closed is not counted against it". That is the hole this closes. A bounce is a
+ * silent once it is not, so a bounce arriving after its day has been closed would not
+ * be counted against it. This closes that hole. A bounce is a
  * fact about the send that caused it, and the day the send happened on is the
  * denominator 12.7's threshold is a rate over, so a late report must be able to change
  * a verdict the close already reached.
@@ -801,7 +800,7 @@ export async function listDaysToClose(
  *     DMARC recorded as passing and automated sending enabled. 12.7's gate is an
  *     admin's checklist, never a DNS lookup (`docs/decisions/g7-no-dns-lookup.md`).
  *   * **coverage** — the mailbox's coverage is *proven* (`coverageRefusal`: connected,
- *     `ready`, and a watermark inside `COVERAGE_FRESHNESS_SECONDS`, lane g77) and no
+ *     `ready`, and a watermark inside `COVERAGE_FRESHNESS_SECONDS`) and no
  *     open hold blocks `email_send` for it or for its owner — the same decision the
  *     send gate makes, from the same function.
  *   * **provider warning** — FSS subscribes to no Postmaster Tools feed, so the only

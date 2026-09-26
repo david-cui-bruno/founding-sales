@@ -11,7 +11,7 @@ import {
 import { TODAY_ALGORITHM_VERSION } from '../../today/types.ts';
 
 /**
- * `TodaySnapshotMissing` against a real PostgreSQL (specification 8.2, 13.3; lane g67).
+ * `TodaySnapshotMissing` against a real PostgreSQL (specification 8.2, 13.3).
  *
  * 13.3 alarms on "Today snapshot absent at 05:10 workspace time", and the gauge
  * answers it from the `today.build` job rather than from `today_snapshots`, because a

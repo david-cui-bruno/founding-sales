@@ -16,7 +16,7 @@ import { contextForPrincipal } from './routeSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**
- * The exact paths this module owns, for G5b's route registry (lane g60).
+ * The exact paths this module owns, for G5b's route registry.
  *
  * Exact, like every endpoint since G3b, so a mistyped path is `not_found` rather than
  * somebody else's router answering it.
@@ -29,7 +29,7 @@ export const CALLING_IDENTITY_PATHS: readonly string[] = [
 ];
 
 /**
- * A salesperson's own calling number (specification 9.1; lane g60).
+ * A salesperson's own calling number (specification 9.1).
  *
  * 9.2's second step refuses every dial whose calling identity is not the actor's own and
  * active, and until this module nothing could make one. Four
