@@ -3,10 +3,7 @@ import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import type { BootstrapRequest, BootstrapResponse, RouteModule } from '../bootstrap/routeRegistry.ts';
 import { ADD_FIRM_PATHS, routeAddFirm } from './addFirm.ts';
 import { routeAuth } from './auth.ts';
-import { routeAdminDevices } from './admin/devices.ts';
-import { routeAdminMemberships } from './admin/memberships.ts';
 import { routeContacts } from './contacts.ts';
-import { EXPORT_PATHS, routeExport } from './export.ts';
 import { FIRM_PAGE_PATHS, routeFirmPage } from './firmPage.ts';
 import { routeFirms } from './firms.ts';
 import { IMPORT_PATHS, routeImport } from './import.ts';
@@ -20,8 +17,7 @@ import { MESSAGE_PATHS, routeMessages } from './messages.ts';
 import { OUTBOUND_PATHS, routeOutbound } from './outbound.ts';
 // Lane G7b's reply cards and the classifier's configuration.
 import { REPLY_PATHS, routeReplies } from './replies.ts';
-import { SEARCH_PATHS, routeSearch } from './search.ts';
-// Lane G4's policy, suppression and dialing surface.
+// Lane G4's policy and dialing surface.
 import { CALLBACK_PATHS, routeCallbacks } from './callbacks.ts';
 import { CALL_PATHS, routeCalls } from './calls.ts';
 import { DIAL_PATHS, routeDial } from './dial.ts';
@@ -29,7 +25,6 @@ import { DIAL_PATHS, routeDial } from './dial.ts';
 import { CALLING_IDENTITY_PATHS, routeCallingIdentities } from './callingIdentities.ts';
 import { PAUSE_PATHS, routePauses } from './pauses.ts';
 import { POSTURE_PATHS, routePostures } from './postures.ts';
-import { SUPPRESSION_PATHS, routeSuppressions } from './suppressions.ts';
 // Lane G8's sequences, templates and enrollments.
 import { ENROLLMENT_PATHS, routeEnrollments } from './enrollments.ts';
 import { SEQUENCE_PATHS, routeSequences } from './sequences.ts';
@@ -41,9 +36,8 @@ import { SETTINGS_PATHS, routeSettings } from './settings.ts';
 // Lane G6's Today list.
 import { SNOOZE_PATHS, routeSnooze } from './snooze.ts';
 import { TODAY_PATHS, routeToday } from './today.ts';
-// Lane G14's retention, deletion, departure and attachment surface.
-import { DEPARTURE_PATHS, routeDeparture } from './departure.ts';
-import { RETENTION_PATHS, routeRetention } from './retention.ts';
+// Lane G14's attachment link (the retention, deletion and departure routes had no
+// caller and went in wave 2, S6).
 import { ATTACHMENT_PATHS, routeAttachments } from './retentionAttachments.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
@@ -130,8 +124,6 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
   return [
     healthModule(routing),
     moduleOf('auth', { prefixes: ['/auth'] }, routeAuth, routing),
-    moduleOf('admin-memberships', { prefixes: ['/admin/memberships'] }, routeAdminMemberships, routing),
-    moduleOf('admin-devices', { prefixes: ['/admin/devices'] }, routeAdminDevices, routing),
     moduleOf('firms', { prefixes: ['/firms'] }, routeFirms, routing),
     moduleOf('contacts', { prefixes: ['/contacts'] }, routeContacts, routing),
     moduleOf('opportunities', { prefixes: ['/opportunities'] }, routeOpportunities, routing),
@@ -141,18 +133,15 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     // be: the prefixes above are a record of the routers that already existed in
     // that shape, not an invitation.
     moduleOf('firm-page', { paths: FIRM_PAGE_PATHS }, routeFirmPage, routing),
-    moduleOf('search', { paths: SEARCH_PATHS }, routeSearch, routing),
     moduleOf('import', { paths: IMPORT_PATHS }, routeImport, routing),
     // Lane g84's Add firm form: one row of an import, typed. Exact, like its neighbours.
     moduleOf('add-firm', { paths: ADD_FIRM_PATHS }, routeAddFirm, routing),
-    moduleOf('export', { paths: EXPORT_PATHS }, routeExport, routing),
-    // Lane G4's policy, suppression and dialing surface. Exact paths throughout, for
+    // Lane G4's policy and dialing surface. Exact paths throughout, for
     // the reason above. `/dial/authorize` and `/dial/consume` are declared separately
     // rather than as a `/dial` prefix because a mistyped dialing path must be
     // `not_found` and not an unauthorized call: the registry is the only thing that
     // can promise that, and only about the paths it was told.
     moduleOf('postures', { paths: POSTURE_PATHS }, routePostures, routing),
-    moduleOf('suppressions', { paths: SUPPRESSION_PATHS }, routeSuppressions, routing),
     moduleOf('dial', { paths: DIAL_PATHS }, routeDial, routing),
     moduleOf('calling-identities', { paths: CALLING_IDENTITY_PATHS }, routeCallingIdentities, routing),
     moduleOf('calls', { paths: CALL_PATHS }, routeCalls, routing),
@@ -202,15 +191,8 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     moduleOf('settings', { paths: SETTINGS_PATHS }, routeSettings, routing),
     moduleOf('dashboard', { paths: DASHBOARD_PATHS }, routeDashboard, routing),
     moduleOf('diagnostics', { paths: DIAGNOSTICS_PATHS }, routeDiagnostics, routing),
-    // Lane G14. Exact paths throughout, and three modules rather than one: the
-    // retention reads and the deletion commands, the departure pair under `/admin`,
-    // and the attachment link, which is neither an admin command nor a retention
-    // operation but the one read in the system that hands out a Gmail URL. A
-    // `/retention` prefix would also have had to swallow `/admin/departure`, which
-    // the registry refuses for the reason it exists: an unknown path near a command
-    // that deletes prospect data must be `not_found` before any module sees it.
-    moduleOf('retention', { paths: RETENTION_PATHS }, routeRetention, routing),
-    moduleOf('departure', { paths: DEPARTURE_PATHS }, routeDeparture, routing),
+    // Lane G14's attachment link: the one read in the system that hands out a Gmail
+    // URL. One exact path.
     moduleOf('attachments', { paths: ATTACHMENT_PATHS }, routeAttachments, routing),
   ];
 }

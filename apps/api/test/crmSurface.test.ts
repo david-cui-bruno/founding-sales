@@ -2,22 +2,22 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   IMPORT_COLUMNS,
-  exportResponseSchema,
   firmPageResponseSchema,
   importCommitResponseSchema,
   importPreviewResponseSchema,
-  searchResponseSchema,
 } from '@fss/contracts';
 import { dispatch, type ApiRequest } from '../src/server.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, OUTDATED_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
+import { seedFirm } from './support/crmSeed.ts';
 
 /**
- * Search, admin CSV import and export, through the real dispatcher with real
- * sessions (specification 7.2, 5.2, Appendix F, Appendix G 7, 8 and 38).
+ * Admin CSV import and the Firm page, through the real dispatcher with real sessions
+ * (specification 7.2, 5.2, Appendix F, Appendix G 7, 8 and 38). Search and export had
+ * no caller and went in wave 2, S6.
  *
  * The domain tests in `@fss/domain` prove the rules against a real PostgreSQL. What
- * is proved here is the surface: that the three endpoints are mounted, that they
+ * is proved here is the surface: that the endpoints are mounted, that they
  * refuse the caller the specification says they refuse, that every response matches
  * the schema in `@fss/contracts`, and — the one that is genuinely about the API
  * rather than the domain — that a CSV import is one command per row, so a retry of
@@ -73,7 +73,7 @@ describe('the CRM surface', () => {
 
   // ------------------------------------------------------------------- mounting
   it('refuses every CRM-surface path without a session', async () => {
-    for (const path of ['/search/firms', '/import/preview', '/import/commit', '/export/firms']) {
+    for (const path of ['/import/preview', '/import/commit', '/crm/firm-page']) {
       const answer = await post(path, null, {});
       expect(answer.status, path).toBe(401);
     }
@@ -83,7 +83,7 @@ describe('the CRM surface', () => {
     const read = await dispatch(
       {
         method: 'GET',
-        path: '/search/firms',
+        path: '/import/preview',
         query: new URLSearchParams(),
         headers: { authorization: `Bearer ${adminToken}` },
         body: undefined,
@@ -92,43 +92,11 @@ describe('the CRM surface', () => {
     );
     expect(read.status).toBe(405);
 
-    const neighbour = await post('/search/contacts', adminToken, {});
-    expect(neighbour.status).toBe(404);
+    for (const path of ['/search/contacts', '/search/firms', '/export/firms']) {
+      expect((await post(path, adminToken, {})).status, path).toBe(404);
+    }
   });
 
-  // --------------------------------------------------------------------- search
-  it('searches, and answers the contract schema', async () => {
-    const created = await post('/firms/create', adminToken, {
-      commandId: randomUUID(),
-      clientVersion: CURRENT_CLIENT_VERSION,
-      name: 'Bramble Test Advisors',
-      regionCode: 'RI',
-      postalCode: '02903',
-      assignedUserId: salespersonUserId,
-    });
-    expect(created.status).toBe(200);
-
-    const found = await post('/search/firms', salespersonToken, { term: 'Bramble' });
-    expect(found.status).toBe(200);
-    const parsed = searchResponseSchema.safeParse(found.body);
-    expect(parsed.success, JSON.stringify(parsed.error?.issues ?? [])).toBe(true);
-    if (!parsed.success) return;
-    expect(parsed.data.hits.map(hit => hit.firm.name)).toEqual(['Bramble Test Advisors']);
-    expect(parsed.data.hits[0]?.matchedOn).toEqual(['name']);
-  });
-
-  it('refuses a filter the workspace cannot honour, with a reason rather than a 500', async () => {
-    const found = await post('/search/firms', adminToken, { filters: { stageKey: 'not-a-stage' } });
-    expect(found.status).toBe(409);
-    expect(found.body['reason']).toBe('stage_unknown');
-  });
-
-  it('refuses a body that is not a search request', async () => {
-    const found = await post('/search/firms', adminToken, { term: 'x', mystery: true });
-    expect(found.status).toBe(400);
-  });
-
-  // ---------------------------------------------- Appendix G 38: the import surface
   it('refuses a salesperson at both import paths', async () => {
     const preview = await post('/import/preview', salespersonToken, { csv: csv('A Test Co,,,,,,,,,,,') });
     expect(preview.status).toBe(409);
@@ -258,9 +226,12 @@ describe('the CRM surface', () => {
 
   // ------------------------------------------------------------------ firm page
   it('serves the Firm page at the caller’s width and refuses an unknown firm as not found', async () => {
-    const found = await post('/search/firms', salespersonToken, { term: 'Bramble' });
-    const firmId = searchResponseSchema.parse(found.body).hits[0]?.firm.id ?? '';
-    expect(firmId).not.toBe('');
+    const firmId = await seedFirm(fixture, {
+      name: 'Bramble Test Advisors',
+      regionCode: 'RI',
+      postalCode: '02903',
+      assignedUserId: salespersonUserId,
+    });
 
     const mine = await post('/crm/firm-page', salespersonToken, { firmId });
     expect(mine.status).toBe(200);
@@ -277,34 +248,4 @@ describe('the CRM surface', () => {
     expect(missing.status).toBe(404);
     expect(missing.body).toEqual({ error: 'not_found', message: 'No such endpoint.' });
   });
-
-  // --------------------------------------------------------------------- export
-  it('exports typed redacted rows and audits the export once', async () => {
-    const before = await exportAudits();
-    const exported = await post('/export/firms', salespersonToken, { term: 'Bramble' });
-    expect(exported.status).toBe(200);
-    const parsed = exportResponseSchema.safeParse(exported.body);
-    expect(parsed.success, JSON.stringify(parsed.error?.issues ?? [])).toBe(true);
-    if (!parsed.success) return;
-    expect(parsed.data.rows).toHaveLength(1);
-    expect(parsed.data.rows[0]?.visibility).toBe('assigned_or_admin');
-    expect(await exportAudits()).toBe(before + 1);
-  });
-
-  it('gives a salesperson a colleague’s firm at identity width and nothing more', async () => {
-    const exported = await post('/export/firms', salespersonToken, { term: 'Sorrel' });
-    const parsed = exportResponseSchema.parse(exported.body);
-    expect(parsed.rows).toHaveLength(1);
-    expect(parsed.rows[0]?.visibility).toBe('any_active_member');
-    expect(JSON.stringify(parsed.rows)).not.toContain('lee@sorrel.example.test');
-    expect(JSON.stringify(parsed.rows)).not.toContain('Lee Placeholder');
-  });
-
-  async function exportAudits(): Promise<number> {
-    const { rows } = await fixture.db.query<{ count: string }>(
-      "SELECT count(*)::text AS count FROM audit_events WHERE workspace_id = $1 AND action = 'export.firms'",
-      [fixture.alpha.workspaceId],
-    );
-    return Number(rows[0]?.count ?? '0');
-  }
 });

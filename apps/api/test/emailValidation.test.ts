@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { dispatch, type ApiRequest } from '../src/server.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
+import { seedContact, seedFirm } from './support/crmSeed.ts';
 
 /**
  * Lane g90 through the API: the Firm page's second version, which puts each route's
@@ -26,7 +27,6 @@ const ROUTE_1_0_5 = routeDtoSchema.omit({ technicalValidation: true });
 
 describe('lane g90 through the API', () => {
   let fixture: AuthFixture;
-  let adminToken = '';
   let salespersonToken = '';
   let betaToken = '';
   let firmId = '';
@@ -81,16 +81,15 @@ describe('lane g90 through the API', () => {
 
   beforeAll(async () => {
     fixture = await createAuthFixture();
-    adminToken = (await issueSessionFor(fixture, fixture.alpha, fixture.alpha.admin)).accessToken;
     salespersonToken = (await issueSessionFor(fixture, fixture.alpha, fixture.alpha.salesperson)).accessToken;
     betaToken = (await issueSessionFor(fixture, fixture.beta, fixture.beta.admin)).accessToken;
-    const firm = await post(
-      '/firms/create',
-      adminToken,
-      command({ name: 'Linden Test Advisors', regionCode: 'RI', postalCode: '02903', assignedUserId: fixture.alpha.salesperson.userId }),
-    );
-    firmId = String(result(firm)['id']);
-    contactId = String(result(await post('/contacts/create', salespersonToken, command({ firmId, fullName: 'Rowan Placeholder' })))['id']);
+    firmId = await seedFirm(fixture, {
+      name: 'Linden Test Advisors',
+      regionCode: 'RI',
+      postalCode: '02903',
+      assignedUserId: fixture.alpha.salesperson.userId,
+    });
+    contactId = await seedContact(fixture, { firmId, fullName: 'Rowan Placeholder' });
   });
 
   afterAll(async () => {

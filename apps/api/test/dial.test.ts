@@ -15,6 +15,7 @@ import {
 } from '../src/journal/index.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
+import { seedContact, seedFirm } from './support/crmSeed.ts';
 
 /**
  * The policy, suppression and dialing endpoints, through the real dispatcher with
@@ -120,21 +121,18 @@ describe('policy, suppression and dialing routes', () => {
       await issueSessionFor(fixture, fixture.alpha, { googleSub: strangerSub, email: strangerEmail }, { deviceLabel: 'Other Mac' })
     ).accessToken;
 
-    const created = await post(
-      '/firms/create',
-      adminToken,
-      command({ name: 'Northwind Test Holdings', regionCode: 'RI', postalCode: '02903', assignedUserId: assigneeUserId }),
-    );
-    expect(created.status).toBe(200);
-    firmId = String(resultOf(created)['id']);
+    firmId = await seedFirm(fixture, {
+      name: 'Northwind Test Holdings',
+      regionCode: 'RI',
+      postalCode: '02903',
+      assignedUserId: assigneeUserId,
+    });
     // Providence, Rhode Island: the state default resolves the zone, which step 5
     // of `authorizeDial` requires before it will look at a posture at all.
     const zone = await post('/firms/resolve-zone', adminToken, command({ firmId }));
     expect(zone.status).toBe(200);
 
-    const contact = await post('/contacts/create', assigneeToken, command({ firmId, fullName: 'Dana Example' }));
-    expect(contact.status).toBe(200);
-    contactId = String(resultOf(contact)['id']);
+    contactId = await seedContact(fixture, { firmId, fullName: 'Dana Example' });
 
     const route = await post(
       '/contacts/routes/add',
@@ -187,7 +185,6 @@ describe('policy, suppression and dialing routes', () => {
       '/dial/authorize',
       '/dial/check',
       '/dial/consume',
-      '/suppressions/record',
       '/postures/record',
       '/pauses/open',
       '/calls/log',
@@ -297,40 +294,49 @@ describe('policy, suppression and dialing routes', () => {
     expect(answer.body['reason']).toBe('identity_shared_line_disabled');
   });
 
-  it('writes the journal before it acknowledges a suppression', async () => {
-    const before = journal.appended.length;
-    const recorded = await post(
-      '/suppressions/record',
+  /**
+   * A firm of its own with one usable number, so a do-not-call (which also switches the
+   * firm to manual) leaves the shared firm alone. The journal tests used
+   * `/suppressions/record` until wave 2 (S6) deleted it: the Mac suppresses a number
+   * by logging the call, and that path writes the same journal first.
+   */
+  const numberToSuppress = async (e164: string) => {
+    const ownFirmId = await seedFirm(fixture, {
+      name: `Suppression Test ${e164}`,
+      regionCode: 'RI',
+      postalCode: '02903',
+      assignedUserId: assigneeUserId,
+    });
+    const ownContactId = await seedContact(fixture, { firmId: ownFirmId, fullName: 'Pat Example' });
+    const route = await post(
+      '/contacts/routes/add',
       assigneeToken,
-      command({ scope: 'handle', value: '+1 401 555 0190', firmId, source: 'salesperson_manual' }),
+      command({ firmId: ownFirmId, contactId: ownContactId, routeKind: 'phone', value: e164, source: 'salesperson' }),
     );
-    expect(recorded.status).toBe(200);
-    expect(journal.appended.length).toBe(before + 1);
+    expect(route.status).toBe(200);
+    return { firmId: ownFirmId, contactId: ownContactId, routeId: String(resultOf(route)['id']) };
+  };
 
-    const appended = journal.appended.at(-1);
-    expect(appended?.eventId).toBe(resultOf(recorded)['eventId']);
-    // Canonicalized server-side: the caller typed spaces and got E.164.
-    expect(appended?.canonicalKey).toBe('+14015550190');
-    expect(appended?.canonicalizerVersion).toBe('e164-lower.1');
+  it('writes the journal before it acknowledges a do-not-call suppression', async () => {
+    const target = await numberToSuppress('+14015550190');
+    const before = journal.appended.length;
+    const logged = await post('/calls/log', assigneeToken, command({ ...target, outcome: 'do_not_call' }));
+    expect(logged.status).toBe(200);
+    const eventIds = resultOf(logged)['suppressionEventIds'] as string[];
+    expect(eventIds.length).toBeGreaterThan(0);
+    expect(journal.appended.length).toBe(before + eventIds.length);
 
-    const listed = await get('/suppressions', assigneeToken);
-    expect(listed.status).toBe(200);
-    const suppressions = listed.body['suppressions'] as { canonicalKey: string }[];
-    expect(suppressions.some(row => row.canonicalKey === '+14015550190')).toBe(true);
+    const handle = journal.appended.slice(before).find(entry => entry.canonicalKey === '+14015550190');
+    expect(eventIds).toContain(handle?.eventId);
+    expect(handle?.canonicalizerVersion).toBe('e164-lower.1');
   });
 
   it('fails the command and leaves the id free when the journal write fails', async () => {
+    const target = await numberToSuppress('+14015550191');
     const commandId = randomUUID();
-    const body = {
-      commandId,
-      clientVersion: CURRENT_CLIENT_VERSION,
-      scope: 'handle' as const,
-      value: '+14015550191',
-      firmId,
-      source: 'salesperson_manual' as const,
-    };
+    const body = { commandId, clientVersion: CURRENT_CLIENT_VERSION, ...target, outcome: 'do_not_call' as const };
     journal.failNext();
-    const failed = await post('/suppressions/record', assigneeToken, body);
+    const failed = await post('/calls/log', assigneeToken, body);
     expect(failed.status).toBe(503);
     expect(failed.body['error']).toBe('journal_unavailable');
 
@@ -341,7 +347,7 @@ describe('policy, suppression and dialing routes', () => {
     expect(Number(receipts.rows[0]?.count)).toBe(0);
 
     // The same id, once the bucket is back.
-    const retried = await post('/suppressions/record', assigneeToken, body);
+    const retried = await post('/calls/log', assigneeToken, body);
     expect(retried.status).toBe(200);
     expect(retried.body['replayed']).toBe(false);
   });
@@ -506,12 +512,12 @@ describe('policy, suppression and dialing routes', () => {
   });
 
   it('refuses a route from another firm before anything is written (lane g79, S15)', async () => {
-    const other = await post(
-      '/firms/create',
-      adminToken,
-      command({ name: 'Larkspur Test Foundry', regionCode: 'RI', postalCode: '02903', assignedUserId: assigneeUserId }),
-    );
-    const otherFirmId = String(resultOf(other)['id']);
+    const otherFirmId = await seedFirm(fixture, {
+      name: 'Larkspur Test Foundry',
+      regionCode: 'RI',
+      postalCode: '02903',
+      assignedUserId: assigneeUserId,
+    });
     const before = await fixture.db.query<{ count: string }>(
       'SELECT count(*)::text AS count FROM call_logs WHERE workspace_id = $1',
       [fixture.alpha.workspaceId],

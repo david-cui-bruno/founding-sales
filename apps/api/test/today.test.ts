@@ -13,6 +13,7 @@ import { localNoopSuppressionJournal } from '../src/journal/index.ts';
 import { dispatch, type ApiRequest } from '../src/server.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
+import { seedContact, seedFirm } from './support/crmSeed.ts';
 
 /**
  * The Today endpoints, through the real dispatcher with real sessions
@@ -123,16 +124,8 @@ describe('the Today routes', () => {
       })
     ).accessToken;
 
-    const created = await post(
-      '/firms/create',
-      adminToken,
-      command({ name: 'Northwind Test Holdings', regionCode: 'RI', assignedUserId: assigneeUserId }),
-    );
-    expect(created.status).toBe(200);
-    firmId = String(resultOf(created)['id']);
-    const contact = await post('/contacts/create', assigneeToken, command({ firmId, fullName: 'Dana Example' }));
-    expect(contact.status).toBe(200);
-    contactId = String(resultOf(contact)['id']);
+    firmId = await seedFirm(fixture, { name: 'Northwind Test Holdings', regionCode: 'RI', assignedUserId: assigneeUserId });
+    contactId = await seedContact(fixture, { firmId, fullName: 'Dana Example' });
 
     const clock = await fixture.db.query<{ now: Date }>('SELECT now() AS now');
     const now = (clock.rows[0]?.now ?? new Date()).toISOString();

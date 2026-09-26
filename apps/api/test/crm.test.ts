@@ -4,6 +4,7 @@ import { firmListResponseSchema, mergeRefusalSchema, wireDrift } from '@fss/cont
 import { dispatch, type ApiRequest } from '../src/server.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, OUTDATED_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
+import { seedContact, seedFirm } from './support/crmSeed.ts';
 
 /**
  * The CRM endpoints, through the real dispatcher with real sessions.
@@ -26,6 +27,7 @@ describe('CRM routes', () => {
   let assigneeUserId: string;
   let strangerUserId: string;
   let firmId: string;
+  let contactId: string;
 
   const options = () => ({
     session: fixture.db,
@@ -90,14 +92,13 @@ describe('CRM routes', () => {
     );
     strangerToken = strangerSession.accessToken;
 
-    const created = await post(
-      '/firms/create',
-      adminToken,
-      command({ name: 'Northwind Test Holdings', regionCode: 'RI', postalCode: '02903', assignedUserId: assigneeUserId }),
-    );
-    expect(created.status).toBe(200);
-    firmId = ((created.body['result'] as { id: string } | null)?.id) ?? '';
-    expect(firmId).not.toBe('');
+    firmId = await seedFirm(fixture, {
+      name: 'Northwind Test Holdings',
+      regionCode: 'RI',
+      postalCode: '02903',
+      assignedUserId: assigneeUserId,
+    });
+    contactId = await seedContact(fixture, { firmId, fullName: 'Dana Example', isPrimary: true });
   });
 
   afterAll(async () => {
@@ -105,7 +106,7 @@ describe('CRM routes', () => {
   });
 
   it('refuses every CRM path without a session', async () => {
-    for (const path of ['/firms/create', '/contacts/create', '/opportunities/open', '/merges/firms']) {
+    for (const path of ['/contacts/update', '/opportunities/open', '/merges/firms', '/crm/firms/add']) {
       const answer = await post(path, null, command({ name: 'x' }));
       expect(answer.status).toBe(401);
     }
@@ -119,18 +120,18 @@ describe('CRM routes', () => {
   it('refuses an outdated client and leaves its command id unspent', async () => {
     const commandId = randomUUID();
     const outdated = await post(
-      '/firms/update',
+      '/contacts/update',
       assigneeToken,
-      { commandId, clientVersion: OUTDATED_CLIENT_VERSION, firmId, patch: { name: 'Renamed' } },
+      { commandId, clientVersion: OUTDATED_CLIENT_VERSION, contactId, patch: { title: 'Partner' } },
     );
     expect(outdated.status).toBe(426);
     expect(outdated.body['reason']).toBe('client_upgrade_required');
 
     // The same id, from an upgraded client, is still free (Appendix G 40).
     const retried = await post(
-      '/firms/update',
+      '/contacts/update',
       assigneeToken,
-      { commandId, clientVersion: CURRENT_CLIENT_VERSION, firmId, patch: { name: 'Renamed' } },
+      { commandId, clientVersion: CURRENT_CLIENT_VERSION, contactId, patch: { title: 'Partner' } },
     );
     expect(retried.status).toBe(200);
     expect(retried.body['replayed']).toBe(false);
@@ -138,26 +139,26 @@ describe('CRM routes', () => {
 
   it('replays a command by id and refuses a different payload under the same id', async () => {
     const commandId = randomUUID();
-    const body = { commandId, clientVersion: CURRENT_CLIENT_VERSION, firmId, patch: { locality: 'Providence' } };
-    const first = await post('/firms/update', assigneeToken, body);
+    const body = { commandId, clientVersion: CURRENT_CLIENT_VERSION, contactId, patch: { title: 'Principal' } };
+    const first = await post('/contacts/update', assigneeToken, body);
     expect(first.status).toBe(200);
     expect(first.body['replayed']).toBe(false);
 
-    const replay = await post('/firms/update', assigneeToken, body);
+    const replay = await post('/contacts/update', assigneeToken, body);
     expect(replay.body['replayed']).toBe(true);
 
-    const different = await post('/firms/update', assigneeToken, { ...body, patch: { locality: 'Newport' } });
+    const different = await post('/contacts/update', assigneeToken, { ...body, patch: { title: 'Founder' } });
     expect(different.status).toBe(409);
     expect(different.body['reason']).toBe('command_payload_mismatch');
   });
 
   it('refuses the other salesperson every mutation on a firm that is not theirs', async () => {
-    const refused = await post('/firms/update', strangerToken, command({ firmId, patch: { name: 'Taken' } }));
+    const refused = await post('/contacts/update', strangerToken, command({ contactId, patch: { title: 'Taken' } }));
     expect(refused.status).toBe(409);
     expect(refused.body['reason']).toBe('not_assigned');
 
-    const contact = await post('/contacts/create', strangerToken, command({ firmId, fullName: 'Intruder' }));
-    expect(contact.body['reason']).toBe('not_assigned');
+    const opened = await post('/opportunities/open', strangerToken, command({ firmId }));
+    expect(opened.body['reason']).toBe('not_assigned');
   });
 
   it('gives the colleague the identity DTO and the assignee the detail DTO', async () => {
@@ -190,10 +191,6 @@ describe('CRM routes', () => {
     const zone = await post('/firms/resolve-zone', assigneeToken, command({ firmId }));
     expect(zone.status).toBe(200);
     expect((zone.body['result'] as { timeZone: string }).timeZone).toBe('America/New_York');
-
-    const contact = await post('/contacts/create', assigneeToken, command({ firmId, fullName: 'Dana Example', isPrimary: true }));
-    expect(contact.status).toBe(200);
-    const contactId = (contact.body['result'] as { id: string }).id;
 
     const route = await post(
       '/contacts/routes/add',
@@ -228,20 +225,15 @@ describe('CRM routes', () => {
       command({ opportunityId, toStageKey: 'lost', reason: 'chose a competitor' }),
     );
     expect(lost.status).toBe(200);
-
-    const reopened = await post('/opportunities/reopen', assigneeToken, command({ firmId, reason: 'they came back' }));
-    expect(reopened.status).toBe(200);
-    expect((reopened.body['result'] as { opportunityId: string }).opportunityId).not.toBe(opportunityId);
   });
 
   it('returns merge conflicts for resolution and accepts the resolved merge', async () => {
-    const duplicate = await post(
-      '/firms/create',
-      adminToken,
-      command({ name: 'Northwind Test Holdings (dup)', website: 'https://dup.example.test', assignedUserId: assigneeUserId }),
-    );
-    const duplicateId = (duplicate.body['result'] as { id: string }).id;
-    await post('/firms/update', assigneeToken, command({ firmId, patch: { website: 'https://northwind.example.test' } }));
+    const duplicateId = await seedFirm(fixture, {
+      name: 'Northwind Test Holdings (dup)',
+      website: 'https://dup.example.test',
+      assignedUserId: assigneeUserId,
+    });
+    await fixture.db.query("UPDATE firms SET website = 'https://northwind.example.test' WHERE id = $1", [firmId]);
 
     const attempt = command({ sourceFirmId: duplicateId, targetFirmId: firmId });
     const conflicted = await post('/merges/firms', assigneeToken, attempt);

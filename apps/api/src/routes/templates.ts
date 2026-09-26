@@ -4,7 +4,6 @@ import {
   approveTemplateVersion,
   createTemplateVersion,
   listTemplateVersions,
-  retireTemplateVersion,
 } from '@fss/domain/templates';
 import {
   REFUSAL_STATUS,
@@ -37,7 +36,6 @@ export const TEMPLATE_PATHS: readonly string[] = [
   '/templates',
   '/templates/create',
   '/templates/approve',
-  '/templates/retire',
 ];
 
 const command = { commandId: commandIdSchema, clientVersion: semanticVersionSchema };
@@ -121,12 +119,6 @@ export async function routeTemplates(
             : `${approved.reason}:${approved.issues.join(',')}`,
       };
     });
-  }
-
-  if (request.path === '/templates/retire') {
-    return await runPolicyCommand(deps, versionSchema, 'retire_template_version', async (context, body) =>
-      await retireTemplateVersion(context, { templateVersionId: body.templateVersionId }),
-    );
   }
 
   return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };

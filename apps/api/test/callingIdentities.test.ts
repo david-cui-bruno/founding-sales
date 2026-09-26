@@ -12,6 +12,7 @@ import { createApiServer, dispatch, refusalCodeOf, type ApiRequest } from '../sr
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
 import { testRequestPool } from './support/poolFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
+import { seedContact, seedFirm } from './support/crmSeed.ts';
 
 /**
  * The calling-number endpoints, through the real dispatcher with real sessions
@@ -116,17 +117,14 @@ describe('the calling-number routes', () => {
 
     // A firm assigned to the salesperson, with a usable phone route, a resolved zone
     // and a posture: everything 9.2 needs except the calling identity.
-    const created = await post(
-      '/firms/create',
-      adminToken,
-      command({ name: 'Northwind Test Holdings', regionCode: 'RI', postalCode: '02903', assignedUserId: salespersonUserId }),
-    );
-    expect(created.status).toBe(200);
-    firmId = String(resultOf(created)['id']);
+    firmId = await seedFirm(fixture, {
+      name: 'Northwind Test Holdings',
+      regionCode: 'RI',
+      postalCode: '02903',
+      assignedUserId: salespersonUserId,
+    });
     expect((await post('/firms/resolve-zone', adminToken, command({ firmId }))).status).toBe(200);
-    const contact = await post('/contacts/create', salespersonToken, command({ firmId, fullName: 'Dana Example' }));
-    expect(contact.status).toBe(200);
-    contactId = String(resultOf(contact)['id']);
+    contactId = await seedContact(fixture, { firmId, fullName: 'Dana Example' });
     const route = await post(
       '/contacts/routes/add',
       salespersonToken,

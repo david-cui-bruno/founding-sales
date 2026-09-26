@@ -80,7 +80,6 @@ describe('the outbound admin routes', () => {
       '/outbound/authentication',
       '/outbound/cap',
       '/outbound/cap/override',
-      '/outbound/domain',
       '/outbound/status',
     ]) {
       expect((await post(path, null, command())).status, path).toBe(401);

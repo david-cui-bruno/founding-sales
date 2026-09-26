@@ -6,6 +6,7 @@ import { openHold, releaseHold } from '@fss/domain/policy';
 import { dispatch, type ApiRequest } from '../src/server.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
+import { seedContact, seedFirm } from './support/crmSeed.ts';
 
 /**
  * The two endpoints lane g88 added, through the real dispatcher: the resume review and
@@ -63,19 +64,19 @@ describe('lane g88 through the API', () => {
     adminToken = (await issueSessionFor(fixture, fixture.alpha, fixture.alpha.admin)).accessToken;
     salespersonToken = (await issueSessionFor(fixture, fixture.alpha, fixture.alpha.salesperson)).accessToken;
 
-    const firm = await post(
-      '/firms/create',
-      adminToken,
-      command({ name: 'Linden Test Advisors', regionCode: 'RI', postalCode: '02903', assignedUserId: fixture.alpha.salesperson.userId }),
-    );
-    firmId = String(result(firm)['id']);
+    firmId = await seedFirm(fixture, {
+      name: 'Linden Test Advisors',
+      regionCode: 'RI',
+      postalCode: '02903',
+      assignedUserId: fixture.alpha.salesperson.userId,
+    });
     await fixture.db.query(
       `UPDATE firms SET time_zone = 'America/New_York', time_zone_confidence = 'high',
               time_zone_source = 'postal', time_zone_rule_version = 'firm-zone.1'
         WHERE workspace_id = $1 AND id = $2`,
       [fixture.alpha.workspaceId, firmId],
     );
-    contactId = String(result(await post('/contacts/create', salespersonToken, command({ firmId, fullName: 'Rowan Placeholder', title: 'Principal' })))['id']);
+    contactId = await seedContact(fixture, { firmId, fullName: 'Rowan Placeholder', title: 'Principal' });
     const opportunityId = String(result(await post('/opportunities/open', salespersonToken, command({ firmId })))['id']);
 
     const signOff = 'Sam Example\nCallie';

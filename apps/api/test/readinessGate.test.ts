@@ -90,7 +90,7 @@ describe('the readiness gate', () => {
     expect(world.checks()).toBe(1);
 
     world.advance(READINESS_GATE_TTL_MILLISECONDS - 1);
-    for (const path of ['/today', '/firms', '/suppressions']) {
+    for (const path of ['/today', '/firms', '/pipeline/board']) {
       await expect(world.gate.admit(path, NO_SESSION)).resolves.toEqual({ admitted: true });
     }
     expect(world.checks()).toBe(1);

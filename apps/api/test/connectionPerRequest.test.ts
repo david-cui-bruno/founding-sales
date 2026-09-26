@@ -5,13 +5,14 @@ import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { withTransaction, type QueryResultRowLike, type SessionQueryable } from '@fss/domain/db';
 import type { SuppressionJournal, SuppressionJournalRecord } from '@fss/domain/suppression';
-import { createApiServer, dispatch } from '../src/server.ts';
+import { createApiServer } from '../src/server.ts';
 import { createRequestPool, poolConnections, type RequestConnections } from '../src/bootstrap/connections.ts';
 import { recordingLogger } from '../src/bootstrap/log.ts';
 import type { RouteModule } from '../src/bootstrap/routeRegistry.ts';
 import { drainApi } from '../src/bootstrap/shutdown.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
+import { seedContact, seedFirm } from './support/crmSeed.ts';
 import { databaseUrlOf, leased, testRequestPool } from './support/poolFixture.ts';
 
 /**
@@ -129,7 +130,6 @@ describe('one database connection per request', () => {
   let journal: ReturnType<typeof gatedJournal>;
   let pool: pg.Pool;
   let sharedClient: pg.Client;
-  let adminToken: string;
   let assigneeToken: string;
   let firmId: string;
   const holds = new Map<string, Gate>();
@@ -218,34 +218,15 @@ describe('one database connection per request', () => {
     sharedClient = new pg.Client({ connectionString: databaseUrlOf(fixture.database) });
     await sharedClient.connect();
 
-    adminToken = (await issueSessionFor(fixture, fixture.alpha, fixture.alpha.admin)).accessToken;
     assigneeToken = (await issueSessionFor(fixture, fixture.alpha, fixture.alpha.salesperson, { deviceLabel: 'Assignee Mac' }))
       .accessToken;
-    // Set up on the fixture's own session, one call at a time, as every route test does.
-    const created = await dispatch(
-      {
-        method: 'POST',
-        path: '/firms/create',
-        query: new URLSearchParams(),
-        headers: { authorization: `Bearer ${adminToken}` },
-        body: command({
-          name: 'Harbor Lane Test Partners',
-          regionCode: 'RI',
-          postalCode: '02903',
-          assignedUserId: fixture.alpha.salesperson.userId,
-        }),
-      },
-      {
-        session: fixture.db,
-        supportedClientVersions: fixture.deps.config.supportedClientVersions,
-        sendingEnabled: false,
-        expectedSystemGeneration: null,
-        auth: fixture.deps,
-        suppressionJournal: journal,
-      },
-    );
-    expect(created.status).toBe(200);
-    firmId = String(((created.body as Record<string, unknown>)['result'] as Record<string, unknown>)['id']);
+    // Set up on the fixture's own session, as every route test does.
+    firmId = await seedFirm(fixture, {
+      name: 'Harbor Lane Test Partners',
+      regionCode: 'RI',
+      postalCode: '02903',
+      assignedUserId: fixture.alpha.salesperson.userId,
+    });
   });
 
   afterAll(async () => {
@@ -312,21 +293,35 @@ describe('one database connection per request', () => {
     });
 
     it('a real command waits for the row lock another request holds instead of running inside its transaction', async () => {
-      // Two suppressions on one firm, through sign-in, `runCommand` and its receipt.
-      // `recordSuppression` locks the firm row FOR UPDATE and then awaits the journal
-      // inside the command's transaction; the first request is held there. On its own
-      // connection the second must wait for that lock. On the shared one it was the
-      // same transaction, already "held" the lock, and ran straight through.
+      // Two do-not-call suppressions on one firm, through sign-in, `runCommand` and its
+      // receipt. `recordSuppression` locks the firm row FOR UPDATE and then awaits the
+      // journal inside the command's transaction; the first request is held there. On
+      // its own connection the second must wait for that lock. On the shared one it was
+      // the same transaction, already "held" the lock, and ran straight through.
       const { origin } = await serve(poolConnections(pool));
+      const contactId = await seedContact(fixture, { firmId, fullName: 'Pat Example' });
+      const routeFor = async (value: string): Promise<string> => {
+        const added = await send(
+          origin,
+          'POST',
+          '/contacts/routes/add',
+          command({ firmId, contactId, routeKind: 'phone', value, source: 'salesperson' }),
+          assigneeToken,
+        );
+        expect(added.status).toBe(200);
+        return String((added.body['result'] as { id: string }).id);
+      };
+      const firstRoute = await routeFor('+14015550194');
+      const secondRoute = await routeFor('+14015550195');
       const first = journal.holdNext();
-      const firstCommand = command({ scope: 'handle', value: '+1 401 555 0194', firmId, source: 'salesperson_manual' });
-      const secondCommand = command({ scope: 'handle', value: '+1 401 555 0195', firmId, source: 'salesperson_manual' });
+      const firstCommand = command({ firmId, contactId, routeId: firstRoute, outcome: 'do_not_call' });
+      const secondCommand = command({ firmId, contactId, routeId: secondRoute, outcome: 'do_not_call' });
 
-      const firstAnswer = send(origin, 'POST', '/suppressions/record', firstCommand, assigneeToken);
+      const firstAnswer = send(origin, 'POST', '/calls/log', firstCommand, assigneeToken);
       await first.reached;
 
       let secondSettled = false;
-      const secondAnswer = send(origin, 'POST', '/suppressions/record', secondCommand, assigneeToken).finally(() => {
+      const secondAnswer = send(origin, 'POST', '/calls/log', secondCommand, assigneeToken).finally(() => {
         secondSettled = true;
       });
       const waited = await eventually(async () => {
@@ -399,11 +394,11 @@ describe('one database connection per request', () => {
       const taken = await tiny.connect();
       try {
         const started = Date.now();
-        const refused = await send(origin, 'GET', '/suppressions', undefined, assigneeToken);
+        const refused = await send(origin, 'GET', '/firms', undefined, assigneeToken);
         expect(Date.now() - started).toBeLessThan(3_000);
         expect(refused.status).toBe(503);
         expect(refused.body).toEqual({ error: 'database_busy', message: 'The API is busy. Nothing was changed; try again.' });
-        expect(log.lines).toContainEqual(expect.objectContaining({ event: 'refusal', reason: 'database_busy', path: '/suppressions' }));
+        expect(log.lines).toContainEqual(expect.objectContaining({ event: 'refusal', reason: 'database_busy', path: '/firms' }));
         expect(log.lines.some(line => line['event'] === 'request_failed')).toBe(false);
 
         // Readiness says so truthfully; liveness needs no connection and still answers.
@@ -415,7 +410,7 @@ describe('one database connection per request', () => {
         taken.release();
       }
 
-      expect((await send(origin, 'GET', '/suppressions', undefined, assigneeToken)).status).toBe(200);
+      expect((await send(origin, 'GET', '/firms', undefined, assigneeToken)).status).toBe(200);
       expect(leased(tiny)).toBe(0);
       await tiny.end();
     });

@@ -14,6 +14,7 @@ import { localNoopSuppressionJournal } from '../src/journal/index.ts';
 import { dispatch, type ApiRequest } from '../src/server.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
+import { seedContact, seedFirm } from './support/crmSeed.ts';
 
 /**
  * The sequence, template and enrollment endpoints, through the real dispatcher with
@@ -92,18 +93,12 @@ describe('the sequence, template and enrollment routes', () => {
     salespersonToken = (await issueSessionFor(fixture, fixture.alpha, fixture.alpha.salesperson))
       .accessToken;
 
-    const firm = await post(
-      '/firms/create',
-      adminToken,
-      command({
-        name: 'Northwind Test Holdings',
-        regionCode: 'RI',
-        postalCode: '02903',
-        assignedUserId: fixture.alpha.salesperson.userId,
-      }),
-    );
-    expect(firm.status).toBe(200);
-    firmId = String(resultOf(firm)['id']);
+    firmId = await seedFirm(fixture, {
+      name: 'Northwind Test Holdings',
+      regionCode: 'RI',
+      postalCode: '02903',
+      assignedUserId: fixture.alpha.salesperson.userId,
+    });
     await fixture.db.query(
       `UPDATE firms SET time_zone = 'America/New_York', time_zone_confidence = 'high',
               time_zone_source = 'postal', time_zone_rule_version = 'firm-zone.1'
@@ -111,13 +106,7 @@ describe('the sequence, template and enrollment routes', () => {
       [fixture.alpha.workspaceId, firmId],
     );
 
-    const contact = await post(
-      '/contacts/create',
-      salespersonToken,
-      command({ firmId, fullName: 'Dana Example' }),
-    );
-    expect(contact.status).toBe(200);
-    contactId = String(resultOf(contact)['id']);
+    contactId = await seedContact(fixture, { firmId, fullName: 'Dana Example' });
 
     const opened = await post('/opportunities/open', salespersonToken, command({ firmId }));
     expect(opened.status).toBe(200);
@@ -378,9 +367,7 @@ describe('the sequence, template and enrollment routes', () => {
     expect(JSON.stringify(versions.body).toLowerCase()).not.toContain('message');
 
     // A live enrollment whose LinkedIn execution the worker has held.
-    const contact = await post('/contacts/create', salespersonToken, command({ firmId, fullName: 'Jordan Placeholder' }));
-    expect(contact.status).toBe(200);
-    const storedContactId = String(resultOf(contact)['id']);
+    const storedContactId = await seedContact(fixture, { firmId, fullName: 'Jordan Placeholder' });
     const { rows: enrollmentRows } = await fixture.db.query<{ id: string }>(
       `INSERT INTO sequence_enrollments
          (workspace_id, sequence_version_id, opportunity_id, firm_id, contact_id, assigned_user_id,

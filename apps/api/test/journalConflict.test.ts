@@ -7,6 +7,7 @@ import { resolveSuppressionJournal } from '../src/journal/index.ts';
 import { dispatch, type ApiRequest } from '../src/server.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
+import { seedContact, seedFirm } from './support/crmSeed.ts';
 
 /**
  * A conditional-write conflict is a failed journal write, never an acknowledgement
@@ -142,10 +143,14 @@ describe('a suppression whose journal write meets a conflict', () => {
   let journal: ReturnType<typeof resolveSuppressionJournal>['journal'];
   const log = recordingLogger();
 
-  const post = async (body: unknown): Promise<{ status: number; body: Record<string, unknown> }> => {
+  let target: { firmId: string; contactId: string; routeId: string };
+
+  // A do-not-call is how the Mac suppresses a number; it writes the journal before the
+  // row exactly as `/suppressions/record` did until wave 2 (S6) deleted that path.
+  const post = async (body: unknown, path = '/calls/log'): Promise<{ status: number; body: Record<string, unknown> }> => {
     const call: ApiRequest = {
       method: 'POST',
-      path: '/suppressions/record',
+      path,
       query: new URLSearchParams(),
       headers: { authorization: `Bearer ${token}` },
       body,
@@ -170,6 +175,28 @@ describe('a suppression whose journal write meets a conflict', () => {
       bucket: request.bucket,
       putObject: await loadJournalPutObject('us-east-1', { sdk, log }),
     }).journal;
+
+    const firmId = await seedFirm(fixture, {
+      name: 'Journal Test Partners',
+      regionCode: 'RI',
+      postalCode: '02903',
+      assignedUserId: fixture.alpha.salesperson.userId,
+    });
+    const contactId = await seedContact(fixture, { firmId, fullName: 'Pat Example' });
+    const route = await post(
+      {
+        commandId: randomUUID(),
+        clientVersion: CURRENT_CLIENT_VERSION,
+        firmId,
+        contactId,
+        routeKind: 'phone',
+        value: '+14015550198',
+        source: 'salesperson',
+      },
+      '/contacts/routes/add',
+    );
+    expect(route.status).toBe(200);
+    target = { firmId, contactId, routeId: String((route.body['result'] as { id: string }).id) };
   });
 
   afterAll(async () => {
@@ -178,13 +205,7 @@ describe('a suppression whose journal write meets a conflict', () => {
 
   it('fails the command, records nothing, and the retry records it', async () => {
     const commandId = randomUUID();
-    const body = {
-      commandId,
-      clientVersion: CURRENT_CLIENT_VERSION,
-      scope: 'handle' as const,
-      value: '+1 401 555 0198',
-      source: 'salesperson_manual' as const,
-    };
+    const body = { commandId, clientVersion: CURRENT_CLIENT_VERSION, ...target, outcome: 'do_not_call' as const };
 
     scripted.push('ConditionalRequestConflict');
     const failed = await post(body);
