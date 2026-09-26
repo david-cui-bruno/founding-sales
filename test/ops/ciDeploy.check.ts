@@ -30,12 +30,13 @@ import { readRepositoryFile, repositoryPath } from './support/repository.ts';
  * re-run gone red) stops the put, stops the worker before its registration, and stops the
  * API before its registration or, once registered, before its update, deregistering it.
  *
- * **An update-service call whose answer was lost, and a read that is stale.** The stub
- * can fail the call with the service left where it was, moved to the new revision anyway,
- * left where it was with a deployment of the new revision, answering for another service,
- * or unreadable after it; and a circuit-breaker rollback can leave the failed deployment
- * listed. The new revision is deregistered only when one read of the service asked for
- * shows the previous revision everywhere and the new one nowhere.
+ * **A revision deregistered on a read that cannot prove it.** A failed update-service call
+ * and an accepted one whose answer was lost look alike in one read — a snapshot of the
+ * service still on the previous revision, with the right name and ARN — so nothing on that
+ * path is deregistered at all. The stub fails the call in five ways, and each leaves the
+ * revision ACTIVE. A revision goes only on ECS's own rejection: the circuit breaker rolled
+ * the service back and the answer lists a FAILED deployment of that revision. A rollback
+ * whose answer does not list it, and one whose deployments cannot all be read, leave it.
  *
  * **A put that launches twice.** The task runner relaunches after an image-pull failure;
  * the CI put must launch exactly one task and fail on a pull failure, even when the
@@ -258,11 +259,14 @@ if args[:2] == ["ecs", "describe-services"]:
                     "rolloutState": service.get("rolloutState", "COMPLETED")}]
     if service.get("rolling"):
         deployments.append({"status": "ACTIVE", "taskDefinition": "older", "rolloutState": "IN_PROGRESS"})
-    if service.get("lingering") and service.get("refused"):
-        # The circuit breaker rolled back, and the failed deployment is still listed.
+    if service.get("refused") and not service.get("forgetsFailed"):
+        # What ECS lists after the circuit breaker rolled a service back: the deployment it
+        # failed, naming the revision it refused.
         deployments.append({"status": "ACTIVE", "taskDefinition": service["refused"], "rolloutState": "FAILED"})
     if service.get("halfUpdated"):
         deployments.append({"status": "ACTIVE", "taskDefinition": service["halfUpdated"], "rolloutState": "IN_PROGRESS"})
+    if service.get("unreadableDeployment") and service.get("refused"):
+        deployments.append(None)
     arn = "arn:aws:ecs:us-east-1:" + account + ":service/fss-prod-cluster/" + name
     if service.get("stale"):
         # An answer for the same name in another cluster: not the service asked for.
@@ -481,8 +485,10 @@ interface WorldOptions {
    * or refused with every later read answering for the same name in another cluster (stale).
    */
   readonly updateFails?: Partial<Record<Service, 'refused' | 'lost' | 'unreadable' | 'half' | 'stale'>>;
-  /** A circuit-breaker rollback that still lists the failed deployment. */
-  readonly lingering?: Service;
+  /** A circuit-breaker rollback whose answer lists no deployment of the revision it failed. */
+  readonly forgetsFailed?: Service;
+  /** A service one of whose deployment entries is not an object, so they cannot all be read. */
+  readonly unreadableDeployment?: Service;
   /** The one-off operations task stops before any container ran: its image could not be pulled. */
   readonly pullFailure?: boolean;
 }
@@ -511,7 +517,8 @@ function world(options: WorldOptions = {}): World {
     ...(options.rolloutState?.[name] === undefined ? {} : { rolloutState: options.rolloutState[name] }),
     ...(options.stray?.[name] === undefined ? {} : { strayDigest: options.stray[name] }),
     ...(options.updateFails?.[name] === undefined ? {} : { updateFails: options.updateFails[name] }),
-    lingering: options.lingering === name,
+    forgetsFailed: options.forgetsFailed === name,
+    unreadableDeployment: options.unreadableDeployment === name,
   });
   const state = {
     account: ACCOUNT,
@@ -889,65 +896,56 @@ describe('deploy registers the next revisions, rolls the worker then the API, an
     expect(stopped.output).toContain(`Greenfield gate run ${GATE_RUN} attempt 1 concluded failure`);
   });
 
-  it('after a failed update-service call, deregisters the new revision only while the service still names the previous one', () => {
-    // Refused: the service still names the previous revision, so the new one goes.
-    const refused = world({ updateFails: { worker: 'refused' } });
-    const run = runScript('deploy', refused);
-    expect(run.code).toBe(1);
-    expect(operations(refused)).toEqual(['register fss-prod-worker', 'update fss-prod-worker', `deregister ${definitionArn('worker', 5)}`]);
-    expect(run.output).toContain(`ECS refused to point fss-prod-worker at ${definitionArn('worker', 5)}; it still runs ${definitionArn('worker', 4)}`);
-    expect(run.outputs['observed_worker_task_definition']).toBe(definitionArn('worker', 4));
-    expect(refused.state().taskDefinitions[definitionArn('worker', 5)]?.taskDefinition.status).toBe('INACTIVE');
-
-    // Accepted with the answer lost: the service names the new revision, which stays.
-    const lost = world({ updateFails: { worker: 'lost' } });
-    const accepted = runScript('deploy', lost);
-    expect(accepted.code).toBe(1);
-    expect(operations(lost)).toEqual(['register fss-prod-worker', 'update fss-prod-worker']);
-    expect(accepted.output).toContain(`fss-prod-worker or one of its deployments names ${definitionArn('worker', 5)} all the same`);
-    expect(accepted.output).toContain(`${definitionArn('worker', 5)} is left ACTIVE`);
-    expect(accepted.outputs['observed_worker_task_definition']).toBe(definitionArn('worker', 5));
-    expect(lost.state().taskDefinitions[definitionArn('worker', 5)]?.taskDefinition.status).toBe('ACTIVE');
-
-    // Unreadable after the failure: nothing is known, so nothing is deregistered.
-    const unknown = world({ updateFails: { api: 'unreadable' } });
-    const unread = runScript('deploy', unknown);
-    expect(unread.code).toBe(1);
-    expect(operations(unknown)).toEqual(['register fss-prod-worker', 'update fss-prod-worker', 'register fss-prod-api', 'update fss-prod-api']);
-    expect(unread.output).toContain(`whether it references ${definitionArn('api', 8)} cannot be established, so ${definitionArn('api', 8)} is left ACTIVE`);
-    expect(unread.outputs['observed_api_task_definition']).toBe('unknown');
-    expect(unknown.state().taskDefinitions[definitionArn('api', 8)]?.taskDefinition.status).toBe('ACTIVE');
-
-    // Refused, but a deployment of the new revision is listed: it is referenced, so it stays.
-    const half = world({ updateFails: { worker: 'half' } });
-    const listed = runScript('deploy', half);
-    expect(listed.code).toBe(1);
-    expect(operations(half)).toEqual(['register fss-prod-worker', 'update fss-prod-worker']);
-    expect(listed.output).toContain(`fss-prod-worker or one of its deployments names ${definitionArn('worker', 5)} all the same`);
-    expect(listed.output).toContain('before the next production plan');
-    expect(half.state().taskDefinitions[definitionArn('worker', 5)]?.taskDefinition.status).toBe('ACTIVE');
-
-    // Refused, and the read answers for the same name in another cluster: not the service
-    // asked for, so nothing is known and nothing is deregistered, though it names the previous revision.
-    const stale = world({ updateFails: { worker: 'stale' } });
-    const other = runScript('deploy', stale);
-    expect(other.code).toBe(1);
-    expect(operations(stale)).toEqual(['register fss-prod-worker', 'update fss-prod-worker']);
-    expect(other.output).toContain(`whether it references ${definitionArn('worker', 5)} cannot be established`);
-    expect(other.outputs['observed_worker_task_definition']).toBe('unknown');
-    expect(stale.state().taskDefinitions[definitionArn('worker', 5)]?.taskDefinition.status).toBe('ACTIVE');
+  it('deregisters nothing after a failed update-service call, whatever the read says, and says to reconcile the revision', () => {
+    // A refused call and an accepted one whose answer was lost look alike in one read: the
+    // service on the previous revision, with the right name and ARN. So none of these
+    // five ends deregisters, and each says what it saw.
+    for (const [failure, observed, service] of [
+      // A snapshot of the service exactly as it was before the call.
+      ['refused', definitionArn('worker', 5 - 1), 'worker'],
+      // Accepted, the answer lost: the service is on the new revision.
+      ['lost', definitionArn('worker', 5), 'worker'],
+      // The service cannot be described at all after the failure.
+      ['unreadable', 'unknown', 'worker'],
+      // Refused, with a deployment of the new revision still listed.
+      ['half', definitionArn('worker', 4), 'worker'],
+      // An answer for the same name in another cluster: not the service asked for.
+      ['stale', 'unknown', 'worker'],
+    ] as const) {
+      const stub = world({ updateFails: { [service]: failure } });
+      const run = runScript('deploy', stub);
+      expect(run.code, failure).toBe(1);
+      expect(operations(stub), failure).toEqual(['register fss-prod-worker', 'update fss-prod-worker']);
+      expect(run.output, failure).toContain('one read cannot say whether ECS took it');
+      expect(run.output, failure).toContain(`So ${definitionArn('worker', 5)} is left ACTIVE`);
+      expect(run.output, failure).toContain('before the next production plan');
+      expect(run.outputs['observed_worker_task_definition'], failure).toBe(observed);
+      expect(stub.state().taskDefinitions[definitionArn('worker', 5)]?.taskDefinition.status, failure).toBe('ACTIVE');
+      expect(stub.state().services['fss-prod-api']?.taskDefinition, failure).toBe(definitionArn('api', 7));
+    }
   });
 
-  it('leaves a rolled-back revision ACTIVE while the failed deployment is still listed, and says to reconcile it', () => {
-    const stub = world({ fail: { worker: true }, lingering: 'worker' });
-    const run = runScript('deploy', stub);
+  it('leaves a rolled-back revision ACTIVE unless the answer itself shows ECS failed a deployment of it', () => {
+    // The rollback is the same; only what ECS reports about it differs. No deployment of
+    // the revision listed, so nothing proves ECS ever saw it.
+    const forgotten = world({ fail: { worker: true }, forgetsFailed: 'worker' });
+    const run = runScript('deploy', forgotten);
     expect(run.code).toBe(1);
-    expect(operations(stub)).toEqual(['register fss-prod-worker', 'update fss-prod-worker']);
+    expect(operations(forgotten)).toEqual(['register fss-prod-worker', 'update fss-prod-worker']);
     expect(run.output).toContain(`and ${definitionArn('worker', 5)} is left ACTIVE`);
     expect(run.output).toContain(`once none names ${definitionArn('worker', 5)}, deregister it with the admin profile`);
     expect(run.outputs['observed_worker_task_definition']).toBe(definitionArn('worker', 4));
-    expect(stub.state().taskDefinitions[definitionArn('worker', 5)]?.taskDefinition.status).toBe('ACTIVE');
-    expect(stub.state().services['fss-prod-api']?.taskDefinition).toBe(definitionArn('api', 7));
+    expect(forgotten.state().taskDefinitions[definitionArn('worker', 5)]?.taskDefinition.status).toBe('ACTIVE');
+    expect(forgotten.state().services['fss-prod-api']?.taskDefinition).toBe(definitionArn('api', 7));
+
+    // The failed deployment is listed, but one entry is not an object: "every deployment"
+    // cannot be judged over entries that cannot be read, so it stays too.
+    const unreadable = world({ fail: { worker: true }, unreadableDeployment: 'worker' });
+    const ambiguous = runScript('deploy', unreadable);
+    expect(ambiguous.code).toBe(1);
+    expect(operations(unreadable)).toEqual(['register fss-prod-worker', 'update fss-prod-worker']);
+    expect(ambiguous.output).toContain(`and ${definitionArn('worker', 5)} is left ACTIVE`);
+    expect(unreadable.state().taskDefinitions[definitionArn('worker', 5)]?.taskDefinition.status).toBe('ACTIVE');
   });
 
   it('deregisters a registration that differs from the running revision in more than the image, and rolls nothing', () => {
@@ -961,11 +959,14 @@ describe('deploy registers the next revisions, rolls the worker then the API, an
     expect(stub.state().taskDefinitions[definitionArn('worker', 5)]?.taskDefinition.status).toBe('INACTIVE');
   });
 
-  it('stops at a worker the circuit breaker rolled back, deregisters its revision, and never touches the API', () => {
+  it('stops at a worker the circuit breaker rolled back, deregisters the revision ECS itself failed, and never touches the API', () => {
+    // The one evidence a revision is deregistered on: ECS lists a FAILED deployment of it,
+    // and both the service and its PRIMARY deployment are back on the previous revision.
     const stub = world({ fail: { worker: true } });
     const run = runScript('deploy', stub);
     expect(run.code).toBe(1);
     expect(operations(stub)).toEqual(['register fss-prod-worker', 'update fss-prod-worker', `deregister ${definitionArn('worker', 5)}`]);
+    expect(run.output).toContain('ECS failed the deployment of it and rolled fss-prod-worker back');
     expect(run.output).toContain(`fss-prod-worker was rolled back by ECS to ${definitionArn('worker', 4)} and does not run ${NEW.worker}`);
     expect(run.outputs['observed_worker_task_definition']).toBe(definitionArn('worker', 4));
     // Why it stopped, and nothing from the log but its event, reason and code.
