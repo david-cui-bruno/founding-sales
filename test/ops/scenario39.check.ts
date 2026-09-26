@@ -904,12 +904,12 @@ describe('Appendix G 39: the run’s own comparison is between durable resources
 });
 
 /**
- * G12h: the drill's front door to the one-off task runner. The runner's own guards are
- * run in `lib.check.ts`.
+ * G12h: the rehearsal's front door to the one-off task runner. The runner's own guards
+ * are run in `lib.check.ts`.
  */
 describe('Appendix G 39: the refusal is symmetric, and the wrapper enforces it per launch', () => {
   /**
-   * The drill's front door, run rather than read (lane g48). Run 35962272085 (24
+   * The front door, run rather than read (lane g48). Run 35962272085 (24
    * September 2026) completed the point-in-time restore and was then refused at the
    * drill's first task: `rehearsal-run-task.sh` passed the restored endpoint as
    * `--database-host` as well as the override, and the definition names the primary.
@@ -917,15 +917,15 @@ describe('Appendix G 39: the refusal is symmetric, and the wrapper enforces it p
    * front door passed; this drives the front door with the root's outputs and the
    * registered definition supplied, and no credential.
    */
-  function drillFrontDoor(restoredHost: string | undefined): { readonly code: number; readonly output: string } {
+  function frontDoor(restoredHost: string | undefined): { readonly code: number; readonly output: string } {
     const digest = `sha256:${'b'.repeat(64)}`;
     const secret = 'arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-rh-check/app-runtime-database-a';
     return runRehearsalScript(
       'infra/scripts/rehearsal-run-task.sh',
-      ['fss-rh-check', 'drill', 'drill', '--', 'drill', '--reports', '/tmp/fss-drill'],
+      ['fss-rh-check', 'schema', 'operations', '--', 'schema-version'],
       {
         FSS_REHEARSAL_DRY_RUN: '1',
-        FSS_REHEARSAL_REPORTS: mkdtempSync(join(tmpdir(), 'fss-drill-door-')),
+        FSS_REHEARSAL_REPORTS: mkdtempSync(join(tmpdir(), 'fss-front-door-')),
         FSS_RELEASE_CALLER_ACCOUNT: '123456789012',
         FSS_RELEASE_CLUSTER_TAGS: '[{"key":"Environment","value":"rehearsal"}]',
         FSS_RELEASE_OUTPUT_CLUSTER_ARN: 'arn:aws:ecs:us-east-1:123456789012:cluster/fss-rh-check-cluster',
@@ -937,14 +937,14 @@ describe('Appendix G 39: the refusal is symmetric, and the wrapper enforces it p
           inbound_rule_count: 0,
         }),
         FSS_RELEASE_OUTPUT_WORKER_LOG_GROUP_NAME: 'fss-rh-check-worker',
-        FSS_RELEASE_OUTPUT_DRILL_TASK_DEFINITION_ARN:
-          'arn:aws:ecs:us-east-1:123456789012:task-definition/fss-rh-check-drill:1',
+        FSS_RELEASE_OUTPUT_OPERATIONS_TASK_DEFINITION_ARN:
+          'arn:aws:ecs:us-east-1:123456789012:task-definition/fss-rh-check-operations:1',
         FSS_RELEASE_OUTPUT_APP_RUNTIME_DATABASE_SECRET_ARN: secret,
         // What Terraform registered: the primary host, before any restore existed.
         FSS_RELEASE_TASK_DEFINITION: JSON.stringify({
           containerDefinitions: [
             {
-              name: 'drill',
+              name: 'operations',
               image: `123456789012.dkr.ecr.us-east-1.amazonaws.com/fss-rh-worker@${digest}`,
               environment: [{ name: 'FSS_DATABASE_HOST', value: 'fss-rh-check-pg.example' }],
               secrets: [{ name: 'DATABASE_SECRET_ARN', valueFrom: secret }],
@@ -957,22 +957,31 @@ describe('Appendix G 39: the refusal is symmetric, and the wrapper enforces it p
     );
   }
 
-  it('launches the drill at the restored instance, with the primary as the host the definition is checked against', () => {
-    const { code, output } = drillFrontDoor('fss-rh-check-pg-restored.example');
+  it('launches a step at a restored instance, with the primary as the host the definition is checked against', () => {
+    const { code, output } = frontDoor('fss-rh-check-pg-restored.example');
 
     expect(code, output).toBe(0);
     expect(output).not.toContain('this task would connect to');
     // The container is pointed at the restored endpoint, and the log says so.
-    expect(output).toContain('drill: target database host fss-rh-check-pg-restored.example');
+    expect(output).toContain('schema: target database host fss-rh-check-pg-restored.example');
     expect(output).toContain('{"name": "FSS_DATABASE_HOST", "value": "fss-rh-check-pg-restored.example"}');
   });
 
   it('launches an ordinary step at the primary when there is no restored instance', () => {
-    const { code, output } = drillFrontDoor(undefined);
+    const { code, output } = frontDoor(undefined);
 
     expect(code, output).toBe(0);
-    expect(output).toContain('drill: target database host fss-rh-check-pg.example');
+    expect(output).toContain('schema: target database host fss-rh-check-pg.example');
     expect(output).not.toContain('FSS_DATABASE_HOST');
+  });
+
+  it('refuses the drill kind, whose task definition went with the restore drill (lane W3-S8)', () => {
+    const result = runRehearsalScript('infra/scripts/rehearsal-run-task.sh', ['fss-rh-check', 'drill', 'drill', '--', 'verify'], {
+      FSS_REHEARSAL_DRY_RUN: '1',
+    });
+
+    expect(result.code).not.toBe(0);
+    expect(result.output).toContain("'drill' is not a task definition this rehearsal has");
   });
 
 });

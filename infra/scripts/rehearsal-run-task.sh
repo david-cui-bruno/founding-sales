@@ -3,7 +3,7 @@
 #
 #   infra/scripts/rehearsal-run-task.sh <fss-rh-run> <step> <migration|operations> -- <command word>...
 #
-#   infra/scripts/rehearsal-run-task.sh fss-rh-0921 drill operations -- drill --from 2 --to 9
+#   infra/scripts/rehearsal-run-task.sh fss-rh-0921 schema operations -- schema-version
 #
 # The engine is `infra/scripts/lib.sh` (`release_run_task`), which the production path
 # uses unchanged. This
@@ -13,9 +13,8 @@
 #
 # ## What the wrapper is for
 #
-# The rehearsal database is private and a GitHub runner cannot reach it. Every
-# database step of the restore drill therefore runs inside the VPC, on the worker
-# image, and this is how. See `.context/FSS-REHEARSAL-EXECUTION-DECISION-20260921.md`
+# The rehearsal database is private and a GitHub runner cannot reach it. A database
+# step therefore runs inside the VPC, on the worker image, and this is how. See `.context/FSS-REHEARSAL-EXECUTION-DECISION-20260921.md`
 # section 4, Option A, and `docs/greenfield/release.md` section 3.
 #
 # Dry run: FSS_REHEARSAL_DRY_RUN=1 prints every call and needs no credential.
@@ -37,12 +36,12 @@ if [ -z "$STEP" ]; then
 fi
 
 case "$KIND" in
-  migration | operations | drill) ;;
+  migration | operations) ;;
   *)
     echo "FAIL: '${KIND:-<empty>}' is not a task definition this rehearsal has." >&2
-    echo "      'migration' is the DDL identity, 'operations' is the runtime identity that runs" >&2
-    echo "      fss verify, and 'drill' is the only one holding both — see" >&2
-    echo "      docs/archive/decisions/g12h-three-one-off-identities.md." >&2
+    echo "      'migration' is the DDL identity and 'operations' is the runtime identity that runs" >&2
+    echo "      fss verify. The third, 'drill', went with the restore drill (lane W3-S8); see" >&2
+    echo "      docs/greenfield/processes.md." >&2
     exit 1
     ;;
 esac
@@ -66,10 +65,6 @@ case "$KIND" in
   migration)
     TASK_DEFINITION="$(release_output "$ROOT_DIRECTORY" migration_task_definition_arn)"
     SECRET_ARN=''
-    ;;
-  drill)
-    TASK_DEFINITION="$(release_output "$ROOT_DIRECTORY" drill_task_definition_arn)"
-    SECRET_ARN="$(release_output "$ROOT_DIRECTORY" app_runtime_database_secret_arn)"
     ;;
   *)
     TASK_DEFINITION="$(release_output "$ROOT_DIRECTORY" operations_task_definition_arn)"
