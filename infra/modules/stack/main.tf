@@ -24,11 +24,6 @@ locals {
   # depending on the module that depends on the journal.
   api_task_role_name    = "${var.name_prefix}-api-task"
   worker_task_role_name = "${var.name_prefix}-worker-task"
-  # The drill task runs Appendix E step 2 against the restored database and reads the
-  # journal to do it. The bucket policy names its readers by role, so the drill role has
-  # to be here as well as in its own IAM statement; rehearsal 36089161207 (25 September
-  # 2026) stopped at step 2 with AccessDenied because it was not.
-  drill_task_role_name = "${var.name_prefix}-drill-task"
 
   # One CloudWatch namespace per environment, derived here and nowhere else: the
   # metric filters (observability), the worker's FSS_METRIC_NAMESPACE and the task
@@ -40,6 +35,13 @@ locals {
   # The prefix is already disjoint by construction (the guard below), so the
   # namespace is too. `docs/archive/decisions/g55-one-metric-namespace-per-environment.md`.
   metric_namespace = "FSS/${var.name_prefix}"
+
+  # The host every task definition connects to (FSS_DATABASE_HOST): the managed
+  # instance, unless the restore runbook (docs/greenfield/runbooks/restore.md) has
+  # pointed the environment at a point-in-time copy while the instance is replaced.
+  # `task_network_configuration` publishes this same value, because the release
+  # scripts compare it with the FSS_DATABASE_HOST a registered definition carries.
+  database_host = var.active_database_host == null ? module.database.address : var.active_database_host
 }
 
 # The structural isolation guard. Everything downstream inherits name_prefix,
@@ -154,7 +156,7 @@ module "journal" {
   name_prefix                = var.name_prefix
   aws_account_id             = var.aws_account_id
   writer_role_names          = [local.api_task_role_name, local.worker_task_role_name]
-  reader_role_names          = [local.worker_task_role_name, local.drill_task_role_name]
+  reader_role_names          = [local.worker_task_role_name]
   object_lock_mode           = var.journal_object_lock_mode
   object_lock_retention_days = var.journal_object_lock_retention_days
   force_destroy              = var.destroyable
@@ -253,22 +255,12 @@ module "cluster" {
   envelope_kms_key_arn = module.secrets.envelope_kms_key_arn
   secrets_kms_key_arn  = module.secrets.secrets_kms_key_arn
 
-  # Lane g59: the drill may unwrap the refresh token the drill-evidence seed stored,
-  # under the recorded seam's encryption context only, and only in a rehearsal.
-  # Production is never seeded, so its drill role has nothing to unwrap and gets no
-  # envelope grant; its plan is unchanged by this line.
-  drill_unwraps_recorded_envelopes = !local.is_production
-
   # Lane g81: the reply classifier's key reaches the worker in production only. A
   # rehearsal's entry holds a fixture and the classifier has no recorded seam, so a
   # rehearsal worker holding it would call the provider with a key that cannot work.
   worker_reads_classifier_key = local.is_production
 
   metric_namespace = local.metric_namespace
-
-  # Appendix E step 1 (lane g56). A first-class input, so the plan shows the one
-  # place it changes.
-  expected_system_generation = var.expected_system_generation
 
   # The upgrade notice's address is the API's alone (lane g86), and absent rather
   # than empty when unset, so the API's own rule decides what an unset one means.
@@ -283,7 +275,7 @@ module "cluster" {
     FSS_DEPENDENCIES       = var.dependencies_mode
     FSS_SENDING_ENABLED    = tostring(var.sending_enabled)
     FSS_BUSINESS_TIME_ZONE = var.business_time_zone
-    FSS_DATABASE_HOST      = module.database.address
+    FSS_DATABASE_HOST      = local.database_host
     FSS_DATABASE_PORT      = tostring(module.database.port)
     FSS_DATABASE_NAME      = module.database.database_name
     FSS_JOURNAL_BUCKET     = module.journal.bucket_name

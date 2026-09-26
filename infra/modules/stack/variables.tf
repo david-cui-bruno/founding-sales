@@ -130,6 +130,30 @@ variable "database_apply_immediately" {
   default     = false
 }
 
+variable "active_database_host" {
+  description = <<-EOT
+    The host every task definition connects to: FSS_DATABASE_HOST, which the
+    API, the worker and the fss tool all use as the database host in place of
+    the host inside their database secret. Null, the default, means the managed
+    instance's address (module.database.address).
+
+    Set only by the restore runbook (docs/greenfield/runbooks/restore.md), to a
+    point-in-time copy's address while the managed instance is being replaced.
+    Setting it changes FSS_DATABASE_HOST on the api, worker, migration and
+    operations task definitions and nothing else; `task_network_configuration`
+    reports the same value, which is what the release scripts compare a
+    registered definition's FSS_DATABASE_HOST with.
+  EOT
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.active_database_host == null ? true : can(regex("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$", var.active_database_host))
+    error_message = "active_database_host is null or a lower-case DNS hostname with at least one dot: no scheme, no port, no path."
+  }
+}
+
 # ---------------------------------------------------------------------------
 # Runtime
 # ---------------------------------------------------------------------------
@@ -259,22 +283,6 @@ variable "sending_enabled" {
   EOT
   type        = bool
   default     = false
-}
-
-variable "expected_system_generation" {
-  description = <<-EOT
-    Appendix E step 1's operator-controlled expected generation, passed to
-    infra/modules/cluster, which puts it on the API and worker services as
-    FSS_EXPECTED_SYSTEM_GENERATION. Null: unpinned. See that module's variable
-    for what it does and when it changes.
-  EOT
-  type        = number
-  default     = null
-
-  validation {
-    condition     = var.expected_system_generation == null ? true : (var.expected_system_generation >= 1 && floor(var.expected_system_generation) == var.expected_system_generation)
-    error_message = "expected_system_generation is a positive whole number, or null for unpinned. The bootstraps refuse anything else at startup."
-  }
 }
 
 variable "business_time_zone" {

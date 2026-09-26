@@ -22,7 +22,7 @@ mock_provider "aws" {
 
 # The provider mock gives every `aws_iam_role` the same ARN, which would make any
 # "this definition carries that role" comparison true whichever role it actually
-# referenced. These four give the roles the assertions name an ARN of their own,
+# referenced. These three give the roles the assertions name an ARN of their own,
 # so the last run in this file can fail. Like the provider mock they take effect
 # during the apply phase, which is why that run is an apply run.
 override_resource {
@@ -43,13 +43,6 @@ override_resource {
   target = aws_iam_role.worker_task
   values = {
     arn = "arn:aws:iam::123456789012:role/fss-test-worker-task"
-  }
-}
-
-override_resource {
-  target = aws_iam_role.drill_task
-  values = {
-    arn = "arn:aws:iam::123456789012:role/fss-test-drill-task"
   }
 }
 
@@ -80,7 +73,7 @@ variables {
   secrets_kms_key_arn  = "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-4333-8444-555555555553"
 }
 
-run "eight_identities_and_no_two_of_them_are_the_same" {
+run "six_identities_and_no_two_of_them_are_the_same" {
   command = plan
 
   assert {
@@ -91,10 +84,8 @@ run "eight_identities_and_no_two_of_them_are_the_same" {
       aws_iam_role.worker_execution.name,
       aws_iam_role.migration_task.name,
       aws_iam_role.migration_execution.name,
-      aws_iam_role.drill_task.name,
-      aws_iam_role.drill_execution.name,
-    ])) == 8
-    error_message = "The migration identity and the drill identity are each their own task role and execution role, distinct from both services'."
+    ])) == 6
+    error_message = "The migration identity is its own task role and execution role, distinct from both services'."
   }
 
   assert {
@@ -269,10 +260,8 @@ run "the_migration_task_definition_is_the_worker_image_under_the_migration_ident
   }
 }
 
-# `fss verify` and `fss drill` run as the *runtime* identity on purpose: the point of
-# a post-deploy gate is to prove the credential the services will use actually reaches
-# the database, and the drill needs the journal and the envelope key the migration
-# role must not have.
+# `fss verify` runs as the *runtime* identity on purpose: the point of a post-deploy
+# gate is to prove the credential the services will use actually reaches the database.
 run "the_operations_task_definition_is_the_runtime_identity_with_the_tool_as_its_entry_point" {
   command = plan
 
@@ -287,99 +276,6 @@ run "the_operations_task_definition_is_the_runtime_identity_with_the_tool_as_its
       secret.valueFrom != var.migration_database_secret_arn
     ])
     error_message = "The operations task holds the runtime credential, never the migration one."
-  }
-}
-
-# `fss drill` is the one command that needs both, so it is the one identity that has
-# both — and it is neither of the other two.
-run "the_drill_is_its_own_identity_because_it_needs_the_journal_and_the_migration_credential" {
-  command = plan
-
-  assert {
-    condition = length(setsubtract(
-      toset(["DATABASE_SECRET_ARN", "MIGRATION_DATABASE_SECRET"]),
-      toset([for reference in jsondecode(aws_ecs_task_definition.drill.container_definitions)[0].secrets : reference.name]),
-    )) == 0
-    error_message = "Appendix E steps 2 to 6 are the application's work and step 7 is DDL, so the drill carries both connections."
-  }
-
-  # Read, never write. A drill that could append to the journal could manufacture
-  # the evidence step 2 is checked against.
-  assert {
-    condition = alltrue([
-      for statement in jsondecode(aws_iam_role_policy.drill_task.policy).Statement :
-      alltrue([for action in statement.Action : action != "s3:PutObject" && !startswith(action, "s3:Delete")])
-    ])
-    error_message = "The drill task role reads the suppression journal and never writes it."
-  }
-
-  # `recorded`, fixed in the definition. A rehearsal that reached a real mailbox
-  # would send real mail, and a mode the caller passes is a mode the caller can
-  # forget (David's condition 6).
-  assert {
-    condition = length([
-      for variable in jsondecode(aws_ecs_task_definition.drill.container_definitions)[0].environment :
-      variable if variable.name == "FSS_DEPENDENCIES" && variable.value == "recorded"
-    ]) == 1
-    error_message = "The drill task definition fixes FSS_DEPENDENCIES=recorded; reconcile-sent, recover and watch-renew all reach Gmail when it is live."
-  }
-
-  # And the worker service does not inherit that. The drill's mode is set on the
-  # drill's definition alone; a `recorded` leaking into the service would be a
-  # rehearsal deploying something other than what production deploys.
-  assert {
-    condition     = !contains(keys(output.worker_environment), "FSS_DEPENDENCIES")
-    error_message = "The worker service's dependency mode comes from the root (var.environment), never from the drill's definition."
-  }
-}
-
-# Lane g59. The drill has one refresh token to unwrap — the one the drill-evidence seed
-# stored in another task through the environment's envelope key, under the recorded
-# seam's encryption context — and production has none. So the grant is absent by
-# default, which is what production gets, and present only where a root asks for it,
-# as `kms:Decrypt` alone, on the envelope key alone, under that context alone.
-run "the_drill_has_no_envelope_grant_unless_the_root_asks_for_one" {
-  command = plan
-
-  assert {
-    condition = alltrue([
-      for statement in jsondecode(aws_iam_role_policy.drill_task.policy).Statement :
-      !contains(statement.Resource, var.envelope_kms_key_arn)
-    ])
-    error_message = "By default — production's case — the drill task role names the envelope key nowhere."
-  }
-}
-
-run "the_rehearsal_drill_may_decrypt_recorded_seam_envelopes_and_nothing_else" {
-  command = plan
-
-  variables {
-    drill_unwraps_recorded_envelopes = true
-  }
-
-  assert {
-    condition = [
-      for statement in jsondecode(aws_iam_role_policy.drill_task.policy).Statement :
-      {
-        action    = statement.Action
-        condition = statement.Condition
-      }
-      if contains(statement.Resource, var.envelope_kms_key_arn)
-      ] == [{
-        action    = ["kms:Decrypt"]
-        condition = { StringEquals = { "kms:EncryptionContext:fss_envelope_seam" = "recorded" } }
-    }]
-    error_message = "The drill may Decrypt with the envelope key only, only under the recorded seam's encryption context, and never wrap."
-  }
-
-  # The rest of the drill's policy is unchanged by the grant: it still reads the journal
-  # and never writes it.
-  assert {
-    condition = alltrue([
-      for statement in jsondecode(aws_iam_role_policy.drill_task.policy).Statement :
-      alltrue([for action in statement.Action : action != "s3:PutObject" && !startswith(action, "s3:Delete")])
-    ])
-    error_message = "The drill task role reads the suppression journal and never writes it, with or without the envelope grant."
   }
 }
 
@@ -438,10 +334,10 @@ run "an_ordinary_apply_creates_the_services_at_their_declared_count" {
 #
 # A role ARN is a computed attribute and the mock supplies mocked values during
 # the apply phase, so no plan here can compare one, exactly as a real plan
-# cannot. The four `override_resource` blocks at the top of this file give the
+# cannot. The three `override_resource` blocks at the top of this file give the
 # roles named below ARNs of their own, so this run fails if a definition
 # references the wrong role rather than passing on a shared mock default. That
-# the eight identities are eight is asserted by name in the first run, which a
+# the six identities are six is asserted by name in the first run, which a
 # plan can see.
 # `docs/archive/decisions/g12j-mock-providers-keep-computed-values-unknown.md`.
 run "each_one_off_task_definition_carries_the_identity_it_is_for" {
@@ -459,23 +355,17 @@ run "each_one_off_task_definition_carries_the_identity_it_is_for" {
 
   assert {
     condition     = aws_ecs_task_definition.operations.task_role_arn == aws_iam_role.worker_task.arn
-    error_message = "`fss verify` and `fss drill` run as the worker task role, so a verify that passes proves the runtime identity reaches the database."
+    error_message = "`fss verify` runs as the worker task role, so a verify that passes proves the runtime identity reaches the database."
   }
 
-  assert {
-    condition     = aws_ecs_task_definition.drill.task_role_arn == aws_iam_role.drill_task.arn
-    error_message = "The drill runs as its own task role, not the worker's and not the migration's."
-  }
-
-  # And no two of the three are the same identity, which the shared mock default
-  # would otherwise hide.
+  # And the two are not the same identity, which the shared mock default would
+  # otherwise hide.
   assert {
     condition = length(distinct([
       aws_ecs_task_definition.migration.task_role_arn,
       aws_ecs_task_definition.operations.task_role_arn,
-      aws_ecs_task_definition.drill.task_role_arn,
-    ])) == 3
-    error_message = "Migration, operations and drill are three identities, not one address repeated."
+    ])) == 2
+    error_message = "Migration and operations are two identities, not one address repeated."
   }
 }
 
@@ -501,10 +391,9 @@ run "each_task_definition_carries_only_the_secrets_its_process_reads" {
       output.task_secret_names.api == tolist(["DATABASE_SECRET_ARN", "device-credential-pepper", "google-gmail-oauth-client", "google-oidc-client", "session-signing-key"])
       && output.task_secret_names.worker == tolist(["DATABASE_SECRET_ARN", "google-gmail-oauth-client"])
       && output.task_secret_names.operations == tolist(["DATABASE_SECRET_ARN", "google-gmail-oauth-client"])
-      && output.task_secret_names.drill == tolist(["DATABASE_SECRET_ARN", "MIGRATION_DATABASE_SECRET", "google-gmail-oauth-client"])
       && output.task_secret_names.migration == tolist(["FSS_RUNTIME_DATABASE_SECRET_ARN", "MIGRATION_DATABASE_SECRET"])
     )
-    error_message = "Each process gets the secrets it reads: the API its sign-in and session material, and the worker, the operations tool and the drill the Gmail client."
+    error_message = "Each process gets the secrets it reads: the API its sign-in and session material, and the worker and the operations tool the Gmail client."
   }
 
   # Read from the definitions themselves, so the output cannot say one thing while
@@ -515,7 +404,6 @@ run "each_task_definition_carries_only_the_secrets_its_process_reads" {
         [aws_ecs_task_definition.api, output.task_secret_names.api],
         [aws_ecs_task_definition.worker, output.task_secret_names.worker],
         [aws_ecs_task_definition.operations, output.task_secret_names.operations],
-        [aws_ecs_task_definition.drill, output.task_secret_names.drill],
       ] :
       toset([for reference in jsondecode(pair[0].container_definitions)[0].secrets : reference.name]) == toset(pair[1])
     ])
@@ -524,7 +412,7 @@ run "each_task_definition_carries_only_the_secrets_its_process_reads" {
 
   assert {
     condition = alltrue(flatten([
-      for definition in [aws_ecs_task_definition.worker, aws_ecs_task_definition.operations, aws_ecs_task_definition.drill] : [
+      for definition in [aws_ecs_task_definition.worker, aws_ecs_task_definition.operations] : [
         for reference in jsondecode(definition.container_definitions)[0].secrets :
         !contains(["session-signing-key", "device-credential-pepper", "google-oidc-client"], reference.name)
       ]
@@ -563,7 +451,7 @@ run "the_worker_reads_the_classifier_key_under_the_name_the_classifier_reads" {
 
   assert {
     condition = alltrue(flatten([
-      for definition in [aws_ecs_task_definition.api, aws_ecs_task_definition.operations, aws_ecs_task_definition.drill] : [
+      for definition in [aws_ecs_task_definition.api, aws_ecs_task_definition.operations] : [
         for reference in jsondecode(definition.container_definitions)[0].secrets :
         reference.name != "FSS_LLM_CLASSIFIER_API_KEY"
       ]

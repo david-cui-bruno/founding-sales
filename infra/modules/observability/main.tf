@@ -4,11 +4,11 @@
 # table, and the metric filters that turn structured log events into the
 # CloudWatch metrics the alarm module watches.
 #
-# Every filter below feeds an alarm, and they are the ones the spec calls
-# immediately critical: a suppression journal write failure, a
-# restore-generation mismatch, and an outbound safety invariant failure. They
-# are derived from logs rather than from PutMetricData so that a task which is
-# failing to reach CloudWatch metrics still raises them through its log stream.
+# Every filter below feeds an alarm, and they are the two the spec calls
+# immediately critical: a suppression journal write failure and an outbound
+# safety invariant failure. They are derived from logs rather than from
+# PutMetricData so that a task which is failing to reach CloudWatch metrics
+# still raises them through its log stream.
 # The five filters no alarm read (API and worker errors, refusals, held steps,
 # dead jobs) went in wave 2 (26 September 2026).
 
@@ -32,12 +32,6 @@ locals {
       service     = "worker"
       pattern     = "{ $.event = \"suppression_journal_write_failed\" }"
       metric_name = "SuppressionJournalWriteFailures"
-      dimensions  = {}
-    }
-    restore_generation_mismatch = {
-      service     = "worker"
-      pattern     = "{ $.event = \"restore_generation_mismatch\" }"
-      metric_name = "RestoreGenerationMismatches"
       dimensions  = {}
     }
     outbound_invariant_violation = {

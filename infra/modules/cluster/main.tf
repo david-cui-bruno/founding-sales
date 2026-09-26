@@ -21,8 +21,6 @@ locals {
   worker_execution_role_name    = "${var.name_prefix}-worker-exec"
   migration_task_role_name      = "${var.name_prefix}-migration-task"
   migration_execution_role_name = "${var.name_prefix}-migration-exec"
-  drill_task_role_name          = "${var.name_prefix}-drill-task"
-  drill_execution_role_name     = "${var.name_prefix}-drill-exec"
 
   # What the two services' execution roles may resolve: the application secrets
   # and the `app_runtime` database entry. Deliberately not the migration entry,
@@ -35,11 +33,6 @@ locals {
   # because `fss admin database-users ensure` is the thing that sets that
   # password; nothing else in this module gives the migration identity reach.
   migration_secret_arns = distinct([var.migration_database_secret_arn, var.app_runtime_database_secret_arn])
-
-  # The drill's execution role: the application secrets, the runtime entry and the
-  # migration entry, because Appendix E step 7 reapplies migrations forward inside
-  # the same process that replayed the journal.
-  drill_secret_arns = distinct(concat(local.runtime_secret_arns, [var.migration_database_secret_arn]))
 
   # The tool, as the container's entry point. `aws ecs run-task --overrides` can
   # replace a container's `command` and cannot replace its `entryPoint`, and the
@@ -62,15 +55,6 @@ locals {
     AWS_REGION           = var.aws_region
   })
 
-  # Appendix E step 1, on the two services only (lane g56). Absent rather than
-  # empty when unpinned: both bootstraps read an absent variable as "the check is
-  # not made" and refuse an empty one. The one-off definitions below are built from
-  # `worker_environment`, not from `worker_service_environment`, so a pin never
-  # reaches them; the commands that need a generation take it as a flag.
-  generation_environment = var.expected_system_generation == null ? {} : {
-    FSS_EXPECTED_SYSTEM_GENERATION = tostring(var.expected_system_generation)
-  }
-
   api_environment = merge(local.common_environment, var.api_environment, {
     FSS_ROLE        = "api"
     FSS_SCHEMA_MIN  = tostring(var.api_schema_range.min)
@@ -78,7 +62,7 @@ locals {
     PORT            = tostring(var.container_port)
     FSS_HTTP_PORT   = tostring(var.container_port)
     FSS_JOURNAL_ARN = var.journal_bucket_arn
-  }, local.generation_environment)
+  })
 
   worker_environment = merge(local.common_environment, {
     FSS_ROLE       = "worker"
@@ -86,14 +70,11 @@ locals {
     FSS_SCHEMA_MAX = tostring(var.worker_schema_range.max)
   })
 
-  # What the worker *service* runs with: the one-off environment plus the pin.
-  worker_service_environment = merge(local.worker_environment, local.generation_environment)
-
   # Each task definition carries the application secrets its own process reads, by
   # the name it reads them under, and no others (lane g81, audit S17). Until then one
-  # map went to all four runtime definitions, so the worker, the operations tool and
-  # the drill each held the session-signing key, the device-credential pepper and the
-  # sign-in client — the API's authentication material, which none of them reads.
+  # map went to every runtime definition, so processes that never sign anybody in
+  # held the session-signing key, the device-credential pepper and the sign-in
+  # client — the API's authentication material, which none of them reads.
   #
   #   * the API reads `google-gmail-oauth-client` (the Gmail callback),
   #     `google-oidc-client` (sign-in) and `session-signing-key`
@@ -103,8 +84,8 @@ locals {
   #     reply classifier's key, which it is the only process to use
   #     (`apps/worker/src/handlers/classify.ts`) — under `FSS_LLM_CLASSIFIER_API_KEY`,
   #     not under its logical name (see `secret_environment_names`).
-  #   * the operations tool and the drill read `google-gmail-oauth-client` through
-  #     the same `readWorkerDeployment` the worker does, and nothing else.
+  #   * the operations tool reads `google-gmail-oauth-client` through the same
+  #     `readWorkerDeployment` the worker does, and nothing else.
   #
   # The database entries are not in these lists: they arrive through the two named
   # inputs, as before, and the runtime one is added to each map below.
@@ -162,24 +143,6 @@ locals {
   # nothing else. A verify that passed as the migration user would prove nothing
   # about the credential the services are about to use.
   operations_environment = local.worker_environment
-
-  # `fss drill` needs both: steps 2 to 6, 8 and 9 are the application's work and
-  # step 7 reapplies migrations forward, which is DDL. So it is its own task
-  # definition under its own identity rather than either of the other two — the
-  # migration role must stay unable to reach the journal, and the worker service's
-  # role must stay unable to reach a DDL credential (David's condition 1).
-  drill_task_secrets = merge(local.operations_task_secrets, {
-    MIGRATION_DATABASE_SECRET = var.migration_database_secret_arn
-  })
-
-  # `recorded`, in the task definition, not as an override.
-  #
-  # The drill runs `mailbox reconcile-sent`, `mailbox recover` and `watch-renew`,
-  # every one of which reaches Gmail when dependencies are `live`. A rehearsal that
-  # reached a real mailbox would send real mail, and a mode chosen by the caller is
-  # a mode a caller can forget. So the definition fixes it and the tool refuses to
-  # drill in any other mode.
-  drill_environment = merge(local.worker_environment, { FSS_DEPENDENCIES = "recorded" })
 
   migration_environment = merge(local.common_environment, {
     # The tool deliberately does not read FSS_SCHEMA_MIN/MAX: `fss migrate` is
@@ -377,113 +340,6 @@ resource "aws_iam_role_policy" "migration_task" {
         }
       },
     ]
-  })
-}
-
-# ---------------------------------------------------------------------------
-# The drill identity (G12h).
-#
-# `fss drill` is Appendix E steps 1 to 9 in one process, and it needs two things
-# neither of the other two identities may have together: the suppression journal
-# (step 2 replays it) and the migration credential (step 7 reapplies migrations
-# forward). Giving them to the migration role would make the DDL identity able to
-# read the journal; giving them to the worker service's role would give the
-# runtime a path to DDL, which is the thing David's first condition removes.
-#
-# So it is a third identity, used by nothing but the drill, which exists in a
-# rehearsal and is never launched in production.
-# ---------------------------------------------------------------------------
-
-resource "aws_iam_role" "drill_execution" {
-  name               = local.drill_execution_role_name
-  assume_role_policy = local.ecs_assume_role_policy
-  tags               = merge(var.tags, { Name = local.drill_execution_role_name })
-}
-
-resource "aws_iam_role_policy_attachment" "drill_execution_managed" {
-  role       = aws_iam_role.drill_execution.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
-}
-
-resource "aws_iam_role_policy" "drill_execution_secrets" {
-  name = "secret-references"
-  role = aws_iam_role.drill_execution.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid      = "ReadOnlyTheNamedSecrets"
-        Effect   = "Allow"
-        Action   = ["secretsmanager:GetSecretValue"]
-        Resource = local.drill_secret_arns
-      },
-      {
-        Sid      = "DecryptTheSecretKey"
-        Effect   = "Allow"
-        Action   = ["kms:Decrypt"]
-        Resource = [var.secrets_kms_key_arn]
-      },
-    ]
-  })
-}
-
-resource "aws_iam_role" "drill_task" {
-  name               = local.drill_task_role_name
-  assume_role_policy = local.ecs_assume_role_policy
-  tags               = merge(var.tags, { Name = local.drill_task_role_name })
-}
-
-resource "aws_iam_role_policy" "drill_task" {
-  name = "drill-runtime"
-  role = aws_iam_role.drill_task.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = concat([
-      {
-        # Read, and only read. Appendix E step 2 replays what the journal already
-        # holds into the restored database; a drill that could write the journal
-        # could manufacture the evidence it is checked against.
-        Sid      = "ReplayTheJournalAfterRestore"
-        Effect   = "Allow"
-        Action   = ["s3:GetObject", "s3:GetObjectVersion", "s3:ListBucket", "s3:ListBucketVersions"]
-        Resource = [var.journal_bucket_arn, local.journal_object_arn]
-      },
-      {
-        Sid      = "DecryptJournalObjects"
-        Effect   = "Allow"
-        Action   = ["kms:Decrypt"]
-        Resource = [var.journal_kms_key_arn]
-      },
-      {
-        Sid      = "PublishOperationalMetrics"
-        Effect   = "Allow"
-        Action   = ["cloudwatch:PutMetricData"]
-        Resource = ["*"]
-        Condition = {
-          StringEquals = { "cloudwatch:namespace" = var.metric_namespace }
-        }
-      },
-      ],
-      # The envelope key, for the recorded seam only, and only where the root asks
-      # (lane g59). The drill runs with FSS_DEPENDENCIES=recorded, fixed in the task
-      # definition, and still has one refresh token to unwrap: the one the
-      # drill-evidence seed stored, in another task, through the same key. Decrypt and
-      # nothing else — the drill never wraps — and only under the recorded seam's
-      # encryption context, which a live process never uses, so no real mailbox's
-      # token is reachable from this identity. Absent in production.
-      var.drill_unwraps_recorded_envelopes ? [
-        {
-          Sid      = "UnwrapRecordedSeamRefreshTokens"
-          Effect   = "Allow"
-          Action   = ["kms:Decrypt"]
-          Resource = [var.envelope_kms_key_arn]
-          Condition = {
-            StringEquals = { "kms:EncryptionContext:fss_envelope_seam" = "recorded" }
-          }
-        },
-    ] : [])
   })
 }
 
@@ -717,9 +573,9 @@ resource "aws_ecs_task_definition" "worker" {
       image     = var.worker_image
       essential = true
 
-      environment = [for name in sort(keys(local.worker_service_environment)) : {
+      environment = [for name in sort(keys(local.worker_environment)) : {
         name  = name
-        value = local.worker_service_environment[name]
+        value = local.worker_environment[name]
       }]
 
       secrets = [for name in sort(keys(local.worker_task_secrets)) : {
@@ -864,56 +720,6 @@ resource "aws_ecs_task_definition" "operations" {
   ])
 
   tags = merge(var.tags, { Name = "${var.name_prefix}-operations" })
-}
-
-resource "aws_ecs_task_definition" "drill" {
-  family                   = "${var.name_prefix}-drill"
-  requires_compatibilities = ["FARGATE"]
-  network_mode             = "awsvpc"
-  cpu                      = tostring(var.migration_cpu)
-  memory                   = tostring(var.migration_memory)
-  execution_role_arn       = aws_iam_role.drill_execution.arn
-  task_role_arn            = aws_iam_role.drill_task.arn
-
-  runtime_platform {
-    operating_system_family = "LINUX"
-    cpu_architecture        = var.cpu_architecture
-  }
-
-  container_definitions = jsonencode([
-    {
-      name       = "drill"
-      image      = var.worker_image
-      essential  = true
-      entryPoint = local.fss_entry_point
-      command    = ["drill", "--reports", "/tmp/fss-drill"]
-
-      environment = [for name in sort(keys(local.drill_environment)) : {
-        name  = name
-        value = local.drill_environment[name]
-      }]
-
-      secrets = [for name in sort(keys(local.drill_task_secrets)) : {
-        name      = name
-        valueFrom = local.drill_task_secrets[name]
-      }]
-
-      logConfiguration = {
-        logDriver = "awslogs"
-        options = {
-          "awslogs-group"         = var.worker_log_group_name
-          "awslogs-region"        = var.aws_region
-          "awslogs-stream-prefix" = "drill"
-        }
-      }
-
-      # Appendix E steps 1 to 9 in one process against a restored instance. The
-      # journal replay is the long one and it must not be killed part-way.
-      stopTimeout = 120
-    },
-  ])
-
-  tags = merge(var.tags, { Name = "${var.name_prefix}-drill" })
 }
 
 resource "aws_ecs_service" "api" {

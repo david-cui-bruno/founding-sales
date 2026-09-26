@@ -56,7 +56,6 @@ run "every_threshold_in_the_spec_has_an_alarm" {
         "dead_job_unresolved",
         "mailbox_disconnected",
         "suppression_journal_failure",
-        "restore_generation_mismatch",
         "outbound_invariant_failure",
       ] : contains(keys(output.alarm_inventory), required)
     ])
@@ -112,17 +111,17 @@ run "the_spec_values_are_the_defaults" {
   }
 }
 
-run "the_three_immediately_critical_conditions_alarm_on_one_datapoint" {
+run "the_two_immediately_critical_conditions_alarm_on_one_datapoint" {
   command = plan
 
   assert {
     condition = alltrue([
-      for name in ["suppression_journal_failure", "restore_generation_mismatch", "outbound_invariant_failure"] :
+      for name in ["suppression_journal_failure", "outbound_invariant_failure"] :
       output.alarm_inventory[name].threshold == 1
       && output.alarm_inventory[name].datapoints_to_alarm == 1
       && output.alarm_inventory[name].severity == "critical"
     ])
-    error_message = "Journal failure, restore-generation mismatch and outbound invariant failure are immediately critical: one datapoint of one line trips each."
+    error_message = "Journal failure and outbound invariant failure are immediately critical: one datapoint of one line trips each."
   }
 
   assert {
@@ -131,23 +130,6 @@ run "the_three_immediately_critical_conditions_alarm_on_one_datapoint" {
       output.alarm_inventory[name].evaluation_periods == 1
     ])
     error_message = "The journal failure and the invariant failure are events, judged one minute at a time."
-  }
-}
-
-# Lane g81, audit O16. The mismatch is a condition, and the worker logs it on every
-# metric pass while it lasts; the alarm clears only after three quiet minutes, so the
-# one minute in many hundreds that a fixed-delay pass skips does not read OK.
-run "the_restore_mismatch_alarm_holds_while_the_mismatch_lasts" {
-  command = plan
-
-  assert {
-    condition = (
-      output.alarm_inventory["restore_generation_mismatch"].evaluation_periods == 3
-      && output.alarm_inventory["restore_generation_mismatch"].datapoints_to_alarm == 1
-      && output.alarm_inventory["restore_generation_mismatch"].period == 60
-      && output.alarm_inventory["restore_generation_mismatch"].treat_missing_data == "notBreaching"
-    )
-    error_message = "One line in three minutes holds the restore-generation alarm in ALARM, and three quiet minutes clear it."
   }
 }
 

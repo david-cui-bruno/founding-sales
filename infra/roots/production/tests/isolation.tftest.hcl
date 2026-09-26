@@ -164,13 +164,11 @@ run "production_runs_its_services_unless_an_operator_says_this_is_a_bootstrap" {
     error_message = "Outside a bootstrap a service is created at its declared count. After that the count is the release scripts' (ignore_changes, lane g70)."
   }
 
-  # The three one-off task definitions exist in production too, so the rehearsal is a
-  # copy of this rather than of something else. `fss drill` is never launched by a
-  # production release; it is here because the two environments must be the same
-  # shape, which is what makes rehearsing worth anything.
+  # The two one-off task definitions exist in production too, so the rehearsal is a
+  # copy of this rather than of something else.
   assert {
-    condition     = join(",", module.stack.one_off_task_families) == "fss-prod-migration,fss-prod-operations,fss-prod-drill"
-    error_message = "Production carries the same three one-off task definitions the rehearsal drills against."
+    condition     = join(",", module.stack.one_off_task_families) == "fss-prod-migration,fss-prod-operations"
+    error_message = "Production carries the same two one-off task definitions the rehearsal runs."
   }
 
   assert {
@@ -298,7 +296,6 @@ run "each_production_task_carries_only_the_secrets_its_process_reads" {
       module.stack.task_secret_names.api == tolist(["DATABASE_SECRET_ARN", "device-credential-pepper", "google-gmail-oauth-client", "google-oidc-client", "session-signing-key"])
       && module.stack.task_secret_names.worker == tolist(["DATABASE_SECRET_ARN", "FSS_LLM_CLASSIFIER_API_KEY", "google-gmail-oauth-client"])
       && module.stack.task_secret_names.operations == tolist(["DATABASE_SECRET_ARN", "google-gmail-oauth-client"])
-      && module.stack.task_secret_names.drill == tolist(["DATABASE_SECRET_ARN", "MIGRATION_DATABASE_SECRET", "google-gmail-oauth-client"])
     )
     error_message = "Every production task definition carries the secrets its own process reads: the authentication secrets reach the API alone, and the classifier key reaches the worker as FSS_LLM_CLASSIFIER_API_KEY."
   }
@@ -544,41 +541,88 @@ run "the_assume_flag_chooses_a_credential_path_and_not_a_plan" {
   }
 }
 
-# Lane g56. Production is unpinned in code: the value is read from the database
-# with an operations task and set by an operator (docs/greenfield/release.md, "The
-# expected system generation"). A default here would be a generation nobody read.
-run "production_is_unpinned_in_code" {
+# The restore runbook's one Terraform input (docs/greenfield/runbooks/restore.md).
+# FSS_DATABASE_HOST is the host every process connects to in place of the one inside
+# its database secret, and `task_network_configuration.database_host` is what the
+# release scripts compare a registered definition's FSS_DATABASE_HOST with, so the
+# two must name the same host whatever the input says.
+#
+# The instance's address is computed, and the mock provider fills computed values
+# only during an apply, so this plan gives the managed instance an address of its
+# own; without it the three values below would be unknown and the run could not
+# tell the managed instance from anything else.
+run "every_task_connects_to_the_managed_instance_by_default" {
   command = plan
 
+  override_resource {
+    target          = module.stack.module.database.aws_db_instance.main
+    override_during = plan
+    values = {
+      address = "fss-prod-pg.mock.us-east-1.rds.amazonaws.com"
+    }
+  }
+
   assert {
-    condition = (!contains(keys(module.stack.api_environment), "FSS_EXPECTED_SYSTEM_GENERATION")
-    && !contains(keys(module.stack.worker_environment), "FSS_EXPECTED_SYSTEM_GENERATION"))
-    error_message = "No production generation is pinned in code."
+    condition = (module.stack.api_environment["FSS_DATABASE_HOST"] == "fss-prod-pg.mock.us-east-1.rds.amazonaws.com"
+      && module.stack.worker_environment["FSS_DATABASE_HOST"] == "fss-prod-pg.mock.us-east-1.rds.amazonaws.com"
+    && module.stack.task_network_configuration.database_host == "fss-prod-pg.mock.us-east-1.rds.amazonaws.com")
+    error_message = "With active_database_host unset, the services and the release scripts all name the managed instance's address."
   }
 }
 
-run "an_operator_pin_reaches_both_production_services" {
+run "a_restored_copy_s_address_reaches_every_task_and_the_release_scripts" {
   command = plan
 
   variables {
-    expected_system_generation = 2
+    active_database_host = "fss-prod-pg-r20261001.example.us-east-1.rds.amazonaws.com"
   }
 
   assert {
-    condition = (module.stack.api_environment["FSS_EXPECTED_SYSTEM_GENERATION"] == "2"
-    && module.stack.worker_environment["FSS_EXPECTED_SYSTEM_GENERATION"] == "2")
-    error_message = "Appendix E step 1's control must reach the worker, which opens the restore holds, and the API, which reports the mismatch."
+    condition = (module.stack.api_environment["FSS_DATABASE_HOST"] == "fss-prod-pg-r20261001.example.us-east-1.rds.amazonaws.com"
+      && module.stack.worker_environment["FSS_DATABASE_HOST"] == "fss-prod-pg-r20261001.example.us-east-1.rds.amazonaws.com"
+    && module.stack.task_network_configuration.database_host == "fss-prod-pg-r20261001.example.us-east-1.rds.amazonaws.com")
+    error_message = "active_database_host is FSS_DATABASE_HOST on the API and the worker (and so on the operations tool), and the host the release scripts expect a registered definition to carry."
   }
 }
 
-run "a_production_generation_that_is_not_a_positive_whole_number_is_refused" {
+run "an_active_database_host_with_a_scheme_is_refused" {
   command = plan
 
   variables {
-    expected_system_generation = 0
+    active_database_host = "https://x"
   }
 
-  expect_failures = [var.expected_system_generation]
+  expect_failures = [var.active_database_host]
+}
+
+run "an_active_database_host_with_a_port_is_refused" {
+  command = plan
+
+  variables {
+    active_database_host = "host:5432"
+  }
+
+  expect_failures = [var.active_database_host]
+}
+
+run "an_active_database_host_in_upper_case_is_refused" {
+  command = plan
+
+  variables {
+    active_database_host = "UPPER.example.com"
+  }
+
+  expect_failures = [var.active_database_host]
+}
+
+run "an_active_database_host_with_no_dot_is_refused" {
+  command = plan
+
+  variables {
+    active_database_host = "nodot"
+  }
+
+  expect_failures = [var.active_database_host]
 }
 
 # Lane g86. `/auth/client-version` publishes the signed update manifest in

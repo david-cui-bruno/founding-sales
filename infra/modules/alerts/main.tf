@@ -206,24 +206,6 @@ locals {
       severity            = "critical"
       description         = "A suppression journal write failed. Immediately critical."
     }
-    # One line fires it; it clears three quiet minutes after the last one (lane
-    # g81, audit O16). The worker writes the event on every metric pass while the
-    # generation it was pinned to and the database's differ, so the alarm holds for
-    # as long as the mismatch does. The pass is a fixed-delay loop, a little over
-    # a minute apart, so one minute in many hundreds has no line; one in three
-    # keeps that minute from reading OK and sending a second ALARM e-mail.
-    restore_generation_mismatch = {
-      metric_name         = "RestoreGenerationMismatches"
-      statistic           = "Sum"
-      comparison          = "GreaterThanOrEqualToThreshold"
-      threshold           = 1
-      period              = 60
-      evaluation_periods  = 3
-      datapoints_to_alarm = 1
-      treat_missing_data  = "notBreaching"
-      severity            = "critical"
-      description         = "The database system generation does not match the operator-controlled expected generation. Immediately critical."
-    }
     outbound_invariant_failure = {
       metric_name         = "OutboundSafetyInvariantFailures"
       statistic           = "Sum"

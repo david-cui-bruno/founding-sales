@@ -164,48 +164,12 @@ variable "environment" {
   description = "Non-secret environment variables added to both tasks. Never put a credential here."
   type        = map(string)
   default     = {}
-
-  validation {
-    condition     = !contains(keys(var.environment), "FSS_EXPECTED_SYSTEM_GENERATION")
-    error_message = "FSS_EXPECTED_SYSTEM_GENERATION is set by expected_system_generation and nowhere else, so there is one control and a plan that shows it."
-  }
 }
 
 variable "api_environment" {
   description = "Non-secret environment variables for the API task only."
   type        = map(string)
   default     = {}
-
-  validation {
-    condition     = !contains(keys(var.api_environment), "FSS_EXPECTED_SYSTEM_GENERATION")
-    error_message = "FSS_EXPECTED_SYSTEM_GENERATION is set by expected_system_generation and nowhere else, so there is one control and a plan that shows it."
-  }
-}
-
-variable "expected_system_generation" {
-  description = <<-EOT
-    Appendix E step 1's operator-controlled expected generation, as
-    FSS_EXPECTED_SYSTEM_GENERATION on the API and worker service task
-    definitions. Null leaves both unpinned and the check unmade.
-
-    The worker compares it with the database's `system_generation` at startup
-    and, when they differ, opens one restore hold per workspace and logs the
-    event RestoreGenerationMismatches counts; the API reports it on /readyz and
-    /diagnostics. A restored copy carries its source's generation, so after a
-    restore this is set to the restored copy's generation plus one, in the
-    same apply as (or one before) whatever points the services at it — which
-    is also the generation step 9 then advances the database to. The one-off
-    task definitions do not carry it: `fss admin restore-holds open` and
-    `fss drill` take the generation as a flag.
-    docs/archive/decisions/g56-restore-holds-are-opened-by-the-generation-check.md.
-  EOT
-  type        = number
-  default     = null
-
-  validation {
-    condition     = var.expected_system_generation == null ? true : (var.expected_system_generation >= 1 && floor(var.expected_system_generation) == var.expected_system_generation)
-    error_message = "expected_system_generation is a positive whole number, or null for unpinned. The bootstraps refuse anything else at startup."
-  }
 }
 
 variable "secret_arns" {
@@ -267,24 +231,6 @@ variable "worker_reads_classifier_key" {
     worker handed it would send its fixture replies to the provider under a key
     that cannot work and fail every classify.reply. Production sets it; everywhere
     else classify.reply stays unclaimed, which is what a worker with no key does.
-  EOT
-  type        = bool
-  default     = false
-}
-
-variable "drill_unwraps_recorded_envelopes" {
-  description = <<-EOT
-    Whether the drill task role may decrypt with the envelope key, and then only an
-    envelope bound to the recorded seam's encryption context (lane g59).
-
-    `fss drill` has to read the refresh token the drill-evidence seed stored in
-    another task. Both run with FSS_DEPENDENCIES=recorded and wrap through the
-    environment's envelope key with the context
-    `fss_envelope_seam = recorded` (packages/domain/mail/envelopeKms.ts), so this
-    grant is conditioned on that context: the drill identity can unwrap what a
-    recorded seed wrapped and never a real mailbox's token, which a live process
-    wraps without it. The rehearsal sets it; production does not, so production's
-    plan shows no change and its drill role has no envelope grant at all.
   EOT
   type        = bool
   default     = false

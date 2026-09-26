@@ -13,7 +13,7 @@
 #
 #   * `aws_ecs_task_definition.api` and `.worker` carry `track_latest = true`, so
 #     Terraform reads the family's newest ACTIVE revision — CI's — as its own;
-#   * the three one-off definitions do not: CI never registers them, and a one-off
+#   * the two one-off definitions do not: CI never registers them, and a one-off
 #     that tracked would adopt whatever an operator registered by hand;
 #   * the services still name their own definitions' ARNs, with no ignore on
 #     `task_definition`, so an apply that registers a revision re-points them.
@@ -81,12 +81,11 @@ run "the_one_off_definitions_stay_terraforms" {
   command = plan
 
   # The positive control: the same resource type in the same module, and CI never
-  # registers any of these three.
+  # registers either of these two.
   assert {
     # Unset reads as null, and the provider's default is false.
     condition = (coalesce(aws_ecs_task_definition.migration.track_latest, false) == false
-      && coalesce(aws_ecs_task_definition.operations.track_latest, false) == false
-    && coalesce(aws_ecs_task_definition.drill.track_latest, false) == false)
-    error_message = "The migration, operations and drill definitions are Terraform's alone; tracking the latest revision would adopt anything registered in those families by hand."
+    && coalesce(aws_ecs_task_definition.operations.track_latest, false) == false)
+    error_message = "The migration and operations definitions are Terraform's alone; tracking the latest revision would adopt anything registered in those families by hand."
   }
 }

@@ -119,10 +119,10 @@ describe('g81: every task gets the secrets its process reads', () => {
     expect(secretsMapOf('api')).toBe('api_task_secrets');
     expect(secretsMapOf('worker')).toBe('worker_task_secrets');
     expect(secretsMapOf('operations')).toBe('operations_task_secrets');
-    expect(secretsMapOf('drill')).toBe('drill_task_secrets');
+    expect(secretsMapOf('drill')).toBeNull();
     expect(secretsMapOf('migration')).toBe('migration_task_secrets');
     expect(CLUSTER).not.toMatch(/local\.task_secrets\b/u);
-    expect(CLUSTER).toContain('drill_task_secrets = merge(local.operations_task_secrets, {');
+    expect(CLUSTER).not.toContain('drill_task_secrets');
     const built = (map: string, list: string): RegExp =>
       new RegExp(
         `${map}\\s+= merge\\(\\{ for name, arn in var\\.secret_arns : lookup\\(local\\.secret_environment_names, name, name\\) => arn if contains\\(local\\.${list}, name\\) \\}`,
@@ -283,7 +283,7 @@ describe('Terraform declares the task definitions CI deploys around (lane g91)',
     for (const family of ['api', 'worker']) {
       expect(block(cluster, `resource "aws_ecs_task_definition" "${family}" {`)).toMatch(/^ {2}track_latest = true$/mu);
     }
-    for (const family of ['migration', 'operations', 'drill']) {
+    for (const family of ['migration', 'operations']) {
       expect(block(cluster, `resource "aws_ecs_task_definition" "${family}" {`)).not.toContain('track_latest');
     }
   });

@@ -86,8 +86,6 @@ module "stack" {
   dependencies_mode = var.dependencies_mode
   sending_enabled   = var.sending_enabled
 
-  expected_system_generation = var.expected_system_generation
-
   certificate_arn = var.certificate_arn
   api_hostname    = var.api_hostname
 

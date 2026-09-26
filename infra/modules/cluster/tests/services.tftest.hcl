@@ -211,13 +211,12 @@ run "every_task_publishes_into_this_environment_s_namespace_and_nowhere_else" {
         aws_ecs_task_definition.worker,
         aws_ecs_task_definition.migration,
         aws_ecs_task_definition.operations,
-        aws_ecs_task_definition.drill,
         ] : [
         for variable in jsondecode(definition.container_definitions)[0].environment :
         variable.value if variable.name == "FSS_METRIC_NAMESPACE"
       ] == ["FSS/fss-test"]
     ])
-    error_message = "All five task definitions carry FSS_METRIC_NAMESPACE, exactly once, set to this environment's namespace."
+    error_message = "All four task definitions carry FSS_METRIC_NAMESPACE, exactly once, set to this environment's namespace."
   }
 
   assert {
@@ -226,7 +225,6 @@ run "every_task_publishes_into_this_environment_s_namespace_and_nowhere_else" {
         aws_iam_role_policy.api_task.policy,
         aws_iam_role_policy.worker_task.policy,
         aws_iam_role_policy.migration_task.policy,
-        aws_iam_role_policy.drill_task.policy,
         ] : [
         for statement in jsondecode(policy).Statement :
         statement.Condition.StringEquals["cloudwatch:namespace"]
@@ -265,101 +263,4 @@ run "an_inverted_schema_range_is_refused" {
   }
 
   expect_failures = [var.worker_schema_range]
-}
-
-# Lane g56: Appendix E step 1's expected generation has a control, and it reaches
-# exactly the two services. Until this lane no task definition set
-# FSS_EXPECTED_SYSTEM_GENERATION, so the worker never compared anything and a
-# restored database held nothing (rehearsal run 36062337914).
-run "unpinned_by_default_and_no_task_definition_carries_a_generation" {
-  command = plan
-
-  assert {
-    condition = alltrue([
-      for definition in [
-        aws_ecs_task_definition.api,
-        aws_ecs_task_definition.worker,
-        aws_ecs_task_definition.migration,
-        aws_ecs_task_definition.operations,
-        aws_ecs_task_definition.drill,
-        ] : length([
-          for variable in jsondecode(definition.container_definitions)[0].environment :
-          variable if variable.name == "FSS_EXPECTED_SYSTEM_GENERATION"
-      ]) == 0
-    ])
-    error_message = "Unpinned means absent: both bootstraps refuse an empty value and read an absent one as 'no check'."
-  }
-}
-
-run "a_pin_reaches_the_api_and_worker_services_and_no_one_off_task" {
-  command = plan
-
-  variables {
-    expected_system_generation = 3
-  }
-
-  assert {
-    condition = alltrue([
-      for definition in [aws_ecs_task_definition.api, aws_ecs_task_definition.worker] : [
-        for variable in jsondecode(definition.container_definitions)[0].environment :
-        variable.value if variable.name == "FSS_EXPECTED_SYSTEM_GENERATION"
-      ] == ["3"]
-    ])
-    error_message = "The worker opens restore holds on a mismatch and the API reports it on /readyz, so both services carry the pin, exactly once."
-  }
-
-  # The one-off definitions take the generation as a flag (`fss admin restore-holds
-  # open`, `fss drill --expected-generation`), so a production pin must not reach a
-  # drill or an operations task pointed at a restored copy with another intention.
-  assert {
-    condition = alltrue([
-      for definition in [
-        aws_ecs_task_definition.migration,
-        aws_ecs_task_definition.operations,
-        aws_ecs_task_definition.drill,
-        ] : length([
-          for variable in jsondecode(definition.container_definitions)[0].environment :
-          variable if variable.name == "FSS_EXPECTED_SYSTEM_GENERATION"
-      ]) == 0
-    ])
-    error_message = "The one-off task definitions do not carry the pin."
-  }
-
-  assert {
-    condition = (output.api_environment["FSS_EXPECTED_SYSTEM_GENERATION"] == "3"
-    && output.worker_environment["FSS_EXPECTED_SYSTEM_GENERATION"] == "3")
-    error_message = "The environment outputs report what the two services run with."
-  }
-}
-
-run "a_generation_below_one_is_refused" {
-  command = plan
-
-  variables {
-    expected_system_generation = 0
-  }
-
-  expect_failures = [var.expected_system_generation]
-}
-
-run "a_fractional_generation_is_refused" {
-  command = plan
-
-  variables {
-    expected_system_generation = 1.5
-  }
-
-  expect_failures = [var.expected_system_generation]
-}
-
-run "the_generation_cannot_arrive_through_the_free_form_environment" {
-  command = plan
-
-  variables {
-    environment = {
-      FSS_EXPECTED_SYSTEM_GENERATION = "2"
-    }
-  }
-
-  expect_failures = [var.environment]
 }
