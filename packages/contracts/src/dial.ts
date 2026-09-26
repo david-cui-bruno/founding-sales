@@ -413,7 +413,8 @@ export type DialCheckRequest = z.infer<typeof dialCheckRequestSchema>;
 /**
  * The advice: `callable`, and every reason that applies (not only the first), in 9.2's
  * order. The Mac shows the reasons, opens `telUri` itself when the person presses Call,
- * and logs the call afterwards with `POST /calls/log`, which needs no ticket.
+ * and logs the call afterwards with `POST /calls/log`, which needs no ticket. `telUri`
+ * is null whenever `callable` is false, so a refused call has nothing to open.
  */
 export const dialAdviceSchema = z.object({
   firmId: uuid,
@@ -421,6 +422,7 @@ export const dialAdviceSchema = z.object({
   reasons: z.array(dialRefusalCodeSchema),
   routeId: uuid.nullable(),
   e164: e164.nullable(),
+  /** Null unless `callable` is true and a number was named: a refused call carries no URI to open. */
   telUri: z.string().regex(/^tel:\+[1-9][0-9]{7,14}$/u, 'a tel: URI for an E.164 number').nullable(),
   firmTimeZone: z.string().max(64).nullable(),
   firmLocalTime: z.string().max(5).nullable(),

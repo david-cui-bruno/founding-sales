@@ -82,6 +82,16 @@ describe('adviseDial', () => {
     const advice = await advise({ at: policy.outsideWindow });
     expect(advice?.callable).toBe(false);
     expect(advice?.reasons).toEqual(['posture_missing', 'outside_calling_window']);
+    expect(advice?.telUri).toBeNull();
+  });
+
+  it('gives no URI outside the calling window, even for a usable number of this firm', async () => {
+    expect(await advise({ at: policy.outsideWindow })).toMatchObject({
+      callable: false,
+      reasons: ['outside_calling_window'],
+      e164: policy.alpha.e164,
+      telUri: null,
+    });
   });
 
   it('says a suppressed firm is not callable, as do-not-call records it', async () => {
@@ -92,7 +102,20 @@ describe('adviseDial', () => {
       journal: recordingSuppressionJournal(),
     });
     expect(recorded.ok).toBe(true);
-    expect(await advise()).toMatchObject({ callable: false, reasons: ['firm_suppressed'] });
+    // The number itself is usable; the firm is not. A refused call carries no URI.
+    expect(await advise()).toMatchObject({ callable: false, reasons: ['firm_suppressed'], telUri: null });
+  });
+
+  it('gives no URI for a suppressed number', async () => {
+    const recorded = await recordSuppression(salesperson(), {
+      scope: 'handle',
+      firmId: crm.alpha.firmId,
+      value: policy.alpha.e164,
+      source: 'prospect_do_not_call',
+      journal: recordingSuppressionJournal(),
+    });
+    expect(recorded.ok).toBe(true);
+    expect(await advise()).toMatchObject({ callable: false, reasons: ['handle_suppressed'], telUri: null });
   });
 
   it('says a retired number or one that is not this firm’s is not callable, and gives no URI for it', async () => {

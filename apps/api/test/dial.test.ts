@@ -200,7 +200,8 @@ describe('policy, suppression and dialing routes', () => {
     expect(checked.status).toBe(200);
     expect(wireDrift(dialCheckResponseSchema, checked.body)).toEqual([]);
     const { advice } = dialCheckResponseSchema.parse(checked.body);
-    expect(advice).toMatchObject({ firmId, routeId, telUri: `tel:${advice.e164 ?? ''}` });
+    // A URI only when the answer is yes (the window depends on the clock the suite runs at).
+    expect(advice).toMatchObject({ firmId, routeId, telUri: advice.callable ? `tel:${advice.e164 ?? ''}` : null });
     // The calling window depends on the clock the suite runs at, and is tested in
     // `@fss/domain` where the instant is a parameter; nothing else stands in the way here.
     expect(advice.reasons.filter(reason => reason !== 'outside_calling_window')).toEqual([]);
@@ -402,6 +403,22 @@ describe('policy, suppression and dialing routes', () => {
     const retried = await post('/suppressions/record', assigneeToken, body);
     expect(retried.status).toBe(200);
     expect(retried.body['replayed']).toBe(false);
+  });
+
+  it('never hands a suppressed number a URI through /dial/check', async () => {
+    const target = await numberToSuppress('+14015550199');
+    const recorded = await post(
+      '/suppressions/record',
+      assigneeToken,
+      command({ scope: 'handle', value: '+14015550199', firmId: target.firmId, source: 'prospect_do_not_call' }),
+    );
+    expect(recorded.status).toBe(200);
+    const checked = await post('/dial/check', assigneeToken, { firmId: target.firmId, routeId: target.routeId });
+    expect(checked.status).toBe(200);
+    const { advice } = dialCheckResponseSchema.parse(checked.body);
+    expect(advice.callable).toBe(false);
+    expect(advice.reasons).toContain('handle_suppressed');
+    expect(advice.telUri).toBeNull();
   });
 
   it('corrects a mistaken entry by its author and lets an admin supersede one', async () => {

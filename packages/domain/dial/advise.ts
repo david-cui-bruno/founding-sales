@@ -43,7 +43,7 @@ export interface DialAdvice {
   readonly reasons: readonly DialRefusalCode[];
   readonly routeId: string | null;
   readonly e164: string | null;
-  /** The URI the Mac opens, for a named number that is this firm's and not invalid or retired. */
+  /** The URI the Mac opens: only when `callable` is true and a number of this firm's was named; null otherwise. */
   readonly telUri: string | null;
   readonly firmTimeZone: string | null;
   /** The firm's local clock at the moment of the advice, `HH:MM`, when the zone is known. */
@@ -122,14 +122,17 @@ export async function adviseDial(
   });
   for (const hold of holds) add(hold.reasonCode as DialRefusalCode);
 
-  const dialable = route !== null && route.eligibility !== 'invalid' && route.eligibility !== 'retired';
+  // No URI unless the answer is yes (wave 2 batch review, P1): the Mac opens `telUri`
+  // itself, so a suppressed, out-of-window or otherwise refused number must not carry
+  // one. A refused route has a reason of its own, so `callable` covers it too.
+  const callable = reasons.length === 0;
   return {
     firmId: firm.id,
-    callable: reasons.length === 0,
+    callable,
     reasons,
     routeId: route?.id ?? null,
     e164: route?.e164 ?? null,
-    telUri: dialable && route !== null ? `tel:${route.e164}` : null,
+    telUri: callable && route !== null ? `tel:${route.e164}` : null,
     firmTimeZone: firm.time_zone,
     firmLocalTime,
     at,
