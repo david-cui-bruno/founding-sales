@@ -37,7 +37,6 @@ describe('the closed reason-code set', () => {
       'posture_overlapping',
       'posture_overdue',
       'restore_in_progress',
-      'domain_cap',
       'send_unknown_reconciling',
     ] as const) {
       expect(isRecoverableHoldReason(code), code).toBe(false);

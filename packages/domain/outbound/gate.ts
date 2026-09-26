@@ -5,29 +5,15 @@ import { readSetting } from '../settings/store.ts';
 import { firstSuppressed } from '../suppression/effective.ts';
 import { localParts } from '../src/index.ts';
 import { businessDateOf } from '../today/snapshots.ts';
-import {
-  dailyCapInForce,
-  ensureRamp,
-  openSendDay,
-  readAccountHeadroom,
-  type AccountHeadroom,
-  type RampRow,
-  type SendDayRow,
-} from './ramp.ts';
+import { dailyCapInForce, ensureRamp, openSendDay, type RampRow, type SendDayRow } from './ramp.ts';
 import { decideStepPermission, dispatchHolidayCalendar, insideSendingWindow } from './stepPermission.ts';
-import {
-  authenticationPasses,
-  decideDomainGuard,
-  readPrimarySendingDomain,
-  type DomainGuardDecision,
-  type SendingDomainRow,
-} from './domainGuard.ts';
+import { authenticationPasses, readPrimarySendingDomain, type SendingDomainRow } from './domainGuard.ts';
 import { refuseSend, acceptSend, type SendResult } from './types.ts';
 import type { OutboundFenceRow } from './fence.ts';
 
 /**
- * Everything that must be true before a fence may be dispatched (11.2, 12.6, 12.7,
- * 4.2, 9.2).
+ * Everything that must be true before a fence may be dispatched (11.2, 12.7, 4.2,
+ * 9.2).
  *
  * This is the last check before an irreversible action, so it is deliberately
  * paranoid in three ways.
@@ -59,7 +45,7 @@ import type { OutboundFenceRow } from './fence.ts';
  */
 
 export interface SendGateDeps {
-  /** Database time, so the window and the guard agree with the fence's timestamps. */
+  /** Database time, so the window agrees with the fence's timestamps. */
   readonly now?: (() => Date) | undefined;
   /**
    * 16.2's deployment half: this build's statement that the rehearsal gate passed on
@@ -97,9 +83,6 @@ export interface SendPlan {
   readonly ramp: RampRow;
   readonly day: SendDayRow;
   readonly cap: number;
-  /** 12.7's operational headroom on the claim's business date (lane g87). */
-  readonly account: AccountHeadroom;
-  readonly guard: DomainGuardDecision;
   /**
    * Which attestation admitted this send, and the record it bound (lane g100): the
    * record's own reference, or the release process `ci-gate:main` with the `ci-gate`
@@ -234,29 +217,6 @@ export async function decideSend(
     return refuseSend('daily_cap', `automated ${String(day.automatedSent)}/${String(cap)}`);
   }
 
-  // 12.7's operational headroom (lane g87, S07): every outgoing message of this
-  // account, the person's own included, on today's business date and yesterday's,
-  // against Google's per-account limit less the sync-lag reserve. The same refusal as
-  // the cap, because it is the same kind of fact — this mailbox has sent enough for
-  // now, and time lifts it — and the detail says which ceiling it was. `openSendDay`
-  // above locked today's row inside the claim, so two claims read it in turn.
-  const account = await readAccountHeadroom(context, { mailboxId: mailbox.id, businessDate, today: day });
-  if (!account.allowed) {
-    return refuseSend('daily_cap', `account ${String(account.used)}/${String(account.ceiling)}`);
-  }
-
-  // 12.6 (lane g87, S08): serialized across the workspace for a personal-Gmail
-  // recipient, so a claim counts every send claimed before it — in doubt included —
-  // and the next claim counts this one.
-  const guard = await decideDomainGuard(context, {
-    recipientAddress: fence.recipientAddress,
-    domain,
-    serialize: true,
-  });
-  if (!guard.allowed) {
-    return refuseSend('domain_guard', `${String(guard.used)}/${String(guard.guard)}`);
-  }
-
   return acceptSend({
     fence,
     mailbox: { id: mailbox.id, address: mailbox.email_address, ownerUserId: mailbox.owner_user_id },
@@ -264,8 +224,6 @@ export async function decideSend(
     ramp,
     day,
     cap,
-    account,
-    guard,
     release,
   });
 }
@@ -285,20 +243,13 @@ async function decisionInstant(context: RepositoryContext): Promise<Date> {
 /**
  * Which hold reason a refusal opens on the step, or null when the refusal is not a
  * hold at all.
- *
- * `domain_guard` maps to `domain_cap`, which is deliberately *not* in
- * `RECOVERABLE_HOLD_REASON_CODES`: 12.6 says reaching the guard "requires a reviewed
- * product-policy change", so no control may clear it early. It lifts when the rolling
- * window moves, which is a fact about time rather than a decision anybody makes.
  */
 export function holdReasonForRefusal(
   reason: string,
-): 'daily_cap' | 'domain_cap' | 'outside_email_window' | 'coverage_incomplete' | 'mailbox_disconnected' | 'route_invalid' | 'firm_suppressed' | 'handle_suppressed' | 'template_unapproved' | 'provider_refusal' | null {
+): 'daily_cap' | 'outside_email_window' | 'coverage_incomplete' | 'mailbox_disconnected' | 'route_invalid' | 'firm_suppressed' | 'handle_suppressed' | 'template_unapproved' | 'provider_refusal' | null {
   switch (reason) {
     case 'daily_cap':
       return 'daily_cap';
-    case 'domain_guard':
-      return 'domain_cap';
     case 'outside_email_window':
       return 'outside_email_window';
     case 'coverage_incomplete':

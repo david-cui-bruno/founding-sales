@@ -124,8 +124,6 @@ describe('the outbound admin routes', () => {
     const result = complete.body['result'] as Record<string, unknown>;
     expect(result['authenticationPasses']).toBe(true);
     expect(result['automatedSendingEnabled']).toBe(true);
-    // 12.6's guard is reported, not invented by the client.
-    expect(result['personalGmailGuardPer24h']).toBe(4000);
   });
 
   it('12.7: closes the gate again the moment a leg of the checklist stops passing', async () => {
@@ -229,19 +227,18 @@ describe('the outbound admin routes', () => {
     expect(refused.body['reason']).toBe('fence_not_ready');
   });
 
-  it('reports the domain, the guard headroom and the doubt, and no message content', async () => {
+  it('reports the domain and the doubt, and no message content', async () => {
     const status = await post('/outbound/status', adminToken, {});
     expect(status.status).toBe(200);
     // The whole answer, in the shape `@fss/contracts` declares since lane g78.
     expect(wireDrift(outboundStatusResponseSchema, status.body)).toEqual([]);
-    const body = status.body as {
-      domain: { domain: string; automatedSendingEnabled: boolean };
-      guard: { guard: number; headroom: number; applies: boolean };
-      doubt: { reconciling: number; unresolvedTerminal: number };
-    };
-    expect(body.domain.domain).toBe(DOMAIN);
-    expect(body.guard.guard).toBe(4000);
-    expect(body.guard.applies).toBe(true);
+    const body = outboundStatusResponseSchema.parse(status.body);
+    expect(body.domain?.domain).toBe(DOMAIN);
+    // The deleted personal-Gmail guard, as constants that always pass: desktops up to
+    // 1.0.10 parse these fields as required (wave 2 removes them).
+    expect(body.domain).toMatchObject({ personalGmailGuardPer24h: 4000, replyOnlyOptOut: true });
+    expect(body.guard).toEqual({ allowed: true, applies: false, used: 0, guard: 4000, headroom: 4000 });
+    expect(body.personalGmailRecipients).toEqual({ automated: 0, direct: 0, total: 0 });
     expect(body.doubt.reconciling).toBe(0);
     expect(body.doubt.unresolvedTerminal).toBe(0);
     // Appendix F: an operational view carries no subject and no body.

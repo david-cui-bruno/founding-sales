@@ -19,7 +19,6 @@ export const HOLD_REASON_CODES = [
   'template_unapproved',
   'missing_variables',
   'daily_cap',
-  'domain_cap',
   'route_missing',
   'route_candidate',
   'route_invalid',

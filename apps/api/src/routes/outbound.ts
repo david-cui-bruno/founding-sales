@@ -1,9 +1,7 @@
 import { z } from 'zod';
 import {
   authenticationPasses,
-  decideDomainGuard,
   outboundDoubtCounts,
-  personalGmailRecipientsInWindow,
   readFence,
   readFenceEvents,
   readPrimarySendingDomain,
@@ -43,7 +41,7 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  *     mailbox connected before the connect path registered one has somewhere to
  *     record the checklist. Idempotent: an existing row comes back unchanged, and the
  *     primary is never moved;
- *   * `/outbound/status` — what the ramp, the guard and the doubt look like now.
+ *   * `/outbound/status` — what the ramp and the doubt look like now.
  *
  * All of them are `POST`, including the read, for the reason in
  * `docs/decisions/g3b-reads-are-posts.md`.
@@ -239,7 +237,6 @@ export async function routeOutbound(request: ApiRequest, options: RoutingOptions
 
   const domain = await readPrimarySendingDomain(context);
   const doubt = await outboundDoubtCounts(context.db);
-  const recipients = await personalGmailRecipientsInWindow(context);
 
   // The cap in force, with a stored raise judged on the mailbox's health as it stands
   // (lane g87) — the number the gate enforces, not the column an admin once wrote.
@@ -254,16 +251,11 @@ export async function routeOutbound(request: ApiRequest, options: RoutingOptions
     status: 200,
     body: {
       domain: domain === null ? null : describeDomain(domain),
-      guard:
-        domain === null
-          ? null
-          : await decideDomainGuard(context, {
-              // The headroom question, asked of a personal Gmail recipient, because
-              // that is the only recipient the guard applies to.
-              recipientAddress: 'headroom@gmail.com',
-              domain,
-            }),
-      personalGmailRecipients: recipients,
+      // Deprecated: the personal-Gmail guard was deleted on 26 Sep 2026. Desktops up to
+      // 1.0.10 parse `guard` and `personalGmailRecipients` as required, so both are
+      // constants that always pass until wave 2 removes them from the contract.
+      guard: domain === null ? null : DEPRECATED_GUARD_DECISION,
+      personalGmailRecipients: DEPRECATED_PERSONAL_GMAIL_RECIPIENTS,
       doubt,
       ramp:
         standing === null
@@ -306,8 +298,23 @@ function describeDomain(domain: SendingDomainRow): Readonly<Record<string, unkno
     postmasterReviewedAt: domain.postmasterReviewedAt,
     authenticationPasses: authenticationPasses(domain),
     automatedSendingEnabled: domain.automatedSendingEnabled,
-    personalGmailGuardPer24h: domain.personalGmailGuardPer24h,
-    replyOnlyOptOut: domain.replyOnlyOptOut,
+    // Deprecated constants, for the same installed desktops as the guard below.
+    personalGmailGuardPer24h: DEPRECATED_PERSONAL_GMAIL_GUARD,
+    replyOnlyOptOut: true,
   };
 }
+
+/** The guard's old default; the installed desktop prints it and nothing enforces it. */
+const DEPRECATED_PERSONAL_GMAIL_GUARD = 4000;
+
+/** A guard decision that always allows: the guard no longer exists. */
+const DEPRECATED_GUARD_DECISION = Object.freeze({
+  allowed: true,
+  applies: false,
+  used: 0,
+  guard: DEPRECATED_PERSONAL_GMAIL_GUARD,
+  headroom: DEPRECATED_PERSONAL_GMAIL_GUARD,
+});
+
+const DEPRECATED_PERSONAL_GMAIL_RECIPIENTS = Object.freeze({ automated: 0, direct: 0, total: 0 });
 

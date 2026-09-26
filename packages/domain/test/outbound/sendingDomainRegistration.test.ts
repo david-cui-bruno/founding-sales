@@ -121,8 +121,6 @@ describe('registerSendingDomain', () => {
       dmarcPass: false,
       postmasterReviewedAt: null,
       automatedSendingEnabled: false,
-      personalGmailGuardPer24h: 4000,
-      replyOnlyOptOut: true,
     });
 
     // What Administration reads, and the command that answered `domain_unknown` in

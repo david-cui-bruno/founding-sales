@@ -533,9 +533,9 @@ describe('two workspaces', () => {
 });
 
 describe('which reasons are expected', () => {
-  it('is scoped_pause and the four clock-clearing holds, and nothing else', () => {
+  it('is scoped_pause and the three clock-clearing holds, and nothing else', () => {
     expect([...EXPECTED_HOLD_REASONS].sort()).toEqual(
-      ['daily_cap', 'domain_cap', 'outside_email_window', 'scoped_pause', 'send_unknown_reconciling'],
+      ['daily_cap', 'outside_email_window', 'scoped_pause', 'send_unknown_reconciling'],
     );
   });
 });

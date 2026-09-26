@@ -5,7 +5,6 @@ import {
   dispatchOutboundMessage,
   listMailboxesToReconcile,
   outboundRecoveryFloor,
-  personalGmailRecipientsInWindow,
   readFence,
   readFenceEvents,
   readOutboundOutcome,
@@ -21,8 +20,7 @@ import {
 } from './support/outboundWorld.ts';
 
 /**
- * The at-most-once send, against a real PostgreSQL (Appendix G 5, 12, 16, 33, 36 and
- * the 12.6 domain guard).
+ * The at-most-once send, against a real PostgreSQL (Appendix G 5, 12, 16, 33 and 36).
  *
  * Every scenario here is one of two questions: *was the message sent exactly once*,
  * and *was it not sent when it should not have been*. The recorded Gmail client
@@ -384,83 +382,6 @@ describe('at-most-once sending', () => {
     const released = await dispatchOutboundMessage(ctx, deps, { outboundMessageId: secondFenceId });
     expect(released.outcome).toBe('sent');
     expect(gmail.sends).toHaveLength(2);
-  });
-
-  // ---------------------------------------------- 12.6: the domain guard holds
-  it('12.6: the domain guard holds a personal-Gmail send and cannot be bypassed by a second mailbox', async () => {
-    const ctx = context();
-    // This scenario is about one refusal, so the holds the earlier ones opened —
-    // each correct, each blocking `email_send` for the firm — are cleared first.
-    await world.clearHolds(world.alpha.workspace.workspaceId);
-    const workspaceId = world.alpha.workspace.workspaceId;
-    await ctx.db.query('UPDATE sending_domains SET personal_gmail_guard_per_24h = 1 WHERE workspace_id = $1', [
-      workspaceId,
-    ]);
-
-    // One personal-Gmail message already sent today, from the *other* mailbox. The
-    // guard is per domain, so it counts here too.
-    await ctx.db.query(
-      `UPDATE email_addresses SET address = 'prospect.personal@gmail.com', updated_at = now()
-        WHERE workspace_id = $1 AND id = $2`,
-      [workspaceId, world.alpha.routeId],
-    );
-    const seeded = world.clientWith(world.alpha, {});
-    const fenceId = await world.prepare(world.alpha, { toAddress: 'prospect.personal@gmail.com' });
-    const first = await dispatchOutboundMessage(ctx, world.sendDeps(world.alpha, { gmail: seeded }), {
-      outboundMessageId: fenceId,
-    });
-    expect(first.outcome, `${first.refusal ?? ''} ${first.detail ?? ''}`).toBe('sent');
-
-    const gmail = world.clientWith(world.alpha, {});
-    const blockedId = await world.prepare(world.alpha, { toAddress: 'another.personal@gmail.com' });
-    const report = await dispatchOutboundMessage(ctx, world.sendDeps(world.alpha, { gmail }), {
-      outboundMessageId: blockedId,
-    });
-    expect(report.outcome).toBe('held');
-    expect(report.refusal).toBe('domain_guard');
-    expect(gmail.sends).toHaveLength(0);
-
-    // The hold is firm-scoped, like every other fence hold. A workspace-scoped one
-    // would block every send including the ones to recipients Google's personal-Gmail
-    // rule does not cover, which is a self-inflicted outage on unaffected traffic;
-    // 12.6 says the guard "holds further *affected* sends".
-    // `docs/decisions/g7-domain-guard-scope.md` records the version that got this
-    // wrong and the scenario that caught it. The comment here said the opposite until
-    // lane G15, so the scope is asserted now rather than described.
-    const holds = await ctx.db.query<{ scope_kind: string; scope_key: string | null; reason_code: string }>(
-      `SELECT scope_kind, scope_key, reason_code FROM active_holds
-        WHERE workspace_id = $1 AND source_event_id = $2 AND released_at IS NULL`,
-      [workspaceId, blockedId],
-    );
-    expect(holds.rows[0]?.reason_code).toBe('domain_cap');
-    expect(holds.rows[0]?.scope_kind).toBe('firm');
-    expect(holds.rows[0]?.scope_key).toBe(world.crm.alpha.firmId);
-
-    // "It cannot be bypassed with extra mailboxes": the count the guard reads takes
-    // no mailbox at all. Structurally there is nothing for a second mailbox to
-    // reset, which is a stronger statement than any assertion about one.
-    const counted = await personalGmailRecipientsInWindow(ctx);
-    expect(counted.total).toBeGreaterThanOrEqual(1);
-    await ctx.db.query('UPDATE active_holds SET released_at = now() WHERE workspace_id = $1 AND released_at IS NULL', [
-      workspaceId,
-    ]);
-
-    // A recipient who is not on personal Gmail is unaffected: Google's rule is about
-    // personal Gmail, and holding everything would be a self-inflicted outage.
-    await ctx.db.query(
-      `UPDATE email_addresses SET address = 'reception@northwind.example.test', updated_at = now()
-        WHERE workspace_id = $1 AND id = $2`,
-      [workspaceId, world.alpha.routeId],
-    );
-    const workId = await world.prepare(world.alpha, { toAddress: 'reception@northwind.example.test' });
-    const allowed = await dispatchOutboundMessage(ctx, world.sendDeps(world.alpha, { gmail }), {
-      outboundMessageId: workId,
-    });
-    expect(allowed.outcome).toBe('sent');
-
-    await ctx.db.query('UPDATE sending_domains SET personal_gmail_guard_per_24h = 4000 WHERE workspace_id = $1', [
-      workspaceId,
-    ]);
   });
 
   // --------------------------------------------- Appendix G 6: opt-out linearizes

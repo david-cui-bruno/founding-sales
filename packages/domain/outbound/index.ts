@@ -1,6 +1,6 @@
 /**
- * At-most-once sending: the fence, the ramp, the domain guard and the Sent-folder
- * reconciliation (specification 12.5 to 12.7, Appendix B).
+ * At-most-once sending: the fence, the ramp and the Sent-folder reconciliation
+ * (specification 12.5 to 12.7, Appendix B).
  *
  * The public surface is deliberately small, and three of its functions are the whole
  * contract with G8's sequence lane:
@@ -18,8 +18,6 @@
  */
 
 export {
-  DEFAULT_PERSONAL_GMAIL_GUARD,
-  DOMAIN_GUARD_WINDOW_HOURS,
   OUTBOUND_STATES,
   PERSONAL_GMAIL_DOMAINS,
   PLACEMENT_RULE_VERSION,
@@ -35,7 +33,6 @@ export {
   deterministicMessageId,
   fenceIdOfMessageId,
   fssFenceIdOfSentMessage,
-  isPersonalGmailAddress,
   reconcileBackoffSeconds,
   refuseSend,
   type OutboundOutcomeState,
@@ -45,9 +42,6 @@ export {
 } from './types.ts';
 
 export {
-  ACCOUNT_HEADROOM_RESERVE,
-  ACCOUNT_OPERATIONAL_CEILING,
-  GMAIL_ACCOUNT_DAILY_LIMIT,
   RAMP_MAX_BOUNCE_RATE,
   RAMP_MAX_OPT_OUT_RATE,
   RAMP_RAISE_HEALTHY_STREAK,
@@ -66,7 +60,6 @@ export {
   raiseAllowance,
   raiseRefusal,
   rampHealthFailure,
-  readAccountHeadroom,
   readHealthyStreak,
   readRamp,
   readRampStanding,
@@ -75,7 +68,6 @@ export {
   recordDaySignal,
   scheduledCap,
   setAdminCap,
-  type AccountHeadroom,
   type AdminCapOutcome,
   type AdminCapRefusal,
   type BounceAgainstDay,
@@ -90,8 +82,6 @@ export {
 
 export {
   authenticationPasses,
-  decideDomainGuard,
-  personalGmailRecipientsInWindow,
   readPrimarySendingDomain,
   normalizeSendingDomain,
   readSendingDomain,
@@ -99,9 +89,7 @@ export {
   registerMailboxSendingDomain,
   registerSendingDomain,
   setAutomatedSendingEnabled,
-  setPersonalGmailGuard,
   type ChecklistOutcome,
-  type DomainGuardDecision,
   type RegisterSendingDomainOutcome,
   type SendingDomainRefusal,
   type SendingDomainRegistrar,

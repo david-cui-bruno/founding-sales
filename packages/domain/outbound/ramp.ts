@@ -625,9 +625,7 @@ export async function claimedAutomatedSends(
  * 12.7: "All outgoing Gmail messages, including direct sends, count toward
  * operational headroom." They are counted in their own column and never against the
  * automated cap, because the cap is FSS's self-restraint and a person writing their
- * own email is not FSS. They do count against the account headroom the gate enforces
- * (`readAccountHeadroom`, lane g87): a person's own mail spends the same Google
- * allowance FSS's does.
+ * own email is not FSS.
  */
 export async function countDirectSend(
   context: RepositoryContext,
@@ -640,81 +638,6 @@ export async function countDirectSend(
      DO UPDATE SET direct_sent = mailbox_send_days.direct_sent + 1, updated_at = now()`,
     [context.scope.workspaceId, input.mailboxId, input.businessDate, input.cap],
   );
-}
-
-/**
- * 12.7's operational headroom (lane g87, audit S07).
- *
- * "All outgoing Gmail messages, including direct sends, count toward operational
- * headroom. Automated capacity is conservatively reserved so sync lag cannot approach
- * Google's account ceiling."
- *
- * Google's ceiling is per account: a Google Workspace user may send
- * `GMAIL_ACCOUNT_DAILY_LIMIT` messages in any rolling 24 hours, and every message
- * counts whoever wrote it. FSS already keeps both halves per mailbox per business date
- * — `automated_sent`, reserved by fence at the claim, and `direct_sent`, counted when
- * the sync imports a message FSS did not send — and until g87 nothing read their sum.
- * The rule that now does:
- *
- *   **an automated send is refused as `daily_cap` (detail `account used/ceiling`) when
- *   the mailbox's automated and direct sends on the claim's business date and the one
- *   before it already reach `ACCOUNT_OPERATIONAL_CEILING`.**
- *
- * Two dates rather than one because Google's window rolls and the counters do not: at
- * nine in the morning, yesterday afternoon's sends are still inside Google's 24 hours,
- * and a ceiling on today's row alone would let an account that sent 1,900 messages by
- * hand yesterday evening take FSS's whole cap this morning. Any 24 hours ending now
- * lies inside today's business date and yesterday's, so their sum can only overstate
- * what Google is counting — the conservative direction.
- *
- * `ACCOUNT_HEADROOM_RESERVE` is the part of Google's limit FSS never plans to use. It
- * is there for what the counters cannot see yet: direct sends the sync has not
- * imported. The gate refuses automated sending once coverage is older than
- * `COVERAGE_FRESHNESS_SECONDS` (fifteen minutes), so the unseen part is at most a
- * quarter of an hour of a person's own sending plus the import itself; five hundred
- * messages is more than any one mailbox sends in that time, mail merges included. It
- * also absorbs the hour a spring-forward night adds to Google's window beyond two
- * business dates. The reasoning, and what it leaves out — Google's separate recipient
- * limits, Bcc, trial accounts — is in `docs/decisions/g87-ramp-raise-headroom-exposure.md`.
- *
- * The automated cap still applies on its own: at most 100 a day ever reach this sum
- * from FSS, so the headroom only bites for an account a person is already driving
- * hard, which is exactly the account FSS should stop adding to.
- */
-export const GMAIL_ACCOUNT_DAILY_LIMIT = 2000;
-export const ACCOUNT_HEADROOM_RESERVE = 500;
-export const ACCOUNT_OPERATIONAL_CEILING = GMAIL_ACCOUNT_DAILY_LIMIT - ACCOUNT_HEADROOM_RESERVE;
-
-export interface AccountHeadroom {
-  /** Automated and direct sends on the business date and the one before it. */
-  readonly used: number;
-  readonly ceiling: number;
-  /** Whether one more automated send fits under the ceiling. */
-  readonly allowed: boolean;
-}
-
-/**
- * The mailbox's account headroom for a business date.
- *
- * `today` is the day's row as the gate just upserted it (`openSendDay`), which inside
- * the claiming transaction is locked, so two claims on one mailbox read it one after
- * the other. The day before is a plain read: its only writer after the fact is the
- * mail pipeline's direct-send counter, which takes the send gate exclusive before it
- * counts and so cannot commit while a claim holds the gate shared.
- */
-export async function readAccountHeadroom(
-  context: RepositoryContext,
-  input: { readonly mailboxId: string; readonly businessDate: string; readonly today: SendDayRow },
-): Promise<AccountHeadroom> {
-  const { rows } = await context.db.query<{ sent: string }>(
-    `SELECT coalesce(sum(automated_sent + direct_sent), 0)::text AS sent
-       FROM mailbox_send_days
-      WHERE workspace_id = $1 AND mailbox_id = $2 AND business_date = $3::date - 1`,
-    [context.scope.workspaceId, input.mailboxId, input.businessDate],
-  );
-  const yesterday = Number(rows[0]?.sent ?? '0');
-  const used = input.today.automatedSent + input.today.directSent + yesterday;
-  return { used, ceiling: ACCOUNT_OPERATIONAL_CEILING, allowed: used < ACCOUNT_OPERATIONAL_CEILING };
 }
 
 /** Record a bounce, an opt-out or a provider error against the day the ramp reads. */

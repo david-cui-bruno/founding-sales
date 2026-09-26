@@ -84,7 +84,6 @@ export const SEND_HANDOFF_REFUSALS = [
   'coverage_incomplete',
   'template_unapproved',
   'daily_cap',
-  'domain_cap',
   'route_missing',
   'route_candidate',
   'route_invalid',
