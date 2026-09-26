@@ -17,37 +17,49 @@ import { readRepositoryFile, repositoryPath } from './support/repository.ts';
  *
  * So the policy ships: `infra/policies/deployment-role-policy.json.tftpl` rendered by
  * `infra/scripts/policy.sh render <prefix>` (P7; the old name render-deployment-role-policy.sh execs it), and
- * `infra/policies/terraform-resource-actions.json` as the reviewable map from every
- * `resource "aws_*"` type in `infra/modules` and `infra/roots` to the actions Terraform
- * needs for it.
+ * `infra/policies/terraform-resource-actions.json` as the reviewable map from every AWS
+ * service the tree creates resources in to the `Deny` statements that narrow what the
+ * role may do in it, per role.
+ *
+ * Until 27 September 2026 that map was per resource type, with the actions each needs:
+ * 47 entries and 562 lines, a second copy of the policy kept by hand. The check is the
+ * same at service granularity, and one thing is knowingly given up: a lane that adds a
+ * resource type inside a service already named there no longer turns this red. The
+ * rehearsal's own deployment-role policy — the exact one production gets — is what
+ * catches a missing action for it, one credentialed run before production.
  *
  * ## The vacuous-pass trap
  *
- * Three shapes of nothing, each of which a careless version of this file would report as
+ * Four shapes of nothing, each of which a careless version of this file would report as
  * a pass:
  *
- *   1. **A map that is asserted against itself.** Listing `aws_kms_alias` in the map and
- *      then checking the map mentions `aws_kms_alias` proves nothing. Closed by deriving
- *      the type set from the Terraform files on disk and requiring the map's keys to
- *      equal it exactly — a lane that adds a resource type and forgets the map turns this
- *      red, which is the whole point, and a stale key for a type that has been deleted
- *      turns it red too.
- *   2. **"The policy mentions the action."** A string search would pass against an action
+ *   1. **A map that is asserted against itself.** Listing `kms` in the map and then
+ *      checking the map mentions `kms` proves nothing. Closed by deriving each resource
+ *      type's service from the Terraform files on disk and requiring the map's keys to
+ *      equal that set exactly — a lane that reaches into a new service and forgets the
+ *      map turns this red, and a stale key for a service nothing creates any more turns
+ *      it red too.
+ *   2. **A service name that is not a service.** The derivation guesses `aws_<service>_`
+ *      for everything the table below does not name, so a wrong guess would put a key in
+ *      the map that no policy could ever contradict. Closed by requiring every service in
+ *      the map to have an `Allow` of its own in both renders.
+ *   3. **"The policy mentions the action."** A string search would pass against an action
  *      named inside a `Deny`, which is exactly what happened to the eight Secrets Manager
  *      entries: `kms:GenerateDataKey*` was in a blanket deny, so the allow it also had
- *      was worth nothing. Closed by evaluating each action the way IAM does — a matching
- *      `Allow`, and no `Deny` that matches it with `Resource: "*"` and no condition — and
- *      by requiring every type whose actions survive only a *scoped* deny to name that
- *      deny in the map.
- *   3. **A scoping check that accepts everything.** Requiring each statement to "be
+ *      was worth nothing. Closed by replaying both credentialed runs' own refusals
+ *      through IAM's rules — a matching `Allow`, and no `Deny` that matches it with
+ *      `Resource: "*"` and no condition — and by comparing the `Deny` statements that
+ *      narrow each service with the map's list for that role, equal in both directions,
+ *      so a new deny over any service is red until a reviewer writes it down.
+ *   4. **A scoping check that accepts everything.** Requiring each statement to "be
  *      scoped" passes trivially if `Resource: "*"` counts. Closed by requiring every
  *      `Allow` to name the namespace in every one of its resource ARNs, or to carry a
  *      condition that names it, or to have its Sid in the map's `unconditional_sids`
  *      with a written reason — which is a list a reviewer reads, not a test that passes.
  *
  * And the floors: the renderer must produce a document with more statements than the
- * number this file asserts about, the tree walk must find more resource types than a
- * handful, and the six error classes of run 35628963637 must each be allowed.
+ * number this file asserts about, and the tree walk must find more resource types than a
+ * handful.
  */
 
 interface PolicyStatement {
@@ -64,13 +76,6 @@ interface PolicyDocument {
   readonly Statement: readonly PolicyStatement[];
 }
 
-interface ResourceEntry {
-  readonly service: string;
-  readonly scope: 'arn' | 'tag' | 'none';
-  readonly actions: readonly string[];
-  readonly deny_carve_out?: string;
-}
-
 interface ActionGroup {
   readonly name: string;
   readonly roles: readonly string[];
@@ -80,7 +85,7 @@ interface ActionGroup {
 
 interface ActionMap {
   readonly unconditional_sids: Readonly<Record<string, string>>;
-  readonly terraform_resources: Readonly<Record<string, ResourceEntry>>;
+  readonly services: Readonly<Record<string, Readonly<Record<Prefix, readonly string[]>>>>;
   readonly action_groups: readonly ActionGroup[];
   readonly denied_in_production: Readonly<Record<string, string>>;
   readonly run_35628963637: Readonly<Record<string, readonly string[]>>;
@@ -156,18 +161,33 @@ function killedByABlanketDeny(policy: PolicyDocument, action: string): PolicySta
   );
 }
 
-/** A Deny that applies to this action but is narrowed by a condition or a NotResource. */
-function scopedDeniesFor(policy: PolicyDocument, action: string): readonly PolicyStatement[] {
-  return policy.Statement.filter(
-    statement =>
-      statement.Effect === 'Deny' &&
-      statementCovers(statement, action) &&
-      (statement.Condition !== undefined || statement.NotResource !== undefined),
-  );
-}
-
 function allowsFor(policy: PolicyDocument, action: string): readonly PolicyStatement[] {
   return policy.Statement.filter(statement => statement.Effect === 'Allow' && statementCovers(statement, action));
+}
+
+/**
+ * The AWS service a resource type belongs to. `aws_<service>_<thing>` is the rule; the
+ * table holds the names where the provider's prefix is not the service's — the load
+ * balancer, the database, the network types EC2 owns, and CloudWatch Logs, which IAM
+ * calls `logs` and not `cloudwatch`. It reproduces all 47 mappings the per-type
+ * inventory carried by hand until 27 September 2026.
+ */
+const SERVICE_OF_PREFIX: readonly (readonly [string, string])[] = [
+  ['lb', 'elasticloadbalancing'],
+  ['db_', 'rds'],
+  ['vpc', 'ec2'],
+  ['subnet', 'ec2'],
+  ['route', 'ec2'],
+  ['internet_gateway', 'ec2'],
+  ['security_group', 'ec2'],
+  ['default_security_group', 'ec2'],
+  ['cloudwatch_log', 'logs'],
+];
+
+function serviceOf(type: string): string {
+  const rest = type.slice('aws_'.length);
+  for (const [prefix, service] of SERVICE_OF_PREFIX) if (rest.startsWith(prefix)) return service;
+  return rest.split('_')[0] as string;
 }
 
 /** Every `resource "aws_*"` type declared under infra/modules and infra/roots. */
@@ -213,23 +233,10 @@ describe('the deployment-role policy is code, and the Terraform tree judges it',
     }
   });
 
-  it('maps exactly the resource types the tree declares, with no stale key and none missing', () => {
-    // The assertion this whole file stands on. A lane that adds a resource type and does
-    // not say which actions it needs finds out here rather than in a credentialed run.
-    expect(Object.keys(map.terraform_resources).sort()).toEqual([...terraformResourceTypes()]);
-  });
-
-  it('names actions, a service and a scope for every type, and no empty entry', () => {
-    for (const [type, entry] of Object.entries(map.terraform_resources)) {
-      expect(entry.actions.length, `${type} names no action`).toBeGreaterThan(0);
-      expect(['arn', 'tag', 'none'], `${type} has an unknown scope`).toContain(entry.scope);
-      for (const action of entry.actions) {
-        expect(action, `${type} names ${action}, which is not a <service>:<Action>`).toMatch(
-          /^[a-z0-9-]+:[A-Za-z0-9*]+$/u,
-        );
-        expect(action.startsWith(`${entry.service}:`) || ['iam:PassRole', 'kms:CreateGrant', 'kms:DescribeKey', 'kms:GenerateDataKey', 'kms:Encrypt', 'kms:Decrypt', 'acm:DescribeCertificate', 'secretsmanager:CreateSecret', 'secretsmanager:TagResource'].includes(action), `${type} names ${action} outside its own service without being one of the documented cross-service calls`).toBe(true);
-      }
-    }
+  it('names exactly the services the tree creates resources in, with no stale key and none missing', () => {
+    // The assertion this whole file stands on. A lane that reaches into a service the
+    // deployment role has never held finds out here rather than in a credentialed run.
+    expect(Object.keys(map.services).sort()).toEqual([...new Set(terraformResourceTypes().map(serviceOf))].sort());
   });
 
   for (const prefix of PREFIXES) {
@@ -237,44 +244,61 @@ describe('the deployment-role policy is code, and the Terraform tree judges it',
       const policy = rendered[prefix];
       const tokens = [prefix, STATE_KEY_TOKEN[prefix]];
 
-      it('allows every action every resource type in the tree needs', () => {
-        const uncovered: string[] = [];
-        for (const [type, entry] of Object.entries(map.terraform_resources)) {
-          for (const action of entry.actions) {
-            if (allowsFor(policy, action).length === 0) uncovered.push(`${type} needs ${action}`);
-          }
-        }
-        expect(uncovered, `${prefix} has no Allow for these`).toEqual([]);
+      it('holds an Allow of its own in every service the tree creates resources in', () => {
+        // Which is also what stops the service derivation from inventing a key: `lb` is
+        // not an IAM service, so a map that carried it would have no Allow to point at.
+        const silent = Object.keys(map.services).filter(
+          service =>
+            !policy.Statement.some(
+              statement =>
+                statement.Effect === 'Allow' && asList(statement.Action).some(action => action.startsWith(`${service}:`)),
+            ),
+        );
+        expect(silent, `${prefix} allows nothing at all in these services`).toEqual([]);
       });
 
-      it('has no blanket deny that cancels an action the tree needs', () => {
-        // The eight Secrets Manager entries, in one assertion. `kms:GenerateDataKey*` was
-        // allowed and then denied on every key but the Terraform state key, so
-        // `CreateSecret` failed with "Access to KMS is not allowed" while the policy
-        // looked, to a reader, as though it permitted it.
-        const killed: string[] = [];
-        for (const [type, entry] of Object.entries(map.terraform_resources)) {
-          for (const action of entry.actions) {
+      it('still allows what both credentialed runs were refused, and denies none of it outright', () => {
+        // The six error classes of run 35628963637 and the one of 35679472666, replayed.
+        // `kms:GenerateDataKey*` was allowed and then denied on every key but the
+        // Terraform state key, so `CreateSecret` failed with "Access to KMS is not
+        // allowed" while the policy looked, to a reader, as though it permitted it.
+        const failing: string[] = [];
+        for (const [failure, actions] of [
+          ...Object.entries(map.run_35628963637),
+          ...Object.entries(map.run_35679472666),
+        ]) {
+          for (const action of actions) {
+            // The two the production role is meant not to hold; `denied_in_production`
+            // is asserted separately, with the rehearsal as its positive control.
+            if (prefix === 'fss-prod' && action in map.denied_in_production) continue;
+            if (allowsFor(policy, action).length === 0) failing.push(`${failure}: no Allow for ${action}`);
             const deny = killedByABlanketDeny(policy, action);
-            if (deny !== undefined) killed.push(`${type} needs ${action}, killed by ${deny.Sid}`);
+            if (deny !== undefined) failing.push(`${failure}: ${action} killed by ${deny.Sid}`);
           }
         }
-        expect(killed, `${prefix} denies these outright`).toEqual([]);
+        expect(failing, `${prefix} would be refused these again`).toEqual([]);
       });
 
-      it('makes every type that survives only a scoped deny name that deny in the map', () => {
-        const unnamed: string[] = [];
-        for (const [type, entry] of Object.entries(map.terraform_resources)) {
-          const scoped = new Set<string>();
-          for (const action of entry.actions) {
-            for (const deny of scopedDeniesFor(policy, action)) scoped.add(deny.Sid);
-          }
-          if (scoped.size === 0) continue;
-          if (entry.deny_carve_out === undefined || !scoped.has(entry.deny_carve_out)) {
-            unnamed.push(`${type} is narrowed by ${[...scoped].join(', ')} and names ${String(entry.deny_carve_out)}`);
-          }
-        }
-        expect(unnamed, 'a scoped deny nobody declared is a denial waiting for a credentialed run').toEqual([]);
+      it('names exactly the denies that narrow each service, per role', () => {
+        // Equal in both directions: a deny nobody declared is a denial waiting for a
+        // credentialed run, and a declared one the render no longer emits is a reader
+        // being told the role is narrower than it is. An empty list is an assertion.
+        const observed = Object.fromEntries(
+          Object.keys(map.services).map(service => [
+            service,
+            policy.Statement.filter(
+              statement =>
+                statement.Effect === 'Deny' &&
+                asList(statement.Action).some(action => action === '*' || action.split(':')[0] === service),
+            )
+              .map(statement => statement.Sid)
+              .sort(),
+          ]),
+        );
+        const declared = Object.fromEntries(
+          Object.entries(map.services).map(([service, byRole]) => [service, [...byRole[prefix]].sort()]),
+        );
+        expect(observed).toEqual(declared);
       });
 
       it('scopes every Allow by ARN or by a condition, or says in the map why it cannot', () => {
