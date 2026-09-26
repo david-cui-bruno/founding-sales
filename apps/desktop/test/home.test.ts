@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_ALERT_THRESHOLDS, type DashboardResponse } from '@fss/contracts';
+import type { DashboardResponse } from '@fss/contracts';
 import {
   CHECKING,
   FIGURES_LABEL,
@@ -96,6 +96,7 @@ function desktop(role: 'admin' | 'salesperson' = 'admin', overrides: Partial<Des
     mayMutate: true,
     notice: null,
     today: { workspaceId: WORKSPACE, snapshotDate: '2026-09-25', businessTimeZone: 'America/New_York', cards: [...CARDS] },
+    rememberedWorkspace: { workspaceId: WORKSPACE, deviceLabel: 'Test Mac' },
     ...overrides,
   };
 }
@@ -131,7 +132,6 @@ const passingDomain = {
   postmasterReviewedAt: '2026-09-24T12:00:00.000Z',
   authenticationPasses: true,
   automatedSendingEnabled: false,
-  personalGmailGuardPer24h: 4000,
 };
 
 function admin(overrides: Partial<AdminState> = {}): AdminState {
@@ -143,7 +143,7 @@ function admin(overrides: Partial<AdminState> = {}): AdminState {
     notice: null,
     settings: {
       settings: [
-        { settingKey: 'alert_thresholds', value: DEFAULT_ALERT_THRESHOLDS, version: 0, changedAt: null, changedByUserId: null, changeNote: null },
+        { settingKey: 'business_time_zone', value: { timeZone: 'America/New_York' }, version: 0, changedAt: null, changedByUserId: null, changeNote: null },
       ],
       elsewhere: [],
       holidayCalendar: { version: 'none.1', dates: [] },
@@ -154,7 +154,7 @@ function admin(overrides: Partial<AdminState> = {}): AdminState {
     diagnostics: null,
     stages: [],
     history: null,
-    sendingAdmin: { domain: passingDomain, personalGmailRecipients: 0, ramps: [] },
+    sendingAdmin: { domain: passingDomain, ramps: [] },
     sendingReadError: null,
     callingNumbers: [number()],
     ...overrides,
@@ -280,22 +280,22 @@ describe('the lanes and the line of counts', () => {
     );
     expect(view.notices.map(notice => notice.text)).toEqual([
       'Callie cannot reach the server.',
-      'This list is from an earlier read, at 2026-09-25T09:05:00.000Z. Nothing here can be changed until Callie reconnects.',
+      'This list is from an earlier read, at 2026-09-25T09:05:00.000Z. Changes will fail until Callie reconnects.',
       'Snoozed.',
       'It has been thirty days. Sign in with Google again.',
     ]);
   });
 
-  it('lists every window with the key the menu gives it, Today first and current', () => {
+  it('lists every view with the key the menu gives it, in key order, Administration before the Dashboard', () => {
     expect(NAV_ROWS.map(row => `${row.label} ${row.keys}`)).toEqual([
       'Today ⌘1',
       'Replies ⌘2',
       'Firms ⌘3',
       'Sequences ⌘4',
-      'Dashboard ⌘6',
       'Administration ⌘5',
+      'Dashboard ⌘6',
     ]);
-    expect(NAV_ROWS[0]?.window).toBeNull();
+    expect(NAV_ROWS.map(row => row.route)).toEqual(['today', 'replies', 'firms', 'sequences', 'admin', 'dashboard']);
   });
 });
 
@@ -354,11 +354,11 @@ describe('the sidebar’s status', () => {
 
   it('shows an admin the domain checklist and a salesperson no domain row at all', () => {
     expect(status(input(), 'domain')).toMatchObject({ tone: 'ok', text: 'Domain passes · sending.example.test' });
-    expect(status(input({ admin: admin({ sendingAdmin: { domain: { ...passingDomain, dmarcPass: false, authenticationPasses: false }, personalGmailRecipients: 0, ramps: [] } }) }), 'domain')).toMatchObject({
+    expect(status(input({ admin: admin({ sendingAdmin: { domain: { ...passingDomain, dmarcPass: false, authenticationPasses: false }, ramps: [] } }) }), 'domain')).toMatchObject({
       tone: 'warn',
       text: 'Domain checklist not passing · sending.example.test',
     });
-    expect(status(input({ admin: admin({ sendingAdmin: { domain: null, personalGmailRecipients: 0, ramps: [] } }) }), 'domain')).toMatchObject({
+    expect(status(input({ admin: admin({ sendingAdmin: { domain: null, ramps: [] } }) }), 'domain')).toMatchObject({
       tone: 'warn',
       text: 'Domain checklist not recorded',
     });
@@ -404,9 +404,9 @@ describe('Needs you', () => {
     });
   });
 
-  it('asks for a calling number when none is the one Today calls from, and opens Administration', () => {
+  it('asks for a calling number when none is the one Today calls from, and opens Administration at it', () => {
     expect(needsRows(input({ admin: admin({ callingNumbers: [] }) }))).toEqual([
-      { key: 'calling_number', label: 'Add your calling number', detail: null, action: { kind: 'open', window: 'administration', label: 'Open' } },
+      { key: 'calling_number', label: 'Add your calling number', detail: null, action: { kind: 'open', route: { name: 'admin', section: 'calling-number' }, label: 'Open' } },
     ]);
     expect(needs(input({ admin: admin({ callingNumbers: [number({ usedForCalls: false, enabled: false, disabledAt: '2026-09-25T13:00:00.000Z' })] }) }))).toEqual([
       'calling_number',
@@ -424,8 +424,8 @@ describe('Needs you', () => {
         key: 'calling_number',
         label: 'Attest your calling number',
         detail: 'Your number is saved. Open Your calling number and attest it.',
-        // Administration opens on Settings, where the saved row has its own Attest.
-        action: { kind: 'open', window: 'administration', label: 'Open' },
+        // Administration opens at Your calling number, where the saved row has its own Attest.
+        action: { kind: 'open', route: { name: 'admin', section: 'calling-number' }, label: 'Open' },
       },
     ]);
     // A saved number beside a retired one: attest the saved one.
@@ -440,25 +440,25 @@ describe('Needs you', () => {
         key: 'calling_number',
         label: 'Re-attest your calling number',
         detail: 'Your number was retired. Open Your calling number and attest it again.',
-        action: { kind: 'open', window: 'administration', label: 'Open' },
+        action: { kind: 'open', route: { name: 'admin', section: 'calling-number' }, label: 'Open' },
       },
     ]);
   });
 
   it('asks an admin to record the domain checklist when it is missing or does not pass', () => {
-    const failing = { domain: { ...passingDomain, spfPass: false, authenticationPasses: false }, personalGmailRecipients: 0, ramps: [] };
+    const failing = { domain: { ...passingDomain, spfPass: false, authenticationPasses: false }, ramps: [] };
     expect(needs(input({ admin: admin({ sendingAdmin: failing }) }))).toEqual(['domain_checklist']);
-    expect(needs(input({ admin: admin({ sendingAdmin: { domain: null, personalGmailRecipients: 0, ramps: [] } }) }))).toEqual(['domain_checklist']);
+    expect(needs(input({ admin: admin({ sendingAdmin: { domain: null, ramps: [] } }) }))).toEqual(['domain_checklist']);
     expect(needs(input({ admin: admin({ sendingAdmin: null }) }))).toEqual([]);
     expect(needsRows(input({ admin: admin({ sendingAdmin: failing }) }))[0]?.action).toEqual({
       kind: 'open',
-      window: 'administration',
+      route: { name: 'admin', section: 'sending-admin' },
       label: 'Open',
     });
   });
 
   it('never tells a salesperson about the domain or the alerts, whatever the bridge holds', () => {
-    const failing = { domain: { ...passingDomain, authenticationPasses: false }, personalGmailRecipients: 0, ramps: [] };
+    const failing = { domain: { ...passingDomain, authenticationPasses: false }, ramps: [] };
     const alerts = {
       alerts: [{ id: '66666666-6666-4666-8666-666666666666', alertKey: 'canary_stale', severity: 'critical' as const, raisedAt: '2026-09-25T10:00:00.000Z', acknowledgedAt: null, runbookPath: null }],
     };
@@ -482,7 +482,7 @@ describe('Needs you', () => {
     const holding = (list: readonly ReturnType<typeof alert>[]) =>
       input({ admin: admin({ diagnostics: { alerts: list } as unknown as AdminState['diagnostics'] }) });
     expect(needsRows(holding([alert('66666666-6666-4666-8666-000000000001', null), alert('66666666-6666-4666-8666-000000000002', null), alert('66666666-6666-4666-8666-000000000003', '2026-09-25T11:00:00.000Z')]))).toEqual([
-      { key: 'alerts', label: '2 alerts to acknowledge', detail: null, action: { kind: 'open', window: 'administration', label: 'Open' } },
+      { key: 'alerts', label: '2 alerts to acknowledge', detail: null, action: { kind: 'open', route: { name: 'admin', section: 'alerts' }, label: 'Open' } },
     ]);
     expect(needsRows(holding([alert('66666666-6666-4666-8666-000000000001', null)]))[0]?.label).toBe('1 alert to acknowledge');
     expect(needs(holding([alert('66666666-6666-4666-8666-000000000003', '2026-09-25T11:00:00.000Z')]))).toEqual([]);
@@ -496,7 +496,7 @@ describe('Needs you', () => {
           mailbox: notConnected,
           admin: admin({
             callingNumbers: [],
-            sendingAdmin: { domain: null, personalGmailRecipients: 0, ramps: [] },
+            sendingAdmin: { domain: null, ramps: [] },
             diagnostics: { alerts: [{ id: '66666666-6666-4666-8666-000000000001', alertKey: 'x', severity: 'critical', raisedAt: '2026-09-25T10:00:00.000Z', acknowledgedAt: null, runbookPath: null }] } as unknown as AdminState['diagnostics'],
           }),
         }),

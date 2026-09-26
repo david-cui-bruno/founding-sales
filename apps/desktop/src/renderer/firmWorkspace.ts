@@ -1,3 +1,4 @@
+import { busyFor } from './busy.ts';
 import { renderAddFirmForm } from './addFirmForm.ts';
 import { button, element } from './firmDom.ts';
 import { renderFirmMerge } from './firmMerge.ts';
@@ -6,15 +7,18 @@ import { renderImportScreen } from './importScreen.ts';
 import { renderPipelineBoard } from './pipelineBoard.ts';
 import type { CrmBridge, CrmState, PipelineView } from './firmWorkspaceContract.ts';
 import { buildFirmWorkspaceView } from './firmWorkspaceView.ts';
+import { routeShown, type Route } from './routes.ts';
 
 /**
- * The CRM window: the Firm page, the pipeline, and the merge conflict screen.
+ * The Firms view: the pipeline, one firm's page, Add firm, Import and the merge screen.
  *
- * A second entry point beside `renderer.ts` rather than a fifth screen inside it.
- * The Today window is the one a person leaves open all day and it has to stay small
- * and fast; the CRM windows are opened, used and closed. They share the stylesheet,
- * the bridge pattern and the rule that every value reaches the page through
- * `textContent`.
+ * A view of the one window (wave 1): `mount` draws into the shell's column and `unmount`
+ * stops it, so an answer that arrives after the person went elsewhere draws nothing.
+ * Two routes show it. `firms` asks the bridge what it holds — the pipeline, or Add firm
+ * or Import half done — and never shows a firm page under that name. `firm/<id>` hands
+ * the firm to the CRM bridge, which holds the open firm in the main process, so a Today
+ * or reply card opens the firm it is about with one call. Opening a firm from the board
+ * stays in this view, and the route follows it.
  *
  * Every state change is "ask the bridge, render what came back". There is no local
  * model to go stale, no optimistic update to reconcile, and no way for the window
@@ -30,21 +34,70 @@ const bridge = (): CrmBridge => {
 };
 
 let lastState: CrmState | null = null;
+/** The shell's column while this view is mounted, or null. */
+let container: HTMLElement | null = null;
+/** Bumped by every mount and unmount, so an answer to an earlier one is dropped. */
+let generation = 0;
+
+/** Read-only while a command is on the wire, so a second press sends nothing (wave 1). */
+const busy = busyFor(() => container);
 
 function apply(next: Promise<CrmState>): void {
+  const mine = generation;
   void (async () => {
-    render(await next);
+    const state = await busy.run(next);
+    if (mine === generation) render(state);
   })();
+}
+
+export function mount(target: HTMLElement, route: Route): void {
+  busy.reset();
+  generation += 1;
+  container = target;
+  lastState = null;
+  if (route.name === 'firm') {
+    apply(bridge().openFirm({ firmId: route.firmId }));
+    return;
+  }
+  // `firms` is the pipeline, or a capture screen the bridge still holds; a firm page the
+  // bridge last showed is not what the sidebar's Firms means.
+  apply(
+    (async () => {
+      const held = await bridge().state();
+      return held.screen === 'firm' ? await bridge().openPipeline() : held;
+    })(),
+  );
+}
+
+export function unmount(): void {
+  busy.reset();
+  generation += 1;
+  container = null;
+}
+
+/** The route the state on screen is: one firm's, or the Firms view's. */
+function routeOfState(state: CrmState): Route {
+  return state.screen === 'firm' && state.firm !== null ? { name: 'firm', firmId: state.firm.read.firm.id } : { name: 'firms' };
 }
 
 export function render(state: CrmState | null): void {
   if (state !== null) lastState = state;
   const current = lastState;
-  const root = document.querySelector('#app');
-  if (!(root instanceof HTMLElement) || current === null) return;
+  const root = container;
+  if (root === null || current === null) return;
   const view = buildFirmWorkspaceView(current);
+  routeShown(routeOfState(current));
 
   root.replaceChildren();
+  if (current.screen === 'firm' && current.firm !== null) {
+    // The way back to the board, which a firm opened in its own window never had.
+    const back = button('← Pipeline', 'back-to-pipeline', true);
+    back.className = 'btn btn-quiet back-link';
+    back.addEventListener('click', () => {
+      apply(bridge().openPipeline());
+    });
+    root.append(back);
+  }
   root.append(element('h1', { text: view.heading, testId: 'heading' }));
 
   const banners = element('div', { className: 'banners', testId: 'banners' });
@@ -204,12 +257,4 @@ function renderUnplacedFirms(root: HTMLElement, pipeline: PipelineView): void {
   }
   section.append(list);
   root.append(section);
-}
-
-export async function boot(): Promise<void> {
-  render(await bridge().state());
-}
-
-if (typeof document !== 'undefined') {
-  void boot();
 }

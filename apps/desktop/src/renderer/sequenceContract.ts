@@ -132,6 +132,12 @@ export const sequenceStateSchema = z.strictObject({
   /** The resume review the person opened, or null (lane g88). */
   resumeReview: resumeReviewSchema.nullable(),
   notice: z.string().max(400).nullable(),
+  /**
+   * The copy warnings the last template create or approval answered (wave 1): codes such
+   * as `template_body_too_long`, which warn and no longer refuse. Strings, not an enum,
+   * so a code added later is still shown rather than refused. Empty after any other act.
+   */
+  warnings: z.array(z.string().min(1).max(80)).max(20),
 });
 export type SequenceState = z.infer<typeof sequenceStateSchema>;
 

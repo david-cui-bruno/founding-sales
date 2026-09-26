@@ -53,8 +53,10 @@ export function registerAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
   handleOnce(ADMIN_IPC_CHANNELS.saveSetting, async argument => {
     const input = argument as { settingKey?: unknown; value?: unknown; changeNote?: unknown } | null;
     const settingKey = text(input?.settingKey);
-    const changeNote = text(input?.changeNote);
-    if (settingKey === null || changeNote === null) return await host.state();
+    // The note is optional (wave 1). Until then a Save with the note left empty came
+    // back here as the unchanged state, and the page looked as if it had saved.
+    const changeNote = typeof input?.changeNote === 'string' ? input.changeNote : '';
+    if (settingKey === null) return await host.state();
     // The key is not checked against `SETTING_KEYS` here: the server chooses the
     // validator from it and refuses an unknown one, and a second copy of that list
     // in the main process is a second thing to keep equal.

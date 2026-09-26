@@ -1,8 +1,8 @@
+import { busyFor } from './busy.ts';
 import { localParts } from '@fss/contracts';
 import { element } from './firmDom.ts';
 import { POSTURES_HEADING, POSTURE_HINT, postureFormIssues, type PosturesSectionView } from './postureView.ts';
 import {
-  ADVANCED_SETTINGS,
   BUSINESS_ZONE_CHOICES,
   SENDING_CHECK_LABELS,
   adminViewOf,
@@ -13,15 +13,20 @@ import {
   type SettingField,
   type SettingRowView,
 } from './settingsView.ts';
+import { routeShown, type AdminSection, type Route } from './routes.ts';
 import type { AdminBridge, AdminScreen, AdminState, RecordPostureInput } from './settingsContract.ts';
 
 /**
- * The administration window: Settings, Dashboard, Diagnostics.
+ * The Administration and Dashboard views: Settings, Dashboard, Diagnostics.
  *
- * A third entry point beside `renderer.ts` and `firmWorkspace.ts`, on the pattern
- * G3b and G6 established. Every state change is "ask the bridge, render what came
- * back": there is no local model to go stale and no optimistic update to reconcile,
- * which is 14.2's "contains no authoritative … logic" made structural.
+ * A view of the one window (wave 1): `mount` draws into the shell's column and `unmount`
+ * stops it, so an answer that arrives after the person went elsewhere draws nothing.
+ * The route `admin` opens Settings (or Diagnostics, for Needs you's alerts) and
+ * `dashboard` the Dashboard; the tabs switch in place and the route follows. Until wave
+ * 1 the Dashboard was this window loaded again with a query, which lost anything typed
+ * in Settings. Every state change is "ask the bridge, render what came back": there is
+ * no local model to go stale and no optimistic update to reconcile, which is 14.2's
+ * "contains no authoritative … logic" made structural.
  *
  * Every value reaches the page through `textContent` — `element` from `firmDom.ts`
  * is the only way anything is written — so a prospect's name in a hold reason or a
@@ -45,11 +50,40 @@ const bridge = (): AdminBridge => {
 };
 
 let lastState: AdminState | null = null;
+/** The shell's column while this view is mounted, or null. */
+let container: HTMLElement | null = null;
+/** Bumped by every mount and unmount, so an answer to an earlier one is dropped. */
+let generation = 0;
+/** Where Needs you asked this mount to scroll, until the first answer is drawn. */
+let scrollTo: AdminSection | null = null;
+
+/** Read-only while a command is on the wire, so a second press sends nothing (wave 1). */
+const busy = busyFor(() => container);
 
 function apply(next: Promise<AdminState>): void {
+  const mine = generation;
   void (async () => {
-    render(await next);
+    const state = await busy.run(next);
+    if (mine === generation) render(state);
   })();
+}
+
+export function mount(target: HTMLElement, route: Route): void {
+  busy.reset();
+  generation += 1;
+  container = target;
+  lastState = null;
+  const section = route.name === 'admin' ? (route.section ?? null) : null;
+  scrollTo = section;
+  const screen: AdminScreen = route.name === 'dashboard' ? 'dashboard' : section === 'alerts' ? 'diagnostics' : 'settings';
+  apply(bridge().show({ screen }));
+}
+
+export function unmount(): void {
+  busy.reset();
+  generation += 1;
+  container = null;
+  scrollTo = null;
 }
 
 function tab(label: string, screen: AdminScreen, current: AdminScreen): HTMLElement {
@@ -64,9 +98,10 @@ function tab(label: string, screen: AdminScreen, current: AdminScreen): HTMLElem
 export function render(state: AdminState | null): void {
   if (state !== null) lastState = state;
   const current = lastState;
-  const root = document.querySelector('#app');
-  if (!(root instanceof HTMLElement) || current === null) return;
+  const root = container;
+  if (root === null || current === null) return;
   const view = adminViewOf(current);
+  routeShown(view.screen === 'dashboard' ? { name: 'dashboard' } : { name: 'admin' });
 
   root.replaceChildren();
   root.append(element('h1', { text: 'Administration', testId: 'heading' }));
@@ -88,6 +123,11 @@ export function render(state: AdminState | null): void {
 
   if (view.screen === 'settings') renderSettings(root, view);
   else renderPanels(root, view);
+
+  // Needs you's Open lands on the section it named, once, on the first answer.
+  const section = scrollTo;
+  scrollTo = null;
+  if (section !== null) root.querySelector(`[data-testid="${section}"]`)?.scrollIntoView({ block: 'start' });
 }
 
 /**
@@ -122,21 +162,9 @@ function renderSettings(root: HTMLElement, view: ReturnType<typeof adminViewOf>)
     root.append(element('p', { className: 'sending', text: view.sending.line, testId: 'sending' }));
   }
 
-  const routine = view.settings.filter(row => !ADVANCED_SETTINGS.includes(row.settingKey));
-  const advanced = view.settings.filter(row => ADVANCED_SETTINGS.includes(row.settingKey));
   const list = element('ul', { className: 'settings', testId: 'settings' });
-  for (const row of routine) list.append(renderSettingRow(row, view));
+  for (const row of view.settings) list.append(renderSettingRow(row, view));
   root.append(list);
-  if (advanced.length > 0) {
-    // Alarm thresholds and the supported versions are the release's business more than
-    // the founder's day, so they are one click further away (lane g88).
-    const more = element('details', { className: 'settings-advanced', testId: 'settings-advanced' });
-    more.append(element('summary', { text: 'Advanced: alarm thresholds and supported Callie versions' }));
-    const advancedList = element('ul', { className: 'settings', testId: 'settings-advanced-list' });
-    for (const row of advanced) advancedList.append(renderSettingRow(row, view));
-    more.append(advancedList);
-    root.append(more);
-  }
 
   const stages = element('ul', { className: 'stages', testId: 'stages' });
   for (const stage of view.stages) {
@@ -227,21 +255,10 @@ function renderField(parent: HTMLElement, settingKey: string, field: SettingFiel
   input.id = id;
   input.disabled = !editable;
   input.autocomplete = 'off';
-  if (field.kind === 'number') {
-    input.type = 'number';
-    input.min = String(field.min);
-    input.max = String(field.max);
-    input.step = String(field.step);
-    input.value = String(field.value);
-  } else if (field.kind === 'time') {
-    input.type = 'time';
-    input.value = field.value;
-  } else {
-    input.type = 'text';
-    input.value = field.value;
-  }
+  input.type = 'text';
+  input.value = field.value;
   wrapper.append(label, input);
-  if (field.kind === 'text' && field.hint !== null) wrapper.append(element('p', { className: 'hint', text: field.hint }));
+  if (field.hint !== null) wrapper.append(element('p', { className: 'hint', text: field.hint }));
   parent.append(wrapper);
   return () => input.value;
 }
@@ -279,7 +296,7 @@ function renderSettingRow(row: SettingRowView, view: ReturnType<typeof adminView
 
   const note = document.createElement('input');
   note.type = 'text';
-  note.placeholder = 'Why are you changing this?';
+  note.placeholder = 'Why (optional)';
   note.disabled = !row.editable;
   note.dataset['testid'] = `note-${row.settingKey}`;
   item.append(note);
@@ -706,8 +723,9 @@ function renderHolidays(root: HTMLElement, view: ReturnType<typeof adminViewOf>)
 }
 
 /**
- * G7-2's sending section: the authentication checklist, the per-mailbox cap, and the
- * personal-Gmail guard shown without a control.
+ * G7-2's sending section: the authentication checklist and the per-mailbox cap. The
+ * personal-Gmail guard's line is gone (wave 1): lane W1-C deleted the guard, and the
+ * server answers constants for it until this build is the one in use.
  *
  * It is absent, not disabled, for anyone who is not an admin — `view.sendingAdmin`
  * is null — because every `/outbound/*` path answers a salesperson with a redacted
@@ -729,8 +747,6 @@ function renderSendingAdmin(root: HTMLElement, view: ReturnType<typeof adminView
   const block = element('section', { className: 'sending-admin', testId: 'sending-admin' });
   block.append(element('h2', { text: 'Sending domain and caps' }));
   block.append(element('p', { text: section.domainLine, testId: 'sending-domain' }));
-  block.append(element('p', { className: 'inert', text: section.guard.line, testId: 'sending-guard' }));
-  block.append(element('p', { className: 'inert', text: section.guard.readOnlyBecause }));
 
   if (section.domain !== null) {
     const domain = section.domain;
@@ -856,22 +872,4 @@ function renderPanels(root: HTMLElement, view: ReturnType<typeof adminViewOf>): 
     }
     root.append(alerts);
   }
-}
-
-/**
- * The screen the window was opened on, when its opener named one (lane g65).
- *
- * The Window menu's ⌘5 opens `settings.html?screen=settings` and ⌘6
- * `settings.html?screen=dashboard`; Home's sidebar calls the same openers. Anything
- * else, including no query at all, is the screen the bridge last showed.
- */
-export function requestedScreen(search: string): AdminScreen | null {
-  const screen = new URLSearchParams(search).get('screen');
-  return screen === 'settings' || screen === 'dashboard' || screen === 'diagnostics' ? screen : null;
-}
-
-/** The window's entry point. Guarded so importing this module in a test is inert. */
-if (typeof document !== 'undefined' && document.querySelector('#app') !== null) {
-  const screen = requestedScreen(location.search);
-  apply(screen === null ? bridge().state() : bridge().show({ screen }));
 }

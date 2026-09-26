@@ -196,7 +196,8 @@ export function createMailboxBridge(deps: MailboxBridgeDeps): MailboxBridgeHost 
       const session = await deps.session.state();
       if (attempt !== mine) return await snapshot();
       if (session.device === null) return await finish('not_signed_in');
-      if (!session.online) return await finish('offline');
+      // Not refused for offline (wave 1): the command below finds out, and says `offline`
+      // itself when the server cannot be reached.
       // The API checks the version itself and is the authority; this only stops the Mac
       // offering a person a command it already knows will be refused (5.3).
       if (!session.mayMutate) return await finish('client_upgrade_required');

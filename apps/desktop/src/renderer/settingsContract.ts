@@ -150,10 +150,7 @@ export interface SendingAdminView {
     readonly postmasterReviewedAt: string | null;
     readonly authenticationPasses: boolean;
     readonly automatedSendingEnabled: boolean;
-    readonly personalGmailGuardPer24h: number;
   } | null;
-  /** How much of 12.6's rolling guard the last 24 hours used. */
-  readonly personalGmailRecipients: number;
   readonly ramps: readonly {
     readonly mailboxId: string;
     readonly healthySendingDays: number;
@@ -213,6 +210,7 @@ export type SettingHistoryView = SettingHistoryResponse;
 export interface SaveSettingInput {
   readonly settingKey: SettingKey;
   readonly value: unknown;
+  /** Optional in effect: empty is sent as "Changed on the Mac" (wave 1). */
   readonly changeNote: string;
 }
 

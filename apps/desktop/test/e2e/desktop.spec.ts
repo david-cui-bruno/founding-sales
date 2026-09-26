@@ -1,13 +1,12 @@
 import { expect, test, type Page } from 'playwright/test';
+import { startAppServer, type AppServer, type AppServerOptions } from './support/appServer.ts';
 import {
   EXAMPLE_WORKSPACE,
   connectedMailbox,
   notConnectedMailbox,
   signedInState,
   signedOutState,
-  startTestServer,
-  type TestServer,
-} from './support/testServer.ts';
+} from './support/sessionFixtures.ts';
 
 /**
  * The window, driven end to end against the generated test server.
@@ -17,26 +16,38 @@ import {
  * stale lines with no actionable controls, and the upgrade screen with nothing to
  * press.
  *
- * Signed in, the window is Home (lane g65). This server installs only `callie` and
- * `callieMailbox`, so Home's lanes and figures say they are unavailable here; the device
- * panel is "This Mac" at the foot of the sidebar, a `<details>` a spec opens before it
- * presses anything in it. `home.spec.ts` drives Home with all four bridges.
+ * Signed in, the window is the shell on Today. These pages are built without
+ * `callieToday` and `callieAdmin`, so Home's lanes and figures say they are unavailable
+ * here; the device panel is "This Mac" at the foot of the sidebar, a `<details>` a spec
+ * opens before it presses anything in it. `home.spec.ts` drives Home with every bridge.
  */
+
+/** The session and the Mailbox row, and nothing of Home's own reads. */
+function session(overrides: AppServerOptions = {}): AppServerOptions {
+  return {
+    without: ['callieToday', 'callieAdmin'],
+    mailbox: notConnectedMailbox(),
+    connectAnswer: connectedMailbox(),
+    ...overrides,
+  };
+}
 
 /** "This Mac" is closed until somebody opens it. */
 async function openThisMac(page: Page): Promise<void> {
   await page.getByTestId('this-mac-summary').click();
 }
 
-let server: TestServer;
+let server: AppServer;
 
 test.afterEach(async () => {
   await server.stop();
 });
 
+const methods = (): string[] => server.calls.map(call => call.method);
+
 test('signs in through the form and then shows this Mac', async ({ page }) => {
-  server = await startTestServer(signedOutState());
-  await page.goto(server.url);
+  server = await startAppServer(session({ desktop: signedOutState() }));
+  await page.goto(server.url());
 
   await expect(page.getByTestId('heading')).toHaveText('Sign in with Google');
   await expect(page.getByTestId('sign-in-form')).toBeVisible();
@@ -49,18 +60,20 @@ test('signs in through the form and then shows this Mac', async ({ page }) => {
   await expect(page.getByTestId('heading')).toHaveText('Monday, 21 September');
   await expect(page.getByTestId('device-panel')).toContainText("David's MacBook");
   await expect(page.getByTestId('today-unavailable')).toHaveText('Unavailable in this build');
-  expect(server.calls).toContain('signIn');
+  expect(methods()).toContain('callie.signIn');
 });
 
 test('an outdated Mac sees only the upgrade instruction', async ({ page }) => {
-  server = await startTestServer(
-    signedOutState({
-      screen: 'upgrade_required',
-      clientVersion: '1.0.0',
-      supportedClientVersions: { minimum: '1.2.0', maximum: '1.4.0' },
+  server = await startAppServer(
+    session({
+      desktop: signedOutState({
+        screen: 'upgrade_required',
+        clientVersion: '1.0.0',
+        supportedClientVersions: { minimum: '1.2.0', maximum: '1.4.0' },
+      }),
     }),
   );
-  await page.goto(server.url);
+  await page.goto(server.url());
 
   await expect(page.getByTestId('heading')).toHaveText('Update Callie');
   await expect(page.getByTestId('banner-blocking')).toContainText('out of date');
@@ -75,10 +88,10 @@ test('an outdated Mac sees only the upgrade instruction', async ({ page }) => {
 });
 
 test('an outage is said at the top of Home, marked stale, and in the sidebar', async ({ page }) => {
-  server = await startTestServer(
-    signedInState({ online: false, stale: true, mayMutate: false, asOf: '2026-09-21T09:05:00.000Z' }),
+  server = await startAppServer(
+    session({ desktop: signedInState({ online: false, stale: true, mayMutate: false, asOf: '2026-09-21T09:05:00.000Z' }) }),
   );
-  await page.goto(server.url);
+  await page.goto(server.url());
 
   await expect(page.getByTestId('heading')).toHaveText('Monday, 21 September');
   await expect(page.getByTestId('banner-warning').first()).toContainText('cannot reach the server');
@@ -88,8 +101,8 @@ test('an outage is said at the top of Home, marked stale, and in the sidebar', a
 });
 
 test('signing out returns to the sign-in form and says so', async ({ page }) => {
-  server = await startTestServer(signedInState());
-  await page.goto(server.url);
+  server = await startAppServer(session({ desktop: signedInState() }));
+  await page.goto(server.url());
   await openThisMac(page);
   await expect(page.getByTestId('device-panel')).toBeVisible();
 
@@ -103,11 +116,12 @@ test('signing out returns to the sign-in form and says so', async ({ page }) => 
 test('a device name that looks like markup is shown as text', async ({ page }) => {
   // A firm name is the lanes' case, in home.spec.ts; on this page it is the device's.
   const state = signedInState();
-  server = await startTestServer({
-    ...state,
-    device: state.device === null ? null : { ...state.device, deviceLabel: '<img src=x onerror=alert(1)>' },
-  });
-  await page.goto(server.url);
+  server = await startAppServer(
+    session({
+      desktop: { ...state, device: state.device === null ? null : { ...state.device, deviceLabel: '<img src=x onerror=alert(1)>' } },
+    }),
+  );
+  await page.goto(server.url());
 
   await expect(page.getByTestId('device-panel')).toContainText('<img src=x onerror=alert(1)>');
   await expect(page.locator('img')).toHaveCount(0);
@@ -119,13 +133,13 @@ test('a device name that looks like markup is shown as text', async ({ page }) =
  * card's exact buttons in each state, and a build without Connect Gmail fails here.
  */
 test('This Mac offers Connect Gmail, and a connected mailbox shows its address and status', async ({ page }) => {
-  server = await startTestServer(signedInState());
+  server = await startAppServer(session({ desktop: signedInState() }));
   const dialogs: string[] = [];
   page.on('dialog', dialog => {
     dialogs.push(dialog.message());
     void dialog.dismiss();
   });
-  await page.goto(server.url);
+  await page.goto(server.url());
   await openThisMac(page);
 
   const panel = page.getByTestId('device-panel');
@@ -138,19 +152,20 @@ test('This Mac offers Connect Gmail, and a connected mailbox shows its address a
   await expect(panel.getByTestId('mailbox-status')).toHaveText('sales@example.test · connected · baseline pending');
   // Connected: nothing to press but Sign out. No Disconnect — the thirty-day rule.
   await expect(panel.getByRole('button')).toHaveText(['Sign out']);
-  expect(server.calls).toContain('mailboxConnect');
+  expect(methods()).toContain('mailbox.connect');
   expect(dialogs).toEqual([]);
 });
 
 test('a refused connection is plain text on the card, never a dialog', async ({ page }) => {
-  server = await startTestServer(signedInState());
-  server.setConnectAnswer(notConnectedMailbox({ notice: 'client_upgrade_required' }));
+  server = await startAppServer(
+    session({ desktop: signedInState(), connectAnswer: notConnectedMailbox({ notice: 'client_upgrade_required' }) }),
+  );
   const dialogs: string[] = [];
   page.on('dialog', dialog => {
     dialogs.push(dialog.message());
     void dialog.dismiss();
   });
-  await page.goto(server.url);
+  await page.goto(server.url());
   await openThisMac(page);
 
   await page.getByTestId('mailbox-connect').click();
@@ -164,11 +179,11 @@ test('a refused connection is plain text on the card, never a dialog', async ({ 
 });
 
 test('a Mac that already has its mailbox shows it on first paint, and Refresh reads it again', async ({ page }) => {
-  server = await startTestServer(signedInState(), connectedMailbox());
-  await page.goto(server.url);
+  server = await startAppServer(session({ desktop: signedInState(), mailbox: connectedMailbox() }));
+  await page.goto(server.url());
 
   await expect(page.getByTestId('mailbox-status')).toHaveText('sales@example.test · connected · baseline pending');
   await expect(page.getByTestId('mailbox-connect')).toHaveCount(0);
   await page.getByTestId('refresh').click();
-  await expect.poll(() => server.calls.includes('mailboxRefresh')).toBe(true);
+  await expect.poll(() => methods().includes('mailbox.refresh')).toBe(true);
 });

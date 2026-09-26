@@ -1,6 +1,6 @@
 import { join } from 'node:path';
-import { app, BrowserWindow, protocol } from 'electron';
-import { start } from './app.ts';
+import { app, protocol } from 'electron';
+import { showRoute, start } from './app.ts';
 import {
   answerBundleRequest,
   BUNDLE_ENTRY_URL,
@@ -8,6 +8,7 @@ import {
   BUNDLE_SCHEME,
 } from './bundleScheme.ts';
 import { startUpdateWatch } from './updater.ts';
+import { deepLinkRoute } from './windowMenu.ts';
 
 /**
  * The entry point of the packaged bundle.
@@ -35,21 +36,15 @@ const updatePublicKey = __FSS_UPDATE_PUBLIC_KEY__;
 const appVersion = __FSS_APP_VERSION__;
 
 /**
- * The deep links this bundle answers to, as a closed set.
- *
- * Nothing from the URL becomes an argument, a path or a query: a link either is one
- * of these exact strings or it is ignored. That is what makes the scheme safe to
- * register at all — a `callie://` URL is something any web page can ask macOS to
- * open, so it must never be able to say anything the app acts on.
+ * A deep link: `callie://today`, `callie://firms` and the rest of the six
+ * (`deepLinkRoute` in `windowMenu.ts` is the closed set). It brings the one window
+ * forward on that view. A link that launched the app arrives before there is a window,
+ * and `showRoute` keeps it until the window has loaded, rather than dropping it.
  */
-export const DEEP_LINKS = Object.freeze(['callie://today']);
-
 export function focusFor(url: string): boolean {
-  if (!DEEP_LINKS.includes(url)) return false;
-  const [window] = BrowserWindow.getAllWindows();
-  if (window === undefined) return false;
-  if (window.isMinimized()) window.restore();
-  window.focus();
+  const route = deepLinkRoute(url);
+  if (route === null) return false;
+  showRoute(route);
   return true;
 }
 

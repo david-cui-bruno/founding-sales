@@ -44,6 +44,7 @@ const NOTICES: Readonly<Record<string, string>> = Object.freeze({
   sign_in_timed_out: 'The browser did not finish signing in. Start it again.',
   signed_out: 'Signed out.',
   offline: 'Callie cannot reach the server.',
+  workspace_required: 'Enter the workspace ID to sign in on this Mac the first time.',
 });
 
 export const UPGRADE_HEADING = 'Update Callie';
@@ -63,10 +64,12 @@ export function buildScreenView(state: DesktopState): ScreenView {
         text:
           state.asOf === null
             ? 'This list is from an earlier read.'
-            : `This list is from an earlier read, at ${state.asOf}. Nothing here can be changed until Callie reconnects.`,
+            : `This list is from an earlier read, at ${state.asOf}. Changes will fail until Callie reconnects.`,
       });
     }
-    const notice = state.notice === null ? undefined : NOTICES[state.notice];
+    // A sign-in that could not reach the server comes back with the notice `offline`,
+    // which the line above has already said (wave 1: sign-in is no longer disabled offline).
+    const notice = state.notice === null || (state.notice === 'offline' && !state.online) ? undefined : NOTICES[state.notice];
     if (notice !== undefined) banners.push({ tone: 'info', text: notice });
   }
 
@@ -83,8 +86,9 @@ export function buildScreenView(state: DesktopState): ScreenView {
     banners,
     // An outdated client may read the upgrade instruction and nothing else, so it may
     // not start a sign-in either: signing in registers a device, which is a mutation.
-    signInEnabled: state.screen === 'sign_in' && state.online,
-    actionsEnabled: state.mayMutate && state.screen === 'today' && !state.stale,
+    // Offline does not disable it (wave 1): a sign-in that cannot reach the server says so.
+    signInEnabled: state.screen === 'sign_in',
+    actionsEnabled: state.mayMutate && state.screen === 'today',
     showingCachedList: state.stale && state.today !== null,
     cardCount: state.today === null ? 0 : state.today.cards.length,
   };

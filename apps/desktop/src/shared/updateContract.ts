@@ -15,6 +15,8 @@ import { semanticVersionSchema } from '@fss/contracts';
 export const UPDATE_IPC_CHANNELS = {
   state: 'callie-update:state',
   restart: 'callie-update:restart',
+  /** Wave 1: "Update now" on the upgrade screen — the six-hourly check, run now. No argument. */
+  checkNow: 'callie-update:check-now',
   /** Main to page: the state changed; ask for it again. Carries nothing. */
   changed: 'callie-update:changed',
 } as const;
@@ -34,6 +36,12 @@ export interface UpdateBridge {
   state(): Promise<UpdateStatus>;
   /** Installs the staged update and relaunches. Answers the state, which is `none` when nothing was staged. */
   restart(): Promise<UpdateStatus>;
+  /**
+   * Checks the channel now rather than in up to six hours (wave 1). A build the API has
+   * blocked installs what it finds at once; any other stages it for Restart to update.
+   * Answers the state after the check: `none` when the channel offered nothing.
+   */
+  checkNow(): Promise<UpdateStatus>;
   /** Called whenever the main process's update state changes. */
   onChange(listener: () => void): void;
 }

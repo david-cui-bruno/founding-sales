@@ -1,3 +1,4 @@
+import { busyFor } from './busy.ts';
 import { SENDING_STOP_LINE, TEMPLATE_VARIABLE_NAMES } from '@fss/contracts';
 import { button, element } from './firmDom.ts';
 import type {
@@ -24,15 +25,18 @@ import {
   sequenceScreen,
   suggestedPlan,
   templateFormIssues,
+  templateFormWarnings,
   typedBodyOf,
   type VersionPanel,
 } from './sequenceView.ts';
 
 /**
- * The sequence editor window (specification 11.1, 4.3, 14.2).
+ * The Sequences view (specification 11.1, 4.3, 14.2).
  *
- * A fourth entry point beside G2's sign-in page, G3b's firm workspace and G6's Today
- * page, and built the same way: every value reaches the DOM through `textContent`, so
+ * A view of the one window (wave 1): `mount` draws into the shell's column and `unmount`
+ * stops it, so an answer that arrives after the person went elsewhere draws nothing. The
+ * draft being edited and the template form are kept between mounts, so steps typed and
+ * not saved are still there when the person comes back. Every value reaches the DOM through `textContent`, so
  * a template body containing a tag is a template body; every decision comes from
  * `sequenceView.ts`, so a control that is shown and a control that works cannot
  * disagree; and the page holds no rule of its own.
@@ -60,7 +64,7 @@ const PUBLISH_REFUSAL_SENTENCES: Readonly<Record<string, string>> = Object.freez
   step_channel_removed: 'This draft still has a LinkedIn step, and LinkedIn was removed. Save the draft without it, then publish.',
   not_a_draft: 'Only a draft can be published. Editing a published version creates a new draft.',
   admin_only: 'Publishing a sequence is an administrator action.',
-  offline: 'Offline. Nothing can be published until the connection comes back.',
+  upgrade_required: 'Update Callie to publish.',
 });
 
 const bridge = (): SequenceBridge => {
@@ -70,6 +74,10 @@ const bridge = (): SequenceBridge => {
 };
 
 let lastState: SequenceState = EMPTY_SEQUENCE_STATE;
+/** The shell's column while this view is mounted, or null. */
+let container: HTMLElement | null = null;
+/** Bumped by every mount and unmount, so an answer to an earlier one is dropped. */
+let generation = 0;
 
 /**
  * The draft being edited (lane g88), kept between renders: every answer redraws the page,
@@ -81,9 +89,14 @@ let editing: { readonly versionId: string; readonly steps: readonly DraftStep[] 
 /** The template form, while open (lane g88). Null is closed. */
 let templateForm: TemplateDraft | null = null;
 
+/** Read-only while a command is on the wire, so a second press sends nothing (wave 1). */
+const busy = busyFor(() => container);
+
 function apply(next: Promise<SequenceState>, after?: (state: SequenceState) => void): void {
+  const mine = generation;
   void (async () => {
-    const state = await next;
+    const state = await busy.run(next);
+    if (mine !== generation) return;
     after?.(state);
     render(state);
   })();
@@ -612,7 +625,7 @@ function renderTemplateForm(root: HTMLElement, draft: TemplateDraft, enabled: bo
     'body',
     'Email',
     true,
-    `You can use ${TEMPLATE_VARIABLE_NAMES.map(name => `{${name}}`).join(', ')}. Plain text, one link at most, 89 words with the sign-off.`,
+    `You can use ${TEMPLATE_VARIABLE_NAMES.map(name => `{${name}}`).join(', ')}. Plain text; one link and 89 words with the sign-off are suggestions, not rules.`,
   );
   field('signOff', 'Sign-off', true, 'Your name, and anything that goes under it.');
   form.append(element('p', { className: 'hint', text: 'Every email ends with your sign-off and then:' }));
@@ -620,6 +633,16 @@ function renderTemplateForm(root: HTMLElement, draft: TemplateDraft, enabled: bo
 
   const issues = element('div', { className: 'template-issues', testId: 'template-issues' });
   form.append(issues);
+  // Wave 1: the word count warns as the email is typed and never stops the save.
+  const advice = element('div', { className: 'template-advice', testId: 'template-advice' });
+  const advise = (): void => {
+    advice.replaceChildren(
+      ...templateFormWarnings(current).map(text => element('p', { className: 'field-advice', text, testId: 'template-form-warning' })),
+    );
+  };
+  advise();
+  form.addEventListener('input', advise);
+  form.append(advice);
   const actions = element('div', { className: 'form-actions' });
   const save = button('Save template', 'template-save', enabled);
   save.type = 'submit';
@@ -739,10 +762,9 @@ function renderUnread(root: HTMLElement, screen: ReturnType<typeof sequenceScree
 
 export function render(state: SequenceState): void {
   lastState = state;
-  const root = document.querySelector('#app');
-  if (root === null) return;
-  root.textContent = '';
-  const host = root as HTMLElement;
+  const host = container;
+  if (host === null) return;
+  host.textContent = '';
   const screen = sequenceScreen(state);
   host.append(element('h1', { text: 'Sequences', testId: 'heading' }));
 
@@ -751,6 +773,11 @@ export function render(state: SequenceState): void {
   }
   if (screen.notice !== null) {
     host.append(element('p', { className: 'notice', text: screen.notice, testId: 'sequence-notice' }));
+  }
+  // The server's copy warnings on the template just saved or approved (wave 1): it went
+  // ahead, and these are worth a second look.
+  for (const warning of screen.warnings) {
+    host.append(element('p', { className: 'banner banner-warning', text: warning, testId: 'template-warning' }));
   }
   renderUnread(host, screen, 'sequences');
   renderSequences(host, screen);
@@ -762,10 +789,17 @@ export function render(state: SequenceState): void {
   renderHoldReview(host, screen);
 }
 
-/** The window's entry point. Renders the empty screen, then whatever the bridge says. */
-export function start(): void {
-  render(EMPTY_SEQUENCE_STATE);
+/** Renders the last answer (or the empty screen), then whatever the bridge says now. */
+export function mount(target: HTMLElement): void {
+  busy.reset();
+  generation += 1;
+  container = target;
+  render(lastState);
   apply(bridge().state());
 }
 
-if (typeof document !== 'undefined' && document.querySelector('#app') !== null) start();
+export function unmount(): void {
+  busy.reset();
+  generation += 1;
+  container = null;
+}

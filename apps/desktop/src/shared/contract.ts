@@ -63,6 +63,17 @@ export type SignInHandoff = SignInStartResponse;
 
 export { deviceSecretSchema };
 
+/**
+ * The workspace and the name of the last sign-in on this Mac (wave 1). Public
+ * identifiers, kept in their own file beside `device.json` so that signing out — which
+ * deletes `device.json` — does not make the next sign-in ask for a UUID again.
+ */
+export const rememberedWorkspaceSchema = z.strictObject({
+  workspaceId: uuid,
+  deviceLabel: z.string().trim().min(1).max(120),
+});
+export type RememberedWorkspace = z.infer<typeof rememberedWorkspaceSchema>;
+
 // ---------------------------------------------------------------------------
 // The encrypted offline cache (specification 5.3, 14.2)
 // ---------------------------------------------------------------------------
@@ -129,53 +140,50 @@ export const desktopStateSchema = z.strictObject({
   stale: z.boolean(),
   /** When the shown list was fetched, or null when there is nothing to show. */
   asOf: instant.nullable(),
-  /** Whether a mutating command may be attempted at all. */
+  /**
+   * Whether a mutating command may be attempted at all: signed in, and a version the API
+   * accepts. Not whether the last call reached the server — offline is a banner, and a
+   * command sent offline fails with its own notice (wave 1).
+   */
   mayMutate: z.boolean(),
   /** A stable code, never a sentence composed here. */
   notice: z.string().nullable(),
   today: cachedTodaySchema.nullable(),
+  /** The last sign-in's workspace and name, so sign-in need not ask for them; null on a new Mac. */
+  rememberedWorkspace: rememberedWorkspaceSchema.nullable(),
 });
 export type DesktopState = z.infer<typeof desktopStateSchema>;
 
+/**
+ * The views the Window menu's ⌘1–⌘6 and a deep link may ask the one window for (wave 1),
+ * as a closed set, in the sidebar's order. A firm's own route is the page's alone.
+ */
+export const ROUTE_NAMES = ['today', 'replies', 'firms', 'sequences', 'admin', 'dashboard'] as const;
+export type RouteName = (typeof ROUTE_NAMES)[number];
+
+/**
+ * One of the six names, or null. Compared with each literal rather than looked up as a
+ * key, so `constructor` and `__proto__` are refused like any other string.
+ */
+export function routeNameOf(value: unknown): RouteName | null {
+  return ROUTE_NAMES.find(name => name === value) ?? null;
+}
+
 export interface DesktopBridge {
   state(): Promise<DesktopState>;
-  /** Opens the system browser and waits for the grant. */
-  signIn(input: { readonly workspaceId: string; readonly deviceLabel: string }): Promise<DesktopState>;
+  /**
+   * Opens the system browser and waits for the grant. Either field left out is the
+   * remembered one (wave 1): a Mac that has signed in before sends neither.
+   */
+  signIn(input: { readonly workspaceId?: string | undefined; readonly deviceLabel?: string | undefined }): Promise<DesktopState>;
   signOut(): Promise<DesktopState>;
   refreshToday(): Promise<DesktopState>;
   /**
-   * Opens one of the other windows, or brings it forward (lane g65). Answers the current
-   * state, as every call here does; a window name outside `WINDOW_TARGETS` opens nothing.
+   * The Window menu and deep links (wave 1): called with one of the six route names
+   * whenever the main process asks the window to show that view. The preload checks
+   * the name against `ROUTE_NAMES` before it gets here.
    */
-  openWindow(input: { readonly window: WindowTarget }): Promise<DesktopState>;
-}
-
-// ---------------------------------------------------------------------------
-// The windows Home opens (lane g65)
-// ---------------------------------------------------------------------------
-
-/**
- * Every window Home's sidebar may ask the main process to open, as a closed set.
- *
- * Home is the main window, so it is not in the list: ⌘1 brings it forward from the
- * menu. `dashboard` is the Administration window on its Dashboard screen, which is the
- * menu's ⌘6. The page names a window; it never names a file, a URL or a screen of its
- * own choosing, so nothing it sends can open anything else.
- */
-export const WINDOW_TARGETS = ['replies', 'firms', 'sequences', 'dashboard', 'administration'] as const;
-export type WindowTarget = (typeof WINDOW_TARGETS)[number];
-
-/**
- * The renderer's `{ window }`, or null for anything that is not exactly one of the five.
- *
- * Compared with each literal rather than looked up as a key, so `constructor`,
- * `__proto__` and every other name an object happens to answer to are refused like any
- * other string.
- */
-export function windowTargetOf(argument: unknown): WindowTarget | null {
-  if (typeof argument !== 'object' || argument === null) return null;
-  const value: unknown = (argument as { readonly window?: unknown }).window;
-  return WINDOW_TARGETS.find(target => target === value) ?? null;
+  onNavigate(listener: (route: RouteName) => void): void;
 }
 
 // ---------------------------------------------------------------------------

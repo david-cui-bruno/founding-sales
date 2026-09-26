@@ -78,17 +78,11 @@ export async function bundleApp(input: BundleInput): Promise<void> {
     logLevel: 'silent',
   });
 
-  // One renderer entry point per window, and one page per window, both read from
-  // `BUNDLE_WINDOWS`. Each entry is bundled separately rather than code split,
-  // because a window loads one script and nothing else — and because the CSP on
-  // every page is `script-src 'self'` with no inline script, so a shared chunk would
-  // only be a second file to get wrong.
-  //
-  // These used to be two hand-written arrays, and the scheme map in
-  // `src/main/bundleScheme.ts` was a third. They disagreed: `settingsPage` was
-  // missing from the entry list, and the scheme map named three paths out of
-  // thirteen, so every window but the first was a 404 in a packaged build. One
-  // declaration now, three readers. See `docs/decisions/g9-bundle-scheme-map.md`.
+  // The page and its one script, read from `BUNDLE_WINDOWS` — one entry since wave 1,
+  // when the sidebar's views moved into the one window. The page loads one script and
+  // nothing else, and its CSP is `script-src 'self'` with no inline script. The list is
+  // the one the scheme map in `src/main/bundleScheme.ts` also reads, so the build and
+  // the map cannot disagree (`docs/decisions/g9-bundle-scheme-map.md`).
   for (const window of BUNDLE_WINDOWS) {
     await build({
       entryPoints: [source('renderer', `${window.entry}.ts`)],

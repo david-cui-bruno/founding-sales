@@ -1,4 +1,4 @@
-import { DEFAULT_ALERT_THRESHOLDS, DEFAULT_SETTING_VALUES, describeClientVersionMaximum } from '@fss/contracts';
+import { DEFAULT_SETTING_VALUES, describeClientVersionMaximum } from '@fss/contracts';
 import { TIME_ZONE_CHOICES } from './captureView.ts';
 import { POSTURE_NOTICES, POSTURES_HEADING, businessZoneOf, postureSection, type PosturesSectionView } from './postureView.ts';
 import { readErrorSentence } from './readError.ts';
@@ -66,15 +66,6 @@ export interface SendingAdminSectionView {
   readonly domain: string | null;
   readonly editable: boolean;
   readonly notEditableBecause: string | null;
-  /**
-   * 12.6's rolling personal-Gmail guard. Shown and never offered: G7-2 gave it no
-   * route on purpose, because changing it is a reviewed policy change.
-   */
-  readonly guard: {
-    readonly line: string;
-    readonly editable: false;
-    readonly readOnlyBecause: string;
-  };
   readonly ramps: readonly {
     readonly mailboxId: string;
     readonly line: string;
@@ -154,9 +145,6 @@ const CALLING_NUMBER_NOTICES: Readonly<Record<string, string>> = Object.freeze({
 export const CALLING_NUMBER_HINT =
   'Type it with the + and your country code, for example +1 401 555 0123. Spaces and dashes are fine.';
 
-/** Why the guard has no control, in the words the page shows. */
-const GUARD_READ_ONLY =
-  'Section 12.6 makes changing the personal-Gmail guard a reviewed policy change, so there is no control for it here.';
 
 /**
  * One slice's history, as a person reads it (lane g78, D04): what is in force now, and
@@ -224,15 +212,23 @@ export interface AdminView {
 }
 
 const LABELS: Readonly<Record<string, string>> = Object.freeze({
-  alert_thresholds: 'Alarm thresholds',
   business_time_zone: 'Workspace business zone',
-  client_version_range: 'Supported client versions',
   sending_enabled: 'Production sending',
 });
 
-/** Why a control is inert, in the order a person would want to be told. */
+/**
+ * The two slices wave 1 deleted on the server (lane W1-C): alarm thresholds and the
+ * supported client versions. A server from before that deletion still lists them, and
+ * this build shows neither — they were the release's business, never the founder's.
+ */
+const RETIRED_SETTINGS: ReadonlySet<string> = new Set(['alert_thresholds', 'client_version_range']);
+
+/**
+ * Why a control is inert, in the order a person would want to be told. Offline is not a
+ * reason (wave 1): the page says so in its banner, and a change sent offline fails with
+ * its own notice rather than being refused before it is tried.
+ */
 function inertBecause(state: AdminState): string | null {
-  if (!state.online) return 'offline';
   if (!state.mayMutate) return 'upgrade_required';
   if (state.role !== 'admin') return 'admin_only';
   return null;
@@ -312,7 +308,7 @@ export function adminViewOf(state: AdminState, now: Date = new Date()): AdminVie
   const reason = inertBecause(state);
   const editable = reason === null;
 
-  const settings = (state.settings?.settings ?? []).map(entry => ({
+  const settings = (state.settings?.settings ?? []).filter(entry => !RETIRED_SETTINGS.has(entry.settingKey)).map(entry => ({
     settingKey: entry.settingKey,
     label: LABELS[entry.settingKey] ?? entry.settingKey,
     version: entry.version,
@@ -357,7 +353,7 @@ export function adminViewOf(state: AdminState, now: Date = new Date()): AdminVie
     screen: state.screen,
     notice:
       state.notice === null ? null : (CALLING_NUMBER_NOTICES[state.notice] ?? POSTURE_NOTICES[state.notice] ?? state.notice),
-    banner: state.online ? null : 'Offline. This page is a snapshot and nothing can be changed.',
+    banner: state.online ? null : OFFLINE_BANNER,
     settings,
     elsewhere,
     sending,
@@ -409,7 +405,7 @@ function attestedBy(number: CallingNumberView): string {
 
 function callingNumberSection(state: AdminState): CallingNumberSectionView {
   // Not `inertBecause`: this section is not admin-only.
-  const reason = !state.online ? 'offline' : !state.mayMutate ? 'upgrade_required' : null;
+  const reason = !state.mayMutate ? 'upgrade_required' : null;
   const editable = reason === null;
   const listed = state.callingNumbers;
   const inUse = listed?.find(number => number.usedForCalls) ?? null;
@@ -497,14 +493,6 @@ function sendingAdminSection(state: AdminState, reason: string | null): SendingA
     domain: domain?.domain ?? null,
     editable,
     notEditableBecause: reason,
-    guard: {
-      line:
-        domain === null
-          ? `Personal-Gmail guard: unknown. ${String(posture.personalGmailRecipients)} recipients in the last 24 hours.`
-          : `Personal-Gmail guard: ${String(domain.personalGmailGuardPer24h)} per 24 hours, ${String(posture.personalGmailRecipients)} used.`,
-      editable: false,
-      readOnlyBecause: GUARD_READ_ONLY,
-    },
     ramps: posture.ramps.map(ramp => ({
       mailboxId: ramp.mailboxId,
       line: `${String(ramp.healthySendingDays)} healthy days, cap ${String(ramp.effectiveCap)}${
@@ -669,9 +657,11 @@ function diagnosticsPanels(state: AdminState): readonly PanelView[] {
 // Lane g88: typed controls instead of JSON (audit G08)
 // ---------------------------------------------------------------------------
 
+/** The page's one word about the connection (wave 1): a banner, and nothing disabled. */
+export const OFFLINE_BANNER = 'Callie cannot reach the server. This page is as it was last read, and changes will fail until it reconnects.';
+
 /** Why a control is inert, as the sentence the page shows. The view keeps the code. */
 const INERT_SENTENCES: Readonly<Record<string, string>> = Object.freeze({
-  offline: 'Offline: nothing here can be changed until Callie is back online.',
   upgrade_required: 'Update Callie to change this.',
   admin_only: 'Only an admin can change this.',
 });
@@ -690,48 +680,17 @@ export type SettingField =
       readonly label: string;
       readonly value: string;
       readonly hint: string | null;
-    }
-  | {
-      readonly kind: 'number';
-      readonly key: string;
-      readonly label: string;
-      readonly value: number;
-      readonly min: number;
-      readonly max: number;
-      readonly step: number;
-    }
-  | { readonly kind: 'time'; readonly key: string; readonly label: string; readonly value: string };
+    };
 
-/** The four slices, the order they are drawn in, and which are behind "Advanced". */
+/** The slices this build draws as forms, in order. */
 export const ROUTINE_SETTINGS: readonly string[] = Object.freeze(['business_time_zone', 'sending_enabled']);
-export const ADVANCED_SETTINGS: readonly string[] = Object.freeze(['alert_thresholds', 'client_version_range']);
 
 /** The zones the business-zone control offers: the same US zones Add firm offers. */
 export const BUSINESS_ZONE_CHOICES = TIME_ZONE_CHOICES.filter(choice => choice.value !== '');
 
-/** 13.3's thresholds with the words a person reads, their bounds, and their steps (`alertThresholdsSchema`). */
-const THRESHOLD_FIELDS: readonly {
-  readonly key: keyof typeof DEFAULT_ALERT_THRESHOLDS;
-  readonly label: string;
-  readonly min: number;
-  readonly max: number;
-  readonly step: number;
-}[] = Object.freeze([
-  { key: 'heartbeatMissedChecks', label: 'Missed one-minute checks before an alarm', min: 1, max: 10, step: 1 },
-  { key: 'oldestJobAgeWarningSeconds', label: 'Oldest waiting job: warn after (seconds)', min: 30, max: 86_400, step: 1 },
-  { key: 'oldestJobAgeCriticalSeconds', label: 'Oldest waiting job: critical after (seconds)', min: 30, max: 86_400, step: 1 },
-  { key: 'gmailWatchExpiryHours', label: 'Gmail watch expiring within (hours)', min: 1, max: 168, step: 1 },
-  { key: 'canaryStaleSeconds', label: 'Canary not completed within (seconds)', min: 60, max: 86_400, step: 1 },
-  { key: 'allSequencesHeldFraction', label: 'Share of sequences held that alarms (0.1 to 1)', min: 0.1, max: 1, step: 0.05 },
-  { key: 'deadJobUnresolvedSeconds', label: 'Dead job unresolved for (seconds)', min: 60, max: 604_800, step: 1 },
-  { key: 'mailboxDisconnectedHours', label: 'Mailbox disconnected for (hours)', min: 1, max: 720, step: 1 },
-  { key: 'unacknowledgedCriticalSeconds', label: 'Repeat an unacknowledged critical alarm after (seconds)', min: 300, max: 86_400, step: 1 },
-]);
-
 const record = (value: unknown): Readonly<Record<string, unknown>> =>
   typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 const text = (value: unknown, fallback: string): string => (typeof value === 'string' ? value : fallback);
-const number = (value: unknown, fallback: number): number => (typeof value === 'number' ? value : fallback);
 
 /**
  * A slice's typed controls, filled with its value (lane g88, audit G08). Null for a slice
@@ -755,31 +714,6 @@ export function settingFields(settingKey: string, value: unknown): readonly Sett
       },
     ];
   }
-  if (settingKey === 'client_version_range') {
-    return [
-      { kind: 'text', key: 'minimum', label: 'Oldest Callie version allowed', value: text(current['minimum'], '1.0.0'), hint: null },
-      { kind: 'text', key: 'maximum', label: 'Newest Callie version allowed', value: text(current['maximum'], '1.0.0'), hint: null },
-    ];
-  }
-  if (settingKey === 'alert_thresholds') {
-    return [
-      {
-        kind: 'time',
-        key: 'todaySnapshotDeadlineLocalTime',
-        label: 'Alarm if Today’s list is missing at',
-        value: text(current['todaySnapshotDeadlineLocalTime'], DEFAULT_ALERT_THRESHOLDS.todaySnapshotDeadlineLocalTime),
-      },
-      ...THRESHOLD_FIELDS.map(field => ({
-        kind: 'number' as const,
-        key: field.key,
-        label: field.label,
-        value: number(current[field.key], DEFAULT_ALERT_THRESHOLDS[field.key] as number),
-        min: field.min,
-        max: field.max,
-        step: field.step,
-      })),
-    ];
-  }
   return null;
 }
 
@@ -801,16 +735,6 @@ export function settingValueFrom(
     const reference = read('releaseGateReference');
     return { ok: true, value: { enabled: values['enabled'] === true, releaseGateReference: reference === '' ? null : reference } };
   }
-  if (settingKey === 'client_version_range') return { ok: true, value: { minimum: read('minimum'), maximum: read('maximum') } };
-  if (settingKey === 'alert_thresholds') {
-    const value: Record<string, unknown> = { todaySnapshotDeadlineLocalTime: read('todaySnapshotDeadlineLocalTime') };
-    for (const field of THRESHOLD_FIELDS) {
-      const parsed = Number(read(field.key));
-      if (read(field.key) === '' || !Number.isFinite(parsed)) return { ok: false, field: field.key };
-      value[field.key] = parsed;
-    }
-    return { ok: true, value };
-  }
   return { ok: false, field: settingKey };
 }
 
@@ -822,10 +746,6 @@ export function settingSummary(settingKey: string, value: unknown): string {
     return BUSINESS_ZONE_CHOICES.find(choice => choice.value === zone)?.label ?? zone;
   }
   if (settingKey === 'sending_enabled') return current['enabled'] === true ? 'On' : 'Off';
-  if (settingKey === 'client_version_range') {
-    return `Callie ${text(current['minimum'], '?')} to ${describeClientVersionMaximum(text(current['maximum'], '?'))}`;
-  }
-  if (settingKey === 'alert_thresholds') return 'The ten thresholds the alarms compare against.';
   return '';
 }
 

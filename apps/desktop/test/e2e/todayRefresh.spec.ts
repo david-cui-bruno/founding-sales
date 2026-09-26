@@ -1,9 +1,10 @@
 import { expect, test, type Page } from 'playwright/test';
-import { expandedFirm, startHomeTestServer, todayState, type HomeTestServer } from './support/homeTestServer.ts';
+import { startAppServer, type AppServer } from './support/appServer.ts';
+import { expandedFirm, todayState } from './support/homeFixtures.ts';
 
 /**
  * Today keeps itself current (lane g84, audit item G05), end to end against Home's
- * generated test server with the page's clock under the spec's control.
+ * one test harness with the page's clock under the spec's control.
  *
  * The renderer is the shipped file and only the bridges are scripted. These prove what a
  * person sees: how old the list is, a focus that reads it again, the business day's
@@ -16,7 +17,7 @@ import { expandedFirm, startHomeTestServer, todayState, type HomeTestServer } fr
  * pass with every read redrawing the lanes.
  */
 
-let server: HomeTestServer;
+let server: AppServer;
 
 test.afterEach(async () => {
   await server.stop();
@@ -46,8 +47,8 @@ async function focusWindow(page: Page): Promise<void> {
 
 test('the list says how old it is, and the minutes move without redrawing anything', async ({ page }) => {
   await page.clock.install({ time: new Date('2026-09-21T13:00:20.000Z') });
-  server = await startHomeTestServer();
-  await page.goto(server.url);
+  server = await startAppServer();
+  await page.goto(server.url());
   await settled(page);
 
   await expect(page.getByTestId('today-updated-text')).toHaveText('Updated just now');
@@ -61,10 +62,10 @@ test('the list says how old it is, and the minutes move without redrawing anythi
 
 test('a focus a minute after the last read reads the list again, quietly, and keeps the lanes', async ({ page }) => {
   await page.clock.install({ time: new Date('2026-09-21T13:00:20.000Z') });
-  server = await startHomeTestServer({
+  server = await startAppServer({
     onRefresh: (today, count) => ({ ...today, asOf: count === 1 ? '2026-09-21T13:00:00.000Z' : '2026-09-21T13:05:00.000Z' }),
   });
-  await page.goto(server.url);
+  await page.goto(server.url());
   await settled(page);
   await markFirstCard(page);
 
@@ -88,8 +89,8 @@ test('a focus a minute after the last read reads the list again, quietly, and ke
 
 test('a read Home would make by itself waits while somebody is typing in the lanes', async ({ page }) => {
   await page.clock.install({ time: new Date('2026-09-21T13:00:20.000Z') });
-  server = await startHomeTestServer({ today: todayState({ expanded: expandedFirm() }) });
-  await page.goto(server.url);
+  server = await startAppServer({ today: todayState({ expanded: expandedFirm() }) });
+  await page.goto(server.url());
   await settled(page);
 
   await page.getByTestId('snooze-reason').nth(1).fill('Waiting on their board');
@@ -103,12 +104,12 @@ test('a read Home would make by itself waits while somebody is typing in the lan
 test('the business day’s rollover reads the list with nobody there, and looks again ten minutes on', async ({ page }) => {
   // 04:59 in New York on Tuesday; the list on screen is Monday's.
   await page.clock.install({ time: new Date('2026-09-22T08:59:00.000Z') });
-  server = await startHomeTestServer({
+  server = await startAppServer({
     today: todayState({ asOf: '2026-09-22T08:59:00.000Z' }),
     onRefresh: (today, count) =>
       count === 1 ? today : { ...today, snapshotDate: '2026-09-22', asOf: count === 2 ? '2026-09-22T09:00:30.000Z' : '2026-09-22T09:10:30.000Z' },
   });
-  await page.goto(server.url);
+  await page.goto(server.url());
   await settled(page);
   await expect(page.getByTestId('heading')).toHaveText('Monday, 21 September');
 
@@ -124,13 +125,13 @@ test('the business day’s rollover reads the list with nobody there, and looks 
 
 test('a failed read says so beside Retry, over the list it kept, and Retry reads again', async ({ page }) => {
   await page.clock.install({ time: new Date('2026-09-21T13:00:20.000Z') });
-  server = await startHomeTestServer({
+  server = await startAppServer({
     onRefresh: (today, count) =>
       count === 2
         ? { ...today, online: false, stale: true }
         : { ...today, online: true, stale: false, asOf: count === 1 ? '2026-09-21T13:00:00.000Z' : '2026-09-21T13:02:30.000Z' },
   });
-  await page.goto(server.url);
+  await page.goto(server.url());
   await settled(page);
   await expect(page.getByTestId('today-refresh-failed')).toHaveCount(0);
 

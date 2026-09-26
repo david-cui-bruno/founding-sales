@@ -6,14 +6,7 @@ import { createApiClient, fetchSend } from './apiClient.ts';
 import { createAuthedClient } from './authedClient.ts';
 import { createDialHandoff } from './dialHandoff.ts';
 import { createDialApi, createTelLaunchDriver } from './telHandoff.ts';
-import {
-  openSecondaryWindow,
-  registerCrmBridge,
-  registerReplyBridge,
-  registerSequenceBridge,
-  registerTodayBridge,
-  type OpenOptions,
-} from './todayWindow.ts';
+import { registerCrmBridge, registerReplyBridge, registerSequenceBridge, registerTodayBridge } from './todayWindow.ts';
 import { windowMenuTemplate } from './windowMenu.ts';
 import { registerAdminBridge } from './settingsWindow.ts';
 import { createDeviceStore } from './deviceStore.ts';
@@ -21,7 +14,7 @@ import { createKeychainVault } from './keychain.ts';
 import { createOfflineCache } from './offlineCache.ts';
 import { createSessionManager, type SessionManager } from './sessionManager.ts';
 import { IPC_CHANNELS } from './ipc.ts';
-import { windowTargetOf, type WindowTarget } from '../shared/contract.ts';
+import type { RouteName } from '../shared/contract.ts';
 import {
   MAILBOX_IPC_CHANNELS,
   createMailboxBridge,
@@ -34,10 +27,9 @@ import {
  *
  * It does four things and no more: build the session manager from real adapters,
  * open one window with context isolation on and node integration off, answer the
- * five bridge channels (and the Mailbox row's three), and send external links to the
- * system browser. Since lane g65 that window's signed-in content is Home: the Today
- * lanes, a status sidebar, the last seven days' figures and what needs the person, and
- * its fifth channel opens the other windows by name. Every rule
+ * bridges, and send external links to the system browser. Since wave 1 that one window
+ * is the whole app: a sidebar and one view at a time, and the Window menu and deep links
+ * tell it which view with `callie:navigate` rather than opening a window. Every rule
  * about sessions, caches and versions lives in `sessionManager.ts`, which knows
  * nothing about Electron and is therefore tested without it.
  *
@@ -65,9 +57,11 @@ export interface DesktopConfiguration {
   readonly rendererUrl?: string;
 }
 
+// Both optional (wave 1): a Mac that has signed in before remembers its workspace and
+// its name, and the form sends neither.
 const signInInputSchema = z.strictObject({
-  workspaceId: uuid,
-  deviceLabel: z.string().trim().min(1).max(120),
+  workspaceId: uuid.optional(),
+  deviceLabel: z.string().trim().min(1).max(120).optional(),
 });
 
 export function buildSessionManager(configuration: DesktopConfiguration): SessionManager {
@@ -92,13 +86,7 @@ export function buildSessionManager(configuration: DesktopConfiguration): Sessio
   });
 }
 
-/**
- * What opens each window: the Window menu's items and Home's sidebar call the same ones.
- * `today` brings the main window forward; the rest are `WINDOW_TARGETS`.
- */
-export type WindowOpeners = Readonly<Record<WindowTarget | 'today', () => void>>;
-
-export function registerBridge(manager: SessionManager, open: WindowOpeners): void {
+export function registerBridge(manager: SessionManager): void {
   ipcMain.handle(IPC_CHANNELS.state, async () => await manager.state());
   ipcMain.handle(IPC_CHANNELS.signIn, async (_event, raw: unknown) => {
     // The renderer's word is never taken for a shape: a malformed request is a
@@ -109,14 +97,6 @@ export function registerBridge(manager: SessionManager, open: WindowOpeners): vo
   });
   ipcMain.handle(IPC_CHANNELS.signOut, async () => await manager.signOut());
   ipcMain.handle(IPC_CHANNELS.refreshToday, async () => await manager.refreshToday());
-  // Lane g65. The page names a window and nothing else: a name outside WINDOW_TARGETS
-  // opens nothing, and the answer is the current state either way, as for every
-  // other channel here.
-  ipcMain.handle(IPC_CHANNELS.openWindow, async (_event, raw: unknown) => {
-    const target = windowTargetOf(raw);
-    if (target !== null) open[target]();
-    return await manager.state();
-  });
 }
 
 /**
@@ -134,13 +114,35 @@ export function registerMailboxBridge(deps: MailboxBridgeDeps): MailboxBridgeHos
   return host;
 }
 
-/** The main window, so ⌘1 can bring it forward, or open it again once it was closed. */
-let homeWindow: BrowserWindow | null = null;
+/** The one window, whether its page has loaded, and a route asked for before it had. */
+let mainWindow: BrowserWindow | null = null;
+let windowLoaded = false;
+let pendingRoute: RouteName | null = null;
+
+/**
+ * Bring the window forward on `route`: the Window menu's ⌘1–⌘6 and every deep link.
+ *
+ * A link that launched the app arrives before the window exists (`open-url` fires
+ * before `ready`), and until wave 1 it was dropped. It is kept here now and sent once
+ * the page has loaded and is listening; a later one replaces an earlier one.
+ */
+export function showRoute(route: RouteName): void {
+  const window = mainWindow;
+  if (window === null || window.isDestroyed() || !windowLoaded) {
+    pendingRoute = route;
+    return;
+  }
+  if (window.isMinimized()) window.restore();
+  window.focus();
+  window.webContents.send(IPC_CHANNELS.navigate, route);
+}
 
 export async function openWindow(configuration: DesktopConfiguration): Promise<BrowserWindow> {
   const window = new BrowserWindow({
     width: 1100,
     height: 760,
+    minWidth: 760,
+    minHeight: 480,
     title: 'Callie',
     webPreferences: {
       preload: configuration.preloadEntry,
@@ -158,41 +160,36 @@ export async function openWindow(configuration: DesktopConfiguration): Promise<B
     void shell.openExternal(url);
     return { action: 'deny' };
   });
-  homeWindow = window;
+  mainWindow = window;
+  windowLoaded = false;
   if (configuration.rendererUrl === undefined) await window.loadFile(configuration.rendererEntry);
   else await window.loadURL(configuration.rendererUrl);
+  // The page's script has run by now (a module script runs before the load finishes),
+  // so its `callie:navigate` listener is there to hear a route kept for it.
+  windowLoaded = true;
+  const queued = pendingRoute;
+  pendingRoute = null;
+  if (queued !== null) showRoute(queued);
   return window;
 }
 
-/** ⌘1: Home to the front, or a new main window when the last one was closed. */
-function showHome(configuration: DesktopConfiguration): void {
-  const existing = homeWindow;
-  if (existing !== null && !existing.isDestroyed()) {
-    if (existing.isMinimized()) existing.restore();
-    existing.focus();
-    return;
-  }
-  void openWindow(configuration);
-}
-
 /**
- * Register the Today, reply, CRM, sequence, administration and mailbox bridges, put
- * their windows on the menu, and return what opens each one.
+ * Register the Today, reply, CRM, sequence, administration and mailbox bridges, and put
+ * the six views on the Window menu.
  *
- * This is the wiring G3b's renderer waited for: `firmWorkspace.ts` reads
+ * Every view is in the one window, and every bridge answers it: `firmWorkspace.ts` reads
  * `globalThis.callieCrm`, the preload script installs it, and these handlers answer it.
- * The Today bridge was G6's window's; since lane g65 the main window's Home calls it.
- *
- * Each window is reachable from the application menu and, since lane g65, from Home's
- * sidebar, which asks for it by name through `registerBridge`'s `openWindow` channel.
- * Both call the openers returned here, so the two ways in cannot disagree.
+ * Only the window plumbing changed in wave 1; the bridges and their channels did not.
  */
-export function registerWindows(configuration: DesktopConfiguration, manager: SessionManager): WindowOpeners {
+export function registerWindows(configuration: DesktopConfiguration, manager: SessionManager): void {
   const api = createAuthedClient({
     baseUrl: configuration.apiBaseUrl,
     clientVersion: configuration.clientVersion,
     send: fetchSend,
     accessToken: async () => await manager.accessToken(),
+    onConnection: reachable => {
+      manager.noteConnection(reachable);
+    },
   });
   const session = { state: async () => await manager.state(), refreshToday: async () => await manager.refreshToday() };
 
@@ -223,62 +220,9 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
     },
   });
 
-  const renderer = (name: string): { readonly pageFile: string; readonly pageUrl?: string; readonly preloadEntry: string } => ({
-    preloadEntry: configuration.preloadEntry,
-    pageFile: join(configuration.rendererEntry, '..', name),
-    ...(configuration.rendererUrl === undefined
-      ? {}
-      : { pageUrl: new URL(name, configuration.rendererUrl).toString() }),
-  });
-
-  let replyWindow: BrowserWindow | null = null;
-  let crmWindow: BrowserWindow | null = null;
-  let sequenceWindow: BrowserWindow | null = null;
-  let adminWindow: BrowserWindow | null = null;
-  const openAdministration = (options: OpenOptions): void => {
-    void openSecondaryWindow('Callie — Administration', renderer('settings.html'), adminWindow, options).then(window => {
-      adminWindow = window;
-    });
-  };
-  const open: WindowOpeners = {
-    today: () => {
-      showHome(configuration);
-    },
-    replies: () => {
-      void openSecondaryWindow('Callie — Replies', renderer('replyCard.html'), replyWindow).then(window => {
-        replyWindow = window;
-      });
-    },
-    firms: () => {
-      void openSecondaryWindow('Callie — CRM', renderer('firmWorkspace.html'), crmWindow).then(window => {
-        crmWindow = window;
-      });
-    },
-    sequences: () => {
-      void openSecondaryWindow('Callie — Sequences', renderer('sequenceEditor.html'), sequenceWindow).then(
-        window => {
-          sequenceWindow = window;
-        },
-      );
-    },
-    // ⌘5 opens Administration on Settings, and only brings it forward when it is
-    // already open, so nothing typed into it is lost. ⌘6 is the same window on its
-    // Dashboard screen, and loads it again when it is open, exactly as pressing the
-    // Dashboard tab would redraw it.
-    administration: () => {
-      openAdministration({ query: { screen: 'settings' } });
-    },
-    dashboard: () => {
-      openAdministration({ query: { screen: 'dashboard' }, reloadExisting: true });
-    },
-  };
   Menu.setApplicationMenu(
-    Menu.buildFromTemplate([
-      ...(Menu.getApplicationMenu()?.items.map(item => item as unknown as Electron.MenuItemConstructorOptions) ?? []),
-      ...(windowMenuTemplate(open) as unknown as Electron.MenuItemConstructorOptions[]),
-    ]),
+    Menu.buildFromTemplate(windowMenuTemplate(showRoute) as unknown as Electron.MenuItemConstructorOptions[]),
   );
-  return open;
 }
 
 /**
@@ -291,8 +235,8 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
 export async function start(configuration: DesktopConfiguration): Promise<SessionManager> {
   await app.whenReady();
   const manager = buildSessionManager(configuration);
-  const windows = registerWindows(configuration, manager);
-  registerBridge(manager, windows);
+  registerWindows(configuration, manager);
+  registerBridge(manager);
   await openWindow(configuration);
   app.on('window-all-closed', () => {
     app.quit();

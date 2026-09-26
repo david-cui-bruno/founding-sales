@@ -3,6 +3,7 @@ import {
   desktopStateSchema,
   type CachedToday,
   type DesktopState,
+  type RememberedWorkspace,
   type StoredDevice,
   type StoredSession,
 } from '../shared/contract.ts';
@@ -30,9 +31,15 @@ import type { OfflineCache } from './offlineCache.ts';
  * **Below the minimum version, nothing mutates.** The gate is checked here as well as
  * at the API, not instead of it: the API is the authority, and this is what stops the
  * app offering a person a button that cannot work.
+ *
+ * **Offline is a fact, not a gate (wave 1).** `online` says whether the last call reached
+ * the server, and every call says so — the bridges' own calls report through
+ * `noteConnection` — so one failed renewal after the Mac wakes no longer greys out every
+ * view until Home refreshes. It is not part of `mayMutate`: a command sent offline fails
+ * with its own notice, and nothing is disabled for it.
  */
 
-export type MutationRefusal = 'offline' | 'client_upgrade_required' | 'not_signed_in';
+export type MutationRefusal = 'client_upgrade_required' | 'not_signed_in';
 
 export interface SessionManagerOptions {
   readonly api: ApiClient;
@@ -52,7 +59,8 @@ export interface SessionManagerOptions {
 
 export interface SessionManager {
   state(): Promise<DesktopState>;
-  signIn(input: { readonly workspaceId: string; readonly deviceLabel: string }): Promise<DesktopState>;
+  /** Either field left out is the remembered one; with neither remembered, `workspace_required`. */
+  signIn(input: { readonly workspaceId?: string | undefined; readonly deviceLabel?: string | undefined }): Promise<DesktopState>;
   signOut(): Promise<DesktopState>;
   refreshToday(): Promise<DesktopState>;
   /** The gate every mutating action passes. Never bypassed by a view. */
@@ -72,7 +80,15 @@ export interface SessionManager {
   accessToken(): Promise<string | null>;
   /** How many renewals actually reached the API. The serialisation test reads this. */
   renewalCount(): number;
+  /**
+   * What a bridge's own call found (wave 1): true when the server answered anything at
+   * all, false only when it could not be reached. `authedClient` reports every call here.
+   */
+  noteConnection(reachable: boolean): void;
 }
+
+/** The name a Mac signs in under when nobody has named it. */
+export const DEFAULT_DEVICE_LABEL = 'This Mac';
 
 /** Refusals that mean this Mac's registration is over and its cache must go. */
 const REVOCATIONS = new Set([
@@ -100,6 +116,7 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
   let asOf: string | null = null;
   let stale = false;
   let loaded = false;
+  let remembered: RememberedWorkspace | null = null;
   let renewals = 0;
   // The one in-flight renewal. Every caller awaits this same promise.
   let renewal: Promise<ApiOutcome<StoredSession>> | null = null;
@@ -120,10 +137,26 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
     if (REVOCATIONS.has(reason)) await forget(reason);
   };
 
+  /**
+   * Keep the workspace for the next sign-in. A file that cannot be written costs the next
+   * sign-in its shortcut, not this one: the failure is not allowed to undo a sign-in that
+   * worked, or to stop the app loading.
+   */
+  const remember = async (value: RememberedWorkspace): Promise<void> => {
+    remembered = value;
+    await options.store.rememberWorkspace(value).catch(() => undefined);
+  };
+
   const ensureLoaded = async (): Promise<void> => {
     if (loaded) return;
     loaded = true;
     device = await options.store.load();
+    remembered = await options.store.rememberedWorkspace();
+    // A Mac registered before wave 1 has `device.json` and no remembered workspace yet;
+    // it is remembered now, so its first sign-out does not ask for the UUID either.
+    if (remembered === null && device !== null) {
+      await remember({ workspaceId: device.workspaceId, deviceLabel: device.deviceLabel });
+    }
     const cached = await options.cache.read();
     if (cached.state === 'fresh') {
       today = cached.today;
@@ -208,13 +241,18 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
       online,
       stale,
       asOf,
-      mayMutate: device !== null && online && (supported === null || mayMutate(supported, options.clientVersion)),
+      mayMutate: device !== null && (supported === null || mayMutate(supported, options.clientVersion)),
       notice,
       today,
+      rememberedWorkspace: remembered,
     });
 
   return {
     renewalCount: () => renewals,
+
+    noteConnection(reachable) {
+      online = reachable;
+    },
 
     async accessToken() {
       const live = await liveSession();
@@ -240,7 +278,13 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
     async signIn(input) {
       await ensureLoaded();
       notice = null;
-      const started = await options.api.startSignIn(input);
+      const workspaceId = input.workspaceId ?? remembered?.workspaceId ?? null;
+      const deviceLabel = input.deviceLabel ?? remembered?.deviceLabel ?? DEFAULT_DEVICE_LABEL;
+      if (workspaceId === null) {
+        notice = 'workspace_required';
+        return snapshot();
+      }
+      const started = await options.api.startSignIn({ workspaceId, deviceLabel });
       if (!started.ok) {
         online = !started.offline;
         await noteRefusal(started.reason);
@@ -262,7 +306,7 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
             userId: grant.userId,
             deviceId: grant.deviceId,
             role: grant.role,
-            deviceLabel: input.deviceLabel,
+            deviceLabel,
             apiBaseUrl: new URL('/', started.value.authorizationUrl).toString(),
             registeredAt: options.now().toISOString(),
           };
@@ -279,6 +323,7 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
           };
           supported = grant.supportedClientVersions;
           notice = null;
+          await remember({ workspaceId: grant.workspaceId, deviceLabel });
           return snapshot();
         }
         // `handoff_unknown` means the browser has not finished; anything else is over.
@@ -346,7 +391,6 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
       if (supported !== null && !mayMutate(supported, options.clientVersion)) {
         return { allowed: false, refusal: 'client_upgrade_required' };
       }
-      if (!online) return { allowed: false, refusal: 'offline' };
       return { allowed: true };
     },
   };

@@ -1,57 +1,78 @@
-/**
- * The Window menu, as a value (lane g65).
- *
- * Its own module, with no Electron in it, so the template is asserted by the unit
- * tests without loading Electron: importing `electron` outside the app resolves to its
- * npm package, which downloads the Electron binary when it finds none — a network fetch
- * in the middle of `vitest`, and a race when two test files do it at once. G6 kept this
- * in `todayWindow.ts`; `app.ts` builds the real menu from it.
- */
+import { ROUTE_NAMES, routeNameOf, type RouteName } from '../shared/contract.ts';
 
 /**
- * The application menu items that open the windows.
+ * The Window menu and the deep links, as values (lane g65; wave 1's one window).
  *
- * The menu is the macOS way to reach a window that is not the front one, and since lane
- * g65 Home's sidebar shows the same keys beside the same names. The template is a value
- * so it can be asserted without Electron.
+ * Their own module, with no Electron in it, so both are asserted by the unit tests
+ * without loading Electron: importing `electron` outside the app resolves to its npm
+ * package, which downloads the Electron binary when it finds none — a network fetch in
+ * the middle of `vitest`, and a race when two test files do it at once. `app.ts` builds
+ * the real menu from the template and `main.ts` reads links with `deepLinkRoute`.
  *
- * **Today, ⌘1, is the main window.** It brings Home forward, and opens it again if it
- * was closed while another window kept the app running. There is no Today window.
+ * There is one window. Every item here brings it forward and shows one view in it;
+ * nothing opens a second window.
  */
-export function windowMenuTemplate(open: {
-  /** Brings the main window, whose content is Today, to the front. */
-  readonly today: () => void;
-  readonly replies: () => void;
-  readonly firms: () => void;
-  readonly sequences: () => void;
-  /** Lane G9's Settings, Dashboard and Diagnostics window. Optional so a caller
-   * that has not wired it yet still gets the selling windows. */
-  readonly administration?: (() => void) | undefined;
-  /** Lane g65: the same window, opened on its Dashboard screen. Offered only beside it. */
-  readonly dashboard?: (() => void) | undefined;
-}): readonly { readonly label: string; readonly submenu: readonly { readonly label: string; readonly accelerator: string; readonly click: () => void }[] }[] {
-  const administration = open.administration;
+
+/** The menu's words and keys, in the sidebar's order. */
+export const MENU_ROUTES: readonly { readonly route: RouteName; readonly label: string; readonly accelerator: string }[] =
+  Object.freeze([
+    { route: 'today', label: 'Today', accelerator: 'CmdOrCtrl+1' },
+    { route: 'replies', label: 'Replies', accelerator: 'CmdOrCtrl+2' },
+    { route: 'firms', label: 'Firms', accelerator: 'CmdOrCtrl+3' },
+    { route: 'sequences', label: 'Sequences', accelerator: 'CmdOrCtrl+4' },
+    { route: 'admin', label: 'Administration', accelerator: 'CmdOrCtrl+5' },
+    { route: 'dashboard', label: 'Dashboard', accelerator: 'CmdOrCtrl+6' },
+  ]);
+
+export type MenuItem =
+  | { readonly label: string; readonly accelerator: string; readonly click: () => void }
+  | { readonly type: 'separator' }
+  | { readonly role: 'minimize' | 'zoom' | 'close' | 'front' };
+
+/**
+ * The whole application menu: the app, Edit (so ⌘C and ⌘V work in every field), View,
+ * and one Window menu with the six views and the usual window controls. Built here
+ * rather than appended to Electron's default menu, which already has a Window menu and
+ * so showed two.
+ */
+export function windowMenuTemplate(
+  show: (route: RouteName) => void,
+): readonly ({ readonly role: 'appMenu' | 'editMenu' | 'viewMenu' } | { readonly label: string; readonly submenu: readonly MenuItem[] })[] {
   return [
+    { role: 'appMenu' },
+    { role: 'editMenu' },
+    { role: 'viewMenu' },
     {
       label: 'Window',
       submenu: [
-        { label: 'Today', accelerator: 'CmdOrCtrl+1', click: open.today },
-        { label: 'Replies', accelerator: 'CmdOrCtrl+2', click: open.replies },
-        { label: 'Firms', accelerator: 'CmdOrCtrl+3', click: open.firms },
-        { label: 'Sequences', accelerator: 'CmdOrCtrl+4', click: open.sequences },
-        // Last, and the only optional ones: ⌘1 to ⌘4 are the windows somebody uses
-        // to sell, and administration is the one they open when they are not. The
-        // Dashboard is a screen of that window, so it takes the next free key rather
-        // than moving a key a person already has in their fingers.
-        ...(administration === undefined
-          ? []
-          : [
-              { label: 'Administration', accelerator: 'CmdOrCtrl+5', click: administration },
-              ...(open.dashboard === undefined
-                ? []
-                : [{ label: 'Dashboard', accelerator: 'CmdOrCtrl+6', click: open.dashboard }]),
-            ]),
+        ...MENU_ROUTES.map(entry => ({
+          label: entry.label,
+          accelerator: entry.accelerator,
+          click: () => {
+            show(entry.route);
+          },
+        })),
+        { type: 'separator' },
+        { role: 'minimize' },
+        { role: 'zoom' },
+        { role: 'close' },
       ],
     },
   ];
+}
+
+/**
+ * The deep links this bundle answers to: `callie://` and one of the six route names,
+ * as a closed set. Nothing from the URL becomes an argument, a path or a query — a link
+ * either is one of these exact strings or it is ignored. That is what makes the scheme
+ * safe to register at all: a `callie://` URL is something any web page can ask macOS to
+ * open, so it must never be able to say anything but which view to show.
+ */
+export const DEEP_LINKS: readonly string[] = Object.freeze(ROUTE_NAMES.map(name => `callie://${name}`));
+
+/** The route a deep link names, or null. `callie://firms/` is `callie://firms`. */
+export function deepLinkRoute(url: string): RouteName | null {
+  const exact = url.endsWith('/') ? url.slice(0, -1) : url;
+  if (!DEEP_LINKS.includes(exact)) return null;
+  return routeNameOf(exact.slice('callie://'.length));
 }

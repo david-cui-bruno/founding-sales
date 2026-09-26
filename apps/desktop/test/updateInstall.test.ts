@@ -66,6 +66,8 @@ interface Harness {
   readonly downloads: string[];
   /** The notice, the download and the relaunch, in the order they happened. */
   readonly events: string[];
+  /** Whether this start's launched record was on disk when each channel check began. */
+  readonly launchedAtCheck: boolean[];
   /** What the channel answers from now on. */
   answer(decision: UpdateDecision): void;
   /** The channel offers this bundle from now on, signed as its own version. */
@@ -119,6 +121,7 @@ function harness(options: HarnessOptions = {}): Harness {
   const checks: UpdateCheckOptions[] = [];
   const downloads: string[] = [];
   const events: string[] = [];
+  const launchedAtCheck: boolean[] = [];
   const host: UpdateHost = {
     updateDirectory: UPDATES,
     executablePath: options.exe ?? EXE,
@@ -134,6 +137,7 @@ function harness(options: HarnessOptions = {}): Harness {
     host,
     check: async input => {
       checks.push(input);
+      launchedAtCheck.push(fake.exists(`${UPDATES}/launched.json`));
       return await Promise.resolve(decision);
     },
     // The real download check against the signed size and digest, over fake bytes.
@@ -172,6 +176,7 @@ function harness(options: HarnessOptions = {}): Harness {
     checks,
     downloads,
     events,
+    launchedAtCheck,
     answer: next => {
       decision = next;
     },
@@ -195,6 +200,14 @@ function expectApplicationsUntouched(h: Harness, version = '1.0.5'): void {
 }
 
 describe('at launch', () => {
+  it('confirms this start before it asks the channel, and before any install (wave 1 keeps the order)', async () => {
+    const h = harness();
+    await expect(h.updater.atLaunch()).resolves.toEqual({ kind: 'relaunching', version: '1.0.6' });
+    // `confirmLaunch` wrote the launched record first; the channel was asked after it.
+    expect(h.launchedAtCheck).toEqual([true]);
+    expect(h.events).toEqual(['publish installing', 'download', 'relaunch']);
+  });
+
   it('asks the channel once, right away, with this build’s version, channel and key', async () => {
     const h = harness({ decision: { kind: 'up_to_date' } });
 

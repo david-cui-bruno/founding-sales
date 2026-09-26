@@ -98,6 +98,17 @@ const createdSequenceSchema = z.object({ id: uuid });
 const createdDraftSchema = z.object({ sequenceVersionId: uuid });
 /** A refused approval's body: `template_unapproved:` and every issue (`apps/api/src/routes/templates.ts`). */
 const refusalReasonSchema = z.object({ reason: z.string().min(1) });
+/**
+ * The copy warnings in a template create's or approval's accepted result (wave 1). The
+ * result is `templateCommandResultSchema` on a server with lane W1-C; an older server
+ * sends the version alone, so `warnings` is optional here and read on its own.
+ */
+const warningCodes = z.array(z.string().min(1).max(80)).max(20);
+const templateWarningsSchema = z.unknown().transform(value => {
+  const listed = typeof value === 'object' && value !== null ? (value as { warnings?: unknown }).warnings : undefined;
+  const parsed = warningCodes.safeParse(listed);
+  return { warnings: parsed.success ? parsed.data : [] };
+});
 const draftStepsSchema = z.array(draftStepSchema).max(50);
 
 /** The longest notice the window's state may carry. A refused approval's issues are cut to it. */
@@ -106,6 +117,8 @@ const NOTICE_LIMIT = 400;
 export function createSequenceBridge(deps: SequenceBridgeDeps): SequenceBridgeHost {
   let selectedSequenceId: string | null = null;
   let notice: string | null = null;
+  /** The last template create's or approval's copy warnings (wave 1); cleared by every other act. */
+  let warnings: readonly string[] = [];
   /** The resume review on screen (lane g88), or null. Only its enrollment may be resumed. */
   let resumeReview: ResumeReview | null = null;
 
@@ -126,11 +139,13 @@ export function createSequenceBridge(deps: SequenceBridgeDeps): SequenceBridgeHo
   const compose = async (): Promise<SequenceState> => {
     const session = await deps.session.state();
     const isAdmin = session.device?.role === 'admin';
-    if (!session.online) {
-      return { ...EMPTY_SEQUENCE_STATE, isAdmin, notice, resumeReview: null };
-    }
-
+    // Always asked, even when the session last found the server away (wave 1). Until
+    // then an offline session skipped the reads, so nothing here could find out the
+    // connection was back and the view stayed empty until Home refreshed.
     const sequences = await deps.api.read('/sequences', value => sequencesResponseSchema.parse(value));
+    if (!sequences.ok && sequences.offline) {
+      return { ...EMPTY_SEQUENCE_STATE, isAdmin, mayMutate: session.mayMutate, notice, resumeReview: null, warnings: [...warnings] };
+    }
     const list = sequences.ok ? sequences.value.sequences : [];
     const chosen = selectedSequenceId ?? list[0]?.id ?? null;
 
@@ -164,6 +179,7 @@ export function createSequenceBridge(deps: SequenceBridgeDeps): SequenceBridgeHo
       },
       resumeReview,
       notice,
+      warnings: [...warnings],
     };
   };
 
@@ -193,7 +209,7 @@ export function createSequenceBridge(deps: SequenceBridgeDeps): SequenceBridgeHo
     return await compose();
   };
 
-  return {
+  const host: SequenceBridgeHost = {
     state: compose,
 
     openSequence: async input => {
@@ -266,6 +282,7 @@ export function createSequenceBridge(deps: SequenceBridgeDeps): SequenceBridgeHo
     createTemplate: async input => {
       if (templateFormIssues(input).length > 0) {
         notice = 'invalid_input';
+        warnings = [];
         return await compose();
       }
       const body = composeTemplateBody(input.body, input.signOff);
@@ -279,9 +296,10 @@ export function createSequenceBridge(deps: SequenceBridgeDeps): SequenceBridgeHo
           footerSignOff: input.signOff.trim(),
           requiredVariables: templateVariablesIn(input.subject, body).known,
         },
-        value => value,
+        value => templateWarningsSchema.parse(value),
       );
       notice = answer.ok ? 'template_created' : answer.reason;
+      warnings = answer.ok ? answer.value.warnings : [];
       return await compose();
     },
 
@@ -294,7 +312,8 @@ export function createSequenceBridge(deps: SequenceBridgeDeps): SequenceBridgeHo
      * where the whole list is.
      */
     approveTemplate: async input => {
-      const answer = await deps.api.command('/templates/approve', input, value => value);
+      const answer = await deps.api.command('/templates/approve', input, value => templateWarningsSchema.parse(value));
+      warnings = answer.ok ? answer.value.warnings : [];
       if (answer.ok) {
         notice = 'template_approved';
       } else {
@@ -340,5 +359,26 @@ export function createSequenceBridge(deps: SequenceBridgeDeps): SequenceBridgeHo
       notice = answer.value.kind === 'resume' ? 'resumed' : 'resume_still_held';
       return await compose();
     },
+  };
+
+  // Every act but a read, a template create and an approval clears the last warnings:
+  // they are about that template's text, and belong on screen only until the next act.
+  const cleared = <A extends unknown[]>(act: (...args: A) => Promise<SequenceState>) =>
+    async (...args: A): Promise<SequenceState> => {
+      warnings = [];
+      return await act(...args);
+    };
+  return {
+    ...host,
+    openSequence: cleared(host.openSequence),
+    createSequence: cleared(host.createSequence),
+    createDraft: cleared(host.createDraft),
+    saveDraft: cleared(host.saveDraft),
+    publish: cleared(host.publish),
+    retire: cleared(host.retire),
+    enroll: cleared(host.enroll),
+    reviewEnrollment: cleared(host.reviewEnrollment),
+    closeReview: cleared(host.closeReview),
+    resumeEnrollment: cleared(host.resumeEnrollment),
   };
 }

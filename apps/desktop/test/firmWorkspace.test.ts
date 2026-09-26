@@ -92,9 +92,9 @@ describe('the CRM window view', () => {
     expect(buildFirmWorkspaceView(state({ screen: 'merge' })).heading).toBe(MERGE_HEADING);
   });
 
-  it('disables every control when the cloud cannot be reached, and says why', () => {
+  it('says when the cloud cannot be reached, and disables nothing for it (wave 1)', () => {
     const view = buildFirmWorkspaceView(state({ online: false }));
-    expect(view.actionsEnabled).toBe(false);
+    expect(view.actionsEnabled).toBe(true);
     expect(view.banners[0]).toEqual({ tone: 'warning', text: CRM_NOTICES['offline'] });
   });
 

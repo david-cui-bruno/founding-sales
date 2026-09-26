@@ -46,7 +46,7 @@ export const IMPORT_HEADING = 'Import firms';
  * person who cannot file one.
  */
 export const CRM_NOTICES: Readonly<Record<string, string>> = Object.freeze({
-  offline: 'Callie cannot reach the server. Nothing here can be changed until it can.',
+  offline: 'Callie cannot reach the server. Changes will fail until it reconnects.',
   client_upgrade_required: 'This version of Callie is out of date. Install the current build to continue.',
   not_assigned: 'This firm is assigned to somebody else, so it cannot be changed here.',
   admin_only: 'Only an administrator can do that.',
@@ -150,10 +150,11 @@ export function buildFirmWorkspaceView(state: CrmState): FirmWorkspaceView {
     screen: state.screen,
     heading: HEADINGS[state.screen],
     banners,
-    // Offline is the only thing that disables every control at once. Not being the
-    // assignee removes the controls entirely, because the data they would edit was
-    // never sent.
-    actionsEnabled: state.mayMutate && state.online,
+    // Offline is a banner, not a disabled page (wave 1): a command sent offline fails
+    // with its own notice. An unsupported version is the only thing that disables every
+    // control at once. Not being the assignee removes the controls entirely, because
+    // the data they would edit was never sent.
+    actionsEnabled: state.mayMutate,
     showsDetail,
     redactionNotice,
   };

@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -6,6 +6,7 @@ import {
   DEVICE_FILE,
   DEVICE_SECRET_ACCOUNT,
   REFRESH_CREDENTIAL_ACCOUNT,
+  WORKSPACE_FILE,
   createDeviceStore,
   createOfflineCache,
   createMemoryVault,
@@ -16,9 +17,10 @@ import { buildScreenView } from '../src/renderer/viewModel.ts';
 import { createAuthedClient } from '../src/main/authedClient.ts';
 import { createAdminBridge } from '../src/main/settingsBridge.ts';
 import { outboundStatusAnswer } from './support/outboundStatus.ts';
-import { WINDOW_TARGETS, desktopStateSchema, windowTargetOf } from '../src/shared/contract.ts';
+import { ROUTE_NAMES, desktopStateSchema, routeNameOf } from '../src/shared/contract.ts';
 import { IPC_CHANNELS } from '../src/main/ipc.ts';
-import { windowMenuTemplate } from '../src/main/windowMenu.ts';
+import { DEEP_LINKS, deepLinkRoute, windowMenuTemplate } from '../src/main/windowMenu.ts';
+import { routeOf, routeText, sidebarRowOf } from '../src/renderer/routes.ts';
 import {
   CLIENT_VERSION,
   createDesktopFixture,
@@ -108,6 +110,110 @@ describe('sign-in through the system browser', () => {
     expect(state.screen).toBe('sign_in');
     expect(state.notice).toBe('membership_required');
     expect(state.device).toBeNull();
+  });
+});
+
+describe('the remembered workspace (wave 1)', () => {
+  it('signs in again after Sign out without asking for the workspace or the name', async () => {
+    const mac = await started();
+    await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: "David's MacBook" });
+    const out = await mac.manager.signOut();
+    expect(out.device).toBeNull();
+    // Sign out removes device.json and both secrets, and leaves workspace.json.
+    await expect(readFile(join(mac.directory, DEVICE_FILE), 'utf8')).rejects.toThrow();
+    expect(out.rememberedWorkspace).toEqual({ workspaceId: mac.workspaceId, deviceLabel: "David's MacBook" });
+    const onDisk = await readFile(join(mac.directory, WORKSPACE_FILE), 'utf8');
+    expect(JSON.parse(onDisk)).toEqual({ workspaceId: mac.workspaceId, deviceLabel: "David's MacBook" });
+    for (const value of mac.vault.entries.values()) expect(onDisk).not.toContain(value);
+
+    const again = await mac.manager.signIn({});
+    expect(again.screen).toBe('today');
+    expect(again.device?.workspaceId).toBe(mac.workspaceId);
+    expect(again.device?.deviceLabel).toBe("David's MacBook");
+  });
+
+  it('asks for the workspace on a Mac that has never signed in, and starts nothing', async () => {
+    const mac = await started();
+    const state = await mac.manager.signIn({});
+    expect(state.screen).toBe('sign_in');
+    expect(state.notice).toBe('workspace_required');
+    expect(state.rememberedWorkspace).toBeNull();
+    expect(mac.openedUrls).toEqual([]);
+  });
+
+  it('remembers a Mac registered before wave 1 from its device.json, on first load', async () => {
+    const mac = await started();
+    await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'Old Mac' });
+    await rm(join(mac.directory, WORKSPACE_FILE));
+    const reopened = createSessionManager({
+      api: mac.api,
+      store: createDeviceStore({ directory: mac.directory, vault: mac.vault }),
+      cache: createOfflineCache({ directory: mac.directory, vault: mac.vault, now: () => new Date('2026-09-21T10:00:01.000Z') }),
+      clientVersion: CLIENT_VERSION,
+      now: () => new Date('2026-09-21T10:00:01.000Z'),
+      openInBrowser: async () => {
+        await Promise.resolve();
+      },
+    });
+    expect((await reopened.state()).rememberedWorkspace).toEqual({ workspaceId: mac.workspaceId, deviceLabel: 'Old Mac' });
+    expect(JSON.parse(await readFile(join(mac.directory, WORKSPACE_FILE), 'utf8'))).toMatchObject({ deviceLabel: 'Old Mac' });
+  });
+});
+
+describe('online follows every call (wave 1)', () => {
+  it('a bridge call that reaches the server clears offline at once, without a Home refresh', async () => {
+    const mac = await started();
+    await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
+    mac.script.offline(true);
+    await mac.manager.refreshToday();
+    expect((await mac.manager.state()).online).toBe(false);
+
+    let reachable = false;
+    const client = createAuthedClient({
+      baseUrl: 'https://api.fss.test',
+      clientVersion: CLIENT_VERSION,
+      accessToken: async () => await Promise.resolve('token'),
+      send: async () => {
+        if (!reachable) throw new Error('the server did not answer');
+        // A refusal is an answer: the server was reached.
+        return await Promise.resolve({ status: 409, body: { status: 'refused', reason: 'not_found' } });
+      },
+      onConnection: online => {
+        mac.manager.noteConnection(online);
+      },
+    });
+    await client.read('/anything', value => value);
+    expect((await mac.manager.state()).online).toBe(false);
+    reachable = true;
+    const answer = await client.read('/anything', value => value);
+    expect(answer.ok).toBe(false);
+    const state = await mac.manager.state();
+    expect(state.online).toBe(true);
+    expect(state.mayMutate).toBe(true);
+  });
+
+  it('reports true on any HTTP answer and false only when the server cannot be reached', async () => {
+    const seen: boolean[] = [];
+    let mode: 'ok' | 'refused' | 'error' | 'down' = 'ok';
+    const client = createAuthedClient({
+      baseUrl: 'https://api.fss.test',
+      clientVersion: CLIENT_VERSION,
+      accessToken: async () => await Promise.resolve('token'),
+      send: async () => {
+        if (mode === 'down') throw new Error('unreachable');
+        const status = mode === 'ok' ? 200 : mode === 'refused' ? 409 : 500;
+        return await Promise.resolve({ status, body: mode === 'ok' ? { status: 'accepted', replayed: false, result: {} } : {} });
+      },
+      onConnection: online => {
+        seen.push(online);
+      },
+    });
+    for (const next of ['ok', 'refused', 'error', 'down'] as const) {
+      mode = next;
+      await client.read('/x', value => value);
+      await client.command('/y', {}, value => value);
+    }
+    expect(seen).toEqual([true, true, true, true, true, true, false, false]);
   });
 });
 
@@ -206,7 +312,7 @@ describe('the role a renewal carries (lane g69)', () => {
     const promoted = await admin.state();
     expect(promoted.role).toBe('admin');
     expect(asked).toContain('/outbound/status');
-    expect(promoted.sendingAdmin).toEqual({ domain: null, personalGmailRecipients: 0, ramps: [] });
+    expect(promoted.sendingAdmin).toEqual({ domain: null, ramps: [] });
   });
 
   it('applies a demotion the same way, and leaves the role alone when the renewal did not change it', async () => {
@@ -251,12 +357,14 @@ describe('the encrypted offline cache', () => {
     expect(state.online).toBe(false);
     expect(state.stale).toBe(true);
     expect(state.today?.cards).toHaveLength(2);
-    expect(state.mayMutate).toBe(false);
+    // Offline is a banner, not a gate (wave 1): nothing is disabled for it.
+    expect(state.mayMutate).toBe(true);
 
     const view = buildScreenView(state);
     expect(view.showingCachedList).toBe(true);
-    expect(view.actionsEnabled).toBe(false);
+    expect(view.actionsEnabled).toBe(true);
     expect(view.banners.some(banner => banner.text.includes('earlier read'))).toBe(true);
+    expect(view.banners.some(banner => banner.text === 'Callie cannot reach the server.')).toBe(true);
   });
 
   it('shows nothing at all once the cache is more than twenty-four hours old', async () => {
@@ -317,6 +425,27 @@ describe('the encrypted offline cache', () => {
   });
 });
 
+describe('the sign-in screen offline (wave 1)', () => {
+  it('says the server cannot be reached once, not once for the connection and again for the press', () => {
+    const state = desktopStateSchema.parse({
+      screen: 'sign_in',
+      clientVersion: CLIENT_VERSION,
+      supportedClientVersions: null,
+      device: null,
+      online: false,
+      stale: false,
+      asOf: null,
+      mayMutate: false,
+      notice: 'offline',
+      today: null,
+      rememberedWorkspace: null,
+    });
+    const view = buildScreenView(state);
+    expect(view.banners.map(banner => banner.text)).toEqual(['Callie cannot reach the server.']);
+    expect(view.signInEnabled).toBe(true);
+  });
+});
+
 describe('the version gate', () => {
   it('shows an outdated Mac the upgrade instruction and nothing it can press', async () => {
     const mac = await started({ clientVersion: '1.0.0' });
@@ -338,14 +467,15 @@ describe('the version gate', () => {
     });
   });
 
-  it('lets a supported Mac mutate and refuses while it is offline', async () => {
+  it('lets a supported Mac mutate, offline or not: a command sent offline fails on its own (wave 1)', async () => {
     const mac = await started();
     await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
     expect(await mac.manager.mayMutateNow()).toEqual({ allowed: true });
 
     mac.script.offline(true);
     await mac.manager.refreshToday();
-    expect(await mac.manager.mayMutateNow()).toEqual({ allowed: false, refusal: 'offline' });
+    expect((await mac.manager.state()).online).toBe(false);
+    expect(await mac.manager.mayMutateNow()).toEqual({ allowed: true });
   });
 
   it('blocks mutation when the minimum rises under a running client', async () => {
@@ -367,63 +497,87 @@ describe('the state that crosses the bridge', () => {
   });
 });
 
-describe('opening the other windows from Home (lane g65)', () => {
-  it('opens exactly the five windows by name, and nothing for any other value', () => {
-    expect(WINDOW_TARGETS).toEqual(['replies', 'firms', 'sequences', 'dashboard', 'administration']);
-    for (const target of WINDOW_TARGETS) expect(windowTargetOf({ window: target })).toBe(target);
-    // `registerBridge` opens only what this returns, and answers the current state for
-    // everything else, as every handler on the bridge does for a malformed argument.
+describe('one window: the routes the menu and deep links may name (wave 1)', () => {
+  it('names exactly six views, and nothing for any other value', () => {
+    expect(ROUTE_NAMES).toEqual(['today', 'replies', 'firms', 'sequences', 'admin', 'dashboard']);
+    for (const name of ROUTE_NAMES) expect(routeNameOf(name)).toBe(name);
+    // The preload drops anything else before the page hears of it.
     for (const malformed of [
       null,
       undefined,
-      'replies',
       42,
       [],
       {},
-      { screen: 'dashboard' },
-      { window: 'today' },
-      { window: 'settings' },
-      { window: 'settings.html' },
-      { window: 'https://example.test/' },
-      { window: 'Replies' },
-      { window: ' replies' },
-      { window: '__proto__' },
-      { window: 'constructor' },
-      { window: 'toString' },
-      { window: ['replies'] },
-      { window: { toString: () => 'replies' } },
+      'Today',
+      ' today',
+      'administration',
+      'firm',
+      'settings.html',
+      'https://example.test/',
+      '__proto__',
+      'constructor',
+      'toString',
+      ['today'],
+      { toString: () => 'today' },
     ]) {
-      expect(windowTargetOf(malformed), JSON.stringify(malformed) ?? String(malformed)).toBeNull();
+      expect(routeNameOf(malformed), JSON.stringify(malformed) ?? String(malformed)).toBeNull();
     }
   });
 
-  it('adds one channel to the main window’s bridge', () => {
+  it('reads a route from text, a firm by its id and Administration by its section, and nothing else', () => {
+    const firmId = '11111111-1111-4111-8111-111111111111';
+    expect(routeOf('today')).toEqual({ name: 'today' });
+    expect(routeOf('admin')).toEqual({ name: 'admin' });
+    expect(routeOf('admin/calling-number')).toEqual({ name: 'admin', section: 'calling-number' });
+    expect(routeOf(`firm/${firmId}`)).toEqual({ name: 'firm', firmId });
+    for (const text of ['', 'firm', 'firm/', 'firm/not-an-id', `firm/${firmId}/x`, 'admin/elsewhere', 'today/x', 'Today']) {
+      expect(routeOf(text), text).toBeNull();
+    }
+    for (const route of [{ name: 'firms' }, { name: 'firm', firmId }, { name: 'admin', section: 'alerts' }] as const) {
+      expect(routeOf(routeText(route))).toEqual(route);
+    }
+    expect(sidebarRowOf({ name: 'firm', firmId })).toBe('firms');
+  });
+
+  it('answers a deep link for each of the six views, and ignores every other link', () => {
+    expect(DEEP_LINKS).toEqual(ROUTE_NAMES.map(name => `callie://${name}`));
+    expect(deepLinkRoute('callie://today')).toBe('today');
+    expect(deepLinkRoute('callie://firms/')).toBe('firms');
+    expect(deepLinkRoute('callie://dashboard')).toBe('dashboard');
+    for (const url of [
+      'callie://firm/11111111-1111-4111-8111-111111111111',
+      'callie://today?x=1',
+      'callie://auth',
+      'callie-app://bundle/index.html',
+      'https://example.test/today',
+      'callie://Today',
+      'callie://',
+    ]) {
+      expect(deepLinkRoute(url), url).toBeNull();
+    }
+  });
+
+  it('has no channel that opens a window: the main process tells the one window where to go', () => {
     expect(Object.values(IPC_CHANNELS)).toEqual([
       'callie:state',
       'callie:sign-in',
       'callie:sign-out',
       'callie:refresh-today',
-      'callie:open-window',
+      'callie:navigate',
     ]);
   });
 });
 
-describe('the Window menu (lane g65)', () => {
-  it('brings Home forward on ⌘1 and opens the Dashboard on ⌘6, beside Administration', () => {
-    const pressed: string[] = [];
-    const press = (name: string) => (): void => {
-      pressed.push(name);
-    };
-    const [menu] = windowMenuTemplate({
-      today: press('today'),
-      replies: press('replies'),
-      firms: press('firms'),
-      sequences: press('sequences'),
-      administration: press('administration'),
-      dashboard: press('dashboard'),
+describe('the Window menu (wave 1)', () => {
+  it('shows each view in the one window, ⌘1 to ⌘6 in the sidebar’s order', () => {
+    const shown: string[] = [];
+    const menu = windowMenuTemplate(route => {
+      shown.push(route);
     });
-    expect(menu?.label).toBe('Window');
-    expect(menu?.submenu.map(item => `${item.label} ${item.accelerator}`)).toEqual([
+    const window = menu.find(entry => 'label' in entry && entry.label === 'Window');
+    if (window === undefined || !('submenu' in window)) throw new Error('no Window menu');
+    const views = window.submenu.filter(item => 'click' in item);
+    expect(views.map(item => ('label' in item ? `${item.label} ${item.accelerator}` : ''))).toEqual([
       'Today CmdOrCtrl+1',
       'Replies CmdOrCtrl+2',
       'Firms CmdOrCtrl+3',
@@ -431,13 +585,17 @@ describe('the Window menu (lane g65)', () => {
       'Administration CmdOrCtrl+5',
       'Dashboard CmdOrCtrl+6',
     ]);
-    for (const item of menu?.submenu ?? []) item.click();
-    expect(pressed).toEqual(['today', 'replies', 'firms', 'sequences', 'administration', 'dashboard']);
+    for (const item of views) if ('click' in item) item.click();
+    expect(shown).toEqual(['today', 'replies', 'firms', 'sequences', 'admin', 'dashboard']);
   });
 
-  it('offers the Dashboard only beside the window it is a screen of', () => {
-    const noop = (): void => undefined;
-    const [menu] = windowMenuTemplate({ today: noop, replies: noop, firms: noop, sequences: noop, dashboard: noop });
-    expect(menu?.submenu.map(item => item.label)).toEqual(['Today', 'Replies', 'Firms', 'Sequences']);
+  it('is one Window menu, built whole rather than appended to Electron’s default', () => {
+    const menu = windowMenuTemplate(() => undefined);
+    expect(menu.filter(entry => 'label' in entry && entry.label === 'Window')).toHaveLength(1);
+    expect(menu.filter(entry => 'role' in entry).map(entry => ('role' in entry ? entry.role : ''))).toEqual([
+      'appMenu',
+      'editMenu',
+      'viewMenu',
+    ]);
   });
 });

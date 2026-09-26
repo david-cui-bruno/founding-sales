@@ -1,4 +1,4 @@
-import { expect, test } from 'playwright/test';
+import { expect, test, type Page } from 'playwright/test';
 import {
   CHECKING_ROUTE_ID,
   FIRM_ID,
@@ -11,12 +11,12 @@ import {
   firmSequences,
   mergeView,
   pipelineView,
-  startCrmTestServer,
-  type CrmTestServer,
-} from './support/crmTestServer.ts';
+} from './support/crmFixtures.ts';
+import { startAppServer, type AppServer, type BridgeHandle } from './support/appServer.ts';
+import type { CrmState } from '../../src/renderer/firmWorkspaceContract.ts';
 
 /**
- * The CRM windows, driven end to end against the generated test server.
+ * The CRM windows, driven end to end against the one test harness.
  *
  * The renderer is the shipped file; only the bridge is substituted, so what these
  * specs prove is what a person actually sees and can press: the Firm page at two
@@ -27,16 +27,23 @@ import {
  * ran as the assignee would pass with the redaction deleted.
  */
 
-let server: CrmTestServer;
+let app: AppServer;
+let server: BridgeHandle<CrmState>;
 
 test.afterEach(async () => {
-  await server.stop();
+  await app.stop();
 });
+
+/** The Firms view on `state`: a firm page by its own route, anything else by `firms`. */
+async function openCrm(page: Page, state: CrmState): Promise<void> {
+  app = await startAppServer({ crm: state });
+  server = app.crm;
+  await page.goto(app.url(state.screen === 'firm' && state.firm !== null ? `#firm/${state.firm.read.firm.id}` : '#firms'));
+}
 
 // ------------------------------------------------------------------- Firm page
 test('the assignee sees routes with their eligibility, contacts, history and holds', async ({ page }) => {
-  server = await startCrmTestServer(crmState());
-  await page.goto(server.url);
+  await openCrm(page, crmState());
 
   await expect(page.getByTestId('heading')).toHaveText('Firm');
   await expect(page.getByTestId('firm-identity')).toContainText('Northwind Test Holdings');
@@ -62,8 +69,7 @@ test('the assignee sees routes with their eligibility, contacts, history and hol
 });
 
 test('a colleague sees identity, a sentence saying why, and nothing else', async ({ page }) => {
-  server = await startCrmTestServer(crmState({ firm: colleagueFirmPage() }));
-  await page.goto(server.url);
+  await openCrm(page, crmState({ firm: colleagueFirmPage() }));
 
   await expect(page.getByTestId('firm-identity')).toContainText('Northwind Test Holdings');
   await expect(page.getByTestId('firm-redacted')).toContainText('assigned to somebody else');
@@ -79,7 +85,8 @@ test('a colleague sees identity, a sentence saying why, and nothing else', async
 
 test('a firm name that looks like markup is shown as text', async ({ page }) => {
   const firm = assigneeFirmPage();
-  server = await startCrmTestServer(
+  await openCrm(
+    page,
     crmState({
       firm: {
         ...firm,
@@ -90,7 +97,6 @@ test('a firm name that looks like markup is shown as text', async ({ page }) => 
       } as typeof firm,
     }),
   );
-  await page.goto(server.url);
 
   await expect(page.getByTestId('firm-identity')).toContainText('<img src=x onerror=alert(1)>');
   await expect(page.locator('img')).toHaveCount(0);
@@ -98,8 +104,7 @@ test('a firm name that looks like markup is shown as text', async ({ page }) => 
 
 // ------------------------------------------------------------ contacts editing
 test('editing a contact sends exactly what was typed, and the promotion flag', async ({ page }) => {
-  server = await startCrmTestServer(crmState());
-  await page.goto(server.url);
+  await openCrm(page, crmState());
 
   await page.getByTestId('contact-name').nth(1).fill('Robin Placeholder-Jones');
   await page.getByTestId('contact-title').nth(1).fill('Head of Operations');
@@ -117,27 +122,25 @@ test('editing a contact sends exactly what was typed, and the promotion flag', a
 });
 
 test('the current main contact cannot be asked to become the main contact again', async ({ page }) => {
-  server = await startCrmTestServer(crmState());
-  await page.goto(server.url);
+  await openCrm(page, crmState());
   await expect(page.getByTestId('contact-primary').nth(0)).toBeChecked();
   await expect(page.getByTestId('contact-primary').nth(0)).toBeDisabled();
   await expect(page.getByTestId('contact-primary').nth(1)).toBeEnabled();
 });
 
-test('an outage leaves the firm readable and nothing editable', async ({ page }) => {
-  server = await startCrmTestServer(crmState({ online: false }));
-  await page.goto(server.url);
+test('an outage is a banner over the firm, and nothing is disabled for it (wave 1)', async ({ page }) => {
+  await openCrm(page, crmState({ online: false }));
 
   await expect(page.getByTestId('banner-warning')).toContainText('cannot reach the server');
+  await expect(page.getByTestId('banner-warning')).toContainText('Changes will fail until it reconnects.');
   await expect(page.getByTestId('firm-identity')).toContainText('Northwind Test Holdings');
-  await expect(page.getByTestId('contact-name').nth(0)).toBeDisabled();
-  await expect(page.getByTestId('contact-save').nth(0)).toBeDisabled();
+  await expect(page.getByTestId('contact-name').nth(0)).toBeEnabled();
+  await expect(page.getByTestId('contact-save').nth(0)).toBeEnabled();
 });
 
 // ------------------------------------------------------------------- pipeline
 test('the pipeline shows the workspace stages, keeps a retired one that is occupied', async ({ page }) => {
-  server = await startCrmTestServer(crmState({ screen: 'pipeline', pipeline: pipelineView(), firm: null }));
-  await page.goto(server.url);
+  await openCrm(page, crmState({ screen: 'pipeline', pipeline: pipelineView(), firm: null }));
 
   await expect(page.getByTestId('heading')).toHaveText('Pipeline');
   // Six of the seven: the empty retired stage is not on screen, the occupied one is.
@@ -148,8 +151,7 @@ test('the pipeline shows the workspace stages, keeps a retired one that is occup
 });
 
 test('a Lost change asks for a reason and will not go without one', async ({ page }) => {
-  server = await startCrmTestServer(crmState({ screen: 'pipeline', pipeline: pipelineView(), firm: null }));
-  await page.goto(server.url);
+  await openCrm(page, crmState({ screen: 'pipeline', pipeline: pipelineView(), firm: null }));
 
   const change = page.getByTestId('stage-change').first();
   await expect(change.getByTestId('stage-submit')).toBeDisabled();
@@ -179,22 +181,19 @@ test('a Lost change asks for a reason and will not go without one', async ({ pag
 });
 
 test('a retired stage is never offered as a destination', async ({ page }) => {
-  server = await startCrmTestServer(crmState({ screen: 'pipeline', pipeline: pipelineView(), firm: null }));
-  await page.goto(server.url);
+  await openCrm(page, crmState({ screen: 'pipeline', pipeline: pipelineView(), firm: null }));
   const options = await page.getByTestId('stage-select').first().locator('option').allTextContents();
   expect(options).toEqual(['Move to…', 'New', 'Contacting', 'Engaged', 'Won', 'Lost']);
 });
 
 test('a firm with no open opportunity offers no stage control at all', async ({ page }) => {
-  server = await startCrmTestServer(crmState({ screen: 'pipeline', pipeline: pipelineView(), firm: null }));
-  await page.goto(server.url);
+  await openCrm(page, crmState({ screen: 'pipeline', pipeline: pipelineView(), firm: null }));
   // The occupied retired column's firm has no open opportunity in the fixture.
   await expect(page.getByTestId('stage-change-unavailable')).toHaveCount(1);
 });
 
 test('opening a firm from the board asks for that firm', async ({ page }) => {
-  server = await startCrmTestServer(crmState({ screen: 'pipeline', pipeline: pipelineView(), firm: null }));
-  await page.goto(server.url);
+  await openCrm(page, crmState({ screen: 'pipeline', pipeline: pipelineView(), firm: null }));
   await page.getByTestId('pipeline-open-firm').first().click();
   await expect(page.getByTestId('heading')).toHaveText('Firm');
   expect(server.calls.find(entry => entry.method === 'openFirm')?.argument).toEqual({ firmId: FIRM_ID });
@@ -202,8 +201,7 @@ test('opening a firm from the board asks for that firm', async ({ page }) => {
 
 // ------------------------------------------------------------ merge resolution
 test('a merge will not submit until every conflict has been decided', async ({ page }) => {
-  server = await startCrmTestServer(crmState({ screen: 'merge', role: 'admin', merge: mergeView(), firm: null }));
-  await page.goto(server.url);
+  await openCrm(page, crmState({ screen: 'merge', role: 'admin', merge: mergeView(), firm: null }));
 
   await expect(page.getByTestId('heading')).toHaveText('Resolve this merge');
   await expect(page.getByTestId('merge-conflict')).toHaveCount(2);
@@ -236,10 +234,10 @@ test('a merge will not submit until every conflict has been decided', async ({ p
 });
 
 test('a salesperson sees the conflicts and cannot commit the merge', async ({ page }) => {
-  server = await startCrmTestServer(
+  await openCrm(
+    page,
     crmState({ screen: 'merge', role: 'salesperson', merge: mergeView(), firm: null }),
   );
-  await page.goto(server.url);
 
   await expect(page.getByTestId('merge-conflict')).toHaveCount(2);
   await expect(page.locator('input[type=radio]').first()).toBeDisabled();
@@ -248,8 +246,7 @@ test('a salesperson sees the conflicts and cannot commit the merge', async ({ pa
 
 // ------------------------------------------------------------ lane g88: the Firm page
 test('a candidate number is confirmed at the version on screen, and an address has no such button', async ({ page }) => {
-  server = await startCrmTestServer(crmState({ sequences: firmSequences() }));
-  await page.goto(server.url);
+  await openCrm(page, crmState({ sequences: firmSequences() }));
 
   // One candidate number: one button, beside it, and the sentence saying what it does.
   await expect(page.getByTestId('route-confirm')).toHaveCount(1);
@@ -269,8 +266,7 @@ test('a candidate number is confirmed at the version on screen, and an address h
 
 // ------------------------------------------------------------ lane g90: an address's validation
 test('each address says where its validation stands, and one being checked can be checked again', async ({ page }) => {
-  server = await startCrmTestServer(crmState({ firm: addressesFirmPage(), sequences: firmSequences() }));
-  await page.goto(server.url);
+  await openCrm(page, crmState({ firm: addressesFirmPage(), sequences: firmSequences() }));
 
   const addresses = page.getByTestId('firm-routes-email');
   await expect(addresses.getByTestId('route-validation')).toHaveText([
@@ -295,15 +291,13 @@ test('each address says where its validation stands, and one being checked can b
 });
 
 test('Check again is not pressable while the window may not change anything', async ({ page }) => {
-  server = await startCrmTestServer(crmState({ firm: addressesFirmPage(), mayMutate: false }));
-  await page.goto(server.url);
+  await openCrm(page, crmState({ firm: addressesFirmPage(), mayMutate: false }));
   await expect(page.getByTestId('firm-routes-email').getByTestId('route-check')).toBeDisabled();
   await expect(page.getByTestId('firm-routes-email').getByTestId('route-validation').first()).toHaveText('Checking…');
 });
 
 test('a contact is enrolled from the Firm page in a published sequence', async ({ page }) => {
-  server = await startCrmTestServer(crmState({ sequences: firmSequences() }));
-  await page.goto(server.url);
+  await openCrm(page, crmState({ sequences: firmSequences() }));
 
   await expect(page.getByTestId('enroll-sequence').locator('option')).toHaveText(['Founder plan v1']);
   await page.getByTestId('enroll-contact').selectOption({ label: 'Robin Placeholder' });
@@ -318,8 +312,7 @@ test('a contact is enrolled from the Firm page in a published sequence', async (
 
 test('a firm with no opportunity is offered "Add to pipeline" before any enrolment', async ({ page }) => {
   const firm = assigneeFirmPage();
-  server = await startCrmTestServer(crmState({ firm: { ...firm, opportunity: null } as typeof firm, sequences: firmSequences() }));
-  await page.goto(server.url);
+  await openCrm(page, crmState({ firm: { ...firm, opportunity: null } as typeof firm, sequences: firmSequences() }));
 
   await expect(page.getByTestId('enroll-form')).toHaveCount(0);
   await expect(page.getByTestId('enroll-needs-pipeline')).toHaveText('Put the firm in the pipeline before enrolling anybody here.');
@@ -329,8 +322,7 @@ test('a firm with no opportunity is offered "Add to pipeline" before any enrolme
 });
 
 test('clearing a contact’s title sends the null that clears it', async ({ page }) => {
-  server = await startCrmTestServer(crmState());
-  await page.goto(server.url);
+  await openCrm(page, crmState());
   await page.getByTestId('contact-title').nth(0).fill('');
   await page.getByTestId('contact-save').nth(0).click();
   await expect(page.getByTestId('banner-info')).toContainText('Saved.');

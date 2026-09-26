@@ -1,17 +1,17 @@
-import { expect, test } from 'playwright/test';
+import { expect, test, type Page } from 'playwright/test';
 import {
   EMPTY_DRAFT,
   FIRM_ID,
   crmState,
   importPreviewView,
   pipelineView,
-  startCrmTestServer,
   unplacedIdentity,
-  type CrmTestServer,
-} from './support/crmTestServer.ts';
+} from './support/crmFixtures.ts';
+import { startAppServer, type AppServer, type BridgeHandle } from './support/appServer.ts';
+import type { CrmState } from '../../src/renderer/firmWorkspaceContract.ts';
 
 /**
- * Add firm and Import in the Firms window, end to end against the generated test server
+ * Add firm and Import in the Firms window, end to end against the one test harness
  * (lane g84, audit item G02).
  *
  * The renderer is the shipped file and only the bridge is scripted, so these prove what a
@@ -24,11 +24,19 @@ import {
  * its sentence and the value that was typed.
  */
 
-let server: CrmTestServer;
+let app: AppServer;
+let server: BridgeHandle<CrmState>;
 
 test.afterEach(async () => {
-  await server.stop();
+  await app.stop();
 });
+
+/** The Firms view on `state`: a firm page by its own route, anything else by `firms`. */
+async function openCrm(page: Page, state: CrmState): Promise<void> {
+  app = await startAppServer({ crm: state });
+  server = app.crm;
+  await page.goto(app.url(state.screen === 'firm' && state.firm !== null ? `#firm/${state.firm.read.firm.id}` : '#firms'));
+}
 
 const pipelineWithUnplaced = () => ({
   ...pipelineView(),
@@ -36,8 +44,7 @@ const pipelineWithUnplaced = () => ({
 });
 
 test('the pipeline offers Add firm and, to an admin, Import CSV, and lists the firms no column holds', async ({ page }) => {
-  server = await startCrmTestServer(crmState({ screen: 'pipeline', role: 'admin', firm: null, pipeline: pipelineWithUnplaced() }));
-  await page.goto(server.url);
+  await openCrm(page, crmState({ screen: 'pipeline', role: 'admin', firm: null, pipeline: pipelineWithUnplaced() }));
 
   await expect(page.getByTestId('open-add-firm')).toBeEnabled();
   await expect(page.getByTestId('open-import')).toBeEnabled();
@@ -48,15 +55,13 @@ test('the pipeline offers Add firm and, to an admin, Import CSV, and lists the f
 });
 
 test('a salesperson is offered Add firm and not Import', async ({ page }) => {
-  server = await startCrmTestServer(crmState({ screen: 'pipeline', role: 'salesperson', firm: null, pipeline: pipelineView() }));
-  await page.goto(server.url);
+  await openCrm(page, crmState({ screen: 'pipeline', role: 'salesperson', firm: null, pipeline: pipelineView() }));
   await expect(page.getByTestId('open-add-firm')).toBeVisible();
   await expect(page.getByTestId('open-import')).toHaveCount(0);
 });
 
 test('Add firm sends exactly what was typed, and lands on the new firm', async ({ page }) => {
-  server = await startCrmTestServer(crmState({ screen: 'pipeline', role: 'admin', firm: null, pipeline: pipelineView() }));
-  await page.goto(server.url);
+  await openCrm(page, crmState({ screen: 'pipeline', role: 'admin', firm: null, pipeline: pipelineView() }));
   await page.getByTestId('open-add-firm').click();
   await expect(page.getByTestId('heading')).toHaveText('Add firm');
 
@@ -83,10 +88,10 @@ test('Add firm sends exactly what was typed, and lands on the new firm', async (
 });
 
 test('a form with no firm name is not sent, and says why', async ({ page }) => {
-  server = await startCrmTestServer(
+  await openCrm(
+    page,
     crmState({ screen: 'add_firm', role: 'admin', firm: null, addFirm: { draft: EMPTY_DRAFT, issues: [], duplicateFirmId: null } }),
   );
-  await page.goto(server.url);
   await page.getByTestId('add-firm-website').fill('aspen.example.test');
   await page.getByTestId('add-firm-submit').click();
   await expect(page.getByTestId('issue-firm_name')).toHaveText('A firm needs a name.');
@@ -96,7 +101,8 @@ test('a form with no firm name is not sent, and says why', async ({ page }) => {
 
 test('a refused form comes back with its values and every field the server named', async ({ page }) => {
   const draft = { ...EMPTY_DRAFT, name: 'Aspen', website: 'not a site', contactEmail: 'kim@@aspen' };
-  server = await startCrmTestServer(
+  await openCrm(
+    page,
     crmState({
       screen: 'add_firm',
       role: 'admin',
@@ -113,7 +119,6 @@ test('a refused form comes back with its values and every field the server named
       },
     }),
   );
-  await page.goto(server.url);
   await expect(page.getByTestId('banner-warning')).toContainText('Check the fields marked below.');
   await expect(page.getByTestId('add-firm-website')).toHaveValue('not a site');
   await expect(page.getByTestId('add-firm-website')).toHaveAttribute('aria-invalid', 'true');
@@ -124,7 +129,8 @@ test('a refused form comes back with its values and every field the server named
 });
 
 test('a firm that is already here can be opened from the refusal', async ({ page }) => {
-  server = await startCrmTestServer(
+  await openCrm(
+    page,
     crmState({
       screen: 'add_firm',
       role: 'admin',
@@ -137,15 +143,13 @@ test('a firm that is already here can be opened from the refusal', async ({ page
       },
     }),
   );
-  await page.goto(server.url);
   await expect(page.getByTestId('banner-warning')).toContainText('That firm is already here.');
   await page.getByTestId('add-firm-open-duplicate').click();
   expect(server.calls.at(-1)).toEqual({ method: 'openFirm', argument: { firmId: FIRM_ID } });
 });
 
 test('Import previews a chosen file row by row, and commits only on the button', async ({ page }) => {
-  server = await startCrmTestServer(crmState({ screen: 'pipeline', role: 'admin', firm: null, pipeline: pipelineView() }));
-  await page.goto(server.url);
+  await openCrm(page, crmState({ screen: 'pipeline', role: 'admin', firm: null, pipeline: pipelineView() }));
   await page.getByTestId('open-import').click();
   await expect(page.getByTestId('heading')).toHaveText('Import firms');
 
@@ -171,7 +175,8 @@ test('Import previews a chosen file row by row, and commits only on the button',
 });
 
 test('a file refused whole says which column', async ({ page }) => {
-  server = await startCrmTestServer(
+  await openCrm(
+    page,
     crmState({
       screen: 'import',
       role: 'admin',
@@ -179,16 +184,15 @@ test('a file refused whole says which column', async ({ page }) => {
       import: { fileName: 'x.csv', preview: null, results: null, fileRefusal: { reason: 'csv_column_unknown', column: 'Notes', rowNumber: null } },
     }),
   );
-  await page.goto(server.url);
   await expect(page.getByTestId('import-file-refused')).toHaveText('The column “Notes” is not one Callie imports. Remove it or rename it.');
   await expect(page.getByTestId('import-file')).toBeVisible();
 });
 
 test('pasted text previews through the same call', async ({ page }) => {
-  server = await startCrmTestServer(
+  await openCrm(
+    page,
     crmState({ screen: 'import', role: 'admin', firm: null, import: { fileName: null, preview: null, results: null, fileRefusal: null } }),
   );
-  await page.goto(server.url);
   await page.getByTestId('import-preview').click();
   await expect(page.getByTestId('import-paste')).toHaveAttribute('aria-invalid', 'true');
   await page.getByTestId('import-paste').fill('firm_name\nAspen Test Wealth');

@@ -1,14 +1,10 @@
-import { expect, test } from 'playwright/test';
-import {
-  ALERT_ID,
-  adminState,
-  sendingPosture,
-  startSettingsTestServer,
-  type SettingsTestServer,
-} from './support/settingsTestServer.ts';
+import { expect, test, type Page } from 'playwright/test';
+import { ALERT_ID, adminState, sendingPosture } from './support/adminFixtures.ts';
+import { startAppServer, type AppServer, type BridgeHandle } from './support/appServer.ts';
+import type { AdminState } from '../../src/renderer/settingsContract.ts';
 
 /**
- * The administration window, driven end to end against the generated test server.
+ * The Administration view, driven end to end against the one test harness.
  *
  * The renderer is the shipped file; only the bridge is substituted, so what these
  * specs prove is what a person actually sees and can press. Every scenario that a
@@ -16,18 +12,29 @@ import {
  * the inert-control logic deleted, and that logic is most of the point of this page.
  */
 
-let server: SettingsTestServer;
+let app: AppServer;
+let server: BridgeHandle<AdminState>;
 
 test.afterEach(async () => {
-  await server.stop();
+  await app.stop();
 });
 
+/** Administration on `state`, loaded straight onto `hash` (Settings unless said). */
+async function openAdmin(page: Page, state: AdminState, hash = '#admin'): Promise<void> {
+  app = await startAppServer({ admin: state });
+  server = app.admin;
+  await page.goto(app.url(hash));
+}
+
 test('an admin sees every slice, its provenance, and an editor for each', async ({ page }) => {
-  server = await startSettingsTestServer(adminState());
-  await page.goto(server.url);
+  await openAdmin(page, adminState());
 
   await expect(page.getByTestId('heading')).toHaveText('Administration');
-  await expect(page.getByTestId('setting-alert_thresholds')).toContainText('Default, never configured');
+  await expect(page.getByTestId('setting-sending_enabled')).toContainText('Default, never configured');
+  // Wave 1: the alarm thresholds and the supported versions are gone from the page.
+  await expect(page.getByTestId('setting-alert_thresholds')).toHaveCount(0);
+  await expect(page.getByTestId('setting-client_version_range')).toHaveCount(0);
+  await expect(page.getByTestId('settings-advanced')).toHaveCount(0);
   await expect(page.getByTestId('setting-business_time_zone')).toContainText('Version 2');
   await expect(page.getByTestId('value-business_time_zone')).toBeEnabled();
   await expect(page.getByTestId('save-business_time_zone')).toBeEnabled();
@@ -42,9 +49,8 @@ test('an admin sees every slice, its provenance, and an editor for each', async 
   await expect(page.getByTestId('setting-sending_limits')).toHaveCount(0);
 });
 
-test("an admin edits G7-2's checklist and cap, and the guard has no control", async ({ page }) => {
-  server = await startSettingsTestServer(adminState({ sendingAdmin: sendingPosture() }));
-  await page.goto(server.url);
+test("an admin edits G7-2's checklist and cap, and the deleted guard is not shown", async ({ page }) => {
+  await openAdmin(page, adminState({ sendingAdmin: sendingPosture() }));
 
   // The checklist is incomplete and the page says which part is missing rather than
   // offering an enable that `sending_domains`' CHECK would refuse.
@@ -52,10 +58,10 @@ test("an admin edits G7-2's checklist and cap, and the guard has no control", as
   await expect(page.getByTestId('sending-record')).toBeEnabled();
   await expect(page.getByTestId('sending-dmarcPass')).toBeEnabled();
 
-  // 12.6: changing the personal-Gmail guard is a reviewed policy change, so it is
-  // shown and never offered. There is no control with this value behind it.
-  await expect(page.getByTestId('sending-guard')).toContainText('4000');
-  await expect(page.getByTestId('sending-admin')).toContainText('reviewed policy change');
+  // Wave 1: the personal-Gmail guard was deleted (lane W1-C). The server still sends
+  // constants for it, for 1.0.10; this build shows no line for them.
+  await expect(page.getByTestId('sending-guard')).toHaveCount(0);
+  await expect(page.getByTestId('sending-admin')).not.toContainText('Personal-Gmail guard');
 
   await expect(page.getByTestId('cap-44444444-4444-4444-8444-444444444444')).toBeEnabled();
   await expect(page.getByTestId('raiseTo-44444444-4444-4444-8444-444444444444')).toBeEnabled();
@@ -70,8 +76,7 @@ test("an admin edits G7-2's checklist and cap, and the guard has no control", as
 test('a sending read that failed says so where the section would be, and Retry reads it again (lane g69)', async ({ page }) => {
   // Desktop 1.0.2 and 1.0.3 in production: every `/outbound/status` answer failed to
   // parse and the section was simply absent. Now the section says it could not read.
-  server = await startSettingsTestServer(adminState({ sendingReadError: 'unreadable_answer' }));
-  await page.goto(server.url);
+  await openAdmin(page, adminState({ sendingReadError: 'unreadable_answer' }));
 
   await expect(page.getByTestId('sending-admin').getByRole('heading')).toHaveText('Sending domain and caps');
   await expect(page.getByTestId('sending-unread')).toHaveText(
@@ -84,19 +89,21 @@ test('a sending read that failed says so where the section would be, and Retry r
   await page.getByTestId('sending-retry').click();
   await expect(page.getByTestId('sending-domain')).toContainText('dmarc');
   await expect(page.getByTestId('sending-unread')).toHaveCount(0);
-  expect(server.calls.filter(call => call.method === 'show').map(call => call.argument)).toEqual([{ screen: 'settings' }]);
+  // Opening Administration was the first read; Retry is Settings shown again.
+  expect(server.calls.filter(call => call.method === 'show').map(call => call.argument)).toEqual([
+    { screen: 'settings' },
+    { screen: 'settings' },
+  ]);
 });
 
 test('a salesperson is told nothing about a sending read their page never made (lane g69)', async ({ page }) => {
-  server = await startSettingsTestServer(adminState({ role: 'salesperson', sendingReadError: 'unreadable_answer' }));
-  await page.goto(server.url);
+  await openAdmin(page, adminState({ role: 'salesperson', sendingReadError: 'unreadable_answer' }));
   await expect(page.getByTestId('calling-number')).toBeVisible();
   await expect(page.getByTestId('sending-admin')).toHaveCount(0);
 });
 
 test("replaces the holiday calendar through G8's command, by naming a new version", async ({ page }) => {
-  server = await startSettingsTestServer(adminState());
-  await page.goto(server.url);
+  await openAdmin(page, adminState());
 
   await expect(page.getByTestId('holidays-current')).toContainText('2026-federal');
   await expect(page.getByTestId('holiday-dates')).toHaveValue('2026-12-25');
@@ -117,10 +124,10 @@ test("replaces the holiday calendar through G8's command, by naming a new versio
 });
 
 test('a salesperson is offered no sending section at all', async ({ page }) => {
-  server = await startSettingsTestServer(
+  await openAdmin(
+    page,
     adminState({ role: 'salesperson', sendingAdmin: sendingPosture() }),
   );
-  await page.goto(server.url);
 
   // Not an inert section: every `/outbound/*` path answers them with a redacted 403,
   // and a control that exists only to be refused teaches nothing.
@@ -133,8 +140,7 @@ test('a salesperson is offered no sending section at all', async ({ page }) => {
 });
 
 test('a salesperson sees the same page with every control inert and a reason', async ({ page }) => {
-  server = await startSettingsTestServer(adminState({ role: 'salesperson' }));
-  await page.goto(server.url);
+  await openAdmin(page, adminState({ role: 'salesperson' }));
 
   await expect(page.getByTestId('value-business_time_zone')).toBeDisabled();
   await expect(page.getByTestId('save-business_time_zone')).toBeDisabled();
@@ -145,19 +151,17 @@ test('a salesperson sees the same page with every control inert and a reason', a
   await expect(page.getByTestId('setting-business_time_zone')).toContainText('Version 2');
 });
 
-test('offline is said once, at the top, and every control is inert', async ({ page }) => {
-  server = await startSettingsTestServer(adminState({ online: false }));
-  await page.goto(server.url);
+test('offline is said once, at the top, and nothing is disabled for it (wave 1)', async ({ page }) => {
+  await openAdmin(page, adminState({ online: false }));
 
-  await expect(page.getByTestId('banner-offline')).toContainText('Offline');
-  await expect(page.getByTestId('save-alert_thresholds')).toBeDisabled();
-  // Offline comes first: an admin who is offline is told that, not "admin only".
-  await expect(page.getByTestId('setting-alert_thresholds')).toContainText('Offline: nothing here can be changed');
+  await expect(page.getByTestId('banner-offline')).toContainText('cannot reach the server');
+  await expect(page.getByTestId('save-business_time_zone')).toBeEnabled();
+  await expect(page.getByTestId('field-business_time_zone-timeZone')).toBeEnabled();
+  await expect(page.getByTestId('setting-business_time_zone')).not.toContainText('Offline:');
 });
 
 test('a terminal stage is listed and offers no administration', async ({ page }) => {
-  server = await startSettingsTestServer(adminState());
-  await page.goto(server.url);
+  await openAdmin(page, adminState());
 
   await expect(page.getByTestId('stage-new')).toContainText('New');
   await expect(page.getByTestId('retire-new')).toBeVisible();
@@ -167,8 +171,7 @@ test('a terminal stage is listed and offers no administration', async ({ page })
 });
 
 test('the dashboard says a figure is unavailable rather than showing it as zero', async ({ page }) => {
-  server = await startSettingsTestServer(adminState());
-  await page.goto(server.url);
+  await openAdmin(page, adminState());
   await page.getByTestId('tab-dashboard').click();
 
   await expect(page.getByTestId('panel-scope')).toContainText('Your assigned firms.');
@@ -179,20 +182,22 @@ test('the dashboard says a figure is unavailable rather than showing it as zero'
   await expect(page.getByTestId('panel-holds')).toContainText('scoped_pause: 1');
 });
 
-test('opened from ⌘6 or Home’s Dashboard row, the window starts on the Dashboard screen', async ({ page }) => {
-  // Lane g65: the opener names the screen in the page's address, and the page asks the
-  // bridge for that screen once, as it loads. Without a query it asks for the state.
-  server = await startSettingsTestServer(adminState());
-  await page.goto(`${server.url}?screen=dashboard`);
+test('the Dashboard route starts on the Dashboard screen, and its tab and route follow each other', async ({ page }) => {
+  await openAdmin(page, adminState(), '#dashboard');
 
   await expect(page.getByTestId('tab-dashboard')).toHaveClass(/tab-current/u);
   await expect(page.getByTestId('panel-calls')).toContainText('voicemail_left: 3');
-  expect(server.calls[0]).toEqual({ method: 'show', argument: { screen: 'dashboard' } });
+  await expect(page.getByTestId('nav-dashboard')).toHaveAttribute('aria-current', 'page');
+  expect(server.calls.find(call => call.method === 'show')).toEqual({ method: 'show', argument: { screen: 'dashboard' } });
+
+  // The Settings tab is Administration's route; the sidebar says so without a reload.
+  await page.getByTestId('tab-settings').click();
+  await expect(page.getByTestId('nav-admin')).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByTestId('setting-business_time_zone')).toBeVisible();
 });
 
 test('Diagnostics names the restore mismatch and puts the runbook beside the alert', async ({ page }) => {
-  server = await startSettingsTestServer(adminState());
-  await page.goto(server.url);
+  await openAdmin(page, adminState());
   await page.getByTestId('tab-diagnostics').click();
 
   await expect(page.getByTestId('panel-restore-generation')).toContainText('Mismatch');
@@ -208,8 +213,7 @@ test('Diagnostics names the restore mismatch and puts the runbook beside the ale
 });
 
 test('a refused save is shown as its code and the page is not edited optimistically', async ({ page }) => {
-  server = await startSettingsTestServer(adminState({ role: 'salesperson' }));
-  await page.goto(server.url);
+  await openAdmin(page, adminState({ role: 'salesperson' }));
 
   // The control is inert, so a person cannot reach this; the bridge can, and the
   // page has to render the refusal rather than the value that was attempted.
@@ -226,8 +230,7 @@ test('a refused save is shown as its code and the page is not edited optimistica
 });
 
 test('History shows what each version changed, from and to, under its setting (lane g78)', async ({ page }) => {
-  server = await startSettingsTestServer(adminState());
-  await page.goto(server.url);
+  await openAdmin(page, adminState());
 
   // Before g78 the button fetched the versions and nothing drew them, and the values
   // were stripped anyway (D04).
@@ -249,8 +252,7 @@ test('History shows what each version changed, from and to, under its setting (l
 
 // ------------------------------------------------------ lane g88: typed controls (G08)
 test('a setting is changed with a typed control, and its JSON and provenance are behind Details', async ({ page }) => {
-  server = await startSettingsTestServer(adminState());
-  await page.goto(server.url);
+  await openAdmin(page, adminState());
 
   // No JSON on the face of the page: a zone picker, and the machinery behind Details.
   await expect(page.getByTestId('setting-business_time_zone').locator('textarea')).toHaveCount(0);
@@ -263,12 +265,17 @@ test('a setting is changed with a typed control, and its JSON and provenance are
     .poll(() => server.calls.find(entry => entry.method === 'saveSetting')?.argument)
     .toEqual({ settingKey: 'business_time_zone', value: { timeZone: 'America/Denver' }, changeNote: 'the office moved' });
 
-  // The thresholds are numbers, one click further away; one that is not a number is marked and not sent.
-  await page.getByText('Advanced: alarm thresholds and supported Callie versions').click();
-  await page.getByTestId('field-alert_thresholds-canaryStaleSeconds').fill('');
-  await page.getByTestId('save-alert_thresholds').click();
-  await expect(page.getByTestId('field-alert_thresholds-canaryStaleSeconds')).toHaveAttribute('aria-invalid', 'true');
-  expect(server.calls.filter(entry => entry.method === 'saveSetting')).toHaveLength(1);
+  // The note is optional (wave 1): a Save with it left empty is sent, never dropped,
+  // and the main process gives it "Changed on the Mac".
+  await expect(page.getByTestId('note-business_time_zone')).toHaveAttribute('placeholder', 'Why (optional)');
+  // The first Save has answered and the page has drawn it: the column is not read-only.
+  await expect(page.getByTestId('column')).not.toHaveAttribute('aria-busy', 'true');
+  await page.getByTestId('field-business_time_zone-timeZone').selectOption('America/Los_Angeles');
+  await page.getByTestId('note-business_time_zone').fill('');
+  await page.getByTestId('save-business_time_zone').click();
+  await expect
+    .poll(() => server.calls.filter(entry => entry.method === 'saveSetting').at(-1)?.argument)
+    .toEqual({ settingKey: 'business_time_zone', value: { timeZone: 'America/Los_Angeles' }, changeNote: '' });
 
   // Where the other settings live, and which lane owns them, is support detail.
   await expect(page.getByTestId('elsewhere-details')).not.toHaveAttribute('open', '');

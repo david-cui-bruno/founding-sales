@@ -43,7 +43,7 @@ export type PublishRefusal =
   | 'step_channel_removed'
   | 'not_a_draft'
   | 'admin_only'
-  | 'offline';
+  | 'upgrade_required';
 
 export interface StepRow {
   readonly ordinal: number;
@@ -134,6 +134,8 @@ export interface SequenceScreen {
   /** Whether the "New sequence" and "New template" forms may be used. */
   readonly canAuthor: boolean;
   readonly notice: string | null;
+  /** The last template create's or approval's copy warnings, as sentences (wave 1). */
+  readonly warnings: readonly string[];
 }
 
 const DAY_MILLISECONDS = 86_400_000;
@@ -165,10 +167,10 @@ function stepDetail(step: SequenceStep): string {
 export function publishRefusalFor(
   version: SequenceVersion,
   templates: readonly TemplateVersion[],
-  options: { readonly isAdmin: boolean; readonly online: boolean },
+  options: { readonly isAdmin: boolean; readonly mayMutate: boolean },
 ): PublishRefusal | null {
   if (!options.isAdmin) return 'admin_only';
-  if (!options.online) return 'offline';
+  if (!options.mayMutate) return 'upgrade_required';
   if (version.state !== 'draft') return 'not_a_draft';
   if (version.steps.length === 0) return 'version_has_no_steps';
   const ordinals = [...version.steps].map(step => step.ordinal).sort((left, right) => left - right);
@@ -188,7 +190,7 @@ export function publishRefusalFor(
 function versionPanel(
   version: SequenceVersion,
   templates: readonly TemplateVersion[],
-  options: { readonly isAdmin: boolean; readonly online: boolean; readonly hasDraft: boolean },
+  options: { readonly isAdmin: boolean; readonly mayMutate: boolean; readonly hasDraft: boolean },
 ): VersionPanel {
   const refusal = publishRefusalFor(version, templates, options);
   const steps = [...version.steps]
@@ -226,15 +228,15 @@ function versionPanel(
     steps,
     // 11.1: a published version and its steps are immutable by trigger. A window
     // that offered an edit would be offering a save that cannot succeed.
-    editable: version.state === 'draft' && options.isAdmin && options.online,
+    editable: version.state === 'draft' && options.isAdmin && options.mayMutate,
     canPublish: refusal === null,
     publishRefusal: refusal,
-    canRetire: version.state === 'published' && options.isAdmin && options.online,
+    canRetire: version.state === 'published' && options.isAdmin && options.mayMutate,
     stopConditions: version.stopConditions,
     stopSentence: STOP_SENTENCE,
     // At most one draft per sequence (`sequence_versions_one_draft`): with one open, the
     // way to change the plan is to edit that draft.
-    canStartDraft: version.state === 'published' && options.isAdmin && options.online && !options.hasDraft,
+    canStartDraft: version.state === 'published' && options.isAdmin && options.mayMutate && !options.hasDraft,
   };
 }
 
@@ -249,7 +251,7 @@ const FOOTER_OF = (template: TemplateVersion): string => `${template.footerSignO
 
 function templatePanel(
   template: TemplateVersion,
-  options: { readonly isAdmin: boolean; readonly online: boolean },
+  options: { readonly isAdmin: boolean; readonly mayMutate: boolean },
 ): TemplatePanel {
   const approved = template.approvedAt !== null;
   const retired = template.retiredAt !== null;
@@ -264,9 +266,9 @@ function templatePanel(
     footer: FOOTER_OF(template),
     approved,
     retired,
-    editable: !approved && !retired && options.isAdmin && options.online,
+    editable: !approved && !retired && options.isAdmin && options.mayMutate,
     canApprove:
-      !approved && !retired && options.isAdmin && options.online && footerPresent && !unsubscribeMentioned,
+      !approved && !retired && options.isAdmin && options.mayMutate && footerPresent && !unsubscribeMentioned,
     footerPresent,
     unsubscribeMentioned,
   };
@@ -277,7 +279,7 @@ function holdReviewRow(enrollment: Enrollment, state: SequenceState): HoldReview
   return {
     enrollmentId: enrollment.id,
     heldForDays: days,
-    canResume: state.online,
+    canResume: state.mayMutate,
     explanation: `Held for about ${String(days)} days in total. Review the remaining steps before resuming; every resume performs a fresh eligibility check.`,
     reviewing: state.resumeReview?.preview.enrollmentId === enrollment.id,
   };
@@ -287,13 +289,14 @@ function holdReviewRow(enrollment: Enrollment, state: SequenceState): HoldReview
 export function sequenceScreen(state: SequenceState): SequenceScreen {
   const options = {
     isAdmin: state.isAdmin,
-    online: state.online && state.mayMutate,
+    // Offline is the banner, not a disabled control (wave 1).
+    mayMutate: state.mayMutate,
     hasDraft: state.versions.some(version => version.state === 'draft'),
   };
   return {
     banner: state.online
       ? null
-      : 'Offline. Sequences are shown as they were; nothing can be published, approved or enrolled.',
+      : 'Offline. Callie cannot reach the server, so sequences cannot be read, and changes will fail until it reconnects.',
     unread: (['sequences', 'versions', 'templates', 'enrollments'] as const).flatMap(slice => {
       const code = state.readErrors[slice];
       return code === null ? [] : [{ slice, line: `${SEQUENCE_UNREAD[slice]} ${readErrorSentence(code)}` }];
@@ -311,8 +314,9 @@ export function sequenceScreen(state: SequenceState): SequenceScreen {
       .filter(enrollment => enrollment.state === 'review_required')
       .map(enrollment => holdReviewRow(enrollment, state)),
     resumeReview: state.resumeReview === null ? null : resumeReviewPanel(state.resumeReview, state),
-    canAuthor: state.isAdmin && state.online && state.mayMutate,
+    canAuthor: state.isAdmin && state.mayMutate,
     notice: state.notice === null ? null : sequenceNotice(state.notice),
+    warnings: state.warnings.map(templateWarningSentence),
   };
 }
 
@@ -330,6 +334,7 @@ export const EMPTY_SEQUENCE_STATE: SequenceState = Object.freeze({
   readErrors: { sequences: null, versions: null, templates: null, enrollments: null },
   resumeReview: null,
   notice: null,
+  warnings: [],
 });
 
 // ---------------------------------------------------------------------------
@@ -560,11 +565,34 @@ export function templateFormIssues(draft: TemplateDraft): readonly TemplateFormI
       text: `Callie cannot fill ${unknown.map(name => `{${name}}`).join(', ')}. Use one of ${TEMPLATE_VARIABLE_NAMES.map(name => `{${name}}`).join(', ')}.`,
     });
   }
-  const words = countWords(composeTemplateBody(draft.body, draft.signOff));
-  if (draft.body.trim() !== '' && draft.signOff.trim() !== '' && words > 89) {
-    issues.push({ field: 'body', text: `The email is ${String(words)} words with its sign-off; keep it to 89.` });
-  }
   return issues;
+}
+
+/**
+ * What the form suggests and does not insist on (wave 1). More than 89 words used to
+ * refuse the approval; it is copy advice, so the server now answers it as a warning and
+ * approves, and the form says it under the email and still saves.
+ */
+export function templateFormWarnings(draft: TemplateDraft): readonly string[] {
+  const words = countWords(composeTemplateBody(draft.body, draft.signOff));
+  if (draft.body.trim() === '' || draft.signOff.trim() === '' || words <= 89) return [];
+  return [`The email is ${String(words)} words with its sign-off. Shorter emails get more replies; 89 or fewer is the suggestion.`];
+}
+
+/**
+ * The server's copy warnings (`TEMPLATE_WARNING_CODES`), as the sentences the window
+ * shows after a create or an approval that went ahead anyway. A code this build does
+ * not know is shown as it came.
+ */
+export const TEMPLATE_WARNING_SENTENCES: Readonly<Record<string, string>> = Object.freeze({
+  template_body_too_long: 'The email is longer than 89 words, sign-off included.',
+  template_body_multiple_urls: 'The email has more than one link.',
+  template_subject_url: 'The subject contains a link.',
+  template_pricing_or_guarantee_language: 'The email mentions prices, percentages or guarantees.',
+});
+
+export function templateWarningSentence(code: string): string {
+  return TEMPLATE_WARNING_SENTENCES[code] ?? code;
 }
 
 /** Each reason `decideTemplateApproval` can give, as the sentence the window shows. */
@@ -728,7 +756,7 @@ export function resumeReviewPanel(review: ResumeReview, state: SequenceState): R
       moved: step.proposedDueAt !== step.dueAt,
       removed: step.channel === 'removed',
     })),
-    canConfirm: !stillHeld && state.online && state.mayMutate,
+    canConfirm: !stillHeld && state.mayMutate,
     confirmLabel: 'Resume with these dates',
     zoneLine: `Times are the firm’s (${zone}). An email still waits for its sending window.`,
   };

@@ -1,18 +1,9 @@
-import { readFile } from 'node:fs/promises';
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import type { AddressInfo } from 'node:net';
-import { fileURLToPath } from 'node:url';
-import { build } from 'esbuild';
 import type { CrmState, ImportView, PipelineView } from '../../../src/renderer/firmWorkspaceContract.ts';
+import type { Call } from './appServer.ts';
 
 /**
- * The generated test server the CRM window specs run against.
- *
- * The same substitution G2 made for the Today window: the renderer under test is
- * the shipped file, transpiled with esbuild and served unmodified, and the only
- * thing replaced is the bridge — `window.callieCrm`, which in Electron comes from
- * the preload script and here comes from a small generated script that posts back
- * to this server.
+ * The Firms view's fixtures and the `callieCrm` fake's scripted answers, for the one
+ * harness (`appServer.ts`).
  *
  * The bridge is scripted rather than backed by the API. What these specs are for is
  * what a person sees and can press, and driving them from a real database would
@@ -28,21 +19,10 @@ import type { CrmState, ImportView, PipelineView } from '../../../src/renderer/f
  * RFC 6761 and the numbers are in the NANP 555-01XX fictional block.
  */
 
-const rendererDirectory = fileURLToPath(new URL('../../../src/renderer/', import.meta.url));
-
 export const FIRM_ID = '11111111-1111-4111-8111-111111111111';
 export const OTHER_FIRM_ID = '44444444-4444-4444-8444-444444444444';
 export const ASSIGNEE_ID = '22222222-2222-4222-8222-222222222222';
 export const OPPORTUNITY_ID = '55555555-5555-4555-8555-555555555555';
-
-export interface CrmTestServer {
-  readonly url: string;
-  /** Replace the state the bridge answers with, for the next page load or call. */
-  setState(state: CrmState): void;
-  /** Bridge method names in call order, and the arguments they were given. */
-  readonly calls: { readonly method: string; readonly argument: unknown }[];
-  stop(): Promise<void>;
-}
 
 const IDENTITY = {
   id: FIRM_ID,
@@ -281,158 +261,55 @@ export function crmState(overrides: Partial<CrmState> = {}): CrmState {
   };
 }
 
-/** The bridge the browser gets. The same methods the preload script exposes. */
-const BRIDGE_SCRIPT = `
-globalThis.callieCrm = {
-  async state() { return await ask('state'); },
-  async openFirm(input) { return await ask('openFirm', input); },
-  async openPipeline() { return await ask('openPipeline'); },
-  async saveContact(input) { return await ask('saveContact', input); },
-  async changeStage(input) { return await ask('changeStage', input); },
-  async resolveMerge(input) { return await ask('resolveMerge', input); },
-  async openAddFirm() { return await ask('openAddFirm'); },
-  async addFirm(input) { return await ask('addFirm', input); },
-  async openImport() { return await ask('openImport'); },
-  async previewImport(input) { return await ask('previewImport', input); },
-  async commitImport() { return await ask('commitImport'); },
-  async openOpportunity() { return await ask('openOpportunity'); },
-  async enroll(input) { return await ask('enroll', input); },
-  async confirmRoute(input) { return await ask('confirmRoute', input); },
-  async checkRoute(input) { return await ask('checkRoute', input); },
-};
-async function ask(method, argument) {
-  const response = await fetch('/bridge/' + method, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(argument ?? null),
-  });
-  return await response.json();
-}
-`;
-
-async function transpile(): Promise<string> {
-  const bundle = await build({
-    entryPoints: [`${rendererDirectory}firmWorkspace.ts`],
-    bundle: true,
-    format: 'esm',
-    target: 'es2022',
-    write: false,
-    platform: 'browser',
-  });
-  return bundle.outputFiles[0]?.text ?? '';
-}
-
-async function readBody(request: IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) chunks.push(chunk as Buffer);
-  if (chunks.length === 0) return null;
-  try {
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
-  } catch {
-    return null;
+/** `callieCrm`, scripted. What each outcome proves is in the spec that uses it. */
+export function crmAnswer(state: CrmState, method: string, argument: unknown, _calls: readonly Call[]): CrmState {
+  if (method === 'openPipeline') return { ...state, screen: 'pipeline', pipeline: pipelineView(), notice: null };
+  if (method === 'openFirm') {
+    // The firm page the bridge would read for that id: the one held when it is that
+    // firm's (a colleague's view stays a colleague's), the assignee's otherwise.
+    const firmId = (argument as { firmId?: string } | null)?.firmId;
+    const held = state.firm !== null && state.firm.read.firm.id === firmId ? state.firm : null;
+    const page = assigneeFirmPage();
+    const firm = held ?? ({ ...page, read: { ...page.read, firm: { ...page.read.firm, id: firmId ?? FIRM_ID } } } as NonNullable<CrmState['firm']>);
+    return { ...state, screen: 'firm', firm, notice: null };
   }
-}
-
-export async function startCrmTestServer(initial: CrmState): Promise<CrmTestServer> {
-  const script = await transpile();
-  const html = (await readFile(`${rendererDirectory}firmWorkspace.html`, 'utf8'))
-    .replace('<script type="module"', '<script src="./bridge.js"></script>\n    <script type="module"')
-    // The shipped page has `connect-src 'none'` because the real renderer talks to
-    // the main process across an IPC bridge, which CSP does not see. Here the bridge
-    // is `fetch` to this same server, so the policy is relaxed to `'self'` for the
-    // test document only; the file on disk stays strict.
-    .replaceAll("connect-src 'none'", "connect-src 'self'");
-  const styles = await readFile(`${rendererDirectory}styles.css`, 'utf8');
-
-  let state = initial;
-  const calls: { method: string; argument: unknown }[] = [];
-
-  const server: Server = createServer((request: IncomingMessage, response: ServerResponse) => {
-    const send = (status: number, type: string, body: string): void => {
-      response.writeHead(status, { 'content-type': type, 'cache-control': 'no-store' });
-      response.end(body);
+  if (method === 'saveContact') return { ...state, notice: 'saved' };
+  if (method === 'changeStage') return { ...state, notice: 'stage_changed' };
+  if (method === 'resolveMerge') return { ...state, notice: 'merged' };
+  // Lane g84: Add firm and Import.
+  if (method === 'openAddFirm') {
+    return { ...state, screen: 'add_firm', notice: null, addFirm: { draft: EMPTY_DRAFT, issues: [], duplicateFirmId: null } };
+  }
+  if (method === 'addFirm') return { ...state, screen: 'firm', firm: assigneeFirmPage(), addFirm: null, notice: 'firm_added' };
+  if (method === 'openImport') {
+    return { ...state, screen: 'import', notice: null, import: { fileName: null, preview: null, fileRefusal: null, results: null } };
+  }
+  if (method === 'previewImport') return { ...state, screen: 'import', notice: null, import: importPreviewView() };
+  if (method === 'commitImport') return { ...state, notice: 'imported_with_refusals', import: importResultsView() };
+  // Lane g88: Confirm this number, Add to pipeline, Enrol.
+  if (method === 'confirmRoute' && state.firm !== null) {
+    return { ...state, firm: confirmedFirmPage(state.firm), notice: 'route_confirmed' };
+  }
+  if (method === 'openOpportunity') return { ...state, notice: 'opportunity_opened' };
+  // Lane g90: Check again queues a check; the address is still being checked.
+  if (method === 'checkRoute') return { ...state, notice: 'route_check_queued' };
+  if (method === 'enroll') {
+    const input = argument as { contactId?: string } | null;
+    return {
+      ...state,
+      notice: 'enrolled',
+      sequences: firmSequences({
+        enrollments: [
+          {
+            enrollmentId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+            contactId: input?.contactId ?? '',
+            label: 'Founder plan v1',
+            state: 'active',
+            startedAt: '2026-09-25T13:00:00.000Z',
+          },
+        ],
+      }),
     };
-    void (async () => {
-      const path = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
-      if (path === '/' || path === '/firmWorkspace.html') return send(200, 'text/html; charset=utf-8', html);
-      if (path === '/firmWorkspace.js') return send(200, 'text/javascript; charset=utf-8', script);
-      if (path === '/bridge.js') return send(200, 'text/javascript; charset=utf-8', BRIDGE_SCRIPT);
-      if (path === '/styles.css') return send(200, 'text/css; charset=utf-8', styles);
-      if (path.startsWith('/bridge/')) {
-        const method = path.slice('/bridge/'.length);
-        const argument = await readBody(request);
-        calls.push({ method, argument });
-        // The scripted outcomes. What each one proves is in the spec that uses it.
-        if (method === 'openPipeline') state = { ...state, screen: 'pipeline', pipeline: pipelineView(), notice: null };
-        if (method === 'openFirm') state = { ...state, screen: 'firm', firm: assigneeFirmPage(), notice: null };
-        if (method === 'saveContact') state = { ...state, notice: 'saved' };
-        if (method === 'changeStage') state = { ...state, notice: 'stage_changed' };
-        if (method === 'resolveMerge') state = { ...state, notice: 'merged' };
-        // Lane g84: Add firm and Import.
-        if (method === 'openAddFirm') {
-          state = { ...state, screen: 'add_firm', notice: null, addFirm: { draft: EMPTY_DRAFT, issues: [], duplicateFirmId: null } };
-        }
-        if (method === 'addFirm') state = { ...state, screen: 'firm', firm: assigneeFirmPage(), addFirm: null, notice: 'firm_added' };
-        if (method === 'openImport') {
-          state = { ...state, screen: 'import', notice: null, import: { fileName: null, preview: null, fileRefusal: null, results: null } };
-        }
-        if (method === 'previewImport') state = { ...state, screen: 'import', notice: null, import: importPreviewView() };
-        if (method === 'commitImport') state = { ...state, notice: 'imported_with_refusals', import: importResultsView() };
-        // Lane g88: Confirm this number, Add to pipeline, Enrol.
-        if (method === 'confirmRoute' && state.firm !== null) {
-          state = { ...state, firm: confirmedFirmPage(state.firm), notice: 'route_confirmed' };
-        }
-        if (method === 'openOpportunity') state = { ...state, notice: 'opportunity_opened' };
-        // Lane g90: Check again queues a check; the address is still being checked.
-        if (method === 'checkRoute') state = { ...state, notice: 'route_check_queued' };
-        if (method === 'enroll') {
-          const input = argument as { contactId?: string } | null;
-          state = {
-            ...state,
-            notice: 'enrolled',
-            sequences: firmSequences({
-              enrollments: [
-                {
-                  enrollmentId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
-                  contactId: input?.contactId ?? '',
-                  label: 'Founder plan v1',
-                  state: 'active',
-                  startedAt: '2026-09-25T13:00:00.000Z',
-                },
-              ],
-            }),
-          };
-        }
-        return send(200, 'application/json', JSON.stringify(state));
-      }
-      return send(404, 'text/plain', 'not found');
-    })().catch(() => {
-      send(500, 'text/plain', 'test server failed');
-    });
-  });
-
-  await new Promise<void>(resolve => {
-    server.listen(0, '127.0.0.1', resolve);
-  });
-  const address = server.address() as AddressInfo;
-
-  return {
-    url: `http://127.0.0.1:${String(address.port)}/`,
-    calls,
-    setState: value => {
-      state = value;
-    },
-    stop: async () => {
-      // The page holds a keep-alive socket, and `close` waits for every open
-      // connection: a spec that made no bridge call leaves one idle and the hook
-      // hangs until the test times out. Closing them first is the whole fix.
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close(error => {
-          if (error) reject(error);
-          else resolve();
-        });
-      });
-    },
-  };
+  }
+  return state;
 }

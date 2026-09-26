@@ -12,10 +12,13 @@ import type { TodayCard, TodayRoute, TodayState, TodayTask } from './todayContra
  *
  * Three rules live here.
  *
- * **A stale list is readable and nothing on it is pressable.** 4.2: the client "shows
- * its unexpired cached Today view marked stale" and "mutations fail closed". So a
- * stale card renders, its counts render, and its dial, snooze and outcome controls
- * are disabled — including the expansion, because expanding needs the cloud.
+ * **A stale list is readable, and says so; nothing is disabled for it (wave 1).** 4.2:
+ * the client "shows its unexpired cached Today view marked stale" and "mutations fail
+ * closed". The banner is the mark. The server is where mutations fail closed: a dial or
+ * a snooze sent while the Mac is offline fails with its own notice, and one sent once
+ * it is back just works. Until wave 1 every control greyed out instead, and a single
+ * failed read after the Mac woke kept them grey until somebody pressed Refresh. A card
+ * expands while stale too, from the cached card when the read fails (`todayBridge`).
  *
  * **The order is the server's.** This file never sorts. 8.2's order is decided by the
  * snapshot and proved by a property test in `@fss/domain`; a second sort here would be
@@ -53,7 +56,7 @@ export const TASK_LABELS: Readonly<Record<TodayTask['kind'], string>> = Object.f
  * leaving a person to wonder why the button is missing.
  */
 export const NO_CALLING_NUMBER =
-  'Callie has no attested number of yours to call from. Add it in Window › Administration, under Your calling number.';
+  'Callie has no attested number of yours to call from. Add it in Administration (⌘5), under Your calling number.';
 
 const NOTICES: Readonly<Record<string, string>> = Object.freeze({
   offline: 'Callie cannot reach the server.',
@@ -139,10 +142,11 @@ export interface TodayScreenView {
   readonly outcomeItemId: string | null;
   /** Routes that may be dialed right now, in the versions the server just sent. */
   readonly dialableRoutes: readonly TodayRoute[];
-  /** Whether anything that would mutate cloud state may be offered at all. */
+  /**
+   * Whether anything that would mutate cloud state may be offered at all: signed in on
+   * a supported version. Offline and stale are banners, not this (wave 1).
+   */
   readonly actionsEnabled: boolean;
-  /** Whether a card may be expanded. Expansion is a cloud read, so not when stale. */
-  readonly expandEnabled: boolean;
   readonly showingCachedList: boolean;
   readonly emptyMessage: string | null;
 }
@@ -175,8 +179,8 @@ export function buildTodayView(state: TodayState): TodayScreenView {
       tone: 'warning',
       text:
         state.asOf === null
-          ? 'This list is from an earlier read. Nothing here can be changed until Callie reconnects.'
-          : `This list is from an earlier read, at ${state.asOf}. Nothing here can be changed until Callie reconnects.`,
+          ? 'This list is from an earlier read. Changes will fail until Callie reconnects.'
+          : `This list is from an earlier read, at ${state.asOf}. Changes will fail until Callie reconnects.`,
     });
   }
   if (state.notice !== null) banners.push({ tone: 'info', text: noticeSentence(state.notice) });
@@ -191,8 +195,7 @@ export function buildTodayView(state: TodayState): TodayScreenView {
     banners.push({ tone: 'info', text: NO_CALLING_NUMBER });
   }
 
-  const actionsEnabled = state.mayMutate && state.online && !state.stale;
-  const expandEnabled = state.online && !state.stale;
+  const actionsEnabled = state.mayMutate;
 
   const cards = state.cards.map(card => ({
     card,
@@ -238,7 +241,6 @@ export function buildTodayView(state: TodayState): TodayScreenView {
         ? (state.expanded?.routes ?? []).filter(route => route.eligibility === 'usable')
         : [],
     actionsEnabled,
-    expandEnabled,
     showingCachedList: state.stale && state.cards.length > 0,
     emptyMessage: state.cards.length > 0 ? null : state.online ? EMPTY_LIST : EMPTY_OFFLINE,
   };
