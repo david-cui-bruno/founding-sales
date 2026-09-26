@@ -28,6 +28,21 @@ import { holdReasonCodeSchema } from './reasonCodes.ts';
 export const STEP_CHANNELS = ['email', 'call_task'] as const;
 export type StepChannel = (typeof STEP_CHANNELS)[number];
 
+/**
+ * The channels removed from the product whose stored steps are still read (lane A2).
+ *
+ * LinkedIn went on 25 September 2026 and schema 17 still admits `linkedin_task` on a
+ * step and an execution, so a version published before then can still carry one. Such
+ * a step crosses the wire as channel `removed` with the channel it was — never its
+ * message text — and the Mac shows it greyed and uneditable. Nothing may author one:
+ * `STEP_CHANNELS` stays the draft vocabulary.
+ */
+export const REMOVED_STEP_CHANNELS = ['linkedin'] as const;
+export type RemovedStepChannel = (typeof REMOVED_STEP_CHANNELS)[number];
+
+/** Why a removed step is held, on the resume review. Not a `hold_reason_codes` row. */
+export const REMOVED_STEP_HELD_REASON = 'channel_removed' as const;
+
 export const SEQUENCE_VERSION_STATES = ['draft', 'published', 'retired'] as const;
 export type SequenceVersionState = (typeof SEQUENCE_VERSION_STATES)[number];
 
@@ -92,8 +107,8 @@ export const sequenceDelaySchema = z.discriminatedUnion('unit', [
 ]);
 export type SequenceDelay = z.infer<typeof sequenceDelaySchema>;
 
-/** One step, as `toStep` in `packages/domain/sequences/rows.ts` maps it. */
-export const sequenceStepDtoSchema = z.object({
+/** One step of a current channel, as `toStep` in `packages/domain/sequences/rows.ts` maps it. */
+export const currentSequenceStepDtoSchema = z.object({
   id: uuid,
   /** On every step, because the step table is keyed by it. D01 was a Mac that forbade it. */
   sequenceVersionId: uuid,
@@ -103,7 +118,31 @@ export const sequenceStepDtoSchema = z.object({
   onNoAnswer: z.enum(STEP_NO_ANSWER_ACTIONS).nullable(),
   templateVersionId: uuid.nullable(),
 });
+
+/**
+ * A stored step of a removed channel, read-only (lane A2): where it sat in the version
+ * and what it was, and nothing it carried. `sequenceVersionForDisplay` in
+ * `packages/domain/sequences/definitions.ts` maps it.
+ */
+export const removedSequenceStepDtoSchema = z.object({
+  id: uuid,
+  sequenceVersionId: uuid,
+  ordinal: z.number().int().min(1),
+  channel: z.literal('removed'),
+  removedChannel: z.enum(REMOVED_STEP_CHANNELS),
+  delay: sequenceDelaySchema,
+  onNoAnswer: z.null(),
+  templateVersionId: z.null(),
+});
+
+/** One step, current or removed. Before lane A2 a removed one failed the whole versions answer. */
+export const sequenceStepDtoSchema = z.discriminatedUnion('channel', [
+  currentSequenceStepDtoSchema,
+  removedSequenceStepDtoSchema,
+]);
 export type SequenceStepDto = z.infer<typeof sequenceStepDtoSchema>;
+export type CurrentSequenceStepDto = z.infer<typeof currentSequenceStepDtoSchema>;
+export type RemovedSequenceStepDto = z.infer<typeof removedSequenceStepDtoSchema>;
 
 export const sequenceVersionDtoSchema = z.object({
   id: uuid,
@@ -197,7 +236,7 @@ export const RESUME_DECISION_KINDS = ['still_held', 'review_required', 'resume']
 export type ResumeDecisionKind = (typeof RESUME_DECISION_KINDS)[number];
 
 /** One unexecuted step: where it is due now, and where a confirmed resume puts it. */
-export const resumePreviewStepSchema = z.object({
+export const currentResumePreviewStepSchema = z.object({
   stepExecutionId: uuid,
   ordinal: z.number().int().min(1),
   channel: z.enum(STEP_CHANNELS),
@@ -206,6 +245,28 @@ export const resumePreviewStepSchema = z.object({
   dueAt: instant,
   proposedDueAt: instant,
 });
+
+/**
+ * An unexecuted step of a removed channel (lane A2). Always held, for `channel_removed`:
+ * a resume leaves it held and unmoved (`proposedDueAt` is `dueAt`), and the worker holds
+ * one that is still pending before it does anything else with it.
+ */
+export const removedResumePreviewStepSchema = z.object({
+  stepExecutionId: uuid,
+  ordinal: z.number().int().min(1),
+  channel: z.literal('removed'),
+  removedChannel: z.enum(REMOVED_STEP_CHANNELS),
+  state: z.literal('held'),
+  heldReason: z.literal(REMOVED_STEP_HELD_REASON),
+  originalDueAt: instant,
+  dueAt: instant,
+  proposedDueAt: instant,
+});
+
+export const resumePreviewStepSchema = z.discriminatedUnion('channel', [
+  currentResumePreviewStepSchema,
+  removedResumePreviewStepSchema,
+]);
 export type ResumePreviewStepDto = z.infer<typeof resumePreviewStepSchema>;
 
 export const resumePreviewSchema = z.object({

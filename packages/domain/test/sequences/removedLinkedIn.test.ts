@@ -10,13 +10,17 @@ import {
   createDraftVersion,
   dueSequenceWorkSource,
   enrollContact,
+  listSequenceVersions,
   listStepExecutions,
+  previewResume,
   proposeEnrollmentMigration,
   publishVersion,
   readEnrollment,
   readSequenceVersion,
   recordingSendHandoff,
+  resumeAfterReview,
   runDueStepExecution,
+  sequenceVersionForDisplay,
 } from '../../sequences/index.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
@@ -49,8 +53,14 @@ let sequences: SeededSequences;
 let linkedInVersionId = '';
 let linkedInDraftId = '';
 let linkedInStepId = '';
+let linkedInSequenceId = '';
 /** A second sequence whose only version is a published LinkedIn one, so it has no draft yet. */
 let publishedOnlySequenceId = '';
+/** Lane A2: a published version of a LinkedIn task and then a call, and its two step ids. */
+let mixedSequenceId = '';
+let mixedVersionId = '';
+let mixedLinkedInStepId = '';
+let mixedCallStepId = '';
 
 const contextFor = (who: 'admin' | 'salesperson'): RepositoryContext =>
   repositoryContext(
@@ -95,7 +105,7 @@ async function publishedLinkedInVersion(sequenceId: string): Promise<{ readonly 
  */
 async function seedLinkedInSequences(): Promise<void> {
   const workspaceId = seeded.alpha.workspaceId;
-  const linkedInSequenceId = await one(
+  linkedInSequenceId = await one(
     'INSERT INTO sequences (workspace_id, name, created_by_user_id) VALUES ($1, $2, $3) RETURNING id',
     [workspaceId, 'LinkedIn first', seeded.alpha.admin.userId],
   );
@@ -118,6 +128,32 @@ async function seedLinkedInSequences(): Promise<void> {
     [workspaceId, 'LinkedIn only', seeded.alpha.admin.userId],
   );
   await publishedLinkedInVersion(publishedOnlySequenceId);
+
+  mixedSequenceId = await one(
+    'INSERT INTO sequences (workspace_id, name, created_by_user_id) VALUES ($1, $2, $3) RETURNING id',
+    [workspaceId, 'LinkedIn then a call', seeded.alpha.admin.userId],
+  );
+  mixedVersionId = await one(
+    'INSERT INTO sequence_versions (workspace_id, sequence_id, version) VALUES ($1, $2, 1) RETURNING id',
+    [workspaceId, mixedSequenceId],
+  );
+  mixedLinkedInStepId = await one(
+    `INSERT INTO sequence_steps
+       (workspace_id, sequence_version_id, ordinal, channel, delay_unit, delay_amount, linkedin_message)
+     VALUES ($1, $2, 1, 'linkedin_task', 'elapsed', 0, 'Hello — a note from before.') RETURNING id`,
+    [workspaceId, mixedVersionId],
+  );
+  mixedCallStepId = await one(
+    `INSERT INTO sequence_steps
+       (workspace_id, sequence_version_id, ordinal, channel, delay_unit, delay_amount, on_no_answer)
+     VALUES ($1, $2, 2, 'call_task', 'business_days', 2, 'advance') RETURNING id`,
+    [workspaceId, mixedVersionId],
+  );
+  await database.session.query(
+    `UPDATE sequence_versions SET state = 'published', published_at = now(), published_by_user_id = $3
+      WHERE workspace_id = $1 AND id = $2`,
+    [workspaceId, mixedVersionId, seeded.alpha.admin.userId],
+  );
 }
 
 /** A live enrollment in the stored LinkedIn version, and its due LinkedIn execution. */
@@ -394,3 +430,117 @@ describe('a manual-mode event with the removed linkedin_reply origin still stops
     expect((await readEnrollment(worker(), { enrollmentId: enrolled.value.enrollmentId }))?.endReason).toBe('human_reply');
   });
 });
+
+describe('a stored LinkedIn step is shown, read-only, and stays held (lane A2)', () => {
+  it('reads a schema-17 version with a LinkedIn step as a removed step, with nothing it carried', async () => {
+    // The vacuous-pass trap: the stored row really is a LinkedIn task with its message.
+    const { rows } = await database.session.query<{ channel: string; linkedin_message: string | null }>(
+      'SELECT channel, linkedin_message FROM sequence_steps WHERE workspace_id = $1 AND id = $2',
+      [seeded.alpha.workspaceId, mixedLinkedInStepId],
+    );
+    expect(rows[0]?.channel).toBe('linkedin_task');
+    expect(rows[0]?.linkedin_message).not.toBeNull();
+
+    const [version] = (await listSequenceVersions(worker(), mixedSequenceId)).map(sequenceVersionForDisplay);
+    expect(version?.id).toBe(mixedVersionId);
+    expect(version?.steps).toEqual([
+      {
+        id: mixedLinkedInStepId,
+        sequenceVersionId: mixedVersionId,
+        ordinal: 1,
+        channel: 'removed',
+        removedChannel: 'linkedin',
+        delay: { unit: 'elapsed', hours: 0 },
+        onNoAnswer: null,
+        templateVersionId: null,
+      },
+      {
+        id: mixedCallStepId,
+        sequenceVersionId: mixedVersionId,
+        ordinal: 2,
+        channel: 'call_task',
+        delay: { unit: 'business_days', days: 2 },
+        onNoAnswer: 'advance',
+        templateVersionId: null,
+      },
+    ]);
+    expect(JSON.stringify(version)).not.toContain('a note from before');
+
+    // Every version of the first sequence, the draft included, reads the same way.
+    const all = (await listSequenceVersions(worker(), linkedInSequenceId)).map(sequenceVersionForDisplay);
+    expect(all.map(entry => entry.steps.map(step => step.channel))).toEqual([['removed'], ['removed']]);
+
+    // The engine's own read is unchanged: it keeps the stored channel `isStepChannel` refuses.
+    expect((await readSequenceVersion(worker(), mixedVersionId))?.steps[0]?.channel).toBe('linkedin_task');
+  });
+
+  it('reviews a held LinkedIn execution as held for channel_removed, unmoved', async () => {
+    const { enrollmentId, executionId } = await storedLinkedInExecution();
+    await database.session.query(
+      `UPDATE step_executions SET state = 'held', hold_reason_code = 'long_hold_review'
+        WHERE workspace_id = $1 AND id = $2`,
+      [seeded.alpha.workspaceId, executionId],
+    );
+    const preview = await previewResume(contextFor('salesperson'), { enrollmentId });
+    if (!preview.ok) throw new Error(`the review was refused: ${preview.reason}`);
+    expect(preview.value.steps).toHaveLength(1);
+    const [step] = preview.value.steps;
+    expect(step).toMatchObject({
+      stepExecutionId: executionId,
+      ordinal: 1,
+      channel: 'removed',
+      removedChannel: 'linkedin',
+      state: 'held',
+      heldReason: 'channel_removed',
+    });
+    expect(step?.proposedDueAt).toBe(step?.dueAt);
+  });
+
+  it('keeps a held LinkedIn execution held on resume, and returns a current one to pending', async () => {
+    const workspaceId = seeded.alpha.workspaceId;
+    const enrollmentId = await one(
+      `INSERT INTO sequence_enrollments
+         (workspace_id, sequence_version_id, opportunity_id, firm_id, contact_id, assigned_user_id, state,
+          review_union_milliseconds, started_at, firm_time_zone, holiday_calendar_version)
+       VALUES ($1, $2, $3, $4, $5, $6, 'review_required', 864000000, now() - interval '12 days',
+               'America/New_York', $7)
+       RETURNING id`,
+      [
+        workspaceId,
+        mixedVersionId,
+        crm.alpha.opportunityId,
+        crm.alpha.firmId,
+        crm.alpha.contactId,
+        seeded.alpha.salesperson.userId,
+        sequences.alpha.calendarVersion,
+      ],
+    );
+    const held = async (stepId: string, channel: string, ordinal: number): Promise<string> =>
+      await one(
+        `INSERT INTO step_executions
+           (workspace_id, enrollment_id, step_id, firm_id, contact_id, channel, ordinal, state, hold_reason_code,
+            due_at, not_before, original_due_at, source_zone, rule_version)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'held', 'long_hold_review',
+                 now() - interval '1 day', now() - interval '1 day', now() - interval '1 day',
+                 'America/New_York', 'elapsed.1')
+         RETURNING id`,
+        [workspaceId, enrollmentId, stepId, crm.alpha.firmId, crm.alpha.contactId, channel, ordinal],
+      );
+    const linkedIn = await held(mixedLinkedInStepId, 'linkedin_task', 1);
+    const call = await held(mixedCallStepId, 'call_task', 2);
+
+    const resumed = await resumeAfterReview(contextFor('salesperson'), { enrollmentId });
+    expect(resumed).toMatchObject({ ok: true, value: { kind: 'resume' } });
+
+    const { rows } = await database.session.query<{ id: string; state: string; hold_reason_code: string | null }>(
+      'SELECT id, state, hold_reason_code FROM step_executions WHERE workspace_id = $1 AND enrollment_id = $2 ORDER BY ordinal',
+      [workspaceId, enrollmentId],
+    );
+    expect(rows).toEqual([
+      { id: linkedIn, state: 'held', hold_reason_code: 'long_hold_review' },
+      // The same resume did clear the current step, so the LinkedIn one staying held is the rule, not a no-op.
+      { id: call, state: 'pending', hold_reason_code: null },
+    ]);
+  });
+});
+

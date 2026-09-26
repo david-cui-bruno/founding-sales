@@ -1,6 +1,8 @@
 import {
   SENDING_STOP_LINE,
+  type CurrentSequenceStepDto,
   type EnrollmentDto,
+  type RemovedSequenceStepDto,
   type SequenceStepDto,
   type SequenceSummaryDto,
   type SequenceVersionDto,
@@ -40,7 +42,11 @@ export function sequenceSummaryAnswer(overrides: Partial<SequenceSummaryDto> = {
 }
 
 /** `toStep`: `sequenceVersionId` on every step, which is the key 1.0.4 refused. */
-export function emailStepAnswer(templateVersionId: string | null, ordinal = 1, overrides: Partial<SequenceStepDto> = {}): SequenceStepDto {
+export function emailStepAnswer(
+  templateVersionId: string | null,
+  ordinal = 1,
+  overrides: Partial<CurrentSequenceStepDto> = {},
+): CurrentSequenceStepDto {
   return {
     id: `55555555-5555-4555-8555-55555555555${String(ordinal)}`,
     sequenceVersionId: SEQUENCE_IDS.version,
@@ -53,7 +59,7 @@ export function emailStepAnswer(templateVersionId: string | null, ordinal = 1, o
   };
 }
 
-export function callStepAnswer(ordinal = 2, overrides: Partial<SequenceStepDto> = {}): SequenceStepDto {
+export function callStepAnswer(ordinal = 2, overrides: Partial<CurrentSequenceStepDto> = {}): CurrentSequenceStepDto {
   return {
     id: `55555555-5555-4555-8555-55555555556${String(ordinal)}`,
     sequenceVersionId: SEQUENCE_IDS.version,
@@ -63,6 +69,23 @@ export function callStepAnswer(ordinal = 2, overrides: Partial<SequenceStepDto> 
     onNoAnswer: 'advance',
     templateVersionId: null,
     ...overrides,
+  };
+}
+
+/**
+ * Lane A2: a LinkedIn step stored before 25 September 2026, as `sequenceVersionForDisplay`
+ * sends it — its place and delay, the channel it was, and no message.
+ */
+export function removedLinkedInStepAnswer(ordinal = 2): RemovedSequenceStepDto {
+  return {
+    id: `55555555-5555-4555-8555-55555555557${String(ordinal)}`,
+    sequenceVersionId: SEQUENCE_IDS.version,
+    ordinal,
+    channel: 'removed',
+    removedChannel: 'linkedin',
+    delay: { unit: 'business_days', days: 3 },
+    onNoAnswer: null,
+    templateVersionId: null,
   };
 }
 

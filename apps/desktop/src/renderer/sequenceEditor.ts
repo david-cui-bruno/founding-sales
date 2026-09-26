@@ -57,6 +57,7 @@ const PUBLISH_REFUSAL_SENTENCES: Readonly<Record<string, string>> = Object.freez
   version_has_no_steps: 'Add at least one step before publishing.',
   ordinals_not_contiguous: 'The steps are numbered with a gap. Renumber them 1, 2, 3.',
   email_step_needs_approved_template: 'An email step names a template version that is not approved.',
+  step_channel_removed: 'This draft still has a LinkedIn step, and LinkedIn was removed. Save the draft without it, then publish.',
   not_a_draft: 'Only a draft can be published. Editing a published version creates a new draft.',
   admin_only: 'Publishing a sequence is an administrator action.',
   offline: 'Offline. Nothing can be published until the connection comes back.',
@@ -149,10 +150,26 @@ function renderStops(section: HTMLElement, panel: VersionPanel): void {
   section.append(details);
 }
 
+/**
+ * A stored step of a removed channel (lane A2): one greyed line saying what it was, and
+ * no control, in whichever list it sits.
+ */
+function removedStepItem(step: VersionPanel['steps'][number]): HTMLLIElement {
+  const item = element('li', { className: 'step removed' });
+  item.dataset['testid'] = 'step-removed';
+  item.setAttribute('aria-disabled', 'true');
+  item.append(element('span', { className: 'detail', text: step.detail, testId: 'step-detail' }));
+  return item;
+}
+
 /** The steps of a version nobody is editing: published, retired, or a draft this person may not change. */
 function renderReadOnlySteps(section: HTMLElement, panel: VersionPanel): void {
   const steps = element('ol', { className: 'steps', testId: 'version-steps' });
   for (const step of panel.steps) {
+    if (step.removed) {
+      steps.append(removedStepItem(step));
+      continue;
+    }
     const item = element('li', { className: 'step' });
     item.dataset['testid'] = 'step';
     item.append(element('span', { className: 'channel', text: step.channel, testId: 'step-channel' }));
@@ -324,6 +341,22 @@ function renderDraftEditor(
     list.append(item);
   });
   section.append(list);
+
+  // Lane A2: a LinkedIn step stored in this draft is shown and cannot be edited; the
+  // editor does not hold it, so saving the draft leaves it out.
+  const removed = panel.steps.filter(step => step.removed);
+  if (removed.length > 0) {
+    const kept = element('ol', { className: 'steps', testId: 'version-removed-steps' });
+    for (const step of removed) kept.append(removedStepItem(step));
+    section.append(kept);
+    section.append(
+      element('p', {
+        className: 'hint',
+        testId: 'step-removed-hint',
+        text: 'Saving the draft leaves this step out. LinkedIn steps can no longer be added or published.',
+      }),
+    );
+  }
 
   const add = element('div', { className: 'toolbar' });
   if (steps.length === 0) {
@@ -648,6 +681,7 @@ function renderHoldReview(root: HTMLElement, screen: ReturnType<typeof sequenceS
       const steps = element('ol', { className: 'rows', testId: 'resume-steps' });
       for (const step of review.steps) {
         const entry = element('li', { testId: 'resume-step' });
+        if (step.removed) entry.className = 'removed';
         const line = element('div', { className: 'row' });
         const main = element('div', { className: 'row-main' });
         main.append(element('span', { className: 'name', text: step.label, testId: 'resume-step-label' }));

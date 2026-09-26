@@ -4,10 +4,16 @@ import { createAuthedClient, type AuthedClient } from '../src/main/authedClient.
 import { createSequenceBridge } from '../src/main/sequenceBridge.ts';
 import type { SequenceState, SequenceStep, TemplateVersion } from '../src/renderer/sequenceContract.ts';
 import {
+  EDITOR_CHANNELS,
   EMPTY_SEQUENCE_STATE,
+  REMOVED_STEP_LABELS,
   SEQUENCE_UNREAD,
+  draftChanged,
+  draftStepsOf,
   publishRefusalFor,
+  resumeReviewPanel,
   sequenceScreen,
+  stepsForWire,
 } from '../src/renderer/sequenceView.ts';
 import {
   FOOTER_SIGN_OFF,
@@ -15,6 +21,7 @@ import {
   callStepAnswer,
   emailStepAnswer,
   enrollmentAnswer,
+  removedLinkedInStepAnswer,
   sequenceSummaryAnswer,
   sequenceVersionAnswer,
   templateVersionAnswer,
@@ -290,5 +297,97 @@ describe('the bridge reads what the routes answer (lane g78)', () => {
     expect(state.versions[0]?.steps).toHaveLength(1);
     // Stripped, not carried: the window cannot show what the contract does not declare.
     expect(JSON.stringify(state.versions)).not.toContain('laterField');
+  });
+});
+
+describe('a LinkedIn step stored before 25 September 2026 (lane A2)', () => {
+  const LABEL = 'LinkedIn step (channel removed 25 Sep 2026)';
+  const bridgeOver = (answers: Readonly<Record<string, { status: number; body: unknown }>>) =>
+    createSequenceBridge({
+      api: createAuthedClient({
+        baseUrl: 'https://api.example.test/',
+        clientVersion: '1.0.5',
+        accessToken: async () => await Promise.resolve('token'),
+        send: async url => await Promise.resolve(answers[new URL(url).pathname] ?? { status: 404, body: { error: 'not_found' } }),
+      }),
+      session: {
+        state: async () => await Promise.resolve({ online: true, mayMutate: true, device: { role: 'admin' as const } }),
+      },
+    });
+  const published = sequenceVersionAnswer([callStepAnswer(1), removedLinkedInStepAnswer(2)], {
+    state: 'published',
+    publishedAt: '2026-09-01T12:00:00.000Z',
+  });
+
+  it('reads the versions answer instead of refusing it, and draws the step as one greyed row with no control', async () => {
+    const state = await bridgeOver({
+      '/sequences': { status: 200, body: { sequences: [sequenceSummaryAnswer()] } },
+      '/sequences/versions': { status: 200, body: { versions: [published] } },
+      '/templates': { status: 200, body: { templates: [] } },
+      '/enrollments': { status: 200, body: { asOf: '2026-09-25T13:00:00.000Z', enrollments: [] } },
+    }).state();
+    // Before lane A2 the whole answer failed to parse and the window said it could not read it.
+    expect(state.readErrors.versions).toBeNull();
+    expect(state.versions[0]?.steps.map(step => step.channel)).toEqual(['call_task', 'removed']);
+
+    const [panel] = sequenceScreen(state).versions;
+    expect(REMOVED_STEP_LABELS.linkedin).toBe(LABEL);
+    expect(panel?.steps[1]).toMatchObject({ ordinal: 2, channel: 'removed', detail: LABEL, problem: null, removed: true });
+    expect(panel?.steps[0]?.removed).toBe(false);
+    expect(panel?.editable).toBe(false);
+  });
+
+  it('keeps draft authoring closed: the editor neither holds, offers nor sends a LinkedIn step', () => {
+    const draft = draftVersion([callStepAnswer(1), removedLinkedInStepAnswer(2)]);
+    expect(EDITOR_CHANNELS).toEqual(['call_task', 'email']);
+    const held = draftStepsOf(draft);
+    expect(held.map(step => step.channel)).toEqual(['call_task']);
+    expect(stepsForWire(held).map(step => step['channel'])).toEqual(['call_task']);
+    // Saving is how the stored step leaves the draft, so the draft always reads as changed.
+    expect(draftChanged(draft, held)).toBe(true);
+    expect(publishRefusalFor(draft, [], { isAdmin: true, online: true })).toBe('step_channel_removed');
+  });
+
+  it('reviews a held LinkedIn execution as held for channel_removed, greyed and unmoved', () => {
+    const state: SequenceState = {
+      ...EMPTY_SEQUENCE_STATE,
+      online: true,
+      mayMutate: true,
+      resumeReview: {
+        asOf: '2026-09-25T13:00:00.000Z',
+        preview: {
+          enrollmentId: SEQUENCE_IDS.enrollment,
+          kind: 'resume',
+          unionMilliseconds: 0,
+          shiftMilliseconds: 0,
+          openHoldIds: [],
+          firmTimeZone: 'America/New_York',
+          holds: [],
+          steps: [
+            {
+              stepExecutionId: SEQUENCE_IDS.stepExecution,
+              ordinal: 2,
+              channel: 'removed',
+              removedChannel: 'linkedin',
+              state: 'held',
+              heldReason: 'channel_removed',
+              originalDueAt: '2026-09-17T13:00:00.000Z',
+              dueAt: '2026-09-17T13:00:00.000Z',
+              proposedDueAt: '2026-09-17T13:00:00.000Z',
+            },
+          ],
+        },
+      },
+    };
+    const panel = resumeReviewPanel(state.resumeReview!, state);
+    expect(panel.steps).toEqual([
+      {
+        label: `Step 2 · ${LABEL} (held: channel removed; resuming leaves it held)`,
+        from: 'Thu, Sep 17, 9:00 AM',
+        to: 'Thu, Sep 17, 9:00 AM',
+        moved: false,
+        removed: true,
+      },
+    ]);
   });
 });

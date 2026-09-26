@@ -11,10 +11,13 @@ import { CHANNEL_ACTION_KINDS, CHANNEL_PAUSE_KEYS } from './eligibility.ts';
 import { loadEnrollmentForUpdate, readEnrollment, unexecutedExecutions } from './rows.ts';
 import { rescheduleExecution } from './shifts.ts';
 import {
+  STEP_CHANNELS,
   acceptSequence,
   isStepChannel,
   refuseSequence,
+  removedChannelOf,
   type EnrollmentRow,
+  type RemovedStepChannel,
   type SequenceResult,
   type StepChannel,
   type StepExecutionState,
@@ -312,6 +315,9 @@ export async function resumeEnrollment(
   let shifted = 0;
   for (const execution of pending) {
     if (shiftMilliseconds <= 0) continue;
+    // A step of a channel this lane no longer runs (lane A2) is not moved: it will never
+    // be due, and the review showed it unmoved.
+    if (!isStepChannel(execution.channel)) continue;
     await rescheduleExecution(context, {
       execution,
       toDueAt: shiftDueInstant(execution.dueAt, shiftMilliseconds),
@@ -329,12 +335,16 @@ export async function resumeEnrollment(
   );
   // A step held for a reason that has now cleared goes back to pending; a step held
   // for `missing_variables`, whose hold this lane opened and nobody released, stays.
+  // So does a step of a removed channel (lane A2): a LinkedIn task stored before 25
+  // September 2026 was held because nothing may run it, and a resume does not change
+  // that. The channel list is the current one, so any channel it does not name stays.
   await context.db.query(
     `UPDATE step_executions
         SET state = 'pending', hold_reason_code = NULL, updated_at = now()
       WHERE workspace_id = $1 AND enrollment_id = $2 AND state = 'held'
-        AND hold_reason_code <> 'missing_variables'`,
-    [context.scope.workspaceId, enrollment.id],
+        AND hold_reason_code <> 'missing_variables'
+        AND channel = ANY($3::text[])`,
+    [context.scope.workspaceId, enrollment.id, [...STEP_CHANNELS]],
   );
 
   return acceptSequence({
@@ -359,18 +369,34 @@ export async function resumeAfterReview(
   return await resumeEnrollment(context, { enrollmentId: input.enrollmentId, afterReview: true });
 }
 
-/** One unexecuted step as the review shows it: where it is due now, and where a resume puts it. */
-export interface ResumePreviewStep {
+interface ResumePreviewStepDates {
   readonly stepExecutionId: string;
   readonly ordinal: number;
-  readonly channel: StepChannel;
-  readonly state: StepExecutionState;
   /** The instant the step was first planned for, which no shift ever moves (11.2). */
   readonly originalDueAt: string;
   readonly dueAt: string;
   /** Where a confirmed resume moves it. Equal to `dueAt` when nothing would move. */
   readonly proposedDueAt: string;
 }
+
+/**
+ * One unexecuted step as the review shows it: where it is due now, and where a resume
+ * puts it.
+ *
+ * A step of a removed channel (lane A2) is `removed`, held for `channel_removed` and
+ * unmoved, whatever its stored state: a resume keeps a held one held and does not shift
+ * it, and the worker holds a pending one before it does anything else with it
+ * (`runDueStepExecution`). Its stored hold reason is `long_hold_review`; the review
+ * names the cause instead.
+ */
+export type ResumePreviewStep =
+  | (ResumePreviewStepDates & { readonly channel: StepChannel; readonly state: StepExecutionState })
+  | (ResumePreviewStepDates & {
+      readonly channel: 'removed';
+      readonly removedChannel: RemovedStepChannel;
+      readonly state: 'held';
+      readonly heldReason: 'channel_removed';
+    });
 
 /** A hold that delayed this enrollment's work in the window the resume would apply. */
 export interface ResumePreviewHold {
@@ -436,14 +462,30 @@ export async function previewResume(
     openHoldIds: decision.kind === 'still_held' ? decision.openHoldIds : [],
     firmTimeZone: enrollment.firmTimeZone,
     holds: holds.map(hold => ({ reasonCode: hold.reasonCode, startedAt: hold.startedAt, releasedAt: hold.releasedAt })),
-    steps: pending.map(execution => ({
-      stepExecutionId: execution.id,
-      ordinal: execution.ordinal,
-      channel: execution.channel,
-      state: execution.state,
-      originalDueAt: execution.originalDueAt,
-      dueAt: execution.dueAt,
-      proposedDueAt: shift > 0 ? shiftDueInstant(execution.dueAt, shift) : execution.dueAt,
-    })),
+    steps: pending.map((execution): ResumePreviewStep => {
+      const dates = {
+        stepExecutionId: execution.id,
+        ordinal: execution.ordinal,
+        originalDueAt: execution.originalDueAt,
+        dueAt: execution.dueAt,
+      };
+      const removed = removedChannelOf(execution.channel);
+      if (removed !== null) {
+        return {
+          ...dates,
+          channel: 'removed',
+          removedChannel: removed,
+          state: 'held',
+          heldReason: 'channel_removed',
+          proposedDueAt: execution.dueAt,
+        };
+      }
+      return {
+        ...dates,
+        channel: execution.channel,
+        state: execution.state,
+        proposedDueAt: shift > 0 ? shiftDueInstant(execution.dueAt, shift) : execution.dueAt,
+      };
+    }),
   });
 }

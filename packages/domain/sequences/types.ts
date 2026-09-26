@@ -30,6 +30,28 @@ export function isStepChannel(value: string): value is StepChannel {
   return (STEP_CHANNELS as readonly string[]).includes(value);
 }
 
+/**
+ * The channels removed from the product whose stored rows are still read (lane A2).
+ *
+ * The engine keeps reading the stored value (`linkedin_task`) and refusing it through
+ * `isStepChannel`. What a person sees is mapped: a version's step by
+ * `sequenceVersionForDisplay` (`definitions.ts`) and a resume review's step by
+ * `previewResume` (`resume.ts`), each to channel `removed` with the channel it was and
+ * none of what it carried. `@fss/contracts` spells the same list.
+ */
+export const REMOVED_STEP_CHANNELS = ['linkedin'] as const;
+export type RemovedStepChannel = (typeof REMOVED_STEP_CHANNELS)[number];
+
+/** The stored channel value of each removed channel: the one migration 0012 still admits. */
+const STORED_REMOVED_CHANNELS: Readonly<Record<string, RemovedStepChannel>> = Object.freeze({
+  linkedin_task: 'linkedin',
+});
+
+/** The removed channel a stored channel value is, or null when it is not one. */
+export function removedChannelOf(stored: string): RemovedStepChannel | null {
+  return STORED_REMOVED_CHANNELS[stored] ?? null;
+}
+
 export const SEQUENCE_VERSION_STATES = ['draft', 'published', 'retired'] as const;
 export type SequenceVersionState = (typeof SEQUENCE_VERSION_STATES)[number];
 
@@ -152,6 +174,29 @@ export interface SequenceStepRow {
   readonly delay: SequenceDelay;
   readonly onNoAnswer: 'advance' | 'retry_call' | null;
   readonly templateVersionId: string | null;
+}
+
+/**
+ * A stored step of a removed channel, as a person is shown it (lane A2): its place and
+ * its delay, the channel it was, and nothing it carried — the LinkedIn message is not
+ * read at all (`STEP_COLUMNS` in `rows.ts` does not name it).
+ */
+export interface RemovedSequenceStep {
+  readonly id: string;
+  readonly sequenceVersionId: string;
+  readonly ordinal: number;
+  readonly channel: 'removed';
+  readonly removedChannel: RemovedStepChannel;
+  readonly delay: SequenceDelay;
+  readonly onNoAnswer: null;
+  readonly templateVersionId: null;
+}
+
+export type DisplayedSequenceStep = SequenceStepRow | RemovedSequenceStep;
+
+/** A version as `/sequences/versions` sends it: every step, a removed one as `RemovedSequenceStep`. */
+export interface DisplayedSequenceVersion extends Omit<SequenceVersionRow, 'steps'> {
+  readonly steps: readonly DisplayedSequenceStep[];
 }
 
 export interface SequenceVersionRow {
