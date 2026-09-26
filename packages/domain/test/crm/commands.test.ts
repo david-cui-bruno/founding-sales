@@ -509,11 +509,13 @@ describe('CRM commands', () => {
         );
         expect(source.rows[0]).toMatchObject({ status: 'merged', merged_into_firm_id: crm.alpha.firmId });
 
-        const mergeEvents = await context.db.query<{ record_kind: string }>(
-          'SELECT record_kind FROM record_merge_events WHERE workspace_id = $1 AND source_id = $2',
+        // The merge's record is its audit event (record_merge_events has no writer since
+        // wave 2; migration 0019 drops it).
+        const audited = await context.db.query<{ subject_id: string }>(
+          "SELECT subject_id FROM audit_events WHERE workspace_id = $1 AND action = 'firm.merged' AND detail->>'sourceFirmId' = $2",
           [seeded.alpha.workspaceId, duplicate.value.id],
         );
-        expect(mergeEvents.rows).toHaveLength(1);
+        expect(audited.rows).toEqual([{ subject_id: crm.alpha.firmId }]);
       });
     });
 

@@ -99,14 +99,14 @@ async function seedVerdicts(verdicts: readonly ('healthy' | 'unhealthy' | 'quiet
 }
 
 /** Put one business date's counters where a test wants them. */
-async function setDay(businessDate: string, counts: { readonly automated?: number; readonly direct?: number }): Promise<void> {
+async function setDay(businessDate: string, counts: { readonly automated?: number }): Promise<void> {
   await session().query(
-    `INSERT INTO mailbox_send_days (workspace_id, mailbox_id, business_date, automated_sent, direct_sent, cap_granted)
-     VALUES ($1, $2, $3::date, $4, $5, 100)
+    `INSERT INTO mailbox_send_days (workspace_id, mailbox_id, business_date, automated_sent, cap_granted)
+     VALUES ($1, $2, $3::date, $4, 100)
      ON CONFLICT (workspace_id, mailbox_id, business_date)
-     DO UPDATE SET automated_sent = EXCLUDED.automated_sent, direct_sent = EXCLUDED.direct_sent,
+     DO UPDATE SET automated_sent = EXCLUDED.automated_sent,
                    cap_granted = greatest(mailbox_send_days.cap_granted, EXCLUDED.cap_granted), updated_at = now()`,
-    [workspaceId(), mailboxId(), businessDate, counts.automated ?? 0, counts.direct ?? 0],
+    [workspaceId(), mailboxId(), businessDate, counts.automated ?? 0],
   );
 }
 

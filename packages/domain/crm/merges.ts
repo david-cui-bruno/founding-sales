@@ -188,19 +188,6 @@ export async function mergeFirms(
     [context.scope.workspaceId, source.id, target.id],
   );
 
-  await context.db.query(
-    `INSERT INTO record_merge_events
-       (workspace_id, record_kind, source_id, target_id, firm_id, performed_by_user_id, command_id, preserved)
-     VALUES ($1, 'firm', $2, $3, $3, $4, $5, $6::jsonb)`,
-    [
-      context.scope.workspaceId,
-      source.id,
-      target.id,
-      actorUserId(context),
-      input.commandId ?? null,
-      JSON.stringify(preserved),
-    ],
-  );
   await emitCrmDomainEvent(context, {
     kind: 'firm.merged',
     firmId: target.id,
@@ -288,20 +275,6 @@ export async function mergeContacts(
     [context.scope.workspaceId, source.id, target.id],
   );
 
-  await context.db.query(
-    `INSERT INTO record_merge_events
-       (workspace_id, record_kind, source_id, target_id, firm_id, performed_by_user_id, command_id, preserved)
-     VALUES ($1, 'contact', $2, $3, $4, $5, $6, $7::jsonb)`,
-    [
-      context.scope.workspaceId,
-      source.id,
-      target.id,
-      target.firm_id,
-      actorUserId(context),
-      input.commandId ?? null,
-      JSON.stringify(preserved),
-    ],
-  );
   await emitCrmDomainEvent(context, {
     kind: 'contact.merged',
     firmId: target.firm_id,

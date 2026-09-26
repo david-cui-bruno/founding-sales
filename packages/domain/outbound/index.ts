@@ -51,7 +51,6 @@ export {
   claimedAutomatedSends,
   closeSendDay,
   countAutomatedSend,
-  countDirectSend,
   effectiveDailyCap,
   ensureRamp,
   listDaysToClose,

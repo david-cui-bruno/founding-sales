@@ -433,10 +433,8 @@ export async function readFenceByStepExecution(
  * `packages/domain/mail/pipeline.ts` said so out loud — "until G7-2's fence exists,
  * every outgoing message that matches is a direct send, which is exactly right while
  * FSS has sent nothing: the fence lookup goes here". The fence exists now, and what it
- * costs to keep believing otherwise is two wrong things at once: FSS's own step-one
- * email would switch its opportunity to manual (7.3 reserves that for a *direct* send),
- * and 12.7's `direct_sent` counter would double-count a message already counted as
- * `automated_sent`.
+ * costs to keep believing otherwise is that FSS's own step-one email would switch its
+ * opportunity to manual (7.3 reserves that for a *direct* send).
  *
  * Two joins, because either can be missing: the deterministic `Message-ID` FSS wrote
  * before it sent (`<fss.{fence}@{domain}>`, unique per mailbox by

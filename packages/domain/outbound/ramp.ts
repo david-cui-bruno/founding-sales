@@ -538,7 +538,6 @@ export interface SendDayRow {
   readonly id: string;
   readonly businessDate: string;
   readonly automatedSent: number;
-  readonly directSent: number;
   readonly capGranted: number;
   readonly healthy: boolean | null;
 }
@@ -560,7 +559,6 @@ export async function openSendDay(
     id: string;
     business_date: Date | string;
     automated_sent: number;
-    direct_sent: number;
     cap_granted: number;
     healthy: boolean | null;
   }>(
@@ -569,7 +567,7 @@ export async function openSendDay(
      ON CONFLICT (workspace_id, mailbox_id, business_date)
      DO UPDATE SET cap_granted = greatest(mailbox_send_days.cap_granted, EXCLUDED.cap_granted),
                    updated_at = now()
-     RETURNING id, business_date, automated_sent, direct_sent, cap_granted, healthy`,
+     RETURNING id, business_date, automated_sent, cap_granted, healthy`,
     [context.scope.workspaceId, input.mailboxId, input.businessDate, input.cap],
   );
   const row = rows[0];
@@ -578,7 +576,6 @@ export async function openSendDay(
     id: row.id,
     businessDate: asDate(row.business_date) ?? input.businessDate,
     automatedSent: row.automated_sent,
-    directSent: row.direct_sent,
     capGranted: row.cap_granted,
     healthy: row.healthy,
   };
@@ -635,27 +632,6 @@ export async function claimedAutomatedSends(
     [context.scope.workspaceId, input.mailboxId, input.businessDate],
   );
   return Number(rows[0]?.claimed ?? '0');
-}
-
-/**
- * Count one direct send — a message the salesperson wrote in Gmail themselves.
- *
- * 12.7: "All outgoing Gmail messages, including direct sends, count toward
- * operational headroom." They are counted in their own column and never against the
- * automated cap, because the cap is FSS's self-restraint and a person writing their
- * own email is not FSS.
- */
-export async function countDirectSend(
-  context: RepositoryContext,
-  input: { readonly mailboxId: string; readonly businessDate: string; readonly cap: number },
-): Promise<void> {
-  await context.db.query(
-    `INSERT INTO mailbox_send_days (workspace_id, mailbox_id, business_date, cap_granted, direct_sent)
-     VALUES ($1, $2, $3::date, $4, 1)
-     ON CONFLICT (workspace_id, mailbox_id, business_date)
-     DO UPDATE SET direct_sent = mailbox_send_days.direct_sent + 1, updated_at = now()`,
-    [context.scope.workspaceId, input.mailboxId, input.businessDate, input.cap],
-  );
 }
 
 /** Record a bounce, an opt-out or a provider error against the day the ramp reads. */
