@@ -120,7 +120,6 @@ mock_provider "aws" {
 }
 
 variables {
-  aws_account_id      = "123456789012"
   certificate_arn     = "arn:aws:acm:us-east-1:123456789012:certificate/11111111-2222-4333-8444-555555555555"
   api_hostname        = "rehearsal.example.invalid"
   api_image           = "123456789012.dkr.ecr.us-east-1.amazonaws.com/fss-rh-api@sha256:0000000000000000000000000000000000000000000000000000000000000001"
@@ -133,7 +132,7 @@ variables {
 # unknown for the whole plan phase once the mock stops pretending otherwise
 # (`override_during = apply`). A real plan is exactly as blind. An apply run
 # under a mocked provider reaches nothing and needs no credential.
-# `docs/decisions/g12j-mock-providers-keep-computed-values-unknown.md`.
+# `docs/archive/decisions/g12j-mock-providers-keep-computed-values-unknown.md`.
 run "every_deny_but_the_transport_one_exempts_this_runs_deployment_role" {
   command = apply
 
@@ -147,7 +146,7 @@ run "every_deny_but_the_transport_one_exempts_this_runs_deployment_role" {
   assert {
     condition = alltrue([
       for statement in jsondecode(module.stack.journal_policy_json).Statement :
-      contains(try(statement.Condition.ArnNotEquals["aws:PrincipalArn"], []), "arn:aws:iam::123456789012:role/fss-rh-deploy")
+      contains(try(statement.Condition.ArnNotEquals["aws:PrincipalArn"], []), "arn:aws:iam::326255650484:role/fss-rh-deploy")
       if statement.Effect == "Deny" && statement.Sid != "DenyUnencryptedTransport"
     ])
     error_message = "Every deny but the transport one must exempt the role that created the bucket, or its own deployer cannot tear it down. The fourth credentialed rehearsal left a bucket behind for exactly this reason."
@@ -169,7 +168,7 @@ run "every_deny_but_the_transport_one_exempts_this_runs_deployment_role" {
   assert {
     condition = alltrue([
       for statement in jsondecode(module.stack.journal_policy_json).Statement :
-      statement.Condition.ArnNotEquals["aws:PrincipalArn"] == ["arn:aws:iam::123456789012:role/fss-rh-deploy"]
+      statement.Condition.ArnNotEquals["aws:PrincipalArn"] == ["arn:aws:iam::326255650484:role/fss-rh-deploy"]
       if statement.Sid == "DenyListingFromAnyoneButTheTaskRolesAndTheDeployer"
     ])
     error_message = "The listing deny exempts this run's deployment role, once."

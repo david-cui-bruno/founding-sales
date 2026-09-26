@@ -7,7 +7,7 @@
 The worker publishes both gauges on every metric pass, once a minute. They have no
 dimensions and are summed over every workspace (lane g72; `collectSequenceMetrics` in
 `packages/domain/sequences/metrics.ts`,
-`docs/decisions/g72-enrollment-gauges.md`).
+`docs/archive/decisions/g72-enrollment-gauges.md`).
 
 - **`ActiveEnrollments`**: live enrollments, meaning `active` or `review_required`.
   Completed and stopped enrollments are not counted.
@@ -23,7 +23,7 @@ dimensions and are summed over every workspace (lane g72; `collectSequenceMetric
 - `scoped_pause`. This covers an admin pause at any scope, a salesperson's Today delay,
   and sending switched off (the deployment flag, the workspace attestation, the domain's
   automated-sending switch, or no sending domain).
-- `daily_cap`, `domain_cap`, `outside_email_window` and `send_unknown_reconciling`.
+- `daily_cap`, `outside_email_window` and `send_unknown_reconciling`.
 
 Every other reason counts. A counted hold under a pause still counts.
 
@@ -63,8 +63,8 @@ ones, most likely first:
   action kind. See `restore_generation_mismatch`.
 - `provider_refusal` on every firm: Gmail is refusing sends, for example because of a
   rate limit or a suspended account.
-- `send_unknown_terminal` / `dead_job`: sends nobody can account for, or failed jobs.
-  See `dead_job_unresolved`.
+- `send_unknown_terminal`: sends nobody can account for. Failed jobs are
+  `dead_job_unresolved`'s.
 - `long_hold_review`: holds whose union passed seven days. These never resume without
   the salesperson's review, by design.
 - `uncertain_reply` / `ambiguous_match` / `manual_suppression_review`: prospect-driven

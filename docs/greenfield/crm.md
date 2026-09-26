@@ -28,7 +28,7 @@ packages/domain/crm/routePolicy.ts           the versioned eligibility threshold
 packages/domain/crm/routeValidation.ts       what a passed email validation is (lane g90)
 apps/worker/src/handlers/routeValidate.ts    the route.validate job and its sweep
 packages/domain/crm/zone.ts                  the postal source behind G0's zone seam
-packages/domain/crm/evidence.ts              research evidence, idempotent per result
+packages/domain/crm/evidence.ts              evidence items, idempotent per result
 packages/domain/crm/pipeline.ts              stages, stage changes, close, reopen
 packages/domain/crm/merges.ts                firm and contact merges
 packages/domain/crm/events.ts                the outbox later lanes subscribe to
@@ -173,7 +173,7 @@ checked. No SMTP callout, no third party, nothing is sent.
 Eligibility is still `decideRouteEligibility`'s, from the route's source and confidence.
 A passed address with no recorded confidence that a member entered themselves
 (`salesperson`, `import`) records confidence 1 — the person vouched for it — and so
-becomes usable; a research or website address with none stays a candidate. A failed one
+becomes usable; an address from any other source with none stays a candidate. A failed one
 is `invalid`. Nothing here lowers a `usable` route: it is never an unchecked candidate.
 
 An unanswered address is asked about again by the `route-validation` source: ten minutes
@@ -182,7 +182,7 @@ twenty addresses a pass. The Firm page's second version (`pageVersion: 2`) carri
 route's `technicalValidation`; the page says **Checking…** (with **Check again**,
 `POST /contacts/routes/check`), **Deliverable domain — usable**, **Deliverable domain —
 not usable yet**, or **Mail can’t reach this address — invalid**.
-`docs/decisions/g90-email-technical-validation.md` has the reasons for every row.
+`docs/archive/decisions/g90-email-technical-validation.md` has the reasons for every row.
 
 ### `pipeline_stages`
 
@@ -215,11 +215,11 @@ append-only by privilege.
 Why not a `jobs` row: Appendix C's job kinds are a closed set the queue owns, no
 handler was registered for any of these when the table was written, and a job nobody
 handles becomes a dead job and then a critical alert. See
-`docs/decisions/g3a-domain-event-outbox.md`, whose "what would change this" paragraph
+`docs/archive/decisions/g3a-domain-event-outbox.md`, whose "what would change this" paragraph
 predicted the job kind that now drains the first two rows —
 `sequence.terminal_stop`, in `apps/worker/src/handlers/terminalStop.ts`. The table did
 not change; it gained a reader (lane G15,
-`docs/decisions/g15-the-worker-drains-what-the-lanes-left.md`).
+`docs/archive/decisions/g15-the-worker-drains-what-the-lanes-left.md`).
 
 ## Reassignment (Appendix A)
 
@@ -257,9 +257,9 @@ refusal rather than a cascade, because moving a person between firms is what the
 semantic key exists to prevent. Merge the firms first.
 
 The merge takes the source firm's row lock before anything else, which is what makes
-it correct "under concurrent research enrichment": an uncommitted `INSERT` into a child
+it correct under a concurrent write to one of the firm's children: an uncommitted `INSERT` into a child
 table already holds `FOR KEY SHARE` on that row, so the merge either waits and carries
-the enrichment over, or the enrichment lands after the merge on a firm the next command
+the write over, or the write lands after the merge on a firm the next command
 refuses as `firm_merged`.
 
 ## What is deliberately not here
@@ -273,7 +273,7 @@ refuses as `firm_merged`.
   `apps/api/src/routes/pipeline.ts`, and the adjective is enforced: no command touches
   a terminal stage, because `changeStage` finds Won and Lost by `terminal_kind` and a
   workspace that had renamed or retired one would have closed opportunities nobody can
-  create (`docs/decisions/g9-terminal-stages-are-not-administrable.md`). Positions stay
+  create (`docs/archive/decisions/g9-terminal-stages-are-not-administrable.md`). Positions stay
   contiguous from 1 with the terminal stages last after every command. The note said
   "still unowned" until lane G15's documentation sweep found it stale.
 * **Suppression and dial authorization** — lane G4. This lane records the route

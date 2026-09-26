@@ -284,9 +284,8 @@ if rehearsal_dry_run; then
   rehearsal_plan "fss admin counts --as-of $RESTORE_TARGET (in-VPC task, operations, against the source)"
   # A baseline the caller already placed is left alone, so the refusal below can be
   # exercised offline with a deliberately empty one. `test/release/scenario11.check.ts`
-  # does exactly that, and the mutation check requires it to fail when the refusal is
-  # removed — which is how "a drill against an empty database proves nothing" stops
-  # being a comment and becomes a test.
+  # does exactly that and expects the refusal — which is how "a drill against an empty
+  # database proves nothing" stops being a comment and becomes a test.
   if [ ! -f "$BASELINE" ]; then
     cat > "$BASELINE" <<'JSON'
 {"asOf":"2026-09-21T00:00:00Z","sends":1,"replies":1,"suppressions":1,"crm_edits":1,"migrations":1,"systemGeneration":1}

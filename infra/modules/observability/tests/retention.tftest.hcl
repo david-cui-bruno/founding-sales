@@ -123,7 +123,7 @@ run "not_sharing_keeps_the_key_policy_to_logs" {
 # during the apply phase, so this comparison cannot be made during a plan any
 # more than a real one could. An apply run under a mocked provider reaches
 # nothing and needs no credential.
-# `docs/decisions/g12j-mock-providers-keep-computed-values-unknown.md`.
+# `docs/archive/decisions/g12j-mock-providers-keep-computed-values-unknown.md`.
 run "every_log_group_is_encrypted_with_the_module_s_own_key" {
   command = apply
 

@@ -21,7 +21,7 @@ name: Greenfield deploy
 #            minutes for a gate still running, then answers `manual` with the reason, as
 #            it does at once for a red gate or a commit no longer on main. The deploy job
 #            starts only after `pass`, and the same step runs again, waiting for nothing,
-#            immediately before its first write and before the record job's put.
+#            immediately before its first write, and in the record job before its read-back.
 #   ranges   the images commit, no credential. The one job that runs code from it for a
 #            value: the two schema ranges the images declare, emitted as validated
 #            scalars. Anything it prints is re-validated where it is used.
@@ -33,18 +33,24 @@ name: Greenfield deploy
 #            production's images were built from and found no protected path in any
 #            commit between the two. Then only `infra/scripts/`, which that guard has
 #            just proved identical to production's own commit, and never Node or
-#            anything under `apps/`, `packages/` or `scripts/`.
+#            anything under `apps/`, `packages/` or `scripts/`. Its first write is the
+#            release record: after `check` decides `deploy` and the gate is read again,
+#            `infra/scripts/ci-deploy-app.sh record --before-rollout` builds the ci-gate
+#            record for the two digests (`release-record-from-ci.sh`) and puts it with
+#            `fss admin release-record put` on the operations task. Only then are the
+#            images promoted and the services rolled. The worker admits a send only
+#            under a stored record naming its digest, so no new worker task starts
+#            without one; once the owner's attestation names the release process
+#            (`ci-gate:main`, release.md 6), that record is all it needs.
 #   smoke    the images commit, no credential: `scripts/productionSmoke.mjs` against the
 #            public origin, with the canary age the deploy job read as a scalar.
 #   record   the other job with `id-token: write`, in the same environment, and only
-#            after a deploy that rolled out and a smoke that passed (lane g100). It
-#            reads the gate and main again with the `gates` step, then
-#            runs `infra/scripts/ci-deploy-app.sh record`: the ci-gate release record for
-#            the two digests (`release-record-from-ci.sh`), put with `fss admin
-#            release-record put` on the operations task. Once the owner's attestation
-#            names the release process (`ci-gate:main`, release.md 6), that record is
-#            what keeps the new worker sending. It runs only `infra/scripts/` from the
-#            images commit, which the deploy job's guard proved unchanged, and no Node.
+#            after a deploy that rolled out and a smoke that passed: the read-back. It
+#            reads the gate and main again with the `gates` step, then runs
+#            `infra/scripts/ci-deploy-app.sh record --after-rollout`, which refuses unless
+#            production runs the two digests, puts the same record again and requires
+#            `existing`. It runs only `infra/scripts/` from the images commit, which the
+#            deploy job's guard proved unchanged, and no Node.
 #   summary  one line, whatever happened.
 #
 # ## Where it stops
@@ -63,16 +69,17 @@ name: Greenfield deploy
 #     outside the images run's own window;
 #   * the gate again, immediately before the first write: anything but green and on
 #     main now fails the run red, with nothing written;
+#   * `ci-deploy-app.sh record --before-rollout`: a record `release-record-from-ci.sh`
+#     refuses to write, or a put the operations task did not make. The run is red and
+#     nothing was promoted or deployed;
 #   * `ci-deploy-app.sh deploy`: a registered revision that differs from the running one
 #     in more than the image, a rollout ECS rolled back or did not call COMPLETED, or a
 #     running task without the new digest. The worker goes first and the API is not
 #     touched after a worker that failed;
-#   * `record`: a gate that is not green on the images commit, or a commit no longer
-#     on main, a record
-#     `release-record-from-ci.sh` refuses to write, or a put the operations task did not
-#     make. The deploy has already rolled out and passed its smoke, so the run is red
-#     with one line: the record was not put, and sending holds for the new worker until
-#     the operator puts its record by hand (release.md 4.2).
+#   * `record` (the read-back): a gate that is not green on the images commit, a commit
+#     no longer on main, production not running the two digests, or a put that does not
+#     answer `existing`. The record was stored before the rollout, so sending does not
+#     hold; the run is red with one line naming what the read-back found (release.md 4.0).
 #
 # ## Two merges
 #
@@ -337,8 +344,9 @@ jobs:
     if: needs.gates.outputs.decision == 'pass'
     runs-on: ubuntu-24.04
     # Twice the worst rollout (two services, three ten-minute waits each), plus the
-    # promotion and the checks. The credential lasts two hours.
-    timeout-minutes: 150
+    # release record's put (one one-off task of up to twenty minutes), the promotion and
+    # the checks. The credential lasts two hours.
+    timeout-minutes: 170
     # The one OIDC subject fss-prod-ci-deploy trusts. Its deployment-branch rule is main
     # only; the `run` job refuses anything else as well.
     environment: production-deploy
@@ -356,6 +364,8 @@ jobs:
       observed: ${{ steps.observed.outputs.observed }}
       expect_sending: ${{ steps.deploy.outputs.expect_sending }}
       canary_age: ${{ steps.canary.outputs.age }}
+      release_record_reference: ${{ steps.record.outputs.release_record_reference }}
+      release_record_outcome: ${{ steps.record.outputs.release_record_outcome }}
     defaults:
       run:
         shell: bash
@@ -710,6 +720,49 @@ jobs:
             minute=$((minute + 1))
           done
 
+      # The release record, before anything else is written. The worker admits a send only
+      # under a stored record naming its own digest; put after the rollout, the record was
+      # missing for every new worker task that started meanwhile, and a step due then was
+      # refused `release_record_unknown` for up to an hour. A record for a rollout that
+      # then fails is inert. The four network identifiers are public, and come from
+      # repository variables the operator set from the production root's outputs
+      # (release.md 4.0), never from Terraform state, which this role cannot read.
+      - name: Build the ci-gate record and put it on the operations task, before the rollout
+        id: record
+        if: steps.check.outputs.decision == 'deploy'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ needs.run.outputs.commit }}
+          RUN_ID: ${{ needs.run.outputs.run_id }}
+          RUN_ATTEMPT: ${{ needs.run.outputs.run_attempt }}
+          RUN_STARTED: ${{ needs.run.outputs.run_started }}
+          RUN_ENDED: ${{ needs.run.outputs.run_ended }}
+          API_RANGE: ${{ needs.ranges.outputs.api_range }}
+          WORKER_RANGE: ${{ needs.ranges.outputs.worker_range }}
+          GATE_RUN_ID: ${{ steps.gates.outputs.gate_run_id }}
+          CLUSTER_NAME: ${{ vars.FSS_PRODUCTION_CLUSTER_NAME }}
+          OPERATIONS_FAMILY: ${{ vars.FSS_PRODUCTION_OPERATIONS_TASK_FAMILY }}
+          TASK_SUBNETS: ${{ vars.FSS_PRODUCTION_TASK_SUBNET_IDS }}
+          TASK_SECURITY_GROUP: ${{ vars.FSS_PRODUCTION_TASK_SECURITY_GROUP_ID }}
+        run: |
+          set -euo pipefail
+          infra/scripts/ci-deploy-app.sh record --before-rollout \
+            --digests "$RUNNER_TEMP/fss-image-digests/image-digests.json" \
+            --commit "$COMMIT" --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" \
+            --run-started "$RUN_STARTED" --run-ended "$RUN_ENDED" \
+            --api-range "$API_RANGE" --worker-range "$WORKER_RANGE" \
+            --gate-run-id "$GATE_RUN_ID" --cluster-name "$CLUSTER_NAME" \
+            --operations-family "$OPERATIONS_FAMILY" \
+            --subnets "$TASK_SUBNETS" --security-group "$TASK_SECURITY_GROUP"
+
+      - name: The record was not put, so nothing was deployed
+        if: failure() && steps.record.outcome == 'failure'
+        env:
+          COMMIT: ${{ needs.run.outputs.commit }}
+        run: |
+          echo "::error::The release record for ${COMMIT:0:8} was NOT put before the rollout, so nothing was promoted or deployed. Re-run the deploy job once the cause is gone (docs/greenfield/release.md 4.0)."
+          exit 1
+
       - name: Promote both images into the production repositories, by digest
         if: steps.check.outputs.decision == 'deploy'
         run: |
@@ -734,9 +787,6 @@ jobs:
             --commit "$COMMIT" --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" \
             --run-started "$RUN_STARTED" --run-ended "$RUN_ENDED" \
             --api-range "$API_RANGE" --worker-range "$WORKER_RANGE"
-
-      # The release record for these digests is put by the `record` job, after the
-      # smoke has passed (lane g100).
 
       - name: Read the canary age the smoke judges
         id: canary
@@ -836,7 +886,7 @@ jobs:
   # smoke failed has not earned it. Its own job, because the smoke holds no credential.
   # The workflow's own group keeps it from overlapping the next deploy.
   record:
-    name: Put the release record for the deployed digests
+    name: Read the release record back, after the rollout and the smoke
     needs: [run, ranges, deploy, smoke]
     if: needs.deploy.result == 'success' && needs.deploy.outputs.decision == 'deploy' && needs.smoke.result == 'success'
     runs-on: ubuntu-24.04
@@ -888,8 +938,8 @@ jobs:
           done
 
       # The gates job's step again. It was green before the deploy; a re-run since
-      # that is red, or main moved off the commit, and no record is put. No credential is
-      # held while it waits for a re-run still going.
+      # that is red, or main moved off the commit, and nothing is put again. No credential
+      # is held while it waits for a re-run still going.
       - name: The gate on the images commit, green, and the commit still on main
         id: gates
         env:
@@ -1081,10 +1131,10 @@ jobs:
             || { echo "::error::the session is $identity, not this run's session of $ROLE_ARN"; exit 1; }
           echo "session $identity"
 
-      # The four network identifiers are public, and come from repository variables the
-      # operator set from the production root's outputs (release.md 4.0), never from
-      # Terraform state, which this role cannot read.
-      - name: Build the ci-gate record and put it on the operations task
+      # The same record the deploy job put before the rollout, built again from the same
+      # gate run and put again: it must answer `existing`, for a production that now runs
+      # its digests.
+      - name: Put the same record again, which must answer existing
         id: put
         env:
           GH_TOKEN: ${{ github.token }}
@@ -1102,7 +1152,7 @@ jobs:
           TASK_SECURITY_GROUP: ${{ vars.FSS_PRODUCTION_TASK_SECURITY_GROUP_ID }}
         run: |
           set -euo pipefail
-          infra/scripts/ci-deploy-app.sh record \
+          infra/scripts/ci-deploy-app.sh record --after-rollout \
             --digests "$RUNNER_TEMP/fss-image-digests/image-digests.json" \
             --commit "$COMMIT" --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" \
             --run-started "$RUN_STARTED" --run-ended "$RUN_ENDED" \
@@ -1111,12 +1161,12 @@ jobs:
             --operations-family "$OPERATIONS_FAMILY" \
             --subnets "$TASK_SUBNETS" --security-group "$TASK_SECURITY_GROUP"
 
-      - name: The record was not put
+      - name: The record was not read back
         if: failure()
         env:
           COMMIT: ${{ needs.run.outputs.commit }}
         run: |
-          echo "::error::The release record for ${COMMIT:0:8} was NOT put. The deploy rolled out and passed its smoke; sending holds for the new worker until the operator puts its record by hand (docs/greenfield/release.md 4.2)."
+          echo "::error::The release record for ${COMMIT:0:8} was put before the rollout, and the read-back after it failed (above). Read it with fss admin release-record show (docs/greenfield/release.md 4.0)."
           exit 1
 
   summary:
@@ -1146,9 +1196,10 @@ jobs:
           PREVIOUS_API: ${{ needs.deploy.outputs.previous_api_task_definition }}
           PREVIOUS_WORKER: ${{ needs.deploy.outputs.previous_worker_task_definition }}
           OBSERVED: ${{ needs.deploy.outputs.observed }}
-          RECORD_RESULT: ${{ needs.record.result }}
-          RECORD_REFERENCE: ${{ needs.record.outputs.reference }}
-          RECORD_OUTCOME: ${{ needs.record.outputs.outcome }}
+          RECORD_REFERENCE: ${{ needs.deploy.outputs.release_record_reference }}
+          RECORD_OUTCOME: ${{ needs.deploy.outputs.release_record_outcome }}
+          READBACK_RESULT: ${{ needs.record.result }}
+          READBACK_OUTCOME: ${{ needs.record.outputs.outcome }}
         run: |
           set -euo pipefail
           short="${COMMIT:0:8}"
@@ -1161,12 +1212,12 @@ jobs:
             [ -z "$PREVIOUS_API$PREVIOUS_WORKER" ] || line="$line Before: worker ${PREVIOUS_WORKER##*/}, api ${PREVIOUS_API##*/}."
             [ -z "$OBSERVED" ] || line="$line Observed now: $OBSERVED."
             echo "::error::$line"
-          elif [ "$DECISION" = deploy ] && [ "$RECORD_RESULT" != success ]; then
-            line="Deployed $short to production (worker ${WORKER_DEFINITION##*/}, api ${API_DEFINITION##*/}, smoke passed), but the release record was NOT put (record ${RECORD_RESULT:-not run}): sending holds for the new worker until the operator puts its record by hand (docs/greenfield/release.md 4.2)."
+          elif [ "$DECISION" = deploy ] && [ "$READBACK_RESULT" != success ]; then
+            line="Deployed $short to production (worker ${WORKER_DEFINITION##*/}, api ${API_DEFINITION##*/}, smoke passed, release record $RECORD_REFERENCE $RECORD_OUTCOME before the rollout), but its read-back after the rollout failed (record ${READBACK_RESULT:-not run}${READBACK_OUTCOME:+, $READBACK_OUTCOME}): read it with fss admin release-record show (docs/greenfield/release.md 4.0)."
             echo "::error::$line"
           else
             case "$DECISION" in
-              deploy) line="Deployed $short to production: worker ${WORKER_DEFINITION##*/}, api ${API_DEFINITION##*/}, each held to its digest, smoke passed, release record $RECORD_REFERENCE $RECORD_OUTCOME. Observed now: $OBSERVED." ;;
+              deploy) line="Deployed $short to production: release record $RECORD_REFERENCE $RECORD_OUTCOME before the rollout and read back after it, worker ${WORKER_DEFINITION##*/}, api ${API_DEFINITION##*/}, each held to its digest, smoke passed. Observed now: $OBSERVED." ;;
               current) line="Production already runs $short. Nothing deployed." ;;
               manual) line="Not deployed: $REASON. The manual path applies (docs/greenfield/release.md 4)." ;;
               *) line="Nothing decided." ;;

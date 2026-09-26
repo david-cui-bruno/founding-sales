@@ -38,7 +38,7 @@ locals {
   # into production's metric streams: the tenth full run's smoke read production's
   # canary age (release.md 8.0s), and production's alarms saw rehearsal data.
   # The prefix is already disjoint by construction (the guard below), so the
-  # namespace is too. `docs/decisions/g55-one-metric-namespace-per-environment.md`.
+  # namespace is too. `docs/archive/decisions/g55-one-metric-namespace-per-environment.md`.
   metric_namespace = "FSS/${var.name_prefix}"
 }
 
@@ -312,7 +312,7 @@ module "cluster" {
     # `infra/roots/production-google` (lane g85), the only root with a Google
     # provider, so this module requires none and neither a rehearsal plan nor a
     # production plan needs a Google credential
-    # (`docs/decisions/g12j-the-rehearsal-has-no-google-provider.md`).
+    # (`docs/archive/decisions/g12j-the-rehearsal-has-no-google-provider.md`).
     #
     # All three are public identifiers, and all three are read by
     # `required()` in both bootstraps: an empty one is a task that refuses to
@@ -364,5 +364,5 @@ module "updates" {
 # September 2026). Only production has a Google Cloud project, and since lane g85 only
 # `infra/roots/production-google` calls the module; `infra/roots/production` passes
 # the topic id, the push service account and the audience into this module as three
-# strings. `docs/decisions/g12j-the-rehearsal-has-no-google-provider.md` and
-# `docs/decisions/g85-the-google-provider-has-its-own-root.md`.
+# strings. `docs/archive/decisions/g12j-the-rehearsal-has-no-google-provider.md` and
+# `docs/archive/decisions/g85-the-google-provider-has-its-own-root.md`.

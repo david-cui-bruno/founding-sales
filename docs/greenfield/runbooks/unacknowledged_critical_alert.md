@@ -19,7 +19,7 @@ critical alert mail is repeating.
 ## Diagnosis
 
 CloudWatch notifies on state transitions, so an alarm that stays in `ALARM` is silent.
-`docs/decisions/g1-alert-repetition.md` is the reason this metric exists: while a
+`docs/archive/decisions/g1-alert-repetition.md` is the reason this metric exists: while a
 critical condition is open and unacknowledged the worker publishes its age, the alarm
 cycles, and each cycle mails. When none is open the worker publishes nothing and the
 alarm's `notBreaching` treatment of missing data says so.

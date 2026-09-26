@@ -47,7 +47,7 @@ resource "aws_db_subnet_group" "main" {
 # The method only matters when a value changes. Changing either of these two
 # values later takes effect at the next reboot unless the same change also sets
 # `apply_method = "immediate"`, which AWS does register together with a new value.
-# docs/decisions/g86-the-parameter-group-names-what-aws-holds.md.
+# docs/archive/decisions/g86-the-parameter-group-names-what-aws-holds.md.
 resource "aws_db_parameter_group" "main" {
   name        = "${var.name_prefix}-pg16"
   family      = "postgres16"

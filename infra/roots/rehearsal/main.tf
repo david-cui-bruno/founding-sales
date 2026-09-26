@@ -14,9 +14,14 @@
 # because `infra/modules/stack` required the provider for a `module "pubsub"`
 # it never instantiated. The three Gmail push identifiers the task definitions
 # carry are values, below.
-# `docs/decisions/g12j-the-rehearsal-has-no-google-provider.md`.
+# `docs/archive/decisions/g12j-the-rehearsal-has-no-google-provider.md`.
 
 locals {
+  # The one AWS account and region FSS runs in. Literals: nothing deploys this
+  # root anywhere else, and the provider refuses a credential of any other account.
+  aws_account_id = "326255650484"
+  aws_region     = "us-east-1"
+
   # The audience a push token would have to carry to be accepted by *this*
   # environment's webhook. Derived from the rehearsal hostname, exactly as
   # production derives its own: a property of the API's route, not of Google.
@@ -27,7 +32,7 @@ locals {
   # `aws:PrincipalArn` carries for an assumed-role session of it: that key is
   # the role's ARN, never the session's, which is why the journal's exemption
   # can be an exact `ArnNotEquals` rather than a pattern.
-  deployment_role_arn = "arn:aws:iam::${var.aws_account_id}:role/${var.deployment_role_name}"
+  deployment_role_arn = "arn:aws:iam::${local.aws_account_id}:role/${var.deployment_role_name}"
 }
 
 module "stack" {
@@ -37,8 +42,8 @@ module "stack" {
   destroyable = true
 
   name_prefix    = var.name_prefix
-  aws_region     = var.aws_region
-  aws_account_id = var.aws_account_id
+  aws_region     = local.aws_region
+  aws_account_id = local.aws_account_id
 
   vpc_cidr             = var.vpc_cidr
   availability_zones   = var.availability_zones
@@ -101,7 +106,7 @@ module "stack" {
   # `--bypass-governance-retention` emptying step could never have worked
   # either. Not a variable: there is no value a caller can pass that makes a
   # rehearsal journal un-removable or that exempts anybody else.
-  # `docs/decisions/g16-the-journal-deny-exempts-its-deployer.md`.
+  # `docs/archive/decisions/g16-the-journal-deny-exempts-its-deployer.md`.
   journal_administrative_principal_arns = [local.deployment_role_arn]
 
   # And the same role may see the bucket, which is a separate thing from being
@@ -110,7 +115,7 @@ module "stack" {
   # `fss-rh-202609211659-suppression-journal-326255650484` was left behind for
   # the deny above; the production apply of 23 September proved the same deny
   # also makes a deployer recreate the bucket it already has.
-  # `docs/decisions/g37-the-deployer-may-list-the-journal-but-never-read-it.md`.
+  # `docs/archive/decisions/g37-the-deployer-may-list-the-journal-but-never-read-it.md`.
   journal_listing_principal_arns = [local.deployment_role_arn]
 
   alert_emails         = var.alert_emails

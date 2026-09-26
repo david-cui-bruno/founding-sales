@@ -30,6 +30,14 @@ import { repositoryPath } from './support/repository.ts';
  *
  * **A dry run that calls something.** The dry run with `--apply` must leave the call log
  * empty and still print the plan, the apply, the deploy and the smoke.
+ *
+ * **A committed value compared with nothing.** Since wave 1 the production root commits
+ * `certificate_arn`, `api_hostname`, `alert_emails` and `sending_enabled` as literals. A
+ * checkout that commits them is planned without those four `-var`s, and each literal that
+ * differs from what production runs is a refusal naming it; a checkout from before wave 1,
+ * which declares them as variables, is still given production's values as `-var`s. The
+ * committed root also carries `certificate_arn = local.certificate_arn` in a module block,
+ * which is not a literal and must not be read as one.
  */
 
 const SCRIPT = repositoryPath('infra/scripts/release-rollback.sh');
@@ -162,7 +170,7 @@ if tool == "terraform":
         for service, revision in (("api", 8), ("worker", 5)):
             schema = planned[service + "_schema_range"].strip("{}").replace("min=", "").replace("max=", "").split(",")
             fresh = definition(service, revision, planned[service + "_image"], (int(schema[0]), int(schema[1])),
-                               planned["sending_enabled"], planned.get("expected_system_generation"))
+                               planned.get("sending_enabled", state["rootSending"]), planned.get("expected_system_generation"))
             for arn, known in state["taskDefinitions"].items():
                 if family_of(arn) == "fss-prod-" + service:
                     known["taskDefinition"]["status"] = "INACTIVE"
@@ -266,6 +274,13 @@ interface WorldOptions {
   readonly missing?: Service;
   readonly plan?: readonly Record<string, unknown>[];
   readonly dirty?: boolean;
+  /**
+   * The shape of the checkout's production root: `literals` (the default, a commit from
+   * wave 1 on) commits the four settings, `variables` (a commit from before) declares them.
+   */
+  readonly root?: 'literals' | 'variables';
+  /** Committed literals that differ from what production runs; production's by default. */
+  readonly committed?: Partial<Record<'certificate_arn' | 'api_hostname' | 'alert_emails' | 'sending_enabled', string>>;
 }
 
 interface World {
@@ -299,7 +314,35 @@ function world(options: WorldOptions = {}): World {
     ].join('\n'),
   );
   writeFileSync(join(checkout, 'scripts/productionSmoke.mjs'), SMOKE);
-  writeFileSync(join(checkout, 'infra/roots/production/main.tf'), '# the production root at the previous release\n');
+  const sending = options.sending ?? { api: 'false', worker: 'false' };
+  const committed = {
+    certificate_arn: `"${CERTIFICATE}"`,
+    api_hostname: `"${HOSTNAME}"`,
+    alert_emails: '["ops@example.invalid"]',
+    sending_enabled: sending.api,
+    ...options.committed,
+  };
+  if (options.root === 'variables') {
+    writeFileSync(join(checkout, 'infra/roots/production/main.tf'), '# the production root before wave 1\n');
+    writeFileSync(
+      join(checkout, 'infra/roots/production/variables.tf'),
+      Object.keys(committed).map(name => `variable "${name}" {\n}\n`).join('\n'),
+    );
+  } else {
+    writeFileSync(
+      join(checkout, 'infra/roots/production/main.tf'),
+      [
+        'locals {',
+        ...Object.entries(committed).map(([name, value]) => `  ${name} = ${value}`),
+        '}',
+        '',
+        'module "stack" {',
+        ...Object.keys(committed).map(name => `  ${name} = local.${name}`),
+        '}',
+        '',
+      ].join('\n'),
+    );
+  }
   const git = (...args: string[]): string =>
     execFileSync(
       'git',
@@ -313,7 +356,6 @@ function world(options: WorldOptions = {}): World {
   if (options.dirty === true) writeFileSync(join(checkout, 'infra/roots/production/override.tf'), '# not committed\n');
 
   const tags = options.tags?.(commit) ?? { api: [`ci-${commit}`], worker: [commit] };
-  const sending = options.sending ?? { api: 'false', worker: 'false' };
   const running = (service: Service, revision: number): Record<string, unknown> => {
     const environment = [
       { name: 'FSS_ROLE', value: service },
@@ -339,6 +381,7 @@ function world(options: WorldOptions = {}): World {
   });
   const state = {
     account: ACCOUNT,
+    rootSending: options.root === 'variables' ? null : committed.sending_enabled,
     hostname: HOSTNAME,
     certificate: CERTIFICATE,
     health: JSON.stringify({
@@ -435,22 +478,22 @@ function expectRefusal(stub: World, run: Run, fragments: readonly string[], opti
 }
 
 describe('release-rollback.sh plans the previous release and stops', () => {
-  it('plans the checkout’s images, ranges and production’s own settings, prints the plan, and writes nothing', () => {
+  it('plans the checkout’s images and ranges, with production’s settings as the root commits them, prints the plan, and writes nothing', () => {
     const stub = world();
     const run = rollback(stub);
     expect(run.code, run.output).toBe(0);
     expect(failLines(run)).toEqual([]);
+    // The four committed settings equal what production runs, so none is passed.
     expect(planVariables(stub)).toEqual([
-      `-var=certificate_arn=${CERTIFICATE}`,
-      `-var=api_hostname=${HOSTNAME}`,
       `-var=api_image=${REGISTRY}/fss-prod-api@${OLD.api}`,
       `-var=worker_image=${REGISTRY}/fss-prod-worker@${OLD.worker}`,
       '-var=api_schema_range={min=16,max=16}',
       '-var=worker_schema_range={min=16,max=16}',
-      '-var=alert_emails=["ops@example.invalid"]',
-      '-var=sending_enabled=false',
       '-var=bootstrap=false',
     ]);
+    expect(run.output).toContain(
+      "the checkout's root: certificate_arn committed, api_hostname committed, alert_emails committed, sending_enabled committed",
+    );
     // The ci-<commit> tag and the bare commit tag both tie an image to the checkout.
     expect(run.output).toContain(`fss-prod-api ${OLD.api} is tagged ci-${stub.commit}`);
     expect(run.output).toContain(`fss-prod-worker ${OLD.worker} is tagged ${stub.commit}`);
@@ -463,11 +506,29 @@ describe('release-rollback.sh plans the previous release and stops', () => {
     expect(existsSync(join(stub.root, 'rollback.tfplan'))).toBe(true);
   });
 
+  it('gives a checkout from before wave 1, which declares the four as variables, production’s values as -vars', () => {
+    const stub = world({ root: 'variables', sending: { api: 'true', worker: 'true' } });
+    const run = rollback(stub);
+    expect(run.code, run.output).toBe(0);
+    expect(planVariables(stub)).toEqual([
+      `-var=certificate_arn=${CERTIFICATE}`,
+      `-var=api_hostname=${HOSTNAME}`,
+      `-var=api_image=${REGISTRY}/fss-prod-api@${OLD.api}`,
+      `-var=worker_image=${REGISTRY}/fss-prod-worker@${OLD.worker}`,
+      '-var=api_schema_range={min=16,max=16}',
+      '-var=worker_schema_range={min=16,max=16}',
+      '-var=alert_emails=["ops@example.invalid"]',
+      '-var=sending_enabled=true',
+      '-var=bootstrap=false',
+    ]);
+  });
+
   it('with --apply applies, then deploys on the rolling path, then smokes, keeping sending and the pin as they run', () => {
     const stub = world({ sending: { api: 'true', worker: 'true' }, generation: '1' });
     const run = rollback(stub, ['--apply']);
     expect(run.code, run.output).toBe(0);
-    expect(planVariables(stub)).toContain('-var=sending_enabled=true');
+    // Sending is the committed `true`, which is what runs; the pin is always a -var.
+    expect(planVariables(stub).some(variable => variable.startsWith('-var=sending_enabled'))).toBe(false);
     expect(planVariables(stub)).toContain('-var=expected_system_generation=1');
     const names = operations(stub);
     const applied = names.indexOf('terraform apply');
@@ -486,7 +547,7 @@ describe('release-rollback.sh plans the previous release and stops', () => {
   });
 
   it('keeps sending off when it runs off, in the plan and in the smoke', () => {
-    const stub = world();
+    const stub = world({ root: 'variables' });
     const run = rollback(stub, ['--apply']);
     expect(run.code, run.output).toBe(0);
     expect(planVariables(stub)).toContain('-var=sending_enabled=false');
@@ -557,6 +618,39 @@ describe('release-rollback.sh refuses in one FAIL line, before anything is writt
     expect(operations(stub)).toContain('terraform plan');
   });
 
+  it('refuses a committed value that is not what production runs, naming each, with the manual recovery', () => {
+    // Production runs sending off and the listener's certificate; the checkout commits
+    // sending on and another certificate. Planning it would switch sending on.
+    const other = `arn:aws:acm:us-east-1:${ACCOUNT}:certificate/99999999-2222-4333-8444-555555555555`;
+    const stub = world({ committed: { sending_enabled: 'true', certificate_arn: `"${other}"` } });
+    const run = rollback(stub, ['--apply']);
+    expectRefusal(
+      stub,
+      run,
+      [
+        `certificate_arn is ${CERTIFICATE} in production and ${other} in ${stub.commit}`,
+        `sending_enabled is false in production and true in ${stub.commit}`,
+        'nothing was planned',
+        'Manual recovery',
+        'release.md 4.0',
+      ],
+      { planned: true },
+    );
+    // The only Terraform call is the read of the alert topic's output: no plan.
+    expect(operations(stub).filter(name => name.startsWith('terraform'))).toEqual(['terraform output']);
+    // The same world with the committed values production's plans.
+    const agreeing = world();
+    expect(rollback(agreeing).code).toBe(0);
+  });
+
+  it('refuses a checkout whose root neither declares nor commits a setting', () => {
+    const stub = world({ committed: { alert_emails: 'var.alert_emails' } });
+    expectRefusal(stub, rollback(stub), [`${stub.commit} neither declares alert_emails as a variable nor commits it as one literal`], {
+      planned: true,
+    });
+    expect(operations(stub)).not.toContain('terraform plan');
+  });
+
   it('refuses a plan that replaces a service', () => {
     const plan = [...GOOD_PLAN.filter(change => change['address'] !== `${CLUSTER_ADDRESS}.aws_ecs_service.api`), servicePlan('api', ['delete', 'create'])];
     const stub = world({ plan });
@@ -573,6 +667,7 @@ describe('release-rollback.sh in a dry run', () => {
     expect(run.output).toContain(`PLAN aws ecr describe-images --repository-name fss-prod-api --image-ids imageDigest=${OLD.api}`);
     expect(run.output).toContain('deployed-digests.sh fss-prod');
     expect(run.output).toContain(`PLAN curl -fsS --max-time 15 https://`);
+    expect(run.output).toContain("PLAN refuse unless production's sending_enabled equals the committed false");
     expect(run.output).toContain(`PLAN terraform -chdir=${stub.root} plan -input=false -no-color -out=rollback.tfplan`);
     expect(run.output).toContain(`PLAN terraform -chdir=${stub.root} apply -input=false -no-color rollback.tfplan`);
     expect(run.output).toContain(`release-deploy.sh ${stub.root} fss-prod --api-digest ${OLD.api} --worker-digest ${OLD.worker}`);

@@ -91,7 +91,7 @@ fourth of those. Uncertain and ambiguous messages use the same kind: 8.2's lane 
 "replies, including uncertain and ambiguous messages", so there is deliberately no
 second kind for them, and 8.3's classification content is G7b's.
 
-`promoteTodayItem` is the general form, for the sequences lane's due work.
+`upsertTodayItem` is the general form, for the sequences lane's due work.
 
 ### 3. The build decides which tasks exist, and cancels only what it enumerated
 
@@ -139,8 +139,8 @@ the schedule by an interval nobody reviewed, so the action is named what it is:
 * Pause asks for a reason and no return time. Pressing it again answers with the same
   hold.
 
-See `docs/decisions/g6-delaying-an-automated-send.md` and
-`docs/decisions/g79-calls-carry-their-authorization.md`.
+See `docs/archive/decisions/g6-delaying-an-automated-send.md` and
+`docs/archive/decisions/g79-calls-carry-their-authorization.md`.
 
 ### 5. A callback task is completed by the call that fulfils it (lane g79)
 
@@ -200,7 +200,7 @@ bridges, and one main process that answers their channels.
 
 **Since lane g65 there is no Today window.** The lanes are the main window's signed-in
 screen, Home, beside a status sidebar, the last seven days and a Needs-you list
-(`docs/decisions/g65-today-is-the-home.md`). `todayPage.ts` became `todayLanes.ts`,
+(`docs/archive/decisions/g65-today-is-the-home.md`). `todayPage.ts` became `todayLanes.ts`,
 which Home calls; ⌘1 brings the main window forward. The bridge, the view model and
 every rule below are unchanged, and G6's Playwright scenarios run against Home in
 `apps/desktop/test/e2e/home.spec.ts`.
@@ -241,7 +241,7 @@ the step or callback behind the task and answers with `followUps` — a callback
 time, a number that was not named — which the window shows as the notice. The expansion is
 requested with `cardVersion: 2`; the API answers the older shape to a Mac that does not ask.
 Both versions, the paused answer and Resume's answer are `@fss/contracts`' (`today.ts`).
-See `docs/decisions/g79-calls-carry-their-authorization.md`.
+See `docs/archive/decisions/g79-calls-carry-their-authorization.md`.
 
 **The card needs the person's own attested number (lane g60).** `readTodayFirm` reports
 `callingIdentityId` from `currentCallingIdentityId`: the most recently attested of the
@@ -253,7 +253,7 @@ in Window › Administration, under Your calling number."* (`NO_CALLING_NUMBER` 
 `todayView.ts`). Before g60 no product path could make one, so every production card was
 in that state. Once the number is attested, the next expansion carries it and the Call
 button appears. A retired number stops being offered at once, because both the card and
-`authorizeDial` read `enabled`. See `docs/decisions/g60-calling-identities-are-attested-in-version-one.md`.
+`authorizeDial` read `enabled`. See `docs/archive/decisions/g60-calling-identities-are-attested-in-version-one.md`.
 
 ### What this lane wired that it did not write
 
@@ -284,14 +284,14 @@ One thing the wiring cannot do yet, recorded rather than faked:
 * **Stage changes from the board.** `GET /firms` returns `FirmIdentityDto`, which
   carries the open opportunity's stage and not its id, so the board can only offer a
   stage change for firms whose Firm page has been opened. See
-  `docs/decisions/g6-pipeline-board-opportunity-ids.md`; the gap belongs to the lane
+  `docs/archive/decisions/g6-pipeline-board-opportunity-ids.md`; the gap belongs to the lane
   that owns Appendix F's read matrix.
 
 ## Adding a source or a lane
 
 1. Write a `TodaySource` with the `source_kind`s it is authoritative for, and add it to
    `defaultTodaySources()`.
-2. For an event-driven promotion, call `promoteTodayItem` in the transaction that
+2. For an event-driven promotion, call `upsertTodayItem` in the transaction that
    records the event. Do not write `today_snapshots`; the trigger does.
 3. Pick an `item_key` that is deterministic from the row that produced it, so a replay
    is an upsert.

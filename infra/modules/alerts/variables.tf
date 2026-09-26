@@ -145,7 +145,7 @@ variable "create_kms_key" {
     determined until apply"). David's third credentialed rehearsal stopped
     there, in `terraform plan`, on the expression this replaces.
 
-    `docs/decisions/g12j-the-alert-key-is-a-boolean-not-a-null-check.md`.
+    `docs/archive/decisions/g12j-the-alert-key-is-a-boolean-not-a-null-check.md`.
   EOT
   type        = bool
   default     = true

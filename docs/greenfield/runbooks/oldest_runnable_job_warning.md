@@ -19,7 +19,7 @@ both passed, attempts remaining — has been waiting more than five minutes.
 
 - **Worker down or flapping:** `worker_heartbeat_missed` is also firing. Work that.
 - **Throughput:** more work is arriving than the claim loop can finish. Common after a
-  research batch or an import.
+  large import or a mailbox's first sync.
 - **One poisoned kind:** a handler that fails slowly consumes claims and backs off,
   and the ladder — 30 s, 60 s, 120 s, 240 s, capped at fifteen minutes — keeps the row
   runnable-but-waiting for a long time.

@@ -40,32 +40,24 @@ check "security-group rules must come from the network module inventory" \
 check "a greenfield root must never point at a legacy state key" \
   '^[^#]*cloud/(terraform|delegated-worker)' infra/roots
 
-# An account id written into Terraform is an account this tree can only ever deploy
-# into, and the owner is moving the rehearsal and production into dedicated accounts
-# (`docs/greenfield/accounts.md`). Every root takes `aws_account_id` as a variable and
-# builds every ARN from it, so the one place twelve digits may appear outside a test
-# fixture is that variable's own `default` — which is what keeps today's behaviour for
-# a caller who states no account.
-#
-# A comment is prose rather than a decision the file makes, and this scan is twelve
-# digits anywhere on the line: `infra/roots/rehearsal/main.tf` names the bucket a real
-# rehearsal run left behind (g37), and that name ends in the account it was left in.
-# `test/release/accountAgnostic.check.ts` reads comments too, with a pattern that
-# admits twelve digits only where they really are an account id, so an ARN written
-# into a comment is still refused there.
-account_literals=$(grep -rInE '[0-9]{12}' --include='*.tf' infra/modules infra/roots \
+# FSS runs in one AWS account. Its id, and the ARNs of the production values committed
+# with it (the certificate), are literals in the roots, which are where an environment is
+# decided. A module is handed its account by the root that calls it, so twelve digits in
+# a module outside a comment, a variable default or a test fixture is an ARN that should
+# have been built from `var.aws_account_id`.
+account_literals=$(grep -rInE '[0-9]{12}' --include='*.tf' infra/modules \
   | grep -v '/tests/' \
   | grep -vE ':[0-9]+: *#' \
   | grep -vE ':[0-9]+: *default +=' || true)
 if [ -n "$account_literals" ]; then
-  echo "FAIL: a Terraform file names an account id outside a variable default"
+  echo "FAIL: a module names an account id instead of taking it from its root"
   echo "$account_literals"
   fail=1
 fi
 
-# And the backend files are the per-account files, so each one must name a bucket, a
-# region and a lock table. A file that lost one would init against whatever backend
-# the caller's own configuration or environment supplies, silently.
+# Each backend file must name a bucket, a region, a lock table and a key. A file that
+# lost one would init against whatever backend the caller's own configuration or
+# environment supplies, silently.
 for backend_file in infra/roots/*/backend.hcl; do
   for backend_setting in bucket region dynamodb_table key; do
     if ! grep -qE "^${backend_setting} +=" "$backend_file"; then
@@ -81,7 +73,7 @@ done
 # AWS, and no offline layer here could see it, because `validate` never
 # evaluates a count and the module's own tests passed a literal. The fix is
 # always an input the caller states; the grep is so the next one is caught in a
-# pull request. `docs/decisions/g12j-the-alert-key-is-a-boolean-not-a-null-check.md`.
+# pull request. `docs/archive/decisions/g12j-the-alert-key-is-a-boolean-not-a-null-check.md`.
 check "a count or for_each must not test for null a value another apply computes" \
   '^[^#]*(count|for_each) *=[^#]*(var|local|module|data)\.[A-Za-z0-9_.]+ *(==|!=) *null' infra
 
@@ -96,7 +88,7 @@ check "a count or for_each must not test for null a value another apply computes
 # module it calls. The production root lost its Google provider in the same lane, so a
 # production plan asks for no Google credential either. Anywhere else, including a `mock_provider "google"` in a test file of
 # another root, is the refusal coming back.
-# `docs/decisions/g12j-the-rehearsal-has-no-google-provider.md`.
+# `docs/archive/decisions/g12j-the-rehearsal-has-no-google-provider.md`.
 google_files=$(grep -rIlE '^[^#]*(hashicorp/google|provider "google"|/pubsub")' \
   --include='*.tf' --include='*.tftest.hcl' infra \
   | grep -v '^infra/modules/pubsub/' \

@@ -36,12 +36,17 @@ import { readRepositoryFile, repositoryPath } from './support/repository.ts';
  * **An application log in the workflow log.** The stub's log lines carry a secret-shaped
  * field and a raw line; only `event`, `reason` and `code` may be printed.
  *
- * **A record put for a deployment that did not happen (lane g100).** `record` runs
- * against a stub production that already runs the new digests, with a stub `gh` for
- * `release-record-from-ci.sh`; the record the operations task was handed is decoded and
- * parsed with the contract the put applies. The same world before the deploy, a refused
- * `RunTask`, a put the tool refused and a gate that was not green each fail with no
- * record stored, so "the record step passes" cannot be the only answer.
+ * **A record that arrives after the workers that need it (26 September 2026).** The
+ * worker admits a send only under a stored record naming its digest, so the put is the
+ * deploy job's first write. `record --before-rollout` runs against a stub production
+ * still on the previous digests, with a stub `gh` for `release-record-from-ci.sh`; the
+ * record the operations task was handed is decoded and parsed with the contract the put
+ * applies, and nothing else is written. `record --after-rollout`, the read-back, fails
+ * on a production not running the digests and on a put that had to create the record.
+ * A refused `RunTask`, a put the tool refused and a gate that was not green each fail
+ * with no record stored, so "the record step passes" cannot be the only answer. The
+ * hand path's `release-deploy.sh --record-only` runs against the same stub, so its put
+ * is held to the operations definition as it runs and its answer to this release.
  */
 
 const SCRIPT = repositoryPath('infra/scripts/ci-deploy-app.sh');
@@ -987,6 +992,7 @@ const runTasks = (stub: World): readonly StubCall[] => stub.calls().filter(call 
 function runRecord(
   stub: World,
   extra: {
+    readonly stage?: 'before' | 'after' | 'none';
     readonly gateConclusion?: string;
     readonly clusterName?: string;
     readonly family?: string;
@@ -996,8 +1002,10 @@ function runRecord(
 ): Run {
   const outputs = join(mkdtempSync(join(tmpdir(), 'fss-ci-outputs-')), 'github-output');
   writeFileSync(outputs, '');
+  const stage = extra.stage ?? 'before';
   const args = [
     'record',
+    ...(stage === 'none' ? [] : [`--${stage}-rollout`]),
     '--digests',
     digestsFile(),
     '--commit',
@@ -1053,9 +1061,11 @@ function runRecord(
   return { code: result.status ?? 1, output: `${result.stdout}${result.stderr}`, outputs: readOutputs(outputs) };
 }
 
-describe('record puts the ci-gate release record for the deployed digests, on the operations task', () => {
-  it('builds the record from the green gate run and puts it the way release-deploy.sh does', () => {
-    const stub = world({ running: NEW });
+describe('record puts the ci-gate release record before the rollout, on the operations task, and reads it back after', () => {
+  it('builds the record from the green gate run and puts it before the rollout, the way release-deploy.sh does', () => {
+    // Production still runs the previous digests: the record goes first, so no new worker
+    // task starts without one.
+    const stub = world();
     const run = runRecord(stub);
     expect(run.code, run.output).toBe(0);
     expect(run.outputs).toMatchObject({ release_record_reference: REFERENCE, release_record_outcome: 'created' });
@@ -1092,19 +1102,40 @@ describe('record puts the ci-gate release record for the deployed digests, on th
     expect(writes(stub)).toEqual([]);
   });
 
-  it('answers existing for a record already stored, which a re-run puts again', () => {
-    const run = runRecord(world({ running: NEW, putOutcome: 'existing' }));
+  it('answers existing for a record already stored, which a re-run of the deploy job puts again', () => {
+    const run = runRecord(world({ putOutcome: 'existing' }));
     expect(run.code, run.output).toBe(0);
     expect(run.outputs['release_record_outcome']).toBe('existing');
   });
 
-  it('fails, with nothing put, when production does not run the deployed digests', () => {
+  it('reads the record back after the rollout: existing, for a production that runs its digests', () => {
+    const run = runRecord(world({ running: NEW, putOutcome: 'existing' }), { stage: 'after' });
+    expect(run.code, run.output).toBe(0);
+    expect(run.outputs).toMatchObject({ release_record_reference: REFERENCE, release_record_outcome: 'existing' });
+  });
+
+  it('fails the read-back, with nothing put, when production does not run the deployed digests', () => {
     const stub = world();
-    const run = runRecord(stub);
+    const run = runRecord(stub, { stage: 'after' });
     expect(run.code).toBe(1);
-    expect(run.output).toContain('A release record is put only for a deployment that runs its digests');
+    expect(run.output).toContain("The read-back after the rollout is for a deployment that runs its record's digests");
     expect(runTasks(stub)).toEqual([]);
     expect(ghCalls(stub)).toEqual([]);
+  });
+
+  it('fails the read-back when the put had to create the record, which the deploy job should have stored', () => {
+    const run = runRecord(world({ running: NEW }), { stage: 'after' });
+    expect(run.code).toBe(1);
+    expect(run.output).toContain(`the read-back had to create the release record ${REFERENCE}`);
+    expect(run.outputs['release_record_reference']).toBeUndefined();
+  });
+
+  it('needs a stage, before anything is asked', () => {
+    const stub = world();
+    const run = runRecord(stub, { stage: 'none' });
+    expect(run.code).toBe(1);
+    expect(run.output).toContain('record needs --before-rollout');
+    expect(stub.calls()).toEqual([]);
   });
 
   it('fails when the put is refused: RunTask denied, or the tool refusing the record', () => {
@@ -1170,6 +1201,162 @@ describe('record puts the ci-gate release record for the deployed digests, on th
     expect(runTasks(elsewhere)).toEqual([]);
   });
 
+  it('is the deploy job’s first write, after the gate is read again, and the record job reads it back after the smoke', () => {
+    const deploy = job(DEPLOY_WORKFLOW, 'deploy');
+    const names = steps(deploy).map(step => step.name);
+    const put = 'Build the ci-gate record and put it on the operations task, before the rollout';
+    const at = (name: string): number => names.indexOf(name);
+    expect(at(GATES_STEP)).toBeGreaterThan(at('Decide - app-only, already running, or the manual path'));
+    expect(at(put)).toBeGreaterThan(at(GATES_STEP));
+    expect(at(put)).toBeLessThan(at('Promote both images into the production repositories, by digest'));
+    expect(at(put)).toBeLessThan(at('Register, roll the worker and then the API, and hold each to its digest'));
+    const putStep = steps(deploy).find(step => step.name === put)?.text ?? '';
+    expect(putStep).toContain("if: steps.check.outputs.decision == 'deploy'");
+    expect(putStep).toContain('GATE_RUN_ID: ${{ steps.gates.outputs.gate_run_id }}');
+    expect(runBody(putStep)).toContain('infra/scripts/ci-deploy-app.sh record --before-rollout');
+    expect(deploy).toContain('release_record_reference: ${{ steps.record.outputs.release_record_reference }}');
+
+    const record = job(DEPLOY_WORKFLOW, 'record');
+    expect(record).toContain('needs: [run, ranges, deploy, smoke]');
+    const readBack = steps(record).find(step => step.name === 'Put the same record again, which must answer existing')?.text ?? '';
+    expect(runBody(readBack)).toContain('infra/scripts/ci-deploy-app.sh record --after-rollout');
+  });
+});
+
+/** The hand path: `release-deploy.sh --record-only`, run against the same stub production. */
+function runRecordOnly(
+  stub: World,
+  record: Readonly<Record<string, unknown>>,
+  digests: { readonly api?: string; readonly worker?: string } = {},
+): Run & { readonly report: string; readonly recordBytes: Buffer } {
+  const directory = mkdtempSync(join(tmpdir(), 'fss-record-only-'));
+  const file = join(directory, 'release-record.json');
+  writeFileSync(file, `${JSON.stringify(record, null, 2)}\n`);
+  const reports = join(directory, 'reports');
+  const env: Record<string, string> = {
+    ...(process.env as Record<string, string>),
+    FSS_REHEARSAL_AWS_COMMAND: join(stub.home, 'aws'),
+    FSS_REHEARSAL_REPORTS: reports,
+    FSS_RELEASE_CALLER_ACCOUNT: ACCOUNT,
+    AWS_REGION: 'us-east-1',
+    RELEASE_LOG_POLL_SECONDS: '0',
+    FSS_RELEASE_OUTPUT_CLUSTER_ARN: CLUSTER,
+    FSS_RELEASE_OUTPUT_MIGRATION_TASK_DEFINITION_ARN: `arn:aws:ecs:us-east-1:${ACCOUNT}:task-definition/fss-prod-migration:3`,
+    FSS_RELEASE_OUTPUT_OPERATIONS_TASK_DEFINITION_ARN: OPERATIONS_REVISION,
+    FSS_RELEASE_OUTPUT_APP_RUNTIME_DATABASE_SECRET_ARN: RUNTIME_SECRET,
+    FSS_RELEASE_OUTPUT_TASK_NETWORK_CONFIGURATION: JSON.stringify({
+      subnet_ids: SUBNETS.split(','),
+      security_group_id: SECURITY_GROUP,
+      assign_public_ip: 'ENABLED',
+      database_host: DATABASE_HOST,
+      inbound_rule_count: 0,
+    }),
+    FSS_RELEASE_OUTPUT_DEPLOYMENT_PLAN: JSON.stringify({
+      api: { service_name: 'fss-prod-api', declared_desired_count: 2 },
+      worker: { service_name: 'fss-prod-worker', declared_desired_count: 1 },
+      bootstrap: false,
+    }),
+    FSS_RELEASE_OUTPUT_WORKER_LOG_GROUP_NAME: '/fss/fss-prod/worker',
+  };
+  for (const name of [
+    'FSS_REHEARSAL_DRY_RUN',
+    'FSS_RELEASE_TASK_DEFINITION',
+    'FSS_RELEASE_DESCRIBE_TASKS',
+    'FSS_RELEASE_LOG_EVENTS',
+    'FSS_RELEASE_CLUSTER_TAGS',
+    'FSS_RELEASE_RUN_ID',
+    'FSS_RELEASE_ACCOUNT',
+  ]) {
+    delete env[name];
+  }
+  const result = spawnSync(
+    'bash',
+    [
+      repositoryPath('infra/scripts/release-deploy.sh'),
+      'infra/roots/production',
+      'fss-prod',
+      '--record-only',
+      '--api-digest',
+      digests.api ?? NEW.api,
+      '--worker-digest',
+      digests.worker ?? NEW.worker,
+      '--release-record',
+      file,
+    ],
+    { cwd: repositoryPath(''), encoding: 'utf8', env },
+  );
+  const reportPath = join(reports, 'release-deploy.txt');
+  return {
+    code: result.status ?? 1,
+    output: `${result.stdout}${result.stderr}`,
+    outputs: {},
+    report: existsSync(reportPath) ? readFileSync(reportPath, 'utf8') : '',
+    recordBytes: readFileSync(file),
+  };
+}
+
+describe('release-deploy.sh --record-only stores the record before the apply, on the operations definition as it runs', () => {
+  const RECORD = {
+    schema: 'fss.release-record.v1',
+    source: 'ci-gate',
+    releaseGateReference: REFERENCE,
+    recordedAt: RUN_ENDED,
+    suite: 'pass',
+    commit: COMMIT,
+    gateRunId: GATE_RUN,
+    gateRunUrl: `https://github.com/${GH_REPOSITORY}/actions/runs/${GATE_RUN}`,
+    imagesRunId: RUN_ID,
+    artifacts: { api: NEW.api, worker: NEW.worker, desktopCommitStamp: COMMIT },
+    enablesSending: false,
+  } as const;
+
+  it('puts the record alone, held to the running operations image, and writes nothing else', () => {
+    const stub = world();
+    const run = runRecordOnly(stub, RECORD);
+    expect(run.code, run.output).toBe(0);
+    const tasks = runTasks(stub);
+    expect(tasks).toHaveLength(1);
+    const task = tasks[0]?.args ?? [];
+    expect(task[task.indexOf('--task-definition') + 1]).toBe(OPERATIONS_REVISION);
+    const command = stub.state().ranTask?.containerOverrides[0]?.command ?? [];
+    expect(command.slice(0, 4)).toEqual(['admin', 'release-record', 'put', '--json-base64']);
+    expect(Buffer.from(command[4] ?? '', 'base64').equals(run.recordBytes)).toBe(true);
+    expect(writes(stub)).toEqual([]);
+    expect(run.report).toContain('record_only=yes');
+    expect(run.report).toContain(`operations_digest=${OLD.worker}`);
+    expect(run.report).toContain('release_record=created');
+  });
+
+  it('answers existing when the record is already stored', () => {
+    const run = runRecordOnly(world({ putOutcome: 'existing' }), RECORD);
+    expect(run.code, run.output).toBe(0);
+    expect(run.report).toContain('release_record=existing');
+  });
+
+  it('fails when the stored record is not this release’s, or the tool refused the put', () => {
+    const different = runRecordOnly(world({ storedWorker: digest('e') }), RECORD);
+    expect(different.code).toBe(1);
+    expect(different.output).toContain('the stored record differs from this release in workerDigest');
+
+    const refused = runRecordOnly(world({ putRefusal: true }), RECORD);
+    expect(refused.code).toBe(1);
+    expect(refused.output).toContain('release-record-put-before-rollout');
+    expect(refused.report).toBe('');
+  });
+
+  it('refuses an operations definition that is not the worker image by digest, and a record for other digests, before any task', () => {
+    const api = world({ operations: { image: `${REGISTRY}/fss-prod-api@${OLD.api}` } });
+    const wrongImage = runRecordOnly(api, RECORD);
+    expect(wrongImage.code).toBe(1);
+    expect(wrongImage.output).toContain('is not the worker image by digest');
+    expect(runTasks(api)).toEqual([]);
+
+    const elsewhere = world();
+    const otherDigests = runRecordOnly(elsewhere, RECORD, { worker: digest('e') });
+    expect(otherDigests.code).toBe(1);
+    expect(otherDigests.output).toContain(`names worker ${NEW.worker} (this release: ${digest('e')})`);
+    expect(elsewhere.calls()).toEqual([]);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1595,6 +1782,13 @@ describe('the deploy workflow’s own scripts, run', () => {
     expect(manual.output).toBe('Not deployed: the gates on x had not finished. The manual path applies (docs/greenfield/release.md 4).\n');
     const broken = line({ GATES_RESULT: 'failure', DEPLOY_RESULT: 'skipped' });
     expect(broken.output).toContain('FAILED (gates failure, deploy skipped');
+    // The record is put before the rollout; the record job only reads it back.
+    const deployed = { GATES_RESULT: 'success', GATES_DECISION: 'pass', DEPLOY_RESULT: 'success', SMOKE_RESULT: 'success', DECISION: 'deploy', RECORD_REFERENCE: REFERENCE, RECORD_OUTCOME: 'created' };
+    expect(line({ ...deployed, READBACK_RESULT: 'success', READBACK_OUTCOME: 'existing' }).output).toContain(
+      `release record ${REFERENCE} created before the rollout and read back after it`,
+    );
+    const unread = line({ ...deployed, READBACK_RESULT: 'failure' });
+    expect(unread.output).toContain(`release record ${REFERENCE} created before the rollout), but its read-back after the rollout failed (record failure)`);
   });
 
   it('reads the gate and main with one script in all three places, so the script run below is the one that runs', () => {

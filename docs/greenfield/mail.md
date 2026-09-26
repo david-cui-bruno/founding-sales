@@ -34,7 +34,7 @@ a mailbox whose coverage is unproved holds them too.
 | Migration | `packages/domain/db/migrations/0009_mail.sql` — eleven tables |
 | Domain | `packages/domain/mail/**` |
 | Gmail seam | `mail/gmailClient.ts` (interface), `gmailClientFake.ts` (recorded), `gmailClientHttp.ts` (the one that speaks HTTP) |
-| Envelope seam | `mail/envelope.ts`, `mail/envelopeKms.ts` — see `docs/decisions/g7-kms-adapter.md` |
+| Envelope seam | `mail/envelope.ts`, `mail/envelopeKms.ts` — see `docs/archive/decisions/g7-kms-adapter.md` |
 | Push token seam | `mail/pushToken.ts` — signature keyed, claims pure |
 | Secret seam | `mail/secretProvider.ts` |
 | Routes | `apps/api/src/routes/gmail.ts`, `pubsub.ts`, `messages.ts` |
@@ -75,8 +75,7 @@ cursor unrepresentable.
 
 12.6: "While a mailbox grant is revoked or coverage unhealthy, every automated step
 kind for that owner is held." So the hold is owner-scoped, not mailbox-scoped, and it
-blocks `email_send`, `call_task` and `enrollment_advance`. Research is
-not a step kind and is not blocked.
+blocks `email_send`, `call_task` and `enrollment_advance`.
 
 `releaseMailboxHold` re-reads the row and refuses to release a `coverage_incomplete`
 hold unless `sync_state = 'ready'`. A caller cannot talk the database out of a hold it
@@ -127,7 +126,7 @@ fact about the moment a person asked, so it counts on the day the message arrive
 counts against that fence's mailbox and business date — re-judging a day that has
 already closed, which can take the ramp back. A report that names no fence still counts
 where it landed. `docs/greenfield/sending.md` rule 6 has the arithmetic, and
-`docs/decisions/g22-a-late-bounce-belongs-to-its-send.md` the reasoning.
+`docs/archive/decisions/g22-a-late-bounce-belongs-to-its-send.md` the reasoning.
 
 `applyDirectSendEffects` switches the firm to manual with `origin: 'direct_send'`, so
 the enrollment the switch stops records `direct_send` rather than `human_reply`
@@ -157,7 +156,7 @@ Reply "stop" and I will not email you again.
 refuses a body that does not end with it (`template_footer_missing`). Between the two
 lines there was a postal address until 22 September 2026; David decided there is
 none, migration 0015 dropped `template_versions.footer_postal_address`, and
-`docs/decisions/g20-automated-email-carries-no-postal-address.md` records the decision
+`docs/archive/decisions/g20-automated-email-carries-no-postal-address.md` records the decision
 and the three specification lines it deviates from. Nothing is appended at send time:
 the footer is inside the approved body, which is why the content hash covers it.
 
@@ -193,7 +192,7 @@ rather than in `jobs/jobStore.ts` because those rules are mail's contract with
 Appendix C, not the queue's.
 
 Each run is bounded and its continuation is the one-minute scheduler, never itself. The
-reasoning is in `docs/decisions/g7-sync-transaction-shape.md` and it is the single
+reasoning is in `docs/archive/decisions/g7-sync-transaction-shape.md` and it is the single
 easiest thing in this lane to get wrong.
 
 ### The cursor stands on whole history records
@@ -237,7 +236,7 @@ message it had not processed; it stalled instead of skipping. The first correct 
 after the fix reads from the stale cursor, processes the backlog in whole records over
 consecutive one-minute passes, and re-reads the first 50 once, which the pipeline's
 idempotent writes make harmless (`mail/effects.ts`, "safe to run twice"). The reasoning is in
-`docs/decisions/g76-history-records-are-the-unit-of-progress.md`.
+`docs/archive/decisions/g76-history-records-are-the-unit-of-progress.md`.
 
 ### The push token
 
@@ -249,7 +248,7 @@ the exact audience, the service-account email (compared lower-cased), `email_ver
 most **one hour** plus the skew. A token that fails any of them is a 401 with one
 redacted body, logged as a `refusal` line with reason `gmail_push_<refusal>` and a
 second with reason `401`, and Pub/Sub retries the message
-(`docs/decisions/g7-webhook-rejection.md`). An accepted push is a 200 and writes no log
+(`docs/archive/decisions/g7-webhook-rejection.md`). An accepted push is a 200 and writes no log
 line; its trace is its `gmail_push_notifications` row and the job id recorded on it.
 
 The age bound is the token's own lifetime. Pub/Sub mints the token for an hour and
@@ -393,8 +392,9 @@ the later guard lane is for.
 
 ## What is deliberately not here
 
-* **Sending.** G7-2 added it: the at-most-once fence, the reputation ramp and the
-  domain guard, in `packages/domain/outbound` and migration 0010. `GmailClient` gained
+* **Sending.** G7-2 added it: the at-most-once fence and the reputation ramp, in
+  `packages/domain/outbound` and migration 0010 (its domain guard was deleted on
+  26 September 2026). `GmailClient` gained
   `sendMessage` and the `rfc822msgid:` Sent-folder search, and nothing about the read
   surface changed. See `docs/greenfield/sending.md`.
 * **The LLM classifier.** G7b, behind the seam rule 4 describes.

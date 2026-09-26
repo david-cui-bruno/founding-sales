@@ -35,7 +35,13 @@
 #      the schema at startup, and the paths are forward repair or the restore protocol.
 #   3. **A service mid-rollout**, or a family whose newest revision is not the one that
 #      runs: `deployed-digests.sh`, whose refusal is printed as it gives it.
-#   4. **A plan that is more than a rollback.** A rollback registers task definitions and
+#   4. **A committed production value that is not what production runs.** Since wave 1
+#      (26 September 2026) `infra/roots/production` commits `certificate_arn`,
+#      `api_hostname`, `alert_emails` and `sending_enabled` as literals instead of taking
+#      them as variables. For each one the checkout commits, the value production runs
+#      (below) must equal it; a difference is refused with the manual recovery, because
+#      the plan would change the listener, the origin, a subscription or sending.
+#   5. **A plan that is more than a rollback.** A rollback registers task definitions and
 #      re-points the two services. A plan that creates, replaces or destroys anything but
 #      an `aws_ecs_task_definition`, or updates anything but the `api` and `worker`
 #      `aws_ecs_service`, is refused and its file deleted, naming every address. An
@@ -44,8 +50,8 @@
 #
 # ## What it keeps as production has it
 #
-# A rollback moves images and nothing an operator decided. So the plan is given what the
-# running deployment carries, not what a file says:
+# A rollback moves images and nothing an operator decided. So it reads what the running
+# deployment carries, not what a file says:
 #
 #   * `sending_enabled` — `FSS_SENDING_ENABLED` of the running API and worker task
 #     definitions, which must agree. The smoke then expects that same state
@@ -56,8 +62,13 @@
 #   * `alert_emails` — the e-mail subscriptions of the alert topic;
 #   * the image repositories — those of the images that run now, with the given digests.
 #
+# Those of the last four that the checkout still declares as variables (a commit from
+# before wave 1) are passed to its plan as `-var`, exactly as before. Those it commits as
+# literals are compared with what runs (refusal 4) and passed as nothing, so the plan uses
+# the committed value, which is then the value production runs. Either way the plan
+# carries production's settings. The generation pin is always a `-var`.
 # A value read wrong shows as a change to the listener, a subscription or a task
-# definition's neighbour, which refusal 4 refuses. `bootstrap=false`, and the schema ranges
+# definition's neighbour, which refusal 5 refuses. `bootstrap=false`, and the schema ranges
 # are the checkout's (`packages/domain/db/schemaRange.ts`).
 #
 # ## The plan, and --apply
@@ -339,19 +350,73 @@ fi
 rehearsal_log "certificate_arn=$CERTIFICATE_ARN, alert_emails=$ALERT_EMAILS, as production has them"
 
 # ---------------------------------------------------------------------------
-# 6. The plan, and the judgement of it.
+# 6. What the checkout commits, against what production runs (refusal 4).
+#
+# For each of the four settings: a checkout that declares it as a variable is given
+# production's value as a `-var`; one that commits it as a literal must commit exactly
+# production's value, and is given nothing. The literal is the one line `<name> = <value>`
+# in the root's own `*.tf` whose value is a string, a list of strings or a boolean (the
+# `locals` block of `infra/roots/production/main.tf`). The answer is one `<name> var` or
+# `<name> committed` line per setting.
 # ---------------------------------------------------------------------------
-PLAN_VARIABLES=(
-  -var="certificate_arn=$CERTIFICATE_ARN"
-  -var="api_hostname=$API_HOSTNAME"
+SETTINGS="$(FSS_ROOT="$ROOT_DIRECTORY" FSS_COMMIT="$COMMIT" FSS_DRY="$(rehearsal_dry_run && echo 1 || echo 0)" \
+  FSS_LIVE_CERTIFICATE_ARN="$CERTIFICATE_ARN" FSS_LIVE_API_HOSTNAME="$API_HOSTNAME" \
+  FSS_LIVE_ALERT_EMAILS="$ALERT_EMAILS" FSS_LIVE_SENDING_ENABLED="$SENDING" python3 - <<'PY'
+# release-rollback-committed
+import glob, json, os, re, sys
+root, commit, dry = os.environ["FSS_ROOT"], os.environ["FSS_COMMIT"], os.environ["FSS_DRY"] == "1"
+text = "\n".join(open(path, encoding="utf-8").read() for path in sorted(glob.glob(os.path.join(root, "*.tf"))))
+literal = {
+    "certificate_arn": r'"([^"\n]+)"',
+    "api_hostname": r'"([^"\n]+)"',
+    "alert_emails": r'(\[[^\]\n]*\])',
+    "sending_enabled": r'(true|false)',
+}
+def canonical(name, value):
+    if name == "alert_emails":
+        return json.dumps(sorted(set(json.loads(value))), separators=(",", ":"))
+    return value
+mismatched = []
+for name, pattern in literal.items():
+    if re.search(r'^variable "' + name + r'" *\{', text, re.M):
+        print(name, "var")
+        continue
+    found = re.findall(r'^[ \t]*' + name + r'[ \t]*=[ \t]*' + pattern + r'[ \t]*$', text, re.M)
+    if len(found) != 1:
+        sys.exit("FAIL: {} neither declares {} as a variable nor commits it as one literal (it has {}), so there is no value to plan it with; nothing was planned".format(commit, name, len(found)))
+    try:
+        committed = canonical(name, found[0])
+    except ValueError:
+        sys.exit("FAIL: {} commits {} = {}, which is not a list of strings; nothing was planned".format(commit, name, found[0]))
+    if dry:
+        sys.stderr.write("PLAN refuse unless production's {} equals the committed {}\n".format(name, committed))
+    else:
+        live = canonical(name, os.environ["FSS_LIVE_" + name.upper()])
+        if live != committed:
+            mismatched.append("{} is {} in production and {} in {}".format(name, live, committed, commit))
+    print(name, "committed")
+if mismatched:
+    sys.exit("FAIL: " + "; ".join(mismatched) + ". A rollback moves images and nothing an operator decided, and this plan would change what production runs, so nothing was planned. Manual recovery: decide which value is right. If production's, roll back by hand on the manual path (release.md 4.0) and correct the literal in infra/roots/production in a pull request; if the committed one, production has drifted, so put it back with a plan and apply of main (release.md 4.0) and run this again.")
+PY
+)" || exit 1
+declared() { printf '%s\n' "$SETTINGS" | grep -qx "$1 var"; }
+rehearsal_log "the checkout's root: $(printf '%s' "$SETTINGS" | tr '\n' ',' | sed 's/,/, /g')"
+
+# ---------------------------------------------------------------------------
+# 7. The plan, and the judgement of it.
+# ---------------------------------------------------------------------------
+PLAN_VARIABLES=()
+if declared certificate_arn; then PLAN_VARIABLES+=(-var="certificate_arn=$CERTIFICATE_ARN"); fi
+if declared api_hostname; then PLAN_VARIABLES+=(-var="api_hostname=$API_HOSTNAME"); fi
+PLAN_VARIABLES+=(
   -var="api_image=$API_IMAGE"
   -var="worker_image=$WORKER_IMAGE"
   -var="api_schema_range={min=$API_MIN,max=$API_MAX}"
   -var="worker_schema_range={min=$WORKER_MIN,max=$WORKER_MAX}"
-  -var="alert_emails=$ALERT_EMAILS"
-  -var="sending_enabled=$SENDING"
-  -var="bootstrap=false"
 )
+if declared alert_emails; then PLAN_VARIABLES+=(-var="alert_emails=$ALERT_EMAILS"); fi
+if declared sending_enabled; then PLAN_VARIABLES+=(-var="sending_enabled=$SENDING"); fi
+PLAN_VARIABLES+=(-var="bootstrap=false")
 if [ "$GENERATION" != - ]; then PLAN_VARIABLES+=(-var="expected_system_generation=$GENERATION"); fi
 
 rehearsal_log "plan: $ROOT_DIRECTORY/$PLAN_FILE"
@@ -411,7 +476,7 @@ if [ "$APPLY" != 1 ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 7. --apply: the apply, the rolling deploy, the smoke.
+# 8. --apply: the apply, the rolling deploy, the smoke.
 # ---------------------------------------------------------------------------
 rehearsal_log "apply $PLAN_FILE"
 if rehearsal_dry_run; then

@@ -46,7 +46,7 @@ variable "engine_version" {
     full version AWS chose in state and suppresses the diff for as long as the
     running version still begins with the configured string. So `"16"` plans as
     no change against 16.9 or 16.15, and `"16.8"` planned as a change against
-    anything. `docs/decisions/g16-postgresql-is-pinned-by-major.md`.
+    anything. `docs/archive/decisions/g16-postgresql-is-pinned-by-major.md`.
 
     A minor **may** still be pinned — to reproduce a bug, or to hold a restored
     instance at the source's version — and the validation below accepts one.

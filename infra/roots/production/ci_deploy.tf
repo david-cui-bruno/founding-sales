@@ -147,13 +147,13 @@ locals {
   # the trust. The rehearsal role's trust uses the same form. The plain form
   # `repo:david-cui-bruno/founding-sales:environment:production-deploy` was refused on the
   # first run (25 Sep 2026 23:42Z, "Not authorized to perform sts:AssumeRoleWithWebIdentity").
-  ci_deploy_oidc_provider = "arn:aws:iam::${var.aws_account_id}:oidc-provider/${local.ci_deploy_oidc_issuer}"
+  ci_deploy_oidc_provider = "arn:aws:iam::${local.aws_account_id}:oidc-provider/${local.ci_deploy_oidc_issuer}"
   ci_deploy_subject       = "repo:david-cui-bruno@196666240/founding-sales@1351406527:environment:production-deploy"
 
   # Every name below comes from the stack's own outputs where the stack publishes it,
   # so a renamed cluster, service, task role or log group moves the policy with it.
   ci_deploy_services  = ["api", "worker"]
-  ci_deploy_arn_ecs   = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}"
+  ci_deploy_arn_ecs   = "arn:aws:ecs:${local.aws_region}:${local.aws_account_id}"
   ci_deploy_cluster   = "${local.ci_deploy_arn_ecs}:cluster/${module.stack.cluster_name}"
   ci_deploy_service   = { api = module.stack.api_service_name, worker = module.stack.worker_service_name }
   ci_deploy_task_role = { api = module.stack.api_task_role_name, worker = module.stack.worker_task_role_name }
@@ -170,20 +170,20 @@ locals {
   # `<prefix>-<service>-exec`. A mismatch is a refused registration, never a wider one.
   ci_deploy_pass_roles = flatten([
     for service in local.ci_deploy_services : [
-      "arn:aws:iam::${var.aws_account_id}:role/${local.ci_deploy_task_role[service]}",
-      "arn:aws:iam::${var.aws_account_id}:role/${var.name_prefix}-${service}-exec",
+      "arn:aws:iam::${local.aws_account_id}:role/${local.ci_deploy_task_role[service]}",
+      "arn:aws:iam::${local.aws_account_id}:role/${var.name_prefix}-${service}-exec",
     ]
   ])
 
   # The rehearsal repositories are the two stable ones `infra/roots/rehearsal-registry`
   # owns, which CI's `publish` job pushes to. Read only.
-  ci_deploy_source_repositories      = [for service in local.ci_deploy_services : "arn:aws:ecr:${var.aws_region}:${var.aws_account_id}:repository/fss-rh-${service}"]
-  ci_deploy_destination_repositories = [for service in local.ci_deploy_services : "arn:aws:ecr:${var.aws_region}:${var.aws_account_id}:repository/${var.name_prefix}-${service}"]
+  ci_deploy_source_repositories      = [for service in local.ci_deploy_services : "arn:aws:ecr:${local.aws_region}:${local.aws_account_id}:repository/fss-rh-${service}"]
+  ci_deploy_destination_repositories = [for service in local.ci_deploy_services : "arn:aws:ecr:${local.aws_region}:${local.aws_account_id}:repository/${var.name_prefix}-${service}"]
 
   ci_deploy_log_groups = flatten([
     for service in local.ci_deploy_services : [
-      "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:${module.stack.log_group_names[service]}",
-      "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:${module.stack.log_group_names[service]}:*",
+      "arn:aws:logs:${local.aws_region}:${local.aws_account_id}:log-group:${module.stack.log_group_names[service]}",
+      "arn:aws:logs:${local.aws_region}:${local.aws_account_id}:log-group:${module.stack.log_group_names[service]}:*",
     ]
   ])
 

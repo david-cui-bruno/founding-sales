@@ -7,7 +7,8 @@
 #   infra/scripts/ci-deploy-app.sh deploy --digests <image-digests.json> --commit <sha> \
 #       --run-id <id> --run-attempt <n> --run-started <instant> --run-ended <instant> \
 #       --api-range <min>-<max> --worker-range <min>-<max>
-#   infra/scripts/ci-deploy-app.sh record --digests <image-digests.json> --commit <sha> \
+#   infra/scripts/ci-deploy-app.sh record --before-rollout|--after-rollout \
+#       --digests <image-digests.json> --commit <sha> \
 #       --run-id <id> --run-attempt <n> --run-started <instant> --run-ended <instant> \
 #       --api-range <min>-<max> --worker-range <min>-<max> \
 #       --gate-run-id <id> --cluster-name <name> --operations-family <family> \
@@ -28,24 +29,28 @@
 # script under `infra/scripts/` is itself a protected path and must not be the thing
 # that vouches for its own change. The order is:
 #
-#   the gates (workflow)  the Greenfield gate and the Source security gate green on the
-#                         images commit, by workflow file, and the commit still on main;
+#   the gate (workflow)   the Greenfield gate (greenfield.yml) green on the images
+#                         commit, by workflow file, and the commit still on main;
 #                         read before the role is assumed and again before the first
 #                         write (lane A1);
 #   the guard (workflow)  every commit since production's, one by one: manual, or pass;
 #   check                 every read and every other guard, and nothing that writes;
+#   the gate again (workflow), then
+#   record --before-rollout  the ci-gate release record for the two digests, built by
+#                         `release-record-from-ci.sh` from the green gate run on the
+#                         images commit and put with `fss admin release-record put` on
+#                         the operations task — the first write, so the record exists
+#                         before any new worker task can claim a send;
 #   release-promote.sh    the two digests copied into fss-prod-*, by digest (--app-only);
 #   deploy                a new revision of each service's running task definition with
 #                         only the image digest changed, verified against the running one
 #                         after ECS registered it; the worker rolled, waited on and held
 #                         to its digest; only then the API, the same way;
 #   the production smoke  in a job of its own, which holds no credential;
-#   record                after the smoke, in a job of its own (lane g100): the ci-gate
-#                         release record for the two digests, built by
-#                         `release-record-from-ci.sh` from the green gate run on the
-#                         images commit and put with `fss admin release-record put` on
-#                         the operations task, so a worker under the owner's process
-#                         attestation (`ci-gate:main`) keeps sending.
+#   record --after-rollout  in a job of its own: the same record put again, which must
+#                         answer `existing` now that production runs its digests — the
+#                         read-back that the deployment running has its record, so a worker
+#                         under the owner's process attestation (`ci-gate:main`) sends.
 #
 # No Terraform, and nothing here runs code from the images commit: the schema ranges
 # arrive as two validated scalars. The task definitions CI registers are the next
@@ -100,10 +105,22 @@
 # lines are printed, and nothing else from an application log. Nothing here changes a
 # count.
 #
-# ## record: the release record, after the smoke (lane g100)
+# ## record: the release record, before the rollout and read back after it
 #
-# Every read and guard of `check` again, and then it refuses unless both services run
-# exactly the two digests: a record is put only for a deployment that runs them. The
+# The worker admits a send only when a stored record names its own digest. Until
+# 26 September 2026 the record was put after the smoke (lane g100), so every new worker
+# task that started during the rollout found none, and a step due then was refused
+# `release_record_unknown` and waited up to an hour. So:
+#
+#   * `record --before-rollout` runs in the deploy job, after `check` decided `deploy` and
+#     the gate was read again, and before the promotion: the first write. Production
+#     still runs the previous digests, and that is expected. A record for a rollout that
+#     then fails is inert: no running process has its digests.
+#   * `record --after-rollout` runs after the smoke. It refuses unless both services run
+#     exactly the two digests, puts the same record again, and requires `existing`: the
+#     read-back that the deployment now running has its record.
+#
+# Both repeat every read and guard of `check` first. The
 # record is `release-record-from-ci.sh <gate run id> <commit> <api> <worker>`, which
 # reads GitHub only and refuses unless the gate run is a green push to main at the
 # commit and the images run published these two digests. It is put on the operations
@@ -138,8 +155,7 @@ source "$CI_SCRIPTS/release-common.sh"
 CI_PREFIX="$RELEASE_PRODUCTION_PREFIX"
 CI_ENVIRONMENT=production
 CI_ROLE="${CI_PREFIX}-ci-deploy"
-# The production account and region. Defaults a dedicated account replaces, like every
-# other script's (`docs/greenfield/accounts.md`); the workflow sets neither.
+# The production account and region; the workflow sets neither, so the defaults hold.
 CI_ACCOUNT="${FSS_PRODUCTION_ACCOUNT_ID:-326255650484}"
 CI_REGION="${FSS_PRODUCTION_REGION:-us-east-1}"
 # The order the services roll in. The worker first, as on every path in release-deploy.sh.
@@ -183,7 +199,7 @@ shift || true
 case "$SUBCOMMAND" in
   check | deploy | record) ;;
   *)
-    echo "usage: $(basename "$0") <check|deploy|record> --digests <image-digests.json> --commit <sha> --run-id <id> --run-attempt <n> --run-started <instant> --run-ended <instant> --api-range <min>-<max> --worker-range <min>-<max> [--origin <https url>] [--gate-run-id <id> --cluster-name <name> --operations-family <family> --subnets <ids> --security-group <id>]" >&2
+    echo "usage: $(basename "$0") <check|deploy|record> --digests <image-digests.json> --commit <sha> --run-id <id> --run-attempt <n> --run-started <instant> --run-ended <instant> --api-range <min>-<max> --worker-range <min>-<max> [--origin <https url>] [--before-rollout|--after-rollout --gate-run-id <id> --cluster-name <name> --operations-family <family> --subnets <ids> --security-group <id>]" >&2
     exit 2
     ;;
 esac
@@ -202,8 +218,11 @@ RECORD_CLUSTER_NAME=''
 OPERATIONS_FAMILY=''
 TASK_SUBNETS=''
 TASK_SECURITY_GROUP=''
+RECORD_STAGE=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --before-rollout) RECORD_STAGE=before; shift ;;
+    --after-rollout) RECORD_STAGE=after; shift ;;
     --gate-run-id) GATE_RUN_ID=${2:-}; shift 2 ;;
     --cluster-name) RECORD_CLUSTER_NAME=${2:-}; shift 2 ;;
     --operations-family) OPERATIONS_FAMILY=${2:-}; shift 2 ;;
@@ -238,6 +257,12 @@ for range in "$API_RANGE" "$WORKER_RANGE"; do
 done
 if [ "$SUBCOMMAND" = check ]; then
   [[ "$ORIGIN" =~ ^https://[A-Za-z0-9.-]+$ ]] || ci_fail "--origin '$ORIGIN' is not an https origin; production has no port-80 listener"
+fi
+if [ "$SUBCOMMAND" = record ]; then
+  [ -n "$RECORD_STAGE" ] \
+    || ci_fail "record needs --before-rollout (the deploy job's put, before its first write) or --after-rollout (the read-back after the smoke)"
+elif [ -n "$RECORD_STAGE" ]; then
+  ci_fail "--before-rollout and --after-rollout belong to record, not to $SUBCOMMAND"
 fi
 if [ "$SUBCOMMAND" = record ]; then
   # Five public identifiers, each judged before anything is asked. The last four come
@@ -523,8 +548,11 @@ fi
 # record (lane g100)
 # ---------------------------------------------------------------------------
 if [ "$SUBCOMMAND" = record ]; then
-  if [ "$ALREADY_RUNNING" -ne 1 ]; then
-    ci_fail "production runs api $(ci_field api digest) and worker $(ci_field worker digest), not the deployed api $API_DIGEST and worker $WORKER_DIGEST. A release record is put only for a deployment that runs its digests."
+  if [ "$RECORD_STAGE" = after ] && [ "$ALREADY_RUNNING" -ne 1 ]; then
+    ci_fail "production runs api $(ci_field api digest) and worker $(ci_field worker digest), not the deployed api $API_DIGEST and worker $WORKER_DIGEST. The read-back after the rollout is for a deployment that runs its record's digests."
+  fi
+  if [ "$RECORD_STAGE" = before ] && [ "$ALREADY_RUNNING" -ne 1 ]; then
+    rehearsal_log "before the rollout: production runs api $(ci_field api digest) and worker $(ci_field worker digest); the record for api $API_DIGEST and worker $WORKER_DIGEST is stored first, so no new worker task starts without one"
   fi
   [ "$RECORD_CLUSTER_NAME" = "${CI_PREFIX}-cluster" ] \
     || ci_fail "the repository variable FSS_PRODUCTION_CLUSTER_NAME names $RECORD_CLUSTER_NAME, and this deploy acts on ${CI_PREFIX}-cluster; set it again from terraform output -raw ci_deploy_cluster_name"
@@ -651,9 +679,12 @@ if different:
     sys.exit("the stored record differs from the one put in {}".format(", ".join(different)))
 print(answer["outcome"])
 ')" || ci_fail "the operations task did not store the release record $RECORD_REFERENCE as it was put"
+  if [ "$RECORD_STAGE" = after ] && [ "$RECORD_OUTCOME" != existing ]; then
+    ci_fail "the read-back had to create the release record $RECORD_REFERENCE: it was not stored before the rollout, which the deploy job's put should have done. It is stored now."
+  fi
   ci_output release_record_reference "$RECORD_REFERENCE"
   ci_output release_record_outcome "$RECORD_OUTCOME"
-  rehearsal_log "release record $RECORD_REFERENCE stored ($RECORD_OUTCOME): source ci-gate, api $API_DIGEST, worker $WORKER_DIGEST"
+  rehearsal_log "release record $RECORD_REFERENCE stored ($RECORD_OUTCOME, ${RECORD_STAGE} the rollout): source ci-gate, api $API_DIGEST, worker $WORKER_DIGEST"
   exit 0
 fi
 

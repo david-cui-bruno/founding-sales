@@ -57,10 +57,9 @@ mock_provider "aws" {
 # application-default credentials before it made a single AWS call, and a mocked
 # provider in a test can never catch that — `mock_provider` replaces the
 # configuration the real plan would have had to make.
-# `docs/decisions/g12j-the-rehearsal-has-no-google-provider.md`.
+# `docs/archive/decisions/g12j-the-rehearsal-has-no-google-provider.md`.
 
 variables {
-  aws_account_id      = "123456789012"
   certificate_arn     = "arn:aws:acm:us-east-1:123456789012:certificate/11111111-2222-4333-8444-555555555555"
   api_hostname        = "rehearsal.example.invalid"
   api_image           = "123456789012.dkr.ecr.us-east-1.amazonaws.com/fss-rh-api@sha256:0000000000000000000000000000000000000000000000000000000000000001"
@@ -120,7 +119,7 @@ run "no_name_this_run_claims_can_be_a_production_name" {
 # environment secrets name the stable `fss-rh-api` and `fss-rh-worker`, and a
 # repository created by a run is destroyed with it. `infra/roots/rehearsal-registry`
 # owns the two stable repositories and is applied once. See
-# docs/decisions/g12c-the-rehearsal-registry-is-its-own-root.md.
+# docs/archive/decisions/g12c-the-rehearsal-registry-is-its-own-root.md.
 run "the_run_creates_no_repository_of_its_own" {
   command = plan
 
@@ -311,7 +310,7 @@ run "the_topology_answers_are_the_rehearsal_defaults_at_one_plus_one" {
 # services carry `ignore_changes = [desired_count]`, and a re-apply of a standing
 # environment leaves the running count to `release-stop.sh` and `release-deploy.sh`
 # (`infra/modules/cluster/tests/release_owns_the_count.tftest.hcl` applies that;
-# `docs/decisions/g12h-bootstrap-is-a-root-variable.md`, "Amended").
+# `docs/archive/decisions/g12h-bootstrap-is-a-root-variable.md`, "Amended").
 run "a_rehearsal_re_apply_declares_the_real_counts" {
   command = plan
 

@@ -54,7 +54,7 @@ Mac.
 
 Both halves are **base64 DER**, and the publisher accepts nothing else: a key pasted
 in PEM form is refused by name, with the conversion, before anything is built
-(`docs/decisions/g13-update-key-encoding.md`). To produce the pair, on a Mac, once:
+(`docs/archive/decisions/g13-update-key-encoding.md`). To produce the pair, on a Mac, once:
 
 ```
 openssl genpkey -algorithm ed25519 -out callie-update.pem
@@ -90,7 +90,7 @@ cd infra/roots/production
 terraform output -raw updates_distribution_domain_name   # d111111abcdef8.cloudfront.net
 ```
 
-and set the variable to `https://` + that + `/`. `docs/decisions/g13b-an-absent-channel-url-is-a-refusal.md`
+and set the variable to `https://` + that + `/`. `docs/archive/decisions/g13b-an-absent-channel-url-is-a-refusal.md`
 says why an absent one is a refusal rather than a default: a build that fell back to an
 unapplied hostname would install once, check a name that does not resolve every six
 hours, and never update — with no alarm and no symptom until the day the API raises the
@@ -175,7 +175,7 @@ The map is now derived from one declaration per window, `BUNDLE_WINDOWS` in
 the firm workspace, the sequence editor and administration, and adding a window is
 one line rather than three lists to keep equal. `bundleScheme.test.ts` asserts that
 every declared page and script resolves and that each page's script tag matches the
-entry its window declares. See `docs/decisions/g9-bundle-scheme-map.md`.
+entry its window declares. See `docs/archive/decisions/g9-bundle-scheme-map.md`.
 
 That derivation makes "a declared window is in the map" true by construction, and it
 cannot say anything about a *bundle*. So `verify:desktop:package` opens the asar and
@@ -190,7 +190,7 @@ refuses on either of two findings:
 Both were proved by breaking them on real packaged bundles before the check landed, and
 neither needs Apple, so `--integrity` checks them too. If you ever see either code, the
 window named in the report is broken on every Mac that installs that build.
-`docs/decisions/g13b-what-the-packaged-window-check-proves.md`.
+`docs/archive/decisions/g13b-what-the-packaged-window-check-proves.md`.
 
 ### What the run leaves behind
 
@@ -215,7 +215,7 @@ GitHub wraps any download in a zip of its own, so a download is
 The upload uses `actions/upload-artifact` pinned to
 `ea165f8d65b6e75b540449e92b4886f43607fa02` — v4.6.2, resolved with `git ls-remote` and
 confirmed to be a commit rather than a tag object
-(`docs/decisions/g13b-the-artifact-leaves-on-a-pinned-action.md`). It runs only after
+(`docs/archive/decisions/g13b-the-artifact-leaves-on-a-pinned-action.md`). It runs only after
 the verifier passed, the manifest was signed and the stamp matched the commit, and it
 has no `if: always()`: a build that failed any of those has nothing worth downloading.
 
@@ -306,12 +306,12 @@ right-click-open.
 
 The first launch asks for nothing. Signing in opens Google in the system browser
 (specification 5.1), and the device secret goes into the login keychain without a
-dialog — see `docs/decisions/g13-keychain-acl.md` for why that took a fix.
+dialog — see `docs/archive/decisions/g13-keychain-acl.md` for why that took a fix.
 
 ## How a Mac updates itself
 
 Since lane g83, Callie installs a verified update by itself
-(`docs/decisions/g83-the-update-installs-itself.md`). Builds without g83 (1.0.0 to
+(`docs/archive/decisions/g83-the-update-installs-itself.md`). Builds without g83 (1.0.0 to
 1.0.4) keep the old way: a dialog, the zip in Downloads, and a replacement by hand. The
 running build's updater is the one that receives an update, so the update *to* the first
 g83 build arrives the old way and the update *from* it is the first automatic one.
@@ -460,7 +460,7 @@ npm run verify:desktop:package -- /Applications/Callie.app
 
 **Expected: the system browser opens on `accounts.google.com`, and no Keychain dialog
 appears at any point.** The device secret goes into the login keychain silently
-(`docs/decisions/g13-keychain-acl.md` is why that took a fix). A Keychain prompt here is
+(`docs/archive/decisions/g13-keychain-acl.md` is why that took a fix). A Keychain prompt here is
 a real finding — report it.
 
 Leave the app signed in. The next step needs a running installation to update.
@@ -500,7 +500,7 @@ On the Mac, quit Callie and open it again.
 zip is written to Downloads and Finder opens on it. Replace `Callie` in Applications,
 open it, and confirm the version.
 
-It does not swap the running bundle in place; `docs/decisions/g13-update-application.md`
+It does not swap the running bundle in place; `docs/archive/decisions/g13-update-application.md`
 says why not. That is how 1.0.0 to 1.0.4 receive every update, including the one to the
 first build with lane g83. From that build on, quitting and opening Callie installs the
 update by itself ("How a Mac updates itself").

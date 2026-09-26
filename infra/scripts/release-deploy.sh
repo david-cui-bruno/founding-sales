@@ -2,11 +2,15 @@
 # The deployment, in the one order that works, for both environments (lane G12h).
 #
 #   infra/scripts/release-deploy.sh <root> <prefix> [--schema-change] --api-digest D --worker-digest D
-#       [--release-record <release-record.json>] [--remove-linkedin-history]
+#       [--release-record <release-record.json>]
+#   infra/scripts/release-deploy.sh <root> <prefix> --record-only --api-digest D --worker-digest D
+#       --release-record <release-record.json>
 #
 #   infra/scripts/release-deploy.sh infra/roots/rehearsal  fss-rh-0921 --schema-change --api-digest D --worker-digest D  # CI
 #   infra/scripts/release-deploy.sh infra/roots/production fss-prod    --schema-change --api-digest D --worker-digest D  # a schema release
 #   infra/scripts/release-deploy.sh infra/roots/production fss-prod    --api-digest D --worker-digest D                  # app-only
+#   infra/scripts/release-deploy.sh infra/roots/production fss-prod    --record-only --api-digest D --worker-digest D \
+#       --release-record release-record.json                                                                        # before the apply
 #
 # A schema change on a standing stack runs `infra/scripts/release-stop.sh` before the
 # apply and this after it; step 1 below refuses when that did not happen.
@@ -76,21 +80,33 @@
 # API's tasks are held to. A dry run prints the three reads and judges nothing.
 #
 # And, only when `--release-record <file>` is given (lane g71): after the final verify,
-# `fss admin release-record put` on the operations task, so the record the green
-# rehearsal wrote is in this deployment's database for the admin's attestation to name.
-# The production operator passes the `release-record.json` downloaded from the green
-# rehearsal run whose digests are the ones being deployed here. Without the flag nothing
-# about the deploy changes. Putting a record enables nothing: the API still refuses an
-# enable unless the record's API digest is its own, and the worker still refuses to send
-# unless the record's worker digest is its own (release.md section 6).
+# `fss admin release-record put` on the operations task, so the record is in this
+# deployment's database for the admin's attestation to name. The production operator
+# passes the record `release-record-from-ci.sh` wrote for the digests being deployed here
+# (release.md 4.2); a record naming other digests is refused before anything else runs.
+# Without the flag nothing about the deploy changes. Putting a record enables nothing: the
+# API still refuses an enable unless the record's API digest is its own, and the worker
+# still refuses to send unless the record's worker digest is its own (release.md 6).
 #
-# And, only when `--remove-linkedin-history` is given (lane A4, migration 0018): step 2
-# runs `fss migrate --remove-linkedin-history`, which is the one thing that lets 0018
-# erase a step's LinkedIn message, a recorded LinkedIn result or a contact URL that does
-# not fit beside the title. It is passed only after the owner has seen the counts
-# `infra/scripts/schema-preflight-0018.sh` printed; without it 0018 refuses, schema 17
-# stays as it was, and this script fails at step 2 with the counts in the task's log.
-# It means nothing without `--schema-change`, and is refused there.
+# ## --record-only: the record before the rollout (26 September 2026)
+#
+# The worker admits a send only when a stored record names its own digest. A put that
+# comes last leaves every new worker task that starts during the rollout without one, so
+# a step due then is refused `release_record_unknown` and waits up to an hour. So the hand
+# release stores the record first:
+#
+#   release-deploy.sh ... --record-only  ->  plan  ->  apply  ->  release-deploy.sh ... --release-record
+#
+# `--record-only` does the put and nothing else: no count, no wait, no one-off task but the
+# put, and it exits. It runs on the operations task definition the root outputs now, which
+# before the apply is the running release's, so the task is held to that definition's own
+# image — an `<prefix>-worker` image by digest in this account and region — and not to
+# `--worker-digest`, which is what the record names. That is the rule the CI record step
+# and the put-alone command of release.md 6 already follow. The record's digests must be
+# the two digests given, and the put's answer must be `created` or `existing` and name
+# them. The put at the end of the deploy stays and answers `existing`: it is the check that
+# the record is there for the deployment now running. A record stored for a rollout that
+# never completes is inert, because no running process has its digests.
 #
 # Stop-during-migration is the policy (`docs/greenfield/release.md` 4.1): every
 # declared range from migration 0006 onwards is a strict `{N,N}`, so there is no
@@ -136,14 +152,14 @@ PREFIX=${2:-}
 shift 2 2>/dev/null || true
 
 SCHEMA_CHANGE=0
+RECORD_ONLY=0
 API_DIGEST=''
 WORKER_DIGEST=''
 RELEASE_RECORD=''
-REMOVE_LINKEDIN_HISTORY=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --schema-change) SCHEMA_CHANGE=1; shift ;;
-    --remove-linkedin-history) REMOVE_LINKEDIN_HISTORY=1; shift ;;
+    --record-only) RECORD_ONLY=1; shift ;;
     --api-digest) API_DIGEST=$2; shift 2 ;;
     --worker-digest) WORKER_DIGEST=$2; shift 2 ;;
     --release-record) RELEASE_RECORD=$2; shift 2 ;;
@@ -152,13 +168,23 @@ while [ "$#" -gt 0 ]; do
 done
 
 if [ -z "$ROOT_DIRECTORY" ] || [ -z "$PREFIX" ]; then
-  echo "usage: release-deploy.sh <terraform root> <name prefix> [--schema-change] --api-digest D --worker-digest D [--release-record <file>] [--remove-linkedin-history]" >&2
+  echo "usage: release-deploy.sh <terraform root> <name prefix> [--schema-change] --api-digest D --worker-digest D [--release-record <file>]" >&2
+  echo "       release-deploy.sh <terraform root> <name prefix> --record-only --api-digest D --worker-digest D --release-record <file>" >&2
   exit 1
 fi
-
-if [ "$REMOVE_LINKEDIN_HISTORY" = "1" ] && [ "$SCHEMA_CHANGE" != "1" ]; then
-  echo "FAIL: --remove-linkedin-history is an instruction to migration 0018, and a release without --schema-change runs no migration." >&2
-  exit 1
+if [ "$RECORD_ONLY" = "1" ]; then
+  if [ -z "$RELEASE_RECORD" ]; then
+    echo "FAIL: --record-only stores a release record and does nothing else, so it needs --release-record <file>." >&2
+    exit 1
+  fi
+  if [ "$SCHEMA_CHANGE" = "1" ]; then
+    echo "FAIL: --record-only deploys nothing, so --schema-change means nothing here. Pass it to the deploy that follows." >&2
+    exit 1
+  fi
+  if [ -z "$API_DIGEST" ] || [ -z "$WORKER_DIGEST" ]; then
+    echo "FAIL: --record-only needs --api-digest and --worker-digest: the record must name exactly the release it is stored for." >&2
+    exit 1
+  fi
 fi
 
 # The release record, read and encoded before anything is scaled, so a missing or
@@ -193,6 +219,23 @@ if len(encoded) > 6000:
 sys.stdout.write(encoded)
 ')"; then
     echo "FAIL: --release-record '$RELEASE_RECORD' is not a release record this script can hand to the task." >&2
+    exit 1
+  fi
+  # The record must be this release's: a record naming other digests would be stored for
+  # nothing, and on the --record-only path it would be stored ahead of a rollout it does not
+  # cover. A digest not given (a dry run without --api-digest) is not compared.
+  RECORD_DIGEST_PROBLEM="$(FSS_RECORD="$RELEASE_RECORD" FSS_API="$API_DIGEST" FSS_WORKER="$WORKER_DIGEST" python3 -c '
+import json, os
+artifacts = json.load(open(os.environ["FSS_RECORD"], "rb")).get("artifacts") or {}
+problems = []
+for name, variable in (("api", "FSS_API"), ("worker", "FSS_WORKER")):
+    given = os.environ[variable]
+    if given and artifacts.get(name) != given:
+        problems.append("{} {} (this release: {})".format(name, artifacts.get(name), given))
+print("; ".join(problems))
+')"
+  if [ -n "$RECORD_DIGEST_PROBLEM" ]; then
+    echo "FAIL: --release-record '$RELEASE_RECORD' names $RECORD_DIGEST_PROBLEM. Build the record for the digests being released (release.md 4.2)." >&2
     exit 1
   fi
 fi
@@ -262,6 +305,10 @@ done
 # A bootstrap is an empty database, which is the largest schema change there is. The
 # rolling path launches no migration, so a bootstrap without the flag would start two
 # services against a database they refuse.
+if [ "$BOOTSTRAP" = "true" ] && [ "$RECORD_ONLY" = "1" ]; then
+  echo "FAIL: the plan says bootstrap=true: before its first apply there is no database to store a record in. Put it with the deploy (--release-record)." >&2
+  exit 1
+fi
 if [ "$BOOTSTRAP" = "true" ] && [ "$SCHEMA_CHANGE" != "1" ]; then
   echo "FAIL: the plan says bootstrap=true, and a bootstrap creates an empty database. Run this with --schema-change." >&2
   exit 1
@@ -306,6 +353,95 @@ fi
 
 rehearsal_log "cluster $CLUSTER_ARN"
 rehearsal_log "services $WORKER_SERVICE (-> $WORKER_TARGET) and $API_SERVICE (-> $API_TARGET); bootstrap=$BOOTSTRAP"
+
+# ---------------------------------------------------------------------------
+# The put, on either path. On the operations task, as the runtime identity, like
+# `verify`: `release_records` is append-only for that role, which may insert and read and
+# nothing else. Idempotent, so a second put of the same file answers `existing`. The
+# answer is printed, because the reference and the two digests in it are what the admin
+# compares before attesting, and it must name this release's digests.
+#
+#   put_release_record <step> <image digest the operations task is held to>
+# ---------------------------------------------------------------------------
+RELEASE_RECORD_OUTCOME=none
+put_release_record() {
+  local step=$1 image_digest=$2 capture answer
+  capture="$REPORTS/$step.log"
+  rehearsal_log "$step: fss admin release-record put --json-base64 \"\$RELEASE_RECORD_BASE64\" --report /tmp/fss-release-record.json (the record in $RELEASE_RECORD)"
+  release_run_task \
+    --step "$step" \
+    --environment "$ENVIRONMENT" \
+    --prefix "$PREFIX" \
+    --account "$ACCOUNT" \
+    --region "$REGION" \
+    --cluster "$CLUSTER_ARN" \
+    --task-definition "$OPERATIONS_TASK_DEFINITION" \
+    --container operations \
+    --network-plan "$NETWORK_PLAN" \
+    --image-digest "$image_digest" \
+    --database-host "$DATABASE_HOST" \
+    --secret-arn "$RUNTIME_SECRET_ARN" \
+    --log-group "$LOG_GROUP" \
+    --log-stream-prefix operations \
+    --capture "$capture" \
+    -- admin release-record put --json-base64 "$RELEASE_RECORD_BASE64" --report /tmp/fss-release-record.json
+  if rehearsal_dry_run; then
+    rehearsal_plan "read the task's log stream, print the put's answer from $REPORTS/$step.json, and require created or existing for api ${API_DIGEST:-<the api digest>} and worker $WORKER_DIGEST"
+    RELEASE_RECORD_OUTCOME=planned
+    return 0
+  fi
+  release_captured_report "$capture" "$REPORTS/$step.json"
+  rehearsal_log "release record stored:"
+  cat "$REPORTS/$step.json"
+  answer="$(FSS_FILE="$REPORTS/$step.json" FSS_API="$API_DIGEST" FSS_WORKER="$WORKER_DIGEST" python3 -c '
+import json, os, sys
+env = os.environ
+answer = json.load(open(env["FSS_FILE"], encoding="utf-8")) or {}
+if answer.get("outcome") not in ("created", "existing"):
+    sys.exit("the put answered {} ({}): {}".format(answer.get("outcome"), answer.get("reason"), answer.get("detail")))
+different = [key for key, value in (("apiDigest", env["FSS_API"]), ("workerDigest", env["FSS_WORKER"])) if value and answer.get(key) != value]
+if different:
+    sys.exit("the stored record differs from this release in {}".format(", ".join(different)))
+print(answer["outcome"])
+')" || { echo "FAIL: $step: the operations task did not store the release record in $RELEASE_RECORD for this release (above)." >&2; exit 1; }
+  RELEASE_RECORD_OUTCOME=$answer
+}
+
+# ---------------------------------------------------------------------------
+# --record-only: the put before the apply, and nothing else.
+#
+# The operations definition the root outputs now is the running release's, so its image
+# is the running worker's, not --worker-digest. It is read from ECS and must be this
+# environment's worker repository by digest; the wrapper then holds the task to exactly
+# that image, with the database host and credential entry this release names.
+# ---------------------------------------------------------------------------
+if [ "$RECORD_ONLY" = "1" ]; then
+  OPERATIONS_DEFINITION="$(release_task_definition "$ENVIRONMENT" "$OPERATIONS_TASK_DEFINITION")"
+  if [ -n "$OPERATIONS_DEFINITION" ]; then
+    OPERATIONS_DIGEST="$(FSS_JSON="$OPERATIONS_DEFINITION" FSS_REPOSITORY="${ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com/${PREFIX}-worker" python3 -c '
+import json, os, re, sys
+definition = json.loads(os.environ["FSS_JSON"]) or {}
+image = next((str(entry.get("image", "")) for entry in definition.get("containerDefinitions") or [] if entry.get("name") == "operations"), "")
+match = re.fullmatch(re.escape(os.environ["FSS_REPOSITORY"]) + r"@(sha256:[0-9a-f]{64})", image)
+if not match:
+    sys.exit("the operations task definition runs {!r}, which is not {} by digest".format(image, os.environ["FSS_REPOSITORY"]))
+print(match.group(1))
+')" || { echo "FAIL: --record-only: the operations task definition is not the worker image by digest (above); nothing was put." >&2; exit 1; }
+  else
+    # A dry run with no fixture read no definition; the plan says which image it would be.
+    OPERATIONS_DIGEST='<read-from-the-operations-definition>'
+  fi
+  if [ "$OPERATIONS_DIGEST" = "$WORKER_DIGEST" ]; then
+    rehearsal_log "record only: the operations task definition already runs this release's worker image ($WORKER_DIGEST): the apply has run"
+  else
+    rehearsal_log "record only: the put runs the operations task definition as it is now ($OPERATIONS_DIGEST, the running release's worker image); the record names api $API_DIGEST and worker $WORKER_DIGEST"
+  fi
+  put_release_record release-record-put-before-rollout "$OPERATIONS_DIGEST"
+  rehearsal_write_report "release-deploy.txt" \
+    "prefix=$PREFIX environment=$ENVIRONMENT record_only=yes api_digest=$API_DIGEST worker_digest=$WORKER_DIGEST operations_digest=$OPERATIONS_DIGEST release_record=$RELEASE_RECORD_OUTCOME"
+  rehearsal_log "record only: release record $RELEASE_RECORD_OUTCOME; nothing was deployed. Next: the plan, the apply, then this script without --record-only."
+  exit 0
+fi
 
 scale() { # scale <service> <count>
   local service=$1 count=$2
@@ -399,14 +535,8 @@ if [ "$SCHEMA_CHANGE" = "1" ]; then
   # -------------------------------------------------------------------------
   # 2. Migrate. Under the migration identity, inside the VPC.
   # -------------------------------------------------------------------------
-  # The switch goes after the report flag, so the command's name is still `migrate`.
-  MIGRATE_SWITCHES=()
-  if [ "$REMOVE_LINKEDIN_HISTORY" = "1" ]; then MIGRATE_SWITCHES+=(--remove-linkedin-history); fi
   rehearsal_log "2/7 fss migrate"
-  if [ "$REMOVE_LINKEDIN_HISTORY" = "1" ]; then
-    rehearsal_log "2/7 with --remove-linkedin-history: migration 0018 may erase the LinkedIn history the owner saw counted"
-  fi
-  one_off migrate "$MIGRATION_TASK_DEFINITION" migration migrate --report /tmp/fss-migrate.json ${MIGRATE_SWITCHES[@]+"${MIGRATE_SWITCHES[@]}"}
+  one_off migrate "$MIGRATION_TASK_DEFINITION" migration migrate --report /tmp/fss-migrate.json
 
   # -------------------------------------------------------------------------
   # 3. The two database login users.
@@ -475,46 +605,14 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Last, on either path, and only with --release-record: store the record the admin will
-# attest to — after the final verify of a schema release, after the running digests of a
-# rolling one, so the record is stored only for a deployment that is running its digests.
-#
-# On the operations task, as the runtime identity, like `verify`: `release_records` is
-# append-only for that role, which may insert and read and nothing else. Idempotent, so a
-# re-run of this script with the same file answers `existing`. The outcome is printed,
-# because the reference and the two digests in it are what the admin compares before
-# attesting.
+# Last, on either path, and only with --release-record: the put again — after the final
+# verify of a schema release, after the running digests of a rolling one. A record already
+# stored by --record-only before the apply answers `existing`, and that is the check that
+# the deployment now running has its record. The apply has registered the new operations
+# definition, so the task is held to this release's worker digest.
 # ---------------------------------------------------------------------------
-RELEASE_RECORD_OUTCOME=none
 if [ -n "$RELEASE_RECORD" ]; then
-  rehearsal_log "last: fss admin release-record put --json-base64 \"\$RELEASE_RECORD_BASE64\" --report /tmp/fss-release-record.json (the record in $RELEASE_RECORD)"
-  RECORD_CAPTURE="$REPORTS/release-record-put.log"
-  release_run_task \
-    --step release-record-put \
-    --environment "$ENVIRONMENT" \
-    --prefix "$PREFIX" \
-    --account "$ACCOUNT" \
-    --region "$REGION" \
-    --cluster "$CLUSTER_ARN" \
-    --task-definition "$OPERATIONS_TASK_DEFINITION" \
-    --container operations \
-    --network-plan "$NETWORK_PLAN" \
-    --image-digest "$WORKER_DIGEST" \
-    --database-host "$DATABASE_HOST" \
-    --secret-arn "$RUNTIME_SECRET_ARN" \
-    --log-group "$LOG_GROUP" \
-    --log-stream-prefix operations \
-    --capture "$RECORD_CAPTURE" \
-    -- admin release-record put --json-base64 "$RELEASE_RECORD_BASE64" --report /tmp/fss-release-record.json
-  if rehearsal_dry_run; then
-    rehearsal_plan "read the task's log stream and print the put's outcome from $REPORTS/release-record-put.json"
-    RELEASE_RECORD_OUTCOME=planned
-  else
-    release_captured_report "$RECORD_CAPTURE" "$REPORTS/release-record-put.json"
-    rehearsal_log "release record stored:"
-    cat "$REPORTS/release-record-put.json"
-    RELEASE_RECORD_OUTCOME="$(release_json_path "$(cat "$REPORTS/release-record-put.json")" "outcome" "unreadable")"
-  fi
+  put_release_record release-record-put "$WORKER_DIGEST"
 fi
 
 rehearsal_write_report "release-deploy.txt" \

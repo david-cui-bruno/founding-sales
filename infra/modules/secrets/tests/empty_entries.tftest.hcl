@@ -95,7 +95,7 @@ run "an_out_of_range_recovery_window_is_refused" {
 # `aws_kms_key.secrets.arn` is computed, and the mock provider above supplies
 # mocked values during the apply phase, so a plan here is as blind as a real
 # one. An apply run under a mocked provider reaches nothing and needs no
-# credential. `docs/decisions/g12j-mock-providers-keep-computed-values-unknown.md`.
+# credential. `docs/archive/decisions/g12j-mock-providers-keep-computed-values-unknown.md`.
 run "every_entry_is_encrypted_with_the_module_s_own_key" {
   command = apply
 

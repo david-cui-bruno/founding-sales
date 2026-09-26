@@ -99,9 +99,6 @@ mock_provider "aws" {
 }
 
 variables {
-  aws_account_id      = "123456789012"
-  certificate_arn     = "arn:aws:acm:us-east-1:123456789012:certificate/11111111-2222-4333-8444-555555555555"
-  api_hostname        = "api.example.invalid"
   api_image           = "123456789012.dkr.ecr.us-east-1.amazonaws.com/fss-prod-api@sha256:0000000000000000000000000000000000000000000000000000000000000001"
   worker_image        = "123456789012.dkr.ecr.us-east-1.amazonaws.com/fss-prod-worker@sha256:0000000000000000000000000000000000000000000000000000000000000002"
   api_schema_range    = { min = 1, max = 4 }
@@ -136,7 +133,7 @@ run "production_exempts_nobody_from_the_journal_denies" {
   assert {
     condition = alltrue([
       for statement in jsondecode(module.stack.journal_policy_json).Statement :
-      statement.Condition.ArnNotEquals["aws:PrincipalArn"] == ["arn:aws:iam::123456789012:role/fss-prod-deploy"]
+      statement.Condition.ArnNotEquals["aws:PrincipalArn"] == ["arn:aws:iam::326255650484:role/fss-prod-deploy"]
       && statement.Resource == ["arn:aws:s3:::mock-bucket"]
       if statement.Sid == "DenyListingFromAnyoneButTheTaskRolesAndTheDeployer"
     ])
@@ -185,7 +182,7 @@ run "david_can_opt_in_to_a_production_teardown_by_naming_a_principal" {
   command = apply
 
   variables {
-    journal_administrative_principal_arns = ["arn:aws:iam::123456789012:role/fss-prod-deploy"]
+    journal_administrative_principal_arns = ["arn:aws:iam::326255650484:role/fss-prod-deploy"]
   }
 
   assert {
@@ -194,7 +191,7 @@ run "david_can_opt_in_to_a_production_teardown_by_naming_a_principal" {
       statement
       if statement.Effect == "Deny"
       && statement.Sid != "DenyUnencryptedTransport"
-      && contains(try(statement.Condition.ArnNotEquals["aws:PrincipalArn"], []), "arn:aws:iam::123456789012:role/fss-prod-deploy")
+      && contains(try(statement.Condition.ArnNotEquals["aws:PrincipalArn"], []), "arn:aws:iam::326255650484:role/fss-prod-deploy")
     ]) == 4
     error_message = "With a principal named, the four non-transport denies exempt it: deletion and lock weakening, writes, object reads, and listing, which already exempted the deployer by name. Without this the run above would pass against a module that had lost the exemption entirely."
   }

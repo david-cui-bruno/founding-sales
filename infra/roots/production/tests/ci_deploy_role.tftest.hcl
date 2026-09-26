@@ -81,11 +81,8 @@ mock_provider "aws" {
 }
 
 variables {
-  aws_account_id      = "123456789012"
-  certificate_arn     = "arn:aws:acm:us-east-1:123456789012:certificate/11111111-2222-4333-8444-555555555555"
-  api_hostname        = "api.example.invalid"
-  api_image           = "123456789012.dkr.ecr.us-east-1.amazonaws.com/fss-prod-api@sha256:0000000000000000000000000000000000000000000000000000000000000001"
-  worker_image        = "123456789012.dkr.ecr.us-east-1.amazonaws.com/fss-prod-worker@sha256:0000000000000000000000000000000000000000000000000000000000000002"
+  api_image           = "326255650484.dkr.ecr.us-east-1.amazonaws.com/fss-prod-api@sha256:0000000000000000000000000000000000000000000000000000000000000001"
+  worker_image        = "326255650484.dkr.ecr.us-east-1.amazonaws.com/fss-prod-worker@sha256:0000000000000000000000000000000000000000000000000000000000000002"
   api_schema_range    = { min = 16, max = 16 }
   worker_schema_range = { min = 16, max = 16 }
 }
@@ -131,7 +128,7 @@ run "the_role_trusts_one_github_subject_and_nothing_else" {
   }
 
   assert {
-    condition     = jsondecode(aws_iam_role.ci_deploy.assume_role_policy).Statement[0].Principal == { Federated = "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com" }
+    condition     = jsondecode(aws_iam_role.ci_deploy.assume_role_policy).Statement[0].Principal == { Federated = "arn:aws:iam::326255650484:oidc-provider/token.actions.githubusercontent.com" }
     error_message = "The only principal is this account's GitHub Actions OIDC provider: no AWS principal, no service, and never Principal *."
   }
 
@@ -259,7 +256,7 @@ run "resource_star_only_where_there_is_no_resource_to_name" {
   assert {
     condition = alltrue([
       for statement in jsondecode(aws_iam_role_policy.ci_deploy.policy).Statement :
-      statement.Condition == { ArnEquals = { "ecs:cluster" = "arn:aws:ecs:us-east-1:123456789012:cluster/fss-prod-cluster" } } if statement.Sid == "ListTasksInTheProductionCluster"
+      statement.Condition == { ArnEquals = { "ecs:cluster" = "arn:aws:ecs:us-east-1:326255650484:cluster/fss-prod-cluster" } } if statement.Sid == "ListTasksInTheProductionCluster"
     ])
     error_message = "Listing tasks is conditioned on the production cluster's ARN."
   }
@@ -272,7 +269,7 @@ run "every_named_resource_is_production_s_but_the_two_images_it_reads" {
     condition = alltrue(flatten([
       for statement in jsondecode(aws_iam_role_policy.ci_deploy.policy).Statement : [
         for resource in statement.Resource :
-        resource == "*" || strcontains(resource, "fss-prod") || (statement.Sid == "ReadTheRehearsalAndProductionImages" && contains(["arn:aws:ecr:us-east-1:123456789012:repository/fss-rh-api", "arn:aws:ecr:us-east-1:123456789012:repository/fss-rh-worker"], resource))
+        resource == "*" || strcontains(resource, "fss-prod") || (statement.Sid == "ReadTheRehearsalAndProductionImages" && contains(["arn:aws:ecr:us-east-1:326255650484:repository/fss-rh-api", "arn:aws:ecr:us-east-1:326255650484:repository/fss-rh-worker"], resource))
       ]
     ]))
     error_message = "Every resource the role names is in the fss-prod namespace, except fss-rh-api and fss-rh-worker, which only the read statement names."
@@ -281,7 +278,7 @@ run "every_named_resource_is_production_s_but_the_two_images_it_reads" {
   assert {
     condition = alltrue([
       for statement in jsondecode(aws_iam_role_policy.ci_deploy.policy).Statement :
-      statement.Resource == ["arn:aws:ecr:us-east-1:123456789012:repository/fss-prod-api", "arn:aws:ecr:us-east-1:123456789012:repository/fss-prod-worker"]
+      statement.Resource == ["arn:aws:ecr:us-east-1:326255650484:repository/fss-prod-api", "arn:aws:ecr:us-east-1:326255650484:repository/fss-prod-worker"]
       if contains(statement.Action, "ecr:PutImage")
     ])
     error_message = "The copy writes into the two production repositories and never into a rehearsal one."
@@ -291,10 +288,10 @@ run "every_named_resource_is_production_s_but_the_two_images_it_reads" {
     condition = alltrue([
       for statement in jsondecode(aws_iam_role_policy.ci_deploy.policy).Statement :
       statement.Resource == [
-        "arn:aws:iam::123456789012:role/fss-prod-api-task",
-        "arn:aws:iam::123456789012:role/fss-prod-api-exec",
-        "arn:aws:iam::123456789012:role/fss-prod-worker-task",
-        "arn:aws:iam::123456789012:role/fss-prod-worker-exec",
+        "arn:aws:iam::326255650484:role/fss-prod-api-task",
+        "arn:aws:iam::326255650484:role/fss-prod-api-exec",
+        "arn:aws:iam::326255650484:role/fss-prod-worker-task",
+        "arn:aws:iam::326255650484:role/fss-prod-worker-exec",
       ] && statement.Condition == { StringEquals = { "iam:PassedToService" = "ecs-tasks.amazonaws.com" } }
       if contains(statement.Action, "iam:PassRole")
     ])
@@ -332,8 +329,8 @@ run "every_named_resource_is_production_s_but_the_two_images_it_reads" {
       for statement in jsondecode(aws_iam_role_policy.ci_deploy.policy).Statement :
       statement.Resource if contains(statement.Action, "ecs:DescribeServices")
       ] == [[
-        "arn:aws:ecs:us-east-1:123456789012:service/fss-prod-cluster/fss-prod-api",
-        "arn:aws:ecs:us-east-1:123456789012:service/fss-prod-cluster/fss-prod-worker",
+        "arn:aws:ecs:us-east-1:326255650484:service/fss-prod-cluster/fss-prod-api",
+        "arn:aws:ecs:us-east-1:326255650484:service/fss-prod-cluster/fss-prod-worker",
     ]]
     error_message = "DescribeServices has a statement of its own, on the two services, with no condition to weaken the UpdateService one."
   }
@@ -343,8 +340,8 @@ run "every_named_resource_is_production_s_but_the_two_images_it_reads" {
       for statement in jsondecode(aws_iam_role_policy.ci_deploy.policy).Statement :
       [statement.Resource, statement.Condition.ArnLike["ecs:task-definition"]] if contains(statement.Action, "ecs:UpdateService")
       ] == [
-      [["arn:aws:ecs:us-east-1:123456789012:service/fss-prod-cluster/fss-prod-api"], "arn:aws:ecs:us-east-1:123456789012:task-definition/fss-prod-api:*"],
-      [["arn:aws:ecs:us-east-1:123456789012:service/fss-prod-cluster/fss-prod-worker"], "arn:aws:ecs:us-east-1:123456789012:task-definition/fss-prod-worker:*"],
+      [["arn:aws:ecs:us-east-1:326255650484:service/fss-prod-cluster/fss-prod-api"], "arn:aws:ecs:us-east-1:326255650484:task-definition/fss-prod-api:*"],
+      [["arn:aws:ecs:us-east-1:326255650484:service/fss-prod-cluster/fss-prod-worker"], "arn:aws:ecs:us-east-1:326255650484:task-definition/fss-prod-worker:*"],
     ]
     error_message = "UpdateService is granted once per service, each bound to its own task-definition family."
   }
@@ -369,8 +366,8 @@ run "the_release_record_put_runs_the_operations_task_in_the_production_cluster_a
       ] == [[
         "RunTheOperationsTaskInTheProductionCluster",
         ["ecs:RunTask"],
-        ["arn:aws:ecs:us-east-1:123456789012:task-definition/fss-prod-operations:*"],
-        { ArnEquals = { "ecs:cluster" = "arn:aws:ecs:us-east-1:123456789012:cluster/fss-prod-cluster" } },
+        ["arn:aws:ecs:us-east-1:326255650484:task-definition/fss-prod-operations:*"],
+        { ArnEquals = { "ecs:cluster" = "arn:aws:ecs:us-east-1:326255650484:cluster/fss-prod-cluster" } },
     ]]
     error_message = "RunTask stands alone in one statement: the operations family's revisions, under ArnEquals on the production cluster. Never a service family, never another cluster, never IfExists."
   }
@@ -381,11 +378,11 @@ run "the_release_record_put_runs_the_operations_task_in_the_production_cluster_a
       [statement.Resource, statement.Condition] if contains(statement.Action, "ecs:TagResource")
       ] == [
       [
-        ["arn:aws:ecs:us-east-1:123456789012:task-definition/fss-prod-api:*", "arn:aws:ecs:us-east-1:123456789012:task-definition/fss-prod-worker:*"],
+        ["arn:aws:ecs:us-east-1:326255650484:task-definition/fss-prod-api:*", "arn:aws:ecs:us-east-1:326255650484:task-definition/fss-prod-worker:*"],
         { StringEquals = { "ecs:CreateAction" = "RegisterTaskDefinition" } },
       ],
       [
-        ["arn:aws:ecs:us-east-1:123456789012:task/fss-prod-cluster/*"],
+        ["arn:aws:ecs:us-east-1:326255650484:task/fss-prod-cluster/*"],
         { StringEquals = { "ecs:CreateAction" = "RunTask" } },
       ],
     ]
@@ -396,7 +393,7 @@ run "the_release_record_put_runs_the_operations_task_in_the_production_cluster_a
     condition = [
       for statement in jsondecode(aws_iam_role_policy.ci_deploy.policy).Statement :
       statement.Resource if contains(statement.Action, "ecs:DescribeTasks")
-    ] == [["arn:aws:ecs:us-east-1:123456789012:task/fss-prod-cluster/*"]]
+    ] == [["arn:aws:ecs:us-east-1:326255650484:task/fss-prod-cluster/*"]]
     error_message = "The put's task is read back with the DescribeTasks the role already had, on the production cluster's tasks."
   }
 
@@ -404,7 +401,7 @@ run "the_release_record_put_runs_the_operations_task_in_the_production_cluster_a
   assert {
     condition = alltrue([
       for statement in jsondecode(aws_iam_role_policy.ci_deploy.policy).Statement :
-      contains(statement.Resource, "arn:aws:logs:us-east-1:123456789012:log-group:/fss/fss-prod/worker:*")
+      contains(statement.Resource, "arn:aws:logs:us-east-1:326255650484:log-group:/fss/fss-prod/worker:*")
       if contains(statement.Action, "logs:GetLogEvents")
     ])
     error_message = "logs:GetLogEvents covers the worker log group's streams, where the operations task writes its put's answer."

@@ -1,6 +1,6 @@
 provider "aws" {
-  region              = var.aws_region
-  allowed_account_ids = [var.aws_account_id]
+  region              = local.aws_region
+  allowed_account_ids = [local.aws_account_id]
 
   # The production root only ever acts as the production deployment role. The
   # rehearsal root assumes a different role whose policy is scoped to fss-rh-*,
@@ -12,7 +12,7 @@ provider "aws" {
   # runbook's section 3.2 commands are unchanged. A session that already holds
   # the role passes false, because assuming a role from itself needs the role to
   # trust itself (Appendix G 39, and
-  # `docs/decisions/g12e-the-provider-does-not-reassume-its-own-session.md`).
+  # `docs/archive/decisions/g12e-the-provider-does-not-reassume-its-own-session.md`).
   #
   # A `dynamic` block rather than `role_arn = … : null`: with the block absent
   # there is nothing to interpret. The AWS provider does accept a null
@@ -24,7 +24,7 @@ provider "aws" {
     for_each = var.assume_deployment_role ? [1] : []
 
     content {
-      role_arn     = "arn:aws:iam::${var.aws_account_id}:role/${var.deployment_role_name}"
+      role_arn     = "arn:aws:iam::${local.aws_account_id}:role/${var.deployment_role_name}"
       session_name = "fss-prod-terraform"
     }
   }
@@ -46,4 +46,4 @@ provider "aws" {
 # credentials that lapse about every 17 hours. The Gmail push objects are
 # `infra/roots/production-google`'s now, planned rarely and with that login;
 # this root carries their identifiers as values (audit O01).
-# `docs/decisions/g85-the-google-provider-has-its-own-root.md`.
+# `docs/archive/decisions/g85-the-google-provider-has-its-own-root.md`.

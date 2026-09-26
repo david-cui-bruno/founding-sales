@@ -214,12 +214,12 @@ one while printing the other would be the same leak with more steps.
 ## What is deliberately not here
 
 * **Resolving an ambiguity.** G7 mounts `/messages/resolve-ambiguity` and the card's
-  `nextAction` names it. See `docs/decisions/g7b-ambiguity-stays-where-g7-put-it.md`.
+  `nextAction` names it. See `docs/archive/decisions/g7b-ambiguity-stays-where-g7-put-it.md`.
 * **Closing an opportunity.** 9.1 gives that to a person on the firm page.
 * **Any use of the model outside reply classification.** No summarisation, no drafting,
   no enrichment. The transport interface has one method and the prompt has one job.
 * **A second place to read a message.** The reply window shows the body, and the Firm
-  page does not gain one. See `docs/decisions/g7b-the-reply-window.md`.
+  page does not gain one. See `docs/archive/decisions/g7b-the-reply-window.md`.
 
 ## Running the tests
 

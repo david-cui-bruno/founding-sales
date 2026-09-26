@@ -7,7 +7,7 @@
 # and applied only when a Gmail push object itself has to change, which is rarely,
 # while the production root is planned for every image release, and an expired
 # login once held a worker fix back for that reason alone (audit O01,
-# `docs/decisions/g85-the-google-provider-has-its-own-root.md`).
+# `docs/archive/decisions/g85-the-google-provider-has-its-own-root.md`).
 #
 # Before any plan here, renew and check the credential exactly as
 # `docs/greenfield/infra-apply-runbook.md` 1.3a says, and never with a key file:

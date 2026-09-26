@@ -43,7 +43,7 @@ output "database_master_secret_arn" {
     RDS-managed master user secret ARN. The release workflow reads this secret
     with the rehearsal role and assembles `FSS_TEST_POSTGRES_URL` in the job, so
     no static rehearsal database URL exists as a repository secret. See
-    `docs/decisions/g12c-the-rehearsal-database-url-is-derived.md`.
+    `docs/archive/decisions/g12c-the-rehearsal-database-url-is-derived.md`.
   EOT
   value       = module.stack.database_master_secret_arn
 }

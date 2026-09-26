@@ -1,8 +1,8 @@
 # FSS greenfield infrastructure: costed topology
 
-**Lane:** G1 (infrastructure) · **Spec:** `FSS-GREENFIELD-SPEC-REV3-20260919.md` sections 2, 3, 4.1, 12.6, 13.3 · **Status:** awaiting David's approval of the line items and the sizes.
+**Lane:** G1 (infrastructure) · **Spec:** `FSS-GREENFIELD-SPEC-REV3-20260919.md` sections 2, 3, 4.1, 12.6, 13.3 · **Status:** applied. Production has run this topology since 24 September 2026, in account 326255650484.
 
-This is the complete list of what the `production` root creates, what each line is billed on, and which variable changes it. **No dollar figure appears in this document.** Nobody on this lane has AWS or Google credentials, no pricing API was called, and a remembered price would be a guess. The last section is the one command that turns the table into numbers.
+This is the complete list of what the `production` root creates, what each line is billed on, and which variable changes it. **No dollar figure appears in this document**, and a remembered price would be a guess. The last section is the one command that turns the table into numbers.
 
 Region assumed throughout: `us-east-1`, the account the repository already names (`326255650484`).
 
@@ -17,25 +17,25 @@ Region assumed throughout: `us-east-1`, the account the repository already names
 
 | Line item | Pricing dimension | Quantity (production default) | Variable | Rehearsal |
 |---|---|---|---|---|
-| RDS PostgreSQL 16 instance | Instance-hour for the class, **doubled by Multi-AZ** | 1 × `db.t4g.small`, Multi-AZ, 730 h/month | `database_instance_class` | 1 × `db.t4g.micro`, single-AZ, run duration only |
+| RDS PostgreSQL 16 instance | Instance-hour for the class, **doubled by Multi-AZ** | 1 × `db.t4g.small`, Multi-AZ, 730 h/month | `database_instance_class` | 1 × `db.t4g.small`, Multi-AZ, run duration only |
 | RDS storage | GB-month of gp3, **doubled by Multi-AZ** | 50 GiB provisioned, autoscaling to 200 GiB | `database_allocated_storage`, `database_max_allocated_storage` | 20 GiB, no autoscaling |
 | RDS provisioned IOPS / throughput | Only billed above the gp3 baseline | none above baseline at 50 GiB | n/a | none |
 | RDS backup storage | GB-month of backup **beyond** the provisioned storage size | 35-day retention over a 50 GiB instance | fixed at 35 in the production root | 1 day |
 | RDS Performance Insights | vCPU-month beyond the 7-day free retention | off | `database_performance_insights_enabled` | off |
 | RDS Enhanced Monitoring | CloudWatch Logs ingestion per metric sample | off (`monitoring_interval = 0`) | module default | off |
-| Fargate API tasks | vCPU-hour + GB-hour, per task, per architecture | 2 tasks × 0.5 vCPU × 1 GiB × 730 h | `api_desired_count`, `api_cpu`, `api_memory`, `cpu_architecture` | 1 task × 0.25 vCPU × 0.5 GiB |
-| Fargate worker tasks | vCPU-hour + GB-hour | 1 task × 0.5 vCPU × 1 GiB × 730 h | `worker_desired_count`, `worker_cpu`, `worker_memory` | 1 task × 0.25 vCPU × 0.5 GiB |
+| Fargate API tasks | vCPU-hour + GB-hour, per task, per architecture | 2 tasks × 0.5 vCPU × 1 GiB × 730 h | `api_desired_count`, `api_cpu`, `api_memory`, `cpu_architecture` | 1 task × 0.5 vCPU × 1 GiB |
+| Fargate worker tasks | vCPU-hour + GB-hour | 1 task × 0.5 vCPU × 1 GiB × 730 h | `worker_desired_count`, `worker_cpu`, `worker_memory` | 1 task × 0.5 vCPU × 1 GiB |
 | Fargate ephemeral storage | GB-month above the free 20 GiB per task | none above free | n/a | none |
 | ECS cluster | No charge for the cluster itself | 1 | n/a | 1 |
 | ECS Container Insights | Per custom metric and per log ingested | **disabled** | `container_insights` | disabled |
 
 Cost levers worth David's attention, in order of size:
 
-1. **Multi-AZ doubles both the instance and its storage.** It is not optional in production: spec section 2 and the invariant that PostgreSQL is authoritative both require it. Rehearsal is single-AZ by variable.
-2. **`cpu_architecture = "ARM64"`** is a materially cheaper Fargate rate for the same vCPU and memory. It is `X86_64` today only because the images must be built for the target. If the G-lane image build produces arm64, switching this is a one-line change and the digest validation still holds.
+1. **Multi-AZ doubles both the instance and its storage.** It is not optional in production: spec section 2 and the invariant that PostgreSQL is authoritative both require it. Rehearsal is Multi-AZ by default too (G12c), and pays for it only while a run stands.
+2. **`cpu_architecture = "ARM64"`** is a materially cheaper Fargate rate for the same vCPU and memory, and it is what both roots run (David, 20 September 2026): CI builds `linux/arm64` images only.
 3. **`api_desired_count = 2`** is for rolling deployment without a gap, not for load. One salesperson does not need two tasks for throughput. Dropping to 1 halves the API compute and means a deployment has a brief window with no API; the Electron cache covers a brief outage by design (spec 4.2).
 
-**Database connections** are not billed but are bounded by the instance class: each API task holds at most 9 (a request pool of 8 plus its heartbeat, lane g75) and the worker `FSS_WORKER_CONCURRENCY + 2` (3 by default), so even a rolling API deployment at 200 % peaks near 36 + 3 plus a few one-off operations connections, far below a `db.t4g.small`'s default `max_connections` of roughly 200 — the arithmetic is in `docs/decisions/g75-one-connection-per-request.md`.
+**Database connections** are not billed but are bounded by the instance class: each API task holds at most 9 (a request pool of 8 plus its heartbeat, lane g75) and the worker `FSS_WORKER_CONCURRENCY + 2` (3 by default), so even a rolling API deployment at 200 % peaks near 36 + 3 plus a few one-off operations connections, far below a `db.t4g.small`'s default `max_connections` of roughly 200 — the arithmetic is in `docs/archive/decisions/g75-one-connection-per-request.md`.
 
 ## 3. Network and edge
 
@@ -46,7 +46,7 @@ Cost levers worth David's attention, in order of size:
 | Public IPv4 addresses | Address-hour, charged per public IPv4 in use | ALB (2 subnets) + one per running task; 2 + 3 = 5 addresses at the default counts | falls with `api_desired_count`, `worker_desired_count` | 2 + 2 |
 | NAT gateway | **Not used.** Gateway-hour and GB-processed | 0 | — | 0 |
 | VPC interface endpoints | **Not used.** Endpoint-hour per AZ and GB-processed | 0 | — | 0 |
-| Data transfer out to internet | GB out | Gmail and research provider traffic; small | n/a | small |
+| Data transfer out to internet | GB out | Gmail and Google API traffic; small | n/a | small |
 | WAFv2 | Web-ACL-month + rule-month + per million requests | **off** | `enable_waf` | off |
 | ACM certificate | No charge for a public certificate on an ALB | 1 | n/a | 1 |
 
@@ -61,7 +61,7 @@ The no-NAT choice is the largest single saving in the network. A NAT gateway wou
 | S3 Electron packages | GB-month + GET requests | a handful of signed builds, superseded versions expired at 365 days | module default | same |
 | CloudFront | Per GB out to the internet, per 10,000 requests, per price class | `PriceClass_100` | `updates_price_class` | `PriceClass_100` |
 | ECR | GB-month of stored images + data transfer | 2 repositories, 30 images retained each, untagged expired at 7 days | module defaults | same, force-deletable |
-| KMS customer keys | Key-month per key + per 10,000 requests | **6 keys**: database, secrets, envelope, journal, logs, alerts | n/a | 6 keys, short deletion window |
+| KMS customer keys | Key-month per key + per 10,000 requests | **6 keys**: database, secrets, envelope, journal, logs, alerts | n/a | 6 keys, the same 30-day deletion window |
 | Secrets Manager | Per secret-month + per 10,000 API calls | 6 empty entries + 1 RDS-managed master user secret = 7 | `secret_names` | 7, zero-day recovery window |
 
 Six customer keys is a deliberate choice, not an accident. Spec 4.1 wants the envelope key for refresh tokens separate from application secrets, and separating the journal key from the log key means an operator who can read logs still cannot decrypt suppression history. If David wants the line smaller, the honest consolidation is logs + alerts onto one key; the database, envelope and journal keys should stay separate.
@@ -95,8 +95,8 @@ Gmail push volume for one mailbox is far below the Pub/Sub free allotment. The l
 - **No NAT gateway, no VPC endpoints.** Section 3 explains why.
 - **No standing staging environment.** Spec section 2: rehearsal environments are created and destroyed by CI. The steady-state cost of rehearsal is zero.
 - **No SQS, no Lambda, no DynamoDB.** The job queue is a PostgreSQL table.
-- **No CloudTrail trail in this root.** Control-plane audit logging is an account-level decision, not an application-stack one; see `docs/decisions/g1-cloudtrail-out-of-scope.md`.
-- **No VPC flow logs.** They are billed per GB ingested and the ALB access logs plus the application logs cover what version one needs; see `docs/decisions/g1-no-flow-logs.md`.
+- **No CloudTrail trail in this root.** Control-plane audit logging is an account-level decision, not an application-stack one; see `docs/archive/decisions/g1-cloudtrail-out-of-scope.md`.
+- **No VPC flow logs.** They are billed per GB ingested and the ALB access logs plus the application logs cover what version one needs; see `docs/archive/decisions/g1-no-flow-logs.md`.
 
 ## 8. The one command that turns this into numbers
 
@@ -159,6 +159,5 @@ roots/
   rehearsal-registry  the two durable rehearsal ECR repositories
 ```
 
-`docs/decisions/g85-the-google-provider-has-its-own-root.md` has the reasoning.
-`docs/greenfield/google-root-migration-runbook.md` is the one-time move of the existing
-objects into the new root's state.
+`docs/archive/decisions/g85-the-google-provider-has-its-own-root.md` has the reasoning. The
+four objects were imported into the new root's state on 25 September 2026.

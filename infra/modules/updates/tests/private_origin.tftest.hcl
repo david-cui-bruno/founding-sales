@@ -68,7 +68,7 @@ run "a_custom_hostname_without_a_certificate_is_refused" {
 # attribute, so the rendered policy is unknown for the whole plan phase, as it
 # is in a real plan. An apply run under a mocked provider reaches nothing and
 # needs no credential.
-# `docs/decisions/g12j-mock-providers-keep-computed-values-unknown.md`.
+# `docs/archive/decisions/g12j-mock-providers-keep-computed-values-unknown.md`.
 run "only_this_distribution_may_read_the_bucket" {
   command = apply
 

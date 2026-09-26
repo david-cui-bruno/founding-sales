@@ -10,7 +10,7 @@
 # role to trust itself; it does not, and Appendix G 39 is the reason it must not. So
 # `assume_deployment_role` exists and both rehearsal workflows pass
 # `-var=assume_deployment_role=false`
-# (`docs/decisions/g12e-the-provider-does-not-reassume-its-own-session.md`).
+# (`docs/archive/decisions/g12e-the-provider-does-not-reassume-its-own-session.md`).
 #
 # That flag moves the question "which principal is this apply?" out of the Terraform
 # configuration and into the job's ambient credentials. Answering it is this script's

@@ -24,7 +24,7 @@
 # worker-heartbeat-missed as their actions suppressor. With no action on any composite
 # the suppressor holds nothing back today; it is kept so that giving a composite an
 # action again is one line and a dead worker is still one notification, not five
-# (docs/decisions/g81-one-e-mail-per-critical-condition.md).
+# (docs/archive/decisions/g81-one-e-mail-per-critical-condition.md).
 #
 # Which members are in ALARM now is
 # `aws cloudwatch describe-alarms --state-value ALARM --alarm-name-prefix <prefix>-`.
