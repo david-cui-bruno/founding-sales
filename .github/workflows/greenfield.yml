@@ -59,6 +59,35 @@ jobs:
       - name: Greenfield gate
         run: npm run gate:greenfield
 
+  workflows:
+    # actionlint 1.7.12 over every workflow, from the linux_amd64 tarball pinned by the
+    # SHA-256 in the v1.7.12 release's checksums file. actionlint's own findings fail the
+    # job; the shellcheck it runs on each `run:` block (the runner's own) reports errors
+    # only, not its warnings and notes.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install integrity-pinned actionlint 1.7.12
+        run: |
+          set -euo pipefail
+          umask 077
+          tool_dir="$(mktemp -d "$RUNNER_TEMP/callie-actionlint.XXXXXX")"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz -o "$tool_dir/actionlint.tar.gz"
+          printf '%s  %s\n' 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8 "$tool_dir/actionlint.tar.gz" | sha256sum -c -
+          tar -xzf "$tool_dir/actionlint.tar.gz" -C "$tool_dir" actionlint
+          test "$("$tool_dir/actionlint" -version | head -n 1)" = '1.7.12'
+          echo "$tool_dir" >> "$GITHUB_PATH"
+      - name: Lint the workflows
+        env:
+          SHELLCHECK_OPTS: --severity=error
+        run: actionlint
+
   secrets:
     # The Gitleaks scan of the full history and of the tracked tree
     # (scripts/verifySecrets.mjs), on every push and pull request. Gitleaks 8.30.1 from
