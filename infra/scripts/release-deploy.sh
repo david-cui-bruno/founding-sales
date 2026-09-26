@@ -463,6 +463,7 @@ fi
 # ---------------------------------------------------------------------------
 RELEASE_RECORD_OUTCOME=none
 if [ -n "$RELEASE_RECORD" ]; then
+  rehearsal_log "the record again: fss admin release-record put --json-base64 \"\$RELEASE_RECORD_BASE64\" --report /tmp/fss-release-record.json (on the operations task, lib.sh release_record_put)"
   release_record_put release-record-put "$RELEASE_RECORD" "$ENVIRONMENT" "$PREFIX" "$ACCOUNT" "$REGION" "$CLUSTER_ARN" \
     "$OPERATIONS_TASK_DEFINITION" "$WORKER_DIGEST" "$NETWORK_PLAN" "$DATABASE_HOST" "$RUNTIME_SECRET_ARN" "$LOG_GROUP" || exit 1
 fi
