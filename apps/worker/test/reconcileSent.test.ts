@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 import { makeStepExecution } from '@fss/domain/db/testing/stepExecutions.ts';
 import type { GmailClient } from '@fss/domain/mail/gmailClient.ts';
 import {
@@ -339,8 +340,8 @@ describe('fss admin holds release-restore', () => {
     await world.stop();
   });
 
-  const invoke = (options: Record<string, string>): AdminInvocation => ({
-    session: world.database.session,
+  const invoke = (options: Record<string, string>, session: SessionQueryable = world.database.session): AdminInvocation => ({
+    session,
     config: readToolConfig({ DATABASE_URL: unusedDatabaseUrl }),
     environment: {},
     options,
@@ -390,7 +391,10 @@ describe('fss admin holds release-restore', () => {
     );
     const admin = world.alpha.workspace.admin.userId;
     const note = 'checked: opened by the generation check before W3-S8, nothing restored';
-    const outcome = await holdsReleaseRestoreCommand(invoke({ '--admin-user': admin, '--note': note }));
+    // As the operations task runs it: the runtime role, with its own privileges (it may
+    // insert into audit_events and never update it).
+    const runtime = await world.database.appRuntimeSession();
+    const outcome = await holdsReleaseRestoreCommand(invoke({ '--admin-user': admin, '--note': note }, runtime));
     expect(outcome).toMatchObject({ ok: true, value: { released: 1, holds: [expect.objectContaining({ holdId: hold })], otherHoldsStillOpen: 1 } });
 
     const audit = await world.database.session.query<{ actor_kind: string; actor_user_id: string; action: string; subject_id: string; detail: { note: string } }>(
