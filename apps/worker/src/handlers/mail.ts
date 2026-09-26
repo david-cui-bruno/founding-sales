@@ -22,15 +22,15 @@ import { promoteReply } from '@fss/domain/today';
 /**
  * The three `mail.*` handlers, composed for this process (12.3, Appendix C).
  *
- * The bodies are in `@fss/domain/mail`, for the reason G4's finalizer and G10's
- * research handlers keep theirs there: everything they touch is domain code, and the
+ * The bodies are in `@fss/domain/mail`, for the reason G4's finalizer keeps its body
+ * there: everything they touch is domain code, and the
  * at-least-once harness has to register them without importing the worker. What this
  * file owns is the composition — which adapters this deployment was given, and
  * therefore which kinds it is willing to claim.
  *
  * ## A worker with no Gmail configuration registers nothing
  *
- * Exactly as `researchHandlers` does with providers. A deployment that has not been
+ * A deployment that has not been
  * handed a Gmail client, an envelope cipher and a suppression journal leaves
  * `mail.sync`, `mail.recover` and `mail.watch_renew` unclaimed in the queue rather
  * than failing each of them four times and producing three dead jobs and a critical

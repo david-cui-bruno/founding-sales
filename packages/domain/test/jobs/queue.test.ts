@@ -104,13 +104,13 @@ describe('the job queue', () => {
   it('claims only the kinds the worker has handlers for', async () => {
     await enqueueJob(database.session, {
       workspaceId: seeded.alpha.workspaceId,
-      kind: 'research.page',
-      idempotencyKey: 'research:q1:p1',
+      kind: 'classify.reply',
+      idempotencyKey: 'classify-reply:message-1',
       payload: {},
       maxAttempts: 4,
     });
     expect(
-      await claimJobs(database.session, { owner: 'worker-1', kinds: ['import.batch'], limit: 5, leaseSeconds: 30 }),
+      await claimJobs(database.session, { owner: 'worker-1', kinds: ['mail.recover'], limit: 5, leaseSeconds: 30 }),
     ).toEqual([]);
     expect(await claimJobs(database.session, { owner: 'worker-1', kinds: [], limit: 5, leaseSeconds: 30 })).toEqual([]);
   });
@@ -118,14 +118,14 @@ describe('the job queue', () => {
   it('reclaims an expired lease through the second partial index', async () => {
     await enqueueJob(database.session, {
       workspaceId: seeded.alpha.workspaceId,
-      kind: 'import.batch',
-      idempotencyKey: 'import:batch-1:1',
+      kind: 'mail.recover',
+      idempotencyKey: 'mail-recover:mailbox-1:1',
       payload: { row: 1 },
       maxAttempts: 4,
     });
     const [claim] = await claimJobs(database.session, {
       owner: 'worker-1',
-      kinds: ['import.batch'],
+      kinds: ['mail.recover'],
       limit: 1,
       leaseSeconds: 30,
     });
@@ -156,8 +156,8 @@ describe('the job queue', () => {
   it('retries with bounded exponential backoff and is dead on the fourth failure', async () => {
     await enqueueJob(database.session, {
       workspaceId: seeded.alpha.workspaceId,
-      kind: 'research.firm',
-      idempotencyKey: 'research-firm:firm-1:1',
+      kind: 'outbound.close_send_day',
+      idempotencyKey: 'send-day-close:mailbox-1:2026-09-01',
       payload: {},
       maxAttempts: 4,
     });
@@ -167,12 +167,12 @@ describe('the job queue', () => {
     for (let attempt = 1; attempt <= 4; attempt += 1) {
       // Each retry is scheduled into the future, so bring it back to now to claim it.
       await database.session.query(
-        "UPDATE jobs SET run_at = now() - INTERVAL '1 second' WHERE workspace_id = $1 AND kind = 'research.firm'",
+        "UPDATE jobs SET run_at = now() - INTERVAL '1 second' WHERE workspace_id = $1 AND kind = 'outbound.close_send_day'",
         [seeded.alpha.workspaceId],
       );
       const [claim] = await claimJobs(database.session, {
         owner: `worker-${String(attempt)}`,
-        kinds: ['research.firm'],
+        kinds: ['outbound.close_send_day'],
         limit: 1,
         leaseSeconds: 30,
       });
@@ -188,14 +188,14 @@ describe('the job queue', () => {
     expect([1, 2, 3, 4, 10].map(attempt => backoffSeconds(attempt, DEFAULT_BACKOFF))).toEqual([30, 60, 120, 240, 900]);
 
     const dead = await listDeadJobs(alpha);
-    expect(dead.map(job => job.kind)).toContain('research.firm');
-    const entry = dead.find(job => job.kind === 'research.firm');
+    expect(dead.map(job => job.kind)).toContain('outbound.close_send_day');
+    const entry = dead.find(job => job.kind === 'outbound.close_send_day');
     expect(entry?.attempts).toBe(4);
     expect(entry?.errorCode).toBe('provider_refused');
 
     // A dead job is not claimable again by a worker; only the admin command revives it.
     expect(
-      await claimJobs(database.session, { owner: 'worker-9', kinds: ['research.firm'], limit: 1, leaseSeconds: 30 }),
+      await claimJobs(database.session, { owner: 'worker-9', kinds: ['outbound.close_send_day'], limit: 1, leaseSeconds: 30 }),
     ).toEqual([]);
     // And the worker that killed it cannot complete it afterwards.
     if (last !== undefined) expect(await completeJob(database.session, last)).toBe('lease_lost');
@@ -206,7 +206,7 @@ describe('the job queue', () => {
 
   it('requeues a dead job only for an admin, and audits it', async () => {
     const dead = await listDeadJobs(alpha);
-    const target = dead.find(job => job.kind === 'research.firm');
+    const target = dead.find(job => job.kind === 'outbound.close_send_day');
     expect(target).toBeDefined();
     if (target === undefined) return;
 
@@ -238,7 +238,7 @@ describe('the job queue', () => {
     });
 
     const outcome = await requeueDeadJob(alpha, { jobId: target.id, reason: 'provider is back' });
-    expect(outcome).toEqual({ requeued: true, jobId: target.id, kind: 'research.firm' });
+    expect(outcome).toEqual({ requeued: true, jobId: target.id, kind: 'outbound.close_send_day' });
 
     const { rows } = await database.session.query<{
       state: string;
@@ -255,7 +255,7 @@ describe('the job queue', () => {
     expect(rows[0]?.requeued_count).toBe(1);
     expect(rows[0]?.dead_at).toBeNull();
     // Appendix A: "unique key unchanged".
-    expect(rows[0]?.idempotency_key).toBe('research-firm:firm-1:1');
+    expect(rows[0]?.idempotency_key).toBe('send-day-close:mailbox-1:2026-09-01');
 
     const audit = await database.session.query<{ action: string; subject_id: string; detail: { reason?: string } }>(
       "SELECT action, subject_id, detail FROM audit_events WHERE workspace_id = $1 AND action = 'job.requeue'",

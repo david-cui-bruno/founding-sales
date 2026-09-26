@@ -50,8 +50,6 @@ export const SETTINGS_ELSEWHERE: readonly SettingsElsewhere[] = Object.freeze([
   { topic: 'Calling window', path: '/postures/calling-window', ownedBy: 'G4 policy' },
   { topic: 'Pauses', path: '/pauses', ownedBy: 'G4 policy' },
   { topic: 'Suppressions', path: '/suppressions', ownedBy: 'G4 suppression' },
-  { topic: 'Research limits and provider budgets', path: '/research/config', ownedBy: 'G10 research' },
-  { topic: 'Route eligibility thresholds', path: '/research/policy', ownedBy: 'G10 research' },
   { topic: 'Mailbox connection', path: '/gmail/status', ownedBy: 'G7 Gmail' },
   { topic: 'Dead jobs', path: '/admin/jobs/dead', ownedBy: 'G5 jobs' },
   { topic: 'Alerts and acknowledgement', path: '/admin/alerts', ownedBy: 'G5 jobs' },

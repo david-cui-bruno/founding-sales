@@ -142,8 +142,8 @@ describe('every alarm metric has something that emits it', () => {
       // A runnable job nothing has a handler for: OldestRunnableJobAgeSeconds.
       await enqueueJob(database.session, {
         workspaceId,
-        kind: 'research.firm',
-        idempotencyKey: 'research-firm:shared:1',
+        kind: 'mail.recover',
+        idempotencyKey: 'mail-recover:shared:1',
         payload: {},
         maxAttempts: 4,
       });

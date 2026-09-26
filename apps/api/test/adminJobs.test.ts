@@ -72,19 +72,19 @@ describe('admin job and alert routes', () => {
     // A real dead job: enqueued, claimed, failed until it is exhausted.
     await enqueueJob(session, {
       workspaceId,
-      kind: 'research.page',
-      idempotencyKey: 'research:q1:p1',
+      kind: 'retention.batch',
+      idempotencyKey: 'retention:audit_events:2026-08',
       payload: { page: 1 },
       maxAttempts: 1,
     });
     const [claim] = await claimJobs(session, {
       owner: 'worker-1',
-      kinds: ['research.page'],
+      kinds: ['retention.batch'],
       limit: 1,
       leaseSeconds: 30,
     });
     if (claim === undefined) throw new Error('the fixture job was not claimable');
-    expect(await failJob(session, claim, { code: 'provider_refused' })).toBe('dead');
+    expect(await failJob(session, claim, { code: 'handler_failed' })).toBe('dead');
     deadJobId = claim.id;
 
     alertId = (await raiseCriticalAlert(session, { workspaceId, alertKey: 'dead_job_unresolved' })).id;
@@ -114,7 +114,7 @@ describe('admin job and alert routes', () => {
       db: database.session,
     });
     expect(response?.status).toBe(401);
-    expect(JSON.stringify(response?.body)).not.toContain('research');
+    expect(JSON.stringify(response?.body)).not.toContain('retention');
   });
 
   const refusedPrincipals: readonly (readonly [string, Partial<VerifiedPrincipal>])[] = [
@@ -144,8 +144,8 @@ describe('admin job and alert routes', () => {
     expect(response?.status).toBe(200);
     const body = response?.body as unknown as { deadJobs: { id: string; kind: string; errorCode: string | null }[] };
     expect(body.deadJobs).toHaveLength(1);
-    expect(body.deadJobs[0]?.kind).toBe('research.page');
-    expect(body.deadJobs[0]?.errorCode).toBe('provider_refused');
+    expect(body.deadJobs[0]?.kind).toBe('retention.batch');
+    expect(body.deadJobs[0]?.errorCode).toBe('handler_failed');
   });
 
   it('refuses a requeue without a job id or a reason', async () => {
@@ -180,7 +180,7 @@ describe('admin job and alert routes', () => {
       db: database.session,
     });
     expect(response?.status).toBe(200);
-    expect(response?.body).toEqual({ requeued: true, jobId: deadJobId, kind: 'research.page' });
+    expect(response?.body).toEqual({ requeued: true, jobId: deadJobId, kind: 'retention.batch' });
 
     const audit = await database.session.query<{ count: string }>(
       "SELECT count(*) AS count FROM audit_events WHERE workspace_id = $1 AND action = 'job.requeue'",

@@ -140,7 +140,6 @@ describe('the administration surface', () => {
     expect(settings.map(entry => entry.settingKey)).toEqual([...SETTING_KEYS]);
     expect(settings.every(entry => entry.version === 0)).toBe(true);
     const elsewhere = answer.body['elsewhere'] as readonly { path: string }[];
-    expect(elsewhere.map(entry => entry.path)).toContain('/research/config');
     expect(elsewhere.map(entry => entry.path)).toContain('/postures/calling-window');
   });
 

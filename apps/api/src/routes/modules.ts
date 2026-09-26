@@ -13,7 +13,6 @@ import { IMPORT_PATHS, routeImport } from './import.ts';
 import { routeMerges } from './merges.ts';
 import { routeOpportunities } from './opportunities.ts';
 import { PIPELINE_PATHS, routePipeline } from './pipeline.ts';
-import { RESEARCH_PATHS, routeResearch } from './research.ts';
 // Lane G7's Gmail surface.
 import { GMAIL_PATHS, routeGmail } from './gmail.ts';
 import { PUBSUB_PATHS, routePubSub } from './pubsub.ts';
@@ -159,12 +158,6 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     moduleOf('calls', { paths: CALL_PATHS }, routeCalls, routing),
     moduleOf('callbacks', { paths: CALLBACK_PATHS }, routeCallbacks, routing),
     moduleOf('pauses', { paths: PAUSE_PATHS }, routePauses, routing),
-    // Lane G10's research surface: the admin configuration, the versioned route
-    // thresholds with their history, the suggestion review queue and the two enqueue
-    // commands. Exact paths, and deliberately not a `/research` prefix: an unknown
-    // path under that root is a typo in a command an admin is about to spend money
-    // with, and `not_found` from the registry says so before any module sees it.
-    moduleOf('research', { paths: RESEARCH_PATHS }, routeResearch, routing),
     // Lane G7's Gmail surface. Exact paths again, and two of them are not this
     // lane's to choose: `/oauth/gmail/callback` is the redirect URI registered in
     // Google's console, and `/integrations/gmail/push` is both the Pub/Sub push

@@ -50,7 +50,9 @@ function liveEnvironment(overrides: Record<string, string | undefined> = {}): Re
     [V.pushAudience]: 'https://api.example.test/integrations/gmail/push',
     [V.pushServiceAccount]: 'fss-prod-gmail-push@example.iam.gserviceaccount.test',
     [V.sendingEnabled]: 'false',
-    [V.researchProviders]: 'none',
+    // Terraform still injects this into the worker (infra/modules/stack) until a later
+    // infra release removes it. Nothing reads it any more.
+    FSS_RESEARCH_PROVIDERS: 'none',
     // The shape after G12b: the two public identifiers come from the task
     // definition, and the secret carries only the client id and secret.
     [V.pushTopic]: 'projects/example/topics/fss-prod-gmail-push',
@@ -160,7 +162,6 @@ describe('the live deployment', () => {
     V.pushAudience,
     V.pushServiceAccount,
     V.gmailOAuthClient,
-    V.researchProviders,
   ]) {
     it(`refuses to start when ${missing} is absent`, async () => {
       await expect(
@@ -271,11 +272,14 @@ describe('a production deployment can never reach the unconfigured branch', () =
     await expect(readWorkerDeployment(environment)).rejects.toMatchObject({ code: 'DEPENDENCIES_INVALID' });
   });
 
-  it('refuses recorded research providers beside a live deployment', async () => {
-    const environment = liveEnvironment({ [V.researchProviders]: 'recorded' });
-    await expect(readWorkerDeployment(environment, { loadKms: loadKms as never })).rejects.toBeInstanceOf(
-      DeploymentConfigError,
-    );
+  it('starts whether the retired FSS_RESEARCH_PROVIDERS is present, absent or anything else', async () => {
+    for (const value of ['none', undefined, 'recorded', '']) {
+      const deployment = await readWorkerDeployment(liveEnvironment({ FSS_RESEARCH_PROVIDERS: value }), {
+        loadKms: loadKms as never,
+      });
+      expect(deployment.dependencies).toBe('live');
+      expect(describeDeployment(deployment)).not.toHaveProperty('research_providers');
+    }
   });
 });
 
@@ -415,7 +419,6 @@ describe('the startup line', () => {
       hosted_domain_configured: true,
       hosted_domain_source: 'environment',
       journal: 'configured',
-      research_providers: 'none',
       sending_enabled: false,
     });
   });

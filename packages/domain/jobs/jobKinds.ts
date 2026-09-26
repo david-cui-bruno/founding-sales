@@ -26,8 +26,6 @@ export const JOB_KINDS = [
   'mail.recover',
   'mail.watch_renew',
   'today.build',
-  'research.page',
-  'research.firm',
   'suppression.finalize',
   'classify.reply',
   'retention.batch',
@@ -67,8 +65,6 @@ export const JOB_KIND_PROTECTION: Readonly<Record<JobKind, IdempotencyProtection
   'mail.watch_renew': 'fencing_token',
   // Snapshot uniqueness, UNIQUE(workspace_id, snapshot_date, firm_id).
   'today.build': 'business_uniqueness',
-  'research.page': 'business_uniqueness',
-  'research.firm': 'business_uniqueness',
   // Event lock and terminal marker.
   'suppression.finalize': 'business_uniqueness',
   // Lane G7b. Appendix C does not name this work, because revision 3 describes the
@@ -120,8 +116,6 @@ export const jobIdempotencyKey = Object.freeze({
   watchRenew: (mailboxId: string, generation: number): string => `watch:${mailboxId}:${String(generation)}`,
   todayList: (workspaceSlug: string, businessDate: string, algorithmVersion: string): string =>
     `today:${workspaceSlug}:${businessDate}:${algorithmVersion}`,
-  researchPage: (queryHash: string, pageHash: string): string => `research:${queryHash}:${pageHash}`,
-  researchFirm: (firmId: string, revision: number): string => `research-firm:${firmId}:${String(revision)}`,
   suppressionFinalize: (eventId: string): string => `suppression-finalize:${eventId}`,
   /**
    * The head of the two terminal-stop streams a workspace has not consumed.

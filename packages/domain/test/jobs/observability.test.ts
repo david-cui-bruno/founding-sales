@@ -272,7 +272,7 @@ describe('counters, heartbeats, the canary and alerts', () => {
     const first = await raiseCriticalAlert(database.session, {
       workspaceId: seeded.alpha.workspaceId,
       alertKey: 'dead_job_unresolved',
-      detail: { kind: 'research.firm' },
+      detail: { kind: 'retention.batch' },
     });
     expect(first.raised).toBe(true);
 
@@ -284,7 +284,7 @@ describe('counters, heartbeats, the canary and alerts', () => {
     const second = await raiseCriticalAlert(database.session, {
       workspaceId: seeded.alpha.workspaceId,
       alertKey: 'dead_job_unresolved',
-      detail: { kind: 'research.firm', seen: 2 },
+      detail: { kind: 'retention.batch', seen: 2 },
     });
     expect(second.raised).toBe(false);
     expect(second.id).toBe(first.id);
