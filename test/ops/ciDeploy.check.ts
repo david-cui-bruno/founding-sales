@@ -37,8 +37,9 @@ import { readRepositoryFile, repositoryPath } from './support/repository.ts';
  * revision ACTIVE. A revision goes only on ECS's own rejection: the circuit breaker rolled
  * the service back and the answer lists exactly one deployment of that revision, FAILED.
  * A rollback whose answer does not list it, one that lists a second deployment of it in
- * any other state, and one whose deployments cannot all be read — an entry that is not an
- * object, or that carries no taskDefinition or no rolloutState — all leave it.
+ * any other state — under its ARN or under the bare family:revision, which is the same
+ * revision — and one whose deployments cannot all be read — an entry that is not an
+ * object, or whose taskDefinition or rolloutState is missing or empty — all leave it.
  *
  * **A put that launches twice.** The task runner relaunches after an image-pull failure;
  * the CI put must launch exactly one task and fail on a pull failure, even when the
@@ -275,10 +276,18 @@ if args[:2] == ["ecs", "describe-services"]:
             deployments.append(None)
         elif extra == "no-task-definition":
             deployments.append({"status": "ACTIVE", "rolloutState": "FAILED"})
+        elif extra == "empty-task-definition":
+            deployments.append({"status": "ACTIVE", "taskDefinition": "", "rolloutState": "FAILED"})
         elif extra == "no-rollout-state":
             deployments.append({"status": "ACTIVE", "taskDefinition": service["refused"]})
+        elif extra == "empty-rollout-state":
+            deployments.append({"status": "ACTIVE", "taskDefinition": service["refused"], "rolloutState": ""})
         elif extra == "in-progress":
             deployments.append({"status": "ACTIVE", "taskDefinition": service["refused"], "rolloutState": "IN_PROGRESS"})
+        elif extra == "short-form-in-progress":
+            # The same revision ECS failed, written as family:revision rather than as its ARN.
+            deployments.append({"status": "ACTIVE", "taskDefinition": service["refused"].rsplit("/", 1)[-1],
+                                "rolloutState": "IN_PROGRESS"})
     arn = "arn:aws:ecs:us-east-1:" + account + ":service/fss-prod-cluster/" + name
     if service.get("stale"):
         # An answer for the same name in another cluster: not the service asked for.
@@ -502,7 +511,14 @@ interface WorldOptions {
   /** One more deployment entry in a rolled-back service's answer, which must make it ambiguous. */
   readonly extraDeployment?: {
     readonly service: Service;
-    readonly kind: 'null' | 'no-task-definition' | 'no-rollout-state' | 'in-progress';
+    readonly kind:
+      | 'null'
+      | 'no-task-definition'
+      | 'empty-task-definition'
+      | 'no-rollout-state'
+      | 'empty-rollout-state'
+      | 'in-progress'
+      | 'short-form-in-progress';
   };
   /** The one-off operations task stops before any container ran: its image could not be pulled. */
   readonly pullFailure?: boolean;
@@ -954,9 +970,18 @@ describe('deploy registers the next revisions, rolls the worker then the API, an
     expect(forgotten.state().services['fss-prod-api']?.taskDefinition).toBe(definitionArn('api', 7));
 
     // The failed deployment is listed, and one more entry makes the answer unjudgeable:
-    // not an object; an object missing either field it would be judged by; or a second
-    // deployment of the same revision, which ECS is still holding.
-    for (const kind of ['null', 'no-task-definition', 'no-rollout-state', 'in-progress'] as const) {
+    // not an object; an object whose taskDefinition or rolloutState is missing or empty;
+    // or a second deployment of the same revision, which ECS is still holding — named by
+    // its ARN, or by the family:revision that is the same revision written shorter.
+    for (const kind of [
+      'null',
+      'no-task-definition',
+      'empty-task-definition',
+      'no-rollout-state',
+      'empty-rollout-state',
+      'in-progress',
+      'short-form-in-progress',
+    ] as const) {
       const stub = world({ fail: { worker: true }, extraDeployment: { service: 'worker', kind } });
       const ambiguous = runScript('deploy', stub);
       expect(ambiguous.code, kind).toBe(1);

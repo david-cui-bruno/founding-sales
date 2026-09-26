@@ -1468,10 +1468,11 @@ PY
 #   rejected  ECS saw the revision and rejected it, and nothing of it is left running. All
 #             of: the answer is exactly the service asked for, by name and by ARN in this
 #             cluster; every deployment entry is an object carrying a taskDefinition and a
-#             rolloutState, both strings; exactly one deployment names the revision and its
-#             rolloutState is FAILED, so none names it in any other state; and the one
-#             PRIMARY deployment and the service itself name <previous>. Only this
-#             deregisters.
+#             rolloutState, both non-empty strings; exactly one deployment names the
+#             revision — counted by its family:revision, so the ARN and the short form are
+#             one revision — and its rolloutState is FAILED, so none names it in any other
+#             state; and the one PRIMARY deployment and the service itself name <previous>,
+#             compared whole. Only this deregisters.
 #   unknown   anything else: a service still naming the revision, a second deployment of
 #             it in any other state (IN_PROGRESS above all: ECS is still trying it), an
 #             answer for another service, an unreadable one, and one whose deployments
@@ -1501,16 +1502,26 @@ verdict, current = "unknown", ""
 if entry.get("serviceName") == env["FSS_NAME"] and entry.get("serviceArn") == wanted:
     current = str(entry.get("taskDefinition") or "")
     deployments = entry.get("deployments")
+
+    def whole(item, field):
+        return isinstance(item.get(field), str) and item[field] != ""
+
     # Every entry readable and whole, or nothing is judged over them: an entry missing
-    # either field could be the one that still names the revision.
+    # either field, or carrying it empty, could be the one that still names the revision.
     readable = (isinstance(deployments, list) and deployments
-                and all(isinstance(item, dict) and isinstance(item.get("taskDefinition"), str)
-                        and isinstance(item.get("rolloutState"), str) for item in deployments))
+                and all(isinstance(item, dict) and whole(item, "taskDefinition") and whole(item, "rolloutState")
+                        for item in deployments))
     if readable:
         primary = [item for item in deployments if item.get("status") == "PRIMARY"]
-        # Exactly one deployment of the revision, and it is the failed one: a second, in
-        # any other state, is ECS still holding it.
-        named = [item for item in deployments if item["taskDefinition"] == env["FSS_REVISION"]]
+        # One revision, however ECS spells it: the trailing family:revision of an ARN is
+        # the same revision as the bare family:revision. Only the count of the new revision
+        # is normalised, because there normalising can only find more references and make
+        # the answer unknown; <previous> is compared whole, so a spelling that is not the
+        # one this deploy read is a difference, and a difference is never a pass.
+        def revision_of(value):
+            return str(value).rsplit("/", 1)[-1]
+
+        named = [item for item in deployments if revision_of(item["taskDefinition"]) == revision_of(env["FSS_REVISION"])]
         if (len(named) == 1 and named[0]["rolloutState"] == "FAILED"
                 and len(primary) == 1 and primary[0]["taskDefinition"] == env["FSS_PREVIOUS"]
                 and current == env["FSS_PREVIOUS"]):
