@@ -70,23 +70,13 @@ run "production_is_named_fss_prod_and_is_never_destroyable" {
   command = plan
 
   assert {
-    condition     = output.environment == "production"
-    error_message = "This root is always production."
-  }
-
-  assert {
-    condition     = output.name_prefix == "fss-prod"
-    error_message = "Production owns exactly the fss-prod namespace."
-  }
-
-  assert {
-    condition     = output.destroyable == false
-    error_message = "Production is never destroyable. It is a literal in main.tf, not a variable."
-  }
-
-  assert {
-    condition     = output.deployment_role_name == "fss-prod-deploy"
-    error_message = "Production assumes its own deployment role."
+    condition = (
+      output.environment == "production"
+      && output.name_prefix == "fss-prod"
+      && output.destroyable == false
+      && output.deployment_role_name == "fss-prod-deploy"
+    )
+    error_message = "This root is always production, owns exactly the fss-prod namespace, assumes its own deployment role, and is never destroyable: environment and destroyable are literals in main.tf, not variables."
   }
 }
 
@@ -94,18 +84,11 @@ run "no_name_production_claims_can_be_a_rehearsal_name" {
   command = plan
 
   assert {
-    condition     = length(output.resource_names) > 25
-    error_message = "The inventory must actually cover the stack; a nearly empty list proves nothing."
-  }
-
-  assert {
-    condition     = alltrue([for name in output.resource_names : strcontains(name, "fss-prod")])
-    error_message = "Every name production claims must carry the production namespace."
-  }
-
-  assert {
-    condition     = alltrue([for name in output.resource_names : !strcontains(name, "fss-rh-")])
-    error_message = "No name production claims may fall inside a rehearsal namespace."
+    condition = (
+      length(output.resource_names) > 25
+      && alltrue([for name in output.resource_names : strcontains(name, "fss-prod") && !strcontains(name, "fss-rh-")])
+    )
+    error_message = "Every name production claims carries the production namespace and none falls inside a rehearsal one. The count is asserted too: a nearly empty inventory would pass the alltrue over nothing."
   }
 
   # Wave 2: the desktop update channel is production's alone.
@@ -123,19 +106,13 @@ run "production_publishes_and_alarms_in_its_own_metric_namespace" {
   command = plan
 
   assert {
-    condition     = output.metric_namespace == "FSS/fss-prod"
-    error_message = "Production's metric namespace is exactly FSS/fss-prod."
-  }
-
-  assert {
-    condition = (module.stack.api_environment["FSS_METRIC_NAMESPACE"] == "FSS/fss-prod"
-    && module.stack.worker_environment["FSS_METRIC_NAMESPACE"] == "FSS/fss-prod")
-    error_message = "Both production services are told to publish into FSS/fss-prod."
-  }
-
-  assert {
-    condition     = module.stack.alarm_metric_namespaces == tolist(["FSS/fss-prod"])
-    error_message = "Every production alarm reads FSS/fss-prod and no other namespace."
+    condition = (
+      output.metric_namespace == "FSS/fss-prod"
+      && module.stack.api_environment["FSS_METRIC_NAMESPACE"] == "FSS/fss-prod"
+      && module.stack.worker_environment["FSS_METRIC_NAMESPACE"] == "FSS/fss-prod"
+      && module.stack.alarm_metric_namespaces == tolist(["FSS/fss-prod"])
+    )
+    error_message = "Production publishes from both services into FSS/fss-prod, and every production alarm reads that namespace and no other."
   }
 }
 
@@ -154,27 +131,23 @@ run "production_runs_its_services_unless_an_operator_says_this_is_a_bootstrap" {
   command = plan
 
   assert {
-    condition     = module.stack.deployment_plan.bootstrap == false
-    error_message = "An ordinary production apply is not a bootstrap; true creates both services at zero, which is only ever right for a brand-new environment."
-  }
-
-  assert {
-    condition = (module.stack.deployment_plan.api.planned_desired_count == module.stack.deployment_plan.api.declared_desired_count
-    && module.stack.deployment_plan.worker.planned_desired_count == module.stack.deployment_plan.worker.declared_desired_count)
-    error_message = "Outside a bootstrap a service is created at its declared count. After that the count is the release scripts' (ignore_changes, lane g70)."
+    condition = (
+      module.stack.deployment_plan.bootstrap == false
+      && module.stack.deployment_plan.api.planned_desired_count == module.stack.deployment_plan.api.declared_desired_count
+      && module.stack.deployment_plan.worker.planned_desired_count == module.stack.deployment_plan.worker.declared_desired_count
+    )
+    error_message = "An ordinary production apply is not a bootstrap, and outside a bootstrap a service is created at its declared count. After that the count is the release scripts' (ignore_changes, lane g70)."
   }
 
   # The two one-off task definitions exist in production too, so the rehearsal is a
   # copy of this rather than of something else.
   assert {
-    condition     = join(",", module.stack.one_off_task_families) == "fss-prod-migration,fss-prod-operations"
-    error_message = "Production carries the same two one-off task definitions the rehearsal runs."
-  }
-
-  assert {
-    condition = (module.stack.task_network_configuration.assign_public_ip == "ENABLED"
-    && module.stack.task_network_configuration.inbound_rule_count == 0)
-    error_message = "A one-off task needs a public address because there is no NAT gateway, and that is only safe because the worker security group admits nothing inbound."
+    condition = (
+      join(",", module.stack.one_off_task_families) == "fss-prod-migration,fss-prod-operations"
+      && module.stack.task_network_configuration.assign_public_ip == "ENABLED"
+      && module.stack.task_network_configuration.inbound_rule_count == 0
+    )
+    error_message = "Production carries the same two one-off task definitions the rehearsal runs, and they get a public address because there is no NAT gateway — safe only because the worker security group admits nothing inbound."
   }
 }
 
@@ -190,15 +163,13 @@ run "a_production_bootstrap_creates_both_services_at_zero" {
   # cannot be launched until the cluster exists, so the only order that works is:
   # create at zero, migrate, verify, scale.
   assert {
-    condition = (module.stack.deployment_plan.api.planned_desired_count == 0
-    && module.stack.deployment_plan.worker.planned_desired_count == 0)
-    error_message = "The first apply of a fresh production environment creates both services at desired count zero."
-  }
-
-  assert {
-    condition = (module.stack.deployment_plan.api.declared_desired_count == 2
-    && module.stack.deployment_plan.worker.declared_desired_count == 1)
-    error_message = "The declared counts survive the bootstrap; they are what release-deploy.sh scales to."
+    condition = (
+      module.stack.deployment_plan.api.planned_desired_count == 0
+      && module.stack.deployment_plan.worker.planned_desired_count == 0
+      && module.stack.deployment_plan.api.declared_desired_count == 2
+      && module.stack.deployment_plan.worker.declared_desired_count == 1
+    )
+    error_message = "The first apply of a fresh production environment creates both services at desired count zero, and the declared counts survive it: they are what release-deploy.sh scales to."
   }
 }
 
@@ -206,13 +177,8 @@ run "the_recovery_posture_is_not_a_deployment_time_choice" {
   command = plan
 
   assert {
-    condition     = module.stack.destroyable == false
-    error_message = "Deletion protection stays on across the production stack."
-  }
-
-  assert {
-    condition     = module.stack.journal_object_lock.retention_days >= 3650
-    error_message = "The production suppression journal keeps its objects locked for years."
+    condition     = module.stack.destroyable == false && module.stack.journal_object_lock.retention_days >= 3650
+    error_message = "Deletion protection stays on across the production stack, and the suppression journal keeps its objects locked for years."
   }
 }
 
@@ -220,16 +186,14 @@ run "the_api_task_never_learns_a_secret_by_environment_value" {
   command = plan
 
   assert {
-    condition = length([
-      for name, value in module.stack.api_environment : name
-      if can(regex("(?i)(password|secret|token|credential|private_key)", name))
-    ]) == 0
-    error_message = "Secrets reach the container only as a Secrets Manager reference."
-  }
-
-  assert {
-    condition     = module.stack.api_environment["FSS_ENVIRONMENT"] == "production"
-    error_message = "The container is told which environment it is in."
+    condition = (
+      length([
+        for name, value in module.stack.api_environment : name
+        if can(regex("(?i)(password|secret|token|credential|private_key)", name))
+      ]) == 0
+      && module.stack.api_environment["FSS_ENVIRONMENT"] == "production"
+    )
+    error_message = "Secrets reach the container only as a Secrets Manager reference, and the container is told which environment it is in."
   }
 }
 
@@ -255,87 +219,64 @@ run "each_production_task_carries_only_the_secrets_its_process_reads" {
 run "the_deployment_flags_reach_both_containers" {
   command = plan
 
+  # FSS_SENDING_ENABLED is committed, not a variable (26 September 2026): the release
+  # gate has passed and David enabled sending, so a plan that forgets a `-var` can no
+  # longer turn it off.
   assert {
-    condition = (module.stack.api_environment["FSS_DEPENDENCIES"] == "live"
-    && module.stack.worker_environment["FSS_DEPENDENCIES"] == "live")
-    error_message = "A production deployment runs on live dependencies; an unset switch is a refusal to start, so the apply has to set it."
-  }
-
-  # Committed, not a variable (26 September 2026): the release gate has passed and David
-  # enabled sending, so a plan that forgets a `-var` can no longer turn it off.
-  assert {
-    condition = (module.stack.api_environment["FSS_SENDING_ENABLED"] == "true"
-    && module.stack.worker_environment["FSS_SENDING_ENABLED"] == "true")
-    error_message = "16.2: production's deployment flag is committed true in infra/roots/production; turning it off is a change to that literal."
+    condition = (
+      module.stack.api_environment["FSS_DEPENDENCIES"] == "live"
+      && module.stack.worker_environment["FSS_DEPENDENCIES"] == "live"
+      && module.stack.api_environment["FSS_SENDING_ENABLED"] == "true"
+      && module.stack.worker_environment["FSS_SENDING_ENABLED"] == "true"
+    )
+    error_message = "A production deployment runs on live dependencies with sending on; an unset switch is a refusal to start, and 16.2's toggle is a literal in infra/roots/production."
   }
 }
 
 run "gmail_push_wires_the_audience_the_webhook_must_require" {
   command = plan
 
+  # All three, non-empty, in both task definitions: each is read with `required()` by
+  # both bootstraps, so an empty one is a service that refuses to start.
   assert {
-    condition     = output.gmail_push_audience == "https://api.usecallie.com/integrations/gmail/push"
-    error_message = "The audience the API must require is derived from the API hostname and published as an output."
+    condition = (
+      output.gmail_push_audience == "https://api.usecallie.com/integrations/gmail/push"
+      && module.stack.api_environment["FSS_GMAIL_PUSH_AUDIENCE"] == output.gmail_push_audience
+      && alltrue([
+        for name in ["FSS_GMAIL_PUSH_AUDIENCE", "FSS_GMAIL_PUSH_TOPIC", "FSS_GMAIL_PUSH_SERVICE_ACCOUNT"] :
+        length(module.stack.api_environment[name]) > 0 && length(module.stack.worker_environment[name]) > 0
+      ])
+    )
+    error_message = "The audience is derived from the API hostname, published as an output and given to the container the subscription mints tokens for; all three push identifiers reach both task definitions non-empty."
   }
 
-  # All three, non-empty, in both task definitions. Each is read with
-  # `required()` by both bootstraps, so an empty one is a service that refuses
-  # to start; this is the same assertion the rehearsal root makes about its own
-  # three values.
+  # The topic `users.watch` names and the one identity the webhook accepts. Since lane
+  # g85 they are public identifiers of objects `infra/roots/production-google` owns,
+  # carried here as committed literals, so a plan knows them without asking Google.
+  # This is what proves the hop from the root's values into both task definitions.
   assert {
-    condition = alltrue([
-      for name in ["FSS_GMAIL_PUSH_AUDIENCE", "FSS_GMAIL_PUSH_TOPIC", "FSS_GMAIL_PUSH_SERVICE_ACCOUNT"] :
-      length(module.stack.api_environment[name]) > 0 && length(module.stack.worker_environment[name]) > 0
-    ])
-    error_message = "Both binaries read all three push identifiers with required(); an empty value is a task that exits at start-up."
-  }
-
-  assert {
-    condition     = module.stack.api_environment["FSS_GMAIL_PUSH_AUDIENCE"] == output.gmail_push_audience
-    error_message = "The container must be told the same audience the subscription mints tokens for."
-  }
-
-  # The topic `users.watch` names and the one identity the webhook accepts.
-  # Since lane g85 they are public identifiers of objects
-  # `infra/roots/production-google` owns, carried here as committed defaults,
-  # so a plan knows them without asking Google, and the literals below are the
-  # production ones rather than a mock's. These assertions are what proves the
-  # hop from the two variables into both task definitions.
-  assert {
-    condition     = module.stack.api_environment["FSS_GMAIL_PUSH_TOPIC"] == "projects/callie-fss/topics/fss-prod-gmail-push"
-    error_message = "The API must be told the production topic the watch registers against."
-  }
-
-  assert {
-    condition     = module.stack.worker_environment["FSS_GMAIL_PUSH_TOPIC"] == output.gmail_push_topic_id
-    error_message = "The worker renews the Gmail watch and must be told the same topic the root publishes."
-  }
-
-  assert {
-    condition     = module.stack.api_environment["FSS_GMAIL_PUSH_SERVICE_ACCOUNT"] == "fss-prod-gmail-push@callie-fss.iam.gserviceaccount.com"
-    error_message = "The webhook accepts exactly one service account, and it is the production push identity."
-  }
-
-  assert {
-    condition     = module.stack.worker_environment["FSS_GMAIL_PUSH_SERVICE_ACCOUNT"] == output.gmail_push_service_account
-    error_message = "Both processes are told the same push identity the root publishes."
+    condition = (
+      module.stack.api_environment["FSS_GMAIL_PUSH_TOPIC"] == "projects/callie-fss/topics/fss-prod-gmail-push"
+      && module.stack.api_environment["FSS_GMAIL_PUSH_SERVICE_ACCOUNT"] == "fss-prod-gmail-push@callie-fss.iam.gserviceaccount.com"
+      && module.stack.worker_environment["FSS_GMAIL_PUSH_TOPIC"] == output.gmail_push_topic_id
+      && module.stack.worker_environment["FSS_GMAIL_PUSH_SERVICE_ACCOUNT"] == output.gmail_push_service_account
+    )
+    error_message = "Both processes are told the production topic the watch registers against and the one service account the webhook accepts, the same values the root publishes."
   }
 }
 
 run "both_services_are_told_the_workspace_domain" {
   command = plan
 
-  # 5.1: an id token whose `hd` differs is refused, and 12.1 lets only a mailbox
-  # in this domain connect. A public identifier, so it is a root variable rather
-  # than a field inside a secret.
+  # 5.1: an id token whose `hd` differs is refused, and 12.1 lets only a mailbox in
+  # this domain connect. A public identifier, so it is a root value rather than a
+  # field inside a secret.
   assert {
-    condition     = module.stack.api_environment["FSS_GOOGLE_HOSTED_DOMAIN"] == "usecallie.com"
-    error_message = "The API restricts sign-in and mailbox connection to the Callie Workspace domain."
-  }
-
-  assert {
-    condition     = module.stack.worker_environment["FSS_GOOGLE_HOSTED_DOMAIN"] == "usecallie.com"
-    error_message = "The worker reads the same domain, so the two processes cannot disagree about it."
+    condition = (
+      module.stack.api_environment["FSS_GOOGLE_HOSTED_DOMAIN"] == "usecallie.com"
+      && module.stack.worker_environment["FSS_GOOGLE_HOSTED_DOMAIN"] == "usecallie.com"
+    )
+    error_message = "Both processes restrict sign-in and mailbox connection to the Callie Workspace domain, so they cannot disagree about it."
   }
 }
 
@@ -343,17 +284,15 @@ run "only_the_load_balancer_faces_the_internet" {
   command = plan
 
   assert {
-    condition = alltrue([
-      for name, rule in module.stack.ingress_rules :
-      rule.group == "alb" && rule.from_port == 443
-      if rule.cidr_ipv4 == "0.0.0.0/0" || rule.cidr_ipv6 == "::/0"
-    ])
-    error_message = "In production as in the module, ALB 443 is the only open-world ingress."
-  }
-
-  assert {
-    condition     = length([for name, rule in module.stack.ingress_rules : name if rule.group == "worker_task"]) == 0
-    error_message = "The production worker admits nothing inbound."
+    condition = (
+      alltrue([
+        for name, rule in module.stack.ingress_rules :
+        rule.group == "alb" && rule.from_port == 443
+        if rule.cidr_ipv4 == "0.0.0.0/0" || rule.cidr_ipv6 == "::/0"
+      ])
+      && length([for name, rule in module.stack.ingress_rules : name if rule.group == "worker_task"]) == 0
+    )
+    error_message = "In production as in the module, ALB 443 is the only open-world ingress, and the worker admits nothing inbound."
   }
 }
 
@@ -374,13 +313,8 @@ run "production_assumes_its_deployment_role_by_default" {
   command = plan
 
   assert {
-    condition     = var.assume_deployment_role
-    error_message = "The default is true in every root: section 3.2's local apply is David's user assuming fss-prod-deploy, and a forgotten flag must fail loudly rather than act as an ambient credential."
-  }
-
-  assert {
-    condition     = output.deployment_role_name == "fss-prod-deploy"
-    error_message = "The role the provider assumes is production's, and the flag does not change which one it is."
+    condition     = var.assume_deployment_role && output.deployment_role_name == "fss-prod-deploy"
+    error_message = "The default is true in every root: section 3.2's local apply is David's user assuming fss-prod-deploy, and a forgotten flag must fail loudly rather than act as an ambient credential. The flag does not change which role that is."
   }
 }
 
@@ -392,13 +326,12 @@ run "the_assume_flag_chooses_a_credential_path_and_not_a_plan" {
   }
 
   assert {
-    condition     = output.name_prefix == "fss-prod" && output.deployment_role_name == "fss-prod-deploy"
-    error_message = "Nothing this root creates may depend on how the caller obtained its credentials."
-  }
-
-  assert {
-    condition     = length(output.resource_names) > 0
-    error_message = "The root still plans with the assumption turned off; otherwise the flag would be a way to plan an empty stack."
+    condition = (
+      output.name_prefix == "fss-prod"
+      && output.deployment_role_name == "fss-prod-deploy"
+      && length(output.resource_names) > 0
+    )
+    error_message = "Nothing this root creates may depend on how the caller obtained its credentials, and the root still plans with the assumption off; otherwise the flag would be a way to plan an empty stack."
   }
 }
 
@@ -494,13 +427,11 @@ run "the_production_api_names_the_update_manifest_as_its_upgrade_address" {
   command = plan
 
   assert {
-    condition     = module.stack.api_environment["FSS_DESKTOP_UPGRADE_URL"] == "https://dlcmdaeskewt5.cloudfront.net/releases/darwin-arm64/latest.json"
-    error_message = "The production API publishes the signed update manifest, releases/darwin-arm64/latest.json on the updates distribution."
-  }
-
-  assert {
-    condition     = !contains(keys(module.stack.worker_environment), "FSS_DESKTOP_UPGRADE_URL")
-    error_message = "The upgrade address is the API's alone."
+    condition = (
+      module.stack.api_environment["FSS_DESKTOP_UPGRADE_URL"] == "https://dlcmdaeskewt5.cloudfront.net/releases/darwin-arm64/latest.json"
+      && !contains(keys(module.stack.worker_environment), "FSS_DESKTOP_UPGRADE_URL")
+    )
+    error_message = "The production API publishes the signed update manifest, releases/darwin-arm64/latest.json on the updates distribution, and the upgrade address is the API's alone."
   }
 }
 

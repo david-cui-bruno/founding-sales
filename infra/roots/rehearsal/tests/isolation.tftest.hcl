@@ -72,28 +72,15 @@ run "the_run_is_rehearsal_and_destroyable" {
   command = plan
 
   assert {
-    condition     = output.environment == "rehearsal"
-    error_message = "This root is always rehearsal."
-  }
-
-  assert {
-    condition     = output.destroyable == true
-    error_message = "A rehearsal environment must be able to disappear."
-  }
-
-  assert {
-    condition     = startswith(output.name_prefix, "fss-rh-")
-    error_message = "A rehearsal run lives in the fss-rh- namespace."
-  }
-
-  assert {
-    condition     = startswith(output.deployment_role_name, "fss-rh-")
-    error_message = "The rehearsal deployment role is its own role, scoped to fss-rh-*."
-  }
-
-  assert {
-    condition     = output.journal_object_lock.mode == "GOVERNANCE" && output.journal_object_lock.retention_days == 1
-    error_message = "A rehearsal journal keeps object lock honest but short enough that the bucket can be removed."
+    condition = (
+      output.environment == "rehearsal"
+      && output.destroyable == true
+      && startswith(output.name_prefix, "fss-rh-")
+      && startswith(output.deployment_role_name, "fss-rh-")
+      && output.journal_object_lock.mode == "GOVERNANCE"
+      && output.journal_object_lock.retention_days == 1
+    )
+    error_message = "A rehearsal run lives in the fss-rh- namespace with its own deployment role, must be able to disappear, and keeps object lock honest but short enough that its journal bucket can be removed."
   }
 }
 
@@ -101,28 +88,22 @@ run "no_name_this_run_claims_can_be_a_production_name" {
   command = plan
 
   assert {
-    condition     = length(output.resource_names) > 25
-    error_message = "The inventory must actually cover the stack; a nearly empty list proves nothing."
-  }
-
-  assert {
-    condition     = alltrue([for name in output.resource_names : strcontains(name, output.name_prefix)])
-    error_message = "Every name this run claims must carry the run namespace."
-  }
-
-  assert {
-    condition     = alltrue([for name in output.resource_names : !strcontains(name, "fss-prod")])
-    error_message = "No name this run claims may fall inside the production namespace."
+    condition = (
+      length(output.resource_names) > 25
+      && alltrue([for name in output.resource_names : strcontains(name, output.name_prefix) && !strcontains(name, "fss-prod")])
+    )
+    error_message = "Every name this run claims carries the run namespace and none falls inside production's. The count is asserted too: a nearly empty inventory would pass the alltrue over nothing."
   }
 
   # Wave 2: a rehearsal publishes no Electron package, so it builds no update
   # channel: no package bucket and no CloudFront distribution.
   assert {
-    condition = (length([for name in output.resource_names : name if strcontains(name, "-updates-")]) == 0
-    && module.stack.updates_distribution_domain_name == null)
+    condition = (
+      length([for name in output.resource_names : name if strcontains(name, "-updates-")]) == 0
+      && module.stack.updates_distribution_domain_name == null
+    )
     error_message = "A rehearsal builds neither the updates bucket nor its CloudFront distribution."
   }
-
 }
 
 # The per-run root creates no ECR repository.
@@ -137,13 +118,11 @@ run "the_run_creates_no_repository_of_its_own" {
   command = plan
 
   assert {
-    condition     = length(keys(module.stack.repository_urls)) == 0
-    error_message = "A rehearsal run deploys from the stable rehearsal repositories; it does not create its own and take them away again."
-  }
-
-  assert {
-    condition     = length([for name in output.resource_names : name if strcontains(name, "ecr")]) == 0
-    error_message = "No repository name is claimed by the run."
+    condition = (
+      length(keys(module.stack.repository_urls)) == 0
+      && length([for name in output.resource_names : name if strcontains(name, "ecr")]) == 0
+    )
+    error_message = "A rehearsal run deploys from the stable rehearsal repositories; it does not create its own, claim their names, and take them away again."
   }
 }
 
@@ -169,18 +148,11 @@ run "a_second_run_shares_no_name_with_the_first" {
   }
 
   assert {
-    condition     = alltrue([for name in output.resource_names : strcontains(name, "fss-rh-second")])
-    error_message = "A second concurrent rehearsal run must claim its own namespace."
-  }
-
-  assert {
-    condition     = alltrue([for name in output.resource_names : !strcontains(name, "fss-rh-default-")])
-    error_message = "Two rehearsal runs must not collide."
-  }
-
-  assert {
-    condition     = output.metric_namespace == "FSS/fss-rh-second"
-    error_message = "A second concurrent rehearsal run publishes and alarms in its own metric namespace, not the first run's."
+    condition = (
+      alltrue([for name in output.resource_names : strcontains(name, "fss-rh-second") && !strcontains(name, "fss-rh-default-")])
+      && output.metric_namespace == "FSS/fss-rh-second"
+    )
+    error_message = "A second concurrent rehearsal run claims its own namespace, collides with nothing of the first run's, and publishes and alarms in its own metric namespace."
   }
 }
 
@@ -193,24 +165,15 @@ run "the_run_publishes_and_alarms_in_its_own_metric_namespace" {
   command = plan
 
   assert {
-    condition     = output.metric_namespace == "FSS/${output.name_prefix}"
-    error_message = "The run's metric namespace is FSS/<its prefix>."
-  }
-
-  assert {
-    condition     = output.metric_namespace != "FSS" && !strcontains(output.metric_namespace, "fss-prod")
-    error_message = "A rehearsal never publishes into the bare namespace or production's."
-  }
-
-  assert {
-    condition = (module.stack.api_environment["FSS_METRIC_NAMESPACE"] == output.metric_namespace
-    && module.stack.worker_environment["FSS_METRIC_NAMESPACE"] == output.metric_namespace)
-    error_message = "Both services are told to publish into the run's namespace."
-  }
-
-  assert {
-    condition     = module.stack.alarm_metric_namespaces == tolist([output.metric_namespace])
-    error_message = "Every alarm this run creates reads the run's namespace and no other."
+    condition = (
+      output.metric_namespace == "FSS/${output.name_prefix}"
+      && output.metric_namespace != "FSS"
+      && !strcontains(output.metric_namespace, "fss-prod")
+      && module.stack.api_environment["FSS_METRIC_NAMESPACE"] == output.metric_namespace
+      && module.stack.worker_environment["FSS_METRIC_NAMESPACE"] == output.metric_namespace
+      && module.stack.alarm_metric_namespaces == tolist([output.metric_namespace])
+    )
+    error_message = "The run publishes from both services into FSS/<its prefix>, never the bare namespace or production's, and every alarm it creates reads that namespace and no other."
   }
 }
 
@@ -250,16 +213,14 @@ run "the_topology_answers_are_the_rehearsal_defaults_at_one_plus_one" {
   # `deployment_plan` rather than from a literal — which is why both numbers are
   # asserted here rather than only the one the plan happens to show.
   assert {
-    condition = (module.stack.deployment_plan.bootstrap
+    condition = (
+      module.stack.deployment_plan.bootstrap
       && module.stack.deployment_plan.api.planned_desired_count == 0
-    && module.stack.deployment_plan.worker.planned_desired_count == 0)
-    error_message = "A rehearsal apply creates both services at zero; nothing can start before the migration task has run."
-  }
-
-  assert {
-    condition = (module.stack.deployment_plan.api.declared_desired_count == 1
-    && module.stack.deployment_plan.worker.declared_desired_count == 1)
-    error_message = "One of each: the shapes are production's, the counts are not. This is the number the deploy script scales to."
+      && module.stack.deployment_plan.worker.planned_desired_count == 0
+      && module.stack.deployment_plan.api.declared_desired_count == 1
+      && module.stack.deployment_plan.worker.declared_desired_count == 1
+    )
+    error_message = "A rehearsal apply creates both services at zero — nothing can start before the migration task has run — and the declared counts are one of each: the shapes are production's, the counts are not, and these are the numbers the deploy script scales to."
   }
 }
 
@@ -278,14 +239,12 @@ run "a_rehearsal_re_apply_declares_the_real_counts" {
   }
 
   assert {
-    condition = (module.stack.deployment_plan.api.planned_desired_count == 1
-    && module.stack.deployment_plan.worker.planned_desired_count == 1)
-    error_message = "With the bootstrap off, Terraform creates the services at the counts they are declared to run at."
-  }
-
-  assert {
-    condition     = module.stack.deployment_plan.bootstrap == false
-    error_message = "The plan says which of the two states this apply is."
+    condition = (
+      module.stack.deployment_plan.bootstrap == false
+      && module.stack.deployment_plan.api.planned_desired_count == 1
+      && module.stack.deployment_plan.worker.planned_desired_count == 1
+    )
+    error_message = "With the bootstrap off the plan says so, and Terraform creates the services at the counts they are declared to run at."
   }
 }
 
@@ -298,15 +257,13 @@ run "the_rehearsal_deploys_on_live_dependencies_with_sending_off" {
   command = plan
 
   assert {
-    condition = (module.stack.api_environment["FSS_DEPENDENCIES"] == "live"
-    && module.stack.worker_environment["FSS_DEPENDENCIES"] == "live")
-    error_message = "The rehearsal signs in against the rehearsal hostname with the real client, so its deployment is live."
-  }
-
-  assert {
-    condition = (module.stack.api_environment["FSS_SENDING_ENABLED"] == "false"
-    && module.stack.worker_environment["FSS_SENDING_ENABLED"] == "false")
-    error_message = "A rehearsal never sends. Nothing in the workflow sets this true and the default is the refusal."
+    condition = (
+      module.stack.api_environment["FSS_DEPENDENCIES"] == "live"
+      && module.stack.worker_environment["FSS_DEPENDENCIES"] == "live"
+      && module.stack.api_environment["FSS_SENDING_ENABLED"] == "false"
+      && module.stack.worker_environment["FSS_SENDING_ENABLED"] == "false"
+    )
+    error_message = "The rehearsal signs in against the rehearsal hostname with the real client, so its deployment is live, and it never sends: nothing in the workflow sets the flag true and the default is the refusal."
   }
 
   # Lane g81. Live dependencies, and still no classifier: the rehearsal fills the
@@ -321,19 +278,16 @@ run "the_rehearsal_deploys_on_live_dependencies_with_sending_off" {
 run "both_services_are_told_the_workspace_domain" {
   command = plan
 
-  # The same Workspace, because the rehearsal signs in with the same Google
-  # OIDC client (its second registered redirect URI). The environment carries
-  # it rather than a field inside an operator-pasted secret.
+  # The same Workspace, because the rehearsal signs in with the same Google OIDC
+  # client (its second registered redirect URI). The environment carries it rather
+  # than a field inside an operator-pasted secret.
   assert {
-    condition     = module.stack.api_environment["FSS_GOOGLE_HOSTED_DOMAIN"] == "usecallie.com"
-    error_message = "The rehearsal API restricts sign-in to the Callie Workspace domain."
+    condition = (
+      module.stack.api_environment["FSS_GOOGLE_HOSTED_DOMAIN"] == "usecallie.com"
+      && module.stack.worker_environment["FSS_GOOGLE_HOSTED_DOMAIN"] == "usecallie.com"
+    )
+    error_message = "Both rehearsal processes restrict sign-in to the Callie Workspace domain."
   }
-
-  assert {
-    condition     = module.stack.worker_environment["FSS_GOOGLE_HOSTED_DOMAIN"] == "usecallie.com"
-    error_message = "The rehearsal worker reads the same domain."
-  }
-
 }
 
 # The rehearsal has no Google Cloud project, and its tasks still have to start.
@@ -354,26 +308,21 @@ run "the_rehearsal_tasks_are_told_a_push_audience_they_can_start_with" {
     error_message = "Both binaries read all three push identifiers with required(). An empty value is a task that refuses to start."
   }
 
-  # The audience is this environment's own webhook URL, derived from its own
-  # hostname. It is the value a locally signed rehearsal push token would have
-  # to carry, and it needs no Google resource to be true.
+  # The audience is this environment's own webhook URL, derived from its own hostname:
+  # the value a locally signed rehearsal push token would have to carry, and it needs
+  # no Google resource to be true. The topic is well-formed and names a project that
+  # does not exist — the shape is what `users.watch` takes, and the name is why nobody
+  # can read a rehearsal as evidence that Gmail push works — and no Google identity is
+  # named, because Google cannot mint a token for an address in the reserved .invalid
+  # domain.
   assert {
-    condition     = module.stack.api_environment["FSS_GMAIL_PUSH_AUDIENCE"] == "https://rehearsal.example.invalid/integrations/gmail/push"
-    error_message = "The rehearsal audience is built from the rehearsal hostname and the push path."
-  }
-
-  # The topic is well-formed and names a project that does not exist. Both
-  # halves matter: the shape is what `users.watch` takes, and the name is why
-  # nobody can read a rehearsal as evidence that Gmail push works.
-  assert {
-    condition = (can(regex("^projects/[^/]+/topics/[^/]+$", module.stack.api_environment["FSS_GMAIL_PUSH_TOPIC"]))
-    && strcontains(module.stack.api_environment["FSS_GMAIL_PUSH_TOPIC"], "no-push"))
-    error_message = "The rehearsal topic is a well-formed id in a project that does not exist; a rehearsal registers no Gmail watch."
-  }
-
-  assert {
-    condition     = endswith(module.stack.worker_environment["FSS_GMAIL_PUSH_SERVICE_ACCOUNT"], ".invalid")
-    error_message = "No Google identity may be named here: Google cannot mint a token for an address in the reserved .invalid domain."
+    condition = (
+      module.stack.api_environment["FSS_GMAIL_PUSH_AUDIENCE"] == "https://rehearsal.example.invalid/integrations/gmail/push"
+      && can(regex("^projects/[^/]+/topics/[^/]+$", module.stack.api_environment["FSS_GMAIL_PUSH_TOPIC"]))
+      && strcontains(module.stack.api_environment["FSS_GMAIL_PUSH_TOPIC"], "no-push")
+      && endswith(module.stack.worker_environment["FSS_GMAIL_PUSH_SERVICE_ACCOUNT"], ".invalid")
+    )
+    error_message = "The rehearsal audience is built from the rehearsal hostname and the push path, its topic is a well-formed id in a project that does not exist, and the push identity is unreachable: a rehearsal registers no Gmail watch."
   }
 }
 
@@ -397,13 +346,8 @@ run "the_rehearsal_root_assumes_its_deployment_role_by_default" {
   command = plan
 
   assert {
-    condition     = var.assume_deployment_role
-    error_message = "A forgotten flag must be refused at STS, not run as an ambient credential; the default is true in all three roots."
-  }
-
-  assert {
-    condition     = output.deployment_role_name == "fss-rh-deploy"
-    error_message = "The role is the rehearsal one whether or not the provider is the thing that assumes it."
+    condition     = var.assume_deployment_role && output.deployment_role_name == "fss-rh-deploy"
+    error_message = "A forgotten flag must be refused at STS, not run as an ambient credential; the default is true in all three roots, and the role is the rehearsal one whether or not the provider is the thing that assumes it."
   }
 }
 
@@ -415,13 +359,12 @@ run "the_assume_flag_chooses_a_credential_path_and_not_a_plan" {
   }
 
   assert {
-    condition     = startswith(output.name_prefix, "fss-rh-") && output.deployment_role_name == "fss-rh-deploy"
-    error_message = "Nothing this root creates may depend on how the caller obtained its credentials."
-  }
-
-  assert {
-    condition     = alltrue([for name in output.resource_names : !strcontains(name, "fss-prod")])
-    error_message = "The namespace refusal is a property of the root, not of the credential path, so it holds with the assumption turned off too."
+    condition = (
+      startswith(output.name_prefix, "fss-rh-")
+      && output.deployment_role_name == "fss-rh-deploy"
+      && alltrue([for name in output.resource_names : !strcontains(name, "fss-prod")])
+    )
+    error_message = "Nothing this root creates may depend on how the caller obtained its credentials: the namespace refusal is a property of the root, and it holds with the assumption turned off too."
   }
 }
 
