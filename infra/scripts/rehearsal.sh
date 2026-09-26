@@ -553,7 +553,9 @@ rehearsal_state_location() {
 # REHEARSAL_READ_ABSENT (yes|no); stops everything when the reading fails for any other
 # reason, because "it is gone" and "I was not allowed to look" are different answers.
 #   rehearsal_read_or_absent <what> <aws argument>...
-REHEARSAL_GONE_ERROR_CODES="InvalidGroup.NotFound InvalidGroupId.NotFound InvalidGroup.Malformed InvalidNetworkInterfaceID.NotFound InvalidSecurityGroupRuleId.NotFound InvalidVpcID.NotFound NotFoundException DBInstanceAutomatedBackupNotFound"
+# Only codes that say the thing is not there. A malformed identifier says the identifier
+# could not be read, which is a failure like any other (review of PR 292c).
+REHEARSAL_GONE_ERROR_CODES="InvalidGroup.NotFound InvalidGroupId.NotFound InvalidNetworkInterfaceID.NotFound InvalidSecurityGroupRuleId.NotFound InvalidVpcID.NotFound NotFoundException DBInstanceAutomatedBackupNotFound"
 rehearsal_read_or_absent() {
   local what=$1 status code
   shift
@@ -572,6 +574,18 @@ rehearsal_read_or_absent() {
   rehearsal_fail "$what could not be read, and not because it is gone; the guard cannot say whether the run left it behind"
 }
 
+# A successful read that projected to nothing is a state nobody read, not an absence: a
+# candidate is settled as gone only by an absence error code from the service itself
+# (review of PR 292c). `<nothing>` and `None` stop the guard, naming what answered.
+#   rehearsal_require_state <class> <identifier> <what it is>
+rehearsal_require_state() {
+  case "$REHEARSAL_READ_OUTPUT" in
+    '' | None)
+      rehearsal_fail "$3 $2 answered '${REHEARSAL_READ_OUTPUT:-<nothing>}' when asked its state, and an empty answer is not an absence: nothing here can say whether this $1 of the run is still there. Read it by hand, and run stage=teardown again."
+      ;;
+  esac
+}
+
 # Is this candidate really settled? Sets REHEARSAL_SETTLED (yes|no) and
 # REHEARSAL_STATE_DETAIL, the state it was read in, which a leftover line carries.
 #   rehearsal_settling_state <class> <arn>
@@ -586,10 +600,10 @@ rehearsal_settling_state() {
       cluster="${identifier%%/*}"
       rehearsal_read_or_absent "the ECS service $arn" ecs describe-services --cluster "$cluster" --services "$arn" \
         --query 'services[0].[status,runningCount,pendingCount]' --output text || return 1
-      case "$REHEARSAL_READ_ABSENT:$REHEARSAL_READ_OUTPUT" in
-        yes:* | *:'' | *:None)
-          REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="ECS has no such service"; return 0 ;;
-      esac
+      if [ "$REHEARSAL_READ_ABSENT" = yes ]; then
+        REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="ECS has no such service"; return 0
+      fi
+      rehearsal_require_state "$kind" "$arn" "the ECS service"
       read -r state running pending <<EOF
 $REHEARSAL_READ_OUTPUT
 EOF
@@ -602,47 +616,59 @@ EOF
     ecs-cluster)
       rehearsal_read_or_absent "the ECS cluster $arn" ecs describe-clusters --clusters "$arn" \
         --query 'clusters[0].status' --output text || return 1
+      if [ "$REHEARSAL_READ_ABSENT" = yes ]; then
+        REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="ECS has no such cluster"; return 0
+      fi
+      rehearsal_require_state "$kind" "$arn" "the ECS cluster"
       state=$REHEARSAL_READ_OUTPUT
-      REHEARSAL_STATE_DETAIL="${state:-absent}"
-      case "$REHEARSAL_READ_ABSENT:$state" in
-        yes:* | *:'' | *:None | *:INACTIVE) REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="INACTIVE or gone" ;;
+      REHEARSAL_STATE_DETAIL="$state"
+      case "$state" in
+        INACTIVE) REHEARSAL_SETTLED=yes ;;
       esac
       ;;
     ecs-task)
       cluster="${identifier%%/*}"
       rehearsal_read_or_absent "the ECS task $arn" ecs describe-tasks --cluster "$cluster" --tasks "$arn" \
         --query 'tasks[0].lastStatus' --output text || return 1
+      if [ "$REHEARSAL_READ_ABSENT" = yes ]; then
+        REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="ECS has no such task"; return 0
+      fi
+      rehearsal_require_state "$kind" "$arn" "the ECS task"
       state=$REHEARSAL_READ_OUTPUT
-      REHEARSAL_STATE_DETAIL="${state:-absent}"
-      case "$REHEARSAL_READ_ABSENT:$state" in
-        yes:* | *:'' | *:None | *:STOPPED) REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="STOPPED or gone" ;;
+      REHEARSAL_STATE_DETAIL="$state"
+      case "$state" in
+        STOPPED) REHEARSAL_SETTLED=yes ;;
       esac
       ;;
     ecs-task-definition)
       rehearsal_read_or_absent "the task definition $arn" ecs describe-task-definition --task-definition "$arn" \
         --query 'taskDefinition.status' --output text || return 1
+      if [ "$REHEARSAL_READ_ABSENT" = yes ]; then
+        REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="ECS has no such task definition"; return 0
+      fi
+      rehearsal_require_state "$kind" "$arn" "the task definition"
       state=$REHEARSAL_READ_OUTPUT
-      REHEARSAL_STATE_DETAIL="${state:-absent}"
-      case "$REHEARSAL_READ_ABSENT:$state" in
-        yes:* | *:'' | *:None | *:INACTIVE) REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="deregistered" ;;
+      REHEARSAL_STATE_DETAIL="$state"
+      case "$state" in
+        INACTIVE) REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="deregistered" ;;
       esac
       ;;
     network-interface)
       rehearsal_read_or_absent "the network interface $identifier" ec2 describe-network-interfaces \
         --network-interface-ids "$identifier" --query 'NetworkInterfaces[0].Status' --output text || return 1
-      state=$REHEARSAL_READ_OUTPUT
-      case "$REHEARSAL_READ_ABSENT:$state" in
-        yes:* | *:'' | *:None) REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="EC2 has no such interface" ;;
-        *) REHEARSAL_STATE_DETAIL="still there, $state" ;;
-      esac
+      if [ "$REHEARSAL_READ_ABSENT" = yes ]; then
+        REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="EC2 has no such interface"; return 0
+      fi
+      rehearsal_require_state "$kind" "$identifier" "the network interface"
+      REHEARSAL_STATE_DETAIL="still there, $REHEARSAL_READ_OUTPUT"
       ;;
     security-group)
       rehearsal_read_or_absent "the security group $identifier" ec2 describe-security-groups --group-ids "$identifier" \
         --query 'SecurityGroups[0].[VpcId,length(IpPermissions),length(IpPermissionsEgress)]' --output text || return 1
-      case "$REHEARSAL_READ_ABSENT:$REHEARSAL_READ_OUTPUT" in
-        yes:* | *:'' | *:None)
-          REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="EC2 has no such group"; return 0 ;;
-      esac
+      if [ "$REHEARSAL_READ_ABSENT" = yes ]; then
+        REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="EC2 has no such group"; return 0
+      fi
+      rehearsal_require_state "$kind" "$identifier" "the security group"
       read -r vpc rules egress <<EOF
 $REHEARSAL_READ_OUTPUT
 EOF
@@ -650,15 +676,20 @@ EOF
       if [ -n "$vpc" ] && [ "$vpc" != None ]; then
         rehearsal_read_or_absent "the VPC $vpc of security group $identifier" ec2 describe-vpcs --vpc-ids "$vpc" \
           --query 'Vpcs[0].VpcId' --output text || return 1
-        case "$REHEARSAL_READ_ABSENT:$REHEARSAL_READ_OUTPUT" in
-          yes:* | *:'' | *:None) REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="its VPC $vpc is gone"; return 0 ;;
-        esac
+        if [ "$REHEARSAL_READ_ABSENT" = yes ]; then
+          REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="its VPC $vpc is gone"; return 0
+        fi
+        rehearsal_require_state "$kind" "$vpc" "the VPC of security group $identifier"
       fi
       if [ "$rules" = 0 ] && [ "$egress" = 0 ]; then
         rehearsal_read_or_absent "the interfaces of security group $identifier" ec2 describe-network-interfaces \
           --filters "Name=group-id,Values=$identifier" --query 'NetworkInterfaces[].NetworkInterfaceId' --output text || return 1
+        # This one projects a list, not a state: no line is the answer "no interface".
+        # `None` is not, and neither is an absence, which this call cannot report.
         case "$REHEARSAL_READ_ABSENT:$REHEARSAL_READ_OUTPUT" in
-          yes:* | *:'' | *:None) REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="no rule and no interface" ;;
+          no:'') REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="no rule and no interface" ;;
+          yes:* | no:None)
+            rehearsal_fail "the interfaces of security group $identifier answered '${REHEARSAL_READ_OUTPUT:-<an absence>}', which is neither a list of interfaces nor none of them: nothing here can say whether this security-group of the run is still in use. Read it by hand, and run stage=teardown again." ;;
           *) REHEARSAL_STATE_DETAIL="no rule, but interface(s) $REHEARSAL_READ_OUTPUT" ;;
         esac
       fi
@@ -666,29 +697,36 @@ EOF
     security-group-rule)
       rehearsal_read_or_absent "the security group rule $identifier" ec2 describe-security-group-rules \
         --security-group-rule-ids "$identifier" --query 'SecurityGroupRules[0].SecurityGroupRuleId' --output text || return 1
-      case "$REHEARSAL_READ_ABSENT:$REHEARSAL_READ_OUTPUT" in
-        yes:* | *:'' | *:None) REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="EC2 has no such rule" ;;
-        *) REHEARSAL_STATE_DETAIL="still there" ;;
-      esac
+      if [ "$REHEARSAL_READ_ABSENT" = yes ]; then
+        REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="EC2 has no such rule"; return 0
+      fi
+      rehearsal_require_state "$kind" "$identifier" "the security group rule"
+      REHEARSAL_STATE_DETAIL="still there"
       ;;
     kms-key)
       rehearsal_read_or_absent "the KMS key $arn" kms describe-key --key-id "$arn" \
         --query 'KeyMetadata.KeyState' --output text || return 1
+      if [ "$REHEARSAL_READ_ABSENT" = yes ]; then
+        REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="KMS has no such key"; return 0
+      fi
+      rehearsal_require_state "$kind" "$arn" "the KMS key"
       state=$REHEARSAL_READ_OUTPUT
-      REHEARSAL_STATE_DETAIL="${state:-absent}"
-      case "$REHEARSAL_READ_ABSENT:$state" in
-        yes:* | *:'' | *:None) REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="KMS has no such key" ;;
-        *:PendingDeletion | *:PendingReplicaDeletion | *:Disabled) REHEARSAL_SETTLED=yes ;;
+      REHEARSAL_STATE_DETAIL="$state"
+      case "$state" in
+        PendingDeletion | PendingReplicaDeletion | Disabled) REHEARSAL_SETTLED=yes ;;
       esac
       ;;
     rds-auto-backup)
       rehearsal_read_or_absent "the automated backup $arn" rds describe-db-instance-automated-backups \
         --db-instance-automated-backups-arn "$arn" --query 'DBInstanceAutomatedBackups[0].Status' --output text || return 1
+      if [ "$REHEARSAL_READ_ABSENT" = yes ]; then
+        REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="no such backup"; return 0
+      fi
+      rehearsal_require_state "$kind" "$arn" "the automated backup"
       state=$REHEARSAL_READ_OUTPUT
-      REHEARSAL_STATE_DETAIL="${state:-absent}"
-      case "$REHEARSAL_READ_ABSENT:$state" in
-        yes:* | *:'' | *:None) REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="no such backup" ;;
-        *:retained | *:deleting) REHEARSAL_SETTLED=yes ;;
+      REHEARSAL_STATE_DETAIL="$state"
+      case "$state" in
+        retained | deleting) REHEARSAL_SETTLED=yes ;;
       esac
       ;;
     *)
@@ -810,9 +848,11 @@ rehearsal_cloudfront_leftovers() {
   listed="$(rehearsal_aws cloudfront list-distributions --query 'DistributionList' --output json)" \
     || rehearsal_fail "the CloudFront distributions could not be listed; the guard cannot say the run left none"
   FSS_JSON="$listed" FSS_PREFIX="$prefix" python3 - <<'PY' || return 1
-# rehearsal-cloudfront-leftovers: an account with no distribution answers a list without
-# an Items member, which is empty; anything else that is not a list of distributions is a
-# reading that failed.
+# rehearsal-cloudfront-leftovers: the distribution list, read as one. An account with no
+# distribution answers Quantity 0 and no Items member, which is the one legitimate empty;
+# anything else that does not hold together is a reading that failed, not an empty one
+# (review of PR 292c). A distribution missing from a list that says it has one, or an item
+# with no readable comment or origins, would otherwise pass for nothing left behind.
 import json, os, sys
 env = os.environ
 prefix = env["FSS_PREFIX"]
@@ -823,16 +863,20 @@ except ValueError:
     listed = False
 if not isinstance(listed, dict):
     sys.exit("FAIL: CloudFront answered something that is not a distribution list: " + raw[:200])
+quantity = listed.get("Quantity")
+if isinstance(quantity, bool) or not isinstance(quantity, int):
+    sys.exit("FAIL: CloudFront answered a distribution list with no readable Quantity: " + raw[:200])
 items = listed.get("Items")
-if items is None:
-    items = []
-if not isinstance(items, list):
-    sys.exit("FAIL: CloudFront answered a distribution list whose Items is not a list: " + raw[:200])
-for item in items:
+if quantity > 0:
+    if not isinstance(items, list):
+        sys.exit("FAIL: CloudFront says it has {} distribution(s) and listed none of them: {}".format(quantity, raw[:200]))
+elif items not in (None, []):
+    sys.exit("FAIL: CloudFront says it has no distribution and listed some anyway: " + raw[:200])
+for item in items or []:
     if not isinstance(item, dict) or not isinstance(item.get("Id"), str):
         sys.exit("FAIL: CloudFront listed something that is not a distribution: " + repr(item)[:200])
-    comment = item.get("Comment") or ""
-    origins = (item.get("Origins") or {}).get("Items") or []
+    comment = item.get("Comment")
+    origins = (item.get("Origins") or {}).get("Items")
     if not isinstance(comment, str) or not isinstance(origins, list):
         sys.exit("FAIL: CloudFront listed a distribution with no readable comment or origins: " + repr(item)[:200])
     names = [origin.get("DomainName") for origin in origins if isinstance(origin, dict)]

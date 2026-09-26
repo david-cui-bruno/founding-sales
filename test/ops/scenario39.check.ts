@@ -450,6 +450,11 @@ describe('Appendix G 39: rehearsal.sh guard, after the teardown: an empty state,
         `  "cloudfront list-distributions") echo '{"Quantity":1,"Items":[{"Id":"E111","Comment":"fss-rh-nothing Electron package distribution.","Origins":{"Items":[]}}]}'; exit 0 ;;`,
         'distribution E111',
       ],
+      [
+        'a distribution, by its origin, beside another account’s',
+        `  "cloudfront list-distributions") echo '{"Quantity":2,"Items":[{"Id":"E222","Comment":"somebody else","Origins":{"Items":[{"DomainName":"other.example.invalid"}]}},{"Id":"E333","Comment":"no comment","Origins":{"Items":[{"DomainName":"fss-rh-nothing-updates.s3.us-east-1.amazonaws.com"}]}}]}'; exit 0 ;;`,
+        'distribution E333',
+      ],
       ['a log group, by name', `  "logs describe-log-groups") echo '["/fss/fss-rh-nothing/worker"]'; exit 0 ;;`, 'log group /fss/fss-rh-nothing/worker'],
     ] as const) {
       const stub = guard({ terraform: 'exit 0', leftovers: ['case "$1 $2" in', answer, 'esac'].join('\n') });
@@ -537,7 +542,8 @@ describe('Appendix G 39: rehearsal.sh guard, after the teardown: an empty state,
         [
           '  "ec2 describe-security-groups") printf "vpc-0a\\t0\\t0\\n"; exit 0 ;;',
           '  "ec2 describe-vpcs") echo "vpc-0a"; exit 0 ;;',
-          '  "ec2 describe-network-interfaces") echo "None"; exit 0 ;;',
+          // An empty list prints no line at all; `None` would be a state nobody read.
+          '  "ec2 describe-network-interfaces") exit 0 ;;',
         ],
       ],
     ] as const) {
@@ -620,7 +626,20 @@ describe('Appendix G 39: rehearsal.sh guard, after the teardown: an empty state,
       ['an RDS answer that is not a list', `  "rds describe-db-instances") echo '{"DBInstances":[]}'; exit 0 ;;`, 'the RDS instances answered something that is not a list of identifiers'],
       ['an RDS list of something other than names', `  "rds describe-db-snapshots") echo '[{"id":"x"}]'; exit 0 ;;`, 'the RDS snapshots answered something that is not a list of identifiers'],
       ['a CloudFront answer that is not a distribution list', '  "cloudfront list-distributions") echo "[]"; exit 0 ;;', 'CloudFront answered something that is not a distribution list'],
-      ['a distribution with no id', `  "cloudfront list-distributions") echo '{"Items":[{"Comment":"fss-rh-nothing"}]}'; exit 0 ;;`, 'CloudFront listed something that is not a distribution'],
+      ['a count of one and no distribution listed', `  "cloudfront list-distributions") echo '{"Quantity":1}'; exit 0 ;;`, 'CloudFront says it has 1 distribution(s) and listed none of them'],
+      ['a list with no count', `  "cloudfront list-distributions") echo '{"Items":[{"Id":"E123"}]}'; exit 0 ;;`, 'CloudFront answered a distribution list with no readable Quantity'],
+      ['a count of none and a distribution listed', `  "cloudfront list-distributions") echo '{"Quantity":0,"Items":[{"Id":"E123"}]}'; exit 0 ;;`, 'CloudFront says it has no distribution and listed some anyway'],
+      ['a distribution with no id', `  "cloudfront list-distributions") echo '{"Quantity":1,"Items":[{"Comment":"fss-rh-nothing"}]}'; exit 0 ;;`, 'CloudFront listed something that is not a distribution'],
+      [
+        'a distribution with no readable comment',
+        `  "cloudfront list-distributions") echo '{"Quantity":1,"Items":[{"Id":"E123","Origins":{"Items":[]}}]}'; exit 0 ;;`,
+        'CloudFront listed a distribution with no readable comment or origins',
+      ],
+      [
+        'a distribution with no readable origins',
+        `  "cloudfront list-distributions") echo '{"Quantity":1,"Items":[{"Id":"E123","Comment":"another account"}]}'; exit 0 ;;`,
+        'CloudFront listed a distribution with no readable comment or origins',
+      ],
       ['a log-group answer that is not a list of names', '  "logs describe-log-groups") echo "[1]"; exit 0 ;;', 'answered something that is not a list of names'],
     ] as const) {
       const malformed = guard({ terraform: 'exit 0', leftovers: answering(answer) });
@@ -628,6 +647,33 @@ describe('Appendix G 39: rehearsal.sh guard, after the teardown: an empty state,
       expect(malformed.output, what).toContain(phrase);
       expect(malformed.report, what).toBeNull();
     }
+  });
+
+  it('fails a candidate whose own service answered nothing, rather than reading it as gone', () => {
+    // A successful describe that projects to nothing is "I could not read the state", not
+    // "it is gone"; only an absence error code settles a candidate (review of PR 292c).
+    for (const [what, arn, answer, named] of [
+      ['a service that answered None', ARN.service, '  "ecs describe-services") echo "None"; exit 0 ;;', `the ECS service ${ARN.service} answered 'None'`],
+      ['a cluster that answered nothing', ARN.cluster, '  "ecs describe-clusters") exit 0 ;;', `the ECS cluster ${ARN.cluster} answered '<nothing>'`],
+      ['a task definition that answered None', ARN.definition, '  "ecs describe-task-definition") echo "None"; exit 0 ;;', `the task definition ${ARN.definition} answered 'None'`],
+      ['an interface that answered nothing', ARN.interface, '  "ec2 describe-network-interfaces") exit 0 ;;', "the network interface eni-0a answered '<nothing>'"],
+      ['a rule that answered None', ARN.rule, '  "ec2 describe-security-group-rules") echo "None"; exit 0 ;;', "the security group rule sgr-0a answered 'None'"],
+      ['a key that answered nothing', ARN.key, '  "kms describe-key") exit 0 ;;', `the KMS key ${ARN.key} answered '<nothing>'`],
+      ['a backup that answered None', ARN.backup, '  "rds describe-db-instance-automated-backups") echo "None"; exit 0 ;;', `the automated backup ${ARN.backup} answered 'None'`],
+    ] as const) {
+      const unread = guard({ terraform: 'exit 0', leftovers: answering(taggedWith(arn), answer) });
+      expect(unread.code, `${what}: ${unread.output}`).toBe(1);
+      expect(unread.output, what).toContain(named);
+      expect(unread.output, what).toContain('an empty answer is not an absence');
+      expect(unread.report, what).toBeNull();
+    }
+    // A malformed identifier means the identifier could not be read, not that it is gone.
+    const malformed = guard({
+      terraform: 'exit 0',
+      leftovers: answering(taggedWith(ARN.group), `  "ec2 describe-security-groups") ${notFound('InvalidGroup.Malformed')} ;;`),
+    });
+    expect(malformed.code, malformed.output).toBe(1);
+    expect(malformed.output).toContain('could not be read, and not because it is gone');
   });
 
   it('refuses to assert anything on no reading at all', () => {
