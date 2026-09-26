@@ -15,7 +15,6 @@ import {
   changeStage,
   createContact,
   createFirm,
-  mergeContacts,
   mergeFirms,
   readFirmForActor,
   recordEvidence,
@@ -534,39 +533,6 @@ describe('CRM commands', () => {
         expect(merged).toMatchObject({ ok: false, reason: 'merge_conflicts' });
         if (merged.ok) return;
         expect(merged.conflicts?.map(conflict => conflict.field)).toContain('website');
-      });
-    });
-
-    it('merges two contacts at the same firm and refuses two at different firms', async () => {
-      await inRolledBackTransaction(admin, async context => {
-        const second = await createContact(context, {
-          firmId: crm.alpha.firmId,
-          fullName: 'Dana Example (dup)',
-          externalId: 'legacy-contact-3',
-        });
-        if (!second.ok) return;
-        const merged = await mergeContacts(context, {
-          sourceContactId: second.value.id,
-          targetContactId: crm.alpha.contactId,
-        });
-        expect(merged).toMatchObject({ ok: true });
-
-        const elsewhere = await createFirm(context, {
-          name: 'Elsewhere Test Firm',
-          assignedUserId: seeded.alpha.salesperson.userId,
-        });
-        if (!elsewhere.ok) return;
-        const otherContact = await createContact(context, {
-          firmId: elsewhere.value.id,
-          fullName: 'Someone Else',
-        });
-        if (!otherContact.ok) return;
-        expect(
-          await mergeContacts(context, {
-            sourceContactId: otherContact.value.id,
-            targetContactId: crm.alpha.contactId,
-          }),
-        ).toMatchObject({ ok: false, reason: 'merge_cross_firm' });
       });
     });
 

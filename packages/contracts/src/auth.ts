@@ -211,35 +211,6 @@ export const commandResultSchema = z.discriminatedUnion('status', [
 export type CommandResult = z.infer<typeof commandResultSchema>;
 
 // ---------------------------------------------------------------------------
-// Redacted administration views (Appendix F)
-// ---------------------------------------------------------------------------
-
-export const membershipViewSchema = z.strictObject({
-  userId: uuid,
-  email: z.string().max(320),
-  displayName: z.string().max(200),
-  role: membershipRoleSchema,
-  status: z.enum(['active', 'inactive']),
-  createdAt: instant,
-  deactivatedAt: instant.nullable(),
-});
-export type MembershipView = z.infer<typeof membershipViewSchema>;
-
-/** No `secretHash`: a hash of a live credential is still a thing worth not handing out. */
-export const deviceViewSchema = z.strictObject({
-  deviceId: uuid,
-  userId: uuid,
-  deviceLabel: deviceLabelSchema,
-  clientVersion: semanticVersionSchema.nullable(),
-  status: z.enum(['active', 'revoked']),
-  credentialGeneration: z.number().int().min(1),
-  registeredAt: instant,
-  lastSeenAt: instant.nullable(),
-  revokedAt: instant.nullable(),
-});
-export type DeviceView = z.infer<typeof deviceViewSchema>;
-
-// ---------------------------------------------------------------------------
 // The audited-read matrix (specification 5.2, Appendix F)
 //
 // "Admin reads of message bodies, drafts, mailbox diagnostics, and exports create

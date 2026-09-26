@@ -46,7 +46,6 @@ describe("the dashboard's enrollment and classifier figures", () => {
   let assignee: RepositoryContext;
   let colleague: RepositoryContext;
   let betaAdmin: RepositoryContext;
-  let sequenceId: string;
   let otherUserId: string;
 
   beforeAll(async () => {
@@ -66,7 +65,7 @@ describe("the dashboard's enrollment and classifier figures", () => {
       [seeded.alpha.workspaceId, otherUserId],
     );
 
-    sequenceId = await seedSequenceWorld(
+    await seedSequenceWorld(
       database,
       seeded.alpha,
       crm.alpha,

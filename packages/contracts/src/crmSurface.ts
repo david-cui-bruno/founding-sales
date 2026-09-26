@@ -3,14 +3,14 @@ import { commandIdSchema } from './auth.ts';
 import { semanticVersionSchema } from './clientVersion.ts';
 import { holdReasonCodeSchema } from './reasonCodes.ts';
 import { uuid } from './foundationRows.ts';
-import { firmIdentityDtoSchema, firmReadDtoSchema, routeEligibilitySchema } from './crm.ts';
+import { firmReadDtoSchema } from './crm.ts';
 
 /**
- * The wire contract of the CRM surface: search, admin CSV import, and export
- * (specification 7.2, 14.1, Appendix F, Appendix G 38).
+ * The wire contract of the CRM surface: admin CSV import and Add firm (specification
+ * 7.2, 14.1, Appendix F, Appendix G 38). Search and export had no caller and went in
+ * wave 2, S6.
  *
- * Three shapes, and one rule that explains all three: **these are POSTs, including
- * the two that are reads.**
+ * One rule that explains the shapes: **these are POSTs, including the reads.**
  *
  * A search term is a prospect's name, their email address or their phone number, and
  * a query string is the one part of a request that is written to a load balancer
@@ -19,61 +19,6 @@ import { firmIdentityDtoSchema, firmReadDtoSchema, routeEligibilitySchema } from
  * URL would leak it on the way in, where no response shape can help. So the term
  * travels in a JSON body, like every other named field this API takes.
  */
-
-// ---------------------------------------------------------------------------
-// Filters, shared by search and export
-// ---------------------------------------------------------------------------
-
-export const SEQUENCE_STATUS_FILTERS = ['any', 'none', 'active', 'stopped'] as const;
-export const sequenceStatusFilterSchema = z.enum(SEQUENCE_STATUS_FILTERS);
-
-export const searchFiltersSchema = z.strictObject({
-  /** Exactly one of `userId` and `unassigned`. Both, or neither, is refused. */
-  owner: z
-    .strictObject({ userId: uuid.optional(), unassigned: z.literal(true).optional() })
-    .optional(),
-  stageKey: z.string().max(40).optional(),
-  sequenceStatus: sequenceStatusFilterSchema.optional(),
-  holdReasonCode: holdReasonCodeSchema.optional(),
-  routeEligibility: routeEligibilitySchema.optional(),
-  activeSince: z.iso.datetime().optional(),
-  activeUntil: z.iso.datetime().optional(),
-});
-export type SearchFiltersInput = z.infer<typeof searchFiltersSchema>;
-
-export const SEARCH_MATCH_FIELDS = [
-  'name',
-  'domain',
-  'locality',
-  'alias',
-  'address',
-  'contact',
-  'email',
-  'phone',
-] as const;
-export const searchMatchFieldSchema = z.enum(SEARCH_MATCH_FIELDS);
-
-export const searchRequestSchema = z.strictObject({
-  /** A fragment. Absent or blank means "every firm this caller may see". */
-  term: z.string().max(200).optional(),
-  filters: searchFiltersSchema.optional(),
-  limit: z.number().int().min(1).max(500).optional(),
-});
-
-/** What a hit matched on — field kinds, never the matching value. */
-export const searchHitSchema = z.strictObject({
-  visibility: z.enum(['any_active_member', 'assigned_or_admin']),
-  firm: firmIdentityDtoSchema,
-  matchedOn: z.array(searchMatchFieldSchema),
-  lastActivityAt: z.iso.datetime(),
-});
-export type SearchHitDto = z.infer<typeof searchHitSchema>;
-
-export const searchResponseSchema = z.strictObject({
-  hits: z.array(searchHitSchema),
-  truncated: z.boolean(),
-});
-export type SearchResponse = z.infer<typeof searchResponseSchema>;
 
 // ---------------------------------------------------------------------------
 // Admin CSV import (Appendix G 38) and Add firm (lane g84, audit item G02)
@@ -324,24 +269,6 @@ export const addFirmRefusalSchema = z.object({
   firmId: uuid.optional(),
 });
 export type AddFirmRefusal = z.infer<typeof addFirmRefusalSchema>;
-
-// ---------------------------------------------------------------------------
-// Export (5.2)
-// ---------------------------------------------------------------------------
-
-export const exportRequestSchema = z.strictObject({
-  term: z.string().max(200).optional(),
-  filters: searchFiltersSchema.optional(),
-  limit: z.number().int().min(1).max(500).optional(),
-});
-
-export const exportResponseSchema = z.strictObject({
-  rows: z.array(firmReadDtoSchema),
-  selection: z.strictObject({ termPresent: z.boolean(), filters: z.array(z.string()) }),
-  exportedAt: z.iso.datetime(),
-  truncated: z.boolean(),
-});
-export type ExportResponse = z.infer<typeof exportResponseSchema>;
 
 // ---------------------------------------------------------------------------
 // The Firm page read (7.2, 7.3, 8.1, 15)

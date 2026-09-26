@@ -12,7 +12,7 @@ import type { GmailAccessGrant, GmailClient, GmailOAuthConfig } from './gmailCli
 import { findMatchCandidates, recordMatches } from './matching.ts';
 import { normalizeMetadata, recordMessage, storeMessageBody } from './messages.ts';
 import type { ReplyPromoter } from './replyLane.ts';
-import { METADATA_HEADERS, type MailMessageRow, type MailboxRow } from './types.ts';
+import { METADATA_HEADERS, type MailboxRow } from './types.ts';
 
 /**
  * What happens to one batch of Gmail message ids, whichever job found them

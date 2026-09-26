@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   CRM_REFUSAL_CODES,
   changeStageCommandSchema,
-  createFirmCommandSchema,
   firmDetailDtoSchema,
   firmIdentityDtoSchema,
   firmReadDtoSchema,
@@ -78,20 +77,22 @@ describe('Appendix F as two schemas', () => {
 
 describe('command bodies', () => {
   it('requires a command id and a client version on every mutation', () => {
-    expect(createFirmCommandSchema.safeParse({ name: 'Nameless Command' }).success).toBe(false);
+    expect(changeStageCommandSchema.safeParse({ opportunityId: ID, toStageKey: 'contacting' }).success).toBe(false);
     expect(
-      createFirmCommandSchema.safeParse({ commandId: 'c-1', clientVersion: '1.4.0', name: 'Northwind' }).success,
+      changeStageCommandSchema.safeParse({ commandId: 'c-1', clientVersion: '1.4.0', opportunityId: ID, toStageKey: 'contacting' })
+        .success,
     ).toBe(true);
   });
 
   it('refuses a field the command does not have, rather than ignoring it', () => {
     expect(
-      createFirmCommandSchema.safeParse({
+      changeStageCommandSchema.safeParse({
         commandId: 'c-1',
         clientVersion: '1.4.0',
-        name: 'Northwind',
-        // Assignment is `reassignFirm`'s, and a create that quietly accepted this
-        // would be a second way to change who may contact a prospect.
+        opportunityId: ID,
+        toStageKey: 'contacting',
+        // A stage change that quietly accepted this would be a second way to change
+        // who may contact a prospect.
         assignedToEmail: 'someone@example.test',
       }).success,
     ).toBe(false);

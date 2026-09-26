@@ -4,13 +4,10 @@ import { decideFirmMutation } from './authorization.ts';
 import { recordCrmAuditEvent } from './audit.ts';
 import { emitCrmDomainEvent } from './events.ts';
 import { loadFirmForUpdate, readFirm } from './firms.ts';
-import { readContact } from './contacts.ts';
 import {
   accept,
-  actorUserId,
   refuse,
   refuseWithConflicts,
-  type ContactRow,
   type CrmResult,
   type FirmRow,
   type MergeConflict,
@@ -69,7 +66,6 @@ const FIRM_CONFLICT_FIELDS: readonly (keyof FirmRow & string)[] = [
   'postal_code',
 ];
 
-const CONTACT_CONFLICT_FIELDS: readonly (keyof ContactRow & string)[] = ['title'];
 
 function conflictsBetween(
   source: Readonly<Record<string, unknown>>,
@@ -200,94 +196,6 @@ export async function mergeFirms(
     subjectKind: 'firm',
     subjectId: target.id,
     detail: { sourceFirmId: source.id, preserved },
-  });
-
-  return accept({ sourceId: source.id, targetId: target.id, preserved });
-}
-
-export interface MergeContactsInput {
-  readonly sourceContactId: string;
-  readonly targetContactId: string;
-  readonly resolutions?: Readonly<Record<string, string>> | undefined;
-  readonly commandId?: string | undefined;
-}
-
-/**
- * Merge two contacts. They must already be at the same firm: folding a person from
- * one firm into a person at another would move a route across the semantic composite
- * key, which is the thing that key exists to prevent. The answer is to merge the
- * firms first, which is why `merge_cross_firm` is a refusal rather than a cascade.
- */
-export async function mergeContacts(
-  context: RepositoryContext,
-  input: MergeContactsInput,
-): Promise<CrmResult<MergeOutcome>> {
-  if (input.sourceContactId === input.targetContactId) return refuse('merge_same_record');
-
-  const source = await readContact(context, input.sourceContactId);
-  if (source === null) return refuse('contact_unknown');
-  const target = await readContact(context, input.targetContactId);
-  if (target === null) return refuse('contact_unknown');
-  if (source.firm_id !== target.firm_id) return refuse('merge_cross_firm');
-  if (source.status === 'merged') return refuse('merge_already_performed');
-  if (target.status === 'merged') return refuse('contact_merged');
-
-  const firm = await loadFirmForUpdate(context, source.firm_id);
-  if (firm === null) return refuse('firm_unknown');
-  const decision = decideFirmMutation(context, firm);
-  if (!decision.permitted) return refuse(decision.reason);
-
-  const resolutions = input.resolutions ?? {};
-  const unresolved = conflictsBetween(source, target, CONTACT_CONFLICT_FIELDS).filter(
-    conflict => resolutions[conflict.field] === undefined,
-  );
-  if (unresolved.length > 0) return refuseWithConflicts(unresolved);
-
-  const preserved: Record<string, number> = {};
-  for (const table of ['phone_routes', 'email_addresses', 'evidence_items', 'record_aliases']) {
-    const { rowCount } = await context.db.query(
-      `UPDATE ${table} SET contact_id = $3 WHERE workspace_id = $1 AND contact_id = $2`,
-      [context.scope.workspaceId, source.id, target.id],
-    );
-    preserved[table] = rowCount ?? 0;
-  }
-
-  // The source's name and external ids keep reaching the target.
-  await insertAlias(context, {
-    recordKind: 'contact',
-    firmId: target.firm_id,
-    contactId: target.id,
-    aliasKind: 'name',
-    aliasValue: source.full_name,
-    sourceRecordId: source.id,
-  });
-
-  await context.db.query(
-    `UPDATE contacts
-        SET title = COALESCE(title, $3), updated_at = now()
-      WHERE workspace_id = $1 AND id = $2`,
-    [context.scope.workspaceId, target.id, resolutions['title'] ?? source.title],
-  );
-  await context.db.query(
-    `UPDATE contacts
-        SET status = 'merged', merged_into_contact_id = $3, is_primary = false, updated_at = now()
-      WHERE workspace_id = $1 AND id = $2`,
-    [context.scope.workspaceId, source.id, target.id],
-  );
-
-  await emitCrmDomainEvent(context, {
-    kind: 'contact.merged',
-    firmId: target.firm_id,
-    contactId: target.id,
-    dedupeKey: source.id,
-    commandId: input.commandId,
-    detail: { sourceContactId: source.id },
-  });
-  await recordCrmAuditEvent(context, {
-    action: 'contact.merged',
-    subjectKind: 'contact',
-    subjectId: target.id,
-    detail: { firmId: target.firm_id, sourceContactId: source.id, preserved },
   });
 
   return accept({ sourceId: source.id, targetId: target.id, preserved });
