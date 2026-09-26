@@ -3,11 +3,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing';
-import { WORKER_SCHEMA_RANGE, withTransaction } from '@fss/domain/db';
+import { WORKER_SCHEMA_RANGE, repositoryContext, withTransaction, workspaceScope } from '@fss/domain/db';
 import { SENDING_STOP_LINE, templateContentHash } from '@fss/domain';
 import { HandlerRegistry, recordingMetricSink, type MetricDatum } from '@fss/domain/jobs';
 import { localEnvelopeCipher, recordedGmailClient } from '@fss/domain/mail';
-import { openRestoreHolds } from '@fss/domain/restore';
+import { ALL_BLOCKED_ACTION_KINDS, openHold } from '@fss/domain/policy';
 import { readWorkerConfig } from '../src/bootstrap/config.ts';
 import { recordingLogger } from '../src/bootstrap/log.ts';
 import { startWorker } from '../src/bootstrap/worker.ts';
@@ -31,8 +31,8 @@ import type { DueWorkSource } from '../src/scheduler/schedulerPass.ts';
  *      the real send gate because `deploymentSendingEnabled` is false. Each step is
  *      held `scoped_pause` and no hold row is opened — and the gauges read 2 active,
  *      0 held, because sending that nobody has enabled is not an unexpected hold;
- *   3. a restore then opens its workspace hold through `openRestoreHolds`, and the
- *      gauges read 2 and 2: every live enrollment held, which is the alarm's case.
+ *   3. a workspace-scope hold nobody chose (here `mailbox_disconnected`) is then opened,
+ *      and the gauges read 2 and 2: every live enrollment held, which is the alarm's case.
  *
  * The worker runs on a fixed clock, Monday 21 September 2026 at 10:00 New York, after
  * the steps' due instant (Friday 18 September, 09:00 New York, inside the firm's
@@ -292,11 +292,15 @@ describe('the worker publishes ActiveEnrollments and HeldEnrollments on every pa
     expect(new Set(values.held)).toEqual(new Set([0]));
   });
 
-  it('publishes 2 held of 2 active once a restore opens its workspace hold', async () => {
-    const opened = await withTransaction(database.session, async () =>
-      await openRestoreHolds(database.session, { observedGeneration: 1, expectedGeneration: 2, openedBy: 'worker' }),
+  it('publishes 2 held of 2 active once a workspace hold nobody chose is open', async () => {
+    await withTransaction(database.session, async () =>
+      await openHold(repositoryContext(workspaceScope(workspaceId, { kind: 'system', component: 'migration' }), database.session), {
+        scopeKind: 'workspace',
+        reasonCode: 'mailbox_disconnected',
+        blockedActionKinds: ALL_BLOCKED_ACTION_KINDS,
+        sourceEventKind: 'test.workspace_hold',
+      }),
     );
-    expect(opened.opened).toHaveLength(1);
 
     const values = await runWorker({
       sources: [],

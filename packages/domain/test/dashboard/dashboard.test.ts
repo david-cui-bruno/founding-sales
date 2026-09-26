@@ -278,7 +278,6 @@ describe('diagnostics', () => {
   const input = {
     appliedSchemaVersion: 13,
     declaredRange: { minimum: 13, maximum: 13 },
-    expectedSystemGeneration: 1,
     clientVersions: { minimum: '1.0.0', maximum: '1.2.0' } as const,
     deploymentSendingEnabled: true,
     adminSendingEnabled: false,
@@ -347,14 +346,9 @@ describe('diagnostics', () => {
     expect(report.sending).toEqual({ deploymentEnabled: true, adminEnabled: false, effective: false });
   });
 
-  it('reports the restore generation and whether it matches the operator s', async () => {
+  it('answers the restore field desktop 1.0.11 still parses, neutrally: no generation is read or pinned', async () => {
     const report = await readDiagnostics(admin, input);
-    expect(report.restore.expectedSystemGeneration).toBe(1);
-    expect(report.restore.mismatch).toBe(report.restore.systemGeneration !== 1);
-
-    const unpinned = await readDiagnostics(admin, { ...input, expectedSystemGeneration: null });
-    // No pinned generation is not a mismatch; it is an operator who has not pinned one.
-    expect(unpinned.restore.mismatch).toBe(false);
+    expect(report.restore).toEqual({ systemGeneration: null, expectedSystemGeneration: null, mismatch: false });
   });
 
   it('reports job health, heartbeats, the canary and the open alerts with their runbooks', async () => {

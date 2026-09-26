@@ -25,7 +25,6 @@ export {
   WORKER_SCHEMA_RANGE,
   acceptsSchemaVersion,
   checkSchemaRange,
-  readSystemGeneration,
   type SchemaRange,
   type SchemaRangeCheck,
 } from './schemaRange.ts';

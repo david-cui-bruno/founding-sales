@@ -85,7 +85,6 @@ describe("the Gmail grant against Google's real endpoints", () => {
     session: fixture.db,
     supportedClientVersions: fixture.deps.config.supportedClientVersions,
     sendingEnabled: false,
-    expectedSystemGeneration: null,
     auth: fixture.deps,
     mail,
   });

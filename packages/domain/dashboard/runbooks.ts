@@ -108,11 +108,6 @@ export const ALARM_RUNBOOKS: Readonly<Record<string, AlarmRunbook>> = Object.fre
     severity: 'critical',
     summary: 'A suppression journal write failed. Immediately critical.',
   },
-  restore_generation_mismatch: {
-    metricName: 'RestoreGenerationMismatches',
-    severity: 'critical',
-    summary: 'The database generation does not match the operator-controlled expected generation.',
-  },
   outbound_invariant_failure: {
     metricName: 'OutboundSafetyInvariantFailures',
     severity: 'critical',

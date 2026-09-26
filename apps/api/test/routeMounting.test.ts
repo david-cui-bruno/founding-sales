@@ -33,7 +33,6 @@ function options(): ApiOptions {
     session: NEVER_QUERIED,
     supportedClientVersions: clientVersionPolicySchema.parse({ minimum: '1.0.0', ceiling: '1.0.x', incompatible: [] }),
     sendingEnabled: false,
-    expectedSystemGeneration: null,
   };
 }
 

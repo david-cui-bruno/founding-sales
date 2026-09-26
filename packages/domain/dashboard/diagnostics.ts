@@ -1,4 +1,4 @@
-import type { ClientVersionRange } from '@fss/contracts';
+import { RESTORE_DIAGNOSTIC_NOT_APPLICABLE, type ClientVersionRange } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { readHeartbeats, type HeartbeatStatus } from '../jobs/heartbeats.ts';
@@ -8,7 +8,7 @@ import { runbookForAlertKey } from './runbooks.ts';
 
 /**
  * Diagnostics: the one page that answers "is this deployment healthy, and if not,
- * which part" (specification 4.2, 5.3, 12.3, 13.3, Appendix E, Appendix F).
+ * which part" (specification 4.2, 5.3, 12.3, 13.3, Appendix F).
  *
  * It is a read, and the thing worth being careful about is the third row of
  * Appendix F: "temporary private Gmail drafts, raw MIME, **mailbox diagnostics**,
@@ -17,8 +17,8 @@ import { runbookForAlertKey } from './runbooks.ts';
  * reading somebody else's writes the access audit event 5.2 asks for.
  *
  * Everything else here is operational rather than personal: schema version, client
- * version range, job counts, heartbeats, the canary, the restore generation and the
- * open alerts. None of it names a prospect.
+ * version range, job counts, heartbeats, the canary and the open alerts. None of it
+ * names a prospect.
  *
  * Each open alert carries the path of its runbook when its key is an alarm key, so
  * the answer to "what do I do about this" is one click from the thing that says it
@@ -56,12 +56,8 @@ export interface AlertDiagnostic extends OpenAlert {
 }
 
 export interface DiagnosticsDto {
-  /** Appendix E: the applied generation and the one the operator pinned. */
-  readonly restore: {
-    readonly systemGeneration: number | null;
-    readonly expectedSystemGeneration: number | null;
-    readonly mismatch: boolean;
-  };
+  /** Always `RESTORE_DIAGNOSTIC_NOT_APPLICABLE`: the shape desktop 1.0.11 parses, and nothing more. */
+  readonly restore: typeof RESTORE_DIAGNOSTIC_NOT_APPLICABLE;
   readonly schema: {
     readonly appliedVersion: number;
     readonly declaredRange: { readonly minimum: number; readonly maximum: number };
@@ -87,7 +83,6 @@ export interface DiagnosticsDto {
 export interface DiagnosticsInput {
   readonly appliedSchemaVersion: number;
   readonly declaredRange: { readonly minimum: number; readonly maximum: number };
-  readonly expectedSystemGeneration: number | null;
   readonly clientVersions: ClientVersionRange;
   readonly deploymentSendingEnabled: boolean;
   readonly adminSendingEnabled: boolean;
@@ -115,14 +110,6 @@ export async function readDiagnostics(
   const actor = context.scope.actor;
   const isAdmin = actor.kind === 'system' || actor.role === 'admin';
   const ownerFilter = isAdmin ? null : actor.kind === 'user' ? actor.userId : null;
-
-  const generationRow = await context.db.query<{ generation: string | null }>(
-    'SELECT max(generation)::text AS generation FROM system_generations',
-  );
-  const systemGeneration =
-    generationRow.rows[0]?.generation === null || generationRow.rows[0]?.generation === undefined
-      ? null
-      : Number(generationRow.rows[0].generation);
 
   const jobs = await context.db.query<{
     runnable: string;
@@ -184,12 +171,7 @@ export async function readDiagnostics(
   const alerts = await listOpenAlerts(context);
 
   return {
-    restore: {
-      systemGeneration,
-      expectedSystemGeneration: input.expectedSystemGeneration,
-      mismatch:
-        input.expectedSystemGeneration !== null && systemGeneration !== input.expectedSystemGeneration,
-    },
+    restore: RESTORE_DIAGNOSTIC_NOT_APPLICABLE,
     schema: {
       appliedVersion: input.appliedSchemaVersion,
       declaredRange: input.declaredRange,

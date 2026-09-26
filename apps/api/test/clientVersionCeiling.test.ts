@@ -60,7 +60,6 @@ describe('the compatibility ceiling, through the real routes', () => {
     session: fixture.db,
     supportedClientVersions: policy,
     sendingEnabled: false,
-    expectedSystemGeneration: null,
     auth: deps,
     upgradeUrl: 'https://callie.example/downloads/mac',
     suppressionJournal: localNoopSuppressionJournal(),

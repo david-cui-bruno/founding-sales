@@ -39,7 +39,6 @@ export async function routeDiagnostics(request: ApiRequest, options: RoutingOpti
     body: await readDiagnostics(scoped.context, {
       appliedSchemaVersion,
       declaredRange: { minimum: API_SCHEMA_RANGE.minimum, maximum: API_SCHEMA_RANGE.maximum },
-      expectedSystemGeneration: options.expectedSystemGeneration ?? null,
       // The published range, not the policy: `/diagnostics` is parsed by every
       // installed Mac with a strict `{ minimum, maximum }` (lane g78).
       clientVersions: publishedClientVersions(options.supportedClientVersions),

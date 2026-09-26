@@ -46,7 +46,8 @@ function alarmKeysInTerraform(): Set<string> {
 function runbookFiles(): Set<string> {
   return new Set(
     readdirSync(new URL('../../../../docs/greenfield/runbooks/', import.meta.url).pathname)
-      .filter(name => name.endsWith('.md') && name !== 'README.md')
+      // `restore.md` is a procedure (the point-in-time restore), not an alarm's runbook.
+      .filter(name => name.endsWith('.md') && name !== 'README.md' && name !== 'restore.md')
       .map(name => name.slice(0, -'.md'.length)),
   );
 }

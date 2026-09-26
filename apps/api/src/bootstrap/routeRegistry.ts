@@ -20,10 +20,8 @@ import type { VerifiedPrincipal } from '../scope.ts';
  */
 
 export interface ReadinessInputs {
-  /** One connection; readiness asks the database two questions and holds no transaction. */
+  /** One connection; readiness asks the database one question and holds no transaction. */
   readonly session: SessionQueryable;
-  /** Appendix E step 1: the generation the operator pinned, or null when none is. */
-  readonly expectedSystemGeneration: number | null;
 }
 
 export interface BootstrapRequest {

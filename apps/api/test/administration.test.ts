@@ -42,7 +42,6 @@ describe('the administration surface', () => {
     session: fixture.db,
     supportedClientVersions: fixture.deps.config.supportedClientVersions,
     sendingEnabled,
-    expectedSystemGeneration: null,
     auth: fixture.deps,
     upgradeUrl: 'https://callie.example/downloads/mac',
     ...(imageDigest === null ? {} : { imageDigest }),

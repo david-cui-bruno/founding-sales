@@ -1,4 +1,4 @@
-import { API_SCHEMA_RANGE, checkSchemaRange, readSystemGeneration } from '@fss/domain/db';
+import { API_SCHEMA_RANGE, checkSchemaRange } from '@fss/domain/db';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { DatabaseBusyError } from './connections.ts';
 import type { BootstrapResponse, ReadinessInputs, RouteModule } from './routeRegistry.ts';
@@ -14,11 +14,9 @@ import type { BootstrapResponse, ReadinessInputs, RouteModule } from './routeReg
  *
  * **`/readyz`** answers "should this task be given traffic", and since lane g81 it is
  * what the load balancer target group asks (`infra/modules/edge`, `health_check_path`
- * default `/readyz`). It fails closed when the database cannot answer, when the applied
- * schema version is outside the range this binary accepts (4.2), or when the system
- * generation is not the one the operator pinned — which after a restore is how a task
- * learns it is looking at recovered data before it serves anything from it (Appendix E
- * step 1). Since lane g86 the same report also gates every other request
+ * default `/readyz`). It fails closed when the database cannot answer or when the
+ * applied schema version is outside the range this binary accepts (4.2). Since lane g86
+ * the same report also gates every other request
  * (`readinessGate.ts`): a task that is not ready answers 503 `not_ready` rather than
  * running a route while the load balancer is still deciding.
  *
@@ -38,11 +36,7 @@ export const READINESS_PATH = '/readyz';
 /** 503: the task is alive and deliberately not serving. Never 500, which means broken. */
 export const NOT_READY_STATUS = 503;
 
-export type NotReadyReason =
-  | 'database_unreachable'
-  | 'database_busy'
-  | 'schema_out_of_range'
-  | 'system_generation_mismatch';
+export type NotReadyReason = 'database_unreachable' | 'database_busy' | 'schema_out_of_range';
 
 export interface ReadinessReport {
   readonly ready: boolean;
@@ -59,11 +53,6 @@ export interface ReadinessReport {
       | 'database_busy'
       | null;
   };
-  readonly generation: {
-    readonly expected: number | null;
-    readonly observed: number | null;
-    readonly matches: boolean;
-  };
 }
 
 export async function buildReadinessReport(inputs: ReadinessInputs): Promise<ReadinessReport> {
@@ -71,14 +60,12 @@ export async function buildReadinessReport(inputs: ReadinessInputs): Promise<Rea
   let version: number | null = null;
   let accepted = false;
   let schemaReason: ReadinessReport['schema']['reason'] = 'database_unreachable';
-  let generation: number | null = null;
 
   try {
     const check = await checkSchemaRange(inputs.session, API_SCHEMA_RANGE);
     version = check.version;
     accepted = check.accepted;
     schemaReason = check.accepted ? null : check.reason;
-    generation = await readSystemGeneration(inputs.session);
   } catch (error) {
     // The cause is not carried out of the catch: it may name a host, a role or a
     // database. The operator reads it in the structured log, not over HTTP.
@@ -88,23 +75,16 @@ export async function buildReadinessReport(inputs: ReadinessInputs): Promise<Rea
       component: 'api',
       reason: unanswered,
       schema: { declaredRange, databaseVersion: null, accepted: false, reason: unanswered },
-      generation: { expected: inputs.expectedSystemGeneration, observed: null, matches: false },
     };
   }
 
-  const matches = inputs.expectedSystemGeneration === null || generation === inputs.expectedSystemGeneration;
-  const reason: NotReadyReason | null = !accepted
-    ? 'schema_out_of_range'
-    : matches
-      ? null
-      : 'system_generation_mismatch';
+  const reason: NotReadyReason | null = accepted ? null : 'schema_out_of_range';
 
   return {
     ready: reason === null,
     component: 'api',
     reason,
     schema: { declaredRange, databaseVersion: version, accepted, reason: schemaReason },
-    generation: { expected: inputs.expectedSystemGeneration, observed: generation, matches },
   };
 }
 

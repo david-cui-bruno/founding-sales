@@ -14,14 +14,12 @@ import type { ReadinessInputs } from './routeRegistry.ts';
  * Readiness on the request path (lane g86, the other half of audit S14).
  *
  * Since lane g81 the load balancer asks `/readyz`, so a task whose database cannot
- * answer, whose schema is outside the range this binary declares, or whose system
- * generation is not the pinned one is taken out of rotation. Out of rotation is not the
- * same as refusing. The target group needs consecutive failed checks before it stops
- * routing to a task, so for tens of seconds after the database moved the routes still
- * ran against it — a restored copy included, which is exactly what Appendix E step 1's
- * pin exists to keep a task from serving. So every request except the four below asks
- * this gate first, and a task that is not ready answers 503 `not_ready` without
- * authenticating anybody or running the route.
+ * answer or whose schema is outside the range this binary declares is taken out of
+ * rotation. Out of rotation is not the same as refusing. The target group needs
+ * consecutive failed checks before it stops routing to a task, so for tens of seconds
+ * after the database moved the routes still ran against it. So every request except the
+ * four below asks this gate first, and a task that is not ready answers 503 `not_ready`
+ * without authenticating anybody or running the route.
  *
  * **The verdict is cached**, for `READINESS_GATE_TTL_MILLISECONDS`. The check is the one
  * `/readyz` answers with (`buildReadinessReport`), made at most once per window per
@@ -33,7 +31,7 @@ import type { ReadinessInputs } from './routeRegistry.ts';
  * against the load balancer's tens.
  *
  * **A busy pool is not a verdict.** When the check could not get a connection inside the
- * checkout timeout it proves nothing about the schema or the generation, so nothing is
+ * checkout timeout it proves nothing about the schema, so nothing is
  * cached and the request is answered exactly as any request whose checkout timed out:
  * 503 `database_busy`, which the caller may retry. The next request checks again.
  *
@@ -70,7 +68,6 @@ export interface ReadinessGate {
 }
 
 export interface ReadinessGateOptions {
-  readonly expectedSystemGeneration: number | null;
   readonly ttlMilliseconds?: number | undefined;
   readonly now?: (() => number) | undefined;
   readonly log?: Logger | undefined;
@@ -86,7 +83,7 @@ interface Verdict {
 
 const ADMITTED: ReadinessAdmission = Object.freeze({ admitted: true });
 
-export function createReadinessGate(options: ReadinessGateOptions): ReadinessGate {
+export function createReadinessGate(options: ReadinessGateOptions = {}): ReadinessGate {
   const ttl = options.ttlMilliseconds ?? READINESS_GATE_TTL_MILLISECONDS;
   const now = options.now ?? ((): number => Date.now());
   const check = options.check ?? buildReadinessReport;
@@ -107,7 +104,7 @@ export function createReadinessGate(options: ReadinessGateOptions): ReadinessGat
   const refresh = (session: SessionQueryable): Promise<Verdict> => {
     pending ??= (async (): Promise<Verdict> => {
       try {
-        const report = await check({ session, expectedSystemGeneration: options.expectedSystemGeneration });
+        const report = await check({ session });
         if (report.reason === 'database_busy') {
           throw new DatabaseBusyError('no database connection came free in time for the readiness check');
         }

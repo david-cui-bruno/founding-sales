@@ -197,7 +197,6 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
 
   const server = createApiServer({
     connections: poolConnections(pool, log),
-    expectedSystemGeneration: config.expectedSystemGeneration,
     supportedClientVersions: CONTAINER_CLIENT_VERSIONS,
     ...(auth === undefined ? {} : { auth }),
     // Specification 16.2's deployment half: the release process's statement that the

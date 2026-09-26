@@ -58,8 +58,6 @@ export interface WorkerConfig {
     readonly namespace: string | null;
     readonly region: string | null;
   };
-  /** Appendix E step 1. Null when the operator has not pinned a generation. */
-  readonly expectedSystemGeneration: number | null;
   readonly livenessFilePath: string;
   readonly livenessFailuresBeforeRemoval: number;
   /** Held, never logged. `describeWorkerConfig` is the only thing that leaves this process. */
@@ -160,6 +158,13 @@ function metricNamespace(environment: Environment, publishes: boolean, namePrefi
  * `DATABASE_URL` on a laptop and as a command override of this image in the VPC, and
  * in the second case the only thing that carries the credential is the ECS `secrets`
  * block this function already understands.
+ *
+ * `FSS_DATABASE_HOST`, when set, is the host a secret's connection goes to instead of the
+ * secret's own `host`. Every task definition carries it: Terraform's `active_database_host`,
+ * which is the managed instance's address unless the restore runbook
+ * (`docs/greenfield/runbooks/restore.md`) has pointed it at a point-in-time copy. The
+ * credential is still the secret's; only the endpoint moved. A whole `DATABASE_URL`
+ * already names its host and is used as given.
  */
 export function databaseConnection(environment: Environment): { readonly connectionString: string } {
   const url = environment['DATABASE_URL']?.trim();
@@ -194,7 +199,8 @@ export function databaseConnection(environment: Environment): { readonly connect
   };
   const user = encodeURIComponent(field('username'));
   const password = encodeURIComponent(field('password'));
-  const host = field('host');
+  const override = environment['FSS_DATABASE_HOST']?.trim();
+  const host = override !== undefined && override.length > 0 ? override : field('host');
   const port = field('port');
   const database = field('dbname');
   return { connectionString: `postgresql://${user}:${password}@${host}:${port}/${database}` };
@@ -220,14 +226,6 @@ export function readWorkerConfig(environment: Environment): WorkerConfig {
       'SCHEMA_RANGE_DISAGREES',
       `FSS_SCHEMA_MIN and FSS_SCHEMA_MAX do not match the range this image accepts (${String(WORKER_SCHEMA_RANGE.minimum)}-${String(WORKER_SCHEMA_RANGE.maximum)})`,
     );
-  }
-
-  const expectedGeneration = environment['FSS_EXPECTED_SYSTEM_GENERATION']?.trim();
-  if (expectedGeneration !== undefined && expectedGeneration.length > 0) {
-    const value = Number(expectedGeneration);
-    if (!Number.isInteger(value) || value < 1) {
-      throw new ConfigError('INVALID', 'FSS_EXPECTED_SYSTEM_GENERATION must be a positive integer');
-    }
   }
 
   const region = environment['AWS_REGION']?.trim();
@@ -263,8 +261,6 @@ export function readWorkerConfig(environment: Environment): WorkerConfig {
       namespace: metricNamespace(environment, mode !== 'off' && metricRegion !== null, namePrefix),
       region: metricRegion,
     },
-    expectedSystemGeneration:
-      expectedGeneration !== undefined && expectedGeneration.length > 0 ? Number(expectedGeneration) : null,
     livenessFilePath: environment['FSS_WORKER_LIVENESS_FILE']?.trim() ?? DEFAULT_LIVENESS_FILE,
     livenessFailuresBeforeRemoval: positiveInteger(environment, 'FSS_LIVENESS_FAILURES', 3),
     database: databaseConnection(environment),
@@ -289,7 +285,6 @@ export function describeWorkerConfig(config: WorkerConfig): LogFields {
     metricsMode: config.metrics.mode,
     metricNamespace: config.metrics.namespace,
     metricRegion: config.metrics.region,
-    expectedSystemGeneration: config.expectedSystemGeneration,
     livenessFilePath: config.livenessFilePath,
   };
 }

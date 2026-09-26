@@ -37,7 +37,6 @@ describe('reply card routes', () => {
     session: fixture.db,
     supportedClientVersions: fixture.deps.config.supportedClientVersions,
     sendingEnabled: false,
-    expectedSystemGeneration: null,
     auth: fixture.deps,
     suppressionJournal: localNoopSuppressionJournal(),
   });

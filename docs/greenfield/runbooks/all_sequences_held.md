@@ -59,8 +59,8 @@ ones, most likely first:
 - `mailbox_disconnected` / `coverage_incomplete`: an owner-scoped mailbox-health hold
   blocks every automated step kind for that owner, and with one salesperson that is the
   whole workspace. See `mailbox_disconnected` and `mailbox_heartbeat_missed`.
-- `restore_in_progress`: Appendix E is in force, as a workspace hold blocking every
-  action kind. See `restore_generation_mismatch`.
+- `restore_in_progress`: a workspace hold from the restore protocol, which nothing opens
+  since lane W3-S8 replaced it with `restore.md`; one still open predates that.
 - `provider_refusal` on every firm: Gmail is refusing sends, for example because of a
   rate limit or a suspended account.
 - `send_unknown_terminal`: sends nobody can account for. Failed jobs are

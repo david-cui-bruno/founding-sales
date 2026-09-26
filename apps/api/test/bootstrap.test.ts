@@ -20,8 +20,7 @@ import { recordingLogger } from '../src/bootstrap/log.ts';
  * edits it. Everything below is what the coordinator mounts into it: one registry
  * that refuses two modules claiming the same path, one dispatch that applies the
  * envelope limits before a route sees a request, and a readiness endpoint that fails
- * closed when the database is behind the binary or the generation says the data was
- * restored.
+ * closed when the database is behind the binary.
  */
 
 function bytes(source: string): BodySource {
@@ -113,7 +112,7 @@ describe('the API bootstrap', () => {
       headers: {},
       principal: null,
       db: database.session,
-      readiness: { session: database.session, expectedSystemGeneration: null },
+      readiness: { session: database.session },
     });
     expect(outcome).toBeNull();
   });
@@ -126,7 +125,7 @@ describe('the API bootstrap', () => {
       path: '/admin/jobs/dead',
       headers: {},
       db: database.session,
-      readiness: { session: database.session, expectedSystemGeneration: null },
+      readiness: { session: database.session },
     };
     const authorized = await dispatch(registry, { ...request, principal: principal() });
     expect(authorized?.status).toBe(200);
@@ -158,7 +157,7 @@ describe('the API bootstrap', () => {
       headers: {},
       principal: null,
       db: exploding,
-      readiness: { session: exploding, expectedSystemGeneration: null },
+      readiness: { session: exploding },
     });
     expect(live?.status).toBe(200);
     expect(JSON.stringify(live?.body)).not.toContain('10.0.0.5');
@@ -169,7 +168,7 @@ describe('the API bootstrap', () => {
       headers: {},
       principal: null,
       db: exploding,
-      readiness: { session: exploding, expectedSystemGeneration: null },
+      readiness: { session: exploding },
     });
     // A database that cannot answer is not readiness. The load balancer takes this
     // task out of rotation; the task stays up so an operator can read its logs.
@@ -179,7 +178,7 @@ describe('the API bootstrap', () => {
   it('is not ready on a database behind the binary', async () => {
     const behind = await createTestDatabase({ throughVersion: 0 });
     try {
-      const report = await buildReadinessReport({ session: behind.session, expectedSystemGeneration: null });
+      const report = await buildReadinessReport({ session: behind.session });
       expect(report.ready).toBe(false);
       expect(report.schema.reason).toBe('database_behind_binary');
     } finally {
@@ -187,16 +186,15 @@ describe('the API bootstrap', () => {
     }
   });
 
-  it('is not ready when the generation says the database was restored', async () => {
-    const report = await buildReadinessReport({ session: database.session, expectedSystemGeneration: 9 });
-    expect(report.ready).toBe(false);
-    expect(report.generation.matches).toBe(false);
-    // Appendix E: restore holds block sending and dialing, and a task that does not
-    // know which generation it is looking at does not serve.
-    expect(report.reason).toBe('system_generation_mismatch');
-
-    const matching = await buildReadinessReport({ session: database.session, expectedSystemGeneration: 1 });
-    expect(matching.ready).toBe(true);
+  it('is ready on a database inside the range, whatever its system_generations rows say', async () => {
+    // The generation pin is gone (lane W3-S8): a restored copy is made ready by the
+    // restore runbook, not refused by a generation comparison.
+    await database.session.query(
+      "INSERT INTO system_generations (generation, reason, established_at, notes) VALUES (9, 'initial', now(), 'W3-S8: never read')",
+    );
+    const report = await buildReadinessReport({ session: database.session });
+    expect(report).toMatchObject({ ready: true, reason: null });
+    expect(report).not.toHaveProperty('generation');
   });
 
   // -------------------------------------------------------------------- body

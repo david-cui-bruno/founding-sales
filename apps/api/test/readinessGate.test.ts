@@ -29,8 +29,8 @@ import { testRequestPool } from './support/poolFixture.ts';
  * 3. A busy pool is not a verdict: it is answered `database_busy`, and nothing is cached.
  *
  * The vacuous-pass trap is a gate that is never consulted, which passes every "ready"
- * test. So the server tests below start a real server against a real database whose
- * generation is not the pinned one, and require the refusal on a route that would
+ * test. So the server tests below start a real server against a real database that is
+ * behind the binary, and require the refusal on a route that would
  * otherwise have answered — and the counting tests require the check to have run at
  * all, not merely no more than once.
  */
@@ -45,7 +45,6 @@ function report(reason: NotReadyReason | null): ReadinessReport {
     component: 'api',
     reason,
     schema: { declaredRange: { minimum: 1, maximum: 1 }, databaseVersion: 1, accepted: reason !== 'schema_out_of_range', reason: null },
-    generation: { expected: null, observed: 1, matches: reason !== 'system_generation_mismatch' },
   };
 }
 
@@ -55,7 +54,6 @@ describe('the readiness gate', () => {
     let checks = 0;
     const log = recordingLogger();
     const gate = createReadinessGate({
-      expectedSystemGeneration: null,
       now: () => clock,
       log,
       check: async () => {
@@ -75,7 +73,7 @@ describe('the readiness gate', () => {
   }
 
   it('never checks for the four exempt paths, whatever the database says', async () => {
-    const world = gateAnswering(['system_generation_mismatch']);
+    const world = gateAnswering(['schema_out_of_range']);
     for (const path of ['/healthz', '/readyz', '/health', '/auth/client-version']) {
       await expect(world.gate.admit(path, NO_SESSION)).resolves.toEqual({ admitted: true });
     }
@@ -106,7 +104,6 @@ describe('the readiness gate', () => {
     let release: () => void = () => undefined;
     let checks = 0;
     const gate = createReadinessGate({
-      expectedSystemGeneration: null,
       check: async () => {
         checks += 1;
         await new Promise<void>(resolve => {
@@ -123,14 +120,14 @@ describe('the readiness gate', () => {
   });
 
   it('refuses with the reason, caches the refusal too, and says when the answer changes', async () => {
-    const world = gateAnswering(['system_generation_mismatch', 'schema_out_of_range', null]);
+    const world = gateAnswering(['database_unreachable', 'schema_out_of_range', null]);
     await expect(world.gate.admit('/today', NO_SESSION)).resolves.toEqual({
       admitted: false,
-      reason: 'system_generation_mismatch',
+      reason: 'database_unreachable',
     });
     await expect(world.gate.admit('/firms', NO_SESSION)).resolves.toEqual({
       admitted: false,
-      reason: 'system_generation_mismatch',
+      reason: 'database_unreachable',
     });
     expect(world.checks()).toBe(1);
 
@@ -143,7 +140,7 @@ describe('the readiness gate', () => {
 
     const changes = world.log.lines.filter(line => line['event'] === 'api_readiness_changed');
     expect(changes).toEqual([
-      expect.objectContaining({ level: 'warn', ready: false, reason: 'system_generation_mismatch' }),
+      expect.objectContaining({ level: 'warn', ready: false, reason: 'database_unreachable' }),
       expect.objectContaining({ level: 'warn', ready: false, reason: 'schema_out_of_range' }),
       expect.objectContaining({ level: 'info', ready: true, reason: null }),
     ]);
@@ -179,7 +176,7 @@ function countingChecks(inner: RequestConnections): { readonly connections: Requ
         return {
           session: {
             async query<Row extends QueryResultRowLike = QueryResultRowLike>(text: string, values?: readonly unknown[]) {
-              if (text.includes("to_regclass('public.system_generations')")) checks += 1;
+              if (text.includes("to_regclass('public.schema_versions')")) checks += 1;
               return await lease.session.query<Row>(text, values);
             },
           },
@@ -211,14 +208,13 @@ describe('the API server refuses every route but the four while it is not ready'
     await behind.drop();
   });
 
-  async function serve(on: TestDatabase, expectedSystemGeneration: number | null) {
+  async function serve(on: TestDatabase) {
     const pool = testRequestPool(on);
     pools.push(pool);
     const counted = countingChecks(poolConnections(pool));
     const log = recordingLogger();
     const server = createApiServer({
       connections: counted.connections,
-      expectedSystemGeneration,
       supportedClientVersions: clientVersionPolicySchema.parse({ minimum: '1.0.0', ceiling: '1.x', incompatible: [] }),
       sendingEnabled: false,
       log,
@@ -234,8 +230,8 @@ describe('the API server refuses every route but the four while it is not ready'
     message: 'The API is not ready to serve requests. Nothing was changed; try again shortly.',
   };
 
-  it('answers 503 not_ready on a database whose generation is not the pinned one, and runs no route', async () => {
-    const { origin, log } = await serve(database, 999_999);
+  it('answers 503 not_ready on a database behind the binary, and runs no route', async () => {
+    const { origin, log } = await serve(behind);
 
     const read = await fetch(`${origin}/firms`);
     expect(read.status).toBe(503);
@@ -257,34 +253,26 @@ describe('the API server refuses every route but the four while it is not ready'
         reason: 'not_ready',
         code: 'not_ready',
         path: '/firms',
-        not_ready_reason: 'system_generation_mismatch',
+        not_ready_reason: 'schema_out_of_range',
       }),
     );
     expect(log.lines.filter(line => line['event'] === 'api_readiness_changed')).toEqual([
-      expect.objectContaining({ level: 'warn', ready: false, reason: 'system_generation_mismatch' }),
+      expect.objectContaining({ level: 'warn', ready: false, reason: 'schema_out_of_range' }),
     ]);
 
     // The four that answer anyway.
     expect((await fetch(`${origin}/healthz`)).status).toBe(200);
     const readiness = await fetch(`${origin}/readyz`);
     expect(readiness.status).toBe(503);
-    expect(await readiness.json()).toMatchObject({ ready: false, reason: 'system_generation_mismatch' });
+    expect(await readiness.json()).toMatchObject({ ready: false, reason: 'schema_out_of_range' });
     expect((await fetch(`${origin}/health`)).status).toBe(200);
     const notice = await fetch(`${origin}/auth/client-version`);
     expect(notice.status).toBe(200);
     expect(await notice.json()).toMatchObject({ supported: { minimum: '1.0.0', maximum: '1.999.999' } });
   });
 
-  it('answers 503 not_ready on a database behind the binary', async () => {
-    const { origin, log } = await serve(behind, null);
-    const read = await fetch(`${origin}/firms`);
-    expect(read.status).toBe(503);
-    expect(await read.json()).toEqual(NOT_READY);
-    expect(log.lines).toContainEqual(expect.objectContaining({ event: 'refusal', not_ready_reason: 'schema_out_of_range' }));
-  });
-
   it('serves a ready task, and asks the database once for many requests inside the window', async () => {
-    const { origin, checks } = await serve(database, 1);
+    const { origin, checks } = await serve(database);
     for (let request = 0; request < 5; request += 1) {
       const response = await fetch(`${origin}/firms`);
       // Whatever the route says without a session, it is the route that said it.

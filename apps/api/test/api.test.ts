@@ -111,7 +111,7 @@ describe('the health route against a real database', () => {
     await database.drop();
   });
 
-  it('reports the schema range, the database version and the system generation', async () => {
+  it('reports the schema range and the database version', async () => {
     const report = await buildHealthReport({
       session: database.session,
       supportedClientVersions: CLIENT_VERSIONS,
@@ -128,7 +128,6 @@ describe('the health route against a real database', () => {
         accepted: true,
         reason: null,
       },
-      systemGeneration: 1,
       // The published range, not the policy: `1.0.x` tops out at 1.0.999 (lane g78).
       supportedClientVersions: { minimum: '1.0.0', maximum: '1.0.999' },
       sendingEnabled: false,
@@ -158,7 +157,6 @@ describe('the health route against a real database', () => {
     });
     expect(report.status).toBe('degraded');
     expect(report.schema.reason).toBe('database_unreachable');
-    expect(report.systemGeneration).toBeNull();
     // The host, the port and the role never leave the catch.
     const serialized = JSON.stringify(report);
     expect(serialized).not.toContain('10.0.0.5');
@@ -185,7 +183,6 @@ describe('the health route against a real database', () => {
       session: database.session,
       supportedClientVersions: CLIENT_VERSIONS,
       sendingEnabled: false,
-      expectedSystemGeneration: null,
     };
     expect((await route('GET', '/health', options)).status).toBe(200);
     expect(await route('POST', '/health', options)).toEqual({

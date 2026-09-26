@@ -11,10 +11,9 @@ import type { WorkerConfig } from './config.ts';
 import { createLiveness, type Liveness } from './liveness.ts';
 import { errorFields, type Logger } from './log.ts';
 import { drain, startLoop, type Loop } from './loop.ts';
-import { enforceRestoreGeneration, observeRestoreGeneration } from './restoreGeneration.ts';
 
 /**
- * The worker process (specification 13, 4.2, Appendix E).
+ * The worker process (specification 13, 4.2).
  *
  * Three loops on three sets of connections, started together and stopped together:
  *
@@ -29,9 +28,7 @@ import { enforceRestoreGeneration, observeRestoreGeneration } from './restoreGen
  *
  * Startup refuses a database outside the declared schema range, because an old worker
  * beside a new one under expand/migrate/contract must stop rather than write rows the
- * other cannot read (4.2). A restored database is *not* a refusal: restore holds are
- * what stop sending and dialing, so the worker opens them, logs the event the
- * `RestoreGenerationMismatches` metric filter counts (Appendix E 1), and runs.
+ * other cannot read (4.2).
  *
  * Stopping drains. `SIGTERM` on Fargate is a promise of `stopTimeout` seconds, so the
  * loops finish the pass in flight — the job keeps the lease it already holds — and
@@ -94,10 +91,7 @@ export async function startWorker(options: WorkerProcessOptions): Promise<Worker
     );
   }
 
-  const startup = await checkWorkerStartup({
-    session: sessions.scheduler,
-    ...(config.expectedSystemGeneration === null ? {} : { expectedSystemGeneration: config.expectedSystemGeneration }),
-  });
+  const startup = await checkWorkerStartup({ session: sessions.scheduler });
   if (startup.outcome !== 'ready') {
     log.log('error', 'worker_startup_refused', {
       outcome: startup.outcome,
@@ -107,19 +101,6 @@ export async function startWorker(options: WorkerProcessOptions): Promise<Worker
     });
     throw new WorkerStartupRefusal(startup, startup.exitCode);
   }
-
-  // Appendix E step 1 (lane g56). A database on a generation other than the one the
-  // operator pinned is held before any loop starts: one restore hold per workspace,
-  // and the `restore_generation_mismatch` line the immediately-critical metric
-  // counts. Until this lane the worker logged the line and held nothing, so a restored
-  // database was sent from as soon as it was reachable. A worker that cannot open the
-  // holds throws here and never starts its loops.
-  await enforceRestoreGeneration(sessions.scheduler, {
-    expectedGeneration: config.expectedSystemGeneration,
-    observedGeneration: startup.systemGeneration,
-    openedBy: 'worker',
-    log,
-  });
 
   const liveness =
     options.liveness ??
@@ -260,16 +241,6 @@ export async function startWorker(options: WorkerProcessOptions): Promise<Worker
     intervalMilliseconds: config.metricsIntervalMilliseconds,
     onError: error => logLoopFailure('metrics', error),
     run: async () => {
-      // Audit O16 (lane g81): a restore-generation mismatch is a condition, not an
-      // event. While it lasts, every pass logs it again, so the immediately-critical
-      // alarm over it stays in ALARM until the generation is reconciled rather than
-      // clearing a few minutes after startup. Before the collectors, and caught on its
-      // own, so a failed read here never costs the heartbeats their publication.
-      try {
-        await observeRestoreGeneration(sessions.metrics, { expectedGeneration: config.expectedSystemGeneration, log });
-      } catch (error) {
-        log.log('error', 'metrics_collect_failed', { collector: 'restore_generation', ...errorFields(error) });
-      }
       const data: MetricDatum[] = [];
       for (const [collector, collect] of collectors) {
         try {
@@ -302,7 +273,6 @@ export async function startWorker(options: WorkerProcessOptions): Promise<Worker
     scheduler_interval_ms: config.schedulerIntervalMilliseconds,
     metrics_interval_ms: config.metricsIntervalMilliseconds,
     database_version: startup.databaseVersion,
-    system_generation: startup.systemGeneration,
   });
 
   let stopped: Promise<WorkerStopReport> | null = null;
