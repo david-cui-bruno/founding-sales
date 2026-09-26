@@ -67,9 +67,9 @@ const PAUSE_COLUMNS = 'id, scope_kind, scope_key, channel, hold_id, created_by_u
 /**
  * Whether a stored pause's channel is one `PAUSE_CHANNELS` still has.
  *
- * LinkedIn was removed on 25 September 2026, and `administrative_pauses_channel_known`
- * (migration 0001) still admits `linkedin`. Such a pause blocks only `linkedin_task`,
- * which nothing does any more, so the list does not show it.
+ * LinkedIn was removed on 25 September 2026, and migration 0018 rewrote a stored
+ * `linkedin` pause's channel to `removed` and its hold's kinds to `removed`. Such a
+ * pause blocks nothing any action asks about, so the list does not show it.
  */
 function isKnownChannel(channel: string | null): channel is PauseChannel | null {
   return channel === null || (PAUSE_CHANNELS as readonly string[]).includes(channel);

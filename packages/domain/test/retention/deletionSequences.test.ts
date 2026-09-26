@@ -15,9 +15,9 @@ import { seedSequences, type SeededSequences } from '../sequences/support/sequen
  *
  * `deletion.test.ts` covers the sentence itself against the CRM and the mail tables.
  * This file covers the part that could only be written once G7b, G8 and G7-2 were on
- * main, and each case is one of the four things those tables made true:
+ * main, and each case is one of the three things those tables made true (a fourth, the
+ * recorded LinkedIn reply, went with its table in migration 0018):
  *
- *   - a prospect's recorded LinkedIn reply is correspondence, so it is removed;
  *   - a reply confirmation is removed *before* the callback it references, because
  *     otherwise the callback delete fails on a foreign key;
  *   - a live enrollment and its unexecuted steps are terminally stopped rather than
@@ -128,14 +128,6 @@ beforeAll(async () => {
   if (!enrolled.ok) throw new Error(`the enrollment fixture was refused: ${enrolled.reason}`);
   enrollmentId = enrolled.value.enrollmentId;
 
-  // A recorded LinkedIn observation: the prospect's own response, by hand.
-  await database.session.query(
-    `INSERT INTO enrollment_linkedin_results
-       (workspace_id, enrollment_id, firm_id, result, recorded_by_user_id, note)
-     VALUES ($1, $2, $3, 'no_engagement', $4, 'No reply after the connection request.')`,
-    [seeded.alpha.workspaceId, enrollmentId, crm.alpha.firmId, seeded.alpha.salesperson.userId],
-  );
-
   // G7b: a confirmation whose consequence was a committed callback, which is the
   // ordering this file exists to pin.
   callbackId = await one(
@@ -200,14 +192,14 @@ describe('the preview tells an approver about the rows the other lanes brought',
     // Stops are their own map: stopping a plan is not blanking a name.
     expect(preview?.stops['sequence_enrollments']).toBe(1);
     expect(preview?.stops['step_executions']).toBeGreaterThan(0);
-    // Removals.
-    expect(preview?.removes['enrollment_linkedin_results']).toBe(1);
+    // Removals. The LinkedIn results table went with migration 0018.
+    expect(preview?.removes).not.toHaveProperty('enrollment_linkedin_results');
     expect(preview?.removes['mail_reply_confirmations']).toBe(1);
     // And the honest line: one route is frozen into a fence that has dispatched.
     expect(preview?.retains['email_addresses_pinned_by_a_sent_fence']).toBe(1);
     // Nothing was touched by the preview itself.
     expect(
-      await count('SELECT count(*) AS count FROM enrollment_linkedin_results WHERE workspace_id = $1', [
+      await count('SELECT count(*) AS count FROM mail_reply_confirmations WHERE workspace_id = $1', [
         seeded.alpha.workspaceId,
       ]),
     ).toBe(1);
@@ -226,13 +218,8 @@ describe('the deletion commit against the sequence and classification tables', (
     });
     expect(outcome.ok, outcome.reason).toBe(true);
 
-    // Removed: the LinkedIn observation and the confirmation. The confirmation went
-    // first, which is the only reason the callback delete below succeeded at all.
-    expect(
-      await count('SELECT count(*) AS count FROM enrollment_linkedin_results WHERE workspace_id = $1', [
-        seeded.alpha.workspaceId,
-      ]),
-    ).toBe(0);
+    // Removed: the confirmation. It went first, which is the only reason the callback
+    // delete below succeeded at all.
     expect(
       await count('SELECT count(*) AS count FROM mail_reply_confirmations WHERE workspace_id = $1', [
         seeded.alpha.workspaceId,

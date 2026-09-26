@@ -17,7 +17,9 @@ const soon = (): string => new Date(Date.now() + 60 * 60 * 1000).toISOString();
 /**
  * A failing insert for every constraint migration 0012 adds, and for the five it adds
  * to `template_versions` (lane G8: sequences, versions, steps, enrollments, step
- * executions, the LinkedIn results, the audited migration and the holiday calendar).
+ * executions, the audited migration and the holiday calendar). Migration 0018 dropped
+ * the LinkedIn results table and the three CHECKs over a step's LinkedIn message, and
+ * replaced the vocabularies that admitted a LinkedIn value under the same names.
  *
  * Same rules as `crmCases.ts`, `policyCases.ts` and `todayCases.ts`: their own file so
  * two lanes never edit the middle of one array, each case inside a transaction the
@@ -251,7 +253,7 @@ async function insertExecution(
 const VERSION_COLUMNS = `(workspace_id, id, sequence_id, version, state, stop_conditions,
   published_at, published_by_user_id, retired_at, retired_by_user_id, created_at, updated_at)`;
 
-const ALL_STOPS = `ARRAY['human_reply','linkedin_reply','engaged_call','opt_out_or_suppression','stage_closed']`;
+const ALL_STOPS = `ARRAY['human_reply','engaged_call','opt_out_or_suppression','stage_closed']`;
 
 interface VersionOverrides {
   readonly id?: string;
@@ -294,7 +296,7 @@ async function insertVersion(
 }
 
 const STEP_COLUMNS = `(workspace_id, id, sequence_version_id, ordinal, channel, delay_unit,
-  delay_amount, on_no_answer, template_version_id, linkedin_message)`;
+  delay_amount, on_no_answer, template_version_id)`;
 
 interface StepOverrides {
   readonly id?: string;
@@ -305,7 +307,6 @@ interface StepOverrides {
   readonly delayAmount?: number;
   readonly onNoAnswer?: string | null;
   readonly templateVersionId?: string | null;
-  readonly linkedInMessage?: string | null;
 }
 
 async function insertStep(
@@ -315,7 +316,7 @@ async function insertStep(
 ): Promise<unknown> {
   return await f.session.query(
     `INSERT INTO sequence_steps ${STEP_COLUMNS}
-     VALUES ($1, COALESCE($2::uuid, gen_random_uuid()), $3, $4, $5, $6, $7, $8, $9::uuid, $10)`,
+     VALUES ($1, COALESCE($2::uuid, gen_random_uuid()), $3, $4, $5, $6, $7, $8, $9::uuid)`,
     [
       workspace(f),
       overrides.id ?? null,
@@ -326,7 +327,6 @@ async function insertStep(
       overrides.delayAmount ?? 1,
       overrides.onNoAnswer === undefined ? 'advance' : overrides.onNoAnswer,
       overrides.templateVersionId ?? null,
-      overrides.linkedInMessage ?? null,
     ],
   );
 }
@@ -413,35 +413,6 @@ async function insertShift(
       overrides.shift ?? 86_400_000,
       overrides.reason ?? 'hold_union',
       overrides.union ?? null,
-    ],
-  );
-}
-
-async function insertLinkedInResult(
-  f: SequenceCaseFixture,
-  chain: Chain,
-  overrides: {
-    readonly id?: string;
-    readonly enrollmentId?: string;
-    readonly executionId?: string | null;
-    readonly result?: string;
-    readonly author?: string;
-    readonly note?: string | null;
-  } = {},
-): Promise<unknown> {
-  return await f.session.query(
-    `INSERT INTO enrollment_linkedin_results
-       (workspace_id, id, enrollment_id, firm_id, step_execution_id, result, recorded_by_user_id, note)
-     VALUES ($1, COALESCE($2::uuid, gen_random_uuid()), $3, $4, $5::uuid, $6, $7, $8)`,
-    [
-      workspace(f),
-      overrides.id ?? null,
-      overrides.enrollmentId ?? chain.enrollmentId,
-      chain.firmId,
-      overrides.executionId ?? null,
-      overrides.result ?? 'no_engagement',
-      overrides.author ?? salesperson(f),
-      overrides.note ?? null,
     ],
   );
 }
@@ -832,7 +803,7 @@ export const SEQUENCE_CONSTRAINT_CASES: readonly SequenceCase[] = [
     constraint: 'sequence_versions_stop_conditions_known',
     run: async f =>
       await insertVersion(f, await makeSequence(f), {
-        stopConditions: `ARRAY['human_reply','linkedin_reply','engaged_call','opt_out_or_suppression','stage_closed','the_moon_is_full']`,
+        stopConditions: `ARRAY['human_reply','engaged_call','opt_out_or_suppression','stage_closed','the_moon_is_full']`,
       }),
   },
   {
@@ -955,34 +926,6 @@ export const SEQUENCE_CONSTRAINT_CASES: readonly SequenceCase[] = [
         channel: 'email',
         onNoAnswer: null,
         templateVersionId: null,
-      }),
-  },
-  {
-    constraint: 'sequence_steps_linkedin_has_message',
-    run: async f =>
-      await insertStep(f, await makeVersion(f, await makeSequence(f)), {
-        channel: 'linkedin_task',
-        onNoAnswer: null,
-        linkedInMessage: null,
-      }),
-  },
-  {
-    constraint: 'sequence_steps_linkedin_message_bounded',
-    run: async f =>
-      await insertStep(f, await makeVersion(f, await makeSequence(f)), {
-        channel: 'linkedin_task',
-        onNoAnswer: null,
-        linkedInMessage: '   ',
-      }),
-  },
-  {
-    // 12.6 and David's decision: no web unsubscribe anywhere, LinkedIn included.
-    constraint: 'sequence_steps_no_unsubscribe_link',
-    run: async f =>
-      await insertStep(f, await makeVersion(f, await makeSequence(f)), {
-        channel: 'linkedin_task',
-        onNoAnswer: null,
-        linkedInMessage: 'Click here to Unsubscribe',
       }),
   },
 
@@ -1368,46 +1311,6 @@ export const SEQUENCE_CONSTRAINT_CASES: readonly SequenceCase[] = [
         [workspace(f), chain.enrollmentId, chain.stepId, chain.firmId, chain.contactId],
       );
       return await insertShift(f, chain, executionId, { union: -1 });
-    },
-  },
-
-  // ------------------------------------------------- enrollment_linkedin_results
-  {
-    constraint: 'enrollment_linkedin_results_pkey',
-    run: async f => {
-      const chain = await makeChain(f);
-      await insertLinkedInResult(f, chain, { id: MISSING });
-      return await insertLinkedInResult(f, chain, { id: MISSING });
-    },
-  },
-  {
-    constraint: 'enrollment_linkedin_results_enrollment_fkey',
-    run: async f =>
-      await insertLinkedInResult(f, await makeChain(f), { enrollmentId: MISSING }),
-  },
-  {
-    constraint: 'enrollment_linkedin_results_execution_fkey',
-    run: async f => await insertLinkedInResult(f, await makeChain(f), { executionId: MISSING }),
-  },
-  {
-    constraint: 'enrollment_linkedin_results_author_fkey',
-    run: async f => await insertLinkedInResult(f, await makeChain(f), { author: outsider(f) }),
-  },
-  {
-    constraint: 'enrollment_linkedin_results_result_known',
-    run: async f => await insertLinkedInResult(f, await makeChain(f), { result: 'maybe' }),
-  },
-  {
-    constraint: 'enrollment_linkedin_results_note_bounded',
-    run: async f => await insertLinkedInResult(f, await makeChain(f), { note: '   ' }),
-  },
-  {
-    // 11.3: a recorded reply is terminal, so there is at most one per enrollment.
-    constraint: 'enrollment_linkedin_results_one_reply',
-    run: async f => {
-      const chain = await makeChain(f);
-      await insertLinkedInResult(f, chain, { result: 'replied' });
-      return await insertLinkedInResult(f, chain, { result: 'replied' });
     },
   },
 

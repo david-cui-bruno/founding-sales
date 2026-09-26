@@ -11,8 +11,9 @@ import { mustCover } from './support/coverage.ts';
  * LinkedIn was removed on 25 September 2026: there is no handoff, so there is no undo
  * window and no successor to race it. What has to stay true is the thing the race was
  * about — no LinkedIn step reaches a fence — and it now has a different shape.
- * Migration 0012 still admits `linkedin_task`, so a step stored before the removal may
- * still come due, and the worker must hold it rather than run it.
+ * Migration 0018 keeps `linkedin_task` as the stored marker of a removed channel, so a
+ * step stored before the removal may still come due, and the worker must hold it rather
+ * than run it.
  *
  * ## The vacuous-pass trap
  *

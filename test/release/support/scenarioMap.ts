@@ -151,7 +151,7 @@ export const SCENARIOS: readonly Scenario[] = Object.freeze([
       'apps/api/test/sequences.test.ts',
     ),
     trap: 'A removal that deleted the routes and the editor option would pass while the worker could still run a LinkedIn step stored before the removal, as a task or worse.',
-    closedBy: 'The lane test runs the real worker function over a stored linkedin_task row twice and requires it held with long_hold_review and no send prepared, and the API test requires the three LinkedIn paths to answer not_found.',
+    closedBy: 'The lane test migrates a schema-17 database holding a held linkedin_task execution through 0018, then runs the real worker function over it twice and requires it still held with long_hold_review and no send prepared; the API test requires the three LinkedIn paths to answer not_found.',
   },
   {
     number: 10,
@@ -240,8 +240,8 @@ export const SCENARIOS: readonly Scenario[] = Object.freeze([
     title: 'A LinkedIn reply after handoff and before the next email stops the opportunity through the recorded-reply path. (LinkedIn was removed on 25 September 2026; what remains is that a stored LinkedIn reply is read as no value and still stops.)',
     coverage: 'lane',
     references: laneTest('packages/domain/test/sequences/removedLinkedIn.test.ts', 'packages/domain/sequences/rows.ts'),
-    trap: 'A reader that drops a linkedin_reply nobody stored passes by construction, and every version does store one, because migration 0012 requires it.',
-    closedBy: 'The lane test reads the raw stop_conditions and end_reason first and asserts linkedin_reply is there, then that the reader drops it, and that a manual-mode event with that origin still stops the enrollment as human_reply.',
+    trap: 'A migration that found no linkedin_reply to remove passes by construction, and every schema-17 version stores one, published ones included, because migration 0012 required it.',
+    closedBy: 'The lane test counts linkedin_reply in every stored version and a linkedin_reply end on schema 17, runs 0018, and asserts every version (published ones included) lost it, the end reads human_reply, and a manual-mode event with that origin still stops the enrollment as human_reply.',
   },
   {
     number: 19,

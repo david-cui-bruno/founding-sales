@@ -30,6 +30,17 @@ export {
   type SchemaRangeCheck,
 } from './schemaRange.ts';
 export {
+  CONTACT_TITLE_MAXIMUM,
+  LINKEDIN_REMOVAL_MIGRATION,
+  LINKEDIN_REMOVAL_PREFLIGHT_SQL,
+  LINKEDIN_REMOVAL_REFUSAL_SQLSTATE,
+  LINKEDIN_URL_TITLE_SEPARATOR,
+  REMOVE_LINKEDIN_HISTORY_SETTING,
+  readLinkedInRemovalPreflight,
+  type LinkedInRemovalCounts,
+  type LinkedInRemovalPreflight,
+} from './linkedinRemoval.ts';
+export {
   FOUNDATION_LOOKUP_KEYS,
   FOUNDATION_TABLES,
   SCOPED_TABLES,

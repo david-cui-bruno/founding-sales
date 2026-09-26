@@ -16,9 +16,9 @@ export type TodayLane = (typeof TODAY_LANES)[number];
  * Two kinds share the `due_work` lane because 8.2 names one lane for "due sequence
  * work" and the card counts them separately: "replies, emails due, calls due".
  *
- * LinkedIn tasks were removed on 25 September 2026. `today_items_kind_known` (migration
- * 0008) still admits `linkedin_due`, so a stored item may carry it; `isTodayItemKind` is
- * how a reader ignores one.
+ * LinkedIn tasks were removed on 25 September 2026, and migration 0018 deleted every
+ * `linkedin_due` item and took the kind out of `today_items_kind_known`. `isTodayItemKind`
+ * still guards the readers, because a kind column is text.
  */
 export const TODAY_ITEM_KINDS = [
   'reply',
@@ -89,8 +89,8 @@ export function refuseToday<T>(reason: TodayRefusalCode): TodayResult<T> {
 }
 
 /**
- * The aggregate counts 8.2 puts on a card. `today_snapshots.linkedin_due` (migration
- * 0008) is still maintained by `today_refresh_card` and is not read.
+ * The aggregate counts 8.2 puts on a card. Migration 0018 dropped
+ * `today_snapshots.linkedin_due` and replaced `today_refresh_card` without it.
  */
 export interface TodayCounts {
   readonly replies: number;

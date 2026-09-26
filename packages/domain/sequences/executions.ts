@@ -206,9 +206,10 @@ export async function runDueStepExecution(
   if (enrollment === null) return { kind: 'nothing_to_do' };
   if (enrollment.endedAt !== null) return { kind: 'nothing_to_do' };
 
-  // LinkedIn was removed on 25 September 2026, and `step_executions_channel_known` still
-  // admits `linkedin_task`. A step with a channel this lane does not know is held for a
-  // person — stop the enrollment or migrate it — and never run.
+  // LinkedIn was removed on 25 September 2026, and migration 0018 kept a stored
+  // `linkedin_task` channel as the marker of a removed channel. A step with a channel
+  // this lane does not know is held for a person — stop the enrollment or migrate it —
+  // and never run.
   if (!isStepChannel(loaded.channel)) return await holdExecution(context, loaded, 'long_hold_review');
 
   // What the fence says comes first once there is one. A send that happened, or may

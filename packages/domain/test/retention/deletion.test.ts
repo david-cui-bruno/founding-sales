@@ -176,13 +176,14 @@ describe('the deletion commit', () => {
     );
     expect(firmRows[0]?.name).not.toContain('Northwind');
     expect(firmRows[0]?.website).toBeNull();
-    const { rows: contactRows } = await database.session.query<{ full_name: string; linkedin_url: string | null }>(
-      'SELECT full_name, linkedin_url FROM contacts WHERE workspace_id = $1 AND firm_id = $2',
+    // The title too: since migration 0018 it is where a contact's LinkedIn URL lives.
+    const { rows: contactRows } = await database.session.query<{ full_name: string; title: string | null }>(
+      'SELECT full_name, title FROM contacts WHERE workspace_id = $1 AND firm_id = $2',
       [seeded.alpha.workspaceId, crm.alpha.firmId],
     );
     for (const row of contactRows) {
       expect(row.full_name).toBe('[deleted]');
-      expect(row.linkedin_url).toBeNull();
+      expect(row.title).toBeNull();
     }
 
     // Business history: still there, because nothing may delete it.

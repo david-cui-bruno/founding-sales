@@ -821,6 +821,61 @@ The commands above are the hand fallback when the record job fails (4.0, "When t
 
 ---
 
+### 4.3 Migration 0018 (schema 18): LinkedIn's schema, the preflight, and the owner's decision (lane A4)
+
+`0018_remove_linkedin.sql` removes what PR 234 left of LinkedIn in the schema. What it does to each stored value is in the file's header; in short:
+
+- **kept where the owner sees it:** each contact's `linkedin_url` is appended to the contact's title (`Managing Partner · https://www.linkedin.com/in/…`), the one free-text field of a contact the desktop shows and lets a person edit; then the column goes;
+- **converted without asking:** `linkedin_reply` leaves every version's `stop_conditions`, published ones included (the published-version trigger is set aside for that one statement), and the default and both CHECKs; `linkedin_task` leaves every hold's kinds (a hold that blocked only it blocks `removed`); a LinkedIn pause's channel, `open_and_copy`, `handed_off` and `linkedin_grace` become `removed`; a `linkedin_reply` end becomes `human_reply`; `linkedin_due` Today items are deleted and `today_snapshots.linkedin_due`, `today_refresh_card`'s count and `today_lane_of_kind`'s arm go, with the nonnegative CHECK added back over the four remaining counts;
+- **kept as a marker:** a step's and an execution's channel stays `linkedin_task`, and both channel CHECKs keep admitting it. It is what lane A2's read-only representation keys on (`channel: 'removed', removedChannel: 'linkedin'`), what keeps a version's steps in place, and what `isStepChannel` refuses, so a held LinkedIn execution stays held. No step or execution row is deleted;
+- **refused unless the owner decides:** a non-empty `sequence_steps.linkedin_message`, any row of `enrollment_linkedin_results`, or a contact URL that does not fit beside the title in 200 characters. The migration then raises `0018 refused: linkedin_message=N linkedin_results=N unfit_urls=N; …` (SQLSTATE `FS018`), `fss migrate` exits 20 with reason `linkedin_history_present`, and schema 17 is untouched. Only `fss migrate --remove-linkedin-history` — `release-deploy.sh --remove-linkedin-history` — lets it erase them.
+
+Both service ranges become `{18, 18}`, so this is a stop-migrate-start release, and the trimmed rehearsal cannot prove the live path: it builds its database from zero. `packages/domain/test/sequences/removedLinkedIn.test.ts` proves 17 → 18 on seeded legacy rows; the preflight below reads production's own counts before anything is stopped.
+
+**The order.** Every step before `release-stop.sh` leaves production running.
+
+1. **Merge.** *Greenfield gate* and *Greenfield images* run on the merge commit. Download the digests as in 4.2 (`COMMIT`, `API_DIGEST`, `WORKER_DIGEST`, `GATE_RUN_ID`).
+2. **The trimmed rehearsal, `mode: schema`:**
+
+   ```bash
+   gh workflow run greenfield-release.yml --ref main -f stage=full -f mode=schema \
+     -f api_image_digest="$API_DIGEST" -f worker_image_digest="$WORKER_DIGEST" \
+     -f desktop_commit_stamp="$COMMIT"
+   ```
+
+3. **Promote the two digests (2.1).** A `mode: schema` run writes no release manifest, so this is `infra/scripts/release-promote.sh /tmp/fss-ci/image-digests.json --app-only` with the admin profile (the flag's name predates the trimmed rehearsal). The preflight's image must be in `fss-prod-worker`.
+4. **The preflight**, read-only, with production still running:
+
+   ```bash
+   export FSS_REHEARSAL_REPORTS="$HOME/fss-release-$(date -u +%Y%m%d%H%M)"
+   infra/scripts/schema-preflight-0018.sh infra/roots/production fss-prod --worker-digest "$WORKER_DIGEST"
+   ```
+
+   It registers one revision of the operations family that differs only in the worker digest (the registered one runs the previous image, which has no `fss admin schema-preflight 0018`), runs the counts on it as the runtime identity in a READ ONLY transaction, prints the JSON, writes `schema-preflight-0018.txt`, and deregisters the revision on the way out. Read it without a credential first with `FSS_REHEARSAL_DRY_RUN=1`.
+5. **The owner's decision on the counts.** `refusesWithoutSetting: false` needs none: nothing 0018 would erase is stored. `true` means the owner sees `stepMessages`, `recordedLinkedInResults` and `contactUrlsThatDoNotFit` and chooses: erase them (step 8 passes `--remove-linkedin-history`) or do not release 0018 yet. The other counts are what 0018 converts; show them too. The flag is passed on the owner's word only.
+6. **`release-stop.sh`** (4.1).
+7. **The apply**, with the new digests and both `api_schema_range` and `worker_schema_range` `{min=18,max=18}`.
+8. **The deploy, with the record.** Build the `ci-gate` record for the merge commit with `release-record-from-ci.sh` (4.2), then:
+
+   ```bash
+   infra/scripts/release-deploy.sh infra/roots/production fss-prod --schema-change \
+     --api-digest "$API_DIGEST" --worker-digest "$WORKER_DIGEST" \
+     --release-record /tmp/fss-ci/release-record.json \
+     [--remove-linkedin-history]   # only on the owner's word, step 5
+   ```
+
+   The record is put after the final verify, so it names a deployment that runs its digests.
+9. **Smoke** (`scripts/productionSmoke.mjs`, as after every release).
+10. **Publish the desktop** built from the merge commit (2.0).
+
+**If 0018 fails in production.** The runner applies the file in one transaction, so a refusal or any error leaves schema 17 exactly as it was, with both services stopped and the apply's `{18, 18}` task definitions registered. Decide before step 6 which of these you will take; neither restores the database:
+
+- **Forward, when the cause is the refusal:** the owner decides, and `release-deploy.sh … --schema-change --remove-linkedin-history` runs again from step 8. It refuses unless both services are still stopped, which they are.
+- **Forward, when the cause is a defect:** fix it in a new pull request and release that from step 1; the services stay stopped until it is deployed.
+- **Back to schema 17, when the outage must end first:** apply the previous release's digests with both ranges `{min=17,max=17}`, then `release-deploy.sh infra/roots/production fss-prod --api-digest "$OLD_API" --worker-digest "$OLD_WORKER"` with `--schema-change` unset. That is the rolling path: it scales both services to their declared counts on the previous images, which accept 17, and checks the running digests.
+
+A 0018 that succeeded is never undone: 17 images cannot serve 18, and the database does not roll back (4.1). After success, a failed deploy is forward repair or the restore protocol.
+
 ## 5. The five manual steps after the apply
 
 These are in the order they unblock each other. Doing 5.3 before 5.2 will not work, because Pub/Sub will not push to an endpoint whose certificate it cannot verify. 5.1 comes before the apply's deploy (4.1) and 5.1a comes after it, because 5.1a runs a command against the deployed database. 5.2a comes straight after 5.2, because Google sends the browser back to `api.usecallie.com`, and before 5.4, whose mailbox consent starts from a signed-in Mac.

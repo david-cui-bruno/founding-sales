@@ -31,8 +31,9 @@ export type StepChannel = (typeof STEP_CHANNELS)[number];
 /**
  * The channels removed from the product whose stored steps are still read (lane A2).
  *
- * LinkedIn went on 25 September 2026 and schema 17 still admits `linkedin_task` on a
- * step and an execution, so a version published before then can still carry one. Such
+ * LinkedIn went on 25 September 2026 and migration 0018 kept `linkedin_task` as the
+ * stored marker of a removed channel on a step and an execution, so a version published
+ * before then can still carry one. Such
  * a step crosses the wire as channel `removed` with the channel it was — never its
  * message text — and the Mac shows it greyed and uneditable. Nothing may author one:
  * `STEP_CHANNELS` stays the draft vocabulary.

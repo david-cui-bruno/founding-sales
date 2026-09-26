@@ -12,18 +12,19 @@ import { mustCover } from './support/coverage.ts';
  * opportunity through the recorded-reply path."
  *
  * LinkedIn was removed on 25 September 2026, and with it the recorded LinkedIn reply.
- * Migration 0012 was not changed: every version's `stop_conditions` still carries
- * `linkedin_reply`, because the column's default puts it there and
- * `sequence_versions_stop_conditions_complete` requires it, and `end_reason` still
- * admits it. So what remains of the scenario is on the read side: a stored
- * `linkedin_reply` is dropped rather than handed to a Mac whose contract no longer has
- * the word, and a manual-mode event that names it as its origin still stops the
- * enrollment — as `human_reply`, the reading of every origin nothing knows.
+ * Until migration 0018 every version's `stop_conditions` carried `linkedin_reply`
+ * (0012's default put it there and `sequence_versions_stop_conditions_complete`
+ * required it) and `end_reason` admitted it; 0018 removes it from every stored version
+ * and both CHECKs, and turns a `linkedin_reply` end into `human_reply`. What remains of
+ * the scenario: no reader hands the word to a Mac whose contract no longer has it, and
+ * a manual-mode event that names it as its origin still stops the enrollment — as
+ * `human_reply`, the reading of every origin nothing knows.
  *
  * ## The vacuous-pass trap
  *
- * A reader that drops a value nobody stored passes by construction. The lane test reads
- * the raw row first and asserts `linkedin_reply` is really there. This check holds the
+ * A migration that removes a value nobody stored passes by construction. The lane test
+ * counts `linkedin_reply` in every schema-17 version first, and asserts it is gone from
+ * each after 0018. This check holds the
  * vocabulary: neither side of the wire has the member, and an origin nobody knows
  * still ends an enrollment rather than leaving it running.
  */

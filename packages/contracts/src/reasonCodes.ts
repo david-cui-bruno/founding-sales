@@ -88,9 +88,10 @@ export type BlockedActionKind = z.infer<typeof blockedActionKindSchema>;
 /**
  * The members of a stored `blocked_action_kinds` array this set still knows.
  *
- * LinkedIn was removed on 25 September 2026, and `active_holds_blocked_action_kinds_known`
- * (migration 0001) still admits `linkedin_task`, which holds opened before then carry. A
- * reader ignores it rather than handing a Mac a kind no schema declares.
+ * LinkedIn was removed on 25 September 2026, and migration 0018 took `linkedin_task`
+ * out of every hold; a hold that blocked nothing else blocks `removed`, which
+ * `active_holds_blocked_action_kinds_known` admits so that the row stays as history. A
+ * reader ignores it rather than handing a Mac a kind no action has.
  */
 export function knownBlockedActionKinds(values: readonly string[]): BlockedActionKind[] {
   return values.filter((value): value is BlockedActionKind => (BLOCKED_ACTION_KINDS as readonly string[]).includes(value));

@@ -171,18 +171,6 @@ describe('a step says what its channel needs and nothing else (11.1, 11.3, 9.1)'
     ).toMatch(/sequence_steps_no_answer_is_a_call_step/);
   });
 
-  it('refuses a LinkedIn message containing an unsubscribe link (12.6)', async () => {
-    const [workspaceId, versionId] = draft();
-    expect(
-      await refusal(
-        `INSERT INTO sequence_steps
-           (workspace_id, sequence_version_id, ordinal, channel, delay_unit, delay_amount, linkedin_message)
-         VALUES ($1, $2, 22, 'linkedin_task', 'elapsed', 1, 'Click here to Unsubscribe')`,
-        [workspaceId, versionId],
-      ),
-    ).toMatch(/sequence_steps_no_unsubscribe_link/);
-  });
-
   it("refuses a step pointing at another sequence's template across workspaces (6)", async () => {
     expect(
       await refusal(
@@ -412,31 +400,6 @@ describe('step executions and their timing history (11.2)', () => {
       [seeded.alpha.workspaceId, executionId, enrollmentId],
     );
     expect(message).toMatch(/never_earlier/);
-  });
-
-  it('refuses a LinkedIn reply recorded twice for one enrollment (11.3)', async () => {
-    await database.session.query(
-      `INSERT INTO enrollment_linkedin_results
-         (workspace_id, enrollment_id, firm_id, result, recorded_by_user_id)
-       VALUES ($1, $2, $3, 'replied', $4)`,
-      [seeded.alpha.workspaceId, enrollmentId, crm.alpha.firmId, seeded.alpha.salesperson.userId],
-    );
-    const message = await refusal(
-      `INSERT INTO enrollment_linkedin_results
-         (workspace_id, enrollment_id, firm_id, result, recorded_by_user_id)
-       VALUES ($1, $2, $3, 'replied', $4)`,
-      [seeded.alpha.workspaceId, enrollmentId, crm.alpha.firmId, seeded.alpha.salesperson.userId],
-    );
-    expect(message).toMatch(/one_reply/);
-    // "No engagement records an observation": several are fine.
-    for (let index = 0; index < 2; index += 1) {
-      await database.session.query(
-        `INSERT INTO enrollment_linkedin_results
-           (workspace_id, enrollment_id, firm_id, result, recorded_by_user_id)
-         VALUES ($1, $2, $3, 'no_engagement', $4)`,
-        [seeded.alpha.workspaceId, enrollmentId, crm.alpha.firmId, seeded.alpha.salesperson.userId],
-      );
-    }
   });
 });
 
