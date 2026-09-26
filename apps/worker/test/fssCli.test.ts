@@ -37,11 +37,8 @@ import { MIGRATION_IDENTITY_COMMANDS } from '../src/tools/fss.ts';
  */
 
 const CALLERS = [
-  'infra/scripts/release-deploy.sh',
-  // g39: the step between the deploy and the schema ranges. It is here for the same
-  // reason the other two are — it names a command, and a script naming a command the
-  // tool does not have is a step that fails inside a container nobody is watching.
-  'infra/scripts/release-bootstrap-workspace.sh',
+  // P7: the deploy and, since g39, the bootstrap of the first workspace (deploy.sh bootstrap).
+  'infra/scripts/deploy.sh',
 ] as const;
 
 const INVOCATIONS = CALLERS.flatMap(relative =>
@@ -142,7 +139,7 @@ describe('the commands release-deploy.sh runs on the migration task definition',
   // refused before it looks at the database: fss migrate on 23 September 2026 (twice),
   // then fss admin database-users ensure (run 35883201716). The script is the input.
   const script = readFileSync(
-    fileURLToPath(new URL('../../../infra/scripts/release-deploy.sh', import.meta.url)),
+    fileURLToPath(new URL('../../../infra/scripts/deploy.sh', import.meta.url)),
     'utf8',
   ).replaceAll('\\\n', ' ');
   const onMigrationTask = [...script.matchAll(/one_off\s+\S+\s+"\$MIGRATION_TASK_DEFINITION"\s+migration\s+(.+)$/gmu)]

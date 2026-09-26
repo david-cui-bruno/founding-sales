@@ -318,7 +318,7 @@ Follow `docs/greenfield/infra-apply-runbook.md` section 3.2 for the plan and app
 
 Three things belong to the release rather than to the infrastructure:
 
-**The digests.** For a schema release, `api_image` and `worker_image` are the release's digests from section 2, not the tags. For an infrastructure change they are the digests production runs, which `infra/scripts/deployed-digests.sh fss-prod` prints — never the ones in the last plan anybody applied, because CI has moved them since (4.0, the drift rule).
+**The digests.** For a schema release, `api_image` and `worker_image` are the release's digests from section 2, not the tags. For an infrastructure change they are the digests production runs, which `infra/scripts/deploy.sh current fss-prod` prints — never the ones in the last plan anybody applied, because CI has moved them since (4.0, the drift rule).
 
 **The schema ranges.** Read them from the source rather than typing them:
 
@@ -419,23 +419,23 @@ run (no credential) → gates (no credential) → ranges (images commit, no cred
 **The drift rule: every production plan starts from what production runs, and every apply checks it again.**
 
 ```bash
-infra/scripts/deployed-digests.sh fss-prod      # api_image=… worker_image=… and the two schema ranges
+infra/scripts/deploy.sh current fss-prod      # api_image=… worker_image=… and the two schema ranges
 (cd infra/roots/production && terraform plan -out=production.tfplan \
-   $(../../scripts/deployed-digests.sh fss-prod --var-flags))   # plus -var="expected_system_generation=<N>" while one is pinned
+   $(../../scripts/deploy.sh current fss-prod --var-flags))   # plus -var="expected_system_generation=<N>" while one is pinned
 # immediately before the apply, with the two images the plan was made with:
-infra/scripts/deployed-digests.sh fss-prod --compare "<api_image>" "<worker_image>" \
+infra/scripts/deploy.sh current fss-prod --compare "<api_image>" "<worker_image>" \
   && (cd infra/roots/production && terraform apply production.tfplan)
 ```
 
-`deployed-digests.sh` refuses in three cases:
+`deploy.sh current` (the old name `deployed-digests.sh` execs it) refuses in three cases:
 - a service's rollout is not finished: it must have one `PRIMARY` deployment that ECS calls `COMPLETED`, its declared count running and nothing pending, and every running task of that deployment's revision reporting its image digest (lane A1). A lone deployment is not enough, because ECS reports one `IN_PROGRESS` with nothing running yet. A service stopped for a schema release (desired zero) runs no task, and prints its revision's image;
 - a family's newest ACTIVE revision is not the one its service runs, which Terraform would otherwise read. Deregister the stray revision it names first;
 - with `--compare`, either image differs from the one running. A CI deploy has landed since the plan; plan again. A schema release plans with its own new images on purpose and passes `--allow-digest-change`.
 
 The two manual paths:
 
-1. **An infrastructure change.** Plan with exactly those four values. The plan shows no change to `aws_ecs_task_definition.api` or `.worker` or to either service. The exception is a change to a task definition, where it registers the next revision from the running images and re-points the service. **A plan that replaces either definition with an image other than the one `deployed-digests.sh` printed rolls production back: do not apply it.** After the apply, `release-deploy.sh infra/roots/production fss-prod --api-digest <deployed> --worker-digest <deployed>` holds the running tasks to those digests. Then release the next app merge by hand, as above.
-2. **A schema change.** The release's digests and ranges, `release-stop.sh` before the apply, and `release-deploy.sh --schema-change` after it (4.1). Pass `--compare … --allow-digest-change` before the apply. CI refuses to deploy while the services are stopped or the images' range differs from production's, so it cannot race a migration.
+1. **An infrastructure change.** Plan with exactly those four values. The plan shows no change to `aws_ecs_task_definition.api` or `.worker` or to either service. The exception is a change to a task definition, where it registers the next revision from the running images and re-points the service. **A plan that replaces either definition with an image other than the one `deploy.sh current` printed rolls production back: do not apply it.** After the apply, `deploy.sh release infra/roots/production fss-prod --api-digest <deployed> --worker-digest <deployed>` holds the running tasks to those digests. Then release the next app merge by hand, as above.
+2. **A schema change.** The release's digests and ranges, `stop.sh` before the apply, and `deploy.sh release --schema-change` after it (4.1). Pass `--compare … --allow-digest-change` before the apply. CI refuses to deploy while the services are stopped or the images' range differs from production's, so it cannot race a migration.
 
 **Set up once** (the operator, 25 September):
 1. Apply the role from a plan of this root, given the deployed digests. The plan should create `aws_iam_role.ci_deploy` and `aws_iam_role_policy.ci_deploy`, set `track_latest` in place on `aws_ecs_task_definition.api` and `.worker`, change the outputs, and replace nothing. A plan that replaces a task definition or touches a service is not this change.
@@ -459,7 +459,7 @@ Optionally, customize the repository's OIDC subject claim to include the workflo
 ### 4.1 The order inside the apply, and the one command that performs it
 
 ```
-[schema change: release-stop.sh]  →  terraform apply  →  all eight entries filled  →  fss migrate  →  database users  →  fss verify  →  worker  →  API  →  fss verify
+[schema change: stop.sh]  →  terraform apply  →  all eight entries filled  →  fss migrate  →  database users  →  fss verify  →  worker  →  API  →  fss verify
 ```
 
 **Every entry first.** Terraform creates the eight Secrets Manager entries empty, and an
@@ -476,7 +476,7 @@ extension the migration role may create.
 
 ```bash
 # 1. Stop both services: the API, then the worker. Each is waited on and read back at zero.
-infra/scripts/release-stop.sh infra/roots/production fss-prod --environment production
+infra/scripts/stop.sh infra/roots/production fss-prod --environment production
 
 # 2. The apply, from the plan you read (infra-apply-runbook.md 3.2). It replaces the task
 #    definitions and starts nothing: both services ignore changes to their count.
@@ -485,12 +485,12 @@ infra/scripts/release-stop.sh infra/roots/production fss-prod --environment prod
 # 3. Migrate, verify and start: the command below, with --schema-change.
 ```
 
-`release-stop.sh` asks for `--environment production` because it takes production down on purpose, the same extra word `release-bootstrap-workspace.sh` asks for, and it refuses a root that is not the prefix's, a cluster in another account, region or namespace, and a cluster tagged as the other environment. Run twice, it does nothing the second time. Plan before the stop and apply after it: the plan does not depend on the counts, and the outage starts at step 1, so keep steps 1 to 3 together. A first apply (`bootstrap=true`) needs no stop, because it creates both services at zero.
+`stop.sh` (the old name `release-stop.sh` execs it) asks for `--environment production` because it takes production down on purpose, the same extra word `deploy.sh bootstrap` asks for, and it refuses a root that is not the prefix's, a cluster in another account, region or namespace, and a cluster tagged as the other environment. Run twice, it does nothing the second time. Plan before the stop and apply after it: the plan does not depend on the counts, and the outage starts at step 1, so keep steps 1 to 3 together. A first apply (`bootstrap=true`) needs no stop, because it creates both services at zero.
 
-**An app-only release is CI's (4.0).** By hand — only when that workflow cannot run — it is the rolling path (8.0am). Store the release record first with `record.sh put` (4.2). Then run `images.sh promote image-digests.json`, no stop, the apply with the release's digests, and `release-deploy.sh … --release-record <file>` without `--schema-change`:
+**An app-only release is CI's (4.0).** By hand — only when that workflow cannot run — it is the rolling path (8.0am). Store the release record first with `record.sh put` (4.2). Then run `images.sh promote image-digests.json`, no stop, the apply with the release's digests, and `deploy.sh release … --release-record <file>` without `--schema-change`:
 
 ```
-record.sh put  →  terraform apply  →  worker count  →  API count  →  one wait  →  running-digest check  →  the record again (existing)
+record.sh put  →  terraform apply  →  worker count  →  API count  →  one wait  →  running-digest check  →  the record read back (existing)
 ```
 
 **You do not type the steps after the apply.** They are one script, and it is the same script CI runs for the rehearsal — the only differences are the root in argument one and the credentials in your shell:
@@ -499,7 +499,7 @@ record.sh put  →  terraform apply  →  worker count  →  API count  →  one
 export AWS_PROFILE=<the profile that can assume fss-prod-deploy>
 export FSS_REHEARSAL_REPORTS="$HOME/fss-release-$(date -u +%Y%m%d%H%M)"
 
-infra/scripts/release-deploy.sh infra/roots/production fss-prod \
+infra/scripts/deploy.sh release infra/roots/production fss-prod \
   --schema-change \
   --api-digest "$API_DIGEST" \
   --worker-digest "$WORKER_DIGEST"
@@ -509,9 +509,9 @@ Read both first, locally and without a credential:
 
 ```bash
 FSS_REHEARSAL_DRY_RUN=1 FSS_REHEARSAL_REPORTS=/tmp/fss-plan \
-  infra/scripts/release-stop.sh infra/roots/production fss-prod --environment production
+  infra/scripts/stop.sh infra/roots/production fss-prod --environment production
 FSS_REHEARSAL_DRY_RUN=1 FSS_REHEARSAL_REPORTS=/tmp/fss-plan \
-  infra/scripts/release-deploy.sh infra/roots/production fss-prod \
+  infra/scripts/deploy.sh release infra/roots/production fss-prod \
     --schema-change --api-digest "$API_DIGEST" --worker-digest "$WORKER_DIGEST"
 ```
 
@@ -521,15 +521,15 @@ Why a script rather than four commands you can see:
 - **Every launch is checked before it is made.** `infra/scripts/lib.sh` refuses a bare cluster name, a wrong account, a wrong region, a cluster tagged as the other environment, a task definition whose image is not the digest this release is about, a network configuration that is not the root's own public subnets under the worker security group, and a task definition resolving a credential entry this release did not name. Afterwards it reads the `failures` array, refuses a task that never started, refuses a stopped task with no exit code (which is not a zero), prints `stopCode` and `stoppedReason`, waits out the log-stream race, and records the task ARN so a retry waits on the task that is already running rather than starting a second migration.
 - **The declared counts come from the plan.** The script scales the services to `terraform output deployment_plan`'s `declared_desired_count`, not to a number in a shell file that somebody has to keep in step with the root. Terraform sets a count only when it creates a service. After that both services ignore changes to `desired_count`, so an apply never moves one, and steps 5 and 6 of every deploy, rolling or schema, set the declared numbers explicitly.
 
-`--schema-change` is the flag that makes it refuse unless both services are already at desired, running and pending zero. It no longer stops them itself: by the time it runs, the apply has registered the new task definitions, and a stop there is the defect 8.0af records. The refusal names the `release-stop.sh` command to run. Leave the flag off for a release that moves no migration: that is the rolling path. The apply replaces the two service task definitions and ECS rolls each service on to its new one at its current count. The script then launches no one-off task. It sets the worker's and then the API's declared count with `update-service --desired-count`, forcing no second deployment, waits once for both, and runs the running-digest check: each service has one deployment that did not fail, exactly its declared number of running tasks, every one on that deployment's task definition, and the release's digest in its container. A release that adds a migration but is deployed without `--schema-change` fails that check. Both `--api-digest` and `--worker-digest` are required on either path, and `bootstrap=true` without `--schema-change` is refused.
+`--schema-change` is the flag that makes it refuse unless both services are already at desired, running and pending zero. It no longer stops them itself: by the time it runs, the apply has registered the new task definitions, and a stop there is the defect 8.0af records. The refusal names the `stop.sh` command to run. Leave the flag off for a release that moves no migration: that is the rolling path. The apply replaces the two service task definitions and ECS rolls each service on to its new one at its current count. The script then launches no one-off task. It sets the worker's and then the API's declared count with `update-service --desired-count`, forcing no second deployment, waits once for both, and runs the running-digest check: each service has one deployment that did not fail, exactly its declared number of running tasks, every one on that deployment's task definition, and the release's digest in its container. A release that adds a migration but is deployed without `--schema-change` fails that check. Both `--api-digest` and `--worker-digest` are required on either path, and `bootstrap=true` without `--schema-change` is refused.
 
-`--release-record <release-record.json>` (lane g71) is optional. When given, after the final verify the script runs `fss admin release-record put` on the operations task, prints the stored record, and fails unless the answer is `created` or `existing` for this release's digests. Pass the record `record.sh from-ci` wrote for these same digests (4.2, lane g96): a record naming other digests is refused before anything else runs. Without it nothing about the deploy changes. Section 6 is where it matters: an enable of sending is refused unless its reference is a stored record naming the running API's digest.
+`--release-record <release-record.json>` (lane g71) is optional. When given, after the final verify the script reads the record back: it runs `fss admin release-record put` on the operations task, prints the stored record, and fails unless the answer is `existing` for this release's digests. `created` fails the deploy (P7, 26 September 2026): the record was not stored before the plan, so the services started without it. Only a bootstrap, which had no database to put into before its apply, may create it. Pass the record `record.sh from-ci` wrote for these same digests (4.2, lane g96): a record naming other digests is refused before anything else runs. Without it nothing about the deploy changes. Section 6 is where it matters: an enable of sending is refused unless its reference is a stored record naming the running API's digest.
 
-**The record goes in before the apply (26 September 2026).** The worker admits a send only while a stored record names its own digest, and new worker tasks start as soon as the apply re-points the service. So store the record first, with `record.sh put` (4.2; `release-deploy.sh --record-only` is its old name). It does the put and nothing else, on the operations definition the root outputs now. That is the running release's definition, so the task is held to that definition's own worker image, and the record it stores names the new digests. The put at the end of the deploy then answers `existing`; `record.sh read-back` is the same check on its own and fails on anything but `existing`. `record.sh put` refuses without `--release-record`, without both digests, on a `bootstrap=true` plan, and when the operations definition is not a worker image by digest.
+**The record goes in before the apply (26 September 2026).** The worker admits a send only while a stored record names its own digest, and new worker tasks start as soon as the apply re-points the service. So store the record first, with `record.sh put` (4.2; `release-deploy.sh --record-only` is its old name, and still execs it). It does the put and nothing else, on the operations definition the root outputs now. That is the running release's definition, so the task is held to that definition's own worker image, and the record it stores names the new digests. The read-back at the end of `deploy.sh release --release-record` then answers `existing`; `record.sh read-back` is the same check on its own and fails on anything but `existing`. `record.sh put` refuses without `--release-record`, without both digests, on a `bootstrap=true` plan, and when the operations definition is not a worker image by digest.
 
 **The policy, and it is not negotiable.**
 
-- **Stop-during-migration.** From migration 0006 onwards every declared range is a strict `{N,N}`, so there is no build of this software that straddles a schema change and no honest way to migrate without an outage. `release-stop.sh` scales the API to zero first — so no request reaches a schema that is about to move — then the worker, which is given time to release its job leases, and it does so **before** the apply registers task definitions that refuse the current schema. `release-deploy.sh --schema-change` then refuses to migrate unless both are still at zero.
+- **Stop-during-migration.** From migration 0006 onwards every declared range is a strict `{N,N}`, so there is no build of this software that straddles a schema change and no honest way to migrate without an outage. `stop.sh` scales the API to zero first — so no request reaches a schema that is about to move — then the worker, which is given time to release its job leases, and it does so **before** the apply registers task definitions that refuse the current schema. `deploy.sh release --schema-change` then refuses to migrate unless both are still at zero.
 - **The database never rolls back.** There is no down migration in this repository and there will not be one. `packages/domain/db/migrations` is forward-only and `loadMigrations` refuses a gap.
 - **After a successful migration and a failed deployment there are exactly two paths.** *Forward repair*: fix the code, build a new digest, deploy it. Or *the restore protocol*: `docs/greenfield/restore-drill.md`, all nine steps, with sending and dialing held until step 9. Redeploying the previous digests is only a rollback when their declared ranges accept the current schema version, which after a migration they usually do not — `infra/scripts/rehearsal-schema-ranges.sh` computed that during the rehearsal and told you. What is never a path is undoing the schema.
 
@@ -545,7 +545,7 @@ infra/scripts/release-rollback.sh ~/fss-prod/infra/roots/production fss-prod \
   --api-digest "$PREVIOUS_API_DIGEST" --worker-digest "$PREVIOUS_WORKER_DIGEST" --apply   # plan, apply, deploy, smoke
 ```
 
-Without `--apply` it saves `rollback.tfplan` in the root, prints each change, and stops so that you can read the plan. With `--apply` it plans again from the same reads and judges the new plan the same way. Then it runs `terraform apply rollback.tfplan`, then `release-deploy.sh` on the rolling path (never `--schema-change`), then the canary age and the six smoke checks. The plan is given the checkout's schema ranges and `bootstrap=false`. Everything else comes from what production runs now, which it reads first: `FSS_SENDING_ENABLED`, the generation pin, `FSS_PUBLIC_ORIGIN` as `api_hostname`, the HTTPS listener's certificate, and the alert topic's e-mail subscriptions. The pin is passed as a `-var`. The other four depend on the checkout:
+Without `--apply` it saves `rollback.tfplan` in the root, prints each change, and stops so that you can read the plan. With `--apply` it plans again from the same reads and judges the new plan the same way. Then it runs `terraform apply rollback.tfplan`, then `deploy.sh release` on the rolling path (never `--schema-change`), then the canary age and the six smoke checks. The plan is given the checkout's schema ranges and `bootstrap=false`. Everything else comes from what production runs now, which it reads first: `FSS_SENDING_ENABLED`, the generation pin, `FSS_PUBLIC_ORIGIN` as `api_hostname`, the HTTPS listener's certificate, and the alert topic's e-mail subscriptions. The pin is passed as a `-var`. The other four depend on the checkout:
 
 - **A commit from 26 September 2026 on** commits `certificate_arn`, `api_hostname`, `alert_emails` and `sending_enabled` as literals in `infra/roots/production/main.tf`. The script reads each literal from the root, compares it with what production runs, and passes none of the four: the plan uses the committed values, which are production's.
 - **A commit from before that** (the previous release at the time of writing, `5ccd2279`) declares them as variables, and the script passes production's values as `-var`, as it always did.
@@ -555,7 +555,7 @@ The smoke expects the same sending state, so **a rollback never switches sending
 It refuses in one `FAIL:` line, before anything is written, in these cases:
 - either digest is not an image in `fss-prod-api` or `fss-prod-worker` tagged `ci-<commit>` or `<commit>` for the checked-out commit, or the checkout is not clean. The code that is planned must be the code of the images that will run;
 - the database version the running API reports at `/health` is outside either of the checkout's declared ranges;
-- either service is mid-rollout (`deployed-digests.sh`), or the API and worker disagree about sending or the pin;
+- either service is mid-rollout (`deploy.sh current`), or the API and worker disagree about sending or the pin;
 - a value the checkout commits is not the one production runs, for example `sending_enabled = true` while production runs sending off. The `FAIL:` line names each value both ways. Decide which is right. If production's, roll back by hand on the manual path of 4.0 and correct the literal in a pull request. If the committed one, production has drifted: put it back with a plan and apply of main (4.0), then run the rollback again;
 - the plan creates, replaces or destroys anything but an `aws_ecs_task_definition`, or updates anything but the `api` and `worker` services. It names every address and deletes the plan file. A difference in infrastructure between the two commits is the manual path of 4.0, not a rollback.
 
@@ -610,11 +610,11 @@ infra/scripts/record.sh put infra/roots/production fss-prod \
   --api-digest "$api_digest" --worker-digest "$worker_digest" \
   --release-record /tmp/fss-ci/release-record.json
 
-# 3. The plan and the apply: images.sh promote /tmp/fss-ci/image-pin.json first, release-stop.sh
+# 3. The plan and the apply: images.sh promote /tmp/fss-ci/image-pin.json first, stop.sh
 #    first for a schema change (4.1).
 
-# 4. The deploy, which puts the record again after the final verify and must answer existing.
-infra/scripts/release-deploy.sh infra/roots/production fss-prod [--schema-change] \
+# 4. The deploy, which reads the record back after the final verify: it must answer existing.
+infra/scripts/deploy.sh release infra/roots/production fss-prod [--schema-change] \
   --api-digest "$api_digest" --worker-digest "$worker_digest" \
   --release-record /tmp/fss-ci/release-record.json
 
@@ -770,7 +770,7 @@ Withdraw either half, or deploy other digests: the worker holds every send when 
 
 `expected_system_generation` in the production root is Appendix E's "operator-controlled expected generation". Its code default is `null`, meaning unpinned. When set, it becomes `FSS_EXPECTED_SYSTEM_GENERATION` on `fss-prod-api` and `fss-prod-worker` and on no one-off task definition. At startup the worker compares it with the database's `system_generation`. When they differ, the worker opens one `restore_in_progress` hold per workspace, logs `restore_generation_mismatch` (which fires `fss-prod-restore-generation-mismatch`, a critical alarm), and runs. The API fails `/readyz` (the smoke's second check) and shows both numbers in the Settings diagnostics line. Until lane g56 nothing set it, and nothing anywhere opened a restore hold (`docs/archive/decisions/g56-restore-holds-are-opened-by-the-generation-check.md`).
 
-**Read the database's generation.** Run this from a checkout at the commit production runs, as the admin profile, with the production root initialised as for section 4. It runs `fss verify` on the operations task, which the deployed image already has. The write it proves is rolled back, and `release-deploy.sh` runs the same command at every deploy. From g56 on, `fss admin counts` reports the same `systemGeneration` field.
+**Read the database's generation.** Run this from a checkout at the commit production runs, as the admin profile, with the production root initialised as for section 4. It runs `fss verify` on the operations task, which the deployed image already has. The write it proves is rolled back, and `deploy.sh release --schema-change` runs the same command at every schema release. From g56 on, `fss admin counts` reports the same `systemGeneration` field.
 
 ```bash
 export AWS_REGION=us-east-1

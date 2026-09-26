@@ -288,11 +288,12 @@ describe('Appendix G 22 (g38): the refusal cases measure the container, not the 
  * The independent review of 25 September found the order backwards. `terraform apply`
  * registers the release's task definitions, whose strict `{N,N}` range refuses the
  * schema the database is still at, and repointed the running services at them;
- * `release-deploy.sh --schema-change` then scaled them to zero in its step 1, after
+ * `release-deploy.sh --schema-change` (now `deploy.sh release`) then scaled them to zero in its step 1, after
  * ECS had begun replacing working tasks with tasks that exit 12. The 04:41Z deploy of
  * schema 16 ran in exactly that order (`docs/greenfield/release.md` 8.0af).
  *
- * The order is now `release-stop.sh` → apply → `release-deploy.sh --schema-change`,
+ * The order is now `stop.sh` → apply → `deploy.sh release --schema-change` (P7; the old names
+ * `release-stop.sh` and `release-deploy.sh` exec them),
  * the apply cannot move a count (`ignore_changes`, asserted above and applied in
  * `infra/modules/cluster/tests/release_owns_the_count.tftest.hcl`), and step 1 is a
  * refusal rather than a scale.
@@ -318,8 +319,8 @@ describe('Appendix G 22 (g38): the refusal cases measure the container, not the 
  * final verify offline.
  */
 
-const STOP = 'infra/scripts/release-stop.sh';
-const DEPLOY = 'infra/scripts/release-deploy.sh';
+const STOP = 'infra/scripts/stop.sh';
+const DEPLOY = 'infra/scripts/deploy.sh';
 const ORDER_PREFIX = 'fss-rh-order';
 const ORDER_ACCOUNT = '111111111111';
 const ORDER_CLUSTER = `arn:aws:ecs:us-east-1:${ORDER_ACCOUNT}:cluster/${ORDER_PREFIX}-cluster`;
@@ -414,7 +415,7 @@ function orderStub(directory: string): string {
     '    # The migration is where these runs stop: reaching it is the assertion.',
     '    echo \'{"tasks": [], "failures": [{"arn": "stub", "reason": "STUB_STOPS_AT_THE_MIGRATION"}]}\'',
     '    exit 0 ;;',
-    '  "logs get-log-events") echo \'{"events":[{"message":"{\\"ok\\":true}"}]}\'; exit 0 ;;',
+    '  "logs get-log-events") if [ -f "$state/log-events.json" ]; then cat "$state/log-events.json"; else echo \'{"events":[{"message":"{\\"ok\\":true}"}]}\'; fi; exit 0 ;;',
     'esac',
     'echo "unexpected: $service $operation" >&2',
     'exit 1',
@@ -434,6 +435,8 @@ interface OrderOptions {
   readonly oneOffsPass?: boolean;
   /** Fixtures to replace, to prove a refusal. */
   readonly fixtures?: Readonly<Record<string, string>>;
+  /** What every one-off task's log stream holds, as `logs get-log-events` answers it. */
+  readonly logEvents?: string;
 }
 
 function runOrder(
@@ -452,6 +455,7 @@ function runOrder(
   writeFileSync(join(directory, `${ORDER_PREFIX}-worker.digest`), `${options.running?.worker ?? ORDER_WORKER_DIGEST}\n`);
   if (options.sticky === true) writeFileSync(join(directory, 'sticky'), '');
   if (options.oneOffsPass === true) writeFileSync(join(directory, 'one-offs-pass'), '');
+  if (options.logEvents !== undefined) writeFileSync(join(directory, 'log-events.json'), options.logEvents);
   const env: Record<string, string> = {};
   for (const [name, value] of Object.entries(process.env)) {
     // No dry run and no ambient fixture may leak into a run judged by its CLI calls.
@@ -513,7 +517,7 @@ function runOrder(
       running: Number(read(`${ORDER_PREFIX}-${name}.running`) ?? 'NaN'),
     };
   }
-  const report = join(reports, script === STOP ? 'release-stop.txt' : 'release-deploy.txt');
+  const report = join(reports, script.endsWith('stop.sh') ? 'release-stop.txt' : 'release-deploy.txt');
   return {
     code: result.status ?? 1,
     output: `${result.stdout}${result.stderr}`,
@@ -526,6 +530,7 @@ function runOrder(
 const RUNNING = { api: { desired: 2, running: 2 }, worker: { desired: 1, running: 1 } } as const;
 const STOPPED = { api: { desired: 0, running: 0 }, worker: { desired: 0, running: 0 } } as const;
 const deployArgs = (...extra: readonly string[]): readonly string[] => [
+  'release',
   'infra/roots/rehearsal',
   ORDER_PREFIX,
   ...extra,
@@ -543,7 +548,7 @@ describe('Appendix G 22 (g70): a schema release stops before the apply, and the 
     const run = runOrder(DEPLOY, deployArgs('--schema-change'), RUNNING);
     expect(run.code).not.toBe(0);
     expect(run.output).toContain(`${ORDER_PREFIX}-api is not stopped: desired 2, running 2, pending 0`);
-    expect(run.output).toContain(`infra/scripts/release-stop.sh infra/roots/rehearsal ${ORDER_PREFIX}, then the apply, then this command`);
+    expect(run.output).toContain(`infra/scripts/stop.sh infra/roots/rehearsal ${ORDER_PREFIX}, then the apply, then this command`);
     // The harm has already happened by now, so the script must not quietly scale.
     expect(scaled(run.calls), 'a refused deploy scaled a service').toEqual([]);
     expect(launched(run.calls), 'a refused deploy launched the migration').toEqual([]);
@@ -691,7 +696,7 @@ describe('g80: an app-only release is one rolling deployment, and ends only when
       script,
       [
         '#!/usr/bin/env bash',
-        `source ${repositoryPath('infra/scripts/release-common.sh')}`,
+        `source ${repositoryPath('infra/scripts/lib.sh')}`,
         'set +e',
         `release_require_running_digest rehearsal ${ORDER_CLUSTER} ${ORDER_PREFIX}-api api ${ORDER_API_DIGEST} 1`,
         'echo "helper exit $?"',
@@ -708,14 +713,14 @@ describe('g80: an app-only release is one rolling deployment, and ends only when
   });
 
   it('refuses without --api-digest, or with a tag, or a bootstrap without --schema-change, before any call', () => {
-    const noApi = runOrder(DEPLOY, ['infra/roots/rehearsal', ORDER_PREFIX, '--worker-digest', ORDER_WORKER_DIGEST], RELEASE_RUNNING);
+    const noApi = runOrder(DEPLOY, ['release', 'infra/roots/rehearsal', ORDER_PREFIX, '--worker-digest', ORDER_WORKER_DIGEST], RELEASE_RUNNING);
     expect(noApi.code).not.toBe(0);
     expect(noApi.output).toContain('--api-digest is required');
     expect(noApi.calls).toEqual([]);
 
     const tagged = runOrder(
       DEPLOY,
-      ['infra/roots/rehearsal', ORDER_PREFIX, '--api-digest', 'latest', '--worker-digest', ORDER_WORKER_DIGEST],
+      ['release', 'infra/roots/rehearsal', ORDER_PREFIX, '--api-digest', 'latest', '--worker-digest', ORDER_WORKER_DIGEST],
       RELEASE_RUNNING,
     );
     expect(tagged.code).not.toBe(0);
@@ -808,4 +813,105 @@ describe('Appendix G 22 (g70), continued: the stop', () => {
     expect(misnamed.calls).toEqual([]);
   });
 
+});
+
+/**
+ * P7 (26 September 2026): the read-back, and the old names.
+ *
+ * The hand release stores the record before the plan (`record.sh put`), because the
+ * worker admits a send only while a stored record names its digest. So the put at the
+ * end of `deploy.sh release --release-record` is a read-back: it must answer `existing`,
+ * and `created` means the services started without their record, which fails the deploy
+ * (the record is stored by then, and the message names the order). A bootstrap may create
+ * it: before its apply there was no database to put it into.
+ *
+ * ## The vacuous-pass trap
+ *
+ * A read-back that failed everything would pass the `created` case, so the `existing`
+ * case must reach `deployed:` through the same fake, with the put as its only one-off.
+ * And the old names are held to the new ones by what the fake CLI saw, call for call.
+ */
+describe('P7: deploy.sh release reads the record back, and the old names are the new ones', () => {
+  const REFERENCE = `${ORDER_PREFIX}-20260926`;
+  const AT_COUNT = { api: { desired: 2, running: 2 }, worker: { desired: 1, running: 1 } } as const;
+  const recordFile = (): string => {
+    const path = join(mkdtempSync(join(tmpdir(), 'fss-order-record-')), 'release-record.json');
+    writeFileSync(
+      path,
+      `${JSON.stringify({
+        schema: 'fss.release-record.v1',
+        releaseGateReference: REFERENCE,
+        suite: 'pass',
+        artifacts: { api: ORDER_API_DIGEST, worker: ORDER_WORKER_DIGEST, desktopCommitStamp: 'c'.repeat(40) },
+      })}\n`,
+    );
+    return path;
+  };
+  const answered = (outcome: 'created' | 'existing'): string =>
+    JSON.stringify({
+      events: [
+        {
+          message: JSON.stringify({
+            outcome,
+            reference: REFERENCE,
+            source: 'rehearsal',
+            suite: 'pass',
+            apiDigest: ORDER_API_DIGEST,
+            workerDigest: ORDER_WORKER_DIGEST,
+          }),
+        },
+      ],
+    });
+
+  it('passes a rolling deploy whose put answers existing: the record was stored before the plan', () => {
+    const run = runOrder(DEPLOY, deployArgs('--release-record', recordFile()), AT_COUNT, {
+      oneOffsPass: true,
+      logEvents: answered('existing'),
+    });
+    expect(run.code, run.output).toBe(0);
+    expect(launched(run.calls), 'the put is the rolling path’s only one-off').toHaveLength(1);
+    expect(run.output).toContain('"outcome": "existing"');
+    expect(run.output).toContain('deployed: one rolling deployment of the worker and the API, running digests, release record');
+    expect(run.report).toContain('release_record=existing');
+  });
+
+  it('fails a deploy whose read-back had to create the record: the services started without it', () => {
+    const run = runOrder(DEPLOY, deployArgs('--release-record', recordFile()), AT_COUNT, {
+      oneOffsPass: true,
+      logEvents: answered('created'),
+    });
+    expect(run.code).not.toBe(0);
+    expect(run.output).toContain('the read-back had to create the release record');
+    expect(run.output).toContain('record.sh put (before the plan)');
+    expect(run.output).not.toContain('deployed:');
+    expect(run.report).toBeNull();
+  });
+
+  it('lets a bootstrap create it, because before its apply there was no database to put it into', () => {
+    const run = runOrder(DEPLOY, deployArgs('--schema-change', '--release-record', recordFile()), STOPPED, {
+      bootstrap: true,
+      oneOffsPass: true,
+      logEvents: answered('created'),
+    });
+    expect(run.code, run.output).toBe(0);
+    expect(launched(run.calls), 'four schema steps and the put').toHaveLength(5);
+    expect(run.report).toContain('bootstrap=true');
+    expect(run.report).toContain('release_record=created');
+  });
+
+  it('makes the same calls and writes the same report through release-deploy.sh and release-stop.sh', () => {
+    const rolling = { api: { desired: 1, running: 1 }, worker: { desired: 1, running: 1 } } as const;
+    const cases = [
+      { now: DEPLOY, old: 'infra/scripts/release-deploy.sh', args: deployArgs(), oldArgs: deployArgs().slice(1), services: rolling },
+      { now: STOP, old: 'infra/scripts/release-stop.sh', args: ['infra/roots/rehearsal', ORDER_PREFIX], oldArgs: ['infra/roots/rehearsal', ORDER_PREFIX], services: RUNNING },
+    ] as const;
+    for (const { now, old, args, oldArgs, services } of cases) {
+      const current = runOrder(now, args, services);
+      const legacy = runOrder(old, oldArgs, services);
+      expect(current.code, current.output).toBe(0);
+      expect(legacy.code, legacy.output).toBe(0);
+      expect(legacy.calls).toEqual(current.calls);
+      expect(legacy.report).toEqual(current.report);
+    }
+  });
 });

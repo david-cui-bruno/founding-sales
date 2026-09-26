@@ -19,7 +19,7 @@
 # `scripts/productionSmoke.mjs` is the smoke, because the smoke holds the running API to
 # the ranges of the checkout it runs from. The script itself may run from another
 # checkout — a commit from before this lane has no `release-rollback.sh` — and uses the
-# `release-deploy.sh` and `deployed-digests.sh` beside it.
+# `deploy.sh release` and `deploy.sh current` beside it.
 #
 # ## What it refuses, each in one `FAIL:` line and before anything is written
 #
@@ -34,7 +34,7 @@
 #      never rolls back** (release.md 4.1): after a migration the previous images refuse
 #      the schema at startup, and the paths are forward repair or the restore protocol.
 #   3. **A service mid-rollout**, or a family whose newest revision is not the one that
-#      runs: `deployed-digests.sh`, whose refusal is printed as it gives it.
+#      runs: `deploy.sh current`, whose refusal is printed as it gives it.
 #   4. **A committed production value that is not what production runs.** Since wave 1
 #      (26 September 2026) `infra/roots/production` commits `certificate_arn`,
 #      `api_hostname`, `alert_emails` and `sending_enabled` as literals instead of taking
@@ -75,7 +75,7 @@
 #
 # Without `--apply` it stops after the plan, leaving `rollback.tfplan` in the root and the
 # plan's text in the reports directory. With `--apply` it plans again from the same
-# reads, judges that plan the same way, applies it, runs `release-deploy.sh` on the rolling
+# reads, judges that plan the same way, applies it, runs `deploy.sh release` on the rolling
 # path (never `--schema-change`: nothing migrates), then the canary age and the six smoke
 # checks. The root must be initialised as for section 4; after checking out another
 # commit, run that `terraform init` again. Terraform runs with every Google credential
@@ -214,20 +214,20 @@ print(" ".join(sorted(detail.get("imageTags") or [])))
 done
 
 # ---------------------------------------------------------------------------
-# 2. What production runs now, and nothing mid-rollout (deployed-digests.sh).
+# 2. What production runs now, and nothing mid-rollout (deploy.sh current).
 # ---------------------------------------------------------------------------
 if rehearsal_dry_run; then
-  rehearsal_plan "$ROLLBACK_SCRIPTS/deployed-digests.sh $PREFIX   (refuses while either service is mid-rollout)"
+  rehearsal_plan "$ROLLBACK_SCRIPTS/deploy.sh current $PREFIX   (refuses while either service is mid-rollout)"
   API_IMAGE="<the fss-prod-api repository>@$API_DIGEST"
   WORKER_IMAGE="<the fss-prod-worker repository>@$WORKER_DIGEST"
 else
-  DEPLOYED="$("$ROLLBACK_SCRIPTS/deployed-digests.sh" "$PREFIX")" \
-    || { echo "      nothing was planned: deployed-digests.sh refused, above" >&2; exit 1; }
+  DEPLOYED="$("$ROLLBACK_SCRIPTS/deploy.sh" current "$PREFIX")" \
+    || { echo "      nothing was planned: deploy.sh current refused, above" >&2; exit 1; }
   RUNNING_API="$(printf '%s\n' "$DEPLOYED" | sed -n 's/^api_image=//p')"
   RUNNING_WORKER="$(printf '%s\n' "$DEPLOYED" | sed -n 's/^worker_image=//p')"
   case "$RUNNING_API:$RUNNING_WORKER" in
     */"$PREFIX-api@"*:*/"$PREFIX-worker@"*) ;;
-    *) rollback_fail "deployed-digests.sh did not name an image of $PREFIX-api and one of $PREFIX-worker" ;;
+    *) rollback_fail "deploy.sh current did not name an image of $PREFIX-api and one of $PREFIX-worker" ;;
   esac
   rehearsal_log "production runs $RUNNING_API and $RUNNING_WORKER"
   if [ "${RUNNING_API##*@}" = "$API_DIGEST" ] && [ "${RUNNING_WORKER##*@}" = "$WORKER_DIGEST" ]; then
@@ -489,10 +489,10 @@ fi
 
 rehearsal_log "the rolling deploy of $COMMIT's task definitions (no --schema-change: nothing migrates)"
 if rehearsal_dry_run; then
-  rehearsal_plan "$ROLLBACK_SCRIPTS/release-deploy.sh $ROOT_DIRECTORY $PREFIX --api-digest $API_DIGEST --worker-digest $WORKER_DIGEST"
+  rehearsal_plan "$ROLLBACK_SCRIPTS/deploy.sh release $ROOT_DIRECTORY $PREFIX --api-digest $API_DIGEST --worker-digest $WORKER_DIGEST"
 else
-  "$ROLLBACK_SCRIPTS/release-deploy.sh" "$ROOT_DIRECTORY" "$PREFIX" --api-digest "$API_DIGEST" --worker-digest "$WORKER_DIGEST" \
-    || { echo "      the apply has put $COMMIT's task definitions on both services, and release-deploy.sh did not confirm them running (above)" >&2; exit 1; }
+  "$ROLLBACK_SCRIPTS/deploy.sh" release "$ROOT_DIRECTORY" "$PREFIX" --api-digest "$API_DIGEST" --worker-digest "$WORKER_DIGEST" \
+    || { echo "      the apply has put $COMMIT's task definitions on both services, and deploy.sh release did not confirm them running (above)" >&2; exit 1; }
 fi
 
 rehearsal_log "the canary age and the six smoke checks, expecting sending $EXPECT_SENDING"
@@ -540,4 +540,4 @@ for attempt in $(seq 1 "$attempts"); do
   rehearsal_log "smoke attempt $attempt of $attempts did not pass"
   [ "$attempt" -eq "$attempts" ] || sleep "${FSS_ROLLBACK_SMOKE_SECONDS:-60}"
 done
-rollback_fail "the production smoke did not pass; $COMMIT's images are running (release-deploy.sh confirmed them)"
+rollback_fail "the production smoke did not pass; $COMMIT's images are running (deploy.sh release confirmed them)"
