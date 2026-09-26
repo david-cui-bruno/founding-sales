@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -16,7 +16,16 @@ import { ghStub, registryStubs } from './support/cliStubs.ts';
  * when the inputs changed since or no gate run is green. `promote` must copy by digest and
  * read each tag back: a copy that changed the digest fails naming both, a copy that
  * wrapped a bare manifest in an index is answered by tagging the digest itself, a second
- * run copies nothing, and a rehearsal repository is never written.
+ * run copies nothing, and a rehearsal repository is never written. With `--gate-run-id`
+ * (the CI deploy's, review of PR 278) it reads the gate again, through `deploy.sh ci
+ * gate` and a stub `gh` whose answer changes between reads, immediately before every
+ * production write: a gate that changed after the API's copy stops the worker's, and one
+ * that changed after a copy stops the in-place tag that would follow it.
+ *
+ * `pushed` and `attested` are the publish job's proof that an existing `ci-<commit>` tag
+ * is its own run's: `attested` must find an EARLIER attempt's `fss-image-pushed-<attempt>`
+ * artifact, bytes held to GitHub's digest, naming that digest, and refuse a first attempt,
+ * an artifact of the same attempt or another run, another digest, and altered bytes.
  */
 
 const IMAGES = repositoryPath('infra/scripts/images.sh');
@@ -34,6 +43,45 @@ describe('images.sh inputs is the images workflow’s push paths', () => {
     const push = workflow.slice(workflow.indexOf('\n  push:\n'), workflow.indexOf('\npermissions:'));
     const globs = [...push.matchAll(/^ {6}- '([^']+)'$/gmu)].map(match => (match[1] ?? '').replace(/\/\*\*$/u, ''));
     expect(run(['inputs']).stdout.trim().split('\n')).toEqual(globs);
+  });
+});
+
+describe('images.sh record writes the digests and the schema range each image declares (P6)', () => {
+  const commit = 'a'.repeat(40);
+  const recorded = (...extra: string[]): { readonly code: number; readonly stderr: string; readonly document: Record<string, unknown> | null } => {
+    const out = join(mkdtempSync(join(tmpdir(), 'fss-record-digests-')), 'image-digests.json');
+    const result = run(['record', commit, '4242', '1', digest('b'), digest('c'), out, ...extra]);
+    let document: Record<string, unknown> | null = null;
+    try {
+      document = JSON.parse(readFileSync(out, 'utf8')) as Record<string, unknown>;
+    } catch {
+      document = null;
+    }
+    return { code: result.code, stderr: result.stderr, document };
+  };
+
+  it('carries both ranges, which the CI deploy reads instead of running code from the images commit', () => {
+    const written = recorded('--api-range', '20-20', '--worker-range', '19-20');
+    expect(written.code, written.stderr).toBe(0);
+    expect(written.document?.['images']).toEqual({
+      api: { repository: 'fss-rh-api', tag: `ci-${commit}`, digest: digest('b'), schemaRange: { minimum: 20, maximum: 20 } },
+      worker: { repository: 'fss-rh-worker', tag: `ci-${commit}`, digest: digest('c'), schemaRange: { minimum: 19, maximum: 20 } },
+    });
+  });
+
+  it('refuses to write a digests file without both ranges', () => {
+    for (const extra of [[], ['--api-range', '20-20'], ['--api-range', '20', '--worker-range', '20-20']]) {
+      const refused = recorded(...extra);
+      expect(refused.code, extra.join(' ')).toBe(1);
+      expect(refused.stderr).toContain('record needs --api-range and --worker-range');
+      expect(refused.document).toBeNull();
+    }
+  });
+
+  it('is what the images workflow records, with the ranges it just verified the images against', () => {
+    const workflow = readRepositoryFile('.github/workflows/greenfield-images.yml');
+    expect(workflow).toContain('--api-range "$API_SCHEMA_MIN-$API_SCHEMA_MAX" --worker-range "$WORKER_SCHEMA_MIN-$WORKER_SCHEMA_MAX"');
+    expect(workflow).not.toContain('release-images.sh');
   });
 });
 
@@ -304,5 +352,289 @@ describe('images.sh promote copies the CI digests into production by digest, nev
       expect(result.code).not.toBe(0);
       expect(result.aws.calls()).toHaveLength(0);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// promote --gate-run-id: the gate read again before every production write
+// ---------------------------------------------------------------------------
+
+const GATE_RUN = '4100';
+
+/** `gh` for `deploy.sh ci gate`: the gate's runs of the push, the n-th read changed by `script`, and main. */
+const GATE_GH = String.raw`#!/usr/bin/env python3
+import json, os, sys
+here = os.path.dirname(os.path.abspath(__file__))
+state = json.load(open(os.path.join(here, "gate-state.json")))
+args = sys.argv[1:]
+with open(os.path.join(here, "gate-calls.jsonl"), "a") as handle:
+    handle.write(json.dumps(args) + "\n")
+if args[:1] == ["api"] and "/actions/workflows/greenfield.yml/runs?head_sha=" in args[1]:
+    counter = os.path.join(here, "gate-reads")
+    reads = int(open(counter).read()) if os.path.exists(counter) else 0
+    open(counter, "w").write(str(reads + 1))
+    script = state["script"] or [{}]
+    print(json.dumps({"workflow_runs": [dict(state["run"], **script[min(reads, len(script) - 1)])]}))
+    sys.exit(0)
+if args[:1] == ["api"] and "/compare/main..." in args[1]:
+    print(json.dumps({"status": "behind"}))
+    sys.exit(0)
+sys.stderr.write("the gate stub does not know: " + " ".join(args) + "\n")
+sys.exit(2)
+`;
+
+function promoteHeld(input: string, state: Readonly<Record<string, unknown>>, script: readonly Record<string, unknown>[] = [], gateRunId = GATE_RUN) {
+  const { aws, docker } = registryStubs(state);
+  const home = mkdtempSync(join(tmpdir(), 'fss-promote-gate-'));
+  writeFileSync(
+    join(home, 'gate-state.json'),
+    JSON.stringify({
+      script,
+      run: {
+        id: Number(GATE_RUN),
+        path: '.github/workflows/greenfield.yml',
+        event: 'push',
+        head_branch: 'main',
+        head_sha: COMMIT,
+        head_repository: { full_name: REPOSITORY },
+        status: 'completed',
+        conclusion: 'success',
+        run_attempt: 1,
+        created_at: '2026-09-26T10:01:00Z',
+      },
+    }),
+  );
+  writeFileSync(join(home, 'gh'), GATE_GH);
+  chmodSync(join(home, 'gh'), 0o755);
+  const result = run(['promote', input, '--gate-run-id', gateRunId], {
+    FSS_REHEARSAL_AWS_COMMAND: aws.command,
+    FSS_DOCKER_COMMAND: docker.command,
+    FSS_GH_COMMAND: join(home, 'gh'),
+    GITHUB_REPOSITORY: REPOSITORY,
+  });
+  const gateReads = existsSync(join(home, 'gate-calls.jsonl'))
+    ? readFileSync(join(home, 'gate-calls.jsonl'), 'utf8').split('\n').filter(line => line.includes('greenfield.yml/runs?')).length
+    : 0;
+  return { ...result, aws, docker, gateReads };
+}
+
+describe('images.sh promote --gate-run-id reads the gate again immediately before each production write (review of PR 278)', () => {
+  it('reads it before each image’s copy, and copies both while it holds', () => {
+    const result = promoteHeld(inputFile(digestsFor(COMMIT)), registry());
+    expect(result.code, result.stderr).toBe(0);
+    expect(result.gateReads).toBe(2);
+    for (const service of ['api', 'worker']) {
+      expect(result.stderr).toContain(`before the copy of the ${service} image to fss-prod-${service}: Greenfield gate run ${GATE_RUN} is still the newest`);
+    }
+    expect(tagsOf(result.docker, 'fss-prod-api')[TAG]).toBe(digest('a'));
+    expect(tagsOf(result.docker, 'fss-prod-worker')[TAG]).toBe(digest('b'));
+  });
+
+  it('stops before the worker’s copy when the gate changed after the API’s', () => {
+    const result = promoteHeld(inputFile(digestsFor(COMMIT)), registry(), [{}, { id: 4200, created_at: '2026-09-26T11:00:00Z' }]);
+    expect(result.code).toBe(1);
+    expect(builds(result.docker.calls())).toHaveLength(1);
+    expect(tagsOf(result.docker, 'fss-prod-api')[TAG]).toBe(digest('a'));
+    expect(tagsOf(result.docker, 'fss-prod-worker')).toEqual({});
+    expect(result.stderr).toContain(`the newest Greenfield gate run of the push is now 4200, not run ${GATE_RUN}`);
+    expect(result.stderr).toContain('(the gate was read again before the copy of the worker image to fss-prod-worker)');
+    // A gate already red before the first write copies nothing.
+    const red = promoteHeld(inputFile(digestsFor(COMMIT)), registry(), [{ conclusion: 'failure' }]);
+    expect(red.code).toBe(1);
+    expect(builds(red.docker.calls())).toHaveLength(0);
+    expect(red.stderr).toContain('(the gate was read again before the copy of the api image to fss-prod-api)');
+  });
+
+  it('stops before an in-place tag when the gate changed after the copy it follows', () => {
+    const manifest = '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{},"layers":[]}';
+    const state = registry({ wraps: true });
+    const repositories = state['repositories'] as Record<string, Record<string, unknown>>;
+    for (const name of ['fss-prod-api', 'fss-prod-worker']) repositories[name] = { ...repositories[name], manifests: { [digest('a')]: manifest, [digest('b')]: manifest } };
+    const result = promoteHeld(inputFile(digestsFor(COMMIT)), state, [{}, { conclusion: 'failure' }]);
+    expect(result.code).toBe(1);
+    expect(builds(result.docker.calls())).toHaveLength(1);
+    expect(puts(result.aws.calls())).toEqual([]);
+    expect(result.stderr).toContain(`(the gate was read again before tagging fss-prod-api@${digest('a')} as ${TAG}-image)`);
+  });
+
+  it('holds only an images run’s digests to a gate, and refuses a malformed run id, before any call', () => {
+    const images = 'cd'.repeat(20);
+    const pinned = JSON.stringify({
+      schema: 'fss.image-pin.v1',
+      commit: COMMIT,
+      imagesCommit: images,
+      imagesRunId: '55',
+      gateRunId: '77',
+      images: {
+        api: { repository: 'fss-rh-api', tag: `ci-${images}`, digest: digest('a') },
+        worker: { repository: 'fss-rh-worker', tag: `ci-${images}`, digest: digest('b') },
+      },
+    });
+    const pin = promoteHeld(inputFile(pinned), registry());
+    expect(pin.code).toBe(1);
+    expect(pin.stderr).toContain('a pin is the hand path’s, which holds none'.replace('’', "'"));
+    const malformed = promoteHeld(inputFile(digestsFor(COMMIT)), registry(), [], 'x');
+    expect(malformed.code).toBe(1);
+    expect(malformed.stderr).toContain("--gate-run-id 'x' is not a workflow run id");
+    for (const result of [pin, malformed]) {
+      expect(result.aws.calls()).toHaveLength(0);
+      expect(result.gateReads).toBe(0);
+    }
+  });
+
+  it('is how the deploy workflow promotes: one call, held to the gate run the gates job chose', () => {
+    const workflow = readRepositoryFile('.github/workflows/greenfield-deploy.yml');
+    expect(workflow).toContain('infra/scripts/images.sh promote "$RUNNER_TEMP/image-digests.json" --gate-run-id "$GATE_RUN_ID"');
+    expect(workflow).not.toContain('deploy.sh ci gate --commit');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// pushed and attested: a re-run reuses a tag only as its own run's
+// ---------------------------------------------------------------------------
+
+const PUSH_RUN = '5151';
+
+/**
+ * `gh` for `attested`: the run's artifacts, each zipped (fixed timestamps) from a directory
+ * `pushed` wrote, listed with the digest of those bytes unless `digest` overrides it; and
+ * each zip by id.
+ */
+const ARTIFACTS_GH = String.raw`#!/usr/bin/env python3
+import hashlib, json, os, re, sys, zipfile
+here = os.path.dirname(os.path.abspath(__file__))
+state = json.load(open(os.path.join(here, "artifacts-state.json")))
+args = sys.argv[1:]
+with open(os.path.join(here, "artifacts-calls.jsonl"), "a") as handle:
+    handle.write(json.dumps(args) + "\n")
+def zipped(item):
+    target = os.path.join(here, "artifact-{}.zip".format(item["id"]))
+    with zipfile.ZipFile(target, "w") as archive:
+        for name in sorted(os.listdir(item["directory"])):
+            info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+            archive.writestr(info, open(os.path.join(item["directory"], name), "rb").read())
+    return target
+if args[:1] == ["api"] and re.fullmatch(r"repos/[^/]+/[^/]+/actions/runs/[0-9]+/artifacts\?per_page=100", args[1]):
+    listed = []
+    for item in state["artifacts"]:
+        data = open(zipped(item), "rb").read()
+        listed.append({"id": item["id"], "name": item["name"], "expired": item.get("expired", False),
+                       "digest": item.get("digest") or "sha256:" + hashlib.sha256(data).hexdigest(),
+                       "workflow_run": {"id": int(item.get("runId", state["runId"])), "head_sha": item.get("headSha", state["commit"])}})
+    print(json.dumps({"total_count": len(listed), "artifacts": listed}))
+    sys.exit(0)
+one = re.fullmatch(r"repos/[^/]+/[^/]+/actions/artifacts/([0-9]+)/zip", args[1]) if args[:1] == ["api"] else None
+if one:
+    item = next(item for item in state["artifacts"] if str(item["id"]) == one.group(1))
+    sys.stdout.buffer.write(open(os.path.join(here, "artifact-{}.zip".format(item["id"])), "rb").read())
+    sys.exit(0)
+sys.stderr.write("the artifacts stub does not know: " + " ".join(args) + "\n")
+sys.exit(2)
+`;
+
+const runFacts = (attempt: string): Record<string, string> => ({
+  GITHUB_SHA: COMMIT,
+  GITHUB_RUN_ID: PUSH_RUN,
+  GITHUB_RUN_ATTEMPT: attempt,
+  GITHUB_REPOSITORY: REPOSITORY,
+});
+
+/** The directory an attempt's `pushed` calls wrote, as its fss-image-pushed-<attempt> artifact holds it. */
+function pushedBy(attempt: string, images: Readonly<Partial<Record<'api' | 'worker', string>>>): string {
+  const directory = mkdtempSync(join(tmpdir(), `fss-pushed-${attempt}-`));
+  for (const [service, value] of Object.entries(images)) {
+    const result = run(['pushed', service, value, directory], runFacts(attempt));
+    if (result.code !== 0) throw new Error(result.stderr);
+  }
+  return directory;
+}
+
+interface Artifact {
+  readonly id: number;
+  readonly name: string;
+  readonly directory: string;
+  readonly runId?: string;
+  readonly digest?: string;
+  readonly expired?: boolean;
+}
+
+function attested(attempt: string, service: 'api' | 'worker', value: string, artifacts: readonly Artifact[]) {
+  const home = mkdtempSync(join(tmpdir(), 'fss-attested-gh-'));
+  writeFileSync(join(home, 'artifacts-state.json'), JSON.stringify({ runId: PUSH_RUN, commit: COMMIT, artifacts }));
+  writeFileSync(join(home, 'gh'), ARTIFACTS_GH);
+  chmodSync(join(home, 'gh'), 0o755);
+  const result = run(['attested', service, value], { ...runFacts(attempt), FSS_GH_COMMAND: join(home, 'gh') });
+  const calls = existsSync(join(home, 'artifacts-calls.jsonl'))
+    ? readFileSync(join(home, 'artifacts-calls.jsonl'), 'utf8').split('\n').filter(line => line !== '')
+    : [];
+  return { ...result, calls };
+}
+
+describe('images.sh pushed and attested: a re-run reuses a tag only as its own run’s (review of PR 278)', () => {
+  it('writes what an attempt pushed, and nothing it did not', () => {
+    const directory = pushedBy('1', { api: digest('a') });
+    expect(JSON.parse(readFileSync(join(directory, 'api.json'), 'utf8'))).toEqual({
+      schema: 'fss.image-pushed.v1',
+      commit: COMMIT,
+      workflowRunId: PUSH_RUN,
+      workflowRunAttempt: '1',
+      service: 'api',
+      repository: 'fss-rh-api',
+      tag: `ci-${COMMIT}`,
+      digest: digest('a'),
+    });
+    expect(existsSync(join(directory, 'worker.json'))).toBe(false);
+  });
+
+  it('attests a digest an earlier attempt of this run pushed, from any earlier attempt', () => {
+    const first = pushedBy('1', { api: digest('a') });
+    const second = pushedBy('2', { worker: digest('b') });
+    const found = attested('2', 'api', digest('a'), [{ id: 901, name: 'fss-image-pushed-1', directory: first }]);
+    expect(found.code, found.stderr).toBe(0);
+    expect(found.stdout).toContain(`fss-rh-api:ci-${COMMIT} = ${digest('a')}, which attempt 1 of run ${PUSH_RUN} pushed`);
+    const third = attested('3', 'api', digest('a'), [
+      { id: 902, name: 'fss-image-pushed-2', directory: second },
+      { id: 901, name: 'fss-image-pushed-1', directory: first },
+    ]);
+    expect(third.code, third.stderr).toBe(0);
+  });
+
+  it('refuses a first attempt before asking anything, and every tag no earlier attempt of this run attests', () => {
+    const first = attested('1', 'api', digest('a'), []);
+    expect(first.code).toBe(1);
+    expect(first.stderr).toContain('this is the first attempt of run 5151: another writer pushed it');
+    expect(first.calls).toEqual([]);
+    const mine = pushedBy('1', { api: digest('a') });
+    const same = pushedBy('2', { api: digest('a') });
+    for (const [label, service, value, artifacts] of [
+      ['no artifact at all', 'api', digest('a'), []],
+      ['another digest', 'api', digest('c'), [{ id: 901, name: 'fss-image-pushed-1', directory: mine }]],
+      ['the other image', 'worker', digest('a'), [{ id: 901, name: 'fss-image-pushed-1', directory: mine }]],
+      ['this same attempt’s artifact', 'api', digest('a'), [{ id: 903, name: 'fss-image-pushed-2', directory: same }]],
+      ['another run’s artifact', 'api', digest('a'), [{ id: 904, name: 'fss-image-pushed-1', directory: mine, runId: '6161' }]],
+      ['bytes that are not the listed digest', 'api', digest('a'), [{ id: 905, name: 'fss-image-pushed-1', directory: mine, digest: digest('f') }]],
+      ['an expired artifact', 'api', digest('a'), [{ id: 906, name: 'fss-image-pushed-1', directory: mine, expired: true }]],
+      ['an artifact of another name', 'api', digest('a'), [{ id: 907, name: 'fss-image-digests', directory: mine }]],
+    ] as const) {
+      const result = attested('2', service, value, artifacts);
+      expect(result.code, label).toBe(1);
+      expect(result.stderr, label).toContain(`no earlier attempt of run ${PUSH_RUN} attests pushing it`);
+    }
+  });
+
+  it('is the only way the publish job reuses a tag, and each attempt uploads what it pushed whatever its end', () => {
+    const workflow = readRepositoryFile('.github/workflows/greenfield-images.yml');
+    const publish = workflow.slice(workflow.indexOf('\n  publish:\n'));
+    expect(publish).toMatch(/permissions:\n {6}contents: read\n {6}actions: read/u);
+    expect(publish).toContain('infra/scripts/images.sh attested "$service" "$existing"');
+    expect(publish).toContain('infra/scripts/images.sh pushed "$service" "$digest" "$RUNNER_TEMP/fss-image-pushed"');
+    expect(publish).not.toContain('GITHUB_RUN_ATTEMPT:-1');
+    const keep = publish.slice(publish.indexOf('      - name: Keep what this attempt pushed'));
+    const step = keep.slice(0, keep.indexOf('\n\n'));
+    expect(step).toContain('if: always()');
+    expect(step).toContain('name: fss-image-pushed-${{ github.run_attempt }}');
+    expect(step).toContain('path: ${{ runner.temp }}/fss-image-pushed/');
+    expect(publish.indexOf('Push each image once')).toBeLessThan(publish.indexOf('Keep what this attempt pushed'));
+    expect(publish.indexOf('Keep what this attempt pushed')).toBeLessThan(publish.indexOf('Verify the images the registry holds'));
   });
 });

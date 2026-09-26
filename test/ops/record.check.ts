@@ -14,7 +14,10 @@ import { repositoryPath } from './support/repository.ts';
  *
  * The record `from-ci` writes is parsed with the contract `fss admin release-record put`
  * applies. Each refusal starts from the world the positive control writes a record in and
- * changes one fact, and must answer exactly one `FAIL:` line with no file. `put` runs the
+ * changes one fact, and must answer exactly one `FAIL:` line with no file. With
+ * `--images-run` (the CI deploy's, review of PR 278) it reads that run by id and never
+ * lists the commit's runs, so a newer images run of the same commit, whose digests differ,
+ * cannot change the record. `put` runs the
  * operations definition as it is now (the running release's worker image) and must store
  * exactly the file's bytes; `read-back` must fail when the put had to create the record,
  * which is the failure the separate pre-rollout put exists to prevent.
@@ -45,7 +48,8 @@ with open(os.path.join(here, "calls-gh.jsonl"), "a") as handle:
 if args[:1] == ["api"]:
     one = re.fullmatch(r"repos/[^/]+/[^/]+/actions/runs/([0-9]+)", args[1])
     if one:
-        run = (state.get("runs") or {}).get(one.group(1))
+        run = (state.get("runs") or {}).get(one.group(1)) or next(
+            (item for item in state.get("imagesRuns") or [] if str(item.get("id")) == one.group(1)), None)
         if run is None:
             sys.stderr.write("gh: Not Found (HTTP 404)\\n")
             sys.exit(1)
@@ -258,6 +262,49 @@ describe('record.sh from-ci writes the ci-gate record from a green gate and its 
       expect(outcome.aws).toBe(0);
     });
   }
+
+  it('builds from the images run --images-run names, by id, even when a newer run of the commit published other digests', () => {
+    const NEWER = '41000000009';
+    const world = greenWorld();
+    world.imagesRuns.unshift(imagesRun({ id: Number(NEWER), created_at: '2026-09-25T23:00:00Z', html_url: `https://github.com/${REPOSITORY}/actions/runs/${NEWER}` }));
+    world.downloads[NEWER] = imageDigests({ api: digest('c') }).replace(IMAGES_RUN, NEWER);
+    // Without it, the newest run of the commit is taken, and its digests are not these.
+    const newest = fromCi(world, GREEN, { GITHUB_REPOSITORY: REPOSITORY });
+    expect(newest.status).not.toBe(0);
+    expect(newest.stderr).toContain(`images run ${NEWER} published the api digest ${digest('c')}`);
+    const held = fromCi(world, [...GREEN, '--images-run', IMAGES_RUN], { GITHUB_REPOSITORY: REPOSITORY });
+    expect(held.status, held.stderr).toBe(0);
+    expect(JSON.parse(held.stdout)).toMatchObject({ imagesRunId: IMAGES_RUN, artifacts: { api: API, worker: WORKER } });
+    expect(held.gh).toEqual([
+      ['api', `repos/${REPOSITORY}/actions/runs/${GATE_RUN}`],
+      ['api', `repos/${REPOSITORY}/actions/runs/${IMAGES_RUN}`],
+      expect.arrayContaining(['run', 'download', IMAGES_RUN, '--name', 'fss-image-digests']),
+    ]);
+    // The same bytes as the build without it, in a world with one images run.
+    const plain = fromCi(greenWorld(), GREEN, { GITHUB_REPOSITORY: REPOSITORY });
+    expect(held.stdout).toBe(plain.stdout);
+  });
+
+  it('refuses an --images-run that is not a green push to main of the images workflow at the commit', () => {
+    for (const [change, phrase] of [
+      [{ path: '.github/workflows/greenfield-release.yml' }, "it is a run of '.github/workflows/greenfield-release.yml'"],
+      [{ head_sha: OTHER_COMMIT }, `at ${OTHER_COMMIT}`],
+      [{ event: 'pull_request', head_branch: 'x' }, 'a pull_request on x'],
+      [{ conclusion: 'failure' }, 'not completed/success'],
+    ] as const) {
+      const world = greenWorld();
+      world.imagesRuns = [imagesRun(change)];
+      const outcome = fromCi(world, [...GREEN, '--images-run', IMAGES_RUN, '--out', '<out>'], { GITHUB_REPOSITORY: REPOSITORY });
+      expect(outcome.status, JSON.stringify(change)).not.toBe(0);
+      expect(outcome.stderr).toContain(phrase);
+      expect(existsSync(outcome.out)).toBe(false);
+    }
+    const unknown = fromCi(greenWorld(), [...GREEN, '--images-run', '41000000077'], { GITHUB_REPOSITORY: REPOSITORY });
+    expect(unknown.stderr).toContain('gh could not read images run 41000000077');
+    const malformed = fromCi(greenWorld(), [...GREEN, '--images-run', 'latest']);
+    expect(malformed.stderr).toContain("--images-run 'latest' is not a GitHub Actions run id");
+    expect(malformed.gh).toEqual([]);
+  });
 
   it('refuses malformed arguments before asking GitHub anything', () => {
     for (const [args, phrase] of [

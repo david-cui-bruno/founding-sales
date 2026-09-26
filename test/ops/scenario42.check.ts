@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { ciGateReleaseReference, releaseRecordSchema } from '@fss/contracts';
 import { effectiveSendingEnabled } from '@fss/domain/settings/effective.ts';
 import { SEND_REFUSAL_CODES } from '@fss/domain/outbound/types.ts';
+import { SHARED_DEPLOYMENT_VARIABLES } from '@fss/domain/release/deployment.ts';
 import { DEPLOYMENT_ENVIRONMENT_VARIABLES as WORKER_VARIABLES } from '../../apps/worker/src/bootstrap/deployment.ts';
 import { DEPLOYMENT_ENVIRONMENT_VARIABLES as API_VARIABLES } from '../../apps/api/src/bootstrap/deployment.ts';
 import { repositoryPath } from './support/repository.ts';
@@ -78,16 +79,19 @@ describe('Appendix G 42: sending stays off until all four agree', () => {
 
   describe('the two processes agree about the deployment they are reading', () => {
     it('name the same environment variable for every fact they share', () => {
-      // The API and the worker are separate npm workspaces with no dependency between
-      // them, so the contract is duplicated. Drift between the two would mean one
-      // process sends and the other refuses, which is the worst of both.
-      for (const [key, name] of Object.entries(WORKER_VARIABLES)) {
-        const theirs = (API_VARIABLES as Record<string, string | undefined>)[key];
-        if (theirs === undefined) continue;
-        expect(theirs, `the two bootstraps disagree about ${key}`).toBe(name);
+      // Drift between the two would mean one process sends and the other refuses, which is
+      // the worst of both. Since W3-S9 both maps spread SHARED_DEPLOYMENT_VARIABLES
+      // (packages/domain/release/deployment.ts), so this holds by construction today; it
+      // stays as the guard against an override in one process (review of PR 278).
+      const shared = Object.keys(WORKER_VARIABLES).filter(key => key in API_VARIABLES);
+      for (const key of Object.keys(SHARED_DEPLOYMENT_VARIABLES)) expect(shared, `both processes read ${key}`).toContain(key);
+      for (const key of shared) {
+        expect((API_VARIABLES as Record<string, string>)[key], `the two bootstraps disagree about ${key}`).toBe(
+          (WORKER_VARIABLES as Record<string, string>)[key],
+        );
       }
+      expect(WORKER_VARIABLES.sendingEnabled).toBe('FSS_SENDING_ENABLED');
     });
-
   });
 });
 

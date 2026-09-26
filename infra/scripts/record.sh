@@ -3,7 +3,7 @@
 # the rollout, read it back after.
 #
 #   infra/scripts/record.sh from-ci <gate run id> <commit> <api digest> <worker digest> \
-#       [--enables-sending] [--out <file>]
+#       [--images-run <id>] [--enables-sending] [--out <file>]
 #   infra/scripts/record.sh put       <root> <prefix> --api-digest D --worker-digest D --release-record <file>
 #   infra/scripts/record.sh read-back <root> <prefix> --api-digest D --worker-digest D --release-record <file> \
 #       [--allow-created]
@@ -18,12 +18,16 @@
 #
 # from-ci reads GitHub only (`gh`, or FSS_GH_COMMAND; GITHUB_REPOSITORY or the checkout's
 # remote): the gate run must be a green push to main of `.github/workflows/greenfield.yml`
-# (by path, never display name) at <commit>; the newest push run of greenfield-images.yml
-# at <commit> must be green and its `fss-image-digests` artifact must name exactly the two
-# digests. A commit that changed no image input has no images run of its own: record the
-# images commit `images.sh pin` names, with that commit's gate run. It writes
-# `fss.release-record.v1` with `source: "ci-gate"`, `recordedAt` = the gate run's
-# `updated_at` (so a rebuild is byte-identical and a second put answers `existing`).
+# (by path, never display name) at <commit>; the images run must be a green push run of
+# greenfield-images.yml at <commit> and its `fss-image-digests` artifact must name exactly
+# the two digests. `--images-run <id>` names that run, and the CI deploy always passes the
+# run it deploys (review of PR 278); without it the newest such run of the commit is
+# taken, which is the hand path's choice (`images.sh pin` prints the run). A commit that
+# changed no image input has no images run of its own: record the images commit
+# `images.sh pin` names, with that commit's gate run. It writes `fss.release-record.v1`
+# with `source: "ci-gate"` and `recordedAt` = the gate run's `updated_at`, which a re-run
+# of the gate run moves: a rebuild is byte-identical only while the gate run is not
+# re-run, so a read-back puts the file that was put, never a rebuilt one.
 # Any mismatch is one `FAIL:` line on stderr, exit 1, and no file.
 #
 # Dry run (put and read-back): FSS_REHEARSAL_DRY_RUN=1 prints every call.
@@ -32,7 +36,7 @@
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 record_usage() {
-  echo "usage: record.sh from-ci <gate run id> <commit> <api digest> <worker digest> [--enables-sending] [--out <file>]" >&2
+  echo "usage: record.sh from-ci <gate run id> <commit> <api digest> <worker digest> [--images-run <id>] [--enables-sending] [--out <file>]" >&2
   echo "       record.sh put|read-back <root> <prefix> --api-digest D --worker-digest D --release-record <file> [--allow-created]" >&2
   exit 2
 }
@@ -46,12 +50,13 @@ fail() {
 # from-ci
 # ---------------------------------------------------------------------------
 record_from_ci() {
-  local enables_sending=false out='' repo_path='{owner}/{repo}' work images_run_id reference
+  local enables_sending=false out='' images_run='' repo_path='{owner}/{repo}' work images_run_id reference
   local -a positional=() repo_args=()
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --enables-sending) enables_sending=true; shift ;;
       --out) [ "$#" -ge 2 ] || record_usage; out=$2; shift 2 ;;
+      --images-run) [ "$#" -ge 2 ] || record_usage; images_run=$2; shift 2 ;;
       --*) fail "record.sh from-ci does not take '$1'" ;;
       *) positional+=("$1"); shift ;;
     esac
@@ -59,6 +64,7 @@ record_from_ci() {
   [ "${#positional[@]}" -eq 4 ] || record_usage
   local gate_run_id=${positional[0]} commit=${positional[1]} api=${positional[2]} worker=${positional[3]} digest
   [[ "$gate_run_id" =~ ^[1-9][0-9]{0,19}$ ]] || fail "the gate run id '$gate_run_id' is not a GitHub Actions run id"
+  [ -z "$images_run" ] || [[ "$images_run" =~ ^[1-9][0-9]{0,19}$ ]] || fail "--images-run '$images_run' is not a GitHub Actions run id"
   [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || fail "the commit '$commit' is not a full forty-character commit"
   for digest in "$api" "$worker"; do
     [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] \
@@ -76,11 +82,19 @@ record_from_ci() {
   trap "rm -rf '$work'" EXIT
   command "${FSS_GH_COMMAND:-gh}" api "repos/$repo_path/actions/runs/$gate_run_id" > "$work/gate.json" 2> "$work/gate.err" \
     || fail "gh could not read run $gate_run_id: $(head -n 1 "$work/gate.err")"
-  command "${FSS_GH_COMMAND:-gh}" api "repos/$repo_path/actions/workflows/greenfield-images.yml/runs?head_sha=$commit&event=push&branch=main&per_page=20" \
-    > "$work/images-runs.json" 2> "$work/images.err" \
-    || fail "gh could not list the Greenfield images runs of $commit: $(head -n 1 "$work/images.err")"
+  if [ -n "$images_run" ]; then
+    # The run the caller deploys, and no other: a newer images run of the commit would
+    # build another record for the same reference.
+    command "${FSS_GH_COMMAND:-gh}" api "repos/$repo_path/actions/runs/$images_run" > "$work/images-run.json" 2> "$work/images.err" \
+      || fail "gh could not read images run $images_run: $(head -n 1 "$work/images.err")"
+  else
+    command "${FSS_GH_COMMAND:-gh}" api "repos/$repo_path/actions/workflows/greenfield-images.yml/runs?head_sha=$commit&event=push&branch=main&per_page=20" \
+      > "$work/images-runs.json" 2> "$work/images.err" \
+      || fail "gh could not list the Greenfield images runs of $commit: $(head -n 1 "$work/images.err")"
+  fi
 
-  images_run_id="$(FSS_WORK="$work" FSS_GATE_RUN_ID="$gate_run_id" FSS_COMMIT="$commit" FSS_REPOSITORY="${GITHUB_REPOSITORY:-}" python3 - <<'PY'
+  images_run_id="$(FSS_WORK="$work" FSS_GATE_RUN_ID="$gate_run_id" FSS_COMMIT="$commit" FSS_REPOSITORY="${GITHUB_REPOSITORY:-}" \
+    FSS_IMAGES_RUN="$images_run" python3 - <<'PY'
 import json, os, re, sys
 
 def fail(message):
@@ -123,16 +137,26 @@ updated = str(gate.get("updated_at", ""))
 if not re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z$", updated):
     fail("gate run {} reports updated_at '{}', which is not a UTC instant".format(run_id, updated))
 
+named = env["FSS_IMAGES_RUN"]
 try:
-    listed = json.load(open(os.path.join(work, "images-runs.json"), encoding="utf-8"))
+    if named:
+        one = json.load(open(os.path.join(work, "images-run.json"), encoding="utf-8"))
+        listed = {"workflow_runs": [one] if isinstance(one, dict) else None}
+    else:
+        listed = json.load(open(os.path.join(work, "images-runs.json"), encoding="utf-8"))
 except ValueError:
-    fail("gh's list of Greenfield images runs is not JSON")
+    fail("gh's answer for the Greenfield images runs is not JSON")
 if not isinstance(listed, dict) or not isinstance(listed.get("workflow_runs"), list):
-    fail("gh's list of Greenfield images runs is not a list of runs")
+    fail("gh's answer for the Greenfield images runs is not a list of runs")
 runs = [run for run in listed["workflow_runs"] if isinstance(run, dict) and path(run) == IMAGES
         and run.get("head_sha") == commit and run.get("event") == "push" and run.get("head_branch") == "main"
         and (run.get("head_repository") or {}).get("full_name") == repository
-        and re.match(r"^[1-9][0-9]{0,19}$", str(run.get("id", "")))]
+        and re.match(r"^[1-9][0-9]{0,19}$", str(run.get("id", "")))
+        and (not named or str(run.get("id")) == named)]
+if named and not runs:
+    one = listed["workflow_runs"][0]
+    fail("images run {} is not a push to main of {} at {} in {} (it is a run of '{}', a {} on {} at {})".format(
+        named, IMAGES, commit, repository, one.get("path"), one.get("event"), one.get("head_branch"), one.get("head_sha")))
 if not runs:
     fail("no Greenfield images run pushed to main at {}; a commit that changed no image input has the images of the last one that did (images.sh pin names it), so record that commit".format(commit))
 runs.sort(key=lambda run: (str(run.get("created_at", "")), int(run["id"])), reverse=True)
