@@ -117,9 +117,7 @@ module "observability" {
   retention_days = var.log_retention_days
   # The metric filters publish into this environment's namespace, never bare FSS.
   metric_namespace = local.metric_namespace
-  # David's decision of 20 Sep 2026: logs and alerts share one key (five keys, not six).
-  shared_with_alerts = true
-  tags               = local.tags
+  tags             = local.tags
 }
 
 # The registry is the one part of the stack that outlives the stack.

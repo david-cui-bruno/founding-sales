@@ -34,12 +34,6 @@ variable "retention_days" {
   }
 }
 
-variable "services" {
-  description = "Service short names that get a log group."
-  type        = list(string)
-  default     = ["api", "worker"]
-}
-
 variable "metric_namespace" {
   description = "CloudWatch namespace the metric filters and the applications publish to. FSS/<name_prefix>, derived once in infra/modules/stack. No default: the bare FSS namespace was shared by every environment in the account (g42)."
   type        = string
@@ -50,20 +44,8 @@ variable "metric_namespace" {
   }
 }
 
-variable "kms_deletion_window_days" {
-  description = "Waiting period before the log customer key is destroyed."
-  type        = number
-  default     = 30
-}
-
 variable "tags" {
   description = "Tags merged into every resource in this module."
   type        = map(string)
   default     = {}
-}
-
-variable "shared_with_alerts" {
-  description = "When true, the log key policy also lets CloudWatch alarms and EventBridge use the key, so the alert topic can share it (five keys instead of six, David's decision of 20 Sep 2026)."
-  type        = bool
-  default     = false
 }

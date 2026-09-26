@@ -13,7 +13,8 @@
 # dead jobs) went in wave 2 (26 September 2026).
 
 locals {
-  log_group_names = { for service in var.services : service => "/fss/${var.name_prefix}/${service}" }
+  services        = ["api", "worker"]
+  log_group_names = { for service in local.services : service => "/fss/${var.name_prefix}/${service}" }
 
   # filter name => { log group service, json pattern, metric name, optional dimensions }
   metric_filters = {
@@ -42,9 +43,11 @@ locals {
     }
   }
 
-  log_group_arn_patterns = [for service in var.services : "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/fss/${var.name_prefix}/${service}"]
+  log_group_arn_patterns = [for service in local.services : "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/fss/${var.name_prefix}/${service}"]
 
-  alerts_key_statements = var.shared_with_alerts ? [
+  # Logs and the alert topic share this key (five keys, not six; David, 20 Sep
+  # 2026), so CloudWatch alarms and EventBridge may use it too.
+  alerts_key_statements = [
     {
       Sid       = "CloudWatchAlarmsPublish"
       Effect    = "Allow"
@@ -55,7 +58,7 @@ locals {
         StringEquals = { "aws:SourceAccount" = [var.aws_account_id] }
       }
     },
-  ] : []
+  ]
 
   log_key_policy = {
     Version = "2012-10-17"
@@ -88,9 +91,9 @@ locals {
 }
 
 resource "aws_kms_key" "logs" {
-  description             = var.shared_with_alerts ? "${var.name_prefix} CloudWatch log groups and alert topic." : "${var.name_prefix} CloudWatch log groups."
+  description             = "${var.name_prefix} CloudWatch log groups and alert topic."
   enable_key_rotation     = true
-  deletion_window_in_days = var.kms_deletion_window_days
+  deletion_window_in_days = 30
   policy                  = jsonencode(local.log_key_policy)
 
   tags = merge(var.tags, { Name = "${var.name_prefix}-logs" })
