@@ -391,6 +391,85 @@ describe('the sequence, template and enrollment routes', () => {
     expect(preview.steps[0]?.proposedDueAt).toBe(preview.steps[0]?.dueAt);
   });
 
+  it('edits a published version with a stored LinkedIn step as a new draft without it, numbered 1..n (lane D1)', async () => {
+    // "Edit as a new draft" sends `/sequences/versions/draft` with no steps, and the server
+    // copies the newest published version. It used to copy the `linkedin_task` step too
+    // and refuse the whole draft as `invalid_input`, leaving an empty draft behind.
+    const workspaceId = fixture.alpha.workspaceId;
+    const storedVersion = async (name: string, channels: readonly ('call_task' | 'linkedin_task')[]): Promise<string> => {
+      const created = await post('/sequences/create', adminToken, command({ name }));
+      expect(created.status).toBe(200);
+      const storedSequenceId = String(resultOf(created)['id']);
+      const { rows } = await fixture.db.query<{ id: string }>(
+        'INSERT INTO sequence_versions (workspace_id, sequence_id, version) VALUES ($1, $2, 1) RETURNING id',
+        [workspaceId, storedSequenceId],
+      );
+      const versionId = rows[0]?.id ?? '';
+      for (const [index, channel] of channels.entries()) {
+        await fixture.db.query(
+          `INSERT INTO sequence_steps (workspace_id, sequence_version_id, ordinal, channel, delay_unit, delay_amount, on_no_answer)
+           VALUES ($1, $2, $3, $4, 'business_days', $5, $6)`,
+          [workspaceId, versionId, index + 1, channel, index * 2, channel === 'call_task' ? 'advance' : null],
+        );
+      }
+      await fixture.db.query(
+        `UPDATE sequence_versions SET state = 'published', published_at = now(), published_by_user_id = $3
+          WHERE workspace_id = $1 AND id = $2`,
+        [workspaceId, versionId, fixture.alpha.admin.userId],
+      );
+      return storedSequenceId;
+    };
+    const versionsOf = async (storedSequenceId: string) => {
+      const answer = await post('/sequences/versions', adminToken, { sequenceId: storedSequenceId });
+      expect(answer.status).toBe(200);
+      expect(wireDrift(sequenceVersionsResponseSchema, answer.body)).toEqual([]);
+      return sequenceVersionsResponseSchema.parse(answer.body).versions;
+    };
+
+    // LinkedIn, call, LinkedIn, call: the draft is the two calls, at 1 and 2, with their delays.
+    const mixedSequenceId = await storedVersion('LinkedIn between calls', ['linkedin_task', 'call_task', 'linkedin_task', 'call_task']);
+    const draft = await post('/sequences/versions/draft', adminToken, command({ sequenceId: mixedSequenceId }));
+    expect(draft.status).toBe(200);
+    expect(resultOf(draft)['version']).toBe(2);
+    const [newest, published] = await versionsOf(mixedSequenceId);
+    expect(newest?.id).toBe(resultOf(draft)['sequenceVersionId']);
+    expect(newest?.state).toBe('draft');
+    expect(newest?.steps.map(step => [step.ordinal, step.channel, step.delay])).toEqual([
+      [1, 'call_task', { unit: 'business_days', days: 2 }],
+      [2, 'call_task', { unit: 'business_days', days: 6 }],
+    ]);
+    // The published version is as it was: its LinkedIn steps are still shown, greyed.
+    expect(published?.steps.map(step => step.channel)).toEqual(['removed', 'call_task', 'removed', 'call_task']);
+
+    // Only LinkedIn: a draft may be empty, so the draft has no steps; publishing it is
+    // what refuses, for `version_has_no_steps`.
+    const onlySequenceId = await storedVersion('Only LinkedIn', ['linkedin_task']);
+    const empty = await post('/sequences/versions/draft', adminToken, command({ sequenceId: onlySequenceId }));
+    expect(empty.status).toBe(200);
+    const [emptyDraft] = await versionsOf(onlySequenceId);
+    expect(emptyDraft?.state).toBe('draft');
+    expect(emptyDraft?.steps).toEqual([]);
+    const publish = await post('/sequences/versions/publish', adminToken, command({ sequenceVersionId: emptyDraft?.id }));
+    expect(publish.status).toBe(409);
+    expect(publish.body['reason']).toBe('version_has_no_steps');
+  });
+
+  it('leaves no draft behind when it refuses one (lane D1)', async () => {
+    const created = await post('/sequences/create', adminToken, command({ name: 'Refused draft' }));
+    expect(created.status).toBe(200);
+    const refusedSequenceId = String(resultOf(created)['id']);
+    // An email step with no template is refused; before lane D1 its version row stayed.
+    const refused = await post(
+      '/sequences/versions/draft',
+      adminToken,
+      command({ sequenceId: refusedSequenceId, steps: [{ ordinal: 1, channel: 'email', delay: { unit: 'elapsed', hours: 0 } }] }),
+    );
+    expect(refused.status).toBe(409);
+    expect(refused.body['reason']).toBe('invalid_input');
+    const versions = await post('/sequences/versions', adminToken, { sequenceId: refusedSequenceId });
+    expect(sequenceVersionsResponseSchema.parse(versions.body).versions).toEqual([]);
+  });
+
   it('answers a path nobody mounted under these roots with not_found', async () => {
     // The LinkedIn task card's three paths went with LinkedIn on 25 September 2026.
     for (const path of [
