@@ -138,17 +138,21 @@ async function seedSide(
   const expiredEvidenceId = await evidence('a'.repeat(64), '2026-07-01T00:00:00+00');
   const liveEvidenceId = await evidence('b'.repeat(64), null);
 
-  const job = async (key: string, completedAt: string): Promise<string> => {
+  // `null` is yesterday by the database's clock: the job-payload sweep
+  // (`archiveCompletedPayloads`) measures its seven days from `now()`, not from
+  // RETENTION_NOW, so a fixed "yesterday" ages out of the window a week later.
+  const job = async (key: string, completedAt: string | null): Promise<string> => {
     const { rows } = await session.query<{ id: string }>(
       `INSERT INTO jobs (workspace_id, kind, payload, idempotency_key, state, run_at, completed_at)
-       VALUES ($1, 'today.build', '{"firmId":"a-prospect"}'::jsonb, $2, 'done', $3::timestamptz, $3::timestamptz)
+       VALUES ($1, 'today.build', '{"firmId":"a-prospect"}'::jsonb, $2, 'done',
+               COALESCE($3::timestamptz, now() - interval '1 day'), COALESCE($3::timestamptz, now() - interval '1 day'))
        RETURNING id`,
       [workspace.workspaceId, key, completedAt],
     );
     return id(rows);
   };
   const oldJobId = await job('retention-old-job', LONG_AGO);
-  const recentJobId = await job('retention-recent-job', YESTERDAY);
+  const recentJobId = await job('retention-recent-job', null);
 
   // Outbound fences (migration 0010). Two held drafts on either side of the
   // thirty-day boundary, and one sent fence, because `canceled_drafts` must take the
