@@ -13,22 +13,15 @@
 # value a caller can pass that names a production repository, and
 # `fss-rh-deploy` could not create one if there were.
 #
-# Everything else is the registry module's defaults, which are production's:
-# immutable tags, scan on push, untagged layers expired after seven days and
-# thirty tagged images retained. Rollback in rehearsal wants the same history
-# production's does.
+# Everything else is the registry module's, which is production's: immutable
+# tags, scan on push, no force delete (a `terraform destroy` here fails on a
+# repository that is not empty, which is the correct answer), untagged layers
+# expired after seven days and thirty tagged images retained.
 
 module "registry" {
   source = "../../modules/registry"
 
   name_prefix = local.name_prefix
-
-  # False, deliberately, and the one place this root differs in spirit from a
-  # rehearsal run. `force_delete` lets Terraform remove a repository that still
-  # holds images; these repositories hold the images every past release was
-  # rehearsed on. A `terraform destroy` here should fail on a repository that
-  # is not empty, because that is the correct answer.
-  force_delete = false
 
   tags = {
     Project     = "callie-fss"
@@ -49,4 +42,9 @@ locals {
   # `fss-rh-api` and `fss-rh-worker`; a root that could be applied under
   # another prefix would produce repositories nothing points at.
   name_prefix = "fss-rh"
+
+  # The role the provider assumes: `fss-rh-deploy`, whose policy is scoped to
+  # `fss-rh-*`. That scoping is what makes `fss-rh-api` and `fss-rh-worker`
+  # creatable here and a production repository unreachable from here.
+  deployment_role_name = "fss-rh-deploy"
 }
