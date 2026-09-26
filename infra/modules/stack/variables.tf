@@ -30,11 +30,6 @@ variable "destroyable" {
   type        = bool
 }
 
-variable "aws_region" {
-  description = "AWS region."
-  type        = string
-}
-
 variable "aws_account_id" {
   description = "AWS account id."
   type        = string
@@ -50,43 +45,13 @@ variable "aws_account_id" {
 # ---------------------------------------------------------------------------
 
 variable "vpc_cidr" {
-  description = "IPv4 CIDR block for the VPC."
+  description = "IPv4 /16 for the VPC: 10.60.0.0/16 in production, 10.70.0.0/16 in a rehearsal. The four subnets are derived from it."
   type        = string
-  default     = "10.60.0.0/16"
-}
-
-variable "availability_zones" {
-  description = "Exactly two availability zones."
-  type        = list(string)
-}
-
-variable "public_subnet_cidrs" {
-  description = "Two CIDR blocks for the public task subnets."
-  type        = list(string)
-  default     = ["10.60.0.0/20", "10.60.16.0/20"]
-}
-
-variable "private_subnet_cidrs" {
-  description = "Two CIDR blocks for the private database subnets."
-  type        = list(string)
-  default     = ["10.60.128.0/20", "10.60.144.0/20"]
-}
-
-variable "container_port" {
-  description = "Port the API container listens on."
-  type        = number
-  default     = 8080
 }
 
 # ---------------------------------------------------------------------------
 # Database
 # ---------------------------------------------------------------------------
-
-variable "database_instance_class" {
-  description = "RDS instance class."
-  type        = string
-  default     = "db.t4g.small"
-}
 
 variable "database_multi_az" {
   description = "Multi-AZ standby. production hard-codes true."
@@ -116,12 +81,6 @@ variable "database_delete_automated_backups" {
   description = "Delete the database's automated backups when the instance is deleted. The rehearsal root hard-codes true and production hard-codes false; the database module refuses true on a deletion-protected instance."
   type        = bool
   default     = false
-}
-
-variable "database_log_min_duration_statement" {
-  description = "Milliseconds above which a statement is logged."
-  type        = number
-  default     = 1000
 }
 
 variable "database_apply_immediately" {
@@ -220,24 +179,6 @@ variable "create_registry" {
   default     = true
 }
 
-variable "dependencies_mode" {
-  description = <<-EOT
-    `FSS_DEPENDENCIES` on both task definitions: `live` builds every real
-    adapter from the deployed configuration, `recorded` selects the rehearsal
-    fakes **by name**. `none` is a laptop value and is not offered here: a
-    deployed process reaching a no-op by omission is the failure
-    `apps/*/src/bootstrap/deployment.ts` exists to prevent, and both binaries
-    refuse `none` when `FSS_ENVIRONMENT` is production anyway.
-  EOT
-  type        = string
-  default     = "live"
-
-  validation {
-    condition     = contains(["live", "recorded"], var.dependencies_mode)
-    error_message = "dependencies_mode must be live or recorded. A deployed process never reaches its no-op dependencies by omission."
-  }
-}
-
 variable "sending_enabled" {
   description = <<-EOT
     `FSS_SENDING_ENABLED` on both task definitions. One of the two switches
@@ -247,27 +188,6 @@ variable "sending_enabled" {
   EOT
   type        = bool
   default     = false
-}
-
-variable "business_time_zone" {
-  description = "Workspace business zone used for the Today snapshot date. Initialized to America/New_York."
-  type        = string
-  default     = "America/New_York"
-}
-
-variable "google_hosted_domain" {
-  description = <<-EOT
-    The Callie Google Workspace domain. Specification 5.1 refuses an id token
-    whose `hd` differs, and 12.1 lets only a mailbox in this domain connect.
-    A public identifier, so it travels in the task environment rather than
-    inside an operator-written secret.
-  EOT
-  type        = string
-
-  validation {
-    condition     = can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$", var.google_hosted_domain))
-    error_message = "google_hosted_domain must be a domain name, and it may not be empty: an empty one would admit every Google account."
-  }
 }
 
 # ---------------------------------------------------------------------------
@@ -287,12 +207,6 @@ variable "api_hostname" {
 # ---------------------------------------------------------------------------
 # Secrets, journal, alerts, updates
 # ---------------------------------------------------------------------------
-
-variable "journal_object_lock_mode" {
-  description = "GOVERNANCE or COMPLIANCE for the suppression journal."
-  type        = string
-  default     = "GOVERNANCE"
-}
 
 variable "journal_object_lock_retention_days" {
   description = "Default object lock retention for journal objects."
@@ -427,10 +341,4 @@ variable "desktop_upgrade_url" {
   EOT
   type        = string
   default     = null
-}
-
-variable "extra_tags" {
-  description = "Additional tags merged into every resource."
-  type        = map(string)
-  default     = {}
 }

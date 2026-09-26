@@ -101,8 +101,8 @@ run "production_is_created_at_its_declared_counts" {
   command = apply
 
   assert {
-    condition = (module.stack.service_shape.api.desired_count == 2
-    && module.stack.service_shape.worker.desired_count == 1)
+    condition = (module.stack.deployment_plan.api.planned_desired_count == 2
+    && module.stack.deployment_plan.worker.planned_desired_count == 1)
     error_message = "The starting point: production created at its declared two API tasks and one worker."
   }
 }
@@ -121,8 +121,8 @@ run "a_later_production_apply_moves_the_task_definitions_and_not_the_counts" {
   }
 
   assert {
-    condition = (module.stack.service_shape.api.desired_count == 2
-    && module.stack.service_shape.worker.desired_count == 1)
+    condition = (module.stack.deployment_plan.api.planned_desired_count == 2
+    && module.stack.deployment_plan.worker.planned_desired_count == 1)
     error_message = "A production apply moved a running service's count. The count is release-stop.sh's and release-deploy.sh's after the first apply: both services must carry ignore_changes = [desired_count]."
   }
 

@@ -236,16 +236,6 @@ run "a_prefix_that_merely_starts_like_production_is_refused" {
   expect_failures = [var.name_prefix]
 }
 
-run "the_production_deployment_role_is_refused" {
-  command = plan
-
-  variables {
-    deployment_role_name = "fss-prod-deploy"
-  }
-
-  expect_failures = [var.deployment_role_name]
-}
-
 # One API task and one worker; sizes and architecture are production's (the cluster
 # module holds them).
 run "the_topology_answers_are_the_rehearsal_defaults_at_one_plus_one" {
@@ -288,8 +278,8 @@ run "a_rehearsal_re_apply_declares_the_real_counts" {
   }
 
   assert {
-    condition = (module.stack.service_shape.api.desired_count == 1
-    && module.stack.service_shape.worker.desired_count == 1)
+    condition = (module.stack.deployment_plan.api.planned_desired_count == 1
+    && module.stack.deployment_plan.worker.planned_desired_count == 1)
     error_message = "With the bootstrap off, Terraform creates the services at the counts they are declared to run at."
   }
 
@@ -326,29 +316,6 @@ run "the_rehearsal_deploys_on_live_dependencies_with_sending_off" {
     condition     = module.stack.task_secret_names.worker == tolist(["DATABASE_SECRET_ARN", "google-gmail-oauth-client"])
     error_message = "A rehearsal worker is handed the Gmail client and its database entry, and never the classifier key."
   }
-}
-
-run "a_rehearsal_may_choose_the_recorded_dependencies_by_name" {
-  command = plan
-
-  variables {
-    dependencies_mode = "recorded"
-  }
-
-  assert {
-    condition     = module.stack.worker_environment["FSS_DEPENDENCIES"] == "recorded"
-    error_message = "A run with no rehearsal Google project may select the recorded fakes — by typing the word, never by omission."
-  }
-}
-
-run "a_rehearsal_apply_cannot_ask_for_no_dependencies_at_all" {
-  command = plan
-
-  variables {
-    dependencies_mode = "none"
-  }
-
-  expect_failures = [var.dependencies_mode]
 }
 
 run "both_services_are_told_the_workspace_domain" {
@@ -407,23 +374,6 @@ run "the_rehearsal_tasks_are_told_a_push_audience_they_can_start_with" {
   assert {
     condition     = endswith(module.stack.worker_environment["FSS_GMAIL_PUSH_SERVICE_ACCOUNT"], ".invalid")
     error_message = "No Google identity may be named here: Google cannot mint a token for an address in the reserved .invalid domain."
-  }
-}
-
-# A run that needed a real topic would need its own Google Cloud project, and
-# there is no longer a variable to give it one. The refusal is structural: this
-# root declares no Google provider and calls no Pub/Sub module, and
-# `infra/scripts/offline-gate.sh` refuses to let either come back.
-run "a_rehearsal_may_be_pointed_at_another_webhook_path_without_google" {
-  command = plan
-
-  variables {
-    gmail_push_path = "/integrations/gmail/push-v2"
-  }
-
-  assert {
-    condition     = module.stack.api_environment["FSS_GMAIL_PUSH_AUDIENCE"] == "https://rehearsal.example.invalid/integrations/gmail/push-v2"
-    error_message = "The audience follows the path, so the webhook and the token cannot disagree about it."
   }
 }
 

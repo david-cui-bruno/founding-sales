@@ -20,7 +20,7 @@ output "metric_namespace" {
 
 output "deployment_role_name" {
   description = "IAM role this root assumes."
-  value       = var.deployment_role_name
+  value       = local.deployment_role_name
 }
 
 output "resource_names" {
@@ -128,8 +128,8 @@ output "updates_distribution_domain_name" {
 }
 
 output "gmail_push_topic_id" {
-  description = "Pub/Sub topic id for Gmail watch requests, as both task definitions carry it. infra/roots/production-google owns the topic; this is var.gmail_push_topic."
-  value       = var.gmail_push_topic
+  description = "Pub/Sub topic id for Gmail watch requests, as both task definitions carry it. infra/roots/production-google owns the topic; this is local.gmail_push_topic."
+  value       = local.gmail_push_topic
 }
 
 output "gmail_push_audience" {
@@ -138,8 +138,8 @@ output "gmail_push_audience" {
 }
 
 output "gmail_push_service_account" {
-  description = "Service account the push token is issued for. The webhook accepts this address and no other. infra/roots/production-google owns it; this is var.gmail_push_service_account."
-  value       = var.gmail_push_service_account
+  description = "Service account the push token is issued for. The webhook accepts this address and no other. infra/roots/production-google owns it; this is local.gmail_push_service_account."
+  value       = local.gmail_push_service_account
 }
 
 # ---------------------------------------------------------------------------

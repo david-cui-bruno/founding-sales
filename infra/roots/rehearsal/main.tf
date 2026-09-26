@@ -22,17 +22,20 @@ locals {
   aws_account_id = "326255650484"
   aws_region     = "us-east-1"
 
+  # The role this run's apply acts as, scoped to fss-rh-*.
+  deployment_role_name = "fss-rh-deploy"
+
   # The audience a push token would have to carry to be accepted by *this*
   # environment's webhook. Derived from the rehearsal hostname, exactly as
   # production derives its own: a property of the API's route, not of Google.
-  push_audience = "https://${var.api_hostname}${var.gmail_push_path}"
+  push_audience = "https://${var.api_hostname}/integrations/gmail/push"
 
   # The role this run's apply, and therefore its teardown, acts as. The same
   # expression the provider's `assume_role` block builds, and the same ARN
   # `aws:PrincipalArn` carries for an assumed-role session of it: that key is
   # the role's ARN, never the session's, which is why the journal's exemption
   # can be an exact `ArnNotEquals` rather than a pattern.
-  deployment_role_arn = "arn:aws:iam::${local.aws_account_id}:role/${var.deployment_role_name}"
+  deployment_role_arn = "arn:aws:iam::${local.aws_account_id}:role/${local.deployment_role_name}"
 }
 
 module "stack" {
@@ -42,18 +45,13 @@ module "stack" {
   destroyable = true
 
   name_prefix    = var.name_prefix
-  aws_region     = local.aws_region
   aws_account_id = local.aws_account_id
 
   # A range of its own, apart from production's 10.60.0.0/16.
-  vpc_cidr             = "10.70.0.0/16"
-  availability_zones   = ["us-east-1a", "us-east-1b"]
-  public_subnet_cidrs  = ["10.70.0.0/20", "10.70.16.0/20"]
-  private_subnet_cidrs = ["10.70.128.0/20", "10.70.144.0/20"]
+  vpc_cidr = "10.70.0.0/16"
 
-  # Production's class, single-AZ (a rehearsal needs a database, not a standby),
+  # Single-AZ (a rehearsal needs a database, not a standby),
   # 20 GiB without autoscaling, and one day of backups.
-  database_instance_class        = "db.t4g.small"
   database_multi_az              = false
   database_allocated_storage     = 20
   database_max_allocated_storage = 0
@@ -78,14 +76,13 @@ module "stack" {
   # does and outlive it. infra/roots/rehearsal-registry owns them.
   create_registry = false
 
-  dependencies_mode = var.dependencies_mode
-  sending_enabled   = var.sending_enabled
+  # Sending is off in a rehearsal.
+  sending_enabled = false
 
   certificate_arn = var.certificate_arn
   api_hostname    = var.api_hostname
 
-  journal_object_lock_mode           = "GOVERNANCE"
-  journal_object_lock_retention_days = var.journal_object_lock_retention_days
+  journal_object_lock_retention_days = 1
 
   # The run's own deployer is exempted from every journal deny but the transport
   # one, because a rehearsal environment has to be able to disappear and on 21
@@ -107,10 +104,9 @@ module "stack" {
   # `docs/archive/decisions/g37-the-deployer-may-list-the-journal-but-never-read-it.md`.
   journal_listing_principal_arns = [local.deployment_role_arn]
 
-  alert_emails         = var.alert_emails
-  log_retention_days   = var.log_retention_days
-  business_time_zone   = var.business_time_zone
-  google_hosted_domain = var.google_hosted_domain
+  # No alert subscription, and logs for a week: the run is short.
+  alert_emails       = []
+  log_retention_days = 7
 
   # Both bootstraps call `required()` on all three of these, so an empty value
   # is a rehearsal whose tasks refuse to start, not a rehearsal with push
@@ -118,7 +114,10 @@ module "stack" {
   # identity name a Google project that does not exist, because no rehearsal
   # registers a Gmail watch: its Gmail is the recorded fake and the webhook is
   # exercised offline with locally signed tokens.
-  gmail_push_audience        = local.push_audience
-  gmail_push_topic           = var.gmail_push_topic
-  gmail_push_service_account = var.gmail_push_service_account
+  gmail_push_audience = local.push_audience
+  # Public placeholders naming a Google Cloud project that does not exist: there
+  # is no rehearsal project, and an empty value is a task that refuses to start.
+  # `docs/archive/decisions/g12j-the-rehearsal-has-no-google-provider.md`.
+  gmail_push_topic           = "projects/fss-rehearsal-no-push/topics/fss-rehearsal-no-push"
+  gmail_push_service_account = "gmail-push@fss-rehearsal-no-push.invalid"
 }
