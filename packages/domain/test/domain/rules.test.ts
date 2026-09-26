@@ -1,16 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
-  CALL_OUTCOMES,
   CANONICALIZER_VERSION,
   FEDERAL_CITATIONS,
   MANUAL_SUPPRESSION_CORRECTION_MILLISECONDS,
   POSTURE_STATEMENTS,
   STATE_POSTURE_RULES,
   SENDING_STOP_LINE,
-  advanceCadence,
   applyModelSuggestion,
   authoredText,
-  callOutcomeEffect,
   canonicalizeEmail,
   canonicalizeHandle,
   canonicalizePhone,
@@ -24,8 +21,8 @@ import {
   mayCorrectSuppression,
   narrowCallingWindow,
   postureReviewAt,
-  renderCadence,
   renderTemplate,
+  resolveStepDue,
   resolveFirmZone,
   selectApplicablePosture,
   stateDefaultZone,
@@ -420,61 +417,11 @@ describe('cadence', () => {
   const startedAt = '2026-09-16T13:00:00.000Z';
 
   it('anchors every step on the enrollment start, not on the previous completion', () => {
-    const rendered = renderCadence(steps, startedAt, NEW_YORK);
-    expect(rendered.map(entry => entry.due.dueAt)).toEqual([
+    expect(steps.map(step => resolveStepDue(step, startedAt, NEW_YORK).dueAt)).toEqual([
       '2026-09-16T13:00:00.000Z',
       '2026-09-19T13:00:00.000Z',
       '2026-09-23T13:00:00.000Z',
       '2026-09-28T13:00:00.000Z',
     ]);
-  });
-
-  it('walks past a step whose channel is blocked and records it as held', () => {
-    const advance = advanceCadence({
-      steps,
-      enrollment: { startedAt, currentStepId: 's1', executedStepIds: ['s0', 's1'] },
-      zone: NEW_YORK,
-      blockedChannels: { email: 'mailbox_disconnected' },
-    });
-    expect(advance).toMatchObject({
-      kind: 'next_step',
-      stepId: 's3',
-      heldSteps: [{ stepId: 's2', channel: 'email', reason: 'mailbox_disconnected' }],
-    });
-  });
-
-  it('reports the sequence complete rather than inventing a step', () => {
-    const advance = advanceCadence({
-      steps,
-      enrollment: { startedAt, currentStepId: 's3', executedStepIds: ['s0', 's1', 's2', 's3'] },
-      zone: NEW_YORK,
-    });
-    expect(advance).toEqual({ kind: 'sequence_complete', heldSteps: [] });
-  });
-
-  it('refuses a current step that is not in this version', () => {
-    expect(() =>
-      advanceCadence({
-        steps,
-        enrollment: { startedAt, currentStepId: 'not-a-step', executedStepIds: [] },
-        zone: NEW_YORK,
-      }),
-    ).toThrow(RangeError);
-  });
-
-  it('applies the call-outcome effects of specification 9.1 exactly', () => {
-    expect(new Set(CALL_OUTCOMES).size).toBe(CALL_OUTCOMES.length);
-    expect(callOutcomeEffect('interested')).toMatchObject({ setsManual: true, stopsEnrollments: true });
-    expect(callOutcomeEffect('wrong_number')).toMatchObject({
-      retiresRoute: true,
-      suppresses: 'none',
-      setsManual: false,
-    });
-    expect(callOutcomeEffect('do_not_call')).toMatchObject({ suppresses: 'firm_when_requested' });
-    expect(callOutcomeEffect('voicemail_left')).toMatchObject({ completesStep: true, setsManual: false });
-    expect(callOutcomeEffect('no_answer')).toMatchObject({ completesStep: false, followsConfiguredRetry: true });
-    expect(callOutcomeEffect('policy_or_technical_failure')).toMatchObject({ completesStep: false });
-    // Every outcome has an effect: logging never refuses history.
-    for (const outcome of CALL_OUTCOMES) expect(callOutcomeEffect(outcome), outcome).toBeDefined();
   });
 });

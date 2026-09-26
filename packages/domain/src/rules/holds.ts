@@ -44,7 +44,7 @@ function toInterval(hold: HoldRecord, now: number): Interval {
 }
 
 /** Merge overlapping and touching intervals into a disjoint, sorted set. */
-export function mergeIntervals(intervals: readonly Interval[]): Interval[] {
+function mergeIntervals(intervals: readonly Interval[]): Interval[] {
   const sorted = [...intervals].filter(interval => interval.end > interval.start).sort((a, b) => a.start - b.start);
   const merged: Interval[] = [];
   for (const interval of sorted) {
@@ -153,22 +153,4 @@ export function shiftDueInstant(dueAt: string, shiftMilliseconds: number): strin
   if (!Number.isFinite(parsed)) throw new TypeError('a due instant is an ISO 8601 string');
   if (shiftMilliseconds < 0) throw new RangeError('a schedule shift never moves work earlier');
   return new Date(parsed + shiftMilliseconds).toISOString();
-}
-
-export interface ShiftableStep {
-  readonly id: string;
-  readonly dueAt: string;
-  readonly executed: boolean;
-}
-
-/** Shift every unexecuted step by the union and leave executed history exactly where it is. */
-export function shiftSchedule(
-  steps: readonly ShiftableStep[],
-  shiftMilliseconds: number,
-): { readonly id: string; readonly dueAt: string; readonly shifted: boolean }[] {
-  return steps.map(step =>
-    step.executed
-      ? { id: step.id, dueAt: step.dueAt, shifted: false }
-      : { id: step.id, dueAt: shiftDueInstant(step.dueAt, shiftMilliseconds), shifted: shiftMilliseconds > 0 },
-  );
 }

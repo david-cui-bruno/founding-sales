@@ -14,8 +14,8 @@ import {
  * lane g82, audit C11).
  *
  * The cadence the salesperson reviews is start-anchored: the editor labels every delay
- * "N business days after enrollment" and `renderCadence` draws it from the enrollment's
- * start. That is the configured anchor and it stays the plan.
+ * "N business days after enrollment" and `resolveStepDue` counts it from the
+ * enrollment's start. That is the configured anchor and it stays the plan.
  *
  * Before this lane the successor was *only* the plan, which fails the moment a step
  * runs late. An email planned for Monday that waited on a cap, a route or a pause and

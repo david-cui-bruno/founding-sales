@@ -10,7 +10,6 @@ import {
   localDate,
   localInstant,
   localParts,
-  paceWithinWindow,
   placeEmailSend,
   resolveDelay,
   startAnchoredDueAt,
@@ -196,17 +195,5 @@ describe('the email sending window', () => {
     const placed = placeEmailSend('2026-03-08T07:30:00Z', NEW_YORK);
     expect(placed.localDate).toBe('2026-03-09');
     expect(placed.sendAt).toBe('2026-03-09T12:00:00.000Z');
-  });
-
-  it('paces sends across the band instead of releasing them at the open', () => {
-    const placed = placeEmailSend('2026-09-21T06:00:00Z', NEW_YORK);
-    const paced = paceWithinWindow(placed, NEW_YORK, 4);
-    expect(paced).toHaveLength(4);
-    expect(paced[0]).toBe(placed.sendAt);
-    expect(new Set(paced).size).toBe(4);
-    const last = paced.at(-1) ?? '';
-    // The last one still starts before the morning band closes at 12:00 local.
-    expect(localParts(last, NEW_YORK).minuteOfDay).toBeLessThan(EMAIL_WINDOW.preferredEndMinute);
-    expect(paceWithinWindow(placed, NEW_YORK, 0)).toEqual([]);
   });
 });

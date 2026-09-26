@@ -20,7 +20,7 @@ import {
   businessDateOf,
   callbackTimeNeededItemKey,
   listTodayItems,
-  promoteTodayItem,
+  upsertTodayItem,
   readTodayFirm,
   releaseTodayPause,
   snoozeTodayItem,
@@ -190,7 +190,7 @@ async function enrolWithCallTask(firm: Firm, contactId: string, versionId: strin
     contactId,
   });
   if (!enrolled.ok) throw new Error(`enrollment refused: ${enrolled.reason}`);
-  const itemId = await promoteTodayItem(worker(), {
+  const itemId = await upsertTodayItem(worker(), {
     businessDate,
     firmId: firm.firmId,
     contactId,
@@ -453,7 +453,7 @@ describe('C14: a refusal never leaves a partial write', () => {
     const enrolled = await enrolWithCallTask(firm, firm.contactId, await callFirstVersion('advance'));
     // A callback task whose callback row is gone: completing it is refused part-way,
     // after the step, the manual switch and the enrollment stop have been written.
-    const staleItem = await promoteTodayItem(worker(), {
+    const staleItem = await upsertTodayItem(worker(), {
       businessDate,
       firmId: firm.firmId,
       contactId: firm.contactId,
@@ -859,7 +859,7 @@ describe('C22: an automated task is paused, visibly, until Resume', () => {
       ).enrollment_id;
     const pausedEnrollment = await enrollmentOf(pausedExecution);
     const otherEnrollment = await enrollmentOf(otherExecution);
-    const itemId = await promoteTodayItem(worker(), {
+    const itemId = await upsertTodayItem(worker(), {
       businessDate,
       firmId: firm.firmId,
       itemKey: `step-execution:${pausedExecution}`,

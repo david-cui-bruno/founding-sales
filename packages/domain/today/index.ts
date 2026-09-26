@@ -69,7 +69,7 @@ export {
   type TodaySourceInput,
 } from './build.ts';
 
-export { promoteReply, promoteTodayItem, type PromoteReplyInput, type PromoteTodayItemInput } from './promotions.ts';
+export { promoteReply, type PromoteReplyInput } from './promotions.ts';
 
 export {
   SNOOZE_REASON_MAX,
