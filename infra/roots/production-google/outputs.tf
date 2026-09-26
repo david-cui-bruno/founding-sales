@@ -5,7 +5,7 @@
 
 output "gcp_project_id" {
   description = "The Google Cloud project the push objects live in."
-  value       = var.gcp_project_id
+  value       = local.gcp_project_id
 }
 
 output "gmail_push_topic_id" {

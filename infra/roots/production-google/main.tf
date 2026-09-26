@@ -13,10 +13,8 @@
 #
 #   gmail_push_topic_id        -> var.gmail_push_topic, a committed default
 #   gmail_push_service_account -> var.gmail_push_service_account, a committed default
-#   gmail_push_audience        -> derived there from its own api_hostname, the same expression as below
-#
-# `test/release/googleRoot.check.ts` computes the first two from this root's
-# names and fails when the production defaults disagree with them.
+#   gmail_push_audience        -> derived there from its api_hostname and gmail_push_path,
+#                                 equal to local.push_endpoint below
 #
 # Nothing here is destroyable by intent. There is no `terraform destroy` in any
 # procedure for this root: the publisher grant needed a project-level exception
@@ -26,32 +24,29 @@
 # `docs/archive/decisions/g85-the-google-provider-has-its-own-root.md`.
 
 locals {
-  # Exactly the expressions `infra/roots/production` used, so that the module
-  # below receives exactly the inputs the objects were created from and a plan
-  # after the migration shows no change to any of them.
+  # The production namespace: `fss-prod-gmail-push` is the topic, the
+  # subscription and the service account id. There is one production and no
+  # rehearsal Google Cloud project to name
+  # (`docs/archive/decisions/g12j-the-rehearsal-has-no-google-provider.md`).
+  name_prefix = "fss-prod"
 
-  # Google caps a service account id at 30 characters.
-  service_account_stem = trimsuffix(
-    length(var.name_prefix) > 18 ? substr(var.name_prefix, 0, 18) : var.name_prefix,
-    "-",
-  )
-  push_service_account_id = "${local.service_account_stem}-gmail-push"
+  # The project the four objects were created in on 23 September 2026
+  # (`docs/greenfield/release.md` 4 and 8.0n). Pub/Sub topics are global; the
+  # region only sets the provider's default.
+  gcp_project_id = "callie-fss"
+  gcp_region     = "us-east1"
 
-  push_endpoint = "https://${var.api_hostname}${var.gmail_push_path}"
-  push_audience = "https://${var.api_hostname}${var.gmail_push_path}"
+  # The subscription pushes to, and mints its token for exactly, the production
+  # API's Gmail route. `infra/roots/production` derives FSS_GMAIL_PUSH_AUDIENCE
+  # from its own `api_hostname` literal and `gmail_push_path` with the same
+  # expression, so the two roots agree.
+  push_endpoint = "https://api.usecallie.com/integrations/gmail/push"
 }
 
 module "pubsub" {
   source = "../../modules/pubsub"
 
-  gcp_project_id          = var.gcp_project_id
-  name_prefix             = var.name_prefix
-  push_service_account_id = local.push_service_account_id
-  push_endpoint           = local.push_endpoint
-  push_audience           = local.push_audience
-
-  labels = {
-    environment = "production"
-    managed_by  = "terraform"
-  }
+  gcp_project_id = local.gcp_project_id
+  name_prefix    = local.name_prefix
+  push_endpoint  = local.push_endpoint
 }

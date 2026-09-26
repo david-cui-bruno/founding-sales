@@ -20,5 +20,5 @@ output "push_service_account_email" {
 
 output "push_audience" {
   description = "Exact audience the webhook must require."
-  value       = var.push_audience
+  value       = var.push_endpoint
 }
