@@ -312,7 +312,7 @@ describe('the role a renewal carries (lane g69)', () => {
     const promoted = await admin.state();
     expect(promoted.role).toBe('admin');
     expect(asked).toContain('/outbound/status');
-    expect(promoted.sendingAdmin).toEqual({ domain: null, personalGmailRecipients: 0, ramps: [] });
+    expect(promoted.sendingAdmin).toEqual({ domain: null, ramps: [] });
   });
 
   it('applies a demotion the same way, and leaves the role alone when the renewal did not change it', async () => {

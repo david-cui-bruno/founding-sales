@@ -150,11 +150,7 @@ export interface SendingAdminView {
     readonly postmasterReviewedAt: string | null;
     readonly authenticationPasses: boolean;
     readonly automatedSendingEnabled: boolean;
-    /** Null once the server stops sending the guard (wave 1, lane W1-C). */
-    readonly personalGmailGuardPer24h: number | null;
   } | null;
-  /** How much of 12.6's rolling guard the last 24 hours used; null once the server stops sending it. */
-  readonly personalGmailRecipients: number | null;
   readonly ramps: readonly {
     readonly mailboxId: string;
     readonly healthySendingDays: number;

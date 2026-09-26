@@ -49,7 +49,7 @@ test('an admin sees every slice, its provenance, and an editor for each', async 
   await expect(page.getByTestId('setting-sending_limits')).toHaveCount(0);
 });
 
-test("an admin edits G7-2's checklist and cap, and the guard has no control", async ({ page }) => {
+test("an admin edits G7-2's checklist and cap, and the deleted guard is not shown", async ({ page }) => {
   await openAdmin(page, adminState({ sendingAdmin: sendingPosture() }));
 
   // The checklist is incomplete and the page says which part is missing rather than
@@ -58,10 +58,10 @@ test("an admin edits G7-2's checklist and cap, and the guard has no control", as
   await expect(page.getByTestId('sending-record')).toBeEnabled();
   await expect(page.getByTestId('sending-dmarcPass')).toBeEnabled();
 
-  // 12.6: changing the personal-Gmail guard is a reviewed policy change, so it is
-  // shown and never offered. There is no control with this value behind it.
-  await expect(page.getByTestId('sending-guard')).toContainText('4000');
-  await expect(page.getByTestId('sending-admin')).toContainText('reviewed policy change');
+  // Wave 1: the personal-Gmail guard was deleted (lane W1-C). The server still sends
+  // constants for it, for 1.0.10; this build shows no line for them.
+  await expect(page.getByTestId('sending-guard')).toHaveCount(0);
+  await expect(page.getByTestId('sending-admin')).not.toContainText('Personal-Gmail guard');
 
   await expect(page.getByTestId('cap-44444444-4444-4444-8444-444444444444')).toBeEnabled();
   await expect(page.getByTestId('raiseTo-44444444-4444-4444-8444-444444444444')).toBeEnabled();

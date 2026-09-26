@@ -134,6 +134,8 @@ export interface SequenceScreen {
   /** Whether the "New sequence" and "New template" forms may be used. */
   readonly canAuthor: boolean;
   readonly notice: string | null;
+  /** The last template create's or approval's copy warnings, as sentences (wave 1). */
+  readonly warnings: readonly string[];
 }
 
 const DAY_MILLISECONDS = 86_400_000;
@@ -314,6 +316,7 @@ export function sequenceScreen(state: SequenceState): SequenceScreen {
     resumeReview: state.resumeReview === null ? null : resumeReviewPanel(state.resumeReview, state),
     canAuthor: state.isAdmin && state.mayMutate,
     notice: state.notice === null ? null : sequenceNotice(state.notice),
+    warnings: state.warnings.map(templateWarningSentence),
   };
 }
 
@@ -331,6 +334,7 @@ export const EMPTY_SEQUENCE_STATE: SequenceState = Object.freeze({
   readErrors: { sequences: null, versions: null, templates: null, enrollments: null },
   resumeReview: null,
   notice: null,
+  warnings: [],
 });
 
 // ---------------------------------------------------------------------------
@@ -561,11 +565,34 @@ export function templateFormIssues(draft: TemplateDraft): readonly TemplateFormI
       text: `Callie cannot fill ${unknown.map(name => `{${name}}`).join(', ')}. Use one of ${TEMPLATE_VARIABLE_NAMES.map(name => `{${name}}`).join(', ')}.`,
     });
   }
-  const words = countWords(composeTemplateBody(draft.body, draft.signOff));
-  if (draft.body.trim() !== '' && draft.signOff.trim() !== '' && words > 89) {
-    issues.push({ field: 'body', text: `The email is ${String(words)} words with its sign-off; keep it to 89.` });
-  }
   return issues;
+}
+
+/**
+ * What the form suggests and does not insist on (wave 1). More than 89 words used to
+ * refuse the approval; it is copy advice, so the server now answers it as a warning and
+ * approves, and the form says it under the email and still saves.
+ */
+export function templateFormWarnings(draft: TemplateDraft): readonly string[] {
+  const words = countWords(composeTemplateBody(draft.body, draft.signOff));
+  if (draft.body.trim() === '' || draft.signOff.trim() === '' || words <= 89) return [];
+  return [`The email is ${String(words)} words with its sign-off. Shorter emails get more replies; 89 or fewer is the suggestion.`];
+}
+
+/**
+ * The server's copy warnings (`TEMPLATE_WARNING_CODES`), as the sentences the window
+ * shows after a create or an approval that went ahead anyway. A code this build does
+ * not know is shown as it came.
+ */
+export const TEMPLATE_WARNING_SENTENCES: Readonly<Record<string, string>> = Object.freeze({
+  template_body_too_long: 'The email is longer than 89 words, sign-off included.',
+  template_body_multiple_urls: 'The email has more than one link.',
+  template_subject_url: 'The subject contains a link.',
+  template_pricing_or_guarantee_language: 'The email mentions prices, percentages or guarantees.',
+});
+
+export function templateWarningSentence(code: string): string {
+  return TEMPLATE_WARNING_SENTENCES[code] ?? code;
 }
 
 /** Each reason `decideTemplateApproval` can give, as the sentence the window shows. */

@@ -66,17 +66,6 @@ export interface SendingAdminSectionView {
   readonly domain: string | null;
   readonly editable: boolean;
   readonly notEditableBecause: string | null;
-  /**
-   * 12.6's rolling personal-Gmail guard. Shown and never offered: G7-2 gave it no
-   * route on purpose, because changing it is a reviewed policy change. `line` is null
-   * when the server no longer reports it (wave 1, lane W1-C), and the section is drawn
-   * without the guard.
-   */
-  readonly guard: {
-    readonly line: string | null;
-    readonly editable: false;
-    readonly readOnlyBecause: string;
-  };
   readonly ramps: readonly {
     readonly mailboxId: string;
     readonly line: string;
@@ -156,22 +145,6 @@ const CALLING_NUMBER_NOTICES: Readonly<Record<string, string>> = Object.freeze({
 export const CALLING_NUMBER_HINT =
   'Type it with the + and your country code, for example +1 401 555 0123. Spaces and dashes are fine.';
 
-/** The guard's line from whichever of its two numbers the server still sends; no line for neither. */
-function guardOf(per24h: number | null, used: number | null): SendingAdminSectionView['guard'] {
-  const line =
-    per24h === null && used === null
-      ? null
-      : per24h === null
-        ? `Personal-Gmail guard: unknown. ${String(used)} recipients in the last 24 hours.`
-        : used === null
-          ? `Personal-Gmail guard: ${String(per24h)} per 24 hours.`
-          : `Personal-Gmail guard: ${String(per24h)} per 24 hours, ${String(used)} used.`;
-  return { line, editable: false, readOnlyBecause: GUARD_READ_ONLY };
-}
-
-/** Why the guard has no control, in the words the page shows. */
-const GUARD_READ_ONLY =
-  'Section 12.6 makes changing the personal-Gmail guard a reviewed policy change, so there is no control for it here.';
 
 /**
  * One slice's history, as a person reads it (lane g78, D04): what is in force now, and
@@ -520,7 +493,6 @@ function sendingAdminSection(state: AdminState, reason: string | null): SendingA
     domain: domain?.domain ?? null,
     editable,
     notEditableBecause: reason,
-    guard: guardOf(domain?.personalGmailGuardPer24h ?? null, posture.personalGmailRecipients),
     ramps: posture.ramps.map(ramp => ({
       mailboxId: ramp.mailboxId,
       line: `${String(ramp.healthySendingDays)} healthy days, cap ${String(ramp.effectiveCap)}${

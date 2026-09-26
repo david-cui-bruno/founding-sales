@@ -129,15 +129,17 @@ export function recordPostureBody(input: RecordPostureInput, zone: string): Read
 
 /**
  * `/outbound/status` as this Mac reads it (wave 1): the contract's schema with the
- * personal-Gmail guard's three fields optional — the domain's `personalGmailGuardPer24h`,
- * the `guard` decision and `personalGmailRecipients`. The server keeps sending them for
- * now; lane W1-C removes them once this build is the one in use. A strict reader would
- * turn that removal into "could not read the sending status" on every open, so this one
- * shows the rest of the section and leaves the guard's line out.
+ * deleted personal-Gmail guard's fields optional — the domain's `personalGmailGuardPer24h`
+ * and `replyOnlyOptOut`, the `guard` decision and `personalGmailRecipients`. Lane W1-C
+ * deleted the guard; the server sends constants for these until this build is the one
+ * in use, then stops. A strict reader would turn that into "could not read the sending
+ * status" on every open, so this one does not need them, and nothing reads them.
  */
 export const outboundStatusReadSchema = outboundStatusResponseSchema
   .partial({ guard: true, personalGmailRecipients: true })
-  .extend({ domain: sendingDomainStatusSchema.partial({ personalGmailGuardPer24h: true }).nullable() });
+  .extend({
+    domain: sendingDomainStatusSchema.partial({ personalGmailGuardPer24h: true, replyOnlyOptOut: true }).nullable(),
+  });
 
 /**
  * The note a setting change carries when nobody wrote one (wave 1). The note is optional
@@ -325,11 +327,7 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
               postmasterReviewedAt: status.value.domain.postmasterReviewedAt,
               authenticationPasses: status.value.domain.authenticationPasses,
               automatedSendingEnabled: status.value.domain.automatedSendingEnabled,
-              personalGmailGuardPer24h: status.value.domain.personalGmailGuardPer24h ?? null,
             },
-      // The whole guard: FSS's own sends and the direct ones the sync imported (12.7,
-      // "All outgoing Gmail messages, including direct sends, count").
-      personalGmailRecipients: status.value.personalGmailRecipients?.total ?? null,
       ramps: collected,
     };
     sendingReadError = null;

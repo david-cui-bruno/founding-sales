@@ -723,8 +723,9 @@ function renderHolidays(root: HTMLElement, view: ReturnType<typeof adminViewOf>)
 }
 
 /**
- * G7-2's sending section: the authentication checklist, the per-mailbox cap, and the
- * personal-Gmail guard shown without a control.
+ * G7-2's sending section: the authentication checklist and the per-mailbox cap. The
+ * personal-Gmail guard's line is gone (wave 1): lane W1-C deleted the guard, and the
+ * server answers constants for it until this build is the one in use.
  *
  * It is absent, not disabled, for anyone who is not an admin — `view.sendingAdmin`
  * is null — because every `/outbound/*` path answers a salesperson with a redacted
@@ -746,10 +747,6 @@ function renderSendingAdmin(root: HTMLElement, view: ReturnType<typeof adminView
   const block = element('section', { className: 'sending-admin', testId: 'sending-admin' });
   block.append(element('h2', { text: 'Sending domain and caps' }));
   block.append(element('p', { text: section.domainLine, testId: 'sending-domain' }));
-  if (section.guard.line !== null) {
-    block.append(element('p', { className: 'inert', text: section.guard.line, testId: 'sending-guard' }));
-    block.append(element('p', { className: 'inert', text: section.guard.readOnlyBecause }));
-  }
 
   if (section.domain !== null) {
     const domain = section.domain;

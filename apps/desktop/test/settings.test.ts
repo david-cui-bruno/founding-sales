@@ -348,7 +348,7 @@ describe('the administration bridge', () => {
     ]);
   });
 
-  it('reads the sending status once the server stops sending the guard, and draws the section without it (wave 1)', async () => {
+  it('reads the sending status once the server stops sending the deleted guard (wave 1)', async () => {
     const withoutGuard = (body: Readonly<Record<string, unknown>>): Record<string, unknown> => {
       const { guard: _guard, personalGmailRecipients: _recipients, ...rest } = body;
       const domain = rest['domain'] as Record<string, unknown> | null;
@@ -365,11 +365,9 @@ describe('the administration bridge', () => {
     const state = await createAdminBridge({ api, session: { state: async () => await Promise.resolve(session()) } }).state();
     expect(state.sendingReadError).toBeNull();
     expect(state.sendingAdmin?.domain?.domain).toBe('sending.example.test');
-    expect(state.sendingAdmin?.domain?.personalGmailGuardPer24h).toBeNull();
-    expect(state.sendingAdmin?.personalGmailRecipients).toBeNull();
     const section = adminViewOf(state).sendingAdmin;
     expect(section?.domainLine).toContain('sending.example.test');
-    expect(section?.guard.line).toBeNull();
+    expect(JSON.stringify(section)).not.toContain('Personal-Gmail');
   });
 
   it("reads G7-2's sending posture for an admin, and not at all for a salesperson", async () => {
@@ -395,9 +393,9 @@ describe('the administration bridge', () => {
     }).state();
     expect(state.sendingReadError).toBeNull();
     expect(state.sendingAdmin?.domain?.domain).toBe('sending.example.test');
-    // The whole guard — FSS's two and the one direct send — never one half of it.
-    expect(state.sendingAdmin?.personalGmailRecipients).toBe(3);
-    expect(adminViewOf(state).sendingAdmin?.guard.line).toBe('Personal-Gmail guard: 4000 per 24 hours, 3 used.');
+    // The deleted guard's constants are read past and never kept (wave 1, lane W1-C).
+    expect(state.sendingAdmin).not.toHaveProperty('personalGmailRecipients');
+    expect(state.sendingAdmin?.domain).not.toHaveProperty('personalGmailGuardPer24h');
     expect(state.sendingAdmin?.ramps).toEqual([
       {
         mailboxId: MAILBOX_ID,
@@ -1017,9 +1015,7 @@ describe('the administration view', () => {
           postmasterReviewedAt: null,
           authenticationPasses: false,
           automatedSendingEnabled: false,
-          personalGmailGuardPer24h: 4000,
         },
-        personalGmailRecipients: 12,
         ramps: [
           {
             mailboxId: '55555555-5555-4555-8555-555555555555',
@@ -1039,9 +1035,6 @@ describe('the administration view', () => {
     // The CHECK forbids enabling without all four, so the page says which is missing
     // rather than offering an enable that the database will refuse.
     expect(section?.domainLine).toContain('dmarc');
-    expect(section?.guard.editable).toBe(false);
-    expect(section?.guard.readOnlyBecause).toContain('reviewed policy change');
-    expect(section?.guard.line).toContain('4000');
     expect(section?.ramps[0]?.line).toContain('5');
     expect(section?.ramps[0]?.editable).toBe(true);
   });
@@ -1057,7 +1050,7 @@ describe('the administration view', () => {
     // A posture that is held is shown, whatever an earlier read said.
     const held = adminViewOf({
       ...withSettings(),
-      sendingAdmin: { domain: null, personalGmailRecipients: 0, ramps: [] },
+      sendingAdmin: { domain: null, ramps: [] },
       sendingReadError: 'offline',
     });
     expect(held.sendingUnread).toBeNull();

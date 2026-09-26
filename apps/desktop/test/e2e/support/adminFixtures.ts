@@ -120,9 +120,7 @@ export function sendingPosture(): NonNullable<AdminState['sendingAdmin']> {
       postmasterReviewedAt: null,
       authenticationPasses: false,
       automatedSendingEnabled: false,
-      personalGmailGuardPer24h: 4000,
     },
-    personalGmailRecipients: 17,
     ramps: [
       {
         mailboxId: '44444444-4444-4444-8444-444444444444',

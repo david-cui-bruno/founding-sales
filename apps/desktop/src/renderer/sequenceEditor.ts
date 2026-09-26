@@ -25,6 +25,7 @@ import {
   sequenceScreen,
   suggestedPlan,
   templateFormIssues,
+  templateFormWarnings,
   typedBodyOf,
   type VersionPanel,
 } from './sequenceView.ts';
@@ -624,7 +625,7 @@ function renderTemplateForm(root: HTMLElement, draft: TemplateDraft, enabled: bo
     'body',
     'Email',
     true,
-    `You can use ${TEMPLATE_VARIABLE_NAMES.map(name => `{${name}}`).join(', ')}. Plain text, one link at most, 89 words with the sign-off.`,
+    `You can use ${TEMPLATE_VARIABLE_NAMES.map(name => `{${name}}`).join(', ')}. Plain text; one link and 89 words with the sign-off are suggestions, not rules.`,
   );
   field('signOff', 'Sign-off', true, 'Your name, and anything that goes under it.');
   form.append(element('p', { className: 'hint', text: 'Every email ends with your sign-off and then:' }));
@@ -632,6 +633,16 @@ function renderTemplateForm(root: HTMLElement, draft: TemplateDraft, enabled: bo
 
   const issues = element('div', { className: 'template-issues', testId: 'template-issues' });
   form.append(issues);
+  // Wave 1: the word count warns as the email is typed and never stops the save.
+  const advice = element('div', { className: 'template-advice', testId: 'template-advice' });
+  const advise = (): void => {
+    advice.replaceChildren(
+      ...templateFormWarnings(current).map(text => element('p', { className: 'field-advice', text, testId: 'template-form-warning' })),
+    );
+  };
+  advise();
+  form.addEventListener('input', advise);
+  form.append(advice);
   const actions = element('div', { className: 'form-actions' });
   const save = button('Save template', 'template-save', enabled);
   save.type = 'submit';
@@ -762,6 +773,11 @@ export function render(state: SequenceState): void {
   }
   if (screen.notice !== null) {
     host.append(element('p', { className: 'notice', text: screen.notice, testId: 'sequence-notice' }));
+  }
+  // The server's copy warnings on the template just saved or approved (wave 1): it went
+  // ahead, and these are worth a second look.
+  for (const warning of screen.warnings) {
+    host.append(element('p', { className: 'banner banner-warning', text: warning, testId: 'template-warning' }));
   }
   renderUnread(host, screen, 'sequences');
   renderSequences(host, screen);

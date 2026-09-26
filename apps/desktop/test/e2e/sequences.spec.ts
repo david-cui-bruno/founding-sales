@@ -145,6 +145,26 @@ test('the template form refuses a variable Callie cannot fill, then saves a temp
   });
 });
 
+test('a long email is a warning under the form, not a refusal, and the server’s warnings show after the save (wave 1)', async ({ page }) => {
+  await openSequences(page, [emptyDraftState()], {
+    createTemplate: emptyDraftState({ notice: 'template_created', warnings: ['template_body_too_long', 'template_body_multiple_urls'] }),
+  });
+
+  await page.getByTestId('template-new').click();
+  await page.getByTestId('template-form-name').fill('Long touch');
+  await page.getByTestId('template-form-subject').fill('A question, {firm_name}');
+  await page.getByTestId('template-form-body').fill('word '.repeat(95));
+  await page.getByTestId('template-form-signOff').fill('David');
+  await expect(page.getByTestId('template-form-warning')).toContainText('words with its sign-off');
+  await page.getByTestId('template-save').click();
+  await expect.poll(() => server.calls.filter(entry => entry.method === 'createTemplate')).toHaveLength(1);
+
+  await expect(page.getByTestId('template-warning')).toHaveText([
+    'The email is longer than 89 words, sign-off included.',
+    'The email has more than one link.',
+  ]);
+});
+
 test('Review and resume shows the dates first, and only the confirmation resumes', async ({ page }) => {
   const held = populatedSequenceState();
   const reviewing = populatedSequenceState({

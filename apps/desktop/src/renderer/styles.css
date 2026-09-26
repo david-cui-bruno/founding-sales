@@ -1233,3 +1233,10 @@ main.view .candidate-choice {
   margin-top: 8px;
   color: var(--ink-2);
 }
+
+/* A template's copy advice (wave 1): grey, under the email; it never stops the save. */
+.field-advice {
+  margin: 4px 0 0;
+  color: var(--ink-2);
+  font-size: 13px;
+}

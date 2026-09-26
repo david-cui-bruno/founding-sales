@@ -20,6 +20,7 @@ import {
   stepsForWire,
   suggestedPlan,
   templateFormIssues,
+  templateFormWarnings,
   templateVariablesIn,
   typedBodyOf,
 } from '../src/renderer/sequenceView.ts';
@@ -156,12 +157,18 @@ describe('the template form (audit G03)', () => {
     expect(templateVariablesIn(draft.subject, body)).toEqual({ known: ['firm_name', 'contact_first_name'], unknown: [] });
   });
 
-  it('refuses a name-less form, an unknown variable, an unsubscribe link and a long email before sending', () => {
+  it('refuses a name-less form, an unknown variable and an unsubscribe link before sending', () => {
     expect(templateFormIssues(draft)).toEqual([]);
     expect(templateFormIssues({ ...draft, name: ' ' }).map(issue => issue.field)).toEqual(['name']);
     expect(templateFormIssues({ ...draft, body: 'Hi {first}' })[0]?.text).toContain('Callie cannot fill {first}');
     expect(templateFormIssues({ ...draft, body: 'Click to unsubscribe' })[0]?.text).toContain('unsubscribe');
-    expect(templateFormIssues({ ...draft, body: 'word '.repeat(90) })[0]?.text).toContain('keep it to 89');
+  });
+
+  it('warns about a long email and still lets it be saved (wave 1)', () => {
+    const long = { ...draft, body: 'word '.repeat(90) };
+    expect(templateFormIssues(long)).toEqual([]);
+    expect(templateFormWarnings(long)[0]).toMatch(/^The email is \d+ words with its sign-off\. /u);
+    expect(templateFormWarnings(draft)).toEqual([]);
   });
 
   it('names every issue of a refused approval in words', () => {
@@ -232,6 +239,27 @@ describe('the sequence bridge authors through the commands (audit G03)', () => {
       requiredVariables: ['firm_name', 'contact_first_name'],
     });
     expect(body).not.toHaveProperty('templateId');
+    // A server before lane W1-C answers the version alone: no warnings.
+    expect(state.warnings).toEqual([]);
+  });
+
+  it('shows the copy warnings a create or an approval answered, until the next act (wave 1)', async () => {
+    const { api } = scriptedApi({
+      ...reads,
+      '/templates/create': accepted({ ...templateVersionAnswer({ approvedAt: null }), warnings: ['template_body_too_long', 'template_new_advice'] }),
+      '/templates/approve': accepted({ ...templateVersionAnswer(), warnings: ['template_subject_url'] }),
+      '/sequences/versions/publish': accepted({}),
+    });
+    const bridge = sequenceBridge(api);
+    const created = await bridge.createTemplate({ templateId: null, name: 'Long', subject: 'Hi', body: 'word '.repeat(90), signOff: 'David' });
+    expect(created.notice).toBe('template_created');
+    expect(created.warnings).toEqual(['template_body_too_long', 'template_new_advice']);
+    expect(sequenceScreen(created).warnings).toEqual(['The email is longer than 89 words, sign-off included.', 'template_new_advice']);
+    // A read keeps them on screen; the next act clears them.
+    expect((await bridge.state()).warnings).toHaveLength(2);
+    const approved = await bridge.approveTemplate({ templateVersionId: TEMPLATE });
+    expect(approved.warnings).toEqual(['template_subject_url']);
+    expect((await bridge.publish({ sequenceVersionId: SEQUENCE_IDS.version })).warnings).toEqual([]);
   });
 
   it('reads a refused approval’s issues from its body, past the transport’s 80-character code', async () => {
