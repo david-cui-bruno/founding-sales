@@ -195,7 +195,16 @@ Three facts must hold before an automated email leaves FSS, and each is checked 
 
 1. **The deployment flag.** `FSS_SENDING_ENABLED` is `true` only when the value is exactly `true`; anything else is a refusal, never a send. Since 26 September 2026 it comes from the committed `sending_enabled = true` in `infra/roots/production/main.tf`, so changing it is a pull request, a read plan and an apply.
 2. **The domain's authentication.** The database enforces it: `sending_domains.automated_sending_enabled` cannot be true without SPF, DKIM, DMARC and a recorded Postmaster review. If the checklist refuses, a check is missing — fix the DNS, not the constraint. How the row comes to exist is in `docs/greenfield/sending.md`.
-3. **The owner's attestation, naming a stored release record.** `POST /settings/update` with `settingKey: "sending_enabled"` refuses a non-admin caller and an enable that names no release gate: "an admin clicked yes" is not the gate. Turning sending off is always accepted.
+3. **The owner's attestation, naming a stored release record.** From the desktop settings page, or:
+
+   ```
+   POST /settings/update
+   { "settingKey": "sending_enabled",
+     "value": { "enabled": true, "releaseGateReference": "<the reference the put printed>" },
+     "changeNote": "<why>" }
+   ```
+
+   It refuses a non-admin caller and an enable that names no release gate: "an admin clicked yes" is not the gate. Turning sending off (`"enabled": false`) is always accepted. The desktop's *Release gate reference* field takes the same text.
 
 Both the enable and each send compare their own half of the record, in the same transaction as the write:
 
@@ -206,7 +215,14 @@ Both the enable and each send compare their own half of the record, in the same 
 | `release_record_digest_mismatch` | the record's `artifacts.api` is not the API image serving the request |
 | `release_record_identity_unknown` | the process could not read its own digest from the ECS task metadata. Fail-closed: the fix is the task, not the setting |
 
-**The process form** (lane g100). The attestation may name `ci-gate:main` instead of one record, so that automatic deploys keep sending on without an attestation each time. `ci-gate:main` means any stored record with `source: "ci-gate"`, and only `record.sh from-ci` writes one, and only from a green *Greenfield gate* run of a push to main at the record's commit. The enable still needs a passing `ci-gate` record naming the running API's digest, and the worker still sends only while one names its own. A rehearsal record is never admitted by the process form even when it names the running digest: production binds `ci-gate` records alone (PR 279). `ci-gate:main` is reserved, so the contract refuses a record carrying it as its reference. Every claimed send records which form admitted it and which record it bound, in its `prepared → dispatching` row of `outbound_message_events`. To go back to one release at a time, attest again naming a reference.
+**The process form** (lane g100). The attestation may name `ci-gate:main` instead of one record, so that automatic deploys keep sending on without an attestation each time:
+
+```
+{ "settingKey": "sending_enabled",
+  "value": { "enabled": true, "releaseGateReference": "ci-gate:main" },
+  "changeNote": "I attest to the release process: a worker may send under any ci-gate release record for a commit on main, put by the CI deploy before its rollout" }
+```
+ `ci-gate:main` means any stored record with `source: "ci-gate"`, and only `record.sh from-ci` writes one, and only from a green *Greenfield gate* run of a push to main at the record's commit. The enable still needs a passing `ci-gate` record naming the running API's digest, and the worker still sends only while one names its own. A rehearsal record is never admitted by the process form even when it names the running digest: production binds `ci-gate` records alone (PR 279). `ci-gate:main` is reserved, so the contract refuses a record carrying it as its reference. Every claimed send records which form admitted it and which record it bound, in its `prepared → dispatching` row of `outbound_message_events`. To go back to one release at a time, attest again naming a reference.
 
 **Withdrawing it.** Either half stops sending, and so does deploying other digests: the worker holds every send when no admitted record names its image. The attestation (`enabled: false`) stops it immediately and is a versioned change with a reason; the deployment flag stops it at the apply and deployment after its pull request. Neither cancels a fence that has already entered `dispatching` — that message may have gone, and Appendix B is how it settles.
 
