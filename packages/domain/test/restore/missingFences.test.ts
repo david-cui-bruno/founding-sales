@@ -498,7 +498,23 @@ describe('sends whose fence a point-in-time restore lost (lane g73)', () => {
       sentMessages: [sentMessage({ header: fssHeader(), to: 'unread@northwind.example.test', at: '2026-09-24T19:00:00.000Z' })],
     });
     const { scan } = await pass(gmail, around('2026-09-24T19:00:00.000Z'));
-    expect(scan).toEqual({ outcome: 'grant_revoked', listed: 0, messages: [] });
+    expect(scan).toEqual({ outcome: 'grant_revoked', listed: 0, messages: [], vanished: 0 });
+  });
+
+  it('reports a folder in which a listed message vanished as not read to the end, with what it did read', async () => {
+    // Lane W3-S8 review: a message Gmail listed and then deleted before the metadata read
+    // used to be skipped while the folder still said `scanned`.
+    const at = '2026-09-24T19:30:00.000Z';
+    const kept = sentMessage({ header: fssHeader(), to: 'still.here@northwind.example.test', at });
+    const gone = sentMessage({ header: fssHeader(), to: 'deleted.since@northwind.example.test', at });
+    const recorded = world.clientWith(world.alpha, { sentMessages: [kept, gone] });
+    const gmail: RecordedGmailClient = {
+      ...recorded,
+      getMetadata: async (access, id, headers) => (id === gone.id ? null : await recorded.getMetadata(access, id, headers)),
+    };
+    const scan = await scanSentFolder(context(), scanDeps(gmail), { mailboxId: world.alpha.mailboxId, ...around(at) });
+    expect(scan).toMatchObject({ outcome: 'message_vanished', vanished: 1, listed: 1 });
+    expect(scan.messages.map(message => message.providerMessageId)).toEqual([kept.id]);
   });
 
   describe('the sequence engine and a tombstoned step', () => {

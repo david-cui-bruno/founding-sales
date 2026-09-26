@@ -7,6 +7,8 @@ import { composeHandlers } from '../bootstrap/main.ts';
 import { createLogger, errorFields, type Logger } from '../bootstrap/log.ts';
 import {
   holdsListCommand,
+  holdsReleaseRestoreCommand,
+  mailboxListCommand,
   mailboxReconcileSentCommand,
   releaseRecordPutCommand,
   releaseRecordShowCommand,
@@ -149,7 +151,9 @@ type AdminRunner = (invocation: AdminInvocation) => Promise<AdminOutcome>;
 
 const ADMIN_COMMANDS: Readonly<Record<string, AdminRunner>> = Object.freeze({
   'holds list': holdsListCommand,
+  'holds release-restore': holdsReleaseRestoreCommand,
   'suppression-journal replay': suppressionJournalReplayCommand,
+  'mailbox list': mailboxListCommand,
   'mailbox reconcile-sent': mailboxReconcileSentCommand,
   'release-record put': releaseRecordPutCommand,
   'release-record show': releaseRecordShowCommand,

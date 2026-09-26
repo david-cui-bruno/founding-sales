@@ -2,10 +2,10 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { withTransaction, type SessionQueryable } from '@fss/domain/db/queryable.ts';
 import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
-import { listConnectedMailboxes } from '@fss/domain/mail/mailboxes.ts';
-import type { MailboxRow } from '@fss/domain/mail/types.ts';
 import { reconcileOutboundMessage } from '@fss/domain/outbound/reconcile.ts';
 import { scanSentFolder } from '@fss/domain/outbound/sentFolder.ts';
+import { openHold, releaseHold } from '@fss/domain/policy/holds.ts';
+import { ALL_BLOCKED_ACTION_KINDS } from '@fss/domain/policy/types.ts';
 import { putReleaseRecord, readReleaseRecord, type StoredReleaseRecord } from '@fss/domain/release/records.ts';
 import { replaySuppressionJournal, type SuppressionJournalSource } from '@fss/domain/suppression/replay.ts';
 import {
@@ -69,6 +69,71 @@ export async function holdsListCommand(invocation: AdminInvocation): Promise<Adm
   return accept({ count: holds.length, reason: reason ?? null, excludeReason: excludeReason ?? null, holds });
 }
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+
+/**
+ * `fss admin holds release-restore --admin-user <uuid> --note <text> [--hold <id>]`.
+ *
+ * The audited clearance of a `restore_in_progress` hold (lane W3-S8). Nothing opens one
+ * since the generation check went, and the generation advance that released them went
+ * with it, so a hold left from before would otherwise block sending and dialing in its
+ * workspace for good. This releases the open ones (or the one `--hold` names) through
+ * the domain's own `releaseHold` and writes one `audit_events` row per hold, as the admin
+ * named, with the note, in the same transaction. It refuses a user who is not an active
+ * admin of the hold's workspace, an empty note, and a `--hold` that is not an open
+ * restore hold; it touches no hold of any other reason. Run `fss admin holds list
+ * --reason restore_in_progress` first and read what it would release.
+ */
+export async function holdsReleaseRestoreCommand(invocation: AdminInvocation): Promise<AdminOutcome> {
+  const adminUserId = (invocation.options['--admin-user'] ?? '').trim();
+  const note = (invocation.options['--note'] ?? '').trim();
+  if (!UUID.test(adminUserId)) return refuse('admin_invalid', '--admin-user is the id of the admin this release is attributed to');
+  if (note.length === 0 || note.length > 500) {
+    return refuse('note_invalid', '--note says why the hold is released, in at most 500 characters');
+  }
+  const named = invocation.options['--hold'];
+  const open = await listOpenHolds(invocation.session, { reason: 'restore_in_progress' });
+  const chosen = named === undefined ? open : open.filter(hold => hold.id === named);
+  if (named !== undefined && chosen.length === 0) {
+    return refuse('hold_unknown', 'no open restore_in_progress hold has that id');
+  }
+  for (const workspaceId of new Set(chosen.map(hold => hold.workspaceId))) {
+    const { rows } = await invocation.session.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM workspace_memberships
+        WHERE workspace_id = $1 AND user_id = $2 AND role = 'admin' AND status = 'active'`,
+      [workspaceId, adminUserId],
+    );
+    if (Number(rows[0]?.count ?? '0') < 1) {
+      return refuse('not_admin', `${adminUserId} is not an active admin of workspace ${workspaceId}`);
+    }
+  }
+
+  const released: Record<string, unknown>[] = [];
+  for (const hold of chosen) {
+    const context = repositoryContext(workspaceScope(hold.workspaceId, RESTORE_ACTOR), invocation.session);
+    const outcome = await withTransaction(invocation.session, async () => {
+      const done = await releaseHold(context, hold.id);
+      if (done === null) return null;
+      await invocation.session.query(
+        `INSERT INTO audit_events (workspace_id, actor_kind, actor_user_id, action, subject_kind, subject_id, detail)
+         VALUES ($1, 'admin', $2, 'hold.restore_released', 'hold', $3, $4::jsonb)`,
+        [
+          hold.workspaceId,
+          adminUserId,
+          hold.id,
+          JSON.stringify({ note, startedAt: done.startedAt, releasedAt: done.releasedAt, via: 'fss admin holds release-restore' }),
+        ],
+      );
+      return done;
+    });
+    if (outcome !== null) {
+      released.push({ workspaceId: hold.workspaceId, holdId: hold.id, startedAt: outcome.startedAt, releasedAt: outcome.releasedAt });
+    }
+  }
+  const others = await listOpenHolds(invocation.session, { excludeReason: 'restore_in_progress' });
+  return accept({ released: released.length, holds: released, otherHoldsStillOpen: others.length, adminUserId, note });
+}
+
 // ---------------------------------------------------------------------------
 // The suppression journal replay (runbook step 5).
 // ---------------------------------------------------------------------------
@@ -121,23 +186,150 @@ export async function suppressionJournalReplayCommand(invocation: AdminInvocatio
 }
 
 // ---------------------------------------------------------------------------
-// The Sent-folder reconciliation (runbook step 5).
+// The mailboxes, and the Sent-folder reconciliation (runbook step d).
 // ---------------------------------------------------------------------------
 
-/** Which mailboxes the command acts on: every connected one, or the one named. */
-async function chosenMailboxes(
-  invocation: AdminInvocation,
-): Promise<readonly { readonly workspaceId: string; readonly mailbox: MailboxRow }[]> {
-  const named = invocation.options['--mailbox'];
-  const found: { workspaceId: string; mailbox: MailboxRow }[] = [];
-  for (const workspaceId of await listWorkspaceIds(invocation.session)) {
-    const context = repositoryContext(workspaceScope(workspaceId, RESTORE_ACTOR), invocation.session);
-    for (const mailbox of await listConnectedMailboxes(context)) {
-      if (named !== undefined && mailbox.id !== named) continue;
-      found.push({ workspaceId, mailbox });
+/** One mailbox row as the restore commands read it, in any status. */
+interface RestoreMailbox {
+  readonly workspaceId: string;
+  readonly id: string;
+  readonly ownerUserId: string;
+  readonly address: string;
+  readonly status: string;
+}
+
+/** Every mailbox this database has, whatever its status, oldest workspace first. */
+async function everyMailbox(session: SessionQueryable): Promise<readonly RestoreMailbox[]> {
+  const found: RestoreMailbox[] = [];
+  for (const workspaceId of await listWorkspaceIds(session)) {
+    const { rows } = await session.query<{ id: string; owner_user_id: string; email_address: string; status: string }>(
+      `SELECT id, owner_user_id, email_address, status FROM mailboxes WHERE workspace_id = $1 ORDER BY email_address, id`,
+      [workspaceId],
+    );
+    for (const row of rows) {
+      found.push({
+        workspaceId,
+        id: row.id,
+        ownerUserId: row.owner_user_id,
+        address: row.email_address.trim().toLowerCase(),
+        status: row.status,
+      });
     }
   }
   return found;
+}
+
+/**
+ * `fss admin mailbox list`. Read-only: every mailbox with its address and status.
+ *
+ * The restore runbook runs it against the instance being replaced, before anything
+ * points at the copy, so the inventory `reconcile-sent` demands comes from the database
+ * that knows every mailbox connected up to the failure, not from the copy, which knows
+ * only those connected before the restore point.
+ */
+export async function mailboxListCommand(invocation: AdminInvocation): Promise<AdminOutcome> {
+  const mailboxes = await everyMailbox(invocation.session);
+  return accept({
+    count: mailboxes.length,
+    mailboxes: mailboxes.map(mailbox => ({
+      workspaceId: mailbox.workspaceId,
+      mailboxId: mailbox.id,
+      address: mailbox.address,
+      status: mailbox.status,
+    })),
+  });
+}
+
+/**
+ * `--inventory a@example.com,b@example.com`: every mailbox address that could have sent
+ * since the restore point, as the operator established it. Lower-cased, each one an
+ * address, none repeated, and at least one.
+ */
+export function parseInventory(value: string | undefined): readonly string[] | null {
+  const entries = (value ?? '')
+    .split(',')
+    .map(entry => entry.trim().toLowerCase())
+    .filter(entry => entry.length > 0);
+  if (entries.length === 0) return null;
+  if (new Set(entries).size !== entries.length) return null;
+  if (!entries.every(entry => /^[^@\s,]+@[^@\s,]+\.[^@\s,]+$/u.test(entry))) return null;
+  return entries;
+}
+
+/** What a hold opened for an unattached send names as its source (`--hold-unattached`). */
+export const UNATTACHED_SEND_HOLD_SOURCE = 'restore.unattached_send';
+
+/**
+ * `--hold-unattached`: a send no single step can be named for holds what it could belong
+ * to instead of stopping the restore. One `restore_in_progress` hold per firm it names,
+ * or one on the workspace when it names none (`recipient_unreadable`), each blocking
+ * every action kind, keyed by the message's hash so a rerun opens nothing twice. The
+ * holds outlive the restore until an admin has checked the Sent message, ended the
+ * duplicate, and released them with `fss admin holds release-restore`.
+ */
+async function holdUnattachedSend(
+  context: ReturnType<typeof repositoryContext>,
+  message: string,
+  firmIds: readonly string[],
+): Promise<readonly string[]> {
+  const scopes: readonly (string | null)[] = firmIds.length === 0 ? [null] : firmIds;
+  const holdIds: string[] = [];
+  for (const firmId of scopes) {
+    const { rows } = await context.db.query<{ id: string }>(
+      `SELECT id FROM active_holds
+        WHERE workspace_id = $1 AND reason_code = 'restore_in_progress' AND released_at IS NULL
+          AND source_event_kind = $2 AND source_event_id = $3 AND scope_key IS NOT DISTINCT FROM $4`,
+      [context.scope.workspaceId, UNATTACHED_SEND_HOLD_SOURCE, message, firmId],
+    );
+    const existing = rows[0]?.id;
+    holdIds.push(
+      existing ??
+        (await openHold(context, {
+          scopeKind: firmId === null ? 'workspace' : 'firm',
+          ...(firmId === null ? {} : { scopeKey: firmId }),
+          reasonCode: 'restore_in_progress',
+          blockedActionKinds: ALL_BLOCKED_ACTION_KINDS,
+          sourceEventKind: UNATTACHED_SEND_HOLD_SOURCE,
+          sourceEventId: message,
+          // Settled by a person who can see the Sent message; released afterwards with
+          // `fss admin holds release-restore`, which audits it.
+          recoveryAction: 'resolve_ambiguity',
+        })),
+    );
+  }
+  return holdIds;
+}
+
+/** How many in-doubt fences one query reads before asking for the next page. */
+export const RECONCILE_FENCE_PAGE_SIZE = 200;
+
+/**
+ * Every fence of one mailbox left `dispatching` or `reconciling` since `since`, however
+ * many there are: read a page at a time in id order, never capped.
+ */
+export async function inDoubtFenceIds(
+  session: SessionQueryable,
+  input: { readonly workspaceId: string; readonly mailboxId: string; readonly since: string },
+  pageSize: number = RECONCILE_FENCE_PAGE_SIZE,
+): Promise<readonly string[]> {
+  const ids: string[] = [];
+  let after = '00000000-0000-0000-0000-000000000000';
+  for (;;) {
+    const { rows } = await session.query<{ id: string }>(
+      `SELECT id FROM outbound_messages
+        WHERE workspace_id = $1 AND mailbox_id = $2
+          AND state IN ('reconciling', 'dispatching')
+          AND (dispatch_started_at IS NULL OR dispatch_started_at >= $3::timestamptz)
+          AND id > $4::uuid
+        ORDER BY id
+        LIMIT $5`,
+      [input.workspaceId, input.mailboxId, input.since, after, pageSize],
+    );
+    ids.push(...rows.map(row => row.id));
+    const last = rows[rows.length - 1];
+    if (rows.length < pageSize || last === undefined) return ids;
+    after = last.id;
+  }
 }
 
 /**
@@ -179,29 +371,40 @@ function missingFenceLine(workspaceId: string, mailboxId: string, message: strin
 }
 
 /**
- * `fss admin mailbox reconcile-sent --since <instant> (--all-mailboxes | --mailbox <id>)`.
+ * `fss admin mailbox reconcile-sent --since <instant> --inventory <address>[,<address>...]`.
  *
  * After a point-in-time restore, against the restored copy, with both services stopped
  * (`docs/greenfield/runbooks/restore.md`). A send made after the restore point is a
  * message in Gmail with no fence in the copy, and nothing in the sender would stop it
  * going again; this puts the fences back.
  *
+ * **Which mailboxes.** The operator's `--inventory`: every address that could have sent
+ * since the restore point, established from the instance being replaced (`fss admin
+ * mailbox list`) and not from the copy, which cannot know a mailbox connected after the
+ * restore point. Each inventory address is read in whatever status the copy has it; an
+ * address the copy has no mailbox for is `mailbox_not_in_copy`. A mailbox the copy has
+ * connected that the inventory does not name is read too, and is
+ * `mailbox_not_in_inventory`, because the inventory was then not the whole list.
+ *
  * **The fences the copy holds.** Every fence in `dispatching` or `reconciling` started
- * since `--since` goes through `reconcileOutboundMessage`, the sweep's own function: a
- * Message-ID the Sent folder holds makes it `sent` (`fences_reconciled`).
+ * since `--since` goes through `reconcileOutboundMessage`, the sweep's own function, a
+ * page at a time and never capped: a Message-ID the Sent folder holds makes it `sent`.
  *
  * **The fences it lost (lane g73).** Then each mailbox's Sent folder is listed from
  * `--since` to now, and every message carrying FSS's marker for that mailbox is answered by
  * `recoverSentFolderMessage`, one transaction each: a lost fence is inserted as a `sent`
- * tombstone on the step it was the send of (`missing_fences_tombstoned`); a fence left
- * `prepared` or `held` is recorded sent (`pre_dispatch_fences_marked_sent`); a send nothing
- * in the copy could repeat is reported (`missing_fences_unmatched`); and a send that cannot
- * be tied to one step is **unattached**.
+ * tombstone (`missing_fences_tombstoned`); a fence left `prepared` or `held` is recorded
+ * sent (`pre_dispatch_fences_marked_sent`); a send nothing in the copy could repeat is
+ * reported (`missing_fences_unmatched`); and a send that cannot be tied to one step is
+ * **unattached**. With `--hold-unattached`, each unattached send instead holds the firms
+ * it could belong to (`holdUnattachedSend`) and is reported under `unattached_held`.
  *
- * **It refuses to finish** (exit 20, the report still printed) while any send is
- * unattached or any mailbox's Sent folder was not read to the end (`grant_revoked`,
- * `rate_limited`, `truncated`): either is a send the copy may repeat. `unresolved` lists
- * each one. The runbook does not start the services until a run exits 0.
+ * **It refuses to finish** (exit 20, the report still printed) while anything could let
+ * a send repeat: an unattached send; a Sent folder not read to the end (`grant_revoked`,
+ * `rate_limited`, `truncated`, `message_vanished`); an inventory address the copy lacks;
+ * a connected mailbox the inventory lacks. `unresolved` lists each one, and a run that
+ * read no mailbox at all is refused as `reconcile_no_coverage`. The runbook starts
+ * nothing until a run exits 0.
  *
  * Gmail is only ever read: the client is `readOnlyGmail`, whatever the deployment built.
  * `--since` is the restore point minus ten minutes (`RESTORE_SENT_SCAN_SKEW_SECONDS`); the
@@ -215,11 +418,30 @@ export async function mailboxReconcileSentCommand(invocation: AdminInvocation): 
   if (!Number.isFinite(Date.parse(since))) {
     return refuse('since_invalid', '--since is the instant the Sent folder is read from: the restore point minus ten minutes');
   }
-  const chosen = await chosenMailboxes(invocation);
-  const named = invocation.options['--mailbox'];
-  if (named !== undefined && chosen.length === 0) {
-    return refuse('mailbox_unknown', 'no connected mailbox has that id in this database');
+  const inventory = parseInventory(invocation.options['--inventory']);
+  if (inventory === null) {
+    return refuse(
+      'inventory_invalid',
+      '--inventory is every mailbox address that could have sent since the restore point, comma-separated, at least one, none repeated',
+    );
   }
+
+  const holdUnattached = invocation.switches.has('--hold-unattached');
+  const unresolved: Record<string, unknown>[] = [];
+  const unattachedHeld: Record<string, unknown>[] = [];
+  const known = await everyMailbox(invocation.session);
+  const chosen = new Map<string, RestoreMailbox>();
+  for (const address of inventory) {
+    const matches = known.filter(mailbox => mailbox.address === address);
+    if (matches.length === 0) unresolved.push({ kind: 'mailbox_not_in_copy', address });
+    for (const mailbox of matches) chosen.set(mailbox.id, mailbox);
+  }
+  for (const mailbox of known) {
+    if (mailbox.status !== 'connected' || inventory.includes(mailbox.address)) continue;
+    unresolved.push({ kind: 'mailbox_not_in_inventory', workspaceId: mailbox.workspaceId, mailboxId: mailbox.id });
+    chosen.set(mailbox.id, mailbox);
+  }
+
   const until = new Date().toISOString();
   const deps = { gmail: readOnlyGmail(mail.gmail), oauth: mail.oauth, cipher: mail.cipher, actor: 'fss-admin' };
 
@@ -228,25 +450,17 @@ export async function mailboxReconcileSentCommand(invocation: AdminInvocation): 
   let listed = 0;
   const missingFences: Record<string, unknown>[] = [];
   const mailboxes: Record<string, unknown>[] = [];
-  const unresolved: Record<string, unknown>[] = [];
-  for (const { workspaceId, mailbox } of chosen) {
+  for (const mailbox of chosen.values()) {
+    const workspaceId = mailbox.workspaceId;
     const context = repositoryContext(workspaceScope(workspaceId, RESTORE_ACTOR), invocation.session);
     // `--since` bounds which fences are looked at; the Sent search's own window is the
     // fence's 24 hours (Appendix B). `reconcileMailbox` has no lower bound, so the bound
     // is applied here and each fence still goes through the one function that observes it.
-    const { rows } = await invocation.session.query<{ id: string }>(
-      `SELECT id FROM outbound_messages
-        WHERE workspace_id = $1 AND mailbox_id = $2
-          AND state IN ('reconciling', 'dispatching')
-          AND (dispatch_started_at IS NULL OR dispatch_started_at >= $3::timestamptz)
-        ORDER BY dispatch_started_at
-        LIMIT 200`,
-      [workspaceId, mailbox.id, since],
-    );
+    const fences = await inDoubtFenceIds(invocation.session, { workspaceId, mailboxId: mailbox.id, since });
     const fenceOutcomes: string[] = [];
-    for (const row of rows) {
+    for (const id of fences) {
       const report = await withTransaction(invocation.session, async () =>
-        reconcileOutboundMessage(context, deps, { outboundMessageId: row.id }),
+        reconcileOutboundMessage(context, deps, { outboundMessageId: id }),
       );
       fenceOutcomes.push(report.outcome);
       if (report.outcome === 'sent') fencesReconciled += 1;
@@ -255,7 +469,13 @@ export async function mailboxReconcileSentCommand(invocation: AdminInvocation): 
     const scan = await scanSentFolder(context, deps, { mailboxId: mailbox.id, since, until });
     listed += scan.listed;
     if (scan.outcome !== 'scanned') {
-      unresolved.push({ kind: 'sent_folder_unscanned', workspaceId, mailboxId: mailbox.id, outcome: scan.outcome });
+      unresolved.push({
+        kind: 'sent_folder_unscanned',
+        workspaceId,
+        mailboxId: mailbox.id,
+        outcome: scan.outcome,
+        ...(scan.vanished > 0 ? { vanished: scan.vanished } : {}),
+      });
     }
     for (const message of scan.messages) {
       const recovery = await withTransaction(invocation.session, async () =>
@@ -269,21 +489,31 @@ export async function mailboxReconcileSentCommand(invocation: AdminInvocation): 
       const line = missingFenceLine(workspaceId, mailbox.id, redactedMessageId(message.rfcMessageId), recovery);
       missingFences.push(line);
       if (recovery.outcome === 'unattached') {
-        unresolved.push({ kind: 'unattached_sent_message', ...line, sentAt: message.sentAt });
+        if (holdUnattached) {
+          const firmIds = recovery.firmIds;
+          const holdIds = await withTransaction(invocation.session, async () =>
+            holdUnattachedSend(context, redactedMessageId(message.rfcMessageId), firmIds),
+          );
+          unattachedHeld.push({ ...line, sentAt: message.sentAt, holdIds });
+        } else {
+          unresolved.push({ kind: 'unattached_sent_message', ...line, sentAt: message.sentAt });
+        }
       }
     }
     mailboxes.push({
       workspaceId,
       mailboxId: mailbox.id,
-      fences: rows.length,
+      status: mailbox.status,
+      fences: fences.length,
       outcomes: fenceOutcomes,
-      sentFolder: { outcome: scan.outcome, listed: scan.listed, fssMessages: scan.messages.length },
+      sentFolder: { outcome: scan.outcome, listed: scan.listed, fssMessages: scan.messages.length, vanished: scan.vanished },
     });
   }
 
   const report = {
     since,
     until,
+    inventory,
     mailboxes_scanned: mailboxes.length,
     fences_reconciled: fencesReconciled,
     missing_fences_tombstoned: outcomes.tombstoned,
@@ -295,14 +525,23 @@ export async function mailboxReconcileSentCommand(invocation: AdminInvocation): 
     sent_folder_present: outcomes.present,
     mailboxes_unscanned: unresolved.filter(item => item['kind'] === 'sent_folder_unscanned').length,
     unresolved,
+    unattached_held: unattachedHeld,
     missing_fences: missingFences,
     mailboxes,
   };
+  if (mailboxes.length === 0) {
+    return {
+      ok: false,
+      reason: 'reconcile_no_coverage',
+      detail: 'no mailbox was read: none of the inventory is in this database; a run that covered nothing proves nothing',
+      report,
+    };
+  }
   if (unresolved.length > 0) {
     return {
       ok: false,
       reason: 'reconcile_unresolved',
-      detail: `${String(report.missing_fences_unattached)} send(s) could not be tied to one step and ${String(report.mailboxes_unscanned)} Sent folder(s) were not read to the end; settle each item in "unresolved" and run again before starting the services`,
+      detail: `${String(unresolved.length)} item(s) could let a send repeat: settle each one in "unresolved" and run again before starting the services`,
       report,
     };
   }
