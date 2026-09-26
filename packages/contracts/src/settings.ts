@@ -20,10 +20,8 @@ import { instant, uuid } from './foundationRows.ts';
  * payload.
  *
  * **Bounds that exist for safety are in the schema, not only in a check.** The
- * warning threshold must be below the critical one, a client-version range must be
- * two real semantic versions: the server applies the key's schema to the value after
- * choosing the schema by key, so a request outside a bound is refused with
- * `invalid_value` and writes no version. A bound a client can move is not a bound.
+ * server applies the key's schema to the value after choosing the schema by key, so a
+ * request outside a bound is refused with `invalid_value` and writes no version.
  */
 
 // ---------------------------------------------------------------------------
@@ -51,60 +49,42 @@ import { instant, uuid } from './foundationRows.ts';
  * reviewed postmaster — that a jsonb blob cannot express. See
  * `docs/decisions/g9-two-slices-that-belong-to-other-lanes.md`.
  */
-export const SETTING_KEYS = [
-  'alert_thresholds',
-  'business_time_zone',
-  'client_version_range',
-  'sending_enabled',
-] as const;
-export type SettingKey = (typeof SETTING_KEYS)[number];
-
-// ---------------------------------------------------------------------------
-// 13.3's thresholds, as versioned configuration
-// ---------------------------------------------------------------------------
-
-/** `HH:MM` on a 24-hour clock. */
-export const localTimeOfDaySchema = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'a local time of day');
+export const SETTING_KEYS = ['business_time_zone', 'sending_enabled'] as const;
+export type ActiveSettingKey = (typeof SETTING_KEYS)[number];
 
 /**
- * Specification 13.3: "Initial alarm thresholds are configuration, versioned with the
- * release." The nine of them, plus G1's repeat interval.
- *
- * Seven of these are also Terraform variables in `infra/modules/alerts/variables.tf`,
- * and `packages/domain/test/settings/settings.test.ts` reads that file and fails when
- * a default here disagrees with the default there. Two are not, because no CloudWatch
- * variable expresses them: the Today deadline is a workspace-local time of day, and
- * the held fraction is a literal inside a metric-math expression.
+ * @deprecated Retired 26 Sep 2026. `alert_thresholds` and `client_version_range`
+ * changed nothing: the API takes its client range from the deployment and CloudWatch
+ * takes its thresholds from Terraform. The server no longer answers, accepts or
+ * reports a history for either. The wire vocabulary still names them only because the
+ * Mac's settings rows and their tests do; remove this list, `DEFAULT_ALERT_THRESHOLDS`
+ * and `AlertThresholds` once the desktop has dropped them. Migration 0015's CHECK
+ * still allows both keys until a later migration narrows it.
  */
-export const alertThresholdsSchema = z
-  .strictObject({
-    /** "Today snapshot absent at 05:10 workspace time", in the workspace business zone. */
-    todaySnapshotDeadlineLocalTime: localTimeOfDaySchema,
-    /** "three missed one-minute scheduler or mailbox checks" */
-    heartbeatMissedChecks: z.number().int().min(1).max(10),
-    /** "oldest runnable job older than five minutes warning" */
-    oldestJobAgeWarningSeconds: z.number().int().min(30).max(86_400),
-    /** "... or fifteen minutes critical" */
-    oldestJobAgeCriticalSeconds: z.number().int().min(30).max(86_400),
-    /** "Gmail watch within two days of expiry" */
-    gmailWatchExpiryHours: z.number().int().min(1).max(168),
-    /** "canary not completed within five minutes" */
-    canaryStaleSeconds: z.number().int().min(60).max(86_400),
-    /** "all active sequences unexpectedly held", as the held fraction the alarm compares. */
-    allSequencesHeldFraction: z.number().min(0.1).max(1),
-    /** "dead job unresolved for one hour" */
-    deadJobUnresolvedSeconds: z.number().int().min(60).max(604_800),
-    /** "connected mailbox with recent sends disconnected for 48 hours" */
-    mailboxDisconnectedHours: z.number().int().min(1).max(720),
-    /** Not one of the nine: G1's repeat interval for an unacknowledged critical alert. */
-    unacknowledgedCriticalSeconds: z.number().int().min(300).max(86_400),
-  })
-  .refine(value => value.oldestJobAgeWarningSeconds < value.oldestJobAgeCriticalSeconds, {
-    message: 'the warning threshold must be lower than the critical one',
-  });
-export type AlertThresholds = z.infer<typeof alertThresholdsSchema>;
+export const RETIRED_SETTING_KEYS = ['alert_thresholds', 'client_version_range'] as const;
 
-/** The values of 13.3, and the Terraform defaults they must equal. */
+/** A key the wire may name: an active one, or (deprecated) a retired one. */
+export type SettingKey = ActiveSettingKey | (typeof RETIRED_SETTING_KEYS)[number];
+
+// ---------------------------------------------------------------------------
+// Deprecated: the retired thresholds slice, still read by the Mac's settings form
+// ---------------------------------------------------------------------------
+
+/** @deprecated See `RETIRED_SETTING_KEYS`. */
+export interface AlertThresholds {
+  readonly todaySnapshotDeadlineLocalTime: string;
+  readonly heartbeatMissedChecks: number;
+  readonly oldestJobAgeWarningSeconds: number;
+  readonly oldestJobAgeCriticalSeconds: number;
+  readonly gmailWatchExpiryHours: number;
+  readonly canaryStaleSeconds: number;
+  readonly allSequencesHeldFraction: number;
+  readonly deadJobUnresolvedSeconds: number;
+  readonly mailboxDisconnectedHours: number;
+  readonly unacknowledgedCriticalSeconds: number;
+}
+
+/** @deprecated See `RETIRED_SETTING_KEYS`. The alarms read Terraform's values. */
 export const DEFAULT_ALERT_THRESHOLDS: AlertThresholds = Object.freeze({
   todaySnapshotDeadlineLocalTime: '05:10',
   heartbeatMissedChecks: 3,
@@ -117,24 +97,6 @@ export const DEFAULT_ALERT_THRESHOLDS: AlertThresholds = Object.freeze({
   mailboxDisconnectedHours: 48,
   unacknowledgedCriticalSeconds: 3600,
 });
-
-/**
- * Which Terraform variable each threshold is the same number as. The two with `null`
- * have no variable, and saying so here is what keeps the test's list honest.
- */
-export const ALERT_THRESHOLD_TERRAFORM_VARIABLES: Readonly<Record<keyof AlertThresholds, string | null>> =
-  Object.freeze({
-    todaySnapshotDeadlineLocalTime: null,
-    heartbeatMissedChecks: 'heartbeat_missed_checks',
-    oldestJobAgeWarningSeconds: 'oldest_job_age_warning_seconds',
-    oldestJobAgeCriticalSeconds: 'oldest_job_age_critical_seconds',
-    gmailWatchExpiryHours: 'gmail_watch_expiry_hours',
-    canaryStaleSeconds: 'canary_stale_seconds',
-    allSequencesHeldFraction: null,
-    deadJobUnresolvedSeconds: 'dead_job_unresolved_seconds',
-    mailboxDisconnectedHours: 'mailbox_disconnected_hours',
-    unacknowledgedCriticalSeconds: 'unacknowledged_critical_seconds',
-  });
 
 // ---------------------------------------------------------------------------
 // The other slices
@@ -192,19 +154,19 @@ export type SendingEnabledSetting = z.infer<typeof sendingEnabledSettingSchema>;
 
 /** Every key's value schema, chosen by the server from the key the command names. */
 export const SETTING_VALUE_SCHEMAS = {
-  alert_thresholds: alertThresholdsSchema,
   business_time_zone: businessTimeZoneSettingSchema,
-  client_version_range: clientVersionRangeSchema,
   sending_enabled: sendingEnabledSettingSchema,
-} as const satisfies Record<SettingKey, z.ZodType>;
+} as const satisfies Record<ActiveSettingKey, z.ZodType>;
 
-/** The value a workspace has before an admin has ever set one. */
-export const DEFAULT_SETTING_VALUES: Readonly<Record<SettingKey, unknown>> = Object.freeze({
-  alert_thresholds: DEFAULT_ALERT_THRESHOLDS,
-  business_time_zone: { timeZone: 'America/New_York' },
-  client_version_range: { minimum: '1.0.0', maximum: '1.0.0' },
-  sending_enabled: { enabled: false, releaseGateReference: null },
-});
+/**
+ * The value a workspace has before an admin has ever set one. Indexable by any wire
+ * key; a retired key has no default.
+ */
+export const DEFAULT_SETTING_VALUES: Readonly<Record<ActiveSettingKey, unknown> & Partial<Record<SettingKey, unknown>>> =
+  Object.freeze({
+    business_time_zone: { timeZone: 'America/New_York' },
+    sending_enabled: { enabled: false, releaseGateReference: null },
+  });
 
 // ---------------------------------------------------------------------------
 // Commands and reads
@@ -212,11 +174,14 @@ export const DEFAULT_SETTING_VALUES: Readonly<Record<SettingKey, unknown>> = Obj
 
 const commandEnvelope = { commandId: commandIdSchema, clientVersion: semanticVersionSchema };
 
-export const settingKeySchema = z.enum(SETTING_KEYS);
+/** Every key a response may carry, the retired two included (deprecated). */
+export const settingKeySchema = z.enum([...SETTING_KEYS, ...RETIRED_SETTING_KEYS]);
+/** The keys a command or a history request may name: the server refuses a retired one. */
+export const activeSettingKeySchema = z.enum(SETTING_KEYS);
 
 export const updateSettingCommandSchema = z.strictObject({
   ...commandEnvelope,
-  settingKey: settingKeySchema,
+  settingKey: activeSettingKeySchema,
   /** Validated by the key's schema on the server, never by a schema the client chose. */
   value: z.unknown(),
   changeNote: z.string().trim().min(1).max(500),
@@ -352,7 +317,7 @@ export const dashboardRequestSchema = z.strictObject({
 export type DashboardRequest = z.infer<typeof dashboardRequestSchema>;
 
 export const settingHistoryRequestSchema = z.strictObject({
-  settingKey: settingKeySchema,
+  settingKey: activeSettingKeySchema,
   limit: z.number().int().min(1).max(200).optional(),
 });
 
