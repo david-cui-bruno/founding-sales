@@ -79,7 +79,8 @@
 #   * `alert_emails` — the e-mail subscriptions of the alert topic;
 #   * the image repositories — those of the images that run now, with the given digests;
 #   * the database host — `--active-database-host`, held to the running `FSS_DATABASE_HOST`,
-#     which `deploy.sh current` reports for each service (refusal 5).
+#     which `deploy.sh current` reports for each service (refusal 5). A service whose task
+#     definition carries no `FSS_DATABASE_HOST` at all is unknown, not empty, and refused.
 #
 # Those of the last four that the checkout still declares as variables (a commit from
 # before wave 1) are passed to its plan as `-var`, exactly as before. Those it commits as
@@ -278,19 +279,54 @@ else
   [ "$API_DATABASE_HOST" = "$WORKER_DATABASE_HOST" ] \
     || rollback_fail "FSS_DATABASE_HOST is $API_DATABASE_HOST on the API and $WORKER_DATABASE_HOST on the worker; production runs on one database, and a rollback keeps it"
   LIVE_DATABASE_HOST=$API_DATABASE_HOST
-  if [ "$LIVE_DATABASE_HOST" = "<none>" ]; then LIVE_DATABASE_HOST=''; fi
+  # `<none>` is deploy.sh current's word for a task definition that carries no
+  # FSS_DATABASE_HOST. Read as an empty host it passes below for "production runs on the
+  # managed instance" and the plan carries no active_database_host, which during a restore
+  # points production back at the old instance (review of PR 292). It is unknown, not empty.
+  [ "$LIVE_DATABASE_HOST" != "<none>" ] \
+    || rollback_fail "deploy.sh current reports FSS_DATABASE_HOST=<none> for $PREFIX-api and $PREFIX-worker: nothing can say which database production runs on, and a plan made without knowing it would point production at the managed instance. Read the two task definitions by hand. Nothing was planned."
   rehearsal_log "production runs $RUNNING_API and $RUNNING_WORKER"
+  # Whether there is anything to roll back is decided here and acted on after the database
+  # host is judged: a rollback that has nothing to do still says so from a known host.
   if [ "${RUNNING_API##*@}" = "$API_DIGEST" ] && [ "${RUNNING_WORKER##*@}" = "$WORKER_DIGEST" ]; then
-    rehearsal_log "production already runs both digests; there is nothing to roll back"
-    exit 0
+    NOTHING_TO_ROLL_BACK=1
   fi
   API_IMAGE="${RUNNING_API%@*}@$API_DIGEST"
   WORKER_IMAGE="${RUNNING_WORKER%@*}@$WORKER_DIGEST"
 fi
 
 # ---------------------------------------------------------------------------
+# 2b. The database host (refusal 5): the managed instance's, unless a restore is in progress,
+# in which case the operator names the copy production runs on and the plan carries it. It
+# is judged here, on the hosts step 2 just read, and before the run that has nothing to roll
+# back returns: a supplied host that is not the running one is wrong either way, and a
+# restore in progress is worth saying out loud even when the images already match.
+# ---------------------------------------------------------------------------
+if rehearsal_dry_run; then
+  release_output "$ROOT_DIRECTORY" database_endpoint >/dev/null
+  rehearsal_plan "refuse unless FSS_DATABASE_HOST as it runs is the managed instance's address (database_endpoint without its port)${ACTIVE_DATABASE_HOST:+ or, as given, $ACTIVE_DATABASE_HOST}"
+else
+  ENDPOINT="$(release_output "$ROOT_DIRECTORY" database_endpoint)" || ENDPOINT=''
+  MANAGED_DATABASE_HOST="${ENDPOINT%:*}"
+  if [ -n "$ACTIVE_DATABASE_HOST" ]; then
+    [ "$ACTIVE_DATABASE_HOST" = "$LIVE_DATABASE_HOST" ] \
+      || rollback_fail "--active-database-host is $ACTIVE_DATABASE_HOST, and production's task definitions run on FSS_DATABASE_HOST=$LIVE_DATABASE_HOST: a rollback moves images and never the database, so the host it plans is the one production runs on. Nothing was planned."
+    rehearsal_log "production runs on $LIVE_DATABASE_HOST (the managed instance is ${MANAGED_DATABASE_HOST:-unknown}); the plan carries active_database_host=$ACTIVE_DATABASE_HOST"
+  elif [ "$LIVE_DATABASE_HOST" != "$MANAGED_DATABASE_HOST" ]; then
+    rollback_fail "production's task definitions run on FSS_DATABASE_HOST=$LIVE_DATABASE_HOST, and the managed instance is ${MANAGED_DATABASE_HOST:-unknown (the database_endpoint output is empty)}: a restore is in progress (docs/greenfield/runbooks/restore.md, between (f) and (g)), and a plan without active_database_host would point production back at the old instance. Run this again with --active-database-host $LIVE_DATABASE_HOST. Nothing was planned."
+  else
+    rehearsal_log "production runs on the managed instance ($LIVE_DATABASE_HOST)"
+  fi
+fi
+
+if [ "${NOTHING_TO_ROLL_BACK:-0}" = 1 ]; then
+  rehearsal_log "production already runs both digests; there is nothing to roll back"
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
 # 3. What the running deployment carries: sending and the hostname. The database host
-# came from deploy.sh current in step 2.
+# came from deploy.sh current in step 2 and was judged in 2b.
 # ---------------------------------------------------------------------------
 if rehearsal_dry_run; then
   release_aws production ecs describe-task-definition --task-definition "$PREFIX-api" --output json
@@ -354,26 +390,6 @@ print(version if isinstance(version, int) and not isinstance(version, bool) else
     rollback_fail "the database is at schema $DATABASE_VERSION and $COMMIT declares api $API_MIN-$API_MAX and worker $WORKER_MIN-$WORKER_MAX: that is a rollback across a schema change, and the database never rolls back (release.md 4.1). The paths are forward repair or the restore protocol."
   fi
   rehearsal_log "the database is at schema $DATABASE_VERSION, which api $API_MIN-$API_MAX and worker $WORKER_MIN-$WORKER_MAX accept"
-fi
-
-# ---------------------------------------------------------------------------
-# 4b. The database host (refusal 5): the managed instance's, unless a restore is in progress,
-# in which case the operator names the copy production runs on and the plan carries it.
-if rehearsal_dry_run; then
-  release_output "$ROOT_DIRECTORY" database_endpoint >/dev/null
-  rehearsal_plan "refuse unless FSS_DATABASE_HOST as it runs is the managed instance's address (database_endpoint without its port)${ACTIVE_DATABASE_HOST:+ or, as given, $ACTIVE_DATABASE_HOST}"
-else
-  ENDPOINT="$(release_output "$ROOT_DIRECTORY" database_endpoint)" || ENDPOINT=''
-  MANAGED_DATABASE_HOST="${ENDPOINT%:*}"
-  if [ -n "$ACTIVE_DATABASE_HOST" ]; then
-    [ "$ACTIVE_DATABASE_HOST" = "$LIVE_DATABASE_HOST" ] \
-      || rollback_fail "--active-database-host is $ACTIVE_DATABASE_HOST, and production's task definitions run on FSS_DATABASE_HOST=${LIVE_DATABASE_HOST:-<none>}: a rollback moves images and never the database, so the host it plans is the one production runs on. Nothing was planned."
-    rehearsal_log "production runs on $LIVE_DATABASE_HOST (the managed instance is ${MANAGED_DATABASE_HOST:-unknown}); the plan carries active_database_host=$ACTIVE_DATABASE_HOST"
-  elif [ -n "$LIVE_DATABASE_HOST" ] && [ "$LIVE_DATABASE_HOST" != "$MANAGED_DATABASE_HOST" ]; then
-    rollback_fail "production's task definitions run on FSS_DATABASE_HOST=$LIVE_DATABASE_HOST, and the managed instance is ${MANAGED_DATABASE_HOST:-unknown (the database_endpoint output is empty)}: a restore is in progress (docs/greenfield/runbooks/restore.md, between (f) and (g)), and a plan without active_database_host would point production back at the old instance. Run this again with --active-database-host $LIVE_DATABASE_HOST. Nothing was planned."
-  else
-    rehearsal_log "production runs on the managed instance${LIVE_DATABASE_HOST:+ ($LIVE_DATABASE_HOST)}"
-  fi
 fi
 
 # ---------------------------------------------------------------------------

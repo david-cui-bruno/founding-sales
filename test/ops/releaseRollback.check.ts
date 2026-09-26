@@ -302,8 +302,14 @@ interface WorldOptions {
    * it (the default), `before` it, or in a repository that does not hold it.
    */
   readonly boundary?: 'after' | 'before' | 'missing';
-  /** FSS_DATABASE_HOST on each running definition; the managed instance's for both by default. */
+  /**
+   * FSS_DATABASE_HOST on each running definition; the managed instance's for both by
+   * default. An empty string leaves the variable off the definition altogether, which is
+   * what `deploy.sh current` reports as `<none>`.
+   */
   readonly databaseHost?: Readonly<Record<Service, string>>;
+  /** Which digests the two services run: the ones this rollback replaces, or the ones it rolls back to. */
+  readonly runs?: 'new' | 'old';
   /** Whether the checkout's root declares active_database_host; it does by default. */
   readonly declaresActiveHost?: boolean;
 }
@@ -407,7 +413,7 @@ function world(options: WorldOptions = {}): World {
       { name: 'FSS_SCHEMA_MIN', value: '16' },
       { name: 'FSS_SCHEMA_MAX', value: '16' },
       { name: 'FSS_SENDING_ENABLED', value: sending[service] },
-      { name: 'FSS_DATABASE_HOST', value: databaseHost[service] },
+      ...(databaseHost[service] === '' ? [] : [{ name: 'FSS_DATABASE_HOST', value: databaseHost[service] }]),
       ...(service === 'api' ? [{ name: 'FSS_PUBLIC_ORIGIN', value: `https://${HOSTNAME}` }] : []),
     ];
     return {
@@ -416,7 +422,9 @@ function world(options: WorldOptions = {}): World {
         family: `fss-prod-${service}`,
         revision,
         status: 'ACTIVE',
-        containerDefinitions: [{ name: service, image: `${REGISTRY}/fss-prod-${service}@${NEW[service]}`, environment }],
+        containerDefinitions: [
+          { name: service, image: `${REGISTRY}/fss-prod-${service}@${options.runs === 'old' ? OLD[service] : NEW[service]}`, environment },
+        ],
       },
     };
   };
@@ -520,7 +528,9 @@ function expectRefusal(stub: World, run: Run, fragments: readonly string[], opti
   for (const fragment of fragments) expect(lines[0], run.output).toContain(fragment);
   expect(writes(stub), run.output).toEqual([]);
   if (options.planned !== true) {
-    expect(operations(stub).filter(name => name.startsWith('terraform')), run.output).toEqual([]);
+    // `terraform output` is a read: step 2b asks for the managed instance's address before
+    // the database host is judged (review of PR 292). Nothing that writes ran.
+    expect(operations(stub).filter(name => name.startsWith('terraform') && name !== 'terraform output'), run.output).toEqual([]);
   }
   expect(existsSync(join(stub.root, 'rollback.tfplan'))).toBe(false);
 }
@@ -764,6 +774,42 @@ describe('rollback.sh refuses in one FAIL line, before anything is written', () 
     // deploy.sh current reports the host per service, so the disagreement is its reading.
     const split = world({ databaseHost: { api: COPY_HOST, worker: MANAGED_HOST } });
     expectRefusal(split, rollback(split), [`FSS_DATABASE_HOST is ${COPY_HOST} on the API and ${MANAGED_HOST} on the worker`]);
+  });
+
+  it('refuses a definition that carries no FSS_DATABASE_HOST at all, rather than reading it as the managed instance', () => {
+    // `deploy.sh current` prints `<none>` for a definition without the variable. Read as an
+    // empty host it passed for the managed instance and the plan carried no
+    // active_database_host, which during a restore points production back at the old
+    // instance (review of PR 292): it is unknown, and unknown is a refusal.
+    const unknown = world({ databaseHost: { api: '', worker: '' } });
+    expectRefusal(unknown, rollback(unknown), [
+      'deploy.sh current reports FSS_DATABASE_HOST=<none> for fss-prod-api and fss-prod-worker',
+      'a plan made without knowing it would point production at the managed instance',
+    ]);
+    const half = world({ databaseHost: { api: MANAGED_HOST, worker: '' } });
+    expectRefusal(half, rollback(half), [`FSS_DATABASE_HOST is ${MANAGED_HOST} on the API and <none> on the worker`]);
+  });
+
+  it('judges the database host before it says there is nothing to roll back', () => {
+    // Production already runs the digests this rolls back to. That is a success, and it is
+    // the last thing said: a host that is not the running one, and a restore in progress,
+    // are wrong whether or not there is an image to move (review of PR 292).
+    const done = world({ runs: 'old' });
+    const nothing = rollback(done);
+    expect(nothing.code, nothing.output).toBe(0);
+    expect(nothing.output).toContain('production already runs both digests; there is nothing to roll back');
+    expect(operations(done)).not.toContain('terraform plan');
+
+    const wrong = world({ runs: 'old' });
+    expectRefusal(wrong, rollback(wrong, ['--active-database-host', COPY_HOST]), [
+      `--active-database-host is ${COPY_HOST}, and production's task definitions run on FSS_DATABASE_HOST=${MANAGED_HOST}`,
+    ]);
+
+    const restoring = world({ runs: 'old', databaseHost: { api: COPY_HOST, worker: COPY_HOST } });
+    expectRefusal(restoring, rollback(restoring), [
+      `production's task definitions run on FSS_DATABASE_HOST=${COPY_HOST}, and the managed instance is ${MANAGED_HOST}`,
+      'a restore is in progress',
+    ]);
   });
 
   it('refuses a plan that replaces a service', () => {

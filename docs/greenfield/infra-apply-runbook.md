@@ -300,7 +300,7 @@ A clean first plan shows:
 
 - every name beginning `fss-prod`, and no `fss-rh-` anywhere;
 - the two ECR repositories under **"has moved to"** — `module.stack.module.registry` to `module.stack.module.registry[0]` — and under nothing else. A plan that proposes to destroy, replace or recreate `fss-prod-api` or `fss-prod-worker` is a plan to delete the images the release record names. Stop there;
-- **five** task definitions: `fss-prod-api`, `fss-prod-worker`, `fss-prod-migration`, `fss-prod-operations`, `fss-prod-drill`. Three of them are one-off families with no service;
+- **four** task definitions: `fss-prod-api`, `fss-prod-worker`, `fss-prod-migration`, `fss-prod-operations`. Two of them are one-off families with no service; the fifth, `fss-prod-drill`, went with the restore drill at main `beed2d90` (PR 272, W3-S8);
 - both ECS services created with `desired_count = 0`, because this plan passes `bootstrap=true`. `release-deploy.sh` scales them afterwards. Without `bootstrap=true` the counts are 2 and 1;
 - **eight** `aws_secretsmanager_secret` entries and **no** `aws_secretsmanager_secret_version` at all. Terraform creates the entries empty and never holds a value; the offline gate refuses a version resource outright;
 - exactly one `aws_lb_listener`, on port 443. There is no port-80 listener by decision (`docs/archive/decisions/g1-no-plaintext-listener.md`);
@@ -311,11 +311,11 @@ A clean first plan shows:
 
 ### 3.1 Rehearsal first, always
 
-A release that touches schema, sending, suppression, Gmail, restore or job fencing runs the full recovery drill in rehearsal before production sees it (spec 16.2). The rehearsal root deploys **the exact digests proposed for production**.
+A release that changes the schema, the infrastructure or a release script is rehearsed before production sees it (`release.md` 3). The rehearsal root deploys **the exact digests proposed for production**. The restore drill that used to run here was deleted on 26 September 2026 (W3-S8): a restore is rehearsed by hand from [`runbooks/restore.md`](runbooks/restore.md) and its quarterly smoke.
 
 **This is a workflow run, not a command you type.** `fss-rh-deploy` is assumable only from the `rehearsal` environment (section 1.1), so the commands below are what `.github/workflows/greenfield-release.yml` runs, written out so you can read them; typed on your Mac they are refused `sts:AssumeRole`, and that refusal is the boundary working. Dispatch the workflow instead: `docs/greenfield/release.md` section 3.
 
-Two differences between what the workflow runs and what is written here. It passes **`-var="assume_deployment_role=false"`** on the apply and on the teardown's destroy, because its session already *is* `fss-rh-deploy` and the provider must not assume the role it already holds (section 1.1); and it runs `infra/scripts/rehearsal-caller-identity.sh fss-rh-deploy` first, which prints the session ARN and refuses anything that is not an assumed-role session of that role. Both appear in the credential-free plan `FSS_REHEARSAL_DRY_RUN=1` prints.
+Two differences between what the workflow runs and what is written here. It passes **`-var="assume_deployment_role=false"`** on the apply and on the teardown's destroy, because its session already *is* `fss-rh-deploy` and the provider must not assume the role it already holds (section 1.1); and it runs `infra/scripts/rehearsal.sh identity fss-rh-deploy` first, which prints the session ARN and refuses anything that is not an assumed-role session of that role. There is no credential-free print of either any more: `rehearsal.sh` has no dry run (P7), and what a stage runs is read from `.github/workflows/greenfield-release.yml` or rehearsed offline by `test/ops/scenario39.check.ts`.
 
 ```bash
 cd infra/roots/rehearsal
@@ -346,7 +346,7 @@ Run the Appendix G scenarios here. Then tear the run down:
 terraform destroy -var="assume_deployment_role=false" -var="name_prefix=fss-rh-${RUN_ID}" ...same vars...
 ```
 
-`infra/scripts/rehearsal.sh teardown` is what the workflow runs, and it repeats the caller-identity check before the destroy: the teardown step runs on `always()`, so it cannot assume the earlier step was reached. An identity that is not `fss-rh-deploy` stops the teardown with the environment still standing, which is the cheaper mistake.
+`infra/scripts/rehearsal.sh teardown` is what the workflow runs, and it repeats the caller-identity check before the destroy: the teardown step runs on `always()`, so it cannot assume the earlier step was reached. An identity that is not `fss-rh-deploy` stops the teardown with the environment still standing, which is the cheaper mistake. After the destroy it reads the cloud for anything still carrying the prefix and fails if there is any — the same reading `rehearsal.sh guard <prefix>` makes, and `rehearsal.sh leftovers <prefix>` prints on its own (`release.md` 3, item 14).
 
 Teardown caveat: the rehearsal journal bucket uses **GOVERNANCE** object lock with a one-day retention. Objects written during the run refuse deletion until that day passes, so a same-day `destroy` leaves the bucket behind. Either wait a day, or have the rehearsal role carry `s3:BypassGovernanceRetention` scoped to `fss-rh-*` buckets only. Do not put that permission on the production role.
 
@@ -561,7 +561,8 @@ A freshly applied stack will show several alarms in `INSUFFICIENT_DATA` until th
 | Rotate a secret value | `aws secretsmanager put-secret-value`, then `--force-new-deployment`. Terraform is not involved. **Except `app-runtime-database`**, whose value is a live PostgreSQL password: a put on its own leaves a secret the database refuses. Put the new value, then `fss admin database-users ensure --rotate-password` to alter the role to match, then force the deployment — and never re-put it as part of a redeploy (`release.md` 5.1 and 8.0s). |
 | Add an alert recipient | append to the `alert_emails` literal in `infra/roots/production/main.tf` in a pull request, plan and apply, then confirm the subscription. |
 | Point production at a restored copy | `docs/greenfield/runbooks/restore.md` (c): `terraform plan -var="active_database_host=<the copy's address>"` with the rest of the section 3.0 list. The plan must replace exactly the `api`, `worker`, `migration` and `operations` task definitions, differing only in `FSS_DATABASE_HOST`, and update the two services in place. Unset (`null`), every task definition carries the managed instance's address, as before the variable existed. |
-| Tear down a rehearsal run | The release workflow does it on `always()`, through `infra/scripts/rehearsal.sh teardown`: caller-identity check, then `terraform destroy` with the same `name_prefix` and `assume_deployment_role=false`. Mind the object-lock caveat in 3.1. |
+| Tear down a rehearsal run | The release workflow does it on `always()`, through `infra/scripts/rehearsal.sh teardown`: caller-identity check, `terraform destroy` with the same `name_prefix` and `assume_deployment_role=false`, then the reading that nothing still carries the prefix. Mind the object-lock caveat in 3.1. |
+| Read what a rehearsal run left behind | `infra/scripts/rehearsal.sh leftovers <prefix>` as the `fss-rh-deploy` session: one line per resource still carrying the prefix, and per stale state lock. It judges nothing; `guard` is what fails on it. |
 
 Never run `terraform destroy` in the production root. Deletion protection on the database and the load balancer will stop it part-way and leave the stack half-removed, which is worse than either state.
 

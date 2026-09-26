@@ -33,7 +33,7 @@ infra/
     policy.sh                           the deployment roles' policy: render (no call), check (read-only
                                         simulation), put (put, read back, compared)
     rehearsal.sh                        the schema rehearsal's steps: prefix, identity, run-task, ranges,
-                                        teardown, guard
+                                        teardown, leftovers, guard
     rollback.sh                         production back on a previous release's images (release.md 4.1a)
 ```
 

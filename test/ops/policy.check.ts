@@ -59,6 +59,15 @@ interface Run {
   readonly output: string;
 }
 
+/** One statement of the rendered document, as far as the put's widening test reads it. */
+interface Statement {
+  readonly Sid: string;
+  readonly Effect: string;
+  readonly Action?: string | readonly string[];
+  readonly Resource?: string | readonly string[];
+  readonly Condition?: Record<string, unknown>;
+}
+
 function world(options: { readonly account?: string; readonly held?: unknown; readonly tampered?: unknown } = {}): {
   readonly aws: string;
   readonly calls: () => readonly string[][];
@@ -114,22 +123,69 @@ describe('policy.sh put: the rendered document, put and read back, in the accoun
     const put = stub.calls()[2] ?? [];
     expect(put.slice(2, 6)).toEqual(['--role-name', 'fss-rh-deploy', '--policy-name', 'fss-rh-deploy-scope']);
     expect(run.output).toContain('adds BypassGovernanceOnRehearsalBucketsOnly');
+    expect(run.output).toContain('fss-rh-deploy-scope is not on fss-rh-deploy yet; this put is the first one');
     expect(run.output).toContain(`put fss-rh-deploy-scope on fss-rh-deploy in account ${ACCOUNT}, and read it back unchanged`);
     expect(run.output).toContain('next, before any apply: infra/scripts/policy.sh check fss-rh-deploy fss-rh');
   });
 
   it('names what changes against the policy the role holds, and nothing when it holds this document', () => {
-    const document = JSON.parse(rendered('fss-rh')) as { Statement: { Sid: string }[] };
-    const [first, second, ...rest] = document.Statement;
-    const held = { ...document, Statement: [{ ...first, Sid: 'AnOldStatement' }, { ...second, Effect: 'Deny' }, ...rest] };
-    const changing = policy(['put', 'fss-rh'], { FSS_POLICY_AWS: world({ held }).aws });
-    expect(changing.code, changing.output).toBe(0);
-    expect(changing.output).toContain(`adds ${String(first?.Sid)}`);
-    expect(changing.output).toContain('removes AnOldStatement');
-    expect(changing.output).toContain(`changes ${String(second?.Sid)}`);
+    // A narrowing: the role holds an Allow this document does not, so the put removes it.
+    const document = JSON.parse(rendered('fss-rh')) as { readonly Statement: Statement[] };
+    const extra = { Sid: 'AnOldStatement', Effect: 'Allow', Action: 's3:GetObject', Resource: '*' };
+    const held = { ...document, Statement: [...document.Statement, extra] };
+    const narrowing = policy(['put', 'fss-rh'], { FSS_POLICY_AWS: world({ held }).aws });
+    expect(narrowing.code, narrowing.output).toBe(0);
+    expect(narrowing.output).toContain('removes AnOldStatement');
     const same = policy(['put', 'fss-rh'], { FSS_POLICY_AWS: world({ held: document }).aws });
     expect(same.code, same.output).toBe(0);
     expect(same.output).toContain('the role already holds this document; putting it again changes nothing');
+  });
+
+  it('refuses a put that would widen the role, in every shape of widening, and puts nothing', () => {
+    // The diff was a courtesy: it printed what a put added and then put it. A document
+    // that grants more than the role holds is a review, not a re-put (review of PR 292).
+    const document = JSON.parse(rendered('fss-rh')) as { readonly Statement: Statement[] };
+    const allow = document.Statement.find(statement => statement.Effect === 'Allow' && Array.isArray(statement.Action));
+    const deny = document.Statement.find(statement => statement.Effect === 'Deny');
+    const unconditioned = document.Statement.find(statement => statement.Condition === undefined);
+    if (allow === undefined || deny === undefined || unconditioned === undefined) throw new Error('the rendered document lost its shapes');
+    const without = (sid: string): Statement[] => document.Statement.filter(statement => statement.Sid !== sid);
+    const replacing = (sid: string, change: Partial<Statement>): Statement[] =>
+      document.Statement.map(statement => (statement.Sid === sid ? { ...statement, ...change } : statement));
+    for (const [what, held, named] of [
+      // The role holds neither this Allow nor this Deny's removal yet.
+      ['an Allow the role does not hold', { ...document, Statement: without(allow.Sid) }, `adds the Allow ${allow.Sid}`],
+      ['a Deny the document drops', { ...document, Statement: [...document.Statement, { Sid: 'AnOldDeny', Effect: 'Deny', Action: 's3:*', Resource: '*' }] }, 'removes the Deny AnOldDeny'],
+      [
+        'an action added to an Allow',
+        { ...document, Statement: replacing(allow.Sid, { Action: (allow.Action as string[]).slice(1) }) },
+        `Action of ${allow.Sid} gains ${(allow.Action as string[])[0] ?? ''}`,
+      ],
+      [
+        'an action taken from a Deny',
+        { ...document, Statement: replacing(deny.Sid, { Action: [...(Array.isArray(deny.Action) ? deny.Action : [deny.Action as string]), 'iam:PassRole'] }) },
+        `Action of ${deny.Sid} gains iam:PassRole`,
+      ],
+      [
+        'a Condition the role holds and the document drops',
+        { ...document, Statement: replacing(unconditioned.Sid, { Condition: { StringEquals: { 'aws:RequestedRegion': 'us-east-1' } } }) },
+        `${unconditioned.Sid} loses its Condition`,
+      ],
+      ['an Allow that was a Deny', { ...document, Statement: replacing(allow.Sid, { Effect: 'Deny' }) }, `changes the effect of ${allow.Sid} from Deny to Allow`],
+    ] as const) {
+      const stub = world({ held });
+      const refused = policy(['put', 'fss-rh'], { FSS_POLICY_AWS: stub.aws });
+      expect(refused.code, what).toBe(1);
+      expect(refused.output, what).toContain('this put would widen the role');
+      expect(refused.output, what).toContain(named);
+      expect(refused.output, what).toContain('put it again with --allow-widening');
+      expect(stub.calls().filter(call => call[1] === 'put-role-policy'), what).toEqual([]);
+      // Named on purpose, the same put goes through and says what it widened.
+      const allowed = policy(['put', 'fss-rh', '--allow-widening'], { FSS_POLICY_AWS: world({ held }).aws });
+      expect(allowed.code, what).toBe(0);
+      expect(allowed.output, what).toContain('widening, put on purpose (--allow-widening)');
+      expect(allowed.output, what).toContain(named);
+    }
   });
 
   it('refuses production unless it is named, and puts it when it is', () => {
@@ -188,11 +244,34 @@ describe('the old names are policy.sh render and policy.sh check', () => {
       const now = policy(['check', ...pair], { FSS_CHECK_ROLE_DRY_RUN: '1' });
       expect(policy(pair, { FSS_CHECK_ROLE_DRY_RUN: '1' }, old), pair.join(' ')).toEqual(now);
     }
-    // The drill's actions and the tagging read went with the scripts that made them (W3-S8, P7).
+    // The drill's actions went with the scripts that made them (W3-S8, P7).
     const plan = policy(['check', 'fss-rh-deploy', 'fss-rh'], { FSS_CHECK_ROLE_DRY_RUN: '1' }).output;
-    for (const gone of ['rds:RestoreDBInstanceToPointInTime', 'rds:CreateDBSnapshot', 'cloudwatch:DescribeAlarmHistory', 'tag:GetResources']) {
+    for (const gone of ['rds:RestoreDBInstanceToPointInTime', 'rds:CreateDBSnapshot', 'cloudwatch:DescribeAlarmHistory']) {
       expect(plan, gone).not.toContain(gone);
     }
-    expect(plan).toContain('plan:   rds:DescribeDBInstances');
+    // The rehearsal guard reads what the run left behind, so the check asks about those
+    // reads too; dropping them from the table was the P1 of the review of PR 292.
+    for (const read of ['tag:GetResources', 'rds:DescribeDBInstances', 'rds:DescribeDBSnapshots', 'cloudfront:ListDistributions', 'logs:DescribeLogGroups']) {
+      expect(plan, read).toContain(`plan:   ${read}`);
+    }
+  });
+
+  it('asks about as many actions as the header says, for each role', () => {
+    // The header of policy.sh names the table's size. A row added or lost without a word
+    // there is a table nobody can reason about from the outside (review of PR 292).
+    const header = readFileSync(repositoryPath('infra/scripts/policy.sh'), 'utf8');
+    expect(header).toContain('The table is 25 groups, 115 action entries over');
+    expect(header).toContain('108 distinct actions, for production; the rehearsal adds one group (116 entries, the same');
+    const counted = (prefix: string): { groups: number; entries: number; distinct: number } => {
+      const lines = policy(['check', `${prefix}-deploy`, prefix], { FSS_CHECK_ROLE_DRY_RUN: '1' }).output.split('\n');
+      const actions = lines.flatMap(line => /^plan: {3}([a-z0-9-]+:[A-Za-z]+)$/.exec(line)?.slice(1) ?? []);
+      return {
+        groups: lines.filter(line => /^plan: [a-z]/.test(line) && line !== 'plan: no call was made').length,
+        entries: actions.length,
+        distinct: new Set(actions).size,
+      };
+    };
+    expect(counted('fss-prod')).toEqual({ groups: 25, entries: 115, distinct: 108 });
+    expect(counted('fss-rh')).toEqual({ groups: 26, entries: 116, distinct: 108 });
   });
 });

@@ -5,7 +5,7 @@
 #
 #   policy.sh render <fss-rh|fss-prod> [--pretty|--compact|--sids]    no call of any kind
 #   policy.sh check  <fss-rh-deploy|fss-prod-deploy> <fss-rh|fss-prod>  read-only simulation
-#   policy.sh put    <fss-rh|fss-prod> [--environment production]     replaces <prefix>-deploy-scope
+#   policy.sh put    <fss-rh|fss-prod> [--environment production] [--allow-widening]
 #
 # docs/greenfield/infra-apply-runbook.md 1.1 is the operator's page. The document replaces
 # the whole inline policy named `<prefix>-deploy-scope` on `<prefix>-deploy`; it is not a
@@ -41,7 +41,11 @@
 # every action the next apply and the release scripts need, against sample ARNs of the
 # namespace that need not exist. The table below is this script's own list: every action
 # of that run, at least one per service the Terraform tree uses, and the actions the
-# release scripts make outside Terraform. What keeps the rendered policy in step with the
+# release scripts make outside Terraform. The table is 25 groups, 115 action entries over
+# 108 distinct actions, for production; the rehearsal adds one group (116 entries, the same
+# 108 actions) for the master secret under the service tag key. `test/ops/policy.check.ts`
+# counts the plan, so a row added or lost without a word here fails the gate.
+# What keeps the rendered policy in step with the
 # Terraform tree is a different check, `test/ops/deploymentRolePolicy.check.ts` over
 # `infra/policies/terraform-resource-actions.json` (W3-T owns both).
 #
@@ -64,6 +68,16 @@
 # document was rendered for (a policy naming another account's resources is not this
 # account's policy), and production unless it is named out loud (--environment production).
 #
+# **A put that widens the role stops** (review of PR 292). Printing the Sid diff and then
+# writing it anyway makes the diff a courtesy; a rendered template that adds an Allow or
+# drops a Deny would be put by a command run for an unrelated reason. So a statement added
+# under Effect Allow, a Deny that is gone, and a change that adds an action or a resource
+# to an Allow or takes one from a Deny are each a refusal that names the Sid. Narrowing —
+# an Allow removed, a Deny added, an action dropped from an Allow — is put without
+# ceremony, and so is the first put of all: a role that holds no `<prefix>-deploy-scope`
+# yet has nothing to widen. `--allow-widening` is how a widening is put on purpose, and the
+# line it prints says what was widened, so a release record can carry it.
+#
 #   FSS_POLICY_AWS=<path>      the CLI, for the offline test's stub
 #
 # `test/ops/deploymentRolePolicy.check.ts` renders and checks; `test/ops/policy.check.ts`
@@ -78,7 +92,7 @@ policy_usage() {
   cat >&2 <<'USAGE'
 usage: policy.sh render <fss-rh|fss-prod> [--pretty|--compact|--sids]
        policy.sh check  <fss-rh-deploy|fss-prod-deploy> <fss-rh|fss-prod>
-       policy.sh put    <fss-rh|fss-prod> [--environment production]
+       policy.sh put    <fss-rh|fss-prod> [--environment production] [--allow-widening]
 USAGE
   exit 2
 }
@@ -316,21 +330,21 @@ secrets manager entries (Access to KMS is not allowed, 21 Sep)|secretsmanager:Cr
 alarms, including the two composites (denied 21 Sep)|cloudwatch:PutMetricAlarm,cloudwatch:PutCompositeAlarm,cloudwatch:DeleteAlarms,cloudwatch:DescribeAlarms,cloudwatch:TagResource|arn:aws:cloudwatch:${REGION}:${ACCOUNT}:alarm:${PREFIX}-example-critical|
 the composite alarms, which CloudWatch authorizes against alarm:* (denied 21 Sep)|cloudwatch:PutCompositeAlarm|arn:aws:cloudwatch:${REGION}:${ACCOUNT}:alarm:*|
 the origin access control (denied 21 Sep)|cloudfront:CreateOriginAccessControl,cloudfront:GetOriginAccessControl,cloudfront:DeleteOriginAccessControl|*|
-the distribution|cloudfront:CreateDistribution,cloudfront:TagResource,cloudfront:GetDistribution,cloudfront:UpdateDistribution,cloudfront:DeleteDistribution|arn:aws:cloudfront::${ACCOUNT}:distribution/E111111111111|aws:ResourceTag/NamePrefix=${PREFIX}-example;aws:RequestTag/NamePrefix=${PREFIX}-example
+the distribution, and the guard's read of every one of them (review of PR 292)|cloudfront:CreateDistribution,cloudfront:TagResource,cloudfront:GetDistribution,cloudfront:UpdateDistribution,cloudfront:DeleteDistribution,cloudfront:ListDistributions|arn:aws:cloudfront::${ACCOUNT}:distribution/E111111111111|aws:ResourceTag/NamePrefix=${PREFIX}-example;aws:RequestTag/NamePrefix=${PREFIX}-example
 the master secret RDS creates on behalf of the caller, tagged with the instance ARN (refused 22 Sep, run 35679472666)|secretsmanager:CreateSecret,secretsmanager:TagResource|arn:aws:secretsmanager:${REGION}:${ACCOUNT}:secret:rds!db-11111111-2222-4333-8444-555555555555-AbCdEf|aws:RequestTag/aws:rds:primaryDBInstanceArn=arn:aws:rds:${REGION}:${ACCOUNT}:db:${PREFIX}-example-pg
-the database, and the rehearsal guard's one describe of it|rds:CreateDBInstance,rds:ModifyDBInstance,rds:DeleteDBInstance,rds:AddTagsToResource,rds:DescribeDBInstances|arn:aws:rds:${REGION}:${ACCOUNT}:db:${PREFIX}-example-pg|
+the database, and the guard's read of every instance and manual snapshot (review of PR 292)|rds:CreateDBInstance,rds:ModifyDBInstance,rds:DeleteDBInstance,rds:AddTagsToResource,rds:DescribeDBInstances,rds:DescribeDBSnapshots|arn:aws:rds:${REGION}:${ACCOUNT}:db:${PREFIX}-example-pg|
 the cluster, the services and the one-off tasks|ecs:CreateCluster,ecs:CreateService,ecs:UpdateService,ecs:DeleteService,ecs:RunTask,ecs:DescribeTasks,ecs:ListTasks|arn:aws:ecs:${REGION}:${ACCOUNT}:cluster/${PREFIX}-example-cluster|aws:RequestTag/NamePrefix=${PREFIX}-example
 a task the teardown has to stop|ecs:StopTask,ecs:DescribeTasks|arn:aws:ecs:${REGION}:${ACCOUNT}:task/${PREFIX}-example-cluster/0000000000000000000000000000000e|
 the task definitions|ecs:RegisterTaskDefinition,ecs:DeregisterTaskDefinition,ecs:DescribeTaskDefinition|*|aws:RequestTag/NamePrefix=${PREFIX}-example
 the task roles|iam:CreateRole,iam:PutRolePolicy,iam:DeleteRolePolicy,iam:DeleteRole,iam:TagRole,iam:PassRole|arn:aws:iam::${ACCOUNT}:role/${PREFIX}-example-worker-task|
 the load balancer and its listener|elasticloadbalancing:CreateLoadBalancer,elasticloadbalancing:CreateTargetGroup,elasticloadbalancing:CreateListener,elasticloadbalancing:AddTags|arn:aws:elasticloadbalancing:${REGION}:${ACCOUNT}:loadbalancer/app/${PREFIX}-example-alb/1111111111111111|aws:RequestTag/NamePrefix=${PREFIX}-example
-the log groups and their metric filters|logs:CreateLogGroup,logs:PutRetentionPolicy,logs:AssociateKmsKey,logs:PutMetricFilter,logs:TagResource,logs:DeleteLogGroup|arn:aws:logs:${REGION}:${ACCOUNT}:log-group:/fss/${PREFIX}-example/worker|
+the log groups and their metric filters, and the guard's read of them by name (review of PR 292)|logs:CreateLogGroup,logs:PutRetentionPolicy,logs:AssociateKmsKey,logs:PutMetricFilter,logs:TagResource,logs:DeleteLogGroup,logs:DescribeLogGroups|arn:aws:logs:${REGION}:${ACCOUNT}:log-group:/fss/${PREFIX}-example/worker|
 the alert topic|sns:CreateTopic,sns:SetTopicAttributes,sns:Subscribe,sns:TagResource,sns:DeleteTopic|arn:aws:sns:${REGION}:${ACCOUNT}:${PREFIX}-example-alerts|
 the daily alarm digest function (g99)|lambda:CreateFunction,lambda:GetFunction,lambda:UpdateFunctionCode,lambda:UpdateFunctionConfiguration,lambda:TagResource,lambda:DeleteFunction|arn:aws:lambda:${REGION}:${ACCOUNT}:function:${PREFIX}-example-alarm-digest|
 the daily alarm digest schedule (g99)|scheduler:CreateSchedule,scheduler:GetSchedule,scheduler:UpdateSchedule,scheduler:DeleteSchedule|arn:aws:scheduler:${REGION}:${ACCOUNT}:schedule/default/${PREFIX}-example-alarm-digest|
 the repositories|ecr:CreateRepository,ecr:DescribeRepositories,ecr:PutLifecyclePolicy,ecr:PutImageTagMutability|arn:aws:ecr:${REGION}:${ACCOUNT}:repository/${PREFIX}-api|
 the journal bucket, and the teardown of it (refused 21 Sep)|s3:CreateBucket,s3:PutBucketPolicy,s3:GetBucketPolicy,s3:DeleteBucketPolicy,s3:PutBucketVersioning,s3:PutBucketObjectLockConfiguration,s3:PutEncryptionConfiguration,s3:PutBucketPublicAccessBlock,s3:PutBucketOwnershipControls,s3:DeleteBucket|arn:aws:s3:::${PREFIX}-example-suppression-journal-${ACCOUNT}|
-the identity|sts:GetCallerIdentity|*|
+the identity, and the guard's read of everything tagged for the run (review of PR 292)|sts:GetCallerIdentity,tag:GetResources|*|
 CHECK_TABLE
 
 # The rehearsal's own row, appended rather than written above: only the rehearsal role
@@ -499,11 +513,12 @@ fi
 # put
 # ===========================================================================
 policy_put() {
-  local prefix=${1:-} named='' aws account expected work
+  local prefix=${1:-} named='' allow_widening=0 aws account expected work
   shift || true
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --environment) named=${2:-}; shift 2 ;;
+      --allow-widening) allow_widening=1; shift ;;
       *) echo "FAIL: policy.sh put does not take '$1'" >&2; exit 2 ;;
     esac
   done
@@ -547,22 +562,67 @@ policy_put() {
       exit 1
     fi
   fi
-  FSS_WORK="$work" python3 - <<'PY'
-# policy-put-changes: which Sids the put adds, removes and changes.
-import json, os
+  FSS_WORK="$work" FSS_PREFIX="$prefix" FSS_ALLOW_WIDENING="$allow_widening" python3 - <<'PY' || exit 1
+# policy-put-changes: which Sids the put adds, removes and changes, and whether any of it
+# widens the role. A widening is a refusal unless --allow-widening was given.
+import json, os, sys
 work = os.environ["FSS_WORK"]
-before = json.load(open(os.path.join(work, "before.json"))) or {"Statement": []}
+held = json.load(open(os.path.join(work, "before.json")))
+first = held is None
+before = held or {"Statement": []}
 after = json.load(open(os.path.join(work, "document.json")))
 old = {s["Sid"]: s for s in before.get("Statement") or []}
 new = {s["Sid"]: s for s in after.get("Statement") or []}
 added = sorted(set(new) - set(old))
 removed = sorted(set(old) - set(new))
 changed = sorted(sid for sid in set(new) & set(old) if new[sid] != old[sid])
-if not (added or removed or changed):
+if first:
+    print("{}-deploy-scope is not on {}-deploy yet; this put is the first one".format(
+        os.environ["FSS_PREFIX"], os.environ["FSS_PREFIX"]))
+elif not (added or removed or changed):
     print("the role already holds this document; putting it again changes nothing")
 for label, sids in (("adds", added), ("removes", removed), ("changes", changed)):
     for sid in sids:
         print("{} {}".format(label, sid))
+
+
+def listed(statement, field):
+    value = statement.get(field)
+    if value is None:
+        return set()
+    return set(value) if isinstance(value, list) else {value}
+
+
+# Widening is judged against what the role holds, so a role that holds no policy yet has
+# nothing to widen: the first put is the whole document by definition.
+widening = []
+for sid in [] if first else added:
+    if new[sid].get("Effect") == "Allow":
+        widening.append("adds the Allow {}".format(sid))
+for sid in [] if first else removed:
+    if old[sid].get("Effect") == "Deny":
+        widening.append("removes the Deny {}".format(sid))
+for sid in [] if first else changed:
+    effect = new[sid].get("Effect")
+    if effect != old[sid].get("Effect"):
+        widening.append("changes the effect of {} from {} to {}".format(sid, old[sid].get("Effect"), effect))
+        continue
+    for field in ("Action", "Resource", "NotAction", "NotResource"):
+        gained = listed(new[sid], field) - listed(old[sid], field)
+        lost = listed(old[sid], field) - listed(new[sid], field)
+        # An Allow grows by gaining; a Deny grows by losing. NotResource and NotAction are
+        # the other way round, because they say what the statement does NOT cover.
+        grew = lost if (effect == "Deny") != field.startswith("Not") else gained
+        if grew:
+            widening.append("{} of {} gains {}".format(field, sid, ", ".join(sorted(grew))))
+    if not new[sid].get("Condition") and old[sid].get("Condition"):
+        widening.append("{} loses its Condition".format(sid))
+if widening and os.environ["FSS_ALLOW_WIDENING"] != "1":
+    sys.exit("FAIL: this put would widen the role: {}. Nothing was put. A document that grants more "
+             "than the role holds is a review, not a re-put: read it, and if the widening is the "
+             "point, put it again with --allow-widening.".format("; ".join(widening)))
+if widening:
+    print("widening, put on purpose (--allow-widening): " + "; ".join(widening))
 PY
   command "$aws" iam put-role-policy --role-name "$prefix-deploy" --policy-name "$prefix-deploy-scope" \
     --policy-document "file://$work/document.json" \

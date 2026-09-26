@@ -27,6 +27,12 @@ import { repositoryPath } from './support/repository.ts';
  * done", and the same world with something in the state still destroys; an AccessDenied
  * and an unreadable state still fail.
  *
+ * **A guard that reads only Terraform state.** A create interrupted part-way leaves
+ * resources the state never recorded (run 35944594998: an RDS instance, a load balancer
+ * and a distribution), so the guard reads the cloud: the tagging API, RDS by identifier,
+ * CloudFront, log groups by name, and the two lock records of the run's state key. There
+ * is an orphan case for each, and one for a leftover that clears on the second read.
+ *
  * **A guard that passes by construction.** It passes an empty state and a deleted
  * database, and fails each of: a state that still holds a resource, a database that is
  * still there, a database it could not describe, and a session that is not the role.
@@ -144,6 +150,27 @@ describe('Appendix G 39: no rehearsal command may name production, wrapper or no
   });
 });
 
+/** The state key this run's guard reads its two lock records under, and where they live. */
+const STATE_BUCKET = 'callie-sourcing-tfstate-326255650484';
+const LOCK_TABLE = 'callie-sourcing-tflock';
+const STATE_KEY = 'fss/greenfield/rehearsal/fss-rh-nothing/terraform.tfstate';
+
+/**
+ * The five readings `leftovers` makes, each answering "nothing of this run". A stub that
+ * wants one of them to answer otherwise puts its own `case` before this one.
+ */
+const NOTHING_LEFT = [
+  'case "$1 $2" in',
+  '  "resourcegroupstaggingapi get-resources") echo "[]"; exit 0 ;;',
+  '  "rds describe-db-instances") echo "[]"; exit 0 ;;',
+  '  "rds describe-db-snapshots") echo "[]"; exit 0 ;;',
+  '  "cloudfront list-distributions") echo "[]"; exit 0 ;;',
+  '  "logs describe-log-groups") echo "[]"; exit 0 ;;',
+  '  "s3api head-object") echo "An error occurred (404) when calling the HeadObject operation: Not Found" >&2; exit 254 ;;',
+  '  "dynamodb get-item") echo "None"; exit 0 ;;',
+  'esac',
+].join('\n');
+
 describe('Appendix G 39: rehearsal.sh teardown tears down a run that created nothing, and one that created everything', () => {
   /** Everything absent, as it is after a run whose creation step never ran. */
   const NOTHING_EXISTS = `
@@ -165,6 +192,8 @@ echo "unexpected: $*" >&2; exit 9`;
   function teardown(options: {
     readonly aws: string;
     readonly terraform: string;
+    /** Answers placed before NOTHING_LEFT, so one of the guard's five readings differs. */
+    readonly leftovers?: string;
     /** The create step writes this file beside the root; a teardown from a fresh checkout has none. */
     readonly tfvars?: boolean;
     readonly identity?: string;
@@ -182,8 +211,16 @@ echo "unexpected: $*" >&2; exit 9`;
       {
         FSS_REHEARSAL_REPORTS: reports,
         FSS_REHEARSAL_CALLER_IDENTITY: options.identity ?? 'arn:aws:sts::123456789012:assumed-role/fss-rh-deploy/x',
-        FSS_REHEARSAL_AWS_COMMAND: stubCommand(stubs, 'aws', `echo "aws $*" >> '${record}'\n${options.aws}`),
+        FSS_REHEARSAL_AWS_COMMAND: stubCommand(
+          stubs,
+          'aws',
+          `echo "aws $*" >> '${record}'\n${options.leftovers ?? ''}\n${NOTHING_LEFT}\n${options.aws}`,
+        ),
         TERRAFORM: stubCommand(stubs, 'terraform', `echo "terraform $*" >> '${record}'\n${options.terraform}`),
+        FSS_REHEARSAL_SETTLING_READS: '1',
+        FSS_REHEARSAL_SETTLING_SECONDS: '0',
+        FSS_REHEARSAL_STATE_BUCKET: STATE_BUCKET,
+        FSS_REHEARSAL_LOCK_TABLE: LOCK_TABLE,
       },
       stubs,
     );
@@ -199,8 +236,13 @@ echo "unexpected: $*" >&2; exit 9`;
     expect(output).toContain('never initialised, so this run created nothing');
     expect(output).toContain('4/4 removing the journal bucket if the destroy left it');
     expect(readFileSync(join(reports, 'teardown.txt'), 'utf8')).toContain('destroyed=nothing_created journal_bucket=gone');
-    // The drill's restored instance and snapshots went with W3-S8.
-    expect(calls.filter(call => call.startsWith('aws rds'))).toEqual([]);
+    // The drill's restored instance and snapshot deletions went with W3-S8; the only RDS
+    // calls left are the two readings that prove the run left no instance or snapshot.
+    expect(calls.filter(call => call.startsWith('aws rds')).map(call => call.split(' ').slice(1, 3).join(' '))).toEqual([
+      'rds describe-db-instances',
+      'rds describe-db-snapshots',
+    ]);
+    expect(readFileSync(join(reports, 'teardown.txt'), 'utf8')).toContain('nothing_left=true');
   });
 
   it('still destroys when there is something in the state, so tolerance is not silence, and the old name does the same', () => {
@@ -285,15 +327,15 @@ echo "unexpected: $*" >&2; exit 9`;
   });
 });
 
-describe('Appendix G 39: rehearsal.sh guard, after the teardown: an empty state, a deleted database, the rehearsal role', () => {
-  const DATABASE_GONE =
-    'echo "An error occurred (DBInstanceNotFound) when calling the DescribeDBInstances operation: DBInstance fss-rh-nothing-pg not found." >&2; exit 254';
-
+describe('Appendix G 39: rehearsal.sh guard, after the teardown: an empty state, nothing left in the cloud, the rehearsal role', () => {
   function guard(options: {
     readonly terraform: string;
+    /** Answers placed before NOTHING_LEFT, so one reading differs and the rest are empty. */
+    readonly leftovers?: string;
     readonly aws?: string;
     readonly identity?: string;
     readonly script?: string;
+    readonly reads?: string;
   }): Run & { readonly report: string | null; readonly calls: readonly string[] } {
     const stubs = mkdtempSync(join(tmpdir(), 'fss-guard-'));
     const reports = mkdtempSync(join(tmpdir(), 'fss-guard-reports-'));
@@ -304,8 +346,16 @@ describe('Appendix G 39: rehearsal.sh guard, after the teardown: an empty state,
       {
         FSS_REHEARSAL_REPORTS: reports,
         FSS_REHEARSAL_CALLER_IDENTITY: options.identity ?? 'arn:aws:sts::123456789012:assumed-role/fss-rh-deploy/x',
-        FSS_REHEARSAL_AWS_COMMAND: stubCommand(stubs, 'aws', `echo "aws $*" >> '${record}'\n${options.aws ?? DATABASE_GONE}`),
+        FSS_REHEARSAL_AWS_COMMAND: stubCommand(
+          stubs,
+          'aws',
+          `echo "aws $*" >> '${record}'\n${options.leftovers ?? ''}\n${NOTHING_LEFT}\n${options.aws ?? 'echo "unexpected: $*" >&2; exit 9'}`,
+        ),
         TERRAFORM: stubCommand(stubs, 'terraform', options.terraform),
+        FSS_REHEARSAL_SETTLING_READS: options.reads ?? '1',
+        FSS_REHEARSAL_SETTLING_SECONDS: '0',
+        FSS_REHEARSAL_STATE_BUCKET: STATE_BUCKET,
+        FSS_REHEARSAL_LOCK_TABLE: LOCK_TABLE,
       },
       stubs,
     );
@@ -317,23 +367,116 @@ describe('Appendix G 39: rehearsal.sh guard, after the teardown: an empty state,
     };
   }
 
-  it('passes an empty state and a deleted database, with one RDS describe, through either name', () => {
+  it('passes an empty state and a cloud that holds nothing of the run, reading all five sources, through either name', () => {
     const now = guard({ terraform: 'exit 0' });
     expect(now.code, now.output).toBe(0);
-    expect(now.report).toBe('prefix=fss-rh-nothing production_untouched=true state_empty=true database=absent state_read=true');
-    expect(now.calls).toEqual([
-      'aws rds describe-db-instances --db-instance-identifier fss-rh-nothing-pg --query DBInstances[0].DBInstanceStatus --output text',
+    expect(now.report).toBe('prefix=fss-rh-nothing production_untouched=true state_empty=true nothing_left=true state_read=true');
+    // Every reading an empty state cannot make: the wide net, then the four it misses.
+    expect(now.calls.map(call => call.split(' ').slice(1, 3).join(' '))).toEqual([
+      'resourcegroupstaggingapi get-resources',
+      'rds describe-db-instances',
+      'rds describe-db-snapshots',
+      'cloudfront list-distributions',
+      'logs describe-log-groups',
+      'logs describe-log-groups',
+      's3api head-object',
+      'dynamodb get-item',
     ]);
+    expect(now.calls.join('\n')).toContain(`--key ${STATE_KEY}.tflock`);
+    expect(now.calls.join('\n')).toContain(`--log-group-name-prefix /fss/fss-rh-nothing`);
     const old = guard({ terraform: 'exit 0', script: 'infra/scripts/rehearsal-prefix-guard.sh' });
     expect(old.code, old.output).toBe(0);
     expect(old.report).toBe(now.report);
   });
 
-  it('passes a run that created nothing, saying so rather than swallowing it', () => {
-    const nothing = guard({ terraform: 'echo "Backend initialization required, please run terraform init" >&2; exit 1' });
-    expect(nothing.code, nothing.output).toBe(0);
-    expect(nothing.output).toContain('never initialised, so this run created nothing');
-    expect(nothing.report).toContain('state_read=false');
+  it('fails on an orphan of each class the state never recorded, naming it', () => {
+    // Run 35944594998 left exactly these outside state, and a teardown reported success.
+    for (const [what, answer, named] of [
+      [
+        'a load balancer, through the tagging API',
+        `  "resourcegroupstaggingapi get-resources") echo '[{"arn":"arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/fss-rh-nothing-alb/1","name":"fss-rh-nothing-alb"}]'; exit 0 ;;`,
+        'tagged arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/fss-rh-nothing-alb/1',
+      ],
+      ['a database, by identifier', `  "rds describe-db-instances") echo '["fss-rh-nothing-pg"]'; exit 0 ;;`, 'database fss-rh-nothing-pg'],
+      ['a manual snapshot', `  "rds describe-db-snapshots") echo '["fss-rh-nothing-pg-final"]'; exit 0 ;;`, 'snapshot fss-rh-nothing-pg-final'],
+      [
+        'a distribution, by its comment',
+        `  "cloudfront list-distributions") echo '[{"id":"E111","comment":"fss-rh-nothing Electron package distribution.","origins":[]}]'; exit 0 ;;`,
+        'distribution E111',
+      ],
+      ['a log group, by name', `  "logs describe-log-groups") echo '["/fss/fss-rh-nothing/worker"]'; exit 0 ;;`, 'log group /fss/fss-rh-nothing/worker'],
+    ] as const) {
+      const stub = guard({ terraform: 'exit 0', leftovers: ['case "$1 $2" in', answer, 'esac'].join('\n') });
+      expect(stub.code, what).toBe(1);
+      expect(stub.output, what).toContain(named);
+      expect(stub.output, what).toContain('resource(s) still carry fss-rh-nothing');
+      expect(stub.output, what).toContain('run stage=teardown again');
+      expect(stub.report, what).toBeNull();
+    }
+  });
+
+  it('fails on either stale lock record of the run’s state key, which blocks the next run', () => {
+    const s3 = guard({
+      terraform: 'exit 0',
+      leftovers: ['case "$1 $2" in', '  "s3api head-object") echo "{}"; exit 0 ;;', 'esac'].join('\n'),
+    });
+    expect(s3.code).toBe(1);
+    expect(s3.output).toContain(`state lock s3://${STATE_BUCKET}/${STATE_KEY}.tflock`);
+    const dynamo = guard({
+      terraform: 'exit 0',
+      leftovers: ['case "$1 $2" in', `  "dynamodb get-item") echo '${STATE_BUCKET}/${STATE_KEY}'; exit 0 ;;`, 'esac'].join('\n'),
+    });
+    expect(dynamo.code).toBe(1);
+    expect(dynamo.output).toContain(`state lock dynamodb:${LOCK_TABLE}/${STATE_BUCKET}/${STATE_KEY}`);
+  });
+
+  it('sets aside what AWS keeps listing after it accepted the deletion, and says which', () => {
+    // An ECS task, a Fargate interface, a security group and its rule, a key scheduled for
+    // deletion, a retained backup. A group that really stayed keeps the VPC, which is not set aside.
+    const settling = [
+      'arn:aws:ecs:us-east-1:123456789012:task/fss-rh-nothing-cluster/0a',
+      'arn:aws:ec2:us-east-1:123456789012:network-interface/eni-0a',
+      'arn:aws:ec2:us-east-1:123456789012:security-group/sg-0a',
+      'arn:aws:ec2:us-east-1:123456789012:security-group-rule/sgr-0a',
+      'arn:aws:kms:us-east-1:123456789012:key/11111111-2222-4333-8444-555555555555',
+      'arn:aws:rds:us-east-1:123456789012:auto-backup:ab-0a',
+    ].map(arn => ({ arn, name: 'fss-rh-nothing' }));
+    const aside = guard({
+      terraform: 'exit 0',
+      leftovers: ['case "$1 $2" in', `  "resourcegroupstaggingapi get-resources") echo '${JSON.stringify(settling)}'; exit 0 ;;`, 'esac'].join('\n'),
+    });
+    expect(aside.code, aside.output).toBe(0);
+    expect(aside.output).toContain('set aside, because AWS keeps listing them after it accepted the deletion');
+    expect(aside.output).toContain('1 ECS, 1 KMS key, 1 network interface');
+    // A VPC carrying the prefix is not set aside: a group that really stayed keeps it.
+    const vpc = guard({
+      terraform: 'exit 0',
+      leftovers: [
+        'case "$1 $2" in',
+        `  "resourcegroupstaggingapi get-resources") echo '[{"arn":"arn:aws:ec2:us-east-1:123456789012:vpc/vpc-0a","name":"fss-rh-nothing"}]'; exit 0 ;;`,
+        'esac',
+      ].join('\n'),
+    });
+    expect(vpc.code).toBe(1);
+    expect(vpc.output).toContain('tagged arn:aws:ec2:us-east-1:123456789012:vpc/vpc-0a');
+  });
+
+  it('reads again while the tagging API settles, and passes when the leftover has gone', () => {
+    // The tagging API lags a deletion, so one sighting is not a leftover.
+    const settling = guard({
+      terraform: 'exit 0',
+      reads: '2',
+      leftovers: [
+        'case "$1 $2" in',
+        '  "resourcegroupstaggingapi get-resources")',
+        `    if [ -e "$(dirname "$0")/seen" ]; then echo '[]'; else : > "$(dirname "$0")/seen"; echo '[{"arn":"arn:aws:s3:::fss-rh-nothing-updates","name":"fss-rh-nothing-updates"}]'; fi`,
+        '    exit 0 ;;',
+        'esac',
+      ].join('\n'),
+    });
+    expect(settling.code, settling.output).toBe(0);
+    expect(settling.output).toContain('1 resource(s) still carry fss-rh-nothing (read 1 of 2)');
+    expect(settling.report).toContain('nothing_left=true');
   });
 
   it('fails a state the teardown left resources in, naming them, and names production separately', () => {
@@ -348,13 +491,32 @@ describe('Appendix G 39: rehearsal.sh guard, after the teardown: an empty state,
     expect(production.output).toContain('the rehearsal state names production resources: aws_s3_bucket.fss-prod-journal');
   });
 
-  it('fails a database that is still there, or one it could not describe, and a session that is not the role', () => {
-    const standing = guard({ terraform: 'exit 0', aws: 'echo deleting' });
-    expect(standing.code).toBe(1);
-    expect(standing.output).toContain("the run's database fss-rh-nothing-pg still exists after the teardown (deleting)");
-    const denied = guard({ terraform: 'exit 0', aws: 'echo "An error occurred (AccessDenied) when calling the DescribeDBInstances operation" >&2; exit 254' });
-    expect(denied.code).toBe(1);
-    expect(denied.output).toContain('fss-rh-nothing-pg could not be described, and not because it is gone');
+  it('passes a run that created nothing, saying so rather than swallowing it', () => {
+    const nothing = guard({ terraform: 'echo "Backend initialization required, please run terraform init" >&2; exit 1' });
+    expect(nothing.code, nothing.output).toBe(0);
+    expect(nothing.output).toContain('never initialised, so this run created nothing');
+    expect(nothing.report).toContain('state_read=false');
+  });
+
+  it('fails a reading it could not make, and a session that is not the role', () => {
+    // "It is gone" and "I was not allowed to look" must not report the same thing.
+    for (const [call, phrase] of [
+      ['resourcegroupstaggingapi get-resources', 'the resources tagged for fss-rh-nothing could not be listed'],
+      ['rds describe-db-instances', 'the RDS instances could not be listed'],
+      ['cloudfront list-distributions', 'the CloudFront distributions could not be listed'],
+      ['s3api head-object', 'the state lock object could not be read, and not because it is gone'],
+    ] as const) {
+      const denied = guard({
+        terraform: 'exit 0',
+        leftovers: [
+          'case "$1 $2" in',
+          `  "${call}") echo "An error occurred (AccessDenied) when calling it" >&2; exit 254 ;;`,
+          'esac',
+        ].join('\n'),
+      });
+      expect(denied.code, call).toBe(1);
+      expect(denied.output, call).toContain(phrase);
+    }
     const somebody = guard({ terraform: 'exit 0', identity: 'arn:aws:sts::123456789012:assumed-role/fss-prod-deploy/x' });
     expect(somebody.code).toBe(1);
     expect(somebody.output).toContain('which is not an assumed-role session of fss-rh-deploy');
