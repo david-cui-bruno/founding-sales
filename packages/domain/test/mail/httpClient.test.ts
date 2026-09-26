@@ -45,6 +45,10 @@ describe('the Gmail HTTP client', () => {
   const answer = (path: string, status: number, body: unknown): void => {
     answers.set(path, { status, body });
   };
+  /** A body sent as these exact bytes rather than serialised: how a malformed 200 is served. */
+  class Raw {
+    constructor(readonly text: string) {}
+  }
 
   beforeAll(async () => {
     server = createServer((request: IncomingMessage, response: ServerResponse) => {
@@ -59,7 +63,7 @@ describe('the Gmail HTTP client', () => {
         });
         const prepared = answers.get(url.pathname) ?? { status: 200, body: {} };
         response.writeHead(prepared.status, { 'content-type': 'application/json' });
-        response.end(JSON.stringify(prepared.body));
+        response.end(prepared.body instanceof Raw ? prepared.body.text : JSON.stringify(prepared.body));
       });
     });
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -334,6 +338,35 @@ describe('the Gmail HTTP client', () => {
       maxResults: 500,
     });
     expect(limited).toEqual({ ok: false, reason: 'rate_limited' });
+  });
+
+  it('refuses a Sent page it cannot read, rather than reading it as a page of no messages', async () => {
+    // Lane W3-S8 review: a 200 carrying invalid JSON, a `messages` that is not a list, or an
+    // entry without an id used to be an empty page, which the restore's reconciliation
+    // reads as "nothing was sent from this mailbox".
+    const request = { afterEpochSeconds: 1_757_000_000, beforeEpochSeconds: 1_758_000_000, maxResults: 500 };
+    const malformed: readonly (readonly [string, unknown])[] = [
+      ['not JSON', new Raw('{"messages": [{"id": "m-7"}')],
+      ['JSON null', new Raw('null')],
+      ['a list, not an object', [{ id: 'm-7' }]],
+      ['messages not a list', { messages: { id: 'm-7' } }],
+      ['an entry with no id', { messages: [{ id: 'm-7' }, { threadId: 't-8' }] }],
+      ['an entry that is not an object', { messages: ['m-7'] }],
+      ['a page token that is not a string', { messages: [{ id: 'm-7' }], nextPageToken: 7 }],
+    ];
+    for (const [label, body] of malformed) {
+      answer('/gmail/v1/users/me/messages', 200, body);
+      await expect(client.listSentMessageIds(access, request), label).rejects.toMatchObject({
+        name: 'GmailClientError',
+        code: 'malformed_response',
+      });
+    }
+    // Google's own empty page carries no `messages` at all, and stays an empty page.
+    answer('/gmail/v1/users/me/messages', 200, { resultSizeEstimate: 0 });
+    expect(await client.listSentMessageIds(access, request)).toEqual({ ok: true, messageIds: [], nextPageToken: null });
+    // The sync's listing is not the restore's, and keeps its reading.
+    answer('/gmail/v1/users/me/messages', 200, { messages: [{ id: 'm-9' }, { threadId: 't-8' }] });
+    expect(await client.listMessageIds(access, request)).toEqual({ ok: true, messageIds: ['m-9'], nextPageToken: null });
   });
 
   it('registers and stops a watch, and reads a refusal as a refusal', async () => {

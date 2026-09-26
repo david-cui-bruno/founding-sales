@@ -1,6 +1,6 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import type { EnvelopeCipher } from '../mail/envelope.ts';
-import { headerValue, type GmailClient, type GmailOAuthConfig } from '../mail/gmailClient.ts';
+import { GmailClientError, headerValue, type GmailClient, type GmailOAuthConfig } from '../mail/gmailClient.ts';
 import { readMailbox } from '../mail/mailboxes.ts';
 import { accessForMailbox } from '../mail/sync.ts';
 import { normalizeAddressList } from '../mail/types.ts';
@@ -67,6 +67,10 @@ export interface SentFolderMessage {
  * (deleted between the two reads). The folder was not read to the end, because that
  * message is exactly one nobody can now say was or was not FSS's; the messages that were
  * read are still returned, and a rerun lists the folder again without it.
+ *
+ * `malformed_response`: a listing page or a metadata read Gmail answered 200 with
+ * something that is not one (no JSON object, an entry without an id, no usable internal
+ * date). The folder was not read, and an unreadable page is never zero messages.
  */
 export type SentFolderScanOutcome =
   | 'scanned'
@@ -74,7 +78,8 @@ export type SentFolderScanOutcome =
   | 'rate_limited'
   | 'truncated'
   | 'mailbox_unknown'
-  | 'message_vanished';
+  | 'message_vanished'
+  | 'malformed_response';
 
 export interface SentFolderScan {
   readonly outcome: SentFolderScanOutcome;
@@ -125,10 +130,10 @@ export async function scanSentFolder(
   let pages = 0;
   for (;;) {
     if (pages >= SENT_SCAN_PAGE_LIMIT) return { outcome: 'truncated', listed: ids.length, messages: [], vanished: 0 };
-    const page = await deps.gmail.listSentMessageIds(access.access, {
-      ...request,
-      ...(pageToken === undefined ? {} : { pageToken }),
-    });
+    const page = await unlessMalformed(
+      deps.gmail.listSentMessageIds(access.access, { ...request, ...(pageToken === undefined ? {} : { pageToken }) }),
+    );
+    if (page === MALFORMED) return { outcome: 'malformed_response', listed: ids.length, messages: [], vanished: 0 };
     if (!page.ok) return { outcome: page.reason, listed: ids.length, messages: [], vanished: 0 };
     ids.push(...page.messageIds);
     pages += 1;
@@ -139,8 +144,16 @@ export async function scanSentFolder(
   let listed = 0;
   let vanished = 0;
   const messages: SentFolderMessage[] = [];
+  const settle = (outcome: SentFolderScanOutcome): SentFolderScan => {
+    messages.sort(
+      (left, right) =>
+        Date.parse(left.sentAt) - Date.parse(right.sentAt) || left.providerMessageId.localeCompare(right.providerMessageId),
+    );
+    return { outcome, listed, messages, vanished };
+  };
   for (const id of [...new Set(ids)]) {
-    const metadata = await deps.gmail.getMetadata(access.access, id, SENT_SCAN_HEADERS);
+    const metadata = await unlessMalformed(deps.gmail.getMetadata(access.access, id, SENT_SCAN_HEADERS));
+    if (metadata === MALFORMED) return settle('malformed_response');
     // Deleted between the listing and the read: Gmail no longer has it to vouch for, so
     // the folder was not read to the end (`message_vanished`), and the scan says so.
     if (metadata === null) {
@@ -148,6 +161,9 @@ export async function scanSentFolder(
       continue;
     }
     const at = metadata.internalDateEpochMilliseconds;
+    // No usable internal date is not "outside the window": it is a message nobody can
+    // place, so the folder was not read.
+    if (!Number.isFinite(at) || at <= 0) return settle('malformed_response');
     if (!(at >= sinceMs && at <= untilMs)) continue;
     listed += 1;
     const header = (headerValue(metadata.headers, 'Message-ID') ?? '').trim();
@@ -164,9 +180,17 @@ export async function scanSentFolder(
       sentAt: new Date(at).toISOString(),
     });
   }
-  messages.sort(
-    (left, right) =>
-      Date.parse(left.sentAt) - Date.parse(right.sentAt) || left.providerMessageId.localeCompare(right.providerMessageId),
-  );
-  return { outcome: vanished > 0 ? 'message_vanished' : 'scanned', listed, messages, vanished };
+  return settle(vanished > 0 ? 'message_vanished' : 'scanned');
+}
+
+const MALFORMED = Symbol('malformed_response');
+
+/** A Gmail answer, or `MALFORMED` when the client refused its shape; any other error propagates. */
+async function unlessMalformed<T>(pending: Promise<T>): Promise<T | typeof MALFORMED> {
+  try {
+    return await pending;
+  } catch (error) {
+    if (error instanceof GmailClientError && error.code === 'malformed_response') return MALFORMED;
+    throw error;
+  }
 }
