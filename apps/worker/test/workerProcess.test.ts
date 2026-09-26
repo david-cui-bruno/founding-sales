@@ -270,35 +270,6 @@ describe('the worker process', () => {
     ).rejects.toThrow(/concurrency/);
   });
 
-  it('reports a restore by logging the event the metric filter counts, and still runs', async () => {
-    const log = recordingLogger();
-    const livenessPath = join(temporaryDirectory, 'heartbeat-5');
-    const worker = await startWorker({
-      config: testConfig({ FSS_EXPECTED_SYSTEM_GENERATION: '9', FSS_WORKER_LIVENESS_FILE: livenessPath }),
-      sessions: {
-        scheduler: await database.appRuntimeSession(),
-        runners: [await database.appRuntimeSession()],
-        metrics: await database.appRuntimeSession(),
-      },
-      registry: new HandlerRegistry(),
-      sources: [],
-      sink: recordingMetricSink(),
-      log,
-    });
-    try {
-      // infra/modules/observability/main.tf turns this exact event name into the
-      // RestoreGenerationMismatches metric, which is immediately critical (13.3).
-      const events = log.lines.map(line => line['event']);
-      expect(events).toContain('restore_generation_mismatch');
-      const mismatch = log.lines.find(line => line['event'] === 'restore_generation_mismatch');
-      expect(mismatch?.['level']).toBe('error');
-      // Restore holds stop sending and dialing; the worker still runs (Appendix E).
-      expect(existsSync(livenessPath)).toBe(true);
-    } finally {
-      await worker.stop('test');
-    }
-  });
-
   it('removes the liveness file once the database stops answering', async () => {
     const livenessPath = join(temporaryDirectory, 'heartbeat-6');
     const failing: SessionQueryable = {
@@ -414,30 +385,21 @@ describe('the worker process', () => {
 });
 
 /**
- * Lane g56: a worker started against a database on a generation other than the one
- * the operator pinned opens the restore holds before any loop runs.
- *
- * Until this lane it logged the mismatch and held nothing, so a restored database was
- * worked from as soon as the worker reached it, and the drill's step 1 found no restore
- * hold (rehearsal run 36062337914, 24 September 2026).
- *
- * ## The vacuous-pass trap, named
- *
- * "The worker logged the mismatch" was already true and held nothing, so the log line
- * is not the assertion: the rows are, one per workspace, read back through the owner's
- * session after the worker opened them as `app_runtime`. And "opens holds when pinned
- * ahead" is only half of it: the same worker unpinned, or pinned to the database's own
- * generation, must open none, or every start would hold production.
+ * Lane W3-S8: the generation pin is gone. A worker started with a stale
+ * `FSS_EXPECTED_SYSTEM_GENERATION` — the variable a pinned task definition carried until
+ * then — opens no restore hold and logs no mismatch: a restore is the runbook's
+ * (`docs/greenfield/runbooks/restore.md`), and holds opened at startup would stop
+ * production sending for nobody's reason.
  */
-describe('the worker opens the restore holds when the database is not on the pinned generation', () => {
+describe('the worker reads no generation and opens no restore hold', () => {
   let database: TestDatabase;
-  let workspaces: SeededWorkspaces;
   let temporaryDirectory: string;
 
   beforeAll(async () => {
     database = await createTestDatabase();
-    workspaces = await seedTwoWorkspaces(database.session);
-    temporaryDirectory = mkdtempSync(join(tmpdir(), 'fss-worker-g56-'));
+    // Two workspaces, so a hold opened per workspace would be two rows, not one.
+    await seedTwoWorkspaces(database.session);
+    temporaryDirectory = mkdtempSync(join(tmpdir(), 'fss-worker-no-pin-'));
   });
 
   afterAll(async () => {
@@ -473,7 +435,6 @@ describe('the worker opens the restore holds when the database is not on the pin
       log,
     });
     try {
-      // The worker still runs: the holds are what stop sending and dialing.
       expect(existsSync(livenessPath)).toBe(true);
     } finally {
       await worker.stop('test');
@@ -481,49 +442,12 @@ describe('the worker opens the restore holds when the database is not on the pin
     return log;
   }
 
-  it('does nothing when unpinned', async () => {
-    const log = await startAndStop({}, 'unpinned');
-    expect(log.lines.map(line => line['event'])).not.toContain('restore_generation_mismatch');
+  it('ignores a stale pin, whatever it says', async () => {
+    for (const [pin, name] of [['1', 'equal'], ['2', 'ahead']] as const) {
+      const log = await startAndStop({ FSS_EXPECTED_SYSTEM_GENERATION: pin }, name);
+      expect(log.lines.map(line => line['event'])).not.toContain('restore_generation_mismatch');
+      expect(log.lines.find(line => line['event'] === 'worker_started')).not.toHaveProperty('system_generation');
+    }
     expect(await openRestoreHolds()).toHaveLength(0);
-  });
-
-  it('does nothing when the pin is the database’s own generation', async () => {
-    const log = await startAndStop({ FSS_EXPECTED_SYSTEM_GENERATION: '1' }, 'equal');
-    expect(log.lines.map(line => line['event'])).not.toContain('restore_generation_mismatch');
-    expect(await openRestoreHolds()).toHaveLength(0);
-  });
-
-  it('opens one restore hold per workspace when pinned ahead, and logs the line the alarm counts', async () => {
-    const log = await startAndStop({ FSS_EXPECTED_SYSTEM_GENERATION: '2' }, 'ahead');
-    const rows = await openRestoreHolds();
-    expect(rows.map(row => row.workspace_id).sort()).toEqual([workspaces.alpha, workspaces.beta].sort());
-    expect(rows.every(row => row.source_event_id === 'worker:1->2')).toBe(true);
-
-    // One startup line, which opened the holds. Since lane g81 (audit O16) the metric
-    // loop repeats the event on each pass while the mismatch lasts, marked
-    // `continuing`; `restoreGenerationContinuing.test.ts` holds that half.
-    const mismatch = log.lines.filter(
-      line => line['event'] === 'restore_generation_mismatch' && line['continuing'] === undefined,
-    );
-    expect(mismatch).toHaveLength(1);
-    expect(mismatch[0]).toMatchObject({
-      level: 'error',
-      expected_generation: 2,
-      observed_generation: 1,
-      restore_holds_opened: 2,
-      restore_holds_already_open: 0,
-    });
-    // Held before the loops: the mismatch line precedes worker_started.
-    const events = log.lines.map(line => line['event']);
-    expect(events.indexOf('restore_generation_mismatch')).toBeLessThan(events.indexOf('worker_started'));
-  });
-
-  it('a restart during the protocol opens nothing new and still raises the alarm', async () => {
-    const log = await startAndStop({ FSS_EXPECTED_SYSTEM_GENERATION: '2' }, 'restart');
-    expect(await openRestoreHolds()).toHaveLength(2);
-    expect(log.lines.find(line => line['event'] === 'restore_generation_mismatch')).toMatchObject({
-      restore_holds_opened: 0,
-      restore_holds_already_open: 2,
-    });
   });
 });

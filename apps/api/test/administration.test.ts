@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   RELEASE_RECORD_SCHEMA_ID,
   SETTING_KEYS,
+  ciGateReleaseReference,
   pipelineBoardResponseSchema,
   pipelineStagesResponseSchema,
   publishedClientVersions,
@@ -42,7 +43,6 @@ describe('the administration surface', () => {
     session: fixture.db,
     supportedClientVersions: fixture.deps.config.supportedClientVersions,
     sendingEnabled,
-    expectedSystemGeneration: null,
     auth: fixture.deps,
     upgradeUrl: 'https://callie.example/downloads/mac',
     ...(imageDigest === null ? {} : { imageDigest }),
@@ -68,22 +68,31 @@ describe('the administration surface', () => {
     return { status: result.status, body: JSON.parse(JSON.stringify(result.body ?? null)) as Record<string, unknown> };
   };
 
-  /** The release record a green rehearsal wrote, stored the way `fss admin release-record put` stores it. */
-  const storeRecord = async (reference: string, suite = 'pass'): Promise<void> => {
+  /**
+   * The release record the CI gate's run `gateRunId` wrote (`record.sh from-ci`), stored
+   * the way `fss admin release-record put` stores it. Answers its reference.
+   */
+  const storeRecord = async (gateRunId: string, suite = 'pass'): Promise<string> => {
+    const commit = 'e'.repeat(40);
+    const reference = ciGateReleaseReference(gateRunId, commit);
     const stored = await putReleaseRecord(
       { db: fixture.db },
       {
         schema: RELEASE_RECORD_SCHEMA_ID,
+        source: 'ci-gate',
         releaseGateReference: reference,
-        rehearsalPrefix: 'fss-rh-fixture',
         recordedAt: '2026-09-20T12:00:00Z',
         suite,
-        artifacts: { api: RUNNING_API_DIGEST, worker: RUNNING_WORKER_DIGEST, desktopCommitStamp: 'e'.repeat(40) },
-        rehearsalScenarios: {},
+        commit,
+        gateRunId,
+        gateRunUrl: `https://github.com/example-owner/example-repo/actions/runs/${gateRunId}`,
+        imagesRunId: '1',
+        artifacts: { api: RUNNING_API_DIGEST, worker: RUNNING_WORKER_DIGEST, desktopCommitStamp: commit },
         enablesSending: false,
       },
     );
     expect(stored.ok, JSON.stringify(stored)).toBe(true);
+    return reference;
   };
 
   const enableCommand = (reference: string) =>
@@ -150,14 +159,14 @@ describe('the administration surface', () => {
     expect(off.body['effectiveSendingEnabled']).toBe(false);
 
     // Lane g71: the reference names a stored record whose API digest is this API's.
-    await storeRecord('rehearsal-2026-09-20');
+    const reference = await storeRecord('41000000201');
     const enabled = await call(
       'POST',
       '/settings/update',
       adminToken,
       command({
         settingKey: 'sending_enabled',
-        value: { enabled: true, releaseGateReference: 'rehearsal-2026-09-20' },
+        value: { enabled: true, releaseGateReference: reference },
         changeNote: 'the gate passed',
       }),
       true,
@@ -207,19 +216,19 @@ describe('the administration surface', () => {
     });
 
     it('refuses a record whose suite did not pass', async () => {
-      await storeRecord('fss-rh-fixture-failed', 'fail');
-      const answer = await call('POST', '/settings/update', adminToken, enableCommand('fss-rh-fixture-failed'));
+      const reference = await storeRecord('41000000202', 'fail');
+      const answer = await call('POST', '/settings/update', adminToken, enableCommand(reference));
       expect(answer.status).toBe(409);
       expect(answer.body).toMatchObject({ status: 'refused', reason: 'release_record_not_passing' });
     });
 
     it('refuses when this API is not the image the rehearsal certified', async () => {
-      await storeRecord('fss-rh-fixture-mismatch');
+      const reference = await storeRecord('41000000203');
       const answer = await call(
         'POST',
         '/settings/update',
         adminToken,
-        enableCommand('fss-rh-fixture-mismatch'),
+        enableCommand(reference),
         true,
         `sha256:${'f'.repeat(64)}`,
       );
@@ -228,13 +237,13 @@ describe('the administration surface', () => {
     });
 
     it('refuses, failing closed, when the API does not know which image it is', async () => {
-      await storeRecord('fss-rh-fixture-identity');
+      const reference = await storeRecord('41000000204');
       for (const imageDigest of ['unknown', null]) {
         const answer = await call(
           'POST',
           '/settings/update',
           adminToken,
-          enableCommand('fss-rh-fixture-identity'),
+          enableCommand(reference),
           true,
           imageDigest,
         );
@@ -246,8 +255,8 @@ describe('the administration surface', () => {
     });
 
     it('accepts the passing record whose API digest is this API’s, which is the positive control', async () => {
-      await storeRecord('fss-rh-fixture-accepted');
-      const answer = await call('POST', '/settings/update', adminToken, enableCommand('fss-rh-fixture-accepted'), true);
+      const reference = await storeRecord('41000000205');
+      const answer = await call('POST', '/settings/update', adminToken, enableCommand(reference), true);
       expect(answer.status).toBe(200);
       expect(answer.body).toMatchObject({ status: 'accepted' });
     });

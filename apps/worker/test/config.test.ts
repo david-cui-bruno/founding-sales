@@ -36,7 +36,7 @@ describe('worker configuration', () => {
     expect(config.metrics.region).toBe('us-east-1');
     // The container health check in infra/modules/cluster stats exactly this path.
     expect(config.livenessFilePath).toBe('/tmp/fss-worker-heartbeat');
-    expect(config.expectedSystemGeneration).toBeNull();
+    expect(config).not.toHaveProperty('expectedSystemGeneration');
   });
 
   it('refuses a declared schema range that disagrees with the binary', () => {
@@ -79,6 +79,29 @@ describe('worker configuration', () => {
     expect(config.database.connectionString).toBe('postgresql://app%20runtime:p%40ss%2Fword@db.internal:5432/fss');
   });
 
+  it('connects to FSS_DATABASE_HOST instead of the secret’s host, with the secret’s credential (active_database_host)', () => {
+    const secret = JSON.stringify({ username: 'app', password: 'pw', host: 'fss-prod-pg.example.invalid', port: 5432, dbname: 'fss' });
+    const environment = {
+      FSS_ROLE: 'worker',
+      FSS_SCHEMA_MIN: String(WORKER_SCHEMA_RANGE.minimum),
+      FSS_SCHEMA_MAX: String(WORKER_SCHEMA_RANGE.maximum),
+      DATABASE_SECRET_ARN: secret,
+    };
+    // The same host as the secret's, which is production today: nothing changes.
+    expect(readWorkerConfig({ ...environment, FSS_DATABASE_HOST: 'fss-prod-pg.example.invalid' }).database.connectionString).toBe(
+      'postgresql://app:pw@fss-prod-pg.example.invalid:5432/fss',
+    );
+    // A point-in-time copy the restore runbook pointed every task at.
+    expect(readWorkerConfig({ ...environment, FSS_DATABASE_HOST: 'fss-prod-pg-r1.example.invalid' }).database.connectionString).toBe(
+      'postgresql://app:pw@fss-prod-pg-r1.example.invalid:5432/fss',
+    );
+    // A whole URL names its own host and is used as given.
+    expect(
+      readWorkerConfig({ ...environment, DATABASE_URL: 'postgresql://u@local.test/db', FSS_DATABASE_HOST: 'elsewhere.test' }).database
+        .connectionString,
+    ).toBe('postgresql://u@local.test/db');
+  });
+
   it('refuses an ARN where the task definition should have injected the value', () => {
     const attempt = (): unknown =>
       readWorkerConfig({
@@ -96,13 +119,12 @@ describe('worker configuration', () => {
   });
 
   it('never puts the connection string in the line it logs at startup', () => {
-    const config = readWorkerConfig({ ...base, FSS_WORKER_CONCURRENCY: '3', FSS_EXPECTED_SYSTEM_GENERATION: '7' });
+    const config = readWorkerConfig({ ...base, FSS_WORKER_CONCURRENCY: '3' });
     const described = JSON.stringify(describeWorkerConfig(config));
     expect(described).not.toContain('pw');
     expect(described).not.toContain('db.internal');
     expect(described).not.toContain('postgresql://');
     expect(described).toContain('"concurrency":3');
-    expect(described).toContain('"expectedSystemGeneration":7');
   });
 
   describe('the metric namespace (g42, lane g55)', () => {

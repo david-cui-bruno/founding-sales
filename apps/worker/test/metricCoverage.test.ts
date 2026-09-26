@@ -174,7 +174,7 @@ describe('every alarm metric has something that emits it', () => {
         payload: {},
         maxAttempts: 4,
       });
-      await raiseCriticalAlert(database.session, { workspaceId, alertKey: 'restore_generation_mismatch' });
+      await raiseCriticalAlert(database.session, { workspaceId, alertKey: 'suppression_journal_failure' });
     }
     // A dead job: DeadJobOldestAgeSeconds.
     await database.session.query(

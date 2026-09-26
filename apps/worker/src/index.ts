@@ -1,5 +1,5 @@
 import type { SessionQueryable } from '@fss/domain/db';
-import { WORKER_SCHEMA_RANGE, checkSchemaRange, readSystemGeneration } from '@fss/domain/db';
+import { WORKER_SCHEMA_RANGE, checkSchemaRange } from '@fss/domain/db';
 
 /**
  * The worker skeleton (specification 4.2 and Appendix G 22).
@@ -26,37 +26,27 @@ export interface WorkerStartupReport {
   readonly outcome: 'ready' | 'schema_out_of_range' | 'database_unreachable';
   readonly declaredRange: { readonly minimum: number; readonly maximum: number };
   readonly databaseVersion: number | null;
-  readonly systemGeneration: number | null;
   readonly reason: 'database_behind_binary' | 'database_ahead_of_binary' | 'database_unreachable' | null;
   readonly exitCode: number;
 }
 
 export interface WorkerStartupOptions {
   readonly session: SessionQueryable;
-  /**
-   * The generation the operator expects (Appendix E step 1). When it is given and the
-   * database reports another, the worker is looking at restored data: it still starts,
-   * because restore holds are what stop sending and dialing, but the report says so.
-   */
-  readonly expectedSystemGeneration?: number | undefined;
 }
 
 const declaredRange = { minimum: WORKER_SCHEMA_RANGE.minimum, maximum: WORKER_SCHEMA_RANGE.maximum };
 
-/** Check the database and decide whether this binary may run. Pure apart from the two reads. */
+/** Check the database and decide whether this binary may run. Pure apart from the read. */
 export async function checkWorkerStartup(options: WorkerStartupOptions): Promise<WorkerStartupReport> {
   let check;
-  let generation: number | null;
   try {
     check = await checkSchemaRange(options.session, WORKER_SCHEMA_RANGE);
-    generation = await readSystemGeneration(options.session);
   } catch {
     return {
       component: 'worker',
       outcome: 'database_unreachable',
       declaredRange,
       databaseVersion: null,
-      systemGeneration: null,
       reason: 'database_unreachable',
       exitCode: WORKER_EXIT_CODES.databaseUnreachable,
     };
@@ -68,7 +58,6 @@ export async function checkWorkerStartup(options: WorkerStartupOptions): Promise
       outcome: 'schema_out_of_range',
       declaredRange,
       databaseVersion: check.version,
-      systemGeneration: generation,
       reason: check.reason,
       exitCode: WORKER_EXIT_CODES.schemaOutOfRange,
     };
@@ -79,20 +68,9 @@ export async function checkWorkerStartup(options: WorkerStartupOptions): Promise
     outcome: 'ready',
     declaredRange,
     databaseVersion: check.version,
-    systemGeneration: generation,
     reason: null,
     exitCode: WORKER_EXIT_CODES.ok,
   };
-}
-
-/**
- * Whether a restore has left the database on a generation the operator did not expect.
- * `enforceRestoreGeneration` (bootstrap/restoreGeneration.ts) applies the same rule and
- * opens the restore holds; releasing them is an admin command (Appendix E 9).
- */
-export function restoreSuspected(report: WorkerStartupReport, expectedSystemGeneration: number | undefined): boolean {
-  if (expectedSystemGeneration === undefined) return false;
-  return report.systemGeneration !== null && report.systemGeneration !== expectedSystemGeneration;
 }
 
 /** One structured, redacted line. No connection string, no host, no credential. */
@@ -102,7 +80,6 @@ export function startupLogLine(report: WorkerStartupReport): string {
     outcome: report.outcome,
     schemaRange: `${String(report.declaredRange.minimum)}-${String(report.declaredRange.maximum)}`,
     databaseVersion: report.databaseVersion,
-    systemGeneration: report.systemGeneration,
     reason: report.reason,
   });
 }
@@ -126,11 +103,6 @@ export {
 } from './bootstrap/config.ts';
 export { APPLICATION_RAISED_METRICS, type ApplicationRaisedMetric, type MetricRaiser } from './bootstrap/metricCoverage.ts';
 export { createLiveness, noLiveness, type Liveness } from './bootstrap/liveness.ts';
-export {
-  enforceRestoreGeneration,
-  type RestoreGenerationCheck,
-  type RestoreGenerationOptions,
-} from './bootstrap/restoreGeneration.ts';
 export { suppressionFinalizeJobHandler } from './handlers/suppressionFinalize.ts';
 export {
   TODAY_BUILD_LOCAL_MINUTE,

@@ -146,7 +146,6 @@ export const METRIC_OWNERS: Readonly<Record<string, MetricOwner>> = Object.freez
   // Derived by a CloudWatch metric filter from a structured log event, so a task that
   // cannot reach the metrics API still raises them.
   SuppressionJournalWriteFailures: 'log_derived',
-  RestoreGenerationMismatches: 'log_derived',
   OutboundSafetyInvariantFailures: 'log_derived',
 });
 

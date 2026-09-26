@@ -35,7 +35,6 @@ describe('the API server over a socket', () => {
     pool = testRequestPool(database);
     const server = createApiServer({
       connections: poolConnections(pool),
-      expectedSystemGeneration: null,
       supportedClientVersions: clientVersionPolicySchema.parse({ minimum: '1.0.0', ceiling: '1.0.x', incompatible: [] }),
       sendingEnabled: false,
       log: recordingLogger(),

@@ -56,5 +56,5 @@ General facts that apply to every page:
   `unacknowledged_critical_alert`, a warning, so since lane g99 it is a line in the next
   morning's digest like every other alarm.
 - `GET /diagnostics` is the one read that shows schema version, client-version range,
-  job health, heartbeats, mailbox health, restore generation and open alerts together.
+  job health, heartbeats, mailbox health and open alerts together.
 - Nothing here authorises editing `infra/`. Threshold changes are a release.

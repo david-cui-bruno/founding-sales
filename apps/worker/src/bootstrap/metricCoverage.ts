@@ -30,16 +30,11 @@ export interface ApplicationRaisedMetric {
 
 export const APPLICATION_RAISED_METRICS: Readonly<Record<string, ApplicationRaisedMetric>> = Object.freeze({
   // Derived from a structured log line rather than from PutMetricData, so a task that
-  // cannot reach the metrics API still raises the three immediately-critical ones.
+  // cannot reach the metrics API still raises the two immediately-critical ones.
   SuppressionJournalWriteFailures: {
     raisedBy: 'log_event',
     detail: 'suppression_journal_write_failed',
     why: 'the API and the worker write the journal (10.2) and each logs the failure event; a metric filter on each log group counts it (lane g81)',
-  },
-  RestoreGenerationMismatches: {
-    raisedBy: 'log_event',
-    detail: 'restore_generation_mismatch',
-    why: 'this worker logs the event at startup when the generation is not the expected one (Appendix E 1)',
   },
   OutboundSafetyInvariantFailures: {
     raisedBy: 'log_event',

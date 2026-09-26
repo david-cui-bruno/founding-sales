@@ -72,11 +72,6 @@ export interface ApiOptions {
   readonly session: SessionQueryable;
   readonly supportedClientVersions: ClientVersionPolicy;
   readonly sendingEnabled: boolean;
-  /**
-   * Appendix E step 1: the generation an operator pinned, or null when none is.
-   * `/readyz` refuses to serve traffic when the database's generation is not it.
-   */
-  readonly expectedSystemGeneration: number | null;
   /** Present once the deployment has its Google configuration. */
   readonly auth?: AuthDeps;
   /**
@@ -142,7 +137,6 @@ function routingOptions(options: ApiOptions): RoutingOptions {
     ...(options.log === undefined ? {} : { log: options.log }),
     upgradeUrl: options.upgradeUrl ?? DEFAULT_UPGRADE_URL,
     suppressionJournal: options.suppressionJournal ?? localNoopSuppressionJournal(),
-    expectedSystemGeneration: options.expectedSystemGeneration,
     ...(options.imageDigest === undefined ? {} : { imageDigest: options.imageDigest }),
   };
 }
@@ -199,7 +193,7 @@ export async function dispatch(request: ApiRequest, options: ApiOptions): Promis
     principal,
     body: request.body as Readonly<Record<string, unknown>> | undefined,
     db: options.session,
-    readiness: { session: options.session, expectedSystemGeneration: options.expectedSystemGeneration },
+    readiness: { session: options.session },
   });
   if (mounted !== null) {
     return {
@@ -244,7 +238,7 @@ export function createApiServer(options: ApiServerOptions): Server {
   });
   // One per process: the verdict it caches is about this task's database, not about a
   // request.
-  const gate = createReadinessGate({ expectedSystemGeneration: options.expectedSystemGeneration, log: options.log });
+  const gate = createReadinessGate({ log: options.log });
   return createServer((request: IncomingMessage, response: ServerResponse) => {
     void handle(request, response, options, gate);
   });

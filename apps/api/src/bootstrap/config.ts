@@ -32,7 +32,6 @@ export interface ApiConfig {
   readonly instanceKey: string;
   readonly port: number;
   readonly schemaRange: { readonly minimum: number; readonly maximum: number };
-  readonly expectedSystemGeneration: number | null;
   readonly heartbeatIntervalMilliseconds: number;
   readonly shutdownTimeoutMilliseconds: number;
   /** Held, never logged. `describeApiConfig` is the only thing that leaves the process. */
@@ -55,6 +54,15 @@ function positiveInteger(environment: Environment, name: string, fallback: numbe
   return value;
 }
 
+/**
+ * The connection string: `DATABASE_URL` as given, or the Secrets Manager value the task
+ * definition injects into `DATABASE_SECRET_ARN`, with its host replaced by
+ * `FSS_DATABASE_HOST` when that is set. Every task definition carries it — Terraform's
+ * `active_database_host`, the managed instance's address unless the restore runbook
+ * (`docs/greenfield/runbooks/restore.md`) has pointed it at a point-in-time copy — so the
+ * credential stays the secret's and only the endpoint moves. The worker's
+ * `databaseConnection` applies the same rule.
+ */
 function databaseConnection(environment: Environment): { readonly connectionString: string } {
   const url = environment['DATABASE_URL']?.trim();
   if (url !== undefined && url.length > 0) return { connectionString: url };
@@ -87,8 +95,10 @@ function databaseConnection(environment: Environment): { readonly connectionStri
   };
   const user = encodeURIComponent(field('username'));
   const password = encodeURIComponent(field('password'));
+  const override = environment['FSS_DATABASE_HOST']?.trim();
+  const host = override !== undefined && override.length > 0 ? override : field('host');
   return {
-    connectionString: `postgresql://${user}:${password}@${field('host')}:${field('port')}/${field('dbname')}`,
+    connectionString: `postgresql://${user}:${password}@${host}:${field('port')}/${field('dbname')}`,
   };
 }
 
@@ -108,18 +118,12 @@ export function readApiConfig(environment: Environment): ApiConfig {
     );
   }
 
-  const expected = environment['FSS_EXPECTED_SYSTEM_GENERATION']?.trim();
-  if (expected !== undefined && expected.length > 0 && (!Number.isInteger(Number(expected)) || Number(expected) < 1)) {
-    throw new ApiConfigError('INVALID', 'FSS_EXPECTED_SYSTEM_GENERATION must be a positive integer');
-  }
-
   const hostname = environment['HOSTNAME']?.trim();
   return {
     role: 'api',
     instanceKey: (environment['FSS_API_INSTANCE']?.trim() ?? (hostname !== undefined && hostname.length > 0 ? `api-${hostname}` : 'api')).slice(0, 120),
     port: positiveInteger(environment, 'PORT', positiveInteger(environment, 'FSS_HTTP_PORT', DEFAULT_PORT)),
     schemaRange: { minimum: API_SCHEMA_RANGE.minimum, maximum: API_SCHEMA_RANGE.maximum },
-    expectedSystemGeneration: expected !== undefined && expected.length > 0 ? Number(expected) : null,
     heartbeatIntervalMilliseconds: positiveInteger(
       environment,
       'FSS_API_HEARTBEAT_MS',
@@ -141,7 +145,6 @@ export function describeApiConfig(config: ApiConfig): LogFields {
     instance: config.instanceKey,
     port: config.port,
     schemaRange: `${String(config.schemaRange.minimum)}-${String(config.schemaRange.maximum)}`,
-    expectedSystemGeneration: config.expectedSystemGeneration,
     heartbeatIntervalMilliseconds: config.heartbeatIntervalMilliseconds,
   };
 }

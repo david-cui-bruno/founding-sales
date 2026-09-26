@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing';
 import { CURRENT_SCHEMA_VERSION, WORKER_SCHEMA_RANGE } from '@fss/domain/db';
-import { WORKER_EXIT_CODES, checkWorkerStartup, restoreSuspected, startupLogLine } from '../src/index.ts';
+import { WORKER_EXIT_CODES, checkWorkerStartup, startupLogLine } from '../src/index.ts';
 
 /**
  * The worker's startup check, against a real database.
@@ -31,7 +31,6 @@ describe('worker startup', () => {
       // new migration is one edit in `schemaRange.ts` and not three in tests.
       declaredRange: { minimum: WORKER_SCHEMA_RANGE.minimum, maximum: WORKER_SCHEMA_RANGE.maximum },
       databaseVersion: CURRENT_SCHEMA_VERSION,
-      systemGeneration: 1,
       reason: null,
       exitCode: WORKER_EXIT_CODES.ok,
     });
@@ -63,16 +62,6 @@ describe('worker startup', () => {
     expect(startupLogLine(report)).not.toContain('10.0.0.5');
   });
 
-  it('notices a restore by the system generation, and still starts', async () => {
-    const report = await checkWorkerStartup({ session: database.session });
-    expect(restoreSuspected(report, 1)).toBe(false);
-    // The operator expected generation 4; the restored database says 1.
-    expect(restoreSuspected(report, 4)).toBe(true);
-    // Restore holds are what stop sending and dialing, not a refusal to start.
-    expect(report.outcome).toBe('ready');
-    expect(restoreSuspected(report, undefined)).toBe(false);
-  });
-
   it('logs one structured redacted line', async () => {
     const report = await checkWorkerStartup({ session: database.session });
     expect(JSON.parse(startupLogLine(report))).toEqual({
@@ -80,7 +69,6 @@ describe('worker startup', () => {
       outcome: 'ready',
       schemaRange: `${String(WORKER_SCHEMA_RANGE.minimum)}-${String(WORKER_SCHEMA_RANGE.maximum)}`,
       databaseVersion: CURRENT_SCHEMA_VERSION,
-      systemGeneration: 1,
       reason: null,
     });
   });

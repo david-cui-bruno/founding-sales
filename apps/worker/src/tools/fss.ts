@@ -2,29 +2,15 @@ import { writeFile } from 'node:fs/promises';
 import pg from 'pg';
 import type { QueryResultRowLike, SessionQueryable } from '@fss/domain/db';
 import { ConfigError } from '../bootstrap/config.ts';
-import {
-  DEPLOYMENT_ENVIRONMENT_VARIABLES,
-  DeploymentConfigError,
-  readWorkerDeployment,
-} from '../bootstrap/deployment.ts';
+import { DeploymentConfigError, readWorkerDeployment } from '../bootstrap/deployment.ts';
 import { composeHandlers } from '../bootstrap/main.ts';
 import { createLogger, errorFields, type Logger } from '../bootstrap/log.ts';
 import {
-  countsCommand,
-  dialAuthorizeCommand,
   holdsListCommand,
-  jobsDiscardRunnableCommand,
-  mailboxCoverageCommand,
   mailboxReconcileSentCommand,
-  mailboxRecoverCommand,
-  mailboxWatchRenewCommand,
   releaseRecordPutCommand,
   releaseRecordShowCommand,
-  restoreHoldsOpenCommand,
-  restoreReportCommand,
-  schedulerRunOnceCommand,
   suppressionJournalReplayCommand,
-  systemGenerationAdvanceCommand,
   type AdminInvocation,
   type AdminOutcome,
 } from './fss/admin.ts';
@@ -40,8 +26,6 @@ import { schemaPreflight0019Command } from './fss/schemaPreflight0019.ts';
 import { runVerify } from './fss/verify.ts';
 import { bootstrapWorkspace } from './fss/bootstrapWorkspace.ts';
 import { RUNTIME_SECRET_VARIABLE, ensureRuntimeDatabaseUser } from './fss/databaseUsers.ts';
-import { runDrill } from './fss/drill.ts';
-import { seedDrillEvidence, type DrillEvidencePhase } from './fss/drillEvidence.ts';
 import {
   COMMAND_DEPENDENCIES,
   describeCommands,
@@ -53,7 +37,7 @@ import {
  * `fss`: the operations command line (lane G12g).
  *
  *   node apps/worker/src/tools/fss.ts migrate
- *   node apps/worker/src/tools/fss.ts admin counts --as-of 2026-09-20T12:00:00Z
+ *   node apps/worker/src/tools/fss.ts admin holds list
  *
  * ## Why it lives in `apps/worker/src/tools`
  *
@@ -68,8 +52,7 @@ import {
  * ## What it prints
  *
  * One JSON object on stdout per command, and `--report <path>` writes the same bytes
- * to a file (`holds list --count` prints a bare integer instead, because that is what
- * the drill's shell reads). Refusals and errors go to stderr as one JSON line each,
+ * to a file. Refusals and errors go to stderr as one JSON line each,
  * in the log shape the CloudWatch metric filters parse, and the exit code says which:
  * 20 for a refusal the operator has to act on, 21 for a failure, 64 for a usage error.
  *
@@ -103,8 +86,8 @@ const write = (line: string): void => {
 /**
  * The tool's logger, and it writes to **stderr**.
  *
- * Everything the caller parses is on stdout — one JSON object, or the bare integer
- * `--count` prints — so a log line there would corrupt the answer. The shape is the
+ * Everything the caller parses is on stdout — one JSON object — so a log line there
+ * would corrupt the answer. The shape is the
  * same JSON the metric filters in `infra/modules/observability` read, because when
  * this runs as a one-off task it lands in the same log group as the worker.
  */
@@ -130,9 +113,9 @@ function asSession(client: pg.Client): SessionQueryable {
  * The Gmail adapters, resolved exactly as the worker's bootstrap resolves them.
  *
  * `FSS_DEPENDENCIES` decides, and there is no third way: `live` builds the real
- * clients from the deployment's configuration, `recorded` is the rehearsal's named
- * choice, and `none` leaves the mail commands to refuse. A tool that reached the fakes
- * by omission would be a restore drill that proved nothing about the production path.
+ * clients from the deployment's configuration, `recorded` is a test's named choice, and
+ * `none` leaves the mail command to refuse. The command wraps whatever this returns in
+ * `readOnlyGmail` before it reads anything.
  */
 async function resolveMail(
   environment: Readonly<Record<string, string | undefined>>,
@@ -165,19 +148,9 @@ async function resolveJournalSource(config: ToolConfig): Promise<AdminInvocation
 type AdminRunner = (invocation: AdminInvocation) => Promise<AdminOutcome>;
 
 const ADMIN_COMMANDS: Readonly<Record<string, AdminRunner>> = Object.freeze({
-  counts: countsCommand,
   'holds list': holdsListCommand,
-  'dial-authorize': dialAuthorizeCommand,
   'suppression-journal replay': suppressionJournalReplayCommand,
   'mailbox reconcile-sent': mailboxReconcileSentCommand,
-  'mailbox recover': mailboxRecoverCommand,
-  'mailbox watch-renew': mailboxWatchRenewCommand,
-  'mailbox coverage': mailboxCoverageCommand,
-  'jobs discard-runnable': jobsDiscardRunnableCommand,
-  'scheduler run-once': schedulerRunOnceCommand,
-  'restore-report': restoreReportCommand,
-  'system-generation advance': systemGenerationAdvanceCommand,
-  'restore-holds open': restoreHoldsOpenCommand,
   'release-record put': releaseRecordPutCommand,
   'release-record show': releaseRecordShowCommand,
   'schema-preflight 0019': schemaPreflight0019Command,
@@ -213,9 +186,9 @@ async function selftest(environment: Readonly<Record<string, string | undefined>
  * Everything one command needs, resolved according to its declared dependency mode.
  *
  * A `database` command is handed no adapters at all, which is the point: it cannot
- * reach Gmail, KMS or S3 even in a fully configured production task. A `recorded`
- * command is refused unless the deployment says `recorded`, so a reconstruction from
- * a command line can never send live mail.
+ * reach Gmail, KMS or S3 even in a fully configured production task. A `gmail-read`
+ * command is handed the deployment's Gmail seam (`live` or `recorded`, refused under any
+ * other word), which it only ever reads through `readOnlyGmail`.
  */
 async function adminInvocation(
   name: string,
@@ -223,7 +196,6 @@ async function adminInvocation(
   session: SessionQueryable,
   config: ToolConfig,
   environment: Readonly<Record<string, string | undefined>>,
-  log: Logger,
 ): Promise<AdminInvocation | { readonly refusal: AdminOutcome }> {
   const mode = COMMAND_DEPENDENCIES[name] ?? 'database';
   const base: AdminInvocation = {
@@ -232,18 +204,17 @@ async function adminInvocation(
     environment,
     options: parsed.options,
     switches: parsed.switches,
-    log,
   };
   if (mode === 'database') return base;
   if (mode === 'journal') {
     return { ...base, journalSource: await resolveJournalSource(config) };
   }
-  if (config.dependencies !== 'recorded') {
+  if (config.dependencies !== 'live' && config.dependencies !== 'recorded') {
     return {
       refusal: {
         ok: false,
-        reason: 'dependencies_not_recorded',
-        detail: `fss admin ${name} reaches the Gmail seam and runs only with FSS_DEPENDENCIES=recorded; this deployment says ${config.dependencies ?? 'nothing'}`,
+        reason: 'dependencies_none',
+        detail: `fss admin ${name} reads Gmail and needs FSS_DEPENDENCIES=live (production) or recorded (a test); this deployment says ${config.dependencies ?? 'nothing'}`,
       },
     };
   }
@@ -258,7 +229,6 @@ async function runCommand(
   migrationSession: SessionQueryable | null,
   config: ToolConfig,
   environment: Readonly<Record<string, string | undefined>>,
-  log: Logger,
 ): Promise<AdminOutcome> {
   const { spec, options, switches } = parsed;
   const path = spec.path.join(' ');
@@ -319,102 +289,11 @@ async function runCommand(
       ? { ok: true, value: { ...outcome.value } }
       : { ok: false, reason: outcome.reason, detail: outcome.detail };
   }
-  if (path === 'drill') {
-    // The drill reaches the Gmail seam through steps 3, 4 and 6, so it is bound by the
-    // same rule those commands are: recorded, or refused.
-    if (config.dependencies !== 'recorded') {
-      return {
-        ok: false,
-        reason: 'dependencies_not_recorded',
-        detail: 'fss drill runs Appendix E steps 3, 4 and 6, which reach the Gmail seam, so it runs only with FSS_DEPENDENCIES=recorded',
-      };
-    }
-    const resolvedMail = await resolveMail(environment, config);
-    if ('refusal' in resolvedMail) return resolvedMail.refusal;
-    const adminUserId = options['--admin-user'] ?? environment[TOOL_ENVIRONMENT_VARIABLES.adminUser]?.trim();
-    const outcome = await runDrill({
-      session,
-      ...(migrationSession === null ? {} : { migrationSession }),
-      invocation: {
-        session,
-        config,
-        environment,
-        journalSource: await resolveJournalSource(config),
-        mail: resolvedMail.mail,
-        log,
-      },
-      ...(options['--baseline'] === undefined ? {} : { baselinePath: options['--baseline'] }),
-      ...(options['--baseline-json'] === undefined ? {} : { baselineJson: options['--baseline-json'] }),
-      ...(options['--as-of'] === undefined ? {} : { asOf: options['--as-of'] }),
-      reportsDirectory: options['--reports'] ?? '',
-      ...(options['--from'] === undefined ? {} : { replayFrom: options['--from'] }),
-      ...(options['--since'] === undefined ? {} : { since: options['--since'] }),
-      ...(options['--expected-generation'] === undefined ? {} : { expectedGeneration: options['--expected-generation'] }),
-      ...(options['--at-failure-json'] === undefined ? {} : { atFailureJson: options['--at-failure-json'] }),
-      ...(options['--mailbox-recording-json'] === undefined
-        ? {}
-        : { mailboxRecordingJson: options['--mailbox-recording-json'] }),
-      ...(adminUserId === undefined || adminUserId.length === 0 ? {} : { adminUserId }),
-    });
-    if (outcome.ok) return { ok: true, value: { ...outcome.value } };
-    // The report travels with the refusal (lane g59). A one-off task's filesystem goes
-    // with it, so a drill that failed used to leave one log line naming the first
-    // failure and nothing about the steps it had measured, or, past an unanswered step,
-    // the steps it went on to run.
-    return {
-      ok: false,
-      reason: outcome.reason,
-      detail: outcome.detail,
-      ...(outcome.value === undefined ? {} : { report: { ...outcome.value } }),
-    };
-  }
-  if (path === 'admin drill seed-evidence') {
-    // The runtime identity, like `verify` and `admin workspace bootstrap`: it writes
-    // business rows with the credential the services use, which is the credential whose
-    // privileges on those tables are the thing worth proving.
-    //
-    // And the same refusal `drill` makes, for a stronger reason. `drill` reconstructs;
-    // this *creates* — a firm, a contact, an enrollment, a fence it drives to `sent`, a
-    // reply and an opt-out it ingests, two suppressions it journals. Production's drill
-    // runs against real data and is never seeded, and `FSS_DEPENDENCIES=live` is what
-    // production's worker says, so `live` is refused here before anything is written.
-    // `infra/scripts/release-seed-drill-evidence.sh` refuses a production prefix
-    // outright as well; neither guard is the other one's excuse.
-    if (config.dependencies !== 'recorded') {
-      return {
-        ok: false,
-        reason: 'dependencies_not_recorded',
-        detail:
-          'fss admin drill seed-evidence writes the activity a restore drill reconstructs and reaches the Gmail seam, so it runs only with FSS_DEPENDENCIES=recorded; production is never seeded',
-      };
-    }
-    const resolvedMail = await resolveMail(environment, config);
-    if ('refusal' in resolvedMail) return resolvedMail.refusal;
-    if (resolvedMail.mail === undefined) {
-      return {
-        ok: false,
-        reason: 'journal_unconfigured',
-        detail: `this deployment composed no mail client; a seeded opt-out is journalled before its row, so ${DEPLOYMENT_ENVIRONMENT_VARIABLES.journalBucket} must name the object-locked bucket`,
-      };
-    }
-    const phase = options['--phase'] ?? '';
-    const outcome = await seedDrillEvidence({
-      session,
-      mail: resolvedMail.mail,
-      workspaceSlug: options['--workspace-slug'] ?? '',
-      phase: phase as DrillEvidencePhase,
-    });
-    return outcome.ok
-      ? { ok: true, value: { ...outcome.value } }
-      : { ok: false, reason: outcome.reason, detail: outcome.detail };
-  }
-
-
   const name = spec.path.slice(1).join(' ');
   const admin = ADMIN_COMMANDS[name];
   if (admin === undefined) return { ok: false, reason: 'command_unimplemented', detail: path };
 
-  const resolved = await adminInvocation(name, parsed, session, config, environment, log);
+  const resolved = await adminInvocation(name, parsed, session, config, environment);
   if ('refusal' in resolved) return resolved.refusal;
   return await admin(resolved);
 }
@@ -490,20 +369,19 @@ export async function main(
       migrationClient === null ? null : asSession(migrationClient),
       config,
       environment,
-      log,
     );
     if (!outcome.ok) {
       log.log('error', 'fss_refused', { command: parsed.value.spec.path.join(' '), reason: outcome.reason, detail: outcome.detail });
-      // A refusal that got somewhere prints how far, on stdout where the runner reads
-      // answers (lane g59). The exit code is still 20: a report is not a pass.
+      // A refusal that got somewhere prints how far, on stdout where the caller reads
+      // answers. The exit code is still 20: a report is not a pass.
       if (outcome.report !== undefined) {
-        await report(parsed.value.options['--report'] ?? parsed.value.options['--out'], outcome.report);
+        await report(parsed.value.options['--report'], outcome.report);
         write(JSON.stringify(outcome.report));
       }
       return FSS_EXIT_CODES.refused;
     }
-    await report(parsed.value.options['--report'] ?? parsed.value.options['--out'], outcome.value);
-    write(outcome.print ?? JSON.stringify(outcome.value));
+    await report(parsed.value.options['--report'], outcome.value);
+    write(JSON.stringify(outcome.value));
     return FSS_EXIT_CODES.ok;
   } catch (error) {
     // Never the message alone: a `pg` error can carry a statement, and a deployment

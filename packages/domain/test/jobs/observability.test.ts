@@ -444,10 +444,10 @@ describe('counters, heartbeats, the canary and alerts', () => {
     const invented = [...declared].filter(name => !infrastructure.has(name)).sort();
     expect(invented, 'a metric is claimed here that no alarm or metric filter reads').toEqual([]);
 
-    // The three the specification calls immediately critical are log-derived, so a
-    // task that cannot reach the metrics API still raises them.
+    // The immediately critical ones are log-derived, so a task that cannot reach the
+    // metrics API still raises them.
     expect(METRIC_OWNERS['SuppressionJournalWriteFailures']).toBe('log_derived');
-    expect(METRIC_OWNERS['RestoreGenerationMismatches']).toBe('log_derived');
+    expect(METRIC_OWNERS).not.toHaveProperty('RestoreGenerationMismatches');
     expect(METRIC_OWNERS['OutboundSafetyInvariantFailures']).toBe('log_derived');
     // And the one G1 asked this lane for.
     expect(METRIC_OWNERS['UnacknowledgedCriticalAlertAgeSeconds']).toBe('jobs');

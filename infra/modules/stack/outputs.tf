@@ -124,16 +124,6 @@ output "operations_task_definition_arn" {
   value       = module.cluster.operations_task_definition_arn
 }
 
-output "drill_task_definition_arn" {
-  description = "Task definition for `fss drill`, under its own role: the only identity holding both the journal and the migration credential."
-  value       = module.cluster.drill_task_definition_arn
-}
-
-output "drill_task_role_name" {
-  description = "Drill task role name."
-  value       = module.cluster.drill_task_role_name
-}
-
 output "migration_database_secret_arn" {
   description = "Entry the migration credential lives in. Created empty; the operator fills it. Readable by the migration execution role alone."
   value       = module.secrets.migration_database_secret_arn
@@ -169,7 +159,7 @@ output "task_network_configuration" {
     security_group_id  = module.network.security_group_ids["worker_task"]
     assign_public_ip   = "ENABLED"
     database_port      = 5432
-    database_host      = module.database.address
+    database_host      = local.database_host
     inbound_rule_count = length([for name, rule in module.network.ingress_rules : name if rule.group == "worker_task"])
   }
 }
@@ -282,7 +272,6 @@ output "resource_names" {
       module.cluster.api_task_role_name,
       module.cluster.worker_task_role_name,
       module.cluster.migration_task_role_name,
-      module.cluster.drill_task_role_name,
       module.database.instance_identifier,
       module.database.subnet_group_name,
       module.database.parameter_group_name,
@@ -312,6 +301,6 @@ output "operations_task_definition_family" {
 }
 
 output "one_off_task_families" {
-  description = "The three one-off task definition families: migration, operations, drill. Names, so a root test can assert them at plan time."
+  description = "The two one-off task definition families: migration, operations. Names, so a root test can assert them at plan time."
   value       = module.cluster.one_off_task_families
 }

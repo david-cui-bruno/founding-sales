@@ -63,14 +63,6 @@ export interface RoutingOptions {
   /** The structured log; the safety metric filters read it. Absent in unit tests. */
   readonly log?: Logger | undefined;
   /**
-   * Appendix E step 1: the generation an operator pinned, or null when none is.
-   *
-   * `/readyz` already reads it through `ReadinessInputs`; Diagnostics shows it beside
-   * the applied generation so a person can see a restore mismatch rather than only
-   * being refused by the load balancer because of one.
-   */
-  readonly expectedSystemGeneration?: number | null | undefined;
-  /**
    * The digest of the API image serving this request, as the bootstrap discovered it
    * (`discoverImageDigest`), or `unknown` (lane g71). An enable of production sending
    * names a release record whose API digest must be this one; absent is unknown, and

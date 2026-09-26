@@ -24,9 +24,7 @@ import {
 } from '../../outbound/index.ts';
 import {
   RESTORE_SENT_SCAN_SKEW_SECONDS,
-  composeRestoreReport,
   recoverSentFolderMessage,
-  verifyRestoreReport,
   type SentMessageRecovery,
 } from '../../restore/index.ts';
 import {
@@ -44,7 +42,7 @@ import {
 } from '../outbound/support/outboundWorld.ts';
 
 /**
- * Appendix E step 3's missing fences, against a real PostgreSQL (lane g73).
+ * The missing fences after a point-in-time restore, against a real PostgreSQL (lane g73).
  *
  * A point-in-time restore loses the fence of every send made after the restore point and
  * keeps the message, which lives in Gmail. The step the send belonged to is back to
@@ -52,7 +50,7 @@ import {
  * execution — is exactly what was lost. These scenarios build that state directly: a
  * pending step with no fence, and a Sent folder holding its message under FSS's
  * deterministic Message-ID. Then they run the scan (`scanSentFolder`, the Gmail half) and
- * the recovery (`recoverSentFolderMessage`, the database half) as step 3 does, and the
+ * the recovery (`recoverSentFolderMessage`, the database half) as `mailbox reconcile-sent` does, and the
  * sequence engine as the worker does.
  *
  * ## The vacuous-pass traps, named
@@ -69,7 +67,7 @@ import {
  *   * "The window" could be a listing that returned everything. So four messages sit on
  *     either side of both bounds, one millisecond apart.
  */
-describe('Appendix E step 3: sends whose fence a restore lost (lane g73)', () => {
+describe('sends whose fence a point-in-time restore lost (lane g73)', () => {
   let world: OutboundWorld;
 
   beforeAll(async () => {
@@ -506,30 +504,6 @@ describe('Appendix E step 3: sends whose fence a restore lost (lane g73)', () =>
     });
     const { scan } = await pass(gmail, around('2026-09-24T19:00:00.000Z'));
     expect(scan).toEqual({ outcome: 'grant_revoked', listed: 0, messages: [] });
-  });
-
-  it('holds step 9 on a send it could not attribute or a folder it could not read', () => {
-    const counts = { asOf: '2026-09-24T12:00:00.000Z', sends: 2, replies: 1, suppressions: 3, crm_edits: 4, migrations: 16 };
-    const clean = composeRestoreReport({
-      before: counts,
-      after: counts,
-      sendsRepeated: 0,
-      crmRpoSeconds: 0,
-      unresolved: { reconciling: [], unknownTerminal: [], ambiguousHeld: [], deadJobs: 0 },
-    });
-    expect(verifyRestoreReport(clean)).toEqual({ ok: true });
-    for (const kind of ['unattached_sent_message', 'sent_folder_unscanned'] as const) {
-      const held = composeRestoreReport({
-        before: counts,
-        after: counts,
-        sendsRepeated: 0,
-        crmRpoSeconds: 0,
-        unresolved: { reconciling: [], unknownTerminal: [], ambiguousHeld: [], deadJobs: 0 },
-        sentFolder: [{ kind, workspaceId: workspaceId(), id: '0123456789abcdef', detail: 'lane g73' }],
-      });
-      expect(held.unresolved.map(entry => entry.kind)).toEqual([kind]);
-      expect(verifyRestoreReport(held)).toEqual({ ok: false, reason: 'unresolved' });
-    }
   });
 
   describe('the sequence engine and a tombstoned step', () => {

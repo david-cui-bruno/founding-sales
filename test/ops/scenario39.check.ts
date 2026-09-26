@@ -283,7 +283,6 @@ describe('Appendix G 39: the plan guard reads a printed plan, so the rehearsal c
       ['infra/scripts/rehearsal-caller-identity.sh', ['fss-rh-deploy']],
       [GUARD, ['fss-rh-dryrun', 'before']],
       ['infra/scripts/rehearsal-schema-ranges.sh', ['fss-rh-dryrun']],
-      ['infra/scripts/rehearsal-restore-drill.sh', ['fss-rh-dryrun']],
       ['infra/scripts/rehearsal-teardown.sh', ['fss-rh-dryrun']],
       [GUARD, ['fss-rh-dryrun', 'after']],
     ];

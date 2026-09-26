@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { RELEASE_RECORD_SCHEMA_ID } from '@fss/contracts';
+import { RELEASE_RECORD_SCHEMA_ID, ciGateReleaseReference } from '@fss/contracts';
 import type { SessionQueryable } from '@fss/domain/db';
 import { CLUSTER_URL_ENVIRONMENT_VARIABLE, asSession } from '@fss/domain/db/testing';
 import { main } from '../src/tools/fss.ts';
@@ -13,8 +13,8 @@ import { COMMAND_DEPENDENCIES, parseFssCommand } from '../src/tools/fss/commands
 /**
  * `fss admin release-record put` and `show` (lane g71).
  *
- * `release-deploy.sh --release-record <file>` runs the put on the operations task after
- * the final verify, so the record a green rehearsal wrote is in the database for the
+ * `release-deploy.sh --release-record <file>` runs the put on the operations task, so the
+ * record the CI gate wrote (`release-record-from-ci.sh`) is in the database for the
  * admin's attestation to name. What is asserted here is the command line: the file and
  * base64 forms, the JSON on stdout, the report file, the exit codes, and the row.
  *
@@ -22,8 +22,8 @@ import { COMMAND_DEPENDENCIES, parseFssCommand } from '../src/tools/fss/commands
  *
  * A put that printed `created` without writing would pass a test that read only
  * stdout, so every accepted case also reads the row, and every refusal is paired with
- * a count that did not move. The data is fictional: digests of repeated letters and a
- * rehearsal nobody ran.
+ * a count that did not move. The data is fictional: digests of repeated letters and gate
+ * runs nobody ran.
  */
 
 let adminUrl: string;
@@ -35,16 +35,23 @@ let directory: string;
 
 const digest = (letter: string): string => `sha256:${letter.repeat(64)}`;
 
-const record = (reference: string, worker = digest('b')): Record<string, unknown> => ({
+const COMMIT = 'c'.repeat(40);
+
+/** The record `release-record-from-ci.sh` writes for gate run `runId`. */
+const record = (runId: string, worker = digest('b')): Record<string, unknown> => ({
   schema: RELEASE_RECORD_SCHEMA_ID,
-  releaseGateReference: reference,
-  rehearsalPrefix: 'fss-rh-fixture',
-  recordedAt: '2026-09-25T07:20:44Z',
+  source: 'ci-gate',
+  releaseGateReference: ciGateReleaseReference(runId, COMMIT),
+  recordedAt: '2026-09-25T21:40:12Z',
   suite: 'pass',
-  artifacts: { api: digest('a'), worker, desktopCommitStamp: 'c'.repeat(40) },
-  rehearsalScenarios: { '11': 'prefix=fss-rh-fixture result=pass' },
+  commit: COMMIT,
+  gateRunId: runId,
+  gateRunUrl: `https://github.com/example-owner/example-repo/actions/runs/${runId}`,
+  imagesRunId: '1',
+  artifacts: { api: digest('a'), worker, desktopCommitStamp: COMMIT },
   enablesSending: false,
 });
+const referenceOf = (runId: string): string => ciGateReleaseReference(runId, COMMIT);
 
 async function run(argv: readonly string[]): Promise<{ readonly code: number; readonly stdout: string; readonly stderr: string }> {
   const printed: string[] = [];
@@ -108,10 +115,10 @@ afterAll(async () => {
 });
 
 describe('fss admin release-record put', () => {
-  it('stores the record from the file the rehearsal wrote, and says so on stdout and in the report', async () => {
-    const reference = 'fss-rh-fixture-2026-09-25T07:20:44Z';
+  it('stores the record from the file the CI gate wrote, and says so on stdout and in the report', async () => {
+    const reference = referenceOf('41000000011');
     const file = join(directory, 'release-record.json');
-    writeFileSync(file, `${JSON.stringify(record(reference), null, 2)}\n`);
+    writeFileSync(file, `${JSON.stringify(record('41000000011'), null, 2)}\n`);
     const report = join(directory, 'put.json');
 
     const put = await run(['admin', 'release-record', 'put', '--json', file, '--report', report]);
@@ -173,11 +180,11 @@ describe('fss admin release-record put', () => {
   });
 
   it('refuses a different record under a reference already stored, with exit 20', async () => {
-    const reference = 'fss-rh-fixture-conflict';
+    const reference = referenceOf('41000000012');
     const first = join(directory, 'first.json');
     const second = join(directory, 'second.json');
-    writeFileSync(first, JSON.stringify(record(reference)));
-    writeFileSync(second, JSON.stringify(record(reference, digest('e'))));
+    writeFileSync(first, JSON.stringify(record('41000000012')));
+    writeFileSync(second, JSON.stringify(record('41000000012', digest('e'))));
     expect((await run(['admin', 'release-record', 'put', '--json', first])).code).toBe(0);
 
     const refused = await run(['admin', 'release-record', 'put', '--json', second]);
@@ -192,13 +199,21 @@ describe('fss admin release-record put', () => {
   });
 
   it('refuses a record the contract refuses, a file it cannot read and base64 that is not', async () => {
-    const reference = 'fss-rh-fixture-refused';
+    const reference = referenceOf('41000000013');
     const tagged = join(directory, 'tagged.json');
-    writeFileSync(tagged, JSON.stringify({ ...record(reference), artifacts: { api: 'latest', worker: digest('b'), desktopCommitStamp: 'x' } }));
+    writeFileSync(tagged, JSON.stringify({ ...record('41000000013'), artifacts: { api: 'latest', worker: digest('b'), desktopCommitStamp: COMMIT } }));
     const invalid = await run(['admin', 'release-record', 'put', '--json', tagged]);
     expect(invalid.code).toBe(20);
     expect(invalid.stderr).toContain('release_record_invalid');
     expect(invalid.stderr).toContain('artifacts.api');
+
+    // The record a full rehearsal wrote, before that mode was deleted (lane W3-S8).
+    const rehearsal = join(directory, 'rehearsal.json');
+    const { source: _source, commit: _commit, gateRunId: _run, gateRunUrl: _url, imagesRunId: _images, ...rest } = record('41000000013');
+    writeFileSync(rehearsal, JSON.stringify({ ...rest, rehearsalPrefix: 'fss-rh-fixture', rehearsalScenarios: { '11': 'result=pass' } }));
+    const refusedRehearsal = await run(['admin', 'release-record', 'put', '--json', rehearsal]);
+    expect(refusedRehearsal.code).toBe(20);
+    expect(refusedRehearsal.stderr).toContain('release_record_invalid');
 
     const missing = await run(['admin', 'release-record', 'put', '--json', join(directory, 'nothing-here.json')]);
     expect(missing.code).toBe(20);
@@ -222,9 +237,9 @@ describe('fss admin release-record put', () => {
 
 describe('fss admin release-record show', () => {
   it('reads back a stored record with the digests the two rules compare', async () => {
-    const reference = 'fss-rh-fixture-show';
+    const reference = referenceOf('41000000014');
     const file = join(directory, 'show.json');
-    writeFileSync(file, JSON.stringify(record(reference)));
+    writeFileSync(file, JSON.stringify(record('41000000014')));
     expect((await run(['admin', 'release-record', 'put', '--json', file])).code).toBe(0);
 
     const shown = await run(['admin', 'release-record', 'show', '--reference', reference]);
@@ -232,12 +247,34 @@ describe('fss admin release-record show', () => {
     const answer = JSON.parse(shown.stdout) as Record<string, unknown>;
     expect(answer).toMatchObject({
       reference,
-      source: 'rehearsal',
+      source: 'ci-gate',
       apiDigest: digest('a'),
       workerDigest: digest('b'),
       suite: 'pass',
     });
-    expect(answer['record']).toEqual(record(reference));
+    expect(answer['record']).toEqual(record('41000000014'));
+  });
+
+  it('names a record a full rehearsal stored before lane W3-S8 a rehearsal’s', async () => {
+    const reference = 'fss-rh-fixture-2026-09-25T07:20:44Z';
+    const stored = {
+      schema: RELEASE_RECORD_SCHEMA_ID,
+      releaseGateReference: reference,
+      rehearsalPrefix: 'fss-rh-fixture',
+      recordedAt: '2026-09-25T07:20:44Z',
+      suite: 'pass',
+      artifacts: { api: digest('a'), worker: digest('b'), desktopCommitStamp: COMMIT },
+      rehearsalScenarios: { '11': 'prefix=fss-rh-fixture result=pass' },
+      enablesSending: false,
+    };
+    await session.query(
+      `INSERT INTO release_records (reference, recorded_at, suite, api_digest, worker_digest, desktop_commit_stamp, enables_sending, record)
+       VALUES ($1, TIMESTAMPTZ '2026-09-25T07:20:44Z', 'pass', $2, $3, $4, false, $5::jsonb)`,
+      [reference, digest('a'), digest('b'), COMMIT, JSON.stringify(stored)],
+    );
+    const shown = await run(['admin', 'release-record', 'show', '--reference', reference]);
+    expect(shown.code, shown.stderr).toBe(0);
+    expect(JSON.parse(shown.stdout)).toMatchObject({ reference, source: 'rehearsal', record: stored });
   });
 
   it('refuses a reference nobody stored, and a bare word in place of --reference', async () => {

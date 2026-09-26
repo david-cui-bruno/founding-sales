@@ -2,7 +2,6 @@ import {
   RELEASE_RECORD_SCHEMA_ID,
   ciGateReleaseReference,
   type CiGateReleaseRecord,
-  type RehearsalReleaseRecord,
 } from '@fss/contracts';
 import type { Queryable } from '../../../db/queryable.ts';
 import { putReleaseRecord } from '../../../release/records.ts';
@@ -11,8 +10,8 @@ import { putReleaseRecord } from '../../../release/records.ts';
  * Fictional release records for the tests that need one (lane g71).
  *
  * The digests are repeated hex letters, so no test ever holds a digest of a real
- * image, and the prefix is a rehearsal nobody ran. `fixtureDigest('a')` is the API
- * image a test "runs", `fixtureDigest('b')` the worker; a mismatch is any other letter.
+ * image. `fixtureDigest('a')` is the API image a test "runs", `fixtureDigest('b')` the
+ * worker; a mismatch is any other letter.
  */
 
 export const fixtureDigest = (letter: string): string => `sha256:${letter.repeat(64)}`;
@@ -27,7 +26,13 @@ export interface FixtureRecordOptions {
   readonly desktopCommitStamp?: string;
 }
 
-export function fixtureReleaseRecord(reference: string, options: FixtureRecordOptions = {}): RehearsalReleaseRecord {
+/**
+ * A record a green `full` rehearsal stored before lane W3-S8 deleted that mode: no
+ * `source`, the drill fields, any reference. A put refuses one now; production still holds
+ * rows like it, and the rules read them by their columns, so `storeFixtureRecord` inserts
+ * one the way it was stored then.
+ */
+export function fixtureReleaseRecord(reference: string, options: FixtureRecordOptions = {}): Readonly<Record<string, unknown>> {
   return {
     schema: RELEASE_RECORD_SCHEMA_ID,
     releaseGateReference: reference,
@@ -47,14 +52,26 @@ export function fixtureReleaseRecord(reference: string, options: FixtureRecordOp
   };
 }
 
-/** Store one, through the domain function, and fail the test if it refuses. */
+/** Store a rehearsal-era record under `reference`, as a row put before lane W3-S8. */
 export async function storeFixtureRecord(
   db: Queryable,
   reference: string,
   options: FixtureRecordOptions = {},
 ): Promise<void> {
-  const stored = await putReleaseRecord({ db }, fixtureReleaseRecord(reference, options));
-  if (!stored.ok) throw new Error(`the fixture release record was refused: ${stored.reason} ${stored.detail}`);
+  const record = fixtureReleaseRecord(reference, options);
+  await db.query(
+    `INSERT INTO release_records
+       (reference, recorded_at, suite, api_digest, worker_digest, desktop_commit_stamp, enables_sending, record)
+     VALUES ($1, TIMESTAMPTZ '2026-09-25T07:20:44Z', $2, $3, $4, $5, false, $6::jsonb)`,
+    [
+      reference,
+      options.suite ?? 'pass',
+      options.api ?? FIXTURE_API_DIGEST,
+      options.worker ?? FIXTURE_WORKER_DIGEST,
+      options.desktopCommitStamp ?? 'd'.repeat(40),
+      JSON.stringify(record),
+    ],
+  );
 }
 
 /**

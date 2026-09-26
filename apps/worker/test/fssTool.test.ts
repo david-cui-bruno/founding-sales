@@ -7,17 +7,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { CURRENT_SCHEMA_VERSION, repositoryContext, workspaceScope, type SessionQueryable } from '@fss/domain/db';
 import { CLUSTER_URL_ENVIRONMENT_VARIABLE, asSession } from '@fss/domain/db/testing';
 import { ALL_BLOCKED_ACTION_KINDS, openHold } from '@fss/domain/policy';
-import { readWorkerDeployment } from '../src/bootstrap/deployment.ts';
-import { composeHandlers } from '../src/bootstrap/main.ts';
 import { main } from '../src/tools/fss.ts';
-import {
-  mailboxWatchRenewCommand,
-  redactedMessageId,
-  suppressionJournalReplayCommand,
-  systemGenerationAdvanceCommand,
-  unresolvedSentFolder,
-  type AdminInvocation,
-} from '../src/tools/fss/admin.ts';
+import { redactedMessageId, suppressionJournalReplayCommand, type AdminInvocation } from '../src/tools/fss/admin.ts';
 import { readToolConfig } from '../src/tools/fss/config.ts';
 import { runMigrate } from '../src/tools/fss/migrate.ts';
 
@@ -26,8 +17,8 @@ import { runMigrate } from '../src/tools/fss/migrate.ts';
  *
  * The first half is the command the deployment does not have: `fss migrate` against an
  * **unmigrated** database, which is the state a fresh apply leaves and the state in
- * which both binaries refuse to start. The second half is the `fss admin` surface the
- * restore drill calls, each command run through `main` exactly as the drill runs it.
+ * which both binaries refuse to start. The second half is the `fss admin` surface a
+ * restore and a release run, each command run through `main` as an operator runs it.
  *
  * ## The vacuous-pass trap, named
  *
@@ -37,7 +28,7 @@ import { runMigrate } from '../src/tools/fss/migrate.ts';
  * `CURRENT_SCHEMA_VERSION` after, which is the only pair of numbers that says the
  * command did the work. And a tool test that asserted "exit code 0" would pass against
  * a tool that printed nothing: every case reads the JSON the command wrote, through
- * `--report` or through stdout, and asserts a field the drill itself parses.
+ * `--report` or through stdout, and asserts a field an operator reads.
  */
 
 const MIGRATION_SCOPE = { kind: 'system', component: 'migration' } as const;
@@ -347,112 +338,35 @@ describe('fss --selftest', () => {
   });
 });
 
-describe('the fss admin commands the drill calls', () => {
+describe('the fss admin commands a restore runs', () => {
   let workspaceId: string;
-  let adminUserId: string;
 
   beforeAll(async () => {
     const workspace = await session.query<{ id: string }>(
-      "INSERT INTO workspaces (slug, display_name) VALUES ('drill', 'Drill') RETURNING id",
+      "INSERT INTO workspaces (slug, display_name) VALUES ('restore', 'Restore') RETURNING id",
     );
     workspaceId = workspace.rows[0]?.id ?? '';
-    const user = await session.query<{ id: string }>(
-      'INSERT INTO users (google_sub, email, display_name) VALUES ($1, $2, $3) RETURNING id',
-      [`sub-${randomUUID()}`, 'admin@example.test', 'Admin'],
-    );
-    adminUserId = user.rows[0]?.id ?? '';
-    await session.query(
-      "INSERT INTO workspace_memberships (workspace_id, user_id, role) VALUES ($1, $2, 'admin')",
-      [workspaceId, adminUserId],
-    );
   });
 
-  it('counts the five kinds, so a drill with nothing to reconstruct is visible', async () => {
-    const { code, stdout } = await run([
-      'admin',
-      'counts',
-      '--as-of',
-      '2026-09-20T00:00:00.000Z',
-      '--report',
-      join(reports, 'baseline.json'),
-    ]);
-    expect(code).toBe(0);
-    const report = JSON.parse(stdout) as Record<string, unknown>;
-    for (const kind of ['sends', 'replies', 'suppressions', 'crm_edits', 'migrations']) {
-      expect(report[kind], `the drill reads ${kind}`).toBe(0);
-    }
-    expect(readReport('baseline.json')['asOf']).toBe('2026-09-20T00:00:00.000Z');
-  });
-
-  it('prints a bare integer for --count, because the drill compares it in the shell', async () => {
+  it('lists the open holds by reason, as JSON', async () => {
     const context = repositoryContext(workspaceScope(workspaceId, MIGRATION_SCOPE), session);
     await openHold(context, {
       scopeKind: 'workspace',
-      reasonCode: 'restore_in_progress',
+      reasonCode: 'long_hold_review',
       blockedActionKinds: ALL_BLOCKED_ACTION_KINDS,
-      sourceEventKind: 'restore.generation_mismatch',
+      sourceEventKind: 'test.long_hold',
     });
 
-    const counted = await run(['admin', 'holds', 'list', '--reason', 'restore_in_progress', '--count']);
-    expect(counted.code).toBe(0);
-    expect(counted.stdout.trim()).toBe('1');
-    expect(Number.parseInt(counted.stdout.trim(), 10)).toBe(1);
+    const listed = await run(['admin', 'holds', 'list', '--reason', 'long_hold_review', '--report', join(reports, 'holds.json')]);
+    expect(listed.code).toBe(0);
+    expect(JSON.parse(listed.stdout)).toMatchObject({ count: 1, reason: 'long_hold_review', excludeReason: null });
+    expect(readReport('holds.json')).toMatchObject({ count: 1 });
 
-    const listed = await run(['admin', 'holds', 'list', '--exclude-reason', 'restore_in_progress', '--count']);
-    expect(listed.stdout.trim()).toBe('0');
+    const others = await run(['admin', 'holds', 'list', '--exclude-reason', 'long_hold_review']);
+    expect(JSON.parse(others.stdout)).toMatchObject({ count: 0 });
   });
 
-  it('refuses to answer a dial nobody could make rather than reporting a refusal', async () => {
-    const { code } = await run(['admin', 'dial-authorize', '--any']);
-    // Exit 20: a probe that found no subject must not report "refused, restore in
-    // progress", which is the vacuous pass this drill exists to prevent.
-    expect(code).toBe(20);
-  });
-
-  it('discards runnable job state and keeps the dead jobs', async () => {
-    const { code, stdout } = await run(['admin', 'jobs', 'discard-runnable', '--report', join(reports, 'jobs.json')]);
-    expect(code).toBe(0);
-    expect(JSON.parse(stdout)).toMatchObject({ discarded: 0, dead_kept: 0 });
-    expect(readReport('jobs.json')).toHaveProperty('discarded');
-  });
-
-  it('runs one scheduler pass, which is how job state is rematerialised', async () => {
-    const { code, stdout } = await run([
-      'admin',
-      'scheduler',
-      'run-once',
-      '--report',
-      join(reports, 'rematerialise.json'),
-    ]);
-    expect(code).toBe(0);
-    const report = JSON.parse(stdout) as Record<string, unknown>;
-    expect(report['outcome']).toBe('ran');
-    expect(report['externalActions']).toBe(0);
-  });
-
-  it('reports mailbox coverage, and an unconnected environment has nothing to report', async () => {
-    const { code, stdout } = await run([
-      'admin',
-      'mailbox',
-      'coverage',
-      '--all-mailboxes',
-      '--report',
-      join(reports, 'coverage.json'),
-    ]);
-    expect(code).toBe(0);
-    expect(JSON.parse(stdout)).toEqual({ mailboxes: [] });
-  });
-
-  it('refuses the mail commands when this deployment was given no Gmail, rather than doing half of one', async () => {
-    const recover = await run([
-      'admin',
-      'mailbox',
-      'recover',
-      '--since',
-      '2026-09-20T00:00:00Z',
-      '--all-mailboxes',
-    ]);
-    expect(recover.code).toBe(20);
+  it('refuses the Sent-folder reconciliation when this deployment names no Gmail, rather than doing half of one', async () => {
     const reconcile = await run([
       'admin',
       'mailbox',
@@ -500,83 +414,9 @@ describe('the fss admin commands the drill calls', () => {
     if (second.ok) expect(second.value['inserted']).toBe(0);
   });
 
-  it('composes the step 8 report, and reports the CRM recovery point as a number', async () => {
-    const { code, stdout } = await run([
-      'admin',
-      'restore-report',
-      '--before',
-      join(reports, 'baseline.json'),
-      '--out',
-      join(reports, 'restore-report.json'),
-    ]);
-    expect(code).toBe(0);
-    const report = JSON.parse(stdout) as Record<string, unknown>;
-    expect(report['sends_repeated']).toBe(0);
-    expect(typeof report['crm_rpo_seconds']).toBe('number');
-    expect(report['suppressions_after']).toBeGreaterThanOrEqual(report['suppressions_before'] as number);
-    expect(readReport('restore-report.json')).toHaveProperty('unresolved');
-  });
-
-  it('advances the generation only for a named active admin, and releases the restore hold only', async () => {
-    const invocation = (options: Record<string, string>): AdminInvocation => ({
-      session,
-      config: readToolConfig({ DATABASE_URL: databaseUrl }),
-      environment: {},
-      options: { '--report': join(reports, 'restore-report.json'), ...options },
-      switches: new Set(),
-    });
-
-    // Nobody named: the row's own constraint requires attribution and so does
-    // Appendix E step 9.
-    expect(await systemGenerationAdvanceCommand(invocation({}))).toMatchObject({
-      ok: false,
-      reason: 'admin_missing',
-    });
-    const advanced = await systemGenerationAdvanceCommand(invocation({ '--admin-user': adminUserId }));
-    expect(advanced).toMatchObject({ ok: true });
-    if (advanced.ok) {
-      expect(advanced.value['generation']).toBe(2);
-      expect(advanced.value['releasedRestoreHolds']).toBe(1);
-    }
-    const remaining = await run(['admin', 'holds', 'list', '--reason', 'restore_in_progress', '--count']);
-    expect(remaining.stdout.trim()).toBe('0');
-  });
-
-  it('renews watches with the Gmail client the deployment named, and never a third one', async () => {
-    // `FSS_DEPENDENCIES=recorded` is the rehearsal's *named* choice, so the recorded
-    // client is reached deliberately rather than by omission. With no mailbox connected
-    // there is nothing to renew, which is the honest answer and reaches no network.
-    const environment = {
-      FSS_ENVIRONMENT: 'rehearsal',
-      FSS_DEPENDENCIES: 'recorded',
-      AWS_REGION: 'us-east-1',
-      FSS_PUBLIC_ORIGIN: 'https://api.example.test',
-      FSS_GMAIL_PUSH_AUDIENCE: 'https://api.example.test/integrations/gmail/push',
-      FSS_GMAIL_PUSH_SERVICE_ACCOUNT: 'push@example.iam.gserviceaccount.test',
-      FSS_GMAIL_PUSH_TOPIC: 'projects/example/topics/push',
-      FSS_GOOGLE_HOSTED_DOMAIN: 'example.test',
-      'google-gmail-oauth-client': JSON.stringify({
-        client_id: 'example.apps.googleusercontent.test',
-        client_secret: `zz-${randomUUID()}-zz`,
-      }),
-    };
-    const deployment = await readWorkerDeployment(environment);
-    const composition = await composeHandlers(deployment, undefined, {
-      journal: { append: async () => await Promise.resolve() },
-      region: 'us-east-1',
-    });
-    expect(composition.mail, 'the recorded deployment composes a mail client').toBeDefined();
-
-    const outcome = await mailboxWatchRenewCommand({
-      session,
-      config: readToolConfig({ DATABASE_URL: databaseUrl }),
-      environment,
-      options: {},
-      switches: new Set(['--all-mailboxes']),
-      mail: composition.mail,
-    });
-    expect(outcome).toMatchObject({ ok: true });
-    if (outcome.ok) expect(outcome.value).toEqual({ renewed: 0, mailboxes: [] });
+  it('keeps a Message-ID in a report only as a hash (lane g73)', () => {
+    expect(redactedMessageId('<fss.00000000-0000-4000-8000-000000000001@example.test>')).toMatch(/^[0-9a-f]{16}$/u);
+    expect(redactedMessageId('<a@example.test>')).not.toBe(redactedMessageId('<b@example.test>'));
   });
 });
 
@@ -955,39 +795,5 @@ describe('fss admin workspace bootstrap', () => {
     } finally {
       spy.mockRestore();
     }
-  });
-});
-
-describe('step 3’s Sent-folder report, read back by step 8 (lane g73)', () => {
-  it('keeps a Message-ID only as a hash, and turns what step 3 could not settle into step 8’s exceptions', () => {
-    expect(redactedMessageId('<fss.00000000-0000-4000-8000-000000000001@example.test>')).toMatch(/^[0-9a-f]{16}$/u);
-    expect(redactedMessageId('<a@example.test>')).not.toBe(redactedMessageId('<b@example.test>'));
-
-    const items = unresolvedSentFolder({
-      missing_fences: [
-        { workspaceId: 'w', mailboxId: 'm', message: 'aaaaaaaaaaaaaaaa', outcome: 'tombstoned' },
-        { workspaceId: 'w', mailboxId: 'm', message: 'bbbbbbbbbbbbbbbb', outcome: 'unmatched', reason: 'no_live_enrollment' },
-        {
-          workspaceId: 'w',
-          mailboxId: 'm',
-          message: 'cccccccccccccccc',
-          outcome: 'unattached',
-          reason: 'several_live_enrollments',
-          firmIds: ['f1', 'f2'],
-        },
-      ],
-      mailboxes: [
-        { workspaceId: 'w', mailboxId: 'm', sentFolder: { outcome: 'scanned' } },
-        { workspaceId: 'w', mailboxId: 'n', sentFolder: { outcome: 'grant_revoked' } },
-      ],
-    });
-    expect(items.map(item => [item.kind, item.id])).toEqual([
-      ['unattached_sent_message', 'cccccccccccccccc'],
-      ['sent_folder_unscanned', 'n'],
-    ]);
-    expect(items[0]?.detail).toContain('several_live_enrollments');
-    // A report from before this lane, with neither list, settles nothing and holds nothing.
-    expect(unresolvedSentFolder({ tombstones: 1, resent: 0 })).toEqual([]);
-    expect(unresolvedSentFolder(null)).toEqual([]);
   });
 });

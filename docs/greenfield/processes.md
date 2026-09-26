@@ -77,14 +77,11 @@ through the sink. With `FSS_METRICS=off`, or with no region, the sink validates 
 datum and sends nothing, so a wrong unit or an unknown metric name fails on a laptop.
 
 **Startup** refuses a database outside the declared schema range and exits 10 (4.2,
-`docs/archive/decisions/g5-schema-range.md`). It does *not* refuse a restored database: restore
-holds are what stop sending and dialing, so when the database's `system_generation` is
-not `FSS_EXPECTED_SYSTEM_GENERATION` the worker opens one `restore_in_progress` hold
-per workspace (idempotently; `openRestoreHolds` in `packages/domain/restore/holds.ts`),
-logs `restore_generation_mismatch`, which is the event `infra/modules/observability`
-turns into the immediately-critical `RestoreGenerationMismatches` metric, and runs.
-Until lane g56 it only logged, and nothing anywhere opened a restore hold
-(`docs/archive/decisions/g56-restore-holds-are-opened-by-the-generation-check.md`).
+`docs/archive/decisions/g5-schema-range.md`). It reads no system generation and opens no
+hold: since lane W3-S8 a restore is a runbook run with both services stopped
+(`docs/greenfield/runbooks/restore.md`), and nothing pins or compares a generation. The
+`system_generations` table and the `restore_in_progress` hold code stay until a migration
+drops them; no code writes either.
 
 **Stopping** drains. `SIGTERM` sets every loop stopping and waits for the pass in
 flight, so the job being run finishes inside the lease it already holds. The budget is
@@ -155,7 +152,7 @@ Three different questions, and the infrastructure asks all three:
 | Path | Asked by | Answers |
 |---|---|---|
 | `/healthz` | the container health check (`infra/modules/cluster`) | is this process running? No database is touched. |
-| `/readyz` | the load balancer target group (`infra/modules/edge`, since lane g81), a deployment, and an operator | should this task be given traffic? 503 when the database cannot answer, when the pool has no connection free inside the checkout timeout (`database_busy`), when the schema is outside the range, or when the system generation is not the pinned one. It asks on a connection checked out from the pool for that request and gives it back. |
+| `/readyz` | the load balancer target group (`infra/modules/edge`, since lane g81), a deployment, and an operator | should this task be given traffic? 503 when the database cannot answer, when the pool has no connection free inside the checkout timeout (`database_busy`), or when the schema is outside the range. It asks on a connection checked out from the pool for that request and gives it back. |
 | `/health` | an operator | the fuller report G0 wrote. 200 even when degraded. |
 
 A liveness check that queries the database restarts every task in the fleet the moment
@@ -196,7 +193,7 @@ startup line names every decision and no credential.
 | `FSS_SCHEMA_MIN`, `FSS_SCHEMA_MAX` | ✓ | the range the *task definition* believes this image accepts. A disagreement with the binary is a stale deployment and is refused at startup. |
 | `DATABASE_SECRET_ARN` | ✓ | the Secrets Manager **value**, injected by the ECS `secrets` block. An ARN arriving here means the task definition used `environment` instead, and that is refused rather than diagnosed later as "database unreachable". |
 | `DATABASE_URL` | ✓ | the alternative, for a laptop and for rehearsal. |
-| `FSS_EXPECTED_SYSTEM_GENERATION` | ✓ | Appendix E step 1, from `expected_system_generation` in the root, on the two services only. Absent means the check is not made. On a mismatch the worker opens the restore holds and the API fails `/readyz`. |
+| `FSS_DATABASE_HOST` | ✓ | the host both connect to, from `active_database_host` in the root (the managed instance's address unless a restore points elsewhere). It replaces the host of the `DATABASE_SECRET_ARN` value; a `DATABASE_URL` is used as given. |
 | `AWS_REGION`, `FSS_METRIC_NAMESPACE` | ✓ | where metrics go. The namespace is the environment's own, `FSS/<name prefix>` (`FSS/fss-prod`, `FSS/fss-rh-<run>`), derived once in `infra/modules/stack`; the task roles may publish nowhere else. It has no default: a worker that would publish (a region is set and `FSS_METRICS` is not `off`) refuses to start without one, and refuses one that is not `FSS/` followed by `FSS_NAME_PREFIX`. The bare `FSS` was shared by every environment in the account (g42, lane g55). |
 | `FSS_METRICS` | worker | `on`, `off` or `auto` (default). `on` with no usable transport is a refusal; `auto` degrades to the validating no-op and says so. |
 | `FSS_WORKER_CONCURRENCY` | worker | runner slots. Default 1. |
@@ -225,7 +222,7 @@ Each task definition carries only the secrets its own process reads (lane g81,
 `infra/modules/cluster`): the API `google-gmail-oauth-client`, `google-oidc-client`,
 `session-signing-key` and `device-credential-pepper`; the worker
 `google-gmail-oauth-client` and, in production only, the classifier key; the operations
-and drill tasks `google-gmail-oauth-client`. Each arrives under its logical Secrets
+task `google-gmail-oauth-client`. Each arrives under its logical Secrets
 Manager name except the classifier key, which arrives as `FSS_LLM_CLASSIFIER_API_KEY`,
 the name the classifier reads. `research-provider-credentials` reaches no process,
 because none reads it; the empty entry goes with a later infrastructure release. None is ever logged; the startup line reports whether each is
@@ -251,7 +248,6 @@ The log events that become metrics, and who writes them:
 
 | Event | Written by | Metric |
 |---|---|---|
-| `restore_generation_mismatch` | the worker at startup, and `fss admin restore-holds open` (so `fss drill` step 1a), when the generation is not the expected one | `RestoreGenerationMismatches` |
 | `job_dead` | the worker, one line per dead job | `DeadJobs` |
 | `refusal` | the API, one line per refusal, with `reason` | `Refusals` |
 | `level: "error"` | both | `ApiErrors`, `WorkerErrors` |
@@ -290,33 +286,24 @@ digest, not the tag, is what `infra/modules/cluster` accepts.
 There is a third thing in the worker image and it is not a service:
 `apps/worker/src/tools/fss.ts`. It exists because two operations have no home
 otherwise — applying migrations, which no deployment step in this repository ever
-did, and the nine steps of Appendix E, which `docs/greenfield/restore-drill.md`
-writes as `fss admin …` commands.
+did, and the database steps of a restore (`docs/greenfield/runbooks/restore.md`).
 
 ```
 fss migrate [--report <path>] [--allow-any-role]   apply every unapplied migration forward
-fss migrate up | status                            the spellings the restore drill uses
+fss migrate up | status                            the same, and the applied/pending list
 fss schema-version                                 the applied version and both declared ranges
 fss verify [--actor <name>] [--note <text>]        version, configured parts, and a rolled-back write
-fss drill --reports <dir> (--baseline <path> | --baseline-json <json> | --as-of <instant>)
-          [--from <instant>] [--since <instant>] [--admin-user <uuid>]
-fss admin counts --as-of <instant>                 the five protected kinds of Appendix G 11
 fss admin database-users ensure [--runtime-secret <VARIABLE>] [--rotate-password]
-fss admin holds list [--reason|--exclude-reason <code>] [--count]
-fss admin dial-authorize --any | --firm <id> --route <id> --identity <id>
+fss admin holds list [--reason|--exclude-reason <code>]
 fss admin suppression-journal replay --from <instant> [--to <instant>]
-fss admin mailbox reconcile-sent | recover --since <instant> --all-mailboxes | --mailbox <id>
-fss admin mailbox watch-renew | coverage --all-mailboxes | --mailbox <id>
-fss admin jobs discard-runnable
-fss admin scheduler run-once
-fss admin restore-report --before <path> --journal <path> --sent <path> --inbox <path> --out <path>
-fss admin system-generation advance --report <step 8 report> [--admin-user <uuid>]
+fss admin mailbox reconcile-sent --since <instant> --all-mailboxes | --mailbox <id>
+fss admin workspace bootstrap --slug <slug> ...    the first workspace and its admin
+fss admin schema-preflight 0019                    the one-off check before migration 0019
 fss admin release-record put --json <file> | --json-base64 <value>
 fss admin release-record show --reference <releaseGateReference>
 ```
 
-Every command takes `--report <path>` (`--out` for `restore-report`), which writes the
-same JSON the command printed.
+Every command takes `--report <path>`, which writes the same JSON the command printed.
 
 **`fss verify`** is what a deployment runs between the migration and the first service:
 the applied version and whether each declared range accepts it, the configured-parts
@@ -326,27 +313,19 @@ is whose `INSERT` is in doubt, and it reports `persisted: false` after re-readin
 read-only check passes against a user who has lost `INSERT`, a full volume and a read
 replica, and each of those is a deployment that looks ready and is not.
 
-**`fss admin restore-holds open --expected-generation <n>`** is Appendix E step 1 by
-hand: the worker's own startup check (`enforceRestoreGeneration`,
-`apps/worker/src/bootstrap/restoreGeneration.ts`) against whatever database the task
-was pointed at. An operator runs it against a restored instance *before* any service is
-pointed there, so that neither the API's dial gate nor an early worker ever sees that
-database unheld. It refuses a generation equal to the database's (`generation_matches`),
-because then it would hold nothing.
+**`fss admin mailbox reconcile-sent`** (lane W3-S8) is the Sent-folder step of the
+restore runbook, run with both services stopped against the restored copy. It reconciles
+the fences left dispatching, lists each mailbox's Sent folder from `--since` (the restore
+point less ten minutes) and answers each FSS message with `recoverSentFolderMessage`
+(`packages/domain/restore/missingFences.ts`): present, marked sent, tombstoned, unmatched
+or unattached. Its Gmail client is `readOnlyGmail` (`tools/fss/readOnlyGmail.ts`), which
+forwards the token refresh, the listings, the `rfc822msgid:` search and metadata reads and
+refuses a send, a watch, a code exchange, a revocation and a body read, so it runs under
+`FSS_DEPENDENCIES=live` against real mailboxes. It refuses to finish (exit 20, the report
+printed) while a mailbox's folder was not read to the end or a send is unattached.
 
-**`fss drill`** runs the restore drill's database-level steps — the baseline counts as of
-the restore instant, the generation check with `--expected-generation` (step 1a, lane
-g56), the restore holds and the refused dial, the journal replay twice,
-the Sent reconciliation and the inbox recovery, the job discard and the scheduler pass,
-the watch renewal and coverage, the migrations reapplied with both ranges checked, the
-reconciliation report, the generation advance and the check that it landed on the pin —
-in one process, writing
-`<dir>/<step>.json` as each step finishes and stopping at the first failure with the
-step named. The runner keeps the control-plane steps: the point-in-time restore, the
-service redeployments, the alarm reads, the snapshots and the teardown.
-
-**`fss admin release-record put`** (lane g71) stores the `fss.release-record.v1` a
-green rehearsal wrote, so an admin's `sending_enabled` attestation can name it. The API
+**`fss admin release-record put`** (lane g71) stores the `fss.release-record.v1` the
+CI gate wrote (`infra/scripts/record.sh from-ci`; lane W3-S8 deleted the rehearsal's), so an admin's `sending_enabled` attestation can name it. The API
 refuses an enable whose record did not pass or does not carry the API's own image digest,
 and the worker refuses to send when the record does not carry its own
 (`docs/archive/decisions/g71-sending-gate-is-bound-to-the-release-record.md`). The command is
@@ -387,7 +366,7 @@ credential:
 # containerOverrides: [{ "name": "worker",
 #   "command": ["node", "apps/worker/src/tools/fss.ts", "migrate"] }]
 docker run --rm -e DATABASE_URL="$DATABASE_URL" <worker-digest> \
-  node apps/worker/src/tools/fss.ts admin counts
+  node apps/worker/src/tools/fss.ts schema-version
 ```
 
 The second form is the one that matters in a deployed environment: the database is
@@ -402,24 +381,20 @@ are imported, not reimplemented.
 **In-VPC one-off ECS tasks** (David, 21 September), and nothing is ever on a PATH.
 `aws ecs run-task --overrides` can replace a container's `command` and **cannot**
 replace its `entryPoint`, and the worker image's entry point is the worker — so the
-three one-off task definitions in `infra/modules/cluster` declare the tool as their
+two one-off task definitions in `infra/modules/cluster` declare the tool as their
 entry point and take the subcommand as the command. A definition that expected
 otherwise would start a worker every time an operator asked it for a migration.
 
 | Task definition | Identity | Reads | Runs |
 |---|---|---|---|
 | `<prefix>-migration` | `<prefix>-migration-task` / `<prefix>-migration-exec` | `migration-database` as `MIGRATION_DATABASE_SECRET`, `app-runtime-database` as `FSS_RUNTIME_DATABASE_SECRET_ARN`. **No runtime connection at all** | `migrate`, `admin database-users ensure` |
-| `<prefix>-operations` | the worker task role / worker execution role | `app-runtime-database` as `DATABASE_SECRET_ARN`, plus the application secrets | `verify`, `admin counts`, `admin restore-holds open`, `admin release-record put` |
-| `<prefix>-drill` | `<prefix>-drill-task` / `<prefix>-drill-exec` | both connections; journal **read** only; `FSS_DEPENDENCIES=recorded` fixed in the definition | `drill` |
+| `<prefix>-operations` | the worker task role / worker execution role | `app-runtime-database` as `DATABASE_SECRET_ARN`, plus the application secrets | `verify`, `schema-version`, `admin suppression-journal replay`, `admin mailbox reconcile-sent`, `admin release-record put` |
 
-Three rather than one, because of what each needs and what each must not have.
+Two rather than one, because of what each needs and what each must not have.
 `verify` runs as the *runtime* identity on purpose: the point of a post-deploy gate is
-to prove the credential the services are about to use reaches the database. `drill`
-needs the suppression journal (step 2 replays it) **and** the migration credential
-(step 7 reapplies migrations forward), and neither of the other two identities may
-hold both — giving them to the migration role would let the DDL identity read the
-journal, and giving them to the worker's role would give the runtime a path to DDL,
-which is the thing David's first condition removes.
+to prove the credential the services are about to use reaches the database, and the
+DDL identity must not read the journal or a mailbox. The third, `<prefix>-drill`, held
+both and went with the restore drill (lane W3-S8).
 
 `infra/scripts/release-common.sh` is the wrapper. It checks the account, the region,
 the cluster's `Environment` tag, full ARNs in this namespace, the registered image
@@ -434,7 +409,7 @@ than starting a second migration.
 file nobody can read afterwards. What survives is the log stream: `--capture` writes
 the task's messages to a file on the runner and `release_captured_report` takes the
 command's JSON answer out of it — the last parseable object that is not a log line.
-That is how the drill's report reaches the runner that decides whether it is a pass.
+That is how a one-off task's report reaches the operator.
 
 **What it reads.**
 
@@ -442,13 +417,12 @@ That is how the drill's report reaches the runner that decides whether it is a p
 |---|---|---|
 | `DATABASE_URL` | every command except `migrate` | the runtime connection, for a laptop or a runner |
 | `DATABASE_SECRET_ARN` | the same | the Secrets Manager **value**, injected by the ECS `secrets` block |
-| `FSS_MIGRATION_DATABASE_URL` | `migrate`, `drill` step 7, `database-users ensure` | the migration user's connection, for a laptop |
+| `FSS_MIGRATION_DATABASE_URL` | `migrate`, `database-users ensure` | the migration user's connection, for a laptop |
 | `MIGRATION_DATABASE_SECRET` | the same | the migration credential's secret **value**. `<prefix>/migration-database`, which holds the RDS master user — the only credential a fresh instance has |
 | `FSS_RUNTIME_DATABASE_SECRET_ARN` | `database-users ensure` | the runtime credential's secret value, whose `username` and `password` the command creates the login user from. `--runtime-secret` names a different variable |
-| `FSS_DATABASE_HOST` | every command | Appendix E step 1's restored endpoint. It replaces the host of a connection assembled from a secret; a `DATABASE_URL` that names a different host is a refusal rather than an override |
-| `FSS_DEPENDENCIES` | the Gmail commands and `drill` | must be exactly `recorded` for them, or they refuse |
+| `FSS_DATABASE_HOST` | every command | the host the task definition names (`active_database_host`), or a scratch copy's in the quarterly restore smoke. It replaces the host of a connection assembled from a secret; a `DATABASE_URL` that names a different host is a refusal rather than an override |
+| `FSS_DEPENDENCIES` | `mailbox reconcile-sent` | `live` or `recorded`, or it refuses; the Gmail client is read-only either way |
 | `FSS_JOURNAL_BUCKET`, `AWS_REGION` | `suppression-journal replay` | what the journal is replayed from; without them it refuses rather than replaying nothing |
-| `FSS_ADMIN_USER_ID` | `system-generation advance` | the admin the act is attributed to when `--admin-user` does not name one. Without either, it refuses |
 
 **`migrate` never uses the runtime credential**, and there is no fallback: the runtime
 credential is `app_runtime`'s, and a tool that applied DDL with it would either fail or
@@ -456,22 +430,19 @@ succeed because somebody had granted the application more than it needs. It also
 outright when the connected role *is* `app_runtime`, before `--allow-any-role` is read.
 
 **The dependency mode is fixed per command**, as data in `COMMAND_DEPENDENCIES`, not as
-whatever the environment happens to say: `counts`, `holds list`, `dial-authorize`,
-`jobs discard-runnable`, `scheduler run-once`, `restore-report`, `system-generation
-advance`, `mailbox coverage` and `database-users ensure` reach PostgreSQL and nothing
-else — no deployment is read, so they cannot reach Gmail, KMS or S3 in a fully
+whatever the environment happens to say: `holds list`, `workspace bootstrap`,
+`release-record`, `schema-preflight 0019` and `database-users ensure` reach PostgreSQL and
+nothing else — no deployment is read, so they cannot reach Gmail, KMS or S3 in a fully
 configured production task; `suppression-journal replay` reaches the configured journal
-bucket and nothing else; the three mailbox commands and `drill` reach the Gmail seam and
-run only with `FSS_DEPENDENCIES=recorded`, so a reconstruction from a command line can
-never send live mail.
+bucket and nothing else; `mailbox reconcile-sent` reaches Gmail through the read-only
+client and nothing else, so a command line can never send mail.
 
 It does **not** read `FSS_SCHEMA_MIN`/`FSS_SCHEMA_MAX`: `fss migrate` is the command
 that makes those agree, so requiring them to agree first would make it unusable for its
 own purpose.
 
 **What it prints.** One JSON object on stdout per command; `--report <path>` writes the
-same bytes to a file with mode 600; `holds list --count` prints a bare integer, because
-the drill compares it in the shell. Logs and refusals go to **stderr** as one JSON line
+same bytes to a file with mode 600. Logs and refusals go to **stderr** as one JSON line
 each in the shape the metric filters parse, so stdout stays parseable. Exit codes: 0,
 20 for a refusal an operator has to act on, 21 for a failure, 64 for a usage error.
 `--selftest` reads the configuration, prints the decisions and exits without touching a
@@ -496,9 +467,6 @@ lane's duplicate while `server.ts` belonged to the identity lane, and it is gone
   Adding a route is one line there, or one entry in `ApiOptions.extraRoutes`.
 * `handle()` reads the body with `bootstrap/requestBody.ts` for body-carrying methods
   only, after `checkEnvelope` and before anything looks at the path.
-* `ApiOptions.expectedSystemGeneration: number | null` is Appendix E step 1 and is
-  what `/readyz` compares against; `bootstrap/config.ts` reads it from the
-  environment.
 * The principal is produced once, in `dispatch`, by `authenticate`. A module is given
   a principal, never a credential.
 

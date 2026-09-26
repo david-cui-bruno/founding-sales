@@ -84,7 +84,7 @@ output "migration_task_definition_family" {
 }
 
 output "operations_task_definition_arn" {
-  description = "Task definition `fss verify` and `fss drill` run under, as the worker task role."
+  description = "Task definition `fss verify` runs under, as the worker task role."
   value       = aws_ecs_task_definition.operations.arn
 }
 
@@ -93,14 +93,9 @@ output "operations_task_definition_family" {
   value       = aws_ecs_task_definition.operations.family
 }
 
-output "drill_task_definition_family" {
-  description = "Family name of the drill task definition."
-  value       = aws_ecs_task_definition.drill.family
-}
-
 output "one_off_task_families" {
   description = <<-EOT
-    The three one-off task definition families, which are names rather than
+    The two one-off task definition families, which are names rather than
     ARNs and are therefore known at plan time. The roots assert them: an ARN
     is unknown until an apply, and a test that could only run against a real
     account is a test nobody runs.
@@ -108,18 +103,7 @@ output "one_off_task_families" {
   value = [
     aws_ecs_task_definition.migration.family,
     aws_ecs_task_definition.operations.family,
-    aws_ecs_task_definition.drill.family,
   ]
-}
-
-output "drill_task_definition_arn" {
-  description = "Task definition `fss drill` runs under. Its own identity: the journal and the migration credential, which neither of the other two may hold together."
-  value       = aws_ecs_task_definition.drill.arn
-}
-
-output "drill_task_role_name" {
-  description = "Drill task role name."
-  value       = aws_iam_role.drill_task.name
 }
 
 output "deployment_plan" {
@@ -150,7 +134,6 @@ output "deployment_plan" {
     }
     migration_task_definition  = aws_ecs_task_definition.migration.arn
     operations_task_definition = aws_ecs_task_definition.operations.arn
-    drill_task_definition      = aws_ecs_task_definition.drill.arn
   }
 }
 
@@ -160,8 +143,8 @@ output "api_environment" {
 }
 
 output "worker_environment" {
-  description = "Non-secret environment of the worker service's task definition, for offline assertions. Never contains a credential. The one-off definitions carry the same minus FSS_EXPECTED_SYSTEM_GENERATION."
-  value       = local.worker_service_environment
+  description = "Non-secret environment of the worker service's task definition, for offline assertions. Never contains a credential."
+  value       = local.worker_environment
 }
 
 output "secret_environment_names" {
@@ -175,7 +158,6 @@ output "task_secret_names" {
     api        = sort(keys(local.api_task_secrets))
     worker     = sort(keys(local.worker_task_secrets))
     operations = sort(keys(local.operations_task_secrets))
-    drill      = sort(keys(local.drill_task_secrets))
     migration  = sort(keys(local.migration_task_secrets))
   }
 }

@@ -162,22 +162,27 @@ variable "dependencies_mode" {
   }
 }
 
-variable "expected_system_generation" {
+variable "active_database_host" {
   description = <<-EOT
-    Appendix E step 1: the generation the API and worker services expect the
-    database to report, as FSS_EXPECTED_SYSTEM_GENERATION. Null: unpinned,
-    and the worker makes no generation check.
-    Production is unpinned in code. `docs/greenfield/release.md` ("The
-    expected system generation") says how to read the database's generation
-    with an operations task, how to pin it, and what to set after a restore:
-    the restored copy's generation plus one, never after step 9.
-  EOT
-  type        = number
-  default     = null
+    FSS_DATABASE_HOST on the api, worker, migration and operations task
+    definitions: the host the API, the worker and the fss tool connect to in
+    place of the host inside their database secret. Null, the default and
+    production's normal state, means the managed instance's address.
 
+    Set only by the restore runbook (docs/greenfield/runbooks/restore.md), to
+    the address of the point-in-time copy production runs on while the managed
+    instance is being replaced, and returned to null when it has been. Setting
+    it changes those four task definitions and nothing else.
+  EOT
+  type        = string
+  default     = null
+  nullable    = true
+
+  # Repeated from the stack module deliberately: a refusal should name the
+  # variable the operator typed, not one two modules down.
   validation {
-    condition     = var.expected_system_generation == null ? true : (var.expected_system_generation >= 1 && floor(var.expected_system_generation) == var.expected_system_generation)
-    error_message = "expected_system_generation is a positive whole number, or null for unpinned. The bootstraps refuse anything else at startup."
+    condition     = var.active_database_host == null ? true : can(regex("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$", var.active_database_host))
+    error_message = "active_database_host is null or a lower-case DNS hostname with at least one dot, such as a restored instance's endpoint address: no scheme, no port, no path."
   }
 }
 

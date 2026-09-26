@@ -9,37 +9,31 @@ import { z } from 'zod';
  * nothing compared it with anything, so "the deployed commit/image digests match the
  * rehearsal artifacts" was an operator instruction rather than a rule.
  *
- * Two things write one, and `source` says which (lane g96, the owner's axiom 10B of
- * 25 September 2026: the record comes from the CI gate):
+ * One thing writes one (lane g96, the owner's axiom 10B of 25 September 2026: the record
+ * comes from the CI gate): `infra/scripts/release-record-from-ci.sh`, from the green
+ * *Greenfield gate* run on the deployed commit and the green *Greenfield images* run
+ * whose `fss-image-digests` names the same two digests. Its `source` is `ci-gate`.
  *
- *   * **`ci-gate`** — `infra/scripts/release-record-from-ci.sh`, from the green
- *     *Greenfield gate* run on the deployed commit and the green *Greenfield images*
- *     run whose `fss-image-digests` names the same two digests. This is the record a
- *     release puts. A CI run drills nothing, so it carries no `rehearsalPrefix` or
- *     `rehearsalScenarios`, and a `ci-gate` record that claims one is refused: it names
- *     the run, its URL and the commit instead.
- *   * **the rehearsal** — `infra/scripts/rehearsal-release-record.sh`, the last step of
- *     a green `full` rehearsal. It writes no `source` (every record stored before g96
- *     is one of these, so an absent `source` means the rehearsal), and it still has to
- *     carry both drill fields.
+ * The rehearsal wrote records too until its `full` mode and the restore drill were
+ * deleted (lane W3-S8, 26 September 2026). Those records carried no `source` and two
+ * drill fields; the ones already stored stay stored and are read back from their columns,
+ * never re-parsed, and `releaseRecordSource` still names them `rehearsal`. A new one is
+ * refused: this contract no longer describes it.
  *
- * Both are `fss.release-record.v1`: the table's CHECK (`0017_release_records.sql`) and
- * `release-deploy.sh --release-record` both read that id, and the five columns the
- * rules compare — reference, suite, the two digests, the desktop stamp — are the same
- * fields in both. The binding (`packages/domain/release/records.ts`) reads only those,
- * so a `ci-gate` record binds sending exactly as a rehearsal's does.
+ * `fss.release-record.v1` is the id the table's CHECK (`0017_release_records.sql`) and
+ * `release-deploy.sh --release-record` both read, and the binding
+ * (`packages/domain/release/records.ts`) reads only the five columns the rules compare —
+ * reference, suite, the two digests, the desktop stamp.
  *
  * The shape lives here, in `@fss/contracts`, for the reason every other wire shape
  * does: two places have to agree about it and neither may import the other. The
- * script writes it and the domain stores it. `test/release/scenario42.check.ts` runs
- * the script and parses what it wrote with `releaseRecordSchema`, so a field renamed
- * on either side fails the release suite rather than the production enable.
+ * script writes it and the domain stores it. `test/ops/releaseRecordFromCi.check.ts` runs
+ * the script and parses what it wrote with `releaseRecordSchema`, so a field renamed on
+ * either side fails the release suite rather than the production enable.
  *
  * **Strict, on purpose.** An unknown field is refused rather than stripped: a record
  * from a script this contract no longer describes is a record nobody has reviewed the
  * meaning of, and storing a subset of it would store a claim the writer did not make.
- * `test/release/releaseRecordFromCi.check.ts` does for the CI script what
- * `scenario42.check.ts` does for the rehearsal's.
  */
 
 export const RELEASE_RECORD_SCHEMA_ID = 'fss.release-record.v1';
@@ -86,11 +80,10 @@ export function releaseAttestationOf(releaseGateReference: string): ReleaseAttes
 }
 
 /**
- * `<rehearsal prefix>-<recordedAt>` from a rehearsal
- * (`fss-rh-202609250554-2026-09-25T07:20:44Z`), `ci-gate-<gate run id>-<first twelve
- * characters of the commit>` from the CI gate (`ciGateReleaseReference`). Bounded at
- * 200 characters, which is the bound `sendingEnabledSettingSchema` already puts on the
- * reference an admin types.
+ * `ci-gate-<gate run id>-<first twelve characters of the commit>` from the CI gate
+ * (`ciGateReleaseReference`); older stored records carry a rehearsal's
+ * `<prefix>-<recordedAt>`. Bounded at 200 characters, which is the bound
+ * `sendingEnabledSettingSchema` already puts on the reference an admin types.
  */
 export const releaseGateReferenceSchema = z
   .string()
@@ -110,7 +103,7 @@ const recordedAtSchema = z
  * The suite's verdict, as a word.
  *
  * Not `z.literal('pass')`, although the script only ever writes `pass`: the record is
- * stored as the rehearsal wrote it, and "is this a passing record" is the enable rule's
+ * stored as the script wrote it, and "is this a passing record" is the enable rule's
  * question (`release_record_not_passing`), asked at the moment an admin relies on it.
  * A contract that refused every other word would make that rule unreachable and its
  * test vacuous.
@@ -129,7 +122,10 @@ export const releaseArtifactsSchema = z
     message: 'the API and worker digests are identical',
   });
 
-/** Who wrote the record. An absent `source` is the rehearsal (every record before g96). */
+/**
+ * Who wrote a stored record. Only `ci-gate` is written now; `rehearsal` names the records
+ * a `full` rehearsal stored before lane W3-S8, which carry no `source` at all.
+ */
 export const RELEASE_RECORD_SOURCES = ['ci-gate', 'rehearsal'] as const;
 export type ReleaseRecordSource = (typeof RELEASE_RECORD_SOURCES)[number];
 
@@ -144,28 +140,6 @@ const GATE_RUN_URL_PATTERN = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-
 export function ciGateReleaseReference(gateRunId: string, commit: string): string {
   return `ci-gate-${gateRunId}-${commit.slice(0, 12)}`;
 }
-
-/**
- * The record a green `full` rehearsal writes (`rehearsal-release-record.sh`). Until 26
- * September 2026 it also carried the old-app carry drill's verdict; the carry was deleted
- * (the old app's DynamoDB tables were destroyed on 17 September 2026), and records
- * stored before then are read back from their columns, never re-parsed.
- */
-export const rehearsalReleaseRecordSchema = z.strictObject({
-  schema: z.literal(RELEASE_RECORD_SCHEMA_ID),
-  /** Absent in every record the rehearsal script writes; accepted when spelled out. */
-  source: z.literal('rehearsal').optional(),
-  releaseGateReference: releaseGateReferenceSchema,
-  rehearsalPrefix: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/u, 'a rehearsal prefix'),
-  recordedAt: recordedAtSchema,
-  suite: releaseSuiteSchema,
-  artifacts: releaseArtifactsSchema,
-  /** Appendix G 11, 22 and 39, one report line each, keyed by scenario number. */
-  rehearsalScenarios: z.record(z.string().regex(/^\d{1,2}$/u), z.string().max(4000)),
-  /** Always false from the script: a record enables nothing by itself. */
-  enablesSending: z.boolean(),
-});
-export type RehearsalReleaseRecord = z.infer<typeof rehearsalReleaseRecordSchema>;
 
 /**
  * The record `infra/scripts/release-record-from-ci.sh` writes (lane g96).
@@ -220,13 +194,17 @@ export const ciGateReleaseRecordSchema = z
   });
 export type CiGateReleaseRecord = z.infer<typeof ciGateReleaseRecordSchema>;
 
-/** Either, told apart by `source`; the drill fields are required of the rehearsal only. */
-export const releaseRecordSchema = z.discriminatedUnion('source', [rehearsalReleaseRecordSchema, ciGateReleaseRecordSchema]);
+/** The record `fss admin release-record put` accepts: the CI gate's, and nothing else. */
+export const releaseRecordSchema = ciGateReleaseRecordSchema;
 export type ReleaseRecord = z.infer<typeof releaseRecordSchema>;
 
-/** `ci-gate` or `rehearsal`, for a record the contract accepted. */
-export function releaseRecordSource(record: ReleaseRecord): ReleaseRecordSource {
-  return record.source ?? 'rehearsal';
+/**
+ * `ci-gate` or `rehearsal`, for a stored record. Read from the stored JSON rather than
+ * trusted from the type: a record a `full` rehearsal stored before lane W3-S8 has no
+ * `source`, and it is a rehearsal's.
+ */
+export function releaseRecordSource(record: { readonly source?: unknown }): ReleaseRecordSource {
+  return record.source === 'ci-gate' ? 'ci-gate' : 'rehearsal';
 }
 
 /**

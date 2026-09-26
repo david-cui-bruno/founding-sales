@@ -50,7 +50,7 @@ The policy half of the gate is not here: `infra/policies/**` is judged by `npm r
 1. `docs/greenfield/release.md` — how a change reaches production: app-only by CI, schema and infrastructure by hand.
 2. `docs/greenfield/infra-topology.md` — what gets created and what each line is billed on.
 3. `docs/greenfield/infra-apply-runbook.md` — how the stack was built the first time, and how to rebuild it from zero.
-4. `docs/greenfield/restore-drill.md` — Appendix E steps 1 to 9 as commands, run in rehearsal.
+4. `docs/greenfield/runbooks/restore.md` — a point-in-time restore of production, and its quarterly hand smoke.
 5. `docs/archive/decisions/g1-*.md` — every choice the specification left open.
 
 ## Two rules that hold everywhere in this tree

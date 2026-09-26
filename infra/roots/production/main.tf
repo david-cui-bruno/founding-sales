@@ -85,7 +85,9 @@ module "stack" {
   dependencies_mode = var.dependencies_mode
   sending_enabled   = local.sending_enabled
 
-  expected_system_generation = var.expected_system_generation
+  # Null in code: the managed instance. Set only while the restore runbook
+  # (docs/greenfield/runbooks/restore.md) has production on a point-in-time copy.
+  active_database_host = var.active_database_host
 
   # Lane g86: the address `/auth/client-version` publishes, on the API alone.
   desktop_upgrade_url = var.desktop_upgrade_url

@@ -178,7 +178,6 @@ describe('one database connection per request', () => {
       connections,
       supportedClientVersions: fixture.deps.config.supportedClientVersions,
       sendingEnabled: false,
-      expectedSystemGeneration: null,
       auth: fixture.deps,
       suppressionJournal: journal,
       extraRoutes: [probe],

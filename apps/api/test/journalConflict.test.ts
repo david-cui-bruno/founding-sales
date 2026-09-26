@@ -159,7 +159,6 @@ describe('a suppression whose journal write meets a conflict', () => {
       session: fixture.db,
       supportedClientVersions: fixture.deps.config.supportedClientVersions,
       sendingEnabled: false,
-      expectedSystemGeneration: null,
       auth: fixture.deps,
       upgradeUrl: 'https://callie.example/downloads/mac',
       suppressionJournal: journal,

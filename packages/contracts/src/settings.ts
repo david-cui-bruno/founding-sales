@@ -379,6 +379,22 @@ export const dashboardResponseSchema = z.object({
 });
 export type DashboardResponse = z.infer<typeof dashboardResponseSchema>;
 
+/**
+ * `restore` is a compatibility field and nothing else (lane W3-S8, 26 September 2026).
+ *
+ * The system-generation pin is gone: a restore is a runbook
+ * (`docs/greenfield/runbooks/restore.md`), and nothing reads or compares generations. The
+ * installed desktop 1.0.11 still parses this object strictly and renders it in Settings →
+ * Diagnostics, so the API answers the same shape with neutral values —
+ * `RESTORE_DIAGNOSTIC_NOT_APPLICABLE`, which 1.0.11 shows as "unknown, unpinned, matches".
+ * Delete the field once the desktop that no longer reads it is the one installed.
+ */
+export const RESTORE_DIAGNOSTIC_NOT_APPLICABLE = Object.freeze({
+  systemGeneration: null,
+  expectedSystemGeneration: null,
+  mismatch: false,
+} as const);
+
 export const diagnosticsResponseSchema = z.object({
   restore: z.object({
     systemGeneration: z.number().nullable(),

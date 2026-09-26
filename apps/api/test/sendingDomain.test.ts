@@ -79,7 +79,6 @@ function baseOptions(overrides: Partial<ApiOptions> = {}): ApiOptions {
     session: fixture.db,
     supportedClientVersions: fixture.deps.config.supportedClientVersions,
     sendingEnabled: false,
-    expectedSystemGeneration: null,
     auth: fixture.deps,
     ...overrides,
   };
