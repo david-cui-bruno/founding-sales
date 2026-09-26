@@ -115,43 +115,6 @@ variable "worker_schema_range" {
   })
 }
 
-variable "database_multi_az" {
-  description = <<-EOT
-    Single-AZ by default (wave 2, 26 September 2026): creating and deleting the
-    standby was among the slowest steps of every run, and a rehearsal needs a
-    database, not a failover. The database module still takes both private
-    subnets. `true` is still accepted, for a run that wants to time a
-    point-in-time restore of a Multi-AZ instance as production would perform it.
-  EOT
-  type        = bool
-  default     = false
-}
-
-variable "database_instance_class" {
-  description = <<-EOT
-    The same class as production, `db.t4g.small`. A rehearsal on `db.t4g.micro`
-    would deploy production's digests onto a machine production never uses and
-    report a recovery point objective nobody can act on.
-  EOT
-  type        = string
-  default     = "db.t4g.small"
-}
-
-variable "database_allocated_storage" {
-  description = "Provisioned gp3 storage in GiB."
-  type        = number
-  default     = 20
-}
-
-variable "database_backup_retention_days" {
-  description = <<-EOT
-    Backup retention for the rehearsal database. One day is enough to exercise
-    the restore drill; the drill restores to a point inside the run.
-  EOT
-  type        = number
-  default     = 1
-}
-
 variable "api_cpu" {
   description = "Fargate CPU units for the API task. Production's 0.5 vCPU, because the rehearsal runs the same image under the same limits."
   type        = number

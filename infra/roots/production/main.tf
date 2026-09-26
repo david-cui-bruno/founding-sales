@@ -58,10 +58,10 @@ module "stack" {
 
   availability_zones = ["us-east-1a", "us-east-1b"]
 
-  database_instance_class        = var.database_instance_class
+  database_instance_class        = "db.t4g.small"
   database_multi_az              = true
-  database_allocated_storage     = var.database_allocated_storage
-  database_max_allocated_storage = var.database_max_allocated_storage
+  database_allocated_storage     = 50
+  database_max_allocated_storage = 200
   database_backup_retention_days = 35
   database_apply_immediately     = false
 

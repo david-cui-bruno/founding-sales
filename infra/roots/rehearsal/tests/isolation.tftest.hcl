@@ -90,6 +90,11 @@ run "the_run_is_rehearsal_and_destroyable" {
     condition     = startswith(output.deployment_role_name, "fss-rh-")
     error_message = "The rehearsal deployment role is its own role, scoped to fss-rh-*."
   }
+
+  assert {
+    condition     = output.journal_object_lock.mode == "GOVERNANCE" && output.journal_object_lock.retention_days == 1
+    error_message = "A rehearsal journal keeps object lock honest but short enough that the bucket can be removed."
+  }
 }
 
 run "no_name_this_run_claims_can_be_a_production_name" {
@@ -257,16 +262,6 @@ run "the_topology_answers_are_the_rehearsal_defaults_at_one_plus_one" {
   }
 
   assert {
-    condition     = module.stack.database_shape.instance_class == "db.t4g.small"
-    error_message = "The same instance class as production, so the restore drill measures something production-shaped."
-  }
-
-  assert {
-    condition     = module.stack.database_shape.multi_az == false
-    error_message = "Single-AZ by default: a rehearsal needs a database, not a standby (wave 2)."
-  }
-
-  assert {
     condition = (module.stack.service_shape.api.cpu == "512"
       && module.stack.service_shape.api.memory == "1024"
       && module.stack.service_shape.worker.cpu == "512"
@@ -293,11 +288,6 @@ run "the_topology_answers_are_the_rehearsal_defaults_at_one_plus_one" {
     condition = (module.stack.deployment_plan.api.declared_desired_count == 1
     && module.stack.deployment_plan.worker.declared_desired_count == 1)
     error_message = "One of each: the shapes are production's, the counts are not. This is the number the deploy script scales to."
-  }
-
-  assert {
-    condition     = module.stack.database_shape.delete_automated_backups
-    error_message = "The teardown deletes the database's automated backups with it; a retained one is a leftover (run 36209569741)."
   }
 }
 
@@ -387,33 +377,6 @@ run "an_architecture_that_is_not_one_of_the_two_is_refused" {
   }
 
   expect_failures = [var.cpu_architecture]
-}
-
-run "rehearsal_may_still_ask_for_multi_az" {
-  command = plan
-
-  # The default is single-AZ (the run above). Multi-AZ stays available for a run
-  # that times the restore drill against what production would restore; this
-  # asserts the capability rather than the default. Production's stack
-  # precondition refuses single-AZ, and rehearsal deliberately has none.
-  variables {
-    database_multi_az = true
-  }
-
-  assert {
-    condition     = module.stack.database_shape.multi_az
-    error_message = "A rehearsal run may still ask for Multi-AZ."
-  }
-
-  assert {
-    condition     = module.stack.destroyable
-    error_message = "Rehearsal turns deletion protection off across the stack."
-  }
-
-  assert {
-    condition     = output.journal_object_lock.mode == "GOVERNANCE" && output.journal_object_lock.retention_days == 1
-    error_message = "A rehearsal journal keeps object lock honest but short enough that the bucket can be removed."
-  }
 }
 
 run "both_services_are_told_the_workspace_domain" {

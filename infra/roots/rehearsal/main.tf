@@ -51,11 +51,13 @@ module "stack" {
   public_subnet_cidrs  = ["10.70.0.0/20", "10.70.16.0/20"]
   private_subnet_cidrs = ["10.70.128.0/20", "10.70.144.0/20"]
 
-  database_instance_class        = var.database_instance_class
-  database_multi_az              = var.database_multi_az
-  database_allocated_storage     = var.database_allocated_storage
+  # Production's class, single-AZ (a rehearsal needs a database, not a standby),
+  # 20 GiB without autoscaling, and one day of backups.
+  database_instance_class        = "db.t4g.small"
+  database_multi_az              = false
+  database_allocated_storage     = 20
   database_max_allocated_storage = 0
-  database_backup_retention_days = var.database_backup_retention_days
+  database_backup_retention_days = 1
   database_apply_immediately     = true
 
   # The teardown deletes the database, and nothing of it may outlive the run: a

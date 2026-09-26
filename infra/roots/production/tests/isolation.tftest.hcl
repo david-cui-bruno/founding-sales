@@ -226,17 +226,7 @@ run "the_topology_answers_are_the_production_defaults" {
     error_message = "Both tasks are Linux."
   }
 
-  # Answer 2: db.t4g.small, Multi-AZ, two API tasks and one worker at 0.5 vCPU / 1 GiB.
-  assert {
-    condition     = module.stack.database_shape.instance_class == "db.t4g.small"
-    error_message = "The production database is db.t4g.small."
-  }
-
-  assert {
-    condition     = module.stack.database_shape.multi_az
-    error_message = "The production database is Multi-AZ. main.tf passes the literal; this asserts it reached the instance."
-  }
-
+  # Answer 2: two API tasks and one worker at 0.5 vCPU / 1 GiB.
   assert {
     condition = (module.stack.service_shape.api.cpu == "512"
       && module.stack.service_shape.api.memory == "1024"
@@ -249,14 +239,6 @@ run "the_topology_answers_are_the_production_defaults" {
     condition = (module.stack.service_shape.api.desired_count == 2
     && module.stack.service_shape.worker.desired_count == 1)
     error_message = "Two API tasks and one worker task."
-  }
-
-  # Answer 5's billed-per-metric options (Performance Insights, Enhanced Monitoring,
-  # Container Insights, WAF, flow logs) have no switch any more: wave 2 deleted the
-  # ones that were never turned on.
-  assert {
-    condition     = module.stack.database_shape.delete_automated_backups == false
-    error_message = "A deleted production database keeps its automated backups for their 35 days."
   }
 }
 

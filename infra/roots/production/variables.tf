@@ -82,24 +82,6 @@ variable "worker_schema_range" {
   })
 }
 
-variable "database_instance_class" {
-  description = "RDS instance class."
-  type        = string
-  default     = "db.t4g.small"
-}
-
-variable "database_allocated_storage" {
-  description = "Provisioned gp3 storage in GiB."
-  type        = number
-  default     = 50
-}
-
-variable "database_max_allocated_storage" {
-  description = "Storage autoscaling ceiling in GiB."
-  type        = number
-  default     = 200
-}
-
 variable "api_cpu" {
   description = "Fargate CPU units for the API task."
   type        = number
