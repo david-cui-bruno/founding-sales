@@ -45,34 +45,6 @@ variable "metric_namespace" {
   }
 }
 
-# ---------------------------------------------------------------------------
-# The two thresholds test/ops/terraformCrossChecks.check.ts compares with the
-# code. The others are literals in main.tf's alarm map.
-# ---------------------------------------------------------------------------
-
-variable "canary_stale_seconds" {
-  description = "The newest canary's scheduler-to-worker latency, in seconds, that alarm: a run inserted and not completed for this long alarms. The canary is inserted once per workspace per quarter hour and proves scheduler-to-worker completion, so this is the gap between the insert and the completion — not the gap between one completion and the next, which sawtooths to 900 on a healthy system (g41)."
-  type        = number
-  default     = 300
-}
-
-variable "mailbox_coverage_stale_seconds" {
-  description = <<-EOT
-    Seconds a connected, ready mailbox's coverage watermark may age before the
-    warning mailbox_coverage_stale (lane g81). The same fifteen minutes as
-    COVERAGE_FRESHNESS_SECONDS in packages/domain/mail/coverage.ts, past which the
-    send path holds that owner's automated email; test/release/alarmIncidents.check.ts
-    keeps the two equal.
-  EOT
-  type        = number
-  default     = 900
-
-  validation {
-    condition     = var.mailbox_coverage_stale_seconds > 0
-    error_message = "mailbox_coverage_stale_seconds must be a positive number of seconds."
-  }
-}
-
 variable "tags" {
   description = "Tags merged into every resource in this module."
   type        = map(string)

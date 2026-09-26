@@ -30,13 +30,6 @@ function block(text: string, header: string): string {
   return end < 0 ? text.slice(start) : text.slice(start, end);
 }
 
-/** A variable's literal numeric default. */
-function numericDefault(variables: string, name: string): number {
-  const match = /\n\s*default\s*=\s*([0-9]+)[ \t]*(?:\n|$)/u.exec(block(variables, `variable "${name}" {`));
-  expect(match?.[1], `${name} has no literal numeric default`).toBeDefined();
-  return Number(match?.[1]);
-}
-
 /** One entry of the alerts module's alarm map, from `<key> = {` to its closing brace. */
 function alarmEntry(alerts: string, key: string): string {
   const start = alerts.indexOf(`\n    ${key} = {\n`);
@@ -185,25 +178,24 @@ describe('the target group polls readiness, and the container check stays on liv
   });
 
   it('keeps the container health check on liveness, so a database outage drains rather than restarts', () => {
-    const containerCheck = block(readRepositoryFile('infra/modules/cluster/variables.tf'), 'variable "api_health_check_command" {');
-    expect(containerCheck).toContain(`'${LIVENESS_PATH}'`);
-    expect(containerCheck).not.toContain(READINESS_PATH);
+    const api = block(readRepositoryFile('infra/modules/cluster/main.tf'), 'resource "aws_ecs_task_definition" "api" {');
+    const command = /\n\s+command\s+= (\[.*\])\n/u.exec(api.slice(api.indexOf('healthCheck = {')))?.[1] ?? '';
+    expect(command, 'the API container health check names no command').not.toBe('');
+    expect(command).toContain(`'${LIVENESS_PATH}'`);
+    expect(command).not.toContain(READINESS_PATH);
   });
 });
 
 describe('the code and the alarms share their thresholds', () => {
   const alerts = readRepositoryFile('infra/modules/alerts/main.tf');
-  const alertVariables = readRepositoryFile('infra/modules/alerts/variables.tf');
 
   it('warns on a stale coverage watermark at the send gate’s own freshness', () => {
-    expect(alarmEntry(alerts, 'mailbox_coverage_stale')).toContain('threshold           = var.mailbox_coverage_stale_seconds');
-    expect(numericDefault(alertVariables, 'mailbox_coverage_stale_seconds')).toBe(COVERAGE_FRESHNESS_SECONDS);
+    expect(alarmEntry(alerts, 'mailbox_coverage_stale')).toContain(`threshold           = ${String(COVERAGE_FRESHNESS_SECONDS)}\n`);
   });
 
   it('is the same five minutes of canary age in the smoke and in the alarm', () => {
     expect(readRepositoryFile('scripts/productionSmoke.mjs')).toContain('export const CANARY_MAXIMUM_AGE_SECONDS = 300;');
-    expect(alarmEntry(alerts, 'canary_stale')).toContain('threshold           = var.canary_stale_seconds');
-    expect(numericDefault(alertVariables, 'canary_stale_seconds')).toBe(300);
+    expect(alarmEntry(alerts, 'canary_stale')).toContain('threshold           = 300\n');
   });
 
   it('counts mailbox heartbeats over the interval the check promises', () => {
@@ -233,22 +225,24 @@ describe('the code and the alarms share their thresholds', () => {
 
 describe('the upgrade notice address', () => {
   const name = API_VARIABLES.upgradeUrl;
-  const variable = block(readRepositoryFile('infra/roots/production/variables.tf'), 'variable "desktop_upgrade_url" {');
-  const productionDefault = /\n {2}default {5,}= "([^"]+)"\n/u.exec(variable)?.[1] ?? '';
+  const root = readRepositoryFile('infra/roots/production/main.tf');
+  const productionUrl = /\n {2}desktop_upgrade_url = "([^"]+)"\n/u.exec(root)?.[1] ?? '';
 
   it('is set, under the name the API reads, on the API task definition alone', () => {
     const stack = readRepositoryFile('infra/modules/stack/main.tf');
     expect(name).toBe('FSS_DESKTOP_UPGRADE_URL');
+    expect(root).toContain('  desktop_upgrade_url = local.desktop_upgrade_url\n');
     expect(stack).toContain(
       '  api_environment = var.desktop_upgrade_url == null ? {} : {\n    FSS_DESKTOP_UPGRADE_URL = var.desktop_upgrade_url\n  }\n',
     );
   });
 
-  it('defaults in production to the signed manifest the desktop reads, and passes the API’s own rule', () => {
-    expect(productionDefault.startsWith('https://')).toBe(true);
-    expect(productionDefault.endsWith(`/${CHANNEL_MANIFEST_PATH}`)).toBe(true);
-    expect(readUpgradeUrl({ FSS_ENVIRONMENT: 'production', [name]: productionDefault })).toEqual({
-      value: productionDefault,
+  it('is in production the signed manifest the desktop reads, and passes the API’s own rule', () => {
+    expect(productionUrl.startsWith('https://')).toBe(true);
+    expect(productionUrl).not.toContain('callie.example');
+    expect(productionUrl.endsWith(`/${CHANNEL_MANIFEST_PATH}`)).toBe(true);
+    expect(readUpgradeUrl({ FSS_ENVIRONMENT: 'production', [name]: productionUrl })).toEqual({
+      value: productionUrl,
       source: 'environment',
     });
     expect(() => readUpgradeUrl({ FSS_ENVIRONMENT: 'production', [name]: DEFAULT_UPGRADE_URL })).toThrow(DeploymentConfigError);

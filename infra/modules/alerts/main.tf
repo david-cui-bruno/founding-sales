@@ -30,9 +30,9 @@
 locals {
   topic_name = "${var.name_prefix}-alerts"
 
-  # The spec 13.3 values, versioned with the release (a change is a pull request and
-  # a plan). canary_stale and mailbox_coverage_stale still read their variables,
-  # which test/ops/terraformCrossChecks.check.ts compares with the code.
+  # The spec 13.3 values, versioned with the release (a change is a pull request
+  # and a plan). test/ops/terraformCrossChecks.check.ts compares the two the
+  # application code shares, canary_stale and mailbox_coverage_stale, with it.
   #
   # severity: critical rolls into the critical composite, warning into the
   # warning composite. treat_missing_data is chosen per metric: "breaching"
@@ -146,11 +146,16 @@ locals {
       severity            = "critical"
       description         = "A Gmail watch is within two days of expiry. Push stops when it lapses."
     }
+    # A run inserted and not completed for five minutes. The canary is inserted once
+    # per workspace per quarter hour and proves scheduler-to-worker completion, so the
+    # metric is the gap between the insert and the completion, not the gap between one
+    # completion and the next, which sawtooths to 900 on a healthy system (g41).
+    # scripts/productionSmoke.mjs reads the same five minutes.
     canary_stale = {
       metric_name         = "CanaryCompletionAgeSeconds"
       statistic           = "Maximum"
       comparison          = "GreaterThanThreshold"
-      threshold           = var.canary_stale_seconds
+      threshold           = 300
       period              = 60
       evaluation_periods  = 2
       datapoints_to_alarm = 2
@@ -187,12 +192,14 @@ locals {
     # Mac said whether sync was advancing. The worker publishes the stalest connected,
     # ready mailbox's watermark age by the gate's own rule, and nothing when no mailbox
     # is connected and ready; a warning, because the gate already holds the sends and
-    # nothing unsafe follows from a stale watermark on its own.
+    # nothing unsafe follows from a stale watermark on its own. The threshold is the
+    # gate's own fifteen minutes, COVERAGE_FRESHNESS_SECONDS in
+    # packages/domain/mail/coverage.ts.
     mailbox_coverage_stale = {
       metric_name         = "MailboxCoverageAgeSeconds"
       statistic           = "Maximum"
       comparison          = "GreaterThanThreshold"
-      threshold           = var.mailbox_coverage_stale_seconds
+      threshold           = 900
       period              = 60
       evaluation_periods  = 3
       datapoints_to_alarm = 3

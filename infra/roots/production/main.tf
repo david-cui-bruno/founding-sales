@@ -38,6 +38,16 @@ locals {
   alert_emails    = ["callie@usecallie.com"]
   sending_enabled = true
 
+  # Lane g86: `FSS_DESKTOP_UPGRADE_URL` on the API task definition alone, the
+  # `upgradeUrl` /auth/client-version publishes to a Mac below the minimum client
+  # version. Machine-facing: the signed manifest on this stack's updates
+  # distribution, which the desktop reads and installs from by itself; its upgrade
+  # screen shows a sentence and never this address. The API refuses to start in
+  # production without it or with the callie.example placeholder, and
+  # test/ops/terraformCrossChecks.check.ts holds this line to the channel path.
+  # `docs/archive/decisions/g86-the-upgrade-notice-names-the-update-channel.md`.
+  desktop_upgrade_url = "https://dlcmdaeskewt5.cloudfront.net/releases/darwin-arm64/latest.json"
+
   # The audience the webhook requires in a push token. A property of this
   # environment's own hostname and route, not of Google, so it is derived here
   # rather than read from the Google root; `infra/roots/production-google`
@@ -93,8 +103,7 @@ module "stack" {
   # (docs/greenfield/runbooks/restore.md) has production on a point-in-time copy.
   active_database_host = var.active_database_host
 
-  # Lane g86: the address `/auth/client-version` publishes, on the API alone.
-  desktop_upgrade_url = var.desktop_upgrade_url
+  desktop_upgrade_url = local.desktop_upgrade_url
 
   certificate_arn = local.certificate_arn
   api_hostname    = local.api_hostname
