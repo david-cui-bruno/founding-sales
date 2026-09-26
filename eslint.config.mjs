@@ -1,46 +1,50 @@
-// ESLint 9 flat configuration for the scripts at the repository root. Tooling only:
-// nothing in the product reads it.
-//
-// `npm run lint:root-scripts` runs it over an explicit file list with --no-ignore:
-// eslint.greenfield.mjs, scripts/verifySecrets.mjs, scripts/productionSmoke.mjs,
-// scripts/releaseMutationCheck.mjs, scripts/releaseMutationRunner.mjs, scripts/changelog.mjs
-// and scripts/mutations/*.mjs. The greenfield workspace (apps/, packages/, test/release/)
-// has its own config, eslint.greenfield.mjs, run by `npm run lint:greenfield`; this one
-// ignores those directories, so the two never lint the same file.
+// ESLint 9 flat configuration for the whole tree: apps/, packages/, test/release/ and the
+// scripts at the repository root. `npm run lint` runs it.
 import js from '@eslint/js';
-// The typescript-eslint packages publish only an `exports` map, which the node
-// resolver of eslint-plugin-import cannot read.
-import tsPlugin from '@typescript-eslint/eslint-plugin'; // eslint-disable-line import/no-unresolved
-import tsParser from '@typescript-eslint/parser'; // eslint-disable-line import/no-unresolved
-import importPlugin from 'eslint-plugin-import';
+import tsPlugin from '@typescript-eslint/eslint-plugin';
+import tsParser from '@typescript-eslint/parser';
 import globals from 'globals';
-
-const sourceFiles = ['**/*.{js,cjs,mjs,jsx,ts,cts,mts,tsx}'];
 
 export default [
   {
-    ignores: [
-      'apps/**',
-      'packages/**',
-      'test/release/**',
-      // Generated output and nested checkouts. ESLint 9 does not skip dot-directories.
-      '**/.*/',
-      'out/**',
-      'coverage/**',
-      'test-results/**',
-      'playwright-report/**',
-      'artifacts/**',
-    ],
+    // Generated output and nested checkouts. ESLint 9 does not skip dot-directories.
+    ignores: ['**/node_modules/**', '**/dist/**', '**/.*/', 'out/**', 'coverage/**', 'test-results/**', 'playwright-report/**', 'artifacts/**'],
+  },
+  {
+    files: ['**/*.{ts,mts,cts}'],
+    languageOptions: {
+      parser: tsParser,
+      parserOptions: { ecmaVersion: 'latest', sourceType: 'module' },
+      globals: { ...globals.node },
+    },
+  },
+  {
+    // Developer tools and the root scripts are plain ESM.
+    files: ['**/*.mjs'],
+    languageOptions: {
+      parserOptions: { ecmaVersion: 'latest', sourceType: 'module' },
+      globals: { ...globals.node },
+    },
   },
   js.configs.recommended,
   ...tsPlugin.configs['flat/recommended'],
-  importPlugin.flatConfigs.recommended,
-  importPlugin.flatConfigs.typescript,
   {
-    files: sourceFiles,
-    languageOptions: {
-      parser: tsParser,
-      globals: { ...globals.node },
+    files: ['**/*.{ts,mts,cts}'],
+    rules: {
+      // Strict TypeScript; `any` is never the conservative option.
+      '@typescript-eslint/no-explicit-any': 'error',
+      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
+      '@typescript-eslint/consistent-type-imports': ['error', { prefer: 'type-imports' }],
+      eqeqeq: ['error', 'always', { null: 'ignore' }],
+      'no-console': ['error', { allow: ['error'] }],
+    },
+  },
+  {
+    // Test files deliberately construct wrong shapes behind @ts-expect-error.
+    files: ['**/test/**/*.ts'],
+    rules: {
+      '@typescript-eslint/ban-ts-comment': ['error', { 'ts-expect-error': false, 'ts-ignore': true, 'ts-nocheck': true }],
+      'no-console': 'off',
     },
   },
 ];

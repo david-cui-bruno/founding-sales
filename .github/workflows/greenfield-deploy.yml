@@ -14,9 +14,8 @@ name: Greenfield deploy
 #            main of this repository; its commit, id, attempt and the two instants it ran
 #            between are this job's outputs, and every later job takes them from here.
 #   gates    no checkout, no credential (lane A1). Through the GitHub API only: the
-#            *Greenfield gate* (`.github/workflows/greenfield.yml`) and the *Source
-#            security gate* (`.github/workflows/ci.yml`), each identified by its file,
-#            have a completed, successful run of the push at the images commit, the
+#            *Greenfield gate* (`.github/workflows/greenfield.yml`, identified by its
+#            file) has a completed, successful run of the push at the images commit, the
 #            newest such run and its latest attempt; and the commit is still on main
 #            (`compare/main...<commit>` is `behind` or `identical`). It waits up to thirty
 #            minutes for a gate still running, then answers `manual` with the reason, as
@@ -39,7 +38,7 @@ name: Greenfield deploy
 #            public origin, with the canary age the deploy job read as a scalar.
 #   record   the other job with `id-token: write`, in the same environment, and only
 #            after a deploy that rolled out and a smoke that passed (lane g100). It
-#            reads the two gates and main again with the `gates` step, then
+#            reads the gate and main again with the `gates` step, then
 #            runs `infra/scripts/ci-deploy-app.sh record`: the ci-gate release record for
 #            the two digests (`release-record-from-ci.sh`), put with `fss admin
 #            release-record put` on the operations task. Once the owner's attestation
@@ -62,7 +61,7 @@ name: Greenfield deploy
 #     a session that is not exactly the CI role, a digest that is not the one the
 #     images run published, or an image `fss-rh-<svc>:ci-<commit>` names that was pushed
 #     outside the images run's own window;
-#   * the gates again, immediately before the first write: anything but green and on
+#   * the gate again, immediately before the first write: anything but green and on
 #     main now fails the run red, with nothing written;
 #   * `ci-deploy-app.sh deploy`: a registered revision that differs from the running one
 #     in more than the image, a rollout ECS rolled back or did not call COMPLETED, or a
@@ -75,16 +74,12 @@ name: Greenfield deploy
 #     with one line: the record was not put, and sending holds for the new worker until
 #     the operator puts its record by hand (release.md 4.2).
 #
-# ## Two merges, and a rehearsal
+# ## Two merges
 #
 # One workflow concurrency group, never cancelled in progress, so two deploys never
-# overlap; a waiting run is replaced by a newer one, whose range covers it. The deploy
-# job also shares `fss-production-inventory` with the rehearsal job of
-# `greenfield-release.yml`: every revision it registers is a new Name-tagged production
-# ARN, which a running rehearsal's inventory guard would see. A job pending in that
-# group is replaced by the next one to queue. The poll before the role is assumed and
-# the recheck before the first write are the fallback for a rehearsal that started
-# before the group existed.
+# overlap; a waiting run is replaced by a newer one, whose range covers it. A rehearsal
+# running at the same time does not matter: its guard compares only its own run's
+# resources (lane g97), under its own prefix and role.
 
 on:
   workflow_run:
@@ -177,10 +172,10 @@ jobs:
           PY
           cat "$GITHUB_OUTPUT"
 
-  # The two gates and main, before anything holds a credential (lane A1). *Greenfield
-  # images* completes before the gates of the same push may have, so this waits.
+  # The gate and main, before anything holds a credential (lane A1). *Greenfield
+  # images* completes before the gate of the same push may have, so this waits.
   gates:
-    name: The two gates are green on the images commit, and it is still on main
+    name: The gate is green on the images commit, and it is still on main
     needs: run
     runs-on: ubuntu-24.04
     # Thirty minutes of waiting, and the reads.
@@ -195,7 +190,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - name: The two gates on the images commit, green, and the commit still on main
+      - name: The gate on the images commit, green, and the commit still on main
         id: gates
         env:
           GH_TOKEN: ${{ github.token }}
@@ -227,18 +222,15 @@ jobs:
           }
           minute=0
           while :; do
-            # Each gate by its workflow file, never by its display name, and main as the
+            # The gate by its workflow file, never by its display name, and main as the
             # API sees it now.
-            for workflow in greenfield.yml ci.yml; do
-              gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow/runs?head_sha=$COMMIT&event=push&branch=main&per_page=20" \
-                > "$work/$workflow.json"
-            done
+            gh api "repos/$GITHUB_REPOSITORY/actions/workflows/greenfield.yml/runs?head_sha=$COMMIT&event=push&branch=main&per_page=20" \
+              > "$work/greenfield.yml.json"
             gh api "repos/$GITHUB_REPOSITORY/compare/main...$COMMIT?per_page=1" > "$work/compare.json"
             verdict="$(FSS_WORK="$work" python3 - <<'PY'
           import json, os, re
           commit, repository, work = os.environ["COMMIT"], os.environ["GITHUB_REPOSITORY"], os.environ["FSS_WORK"]
-          gates = ((".github/workflows/greenfield.yml", "greenfield.yml", "Greenfield gate"),
-                   (".github/workflows/ci.yml", "ci.yml", "Source security gate"))
+          gates = ((".github/workflows/greenfield.yml", "greenfield.yml", "Greenfield gate"),)
           green, waiting, red = [], [], []
           for path, name, label in gates:
               runs = (json.load(open(os.path.join(work, name + ".json"), encoding="utf-8")) or {}).get("workflow_runs") or []
@@ -274,13 +266,12 @@ jobs:
           )"
             case "$verdict" in
               green\ *)
-                read -r _ gate security <<<"$verdict"
+                read -r _ gate <<<"$verdict"
                 {
                   echo "decision=pass"
                   echo "gate_run_id=$gate"
-                  echo "security_run_id=$security"
                 } >> "$GITHUB_OUTPUT"
-                echo "Greenfield gate run $gate and Source security gate run $security are green on $COMMIT, which is on main"
+                echo "Greenfield gate run $gate is green on $COMMIT, which is on main"
                 exit 0
                 ;;
               red\ *)
@@ -288,9 +279,9 @@ jobs:
                 ;;
             esac
             if [ "$minute" -ge "$WAIT_MINUTES" ]; then
-              not_green "the gates on $COMMIT had not finished after $WAIT_MINUTES minute(s): ${verdict#waiting }"
+              not_green "the gate on $COMMIT had not finished after $WAIT_MINUTES minute(s): ${verdict#waiting }"
             fi
-            echo "the gates on $COMMIT: ${verdict#waiting }; waiting"
+            echo "the gate on $COMMIT: ${verdict#waiting }; waiting"
             sleep 60
             minute=$((minute + 1))
           done
@@ -317,7 +308,7 @@ jobs:
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: '24.20.0'
+          node-version-file: .node-version
 
       - name: The two ranges, as validated scalars
         id: ranges
@@ -346,15 +337,11 @@ jobs:
     if: needs.gates.outputs.decision == 'pass'
     runs-on: ubuntu-24.04
     # Twice the worst rollout (two services, three ten-minute waits each), plus the
-    # rehearsal poll, the promotion and the checks. The credential is assumed after the
-    # poll and lasts two hours.
+    # promotion and the checks. The credential lasts two hours.
     timeout-minutes: 150
     # The one OIDC subject fss-prod-ci-deploy trusts. Its deployment-branch rule is main
     # only; the `run` job refuses anything else as well.
     environment: production-deploy
-    concurrency:
-      group: fss-production-inventory
-      cancel-in-progress: false
     permissions:
       contents: read
       actions: read
@@ -403,61 +390,6 @@ jobs:
           done
           for range in "$API_RANGE" "$WORKER_RANGE"; do
             [[ "$range" =~ ^[0-9]{1,4}-[0-9]{1,4}$ ]] || { echo "::error::'$range' is not a schema range"; exit 1; }
-          done
-
-      - name: No credentialed rehearsal is running
-        env:
-          GH_TOKEN: ${{ github.token }}
-          WAIT_MINUTES: '20'
-        run: |
-          set -euo pipefail
-          # The fallback to the shared concurrency group: a rehearsal job in progress, which
-          # can only be one that started without the group. A rehearsal waiting on the
-          # group behind this job is not counted, or neither would ever run.
-          rehearsal_jobs_in_progress() {
-            local work="$RUNNER_TEMP/rehearsal-poll" status id
-            rm -rf "$work"
-            mkdir -p "$work"
-            for status in in_progress queued waiting requested pending; do
-              gh api "repos/$GITHUB_REPOSITORY/actions/runs?status=$status&per_page=100" > "$work/runs-$status.json"
-            done
-            for id in $(python3 - "$work" <<'PY'
-          import glob, json, sys
-          wanted = {".github/workflows/greenfield-release.yml", ".github/workflows/greenfield-monthly-drill.yml"}
-          ids = set()
-          for path in glob.glob(sys.argv[1] + "/runs-*.json"):
-              for run in (json.load(open(path, encoding="utf-8")) or {}).get("workflow_runs") or []:
-                  if str(run.get("path", "")).split("@")[0] in wanted and str(run.get("id", "")).isdigit():
-                      ids.add(str(run["id"]))
-          print(" ".join(sorted(ids)))
-          PY
-            ); do
-              gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/jobs?per_page=100" > "$work/jobs.json"
-              if python3 - "$work/jobs.json" <<'PY'
-          import json, sys
-          jobs = (json.load(open(sys.argv[1], encoding="utf-8")) or {}).get("jobs") or []
-          sys.exit(0 if any("Create, deploy, drill and destroy a rehearsal environment" in str(job.get("name", ""))
-                            and job.get("status") == "in_progress" for job in jobs) else 1)
-          PY
-              then
-                printf ' %s' "$id"
-              fi
-            done
-          }
-          minute=0
-          while :; do
-            running="$(rehearsal_jobs_in_progress)"
-            if [ -z "$running" ]; then
-              echo "no rehearsal job is in progress"
-              exit 0
-            fi
-            if [ "$minute" -ge "$WAIT_MINUTES" ]; then
-              echo "::error::a rehearsal job is in progress (run$running). Nothing has been written; re-run this deploy when it has finished."
-              exit 1
-            fi
-            echo "a rehearsal job is in progress (run$running); waiting for it"
-            sleep 60
-            minute=$((minute + 1))
           done
 
       # The images commit, exactly, with the history the guard reads. Nothing in it runs
@@ -637,7 +569,6 @@ jobs:
               packages/domain/db/queryable.ts) why='the session helpers the migration runner applies migrations with' ;;
               .github/*) why='a workflow' ;;
               scripts/productionSmoke.mjs) why='the production smoke this deploy is judged by' ;;
-              scripts/releaseMutation*) why='' ;;
               scripts/*[Rr]elease*) why='a release script' ;;
               apps/* | packages/* | scripts/* | docs/* | test/* | tests/*) why='' ;;
               Dockerfile.api | Dockerfile.worker | Dockerfile.api.dockerignore | Dockerfile.worker.dockerignore) why='' ;;
@@ -681,9 +612,8 @@ jobs:
             --origin "$FSS_PRODUCTION_ORIGIN"
 
       # The gates job's step, waiting for nothing: a gate re-run red, or main moved off
-      # the commit, while this job waited for a rehearsal or ran the check, fails the run
-      # before anything is written.
-      - name: The two gates on the images commit, green, and the commit still on main
+      # the commit, while this job ran the check, fails the run before anything is written.
+      - name: The gate on the images commit, green, and the commit still on main
         id: gates
         if: steps.check.outputs.decision == 'deploy'
         env:
@@ -716,18 +646,15 @@ jobs:
           }
           minute=0
           while :; do
-            # Each gate by its workflow file, never by its display name, and main as the
+            # The gate by its workflow file, never by its display name, and main as the
             # API sees it now.
-            for workflow in greenfield.yml ci.yml; do
-              gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow/runs?head_sha=$COMMIT&event=push&branch=main&per_page=20" \
-                > "$work/$workflow.json"
-            done
+            gh api "repos/$GITHUB_REPOSITORY/actions/workflows/greenfield.yml/runs?head_sha=$COMMIT&event=push&branch=main&per_page=20" \
+              > "$work/greenfield.yml.json"
             gh api "repos/$GITHUB_REPOSITORY/compare/main...$COMMIT?per_page=1" > "$work/compare.json"
             verdict="$(FSS_WORK="$work" python3 - <<'PY'
           import json, os, re
           commit, repository, work = os.environ["COMMIT"], os.environ["GITHUB_REPOSITORY"], os.environ["FSS_WORK"]
-          gates = ((".github/workflows/greenfield.yml", "greenfield.yml", "Greenfield gate"),
-                   (".github/workflows/ci.yml", "ci.yml", "Source security gate"))
+          gates = ((".github/workflows/greenfield.yml", "greenfield.yml", "Greenfield gate"),)
           green, waiting, red = [], [], []
           for path, name, label in gates:
               runs = (json.load(open(os.path.join(work, name + ".json"), encoding="utf-8")) or {}).get("workflow_runs") or []
@@ -763,13 +690,12 @@ jobs:
           )"
             case "$verdict" in
               green\ *)
-                read -r _ gate security <<<"$verdict"
+                read -r _ gate <<<"$verdict"
                 {
                   echo "decision=pass"
                   echo "gate_run_id=$gate"
-                  echo "security_run_id=$security"
                 } >> "$GITHUB_OUTPUT"
-                echo "Greenfield gate run $gate and Source security gate run $security are green on $COMMIT, which is on main"
+                echo "Greenfield gate run $gate is green on $COMMIT, which is on main"
                 exit 0
                 ;;
               red\ *)
@@ -777,66 +703,9 @@ jobs:
                 ;;
             esac
             if [ "$minute" -ge "$WAIT_MINUTES" ]; then
-              not_green "the gates on $COMMIT had not finished after $WAIT_MINUTES minute(s): ${verdict#waiting }"
+              not_green "the gate on $COMMIT had not finished after $WAIT_MINUTES minute(s): ${verdict#waiting }"
             fi
-            echo "the gates on $COMMIT: ${verdict#waiting }; waiting"
-            sleep 60
-            minute=$((minute + 1))
-          done
-
-      # The same script, waiting for nothing.
-      - name: Still no rehearsal job in progress, immediately before the first write
-        if: steps.check.outputs.decision == 'deploy'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          WAIT_MINUTES: '0'
-        run: |
-          set -euo pipefail
-          # The fallback to the shared concurrency group: a rehearsal job in progress, which
-          # can only be one that started without the group. A rehearsal waiting on the
-          # group behind this job is not counted, or neither would ever run.
-          rehearsal_jobs_in_progress() {
-            local work="$RUNNER_TEMP/rehearsal-poll" status id
-            rm -rf "$work"
-            mkdir -p "$work"
-            for status in in_progress queued waiting requested pending; do
-              gh api "repos/$GITHUB_REPOSITORY/actions/runs?status=$status&per_page=100" > "$work/runs-$status.json"
-            done
-            for id in $(python3 - "$work" <<'PY'
-          import glob, json, sys
-          wanted = {".github/workflows/greenfield-release.yml", ".github/workflows/greenfield-monthly-drill.yml"}
-          ids = set()
-          for path in glob.glob(sys.argv[1] + "/runs-*.json"):
-              for run in (json.load(open(path, encoding="utf-8")) or {}).get("workflow_runs") or []:
-                  if str(run.get("path", "")).split("@")[0] in wanted and str(run.get("id", "")).isdigit():
-                      ids.add(str(run["id"]))
-          print(" ".join(sorted(ids)))
-          PY
-            ); do
-              gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/jobs?per_page=100" > "$work/jobs.json"
-              if python3 - "$work/jobs.json" <<'PY'
-          import json, sys
-          jobs = (json.load(open(sys.argv[1], encoding="utf-8")) or {}).get("jobs") or []
-          sys.exit(0 if any("Create, deploy, drill and destroy a rehearsal environment" in str(job.get("name", ""))
-                            and job.get("status") == "in_progress" for job in jobs) else 1)
-          PY
-              then
-                printf ' %s' "$id"
-              fi
-            done
-          }
-          minute=0
-          while :; do
-            running="$(rehearsal_jobs_in_progress)"
-            if [ -z "$running" ]; then
-              echo "no rehearsal job is in progress"
-              exit 0
-            fi
-            if [ "$minute" -ge "$WAIT_MINUTES" ]; then
-              echo "::error::a rehearsal job is in progress (run$running). Nothing has been written; re-run this deploy when it has finished."
-              exit 1
-            fi
-            echo "a rehearsal job is in progress (run$running); waiting for it"
+            echo "the gate on $COMMIT: ${verdict#waiting }; waiting"
             sleep 60
             minute=$((minute + 1))
           done
@@ -940,7 +809,7 @@ jobs:
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: '24.20.0'
+          node-version-file: .node-version
 
       - name: Six checks against the running API
         env:
@@ -965,9 +834,7 @@ jobs:
   # The release record for the deployed digests (lane g100). After the smoke, because a
   # record is the statement that these digests are fit to send under, and a deploy whose
   # smoke failed has not earned it. Its own job, because the smoke holds no credential.
-  # Not in `fss-production-inventory`: the one thing it creates is an ECS task, which a
-  # rehearsal's inventory guard sets aside (`rehearsal-prefix-guard.sh`), and the
-  # workflow's own group already keeps it from overlapping the next deploy.
+  # The workflow's own group keeps it from overlapping the next deploy.
   record:
     name: Put the release record for the deployed digests
     needs: [run, ranges, deploy, smoke]
@@ -1020,10 +887,10 @@ jobs:
             [[ "$range" =~ ^[0-9]{1,4}-[0-9]{1,4}$ ]] || { echo "::error::'$range' is not a schema range"; exit 1; }
           done
 
-      # The gates job's step again. They were green before the deploy; a re-run since
+      # The gates job's step again. It was green before the deploy; a re-run since
       # that is red, or main moved off the commit, and no record is put. No credential is
       # held while it waits for a re-run still going.
-      - name: The two gates on the images commit, green, and the commit still on main
+      - name: The gate on the images commit, green, and the commit still on main
         id: gates
         env:
           GH_TOKEN: ${{ github.token }}
@@ -1055,18 +922,15 @@ jobs:
           }
           minute=0
           while :; do
-            # Each gate by its workflow file, never by its display name, and main as the
+            # The gate by its workflow file, never by its display name, and main as the
             # API sees it now.
-            for workflow in greenfield.yml ci.yml; do
-              gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow/runs?head_sha=$COMMIT&event=push&branch=main&per_page=20" \
-                > "$work/$workflow.json"
-            done
+            gh api "repos/$GITHUB_REPOSITORY/actions/workflows/greenfield.yml/runs?head_sha=$COMMIT&event=push&branch=main&per_page=20" \
+              > "$work/greenfield.yml.json"
             gh api "repos/$GITHUB_REPOSITORY/compare/main...$COMMIT?per_page=1" > "$work/compare.json"
             verdict="$(FSS_WORK="$work" python3 - <<'PY'
           import json, os, re
           commit, repository, work = os.environ["COMMIT"], os.environ["GITHUB_REPOSITORY"], os.environ["FSS_WORK"]
-          gates = ((".github/workflows/greenfield.yml", "greenfield.yml", "Greenfield gate"),
-                   (".github/workflows/ci.yml", "ci.yml", "Source security gate"))
+          gates = ((".github/workflows/greenfield.yml", "greenfield.yml", "Greenfield gate"),)
           green, waiting, red = [], [], []
           for path, name, label in gates:
               runs = (json.load(open(os.path.join(work, name + ".json"), encoding="utf-8")) or {}).get("workflow_runs") or []
@@ -1102,13 +966,12 @@ jobs:
           )"
             case "$verdict" in
               green\ *)
-                read -r _ gate security <<<"$verdict"
+                read -r _ gate <<<"$verdict"
                 {
                   echo "decision=pass"
                   echo "gate_run_id=$gate"
-                  echo "security_run_id=$security"
                 } >> "$GITHUB_OUTPUT"
-                echo "Greenfield gate run $gate and Source security gate run $security are green on $COMMIT, which is on main"
+                echo "Greenfield gate run $gate is green on $COMMIT, which is on main"
                 exit 0
                 ;;
               red\ *)
@@ -1116,9 +979,9 @@ jobs:
                 ;;
             esac
             if [ "$minute" -ge "$WAIT_MINUTES" ]; then
-              not_green "the gates on $COMMIT had not finished after $WAIT_MINUTES minute(s): ${verdict#waiting }"
+              not_green "the gate on $COMMIT had not finished after $WAIT_MINUTES minute(s): ${verdict#waiting }"
             fi
-            echo "the gates on $COMMIT: ${verdict#waiting }; waiting"
+            echo "the gate on $COMMIT: ${verdict#waiting }; waiting"
             sleep 60
             minute=$((minute + 1))
           done

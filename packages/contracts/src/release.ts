@@ -15,13 +15,13 @@ import { z } from 'zod';
  *   * **`ci-gate`** — `infra/scripts/release-record-from-ci.sh`, from the green
  *     *Greenfield gate* run on the deployed commit and the green *Greenfield images*
  *     run whose `fss-image-digests` names the same two digests. This is the record a
- *     release puts. A CI run drills nothing, so it carries no `rehearsalPrefix`,
- *     `carryDrill` or `rehearsalScenarios`, and a `ci-gate` record that claims one is
- *     refused: it names the run, its URL and the commit instead.
+ *     release puts. A CI run drills nothing, so it carries no `rehearsalPrefix` or
+ *     `rehearsalScenarios`, and a `ci-gate` record that claims one is refused: it names
+ *     the run, its URL and the commit instead.
  *   * **the rehearsal** — `infra/scripts/rehearsal-release-record.sh`, the last step of
  *     a green `full` rehearsal. It writes no `source` (every record stored before g96
  *     is one of these, so an absent `source` means the rehearsal), and it still has to
- *     carry all three drill fields.
+ *     carry both drill fields.
  *
  * Both are `fss.release-record.v1`: the table's CHECK (`0017_release_records.sql`) and
  * `release-deploy.sh --release-record` both read that id, and the five columns the
@@ -145,7 +145,12 @@ export function ciGateReleaseReference(gateRunId: string, commit: string): strin
   return `ci-gate-${gateRunId}-${commit.slice(0, 12)}`;
 }
 
-/** The record a green `full` rehearsal writes (`rehearsal-release-record.sh`), unchanged by g96. */
+/**
+ * The record a green `full` rehearsal writes (`rehearsal-release-record.sh`). Until 26
+ * September 2026 it also carried the old-app carry drill's verdict; the carry was deleted
+ * (the old app's DynamoDB tables were destroyed on 17 September 2026), and records
+ * stored before then are read back from their columns, never re-parsed.
+ */
 export const rehearsalReleaseRecordSchema = z.strictObject({
   schema: z.literal(RELEASE_RECORD_SCHEMA_ID),
   /** Absent in every record the rehearsal script writes; accepted when spelled out. */
@@ -155,9 +160,7 @@ export const rehearsalReleaseRecordSchema = z.strictObject({
   recordedAt: recordedAtSchema,
   suite: releaseSuiteSchema,
   artifacts: releaseArtifactsSchema,
-  /** Appendix G 20's export half needs a cutover watermark; the drill says which it ran. */
-  carryDrill: z.enum(['ran', 'skipped_no_watermark']),
-  /** Appendix G 11, 20, 22 and 39, one report line each, keyed by scenario number. */
+  /** Appendix G 11, 22 and 39, one report line each, keyed by scenario number. */
   rehearsalScenarios: z.record(z.string().regex(/^\d{1,2}$/u), z.string().max(4000)),
   /** Always false from the script: a record enables nothing by itself. */
   enablesSending: z.boolean(),

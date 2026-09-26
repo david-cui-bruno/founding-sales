@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, posix } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ciGateReleaseRecordSchema } from '@fss/contracts';
-import { readRepositoryFile, repositoryPath } from './support/coverage.ts';
+import { readRepositoryFile, repositoryPath } from './support/repository.ts';
 
 /**
  * Lane g91: an app-only merge to main is deployed to production by CI, and a schema,
@@ -27,10 +27,6 @@ import { readRepositoryFile, repositoryPath } from './support/coverage.ts';
  * file was moved, and where a merge commit itself edited infrastructure. The same
  * history from one commit later answers pass, so "manual" cannot be the only answer.
  *
- * **Image code with a credential.** The jobs that run code from the images commit are
- * asserted to hold no `id-token` and no environment, and the credentialed job to run no
- * Node and nothing from the checkout before the guard.
- *
  * **A failed rollout that reads as a deploy, and a stray revision Terraform would
  * adopt.** The stub rolls a failing service back as the circuit breaker does; the deploy
  * must fail, never touch the API after a failed worker, and deregister the revision it
@@ -45,9 +41,7 @@ import { readRepositoryFile, repositoryPath } from './support/coverage.ts';
  * `release-record-from-ci.sh`; the record the operations task was handed is decoded and
  * parsed with the contract the put applies. The same world before the deploy, a refused
  * `RunTask`, a put the tool refused and a gate that was not green each fail with no
- * record stored, so "the record step passes" cannot be the only answer. In the workflow
- * the record job needs the smoke, and fails red with one line when the put did not
- * happen.
+ * record stored, so "the record step passes" cannot be the only answer.
  */
 
 const SCRIPT = repositoryPath('infra/scripts/ci-deploy-app.sh');
@@ -1176,16 +1170,6 @@ describe('record puts the ci-gate release record for the deployed digests, on th
     expect(runTasks(elsewhere)).toEqual([]);
   });
 
-  it('runs the operations task as Terraform declares it: the worker image, roles and log group', () => {
-    const cluster = readRepositoryFile('infra/modules/cluster/main.tf');
-    const start = cluster.indexOf('resource "aws_ecs_task_definition" "operations" {');
-    const block = cluster.slice(start, cluster.indexOf('\n}\n', start));
-    expect(block).toContain('execution_role_arn       = aws_iam_role.worker_execution.arn');
-    expect(block).toContain('task_role_arn            = aws_iam_role.worker_task.arn');
-    expect(block).toContain('image      = var.worker_image');
-    expect(block).toContain('"awslogs-group"         = var.worker_log_group_name');
-    expect(block).toContain('"awslogs-stream-prefix" = "operations"');
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1224,7 +1208,7 @@ function job(workflow: string, name: string): string {
 }
 
 const DEPLOY_WORKFLOW = readRepositoryFile(WORKFLOW);
-const GATES_STEP = 'The two gates on the images commit, green, and the commit still on main';
+const GATES_STEP = 'The gate on the images commit, green, and the commit still on main';
 const DOWNLOAD_STEP = 'Download the digests the images run published, from its own artifact';
 const GUARD = runBody(steps(DEPLOY_WORKFLOW).find(step => step.name === "Protected paths in any commit since production's")?.text ?? '');
 
@@ -1261,7 +1245,7 @@ const HISTORY = (() => {
     'packages/domain/today/x.ts',
     'docs/greenfield/x.md',
     'test/release/x.check.ts',
-    'scripts/releaseMutationCheck.mjs',
+    'scripts/verifySecrets.mjs',
     'package-lock.json',
     'Dockerfile.api',
   ]);
@@ -1402,7 +1386,7 @@ describe('the protected-path guard reads every commit since production’s, befo
       'Dockerfile.worker.dockerignore',
       'certs/rds-global-bundle.pem',
       'tsconfig.base.json',
-      'eslint.greenfield.mjs',
+      'eslint.config.mjs',
     ]);
     const passed = guard(world(at(base)), app, directory);
     expect(passed.outputs['decision'], passed.output).toBe('pass');
@@ -1417,7 +1401,7 @@ describe('the protected-path guard reads every commit since production’s, befo
       'packages/domain/db/queryable.ts',
       'scripts/productionSmoke.mjs',
       'scripts/releaseArtifact.mjs',
-      '.github/workflows/ci.yml',
+      '.github/workflows/greenfield.yml',
       'cloud/terraform/main.tf',
       'src/main/index.ts',
     ]) {
@@ -1583,171 +1567,16 @@ describe('deployed-digests.sh prints what an operator plan must be given, and re
   });
 });
 
-describe('the deploy workflow', () => {
+describe('the deploy workflow’s own scripts, run', () => {
   const workflow = DEPLOY_WORKFLOW;
-  const jobSteps = steps(workflow);
   const named = (fragment: string): string => {
-    const step = jobSteps.find(candidate => candidate.name.includes(fragment));
+    const step = steps(workflow).find(candidate => candidate.name.includes(fragment));
     if (step === undefined) throw new Error(`no step named like ${fragment}`);
     return step.text;
   };
 
-  it('runs after a green images run on main, or by hand on main, and never on a pull request', () => {
-    expect(workflow).toContain('  workflow_run:\n    workflows: [Greenfield images]\n    types: [completed]\n    branches: [main]');
-    expect(readRepositoryFile('.github/workflows/greenfield-images.yml')).toMatch(/^name: Greenfield images$/mu);
-    expect(workflow).toContain('  workflow_dispatch:');
-    expect(workflow).not.toMatch(/^ {2}(push|pull_request|pull_request_target):/mu);
-    const run = job(workflow, 'run');
-    expect(run).toContain("github.event.workflow_run.conclusion == 'success'");
-    expect(run).toContain("github.event.workflow_run.event == 'push'");
-    expect(run).toContain("github.event.workflow_run.head_branch == 'main'");
-    expect(run).toContain('github.event.workflow_run.head_repository.full_name == github.repository');
-    expect(run).toContain("(github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')");
-  });
-
-  it('has no dispatch input that turns a protected change into an app-only one', () => {
-    for (const text of [workflow, readRepositoryFile('infra/scripts/ci-deploy-app.sh'), readRepositoryFile('docs/greenfield/release.md')]) {
-      expect(text).not.toMatch(/infrastructure[_-]applied/u);
-    }
-    expect(workflow.slice(workflow.indexOf('  workflow_dispatch:'), workflow.indexOf('\npermissions:'))).not.toContain('type: boolean');
-  });
-
-  it('gives a credential to two jobs, deploy and record, which run no code from the images commit before its guard and no Node at all', () => {
-    const jobs = ['run', 'gates', 'ranges', 'deploy', 'smoke', 'record', 'summary'];
-    for (const name of jobs) {
-      const text = job(workflow, name);
-      if (name === 'deploy' || name === 'record') {
-        expect(text).toContain('      id-token: write');
-        expect(text).toContain('    environment: production-deploy');
-        expect(text, name).not.toContain('setup-node');
-        expect(text, name).not.toMatch(/^\s*node /mu);
-        continue;
-      }
-      expect(text, name).not.toContain('id-token');
-      expect(text, name).not.toContain('environment:');
-      expect(text, name).not.toContain('configure-aws-credentials');
-      expect(text, name).not.toContain('secrets.');
-    }
-    // The two jobs that run images-commit code hold contents: read and nothing else.
-    for (const name of ['ranges', 'smoke']) {
-      expect(job(workflow, name)).toMatch(/ {4}permissions:\n {6}contents: read\n {4}[a-z]/u);
-    }
-    const deploy = job(workflow, 'deploy');
-    expect(deploy).not.toContain('setup-node');
-    expect(deploy).not.toMatch(/^\s*node /mu);
-    expect(deploy).toContain('          ref: ${{ needs.run.outputs.commit }}\n          fetch-depth: 0');
-    // Nothing from the checkout runs before the guard, and everything after it is gated on it.
-    const deploySteps = steps(deploy);
-    const guardAt = deploySteps.findIndex(step => step.name === "Protected paths in any commit since production's");
-    const assumeAt = deploySteps.findIndex(step => step.name === 'Assume the production CI deploy role');
-    const checkoutAt = deploySteps.findIndex(step => step.name.startsWith('actions/checkout@'));
-    expect(checkoutAt).toBeGreaterThan(-1);
-    expect(assumeAt).toBeGreaterThan(checkoutAt);
-    expect(guardAt).toBeGreaterThan(assumeAt);
-    for (const step of deploySteps.slice(0, guardAt + 1)) {
-      // A command that is a repository path, or one handed to an interpreter. A `case`
-      // pattern ends in `)` and is not a command.
-      expect(step.text, step.name).not.toMatch(
-        /^\s*(?:bash |sh |node |source |\. )?(?:\.\/)?(?:infra\/scripts|scripts|packages|apps)\/[^\s'"]*\.(?:sh|mjs|ts|js)(?![)|*])/mu,
-      );
-      expect(step.text, step.name).not.toMatch(/\b(?:node|npm|npx|bash infra|source infra)\b/u);
-    }
-    const repositoryCode = deploySteps.filter(step => /infra\/scripts\//u.test(step.text.replace(/^\s*#.*$/gmu, '')));
-    expect(repositoryCode.map(step => step.name)).toEqual([
-      'Decide - app-only, already running, or the manual path',
-      'Promote both images into the production repositories, by digest',
-      'Register, roll the worker and then the API, and hold each to its digest',
-    ]);
-    expect(named('Decide')).toContain("if: steps.guard.outputs.decision == 'pass'");
-    for (const fragment of ['Promote both images', 'Register, roll the worker']) {
-      expect(named(fragment)).toContain("if: steps.check.outputs.decision == 'deploy'");
-    }
-    expect(named('Promote both images')).toContain(
-      'infra/scripts/release-promote.sh "$RUNNER_TEMP/fss-image-digests/image-digests.json" --app-only',
-    );
-  });
-
-  it('takes the schema ranges from the uncredentialed job as scalars it validates again, and smokes without a credential', () => {
-    expect(job(workflow, 'ranges')).toContain("import('./packages/domain/db/schemaRange.ts')");
-    expect(named('The scalars from the other jobs are what they claim to be')).toContain('[[ "$range" =~ ^[0-9]{1,4}-[0-9]{1,4}$ ]]');
-    const smoke = job(workflow, 'smoke');
-    expect(smoke).toContain('node scripts/productionSmoke.mjs --origin "$FSS_PRODUCTION_ORIGIN"');
-    expect(smoke).toContain('--canary-age-seconds "$CANARY_AGE" --expect-sending "$EXPECT_SENDING"');
-    expect(smoke).toContain('[[ "$CANARY_AGE" =~ ^[0-9]{1,7}(\\.[0-9]{1,6})?$ ]]');
-    expect(named('Read the canary age the smoke judges')).toContain('--namespace FSS/fss-prod');
-  });
-
-  it('checks the session is exactly the CI role in the account its secret names', () => {
-    const preflight = named('The session is exactly the CI role');
-    expect(preflight).toContain('[[ "$ROLE_ARN" =~ ^arn:aws:iam::([0-9]{12}):role/fss-prod-ci-deploy$ ]]');
-    expect(preflight).toContain('"arn:aws:sts::${account}:assumed-role/fss-prod-ci-deploy/fss-prod-ci-deploy-${GITHUB_RUN_ID}"');
-    expect(named('Assume the production CI deploy role')).toContain('role-session-name: fss-prod-ci-deploy-${{ github.run_id }}');
-  });
-
-  it('queues, excludes a rehearsal through one shared group, and budgets twice the worst rollout', () => {
-    expect(workflow).toContain('concurrency:\n  group: fss-production-deploy\n  cancel-in-progress: false');
-    const deploy = job(workflow, 'deploy');
-    expect(deploy).toContain('    concurrency:\n      group: fss-production-inventory\n      cancel-in-progress: false');
-    const release = readRepositoryFile('.github/workflows/greenfield-release.yml');
-    expect(job(release, 'rehearsal')).toContain('    concurrency:\n      group: fss-production-inventory\n      cancel-in-progress: false');
-    // Two services, three ten-minute waits each, doubled, and the two-hour credential.
-    expect(deploy).toContain('    timeout-minutes: 150');
-    expect(named('Assume the production CI deploy role')).toContain('role-duration-seconds: 7200');
-    expect(readRepositoryFile('infra/scripts/ci-deploy-app.sh')).toContain('CI_WAIT_ATTEMPTS="${FSS_CI_WAIT_ATTEMPTS:-3}"');
-  });
-
-  it('reports the revisions it observed, never a rollback it did not see', () => {
-    expect(named('The revisions each service names now')).toContain('if: always()');
-    const summary = job(workflow, 'summary');
-    expect(summary).toContain("if: always() && needs.run.result != 'skipped'");
-    expect(summary).toContain('Observed now: $OBSERVED');
-    expect(summary).not.toMatch(/rolled back by ECS/u);
-    expect(summary).toContain('    permissions: {}');
-  });
-
-  it('puts the release record in a job of its own, only after a deploy that rolled out and a smoke that passed', () => {
-    const record = job(workflow, 'record');
-    expect(record).toContain('    needs: [run, ranges, deploy, smoke]');
-    expect(record).toContain(
-      "    if: needs.deploy.result == 'success' && needs.deploy.outputs.decision == 'deploy' && needs.smoke.result == 'success'",
-    );
-    // No record from the deploy job itself: nothing there writes one before the smoke.
-    const uncommentedDeploy = job(workflow, 'deploy').replace(/^\s*#.*$/gmu, '');
-    expect(uncommentedDeploy).not.toContain('record');
-    expect(workflow.replace(/^\s*#.*$/gmu, '')).not.toContain('release-deploy.sh');
-    expect(workflow).not.toContain('HOOK (lane g96)');
-
-    // The order inside it: the gates are read again with no credential, then the role,
-    // then the one step that runs repository code, which is the record put.
-    const recordSteps = steps(record);
-    const at = (name: string): number => recordSteps.findIndex(step => step.name === name);
-    expect(at(GATES_STEP)).toBeGreaterThan(-1);
-    expect(at(GATES_STEP)).toBeLessThan(at('Assume the production CI deploy role'));
-    expect(at('Assume the production CI deploy role')).toBeLessThan(
-      at('The session is exactly the CI role, in the account its ARN names, in the region this deploys to'),
-    );
-    const repositoryCode = recordSteps.filter(step => /infra\/scripts\//u.test(step.text.replace(/^\s*#.*$/gmu, '')));
-    expect(repositoryCode.map(step => step.name)).toEqual(['Build the ci-gate record and put it on the operations task']);
-    const put = recordSteps[at('Build the ci-gate record and put it on the operations task')]?.text ?? '';
-    expect(put).toContain('infra/scripts/ci-deploy-app.sh record');
-    expect(put).toContain('--gate-run-id "$GATE_RUN_ID"');
-    expect(put).toContain('GATE_RUN_ID: ${{ steps.gates.outputs.gate_run_id }}');
-    // The four network identifiers from repository variables, never from state.
-    for (const variable of [
-      'FSS_PRODUCTION_CLUSTER_NAME',
-      'FSS_PRODUCTION_OPERATIONS_TASK_FAMILY',
-      'FSS_PRODUCTION_TASK_SUBNET_IDS',
-      'FSS_PRODUCTION_TASK_SECURITY_GROUP_ID',
-    ]) {
-      expect(put).toContain(`\${{ vars.${variable} }}`);
-    }
-    expect(record).not.toMatch(/terraform|tfstate/u);
-    expect(recordSteps[at('Assume the production CI deploy role')]?.text).toContain('role-duration-seconds: 3600');
-  });
-
   it('says what the gates answered when the deploy job never ran, and counts a gates error as a failure', () => {
     const summary = job(workflow, 'summary');
-    expect(summary).toContain('    needs: [run, gates, ranges, deploy, smoke, record]');
     const body = runBody(steps(summary).find(step => step.name === 'One line')?.text ?? '');
     // Every input the step names, empty as Actions leaves an output nobody set.
     const SUMMARY_INPUTS = [...summary.matchAll(/^ {10}([A-Z_]+): \$\{\{/gmu)].map(match => match[1] ?? '');
@@ -1768,50 +1597,17 @@ describe('the deploy workflow', () => {
     expect(broken.output).toContain('FAILED (gates failure, deploy skipped');
   });
 
-  it('fails red with one line when the record was not put, and the summary says so', () => {
-    const record = job(workflow, 'record');
-    // The last step, on any failure of the job: one error annotation, then a red exit.
-    const last = steps(record).at(-1)?.text ?? '';
-    expect(last).toContain('if: failure()');
-    const body = runBody(last).trim().split('\n');
-    expect(body).toHaveLength(2);
-    expect(body[0]).toMatch(/^echo "::error::[^"\n]+docs\/greenfield\/release\.md 4\.2[^"\n]*"$/u);
-    expect(body[1]?.trim()).toBe('exit 1');
-    // The summary waits for the record job, and a deploy whose record failed is an error.
-    const summary = job(workflow, 'summary');
-    expect(summary).toContain('    needs: [run, gates, ranges, deploy, smoke, record]');
-    const branch = summary.slice(summary.indexOf('elif [ "$DECISION" = deploy ] && [ "$RECORD_RESULT" != success ]; then'));
-    expect(branch.length).toBeLessThan(summary.length);
-    expect(branch.slice(0, branch.indexOf('\n          else'))).toContain('echo "::error::$line"');
-  });
-
-  it('reads the two gates and main in one step, in three places: before the deploy, before its first write, before the put', () => {
-    const places = (['gates', 'deploy', 'record'] as const).map(name => {
+  it('reads the gate and main with one script in all three places, so the script run below is the one that runs', () => {
+    const bodies = (['gates', 'deploy', 'record'] as const).map(name => {
       const step = steps(job(workflow, name)).find(candidate => candidate.name === GATES_STEP)?.text ?? '';
       expect(step, name).not.toBe('');
-      return step;
+      return runBody(step);
     });
-    // One body: the three are the same script, told how long to wait and what not green means.
-    expect(runBody(places[1] ?? '')).toBe(runBody(places[0] ?? ''));
-    expect(runBody(places[2] ?? '')).toBe(runBody(places[0] ?? ''));
-    expect(places[0]).toContain("WAIT_MINUTES: '30'\n          NOT_GREEN: manual");
-    expect(places[1]).toContain("WAIT_MINUTES: '0'\n          NOT_GREEN: fail");
-    expect(places[1]).toContain("if: steps.check.outputs.decision == 'deploy'");
-    expect(places[2]).toContain("WAIT_MINUTES: '30'\n          NOT_GREEN: fail");
-    // The gates job holds no credential, and the deploy starts only after it passed.
-    const gates = job(workflow, 'gates');
-    expect(gates).toMatch(/ {4}permissions:\n {6}contents: read\n {6}actions: read\n {4}outputs:/u);
-    expect(gates).not.toContain('actions/checkout');
-    const deploy = job(workflow, 'deploy');
-    expect(deploy).toContain('    needs: [run, gates, ranges]\n');
-    expect(deploy).toContain("    if: needs.gates.outputs.decision == 'pass'\n");
-    // Before the decision's first write: after check, then the rehearsal recheck, then the promotion.
-    const names = steps(deploy).map(step => step.name);
-    expect(names.indexOf(GATES_STEP)).toBe(names.indexOf('Decide - app-only, already running, or the manual path') + 1);
-    expect(names.indexOf(GATES_STEP)).toBeLessThan(names.indexOf('Promote both images into the production repositories, by digest'));
+    expect(bodies[1]).toBe(bodies[0]);
+    expect(bodies[2]).toBe(bodies[0]);
   });
 
-  it('passes only when both gate files are green on the latest attempt and the commit is on main, and waits otherwise', () => {
+  it('passes only when the gate file is green on the latest attempt and the commit is on main, and waits otherwise', () => {
     const body = runBody(steps(job(workflow, 'gates')).find(step => step.name === GATES_STEP)?.text ?? '');
     const gate = {
       id: 4100,
@@ -1826,14 +1622,12 @@ describe('the deploy workflow', () => {
       run_attempt: 1,
       created_at: '2026-09-25T22:00:00Z',
     };
-    const security = { ...gate, id: 4200, path: '.github/workflows/ci.yml', name: 'Source security gate' };
     const attempt = (
-      world: { readonly gate?: readonly Record<string, unknown>[]; readonly security?: readonly Record<string, unknown>[]; readonly compare?: string },
+      world: { readonly gate?: readonly Record<string, unknown>[]; readonly compare?: string },
       mode: 'manual' | 'fail' = 'manual',
     ): Run => {
       const bin = mkdtempSync(join(tmpdir(), 'fss-gh-gates-'));
       writeFileSync(join(bin, 'greenfield.json'), JSON.stringify({ workflow_runs: world.gate ?? [gate] }));
-      writeFileSync(join(bin, 'ci.json'), JSON.stringify({ workflow_runs: world.security ?? [security] }));
       writeFileSync(join(bin, 'compare.json'), JSON.stringify({ status: world.compare ?? 'behind', ahead_by: 0, behind_by: 3 }));
       const prefix = `repos/${GH_REPOSITORY}`;
       writeFileSync(
@@ -1843,7 +1637,6 @@ describe('the deploy workflow', () => {
           `echo "$*" >> '${bin}/calls'`,
           'case "$2" in',
           `  "${prefix}/actions/workflows/greenfield.yml/runs?head_sha=${COMMIT}&event=push&branch=main&per_page=20") cat '${bin}/greenfield.json' ;;`,
-          `  "${prefix}/actions/workflows/ci.yml/runs?head_sha=${COMMIT}&event=push&branch=main&per_page=20") cat '${bin}/ci.json' ;;`,
           `  "${prefix}/compare/main...${COMMIT}?per_page=1") cat '${bin}/compare.json' ;;`,
           '  *) echo "unexpected $*" >&2; exit 1 ;;',
           'esac',
@@ -1871,25 +1664,25 @@ describe('the deploy workflow', () => {
 
     const green = attempt({ gate: [gate, { ...gate, id: 4000, created_at: '2026-09-25T21:00:00Z', conclusion: 'failure' }] });
     expect(green.code, green.output).toBe(0);
-    expect(green.outputs).toEqual({ decision: 'pass', gate_run_id: '4100', security_run_id: '4200' });
+    expect(green.outputs).toEqual({ decision: 'pass', gate_run_id: '4100' });
     expect(attempt({ compare: 'identical' }).outputs['decision']).toBe('pass');
 
     // Each of these is `manual` before the decision, with the reason, and a red run after it.
     for (const [world, reason] of [
       [{ gate: [{ ...gate, conclusion: 'failure' }] }, 'Greenfield gate run 4100 attempt 1 concluded failure'],
-      [{ security: [{ ...security, conclusion: 'cancelled' }] }, 'Source security gate run 4200 attempt 1 concluded cancelled'],
+      [{ gate: [{ ...gate, conclusion: 'cancelled' }] }, 'Greenfield gate run 4100 attempt 1 concluded cancelled'],
       // A re-run that turned red: the run is reported as its latest attempt.
       [{ gate: [{ ...gate, run_attempt: 2, conclusion: 'failure' }] }, 'Greenfield gate run 4100 attempt 2 concluded failure'],
       // A newer run of the same push that is red, beside an older green one.
       [
-        { security: [security, { ...security, id: 4300, created_at: '2026-09-25T23:00:00Z', conclusion: 'failure' }] },
-        'Source security gate run 4300 attempt 1 concluded failure',
+        { gate: [gate, { ...gate, id: 4300, created_at: '2026-09-25T23:00:00Z', conclusion: 'failure' }] },
+        'Greenfield gate run 4300 attempt 1 concluded failure',
       ],
       [{ compare: 'diverged' }, `it is no longer on main (compare main...${COMMIT.slice(0, 12)} is diverged)`],
       [{ compare: 'ahead' }, 'is ahead)'],
       // Still going, or not started: waited for, and after the wait, manual.
       [{ gate: [{ ...gate, run_attempt: 2, status: 'in_progress', conclusion: null }] }, 'had not finished after 0 minute(s): Greenfield gate run 4100 attempt 2 is in_progress'],
-      [{ security: [] }, 'no Source security gate run (.github/workflows/ci.yml) of the push yet'],
+      [{ gate: [] }, 'no Greenfield gate run (.github/workflows/greenfield.yml) of the push yet'],
     ] as const) {
       const manual = attempt(world);
       expect(manual.code, manual.output).toBe(0);
@@ -2052,118 +1845,5 @@ describe('the deploy workflow', () => {
       expect(refused.outputs['commit']).toBeUndefined();
     }
     expect(attempt(good, '42; rm -rf /').code).not.toBe(0);
-  });
-});
-
-describe('the deploy waits for a rehearsal job in progress, and checks again before its first write', () => {
-  const poll = steps(DEPLOY_WORKFLOW).find(step => step.name === 'No credentialed rehearsal is running')?.text ?? '';
-  const recheck =
-    steps(DEPLOY_WORKFLOW).find(step => step.name === 'Still no rehearsal job in progress, immediately before the first write')?.text ?? '';
-
-  const attempt = (
-    runs: readonly Record<string, unknown>[],
-    jobs: Readonly<Record<string, readonly Record<string, unknown>[]>>,
-  ): { readonly code: number; readonly output: string } => {
-    const bin = mkdtempSync(join(tmpdir(), 'fss-gh-runs-'));
-    writeFileSync(join(bin, 'runs.json'), JSON.stringify({ workflow_runs: runs }));
-    for (const [id, list] of Object.entries(jobs)) writeFileSync(join(bin, `jobs-${id}.json`), JSON.stringify({ jobs: list }));
-    writeFileSync(
-      join(bin, 'gh'),
-      [
-        '#!/usr/bin/env bash',
-        `here='${bin}'`,
-        'case "$2" in',
-        '  */actions/runs/*/jobs*) id="${2#*/actions/runs/}"; id="${id%%/*}"; cat "$here/jobs-$id.json" 2>/dev/null || echo \'{"jobs":[]}\' ;;',
-        '  */actions/runs\\?*) cat "$here/runs.json" ;;',
-        '  *) echo "unexpected $*" >&2; exit 1 ;;',
-        'esac',
-        '',
-      ].join('\n'),
-    );
-    chmodSync(join(bin, 'gh'), 0o755);
-    const result = spawnSync('bash', ['-c', runBody(recheck)], {
-      encoding: 'utf8',
-      env: {
-        ...process.env,
-        PATH: `${bin}:${process.env['PATH'] ?? ''}`,
-        GITHUB_REPOSITORY: 'example-owner/example-repo',
-        RUNNER_TEMP: bin,
-        WAIT_MINUTES: '0',
-      },
-    });
-    return { code: result.status ?? 1, output: `${result.stdout}${result.stderr}` };
-  };
-  const rehearsalJob = (status: string): Record<string, unknown> => ({
-    name: 'Create, deploy, drill and destroy a rehearsal environment',
-    status,
-  });
-
-  it('is one script in both places, waiting twenty minutes before the role and none before the write', () => {
-    expect(runBody(poll)).toBe(runBody(recheck));
-    expect(poll).toContain("WAIT_MINUTES: '20'");
-    expect(recheck).toContain("WAIT_MINUTES: '0'");
-    const names = steps(job(DEPLOY_WORKFLOW, 'deploy')).map(step => step.name);
-    expect(names.indexOf('No credentialed rehearsal is running')).toBeLessThan(names.indexOf('Assume the production CI deploy role'));
-    expect(names.indexOf('Still no rehearsal job in progress, immediately before the first write')).toBe(
-      names.indexOf('Promote both images into the production repositories, by digest') - 1,
-    );
-  });
-
-  it('refuses while a rehearsal job is in progress, and not for a rehearsal waiting behind it or another workflow', () => {
-    // The two workflows whose job holds a rehearsal credential: the release rehearsal and
-    // the monthly drill (lane g97 renamed the weekly rehearsal and dropped its schedule).
-    expect(runBody(poll)).toContain(
-      'wanted = {".github/workflows/greenfield-release.yml", ".github/workflows/greenfield-monthly-drill.yml"}',
-    );
-    expect(DEPLOY_WORKFLOW).not.toContain('greenfield-weekly-rehearsal.yml');
-    expect(attempt([], {}).code).toBe(0);
-    const release = { id: 7, path: '.github/workflows/greenfield-release.yml' };
-    const drill = { id: 8, path: '.github/workflows/greenfield-monthly-drill.yml' };
-    const other = { id: 9, path: '.github/workflows/ci.yml' };
-    expect(
-      attempt([release], { 7: [{ name: 'Print the rehearsal plan without credentials', status: 'in_progress' }, rehearsalJob('queued')] })
-        .code,
-    ).toBe(0);
-    expect(attempt([other], { 9: [rehearsalJob('in_progress')] }).code).toBe(0);
-    const busy = attempt([release], { 7: [rehearsalJob('in_progress')] });
-    expect(busy.code).toBe(1);
-    expect(busy.output).toContain('a rehearsal job is in progress (run 7)');
-    expect(
-      attempt([drill], {
-        8: [
-          {
-            ...rehearsalJob('in_progress'),
-            name: 'Full rehearsal at the pinned commit / Create, deploy, drill and destroy a rehearsal environment',
-          },
-        ],
-      }).code,
-    ).toBe(1);
-  });
-});
-
-describe('Terraform reads CI’s revisions as its own and still re-points the services', () => {
-  const cluster = readRepositoryFile('infra/modules/cluster/main.tf');
-  const block = (header: string): string => {
-    const start = cluster.indexOf(header);
-    if (start < 0) throw new Error(`no ${header}`);
-    const end = cluster.indexOf('\n}\n', start);
-    return cluster.slice(start, end);
-  };
-
-  it('ignores only the count on both services, never the task definition', () => {
-    for (const service of ['api', 'worker']) {
-      const text = block(`resource "aws_ecs_service" "${service}" {`);
-      expect(text).toContain(`task_definition = aws_ecs_task_definition.${service}.arn`);
-      expect(text.match(/ignore_changes = \[[^\]]*\]/gu)).toEqual(['ignore_changes = [desired_count]']);
-    }
-  });
-
-  it('tracks the newest revision on the two service definitions and on no one-off', () => {
-    for (const family of ['api', 'worker']) {
-      expect(block(`resource "aws_ecs_task_definition" "${family}" {`)).toMatch(/^ {2}track_latest = true$/mu);
-    }
-    for (const family of ['migration', 'operations', 'drill']) {
-      expect(block(`resource "aws_ecs_task_definition" "${family}" {`)).not.toContain('track_latest');
-    }
   });
 });

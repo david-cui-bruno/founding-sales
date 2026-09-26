@@ -42,7 +42,6 @@ const record = (reference: string, worker = digest('b')): Record<string, unknown
   recordedAt: '2026-09-25T07:20:44Z',
   suite: 'pass',
   artifacts: { api: digest('a'), worker, desktopCommitStamp: 'c'.repeat(40) },
-  carryDrill: 'skipped_no_watermark',
   rehearsalScenarios: { '11': 'prefix=fss-rh-fixture result=pass' },
   enablesSending: false,
 });

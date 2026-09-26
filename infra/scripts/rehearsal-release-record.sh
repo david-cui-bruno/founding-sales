@@ -29,10 +29,6 @@
 #   * the two digests being equal to each other (one image pushed under both names);
 #   * a missing report from any rehearsal-only scenario, so a record cannot claim a
 #     drill that did not run;
-#   * a carry report that does not say whether the carry drill ran. Appendix G 20's
-#     export half needs a cutover watermark and the first release comes before the
-#     cutover, so `carryDrill` is `ran` or `skipped_no_watermark` and the record takes
-#     the drill's word for it rather than assuming either;
 #   * a production prefix anywhere in its arguments.
 #
 # The record names the digests rather than asserting they match the deployment. The
@@ -86,25 +82,12 @@ fi
 # Every rehearsal-only scenario must have left a report. A record that claimed a drill
 # nobody ran would be the exact failure Appendix G 42 is about.
 REPORTS="$(rehearsal_report_dir)"
-for report in restore-drill.txt carry-watermark.txt schema-ranges.txt prefix-guard.txt; do
+for report in restore-drill.txt schema-ranges.txt prefix-guard.txt; do
   if [ ! -f "$REPORTS/$report" ]; then
     echo "FAIL: $REPORTS/$report is missing, so a rehearsal-only scenario did not run" >&2
     exit 1
   fi
 done
-
-# Appendix G 20 has two halves and only one of them needs a cutover. The drill reports
-# which it ran; the record repeats the drill's own word rather than assuming either.
-# A report that says neither is a report from a script this one no longer understands.
-CARRY_REPORT="$(cat "$REPORTS/carry-watermark.txt")"
-case "$CARRY_REPORT" in
-  *carry_drill=skipped_no_watermark*) CARRY_DRILL="skipped_no_watermark" ;;
-  *carry_drill=ran*) CARRY_DRILL="ran" ;;
-  *)
-    echo "FAIL: $REPORTS/carry-watermark.txt does not say whether the carry drill ran" >&2
-    exit 1
-    ;;
-esac
 
 RECORDED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 REFERENCE="${PREFIX}-${RECORDED_AT}"
@@ -122,10 +105,8 @@ cat > "$OUT" <<JSON
     "worker": "$WORKER_DIGEST",
     "desktopCommitStamp": "$DESKTOP_STAMP"
   },
-  "carryDrill": "$CARRY_DRILL",
   "rehearsalScenarios": {
     "11": "$(cat "$REPORTS/restore-drill.txt")",
-    "20": "$(cat "$REPORTS/carry-watermark.txt")",
     "22": "$(cat "$REPORTS/schema-ranges.txt")",
     "39": "$(cat "$REPORTS/prefix-guard.txt")"
   },

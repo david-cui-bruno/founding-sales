@@ -460,7 +460,6 @@ const DRILL_EVIDENCE_RELEASE_RECORD: ReleaseRecord = Object.freeze({
     worker: DRILL_EVIDENCE_WORKER_DIGEST,
     desktopCommitStamp: 'drill-evidence-seed',
   }),
-  carryDrill: 'skipped_no_watermark',
   rehearsalScenarios: Object.freeze({}),
   enablesSending: false,
 }) as ReleaseRecord;

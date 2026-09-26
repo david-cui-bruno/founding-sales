@@ -29,7 +29,6 @@ const record = (overrides: Record<string, unknown> = {}): Record<string, unknown
   recordedAt: '2026-09-25T07:20:44Z',
   suite: 'pass',
   artifacts: { api: digest('a'), worker: digest('b'), desktopCommitStamp: 'c'.repeat(40) },
-  carryDrill: 'skipped_no_watermark',
   rehearsalScenarios: { '11': 'prefix=fss-rh-example result=pass', '39': 'production_untouched=true' },
   enablesSending: false,
   ...overrides,
@@ -120,7 +119,6 @@ describe('the ci-gate release record', () => {
 
   it('refuses a ci-gate record that claims a drill a CI run did not do', () => {
     for (const claim of [
-      { carryDrill: 'ran' },
       { rehearsalScenarios: { '11': 'result=pass' } },
       { rehearsalPrefix: 'fss-rh-example' },
     ]) {
@@ -129,7 +127,7 @@ describe('the ci-gate release record', () => {
   });
 
   it('still requires every drill field of a rehearsal record, with or without source spelled out', () => {
-    for (const field of ['carryDrill', 'rehearsalScenarios', 'rehearsalPrefix']) {
+    for (const field of ['rehearsalScenarios', 'rehearsalPrefix']) {
       const { [field]: _dropped, ...without } = record();
       expect(releaseRecordSchema.safeParse(without).success, field).toBe(false);
       expect(releaseRecordSchema.safeParse({ ...without, source: 'rehearsal' }).success, field).toBe(false);

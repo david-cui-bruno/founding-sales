@@ -39,7 +39,6 @@ export function fixtureReleaseRecord(reference: string, options: FixtureRecordOp
       worker: options.worker ?? FIXTURE_WORKER_DIGEST,
       desktopCommitStamp: options.desktopCommitStamp ?? 'd'.repeat(40),
     },
-    carryDrill: 'skipped_no_watermark',
     rehearsalScenarios: {
       '11': 'prefix=fss-rh-fixture result=pass',
       '39': 'prefix=fss-rh-fixture production_untouched=true',

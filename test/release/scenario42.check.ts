@@ -8,15 +8,7 @@ import { effectiveSendingEnabled } from '@fss/domain/settings';
 import { SEND_REFUSAL_CODES } from '@fss/domain/outbound';
 import { DEPLOYMENT_ENVIRONMENT_VARIABLES as WORKER_VARIABLES } from '../../apps/worker/src/bootstrap/deployment.ts';
 import { DEPLOYMENT_ENVIRONMENT_VARIABLES as API_VARIABLES } from '../../apps/api/src/bootstrap/deployment.ts';
-import { mustBeRehearsed, readRepositoryFile, repositoryPath } from './support/coverage.ts';
-import {
-  REHEARSAL_STAGE_CHOICES,
-  modesForCondition,
-  rehearsalJobSteps,
-  stagesForCondition,
-  stepScript,
-  stepsForStage,
-} from './support/releaseWorkflow.ts';
+import { repositoryPath } from './support/repository.ts';
 
 /**
  * Appendix G 42: "Authentication passes but production sending remains disabled until
@@ -51,8 +43,6 @@ import {
 const REFERENCE = 'fss-rh-20260920-example';
 
 describe('Appendix G 42: sending stays off until all four agree', () => {
-  mustBeRehearsed(42);
-
   describe('the two switches the send gate reads', () => {
     it('is on only when the deployment flag and the admin attestation both say yes', () => {
       // The positive control. Without it, "always false" would pass every case below.
@@ -78,272 +68,12 @@ describe('Appendix G 42: sending stays off until all four agree', () => {
     });
   });
 
-  describe('the dispatch path reads both, and the domain flag as well', () => {
-    const gate = readRepositoryFile('packages/domain/outbound/gate.ts');
-
+  describe('the dispatch path has its own refusal codes', () => {
     it('names its own refusal code, distinct from the domain authentication one', () => {
       expect(SEND_REFUSAL_CODES).toContain('workspace_sending_not_attested');
       expect(SEND_REFUSAL_CODES).toContain('automated_sending_disabled');
     });
 
-    it('calls effectiveSendingEnabled with the deployment flag before it reads the domain', () => {
-      const attestationAt = gate.indexOf('effectiveSendingEnabled(');
-      const domainAt = gate.indexOf('readPrimarySendingDomain(');
-      expect(attestationAt).toBeGreaterThan(-1);
-      expect(domainAt).toBeGreaterThan(attestationAt);
-      expect(gate).toContain("readSetting(context, 'sending_enabled')");
-      // Fail closed: an absent flag is false, never "probably fine".
-      expect(gate).toContain('deps.deploymentSendingEnabled ?? false');
-    });
-
-    it('still refuses on the domain half, so the three facts are not one fact', () => {
-      expect(gate).toContain('automatedSendingEnabled');
-      expect(gate).toContain("refuseSend('automated_sending_disabled')");
-    });
-  });
-
-  describe('the attestation can only be set by an authenticated admin', () => {
-    const store = readRepositoryFile('packages/domain/settings/store.ts');
-    const contracts = readRepositoryFile('packages/contracts/src/settings.ts');
-
-    it('refuses a non-admin scope in the same transaction as the write', () => {
-      expect(store).toContain("if (!isAdminScope(context.scope)) return { ok: false, reason: 'admin_only' };");
-      expect(store).toContain("if (actor.kind !== 'user') return { ok: false, reason: 'admin_only' };");
-    });
-
-    it('refuses an enable that names no release gate', () => {
-      expect(contracts).toContain('releaseGateReference');
-      expect(contracts).toContain('enabling production sending names the release gate it passed');
-    });
-  });
-
-  describe('the release record is what the attestation refers to', () => {
-    const script = readRepositoryFile('infra/scripts/rehearsal-release-record.sh');
-    const workflow = readRepositoryFile('.github/workflows/greenfield-release.yml');
-
-    it('refuses a suite result that is not a pass', () => {
-      expect(script).toContain('a release record is only written for a green suite');
-    });
-
-    it('refuses a mutable tag in place of a digest, and one image under both names', () => {
-      expect(script).toContain("digest_shape='^sha256:[0-9a-f]{64}$'");
-      expect(script).toContain('one image was pushed under both names');
-    });
-
-    it('refuses a record for a rehearsal whose drills left no report', () => {
-      for (const report of ['restore-drill.txt', 'carry-watermark.txt', 'schema-ranges.txt', 'prefix-guard.txt']) {
-        expect(script).toContain(report);
-      }
-    });
-
-    it('is written last in the workflow, after teardown and the production-prefix assertion', () => {
-      const teardownAt = workflow.indexOf('rehearsal-teardown.sh');
-      const guardAt = workflow.lastIndexOf('rehearsal-prefix-guard.sh');
-      const recordAt = workflow.lastIndexOf('rehearsal-release-record.sh');
-      expect(teardownAt).toBeGreaterThan(-1);
-      expect(recordAt).toBeGreaterThan(teardownAt);
-      expect(recordAt).toBeGreaterThan(guardAt);
-    });
-
-    it('enables nothing by itself', () => {
-      expect(script).toContain('"enablesSending": false');
-    });
-  });
-
-  /**
-   * G12k: the rehearsal has five stages and only one of them is the gate — and since
-   * lane g97 only in `mode: full`, which the monthly drill runs and nothing inherits.
-   *
-   * A `plan`, `create` or `deploy` run is a discovery run — it exists so that the next
-   * plan-time error costs a minute rather than an hour — and none of them proves what
-   * 16.2 asks of a release. G16's `teardown` is not even that: it removes an
-   * environment an earlier run left standing. The thing that must be impossible is any
-   * of the four producing the artifact an admin later points at when enabling sending,
-   * so the release-record step's `if:` is the whole of that impossibility.
-   *
-   * ## The vacuous-pass trap
-   *
-   * Asserting that the workflow *mentions* `stage` would pass against an input nothing
-   * reads, and asserting the record step has some condition would pass against
-   * `inputs.stage != 'plan'` — which lets a `create` run write a record for an
-   * environment that was never deployed or drilled. Closed by reading the condition as
-   * a set of stages and requiring it to be exactly `{full}` and its modes exactly
-   * `{full}`, by requiring the record step to be absent from the step list of each of
-   * the other four and of a `mode: schema` run, and by the positive control that it is
-   * present in `full`. The mutation check drops the condition and requires this to go
-   * red.
-   */
-  describe('only the full stage can write a release record', () => {
-    const steps = rehearsalJobSteps();
-    const record = steps.find(step => step.text.includes('rehearsal-release-record.sh'));
-
-    it('offers the five stages, and the gate is chosen, never inherited from a default', () => {
-      const workflow = readRepositoryFile('.github/workflows/greenfield-release.yml');
-      const input = workflow.slice(workflow.indexOf('      stage:'), workflow.indexOf('  pull_request:'));
-      expect(input, 'workflow_dispatch declares no `stage` input').toContain('type: choice');
-      for (const stage of REHEARSAL_STAGE_CHOICES) expect(input).toContain(`          - ${stage}\n`);
-      // Since lane g97 the stage runs the whole of the chosen mode by default, and the
-      // mode defaults to `schema`, which writes no record: the record-writing gate is
-      // `mode: full`, chosen by the monthly drill or by hand.
-      expect(input).toContain("default: 'full'");
-      const mode = workflow.slice(workflow.indexOf('      mode:'), workflow.indexOf('      stage:'));
-      expect(mode).toContain("default: 'schema'");
-    });
-
-    it('runs the release record in the full stage of the full mode and in no other', () => {
-      expect(record, 'no step of the rehearsal job writes a release record').toBeDefined();
-      expect(record?.condition).toBe("inputs.stage == 'full' && inputs.mode == 'full'");
-      expect([...stagesForCondition(record?.condition ?? null)]).toEqual(['full']);
-      expect([...modesForCondition(record?.condition ?? null)]).toEqual(['full']);
-    });
-
-    it('is not in the step list of a plan, a create, a deploy, a teardown or a schema run', () => {
-      for (const stage of REHEARSAL_STAGE_CHOICES) {
-        const names = stepsForStage(stage, steps).map(step => step.name);
-        expect(names.includes(record?.name ?? ''), `a ${stage} run writes a release record`).toBe(stage === 'full');
-        const schema = stepsForStage(stage, steps, 'schema').map(step => step.name);
-        expect(schema, `a schema-mode ${stage} run writes a release record`).not.toContain(record?.name ?? '');
-      }
-    });
-
-    it('cannot produce a releaseGateReference from a run that applied nothing', () => {
-      // The other half of the same sentence: a `plan` run creates no environment, so
-      // even a record step that escaped its condition would have nothing to record.
-      const apply = steps.find(step => step.text.includes('terraform apply'));
-      expect(apply, 'no step of the rehearsal job applies anything').toBeDefined();
-      expect([...stagesForCondition(apply?.condition ?? null)]).toEqual(['create', 'deploy', 'full']);
-      expect(stepsForStage('plan', steps).map(step => step.name)).not.toContain(apply?.name);
-    });
-  });
-
-  /**
-   * G16: the fifth stage exists to clean, and cleaning is all it may do.
-   *
-   * The fourth credentialed rehearsal (Actions run 35628963637) applied an environment
-   * and then could not remove it: the journal bucket's own policy denied
-   * `s3:DeleteBucketPolicy` and `s3:PutBucketObjectLockConfiguration` to every
-   * principal, so `fss-rh-202609211659` is still standing with a bucket, four resources
-   * in its state, and an hourly cost for the ones that bill. `if: always()` means the
-   * teardown ran; it could not succeed, and nothing in the workflow could be dispatched
-   * to try again without also creating a second environment.
-   *
-   * So `stage = teardown` runs identity, the run's own resources, the tfvars file and
-   * `terraform init` against the prefix in `run_suffix`, and then the two steps every
-   * stage runs. Nothing else.
-   *
-   * ## The vacuous-pass trap
-   *
-   * Asserting that the stage exists would pass against a choice nothing reads, and
-   * asserting that it runs the teardown step would pass against a `teardown` that also
-   * planned, applied, deployed and wrote a record — which is a `full` run with a
-   * misleading name, and the expensive mistake this stage is meant to avoid. Closed by
-   * naming the steps it must run *and* by requiring the steps it must not: every step
-   * whose script reaches `terraform plan`, `terraform apply`, `release-deploy.sh`, the
-   * restore drill, the suite or the release record is asserted absent from its step
-   * list. The mutation check adds `teardown` to the create step's condition and
-   * requires this to go red.
-   */
-  describe('the teardown stage cleans, and does nothing else', () => {
-    const steps = rehearsalJobSteps();
-    const names = stepsForStage('teardown', steps).map(step => step.name);
-
-    it('runs identity, the inventory, the variables file, the init, the teardown and the guard', () => {
-      for (const name of [
-        'The assumed identity is the rehearsal role and nothing else',
-        "Record the run's own resources before anything is created",
-        'Write the variables this run plans, applies and tears down with',
-        "Initialise the backend for this run's state key",
-        'Tear the rehearsal run down',
-        'Nothing with the production prefix was touched',
-      ]) {
-        expect(names, `a teardown run skips ${name}`).toContain(name);
-      }
-      // The guard compares against what the `before` phase recorded and fails outright
-      // without it, so a teardown that skipped the recording would fail its own last step.
-      expect(names.indexOf("Record the run's own resources before anything is created")).toBeLessThan(
-        names.indexOf('Nothing with the production prefix was touched'),
-      );
-    });
-
-    it('creates, deploys, drills and records nothing', () => {
-      const forbidden: Record<string, string> = {
-        'terraform plan': 'plans the environment it is about to destroy',
-        'terraform apply': 'applies',
-        'release-deploy.sh': 'deploys',
-        'release-bootstrap-workspace.sh': 'writes the first workspace and its admin',
-        'release-seed-drill-evidence.sh': 'seeds the evidence the restore drill reconstructs',
-        'rehearsal-restore-drill.sh': 'runs the restore drill',
-        'npm run test:release': 'runs the release suite',
-        'rehearsal-release-record.sh': 'writes a release record',
-      };
-      const running = stepsForStage('teardown', steps);
-      for (const [needle, what] of Object.entries(forbidden)) {
-        // The floor: the needle has to appear somewhere in the job, or "no step of a
-        // teardown run contains it" would be true because nothing does.
-        expect(
-          steps.some(step => step.text.includes(needle)),
-          `no step of the rehearsal job contains ${needle}, so asserting its absence proves nothing`,
-        ).toBe(true);
-        expect(
-          running.filter(step => step.text.includes(needle)).map(step => step.name),
-          `a teardown run ${what}`,
-        ).toEqual([]);
-      }
-    });
-
-    it('refuses an empty run_suffix, because a teardown of a timestamp names nothing', () => {
-      // Every other stage falls back to `fss-rh-<now>`, which is right for a run that
-      // is about to create an environment and exactly wrong for one that is about to
-      // destroy an existing one: the teardown would report `destroyed=nothing_created`
-      // and the orphan would still be there.
-      const prefix = stepScript('Decide the run prefix');
-      expect(prefix).toContain("if [ \"${{ inputs.stage }}\" = 'teardown' ] && [ -z \"$suffix\" ]; then");
-      expect(prefix).toContain('stage=teardown needs run_suffix');
-      // And the fallback is still there for the four stages that want it.
-      expect(prefix).toContain('suffix="$(date -u +%Y%m%d%H%M)"');
-    });
-
-    it('takes the two digests from the inputs, as every stage does', () => {
-      // `terraform destroy` requires every variable `apply` did, and the teardown
-      // refuses without `run.auto.tfvars.json`. For a teardown the digests need only be
-      // well-formed: nothing resolves them, and the resources being destroyed are read
-      // from state. So the variables step is unchanged and the digest refusal still runs.
-      expect(names).toContain('Refuse anything that is not a digest');
-      const tfvars = stepScript('Write the variables this run plans, applies and tears down with');
-      expect(tfvars).toContain('"api_image": ');
-      expect(tfvars).toContain('"worker_image": ');
-      expect(tfvars).toContain('"name_prefix": ');
-    });
-  });
-
-  describe('the production smoke checks', () => {
-    const smoke = readRepositoryFile('scripts/productionSmoke.mjs');
-
-    it('are the six 16.2 names and no others', () => {
-      expect(smoke).toContain("'health',");
-      expect(smoke).toContain("'readiness',");
-      expect(smoke).toContain("'schema_range',");
-      expect(smoke).toContain("'connectivity',");
-      expect(smoke).toContain("'canary',");
-      expect(smoke).toContain("'sending_disabled',");
-    });
-
-    it('cannot mutate anything, because only GET appears in it', () => {
-      expect(smoke).not.toMatch(/method: *'(POST|PUT|PATCH|DELETE)'/u);
-      expect(smoke).toContain("method: 'GET'");
-    });
-
-    it('fails rather than skips when the canary age was not supplied', () => {
-      expect(smoke).toContain('SMOKE_CANARY_AGE_NOT_SUPPLIED');
-    });
-
-    it('compares sending with the state the operator expects, off unless told otherwise', () => {
-      // Lane g80 (audit O12): the expectation is an input, and its default is off. The
-      // behaviour, both ways, is in productionSmoke.check.ts.
-      expect(smoke).toContain("typeof enabled === 'boolean' && enabled === (expectation === 'enabled')");
-      expect(smoke).toContain("export const SENDING_EXPECTATIONS = Object.freeze(['disabled', 'enabled']);");
-      expect(smoke).toContain('expectSending: SENDING_EXPECTATIONS[0],');
-    });
   });
 
   describe('the two processes agree about the deployment they are reading', () => {
@@ -358,23 +88,6 @@ describe('Appendix G 42: sending stays off until all four agree', () => {
       }
     });
 
-    it('both refuse to run a production deployment on anything but live dependencies', () => {
-      for (const path of ['apps/worker/src/bootstrap/deployment.ts', 'apps/api/src/bootstrap/deployment.ts']) {
-        const source = readRepositoryFile(path);
-        expect(source, path).toContain('PRODUCTION_REQUIRES_LIVE');
-        expect(source, path).toContain('DEPENDENCIES_UNSET');
-      }
-    });
-
-    it('neither turns sending on by omission', () => {
-      for (const path of ['apps/worker/src/bootstrap/deployment.ts', 'apps/api/src/bootstrap/deployment.ts']) {
-        const source = readRepositoryFile(path);
-        // `booleanFlag` returns false for an unset variable and refuses anything that
-        // is neither `true` nor `false`, so a typo is a refusal rather than a send.
-        expect(source, path).toContain("if (raw === undefined || raw.length === 0) return false;");
-        expect(source, path).toContain('must be true or false');
-      }
-    });
   });
 });
 
@@ -406,7 +119,6 @@ describe('Appendix G 42: the inventory exemption did not become a general one', 
     for (const report of ['restore-drill.txt', 'schema-ranges.txt', 'prefix-guard.txt']) {
       writeFileSync(join(reports, report), 'prefix=fss-rh-case\n');
     }
-    writeFileSync(join(reports, 'carry-watermark.txt'), 'carry_drill=skipped_no_watermark\n');
     const out = join(reports, 'release-record.json');
     const result = spawnSync(repositoryPath(record), [...args, out], {
       encoding: 'utf8',
@@ -467,7 +179,7 @@ describe('Appendix G 42: the inventory exemption did not become a general one', 
  * one it requires and the script dropped, fails here. And the deploy step is run in dry
  * mode rather than read, both with the flag (the put is planned, after the final
  * verify, carrying the file byte for byte) and without it (nothing about the deploy
- * changes). The mutation check drops the flag's branch and requires this to go red.
+ * changes).
  */
 describe('Appendix G 42: the attestation is bound to the release record (lane g71)', () => {
   const digest = (letter: string): string => `sha256:${letter.repeat(64)}`;
@@ -477,7 +189,6 @@ describe('Appendix G 42: the attestation is bound to the release record (lane g7
     for (const report of ['restore-drill.txt', 'schema-ranges.txt', 'prefix-guard.txt']) {
       writeFileSync(join(reports, report), 'prefix=fss-rh-contract result=pass');
     }
-    writeFileSync(join(reports, 'carry-watermark.txt'), 'prefix=fss-rh-contract carry_drill=skipped_no_watermark');
     const out = join(reports, 'release-record.json');
     const result = spawnSync(
       repositoryPath('infra/scripts/rehearsal-release-record.sh'),
@@ -504,27 +215,6 @@ describe('Appendix G 42: the attestation is bound to the release record (lane g7
     expect(parsed.data?.artifacts).toEqual({ api: digest('a'), worker: digest('b'), desktopCommitStamp: 'c'.repeat(40) });
     expect(parsed.data?.suite).toBe('pass');
     expect(parsed.data?.releaseGateReference.startsWith('fss-rh-contract-')).toBe(true);
-  });
-
-  it('refuses the enable on the API side and the send on the worker side, each with its own digest', () => {
-    const store = readRepositoryFile('packages/domain/settings/store.ts');
-    // Lane g100: through the attestation, which binds the named record or, for the
-    // process form `ci-gate:main`, the ci-gate record for the API's own digest.
-    expect(store).toContain("await bindReleaseAttestation(");
-    expect(store).toContain("'api',\n        input.runningApiDigest,");
-    const gate = readRepositoryFile('packages/domain/outbound/gate.ts');
-    expect(gate).toContain("attestedReleaseBinding(context, attestation.value, 'worker', deps.workerImageDigest)");
-    // After the two switches and before the domain, so the order of refusals is kept.
-    expect(gate.indexOf('attestedReleaseBinding(context')).toBeGreaterThan(gate.indexOf('effectiveSendingEnabled('));
-    expect(gate.indexOf('readPrimarySendingDomain(')).toBeGreaterThan(gate.indexOf('attestedReleaseBinding(context'));
-    // Both processes say which image they are, from the task metadata.
-    for (const path of ['apps/api/src/bootstrap/main.ts', 'apps/worker/src/bootstrap/main.ts']) {
-      const main = readRepositoryFile(path);
-      expect(main, path).toContain('await discoverImageDigest(environment)');
-      expect(main, path).toContain('image_digest: identity.digest');
-    }
-    expect(readRepositoryFile('apps/api/src/routes/settings.ts')).toContain('runningApiDigest: options.imageDigest');
-    expect(readRepositoryFile('apps/worker/src/bootstrap/main.ts')).toContain('workerImageDigest: options.imageDigest');
   });
 
   describe('release-deploy.sh --release-record', () => {

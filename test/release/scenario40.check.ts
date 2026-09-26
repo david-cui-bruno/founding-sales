@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { clientCompatibility, clientVersionRangeSchema, mayMutate } from '@fss/contracts';
-import { mustCover } from './support/coverage.ts';
 
 /**
  * Appendix G 40: "A minimum-client-version increase blocks old Electron mutation
@@ -26,8 +25,6 @@ import { mustCover } from './support/coverage.ts';
  */
 
 describe('Appendix G 40: blocked for mutation, never blocked from the way out', () => {
-  mustCover(40, ['client_upgrade_required', 'clientVersionNotice', 'mayMutate']);
-
   it('refuses a below-minimum client and names the version it must reach', () => {
     const range = clientVersionRangeSchema.parse({ minimum: '1.2.0', maximum: '1.4.0' });
 

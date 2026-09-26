@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { LONG_HOLD_REVIEW_DAYS, composeHolds, decideResume, unionDuration } from '@fss/domain';
-import { mustCover } from './support/coverage.ts';
 
 /**
  * Appendix G 28: "Two overlapping holds clear in both orders; automation remains blocked
@@ -41,8 +40,6 @@ function hold(
 }
 
 describe('Appendix G 28: two overlapping holds, in both orders', () => {
-  mustCover(28, ['unionMilliseconds', 'composeHolds', 'decideResume']);
-
   it('counts the union, which is strictly less than the sum', () => {
     const union = unionDuration([
       { start: Date.parse(FIRST.start), end: Date.parse(FIRST.end) },

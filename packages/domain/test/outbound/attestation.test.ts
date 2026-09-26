@@ -199,7 +199,7 @@ describe('the send gate binds the attestation to the running worker', () => {
 
   it('sends under a record from the CI gate, which carries no drill evidence (lane g96)', async () => {
     // The record the release puts since axiom 10B: `release-record-from-ci.sh`'s shape,
-    // no rehearsalPrefix, carryDrill or rehearsalScenarios. The enable rule accepts it
+    // no rehearsalPrefix or rehearsalScenarios. The enable rule accepts it
     // from an API running its api digest, and the worker sends under it.
     const reference = await storeFixtureCiGateRecord(world.database.session, '41000000011');
     const enabled = await updateSetting(adminContext(world.alpha), {

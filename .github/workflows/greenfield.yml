@@ -7,21 +7,9 @@ permissions:
   contents: read
 jobs:
   greenfield:
-    # The workspace: apps/*, packages/* and test/release. The secret scan and the root
-    # scripts' lint are the "Source security gate" workflow (ci.yml).
-    #
-    # ubuntu, not macos: this job's only host requirement is a PostgreSQL 16 service
-    # container, which GitHub provides on Linux runners. The macOS-specific parts of
-    # the product (Electron packaging, Keychain, tel: handoff) are not in this tree.
+    # Typecheck, lint (the workspace and the root scripts, one ESLint config), the
+    # workspace tests and the release suite.
     runs-on: ubuntu-24.04
-    # 20. Until lane g62 this was 45, because the release mutation check was most of
-    # the job: about sixteen minutes of it on main at 102 mutations (run 36089059879,
-    # "129 suite run(s) in 940 s"), growing by about 15 s with every mutation that
-    # names the whole release suite. David's decision of 25 September 2026 moved that check to
-    # `.github/workflows/greenfield-nightly.yml`, which runs it once a day on main
-    # (and on demand), so this job is typecheck, lint, the workspace tests and the
-    # release suite: about three minutes. `test/release/mutationSchedule.check.ts`
-    # fails if the mutation check comes back here.
     timeout-minutes: 20
     defaults:
       run:
@@ -50,29 +38,42 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: '24.20.0'
-      - name: Assert the supported Node version
-        run: |
-          node -e "if (process.versions.node !== '24.20.0') process.exit(1)"
-      - name: Assert the service container is PostgreSQL 16
-        run: |
-          set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends postgresql-client >/dev/null
-          version="$(psql "$FSS_TEST_POSTGRES_URL" -tAc 'SHOW server_version')"
-          echo "server_version=$version"
-          case "$version" in 16.*) ;; *) echo "expected PostgreSQL 16"; exit 1;; esac
+          node-version-file: .node-version
       - name: Install
         # --ignore-scripts: the root postinstall fetches the Electron binary, which this
-        # job never runs. The greenfield packages have no build step, and
-        # embedded-postgres is unused here because the service container is.
+        # job never runs. embedded-postgres is unused here because the service container is.
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Greenfield gate
+        run: npm run gate:greenfield
+
+  secrets:
+    # The Gitleaks scan of the full history and of the tracked tree
+    # (scripts/verifySecrets.mjs), on every push and pull request. Gitleaks 8.30.1 from
+    # the linux_x64 tarball, pinned by the SHA-256 in the v8.30.1 release's checksums file.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version-file: .node-version
+      - name: Install integrity-pinned Gitleaks 8.30.1
         run: |
           set -euo pipefail
-          npm ci --ignore-scripts --no-audit --no-fund
-      - name: Greenfield gate
-        # Typecheck, lint, the workspace tests and the release suite. The release
-        # mutation check, which proves the release suite's traps are closed by
-        # breaking each one, runs nightly on main instead
-        # (`.github/workflows/greenfield-nightly.yml`) and locally as
-        # `npm run test:release:mutation`.
-        run: npm run gate:greenfield
+          umask 077
+          tool_dir="$(mktemp -d "$RUNNER_TEMP/callie-gitleaks.XXXXXX")"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz -o "$tool_dir/gitleaks.tar.gz"
+          printf '%s  %s\n' 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb "$tool_dir/gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf "$tool_dir/gitleaks.tar.gz" -C "$tool_dir" gitleaks
+          test "$("$tool_dir/gitleaks" version)" = '8.30.1'
+          echo "$tool_dir" >> "$GITHUB_PATH"
+      - name: Scan the history and the tracked tree
+        # scripts/verifySecrets.mjs imports only Node's own modules, so nothing is installed.
+        run: npm run verify:secrets

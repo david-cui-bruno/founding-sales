@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileS
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { repositoryPath } from './support/coverage.ts';
+import { repositoryPath } from './support/repository.ts';
 
 /**
  * What a one-off task's record means, and when an image that could not be pulled is
@@ -32,9 +32,7 @@ import { repositoryPath } from './support/coverage.ts';
  * its launch, must resume without a second `run-task`. And "it retried" passes for a
  * wrapper that retries everything, so an exit code and an unresolvable secret must each
  * fail on their only attempt. The fake CLI counts every `run-task`, and each case is
- * judged by that count as well as by the exit status. Mutations in
- * `scripts/releaseMutationCheck.mjs` remove the fingerprint comparison, the retirement,
- * the retry and its restriction, and require this file to go red.
+ * judged by that count as well as by the exit status.
  */
 
 const ACCOUNT = '111111111111';

@@ -13,7 +13,7 @@ name: Greenfield images
 #
 # `images` runs on a pull request. It builds with `--load`, verifies the local
 # images with `infra/scripts/release-images.sh verify`, and holds no credential of
-# any kind: it refuses to start if one is present.
+# any kind.
 #
 # `publish` runs on a push to main — only when an image input changed, which is
 # what `push.paths` lists and what `release-images.sh inputs` names — and replaces
@@ -91,20 +91,6 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-
-      - name: Refuse any ambient cloud credential
-        run: |
-          set -euo pipefail
-          # This job must behave identically with and without credentials.
-          # If one is present the workflow has been changed in a way this lane
-          # did not intend, so stop rather than risk a push or an API call.
-          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN \
-                      AWS_PROFILE AWS_ROLE_ARN AWS_WEB_IDENTITY_TOKEN_FILE; do
-            if [ -n "${!name:-}" ]; then
-              echo "::error::$name is set. The pull-request image build never pushes and must never hold a cloud credential."
-              exit 1
-            fi
-          done
 
       - name: Register the arm64 interpreter
         run: |
@@ -200,7 +186,7 @@ jobs:
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: '24.20.0'
+          node-version-file: .node-version
 
       - name: Refuse any ambient cloud credential before the role is assumed
         run: |

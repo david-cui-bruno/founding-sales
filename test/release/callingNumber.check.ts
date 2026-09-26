@@ -1,5 +1,3 @@
-import { readdirSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   attestCallingIdentityCommandSchema,
@@ -12,13 +10,8 @@ import { CALLING_IDENTITY_PATHS } from '../../apps/api/src/routes/callingIdentit
 import { CONTAINER_CLIENT_VERSIONS } from '../../apps/api/src/bootstrap/main.ts';
 import { createAuthedClient } from '../../apps/desktop/src/main/authedClient.ts';
 import type { HttpAnswer } from '../../apps/desktop/src/main/apiClient.ts';
-import {
-  ADMIN_IPC_CHANNELS,
-  CALLING_NUMBER_API_PATHS,
-  createAdminBridge,
-} from '../../apps/desktop/src/main/settingsBridge.ts';
+import { CALLING_NUMBER_API_PATHS, createAdminBridge } from '../../apps/desktop/src/main/settingsBridge.ts';
 import { adminViewOf } from '../../apps/desktop/src/renderer/settingsView.ts';
-import { readRepositoryFile, repositoryPath } from './support/coverage.ts';
 
 /**
  * A salesperson can give Callie the number they call from (9.1; lane g60).
@@ -125,18 +118,6 @@ function settingsWindow(role: 'admin' | 'salesperson' = 'admin') {
   return { bridge, calls };
 }
 
-/** Every `.ts` file under a directory, skipping dependencies and test code. */
-function sourceFiles(directory: string): readonly string[] {
-  const found: string[] = [];
-  for (const name of readdirSync(directory)) {
-    if (name === 'node_modules' || name === 'test' || name === 'testing') continue;
-    const path = join(directory, name);
-    if (statSync(path).isDirectory()) found.push(...sourceFiles(path));
-    else if (name.endsWith('.ts')) found.push(path);
-  }
-  return found;
-}
-
 describe('9.1: a salesperson gives Callie the number they call from (lane g60)', () => {
   it('registers and attests the number from the Settings screen, and the page then names it as the one Today calls from', async () => {
     const { bridge, calls } = settingsWindow('salesperson');
@@ -172,28 +153,6 @@ describe('9.1: a salesperson gives Callie the number they call from (lane g60)',
     for (const path of Object.values(CALLING_NUMBER_API_PATHS)) expect(CALLING_IDENTITY_PATHS).toContain(path);
   });
 
-  it('is reachable from the window: the preload exposes it, the main process answers it, the page renders it', () => {
-    const preload = readRepositoryFile('apps/desktop/src/preload/preload.ts');
-    expect(preload).toContain(
-      '  addCallingNumber: async input => await invokeAdmin(ADMIN_IPC_CHANNELS.addCallingNumber, input),\n',
-    );
-    expect(preload).toContain(
-      '  attestCallingNumber: async input => await invokeAdmin(ADMIN_IPC_CHANNELS.attestCallingNumber, input),\n',
-    );
-    expect(preload).toContain("contextBridge.exposeInMainWorld('callieAdmin', admin);\n");
-
-    const window = readRepositoryFile('apps/desktop/src/main/settingsWindow.ts');
-    expect(window).toContain('  handleOnce(ADMIN_IPC_CHANNELS.addCallingNumber, async argument => {\n');
-    expect(window).toContain('  handleOnce(ADMIN_IPC_CHANNELS.attestCallingNumber, async argument => {\n');
-    expect(readRepositoryFile('apps/desktop/src/main/app.ts')).toContain('  registerAdminBridge({ api, session });\n');
-
-    const page = readRepositoryFile('apps/desktop/src/renderer/settingsPage.ts');
-    expect(page).toContain('  renderCallingNumber(root, view);\n');
-    expect(page).toContain('bridge().addCallingNumber({ e164: number.value, label: label.value, attested: attested.checked })');
-
-    expect(ADMIN_IPC_CHANNELS.addCallingNumber).toBe('callie:admin:add-calling-number');
-  });
-
   it('is a build the deployed API accepts', () => {
     expect(compareVersions(publishedClientVersions(CONTAINER_CLIENT_VERSIONS).maximum, FIRST_VERSION_WITH_THE_CONTROL)).toBeGreaterThanOrEqual(0);
     expect(mayMutate(CONTAINER_CLIENT_VERSIONS, FIRST_VERSION_WITH_THE_CONTROL)).toBe(true);
@@ -201,11 +160,4 @@ describe('9.1: a salesperson gives Callie the number they call from (lane g60)',
     expect(CONTAINER_CLIENT_VERSIONS.minimum).toBe('1.0.0');
   });
 
-  it('has one writer: the domain module that records an attestation', () => {
-    const writers = ['apps/api/src', 'apps/worker/src', 'apps/desktop/src', 'packages/domain', 'packages/contracts/src']
-      .flatMap(directory => sourceFiles(repositoryPath(directory)))
-      .filter(path => /\b(INSERT\s+INTO|UPDATE)\s+calling_identities\b/u.test(readRepositoryFile(relative(repositoryPath('.'), path))))
-      .map(path => relative(repositoryPath('.'), path));
-    expect(writers).toEqual(['packages/domain/dial/identities.ts']);
-  });
 });

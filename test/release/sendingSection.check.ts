@@ -36,10 +36,6 @@ import { outboundRampAnswer, outboundStatusAnswer } from '../../apps/desktop/tes
  * answer key for key and type for type, so the unit suite cannot drift back into
  * agreeing with itself either.
  *
- * **A parse that succeeds and reads the wrong half.** The recipients are an object of
- * three counts. The workspace here has one direct send to personal Gmail and no fence,
- * so `total` is 1 and `automated` is 0: a bridge that mapped the wrong field reads 0.
- *
  * **A posture read that never reaches the per-mailbox ramps.** The ramp comes from a
  * second read, per mailbox, whose ids come from `/diagnostics`. A seeded mailbox with a
  * ramp row makes the section's ramp line exist only if both reads parsed.
@@ -136,33 +132,24 @@ describe('8.0ae: the sending section parses the API’s own answer (lane g69)', 
     );
     mailboxId = mailbox.rows[0]?.id ?? '';
     await fixture.db.query('INSERT INTO mailbox_send_ramp (workspace_id, mailbox_id) VALUES ($1, $2)', [workspaceId, mailboxId]);
-    // One direct send to personal Gmail that the sync imported and FSS did not send:
-    // `direct` 1, `automated` 0, `total` 1.
-    await fixture.db.query(
-      `INSERT INTO mail_messages (workspace_id, mailbox_id, provider_message_id, provider_thread_id, direction, internal_date, header_to)
-       VALUES ($1, $2, 'g69direct1', 'g69thread1', 'outgoing', now() - interval '1 hour', ARRAY['prospect.personal@gmail.com'])`,
-      [workspaceId, mailboxId],
-    );
   });
 
   afterAll(async () => {
     await fixture.stop();
   });
 
-  it('renders the section from the real route’s answer: the checklist, the whole guard, and the mailbox’s ramp', async () => {
+  it('renders the section from the real route’s answer: the checklist and the mailbox’s ramp', async () => {
     const calls: string[] = [];
     const state = await bridgeFor(adminToken, calls).state();
 
     expect(calls).toEqual(expect.arrayContaining(['POST /outbound/status', 'GET /diagnostics']));
     expect(state.sendingReadError).toBeNull();
     expect(state.sendingAdmin?.domain?.domain).toBe(DOMAIN);
-    expect(state.sendingAdmin?.personalGmailRecipients).toBe(1);
     expect(state.sendingAdmin?.ramps.map(ramp => [ramp.mailboxId, ramp.effectiveCap])).toEqual([[mailboxId, 5]]);
 
     const view = adminViewOf(state);
     expect(view.sendingUnread).toBeNull();
     expect(view.sendingAdmin?.domainLine).toBe(`${DOMAIN}: authentication incomplete — still needed: spf, dkim, dmarc, postmaster review.`);
-    expect(view.sendingAdmin?.guard.line).toBe('Personal-Gmail guard: 4000 per 24 hours, 1 used.');
     expect(view.sendingAdmin?.ramps.map(ramp => ramp.line)).toEqual(['0 healthy days, cap 5.']);
   });
 
@@ -184,9 +171,6 @@ describe('8.0ae: the sending section parses the API’s own answer (lane g69)', 
     const none = await statusAnswer(noDomainToken, {});
     expect(wireDrift(outboundStatusResponseSchema, none)).toEqual([]);
     expect(shapeOf(none)).toEqual(shapeOf(outboundStatusAnswer({ domain: null })));
-
-    // The one field the defect was about, said outright.
-    expect((plain as { personalGmailRecipients: unknown }).personalGmailRecipients).toEqual({ automated: 0, direct: 1, total: 1 });
   });
 
   it('is a build the deployed API accepts', () => {

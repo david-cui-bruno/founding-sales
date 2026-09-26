@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ciGateReleaseRecordSchema, releaseRecordSchema, releaseRecordSource } from '@fss/contracts';
-import { repositoryPath } from './support/coverage.ts';
+import { repositoryPath } from './support/repository.ts';
 
 /**
  * Lane g96: the release record the worker needs before it may send comes from the CI

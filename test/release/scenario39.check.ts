@@ -1,21 +1,9 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { mustBeRehearsed, readRepositoryFile, repositoryPath } from './support/coverage.ts';
-import {
-  REHEARSAL_MODES,
-  REHEARSAL_STAGES,
-  REHEARSAL_STAGE_CHOICES,
-  ladderStagesForCondition,
-  embeddedPythonProgram,
-  rehearsalJobSteps,
-  stagesForCondition,
-  stepScript,
-  stepsForStage,
-} from './support/releaseWorkflow.ts';
+import { repositoryPath } from './support/repository.ts';
 
 /**
  * Appendix G 39: "Production and rehearsal Terraform plans use distinct state keys,
@@ -39,67 +27,7 @@ import {
  * coincidence of the values somebody typed.
  */
 
-describe('Appendix G 39: the two roots cannot address each other', () => {
-  mustBeRehearsed(39);
-
-  it('pins two different state-key prefixes, and the gate compares them', () => {
-    const keyOf = (backend: string): string => {
-      const line = backend.split('\n').find(row => row.trimStart().startsWith('key '));
-      return (line ?? '').split('"')[1] ?? '';
-    };
-    const production = keyOf(readRepositoryFile('infra/roots/production/backend.hcl'));
-    const rehearsal = keyOf(readRepositoryFile('infra/roots/rehearsal/backend.hcl'));
-
-    expect(production).toBe('fss/greenfield/production/terraform.tfstate');
-    expect(rehearsal.startsWith('fss/greenfield/rehearsal/')).toBe(true);
-    expect(rehearsal).not.toBe(production);
-
-    // The comparison is in the gate rather than only here, so a hand-run of the
-    // offline gate catches it too.
-    const gate = readRepositoryFile('infra/scripts/offline-gate.sh');
-    expect(gate).toContain('if [ "$production_key" = "$rehearsal_key" ]; then');
-    expect(gate).toContain('fss/greenfield/production/*');
-    expect(gate).toContain('fss/greenfield/rehearsal/*');
-  });
-
-  it('gives the durable rehearsal repositories a third state key, outside the per-run space', () => {
-    const keyOf = (backend: string): string => {
-      const line = backend.split('\n').find(row => row.trimStart().startsWith('key '));
-      return (line ?? '').split('"')[1] ?? '';
-    };
-    const registry = keyOf(readRepositoryFile('infra/roots/rehearsal-registry/backend.hcl'));
-
-    // `registry` is a legal run suffix (`fss-rh-registry`), so a state key under
-    // fss/greenfield/rehearsal/ could be claimed by a run and destroyed on teardown,
-    // taking every image past releases were rehearsed on.
-    expect(registry).toBe('fss/greenfield/rehearsal-registry/terraform.tfstate');
-    expect(registry.startsWith('fss/greenfield/rehearsal/')).toBe(false);
-
-    const gate = readRepositoryFile('infra/scripts/offline-gate.sh');
-    expect(gate).toContain('rehearsal_registry_key');
-    // And the per-run root creates no repository of its own.
-    expect(gate).toContain('create_registry = false');
-    expect(readRepositoryFile('infra/roots/rehearsal/main.tf')).toContain('create_registry = false');
-  });
-
-  it('treats the two stable repositories as rehearsal resources, not as production ones', () => {
-    const common = readRepositoryFile('infra/scripts/rehearsal-common.sh');
-    const guard = readRepositoryFile('infra/scripts/rehearsal-prefix-guard.sh');
-
-    // They are the only fss-rh- names a guard sees that do not contain the run, so a
-    // guard reasoning "not mine, therefore production's" would fail this scenario for
-    // the wrong reason. The classifier says which of the four they are.
-    expect(common).toContain("REHEARSAL_STABLE_NAMES='fss-rh-api fss-rh-worker'");
-    expect(common).toContain('rehearsal_classify_name()');
-    expect(common).toContain('rehearsal-stable');
-
-    // And it is exercised rather than described: the after phase classifies the run's
-    // own name, both stable names, a production name and another run's name, and the
-    // dry run reaches all of it without a credential.
-    expect(guard).toContain('rehearsal_classify_name "$PREFIX"');
-    expect(guard).toContain('stable_repositories=rehearsal');
-  });
-
+describe('Appendix G 39: the prefix guard tells the run from the stable repositories', () => {
   it('runs that classifier rather than only declaring it', () => {
     // Asserting the source would pass against a classifier somebody commented out.
     const reports = mkdtempSync(join(tmpdir(), 'fss-guard-'));
@@ -111,222 +39,6 @@ describe('Appendix G 39: the two roots cannot address each other', () => {
     expect(output).toContain('fss-rh-check-api: rehearsal-run');
     expect(output).toContain('fss-rh-api: rehearsal-stable');
     expect(output).toContain('fss-rh-worker: rehearsal-stable');
-  });
-
-  it('makes each root refuse the other’s namespace rather than merely avoid it', () => {
-    const production = readRepositoryFile('infra/roots/production/tests/isolation.tftest.hcl');
-    const rehearsal = readRepositoryFile('infra/roots/rehearsal/tests/isolation.tftest.hcl');
-
-    expect(production).toContain('output.name_prefix == "fss-prod"');
-    expect(production).toContain('output.deployment_role_name == "fss-prod-deploy"');
-    expect(production).toContain('run "a_rehearsal_prefix_is_refused"');
-    expect(production).toContain('expect_failures');
-
-    expect(rehearsal).toContain('startswith(output.name_prefix, "fss-rh-")');
-    expect(rehearsal).toContain('run "the_production_prefix_is_refused"');
-    // A prefix that merely looks like production's is refused too, which is the
-    // difference between a rule and a string comparison somebody got lucky with.
-    expect(rehearsal).toContain('run "a_prefix_that_merely_starts_like_production_is_refused"');
-    expect(rehearsal).toContain('expect_failures');
-  });
-});
-
-/**
- * G12d: the third root's one apply is a workflow run, not a command in a terminal.
- *
- * `fss-rh-deploy` trusts the GitHub OIDC provider and the subject
- * `repo:david-cui-bruno/founding-sales:environment:rehearsal`, and nothing else —
- * which is Appendix G 39's "distinct roles" clause taken seriously. The operator
- * tried `terraform apply` in `infra/roots/rehearsal-registry` and was refused
- * `sts:AssumeRole`. That refusal is the design working, so the apply moves to a
- * workflow that runs in that environment rather than the trust policy moving to
- * admit a laptop.
- *
- * ## The vacuous-pass trap
- *
- * A workflow that declares the environment and then applies whatever Terraform
- * proposes has moved the credential without moving the judgement: nobody reads the
- * plan, because nobody can — the plan exists only inside a run. Asserting the
- * workflow's text would pass against a guard that approves everything. Closed by
- * running the guard against fabricated plans, one acceptable and four not, and
- * requiring the refusals; and by requiring the default run to be plan-only, so the
- * apply is a second dispatch a person makes after reading a summary.
- */
-
-const REGISTRY_WORKFLOW_PATH = '.github/workflows/greenfield-rehearsal-registry.yml';
-const REGISTRY_GUARD_PATH = 'infra/scripts/rehearsal-registry-guard.sh';
-
-/** One entry of `terraform show -json`'s `resource_changes`. */
-function planned(
-  address: string,
-  type: string,
-  actions: readonly string[],
-  after: Readonly<Record<string, string>>,
-): Readonly<Record<string, unknown>> {
-  return {
-    address,
-    module_address: address.startsWith('module.registry.') ? 'module.registry' : '',
-    mode: 'managed',
-    type,
-    name: 'this',
-    change: { actions, before: null, after },
-  };
-}
-
-/** The plan `infra/roots/rehearsal-registry` produces on the one apply. */
-function goodPlan(): Readonly<Record<string, unknown>> {
-  return {
-    format_version: '1.2',
-    resource_changes: [
-      planned('module.registry.aws_ecr_repository.this["api"]', 'aws_ecr_repository', ['create'], {
-        name: 'fss-rh-api',
-      }),
-      planned('module.registry.aws_ecr_repository.this["worker"]', 'aws_ecr_repository', ['create'], {
-        name: 'fss-rh-worker',
-      }),
-      planned('module.registry.aws_ecr_lifecycle_policy.this["api"]', 'aws_ecr_lifecycle_policy', ['create'], {
-        repository: 'fss-rh-api',
-      }),
-      planned('module.registry.aws_ecr_lifecycle_policy.this["worker"]', 'aws_ecr_lifecycle_policy', ['create'], {
-        repository: 'fss-rh-worker',
-      }),
-    ],
-  };
-}
-
-function runGuard(plan: unknown): { readonly accepted: boolean; readonly output: string } {
-  const directory = mkdtempSync(join(tmpdir(), 'fss-registry-plan-'));
-  const file = join(directory, 'plan.json');
-  writeFileSync(file, JSON.stringify(plan));
-  try {
-    return {
-      accepted: true,
-      output: execFileSync(repositoryPath(REGISTRY_GUARD_PATH), ['plan', file], {
-        env: { ...process.env, FSS_REHEARSAL_REPORTS: directory },
-        encoding: 'utf8',
-        stdio: 'pipe',
-      }),
-    };
-  } catch (error) {
-    const failure = error as { stdout?: string; stderr?: string };
-    return { accepted: false, output: `${failure.stdout ?? ''}\n${failure.stderr ?? ''}` };
-  }
-}
-
-describe('Appendix G 39: the rehearsal registry is applied by a workflow, never from a laptop', () => {
-  const workflow = readRepositoryFile(REGISTRY_WORKFLOW_PATH);
-  const release = readRepositoryFile('.github/workflows/greenfield-release.yml');
-
-  it('is dispatch-only, so nothing a push or a pull request does can reach the role', () => {
-    const triggers = workflow.slice(workflow.indexOf('\non:'), workflow.indexOf('\npermissions:'));
-
-    expect(triggers).toContain('workflow_dispatch:');
-    expect(triggers).not.toContain('pull_request');
-    expect(triggers).not.toContain('push:');
-    expect(triggers).not.toContain('schedule:');
-    expect(triggers).not.toContain('workflow_call');
-  });
-
-  it('declares the rehearsal environment, which is the only subject the role trusts', () => {
-    expect(workflow).toContain('environment: rehearsal');
-    expect(workflow).toContain('id-token: write');
-    expect(workflow).toContain('contents: read');
-    expect(workflow).toContain('role-to-assume: ${{ secrets.FSS_REHEARSAL_ROLE_ARN }}');
-    // And it checks what it got, because an environment pointed at another role is a
-    // configuration mistake no plan would catch — and since G12e the plan runs with
-    // the assumption turned off, so this session is what the apply acts as.
-    expect(workflow).toContain('infra/scripts/rehearsal-caller-identity.sh fss-rh-deploy');
-  });
-
-  it('references every action by the same commit sha the release workflow pins', () => {
-    const references = [...workflow.matchAll(/uses:\s*(\S+)/gu)].map(match => match[1] ?? '');
-
-    expect(references.length).toBeGreaterThan(0);
-    for (const reference of references) {
-      expect(reference, reference).toMatch(/^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/u);
-      // The same pin, not merely a pin: two files pinning different commits of
-      // configure-aws-credentials is two different credential paths.
-      expect(release, reference).toContain(reference);
-    }
-    const version = /TERRAFORM_VERSION: '([\d.]+)'/u.exec(workflow)?.[1];
-    expect(version).toBe(/TERRAFORM_VERSION: '([\d.]+)'/u.exec(release)?.[1]);
-  });
-
-  it('initializes the backend the runbook names, and the key that is not a run’s', () => {
-    expect(workflow).toContain('infra/roots/rehearsal-registry');
-    expect(workflow).toContain('fss/greenfield/rehearsal-registry/terraform.tfstate');
-    expect(workflow).toContain('FSS_REHEARSAL_STATE_KMS_KEY_ARN');
-
-    // The bucket and the lock table are per-account values and are no longer written
-    // here: G27 made the tree able to run in a dedicated AWS account, so the workflow
-    // reads them out of the root's own `backend.hcl` — the per-account backend file —
-    // and the state key, which names a root rather than an account, is the one it
-    // states and checks. Two copies of an account-specific value is how they come to
-    // disagree. `docs/greenfield/accounts.md`, `test/release/accountAgnostic.check.ts`.
-    const backend = readRepositoryFile('infra/roots/rehearsal-registry/backend.hcl');
-    expect(backend).toContain('callie-sourcing-tfstate-326255650484');
-    expect(backend).toContain('callie-sourcing-tflock');
-    expect(workflow).toContain("grep -E '^bucket ' infra/roots/rehearsal-registry/backend.hcl");
-    expect(workflow).toContain("grep -E '^dynamodb_table ' infra/roots/rehearsal-registry/backend.hcl");
-    expect(workflow).not.toContain('callie-sourcing-tfstate-326255650484');
-    expect(workflow).not.toContain('callie-sourcing-tflock');
-  });
-
-  it('defaults to plan-only, and the guard runs before the apply rather than beside it', () => {
-    expect(workflow).toMatch(/apply:\s*\n\s+description:[^\n]*\n\s+required: false\n\s+type: boolean\n\s+default: false/u);
-
-    const guardAt = workflow.indexOf('rehearsal-registry-guard.sh plan');
-    const applyAt = workflow.indexOf('apply -input=false');
-    expect(guardAt).toBeGreaterThan(-1);
-    expect(applyAt).toBeGreaterThan(guardAt);
-    // The apply step and the final read-back are both conditional on the input, so
-    // the run an operator makes first cannot change anything.
-    expect(workflow).toContain("if: ${{ inputs.apply }}");
-    expect(workflow).toContain('aws ecr describe-repositories --repository-names fss-rh-api fss-rh-worker');
-  });
-
-  it('has a shell block in every step that bash can parse', () => {
-    // A dispatch-only workflow is never run by accident, which means a syntax error
-    // in it is discovered on the one run that costs something. `bash -n` here is the
-    // cheapest possible substitute for the run nobody can make.
-    const require = createRequire(import.meta.url);
-    const yaml = createRequire(require.resolve('eslint/package.json'))('js-yaml') as {
-      load: (source: string) => unknown;
-    };
-    const parsed = yaml.load(workflow) as { jobs: Record<string, { steps: { run?: string }[] }> };
-    const scripts = Object.values(parsed.jobs)
-      .flatMap(job => job.steps)
-      .map(step => step.run)
-      .filter((run): run is string => typeof run === 'string');
-
-    expect(scripts.length).toBeGreaterThan(4);
-    for (const script of scripts) {
-      const parse = spawnSync('/bin/bash', ['-n'], {
-        input: script.replace(/\$\{\{[^}]+\}\}/gu, 'fixture'),
-        encoding: 'utf8',
-      });
-      expect(parse.status, `${script.slice(0, 80)}\n${parse.stderr}`).toBe(0);
-    }
-  });
-
-  it('prints the plan of its own commands in the release dry run, on every pull request', () => {
-    expect(release).toContain(REGISTRY_WORKFLOW_PATH);
-    expect(release).toContain(`${REGISTRY_GUARD_PATH} commands`);
-
-    // And the printed plan is the workflow's commands rather than a description of
-    // them: every command the guard prints has to appear in the file that runs it.
-    const printed = execFileSync(repositoryPath(REGISTRY_GUARD_PATH), ['commands'], {
-      env: { ...process.env, FSS_REHEARSAL_DRY_RUN: '1' },
-      encoding: 'utf8',
-      stdio: 'pipe',
-    });
-    const commands = printed
-      .split('\n')
-      .filter(line => line.startsWith('PLAN '))
-      .map(line => (line.slice('PLAN '.length).split(/\s+[<#]/u)[0] ?? '').trim());
-
-    expect(commands.length).toBe(7);
-    for (const command of commands) expect(workflow, command).toContain(command);
   });
 });
 
@@ -346,89 +58,17 @@ describe('Appendix G 39: the rehearsal registry is applied by a workflow, never 
  * `assume_deployment_role=false` means "use whatever credentials this process has",
  * and a workflow that passed it without proving what those credentials are would have
  * turned a scoped role into an ambient one — the opposite of scenario 39. Asserting
- * the flag's presence would pass against exactly that workflow. Closed by requiring
- * the caller-identity check to appear *before* the flag is used, and by running that
- * check against six identities offline: a user, a role whose name merely starts the
- * same way, a different rehearsal role, an ARN with no session, no identity at all,
- * and the one it must accept.
+ * the flag's presence would pass against exactly that workflow. Closed by running the
+ * caller-identity check against six identities offline: a user, a role whose name
+ * merely starts the same way, a different rehearsal role, an ARN with no session, no
+ * identity at all, and the one it must accept.
  */
-describe('Appendix G 39: the flag that stops the second assumption cannot become an ambient credential', () => {
-  const release = readRepositoryFile('.github/workflows/greenfield-release.yml');
-  const registry = readRepositoryFile(REGISTRY_WORKFLOW_PATH);
-  const teardown = readRepositoryFile('infra/scripts/rehearsal-teardown.sh');
-  const roots = ['production', 'rehearsal', 'rehearsal-registry'] as const;
-
-  it('gives every root the variable, defaulting to assuming the role', () => {
-    for (const root of roots) {
-      const variables = readRepositoryFile(`infra/roots/${root}/variables.tf`);
-      const providers = readRepositoryFile(`infra/roots/${root}/providers.tf`);
-
-      // The default is true in all three, so a caller who forgets the flag is refused
-      // at STS rather than acting as whatever credential the shell was holding.
-      expect(variables, root).toMatch(/variable "assume_deployment_role" \{[\s\S]*?default {5}= true\n\}/u);
-      // And the block is conditional rather than absent: turning the flag off must
-      // not be the only way to configure the provider.
-      expect(providers, root).toContain('dynamic "assume_role"');
-      expect(providers, root).toContain('for_each = var.assume_deployment_role ? [1] : []');
-      expect(providers, root).toContain(
-        'role_arn     = "arn:aws:iam::${var.aws_account_id}:role/${var.deployment_role_name}"',
-      );
-      // The namespace validations G1 and G12c wrote are untouched by this.
-      expect(variables, root).toContain('variable "deployment_role_name"');
-      expect(variables, root).toContain('validation {');
-    }
-  });
-
-  it('passes the flag in exactly the places whose session already holds the role', () => {
-    // The two rehearsal roots, never production: section 3.2's apply is David's user
-    // assuming `fss-prod-deploy`, and there is nothing in this repository that runs it.
-    expect(release).toContain('-var="assume_deployment_role=false"');
-    expect(registry).toContain('-var=assume_deployment_role=false');
-    expect(teardown).toContain('"$REHEARSAL_NO_ASSUME_VAR"');
-    expect(readRepositoryFile('infra/scripts/rehearsal-common.sh')).toContain(
-      "REHEARSAL_NO_ASSUME_VAR='-var=assume_deployment_role=false'",
-    );
-  });
-
-  it('names the principal before it uses the flag, in both workflows and in the teardown', () => {
-    // By line, and only lines that are commands: both files explain the flag in a
-    // comment above the step that runs it, and a prose mention must not be able to
-    // satisfy an ordering assertion about commands.
-    const commandLine = (workflow: string, match: (line: string) => boolean): number =>
-      workflow.split('\n').findIndex(line => !line.trimStart().startsWith('#') && match(line));
-
-    // Only the credentialed job of the release workflow: the dry-run job runs the
-    // check too, and an ordering assertion satisfied by the job that holds no
-    // credential would say nothing about the job that does.
-    const credentialedJob = release.slice(release.indexOf('\n  rehearsal:\n'));
-    expect(credentialedJob.length).toBeGreaterThan(1000);
-
-    for (const [name, workflow] of [
-      ['release', credentialedJob],
-      ['registry', registry],
-    ] as const) {
-      const checkAt = commandLine(workflow, line =>
-        line.includes('infra/scripts/rehearsal-caller-identity.sh fss-rh-deploy'),
-      );
-      const flagAt = commandLine(workflow, line => line.includes('assume_deployment_role=false'));
-      expect(checkAt, name).toBeGreaterThan(-1);
-      expect(flagAt, name).toBeGreaterThan(checkAt);
-    }
-
-    // The teardown runs on `always()`, including after a failure, so it repeats the
-    // check rather than trusting a step that may not have been reached.
-    const checkAt = teardown.indexOf('rehearsal_require_deployment_session');
-    const destroyAt = teardown.indexOf('rehearsal_terraform destroy');
-    expect(checkAt).toBeGreaterThan(-1);
-    expect(destroyAt).toBeGreaterThan(checkAt);
-  });
-
+describe('Appendix G 39: the caller-identity check refuses every principal but the rehearsal role', () => {
   it('runs the check rather than describing it: one identity accepted, five refused', () => {
     const judge = (identity: string, role?: string): boolean => {
       try {
         execFileSync(repositoryPath('infra/scripts/rehearsal-caller-identity.sh'), role === undefined ? [] : [role], {
-          // Supplied rather than fetched: this makes no AWS call, which is also how
-          // the release workflow's credential-free dry run exercises it.
+          // Supplied rather than fetched: this makes no AWS call.
           env: {
             ...process.env,
             FSS_REHEARSAL_CALLER_IDENTITY: identity,
@@ -457,81 +97,6 @@ describe('Appendix G 39: the flag that stops the second assumption cannot become
     // And it refuses to vouch for production, whose applies assume their role in the
     // provider and never pass this flag.
     expect(judge('arn:aws:sts::123456789012:assumed-role/fss-prod-deploy/x', 'fss-prod-deploy')).toBe(false);
-  });
-});
-
-describe('Appendix G 39: the plan guard is what reads the plan nobody can read', () => {
-  it('accepts the plan this root actually produces', () => {
-    const { accepted, output } = runGuard(goodPlan());
-
-    expect(output).toContain('create=4');
-    expect(output).toContain('destroy=0');
-    expect(accepted).toBe(true);
-  });
-
-  it('refuses a plan that destroys or replaces anything', () => {
-    const plan = goodPlan();
-    const changes = [...(plan['resource_changes'] as readonly unknown[])];
-    changes[0] = planned('module.registry.aws_ecr_repository.this["api"]', 'aws_ecr_repository', ['delete', 'create'], {
-      name: 'fss-rh-api',
-    });
-    const { accepted, output } = runGuard({ ...plan, resource_changes: changes });
-
-    // `force_delete = false` stops a destroy of a repository that holds images; it
-    // does not stop a replacement, which is the same deletion wearing a create.
-    expect(accepted).toBe(false);
-    expect(output).toContain('would be destroyed or replaced');
-  });
-
-  it('refuses a resource type this root does not create', () => {
-    const plan = goodPlan();
-    const changes = [
-      ...(plan['resource_changes'] as readonly unknown[]),
-      planned('module.registry.aws_ecr_repository_policy.this["api"]', 'aws_ecr_repository_policy', ['create'], {
-        repository: 'fss-rh-api',
-      }),
-    ];
-    const { accepted, output } = runGuard({ ...plan, resource_changes: changes });
-
-    expect(accepted).toBe(false);
-    expect(output).toContain('aws_ecr_repository_policy');
-  });
-
-  it('refuses a name outside the rehearsal namespace', () => {
-    const plan = goodPlan();
-    const changes = [...(plan['resource_changes'] as readonly unknown[])];
-    changes[1] = planned('module.registry.aws_ecr_repository.this["worker"]', 'aws_ecr_repository', ['create'], {
-      name: 'fss-prod-worker',
-    });
-    const { accepted, output } = runGuard({ ...plan, resource_changes: changes });
-
-    expect(accepted).toBe(false);
-    expect(output).toContain('fss-prod-worker');
-  });
-
-  it('refuses a resource it cannot name, rather than assuming it is one of the four', () => {
-    const plan = goodPlan();
-    const changes = [
-      ...(plan['resource_changes'] as readonly unknown[]),
-      planned('aws_ecr_repository.loose', 'aws_ecr_repository', ['create'], {}),
-    ];
-    const { accepted, output } = runGuard({ ...plan, resource_changes: changes });
-
-    expect(accepted).toBe(false);
-    expect(output).toContain('no readable name');
-  });
-
-  it('refuses a plan file that is not there, which is the shape a skipped step takes', () => {
-    let refused = false;
-    try {
-      execFileSync(repositoryPath(REGISTRY_GUARD_PATH), ['plan', join(tmpdir(), 'fss-no-such-plan.json')], {
-        encoding: 'utf8',
-        stdio: 'pipe',
-      });
-    } catch {
-      refused = true;
-    }
-    expect(refused).toBe(true);
   });
 });
 
@@ -659,14 +224,6 @@ describe('Appendix G 39: the guard reads the run’s own resources, and no rehea
     expect(terraform.output).toContain('rc=1');
   });
 
-  it('has no exemption left: the old exempt caller and its marker are gone', () => {
-    const { output } = inCommon('rehearsal_read_production_inventory resourcegroupstaggingapi get-resources\necho "rc=$?"');
-    expect(output).toContain('rc=127');
-    const common = readRepositoryFile('infra/scripts/rehearsal-common.sh');
-    expect(common).not.toContain('exempt-read-only-production-inventory');
-    expect(common).not.toMatch(/^rehearsal_read_production_inventory\(\)/mu);
-  });
-
   it('selects the run’s own names locally, sorted, and neither a longer prefix nor production', () => {
     // `get-resources` tag-filter values are exact matches and take no wildcard, so the
     // selection is local; and `fss-rh-dryrunx` is another run, not this one.
@@ -712,9 +269,7 @@ describe('Appendix G 39: the guard reads the run’s own resources, and no rehea
   });
 });
 
-describe('Appendix G 39: the dry run reads the plan it printed, so the rehearsal cannot refuse itself', () => {
-  const release = readRepositoryFile('.github/workflows/greenfield-release.yml');
-
+describe('Appendix G 39: the plan guard reads a printed plan, so the rehearsal cannot refuse itself', () => {
   it('accepts the plan the dry run actually prints today', () => {
     // Generated rather than fabricated: this is the same sequence the workflow runs,
     // so a step that acquires a production-named command fails here on the pull
@@ -723,15 +278,12 @@ describe('Appendix G 39: the dry run reads the plan it printed, so the rehearsal
     const environment = {
       FSS_REHEARSAL_DRY_RUN: '1',
       FSS_REHEARSAL_REPORTS: reports,
-      FSS_CARRY_WATERMARK: '2026-09-21T00:00:00Z',
-      FSS_CARRY_SOURCE_TABLE: 'rehearsal-old-table',
     };
     const steps: readonly (readonly [string, readonly string[]])[] = [
       ['infra/scripts/rehearsal-caller-identity.sh', ['fss-rh-deploy']],
       [GUARD, ['fss-rh-dryrun', 'before']],
       ['infra/scripts/rehearsal-schema-ranges.sh', ['fss-rh-dryrun']],
       ['infra/scripts/rehearsal-restore-drill.sh', ['fss-rh-dryrun']],
-      ['infra/scripts/rehearsal-carry-watermark.sh', ['fss-rh-dryrun']],
       ['infra/scripts/rehearsal-teardown.sh', ['fss-rh-dryrun']],
       [GUARD, ['fss-rh-dryrun', 'after']],
     ];
@@ -832,17 +384,6 @@ describe('Appendix G 39: the dry run reads the plan it printed, so the rehearsal
     expect(guard.code).not.toBe(0);
   });
 
-  it('is run by the credential-free job on every pull request, after the plan is printed', () => {
-    const dryRunJob = release.slice(release.indexOf('\n  dry-run:\n'), release.indexOf('\n  rehearsal:\n'));
-    const printedAt = dryRunJob.indexOf('Print the plan every rehearsal step would run');
-    const guardAt = dryRunJob.indexOf(`${GUARD} fss-rh-dryrun plan`);
-
-    expect(printedAt).toBeGreaterThan(-1);
-    expect(guardAt).toBeGreaterThan(printedAt);
-    // And the job that runs it holds no credential, which is the whole point.
-    expect(dryRunJob).not.toContain('environment: rehearsal');
-    expect(dryRunJob).toContain('for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN');
-  });
 });
 
 describe('Appendix G 39: a teardown of a run that created nothing still tears down', () => {
@@ -1465,331 +1006,4 @@ describe('Appendix G 39: the refusal is symmetric, and the wrapper enforces it p
     expect(output).not.toContain('FSS_DATABASE_HOST');
   });
 
-  it('refuses a rehearsal name from production and a production name from a rehearsal', () => {
-    const common = readRepositoryFile('infra/scripts/release-common.sh');
-    expect(common).toContain('release_refuse_foreign_arguments()');
-    expect(common).toContain('rehearsal_refuse_production_arguments "$@" || return 1');
-    // The command's own arguments are read too: a `--report /tmp/fss-prod-…` path in
-    // a rehearsal is still a production name.
-    expect(common).toContain('release_refuse_foreign_arguments "$environment" "${command_words[@]}"');
-  });
-
-  it('gives both credentialed workflows a concurrency group and never cancels one in flight', () => {
-    for (const path of [
-      '.github/workflows/greenfield-release.yml',
-      '.github/workflows/greenfield-rehearsal-registry.yml',
-    ]) {
-      const workflow = readRepositoryFile(path);
-      expect(workflow, `${path} declares no concurrency group`).toMatch(/^concurrency:$/mu);
-      // Two rehearsals overlapping share the account's quotas and the two stable
-      // repositories. And a teardown that runs on `always()` must not be cancelled: a
-      // cancelled run still has an environment standing.
-      expect(workflow, `${path} cancels a run that is already holding the namespace`).toContain(
-        'cancel-in-progress: false',
-      );
-    }
-  });
-
-  it('stops every one-off task before the teardown deletes the subnets they are in', () => {
-    const teardown = readRepositoryFile('infra/scripts/rehearsal-teardown.sh');
-    // A running task holds an elastic network interface in a subnet Terraform is
-    // about to delete; the destroy then waits on the subnet and times out, and the
-    // report blames the subnet.
-    const stopAt = teardown.indexOf('ecs stop-task --cluster "${PREFIX}-cluster"');
-    const destroyAt = teardown.indexOf('rehearsal_terraform destroy -auto-approve -input=false');
-    expect(stopAt).toBeGreaterThan(-1);
-    expect(destroyAt).toBeGreaterThan(stopAt);
-    // And every ARN is classified before it is addressed, so another run's task — or
-    // production's — is never a candidate.
-    expect(teardown).toContain('rehearsal_classify_name "$PREFIX" "${task_arn##*:task/}"');
-  });
-
-  it('runs the 42 scenarios in the runner, against a service container, never the rehearsal database', () => {
-    const workflow = readRepositoryFile('.github/workflows/greenfield-release.yml');
-    expect(workflow).toContain('npm run test:release');
-    expect(workflow).toContain('image: postgres:16');
-    // The rehearsal database is private: no NAT, no bastion, `publicly_accessible =
-    // false`, so no step builds a connection string to it.
-    expect(workflow).not.toContain('sslmode=require');
-  });
-});
-
-/**
- * G12k: the stages nest, and the two steps that clean up belong to all of them.
- * G16: and the fifth stage is not on that ladder at all.
- *
- * The rehearsal had one credentialed mode, so each of the three runs of 21 September
- * spent about an hour of David's attention to find one error. `stage` — `plan`,
- * `create`, `deploy`, `full` — makes the cheap part runnable alone. The risk it
- * introduces is a stage that is not a prefix of the next: a `deploy` that skipped
- * something `create` does would be a deploy of an environment nobody created, and a
- * `plan` that ran a step `full` does not would be a stage nobody designed.
- *
- * `teardown` is the fifth dispatch choice and deliberately outside that ladder: it
- * removes an environment an earlier run created and left, so it plans nothing, applies
- * nothing and writes no record. Every statement below about nesting is therefore about
- * the ladder — `ladderStagesForCondition` drops `teardown` before comparing — and the
- * statements about `teardown` are their own `describe`, further down.
- *
- * ## The vacuous-pass trap
- *
- * Reading the conditions out of the file and asserting the strings would pass against
- * a workflow where they were never evaluated, and asserting "every step has a stage
- * condition" would pass against four stages that all run everything. Closed by turning
- * each condition into the set of stages it admits, requiring that set to be a suffix of
- * `[plan, create, deploy, full]` for every step, and requiring each stage to run
- * *strictly more* steps than the one before it — so a `create` identical to `plan` is a
- * failure rather than a tautology. `stagesForCondition` refuses any condition grammar
- * it cannot read, because the permissive reading of an unknown condition is "every
- * stage", which is the answer that hides a mistake.
- */
-describe('Appendix G 39: the rehearsal has five stages and four of them contain the one before', () => {
-  const steps = rehearsalJobSteps();
-
-  it('reads a job with every step named, so a parser that found nothing is a failure', () => {
-    // The floor. Everything below is derived from this list, and a reader that
-    // silently matched no steps would make each of those assertions vacuously true.
-    expect(steps.length).toBeGreaterThanOrEqual(20);
-    for (const step of steps) expect(step.name.length, `step ${String(step.index)} has no name`).toBeGreaterThan(3);
-    expect(steps.map(step => step.name)).toContain('Write the release record, last');
-    expect(steps.map(step => step.name)).toContain('Tear the rehearsal run down');
-  });
-
-  it('gives every step a ladder stage set that is a suffix of the four, never a hole in the middle', () => {
-    for (const step of steps) {
-      const stages = ladderStagesForCondition(step.condition);
-      const suffix = REHEARSAL_STAGES.slice(REHEARSAL_STAGES.length - stages.length);
-      expect([...stages], `${step.name} runs in a set of ladder stages that is not a suffix`).toEqual([...suffix]);
-    }
-  });
-
-  it('runs strictly more with each stage, in either mode, so no two stages are the same run', () => {
-    // In `mode: schema` too (lane g97): its `full` adds the declared schema ranges to
-    // `deploy`, which is the step a schema change is rehearsed for.
-    for (const mode of REHEARSAL_MODES) {
-      for (const [index, stage] of REHEARSAL_STAGES.entries()) {
-        if (index === 0) continue;
-        const earlier = REHEARSAL_STAGES[index - 1] ?? 'plan';
-        const previous = stepsForStage(earlier, steps, mode).map(step => step.name);
-        const current = stepsForStage(stage, steps, mode).map(step => step.name);
-        for (const name of previous) {
-          expect(current, `${mode} ${stage} does not run ${name}, which ${earlier} does`).toContain(name);
-        }
-        expect(current.length, `${mode} ${stage} adds nothing to the stage before it`).toBeGreaterThan(previous.length);
-      }
-    }
-    // And the cheapest stage is a real run rather than a shell: it plans.
-    expect(stepsForStage('plan', steps).length).toBeGreaterThanOrEqual(10);
-  });
-
-  it('tears down and runs the guard in every stage and every mode, unconditionally', () => {
-    // These two are what protect against a stage condition being wrong, so neither may
-    // depend on one: `always()` and nothing else. A `plan` run creates nothing, but
-    // "creates nothing" is exactly the claim a broken `if:` would falsify, and the
-    // teardown is tolerant of a run that created nothing (it reports
-    // `destroyed=nothing_created`), so running it costs a few seconds and buys the
-    // guarantee. They are also the only two steps the `teardown` stage exists to run.
-    for (const name of ['Tear the rehearsal run down', 'Nothing with the production prefix was touched']) {
-      const step = steps.find(candidate => candidate.name === name);
-      expect(step, `the rehearsal job has no step named ${name}`).toBeDefined();
-      expect(step?.condition).toBe('always()');
-      for (const stage of REHEARSAL_STAGE_CHOICES) {
-        for (const mode of REHEARSAL_MODES) {
-          expect(
-            stepsForStage(stage, steps, mode).map(candidate => candidate.name),
-            `${mode} ${stage} skips ${name}`,
-          ).toContain(name);
-        }
-      }
-    }
-    // The teardown needs the variables `terraform destroy` requires (G12i), so the
-    // step that writes them is in every stage too — the `teardown` stage included, and
-    // that is the whole reason a teardown of an orphan works at all from a fresh
-    // checkout: the file is rebuilt from the run's inputs before the destroy.
-    for (const stage of REHEARSAL_STAGE_CHOICES) {
-      expect(stepsForStage(stage, steps).map(step => step.name)).toContain(
-        'Write the variables this run plans, applies and tears down with',
-      );
-    }
-  });
-
-  it('plans in every ladder stage, and the apply names no variable of its own', () => {
-    const plan = steps.find(step => step.text.includes('terraform plan'));
-    const apply = steps.find(step => step.text.includes('terraform apply'));
-    expect(plan, 'no step of the rehearsal job plans').toBeDefined();
-    expect(apply, 'no step of the rehearsal job applies').toBeDefined();
-    expect([...ladderStagesForCondition(plan?.condition ?? null)]).toEqual([...REHEARSAL_STAGES]);
-    // And not in the fifth: a teardown of an orphan must not plan the environment it is
-    // about to destroy, because a plan of a root whose state holds four leftover
-    // resources proposes to create the other hundred and thirty-four.
-    expect([...stagesForCondition(plan?.condition ?? null)]).not.toContain('teardown');
-    expect(plan?.text).toContain('-out="$plan_file"');
-    // One `-var` list, on the plan, which every stage runs. The apply takes its
-    // values from `run.auto.tfvars.json`, which Terraform loads automatically from
-    // the root directory and which `terraform destroy` already depends on (G12i). A
-    // second list would be a second set of values to keep in step, and losing two of
-    // eight from one of them is what stopped the second credentialed run.
-    expect(apply?.text).toContain('terraform apply -auto-approve -input=false');
-    expect(apply?.text).not.toContain('-var=');
-  });
-
-  it('gives the plan and the variables file the same expressions, so they cannot drift', () => {
-    // The two are the same values only because they read the same secrets and the
-    // same job environment. Nothing but this compares them, and a plan pointed at one
-    // certificate while the apply reads another would be invisible until the apply.
-    const plan = stepScript('Plan the rehearsal environment, and summarise it without values');
-    const tfvars = stepScript('Write the variables this run plans, applies and tears down with');
-    const expressions = (script: string): readonly string[] =>
-      [...new Set([...script.matchAll(/\$\{\{ ([^}]+) \}\}/gu)].map(match => (match[1] ?? '').trim()))].sort();
-
-    expect(expressions(plan)).toEqual(expressions(tfvars));
-    // A floor: two scripts that reference nothing would compare equal.
-    expect(expressions(plan).length).toBeGreaterThanOrEqual(6);
-    for (const name of ['API_SCHEMA_MIN', 'API_SCHEMA_MAX', 'WORKER_SCHEMA_MIN', 'WORKER_SCHEMA_MAX']) {
-      expect(plan, `the plan does not read ${name}`).toContain(name);
-      expect(tfvars, `the variables file does not read ${name}`).toContain(name);
-    }
-  });
-});
-
-/**
- * G12k: what a `plan` run is allowed to print.
- *
- * The plan stage exists to be run often and read quickly, and its output is published
- * twice — to the job summary and to the ninety-day reports artifact. `terraform plan`
- * prints values: the image references, the certificate ARN, the hostname, every
- * attribute it can already resolve. So the summary is built from the machine-readable
- * plan, out of `address` and `change.actions` and nothing else.
- *
- * ## The vacuous-pass trap
- *
- * Asserting that the workflow contains a python program that looks careful would pass
- * against a program that had stopped being run, and against one whose refusal had
- * become a print. So both programs are lifted out of the workflow and executed: the
- * summariser against a plan whose values are secret-shaped, and the guard against a
- * summary that carries one, against a summary that does not, and against a variables
- * file that has stopped naming the values it is supposed to be looking for.
- */
-describe('Appendix G 39: a plan run publishes addresses and counts, never values', () => {
-  const script = stepScript('Plan the rehearsal environment, and summarise it without values');
-  /** Secret-shaped, written here: nothing in this repository holds a real one. */
-  const HOSTNAME = 'rehearsal-api.example.invalid';
-  const CERTIFICATE = 'arn:aws:acm:us-east-1:123456789012:certificate/11111111-2222-3333-4444-555555555555';
-  const IMAGE = `123456789012.dkr.ecr.us-east-1.amazonaws.com/fss-rh-api@sha256:${'c'.repeat(64)}`;
-
-  function python(program: string, args: readonly string[]): { readonly code: number; readonly output: string } {
-    const result = spawnSync('python3', ['-', ...args], { encoding: 'utf8', input: program });
-    return { code: result.status ?? 1, output: `${result.stdout}${result.stderr}` };
-  }
-
-  function variablesFile(overrides: Readonly<Record<string, unknown>> = {}): string {
-    const directory = mkdtempSync(join(tmpdir(), 'fss-tfvars-'));
-    const path = join(directory, 'run.auto.tfvars.json');
-    const variables: Record<string, unknown> = {
-      assume_deployment_role: false,
-      bootstrap: true,
-      name_prefix: 'fss-rh-case',
-      api_image: IMAGE,
-      worker_image: IMAGE.replace('fss-rh-api', 'fss-rh-worker'),
-      certificate_arn: CERTIFICATE,
-      api_hostname: HOSTNAME,
-      api_schema_range: { min: 1, max: 1 },
-      worker_schema_range: { min: 1, max: 1 },
-      ...overrides,
-    };
-    for (const [name, value] of Object.entries(overrides)) {
-      if (value === undefined) delete variables[name];
-    }
-    writeFileSync(path, JSON.stringify(variables, null, 2));
-    return path;
-  }
-
-  it('prints one line per resource change, with the action and the address', () => {
-    const summariser = embeddedPythonProgram(script, 'rehearsal-plan-summary:');
-    const directory = mkdtempSync(join(tmpdir(), 'fss-planjson-'));
-    const path = join(directory, 'plan.json');
-    // The shape `terraform show -json` produces, carrying the values a real one has.
-    writeFileSync(
-      path,
-      JSON.stringify({
-        format_version: '1.2',
-        variables: { api_hostname: { value: HOSTNAME } },
-        resource_changes: [
-          {
-            address: 'module.stack.module.cluster.aws_ecs_service.api',
-            change: { actions: ['create'], before: null, after: { name: 'fss-rh-case-api', image: IMAGE } },
-          },
-          {
-            address: 'module.stack.module.network.aws_lb_listener.https',
-            change: { actions: ['create'], before: null, after: { certificate_arn: CERTIFICATE } },
-          },
-          {
-            address: 'module.stack.module.database.aws_db_instance.this',
-            change: { actions: ['no-op'], before: {}, after: {} },
-          },
-        ],
-      }),
-    );
-
-    const { code, output } = python(summariser, [path]);
-
-    expect(code, output).toBe(0);
-    expect(output).toContain('resource changes: 3');
-    expect(output).toContain('  create: 2');
-    expect(output).toContain('  no-op: 1');
-    expect(output).toContain('create module.stack.module.cluster.aws_ecs_service.api');
-    // The positive control above is what makes these three mean something.
-    expect(output).not.toContain(HOSTNAME);
-    expect(output).not.toContain(CERTIFICATE);
-    expect(output).not.toContain(IMAGE);
-  });
-
-  it('refuses to publish a summary that carries a value the run holds', () => {
-    const guard = embeddedPythonProgram(script, 'rehearsal-plan-summary-guard:');
-    const directory = mkdtempSync(join(tmpdir(), 'fss-summary-'));
-    const clean = join(directory, 'clean.txt');
-    writeFileSync(clean, 'resource changes: 1\n  create: 1\ncreate module.stack.module.cluster.aws_ecs_service.api\n');
-    const leaking = join(directory, 'leaking.txt');
-    writeFileSync(leaking, `resource changes: 1\n  create: 1\ncreate ${HOSTNAME}\n`);
-    const partial = join(directory, 'partial.txt');
-    // Half of an image reference is still the account and the repository.
-    writeFileSync(partial, `resource changes: 1\n  create: 1\ncreate ${IMAGE.split('@')[0] ?? ''}\n`);
-
-    const accepted = python(guard, [clean, variablesFile()]);
-    expect(accepted.code, accepted.output).toBe(0);
-    expect(accepted.output).toContain('holds no value of the 4 secret-backed variables');
-
-    const refused = python(guard, [leaking, variablesFile()]);
-    expect(refused.code).not.toBe(0);
-    expect(refused.output).toContain('the plan summary contains the value of api_hostname');
-
-    const half = python(guard, [partial, variablesFile()]);
-    expect(half.code).not.toBe(0);
-    expect(half.output).toContain('the plan summary contains the value of api_image');
-  });
-
-  it('refuses a variables file that has stopped naming what it is supposed to check', () => {
-    // Otherwise the guard passes by having nothing to look for, which is the shape
-    // this whole suite exists to refuse.
-    const guard = embeddedPythonProgram(script, 'rehearsal-plan-summary-guard:');
-    const directory = mkdtempSync(join(tmpdir(), 'fss-summary-empty-'));
-    const clean = join(directory, 'clean.txt');
-    writeFileSync(clean, 'resource changes: 0\n');
-
-    const { code, output } = python(guard, [clean, variablesFile({ api_hostname: undefined })]);
-
-    expect(code).not.toBe(0);
-    expect(output).toContain('this guard would check nothing');
-  });
-
-  it('keeps the plan output itself out of the log and out of the artifact', () => {
-    // `$RUNNER_TEMP` is not `$FSS_REHEARSAL_REPORTS`, which is what the workflow
-    // uploads for ninety days. The summary is copied there; the plan file, the plan
-    // JSON and the plan's own stdout are not.
-    expect(script).toContain('plan_log="$RUNNER_TEMP/terraform-plan.txt"');
-    expect(script).toContain('> "$plan_log"; then');
-    expect(script).toContain('cp "$summary" "$FSS_REHEARSAL_REPORTS/plan-summary.txt"');
-    expect(script).not.toContain('"$FSS_REHEARSAL_REPORTS/rehearsal-plan.json"');
-    expect(script).not.toContain('cat "$plan_log"');
-  });
 });

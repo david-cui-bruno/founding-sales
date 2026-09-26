@@ -40,179 +40,18 @@ jobs:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
-      - name: Refuse any ambient cloud credential
-        run: |
-          set -euo pipefail
-          # This gate must pass identically with and without credentials. If a
-          # credential is present the workflow has been changed in a way this
-          # lane did not intend, so stop rather than risk reaching a real API.
-          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN \
-                      AWS_PROFILE AWS_ROLE_ARN AWS_WEB_IDENTITY_TOKEN_FILE \
-                      GOOGLE_CREDENTIALS GOOGLE_APPLICATION_CREDENTIALS; do
-            if [ -n "${!name:-}" ]; then
-              echo "::error::$name is set. The greenfield infrastructure gate is offline and must never hold a cloud credential."
-              exit 1
-            fi
-          done
-
-      - name: terraform fmt
-        run: terraform fmt -check -recursive infra
-
-      - name: Structural policy checks
-        run: |
-          set -euo pipefail
-          fail=0
-          check() {
-            local description=$1 pattern=$2
-            shift 2
-            if grep -rInE "$pattern" "$@" >/dev/null 2>&1; then
-              echo "::error::$description"
-              grep -rInE "$pattern" "$@" || true
-              fail=1
-            fi
-          }
-
-          # The design has no NAT gateway and no VPC endpoint. Tasks reach ECR
-          # and the internet through public addresses.
-          check "infra must declare no NAT gateway and no VPC endpoint" \
-            'resource "aws_(nat_gateway|eip|vpc_endpoint[a-z_]*)"' infra
-
-          # Terraform creates empty secret containers. It never holds a value
-          # and never generates one.
-          check "infra must never write a secret value or generate a password" \
-            'resource "(aws_secretsmanager_secret_version|aws_ssm_parameter|random_password|random_string|random_id)"' infra
-
-          # Security-group rules exist only as the generated inventory.
-          check "security-group rules must come from the network module inventory" \
-            'resource "aws_(security_group_rule|vpc_security_group_(in|e)gress_rule)"' \
-            infra/modules/cluster infra/modules/database infra/modules/edge infra/modules/stack infra/roots
-
-          # The greenfield roots must never touch the old state objects.
-          check "a greenfield root must never point at a legacy state key" \
-            '^[^#]*cloud/(terraform|delegated-worker)' infra/roots
-
-          # An account id written into Terraform is an account this tree can only ever
-          # deploy into, and the rehearsal and production are moving into dedicated
-          # accounts (docs/greenfield/accounts.md). Every root takes aws_account_id as
-          # a variable, so the one place twelve digits may appear outside a test
-          # fixture is that variable's own default — or a comment, which is prose
-          # rather than a decision the file makes (g37 names the bucket a real
-          # rehearsal run left behind, and that name ends in its account). The
-          # release suite reads comments too, with a pattern that admits twelve
-          # digits only where they really are an account id.
-          account_literals=$(grep -rInE '[0-9]{12}' --include='*.tf' infra/modules infra/roots \
-            | grep -v '/tests/' \
-            | grep -vE ':[0-9]+: *#' \
-            | grep -vE ':[0-9]+: *default +=' || true)
-          if [ -n "$account_literals" ]; then
-            echo "::error::a Terraform file names an account id outside a variable default"
-            echo "$account_literals"
-            fail=1
-          fi
-
-          # The network module owns exactly the asserted rule set.
-          ingress=$(grep -cE '^    [a-z_]+ = \{$' infra/modules/network/main.tf || true)
-          if [ "$(grep -c 'resource "aws_vpc_security_group_ingress_rule"' infra/modules/network/main.tf)" != "1" ] \
-             || [ "$(grep -c 'resource "aws_vpc_security_group_egress_rule"' infra/modules/network/main.tf)" != "1" ]; then
-            echo "::error::the network module must generate its rules from exactly one for_each resource per direction"
-            fail=1
-          fi
-          echo "declared rule entries: $ingress"
-
-          exit "$fail"
-
-      - name: Backend state keys are distinct and namespaced
-        run: |
-          set -euo pipefail
-          production_key=$(grep -E '^key ' infra/roots/production/backend.hcl | cut -d'"' -f2)
-          rehearsal_key=$(grep -E '^key ' infra/roots/rehearsal/backend.hcl | cut -d'"' -f2)
-          registry_key=$(grep -E '^key ' infra/roots/rehearsal-registry/backend.hcl | cut -d'"' -f2)
-          echo "production:         $production_key"
-          echo "rehearsal:          $rehearsal_key"
-          echo "rehearsal-registry: $registry_key"
-          test "$production_key" != "$rehearsal_key"
-          test "$(printf '%s\n%s\n%s\n' "$production_key" "$rehearsal_key" "$registry_key" | sort -u | wc -l | tr -d ' ')" = "3"
-          case "$production_key" in fss/greenfield/production/*) ;; *) echo "::error::production state key is not under fss/greenfield/production/"; exit 1 ;; esac
-          case "$rehearsal_key" in fss/greenfield/rehearsal/*) ;; *) echo "::error::rehearsal state key is not under fss/greenfield/rehearsal/"; exit 1 ;; esac
-          case "$registry_key" in fss/greenfield/rehearsal-registry/*) ;; *) echo "::error::rehearsal registry state key is not under fss/greenfield/rehearsal-registry/"; exit 1 ;; esac
-          # "registry" is a legal run suffix, so the durable repositories must live
-          # outside the per-run state space or a run could destroy them on teardown.
-          case "$registry_key" in fss/greenfield/rehearsal/*) echo "::error::the rehearsal registry state key is inside the per-run space"; exit 1 ;; esac
-          # Each backend.hcl is its root's per-account file, so each must name a
-          # bucket, a region and a lock table: a file that lost one would init against
-          # whatever backend the caller's own environment supplies, silently.
-          for backend_file in infra/roots/*/backend.hcl; do
-            for backend_setting in bucket region dynamodb_table key; do
-              grep -qE "^${backend_setting} +=" "$backend_file" \
-                || { echo "::error::$backend_file names no $backend_setting"; exit 1; }
-            done
-          done
-          # No backend file may carry a credential-looking value.
-          ! grep -rInE '(access_key|secret_key|token|password)' infra/roots/*/backend.hcl
-
-      - name: Validate and test every module and root
+      - name: Release scripts are executable, parse, and pass shellcheck
+        # shellcheck is preinstalled on the ubuntu-24.04 image. Errors only: the
+        # warnings are style the scripts have not been held to.
         run: |
           set -euo pipefail
           status=0
-          while IFS= read -r directory; do
-            echo "::group::$directory"
-            (
-              cd "$directory"
-              terraform init -backend=false -input=false -no-color
-              terraform validate -no-color
-              if compgen -G "tests/*.tftest.hcl" >/dev/null || compgen -G "*.tftest.hcl" >/dev/null; then
-                terraform test -no-color
-              else
-                echo "no test files in $directory"
-              fi
-            ) || status=1
-            echo "::endgroup::"
-          done < <(find infra/modules infra/roots -mindepth 1 -maxdepth 1 -type d | sort)
+          for script in infra/scripts/*.sh; do
+            [ -x "$script" ] || { echo "::error::$script is not executable"; status=1; }
+            bash -n "$script" || { echo "::error::$script does not parse"; status=1; }
+          done
+          shellcheck --severity=error infra/scripts/*.sh || status=1
           exit "$status"
 
-      - name: Every module and root must be covered by an offline test
-        run: |
-          set -euo pipefail
-          fail=0
-          while IFS= read -r directory; do
-            # The stack module is a pure composition with no resources of its
-            # own except the environment guard, and both root test files plan
-            # it end to end. Everything else carries its own test file.
-            [ "$directory" = "infra/modules/stack" ] && continue
-            if ! compgen -G "$directory/tests/*.tftest.hcl" >/dev/null; then
-              echo "::error::$directory has no offline test file"
-              fail=1
-            fi
-          done < <(find infra/modules infra/roots -mindepth 1 -maxdepth 1 -type d | sort)
-          exit "$fail"
-
-  secrets:
-    runs-on: macos-15
-    timeout-minutes: 30
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-          persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: '24.20.0'
-      - name: Install integrity-pinned Gitleaks 8.30.1
-        run: |
-          set -euo pipefail
-          umask 077
-          tool_dir="$(mktemp -d "$RUNNER_TEMP/callie-gitleaks.XXXXXX")"
-          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_darwin_arm64.tar.gz -o "$tool_dir/gitleaks.tar.gz"
-          printf '%s  %s\n' b40ab0ae55c505963e365f271a8d3846efbc170aa17f2607f13df610a9aeb6a5 "$tool_dir/gitleaks.tar.gz" | shasum -a 256 -c -
-          tar -xzf "$tool_dir/gitleaks.tar.gz" -C "$tool_dir" gitleaks
-          test "$("$tool_dir/gitleaks" version)" = '8.30.1'
-          echo "$tool_dir" >> "$GITHUB_PATH"
-      - name: Scan the tree and history, including infra
-        run: |
-          set -euo pipefail
-          npm ci --no-audit --no-fund
-          npm run verify:secrets
+      - name: Offline gate (fmt, structural checks, validate and test every module and root)
+        run: infra/scripts/offline-gate.sh

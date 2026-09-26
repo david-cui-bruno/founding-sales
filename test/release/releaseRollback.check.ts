@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileS
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { repositoryPath } from './support/coverage.ts';
+import { repositoryPath } from './support/repository.ts';
 
 /**
  * Lane R1: `infra/scripts/release-rollback.sh` puts production back on a previous

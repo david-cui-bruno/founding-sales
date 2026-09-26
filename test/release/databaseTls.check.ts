@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { readRepositoryFile } from './support/coverage.ts';
+import { readRepositoryFile } from './support/repository.ts';
 
 /**
  * The database refuses any connection that is not TLS (`rds.force_ssl = 1`), the `pg`

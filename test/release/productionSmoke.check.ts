@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
-import { repositoryPath } from './support/coverage.ts';
+import { repositoryPath } from './support/repository.ts';
 
 /**
  * The production smoke compares sending with the state the operator expects (lane g80,
@@ -17,9 +17,7 @@ import { repositoryPath } from './support/coverage.ts';
  * A check that took the expectation and passed either way would be green in both states
  * and would never notice a deployment that flipped sending by accident, which is the one
  * thing it is for. So each expectation is run against both answers and must fail the
- * one it does not expect, and a truthy string is neither state. A mutation in
- * `scripts/releaseMutationCheck.mjs` puts the old `enabled === false` back and requires
- * this file to go red.
+ * one it does not expect, and a truthy string is neither state.
  */
 
 interface SmokeResult {
@@ -49,7 +47,7 @@ interface Smoke {
   ): Promise<SmokeResult[]>;
 }
 
-// A computed specifier, as in mutationRunner.check.ts: plain ESM with no declarations.
+// A computed specifier: plain ESM with no declarations.
 const SMOKE_PATH = repositoryPath('scripts/productionSmoke.mjs');
 const smoke = (await import(SMOKE_PATH)) as Smoke;
 

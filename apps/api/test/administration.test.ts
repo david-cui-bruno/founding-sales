@@ -80,7 +80,6 @@ describe('the administration surface', () => {
         recordedAt: '2026-09-20T12:00:00Z',
         suite,
         artifacts: { api: RUNNING_API_DIGEST, worker: RUNNING_WORKER_DIGEST, desktopCommitStamp: 'e'.repeat(40) },
-        carryDrill: 'skipped_no_watermark',
         rehearsalScenarios: {},
         enablesSending: false,
       },

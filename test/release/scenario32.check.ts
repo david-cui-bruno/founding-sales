@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { EMAIL_WINDOW, EMAIL_WINDOW_WEEKDAYS, localParts, placeEmailSend } from '@fss/domain';
-import { mustCover } from './support/coverage.ts';
 
 /**
  * Appendix G 32: "Monday-due email sends Monday morning; weekend due work moves to
@@ -25,8 +24,6 @@ import { mustCover } from './support/coverage.ts';
 const NEW_YORK = 'America/New_York';
 
 describe('Appendix G 32: Monday mornings, weekends and DST', () => {
-  mustCover(32, ['placeEmailSend', 'EMAIL_WINDOW']);
-
   it('places Monday-due mail on Monday morning, not on Tuesday', () => {
     // Monday 21 September 2026, 02:00 New York: due, and before the window opens.
     const placement = placeEmailSend('2026-09-21T06:00:00.000Z', NEW_YORK);

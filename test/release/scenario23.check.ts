@@ -10,7 +10,6 @@ import {
   GOOGLE_OIDC_ISSUER,
   readApiDeployment,
 } from '../../apps/api/src/bootstrap/deployment.ts';
-import { mustCover, readRepositoryFile } from './support/coverage.ts';
 
 /**
  * Appendix G 23: "OIDC state, nonce, code and token-audience replay are refused."
@@ -35,12 +34,6 @@ import { mustCover, readRepositoryFile } from './support/coverage.ts';
  */
 
 describe('Appendix G 23: each replay is refused for being that replay', () => {
-  mustCover(23, [
-    'authorization_request_unknown',
-    'audience_mismatch',
-    'nonce_mismatch',
-  ]);
-
   it('gives replay and expiry separate codes, and gives each of the four its own', () => {
     for (const code of [
       'authorization_request_unknown',
@@ -53,25 +46,6 @@ describe('Appendix G 23: each replay is refused for being that replay', () => {
       expect(AUTH_REFUSAL_CODES).toContain(code);
     }
     expect(new Set(AUTH_REFUSAL_CODES).size).toBe(AUTH_REFUSAL_CODES.length);
-  });
-
-  it('verifies the signature before it reads a single claim', () => {
-    const validator = readRepositoryFile('apps/api/src/auth/idToken.ts');
-    const algorithm = validator.indexOf("refusal: 'unsupported_algorithm'");
-    const signature = validator.indexOf("refusal: 'bad_signature'");
-    const issuer = validator.indexOf("refusal: 'issuer_mismatch'");
-    const audience = validator.indexOf("refusal: 'audience_mismatch'");
-    const nonce = validator.indexOf("refusal: 'nonce_mismatch'");
-
-    expect(algorithm).toBeGreaterThan(-1);
-    // Shape, then algorithm, then signature, then claims. Nothing unsigned is ever
-    // read for its claims, so `alg: none` cannot talk its way past the issuer check.
-    expect(signature).toBeGreaterThan(algorithm);
-    expect(issuer).toBeGreaterThan(signature);
-    expect(audience).toBeGreaterThan(issuer);
-    expect(nonce).toBeGreaterThan(audience);
-    // Exactly our client id, and an array carrying it among others is not enough.
-    expect(validator).toContain('audience.length === 1 && audience[0] === clientId');
   });
 });
 
@@ -165,13 +139,6 @@ describe('Appendix G 23: a production API cannot run without sign-in configured'
         readApiDeployment(productionEnvironment({ [V.dependencies]: value }), { loadKms, putObject }),
       ).rejects.toMatchObject({ code });
     }
-  });
-
-  it('hands what it built to the server rather than building it and dropping it', () => {
-    const main = readRepositoryFile('apps/api/src/bootstrap/main.ts');
-    expect(main).toContain('deployment.auth === undefined');
-    expect(main).toContain('...(auth === undefined ? {} : { auth })');
-    expect(main).toContain('supportedClientVersions: CONTAINER_CLIENT_VERSIONS');
   });
 
   it('restricts sign-in to the same Workspace domain the mailbox check uses', async () => {

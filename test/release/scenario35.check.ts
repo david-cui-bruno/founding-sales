@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { authoredText, classifyReply, hasExplicitOptOut, type ReplyMessage } from '@fss/domain';
-import { mustCover } from './support/coverage.ts';
 
 /**
  * Appendix G 35: "Ambiguous opt-out wording holds for review; explicit stop wording
@@ -29,8 +28,6 @@ const message = (text: string, truncated = false): ReplyMessage => ({
 });
 
 describe('Appendix G 35: explicit stop suppresses, ambiguity holds', () => {
-  mustCover(35, ['hasExplicitOptOut', 'opt_out']);
-
   it('explicit stop wording is an opt-out', () => {
     for (const text of ['Please stop emailing me.', 'Unsubscribe me.', 'Remove me from your list.']) {
       expect(hasExplicitOptOut(authoredText(text)), text).toBe(true);

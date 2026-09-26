@@ -1,19 +1,11 @@
 # FSS changelog
 
-This file is generated: `npm run changelog` writes it from the fragment files in [`changelog/`](changelog/), and nothing above "Before 25 Sep 2026" is edited by hand.
+Frozen 26 Sep 2026. From here the changelog is the list of merged pull requests (`gh pr list --state merged`).
 
-One line per merged change, newest first:
+The lines below, newest first, cover 21 to 26 September 2026. Those from 21 to 25 September were seeded from the release records 8.0 to 8.0av, one line each; the bracketed number ending each names its record in `release-records.md`.
 
-```
-- YYYY-MM-DD PR <n> (<lane>): <what changed for the founder or operator>
-```
-
-Each line is a fragment: one file under `docs/greenfield/changelog/` holding exactly that line, added in the pull request that makes the change. Name it `<yyyy-mm-dd>-pr<n>.md`, or `<yyyy-mm-dd>-<branch-slug>.md` with `branch <branch>` in place of `PR <n>` while the pull request has no number yet; the date in the name is the line's date, and the slug is the branch name in lower case with every run of other characters as one `-` (`a3/changelog-fragments` is `a3-changelog-fragments`). A pull request adds its fragment and does not touch this file, so no two pull requests conflict over the changelog; merged fragments are folded in with `npm run changelog`, in a pull request of its own. `npm run changelog:check`, in the greenfield gate and the nightly, fails on a malformed fragment and on anything above "Before 25 Sep 2026" that the fragments do not say, and lists the fragments not folded in yet. Lines of one day sort by file name, pull request numbers as numbers.
-
-Say what the founder or the operator will notice, not how it was built; the pull request and the code say how. From 25 September 2026 this replaces the numbered release records that `release.md` used to collect, and a decision is a line here too unless it changes an interface or a safety rule (`docs/decisions/README.md`). What is still unverified lives in `release.md` 8.1, not here.
-
-The lines from 21 to 25 September 2026 were seeded from the release records 8.0 to 8.0av, one line each, dated as the record dates itself. The bracketed number ending each names its record in [`release-records.md`](release-records.md). Changes merged in those days without a record of their own are not listed; `git log --merges` has them.
-
+- 2026-09-26 PR 252 (R1): `infra/scripts/release-rollback.sh` rolls production back to a previous release's images in one command (release.md 4.1a): it plans the checked-out previous commit with its digests and ranges, keeping sending, the generation pin, hostname, certificate and alert e-mails as production runs them, and with `--apply` applies, deploys on the rolling path and smokes; it refuses digests not tagged for that commit, a database version outside its ranges, a service mid-rollout, and any plan touching more than task definitions and the two services.
+- 2026-09-26 PR 251 (D1): "Edit as a new draft" on a published version that still has a LinkedIn step now makes the draft instead of failing with `invalid_input`: the draft keeps the email and call steps in order, numbered 1..n, and leaves the LinkedIn step out; a version of only LinkedIn steps gives an empty draft, which Publish refuses until a step is added; and a refused draft no longer leaves an empty draft behind.
 - 2026-09-26 PR 249 (T1): a rehearsal teardown no longer leaves a retained 20 GB automated backup of its database (the rehearsal root deletes them with the instance; production keeps its 35 days), and the prefix guard no longer fails on deleted EC2 security groups and rules the tagging API still lists — it sets them aside like ECS and KMS ARNs, while a real leftover such as an RDS snapshot still fails it.
 - 2026-09-26 PR 248 (coordinator): the images run fails its first attempt when `fss-rh-<image>:ci-<commit>` already exists, so another writer's push can never become this run's build (a re-run of the same run still reuses its own tag); `schema-preflight-0018.sh` exits non-zero when ECS refuses to deregister its temporary operations revision, naming the revision to remove by hand. Review of PRs 246 and 247.
 - 2026-09-26 PR 247 (A4): migration 0018 takes LinkedIn out of the database — each contact's LinkedIn URL moves into the contact's title, where the Mac shows it; the migration refuses, naming counts, before it would erase a stored LinkedIn message or recorded reply unless the owner has said so (`--remove-linkedin-history`); `infra/scripts/schema-preflight-0018.sh` prints those counts while production is still running (schema 18, a stop-migrate-start release: release.md 4.3)

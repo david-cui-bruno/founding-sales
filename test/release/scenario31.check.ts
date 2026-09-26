@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { LONG_HOLD_REVIEW_MILLISECONDS, composeHolds, decideResume } from '@fss/domain';
-import { mustCover } from './support/coverage.ts';
 
 /**
  * Appendix G 31: "Long hold of more than seven days never resumes without review; a
@@ -38,8 +37,6 @@ function unionOf(milliseconds: number) {
 }
 
 describe('Appendix G 31: the seven-day review boundary', () => {
-  mustCover(31, ['requiresReview', 'review_required']);
-
   it('a hold shorter than seven days shifts and resumes', () => {
     const composition = unionOf(LONG_HOLD_REVIEW_MILLISECONDS - 1000);
     expect(composition.blocked).toBe(false);

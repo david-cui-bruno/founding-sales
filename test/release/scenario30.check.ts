@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { SUPPRESSION_SOURCES } from '@fss/contracts';
 import { mayCorrectSuppression } from '@fss/domain';
-import { mustCover } from './support/coverage.ts';
 
 /**
  * Appendix G 30: "A prospect opt-out cannot use the salesperson correction path."
@@ -25,8 +24,6 @@ import { mustCover } from './support/coverage.ts';
  */
 
 describe('Appendix G 30: the source, not the clock, refuses a prospect opt-out', () => {
-  mustCover(30, ['not_salesperson_originated', 'prospect_opt_out']);
-
   it('refuses the prospect’s own words one second after they were recorded', () => {
     const actorUserId = '11111111-2222-4333-8444-555555555555';
     const recordedAt = '2026-09-21T13:00:00.000Z';
