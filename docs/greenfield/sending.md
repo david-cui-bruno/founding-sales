@@ -90,7 +90,7 @@ mailbox (`fssFenceIdOfSentMessage`). `@fss/domain/restore`'s `recoverSentFolderM
 then inserts a `sent` tombstone (`insertSentTombstone`) on the step a lost fence was the
 send of. The tombstone takes the lost fence's own id and Message-ID, so the dedupe key
 in `prepareOutboundMessage` sees it and `dispatchOutboundMessage` answers
-`already_terminal`. See `docs/decisions/g73-missing-fences-are-recovered-from-sent.md`.
+`already_terminal`. See `docs/archive/decisions/g73-missing-fences-are-recovered-from-sent.md`.
 
 ### 5. `unknown_terminal` is terminal, whichever the admin chooses
 
@@ -149,8 +149,8 @@ business date has moved past an open day. The signals are recorded where they ar
 learned: a bounce and an opt-out in `mail/effects.ts`, a confirmed opt-out in
 `classification/confirmations.ts`, a provider error in `outbound/send.ts`, and every
 imported outgoing message that has no fence in `mail/pipeline.ts`. See
-`docs/decisions/g15-the-worker-drains-what-the-lanes-left.md` and
-`docs/decisions/g22-a-late-bounce-belongs-to-its-send.md`.
+`docs/archive/decisions/g15-the-worker-drains-what-the-lanes-left.md` and
+`docs/archive/decisions/g22-a-late-bounce-belongs-to-its-send.md`.
 
 The thresholds `rampHealthFailure` uses — `RAMP_MAX_BOUNCE_RATE = 0.05`,
 `RAMP_MAX_OPT_OUT_RATE = 0.1`, `RAMP_RATE_FLOOR = 20`, `RAMP_SMALL_DAY_TOLERANCE = 1` —
@@ -274,7 +274,7 @@ is Google Workspace's per-user limit of 2,000 messages in any rolling 24 hours
   other. Yesterday's row changes only when the pipeline counts a late direct send, which
   takes the send gate exclusive first.
 
-What it does not model is in `docs/decisions/g87-ramp-raise-headroom-exposure.md`:
+What it does not model is in `docs/archive/decisions/g87-ramp-raise-headroom-exposure.md`:
 Google's separate recipient limits, trial Workspace accounts (500 a day), and a
 salesperson's own sending beyond the ceiling, which FSS observes and cannot stop.
 
@@ -352,7 +352,7 @@ direct-send counter take it first thing for that reason.
 
 This section supersedes items 3 to 5 of *What the gate refuses* below: those are now one
 step, the complete eligibility. Items 7 and 8 now use the holiday-aware window and the
-claim's business date. `docs/decisions/g77-dispatch-rechecks-under-the-lock.md` has the
+claim's business date. `docs/archive/decisions/g77-dispatch-rechecks-under-the-lock.md` has the
 reasoning and what it deliberately leaves out.
 
 ## How a sending domain comes to exist
@@ -420,7 +420,7 @@ daily cap is reported as suppressed, because that is the fact somebody needs to 
 3. the frozen route invalidated or retired since preparation (12.3's bounce handling);
 4. any open hold blocking `email_send` for this owner or firm (4.2, 12.6);
 5. coverage unproved;
-6. **the release gate** (16.2), refused as `workspace_sending_not_attested`. The deployment flag and the admin's `sending_enabled` attestation must both say yes. Since lane g71 the release record the attestation names must also be stored, have passed, and carry *this worker's own* image digest. The `detail` says which part said no: `deployment`, `workspace`, `release_record_unknown`, `release_record_not_passing`, `release_record_identity_unknown` or `release_record_digest_mismatch`. It never names the reference. See `docs/decisions/g71-sending-gate-is-bound-to-the-release-record.md`;
+6. **the release gate** (16.2), refused as `workspace_sending_not_attested`. The deployment flag and the admin's `sending_enabled` attestation must both say yes. Since lane g71 the release record the attestation names must also be stored, have passed, and carry *this worker's own* image digest. The `detail` says which part said no: `deployment`, `workspace`, `release_record_unknown`, `release_record_not_passing`, `release_record_identity_unknown` or `release_record_digest_mismatch`. It never names the reference. See `docs/archive/decisions/g71-sending-gate-is-bound-to-the-release-record.md`;
 7. the sending domain unknown, unauthenticated, or sending disabled (12.7);
 8. outside the firm-local window, re-derived rather than trusted (11.2);
 9. the mailbox's daily cap (12.7): the cap in force, with a stored raise judged on
@@ -455,18 +455,18 @@ Nothing in `packages/domain/outbound` imports anything of G8's.
 
 ## The decisions behind it
 
-* `docs/decisions/g7-held-returns-to-prepared.md` — why the machine has one reverse
+* `docs/archive/decisions/g7-held-returns-to-prepared.md` — why the machine has one reverse
   edge, and why no other one would be safe.
-* `docs/decisions/g7-count-before-claim.md` — why the cap was counted before the fence
+* `docs/archive/decisions/g7-count-before-claim.md` — why the cap was counted before the fence
   was claimed; superseded by g77.
-* `docs/decisions/g77-dispatch-rechecks-under-the-lock.md` — OAuth first, then the
+* `docs/archive/decisions/g77-dispatch-rechecks-under-the-lock.md` — OAuth first, then the
   recheck, the reservation and the claim in one transaction under the send gate;
   coverage freshness; the claim's business date; holidays at dispatch.
-* `docs/decisions/g7-domain-guard-scope.md` — why the guard counts the domain and
+* `docs/archive/decisions/g7-domain-guard-scope.md` — why the guard counts the domain and
   holds the firm, including the over-broad hold the scenario test caught.
-* `docs/decisions/g87-ramp-raise-headroom-exposure.md` — the raise's health rule, the
+* `docs/archive/decisions/g87-ramp-raise-headroom-exposure.md` — the raise's health rule, the
   account headroom and its reserve, and recipient exposure with in-doubt reservation.
-* `docs/decisions/g7-no-dns-lookup.md` — why 12.7's authentication gate is a person's
+* `docs/archive/decisions/g7-no-dns-lookup.md` — why 12.7's authentication gate is a person's
   checklist and this application never resolves a TXT record.
 
 ## What is deliberately not here

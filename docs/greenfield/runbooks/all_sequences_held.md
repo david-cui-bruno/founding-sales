@@ -7,7 +7,7 @@
 The worker publishes both gauges on every metric pass, once a minute. They have no
 dimensions and are summed over every workspace (lane g72; `collectSequenceMetrics` in
 `packages/domain/sequences/metrics.ts`,
-`docs/decisions/g72-enrollment-gauges.md`).
+`docs/archive/decisions/g72-enrollment-gauges.md`).
 
 - **`ActiveEnrollments`**: live enrollments, meaning `active` or `review_required`.
   Completed and stopped enrollments are not counted.

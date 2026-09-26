@@ -172,7 +172,7 @@ run "a_certificate_that_is_not_an_acm_arn_is_refused" {
 # mocked values during the apply phase, so this comparison cannot be made during
 # a plan any more than a real one could. An apply run under a mocked provider
 # reaches nothing and needs no credential.
-# `docs/decisions/g12j-mock-providers-keep-computed-values-unknown.md`.
+# `docs/archive/decisions/g12j-mock-providers-keep-computed-values-unknown.md`.
 run "the_access_log_bucket_is_the_module_s_own" {
   command = apply
 

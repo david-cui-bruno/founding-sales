@@ -182,7 +182,7 @@ twenty addresses a pass. The Firm page's second version (`pageVersion: 2`) carri
 route's `technicalValidation`; the page says **Checking…** (with **Check again**,
 `POST /contacts/routes/check`), **Deliverable domain — usable**, **Deliverable domain —
 not usable yet**, or **Mail can’t reach this address — invalid**.
-`docs/decisions/g90-email-technical-validation.md` has the reasons for every row.
+`docs/archive/decisions/g90-email-technical-validation.md` has the reasons for every row.
 
 ### `pipeline_stages`
 
@@ -215,11 +215,11 @@ append-only by privilege.
 Why not a `jobs` row: Appendix C's job kinds are a closed set the queue owns, no
 handler was registered for any of these when the table was written, and a job nobody
 handles becomes a dead job and then a critical alert. See
-`docs/decisions/g3a-domain-event-outbox.md`, whose "what would change this" paragraph
+`docs/archive/decisions/g3a-domain-event-outbox.md`, whose "what would change this" paragraph
 predicted the job kind that now drains the first two rows —
 `sequence.terminal_stop`, in `apps/worker/src/handlers/terminalStop.ts`. The table did
 not change; it gained a reader (lane G15,
-`docs/decisions/g15-the-worker-drains-what-the-lanes-left.md`).
+`docs/archive/decisions/g15-the-worker-drains-what-the-lanes-left.md`).
 
 ## Reassignment (Appendix A)
 
@@ -273,7 +273,7 @@ refuses as `firm_merged`.
   `apps/api/src/routes/pipeline.ts`, and the adjective is enforced: no command touches
   a terminal stage, because `changeStage` finds Won and Lost by `terminal_kind` and a
   workspace that had renamed or retired one would have closed opportunities nobody can
-  create (`docs/decisions/g9-terminal-stages-are-not-administrable.md`). Positions stay
+  create (`docs/archive/decisions/g9-terminal-stages-are-not-administrable.md`). Positions stay
   contiguous from 1 with the terminal stages last after every command. The note said
   "still unowned" until lane G15's documentation sweep found it stale.
 * **Suppression and dial authorization** — lane G4. This lane records the route

@@ -82,7 +82,7 @@ The footer a version stores is its sign-off, and the block an approval requires 
 body to end with is that sign-off and then `Reply "stop" and I will not email you
 again.` There is no postal address between them and no column for one: migration 0015
 dropped `footer_postal_address` under David's 22 September decision, recorded in
-`docs/decisions/g20-automated-email-carries-no-postal-address.md`. The footer is
+`docs/archive/decisions/g20-automated-email-carries-no-postal-address.md`. The footer is
 inside the body rather than appended at send time, so the content hash covers it and
 an edit to the footer leaves the approval behind exactly as an edit to the opening
 does.
@@ -133,7 +133,7 @@ produced.
 `missing_variables`, and nothing else. Every other refusal already *is* a hold somebody
 else wrote, or a cap re-read inside the fence, and a second row for it would match
 nobody's release statement — "clearing one hold never clears another" (4.3) cuts both
-ways. See `docs/decisions/g8-which-holds-this-lane-opens.md`.
+ways. See `docs/archive/decisions/g8-which-holds-this-lane-opens.md`.
 
 ### 5. The union, never the sum
 
@@ -156,7 +156,7 @@ Since lane g82 a resume counts only the window after the last applied one (the l
 the same seven scopes, for the same action kinds, as `holdSource`. It runs on its own:
 a released hold wakes the steps it blocked on the next scheduler pass, and the run
 resumes them before its eligibility check
-(`docs/decisions/g82-a-step-is-woken-by-its-row-version.md`).
+(`docs/archive/decisions/g82-a-step-is-woken-by-its-row-version.md`).
 
 ### 6. The send gets finished bytes, and the fence is G7-2's
 
@@ -169,7 +169,7 @@ machine from `prepared` onwards.
 Owning the state machine is not the same as driving it. Appendix C has no send job
 kind, so `sequence.action` calls `dispatch` too — after its own transaction commits,
 and only while the fence reads `prepared` or `held`, neither of which ever reached
-Gmail (`docs/decisions/g8-this-lane-dispatches.md`, amended by g82). A fence that comes
+Gmail (`docs/archive/decisions/g8-this-lane-dispatches.md`, amended by g82). A fence that comes
 back `held` is a cap that has not cleared yet, not a step that is over:
 `CLOCK_CLEARING_HOLDS` pushes `not_before` forward, the scheduler asks again, and the
 step's next run finds the fence it already has and hands it back to the dispatch path.
@@ -241,7 +241,7 @@ it and sleeps until the release; any other held step waits out its reason's inte
 `CLOCK_CLEARING_HOLDS` for caps, windows and a reconciling fence, fifteen minutes for
 `send_unknown_terminal`, an hour for everything else. A step's own fence's holds do not
 block its own wake, because the dispatch path is what releases them. See
-`docs/decisions/g82-a-step-is-woken-by-its-row-version.md`.
+`docs/archive/decisions/g82-a-step-is-woken-by-its-row-version.md`.
 
 The handler's shape follows from Appendix B: one narrow transaction that re-reads
 eligibility, renders and prepares the fence, then a commit, then the dispatch. The
@@ -294,7 +294,7 @@ the audited record of each enrollment it ended.
 The cursor is a `(occurred_at, id)` keyset rather than a timestamp, because two events
 written in one transaction share `now()` to the microsecond. It is only an
 optimisation: stopping is idempotent, so a replay stops nothing twice. See
-`docs/decisions/g8-outbox-cursor.md`.
+`docs/archive/decisions/g8-outbox-cursor.md`.
 
 `consumeSuppressionStops` is the second stream. G4's `suppression_finalizations` marker
 with `outcome = 'finalized'` is Appendix C's "terminal marker" — an event whose terminal
@@ -312,8 +312,8 @@ missed.
 owes a workspace anything. Until lane G15 nothing called either function at all: closing
 an opportunity Won stopped no enrollment, and a confirmed human reply set the control
 mode and left the sequence running, which is invariant 3. See
-`docs/decisions/g15-the-worker-drains-what-the-lanes-left.md` and
-`docs/decisions/g22-the-manual-mode-origin.md`.
+`docs/archive/decisions/g15-the-worker-drains-what-the-lanes-left.md` and
+`docs/archive/decisions/g22-the-manual-mode-origin.md`.
 
 ## Authoring and starting a sequence on the Mac (lane g88)
 
@@ -360,7 +360,7 @@ enrollment and each remaining step as *from → to* in the firm's zone, and **Re
 these dates** is the only control that resumes. The bridge refuses to resume an
 enrollment whose review is not on screen and opens the review instead. When a hold is
 still open, the review says so and offers no confirmation. The confirmation decides again
-under its lock. See `docs/decisions/g88-founder-authoring-and-review.md`.
+under its lock. See `docs/archive/decisions/g88-founder-authoring-and-review.md`.
 
 ## Adding a step channel, or a terminal condition
 
@@ -370,7 +370,7 @@ under its lock. See `docs/decisions/g88-founder-authoring-and-review.md`.
 4. Decide in `runDueStepExecution` whether it is automated or `awaiting_manual`.
 5. A terminal condition additionally goes in `sequence_versions_stop_conditions_known`
    **and** its `_complete` twin, because a version may not opt out of one
-   (`docs/decisions/g8-stop-conditions-are-mandatory.md`).
+   (`docs/archive/decisions/g8-stop-conditions-are-mandatory.md`).
 6. `npm run gate:greenfield`.
 
 ## Running the tests

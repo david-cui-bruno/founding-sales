@@ -11,8 +11,8 @@ Read section 1 in full before running anything in section 3. The order matters: 
 | Thing | Value |
 |---|---|
 | Terraform | 1.15.8 locally and in CI (`.github/workflows/greenfield-infra.yml`). The roots declare `>= 1.10.0`; the floor is the S3 native state lock. |
-| Region | `us-east-1` — `var.aws_region`, `FSS_POLICY_REGION`, `FSS_CHECK_ROLE_REGION`, `vars.FSS_AWS_REGION` |
-| Account | `326255650484` — `var.aws_account_id` (`TF_VAR_aws_account_id` or `-var`), `FSS_POLICY_ACCOUNT_ID`, `FSS_CHECK_ROLE_ACCOUNT_ID` |
+| Region | `us-east-1` — `local.aws_region` in each AWS root |
+| Account | `326255650484` — `local.aws_account_id` in each AWS root |
 | State bucket | `callie-sourcing-tfstate-326255650484` (already exists; created once by `cloud/scripts/bootstrap-terraform-state.sh`) — `infra/roots/<root>/backend.hcl`, `FSS_POLICY_STATE_BUCKET` |
 | Lock table | `callie-sourcing-tflock` (already exists) — `infra/roots/<root>/backend.hcl`, `FSS_POLICY_LOCK_TABLE` |
 | Production state key | `fss/greenfield/production/terraform.tfstate` |
@@ -21,7 +21,7 @@ Read section 1 in full before running anything in section 3. The order matters: 
 
 Neither root provisions, modifies or grants access to the state bucket or the lock table. They are inputs.
 
-**Every value in that table is a parameter, and the values above are its default.** The account, the region, the state bucket, the lock table and the state KMS key are supplied by variable, environment variable or `-backend-config`; nothing under `infra/**/*.tf`, no workflow and no script decides which account an apply is in. That is what lets the rehearsal and production move into dedicated AWS accounts under Organizations, which David decided on 22 September 2026: **`docs/greenfield/accounts.md`** is the per-account checklist, in order, and `test/release/accountAgnostic.check.ts` is what keeps the tree able to follow it. Every command in this runbook can be given another account by exporting the variables named above; run with none, it does exactly what it did before.
+FSS runs in that one account and region. They are literals in the roots and the backend files; the plan of 22 September 2026 to move into dedicated accounts was not carried out.
 
 Run the offline gate before any apply. It is the same gate CI runs and it needs no credentials:
 
@@ -55,7 +55,7 @@ Until those roles exist, `terraform plan` will fail at provider configuration. T
 
 **This section used to be the policy.** It described the two roles in prose and the repository shipped no document, so both policies were written from that prose — and on 21 September the fourth credentialed rehearsal (Actions run 35628963637) applied with them and reported 25 errors in six classes, then failed its teardown and left a bucket behind. Six classes, one run, none of them visible to any offline check here, because there was nothing offline to check.
 
-The policy is now `infra/policies/deployment-role-policy.json.tftpl`, rendered by a script that makes no call, and `test/release/deploymentRolePolicy.check.ts` walks every `resource "aws_*"` type in `infra/modules` and `infra/roots` and fails when one of them needs an action the rendered policy does not allow — or allows and then cancels with a blanket deny, which is what happened to all eight Secrets Manager entries. `infra/policies/terraform-resource-actions.json` is the map it reads, one entry per resource type, and it is meant to be read. `docs/decisions/g16-the-deployment-role-policy-is-code.md` lists every change against David's hand-written policies.
+The policy is now `infra/policies/deployment-role-policy.json.tftpl`, rendered by a script that makes no call, and `test/release/deploymentRolePolicy.check.ts` walks every `resource "aws_*"` type in `infra/modules` and `infra/roots` and fails when one of them needs an action the rendered policy does not allow — or allows and then cancels with a blanket deny, which is what happened to all eight Secrets Manager entries. `infra/policies/terraform-resource-actions.json` is the map it reads, one entry per resource type, and it is meant to be read. `docs/archive/decisions/g16-the-deployment-role-policy-is-code.md` lists every change against David's hand-written policies.
 
 **Read the document before you put it.** It is a whole inline policy, not a delta: `put-role-policy` replaces the policy of that name entirely. **Validate it before you put it**, read-only: `aws accessanalyzer validate-policy --policy-type IDENTITY_POLICY --policy-document file:///tmp/<file>.json --query 'findings[?findingType==`ERROR`]'` must print `[]`. The renderer checks the ARN grammar it knows about (a literal service segment in every resource); Access Analyzer checks the rest as IAM itself will.
 
@@ -103,37 +103,6 @@ Each role is asked only about its own namespace and the command refuses the othe
 
 **And the one permission that must never appear on the production role.** `s3:BypassGovernanceRetention` is in the rehearsal document and denied outright in the production one, because a production suppression journal that its deployer can empty is not an append-only record and Appendix E step 2 stops being a recovery. The check is in `docs/greenfield/release.md` 1.2 and the release suite asserts both halves.
 
-#### 1.1b Discovery mode: one wide pass for the rehearsal role, then the exact policy (David's decision, 22 September 2026)
-
-Six credentialed runs each found exactly one missing permission, forty minutes apart, because the services the apply asks for call each other in the caller's session and the message names the wrong resource. David chose to break that loop once: `fss-rh-deploy` holds a wide allow on the services the tree uses for **one** pass of `create`, `deploy` and `full`; the CloudTrail record of that pass is the source of the exact policy; the exact policy is proved by one more run before anything touches production. `fss-prod-deploy` is never widened and the renderer refuses to render discovery for it. `docs/decisions/g25-discovery-mode-for-the-rehearsal-role.md` has the reasoning and the guards.
-
-```bash
-# 1. Render, read, validate, put: the rehearsal role only. The renderer prints what it left out.
-infra/scripts/render-deployment-role-policy.sh fss-rh --sids   --discovery
-infra/scripts/render-deployment-role-policy.sh fss-rh --pretty --discovery > /tmp/fss-rh-deploy-scope.discovery.json
-# Read-only: IAM Access Analyzer parses the document as IAM will and reports grammar errors
-# (the first discovery document failed put-role-policy on a wildcard service segment, 22 Sep).
-aws accessanalyzer validate-policy --policy-type IDENTITY_POLICY \
-  --policy-document file:///tmp/fss-rh-deploy-scope.discovery.json \
-  --query 'findings[?findingType==`ERROR`]' --output json          # expect []
-aws iam put-role-policy --role-name fss-rh-deploy --policy-name fss-rh-deploy-scope \
-  --policy-document file:///tmp/fss-rh-deploy-scope.discovery.json
-
-# 2. The check still runs, and must still pass: the guards must not deny anything the apply needs.
-infra/scripts/check-deployment-role.sh fss-rh-deploy fss-rh
-
-# 3. Note the UTC time, run the stages, note the UTC time.
-# 4. The record of what the role actually asked for, from CloudTrail's 90-day event history (read-only):
-infra/scripts/deployment-role-actions-used.sh 2026-09-22T17:00:00Z 2026-09-22T21:00:00Z fss-rh-deploy > /tmp/fss-rh-actions-used.json
-
-# 5. When the exact policy has merged: put the normal document back, and check it, before anything else.
-infra/scripts/render-deployment-role-policy.sh fss-rh > /tmp/fss-rh-deploy-scope.json
-aws iam put-role-policy --role-name fss-rh-deploy --policy-name fss-rh-deploy-scope --policy-document file:///tmp/fss-rh-deploy-scope.json
-infra/scripts/check-deployment-role.sh fss-rh-deploy fss-rh
-```
-
-What the discovery document holds, exactly: every statement of the normal document except the Allows whose every action is on a widened service (they grant nothing the wide allow does not, and with them the document is past IAM's limit); so the read-only metadata statement, the scoped IAM grant, the lock-table grant, and **every Deny** stay. Added: `DiscoveryAllowOnTheServicesTheTreeUsesRemoveAfterTheFirstFullRun` (`cloudfront`, `cloudwatch`, `ec2`, `ecs`, `elasticloadbalancing`, `kms`, `logs`, `rds`, `secretsmanager`, `wafv2`, and `tag:GetResources`, on `*`; never `iam`, `sts` or `dynamodb`, and since the independent review of 22 September never `s3`, `ecr`, `sns` or `acm` either, whose scoped statements stay), and seven guards, the seventh denying every object action on production's state keys: nothing named `fss-prod`, nothing tagged `NamePrefix=fss-prod*`, no tagging as `fss-prod*`, nothing of the old stack or its delegated worker, no change to the state bucket's configuration, no change to the state key. Secret values stay unreadable (the value-read deny is kept), KMS data actions stay inside the namespace (that deny is kept), and S3 data outside the state stays unreadable.
-
 **The trust policies are not this lane's and are not in the repository.** `fss-rh-deploy` trusts the GitHub OIDC provider and the subject `repo:david-cui-bruno/founding-sales:environment:rehearsal`; `fss-prod-deploy` trusts David's admin principal. Neither is touched by anything above: `put-role-policy` writes the permission policy, never the trust relationship.
 
 **Who does the assuming, and the one flag that changes it.** Every root takes `assume_deployment_role`, a boolean **defaulting to `true`**: the provider assumes `deployment_role_name` before it makes a call. That is what your local applies do and there is nothing to pass — sections 2.2 and 3.2 are unchanged.
@@ -144,7 +113,7 @@ CI is the exception. `aws-actions/configure-aws-credentials` has already assumed
 infra/scripts/rehearsal-caller-identity.sh fss-rh-deploy
 ```
 
-which prints `aws sts get-caller-identity --query Arn` and refuses anything that is not `arn:aws:sts::326255650484:assumed-role/fss-rh-deploy/<session>` — a user, a different role, or a role whose name merely begins the same way. The flag says "use the credentials you already have"; that script is what makes sure they are the right ones. The default stays `true` in all three roots so that a forgotten flag is an `sts:AssumeRole` refusal rather than an apply running as whatever credential happened to be in the environment. `docs/decisions/g12e-the-provider-does-not-reassume-its-own-session.md`.
+which prints `aws sts get-caller-identity --query Arn` and refuses anything that is not `arn:aws:sts::326255650484:assumed-role/fss-rh-deploy/<session>` — a user, a different role, or a role whose name merely begins the same way. The flag says "use the credentials you already have"; that script is what makes sure they are the right ones. The default stays `true` in all three roots so that a forgotten flag is an `sts:AssumeRole` refusal rather than an apply running as whatever credential happened to be in the environment. `docs/archive/decisions/g12e-the-provider-does-not-reassume-its-own-session.md`.
 
 ### 1.2 The DNS zone and the ACM certificates
 
@@ -165,11 +134,11 @@ The DNS A/ALIAS record for the API hostname is created **after** the first apply
    - the **sign-in** client, for the Google OpenID Connect authorization-code flow with PKCE in the system browser;
    - the **Gmail** client, for the separate `gmail.readonly` + `gmail.send` grant.
 5. Keep both client secrets to hand for step 1.4. Do not put either in a file in the repository, in a `tfvars` file, or in a shell history line.
-6. **No rehearsal Google Cloud project, ever.** The Pub/Sub topic and its push subscription belong to `infra/roots/production-google` alone (lane g85); the rehearsal root declares no Google provider, has no `gcp_project_id`, and creates nothing in Google Cloud. A rehearsal's Gmail is the recorded fake and its webhook is exercised offline with locally signed tokens, so a rehearsal project would be a second cloud trust relationship that proves nothing. Its two task definitions carry a derived audience and two public placeholders naming a project that does not exist; `docs/decisions/g12j-the-rehearsal-has-no-google-provider.md` lists the values and why they are not blank.
+6. **No rehearsal Google Cloud project, ever.** The Pub/Sub topic and its push subscription belong to `infra/roots/production-google` alone (lane g85); the rehearsal root declares no Google provider, has no `gcp_project_id`, and creates nothing in Google Cloud. A rehearsal's Gmail is the recorded fake and its webhook is exercised offline with locally signed tokens, so a rehearsal project would be a second cloud trust relationship that proves nothing. Its two task definitions carry a derived audience and two public placeholders naming a project that does not exist; `docs/archive/decisions/g12j-the-rehearsal-has-no-google-provider.md` lists the values and why they are not blank.
 
 ### 1.3a Google application-default credentials, on your Mac, before a plan of the Google root
 
-`infra/roots/production-google` is the one root that declares `provider "google"` (lane g85, `docs/decisions/g85-the-google-provider-has-its-own-root.md`). It holds the four Gmail push objects and is planned and applied only when one of them has to change. `infra/roots/production` declares no Google provider: it takes the topic and the push service account as validated variable defaults, so **a production plan needs no Google credential** — once the one-time migration in `docs/greenfield/google-root-migration-runbook.md` has taken the four addresses out of the production state. Until then a production plan still needs one, because its state names Google objects.
+`infra/roots/production-google` is the one root that declares `provider "google"` (lane g85, `docs/archive/decisions/g85-the-google-provider-has-its-own-root.md`). It holds the four Gmail push objects and is planned and applied only when one of them has to change. `infra/roots/production` declares no Google provider: it takes the topic and the push service account as validated variable defaults, so **a production plan needs no Google credential**. The four objects were imported into the Google root's state, and removed from the production state, on 25 September 2026.
 
 Terraform configures **every** provider a configuration requires before it evaluates anything, whether or not a resource uses it. Without a credential a plan of the Google root stops with
 
@@ -256,27 +225,9 @@ Both services are deployed by **digest**. `api_image` and `worker_image` are val
 
 ### 2.1 The rehearsal repositories — one apply, then never again
 
-The per-run rehearsal root creates **no** repository (`create_registry = false`). It cannot: the images are pushed before the run exists, the release workflow's environment secrets name two fixed repositories, and a per-run repository would be destroyed with the run — taking the earlier compatible binaries the 4.2 rollback path depends on. `docs/decisions/g12c-the-rehearsal-registry-is-its-own-root.md` has the reasoning.
+The per-run rehearsal root creates **no** repository (`create_registry = false`). It cannot: the images are pushed before the run exists, the release workflow's environment secrets name two fixed repositories, and a per-run repository would be destroyed with the run — taking the earlier compatible binaries the 4.2 rollback path depends on. `docs/archive/decisions/g12c-the-rehearsal-registry-is-its-own-root.md` has the reasoning.
 
-**You cannot apply this root from your Mac, and you should not try.** `fss-rh-deploy` trusts the GitHub OIDC provider and the subject `repo:david-cui-bruno/founding-sales:environment:rehearsal`, and nothing else; a `terraform apply` here is refused `sts:AssumeRole`, which is the trust policy working rather than a fault. **You never assume `fss-rh-deploy`.** The apply is a workflow run:
-
-> Actions → **Greenfield rehearsal registry apply** → Run workflow, on the commit you are releasing.
->
-> 1. **Leave `apply` unticked.** The run plans, guards the plan and prints it in the run summary. Nothing is created.
-> 2. Read the summary. It must create exactly `fss-rh-api` and `fss-rh-worker` with their two lifecycle policies, and it must destroy nothing. The run's own plan guard refuses anything else, but the guard is the second reader, not the first.
-> 3. Run the workflow **again, on the same commit, with `apply` ticked.** It applies the same saved plan and then prints `aws ecr describe-repositories` for the two names.
-
-The two repository URLs in that last table are the values of the `rehearsal` environment's `FSS_REHEARSAL_API_REPOSITORY` and `FSS_REHEARSAL_WORKER_REPOSITORY` secrets (release.md 1.3). Read them from the run summary rather than assembling them by hand.
-
-The workflow needs one more `rehearsal` environment secret than the release workflow does — `FSS_REHEARSAL_STATE_KMS_KEY_ARN`, the state bucket's KMS key, optional; without it the bucket's default encryption applies. `release.md` 1.3 lists it. The commands the workflow runs are printed with no credential by every pull request that touches it, and by hand with:
-
-```bash
-infra/scripts/rehearsal-registry-guard.sh commands
-```
-
-**The plan is no longer a second assumption of the role this run already holds.** G12d predicted that it would be, and it was: all three roots' `providers.tf` carried an unconditional `assume_role` block, so Terraform asked STS to assume `fss-rh-deploy` from a session that already was `fss-rh-deploy`, and the plan — not the init — was refused. **The answer is not a trust policy that admits the role to itself**, which would turn Appendix G 39's scoping into a convention. The `assume_role` block is conditional on `assume_deployment_role` (section 1.1), this workflow plans with `-var=assume_deployment_role=false`, and the step before it runs `infra/scripts/rehearsal-caller-identity.sh fss-rh-deploy`, which prints the session ARN and refuses anything that is not an assumed-role session of that role. If a plan is still refused at provider configuration, read that printed ARN first: it names the principal the run actually has.
-
-**If `init` is refused:** `fss-rh-deploy`'s state-bucket grant may be scoped to `fss/greenfield/rehearsal/*`, the per-run space, which excludes this root's key by construction — check that the role allows `s3:GetObject`/`s3:PutObject` on `arn:aws:s3:::callie-sourcing-tfstate-326255650484/fss/greenfield/rehearsal-registry/terraform.tfstate` (and on the same key plus `.tflock`, since `use_lockfile = true`), `s3:ListBucket` on `arn:aws:s3:::callie-sourcing-tfstate-326255650484` for that prefix, `dynamodb:GetItem`/`PutItem`/`DeleteItem` on `arn:aws:dynamodb:us-east-1:326255650484:table/callie-sourcing-tflock` for the lock items `callie-sourcing-tfstate-326255650484/fss/greenfield/rehearsal-registry/terraform.tfstate` and `…-md5`, and `kms:Decrypt`/`Encrypt`/`GenerateDataKey` on the state key if one is set.
+**It has been applied, once, and nothing re-applies it.** The workflow that did it (`greenfield-rehearsal-registry.yml`) and its plan guard were deleted on 26 September 2026; the root's state holds the two repositories. You cannot apply this root from your Mac: `fss-rh-deploy` trusts the GitHub OIDC provider and the subject `repo:david-cui-bruno/founding-sales:environment:rehearsal`, and nothing else, so a `terraform apply` here is refused `sts:AssumeRole`. If it ever has to be applied again, that is a pull request adding a job in the `rehearsal` environment that runs `infra/scripts/rehearsal-caller-identity.sh fss-rh-deploy` and then plans with `-var=assume_deployment_role=false` (section 1.1). The two repository URLs are the values of the `rehearsal` environment's `FSS_REHEARSAL_API_REPOSITORY` and `FSS_REHEARSAL_WORKER_REPOSITORY` secrets; `terraform output repository_urls` prints them.
 
 This root takes no `name_prefix`: `fss-rh` is a literal, because the workflow's secrets name exactly `fss-rh-api` and `fss-rh-worker`. Its state key is `fss/greenfield/rehearsal-registry/terraform.tfstate`, deliberately outside the per-run space `fss/greenfield/rehearsal/<run>/` — `registry` is a legal run suffix, and a run whose state collided with this one would destroy the repositories on teardown. The offline gate checks all of that.
 
@@ -292,7 +243,7 @@ and reports **no changes** to either repository. **If a production plan ever pro
 
 ### 2.2 The production repositories — the one use of `-target`
 
-Unlike 2.1, this one **is** a local command. `fss-prod-deploy` is trusted by your admin principal; `fss-rh-deploy` is not trusted by anything but the `rehearsal` environment, which is why the rehearsal registry apply above is a workflow run and this is not. Nothing here passes `assume_deployment_role`: its default is `true`, and the provider assuming `fss-prod-deploy` on your behalf is exactly what should happen when a person runs this.
+Unlike 2.1, this one **is** a local command. `fss-prod-deploy` is trusted by your admin principal; `fss-rh-deploy` is not trusted by anything but the `rehearsal` environment, which is why the rehearsal registry apply above was a workflow run and this is not. Nothing here passes `assume_deployment_role`: its default is `true`, and the provider assuming `fss-prod-deploy` on your behalf is exactly what should happen when a person runs this.
 
 ```bash
 # First apply: create the registries only.
@@ -358,7 +309,7 @@ A clean first plan shows:
 - **five** task definitions: `fss-prod-api`, `fss-prod-worker`, `fss-prod-migration`, `fss-prod-operations`, `fss-prod-drill`. Three of them are one-off families with no service;
 - both ECS services created with `desired_count = 0`, because this plan passes `bootstrap=true`. `release-deploy.sh` scales them afterwards. Without `bootstrap=true` the counts are 2 and 1;
 - **eight** `aws_secretsmanager_secret` entries and **no** `aws_secretsmanager_secret_version` at all. Terraform creates the entries empty and never holds a value; the offline gate refuses a version resource outright;
-- exactly one `aws_lb_listener`, on port 443. There is no port-80 listener by decision (`docs/decisions/g1-no-plaintext-listener.md`);
+- exactly one `aws_lb_listener`, on port 443. There is no port-80 listener by decision (`docs/archive/decisions/g1-no-plaintext-listener.md`);
 - no `aws_nat_gateway` and no `aws_vpc_endpoint`;
 - four Google resources created — service account, topic, publisher binding, push subscription — and **not** moved. They have never been applied anywhere, so a `moved` line for any of them would mean something has gone wrong.
 
@@ -618,7 +569,7 @@ A freshly applied stack will show several alarms in `INSUFFICIENT_DATA` until th
 | Change an alarm threshold | the thresholds are variables in `infra/modules/alerts`; surface the one you need in the root and apply. Spec 13.3 says thresholds are configuration versioned with the release. |
 | Rotate a secret value | `aws secretsmanager put-secret-value`, then `--force-new-deployment`. Terraform is not involved. **Except `app-runtime-database`**, whose value is a live PostgreSQL password: a put on its own leaves a secret the database refuses. Put the new value, then `fss admin database-users ensure --rotate-password` to alter the role to match, then force the deployment — and never re-put it as part of a redeploy (`release.md` 5.1 and 8.0s). |
 | Add an alert recipient | append to `alert_emails`, apply, then confirm the subscription. |
-| Pin the expected system generation (Appendix E step 1) | read the database's `systemGeneration` with the operations task in `release.md` 7.1, then `terraform plan -var="expected_system_generation=<N>"` with the rest of the section 3.0 list. The plan must replace exactly the `fss-prod-api` and `fss-prod-worker` task definitions, differing only in `FSS_EXPECTED_SYSTEM_GENERATION`, and update the two services in place. No one-off task definition carries it. Code leaves production unpinned (`null`). A wrong value makes the next worker open restore holds and fire the critical alarm; see `release.md` 7.1. **After a restore** the pin is the restored copy's generation plus one, applied with or before the change that points the services at it, never after. **After Appendix E step 9 it does not change:** step 9 lands the database on exactly that number. Confirm the advance's reported `generation` equals the pin (`docs/decisions/g56-restore-holds-are-opened-by-the-generation-check.md`). |
+| Pin the expected system generation (Appendix E step 1) | read the database's `systemGeneration` with the operations task in `release.md` 7.1, then `terraform plan -var="expected_system_generation=<N>"` with the rest of the section 3.0 list. The plan must replace exactly the `fss-prod-api` and `fss-prod-worker` task definitions, differing only in `FSS_EXPECTED_SYSTEM_GENERATION`, and update the two services in place. No one-off task definition carries it. Code leaves production unpinned (`null`). A wrong value makes the next worker open restore holds and fire the critical alarm; see `release.md` 7.1. **After a restore** the pin is the restored copy's generation plus one, applied with or before the change that points the services at it, never after. **After Appendix E step 9 it does not change:** step 9 lands the database on exactly that number. Confirm the advance's reported `generation` equals the pin (`docs/archive/decisions/g56-restore-holds-are-opened-by-the-generation-check.md`). |
 | Tear down a rehearsal run | The release workflow does it on `always()`, through `infra/scripts/rehearsal-teardown.sh`: caller-identity check, then `terraform destroy` with the same `name_prefix` and `assume_deployment_role=false`. Mind the object-lock caveat in 3.1. |
 
 Never run `terraform destroy` in the production root. Deletion protection on the database and the load balancer will stop it part-way and leave the stack half-removed, which is worse than either state.
@@ -631,6 +582,6 @@ Every statement about resource behaviour here comes from the Terraform schema an
 2. Whether the RDS parameter group values are all dynamic. `rds.force_ssl` is static and requires a reboot; the first apply creates the instance with the group attached, so it applies at creation.
 3. Whether `db.t4g.small` is enough for the scheduler's one-minute pass plus Gmail sync. It is a guess based on one salesperson; watch `OldestRunnableJobAgeSeconds` and the CPU credit balance for the first week.
 4. ~~The exact IAM policy text the two deployment roles need.~~ **Closed as prose, open as a cloud fact.** The policy is now `infra/policies/deployment-role-policy.json.tftpl`, both documents are rendered by `infra/scripts/render-deployment-role-policy.sh`, and the release suite fails when a resource type in this tree needs an action they do not allow (1.1a). What is still unverified is whether AWS agrees: every condition key and every resource-ARN shape below comes from the service authorization reference, and the only thing that settles them is `infra/scripts/check-deployment-role.sh` against the real roles, then a plan, then an apply.
-5. **Whether `fss-rh-deploy` can read the RDS-managed master secret.** The release workflow assembles the rehearsal database URL in the job from the run's outputs plus `secretsmanager:GetSecretValue` on `database_master_secret_arn` (`docs/decisions/g12c-the-rehearsal-database-url-is-derived.md`). RDS names that secret `rds!db-<id>`, which does **not** begin `fss-rh-`, so a policy scoped purely by name prefix will refuse it. Allow `secretsmanager:GetSecretValue` and `kms:Decrypt` on the specific secret the rehearsal root outputs — not on `*` — or the suite step fails with an `AccessDenied` and no connection string.
+5. **Whether `fss-rh-deploy` can read the RDS-managed master secret.** The release workflow assembles the rehearsal database URL in the job from the run's outputs plus `secretsmanager:GetSecretValue` on `database_master_secret_arn` (`docs/archive/decisions/g12c-the-rehearsal-database-url-is-derived.md`). RDS names that secret `rds!db-<id>`, which does **not** begin `fss-rh-`, so a policy scoped purely by name prefix will refuse it. Allow `secretsmanager:GetSecretValue` and `kms:Decrypt` on the specific secret the rehearsal root outputs — not on `*` — or the suite step fails with an `AccessDenied` and no connection string.
 6. Whether `fss-rh-deploy` may create the two durable repositories in `infra/roots/rehearsal-registry`. It should: the names are `fss-rh-api` and `fss-rh-worker` and the condition is on the resource name. It is one apply, and it is the first thing in section 2.
-7. **That a CI plan with `assume_deployment_role=false` reaches AWS at all.** With the flag off the provider has no `assume_role` block, which is the ordinary configuration for a process using ambient credentials — but nothing here has been run. The first workflow run is the proof, and the caller-identity step immediately above the plan prints the session ARN, so a failure at provider configuration can be read rather than guessed. The provider version this rests on is `hashicorp/aws` v5.100.0 under `~> 5.60`; `docs/decisions/g12e-the-provider-does-not-reassume-its-own-session.md` has the schema evidence and what to re-check if the roots ever move to v6.
+7. **That a CI plan with `assume_deployment_role=false` reaches AWS at all.** With the flag off the provider has no `assume_role` block, which is the ordinary configuration for a process using ambient credentials — but nothing here has been run. The first workflow run is the proof, and the caller-identity step immediately above the plan prints the session ARN, so a failure at provider configuration can be read rather than guessed. The provider version this rests on is `hashicorp/aws` v5.100.0 under `~> 5.60`; `docs/archive/decisions/g12e-the-provider-does-not-reassume-its-own-session.md` has the schema evidence and what to re-check if the roots ever move to v6.

@@ -208,7 +208,7 @@ the queue.
 `effective_suppressions` view does not exist yet. The rule is conservative: a
 firm-scoped event from one of the four *suppressing* sources, with no direct
 supersession, suppresses the firm. See
-`docs/decisions/g10-suppression-read.md`.
+`docs/archive/decisions/g10-suppression-read.md`.
 
 ## The firm's time zone comes from its coordinate
 
@@ -227,7 +227,7 @@ coordinate should supersede it. It should, and `zone.ts` is the better source:
 `RESEARCH_FIRM_ZONE_SOURCES` is `[coordinates, postal]`. `FIRM_ZONE_SOURCES` in
 `@fss/domain/crm` keeps the postal source alone, which is correct rather than an
 oversight: a firm typed in by hand has an address and no coordinate. See
-`docs/decisions/g10-coordinate-zone-source.md`.
+`docs/archive/decisions/g10-coordinate-zone-source.md`.
 
 ## What is deliberately not here
 
@@ -235,12 +235,12 @@ oversight: a firm typed in by hand has an address and no coordinate. See
   research does not. A sweep is a decision to spend money on a territory and an
   enrichment is a decision to re-read somebody's website. Both are enqueued by an admin
   command, or by the discovery run that just created the firm.
-  `docs/decisions/g10-no-scheduler-source.md`.
+  `docs/archive/decisions/g10-no-scheduler-source.md`.
 * **Live provider adapters.** A separate reviewed change. The worker registers a
   handler only for the provider kinds it was given, so today's image claims neither
   research kind and the jobs wait rather than failing.
 * **Creating contacts and routes from enrichment.** Suggestions instead.
-  `docs/decisions/g10-enrichment-suggests-routes.md`.
+  `docs/archive/decisions/g10-enrichment-suggests-routes.md`.
 * **Evidence retention deletion.** The provider's terms are recorded and
   `evidence_items.retention_expires_at` is written; the sweep that acts on it is lane
   G14's retention batch.

@@ -35,7 +35,7 @@ Cost levers worth David's attention, in order of size:
 2. **`cpu_architecture = "ARM64"`** is a materially cheaper Fargate rate for the same vCPU and memory. It is `X86_64` today only because the images must be built for the target. If the G-lane image build produces arm64, switching this is a one-line change and the digest validation still holds.
 3. **`api_desired_count = 2`** is for rolling deployment without a gap, not for load. One salesperson does not need two tasks for throughput. Dropping to 1 halves the API compute and means a deployment has a brief window with no API; the Electron cache covers a brief outage by design (spec 4.2).
 
-**Database connections** are not billed but are bounded by the instance class: each API task holds at most 9 (a request pool of 8 plus its heartbeat, lane g75) and the worker `FSS_WORKER_CONCURRENCY + 2` (3 by default), so even a rolling API deployment at 200 % peaks near 36 + 3 plus a few one-off operations connections, far below a `db.t4g.small`'s default `max_connections` of roughly 200 — the arithmetic is in `docs/decisions/g75-one-connection-per-request.md`.
+**Database connections** are not billed but are bounded by the instance class: each API task holds at most 9 (a request pool of 8 plus its heartbeat, lane g75) and the worker `FSS_WORKER_CONCURRENCY + 2` (3 by default), so even a rolling API deployment at 200 % peaks near 36 + 3 plus a few one-off operations connections, far below a `db.t4g.small`'s default `max_connections` of roughly 200 — the arithmetic is in `docs/archive/decisions/g75-one-connection-per-request.md`.
 
 ## 3. Network and edge
 
@@ -95,8 +95,8 @@ Gmail push volume for one mailbox is far below the Pub/Sub free allotment. The l
 - **No NAT gateway, no VPC endpoints.** Section 3 explains why.
 - **No standing staging environment.** Spec section 2: rehearsal environments are created and destroyed by CI. The steady-state cost of rehearsal is zero.
 - **No SQS, no Lambda, no DynamoDB.** The job queue is a PostgreSQL table.
-- **No CloudTrail trail in this root.** Control-plane audit logging is an account-level decision, not an application-stack one; see `docs/decisions/g1-cloudtrail-out-of-scope.md`.
-- **No VPC flow logs.** They are billed per GB ingested and the ALB access logs plus the application logs cover what version one needs; see `docs/decisions/g1-no-flow-logs.md`.
+- **No CloudTrail trail in this root.** Control-plane audit logging is an account-level decision, not an application-stack one; see `docs/archive/decisions/g1-cloudtrail-out-of-scope.md`.
+- **No VPC flow logs.** They are billed per GB ingested and the ALB access logs plus the application logs cover what version one needs; see `docs/archive/decisions/g1-no-flow-logs.md`.
 
 ## 8. The one command that turns this into numbers
 
@@ -159,6 +159,5 @@ roots/
   rehearsal-registry  the two durable rehearsal ECR repositories
 ```
 
-`docs/decisions/g85-the-google-provider-has-its-own-root.md` has the reasoning.
-`docs/greenfield/google-root-migration-runbook.md` is the one-time move of the existing
-objects into the new root's state.
+`docs/archive/decisions/g85-the-google-provider-has-its-own-root.md` has the reasoning. The
+four objects were imported into the new root's state on 25 September 2026.

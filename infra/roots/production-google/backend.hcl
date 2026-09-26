@@ -3,7 +3,7 @@
 # The same bucket and lock table as `infra/roots/production`, under a key of its own.
 # This root owns the four Gmail push objects in Google Cloud and nothing else; the
 # production root no longer names them (lane g85,
-# `docs/decisions/g85-the-google-provider-has-its-own-root.md`). Nothing here creates,
+# `docs/archive/decisions/g85-the-google-provider-has-its-own-root.md`). Nothing here creates,
 # modifies or grants access to the bucket or the table.
 #
 # The key names the root, like `fss/greenfield/rehearsal-registry/`: it is outside
@@ -15,19 +15,6 @@
 # AWS credential the shell holds, which for a production state is the admin profile,
 # exactly as for `infra/roots/production`: `fss-prod-deploy` is denied `s3:GetObject*`
 # on every object by `NoDeploymentDataAccess` in its own policy and never touches state.
-#
-# ## This file is the per-account file, and it is the only one
-#
-# Nothing under `infra/**/*.tf` names a bucket, a lock table or an account id. When the
-# production state moves to a dedicated AWS account (`docs/greenfield/accounts.md`)
-# exactly three values below change, the same three as in
-# `infra/roots/production/backend.hcl`:
-#
-#   bucket          that account's Terraform state bucket
-#   region          the region that bucket is in
-#   dynamodb_table  that account's lock table
-#
-# The key does not. The Google project does not move with the AWS account either.
 #
 # The state KMS key ARN is the production state key, supplied at init time:
 #   terraform init -backend-config=backend.hcl -backend-config="kms_key_id=<arn>"

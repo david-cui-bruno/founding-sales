@@ -65,7 +65,7 @@ That table is the contract, not a description: `apps/worker/test/sourceRegistry.
 reads it and fails when the registered list and the documented one differ in either
 direction. Three functions were built, tested and left with no caller for a week
 because nothing compared the two (the 21 September deviations sweep;
-`docs/decisions/g15-the-worker-drains-what-the-lanes-left.md`).
+`docs/archive/decisions/g15-the-worker-drains-what-the-lanes-left.md`).
 
 **The runner slots.** One per unit of configured concurrency, one connection each,
 because two slots cannot share a connection — a transaction is not shareable.
@@ -77,14 +77,14 @@ through the sink. With `FSS_METRICS=off`, or with no region, the sink validates 
 datum and sends nothing, so a wrong unit or an unknown metric name fails on a laptop.
 
 **Startup** refuses a database outside the declared schema range and exits 10 (4.2,
-`docs/decisions/g5-schema-range.md`). It does *not* refuse a restored database: restore
+`docs/archive/decisions/g5-schema-range.md`). It does *not* refuse a restored database: restore
 holds are what stop sending and dialing, so when the database's `system_generation` is
 not `FSS_EXPECTED_SYSTEM_GENERATION` the worker opens one `restore_in_progress` hold
 per workspace (idempotently; `openRestoreHolds` in `packages/domain/restore/holds.ts`),
 logs `restore_generation_mismatch`, which is the event `infra/modules/observability`
 turns into the immediately-critical `RestoreGenerationMismatches` metric, and runs.
 Until lane g56 it only logged, and nothing anywhere opened a restore hold
-(`docs/decisions/g56-restore-holds-are-opened-by-the-generation-check.md`).
+(`docs/archive/decisions/g56-restore-holds-are-opened-by-the-generation-check.md`).
 
 **Stopping** drains. `SIGTERM` sets every loop stopping and waits for the pass in
 flight, so the job being run finishes inside the lease it already holds. The budget is
@@ -116,7 +116,7 @@ too. So `withTransaction`, `FOR UPDATE` and advisory locks mean what they say pe
 request. Until 25 September 2026 the API served every request on one shared
 `pg.Client`, and two requests in flight at once ran inside each other's transactions:
 one's `ROLLBACK` discarded the other's answered-200 write
-(`docs/decisions/g75-one-connection-per-request.md`).
+(`docs/archive/decisions/g75-one-connection-per-request.md`).
 
 * A checkout that waits longer than `API_POOL_CHECKOUT_TIMEOUT_MILLISECONDS` (5 s) is
   answered **503 `database_busy`** with a `refusal` line carrying that reason, never a
@@ -205,11 +205,11 @@ startup line names every decision and no credential.
 | `PORT`, `FSS_HTTP_PORT` | api | the listening port. Default 8080. |
 | `FSS_DESKTOP_UPGRADE_URL` | api | the `upgradeUrl` `/auth/client-version` publishes (lane g86): in production the signed update manifest, from the root's `desktop_upgrade_url`. Unset elsewhere is the `callie.example` placeholder; unset in production is a refusal to start. |
 | `FSS_API_HEARTBEAT_MS`, `FSS_API_SHUTDOWN_TIMEOUT_MS` | api | the heartbeat cadence and the drain budget. |
-| `FSS_ENVIRONMENT`, `FSS_DEPENDENCIES` | ✓ | the deployment switch. `production` refuses anything but `live`, and refuses the switch being unset (`docs/decisions/g12-the-credentialed-bootstrap.md`). |
+| `FSS_ENVIRONMENT`, `FSS_DEPENDENCIES` | ✓ | the deployment switch. `production` refuses anything but `live`, and refuses the switch being unset (`docs/archive/decisions/g12-the-credentialed-bootstrap.md`). |
 | `FSS_PUBLIC_ORIGIN` | ✓ | the API's own origin. Both OAuth redirect URIs are derived from it rather than configured twice. |
 | `FSS_JOURNAL_BUCKET`, `FSS_ENVELOPE_KEY_ID` | ✓ | the suppression journal and the refresh-token envelope key. A live process without the bucket refuses (10.2). |
 | `FSS_GMAIL_PUSH_AUDIENCE`, `FSS_GMAIL_PUSH_SERVICE_ACCOUNT` | ✓ | the two claims the webhook checks exactly (Appendix G 27). |
-| `FSS_GMAIL_PUSH_TOPIC` | ✓ | the Pub/Sub topic `users.watch` registers against. In production from the root's `module.pubsub`; the rehearsal carries a placeholder identifier because its Gmail is recorded and it has no Google project (`docs/decisions/g12j-the-rehearsal-has-no-google-provider.md`). |
+| `FSS_GMAIL_PUSH_TOPIC` | ✓ | the Pub/Sub topic `users.watch` registers against. In production from the root's `module.pubsub`; the rehearsal carries a placeholder identifier because its Gmail is recorded and it has no Google project (`docs/archive/decisions/g12j-the-rehearsal-has-no-google-provider.md`). |
 | `FSS_GOOGLE_HOSTED_DOMAIN` | ✓ | the Callie Workspace domain. Restricts `hd` at sign-in (5.1) and which mailbox may connect (12.1). |
 | `FSS_SENDING_ENABLED` | ✓ | 16.2's deployment half. False unless the value is exactly `true`; anything else is a refusal, never a send. |
 | `FSS_RESEARCH_PROVIDERS` | worker | `none` or `recorded`. A live worker must say which; there is no live research adapter in this build. |
@@ -218,7 +218,7 @@ The last two rows of Google configuration are the ones that moved: `FSS_GMAIL_PU
 and `FSS_GOOGLE_HOSTED_DOMAIN` used to travel inside the operator-written
 `google-gmail-oauth-client` secret because nothing in the task environment carried them.
 Both bootstraps read the environment first and the secret second, for one release, and
-report which source they used. `docs/decisions/g12b-two-public-identifiers-move-out-of-the-secret.md`
+report which source they used. `docs/archive/decisions/g12b-two-public-identifiers-move-out-of-the-secret.md`
 says when the fallback goes.
 
 Each task definition carries only the secrets its own process reads (lane g81,
@@ -267,7 +267,7 @@ The log events that become metrics, and who writes them:
 There is no build step: Node runs the TypeScript. It needs
 `--experimental-transform-types` rather than plain type stripping, because
 `packages/domain` uses constructor parameter properties; see
-`docs/decisions/g5b-typescript-at-runtime.md`.
+`docs/archive/decisions/g5b-typescript-at-runtime.md`.
 
 `npm ci --workspace @fss/api --workspace @fss/domain --workspace @fss/contracts`
 resolves from the same lock file as the repository root and installs only what those
@@ -349,7 +349,7 @@ service redeployments, the alarm reads, the snapshots and the teardown.
 green rehearsal wrote, so an admin's `sending_enabled` attestation can name it. The API
 refuses an enable whose record did not pass or does not carry the API's own image digest,
 and the worker refuses to send when the record does not carry its own
-(`docs/decisions/g71-sending-gate-is-bound-to-the-release-record.md`). The command is
+(`docs/archive/decisions/g71-sending-gate-is-bound-to-the-release-record.md`). The command is
 idempotent by reference: the same record is `existing`, and a different record under a
 stored reference is refused `release_record_conflict`. It runs on the operations task,
 as the runtime identity, which may insert into `release_records` and read it, and do
@@ -503,4 +503,4 @@ Most routers are mounted on a **prefix** rather than on exact paths, because the
 already answer `not_found` for the unknown paths under their own root and because
 `GET /firms/<uuid>` cannot be enumerated. The registry refuses a prefix that overlaps
 another module's claim, so the guarantee is the one an exact path gives; see
-`docs/decisions/g3b-route-registry-prefixes.md`.
+`docs/archive/decisions/g3b-route-registry-prefixes.md`.

@@ -153,7 +153,7 @@ suppressed by a tombstone either way.
 
 Redaction rather than deletion for the two tables is not a compromise; it is what
 the append-only privileges require. See
-`docs/decisions/g14-deletion-is-remove-and-redact.md`.
+`docs/archive/decisions/g14-deletion-is-remove-and-redact.md`.
 
 ## Departure
 

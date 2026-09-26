@@ -16,10 +16,6 @@ mock_provider "aws" {
   }
 }
 
-variables {
-  aws_account_id = "123456789012"
-}
-
 run "the_two_repositories_are_the_ones_the_workflow_secrets_name" {
   command = plan
 

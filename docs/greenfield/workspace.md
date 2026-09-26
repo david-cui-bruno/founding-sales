@@ -48,7 +48,7 @@ npm run test:desktop:e2e    # the window, in chromium; not part of the gate
 
 `test:desktop:e2e` is separate because it needs a chromium binary that
 `npx playwright install chromium` provides and no `npm` install fetches. See
-`docs/decisions/g2-desktop-test-layers.md`.
+`docs/archive/decisions/g2-desktop-test-layers.md`.
 
 `npm run typecheck`, `npm run lint` and `npm test` are the greenfield defaults:
 `typecheck:greenfield`; `lint:greenfield` plus `lint:root-scripts` (the scripts at the
@@ -95,6 +95,6 @@ single-workspace setup.
   `packages/domain/db/queryable.ts`, and every scoped statement is built by
   `scopedQueries.ts`, which supplies `workspace_id` from the scope.
 * No HTTP framework. `apps/api` uses `node:http`; see
-  `docs/decisions/g0-api-http-server.md`.
+  `docs/archive/decisions/g0-api-http-server.md`.
 * No secret, key, token or real address anywhere in the tree. Test credentials are
   generated at run time; public identifiers only in configuration.

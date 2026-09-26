@@ -57,10 +57,9 @@ mock_provider "aws" {
 # absence is the fix for audit O01: while this root required the provider, every
 # production plan needed a Google login. The push objects and their offline test
 # are `infra/roots/production-google`'s now.
-# `docs/decisions/g85-the-google-provider-has-its-own-root.md`.
+# `docs/archive/decisions/g85-the-google-provider-has-its-own-root.md`.
 
 variables {
-  aws_account_id      = "123456789012"
   certificate_arn     = "arn:aws:acm:us-east-1:123456789012:certificate/11111111-2222-4333-8444-555555555555"
   api_hostname        = "api.example.invalid"
   api_image           = "123456789012.dkr.ecr.us-east-1.amazonaws.com/fss-prod-api@sha256:0000000000000000000000000000000000000000000000000000000000000001"
@@ -137,14 +136,14 @@ run "production_publishes_and_alarms_in_its_own_metric_namespace" {
   }
 }
 
-# David's topology answers of 20 September 2026 (docs/decisions/coord-topology-answers.md),
+# David's topology answers of 20 September 2026 (docs/archive/decisions/coord-topology-answers.md),
 # asserted against the plan rather than against the variables they were passed.
 #
 # They were written into `terraform.tfvars`, which `infra/.gitignore` ignores, so the
 # answers never reached the repository and both roots still planned X86_64 against
 # `linux/arm64` images. Tfvars stay ignored; the answers are the defaults, and this run
 # is what makes them a fact somebody would have to edit a test to change. See
-# docs/decisions/g12c-the-topology-answers-are-root-defaults.md.
+# docs/archive/decisions/g12c-the-topology-answers-are-root-defaults.md.
 # G12h. Production is bootstrapped once, ever, and every apply after that runs the
 # services. So the default is `false` here and `true` in the rehearsal root, and the
 # flag is a value an operator passes rather than a state nobody can see.
@@ -251,7 +250,7 @@ run "the_topology_answers_are_the_production_defaults" {
 
   # Answer 5: the five billed-per-metric options stay off. Enhanced Monitoring is not a
   # root input at all (the database module's monitoring_interval defaults to 0) and
-  # there is no flow-log resource anywhere in infra (docs/decisions/g1-no-flow-logs.md),
+  # there is no flow-log resource anywhere in infra (docs/archive/decisions/g1-no-flow-logs.md),
   # so those two are asserted here as the absence they are.
   assert {
     condition     = module.stack.database_shape.performance_insights_enabled == false
@@ -345,7 +344,7 @@ run "each_production_task_carries_only_the_secrets_its_process_reads" {
 # guess at. `infra/modules/stack` had `extra_environment` and neither root exposed
 # it, so there was no way to set them from an apply at all: the runbook told the
 # operator to put them "in `extra_environment` or the plan review" and neither
-# existed. See docs/decisions/g12c-the-deployment-flags-are-root-variables.md.
+# existed. See docs/archive/decisions/g12c-the-deployment-flags-are-root-variables.md.
 run "the_deployment_flags_reach_both_containers" {
   command = plan
 
@@ -584,7 +583,7 @@ run "only_the_load_balancer_faces_the_internet" {
 # credential the shell was holding), and turning it off changes nothing about
 # what the root creates. That the provider really skips the assumption when the
 # block is absent is a property of the AWS provider, taken from its own schema
-# in `docs/decisions/g12e-the-provider-does-not-reassume-its-own-session.md`.
+# in `docs/archive/decisions/g12e-the-provider-does-not-reassume-its-own-session.md`.
 run "production_assumes_its_deployment_role_by_default" {
   command = plan
 
@@ -657,7 +656,7 @@ run "a_production_generation_that_is_not_a_positive_whole_number_is_refused" {
 # Lane g86. `/auth/client-version` publishes the signed update manifest in
 # production, on the API task alone, and the root refuses the placeholder the
 # API falls back to elsewhere.
-# `docs/decisions/g86-the-upgrade-notice-names-the-update-channel.md`.
+# `docs/archive/decisions/g86-the-upgrade-notice-names-the-update-channel.md`.
 run "the_production_api_names_the_update_manifest_as_its_upgrade_address" {
   command = plan
 

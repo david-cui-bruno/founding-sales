@@ -43,7 +43,7 @@ case "$KIND" in
     echo "FAIL: '${KIND:-<empty>}' is not a task definition this rehearsal has." >&2
     echo "      'migration' is the DDL identity, 'operations' is the runtime identity that runs" >&2
     echo "      fss verify, and 'drill' is the only one holding both — see" >&2
-    echo "      docs/decisions/g12h-three-one-off-identities.md." >&2
+    echo "      docs/archive/decisions/g12h-three-one-off-identities.md." >&2
     exit 1
     ;;
 esac

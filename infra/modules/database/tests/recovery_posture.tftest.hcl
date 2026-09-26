@@ -31,7 +31,7 @@ run "production_defaults_are_recoverable_and_protected" {
   # would be true of the next retired minor, so the default itself is asserted:
   # a pinned minor is a value only a real apply can falsify, and an apply is the
   # most expensive place in this release to learn anything.
-  # `docs/decisions/g16-postgresql-is-pinned-by-major.md`.
+  # `docs/archive/decisions/g16-postgresql-is-pinned-by-major.md`.
   assert {
     condition     = aws_db_instance.main.engine == "postgres" && aws_db_instance.main.engine_version == "16"
     error_message = "The engine version default is the bare major \"16\". A pinned minor retires on AWS's schedule and the failure arrives during an apply."
@@ -119,7 +119,7 @@ run "parameter_group_logs_slow_statements_and_forces_tls" {
 
   # Lane g86: the apply method each parameter carries is the one AWS reports for
   # it in production, or every plan shows an update that changes nothing
-  # (docs/decisions/g86-the-parameter-group-names-what-aws-holds.md).
+  # (docs/archive/decisions/g86-the-parameter-group-names-what-aws-holds.md).
   assert {
     condition = length([
       for parameter in aws_db_parameter_group.main.parameter :
@@ -209,7 +209,7 @@ run "a_retention_longer_than_the_rds_maximum_is_refused" {
 # any more than a real one could. An apply run under a mocked provider reaches
 # nothing and needs no credential. The distinction this keeps alive is the one
 # that matters: the module's own customer key, never the AWS-managed RDS key.
-# `docs/decisions/g12j-mock-providers-keep-computed-values-unknown.md`.
+# `docs/archive/decisions/g12j-mock-providers-keep-computed-values-unknown.md`.
 run "the_storage_key_is_the_module_s_own_customer_key" {
   command = apply
 

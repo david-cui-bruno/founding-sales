@@ -40,6 +40,11 @@ module "registry" {
 }
 
 locals {
+  # The one AWS account and region FSS runs in. Literals: nothing deploys this
+  # root anywhere else, and the provider refuses a credential of any other account.
+  aws_account_id = "326255650484"
+  aws_region     = "us-east-1"
+
   # A literal, not var.name_prefix. The release workflow's secrets name
   # `fss-rh-api` and `fss-rh-worker`; a root that could be applied under
   # another prefix would produce repositories nothing points at.

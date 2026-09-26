@@ -12,10 +12,15 @@
 # `module.pubsub[0]` here, every production plan, an image-only release included,
 # needed a Google login that lapses about every 17 hours, and an expired one held
 # a worker fix back (audit O01). This root carries their public identifiers as
-# values instead. `docs/decisions/g85-the-google-provider-has-its-own-root.md`,
-# and before it `docs/decisions/g12j-the-rehearsal-has-no-google-provider.md`.
+# values instead. `docs/archive/decisions/g85-the-google-provider-has-its-own-root.md`,
+# and before it `docs/archive/decisions/g12j-the-rehearsal-has-no-google-provider.md`.
 
 locals {
+  # The one AWS account and region FSS runs in. Literals: nothing deploys this
+  # root anywhere else, and the provider refuses a credential of any other account.
+  aws_account_id = "326255650484"
+  aws_region     = "us-east-1"
+
   # The audience the webhook requires in a push token. A property of this
   # environment's own hostname and route, not of Google, so it is derived here
   # rather than read from the Google root; `infra/roots/production-google`
@@ -27,28 +32,7 @@ locals {
   # `assume_role` block builds, and the same ARN `aws:PrincipalArn` carries for
   # an assumed-role session of it, which is why the journal's listing exemption
   # can be an exact `ArnNotEquals` rather than a pattern.
-  deployment_role_arn = "arn:aws:iam::${var.aws_account_id}:role/${var.deployment_role_name}"
-}
-
-# The four Google objects this root created on 23 September 2026 as
-# `module.pubsub[0]`, forgotten and never destroyed.
-#
-# The migration (`docs/greenfield/google-root-migration-runbook.md`) imports them
-# into `infra/roots/production-google` and then removes them from this root's
-# state with `terraform state rm`, which needs no Google credential. This block is
-# the net under that procedure: a plan of this root taken before the state
-# removal, which still needs application-default credentials because the state
-# still names Google objects, shows them as "will no longer be managed by
-# Terraform" instead of as four deletions. A deleted topic stops the Gmail watch,
-# and the publisher grant needed an organisation-policy exception to be made at
-# all (`docs/greenfield/release.md` 8.0n). Once the state holds no `module.pubsub`
-# address the block matches nothing and does nothing.
-removed {
-  from = module.pubsub
-
-  lifecycle {
-    destroy = false
-  }
+  deployment_role_arn = "arn:aws:iam::${local.aws_account_id}:role/${var.deployment_role_name}"
 }
 
 module "stack" {
@@ -58,8 +42,8 @@ module "stack" {
   destroyable = false
 
   name_prefix    = var.name_prefix
-  aws_region     = var.aws_region
-  aws_account_id = var.aws_account_id
+  aws_region     = local.aws_region
+  aws_account_id = local.aws_account_id
 
   availability_zones = var.availability_zones
 
@@ -122,7 +106,7 @@ module "stack" {
   # controls before the policy and the object lock refused to go. Listing is not
   # reading: `s3:GetObject*` stays denied to this role by the bucket policy and
   # by `infra/policies/deployment-role-policy.json.tftpl` both.
-  # `docs/decisions/g37-the-deployer-may-list-the-journal-but-never-read-it.md`.
+  # `docs/archive/decisions/g37-the-deployer-may-list-the-journal-but-never-read-it.md`.
   journal_listing_principal_arns = [local.deployment_role_arn]
 
   alert_emails         = var.alert_emails

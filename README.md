@@ -13,7 +13,7 @@ Callie is a 24/7 maintenance agent for property managers: it handles tenant requ
 | `packages/contracts` | The zod wire contracts shared by all three apps. |
 | `infra/` | Terraform: the modules, the rehearsal and production roots, the deployment roles' policies and the release scripts (`infra/README.md`). |
 | `test/release` | The release suite (specification Appendix G and the checks added since). |
-| `docs/greenfield/` | How each part works and how it is released; `docs/decisions/` has the decisions made along the way. |
+| `docs/greenfield/` | How each part works and how it is released; `docs/archive/decisions/` has the decisions made along the way. |
 
 At the root: `scripts/` holds the secret scan (`verifySecrets.mjs`), the production smoke and the release mutation check, and `certs/` the RDS CA bundle the images trust. The previous-generation app was deleted in lane g95; the tag `legacy-final` holds its last tree ([`docs/greenfield/legacy.md`](docs/greenfield/legacy.md)).
 
@@ -44,7 +44,7 @@ The tests run against a real PostgreSQL 16 (embedded locally, a service containe
 - `docs/greenfield/release.md`: how a release goes out, and the running record of every one.
 - `docs/greenfield/processes.md`: what the API and the worker do and how they start and stop.
 - `docs/greenfield/today.md`, `sequences.md`, `sending.md`, `mail.md`, `suppression.md`: the product's rules, one area each.
-- `docs/greenfield/infra-topology.md`, `infra-apply-runbook.md`, `accounts.md`: the AWS side.
+- `docs/greenfield/infra-topology.md`, `infra-apply-runbook.md`: the AWS side.
 
 ## Working rules
 

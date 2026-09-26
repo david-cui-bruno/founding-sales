@@ -208,7 +208,7 @@ variable "expected_system_generation" {
     is also the generation step 9 then advances the database to. The one-off
     task definitions do not carry it: `fss admin restore-holds open` and
     `fss drill` take the generation as a flag.
-    docs/decisions/g56-restore-holds-are-opened-by-the-generation-check.md.
+    docs/archive/decisions/g56-restore-holds-are-opened-by-the-generation-check.md.
   EOT
   type        = number
   default     = null

@@ -443,7 +443,7 @@ run "an_ordinary_apply_creates_the_services_at_their_declared_count" {
 # references the wrong role rather than passing on a shared mock default. That
 # the eight identities are eight is asserted by name in the first run, which a
 # plan can see.
-# `docs/decisions/g12j-mock-providers-keep-computed-values-unknown.md`.
+# `docs/archive/decisions/g12j-mock-providers-keep-computed-values-unknown.md`.
 run "each_one_off_task_definition_carries_the_identity_it_is_for" {
   command = apply
 

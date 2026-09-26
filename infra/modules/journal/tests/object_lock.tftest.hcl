@@ -105,7 +105,7 @@ run "an_unknown_lock_mode_is_refused" {
 # nothing and needs no credential. The alternative would be for the module to
 # build the ARN from the bucket name it already knows, which is a change to a
 # policy document and not to a test.
-# `docs/decisions/g12j-mock-providers-keep-computed-values-unknown.md`.
+# `docs/archive/decisions/g12j-mock-providers-keep-computed-values-unknown.md`.
 run "the_policy_denies_deletion_and_admits_only_the_named_writers" {
   command = apply
 

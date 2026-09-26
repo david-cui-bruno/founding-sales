@@ -1,6 +1,6 @@
 provider "aws" {
-  region              = var.aws_region
-  allowed_account_ids = [var.aws_account_id]
+  region              = local.aws_region
+  allowed_account_ids = [local.aws_account_id]
 
   # Present only when the caller is not already `fss-rh-deploy`. The release
   # workflow's session is: `aws-actions/configure-aws-credentials` assumed the
@@ -10,12 +10,12 @@ provider "aws" {
   # role to trust itself, and its trust is the OIDC subject alone (Appendix G
   # 39). The default is true so that a caller who says nothing is refused rather
   # than acting as an ambient credential;
-  # `docs/decisions/g12e-the-provider-does-not-reassume-its-own-session.md`.
+  # `docs/archive/decisions/g12e-the-provider-does-not-reassume-its-own-session.md`.
   dynamic "assume_role" {
     for_each = var.assume_deployment_role ? [1] : []
 
     content {
-      role_arn     = "arn:aws:iam::${var.aws_account_id}:role/${var.deployment_role_name}"
+      role_arn     = "arn:aws:iam::${local.aws_account_id}:role/${var.deployment_role_name}"
       session_name = "fss-rehearsal-terraform"
     }
   }
@@ -36,4 +36,4 @@ provider "aws" {
 # so declaring one is asking for its credential. CI has no Google credential and
 # must not have one: the rehearsal's Gmail is the recorded fake, and the topic
 # and subscription belong to `infra/roots/production` alone.
-# `docs/decisions/g12j-the-rehearsal-has-no-google-provider.md`.
+# `docs/archive/decisions/g12j-the-rehearsal-has-no-google-provider.md`.

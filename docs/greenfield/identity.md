@@ -40,7 +40,7 @@ Mac                         API                         Google (system browser)
 ```
 
 Why the API's callback rather than a loopback port or a `callie://` scheme:
-`docs/decisions/g2-redirect-target.md`, which is also the note that says exactly which
+`docs/archive/decisions/g2-redirect-target.md`, which is also the note that says exactly which
 OAuth client David creates and with which redirect URIs.
 
 ### How a deployed API is given all this
@@ -116,7 +116,7 @@ each part — `sign_in`, `sign_in_client_configured`, `sign_in_redirect_configur
 a closed vocabulary, never a value, not even the public client id. A rehearsal selects
 its own sign-in client explicitly, for the same reason it selects its own push
 verifier: a rehearsal that fetched Google's key set would be testing Google's
-availability. See `docs/decisions/g12b-sign-in-is-configured-or-the-api-refuses.md`.
+availability. See `docs/archive/decisions/g12b-sign-in-is-configured-or-the-api-refuses.md`.
 
 ### What makes each replay fail
 
@@ -167,7 +167,7 @@ records `auth.provisional_user_adopted`; an address that already has a real acco
 never overwritten, because the statement carries a `NOT EXISTS` guard, and a sign-in by
 anybody else adopts nothing. Adoption changes *which row* the sign-in finds and grants
 nothing: the membership check still decides, at the callback, at the claim and on every
-command. `docs/decisions/g39-the-first-workspace-and-its-admin-are-bootstrapped.md`.
+command. `docs/archive/decisions/g39-the-first-workspace-and-its-admin-are-bootstrapped.md`.
 
 ## What the Mac holds
 
@@ -185,7 +185,7 @@ credential cannot be written by mistake.
 
 The credentials name their own workspace (`fssa1.<workspace>.<secret>`), which is what
 lets an unauthenticated lookup still begin with `workspace_id`:
-`docs/decisions/g2-session-token-shape.md`.
+`docs/archive/decisions/g2-session-token-shape.md`.
 
 ## Renewal, and what reuse means
 
@@ -218,7 +218,7 @@ transaction.
 * Same id, different payload: `command_payload_mismatch`.
 * Same id, different device: `command_device_mismatch` — and the database enforces it,
   because `(workspace_id, command_id)` is unique
-  (`docs/decisions/g2-command-id-uniqueness.md`).
+  (`docs/archive/decisions/g2-command-id-uniqueness.md`).
 * `authorize_dial`: the receipt carries no result at all, so a replay is never
   actionable. Migration 0001 refuses a row of that kind that has one.
 

@@ -57,37 +57,10 @@ variable "assume_deployment_role" {
     session is first, with `infra/scripts/rehearsal-caller-identity.sh`, which
     refuses any identity that is not an assumed-role session of
     `fss-rh-deploy`.
-    `docs/decisions/g12e-the-provider-does-not-reassume-its-own-session.md`.
+    `docs/archive/decisions/g12e-the-provider-does-not-reassume-its-own-session.md`.
   EOT
   type        = bool
   default     = true
-}
-
-variable "aws_region" {
-  description = "AWS region. The default is the region this tree started in; a dedicated account states its own."
-  type        = string
-  default     = "us-east-1"
-}
-
-variable "aws_account_id" {
-  description = <<-EOT
-    The AWS account this root deploys into. `providers.tf` passes it to
-    `allowed_account_ids` and builds the deployment role ARN from it, so a
-    credential belonging to any other account is refused before a plan is made.
-
-    The default is the shared account the tree started in, which is why nothing
-    changes today. A dedicated rehearsal account states its own with
-    `TF_VAR_aws_account_id`, `-var` or a tfvars file, and edits no Terraform:
-    `docs/greenfield/accounts.md` is the checklist, and the rehearsal workflows
-    set the variable from the session they verified.
-  EOT
-  type        = string
-  default     = "326255650484"
-
-  validation {
-    condition     = can(regex("^[0-9]{12}$", var.aws_account_id))
-    error_message = "An AWS account id is twelve digits and nothing else."
-  }
 }
 
 variable "availability_zones" {
@@ -402,7 +375,7 @@ variable "google_hosted_domain" {
 # three names with `required()` at start-up (`apps/api/src/bootstrap/deployment.ts`,
 # `apps/worker/src/bootstrap/deployment.ts`), so an empty value is a task that
 # refuses to start; these are the values that let a rehearsal environment boot.
-# `docs/decisions/g12j-the-rehearsal-has-no-google-provider.md`.
+# `docs/archive/decisions/g12j-the-rehearsal-has-no-google-provider.md`.
 # ---------------------------------------------------------------------------
 
 variable "gmail_push_path" {
@@ -427,7 +400,7 @@ variable "gmail_push_topic" {
     that a rehearsal exercises the same parsing production will, and it is
     obviously not a real project so that nobody reads a rehearsal log as
     evidence that push works. Spec 16.2's Gmail path is proved in production,
-    never here: `docs/decisions/g12-what-the-rehearsal-cannot-prove.md`.
+    never here: `docs/archive/decisions/g12-what-the-rehearsal-cannot-prove.md`.
   EOT
   type        = string
   default     = "projects/fss-rehearsal-no-push/topics/fss-rehearsal-no-push"

@@ -91,7 +91,6 @@ mock_provider "aws" {
 }
 
 variables {
-  aws_account_id      = "123456789012"
   certificate_arn     = "arn:aws:acm:us-east-1:123456789012:certificate/11111111-2222-4333-8444-555555555555"
   api_hostname        = "api.example.invalid"
   api_image           = "123456789012.dkr.ecr.us-east-1.amazonaws.com/fss-prod-api@sha256:0000000000000000000000000000000000000000000000000000000000000001"

@@ -40,7 +40,7 @@ happens to *enrollments*, not whether the handle is suppressed.
 ### 2. The journal is durable before the row is
 
 `journal.append` is awaited inside the command transaction and before the `INSERT`.
-See `docs/decisions/g4-journal-port.md` for the two failure modes and why the
+See `docs/archive/decisions/g4-journal-port.md` for the two failure modes and why the
 surviving-journal one is the safe direction.
 
 **Both processes write it.** The API writes from its three suppression routes; the
@@ -72,7 +72,7 @@ The ten-minute correction and the finalizer race for one row in
 `suppression_finalizations`, whose primary key is the event. Whoever inserts first
 wins. `suppression_events` cannot be row-locked at all — `SELECT ... FOR UPDATE`
 requires the `UPDATE` privilege, which is revoked — so the insert *is* the lock. See
-`docs/decisions/g4-finalization-is-the-lock.md`, including why the correction's
+`docs/archive/decisions/g4-finalization-is-the-lock.md`, including why the correction's
 foreign key is deferred.
 
 ### 4. Nothing here can change a row that has been written
@@ -167,7 +167,7 @@ G15 nothing read the marker at all, so a prospect's opt-out suppressed the handl
 `effective_suppressions` and the send gate refused every send from the moment it
 committed, which is why this was an enrollment-state gap and never a sending leak — and
 left the enrollment running until its next step held.
-`docs/decisions/g15-the-worker-drains-what-the-lanes-left.md`.
+`docs/archive/decisions/g15-the-worker-drains-what-the-lanes-left.md`.
 
 ## Running the tests
 

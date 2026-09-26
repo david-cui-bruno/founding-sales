@@ -65,7 +65,7 @@ a requeue can never materialize a second copy of work that already exists.
 
 **Archival** redacts the payload of a completed job after the operational window and
 leaves the row, so the dedupe key survives its horizon. A dead job is never archived: a
-requeue has to have something to run. See `docs/decisions/g5-payload-archival.md`.
+requeue has to have something to run. See `docs/archive/decisions/g5-payload-archival.md`.
 
 ## At least once, and what saves you
 
@@ -112,7 +112,7 @@ and composes its key with `jobIdempotencyKey`; it does not touch the pass. The r
 list and the table in `docs/greenfield/processes.md` are compared by
 `apps/worker/test/sourceRegistry.test.ts`, in both directions, because three domain
 functions once sat exported and uncalled for a week with every package's suite green
-(`docs/decisions/g15-the-worker-drains-what-the-lanes-left.md`).
+(`docs/archive/decisions/g15-the-worker-drains-what-the-lanes-left.md`).
 
 Most sources materialize unconditionally and let their handler no-op — `retention.batch`
 writes a "retained, deleted nothing" ledger row eleven times a workspace a day on
@@ -154,7 +154,7 @@ canary completes normally cannot hide another whose canary never completes. It i
 deliberately *not* the time since the last completion — the canary is inserted once
 every fifteen minutes, so that reading sawtooths to 900 on a perfectly healthy system
 and sits above the five-minute threshold 13.3 names for about ten minutes in every
-fifteen (`docs/decisions/g41-the-canary-age-is-the-newest-runs-latency.md`).
+fifteen (`docs/archive/decisions/g41-the-canary-age-is-the-newest-runs-latency.md`).
 
 ## Metrics and the repeating critical alert
 
@@ -172,7 +172,7 @@ none is supplied, so publishing validates the data and does nothing — a wrong 
 an unknown name fails on a laptop rather than in production.
 
 `UnacknowledgedCriticalAlertAgeSeconds` is the one G1 asked for
-(`docs/decisions/g1-alert-repetition.md`). While a critical condition is open and
+(`docs/archive/decisions/g1-alert-repetition.md`). While a critical condition is open and
 unacknowledged, the worker publishes its age; when none is, it publishes nothing and
 the alarm's `notBreaching` treatment of missing data says so. An admin acknowledging
 through `POST /admin/alerts/acknowledge` stops the publication immediately, and the

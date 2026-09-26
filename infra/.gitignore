@@ -6,7 +6,7 @@ crash.log
 crash.*.log
 
 # Provider lock files stay out of the repository until a deployment lock file is
-# reviewed and pinned for every target platform. See docs/decisions/g1-provider-lock-files.md.
+# reviewed and pinned for every target platform. See docs/archive/decisions/g1-provider-lock-files.md.
 .terraform.lock.hcl
 
 # State never belongs in the repository. It lives in the S3 backend.

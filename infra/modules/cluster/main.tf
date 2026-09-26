@@ -964,7 +964,7 @@ resource "aws_ecs_service" "api" {
   # undo the stop it came after. `infra/scripts/release-deploy.sh` sets the declared
   # count (`output.deployment_plan`) in steps 5 and 6 of every deploy, rolling or
   # schema, so the number still comes from the root; it just no longer arrives
-  # through the apply. `docs/decisions/g12h-bootstrap-is-a-root-variable.md`, "Amended".
+  # through the apply. `docs/archive/decisions/g12h-bootstrap-is-a-root-variable.md`, "Amended".
   #
   # `task_definition` is not ignored, although CI moves it (lane g91): the task
   # definition above tracks the newest revision of its family, so after a CI deploy

@@ -23,7 +23,7 @@
 # to the organisation's domain-restricted sharing policy when it was first made
 # (`docs/greenfield/release.md` 8.0n), so a recreated grant may be refused, and a
 # deleted topic stops the Gmail watch until the next renewal names a new one.
-# `docs/decisions/g85-the-google-provider-has-its-own-root.md`.
+# `docs/archive/decisions/g85-the-google-provider-has-its-own-root.md`.
 
 locals {
   # Exactly the expressions `infra/roots/production` used, so that the module

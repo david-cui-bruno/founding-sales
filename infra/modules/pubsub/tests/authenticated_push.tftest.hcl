@@ -82,7 +82,7 @@ run "an_empty_audience_is_refused" {
 # plan does. An apply run under a mocked provider makes no Google call and needs
 # no credential. This is the one place in `infra` where an apply run touches the
 # Google provider at all: `infra/roots/production` is the only root that
-# declares it. `docs/decisions/g12j-mock-providers-keep-computed-values-unknown.md`.
+# declares it. `docs/archive/decisions/g12j-mock-providers-keep-computed-values-unknown.md`.
 run "the_token_is_minted_for_the_dedicated_push_service_account" {
   command = apply
 

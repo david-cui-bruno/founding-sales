@@ -42,7 +42,7 @@ apps/desktop/src/renderer/{addFirmForm,importScreen,captureView}.ts   Add firm a
 The narrow set is exactly what `FirmIdentityDto` publishes, so a salesperson can find
 a colleague's firm by anything they could have read off the screen and by nothing
 else. Every hit reports `matchedOn` — field kinds, never the matching value.
-`docs/decisions/g3b-search-visibility.md` has the argument.
+`docs/archive/decisions/g3b-search-visibility.md` has the argument.
 
 ### 2. A preview writes nothing, and the commit re-derives it
 
@@ -68,7 +68,7 @@ searches. `exportFirms` writes one `export.firms` event carrying the row counts,
 filters used and whether there was a term — never the term, which may be a prospect's
 address. A refused export writes nothing, because nothing left the system. The
 reasoning, including why auditing search was rejected, is in
-`docs/decisions/g3b-search-visibility.md`.
+`docs/archive/decisions/g3b-search-visibility.md`.
 
 There is no CSV export. A flat file has one set of columns and Appendix F has two
 visibility classes; a CSV of both would need an `address_line` column blank for some
@@ -278,4 +278,4 @@ npm run test:e2e --workspace apps/desktop                              # needs a
 
 The Playwright specs are deliberately outside `gate:greenfield`: the documented local
 install is `npm install --ignore-scripts`, and a gate that needs a browser binary fails
-for the wrong reason. See `docs/decisions/g2-desktop-test-layers.md`.
+for the wrong reason. See `docs/archive/decisions/g2-desktop-test-layers.md`.

@@ -22,12 +22,9 @@
 #
 #   FSS_CHECK_ROLE_DRY_RUN=1   print the plan, make no call, exit 0
 #   FSS_CHECK_ROLE_AWS=<path>  the CLI to use, for the offline test's stub
-# The account and the region are per-account values. Their defaults are the shared
-# account this tree started in, so a run with no environment asks exactly what it asked
-# before; a dedicated account exports its own and `docs/greenfield/accounts.md` says
-# which. Both are only ever used to build the *sample* ARNs the simulation is run
-# against, so a wrong one shows up as a simulation of the wrong namespace rather than as
-# a call against the wrong account.
+# The account and the region default to the one FSS runs in. Both are only ever used to
+# build the *sample* ARNs the simulation is run against, so a wrong one shows up as a
+# simulation of the wrong namespace rather than as a call against the wrong account.
 #
 #   FSS_CHECK_ROLE_ACCOUNT_ID  default 326255650484
 #   FSS_CHECK_ROLE_REGION      default us-east-1

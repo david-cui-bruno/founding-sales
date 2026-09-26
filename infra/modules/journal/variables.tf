@@ -63,7 +63,7 @@ variable "administrative_principal_arns" {
     passes its deployment role ARN here and the production root passes nothing
     unless David sets the variable (his decision 4 of 21 September: GOVERNANCE,
     ten years, and production teardown stays a root-user act unless he opts in).
-    `docs/decisions/g16-the-journal-deny-exempts-its-deployer.md`.
+    `docs/archive/decisions/g16-the-journal-deny-exempts-its-deployer.md`.
 
     ARNs rather than names, and role ARNs rather than session ARNs:
     `aws:PrincipalArn` carries the *role* ARN for an assumed-role session, which
@@ -98,7 +98,7 @@ variable "bucket_listing_principal_arns" {
     role, production included: unlike `administrative_principal_arns` this is
     not an opt-in, because an environment whose deployer cannot see its bucket
     destroys it by accident.
-    `docs/decisions/g37-the-deployer-may-list-the-journal-but-never-read-it.md`.
+    `docs/archive/decisions/g37-the-deployer-may-list-the-journal-but-never-read-it.md`.
 
     ARNs rather than names, and role ARNs rather than session ARNs:
     `aws:PrincipalArn` carries the *role* ARN for an assumed-role session, which

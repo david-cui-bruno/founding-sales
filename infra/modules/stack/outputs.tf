@@ -49,7 +49,7 @@ output "database_name" {
     `database_master_secret_arn` it is everything a connection string needs, and
     it is why the rehearsal database URL is assembled inside the job from three
     outputs rather than stored as a static environment secret. See
-    `docs/decisions/g12c-the-rehearsal-database-url-is-derived.md`.
+    `docs/archive/decisions/g12c-the-rehearsal-database-url-is-derived.md`.
   EOT
   value       = module.database.database_name
 }

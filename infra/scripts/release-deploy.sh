@@ -2,7 +2,7 @@
 # The deployment, in the one order that works, for both environments (lane G12h).
 #
 #   infra/scripts/release-deploy.sh <root> <prefix> [--schema-change] --api-digest D --worker-digest D
-#       [--release-record <release-record.json>] [--remove-linkedin-history]
+#       [--release-record <release-record.json>]
 #
 #   infra/scripts/release-deploy.sh infra/roots/rehearsal  fss-rh-0921 --schema-change --api-digest D --worker-digest D  # CI
 #   infra/scripts/release-deploy.sh infra/roots/production fss-prod    --schema-change --api-digest D --worker-digest D  # a schema release
@@ -84,14 +84,6 @@
 # enable unless the record's API digest is its own, and the worker still refuses to send
 # unless the record's worker digest is its own (release.md section 6).
 #
-# And, only when `--remove-linkedin-history` is given (lane A4, migration 0018): step 2
-# runs `fss migrate --remove-linkedin-history`, which is the one thing that lets 0018
-# erase a step's LinkedIn message, a recorded LinkedIn result or a contact URL that does
-# not fit beside the title. It is passed only after the owner has seen the counts
-# `infra/scripts/schema-preflight-0018.sh` printed; without it 0018 refuses, schema 17
-# stays as it was, and this script fails at step 2 with the counts in the task's log.
-# It means nothing without `--schema-change`, and is refused there.
-#
 # Stop-during-migration is the policy (`docs/greenfield/release.md` 4.1): every
 # declared range from migration 0006 onwards is a strict `{N,N}`, so there is no
 # version of the software that straddles a schema change and no honest way to do this
@@ -139,11 +131,9 @@ SCHEMA_CHANGE=0
 API_DIGEST=''
 WORKER_DIGEST=''
 RELEASE_RECORD=''
-REMOVE_LINKEDIN_HISTORY=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --schema-change) SCHEMA_CHANGE=1; shift ;;
-    --remove-linkedin-history) REMOVE_LINKEDIN_HISTORY=1; shift ;;
     --api-digest) API_DIGEST=$2; shift 2 ;;
     --worker-digest) WORKER_DIGEST=$2; shift 2 ;;
     --release-record) RELEASE_RECORD=$2; shift 2 ;;
@@ -152,12 +142,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 if [ -z "$ROOT_DIRECTORY" ] || [ -z "$PREFIX" ]; then
-  echo "usage: release-deploy.sh <terraform root> <name prefix> [--schema-change] --api-digest D --worker-digest D [--release-record <file>] [--remove-linkedin-history]" >&2
-  exit 1
-fi
-
-if [ "$REMOVE_LINKEDIN_HISTORY" = "1" ] && [ "$SCHEMA_CHANGE" != "1" ]; then
-  echo "FAIL: --remove-linkedin-history is an instruction to migration 0018, and a release without --schema-change runs no migration." >&2
+  echo "usage: release-deploy.sh <terraform root> <name prefix> [--schema-change] --api-digest D --worker-digest D [--release-record <file>]" >&2
   exit 1
 fi
 
@@ -399,14 +384,8 @@ if [ "$SCHEMA_CHANGE" = "1" ]; then
   # -------------------------------------------------------------------------
   # 2. Migrate. Under the migration identity, inside the VPC.
   # -------------------------------------------------------------------------
-  # The switch goes after the report flag, so the command's name is still `migrate`.
-  MIGRATE_SWITCHES=()
-  if [ "$REMOVE_LINKEDIN_HISTORY" = "1" ]; then MIGRATE_SWITCHES+=(--remove-linkedin-history); fi
   rehearsal_log "2/7 fss migrate"
-  if [ "$REMOVE_LINKEDIN_HISTORY" = "1" ]; then
-    rehearsal_log "2/7 with --remove-linkedin-history: migration 0018 may erase the LinkedIn history the owner saw counted"
-  fi
-  one_off migrate "$MIGRATION_TASK_DEFINITION" migration migrate --report /tmp/fss-migrate.json ${MIGRATE_SWITCHES[@]+"${MIGRATE_SWITCHES[@]}"}
+  one_off migrate "$MIGRATION_TASK_DEFINITION" migration migrate --report /tmp/fss-migrate.json
 
   # -------------------------------------------------------------------------
   # 3. The two database login users.

@@ -78,7 +78,7 @@ whatever a later lane adds all answer with their own reason code.
 ### The refusal codes
 
 Section 15's vocabulary where it has a word, and a second closed set where it does
-not. See `docs/decisions/g4-dial-refusal-codes.md`; the short version is that "that
+not. See `docs/archive/decisions/g4-dial-refusal-codes.md`; the short version is that "that
 identity is not yours" is not a hold, has no recovery action, and must not become a
 row in a table whose intervals shift a schedule.
 
@@ -86,7 +86,7 @@ row in a table whose intervals shift a schedule.
 
 Step 2 needs an "active verified calling identity owned by the actor", and until lane
 g60 nothing could make one. Now a salesperson registers their own number and attests
-it (`docs/decisions/g60-calling-identities-are-attested-in-version-one.md`):
+it (`docs/archive/decisions/g60-calling-identities-are-attested-in-version-one.md`):
 
 ```
 POST /calling-identities/register   { e164, label?, ownerUserId? }   unverified, disabled
@@ -216,7 +216,7 @@ partial write and a call that happened is never refused: a callback without a co
 instant, a wrong number with no route, or an effect that could not be applied comes back
 as a `followUps` entry beside the recorded call. The route must be the firm's and the
 contact's, the ticket the firm's, the actor's and the route's, and "just now" is database
-time. See `docs/decisions/g79-calls-carry-their-authorization.md`.
+time. See `docs/archive/decisions/g79-calls-carry-their-authorization.md`.
 
 ## Callbacks
 
@@ -229,7 +229,7 @@ call it came from is a callback nobody can explain.
 The instant is the server's: `createCallback` resolves the local date, time and zone
 through `callbackInstant` in `@fss/contracts` (the Mac calls the same function) and
 refuses a supplied `dueAt` that disagrees, so a DST gap resolves forward to the first
-valid time on both sides (`docs/decisions/g0-dst-gap-resolution.md`). Completing one
+valid time on both sides (`docs/archive/decisions/g0-dst-gap-resolution.md`). Completing one
 applies the CRM's assignment rule.
 
 Appendix D wants four things stored and there are four columns — requested local date,

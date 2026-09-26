@@ -4,7 +4,7 @@ variable "name_prefix" {
     `fss-prod-gmail-push` is the topic, the subscription and the service
     account id. It is fixed for the same reason it is fixed in
     `infra/roots/production`: there is one production, and there is no
-    rehearsal Google Cloud project to name (`docs/decisions/g12j-the-rehearsal-has-no-google-provider.md`).
+    rehearsal Google Cloud project to name (`docs/archive/decisions/g12j-the-rehearsal-has-no-google-provider.md`).
   EOT
   type        = string
   default     = "fss-prod"

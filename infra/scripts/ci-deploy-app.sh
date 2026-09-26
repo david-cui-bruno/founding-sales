@@ -138,8 +138,7 @@ source "$CI_SCRIPTS/release-common.sh"
 CI_PREFIX="$RELEASE_PRODUCTION_PREFIX"
 CI_ENVIRONMENT=production
 CI_ROLE="${CI_PREFIX}-ci-deploy"
-# The production account and region. Defaults a dedicated account replaces, like every
-# other script's (`docs/greenfield/accounts.md`); the workflow sets neither.
+# The production account and region; the workflow sets neither, so the defaults hold.
 CI_ACCOUNT="${FSS_PRODUCTION_ACCOUNT_ID:-326255650484}"
 CI_REGION="${FSS_PRODUCTION_REGION:-us-east-1}"
 # The order the services roll in. The worker first, as on every path in release-deploy.sh.

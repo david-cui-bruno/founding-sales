@@ -50,37 +50,10 @@ variable "assume_deployment_role" {
     The flag chooses a credential path and never a plan:
     `infra/roots/*/tests/*.tftest.hcl` assert the same names and the same
     outputs with it on and off.
-    `docs/decisions/g12e-the-provider-does-not-reassume-its-own-session.md`.
+    `docs/archive/decisions/g12e-the-provider-does-not-reassume-its-own-session.md`.
   EOT
   type        = bool
   default     = true
-}
-
-variable "aws_region" {
-  description = "AWS region. The default is the region this tree started in; a dedicated account states its own."
-  type        = string
-  default     = "us-east-1"
-}
-
-variable "aws_account_id" {
-  description = <<-EOT
-    The AWS account this root deploys into. The provider refuses to act against
-    any other account.
-
-    The default is the shared account the tree started in, which is why nothing
-    changes today. The dedicated production account states its own with
-    `TF_VAR_aws_account_id`, `-var` or a tfvars file, and edits no Terraform;
-    `docs/greenfield/accounts.md` is the checklist. Production applies stay local
-    and the provider does the assuming, so this is also the account the
-    `fss-prod-deploy` ARN is built from.
-  EOT
-  type        = string
-  default     = "326255650484"
-
-  validation {
-    condition     = can(regex("^[0-9]{12}$", var.aws_account_id))
-    error_message = "An AWS account id is twelve digits and nothing else."
-  }
 }
 
 variable "availability_zones" {
@@ -320,7 +293,7 @@ variable "journal_administrative_principal_arns" {
     retention, and removing the journal is an act of the account root rather
     than something a release could do by mistake. The variable exists so that
     the opt-in is one `-var` and a line in a plan David reads, not a change to
-    a module. `docs/decisions/g16-the-journal-deny-exempts-its-deployer.md`.
+    a module. `docs/archive/decisions/g16-the-journal-deny-exempts-its-deployer.md`.
 
     The production deployment role is separately denied `s3:GetObject*` and
     `s3:BypassGovernanceRetention` by its own policy
@@ -366,9 +339,9 @@ variable "google_hosted_domain" {
 # definitions carry: the audience, derived below from this root's own hostname,
 # and two public identifiers, committed as defaults because `infra/.gitignore`
 # keeps every tfvars file out of the repository
-# (`docs/decisions/g12c-the-topology-answers-are-root-defaults.md`). Passing
+# (`docs/archive/decisions/g12c-the-topology-answers-are-root-defaults.md`). Passing
 # `-var="gcp_project_id=…"` to this root is now an "undeclared variable" error.
-# `docs/decisions/g85-the-google-provider-has-its-own-root.md`.
+# `docs/archive/decisions/g85-the-google-provider-has-its-own-root.md`.
 # ---------------------------------------------------------------------------
 
 variable "gmail_push_path" {
@@ -470,7 +443,7 @@ variable "desktop_upgrade_url" {
     gives. The validation refuses a blank, anything but a plain https address,
     and the `callie.example` placeholder the API publishes outside production;
     the API refuses to start in production without a value, so both lines hold.
-    `docs/decisions/g86-the-upgrade-notice-names-the-update-channel.md`.
+    `docs/archive/decisions/g86-the-upgrade-notice-names-the-update-channel.md`.
   EOT
   type        = string
   default     = "https://dlcmdaeskewt5.cloudfront.net/releases/darwin-arm64/latest.json"

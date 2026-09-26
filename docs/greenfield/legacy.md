@@ -2,7 +2,7 @@
 
 Lane g95 (25 September 2026) deleted the previous-generation app from the repository.
 The greenfield tree (`apps/`, `packages/`, `infra/`, `test/release/`, the root scripts
-listed below, `docs/greenfield/` and `docs/decisions/`) is now the whole repository.
+listed below, `docs/greenfield/` and `docs/archive/decisions/`) is now the whole repository.
 The last commit that holds the old app is the tag **`legacy-final`**; check it out to
 read, run or recover any of it.
 
@@ -24,7 +24,7 @@ scripts under `legacy:`, its CI jobs only when a change touched it); lane g95 re
 | `package.json`: every `legacy:*` script, `main`, `productName`, every `dependencies` entry and the old app's devDependencies (Electron Forge, `@electron/rebuild`, the SQLite driver, React, Vite, Playwright, knip, prettier and their types) | The old app's install and build |
 | `.github/workflows/release.yml`; the `old-trees-changed`, `source` and `client` jobs of `.github/workflows/ci.yml` | The old app's release gate and CI |
 | `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`, `docs/engineering/`, `docs/cutover/`, `docs/acceptance/`, `docs/archive/`, `docs/known-company-extraction.md`, `docs/outreach-setup.md`, `docs/sourcing/founder-actions/alert-setup.md`, `.superpowers/` | The old app's documentation and history |
-| `packages/domain/test/oracle/portedModules.test.ts` | The oracle run that checked each ported module against the old one; temporary by construction (`docs/decisions/g0-oracle-imports.md`) |
+| `packages/domain/test/oracle/portedModules.test.ts` | The oracle run that checked each ported module against the old one; temporary by construction (`docs/archive/decisions/g0-oracle-imports.md`) |
 
 `DELETION-MAP-20260918.md` (the reachability audit of 18 September, in the
 coordinator's `.context/` notes) and David's answers of 18 and 19 September are the
@@ -66,7 +66,7 @@ desktop host job (`greenfield-desktop.yml`), images, infra, release, nightly and
 ## The old worker's AWS resources
 
 Deleting the code deleted nothing in AWS. Whatever of the old delegated worker is still
-deployed in the shared account (`docs/greenfield/accounts.md`,
-`docs/greenfield/carry-runbook.md`) is managed from its Terraform at `legacy-final`
-(`cloud/worker-terraform`), and the carry tool (`apps/worker/tools/carry`) reads the old
-table directly, not the old code.
+deployed in the account is managed from its Terraform at `legacy-final`
+(`cloud/worker-terraform`). The old data tables were destroyed on 17 September 2026, so
+there is nothing to carry into FSS; the carry tool and its runbook were deleted on
+26 September 2026.

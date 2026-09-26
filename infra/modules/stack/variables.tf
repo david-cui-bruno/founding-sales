@@ -420,7 +420,7 @@ variable "journal_administrative_principal_arns" {
     Actions run 35628963637 left the bucket, its policy, its object lock, its
     versioning and its public-access block behind. The production root passes
     nothing unless David sets it.
-    `docs/decisions/g16-the-journal-deny-exempts-its-deployer.md`.
+    `docs/archive/decisions/g16-the-journal-deny-exempts-its-deployer.md`.
   EOT
   type        = list(string)
   default     = []
@@ -439,7 +439,7 @@ variable "journal_listing_principal_arns" {
     again, and deleted the encryption configuration and the ownership controls
     before the policy and the object lock refused. Listing only: an exemption
     here reads no object and no version list.
-    `docs/decisions/g37-the-deployer-may-list-the-journal-but-never-read-it.md`.
+    `docs/archive/decisions/g37-the-deployer-may-list-the-journal-but-never-read-it.md`.
   EOT
   type        = list(string)
   default     = []
@@ -473,7 +473,7 @@ variable "updates_price_class" {
 # identifiers its task definitions carry. Terraform configures every provider a module *requires*
 # during a plan, even with no instances of it, which is why `module "pubsub"`
 # with `count = 0` still asked CI for a Google credential.
-# `docs/decisions/g12j-the-rehearsal-has-no-google-provider.md`.
+# `docs/archive/decisions/g12j-the-rehearsal-has-no-google-provider.md`.
 #
 # Each of the three is validated for shape and not for presence. An empty value
 # means "this environment was not told", which both bootstraps refuse at
