@@ -212,7 +212,7 @@ startup line names every decision and no credential.
 | `FSS_GMAIL_PUSH_TOPIC` | ✓ | the Pub/Sub topic `users.watch` registers against. In production from the root's `module.pubsub`; the rehearsal carries a placeholder identifier because its Gmail is recorded and it has no Google project (`docs/archive/decisions/g12j-the-rehearsal-has-no-google-provider.md`). |
 | `FSS_GOOGLE_HOSTED_DOMAIN` | ✓ | the Callie Workspace domain. Restricts `hd` at sign-in (5.1) and which mailbox may connect (12.1). |
 | `FSS_SENDING_ENABLED` | ✓ | 16.2's deployment half. False unless the value is exactly `true`; anything else is a refusal, never a send. |
-| `FSS_RESEARCH_PROVIDERS` | worker | `none` or `recorded`. A live worker must say which; there is no live research adapter in this build. |
+| `FSS_RESEARCH_PROVIDERS` | worker | Ignored since the research feature was deleted (26 September 2026). Terraform still sets it to `none` until a later infrastructure release removes it. |
 
 The last two rows of Google configuration are the ones that moved: `FSS_GMAIL_PUSH_TOPIC`
 and `FSS_GOOGLE_HOSTED_DOMAIN` used to travel inside the operator-written
@@ -228,7 +228,7 @@ Each task definition carries only the secrets its own process reads (lane g81,
 and drill tasks `google-gmail-oauth-client`. Each arrives under its logical Secrets
 Manager name except the classifier key, which arrives as `FSS_LLM_CLASSIFIER_API_KEY`,
 the name the classifier reads. `research-provider-credentials` reaches no process,
-because none reads it. None is ever logged; the startup line reports whether each is
+because none reads it; the empty entry goes with a later infrastructure release. None is ever logged; the startup line reports whether each is
 configured.
 
 ## Metrics, and what is not published

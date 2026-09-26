@@ -91,7 +91,7 @@ fourth of those. Uncertain and ambiguous messages use the same kind: 8.2's lane 
 "replies, including uncertain and ambiguous messages", so there is deliberately no
 second kind for them, and 8.3's classification content is G7b's.
 
-`promoteTodayItem` is the general form, for the sequences lane's due work.
+`upsertTodayItem` is the general form, for the sequences lane's due work.
 
 ### 3. The build decides which tasks exist, and cancels only what it enumerated
 
@@ -291,7 +291,7 @@ One thing the wiring cannot do yet, recorded rather than faked:
 
 1. Write a `TodaySource` with the `source_kind`s it is authoritative for, and add it to
    `defaultTodaySources()`.
-2. For an event-driven promotion, call `promoteTodayItem` in the transaction that
+2. For an event-driven promotion, call `upsertTodayItem` in the transaction that
    records the event. Do not write `today_snapshots`; the trigger does.
 3. Pick an `item_key` that is deterministic from the row that produced it, so a replay
    is an upsert.

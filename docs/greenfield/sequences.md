@@ -122,7 +122,7 @@ Suppression before assignment for the reason `docs/greenfield/policy.md` gives a
 dialing: an unassigned salesperson should be told the firm is suppressed rather than
 that it is not theirs.
 
-Caps, the domain guard and the window are deliberately *not* sources. They belong to
+Caps and the window are deliberately *not* sources. They belong to
 the sending lane and are re-read inside its own fence, where the answer that matters is
 decided; asking them here as well would be a second answer that can disagree with it.
 A refusal from the send is turned into the same hold this composition would have
@@ -328,7 +328,9 @@ its own.
    The bridge appends the sign-off and 12.6's stop line, because the approval requires the
    body to end with them. The declared variables are the ones the text names. The form
    refuses, before sending, a variable Callie cannot fill (`TEMPLATE_VARIABLE_NAMES`, in
-   `@fss/contracts`), an unsubscribe link, and more than 89 words. **Approve** is a separate
+   `@fss/contracts`) and an unsubscribe link. Since 26 September 2026 the approval answers
+   more than 89 words, more than one link, a link in the subject and pricing or guarantee
+   language as `warnings` (`TEMPLATE_WARNING_CODES`), not refusals. **Approve** is a separate
    press. A refused approval lists every issue, read from the refusal's body, because the
    Mac's transport cuts a reason code at 80 characters.
 3. **Steps** — the draft's steps as typed controls: Call or Email, a delay in business

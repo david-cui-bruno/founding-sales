@@ -7,7 +7,7 @@ Callie is a 24/7 maintenance agent for property managers: it handles tenant requ
 | Path | What lives there |
 | --- | --- |
 | `apps/api` | The HTTP API on Fargate: Google sign-in, sessions and devices, the command and read routes the Mac calls, administration. |
-| `apps/worker` | The worker on Fargate: the job queue, mailbox sync, sequences and sending, research, the operations command line (`fss`). |
+| `apps/worker` | The worker on Fargate: the job queue, mailbox sync, sequences and sending, the operations command line (`fss`). |
 | `apps/desktop` | The Mac app (Electron): sign-in, Today, firms, calls, replies, settings, the signed update channel. |
 | `packages/domain` | The rules and the PostgreSQL 16 schema and migrations, shared by the API and the worker. |
 | `packages/contracts` | The zod wire contracts shared by all three apps. |

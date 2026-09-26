@@ -28,7 +28,7 @@ packages/domain/crm/routePolicy.ts           the versioned eligibility threshold
 packages/domain/crm/routeValidation.ts       what a passed email validation is (lane g90)
 apps/worker/src/handlers/routeValidate.ts    the route.validate job and its sweep
 packages/domain/crm/zone.ts                  the postal source behind G0's zone seam
-packages/domain/crm/evidence.ts              research evidence, idempotent per result
+packages/domain/crm/evidence.ts              evidence items, idempotent per result
 packages/domain/crm/pipeline.ts              stages, stage changes, close, reopen
 packages/domain/crm/merges.ts                firm and contact merges
 packages/domain/crm/events.ts                the outbox later lanes subscribe to
@@ -173,7 +173,7 @@ checked. No SMTP callout, no third party, nothing is sent.
 Eligibility is still `decideRouteEligibility`'s, from the route's source and confidence.
 A passed address with no recorded confidence that a member entered themselves
 (`salesperson`, `import`) records confidence 1 — the person vouched for it — and so
-becomes usable; a research or website address with none stays a candidate. A failed one
+becomes usable; an address from any other source with none stays a candidate. A failed one
 is `invalid`. Nothing here lowers a `usable` route: it is never an unchecked candidate.
 
 An unanswered address is asked about again by the `route-validation` source: ten minutes
@@ -257,9 +257,9 @@ refusal rather than a cascade, because moving a person between firms is what the
 semantic key exists to prevent. Merge the firms first.
 
 The merge takes the source firm's row lock before anything else, which is what makes
-it correct "under concurrent research enrichment": an uncommitted `INSERT` into a child
+it correct under a concurrent write to one of the firm's children: an uncommitted `INSERT` into a child
 table already holds `FOR KEY SHARE` on that row, so the merge either waits and carries
-the enrichment over, or the enrichment lands after the merge on a firm the next command
+the write over, or the write lands after the merge on a firm the next command
 refuses as `firm_merged`.
 
 ## What is deliberately not here

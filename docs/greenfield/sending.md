@@ -1,4 +1,4 @@
-# Sending: the at-most-once fence, the ramp and the domain guard
+# Sending: the at-most-once fence and the ramp
 
 Specification revision 3, sections 12.5, 12.6, 12.7 and 11.2, and Appendices B, C, D,
 F and G 5, 6, 12, 16, 33, 36. This is the only part of FSS that does something to a
@@ -39,12 +39,12 @@ is built around.
 | The one Gmail call, and the claiming transaction | `outbound/send.ts` |
 | Sent-folder reconciliation | `outbound/reconcile.ts` |
 | 12.7's ramp and the daily counters | `outbound/ramp.ts` |
-| 12.6's guard, the DNS checklist and `registerSendingDomain` | `outbound/domainGuard.ts` |
+| The sending domain, the DNS checklist and `registerSendingDomain` | `outbound/domainGuard.ts` |
 | Routes | `apps/api/src/routes/outbound.ts` |
 | Handler and source | `apps/worker/src/handlers/mail.ts`, `scheduler/mailSources.ts` |
 | Tests | `packages/domain/test/outbound/**`, `apps/api/test/outbound.test.ts`, `apps/api/test/sendingDomain.test.ts`, `apps/worker/test/mailHandlers.test.ts`, `apps/worker/test/sequenceActionDispatch.test.ts` |
 
-## The nine rules a reader should carry
+## The seven rules a reader should carry
 
 ### 1. One fence per origin, and `prepare` reuses rather than duplicates
 
@@ -203,82 +203,7 @@ process that dies before the commit leaves neither, and there is nothing to refu
 the number of fences whose dispatch began on it, and the send path cannot make the two
 disagree. A fence planned for Monday and held into Tuesday is Tuesday's send.
 
-### 7. The domain guard counts the domain, not the mailbox
-
-12.6's 4,000 personal-Gmail recipients per rolling 24 hours lives on `sending_domains`
-and is counted across every mailbox plus every direct send the sync imported. Connecting
-a second mailbox adds to the same total — the count query takes no mailbox at all,
-which is the structural form of "it cannot be bypassed with extra mailboxes".
-
-It is rolling rather than daily (a midnight reset would permit 8,000 in two hours), and
-it applies only to recipients on `gmail.com` or `googlemail.com` — a Workspace mailbox on
-a customer's own domain is not covered by Google's rule, and holding it would be an
-outage on traffic nobody objected to.
-
-**It counts recipient exposure** (lane g87, audit S08). Before g87 it counted `sent`
-fences and one per direct message, so a send in doubt left the count the moment Gmail
-went quiet, and a mail merge sent as one message to forty Gmail addresses moved it by
-one. `personalGmailRecipientsInWindow` now counts:
-
-* **`automated`:** every FSS fence to a personal-Gmail address whose dispatch began in
-  the window, in every state after the claim: `dispatching`, `reconciling`, `sent` and
-  `unknown_terminal`. A claimed send may have left, so it is reserved against the guard
-  exactly as a sent one is. Its instant is the later of the claim and the proven send.
-* **`direct`:** every distinct personal-Gmail address on the `To` and `Cc` of every
-  imported outgoing message, counted once per message. `Bcc` is not in 12.3's header
-  allowlist, so it is the one recipient this count cannot see.
-* A message FSS sent is left out of `direct` exactly when its fence is counted in
-  `automated`: a claimed fence in the same mailbox with the message's Gmail id or its
-  deterministic `Message-ID`. So the sync importing FSS's own copy is counted once.
-
-Across messages it still over-counts on purpose: two messages to one address count
-twice. The answer keeps the `{ automated, direct, total }` shape the desktop parses, and
-the in-doubt part is inside `automated`.
-
-**The decision is serialized.** Every dispatch claim holds the send gate *shared*, so
-two claims to personal Gmail from two mailboxes used to run side by side, each count the
-other's fence as unclaimed, and both take the last place. The gate now takes a
-per-workspace transaction advisory lock (`lockDomainGuard`, key `fss.domain-guard:` plus
-the workspace id) before it counts a personal-Gmail recipient. The claim holds it until
-it commits, so the next claim counts this one in `dispatching`. It is taken after every
-row lock the claim already holds and by nothing but a claim, so it adds no lock-order
-cycle.
-
-### 8. Every outgoing message spends the account's headroom
-
-12.7: "All outgoing Gmail messages, including direct sends, count toward operational
-headroom. Automated capacity is conservatively reserved so sync lag cannot approach
-Google's account ceiling." Until lane g87 (audit S07) FSS counted direct sends in
-`mailbox_send_days.direct_sent` and nothing read them.
-
-The rule: **an automated send is refused as `daily_cap`, with detail `account
-used/ceiling`, when the mailbox's `automated_sent + direct_sent` on the claim's business
-date and the one before it already reach `ACCOUNT_OPERATIONAL_CEILING` (1,500).** That
-is Google Workspace's per-user limit of 2,000 messages in any rolling 24 hours
-(`GMAIL_ACCOUNT_DAILY_LIMIT`), less a reserve of 500 (`ACCOUNT_HEADROOM_RESERVE`).
-
-* **Two dates, because Google's window rolls.** At nine in the morning, yesterday
-  afternoon's sends are still inside Google's 24 hours. Any 24 hours ending now lies
-  inside today's business date and yesterday's, so their sum can only overstate what
-  Google counts.
-* **The reserve is for what the counters cannot see yet.** That means direct sends the
-  sync has not imported. The gate refuses automated sending once coverage is older than
-  fifteen minutes, so the unseen part is at most a quarter of an hour of a person's own
-  sending. It also absorbs the extra hour a spring-forward night adds to Google's window.
-* **It is its own ceiling.** The automated cap still applies first, and it can never
-  reach 1,500 on its own (the hard ceiling is 100). So this refusal only fires on an
-  account a person is already sending a great deal from by hand. The detail says which
-  ceiling: `automated n/cap` for the cap, `account used/ceiling` for this.
-* **It is enforced in the claim.** The gate's `openSendDay` upsert locks today's row
-  inside the claiming transaction, so two claims on one mailbox read it one after the
-  other. Yesterday's row changes only when the pipeline counts a late direct send, which
-  takes the send gate exclusive first.
-
-What it does not model is in `docs/archive/decisions/g87-ramp-raise-headroom-exposure.md`:
-Google's separate recipient limits, trial Workspace accounts (500 a day), and a
-salesperson's own sending beyond the ceiling, which FSS observes and cannot stop.
-
-### 9. The application never queries DNS
+### 7. The application never queries DNS
 
 12.7 gates automated sending on SPF, DKIM and DMARC. Those are three booleans on
 `sending_domains`, set by an admin through `/outbound/authentication`, with who and
@@ -386,8 +311,8 @@ It follows four rules, and each has a test:
   and the answer is `existing`. A reconnect or a 5.1a re-run never resets the checklist
   or the enable.
 * **A new row is primary only if the workspace has none.** Otherwise it is registered
-  beside the primary. A registration never changes which domain the 12.6 guard counts
-  against. When two first registrations race, the loser waits on
+  beside the primary. A registration never changes which domain is primary. When two
+  first registrations race, the loser waits on
   `sending_domains_one_primary`, inserts nothing, and on its next pass is registered as
   non-primary.
 * **Personal Gmail is refused** (`personal_gmail_domain`). 12.6 treats `gmail.com` and
@@ -424,12 +349,12 @@ daily cap is reported as suppressed, because that is the fact somebody needs to 
 7. the sending domain unknown, unauthenticated, or sending disabled (12.7);
 8. outside the firm-local window, re-derived rather than trusted (11.2);
 9. the mailbox's daily cap (12.7): the cap in force, with a stored raise judged on
-   today's health (lane g87), detail `automated n/cap`;
-10. the account headroom (12.7, lane g87): automated and direct sends on today's and
-    yesterday's business date against 1,500, refused as `daily_cap` with detail
-    `account used/ceiling`;
-11. the domain guard (12.6), serialized for a personal-Gmail recipient and counting
-    recipient exposure (lane g87).
+   today's health (lane g87), detail `automated n/cap`.
+
+The personal-Gmail domain guard (12.6) and the account headroom (12.7) were refusals 10
+and 11 until 26 September 2026 (lane W1-C). One founder sending from one Workspace
+mailbox is nowhere near either limit, so both were deleted; `/outbound/status` still
+answers the guard's fields with constant values because installed desktops parse them.
 
 Each refusal sets the fence `held` — which by definition means nothing was attempted —
 and opens the matching `active_holds` row. A later attempt releases the fence's own
@@ -462,10 +387,9 @@ Nothing in `packages/domain/outbound` imports anything of G8's.
 * `docs/archive/decisions/g77-dispatch-rechecks-under-the-lock.md` — OAuth first, then the
   recheck, the reservation and the claim in one transaction under the send gate;
   coverage freshness; the claim's business date; holidays at dispatch.
-* `docs/archive/decisions/g7-domain-guard-scope.md` — why the guard counts the domain and
-  holds the firm, including the over-broad hold the scenario test caught.
-* `docs/archive/decisions/g87-ramp-raise-headroom-exposure.md` — the raise's health rule, the
-  account headroom and its reserve, and recipient exposure with in-doubt reservation.
+* `docs/archive/decisions/g87-ramp-raise-headroom-exposure.md` — the raise's health rule (its
+  account headroom and recipient exposure were deleted with the domain guard on
+  26 September 2026).
 * `docs/archive/decisions/g7-no-dns-lookup.md` — why 12.7's authentication gate is a person's
   checklist and this application never resolves a TXT record.
 
@@ -476,8 +400,6 @@ Nothing in `packages/domain/outbound` imports anything of G8's.
   records is the resolution and the original dispatch instant.
 * **Live credentials.** `mailHandlers(undefined)` in this release, so `mail.reconcile`
   waits in the queue with the other three mail kinds.
-* **A guard-change command.** 12.6 calls it "a reviewed product-policy change", so the
-  value is a column an operator changes with a record of the review, not a button.
 
 ## Running the tests
 

@@ -344,14 +344,14 @@ and pass them as `api_schema_range` and `worker_schema_range`. A task definition
 | Variable | Production value | Root variable |
 |---|---|---|
 | `FSS_DEPENDENCIES` | `live` | `dependencies_mode`, default `live` |
-| `FSS_RESEARCH_PROVIDERS` | `none` (worker only) | `research_providers`, default `none` |
+| `FSS_RESEARCH_PROVIDERS` | `none` (worker only); the worker ignores it since research was deleted (26 September 2026), and a later infrastructure release removes it | `research_providers`, default `none` |
 | `FSS_SENDING_ENABLED` | `true` since section 6 ran | `sending_enabled`, a committed literal in the root, not a variable |
 | `FSS_GMAIL_PUSH_TOPIC` | the Pub/Sub topic id | `gmail_push_topic`, whose default is production's (8.0ar; the rehearsal passes a placeholder) |
 | `FSS_GOOGLE_HOSTED_DOMAIN` | `usecallie.com` | `google_hosted_domain` |
 
 Until G12c none of the first three could be set at all: `extra_environment` existed on the stack module and no root exposed it, so an apply produced two services whose tasks exit at startup naming a variable no plan could set. `docs/archive/decisions/g12c-the-deployment-flags-are-root-variables.md`.
 
-`FSS_DEPENDENCIES` has no default **in the binary**: an unset one is a refusal to start, which is deliberate (`docs/archive/decisions/g12-the-credentialed-bootstrap.md`); the root's default is what makes sure it is never unset. `dependencies_mode` refuses `none` outright and accepts `recorded`, which the binaries then refuse in a production environment — the rule lives in one place rather than two that can disagree. `FSS_RESEARCH_PROVIDERS=none` is a declaration that this build ships no live research adapter, not an accident. The last two need nothing from you; they are listed so that a startup line reporting `hosted_domain_source: "secret"` reads as "the apply has not landed yet" rather than as a mystery.
+`FSS_DEPENDENCIES` has no default **in the binary**: an unset one is a refusal to start, which is deliberate (`docs/archive/decisions/g12-the-credentialed-bootstrap.md`); the root's default is what makes sure it is never unset. `dependencies_mode` refuses `none` outright and accepts `recorded`, which the binaries then refuse in a production environment — the rule lives in one place rather than two that can disagree. `FSS_RESEARCH_PROVIDERS=none` is left over from the deleted research feature and read by nothing. The last two need nothing from you; they are listed so that a startup line reporting `hosted_domain_source: "secret"` reads as "the apply has not landed yet" rather than as a mystery.
 
 There is also `extra_environment` (`map(string)`, empty) on both roots, for whatever the next release needs before it earns a variable of its own. Never a credential: secrets reach a container only as a Secrets Manager reference, and the root test asserts no environment name looks like one.
 

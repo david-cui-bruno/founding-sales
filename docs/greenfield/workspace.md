@@ -92,8 +92,7 @@ single-workspace setup.
 ## Things that are deliberately absent
 
 * No ORM. Repositories are written against the narrow `Queryable` interface in
-  `packages/domain/db/queryable.ts`, and every scoped statement is built by
-  `scopedQueries.ts`, which supplies `workspace_id` from the scope.
+  `packages/domain/db/queryable.ts`.
 * No HTTP framework. `apps/api` uses `node:http`; see
   `docs/archive/decisions/g0-api-http-server.md`.
 * No secret, key, token or real address anywhere in the tree. Test credentials are

@@ -75,8 +75,7 @@ cursor unrepresentable.
 
 12.6: "While a mailbox grant is revoked or coverage unhealthy, every automated step
 kind for that owner is held." So the hold is owner-scoped, not mailbox-scoped, and it
-blocks `email_send`, `call_task` and `enrollment_advance`. Research is
-not a step kind and is not blocked.
+blocks `email_send`, `call_task` and `enrollment_advance`.
 
 `releaseMailboxHold` re-reads the row and refuses to release a `coverage_incomplete`
 hold unless `sync_state = 'ready'`. A caller cannot talk the database out of a hold it
@@ -393,8 +392,9 @@ the later guard lane is for.
 
 ## What is deliberately not here
 
-* **Sending.** G7-2 added it: the at-most-once fence, the reputation ramp and the
-  domain guard, in `packages/domain/outbound` and migration 0010. `GmailClient` gained
+* **Sending.** G7-2 added it: the at-most-once fence and the reputation ramp, in
+  `packages/domain/outbound` and migration 0010 (its domain guard was deleted on
+  26 September 2026). `GmailClient` gained
   `sendMessage` and the `rfc822msgid:` Sent-folder search, and nothing about the read
   surface changed. See `docs/greenfield/sending.md`.
 * **The LLM classifier.** G7b, behind the seam rule 4 describes.

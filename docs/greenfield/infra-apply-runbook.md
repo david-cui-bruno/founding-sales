@@ -187,7 +187,7 @@ Terraform creates six **empty** Secrets Manager entries. It never holds a value 
 | `fss-prod/session-signing-key` | signing material for access sessions |
 | `fss-prod/device-credential-pepper` | server-side pepper for the device credential hash |
 | `fss-prod/llm-classifier-api-key` | reply-classifier provider key |
-| `fss-prod/research-provider-credentials` | approved research provider credentials |
+| `fss-prod/research-provider-credentials` | nothing: the research feature was deleted on 26 September 2026 and nothing reads it; the empty entry goes with a later infrastructure release |
 
 Nothing else goes in either Google entry. The Pub/Sub topic and the Workspace domain are public identifiers and travel in the task environment (`FSS_GMAIL_PUSH_TOPIC`, `FSS_GOOGLE_HOSTED_DOMAIN`), set by the apply from `module.pubsub` and the `google_hosted_domain` root variable; see `docs/greenfield/release.md` 1.6.
 

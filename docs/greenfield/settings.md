@@ -40,8 +40,11 @@ docs/greenfield/runbooks/*.md                      one page per alarm
 
 ## What this lane stores, and what it deliberately does not
 
-`workspace_settings` holds four slices: the alarm thresholds, the workspace business
-zone, the supported client-version range and the production sending attestation.
+`workspace_settings` holds two active slices: the workspace business zone and the
+production sending attestation. The alarm thresholds and the supported client-version
+range were retired on 26 September 2026 (lane W1-C): the alarms read Terraform's values
+and the API's client-version policy is code, so neither slice was read by anything.
+Their rows stay allowed by the database until migration 0019.
 
 It held a fifth, `postal_footer`, until 22 September 2026. David decided that an
 automated email carries no postal address, so there is nothing to configure: the key
@@ -62,10 +65,10 @@ ceilings are row-level CHECKs rather than schema maxima (G7-2's `mailbox_send_ra
 and `sending_domains`, migration 0010).
 `docs/archive/decisions/g9-two-slices-that-belong-to-other-lanes.md` is the argument.
 
-Everything else 10.1 lists — state postures, calling windows, research limits and
-route-eligibility thresholds, approved templates, memberships, devices, mailboxes,
-pauses — already has its own table, its own versioning and its own commands, written
-by the lane that owns the behaviour. None of it is copied here. A workspace with two
+Everything else 10.1 lists — state postures, calling windows, approved templates,
+memberships, devices, mailboxes, pauses — already has its own table, its own
+versioning and its own commands, written by the lane that owns the behaviour. None of
+it is copied here. A workspace with two
 answers to "what is the calling window" is worse than a settings page with links on
 it, so the settings response carries `elsewhere`: a list of topic, endpoint and
 owning lane that the page renders as navigation. `SETTINGS_ELSEWHERE` in
@@ -83,12 +86,10 @@ Each setting has typed controls, built by `settingFields` in
 
 * The business zone is a picker of the US zones that Add firm offers.
 * Production sending is a switch and a release-gate reference.
-* The supported versions are two fields.
-* The ten alarm thresholds are labelled numbers and a time.
 
 Nothing is clamped on the Mac. The server's `invalid_value` is still the answer. The
 version and when it changed, and the value as JSON, are behind each setting's
-**Details**. Alarm thresholds and supported versions are behind **Advanced**.
+**Details**.
 `elsewhere` is listed by topic, with endpoints and owning lanes behind **Where each is
 changed**. A reason reads as a sentence ("Only an admin can change this."), not a code. A
 slice this build does not recognise is edited as JSON under Details. This supersedes
@@ -125,21 +126,10 @@ is, and the domain test wraps it the same way.
 is the transaction-start instant and the superseding transaction may have begun
 before the one it retires committed.
 
-## The nine thresholds of 13.3
+## The thresholds of 13.3
 
-They are configuration, "versioned with the release", and they are also Terraform
-variables that build the CloudWatch alarms. Two copies of one set of numbers drift,
-so `packages/domain/test/settings/settings.test.ts` reads
-`infra/modules/alerts/variables.tf` and fails when a default here disagrees with the
-default there. Eight of the ten fields have a variable; the Today deadline is a
-workspace-local time of day and the held fraction is a literal inside a metric-math
-expression, and `ALERT_THRESHOLD_TERRAFORM_VARIABLES` records both exceptions as
-`null` so the test's list stays honest.
-
-Changing a threshold in the settings store does **not** move the alarm. The alarm is
-Terraform, and infrastructure is deployed rather than configured at runtime. The
-stored value is what the application reads and what an operator compares an alarm
-against; moving both is a release.
+They are Terraform variables of `infra/modules/alerts`, and the alarms are built from
+them. Changing one is an infrastructure release, not a setting.
 
 ## Pauses
 
@@ -158,13 +148,14 @@ Not this lane's. G7-2's `POST /outbound/cap` sets the admin lower bound and the 
 to 75 on `mailbox_send_ramp`; `POST /outbound/authentication` records the SPF, DKIM,
 DMARC and Postmaster facts and the per-domain enable on `sending_domains`. The
 per-domain ramp is computed from `healthy_sending_days` and never stored.
-`personal_gmail_guard_per_24h` has no route on purpose — 12.6 calls changing it a
-reviewed product-policy change — so the settings page renders it read-only. Both
+`personal_gmail_guard_per_24h` is a constant since the personal-Gmail guard was deleted
+(26 September 2026); `/outbound/status` still answers it because installed desktops parse
+it, and the desktop no longer shows it since wave 1 (lane W1-D). Both
 `/outbound/*` paths are admin-only with a redacted 403, so the section is gated on
 role rather than offering a control that answers 403.
 
-The Settings window calls all of it. For an admin it reads `/outbound/status` — once
-with no argument for the domain checklist and the guard, then once per mailbox for
+The Settings view calls all of it. For an admin it reads `/outbound/status` — once
+with no argument for the domain checklist, then once per mailbox for
 that mailbox's ramp, because the status route has no list form and the mailbox ids
 come from `/diagnostics`, which already applies the read matrix to them. For anyone
 else the section is **absent, not inert**: an `/outbound/*` control offered to a
@@ -188,8 +179,8 @@ exist", has the rules.
 **No build before desktop 1.0.4 renders this section at all** (lane g69, release.md
 8.0ae). The route answers `personalGmailRecipients` as `{ automated, direct, total }`,
 and until 1.0.4 the desktop parsed it as a number. Every answer failed, and the section
-was absent whatever the database held. From 1.0.4 the guard line reads `total`, and a
-read that fails is no longer silent: for an admin the section keeps its heading and
+was absent whatever the database held. From 1.0.4 the guard line read `total` (the line
+is gone since wave 1), and a read that fails is no longer silent: for an admin the section keeps its heading and
 shows one grey line, *Callie could not read the sending status.*, a sentence naming the
 refusal code, and **Retry**, which shows Settings again. The sending read no longer waits
 on `/settings` succeeding, and Home's focus and Refresh ask again while it is failing.

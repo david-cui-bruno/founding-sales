@@ -1,5 +1,7 @@
 # Research: discovery, enrichment, evidence and suggestions
 
+**Archived on 26 September 2026.** The research feature was deleted (lane W1-C, PR 253); its five tables stay until migration 0019. This is how it worked.
+
 Specification revision 3, invariant 8, sections 7.4, 9.2, 10.3 and 13.2, and
 Appendices C, D and G 37. This is how firms get into the system and how what is known
 about them grows, and — just as importantly — everything that does not happen as a

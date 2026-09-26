@@ -46,7 +46,7 @@ Cost levers worth David's attention, in order of size:
 | Public IPv4 addresses | Address-hour, charged per public IPv4 in use | ALB (2 subnets) + one per running task; 2 + 3 = 5 addresses at the default counts | falls with `api_desired_count`, `worker_desired_count` | 2 + 2 |
 | NAT gateway | **Not used.** Gateway-hour and GB-processed | 0 | — | 0 |
 | VPC interface endpoints | **Not used.** Endpoint-hour per AZ and GB-processed | 0 | — | 0 |
-| Data transfer out to internet | GB out | Gmail and research provider traffic; small | n/a | small |
+| Data transfer out to internet | GB out | Gmail and Google API traffic; small | n/a | small |
 | WAFv2 | Web-ACL-month + rule-month + per million requests | **off** | `enable_waf` | off |
 | ACM certificate | No charge for a public certificate on an ALB | 1 | n/a | 1 |
 
