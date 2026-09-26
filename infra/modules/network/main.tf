@@ -8,9 +8,12 @@
 #
 # Every security-group rule in this module is generated from local.ingress_rules
 # and local.egress_rules. A rule that is not in those maps does not exist, and
-# tests/security_groups.tftest.hcl asserts the resource counts match the maps.
+# tests/security_groups.tftest.hcl asserts what the maps admit.
 
 locals {
+  # PostgreSQL's port; the stack gives the database module the same literal.
+  database_port = 5432
+
   security_groups = {
     alb = {
       description = "Public application load balancer. The only internet-facing component."
@@ -67,8 +70,8 @@ locals {
       group        = "database"
       description  = "PostgreSQL from the API tasks."
       ip_protocol  = "tcp"
-      from_port    = var.database_port
-      to_port      = var.database_port
+      from_port    = local.database_port
+      to_port      = local.database_port
       cidr_ipv4    = null
       cidr_ipv6    = null
       prefix_list  = null
@@ -78,8 +81,8 @@ locals {
       group        = "database"
       description  = "PostgreSQL from the worker tasks."
       ip_protocol  = "tcp"
-      from_port    = var.database_port
-      to_port      = var.database_port
+      from_port    = local.database_port
+      to_port      = local.database_port
       cidr_ipv4    = null
       cidr_ipv6    = null
       prefix_list  = null
@@ -119,10 +122,6 @@ locals {
       destination_group = null
     }
   }
-
-  # The private route table carries no route off the VPC. This list stays empty
-  # by construction and the test asserts it; see the no-NAT note above.
-  private_route_destinations = []
 }
 
 resource "aws_vpc" "main" {

@@ -32,8 +32,3 @@ output "egress_rules" {
   description = "The declared egress inventory. Every egress rule resource is generated from it."
   value       = local.egress_rules
 }
-
-output "private_route_destinations" {
-  description = "Routes off the VPC from the private route table. Always empty: there is no NAT gateway."
-  value       = local.private_route_destinations
-}

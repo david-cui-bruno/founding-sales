@@ -56,7 +56,7 @@ module "stack" {
   aws_region     = local.aws_region
   aws_account_id = local.aws_account_id
 
-  availability_zones = var.availability_zones
+  availability_zones = ["us-east-1a", "us-east-1b"]
 
   database_instance_class        = var.database_instance_class
   database_multi_az              = true
