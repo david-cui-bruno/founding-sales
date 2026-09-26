@@ -141,7 +141,7 @@
 # `ci_deploy_*` outputs; nothing here reads Terraform state. The cluster name must be the
 # one this script acts on, so a variable that drifted from the root is a refusal.
 #
-# Offline seams, for `test/release/ciDeploy.check.ts`: FSS_REHEARSAL_AWS_COMMAND (the AWS
+# Offline seams, for `test/ops/ciDeploy.check.ts`: FSS_REHEARSAL_AWS_COMMAND (the AWS
 # CLI), FSS_CI_CALLER_IDENTITY (the session ARN), FSS_CI_HEALTH_JSON (the `/health`
 # body), FSS_CI_WAIT_ATTEMPTS, FSS_CI_ROLLOUT_READS and FSS_CI_ROLLOUT_SECONDS, and for
 # `record` FSS_GH_COMMAND (the `gh`
@@ -242,7 +242,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 if rehearsal_dry_run; then
-  ci_fail "ci-deploy-app.sh has no dry run. Every step of check is a read, and test/release/ciDeploy.check.ts drives the whole script against a stub CLI."
+  ci_fail "ci-deploy-app.sh has no dry run. Every step of check is a read, and test/ops/ciDeploy.check.ts drives the whole script against a stub CLI."
 fi
 [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || ci_fail "--commit '$COMMIT' is not a full forty-character commit"
 [[ "$RUN_ID" =~ ^[0-9]{1,20}$ ]] || ci_fail "--run-id '$RUN_ID' is not a workflow run id"
