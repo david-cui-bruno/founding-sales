@@ -1,14 +1,14 @@
 import { button, element, orDash } from './firmDom.ts';
 import type { ReplyBridge, ReplyDisposition, ReplyState } from './replyContract.ts';
 import { buildReplyView, candidateLabel, replyNotice, type ReplyCardView } from './replyView.ts';
+import { navigate } from './routes.ts';
 
 /**
- * The reply window (specification 8.3, 12.4, 14.2).
+ * The Replies view (specification 8.3, 12.4, 14.2).
  *
- * A fourth entry point beside `renderer.ts`, `firmWorkspace.ts` and G6's `todayPage.ts`
- * (whose lanes are Home's `todayLanes.ts` since lane g65), for the reason G3b gave for
- * the second: the windows are opened, used and closed,
- * and every rule lives where it can be tested without Electron.
+ * A view of the one window (wave 1): `mount` draws into the shell's column and `unmount`
+ * stops it, so an answer that arrives after the person went elsewhere draws nothing.
+ * Every rule lives where it can be tested without Electron.
  *
  * The page holds one piece of state — `chosen`, the disposition the person has
  * clicked — and no rules at all. It asks `buildReplyCardView` what to show and what
@@ -30,11 +30,28 @@ const bridge = (): ReplyBridge => {
 
 let lastState: ReplyState | null = null;
 let chosen: ReplyDisposition | null = null;
+/** The shell's column while this view is mounted, or null. */
+let container: HTMLElement | null = null;
+/** Bumped by every mount and unmount, so an answer to an earlier one is dropped. */
+let generation = 0;
 
 function apply(next: Promise<ReplyState>): void {
+  const mine = generation;
   void (async () => {
-    render(await next);
+    const state = await next;
+    if (mine === generation) render(state);
   })();
+}
+
+export function mount(target: HTMLElement): void {
+  generation += 1;
+  container = target;
+  apply(bridge().state());
+}
+
+export function unmount(): void {
+  generation += 1;
+  container = null;
 }
 
 function renderSummaries(root: HTMLElement, view: ReturnType<typeof buildReplyView>): void {
@@ -57,7 +74,17 @@ function renderSummaries(root: HTMLElement, view: ReturnType<typeof buildReplyVi
 }
 
 function renderMessage(panel: HTMLElement, card: ReplyCardView): void {
-  panel.append(element('h2', { text: card.heading, testId: 'card-firm' }));
+  const head = element('div', { className: 'card-head' });
+  head.append(element('h2', { text: card.heading, testId: 'card-firm' }));
+  // The firm the reply is about, in the same window: its page is where the deal is
+  // marked Lost, a contact is added, or a number is confirmed.
+  const firm = button('Open firm', 'reply-open-firm', true);
+  firm.className = 'btn btn-quiet';
+  firm.addEventListener('click', () => {
+    navigate({ name: 'firm', firmId: card.firmId });
+  });
+  head.append(firm);
+  panel.append(head);
   panel.append(element('p', { className: 'from', text: card.fromLine, testId: 'card-from' }));
   panel.append(element('p', { className: 'subject', text: orDash(card.subject), testId: 'card-subject' }));
   if (card.redacted) {
@@ -234,8 +261,8 @@ function renderAnswer(panel: HTMLElement, card: ReplyCardView, state: ReplyState
 export function render(state: ReplyState | null): void {
   if (state !== null) lastState = state;
   const current = lastState;
-  const root = document.querySelector('#app');
-  if (!(root instanceof HTMLElement) || current === null) return;
+  const root = container;
+  if (root === null || current === null) return;
   const view = buildReplyView(current, chosen);
 
   root.replaceChildren();
@@ -280,12 +307,4 @@ export function render(state: ReplyState | null): void {
   }
 }
 
-export async function boot(): Promise<void> {
-  render(await bridge().state());
-}
-
 export { replyNotice };
-
-if (typeof document !== 'undefined') {
-  void boot();
-}

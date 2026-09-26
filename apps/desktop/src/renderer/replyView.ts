@@ -132,6 +132,8 @@ export interface SuggestionView {
 
 export interface ReplyCardView {
   readonly messageId: string;
+  /** The firm the reply is about, which the card opens in the Firms view. */
+  readonly firmId: string;
   readonly heading: string;
   readonly fromLine: string;
   readonly subject: string | null;
@@ -269,6 +271,7 @@ export function buildReplyCardView(
   const callbackOffered = chosen === 'follow_up_later';
   return {
     messageId: card.messageId,
+    firmId: card.firmId,
     heading: card.firmName,
     fromLine:
       card.contactName === null

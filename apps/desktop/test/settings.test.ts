@@ -3,8 +3,6 @@ import { DEFAULT_ALERT_THRESHOLDS } from '@fss/contracts';
 import { createAuthedClient } from '../src/main/authedClient.ts';
 import { ADMIN_IPC_CHANNELS, createAdminBridge } from '../src/main/settingsBridge.ts';
 import { adminViewOf } from '../src/renderer/settingsView.ts';
-import { windowMenuTemplate } from '../src/main/windowMenu.ts';
-import { requestedScreen } from '../src/renderer/settingsPage.ts';
 import type { AdminState, CallingNumberView } from '../src/renderer/settingsContract.ts';
 import { outboundRampAnswer, outboundStatusAnswer } from './support/outboundStatus.ts';
 import { settingHistoryAnswer } from './support/settingHistory.ts';
@@ -1031,52 +1029,6 @@ describe('the administration view', () => {
   });
 });
 
-describe('the window menu', () => {
-  it('offers the administration window and still works without it', () => {
-    const noop = (): void => undefined;
-    const withAdmin = windowMenuTemplate({
-      today: noop,
-      replies: noop,
-      firms: noop,
-      sequences: noop,
-      administration: noop,
-    });
-    expect(withAdmin[0]?.submenu.map(item => item.label)).toEqual([
-      'Today',
-      'Replies',
-      'Firms',
-      'Sequences',
-      'Administration',
-    ]);
-    // ⌘1 to ⌘4 are the windows somebody sells from and they keep them; this one
-    // takes the next free key rather than pushing a window used all day along.
-    expect(withAdmin[0]?.submenu.map(item => item.accelerator)).toEqual([
-      'CmdOrCtrl+1',
-      'CmdOrCtrl+2',
-      'CmdOrCtrl+3',
-      'CmdOrCtrl+4',
-      'CmdOrCtrl+5',
-    ]);
-    const without = windowMenuTemplate({ today: noop, replies: noop, firms: noop, sequences: noop });
-    expect(without[0]?.submenu.map(item => item.label)).toEqual([
-      'Today',
-      'Replies',
-      'Firms',
-      'Sequences',
-    ]);
-  });
-});
-
-describe('the screen the window opens on (lane g65)', () => {
-  it('is the one the opener named — ⌘5 Settings, ⌘6 Dashboard — and the last one shown otherwise', () => {
-    expect(requestedScreen('?screen=settings')).toBe('settings');
-    expect(requestedScreen('?screen=dashboard')).toBe('dashboard');
-    expect(requestedScreen('?screen=diagnostics')).toBe('diagnostics');
-    for (const search of ['', '?', '?screen=', '?screen=Dashboard', '?screen=history', '?other=dashboard']) {
-      expect(requestedScreen(search), search).toBeNull();
-    }
-  });
-});
 
 describe('Your calling number (lane g60)', () => {
   it('is offered to a salesperson as well as an admin, and is inert only offline or out of date', () => {

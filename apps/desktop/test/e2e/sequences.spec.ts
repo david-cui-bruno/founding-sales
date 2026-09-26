@@ -1,15 +1,15 @@
-import { expect, test } from 'playwright/test';
+import { expect, test, type Page } from 'playwright/test';
 import { SEQUENCE_IDS, enrollmentAnswer } from '../support/sequenceAnswers.ts';
 import {
   emptyDraftState,
   populatedSequenceState,
-  startSequencesTestServer,
   unreadSequenceState,
-  type SequencesTestServer,
-} from './support/sequencesTestServer.ts';
+} from './support/sequenceFixtures.ts';
+import { startAppServer, type AppServer, type BridgeHandle } from './support/appServer.ts';
+import type { SequenceState } from '../../src/renderer/sequenceContract.ts';
 
 /**
- * The sequence editor window, driven end to end against the generated test server
+ * The Sequences view, driven end to end against the one test harness
  * (lane g78).
  *
  * The renderer is the shipped file; only the bridge is substituted. Two things a person
@@ -18,15 +18,26 @@ import {
  * Retry, instead of drawing an empty list that reads as "there are none" (D06).
  */
 
-let server: SequencesTestServer;
+let app: AppServer;
+let server: BridgeHandle<SequenceState>;
 
 test.afterEach(async () => {
-  await server.stop();
+  await app.stop();
 });
 
+/** The Sequences view, whose `state()` answers `answers` one per call and whose methods `scripted` moves. */
+async function openSequences(
+  page: Page,
+  answers: readonly SequenceState[],
+  scripted: Readonly<Partial<Record<string, SequenceState>>> = {},
+): Promise<void> {
+  app = await startAppServer({ sequences: answers, sequencesScripted: scripted });
+  server = app.sequences;
+  await page.goto(app.url('#sequences'));
+}
+
 test('a populated version draws both its steps, the template and the held enrollment', async ({ page }) => {
-  server = await startSequencesTestServer([populatedSequenceState()]);
-  await page.goto(server.url);
+  await openSequences(page, [populatedSequenceState()]);
 
   await expect(page.getByTestId('version-heading')).toHaveText('Version 1 — published');
   await expect(page.getByTestId('step')).toHaveCount(2);
@@ -38,8 +49,7 @@ test('a populated version draws both its steps, the template and the held enroll
 });
 
 test('a read that failed is one grey line with Retry, not an empty list, and Retry reads again', async ({ page }) => {
-  server = await startSequencesTestServer([unreadSequenceState(), populatedSequenceState()]);
-  await page.goto(server.url);
+  await openSequences(page, [unreadSequenceState(), populatedSequenceState()]);
 
   // The list that did read is drawn; the three that did not each say why.
   await expect(page.getByTestId('sequence-name')).toHaveText('Founding outreach');
@@ -63,8 +73,7 @@ test('a read that failed is one grey line with Retry, not an empty list, and Ret
 
 // --------------------------------------------------------------- lane g88: authoring
 test('a founder fills the suggested plan, changes a delay, saves numbered steps, and Publish waits for the save', async ({ page }) => {
-  server = await startSequencesTestServer([emptyDraftState()]);
-  await page.goto(server.url);
+  await openSequences(page, [emptyDraftState()]);
 
   await expect(page.getByTestId('step')).toHaveCount(0);
   await expect(page.getByTestId('draft-save')).toBeDisabled();
@@ -93,8 +102,7 @@ test('a founder fills the suggested plan, changes a delay, saves numbered steps,
 });
 
 test('an email step without a template cannot be saved, and says so', async ({ page }) => {
-  server = await startSequencesTestServer([emptyDraftState()]);
-  await page.goto(server.url);
+  await openSequences(page, [emptyDraftState()]);
   await page.getByTestId('step-add-email').click();
   await expect(page.getByTestId('draft-issues')).toHaveText('Step 1: choose the template this email sends.');
   await expect(page.getByTestId('draft-save')).toBeDisabled();
@@ -104,16 +112,14 @@ test('an email step without a template cannot be saved, and says so', async ({ p
 });
 
 test('a new sequence is named and created in one press', async ({ page }) => {
-  server = await startSequencesTestServer([emptyDraftState()]);
-  await page.goto(server.url);
+  await openSequences(page, [emptyDraftState()]);
   await page.getByTestId('new-sequence-name').fill('Spring outreach');
   await page.getByTestId('new-sequence-create').click();
   await expect.poll(() => server.calls.find(entry => entry.method === 'createSequence')?.argument).toEqual({ name: 'Spring outreach' });
 });
 
 test('the template form refuses a variable Callie cannot fill, then saves a template with its sign-off', async ({ page }) => {
-  server = await startSequencesTestServer([emptyDraftState()]);
-  await page.goto(server.url);
+  await openSequences(page, [emptyDraftState()]);
 
   // The digest is there, behind Details, not on the face of the template.
   await expect(page.getByTestId('template-hash')).toBeHidden();
@@ -166,11 +172,10 @@ test('Review and resume shows the dates first, and only the confirmation resumes
       },
     },
   });
-  server = await startSequencesTestServer([held], {
+  await openSequences(page, [held], {
     reviewEnrollment: reviewing,
     resumeEnrollment: populatedSequenceState({ heldEnrollments: [], notice: 'resumed' }),
   });
-  await page.goto(server.url);
 
   await page.getByTestId('hold-resume').click();
   await expect(page.getByTestId('resume-review')).toBeVisible();

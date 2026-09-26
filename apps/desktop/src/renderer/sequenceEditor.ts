@@ -29,10 +29,12 @@ import {
 } from './sequenceView.ts';
 
 /**
- * The sequence editor window (specification 11.1, 4.3, 14.2).
+ * The Sequences view (specification 11.1, 4.3, 14.2).
  *
- * A fourth entry point beside G2's sign-in page, G3b's firm workspace and G6's Today
- * page, and built the same way: every value reaches the DOM through `textContent`, so
+ * A view of the one window (wave 1): `mount` draws into the shell's column and `unmount`
+ * stops it, so an answer that arrives after the person went elsewhere draws nothing. The
+ * draft being edited and the template form are kept between mounts, so steps typed and
+ * not saved are still there when the person comes back. Every value reaches the DOM through `textContent`, so
  * a template body containing a tag is a template body; every decision comes from
  * `sequenceView.ts`, so a control that is shown and a control that works cannot
  * disagree; and the page holds no rule of its own.
@@ -70,6 +72,10 @@ const bridge = (): SequenceBridge => {
 };
 
 let lastState: SequenceState = EMPTY_SEQUENCE_STATE;
+/** The shell's column while this view is mounted, or null. */
+let container: HTMLElement | null = null;
+/** Bumped by every mount and unmount, so an answer to an earlier one is dropped. */
+let generation = 0;
 
 /**
  * The draft being edited (lane g88), kept between renders: every answer redraws the page,
@@ -82,8 +88,10 @@ let editing: { readonly versionId: string; readonly steps: readonly DraftStep[] 
 let templateForm: TemplateDraft | null = null;
 
 function apply(next: Promise<SequenceState>, after?: (state: SequenceState) => void): void {
+  const mine = generation;
   void (async () => {
     const state = await next;
+    if (mine !== generation) return;
     after?.(state);
     render(state);
   })();
@@ -739,10 +747,9 @@ function renderUnread(root: HTMLElement, screen: ReturnType<typeof sequenceScree
 
 export function render(state: SequenceState): void {
   lastState = state;
-  const root = document.querySelector('#app');
-  if (root === null) return;
-  root.textContent = '';
-  const host = root as HTMLElement;
+  const host = container;
+  if (host === null) return;
+  host.textContent = '';
   const screen = sequenceScreen(state);
   host.append(element('h1', { text: 'Sequences', testId: 'heading' }));
 
@@ -762,10 +769,15 @@ export function render(state: SequenceState): void {
   renderHoldReview(host, screen);
 }
 
-/** The window's entry point. Renders the empty screen, then whatever the bridge says. */
-export function start(): void {
-  render(EMPTY_SEQUENCE_STATE);
+/** Renders the last answer (or the empty screen), then whatever the bridge says now. */
+export function mount(target: HTMLElement): void {
+  generation += 1;
+  container = target;
+  render(lastState);
   apply(bridge().state());
 }
 
-if (typeof document !== 'undefined' && document.querySelector('#app') !== null) start();
+export function unmount(): void {
+  generation += 1;
+  container = null;
+}

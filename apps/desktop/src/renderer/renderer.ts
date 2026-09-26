@@ -1,20 +1,27 @@
 import type { DesktopBridge, DesktopState, MailboxBridge, MailboxState } from '../shared/contract.ts';
 import type { UpdateStatus } from '../shared/updateContract.ts';
+import * as firmWorkspace from './firmWorkspace.ts';
 import {
   autoRefreshToday,
   forgetHome,
   hasTodayBridge,
   loadHomeAdmin,
   loadHomeToday,
+  mount as mountToday,
   renderHome,
   setHomeRedraw,
   startTodayTicker,
+  unmount as unmountToday,
 } from './homePage.ts';
 import { updateLine } from './homeView.ts';
+import * as replyPage from './replyPage.ts';
+import { routeOf, routeText, setNavigator, type Route, type View } from './routes.ts';
+import * as sequenceEditor from './sequenceEditor.ts';
+import * as settingsPage from './settingsPage.ts';
 import { buildMailboxView, buildScreenView, MAILBOX_ROW_LABEL } from './viewModel.ts';
 
 /**
- * The main window.
+ * The one window (wave 1).
  *
  * Deliberately plain: no framework, no build step beyond a transpile, and every
  * value written to the page through `textContent` rather than `innerHTML`, so a firm
@@ -22,11 +29,15 @@ import { buildMailboxView, buildScreenView, MAILBOX_ROW_LABEL } from './viewMode
  * it asks `buildScreenView` what to show and does that.
  *
  * Signed out, it is the sign-in form; below the minimum version, the upgrade
- * instruction and nothing to press. Signed in, it is **Home** (lane g65,
- * `homePage.ts`): the Today lanes, the status sidebar, the last seven days and what
- * needs the person. Home replaced G2's "This Mac" card and its bare list of cached
- * cards; the card is now "This Mac" at the foot of the sidebar, and this file still
- * builds it.
+ * instruction and nothing to press. Signed in, it is the **shell**: the sidebar on the
+ * left (`homePage.ts` draws it — the views with their keys, the system's status and
+ * "This Mac") and one view in the column on the right. The route says which view:
+ * Today, Replies, Firms or one firm, Sequences, Administration or the Dashboard. The
+ * sidebar sets it, and so do the Window menu's ⌘1–⌘6 and a deep link, through
+ * `callie:navigate`. Each view is a module with `mount(container, route)` and
+ * `unmount()`; nothing boots when it is imported, and an answer that arrives after its
+ * view was unmounted draws nothing. Until wave 1 each sidebar row opened a window of its
+ * own, which is the "clicking on a tab opens a new page" the owner reported.
  *
  * "This Mac" carries the Mailbox row (release.md 8.0x): the second bridge,
  * `callieMailbox`, answers it, and `buildMailboxView` decides what it says. Connect
@@ -265,6 +276,94 @@ async function connectMailbox(): Promise<void> {
   }
 }
 
+// --- The shell: the sidebar and one view --------------------------------------------
+
+/** Every view, by the route that shows it. A firm and the pipeline are one view. */
+const VIEWS: Readonly<Record<Route['name'], View>> = {
+  today: { mount: container => { mountToday(container); }, unmount: unmountToday },
+  replies: replyPage,
+  firms: firmWorkspace,
+  firm: firmWorkspace,
+  sequences: sequenceEditor,
+  admin: settingsPage,
+  dashboard: settingsPage,
+};
+
+/** Where the window is. Today until something says otherwise. */
+let route: Route = { name: 'today' };
+/** The view in the column now, and the route it was mounted for. */
+let mounted: { readonly view: View; readonly route: Route } | null = null;
+
+interface Shell {
+  readonly sidebar: HTMLElement;
+  readonly column: HTMLElement;
+}
+
+function shellOf(root: HTMLElement): Shell | null {
+  if (root.dataset['view'] !== 'shell') return null;
+  const sidebar = root.querySelector('[data-region="sidebar"]');
+  const column = root.querySelector('[data-region="column"]');
+  return sidebar instanceof HTMLElement && column instanceof HTMLElement ? { sidebar, column } : null;
+}
+
+function unmountView(): void {
+  mounted?.view.unmount();
+  mounted = null;
+}
+
+/** Put the route's view in the column: the old one unmounted, the new one mounted fresh. */
+function mountView(shell: Shell): void {
+  unmountView();
+  shell.column.replaceChildren();
+  shell.column.scrollTop = 0;
+  const view = VIEWS[route.name];
+  mounted = { view, route };
+  // Today keeps Home's own look; every other view is laid out as its window was.
+  shell.column.className = route.name === 'today' ? 'column' : 'column view';
+  shell.column.dataset['route'] = routeText(route);
+  view.mount(shell.column, route);
+}
+
+/** The sidebar and an empty column, built once per sign-in; the route's view goes in it. */
+function buildShell(root: HTMLElement): Shell {
+  root.replaceChildren();
+  root.className = 'shell';
+  root.dataset['view'] = 'shell';
+  const sidebar = element('aside', { className: 'sidebar', testId: 'sidebar' });
+  sidebar.dataset['region'] = 'sidebar';
+  const column = element('main', { className: 'column', testId: 'column' });
+  column.dataset['region'] = 'column';
+  root.append(sidebar, column);
+  const shell = { sidebar, column };
+  mountView(shell);
+  return shell;
+}
+
+/**
+ * Go to `next`. The same route again is a fresh look — the pipeline re-read, Settings
+ * shown from the top — except Today, whose lanes may hold what somebody is typing.
+ */
+export function navigate(next: Route): void {
+  const same = routeText(next) === routeText(route);
+  route = next;
+  const root = document.querySelector('#app');
+  const shell = root instanceof HTMLElement ? shellOf(root) : null;
+  if (shell === null) return;
+  if (!(same && next.name === 'today')) mountView(shell);
+  render(null);
+}
+
+/** A view's own answer moved it (a firm opened from the board): the route follows, nothing is mounted again. */
+function routeShown(next: Route): void {
+  if (routeText(next) === routeText(route)) return;
+  route = next;
+  if (mounted !== null) mounted = { view: mounted.view, route: next };
+  const root = document.querySelector('#app');
+  const shell = root instanceof HTMLElement ? shellOf(root) : null;
+  if (shell !== null) shell.column.dataset['route'] = routeText(next);
+  render(null);
+}
+
 export function render(state: DesktopState | null, options: { readonly busy?: boolean } = {}): void {
   if (state !== null) lastState = state;
   const current = lastState;
@@ -273,7 +372,8 @@ export function render(state: DesktopState | null, options: { readonly busy?: bo
   const view = buildScreenView(current);
 
   if (view.screen === 'today' && current.device !== null) {
-    renderHome(root, {
+    const shell = shellOf(root) ?? buildShell(root);
+    renderHome(shell.sidebar, {
       desktop: current,
       desktopBanners: view.banners,
       mailbox: lastMailbox,
@@ -285,13 +385,14 @@ export function render(state: DesktopState | null, options: { readonly busy?: bo
       refresh: refreshAll,
       update: lastUpdate,
       restartToUpdate,
-    });
+    }, route);
     return;
   }
 
-  if (root.dataset['view'] === 'home') {
-    // Leaving Home without a Sign out press — a revoked device, an expired
+  if (root.dataset['view'] === 'shell') {
+    // Leaving the shell without a Sign out press — a revoked device, an expired
     // membership — forgets the person as thoroughly as the button does.
+    unmountView();
     lastMailbox = null;
     mailboxWaiting = false;
     forgetHome();
@@ -327,6 +428,16 @@ export async function boot(): Promise<void> {
   setHomeRedraw(() => {
     render(null);
   });
+  setNavigator(navigate, routeShown);
+  // The menu's ⌘1–⌘6 and a deep link. The main process sends one of the six names and
+  // nothing else; the preload has checked it before it gets here.
+  bridge().onNavigate(name => {
+    const next = routeOf(name);
+    if (next !== null) navigate(next);
+  });
+  // A route in the address, for a page loaded straight onto one (the specs do). The
+  // main process loads the window without one, so the app opens on Today.
+  route = routeOf(decodeURIComponent(location.hash.slice(1))) ?? route;
   globalThis.callieUpdate?.onChange(() => {
     void loadUpdate();
   });

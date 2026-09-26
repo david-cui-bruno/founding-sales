@@ -137,6 +137,21 @@ export const desktopStateSchema = z.strictObject({
 });
 export type DesktopState = z.infer<typeof desktopStateSchema>;
 
+/**
+ * The views the Window menu's ⌘1–⌘6 and a deep link may ask the one window for (wave 1),
+ * as a closed set, in the sidebar's order. A firm's own route is the page's alone.
+ */
+export const ROUTE_NAMES = ['today', 'replies', 'firms', 'sequences', 'admin', 'dashboard'] as const;
+export type RouteName = (typeof ROUTE_NAMES)[number];
+
+/**
+ * One of the six names, or null. Compared with each literal rather than looked up as a
+ * key, so `constructor` and `__proto__` are refused like any other string.
+ */
+export function routeNameOf(value: unknown): RouteName | null {
+  return ROUTE_NAMES.find(name => name === value) ?? null;
+}
+
 export interface DesktopBridge {
   state(): Promise<DesktopState>;
   /** Opens the system browser and waits for the grant. */
@@ -144,38 +159,11 @@ export interface DesktopBridge {
   signOut(): Promise<DesktopState>;
   refreshToday(): Promise<DesktopState>;
   /**
-   * Opens one of the other windows, or brings it forward (lane g65). Answers the current
-   * state, as every call here does; a window name outside `WINDOW_TARGETS` opens nothing.
+   * The Window menu and deep links (wave 1): called with one of the six route names
+   * whenever the main process asks the window to show that view. The preload checks
+   * the name against `ROUTE_NAMES` before it gets here.
    */
-  openWindow(input: { readonly window: WindowTarget }): Promise<DesktopState>;
-}
-
-// ---------------------------------------------------------------------------
-// The windows Home opens (lane g65)
-// ---------------------------------------------------------------------------
-
-/**
- * Every window Home's sidebar may ask the main process to open, as a closed set.
- *
- * Home is the main window, so it is not in the list: ⌘1 brings it forward from the
- * menu. `dashboard` is the Administration window on its Dashboard screen, which is the
- * menu's ⌘6. The page names a window; it never names a file, a URL or a screen of its
- * own choosing, so nothing it sends can open anything else.
- */
-export const WINDOW_TARGETS = ['replies', 'firms', 'sequences', 'dashboard', 'administration'] as const;
-export type WindowTarget = (typeof WINDOW_TARGETS)[number];
-
-/**
- * The renderer's `{ window }`, or null for anything that is not exactly one of the five.
- *
- * Compared with each literal rather than looked up as a key, so `constructor`,
- * `__proto__` and every other name an object happens to answer to are refused like any
- * other string.
- */
-export function windowTargetOf(argument: unknown): WindowTarget | null {
-  if (typeof argument !== 'object' || argument === null) return null;
-  const value: unknown = (argument as { readonly window?: unknown }).window;
-  return WINDOW_TARGETS.find(target => target === value) ?? null;
+  onNavigate(listener: (route: RouteName) => void): void;
 }
 
 // ---------------------------------------------------------------------------

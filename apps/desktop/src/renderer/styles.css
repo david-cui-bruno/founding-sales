@@ -71,7 +71,7 @@ body {
   padding-top: 12vh;
 }
 
-#app.home {
+#app.shell {
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr);
   max-width: none;
@@ -688,6 +688,22 @@ button.status-action {
   font-size: 34px;
 }
 
+/* The way back from a firm to the board: a grey link above the heading. */
+button.back-link {
+  margin: -28px 0 12px -8px;
+  padding: 2px 8px;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+/* A reply card's firm, with its page one hover away. */
+.card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .summary-line {
   display: flex;
   align-items: baseline;
@@ -903,33 +919,33 @@ button.status-action {
 }
 
 /* ------------------------------------------------------------------------- */
-/* The other windows: Replies, Firms, Sequences, Administration               */
+/* The other views: Replies, Firms, Sequences, Administration, Dashboard      */
 /* ------------------------------------------------------------------------- */
 
-main#app > section,
-main#app .panel,
-main#app .reply-card {
+main.view > section,
+main.view .panel,
+main.view .reply-card {
   margin-top: 8px;
 }
 
-main#app section input:not([type='checkbox'], [type='radio']),
-main#app section select,
-main#app section textarea,
-main#app .settings input:not([type='checkbox'], [type='radio']),
-main#app .settings textarea {
+main.view section input:not([type='checkbox'], [type='radio']),
+main.view section select,
+main.view section textarea,
+main.view .settings input:not([type='checkbox'], [type='radio']),
+main.view .settings textarea {
   margin: 4px 6px 4px 0;
 }
 
-main#app section button,
-main#app .settings button,
-main#app .stages button,
-main#app .ramps button,
-main#app .alerts button,
-main#app .calling-numbers button {
+main.view section button,
+main.view .settings button,
+main.view .stages button,
+main.view .ramps button,
+main.view .alerts button,
+main.view .calling-numbers button {
   margin: 4px 6px 4px 0;
 }
 
-main#app section label {
+main.view section label {
   display: inline-flex;
   align-items: center;
   margin: 4px 14px 4px 0;
@@ -1040,14 +1056,14 @@ main#app section label {
   margin: 6px 0;
 }
 
-main#app .field label {
+main.view .field label {
   display: block;
   margin: 0;
   font-size: 13px;
 }
 
-main#app .field input:not([type='checkbox'], [type='radio']),
-main#app .field select {
+main.view .field input:not([type='checkbox'], [type='radio']),
+main.view .field select {
   margin: 0;
 }
 
@@ -1082,7 +1098,7 @@ main#app .field select {
 }
 
 /* The postures form: a statement per line, the box beside its words. */
-main#app .posture-statement {
+main.view .posture-statement {
   display: flex;
   align-items: flex-start;
   gap: 6px;
@@ -1092,7 +1108,7 @@ main#app .posture-statement {
   font-size: 13.5px;
 }
 
-main#app .posture-statement input {
+main.view .posture-statement input {
   margin-top: 3px;
 }
 
@@ -1120,8 +1136,8 @@ main#app .posture-statement input {
   gap: 4px 8px;
 }
 
-main#app .row-main.step-fields select,
-main#app .row-main.step-fields input {
+main.view .row-main.step-fields select,
+main.view .row-main.step-fields input {
   margin: 0;
 }
 
@@ -1171,7 +1187,7 @@ h3 .tag,
 }
 
 /* The reply's candidate firms: one choice per line. */
-main#app .candidate-choice {
+main.view .candidate-choice {
   display: flex;
   margin: 4px 0;
 }

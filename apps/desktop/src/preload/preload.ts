@@ -9,6 +9,7 @@ import { MAILBOX_IPC_CHANNELS } from '../main/mailboxBridge.ts';
 import {
   desktopStateSchema,
   mailboxStateSchema,
+  routeNameOf,
   type DesktopBridge,
   type DesktopState,
   type MailboxBridge,
@@ -28,14 +29,10 @@ import { UPDATE_IPC_CHANNELS, updateStatusSchema, type UpdateBridge, type Update
 /**
  * The bridges, and the whole of what a renderer can reach (specification 14.2).
  *
- * One preload script serves all five windows, because Electron gives a window one
- * preload. Installing all eight bridges is not a widening: every channel below is
- * answered by a main-process handler that exists, and a window that never calls one has
- * reached nothing. Since lane g65 the main window calls four of them: its Home reads
- * `callie` for the session, `callieMailbox` for the Mailbox row, `callieToday` for the
- * lanes and `callieAdmin` for the sidebar's status, the "Last 7 days" figures and the
- * Needs-you list. The Today window that used to own `callieToday` is gone; Today is the
- * main window's content now (`docs/decisions/g65-today-is-the-home.md`).
+ * There is one window (wave 1), and its views call all eight: the shell reads `callie`
+ * for the session, `callieMailbox` for the Mailbox row, `callieToday` for the lanes and
+ * `callieAdmin` for the sidebar's status; Replies, Firms, Sequences and Administration
+ * read their own. Every channel below is answered by a main-process handler that exists.
  *
  * Parsing on this side as well as on the main side is not paranoia about our own
  * code: it is what makes the renderer's type a guarantee rather than a hope, and it
@@ -94,8 +91,14 @@ const bridge: DesktopBridge = {
   signIn: async input => await invokeDesktop(IPC_CHANNELS.signIn, input),
   signOut: async () => await invokeDesktop(IPC_CHANNELS.signOut),
   refreshToday: async () => await invokeDesktop(IPC_CHANNELS.refreshToday),
-  // Lane g65: a window name, checked against WINDOW_TARGETS in the main process.
-  openWindow: async input => await invokeDesktop(IPC_CHANNELS.openWindow, input),
+  // Wave 1: the menu's ⌘1–⌘6 and deep links. A name outside the six is dropped here,
+  // so the page is only ever told one of them.
+  onNavigate: listener => {
+    ipcRenderer.on(IPC_CHANNELS.navigate, (_event, name: unknown) => {
+      const route = routeNameOf(name);
+      if (route !== null) listener(route);
+    });
+  },
 };
 
 /**

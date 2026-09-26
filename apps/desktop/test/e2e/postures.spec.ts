@@ -1,8 +1,10 @@
-import { expect, test } from 'playwright/test';
-import { POSTURE_ID, adminState, startSettingsTestServer, type SettingsTestServer } from './support/settingsTestServer.ts';
+import { expect, test, type Page } from 'playwright/test';
+import { POSTURE_ID, adminState } from './support/adminFixtures.ts';
+import { startAppServer, type AppServer, type BridgeHandle } from './support/appServer.ts';
+import type { AdminState } from '../../src/renderer/settingsContract.ts';
 
 /**
- * The postures form in Settings, end to end against the generated test server (lane g84,
+ * The postures form in Settings, end to end against the one test harness (lane g84,
  * audit item G04).
  *
  * The renderer is the shipped file and only the bridge is scripted. These prove the
@@ -12,15 +14,22 @@ import { POSTURE_ID, adminState, startSettingsTestServer, type SettingsTestServe
  * as it was sent, which a spec that only ever succeeded would not notice missing.
  */
 
-let server: SettingsTestServer;
+let app: AppServer;
+let server: BridgeHandle<AdminState>;
 
 test.afterEach(async () => {
-  await server.stop();
+  await app.stop();
 });
 
+/** Administration on `state`, loaded straight onto `hash` (Settings unless said). */
+async function openAdmin(page: Page, state: AdminState, hash = '#admin'): Promise<void> {
+  app = await startAppServer({ admin: state });
+  server = app.admin;
+  await page.goto(app.url(hash));
+}
+
 test('an admin records a posture with typed controls, and the list shows it', async ({ page }) => {
-  server = await startSettingsTestServer(adminState());
-  await page.goto(server.url);
+  await openAdmin(page, adminState());
 
   const section = page.getByTestId('postures');
   await expect(section.getByRole('heading', { name: 'Calling postures' })).toBeVisible();
@@ -65,16 +74,14 @@ test('an admin records a posture with typed controls, and the list shows it', as
 });
 
 test('the quoted rule is shown verbatim for a state that has one', async ({ page }) => {
-  server = await startSettingsTestServer(adminState({ postures: { ...adminState().postures!, records: [] } }));
-  await page.goto(server.url);
+  await openAdmin(page, adminState({ postures: { ...adminState().postures!, records: [] } }));
   await page.getByTestId('posture-state').selectOption('RI');
   await expect(page.getByTestId('posture-rule-summary')).toHaveText('Rhode Island quoted summary.');
   await expect(page.getByTestId('posture-rule')).toContainText('A quoted Rhode Island line.');
 });
 
 test('a form missing a statement, or a state already in force, is not sent and says why', async ({ page }) => {
-  server = await startSettingsTestServer(adminState());
-  await page.goto(server.url);
+  await openAdmin(page, adminState());
 
   await page.getByTestId('posture-record').click();
   await expect(page.getByTestId('posture-issue-state')).toHaveText('Choose a state.');
@@ -96,8 +103,7 @@ test('a form missing a statement, or a state already in force, is not sent and s
 });
 
 test('a refused posture comes back as it was sent, with the refusal in words', async ({ page }) => {
-  server = await startSettingsTestServer(adminState());
-  await page.goto(server.url);
+  await openAdmin(page, adminState());
   await page.getByTestId('posture-state').selectOption('TX');
   await page.getByTestId('posture-effective-from').fill('2026-11-02');
   await page.getByTestId('posture-statement-federal_rules_apply').check();
@@ -113,8 +119,7 @@ test('a refused posture comes back as it was sent, with the refusal in words', a
 });
 
 test('Revoke sends the posture id, and the JSON is behind a disclosure', async ({ page }) => {
-  server = await startSettingsTestServer(adminState());
-  await page.goto(server.url);
+  await openAdmin(page, adminState());
 
   await expect(page.getByTestId('postures-json-body')).toBeHidden();
   await page.getByTestId('postures-json').locator('summary').click();
@@ -122,14 +127,15 @@ test('Revoke sends the posture id, and the JSON is behind a disclosure', async (
 
   await page.getByTestId(`posture-revoke-${POSTURE_ID}`).click();
   // The bridge call reaches the stub after the click resolves, so wait for it (lane g86).
-  await expect.poll(() => server.calls.at(-1)).toEqual({ method: 'revokePosture', argument: { postureId: POSTURE_ID } });
+  await expect
+    .poll(() => server.calls.filter(call => call.method === 'revokePosture'))
+    .toEqual([{ method: 'revokePosture', argument: { postureId: POSTURE_ID } }]);
   await expect(page.getByTestId('posture-status')).toHaveText('Revoked');
   await expect(page.getByTestId(`posture-revoke-${POSTURE_ID}`)).toHaveCount(0);
 });
 
 test('a salesperson sees the postures and cannot record or revoke one', async ({ page }) => {
-  server = await startSettingsTestServer(adminState({ role: 'salesperson' }));
-  await page.goto(server.url);
+  await openAdmin(page, adminState({ role: 'salesperson' }));
   await expect(page.getByTestId('posture-row')).toHaveCount(1);
   await expect(page.getByTestId('posture-state')).toBeDisabled();
   await expect(page.getByTestId('posture-statement-federal_rules_apply')).toBeDisabled();
@@ -139,10 +145,15 @@ test('a salesperson sees the postures and cannot record or revoke one', async ({
 });
 
 test('a failed read says so, with Retry', async ({ page }) => {
-  server = await startSettingsTestServer(adminState({ postures: { reference: null, records: null, readError: 'offline' } }));
-  await page.goto(server.url);
+  await openAdmin(page, adminState({ postures: { reference: null, records: null, readError: 'offline' } }));
   await expect(page.getByTestId('postures-unread')).toContainText('Callie could not read the postures.');
   await expect(page.getByTestId('posture-record')).toBeDisabled();
   await page.getByTestId('postures-retry').click();
-  expect(server.calls.at(-1)).toEqual({ method: 'show', argument: { screen: 'settings' } });
+  // Opening Administration was the first read; Retry is Settings shown again.
+  await expect
+    .poll(() => server.calls.filter(call => call.method === 'show'))
+    .toEqual([
+      { method: 'show', argument: { screen: 'settings' } },
+      { method: 'show', argument: { screen: 'settings' } },
+    ]);
 });

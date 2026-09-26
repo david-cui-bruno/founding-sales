@@ -16,9 +16,10 @@ import { buildScreenView } from '../src/renderer/viewModel.ts';
 import { createAuthedClient } from '../src/main/authedClient.ts';
 import { createAdminBridge } from '../src/main/settingsBridge.ts';
 import { outboundStatusAnswer } from './support/outboundStatus.ts';
-import { WINDOW_TARGETS, desktopStateSchema, windowTargetOf } from '../src/shared/contract.ts';
+import { ROUTE_NAMES, desktopStateSchema, routeNameOf } from '../src/shared/contract.ts';
 import { IPC_CHANNELS } from '../src/main/ipc.ts';
-import { windowMenuTemplate } from '../src/main/windowMenu.ts';
+import { DEEP_LINKS, deepLinkRoute, windowMenuTemplate } from '../src/main/windowMenu.ts';
+import { routeOf, routeText, sidebarRowOf } from '../src/renderer/routes.ts';
 import {
   CLIENT_VERSION,
   createDesktopFixture,
@@ -367,63 +368,87 @@ describe('the state that crosses the bridge', () => {
   });
 });
 
-describe('opening the other windows from Home (lane g65)', () => {
-  it('opens exactly the five windows by name, and nothing for any other value', () => {
-    expect(WINDOW_TARGETS).toEqual(['replies', 'firms', 'sequences', 'dashboard', 'administration']);
-    for (const target of WINDOW_TARGETS) expect(windowTargetOf({ window: target })).toBe(target);
-    // `registerBridge` opens only what this returns, and answers the current state for
-    // everything else, as every handler on the bridge does for a malformed argument.
+describe('one window: the routes the menu and deep links may name (wave 1)', () => {
+  it('names exactly six views, and nothing for any other value', () => {
+    expect(ROUTE_NAMES).toEqual(['today', 'replies', 'firms', 'sequences', 'admin', 'dashboard']);
+    for (const name of ROUTE_NAMES) expect(routeNameOf(name)).toBe(name);
+    // The preload drops anything else before the page hears of it.
     for (const malformed of [
       null,
       undefined,
-      'replies',
       42,
       [],
       {},
-      { screen: 'dashboard' },
-      { window: 'today' },
-      { window: 'settings' },
-      { window: 'settings.html' },
-      { window: 'https://example.test/' },
-      { window: 'Replies' },
-      { window: ' replies' },
-      { window: '__proto__' },
-      { window: 'constructor' },
-      { window: 'toString' },
-      { window: ['replies'] },
-      { window: { toString: () => 'replies' } },
+      'Today',
+      ' today',
+      'administration',
+      'firm',
+      'settings.html',
+      'https://example.test/',
+      '__proto__',
+      'constructor',
+      'toString',
+      ['today'],
+      { toString: () => 'today' },
     ]) {
-      expect(windowTargetOf(malformed), JSON.stringify(malformed) ?? String(malformed)).toBeNull();
+      expect(routeNameOf(malformed), JSON.stringify(malformed) ?? String(malformed)).toBeNull();
     }
   });
 
-  it('adds one channel to the main window’s bridge', () => {
+  it('reads a route from text, a firm by its id and Administration by its section, and nothing else', () => {
+    const firmId = '11111111-1111-4111-8111-111111111111';
+    expect(routeOf('today')).toEqual({ name: 'today' });
+    expect(routeOf('admin')).toEqual({ name: 'admin' });
+    expect(routeOf('admin/calling-number')).toEqual({ name: 'admin', section: 'calling-number' });
+    expect(routeOf(`firm/${firmId}`)).toEqual({ name: 'firm', firmId });
+    for (const text of ['', 'firm', 'firm/', 'firm/not-an-id', `firm/${firmId}/x`, 'admin/elsewhere', 'today/x', 'Today']) {
+      expect(routeOf(text), text).toBeNull();
+    }
+    for (const route of [{ name: 'firms' }, { name: 'firm', firmId }, { name: 'admin', section: 'alerts' }] as const) {
+      expect(routeOf(routeText(route))).toEqual(route);
+    }
+    expect(sidebarRowOf({ name: 'firm', firmId })).toBe('firms');
+  });
+
+  it('answers a deep link for each of the six views, and ignores every other link', () => {
+    expect(DEEP_LINKS).toEqual(ROUTE_NAMES.map(name => `callie://${name}`));
+    expect(deepLinkRoute('callie://today')).toBe('today');
+    expect(deepLinkRoute('callie://firms/')).toBe('firms');
+    expect(deepLinkRoute('callie://dashboard')).toBe('dashboard');
+    for (const url of [
+      'callie://firm/11111111-1111-4111-8111-111111111111',
+      'callie://today?x=1',
+      'callie://auth',
+      'callie-app://bundle/index.html',
+      'https://example.test/today',
+      'callie://Today',
+      'callie://',
+    ]) {
+      expect(deepLinkRoute(url), url).toBeNull();
+    }
+  });
+
+  it('has no channel that opens a window: the main process tells the one window where to go', () => {
     expect(Object.values(IPC_CHANNELS)).toEqual([
       'callie:state',
       'callie:sign-in',
       'callie:sign-out',
       'callie:refresh-today',
-      'callie:open-window',
+      'callie:navigate',
     ]);
   });
 });
 
-describe('the Window menu (lane g65)', () => {
-  it('brings Home forward on ⌘1 and opens the Dashboard on ⌘6, beside Administration', () => {
-    const pressed: string[] = [];
-    const press = (name: string) => (): void => {
-      pressed.push(name);
-    };
-    const [menu] = windowMenuTemplate({
-      today: press('today'),
-      replies: press('replies'),
-      firms: press('firms'),
-      sequences: press('sequences'),
-      administration: press('administration'),
-      dashboard: press('dashboard'),
+describe('the Window menu (wave 1)', () => {
+  it('shows each view in the one window, ⌘1 to ⌘6 in the sidebar’s order', () => {
+    const shown: string[] = [];
+    const menu = windowMenuTemplate(route => {
+      shown.push(route);
     });
-    expect(menu?.label).toBe('Window');
-    expect(menu?.submenu.map(item => `${item.label} ${item.accelerator}`)).toEqual([
+    const window = menu.find(entry => 'label' in entry && entry.label === 'Window');
+    if (window === undefined || !('submenu' in window)) throw new Error('no Window menu');
+    const views = window.submenu.filter(item => 'click' in item);
+    expect(views.map(item => ('label' in item ? `${item.label} ${item.accelerator}` : ''))).toEqual([
       'Today CmdOrCtrl+1',
       'Replies CmdOrCtrl+2',
       'Firms CmdOrCtrl+3',
@@ -431,13 +456,17 @@ describe('the Window menu (lane g65)', () => {
       'Administration CmdOrCtrl+5',
       'Dashboard CmdOrCtrl+6',
     ]);
-    for (const item of menu?.submenu ?? []) item.click();
-    expect(pressed).toEqual(['today', 'replies', 'firms', 'sequences', 'administration', 'dashboard']);
+    for (const item of views) if ('click' in item) item.click();
+    expect(shown).toEqual(['today', 'replies', 'firms', 'sequences', 'admin', 'dashboard']);
   });
 
-  it('offers the Dashboard only beside the window it is a screen of', () => {
-    const noop = (): void => undefined;
-    const [menu] = windowMenuTemplate({ today: noop, replies: noop, firms: noop, sequences: noop, dashboard: noop });
-    expect(menu?.submenu.map(item => item.label)).toEqual(['Today', 'Replies', 'Firms', 'Sequences']);
+  it('is one Window menu, built whole rather than appended to Electron’s default', () => {
+    const menu = windowMenuTemplate(() => undefined);
+    expect(menu.filter(entry => 'label' in entry && entry.label === 'Window')).toHaveLength(1);
+    expect(menu.filter(entry => 'role' in entry).map(entry => ('role' in entry ? entry.role : ''))).toEqual([
+      'appMenu',
+      'editMenu',
+      'viewMenu',
+    ]);
   });
 });

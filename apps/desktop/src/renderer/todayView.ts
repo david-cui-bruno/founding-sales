@@ -53,7 +53,7 @@ export const TASK_LABELS: Readonly<Record<TodayTask['kind'], string>> = Object.f
  * leaving a person to wonder why the button is missing.
  */
 export const NO_CALLING_NUMBER =
-  'Callie has no attested number of yours to call from. Add it in Window › Administration, under Your calling number.';
+  'Callie has no attested number of yours to call from. Add it in Administration (⌘5), under Your calling number.';
 
 const NOTICES: Readonly<Record<string, string>> = Object.freeze({
   offline: 'Callie cannot reach the server.',

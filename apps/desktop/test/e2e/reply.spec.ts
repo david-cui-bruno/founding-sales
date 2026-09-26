@@ -1,15 +1,15 @@
-import { expect, test } from 'playwright/test';
+import { expect, test, type Page } from 'playwright/test';
 import {
   MESSAGE_ID,
   OTHER_MESSAGE_ID,
   replyCard,
   replyState,
-  startReplyTestServer,
-  type ReplyTestServer,
-} from './support/replyTestServer.ts';
+} from './support/replyFixtures.ts';
+import { startAppServer, type AppServer, type BridgeHandle } from './support/appServer.ts';
+import type { ReplyState } from '../../src/renderer/replyContract.ts';
 
 /**
- * The reply window, driven end to end against the generated test server
+ * The Replies view, driven end to end against the one test harness
  * (specification 8.3, 12.4).
  *
  * The renderer is the shipped file; only the bridge is substituted, so what these
@@ -20,14 +20,22 @@ import {
  * close anything.
  */
 
-let server: ReplyTestServer;
+let app: AppServer;
+let server: BridgeHandle<ReplyState>;
 
 test.afterEach(async () => {
-  await server.stop();
+  await app.stop();
 });
 
+async function openReplies(page: Page, state: ReplyState): Promise<void> {
+  app = await startAppServer({ replies: state });
+  server = app.replies;
+  await page.goto(app.url('#replies'));
+}
+
 test('lists the day’s replies and says which model is suggesting', async ({ page }) => {
-  server = await startReplyTestServer(
+  await openReplies(
+    page,
     replyState({
       cards: [
         replyCard(),
@@ -35,7 +43,6 @@ test('lists the day’s replies and says which model is suggesting', async ({ pa
       ],
     }),
   );
-  await page.goto(server.url);
 
   await expect(page.getByTestId('heading')).toHaveText('Replies');
   await expect(page.getByTestId('business-date')).toHaveText('2026-09-21');
@@ -48,10 +55,10 @@ test('lists the day’s replies and says which model is suggesting', async ({ pa
 });
 
 test('a message body that looks like markup is shown as text', async ({ page }) => {
-  server = await startReplyTestServer(
+  await openReplies(
+    page,
     replyState({ cards: [replyCard({ body: { text: '<img src=x onerror=alert(1)>', truncated: false } })] }),
   );
-  await page.goto(server.url);
   await page.getByTestId('reply-open').nth(0).click();
 
   await expect(page.getByTestId('card-body')).toHaveText('<img src=x onerror=alert(1)>');
@@ -59,8 +66,7 @@ test('a message body that looks like markup is shown as text', async ({ page }) 
 });
 
 test('shows the suggestion, selects nothing, and keeps Confirm dead until a person chooses', async ({ page }) => {
-  server = await startReplyTestServer(replyState());
-  await page.goto(server.url);
+  await openReplies(page, replyState());
   await page.getByTestId('reply-open').nth(0).click();
 
   await expect(page.getByTestId('suggestion-disposition')).toHaveText('Interested');
@@ -92,10 +98,10 @@ test('shows the suggestion, selects nothing, and keeps Confirm dead until a pers
 });
 
 test('asks for the callback the model only proposed, prefilled and still the person’s', async ({ page }) => {
-  server = await startReplyTestServer(
+  await openReplies(
+    page,
     replyState({ cards: [replyCard({ callbackProposal: { localDateTime: '2026-09-28T09:00', timeZone: null } })] }),
   );
-  await page.goto(server.url);
   await page.getByTestId('reply-open').nth(0).click();
 
   // Hidden until the disposition that has a callback is chosen.
@@ -117,8 +123,7 @@ test('asks for the callback the model only proposed, prefilled and still the per
 });
 
 test('offers the firm-wide do-not-contact only on an opt-out, and never ticks it', async ({ page }) => {
-  server = await startReplyTestServer(replyState());
-  await page.goto(server.url);
+  await openReplies(page, replyState());
   await page.getByTestId('reply-open').nth(0).click();
 
   await expect(page.getByTestId('firm-wide-label')).toBeHidden();
@@ -134,8 +139,7 @@ test('offers the firm-wide do-not-contact only on an opt-out, and never ticks it
 });
 
 test('says a reply looks lost and offers nothing that would close it', async ({ page }) => {
-  server = await startReplyTestServer(replyState());
-  await page.goto(server.url);
+  await openReplies(page, replyState());
   await page.getByTestId('reply-open').nth(0).click();
   await page.getByTestId('choice-not_interested').check();
   await expect(page.getByTestId('consequence')).toContainText('does not close anything');
@@ -147,7 +151,8 @@ test('says a reply looks lost and offers nothing that would close it', async ({ 
 });
 
 test('shows a member who may not read the body the impact and no answer', async ({ page }) => {
-  server = await startReplyTestServer(
+  await openReplies(
+    page,
     replyState({
       cards: [
         replyCard({
@@ -160,7 +165,6 @@ test('shows a member who may not read the body the impact and no answer', async 
       ],
     }),
   );
-  await page.goto(server.url);
   await page.getByTestId('reply-open').nth(0).click();
 
   await expect(page.getByTestId('card-body')).toHaveCount(0);
@@ -171,7 +175,8 @@ test('shows a member who may not read the body the impact and no answer', async 
 });
 
 test('offers no disposition for an unresolved ambiguity, and names the candidates', async ({ page }) => {
-  server = await startReplyTestServer(
+  await openReplies(
+    page,
     replyState({
       cards: [
         replyCard({
@@ -190,7 +195,6 @@ test('offers no disposition for an unresolved ambiguity, and names the candidate
       ],
     }),
   );
-  await page.goto(server.url);
   await page.getByTestId('reply-open').nth(0).click();
 
   await expect(page.getByTestId('disposition-form')).toHaveCount(0);
@@ -217,8 +221,7 @@ test('offers no disposition for an unresolved ambiguity, and names the candidate
 test('is readable and unpressable when Callie cannot reach the server', async ({ page }) => {
   // Nothing on this window is cached — a reply card is somebody's mail — so an
   // outage is an empty lane and a notice rather than a stale card to answer.
-  server = await startReplyTestServer(replyState({ online: false, cards: [] }));
-  await page.goto(server.url);
+  await openReplies(page, replyState({ online: false, cards: [] }));
 
   await expect(page.getByTestId('banner-warning')).toHaveText('Callie cannot reach the server.');
   await expect(page.getByTestId('reply-empty')).toHaveText(

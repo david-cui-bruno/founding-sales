@@ -1,4 +1,4 @@
-import type { DesktopState, MailboxState, WindowTarget } from '../shared/contract.ts';
+import type { DesktopState, MailboxState } from '../shared/contract.ts';
 import type { UpdateStatus } from '../shared/updateContract.ts';
 import { button, element } from './firmDom.ts';
 import {
@@ -11,6 +11,7 @@ import {
   type HomeView,
   type NeedsRow,
 } from './homeView.ts';
+import { navigate, sidebarRowOf, type Route } from './routes.ts';
 import type { AdminState } from './settingsContract.ts';
 import type { TodayState } from './todayContract.ts';
 import { renderLanes } from './todayLanes.ts';
@@ -25,21 +26,21 @@ import {
 } from './todayView.ts';
 
 /**
- * Home: what a signed-in person sees in the main window (lane g65; specification 8.2,
- * 13.4, 14.2).
+ * Home: the sidebar every view sits beside, and the Today view (lane g65; wave 1's one
+ * window; specification 8.2, 13.4, 14.2).
  *
- * One column of Today — the business date, a line of counts, the four lanes in the
- * server's order, the last seven days in four figures, and what needs the person — beside
- * a sidebar holding the windows with their keys, the system's status as dots and words,
- * and "This Mac". The design is Mockup A2's (`docs/decisions/g65-today-is-the-home.md`):
+ * The Today column — the business date, a line of counts, the four lanes in the server's
+ * order, the last seven days in four figures, and what needs the person — beside a
+ * sidebar holding the views with their keys, the system's status as dots and words, and
+ * "This Mac". The design is Mockup A2's (`docs/decisions/g65-today-is-the-home.md`):
  * dividers rather than cards, grey section headers with a small count, colour only as a
  * dot or a small tag, actions that appear on hover, status in the sidebar rather than in
- * banners.
+ * banners. The sidebar is drawn on every route; the column only while Today is mounted.
  *
- * `renderer.ts` owns the session, sign-in and the Mailbox row, and hands this module the
- * "This Mac" panel it builds. This module owns the three reads Home adds — the lanes from
- * `callieToday`, the status and figures from `callieAdmin` — and draws them. It decides
- * nothing: `homeView.ts` says what to show and `todayLanes.ts` draws the lanes.
+ * `renderer.ts` owns the session, sign-in, the Mailbox row and the route, and hands this
+ * module the "This Mac" panel it builds. This module owns the three reads Home adds — the
+ * lanes from `callieToday`, the status and figures from `callieAdmin` — and draws them. It
+ * decides nothing: `homeView.ts` says what to show and `todayLanes.ts` draws the lanes.
  *
  * **The lanes are redrawn only when the list changes.** The sidebar, the figures and the
  * Needs-you list are redrawn whenever any answer arrives, and those answers include the
@@ -90,6 +91,8 @@ let refreshAnswered = false;
 /** Whether somebody has typed or chosen in the lanes since they were last drawn. */
 let lanesEdited = false;
 let ticker: ReturnType<typeof setInterval> | null = null;
+/** Where the Today column is drawn while it is mounted; null on every other route. */
+let column: HTMLElement | null = null;
 
 /** `renderer.ts` says how to draw the window again when an answer arrives. */
 export function setHomeRedraw(next: () => void): void {
@@ -246,32 +249,28 @@ function applyToday(next: Promise<TodayState>): void {
   void keepToday(async () => await next);
 }
 
-function openWindow(window: WindowTarget): void {
-  void globalThis.callie?.openWindow({ window });
-}
-
 // ---------------------------------------------------------------------------
 // Drawing
 // ---------------------------------------------------------------------------
 
-function renderSidebar(sidebar: HTMLElement, view: HomeView, context: HomeContext): void {
+function renderSidebar(sidebar: HTMLElement, view: HomeView, context: HomeContext, route: Route): void {
   sidebar.replaceChildren();
   const mark = element('div', { className: 'workspace' });
   mark.append(element('span', { className: 'workspace-mark', text: 'C' }), element('span', { text: 'Callie' }));
   sidebar.append(mark);
 
   const nav = element('nav', { className: 'nav', testId: 'nav' });
+  const current = sidebarRowOf(route);
   for (const row of NAV_ROWS) {
-    const item = element('button', { className: 'nav-row', testId: `nav-${row.window ?? 'today'}` });
+    const item = element('button', { className: 'nav-row', testId: `nav-${row.route}` });
     item.type = 'button';
     item.append(element('span', { text: row.label }), element('kbd', { text: row.keys }));
-    const target = row.window;
-    if (target === null) item.setAttribute('aria-current', 'page');
-    else {
-      item.addEventListener('click', () => {
-        openWindow(target);
-      });
-    }
+    if (row.route === current) item.setAttribute('aria-current', 'page');
+    // In place: the column changes and the sidebar stays. Pressing the row already
+    // shown goes to its top — the pipeline from a firm, Settings from Diagnostics.
+    item.addEventListener('click', () => {
+      navigate(row.route === 'admin' ? { name: 'admin' } : { name: row.route });
+    });
     nav.append(item);
   }
   sidebar.append(nav);
@@ -413,7 +412,7 @@ function renderNeed(list: HTMLElement, need: NeedsRow, context: HomeContext): vo
     const open = button(action.label, 'needs-open', true);
     open.className = 'btn';
     open.addEventListener('click', () => {
-      openWindow(action.window);
+      navigate(action.route);
     });
     actions.append(open);
   }
@@ -437,7 +436,7 @@ function renderNeeds(region: HTMLElement, view: HomeView, context: HomeContext):
   region.append(list);
 }
 
-/** The regions of the page, found by name once the skeleton exists. */
+/** The regions of the column, found by name once the skeleton exists. */
 function region(root: HTMLElement, name: string): HTMLElement {
   const found = root.querySelector(`[data-region="${name}"]`);
   if (!(found instanceof HTMLElement)) throw new Error(`the Home region ${name} is missing`);
@@ -446,13 +445,9 @@ function region(root: HTMLElement, name: string): HTMLElement {
 
 function skeleton(root: HTMLElement): void {
   root.replaceChildren();
-  root.className = 'home';
-  root.dataset['view'] = 'home';
   lanesDrawnFrom = undefined;
 
-  const sidebar = element('aside', { className: 'sidebar', testId: 'sidebar' });
-  sidebar.dataset['region'] = 'sidebar';
-  const column = element('main', { className: 'column', testId: 'home' });
+  const home = element('div', { className: 'home', testId: 'home' });
   for (const [name, tag, className, testId] of [
     ['header', 'header', 'column-head', 'column-head'],
     ['notices', 'div', 'banners', 'banners'],
@@ -470,14 +465,33 @@ function skeleton(root: HTMLElement): void {
         });
       }
     }
-    column.append(part);
+    home.append(part);
   }
-  root.append(sidebar, column);
+  root.append(home);
 }
 
-/** Draw Home into `root`, building its skeleton the first time. */
-export function renderHome(root: HTMLElement, context: HomeContext): void {
-  if (root.dataset['view'] !== 'home') skeleton(root);
+/**
+ * The Today view, into the shell's column. It draws from what Home already holds — the
+ * reads run at sign-in whatever the route — so coming back to Today shows the list at
+ * once, and reads it again only if the last read is a minute old.
+ */
+export function mount(container: HTMLElement): void {
+  column = container;
+  skeleton(container);
+  autoRefreshToday('focus');
+}
+
+/** Stop drawing the column. The reads keep Home's state current for the sidebar. */
+export function unmount(): void {
+  column = null;
+  lanesDrawnFrom = undefined;
+}
+
+/**
+ * Draw the sidebar into `sidebar`, and the Today column when it is mounted. Called on
+ * every answer: the sidebar is redrawn whole, the lanes only when the list changed.
+ */
+export function renderHome(sidebar: HTMLElement, context: HomeContext, route: Route): void {
   const todayView = today === null ? null : buildTodayView(today);
   const view = buildHomeView(
     {
@@ -497,7 +511,9 @@ export function renderHome(root: HTMLElement, context: HomeContext): void {
     },
     context.desktopBanners,
   );
-  renderSidebar(region(root, 'sidebar'), view, context);
+  renderSidebar(sidebar, view, context, route);
+  const root = column;
+  if (root === null || !root.isConnected) return;
   renderHeader(region(root, 'header'), view, context);
   renderNotices(region(root, 'notices'), view);
   renderTodayRegion(region(root, 'today'), view, todayView);

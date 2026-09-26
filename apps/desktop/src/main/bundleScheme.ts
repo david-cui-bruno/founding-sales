@@ -19,15 +19,15 @@ import { join } from 'node:path';
  * Content-Security-Policy resolves `'self'` to this origin, which is why the shipped
  * pages need no change.
  *
- * ## Why the window list lives here rather than in the build script
+ * ## Why the page list lives here rather than in the build script
  *
  * It used to be hand-written, and it listed three paths while the build shipped four
  * pages and four scripts. Every window except the first was a 404 in a packaged
  * build, and no test saw it because the development path uses `loadFile`. The list
- * is therefore one declaration per window, here, and three things read it: the
- * esbuild loop and the copy loop in `scripts/bundle.ts`, and the map below. A window
- * added in one place is added in all three, which is the only version of this that
- * stays true. See `docs/decisions/g9-bundle-scheme-map.md`.
+ * is therefore declared once, here, and three things read it: the esbuild loop and the
+ * copy loop in `scripts/bundle.ts`, and the map below. See
+ * `docs/decisions/g9-bundle-scheme-map.md`. Since wave 1 there is one window and so one
+ * entry: `index.html` and the script that holds every view.
  *
  * It lives in `src/main` rather than `scripts` because the scheme handler ships and
  * the build script does not: a shipped file may not import a build script, and the
@@ -64,18 +64,12 @@ export interface BundleWindow {
 }
 
 /**
- * Every window the application can open.
- *
- * The order is the order the windows arrived. G6's `today.html` is not here: lane g65
- * made Today the main window's Home, so `index.html` carries it
- * (`docs/decisions/g65-today-is-the-home.md`).
+ * The one window (wave 1). Its script, `renderer.js`, holds the shell and every view —
+ * Today, Replies, Firms, Sequences, Administration and the Dashboard — which were four
+ * more pages and four more scripts until the sidebar stopped opening windows.
  */
 export const BUNDLE_WINDOWS: readonly BundleWindow[] = Object.freeze([
-  { page: 'index.html', entry: 'renderer', ownedBy: 'G2 identity, g65 Home' },
-  { page: 'firmWorkspace.html', entry: 'firmWorkspace', ownedBy: 'G3b CRM' },
-  { page: 'replyCard.html', entry: 'replyPage', ownedBy: 'G7b classifier' },
-  { page: 'sequenceEditor.html', entry: 'sequenceEditor', ownedBy: 'G8 sequences' },
-  { page: 'settings.html', entry: 'settingsPage', ownedBy: 'G9 administration' },
+  { page: 'index.html', entry: 'renderer', ownedBy: 'the one window (wave 1)' },
 ]);
 
 /** Copied once and shared by every page. Not a window, so not in the list above. */

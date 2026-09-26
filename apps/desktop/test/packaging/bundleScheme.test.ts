@@ -86,7 +86,8 @@ describe('the bundle scheme answers every window and refuses everything else', (
    * packaged build.
    */
   it('serves the page and the script of every declared window', async () => {
-    expect(BUNDLE_WINDOWS.length).toBeGreaterThan(1);
+    // One window since wave 1: the sidebar's views are mounted in it, not opened beside it.
+    expect(BUNDLE_WINDOWS.map(window => `${window.page} ${window.entry}`)).toEqual(['index.html renderer']);
     for (const window of BUNDLE_WINDOWS) {
       await expect(answer(`${BUNDLE_ORIGIN}/${window.page}`), window.page).resolves.toMatchObject({
         status: 200,

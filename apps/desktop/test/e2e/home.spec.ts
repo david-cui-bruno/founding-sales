@@ -12,17 +12,16 @@ import {
   notConnectedMailbox,
   readyAdmin,
   sendingPosture,
-  startHomeTestServer,
   todayState,
-  type HomeTestServer,
-} from './support/homeTestServer.ts';
+} from './support/homeFixtures.ts';
+import { startAppServer, type AppServer } from './support/appServer.ts';
 
 /**
- * Home: the main window once a person is signed in (lane g65).
+ * Home: the shell's sidebar and its Today view, once a person is signed in (lane g65).
  *
- * The renderer is the shipped file; only the four bridges are substituted, so what these
+ * The renderer is the shipped file; only the bridges are substituted, so what these
  * specs prove is what a person sees and can press: the business date and a line of
- * counts, the lanes in the order the server sent, the sidebar's windows and status, the
+ * counts, the lanes in the order the server sent, the sidebar's views and status, the
  * last seven days, and a Needs-you list that holds only what the bridges say is missing.
  *
  * G6's Today window specs are folded in here unchanged in what they assert, because the
@@ -31,7 +30,7 @@ import {
  * and the outage in which everything is readable and nothing is pressable.
  */
 
-let server: HomeTestServer;
+let server: AppServer;
 
 test.afterEach(async () => {
   await server.stop();
@@ -61,8 +60,8 @@ function dialogsOf(page: Page): string[] {
 }
 
 test('Home opens on the business date, a line of counts, and the four lanes in the server’s order', async ({ page }) => {
-  server = await startHomeTestServer();
-  await page.goto(server.url);
+  server = await startAppServer();
+  await page.goto(server.url());
 
   await expect(page.getByTestId('heading')).toHaveText('Monday, 21 September');
   // Sending is off on this workspace, so the list's emails are counted as held.
@@ -90,9 +89,9 @@ test('Home opens on the business date, a line of counts, and the four lanes in t
   ]);
 });
 
-test('the sidebar names every window with its key and opens the one pressed', async ({ page }) => {
-  server = await startHomeTestServer();
-  await page.goto(server.url);
+test('the sidebar names every view with its key, and shows the one pressed in place', async ({ page }) => {
+  server = await startAppServer();
+  await page.goto(server.url());
 
   const nav = page.getByTestId('nav');
   await expect(nav.getByRole('button')).toHaveText([
@@ -100,19 +99,26 @@ test('the sidebar names every window with its key and opens the one pressed', as
     'Replies⌘2',
     'Firms⌘3',
     'Sequences⌘4',
-    'Dashboard⌘6',
     'Administration⌘5',
+    'Dashboard⌘6',
   ]);
   await expect(page.getByTestId('nav-today')).toHaveAttribute('aria-current', 'page');
 
+  // The column changes and the sidebar stays: no second window, no reload.
   await page.getByTestId('nav-dashboard').click();
+  await expect(page.getByTestId('heading')).toHaveText('Administration');
+  await expect(page.getByTestId('tab-dashboard')).toHaveClass(/tab-current/u);
+  await expect(page.getByTestId('nav-dashboard')).toHaveAttribute('aria-current', 'page');
   await page.getByTestId('nav-replies').click();
-  await expect.poll(() => called('callie.openWindow')).toEqual([{ window: 'dashboard' }, { window: 'replies' }]);
+  await expect(page.getByTestId('heading')).toHaveText('Replies');
+  await expect(page.getByTestId('nav-replies')).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByTestId('nav-today')).not.toHaveAttribute('aria-current', 'page');
+  expect(called('admin.show')).toEqual([{ screen: 'dashboard' }]);
 });
 
 test('the sidebar says what state the system is in, in dots and words', async ({ page }) => {
-  server = await startHomeTestServer();
-  await page.goto(server.url);
+  server = await startAppServer();
+  await page.goto(server.url());
 
   await expect(page.getByTestId('status-mailbox')).toHaveText('Mailbox connected · sales@example.test');
   await expect(page.getByTestId('status-calling')).toHaveText('Calling from +1 617 ··· 0100');
@@ -126,7 +132,7 @@ test('the sidebar says what state the system is in, in dots and words', async ({
 });
 
 test('Needs you lists only what the bridges say is missing, and each row does its one thing', async ({ page }) => {
-  server = await startHomeTestServer({
+  server = await startAppServer({
     mailbox: notConnectedMailbox(),
     admin: readyAdmin({
       callingNumbers: [],
@@ -134,7 +140,7 @@ test('Needs you lists only what the bridges say is missing, and each row does it
       diagnostics: diagnostics(),
     }),
   });
-  await page.goto(server.url);
+  await page.goto(server.url());
 
   const rows = page.getByTestId('needs-row');
   await expect(rows).toHaveCount(4);
@@ -147,9 +153,6 @@ test('Needs you lists only what the bridges say is missing, and each row does it
   await expect(page.getByTestId('status-calling')).toHaveText('No calling number');
   await expect(page.getByTestId('status-domain')).toHaveText('Domain checklist not passing · sending.example.test');
 
-  await rows.filter({ hasText: 'Add your calling number' }).getByTestId('needs-open').click();
-  await expect.poll(() => called('callie.openWindow')).toEqual([{ window: 'administration' }]);
-
   await page.getByTestId('needs-connect').click();
   await expect.poll(() => called('mailbox.connect')).toHaveLength(1);
   await expect(page.getByTestId('needs-label')).toHaveText([
@@ -158,34 +161,54 @@ test('Needs you lists only what the bridges say is missing, and each row does it
     '1 alert to acknowledge',
   ]);
   await expect(page.getByTestId('status-mailbox')).toHaveText('Mailbox connected · sales@example.test');
+
+  // Open goes to Administration in the same window, at the section the row is about.
+  await rows.filter({ hasText: 'Add your calling number' }).getByTestId('needs-open').click();
+  await expect(page.getByTestId('calling-number')).toBeInViewport();
+  await expect(page.getByTestId('nav-admin')).toHaveAttribute('aria-current', 'page');
+  expect(called('admin.show')).toEqual([{ screen: 'settings' }]);
+});
+
+test('each Needs-you Open lands on its own section: the domain in Settings, the alerts in Diagnostics', async ({ page }) => {
+  server = await startAppServer({ admin: readyAdmin({ sendingAdmin: sendingPosture(), diagnostics: diagnostics() }) });
+  await page.goto(server.url());
+
+  await page.getByTestId('needs-row').filter({ hasText: 'Record the domain checklist' }).getByTestId('needs-open').click();
+  await expect(page.getByTestId('sending-admin')).toBeInViewport();
+  await page.getByTestId('nav-today').click();
+  await page.getByTestId('needs-row').filter({ hasText: 'alert to acknowledge' }).getByTestId('needs-open').click();
+  await expect(page.getByTestId('tab-diagnostics')).toHaveClass(/tab-current/u);
+  await expect(page.getByTestId('alerts')).toBeInViewport();
+  expect(called('admin.show')).toEqual([{ screen: 'settings' }, { screen: 'diagnostics' }]);
 });
 
 test('a saved number that is not attested is asked to be attested, not added again (lane g69)', async ({ page }) => {
   // What an unticked Add leaves behind: the number is registered, unverified and
   // disabled, and Today still has no Call button. Until g69 Home said "Add your calling
   // number" and "No calling number" here, and a second Add is what that invites.
-  server = await startHomeTestServer({
+  server = await startAppServer({
     admin: readyAdmin({
       callingNumbers: [
         callingNumber({ verificationStatus: 'unverified', enabled: false, verifiedAt: null, verificationMethod: null, usedForCalls: false }),
       ],
     }),
   });
-  await page.goto(server.url);
+  await page.goto(server.url());
 
   await expect(page.getByTestId('status-calling')).toHaveText('Calling number needs attestation');
   await expect(page.getByTestId('status-calling')).toHaveAttribute('data-tone', 'warn');
   await expect(page.getByTestId('needs-label')).toHaveText(['Attest your calling number']);
   await expect(page.getByTestId('needs-detail')).toHaveText(['Your number is saved. Open Your calling number and attest it.']);
 
-  // Administration opens on Settings, where the saved row has its own Attest button.
+  // Administration opens at Your calling number, where the saved row has its own Attest button.
   await page.getByTestId('needs-row').getByTestId('needs-open').click();
-  await expect.poll(() => called('callie.openWindow')).toEqual([{ window: 'administration' }]);
+  await expect(page.getByTestId('calling-number')).toBeInViewport();
+  await expect(page.getByTestId('calling-number-summary')).toContainText('None of your numbers is attested');
 });
 
 test('with everything in order, Needs you says so in one grey line', async ({ page }) => {
-  server = await startHomeTestServer();
-  await page.goto(server.url);
+  server = await startAppServer();
+  await page.goto(server.url());
   await expect(page.getByTestId('needs-empty')).toHaveText('Nothing needs you.');
   await expect(page.getByTestId('needs-row')).toHaveCount(0);
 });
@@ -193,13 +216,13 @@ test('with everything in order, Needs you says so in one grey line', async ({ pa
 test('a salesperson is never shown the domain, in the sidebar or in Needs you', async ({ page }) => {
   const device = desktopState().device;
   if (device === null) throw new Error('fixture');
-  server = await startHomeTestServer({
+  server = await startAppServer({
     desktop: desktopState({ device: { ...device, role: 'salesperson' } }),
     today: todayState({ role: 'salesperson' }),
     // A checklist that does not pass, which an admin would be asked to record.
     admin: readyAdmin({ role: 'salesperson', sendingAdmin: sendingPosture() }),
   });
-  await page.goto(server.url);
+  await page.goto(server.url());
 
   await expect(page.getByTestId('status-system')).toHaveText('Callie 1.0.3 · online');
   await expect(page.getByTestId('status-domain')).toHaveCount(0);
@@ -207,8 +230,8 @@ test('a salesperson is never shown the domain, in the sidebar or in Needs you', 
 });
 
 test('the last 7 days are read over the last seven days, and a figure not in this build is a dash', async ({ page }) => {
-  server = await startHomeTestServer();
-  await page.goto(server.url);
+  server = await startAppServer();
+  await page.goto(server.url());
 
   await expect(page.getByTestId('figures-label')).toHaveText('Last 7 days');
   await expect(page.getByTestId('figure-replies')).toHaveText('Replies21 uncertain');
@@ -224,9 +247,9 @@ test('the last 7 days are read over the last seven days, and a figure not in thi
 });
 
 test('figures that could not be read are dashes and one grey line, never a dialog', async ({ page }) => {
-  server = await startHomeTestServer({ figuresFail: true });
+  server = await startAppServer({ figuresFail: true });
   const dialogs = dialogsOf(page);
-  await page.goto(server.url);
+  await page.goto(server.url());
 
   await expect(page.getByTestId('figures-line')).toHaveText('Callie could not read the last 7 days.');
   await expect(page.getByTestId('figure-value')).toHaveText(['—', '—', '—', '—']);
@@ -235,17 +258,17 @@ test('figures that could not be read are dashes and one grey line, never a dialo
 
 test('a firm name that looks like markup is shown as text', async ({ page }) => {
   const base = todayState();
-  server = await startHomeTestServer({
+  server = await startAppServer({
     today: { ...base, cards: base.cards.map((card, index) => (index === 0 ? { ...card, firmName: '<img src=x onerror=alert(1)>' } : card)) },
   });
-  await page.goto(server.url);
+  await page.goto(server.url());
   await expect(page.getByTestId('card-firm').nth(0)).toHaveText('<img src=x onerror=alert(1)>');
   await expect(page.locator('img')).toHaveCount(0);
 });
 
 test('expanding a card reveals one task per contact, under its own row', async ({ page }) => {
-  server = await startHomeTestServer();
-  await page.goto(server.url);
+  server = await startAppServer();
+  await page.goto(server.url());
   await settled(page);
 
   await page.getByTestId('card-expand').nth(1).click();
@@ -265,8 +288,8 @@ test('expanding a card reveals one task per contact, under its own row', async (
 });
 
 test('a manual task is snoozed and an automated send is paused, and the server decides which', async ({ page }) => {
-  server = await startHomeTestServer({ today: todayState({ expanded: expandedFirm() }) });
-  await page.goto(server.url);
+  server = await startAppServer({ today: todayState({ expanded: expandedFirm() }) });
+  await page.goto(server.url());
   await settled(page);
 
   // The labels differ, so nobody presses "snooze" and gets a hold they did not want.
@@ -291,8 +314,8 @@ test('a manual task is snoozed and an automated send is paused, and the server d
 });
 
 test('the same request on an automated send comes back as a pause', async ({ page }) => {
-  server = await startHomeTestServer({ today: todayState({ expanded: expandedFirm() }) });
-  await page.goto(server.url);
+  server = await startAppServer({ today: todayState({ expanded: expandedFirm() }) });
+  await page.goto(server.url());
   await settled(page);
 
   await page.getByTestId('snooze-reason').nth(2).fill('Their office is closed this week');
@@ -308,7 +331,7 @@ test('the same request on an automated send comes back as a pause', async ({ pag
 test('a paused send shows Resume where Pause was, and Resume releases it (lane g79, C22)', async ({ page }) => {
   const HOLD_ID = '12121212-1212-4121-8121-121212121212';
   const base = expandedFirm();
-  server = await startHomeTestServer({
+  server = await startAppServer({
     today: todayState({
       expanded: {
         ...base,
@@ -316,7 +339,7 @@ test('a paused send shows Resume where Pause was, and Resume releases it (lane g
       },
     }),
   });
-  await page.goto(server.url);
+  await page.goto(server.url());
   await settled(page);
 
   const paused = page.getByTestId('today-task').nth(2);
@@ -328,8 +351,8 @@ test('a paused send shows Resume where Pause was, and Resume releases it (lane g
 });
 
 test('what a person is typing survives the window regaining focus', async ({ page }) => {
-  server = await startHomeTestServer({ today: todayState({ expanded: expandedFirm() }) });
-  await page.goto(server.url);
+  server = await startAppServer({ today: todayState({ expanded: expandedFirm() }) });
+  await page.goto(server.url());
   await settled(page);
 
   await page.getByTestId('snooze-reason').nth(1).fill('Waiting on their board');
@@ -341,8 +364,8 @@ test('what a person is typing survives the window regaining focus', async ({ pag
 });
 
 test('only a usable number is offered, with the limitation notice beside it', async ({ page }) => {
-  server = await startHomeTestServer({ today: todayState({ expanded: expandedFirm() }) });
-  await page.goto(server.url);
+  server = await startAppServer({ today: todayState({ expanded: expandedFirm() }) });
+  await page.goto(server.url());
   await settled(page);
 
   // Two routes on the card, one of them a candidate. One Call button.
@@ -359,15 +382,15 @@ test('only a usable number is offered, with the limitation notice beside it', as
 });
 
 test('a firm with no verified number of the caller’s offers no Call button, and says where to add one', async ({ page }) => {
-  server = await startHomeTestServer({ today: todayState({ expanded: expandedFirm({ callingIdentityId: null }) }) });
-  await page.goto(server.url);
+  server = await startAppServer({ today: todayState({ expanded: expandedFirm({ callingIdentityId: null }) }) });
+  await page.goto(server.url());
   await expect(page.getByTestId('dial')).toHaveCount(0);
-  await expect(page.getByTestId('banner-info')).toContainText('Add it in Window › Administration');
+  await expect(page.getByTestId('banner-info')).toContainText('Add it in Administration (⌘5)');
 });
 
 test('an outcome will not record until it has everything it needs', async ({ page }) => {
-  server = await startHomeTestServer({ today: todayState({ expanded: expandedFirm() }) });
-  await page.goto(server.url);
+  server = await startAppServer({ today: todayState({ expanded: expandedFirm() }) });
+  await page.goto(server.url());
   await settled(page);
 
   await expect(page.getByTestId('outcome-submit')).toBeDisabled();
@@ -400,13 +423,13 @@ test('an outcome will not record until it has everything it needs', async ({ pag
 
 test('the outcome names the task it was for and the number just called (lane g79, C04, C16, C17)', async ({ page }) => {
   const CALLBACK_ITEM = '77777777-7777-4777-8777-777777777777';
-  server = await startHomeTestServer({
+  server = await startAppServer({
     today: todayState({
       expanded: expandedFirm(),
       lastCall: { firmId: FIRM_ID, routeId: ROUTE_ID, contactId: null, e164: '+14015550187' },
     }),
   });
-  await page.goto(server.url);
+  await page.goto(server.url());
   await settled(page);
 
   await expect(page.getByTestId('outcome-call')).toHaveText('The call to +14015550187.');
@@ -438,7 +461,7 @@ test('the outcome names the task it was for and the number just called (lane g79
 test('a callback asked for with no day waits on the card, and its time is set there (lane g79, C13)', async ({ page }) => {
   const CALL_LOG_ID = '34343434-3434-4343-8343-343434343434';
   const base = expandedFirm();
-  server = await startHomeTestServer({
+  server = await startAppServer({
     today: todayState({
       expanded: {
         ...base,
@@ -460,7 +483,7 @@ test('a callback asked for with no day waits on the card, and its time is set th
       },
     }),
   });
-  await page.goto(server.url);
+  await page.goto(server.url());
   await settled(page);
 
   const waiting = page.getByTestId('today-task').nth(0);
@@ -477,8 +500,8 @@ test('a callback asked for with no day waits on the card, and its time is set th
 });
 
 test('a callback recorded with no day says where it is waiting', async ({ page }) => {
-  server = await startHomeTestServer({ today: todayState({ expanded: expandedFirm() }) });
-  await page.goto(server.url);
+  server = await startAppServer({ today: todayState({ expanded: expandedFirm() }) });
+  await page.goto(server.url());
   await settled(page);
   await page.getByTestId('outcome-select').selectOption('callback_requested');
   await page.getByTestId('outcome-submit').click();
@@ -488,20 +511,20 @@ test('a callback recorded with no day says where it is waiting', async ({ page }
 });
 
 test('“do not call” says how wide the suppression is before it is recorded', async ({ page }) => {
-  server = await startHomeTestServer({ today: todayState({ expanded: expandedFirm() }) });
-  await page.goto(server.url);
+  server = await startAppServer({ today: todayState({ expanded: expandedFirm() }) });
+  await page.goto(server.url());
   await settled(page);
   await page.getByTestId('outcome-select').selectOption('do_not_call');
   await expect(page.getByTestId('outcome-warning')).toContainText('stops Callie calling this number');
 });
 
 test('an outage leaves Home readable and nothing on it pressable', async ({ page }) => {
-  server = await startHomeTestServer({
+  server = await startAppServer({
     desktop: desktopState({ online: false, stale: true, mayMutate: false }),
     today: todayState({ online: false, stale: true, mayMutate: false, expanded: expandedFirm() }),
     mailbox: notConnectedMailbox({ mayConnect: false, notice: 'offline' }),
   });
-  await page.goto(server.url);
+  await page.goto(server.url());
 
   // The existing sentences, as quiet lines at the top of the column.
   await expect(page.getByTestId('banner-warning').nth(0)).toContainText('cannot reach the server');
@@ -522,8 +545,8 @@ test('an outage leaves Home readable and nothing on it pressable', async ({ page
 });
 
 test('an empty list says what to do next in one grey line', async ({ page }) => {
-  server = await startHomeTestServer({ today: todayState({ cards: [] }) });
-  await page.goto(server.url);
+  server = await startAppServer({ today: todayState({ cards: [] }) });
+  await page.goto(server.url());
   await expect(page.getByTestId('today-empty')).toHaveText(
     'Nothing today. Add firms and a sequence, and tomorrow’s list builds at 05:00.',
   );
@@ -532,8 +555,8 @@ test('an empty list says what to do next in one grey line', async ({ page }) => 
 });
 
 test('a page built without the Today and administration bridges says so where they would be', async ({ page }) => {
-  server = await startHomeTestServer({ without: ['callieToday', 'callieAdmin'], mailbox: connectedMailbox() });
-  await page.goto(server.url);
+  server = await startAppServer({ without: ['callieToday', 'callieAdmin'], mailbox: connectedMailbox() });
+  await page.goto(server.url());
 
   await expect(page.getByTestId('heading')).toHaveText('Monday, 21 September');
   await expect(page.getByTestId('today-unavailable')).toHaveText('Unavailable in this build');

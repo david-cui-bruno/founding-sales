@@ -1,6 +1,7 @@
 import type { DashboardResponse } from '@fss/contracts';
-import type { DesktopState, MailboxState, WindowTarget } from '../shared/contract.ts';
+import type { DesktopState, MailboxState } from '../shared/contract.ts';
 import type { UpdateStatus } from '../shared/updateContract.ts';
+import type { Route, RouteName } from './routes.ts';
 import type { AdminState, CallingNumberView } from './settingsContract.ts';
 import type { TodayCard, TodayLane, TodayState } from './todayContract.ts';
 import type { BannerView, CardView, TodayScreenView } from './todayView.ts';
@@ -47,25 +48,25 @@ export const LANE_SECTION_LABELS: Readonly<Record<TodayLane, string>> = Object.f
 });
 
 // ---------------------------------------------------------------------------
-// The sidebar's windows
+// The sidebar
 // ---------------------------------------------------------------------------
 
 export interface NavRow {
   readonly label: string;
-  /** Null for Today, which is this window. */
-  readonly window: WindowTarget | null;
+  /** The view the row shows in the column. */
+  readonly route: RouteName;
   /** The key the Window menu gives it. */
   readonly keys: string;
 }
 
-/** The mockup's order: selling first, then the two screens a person opens when not selling. */
+/** Selling first, then the two a person opens when not selling, in key order. */
 export const NAV_ROWS: readonly NavRow[] = Object.freeze([
-  { label: 'Today', window: null, keys: '⌘1' },
-  { label: 'Replies', window: 'replies', keys: '⌘2' },
-  { label: 'Firms', window: 'firms', keys: '⌘3' },
-  { label: 'Sequences', window: 'sequences', keys: '⌘4' },
-  { label: 'Dashboard', window: 'dashboard', keys: '⌘6' },
-  { label: 'Administration', window: 'administration', keys: '⌘5' },
+  { label: 'Today', route: 'today', keys: '⌘1' },
+  { label: 'Replies', route: 'replies', keys: '⌘2' },
+  { label: 'Firms', route: 'firms', keys: '⌘3' },
+  { label: 'Sequences', route: 'sequences', keys: '⌘4' },
+  { label: 'Administration', route: 'admin', keys: '⌘5' },
+  { label: 'Dashboard', route: 'dashboard', keys: '⌘6' },
 ]);
 
 // ---------------------------------------------------------------------------
@@ -113,7 +114,7 @@ export interface StatusRow {
 
 export type NeedsAction =
   | { readonly kind: 'connect_mailbox'; readonly label: string; readonly enabled: boolean }
-  | { readonly kind: 'open'; readonly window: WindowTarget; readonly label: string };
+  | { readonly kind: 'open'; readonly route: Route; readonly label: string };
 
 export interface NeedsRow {
   readonly key: 'connect_gmail' | 'calling_number' | 'domain_checklist' | 'alerts';
@@ -420,13 +421,14 @@ export function statusRows(input: HomeInput): readonly StatusRow[] {
  * * The calling numbers were read and none is the one Today calls from → **Add your
  *   calling number** when there is none, **Attest your calling number** when one is saved
  *   and not attested, and **Re-attest your calling number** when every one is retired.
- *   Each opens Administration on Settings, where **Your calling number** is first and
- *   the existing row has its own Attest button (lane g69: until then a saved, unattested
- *   number was told to add itself again).
+ *   Each opens Administration scrolled to **Your calling number**, where the existing
+ *   row has its own Attest button (lane g69: until then a saved, unattested number was
+ *   told to add itself again).
  * * An admin, whose `/outbound/status` read answered with no domain or a checklist that
- *   does not pass → **Record the domain checklist**, which opens Administration.
+ *   does not pass → **Record the domain checklist**, which opens Administration at the
+ *   sending section.
  * * An admin with unacknowledged alerts in a Diagnostics read the bridge already holds →
- *   **N alerts to acknowledge**, which opens Administration.
+ *   **N alerts to acknowledge**, which opens Diagnostics at the alerts.
  *
  * A fact that was not read is not a need: an unread list of numbers is not "you have no
  * number", and a salesperson is never told about a domain they cannot see.
@@ -461,7 +463,7 @@ export function needsRows(input: HomeInput): readonly NeedsRow[] {
         key: 'domain_checklist',
         label: 'Record the domain checklist',
         detail: null,
-        action: { kind: 'open', window: 'administration', label: 'Open' },
+        action: { kind: 'open', route: { name: 'admin', section: 'sending-admin' }, label: 'Open' },
       });
     }
     const open = (admin.diagnostics?.alerts ?? []).filter(alert => alert.acknowledgedAt === null).length;
@@ -470,16 +472,16 @@ export function needsRows(input: HomeInput): readonly NeedsRow[] {
         key: 'alerts',
         label: `${counted(open, 'alert', 'alerts')} to acknowledge`,
         detail: null,
-        action: { kind: 'open', window: 'administration', label: 'Open' },
+        action: { kind: 'open', route: { name: 'admin', section: 'alerts' }, label: 'Open' },
       });
     }
   }
   return rows;
 }
 
-/** The calling-number row, worded for what is missing. Administration opens on Settings. */
+/** The calling-number row, worded for what is missing. Administration opens at the section. */
 function callingNumberNeed(missing: 'none' | 'unattested' | 'retired'): NeedsRow {
-  const action: NeedsAction = { kind: 'open', window: 'administration', label: 'Open' };
+  const action: NeedsAction = { kind: 'open', route: { name: 'admin', section: 'calling-number' }, label: 'Open' };
   if (missing === 'unattested') {
     return {
       key: 'calling_number',

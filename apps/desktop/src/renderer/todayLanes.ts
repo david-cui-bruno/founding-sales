@@ -14,6 +14,7 @@ import {
 import type { TodayBridge, TodayState } from './todayContract.ts';
 import type { CardView, TaskView, TodayScreenView } from './todayView.ts';
 import { dueLabel, type LaneSection } from './homeView.ts';
+import { navigate } from './routes.ts';
 
 /**
  * The Today lanes, drawn (specification 8.2, 8.3, 9.1, 14.2).
@@ -58,6 +59,13 @@ function renderCard(item: HTMLElement, entry: CardView, view: TodayScreenView, h
   row.append(main);
 
   const actions = element('div', { className: 'row-actions' });
+  // The firm's page, in the same window: the Firms view opens it through the CRM bridge.
+  const firm = button('Firm page', 'card-open-firm', true);
+  firm.className = 'btn btn-quiet';
+  firm.addEventListener('click', () => {
+    navigate({ name: 'firm', firmId: entry.card.firmId });
+  });
+  actions.append(firm);
   const toggle = button(entry.expanded ? 'Close' : 'Open', 'card-expand', view.expandEnabled);
   toggle.className = 'btn';
   toggle.addEventListener('click', () => {

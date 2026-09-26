@@ -13,15 +13,20 @@ import {
   type SettingField,
   type SettingRowView,
 } from './settingsView.ts';
+import { routeShown, type AdminSection, type Route } from './routes.ts';
 import type { AdminBridge, AdminScreen, AdminState, RecordPostureInput } from './settingsContract.ts';
 
 /**
- * The administration window: Settings, Dashboard, Diagnostics.
+ * The Administration and Dashboard views: Settings, Dashboard, Diagnostics.
  *
- * A third entry point beside `renderer.ts` and `firmWorkspace.ts`, on the pattern
- * G3b and G6 established. Every state change is "ask the bridge, render what came
- * back": there is no local model to go stale and no optimistic update to reconcile,
- * which is 14.2's "contains no authoritative … logic" made structural.
+ * A view of the one window (wave 1): `mount` draws into the shell's column and `unmount`
+ * stops it, so an answer that arrives after the person went elsewhere draws nothing.
+ * The route `admin` opens Settings (or Diagnostics, for Needs you's alerts) and
+ * `dashboard` the Dashboard; the tabs switch in place and the route follows. Until wave
+ * 1 the Dashboard was this window loaded again with a query, which lost anything typed
+ * in Settings. Every state change is "ask the bridge, render what came back": there is
+ * no local model to go stale and no optimistic update to reconcile, which is 14.2's
+ * "contains no authoritative … logic" made structural.
  *
  * Every value reaches the page through `textContent` — `element` from `firmDom.ts`
  * is the only way anything is written — so a prospect's name in a hold reason or a
@@ -45,11 +50,35 @@ const bridge = (): AdminBridge => {
 };
 
 let lastState: AdminState | null = null;
+/** The shell's column while this view is mounted, or null. */
+let container: HTMLElement | null = null;
+/** Bumped by every mount and unmount, so an answer to an earlier one is dropped. */
+let generation = 0;
+/** Where Needs you asked this mount to scroll, until the first answer is drawn. */
+let scrollTo: AdminSection | null = null;
 
 function apply(next: Promise<AdminState>): void {
+  const mine = generation;
   void (async () => {
-    render(await next);
+    const state = await next;
+    if (mine === generation) render(state);
   })();
+}
+
+export function mount(target: HTMLElement, route: Route): void {
+  generation += 1;
+  container = target;
+  lastState = null;
+  const section = route.name === 'admin' ? (route.section ?? null) : null;
+  scrollTo = section;
+  const screen: AdminScreen = route.name === 'dashboard' ? 'dashboard' : section === 'alerts' ? 'diagnostics' : 'settings';
+  apply(bridge().show({ screen }));
+}
+
+export function unmount(): void {
+  generation += 1;
+  container = null;
+  scrollTo = null;
 }
 
 function tab(label: string, screen: AdminScreen, current: AdminScreen): HTMLElement {
@@ -64,9 +93,10 @@ function tab(label: string, screen: AdminScreen, current: AdminScreen): HTMLElem
 export function render(state: AdminState | null): void {
   if (state !== null) lastState = state;
   const current = lastState;
-  const root = document.querySelector('#app');
-  if (!(root instanceof HTMLElement) || current === null) return;
+  const root = container;
+  if (root === null || current === null) return;
   const view = adminViewOf(current);
+  routeShown(view.screen === 'dashboard' ? { name: 'dashboard' } : { name: 'admin' });
 
   root.replaceChildren();
   root.append(element('h1', { text: 'Administration', testId: 'heading' }));
@@ -88,6 +118,11 @@ export function render(state: AdminState | null): void {
 
   if (view.screen === 'settings') renderSettings(root, view);
   else renderPanels(root, view);
+
+  // Needs you's Open lands on the section it named, once, on the first answer.
+  const section = scrollTo;
+  scrollTo = null;
+  if (section !== null) root.querySelector(`[data-testid="${section}"]`)?.scrollIntoView({ block: 'start' });
 }
 
 /**
@@ -856,22 +891,4 @@ function renderPanels(root: HTMLElement, view: ReturnType<typeof adminViewOf>): 
     }
     root.append(alerts);
   }
-}
-
-/**
- * The screen the window was opened on, when its opener named one (lane g65).
- *
- * The Window menu's ⌘5 opens `settings.html?screen=settings` and ⌘6
- * `settings.html?screen=dashboard`; Home's sidebar calls the same openers. Anything
- * else, including no query at all, is the screen the bridge last showed.
- */
-export function requestedScreen(search: string): AdminScreen | null {
-  const screen = new URLSearchParams(search).get('screen');
-  return screen === 'settings' || screen === 'dashboard' || screen === 'diagnostics' ? screen : null;
-}
-
-/** The window's entry point. Guarded so importing this module in a test is inert. */
-if (typeof document !== 'undefined' && document.querySelector('#app') !== null) {
-  const screen = requestedScreen(location.search);
-  apply(screen === null ? bridge().state() : bridge().show({ screen }));
 }

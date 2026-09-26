@@ -189,7 +189,7 @@ describe('the Today view model', () => {
   it('says where to add a calling number when a card has a number to dial and nothing to dial it from (lane g60)', () => {
     const missing = buildTodayView(state({ expanded: firmPage({ callingIdentityId: null }) }));
     expect(missing.banners).toContainEqual({ tone: 'info', text: NO_CALLING_NUMBER });
-    expect(NO_CALLING_NUMBER).toContain('Window › Administration');
+    expect(NO_CALLING_NUMBER).toContain('Administration (⌘5)');
     // Not when the card has a number to call from, nor when there is nothing to dial.
     expect(buildTodayView(state({ expanded: firmPage() })).banners.map(banner => banner.text)).not.toContain(
       NO_CALLING_NUMBER,
