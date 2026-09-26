@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import {
-  readLinkedInRemovalPreflight,
   readSystemGeneration,
   repositoryContext,
   withTransaction,
@@ -969,27 +968,4 @@ export async function releaseRecordShowCommand(invocation: AdminInvocation): Pro
     return refuse('release_record_unknown', 'no release record is stored under that reference; put it first with fss admin release-record put');
   }
   return accept({ ...describeRecord(record), record: record.record });
-}
-
-// ---------------------------------------------------------------------------
-// Lane A4: migration 0018's counts, before the release stops anything.
-// ---------------------------------------------------------------------------
-
-/**
- * `fss admin schema-preflight 0018`. Read-only (a READ ONLY transaction, rolled back),
- * as the runtime identity on the operations task, against the database the services
- * are still using. The answer is what the owner decides on: `refusesWithoutSetting`
- * says whether `fss migrate` will need `--remove-linkedin-history`, and `counts` says
- * what 0018 keeps, converts or would erase. On any schema but 17 it refuses, because
- * there is nothing to decide: before 17 the release is not this one, after it 0018 ran.
- */
-export async function schemaPreflight0018Command(invocation: AdminInvocation): Promise<AdminOutcome> {
-  const preflight = await readLinkedInRemovalPreflight(invocation.session);
-  if (!preflight.applicable) {
-    return refuse(
-      'schema_not_17',
-      `the database is at schema ${String(preflight.schemaVersion)}; migration 0018's preflight counts a schema-17 database`,
-    );
-  }
-  return accept({ ...preflight, counts: { ...preflight.counts } });
 }

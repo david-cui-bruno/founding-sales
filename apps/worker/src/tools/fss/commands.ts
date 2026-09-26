@@ -80,8 +80,6 @@ export const COMMAND_DEPENDENCIES: Readonly<Record<string, DependencyMode>> = Ob
   // never reads the deployment, so it cannot reach Gmail, KMS or S3.
   'release-record put': 'database',
   'release-record show': 'database',
-  // Lane A4. Counts, in a READ ONLY transaction, and nothing else.
-  'schema-preflight 0018': 'database',
   'suppression-journal replay': 'journal',
   // g40. It drives a fence through the real dispatch path and ingests a reply and an
   // opt-out through the real pipeline, so it reaches the Gmail seam and is bound by the
@@ -97,16 +95,14 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
   {
     path: ['migrate'],
     valueFlags: [...REPORTABLE],
-    // `--remove-linkedin-history` (lane A4): migration 0018 may erase LinkedIn history
-    // only with it, after the owner has seen `admin schema-preflight 0018`'s counts.
-    booleanFlags: ['--allow-any-role', '--remove-linkedin-history'],
+    booleanFlags: ['--allow-any-role'],
     requiredFlags: [],
     summary: 'apply every unapplied migration forward under the migration advisory lock',
   },
   {
     path: ['migrate', 'up'],
     valueFlags: [...REPORTABLE],
-    booleanFlags: ['--allow-any-role', '--remove-linkedin-history'],
+    booleanFlags: ['--allow-any-role'],
     requiredFlags: [],
     summary: 'the same thing, spelled the way docs/greenfield/restore-drill.md step 7 spells it',
   },
@@ -258,16 +254,6 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     booleanFlags: [],
     requiredFlags: ['--reference'],
     summary: 'the stored release record for one reference, and the digests it binds sending to. Reads only',
-  },
-  {
-    // Lane A4. What `infra/scripts/schema-preflight-0018.sh` runs on the operations
-    // task before a schema-18 release stops anything: migration 0018's counts, read
-    // only, so the owner decides on them while the services are still running.
-    path: ['admin', 'schema-preflight', '0018'],
-    valueFlags: [...REPORTABLE],
-    booleanFlags: [],
-    requiredFlags: [],
-    summary: 'the LinkedIn values migration 0018 keeps, converts or refuses to erase, counted read-only on schema 17',
   },
   {
     path: ['admin', 'drill', 'seed-evidence'],
