@@ -78,7 +78,7 @@ function alarmEntry(alerts: string, key: string): string {
  */
 
 const CLUSTER = readRepositoryFile('infra/modules/cluster/main.tf');
-const SECRETS_VARIABLES = readRepositoryFile('infra/modules/secrets/variables.tf');
+const SECRETS = readRepositoryFile('infra/modules/secrets/main.tf');
 
 const AUTHENTICATION_SECRETS = ['session-signing-key', 'device-credential-pepper', 'google-oidc-client'];
 
@@ -97,9 +97,11 @@ function secretsMapOf(resource: string): string | null {
   return /secrets = \[for name in sort\(keys\(local\.([a-z_]+)\)\)/u.exec(block)?.[1] ?? null;
 }
 
+/** The seven entries the secrets module creates: its `local.secret_names` list. */
 const DEFAULT_SECRET_NAMES = ((): string[] => {
-  const start = SECRETS_VARIABLES.indexOf('variable "secret_names" {');
-  const block = SECRETS_VARIABLES.slice(start, SECRETS_VARIABLES.indexOf('\n}\n', start));
+  const start = SECRETS.indexOf('\n  secret_names = [\n');
+  if (start < 0) return [];
+  const block = SECRETS.slice(start, SECRETS.indexOf('\n  ]\n', start));
   return [...block.matchAll(/^\s+"([a-z0-9-]+)",$/gmu)].map(entry => entry[1] ?? '');
 })();
 
