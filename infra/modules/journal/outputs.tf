@@ -15,7 +15,7 @@ output "kms_key_arn" {
 
 output "object_lock_mode" {
   description = "Object lock mode in force."
-  value       = var.object_lock_mode
+  value       = "GOVERNANCE"
 }
 
 output "object_lock_retention_days" {

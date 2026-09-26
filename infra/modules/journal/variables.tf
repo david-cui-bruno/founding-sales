@@ -113,17 +113,6 @@ variable "bucket_listing_principal_arns" {
   }
 }
 
-variable "object_lock_mode" {
-  description = "GOVERNANCE or COMPLIANCE. COMPLIANCE cannot be shortened or removed by anyone, including the account root."
-  type        = string
-  default     = "GOVERNANCE"
-
-  validation {
-    condition     = contains(["GOVERNANCE", "COMPLIANCE"], var.object_lock_mode)
-    error_message = "Object lock mode must be GOVERNANCE or COMPLIANCE."
-  }
-}
-
 variable "object_lock_retention_days" {
   description = "Default retention applied to every journal object. Suppression history is retained indefinitely, so production sets this long."
   type        = number
@@ -139,12 +128,6 @@ variable "force_destroy" {
   description = "Allow Terraform to empty the bucket on destroy. Object-locked objects still refuse deletion until their retention expires."
   type        = bool
   default     = false
-}
-
-variable "kms_deletion_window_days" {
-  description = "Waiting period before the customer key is destroyed."
-  type        = number
-  default     = 30
 }
 
 variable "tags" {

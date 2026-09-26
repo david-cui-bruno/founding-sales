@@ -51,7 +51,7 @@ locals {
 resource "aws_kms_key" "journal" {
   description             = "${var.name_prefix} suppression journal objects."
   enable_key_rotation     = true
-  deletion_window_in_days = var.kms_deletion_window_days
+  deletion_window_in_days = 30
 
   tags = merge(var.tags, { Name = "${var.name_prefix}-journal" })
 }
@@ -83,7 +83,11 @@ resource "aws_s3_bucket_object_lock_configuration" "journal" {
 
   rule {
     default_retention {
-      mode = var.object_lock_mode
+      # GOVERNANCE, so the account root can still shorten a retention in an
+      # emergency; COMPLIANCE could not be undone by anyone, this account
+      # included. Retention days are the caller's: production locks for ten
+      # years and a rehearsal for one day.
+      mode = "GOVERNANCE"
       days = var.object_lock_retention_days
     }
   }
