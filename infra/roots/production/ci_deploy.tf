@@ -10,7 +10,7 @@
 # This role is what the workflow holds, and it is deliberately small. It is not
 # `fss-prod-deploy`, which Terraform assumes and which may create and destroy
 # anything in the `fss-prod` namespace; that role trusts no OIDC subject and this
-# lane does not change it. `fss-prod-ci-deploy` can do exactly five things:
+# lane does not change it. `fss-prod-ci-deploy` can do exactly six things:
 #
 #   1. read the two images from the rehearsal repositories CI published them to, and
 #      copy them by digest into the two production repositories
@@ -22,7 +22,11 @@
 #   3. point each service at a revision of its own family, and nothing else;
 #   4. watch the rollout: the services' tasks, and the two services' logs when a
 #      rollout fails;
-#   5. read the canary metric the production smoke judges.
+#   5. read the canary metric the production smoke judges;
+#   6. put the release record for the two digests it deployed, after the smoke passed
+#      (lane g100): run the operations task in the production cluster, the one-off
+#      `fss admin release-record put --json-base64` that `release-deploy.sh
+#      --release-record` runs, and read that task's log for the put's answer.
 #
 # ## The residual this lane accepts, in two sentences
 #
@@ -46,8 +50,33 @@
 # It has no Terraform state, no secret, no database, no bucket, no key and no IAM
 # write. `iam:PassRole` names the two services' four roles, and only for ECS, because
 # registering a task definition that names a task role and an execution role is a
-# pass of both. The one-off task definitions — migration, operations, drill — are not
-# CI's business: the policy names neither their families nor their roles.
+# pass of both. The migration and drill task definitions are not CI's business: the
+# policy names neither their families nor their roles.
+#
+# ## The release record's put, and its residual (lane g100)
+#
+# Once sending is on, the worker sends only under a stored release record naming its
+# digest, so a CI deploy that stored none would hold sending until somebody put one by
+# hand. So after the rollout and the smoke the workflow builds the ci-gate record
+# (`release-record-from-ci.sh`) and puts it the way `release-deploy.sh
+# --release-record` does: `ecs:RunTask` of the operations family, which runs the
+# worker image under the worker's task and execution roles and writes to the worker's
+# log group with the stream prefix `operations` (`infra/modules/cluster`). So the
+# grant is `ecs:RunTask` on that family's revisions, conditioned on the production
+# cluster; `ecs:TagResource` on that cluster's tasks, only as part of `RunTask`,
+# because the wrapper propagates the task definition's tags onto the task; and nothing
+# else — the `iam:PassRole` and the log read below already name the worker's two roles
+# and the worker's log group, and `ecs:DescribeTasks` is already there. The network
+# the task is launched into is three public identifiers the workflow reads from
+# repository variables, never from state (`docs/greenfield/release.md` 4.0).
+#
+# IAM has no condition on a task's command or environment overrides, so a job holding
+# this role can run any `fss` command on the operations task, as the worker's task role
+# with the runtime database credential. It could already reach exactly that identity:
+# it registers worker revisions with any image in `fss-prod-worker` and rolls them. The
+# put adds a second way to the same identity, not a new one; `ci-deploy-app.sh record`
+# runs one command, and the family, the cluster and the four roles `iam:PassRole`
+# names bound what any other call could reach.
 #
 # ## The trust is one subject, and it is not a pattern
 #
@@ -131,6 +160,11 @@ locals {
 
   # The two families CI registers into: the services' own, never a one-off's.
   ci_deploy_family_arn = { for service in local.ci_deploy_services : service => "${local.ci_deploy_arn_ecs}:task-definition/${local.ci_deploy_service[service]}:*" }
+
+  # The one family CI runs a task of (lane g100): the operations task, for the release
+  # record's put. Its revisions are Terraform's; CI registers none.
+  ci_deploy_operations_family_arn = "${local.ci_deploy_arn_ecs}:task-definition/${module.stack.operations_task_definition_family}:*"
+  ci_deploy_cluster_tasks         = "${local.ci_deploy_arn_ecs}:task/${module.stack.cluster_name}/*"
 
   # The execution roles are not a stack output; `infra/modules/cluster` names them
   # `<prefix>-<service>-exec`. A mismatch is a refused registration, never a wider one.
@@ -287,9 +321,36 @@ locals {
           Sid      = "ReadTasksInTheProductionCluster"
           Effect   = "Allow"
           Action   = ["ecs:DescribeTasks"]
-          Resource = ["${local.ci_deploy_arn_ecs}:task/${module.stack.cluster_name}/*"]
+          Resource = [local.ci_deploy_cluster_tasks]
         },
         {
+          # The release record's put (lane g100): a revision of the operations family,
+          # in the production cluster and no other. `ArnEquals`, not `IfExists`: a call
+          # that names no cluster runs in `default` and is refused.
+          Sid      = "RunTheOperationsTaskInTheProductionCluster"
+          Effect   = "Allow"
+          Action   = ["ecs:RunTask"]
+          Resource = [local.ci_deploy_operations_family_arn]
+          Condition = {
+            ArnEquals = { "ecs:cluster" = local.ci_deploy_cluster }
+          }
+        },
+        {
+          # The put's task carries the operations definition's tags
+          # (`--propagate-tags TASK_DEFINITION`), and tagging on creation is authorized
+          # as a TagResource. Only on a task in the production cluster, and only as part
+          # of RunTask: never a tag on anything that already exists.
+          Sid      = "TagOnlyTheTasksItRuns"
+          Effect   = "Allow"
+          Action   = ["ecs:TagResource"]
+          Resource = [local.ci_deploy_cluster_tasks]
+          Condition = {
+            StringEquals = { "ecs:CreateAction" = "RunTask" }
+          }
+        },
+        {
+          # The operations task runs under the worker's task and execution roles, so the
+          # release record's put needs no role beyond these four (lane g100).
           Sid      = "PassOnlyTheTwoServicesRolesToEcs"
           Effect   = "Allow"
           Action   = ["iam:PassRole"]
@@ -299,7 +360,9 @@ locals {
           }
         },
         {
-          # A failed rollout's stopped tasks, read back so the run says why.
+          # A failed rollout's stopped tasks, read back so the run says why; and the
+          # release record's put, whose operations task writes to the worker's log group
+          # under the stream prefix `operations` (lane g100).
           Sid      = "ReadTheTwoServicesLogs"
           Effect   = "Allow"
           Action   = ["logs:FilterLogEvents", "logs:GetLogEvents"]

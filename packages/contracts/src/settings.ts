@@ -174,6 +174,11 @@ export type BusinessTimeZoneSetting = z.infer<typeof businessTimeZoneSettingSche
  * requires the same record to name its own. Those checks need the database and the
  * process's own identity, so they are the domain's (`updateSetting`, `decideSend`), not
  * this schema's.
+ *
+ * Since lane g100 the reference may instead be the release process's name,
+ * `ci-gate:main` (`CI_GATE_MAIN_POLICY` in `./release.ts`): any stored `ci-gate` record
+ * that names the asking process's digest. The shape is unchanged, so a stored value
+ * and the desktop's text field need nothing new.
  */
 export const sendingEnabledSettingSchema = z
   .strictObject({

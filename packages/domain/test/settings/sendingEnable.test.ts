@@ -3,10 +3,12 @@ import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
 import { SETTINGS_REFUSAL_CODES, readSetting, updateSetting } from '../../settings/index.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
+import { CI_GATE_MAIN_POLICY } from '@fss/contracts';
 import {
   FIXTURE_API_DIGEST,
   FIXTURE_WORKER_DIGEST,
   fixtureDigest,
+  storeFixtureCiGateRecord,
   storeFixtureRecord,
 } from '../release/support/releaseRecords.ts';
 
@@ -124,6 +126,31 @@ describe('enabling production sending', () => {
         runningApiDigest: FIXTURE_API_DIGEST,
       }),
     ).toEqual({ ok: false, reason: 'admin_only' });
+  });
+
+  it('accepts the process form, ci-gate:main, only from an API a passing ci-gate record names (lane g100)', async () => {
+    // Its own API digests, so the records the other cases stored cannot answer for it.
+    const ciApi = fixtureDigest('5');
+    const rehearsedApi = fixtureDigest('6');
+    const failedApi = fixtureDigest('7');
+    await storeFixtureCiGateRecord(database.session, '41000000101', { api: ciApi, worker: fixtureDigest('8') });
+    await storeFixtureRecord(database.session, 'fss-rh-enable-policy-rehearsal', { api: rehearsedApi });
+    await storeFixtureCiGateRecord(database.session, '41000000102', { api: failedApi, suite: 'fail' });
+
+    // Refused: no record at all names this API, only a rehearsal record does, the only
+    // ci-gate record did not pass, and an API that cannot say what it runs.
+    expect(await enable(CI_GATE_MAIN_POLICY, fixtureDigest('9'))).toEqual({ ok: false, reason: 'release_record_unknown' });
+    expect(await enable(CI_GATE_MAIN_POLICY, rehearsedApi)).toEqual({ ok: false, reason: 'release_record_unknown' });
+    expect(await enable(CI_GATE_MAIN_POLICY, failedApi)).toEqual({ ok: false, reason: 'release_record_not_passing' });
+    expect(await enable(CI_GATE_MAIN_POLICY, 'unknown')).toEqual({ ok: false, reason: 'release_record_identity_unknown' });
+
+    // The positive control: a passing ci-gate record names the running API. What is
+    // stored is the policy's name, not the record's reference.
+    expect(await enable(CI_GATE_MAIN_POLICY, ciApi)).toMatchObject({ ok: true });
+    expect((await readSetting(admin, 'sending_enabled')).value).toEqual({
+      enabled: true,
+      releaseGateReference: CI_GATE_MAIN_POLICY,
+    });
   });
 
   it('names all four binding refusals among the settings refusal codes', () => {

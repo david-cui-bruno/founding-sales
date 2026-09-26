@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { ciGateReleaseRecordSchema } from '@fss/contracts';
 import { readRepositoryFile, repositoryPath } from './support/coverage.ts';
 
 /**
@@ -37,6 +38,15 @@ import { readRepositoryFile, repositoryPath } from './support/coverage.ts';
  *
  * **An application log in the workflow log.** The stub's log lines carry a secret-shaped
  * field and a raw line; only `event`, `reason` and `code` may be printed.
+ *
+ * **A record put for a deployment that did not happen (lane g100).** `record` runs
+ * against a stub production that already runs the new digests, with a stub `gh` for
+ * `release-record-from-ci.sh`; the record the operations task was handed is decoded and
+ * parsed with the contract the put applies. The same world before the deploy, a refused
+ * `RunTask`, a put the tool refused and a gate that was not green each fail with no
+ * record stored, so "the record step passes" cannot be the only answer. In the workflow
+ * the record job needs the smoke, and fails red with one line when the put did not
+ * happen.
  */
 
 const SCRIPT = repositoryPath('infra/scripts/ci-deploy-app.sh');
@@ -54,10 +64,14 @@ const digest = (character: string): string => `sha256:${character.repeat(64)}`;
 const OLD = { api: digest('a'), worker: digest('b') } as const;
 const NEW = { api: digest('c'), worker: digest('d') } as const;
 type Service = 'api' | 'worker';
+const RUNTIME_SECRET = `arn:aws:secretsmanager:us-east-1:${ACCOUNT}:secret:fss-prod/app-runtime-database-aaaaaa`;
+const DATABASE_HOST = 'fss-prod-database.example.invalid';
 
 function definitionArn(service: Service, revision: number): string {
   return `arn:aws:ecs:us-east-1:${ACCOUNT}:task-definition/fss-prod-${service}:${String(revision)}`;
 }
+
+const OPERATIONS_REVISION = `arn:aws:ecs:us-east-1:${ACCOUNT}:task-definition/fss-prod-operations:3`;
 
 const TAGS = [
   { key: 'Project', value: 'callie-fss' },
@@ -98,19 +112,69 @@ function runningDefinition(service: Service, revision: number, image: string, sc
             { name: 'FSS_SCHEMA_MIN', value: String(schema) },
             { name: 'FSS_SCHEMA_MAX', value: String(schema) },
             { name: 'FSS_SENDING_ENABLED', value: 'false' },
+            { name: 'FSS_DATABASE_HOST', value: DATABASE_HOST },
           ],
-          secrets: [
-            {
-              name: 'DATABASE_SECRET_ARN',
-              valueFrom: `arn:aws:secretsmanager:us-east-1:${ACCOUNT}:secret:fss-prod/app-runtime-database-aaaaaa`,
-            },
-          ],
+          secrets: [{ name: 'DATABASE_SECRET_ARN', valueFrom: RUNTIME_SECRET }],
+          logConfiguration: {
+            logDriver: 'awslogs',
+            options: { 'awslogs-group': `/fss/fss-prod/${service}`, 'awslogs-region': 'us-east-1', 'awslogs-stream-prefix': service },
+          },
           mountPoints: [],
           volumesFrom: [],
         },
       ],
     },
     tags: TAGS,
+  };
+}
+
+interface OperationsOptions {
+  readonly image?: string;
+  readonly taskRole?: string;
+  readonly streamPrefix?: string;
+}
+
+/**
+ * The operations definition as Terraform registers it (`infra/modules/cluster`): the
+ * worker image of the last apply, the worker's two roles, the worker's log group under
+ * the prefix `operations`. It does not track, so after a CI deploy its image is older
+ * than the worker's.
+ */
+function operationsDefinition(options: OperationsOptions = {}): Record<string, unknown> {
+  return {
+    taskDefinition: {
+      taskDefinitionArn: OPERATIONS_REVISION,
+      family: 'fss-prod-operations',
+      revision: 3,
+      status: 'ACTIVE',
+      taskRoleArn: options.taskRole ?? `arn:aws:iam::${ACCOUNT}:role/fss-prod-worker-task`,
+      executionRoleArn: `arn:aws:iam::${ACCOUNT}:role/fss-prod-worker-exec`,
+      networkMode: 'awsvpc',
+      requiresCompatibilities: ['FARGATE'],
+      containerDefinitions: [
+        {
+          name: 'operations',
+          image: options.image ?? `${REGISTRY}/fss-prod-worker@${OLD.worker}`,
+          essential: true,
+          entryPoint: ['node', 'apps/worker/dist/tools/fss.js'],
+          command: ['verify'],
+          environment: [
+            { name: 'FSS_ROLE', value: 'worker' },
+            { name: 'FSS_DATABASE_HOST', value: DATABASE_HOST },
+          ],
+          secrets: [{ name: 'DATABASE_SECRET_ARN', valueFrom: RUNTIME_SECRET }],
+          logConfiguration: {
+            logDriver: 'awslogs',
+            options: {
+              'awslogs-group': '/fss/fss-prod/worker',
+              'awslogs-region': 'us-east-1',
+              'awslogs-stream-prefix': options.streamPrefix ?? 'operations',
+            },
+          },
+        },
+      ],
+    },
+    tags: [...TAGS, { key: 'Name', value: 'fss-prod-operations' }],
   };
 }
 
@@ -122,7 +186,7 @@ function runningDefinition(service: Service, revision: number, image: string, sc
  * stays where it was: the circuit breaker's rollback.
  */
 const AWS_STUB = String.raw`#!/usr/bin/env python3
-import json, os, sys
+import base64, json, os, sys
 here = os.path.dirname(os.path.abspath(__file__))
 path = os.path.join(here, "state.json")
 state = json.load(open(path))
@@ -176,6 +240,8 @@ if args[:2] == ["ecs", "describe-task-definition"]:
     answer = dict(definitions[wanted])
     if "--include" not in args:
         answer.pop("tags", None)
+    if value("--query") == "taskDefinition":
+        done(answer["taskDefinition"])
     done(answer)
 if args[:2] == ["ecr", "describe-images"]:
     repository = state["images"].get(value("--repository-name"), {})
@@ -214,6 +280,15 @@ if args[:2] == ["ecs", "update-service"]:
     done({"service": {"serviceName": name, "taskDefinition": service["taskDefinition"]}})
 if args[:2] == ["ecs", "wait"]:
     sys.exit(0)
+if args[:2] == ["ecs", "run-task"]:
+    # The release record's put (lane g100). A refusal is the CLI's, as IAM answers it.
+    if state.get("runTaskRefused"):
+        sys.stderr.write("An error occurred (AccessDeniedException) when calling the RunTask operation: not authorized to perform: ecs:RunTask\n")
+        sys.exit(254)
+    state["ranTask"] = json.loads(value("--overrides"))
+    save()
+    done({"tasks": [{"taskArn": "arn:aws:ecs:us-east-1:" + account + ":task/fss-prod-cluster/ops-1", "lastStatus": "PROVISIONING"}],
+          "failures": []})
 if args[:2] == ["ecs", "list-tasks"]:
     name = value("--service-name")
     service = state["services"][name]
@@ -227,6 +302,11 @@ if args[:2] == ["ecs", "describe-tasks"]:
     tasks = []
     for arn in arns:
         task_id = arn.rsplit("/", 1)[1]
+        if task_id.startswith("ops-"):
+            tasks.append({"taskArn": arn, "lastStatus": "STOPPED", "stopCode": "EssentialContainerExited",
+                          "stoppedReason": "Essential container in task exited",
+                          "containers": [{"name": "operations", "exitCode": 1 if state.get("putRefusal") else 0}]})
+            continue
         name = task_id.rsplit("-", 1)[0]
         service = state["services"][name]
         container = name.rsplit("-", 1)[1]
@@ -239,6 +319,22 @@ if args[:2] == ["ecs", "describe-tasks"]:
         tasks.append({"taskArn": arn, "lastStatus": "RUNNING", "taskDefinitionArn": service["taskDefinition"],
                       "containers": [{"name": container, "image": image, "imageDigest": image.rsplit("@", 1)[1]}]})
     done({"tasks": tasks, "failures": []})
+if args[:2] == ["logs", "get-log-events"] and value("--log-stream-name").startswith("operations/operations/"):
+    # What fss admin release-record put prints: a structured log line, then its answer.
+    command = state["ranTask"]["containerOverrides"][0]["command"]
+    record = json.loads(base64.b64decode(command[command.index("--json-base64") + 1]))
+    if state.get("putRefusal"):
+        answer = {"ok": False, "reason": "release_record_conflict",
+                  "detail": "a different record is already stored under " + record["releaseGateReference"]}
+    else:
+        answer = {"outcome": state.get("putOutcome", "created"), "reference": record["releaseGateReference"],
+                  "source": record.get("source", "rehearsal"), "suite": record["suite"],
+                  "apiDigest": record["artifacts"]["api"], "workerDigest": state.get("storedWorker", record["artifacts"]["worker"]),
+                  "enablesSending": record["enablesSending"]}
+    done({"events": [
+        {"message": json.dumps({"level": "info", "event": "release_record_put", "reference": record["releaseGateReference"]})},
+        {"message": json.dumps(answer)},
+    ]})
 if args[:2] == ["logs", "get-log-events"]:
     done({"events": [
         {"message": json.dumps({"level": "error", "event": "startup_refused", "code": "SCHEMA_RANGE", "detail": state["secret"]})},
@@ -264,6 +360,7 @@ interface World {
   state(): {
     services: Record<string, StubService>;
     taskDefinitions: Record<string, { taskDefinition: { status: string } }>;
+    ranTask?: { containerOverrides: { name: string; command: string[] }[] };
   };
 }
 
@@ -287,13 +384,24 @@ interface WorldOptions {
   readonly sourceDigest?: Partial<Record<Service, string>>;
   /** A revision in the family newer than the running one (a rollout nobody cleaned up). */
   readonly newerRevision?: Service;
+  /** The digests the services run; the old ones by default, the new ones after a deploy. */
+  readonly running?: Readonly<Record<Service, string>>;
+  /** The operations definition, for the release record's put (lane g100). */
+  readonly operations?: OperationsOptions;
+  readonly runTaskRefused?: boolean;
+  readonly putRefusal?: boolean;
+  /** A put whose stored record names another worker than the one put. */
+  readonly storedWorker?: string;
+  readonly putOutcome?: 'created' | 'existing';
 }
 
 function world(options: WorldOptions = {}): World {
   const home = mkdtempSync(join(tmpdir(), 'fss-ci-deploy-stub-'));
+  const running = options.running ?? OLD;
   const taskDefinitions: Record<string, unknown> = {
-    [definitionArn('api', 7)]: runningDefinition('api', 7, OLD.api, options.schema),
-    [definitionArn('worker', 4)]: runningDefinition('worker', 4, OLD.worker, options.schema),
+    [definitionArn('api', 7)]: runningDefinition('api', 7, running.api, options.schema),
+    [definitionArn('worker', 4)]: runningDefinition('worker', 4, running.worker, options.schema),
+    [OPERATIONS_REVISION]: operationsDefinition(options.operations),
   };
   if (options.newerRevision !== undefined) {
     const service = options.newerRevision;
@@ -313,6 +421,10 @@ function world(options: WorldOptions = {}): World {
     identity: options.identity ?? IDENTITY,
     secret: SECRET_SHAPED,
     tamper: options.tamper ?? false,
+    runTaskRefused: options.runTaskRefused ?? false,
+    putRefusal: options.putRefusal ?? false,
+    ...(options.storedWorker === undefined ? {} : { storedWorker: options.storedWorker }),
+    ...(options.putOutcome === undefined ? {} : { putOutcome: options.putOutcome }),
     clusterTags: [{ key: 'Environment', value: options.clusterEnvironment ?? 'production' }],
     services: { 'fss-prod-api': service('api', 7), 'fss-prod-worker': service('worker', 4) },
     taskDefinitions,
@@ -670,6 +782,289 @@ describe('deploy registers the next revisions, rolls the worker then the API, an
 });
 
 // ---------------------------------------------------------------------------
+// record: the release record for the deployed digests, after the smoke (lane g100).
+// ---------------------------------------------------------------------------
+
+const GATE_RUN = '4100';
+const GH_REPOSITORY = 'example-owner/example-repo';
+const SUBNETS = 'subnet-0a1b2c3d4e5f60718,subnet-0f1e2d3c4b5a69788';
+const SECURITY_GROUP = 'sg-0123456789abcdef0';
+const REFERENCE = `ci-gate-${GATE_RUN}-${COMMIT.slice(0, 12)}`;
+
+/** `gh`, as far as `release-record-from-ci.sh` asks it: the gate run, the images runs, the artifact. */
+const GH_STUB = String.raw`#!/usr/bin/env python3
+import json, os, sys
+here = os.path.dirname(os.path.abspath(__file__))
+state = json.load(open(os.path.join(here, "gh-state.json")))
+args = sys.argv[1:]
+with open(os.path.join(here, "gh-calls.jsonl"), "a") as handle:
+    handle.write(json.dumps(args) + "\n")
+def value(flag):
+    return args[args.index(flag) + 1] if flag in args else None
+if args[:2] == ["run", "view"]:
+    run = state["runs"].get(args[2])
+    if run is None:
+        sys.stderr.write("could not find any workflow run with ID " + args[2] + "\n")
+        sys.exit(1)
+    print(json.dumps(run))
+    sys.exit(0)
+if args[:2] == ["run", "list"]:
+    print(json.dumps([run for run in state["imagesRuns"] if run["headSha"] == value("--commit")]))
+    sys.exit(0)
+if args[:2] == ["run", "download"]:
+    directory = value("--dir")
+    os.makedirs(directory, exist_ok=True)
+    open(os.path.join(directory, "image-digests.json"), "w").write(state["downloads"][args[2]])
+    sys.exit(0)
+sys.stderr.write("the gh stub does not know: " + " ".join(args) + "\n")
+sys.exit(2)
+`;
+
+function ghWorld(stub: World, gateConclusion = 'success'): string {
+  const runPage = (id: string): string => `https://github.com/${GH_REPOSITORY}/actions/runs/${id}`;
+  writeFileSync(
+    join(stub.home, 'gh-state.json'),
+    JSON.stringify({
+      runs: {
+        [GATE_RUN]: {
+          databaseId: Number(GATE_RUN),
+          workflowName: 'Greenfield gate',
+          status: 'completed',
+          conclusion: gateConclusion,
+          headSha: COMMIT,
+          headBranch: 'main',
+          event: 'push',
+          url: runPage(GATE_RUN),
+          updatedAt: '2026-09-25T22:10:00Z',
+        },
+      },
+      imagesRuns: [
+        {
+          databaseId: Number(RUN_ID),
+          workflowName: 'Greenfield images',
+          status: 'completed',
+          conclusion: 'success',
+          headSha: COMMIT,
+          headBranch: 'main',
+          event: 'push',
+          url: runPage(RUN_ID),
+          createdAt: '2026-09-25T22:00:00Z',
+        },
+      ],
+      downloads: { [RUN_ID]: readFileSync(digestsFile(), 'utf8') },
+    }),
+  );
+  const command = join(stub.home, 'gh');
+  writeFileSync(command, GH_STUB);
+  chmodSync(command, 0o755);
+  return command;
+}
+
+const ghCalls = (stub: World): readonly string[][] =>
+  existsSync(join(stub.home, 'gh-calls.jsonl'))
+    ? readFileSync(join(stub.home, 'gh-calls.jsonl'), 'utf8')
+        .split('\n')
+        .filter(line => line !== '')
+        .map(line => JSON.parse(line) as string[])
+    : [];
+
+const runTasks = (stub: World): readonly StubCall[] => stub.calls().filter(call => call.args[1] === 'run-task');
+
+function runRecord(
+  stub: World,
+  extra: {
+    readonly gateConclusion?: string;
+    readonly clusterName?: string;
+    readonly family?: string;
+    readonly subnets?: string;
+    readonly securityGroup?: string;
+  } = {},
+): Run {
+  const outputs = join(mkdtempSync(join(tmpdir(), 'fss-ci-outputs-')), 'github-output');
+  writeFileSync(outputs, '');
+  const args = [
+    'record',
+    '--digests',
+    digestsFile(),
+    '--commit',
+    COMMIT,
+    '--run-id',
+    RUN_ID,
+    '--run-attempt',
+    '1',
+    '--api-range',
+    '16-16',
+    '--worker-range',
+    '16-16',
+    '--gate-run-id',
+    GATE_RUN,
+    '--cluster-name',
+    extra.clusterName ?? 'fss-prod-cluster',
+    '--operations-family',
+    extra.family ?? 'fss-prod-operations',
+    '--subnets',
+    extra.subnets ?? SUBNETS,
+    '--security-group',
+    extra.securityGroup ?? SECURITY_GROUP,
+  ];
+  const env: Record<string, string> = {
+    ...(process.env as Record<string, string>),
+    FSS_REHEARSAL_AWS_COMMAND: join(stub.home, 'aws'),
+    FSS_GH_COMMAND: ghWorld(stub, extra.gateConclusion),
+    FSS_CI_CALLER_IDENTITY: IDENTITY,
+    FSS_PRODUCTION_ACCOUNT_ID: ACCOUNT,
+    GITHUB_OUTPUT: outputs,
+    GITHUB_REPOSITORY: GH_REPOSITORY,
+    AWS_REGION: 'us-east-1',
+    RELEASE_LOG_POLL_SECONDS: '0',
+  };
+  for (const name of [
+    'FSS_REHEARSAL_DRY_RUN',
+    'FSS_PRODUCTION_REGION',
+    'FSS_REHEARSAL_REPORTS',
+    'FSS_RELEASE_TASK_DEFINITION',
+    'FSS_RELEASE_DESCRIBE_TASKS',
+    'FSS_RELEASE_LOG_EVENTS',
+    'FSS_RELEASE_CALLER_ACCOUNT',
+    'FSS_RELEASE_CLUSTER_TAGS',
+    'FSS_RELEASE_RUN_ID',
+  ]) {
+    delete env[name];
+  }
+  const result = spawnSync(SCRIPT, args, { encoding: 'utf8', env });
+  return { code: result.status ?? 1, output: `${result.stdout}${result.stderr}`, outputs: readOutputs(outputs) };
+}
+
+describe('record puts the ci-gate release record for the deployed digests, on the operations task', () => {
+  it('builds the record from the green gate run and puts it the way release-deploy.sh does', () => {
+    const stub = world({ running: NEW });
+    const run = runRecord(stub);
+    expect(run.code, run.output).toBe(0);
+    expect(run.outputs).toMatchObject({ release_record_reference: REFERENCE, release_record_outcome: 'created' });
+
+    // One task: the operations family's revision, in the production cluster, on the
+    // network the repository variables name, carrying its definition's tags.
+    const tasks = runTasks(stub);
+    expect(tasks).toHaveLength(1);
+    const task = tasks[0]?.args ?? [];
+    const flag = (name: string): string => task[task.indexOf(name) + 1] ?? '';
+    expect(flag('--cluster')).toBe(CLUSTER);
+    expect(flag('--task-definition')).toBe(OPERATIONS_REVISION);
+    expect(flag('--launch-type')).toBe('FARGATE');
+    expect(flag('--propagate-tags')).toBe('TASK_DEFINITION');
+    expect(JSON.parse(flag('--network-configuration'))).toEqual({
+      awsvpcConfiguration: { subnets: SUBNETS.split(','), securityGroups: [SECURITY_GROUP], assignPublicIp: 'ENABLED' },
+    });
+
+    // The one command, and a record the put's own contract accepts: this deploy's digests.
+    const command = stub.state().ranTask?.containerOverrides[0]?.command ?? [];
+    expect(command.slice(0, 4)).toEqual(['admin', 'release-record', 'put', '--json-base64']);
+    expect(command.slice(5)).toEqual(['--report', '/tmp/fss-release-record.json']);
+    const record = ciGateReleaseRecordSchema.parse(JSON.parse(Buffer.from(command[4] ?? '', 'base64').toString('utf8')));
+    expect(record).toMatchObject({
+      source: 'ci-gate',
+      releaseGateReference: REFERENCE,
+      commit: COMMIT,
+      gateRunId: GATE_RUN,
+      imagesRunId: RUN_ID,
+      artifacts: { api: NEW.api, worker: NEW.worker, desktopCommitStamp: COMMIT },
+      enablesSending: false,
+    });
+    // It writes nothing else: no registration, no service touched.
+    expect(writes(stub)).toEqual([]);
+  });
+
+  it('answers existing for a record already stored, which a re-run puts again', () => {
+    const run = runRecord(world({ running: NEW, putOutcome: 'existing' }));
+    expect(run.code, run.output).toBe(0);
+    expect(run.outputs['release_record_outcome']).toBe('existing');
+  });
+
+  it('fails, with nothing put, when production does not run the deployed digests', () => {
+    const stub = world();
+    const run = runRecord(stub);
+    expect(run.code).toBe(1);
+    expect(run.output).toContain('A release record is put only for a deployment that runs its digests');
+    expect(runTasks(stub)).toEqual([]);
+    expect(ghCalls(stub)).toEqual([]);
+  });
+
+  it('fails when the put is refused: RunTask denied, or the tool refusing the record', () => {
+    const denied = world({ running: NEW, runTaskRefused: true });
+    const refusedTask = runRecord(denied);
+    expect(refusedTask.code).toBe(1);
+    expect(refusedTask.output).toContain(`FAIL: the operations task did not put the release record ${REFERENCE}`);
+    expect(refusedTask.outputs['release_record_reference']).toBeUndefined();
+
+    const conflicting = world({ running: NEW, putRefusal: true });
+    const refusedPut = runRecord(conflicting);
+    expect(refusedPut.code).toBe(1);
+    expect(refusedPut.output).toContain('FAIL: release-record-put exited 1');
+    expect(refusedPut.output).toContain(`FAIL: the operations task did not put the release record ${REFERENCE}`);
+    expect(refusedPut.outputs['release_record_reference']).toBeUndefined();
+
+    const different = runRecord(world({ running: NEW, storedWorker: digest('e') }));
+    expect(different.code).toBe(1);
+    expect(different.output).toContain('the stored record differs from the one put in workerDigest');
+  });
+
+  it('fails before any task when the gate run was not green', () => {
+    const stub = world({ running: NEW });
+    const run = runRecord(stub, { gateConclusion: 'failure' });
+    expect(run.code).toBe(1);
+    expect(run.output).toContain(`FAIL: gate run ${GATE_RUN} is completed/failure, not completed/success`);
+    expect(runTasks(stub)).toEqual([]);
+  });
+
+  it('refuses an operations definition that is not the worker image under the worker’s roles and log group', () => {
+    for (const [operations, expected] of [
+      [{ image: `${REGISTRY}/fss-prod-api@${OLD.api}` }, `which is not ${REGISTRY}/fss-prod-worker by digest`],
+      [{ image: `${REGISTRY}/fss-prod-worker:latest` }, `which is not ${REGISTRY}/fss-prod-worker by digest`],
+      [{ taskRole: `arn:aws:iam::${ACCOUNT}:role/fss-prod-migration-task` }, 'the put may pass only the worker’s roles'.replace('’', "'")],
+      [{ streamPrefix: 'worker' }, "not to the worker's group under 'operations'"],
+    ] as const) {
+      const stub = world({ running: NEW, operations });
+      const run = runRecord(stub);
+      expect(run.code, JSON.stringify(operations)).toBe(1);
+      expect(run.output).toContain(expected);
+      expect(runTasks(stub)).toEqual([]);
+    }
+  });
+
+  it('judges the five identifiers before anything is asked, and holds the cluster variable to the one it acts on', () => {
+    for (const [extra, expected] of [
+      [{ subnets: '' }, 'FSS_PRODUCTION_TASK_SUBNET_IDS'],
+      [{ subnets: 'subnet-1; rm -rf /' }, 'FSS_PRODUCTION_TASK_SUBNET_IDS'],
+      [{ securityGroup: 'sg-bad' }, 'FSS_PRODUCTION_TASK_SECURITY_GROUP_ID'],
+      [{ family: 'fss-rh-operations' }, 'FSS_PRODUCTION_OPERATIONS_TASK_FAMILY'],
+      [{ clusterName: '' }, 'FSS_PRODUCTION_CLUSTER_NAME'],
+    ] as const) {
+      const stub = world({ running: NEW });
+      const run = runRecord(stub, extra);
+      expect(run.code, JSON.stringify(extra)).toBe(1);
+      expect(run.output).toContain(expected);
+      expect(stub.calls()).toEqual([]);
+    }
+    const elsewhere = world({ running: NEW });
+    const run = runRecord(elsewhere, { clusterName: 'fss-prod-other' });
+    expect(run.code).toBe(1);
+    expect(run.output).toContain('FSS_PRODUCTION_CLUSTER_NAME names fss-prod-other, and this deploy acts on fss-prod-cluster');
+    expect(runTasks(elsewhere)).toEqual([]);
+  });
+
+  it('runs the operations task as Terraform declares it: the worker image, roles and log group', () => {
+    const cluster = readRepositoryFile('infra/modules/cluster/main.tf');
+    const start = cluster.indexOf('resource "aws_ecs_task_definition" "operations" {');
+    const block = cluster.slice(start, cluster.indexOf('\n}\n', start));
+    expect(block).toContain('execution_role_arn       = aws_iam_role.worker_execution.arn');
+    expect(block).toContain('task_role_arn            = aws_iam_role.worker_task.arn');
+    expect(block).toContain('image      = var.worker_image');
+    expect(block).toContain('"awslogs-group"         = var.worker_log_group_name');
+    expect(block).toContain('"awslogs-stream-prefix" = "operations"');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // The workflow's protected-path guard, extracted and run in a real git history.
 // ---------------------------------------------------------------------------
 
@@ -986,13 +1381,15 @@ describe('the deploy workflow', () => {
     expect(workflow.slice(workflow.indexOf('  workflow_dispatch:'), workflow.indexOf('\npermissions:'))).not.toContain('type: boolean');
   });
 
-  it('gives a credential to one job, which runs no code from the images commit before its guard and no Node at all', () => {
-    const jobs = ['run', 'ranges', 'deploy', 'smoke', 'summary'];
+  it('gives a credential to two jobs, deploy and record, which run no code from the images commit before its guard and no Node at all', () => {
+    const jobs = ['run', 'ranges', 'deploy', 'smoke', 'record', 'summary'];
     for (const name of jobs) {
       const text = job(workflow, name);
-      if (name === 'deploy') {
+      if (name === 'deploy' || name === 'record') {
         expect(text).toContain('      id-token: write');
         expect(text).toContain('    environment: production-deploy');
+        expect(text, name).not.toContain('setup-node');
+        expect(text, name).not.toMatch(/^\s*node /mu);
         continue;
       }
       expect(text, name).not.toContain('id-token');
@@ -1077,15 +1474,131 @@ describe('the deploy workflow', () => {
     expect(summary).toContain('    permissions: {}');
   });
 
-  it('marks where lane g96’s release record would go, as a comment that runs nothing', () => {
-    const deploy = job(workflow, 'deploy');
-    const hookAt = deploy.indexOf('# HOOK (lane g96), NOT INTEGRATED');
-    expect(hookAt).toBeGreaterThan(deploy.indexOf('infra/scripts/ci-deploy-app.sh deploy'));
-    expect(hookAt).toBeLessThan(deploy.indexOf('- name: Read the canary age the smoke judges'));
-    const uncommented = workflow.replace(/^\s*#.*$/gmu, '');
-    expect(uncommented).not.toContain('release-record-from-ci.sh');
-    expect(uncommented).not.toContain('release-deploy.sh');
-    expect(uncommented).not.toContain('--release-record');
+  it('puts the release record in a job of its own, only after a deploy that rolled out and a smoke that passed', () => {
+    const record = job(workflow, 'record');
+    expect(record).toContain('    needs: [run, ranges, deploy, smoke]');
+    expect(record).toContain(
+      "    if: needs.deploy.result == 'success' && needs.deploy.outputs.decision == 'deploy' && needs.smoke.result == 'success'",
+    );
+    // No record from the deploy job itself: nothing there writes one before the smoke.
+    const uncommentedDeploy = job(workflow, 'deploy').replace(/^\s*#.*$/gmu, '');
+    expect(uncommentedDeploy).not.toContain('record');
+    expect(workflow.replace(/^\s*#.*$/gmu, '')).not.toContain('release-deploy.sh');
+    expect(workflow).not.toContain('HOOK (lane g96)');
+
+    // The order inside it: the gate is waited for with no credential, then the role, then
+    // the one step that runs repository code, which is the record put.
+    const recordSteps = steps(record);
+    const at = (name: string): number => recordSteps.findIndex(step => step.name === name);
+    expect(at('The gate run on the images commit, green')).toBeGreaterThan(-1);
+    expect(at('The gate run on the images commit, green')).toBeLessThan(at('Assume the production CI deploy role'));
+    expect(at('Assume the production CI deploy role')).toBeLessThan(
+      at('The session is exactly the CI role, in the account its ARN names, in the region this deploys to'),
+    );
+    const repositoryCode = recordSteps.filter(step => /infra\/scripts\//u.test(step.text.replace(/^\s*#.*$/gmu, '')));
+    expect(repositoryCode.map(step => step.name)).toEqual(['Build the ci-gate record and put it on the operations task']);
+    const put = recordSteps[at('Build the ci-gate record and put it on the operations task')]?.text ?? '';
+    expect(put).toContain('infra/scripts/ci-deploy-app.sh record');
+    expect(put).toContain('--gate-run-id "$GATE_RUN_ID"');
+    expect(put).toContain('GATE_RUN_ID: ${{ steps.gate.outputs.gate_run_id }}');
+    // The four network identifiers from repository variables, never from state.
+    for (const variable of [
+      'FSS_PRODUCTION_CLUSTER_NAME',
+      'FSS_PRODUCTION_OPERATIONS_TASK_FAMILY',
+      'FSS_PRODUCTION_TASK_SUBNET_IDS',
+      'FSS_PRODUCTION_TASK_SECURITY_GROUP_ID',
+    ]) {
+      expect(put).toContain(`\${{ vars.${variable} }}`);
+    }
+    expect(record).not.toMatch(/terraform|tfstate/u);
+    expect(recordSteps[at('Assume the production CI deploy role')]?.text).toContain('role-duration-seconds: 3600');
+  });
+
+  it('fails red with one line when the record was not put, and the summary says so', () => {
+    const record = job(workflow, 'record');
+    // The last step, on any failure of the job: one error annotation, then a red exit.
+    const last = steps(record).at(-1)?.text ?? '';
+    expect(last).toContain('if: failure()');
+    const body = runBody(last).trim().split('\n');
+    expect(body).toHaveLength(2);
+    expect(body[0]).toMatch(/^echo "::error::[^"\n]+docs\/greenfield\/release\.md 4\.2[^"\n]*"$/u);
+    expect(body[1]?.trim()).toBe('exit 1');
+    // The summary waits for the record job, and a deploy whose record failed is an error.
+    const summary = job(workflow, 'summary');
+    expect(summary).toContain('    needs: [run, ranges, deploy, smoke, record]');
+    const branch = summary.slice(summary.indexOf('elif [ "$DECISION" = deploy ] && [ "$RECORD_RESULT" != success ]; then'));
+    expect(branch.length).toBeLessThan(summary.length);
+    expect(branch.slice(0, branch.indexOf('\n          else'))).toContain('echo "::error::$line"');
+  });
+
+  it('finds the gate run on the images commit through the API, waits for it, and refuses one that is not green', () => {
+    const gate = runBody(steps(job(workflow, 'record')).find(step => step.name === 'The gate run on the images commit, green')?.text ?? '');
+    const green = {
+      id: 4100,
+      path: '.github/workflows/greenfield.yml',
+      event: 'push',
+      head_branch: 'main',
+      head_sha: COMMIT,
+      head_repository: { full_name: GH_REPOSITORY },
+      status: 'completed',
+      conclusion: 'success',
+      created_at: '2026-09-25T22:00:00Z',
+    };
+    const attempt = (runs: readonly Record<string, unknown>[]): Run => {
+      const bin = mkdtempSync(join(tmpdir(), 'fss-gh-gate-'));
+      writeFileSync(join(bin, 'runs.json'), JSON.stringify({ workflow_runs: runs }));
+      writeFileSync(
+        join(bin, 'gh'),
+        [
+          '#!/usr/bin/env bash',
+          `echo "$*" >> '${bin}/calls'`,
+          `if [[ "$2" == *"/actions/workflows/greenfield.yml/runs?head_sha=${COMMIT}&event=push&branch=main&"* ]]; then cat '${bin}/runs.json'; else echo "unexpected $*" >&2; exit 1; fi`,
+          '',
+        ].join('\n'),
+      );
+      chmodSync(join(bin, 'gh'), 0o755);
+      const outputs = join(bin, 'github-output');
+      writeFileSync(outputs, '');
+      const result = spawnSync('bash', ['-c', gate], {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PATH: `${bin}:${process.env['PATH'] ?? ''}`,
+          COMMIT,
+          GITHUB_REPOSITORY: GH_REPOSITORY,
+          GITHUB_OUTPUT: outputs,
+          RUNNER_TEMP: bin,
+          WAIT_MINUTES: '0',
+        },
+      });
+      return { code: result.status ?? 1, output: `${result.stdout}${result.stderr}`, outputs: readOutputs(outputs) };
+    };
+    const accepted = attempt([green, { ...green, id: 4000, created_at: '2026-09-25T21:00:00Z', conclusion: 'failure' }]);
+    expect(accepted.code, accepted.output).toBe(0);
+    expect(accepted.outputs).toEqual({ gate_run_id: '4100' });
+
+    const red = attempt([{ ...green, conclusion: 'failure' }]);
+    expect(red.code).toBe(1);
+    expect(red.output).toContain('did not pass (run and conclusion: 4100 failure)');
+    expect(red.outputs['gate_run_id']).toBeUndefined();
+
+    const running = attempt([{ ...green, status: 'in_progress', conclusion: null }]);
+    expect(running.code).toBe(1);
+    expect(running.output).toContain('no green Greenfield gate run on');
+    expect(running.output).toContain('(last seen: waiting 4100)');
+
+    for (const change of [
+      { head_branch: 'feature' },
+      { event: 'pull_request' },
+      { head_sha: 'f'.repeat(40) },
+      { head_repository: { full_name: 'someone/fork' } },
+      { path: '.github/workflows/greenfield-images.yml' },
+    ]) {
+      const refused = attempt([{ ...green, ...change }]);
+      expect(refused.code, JSON.stringify(change)).toBe(1);
+      expect(refused.output).toContain('(last seen: none)');
+      expect(refused.outputs['gate_run_id']).toBeUndefined();
+    }
   });
 
   it('checks the images run it was handed: a green push to main of the images workflow, and nothing else', () => {
@@ -1191,9 +1704,15 @@ describe('the deploy waits for a rehearsal job in progress, and checks again bef
   });
 
   it('refuses while a rehearsal job is in progress, and not for a rehearsal waiting behind it or another workflow', () => {
+    // The two workflows whose job holds a rehearsal credential: the release rehearsal and
+    // the monthly drill (lane g97 renamed the weekly rehearsal and dropped its schedule).
+    expect(runBody(poll)).toContain(
+      'wanted = {".github/workflows/greenfield-release.yml", ".github/workflows/greenfield-monthly-drill.yml"}',
+    );
+    expect(DEPLOY_WORKFLOW).not.toContain('greenfield-weekly-rehearsal.yml');
     expect(attempt([], {}).code).toBe(0);
     const release = { id: 7, path: '.github/workflows/greenfield-release.yml' };
-    const weekly = { id: 8, path: '.github/workflows/greenfield-weekly-rehearsal.yml' };
+    const drill = { id: 8, path: '.github/workflows/greenfield-monthly-drill.yml' };
     const other = { id: 9, path: '.github/workflows/ci.yml' };
     expect(
       attempt([release], { 7: [{ name: 'Print the rehearsal plan without credentials', status: 'in_progress' }, rehearsalJob('queued')] })
@@ -1204,7 +1723,7 @@ describe('the deploy waits for a rehearsal job in progress, and checks again bef
     expect(busy.code).toBe(1);
     expect(busy.output).toContain('a rehearsal job is in progress (run 7)');
     expect(
-      attempt([weekly], {
+      attempt([drill], {
         8: [
           {
             ...rehearsalJob('in_progress'),

@@ -6,6 +6,10 @@
 #       --origin https://api.usecallie.com
 #   infra/scripts/ci-deploy-app.sh deploy --digests <image-digests.json> --commit <sha> \
 #       --run-id <id> --run-attempt <n> --api-range <min>-<max> --worker-range <min>-<max>
+#   infra/scripts/ci-deploy-app.sh record --digests <image-digests.json> --commit <sha> \
+#       --run-id <id> --run-attempt <n> --api-range <min>-<max> --worker-range <min>-<max> \
+#       --gate-run-id <id> --cluster-name <name> --operations-family <family> \
+#       --subnets <subnet-a,subnet-b> --security-group <sg-id>
 #
 # David's decision of 25 September 2026: "I'm a startup, I want to move fast." A merge
 # to main that changes only application code reaches production with nobody in the
@@ -25,7 +29,13 @@
 #                         only the image digest changed, verified against the running one
 #                         after ECS registered it; the worker rolled, waited on and held
 #                         to its digest; only then the API, the same way;
-#   the production smoke  in a job of its own, which holds no credential.
+#   the production smoke  in a job of its own, which holds no credential;
+#   record                after the smoke, in a job of its own (lane g100): the ci-gate
+#                         release record for the two digests, built by
+#                         `release-record-from-ci.sh` from the green gate run on the
+#                         images commit and put with `fss admin release-record put` on
+#                         the operations task, so a worker under the owner's process
+#                         attestation (`ci-gate:main`) keeps sending.
 #
 # No Terraform, and nothing here runs code from the images commit: the schema ranges
 # arrive as two validated scalars. The task definitions CI registers are the next
@@ -66,13 +76,39 @@
 # lines are printed, and nothing else from an application log. Nothing here changes a
 # count.
 #
+# ## record: the release record, after the smoke (lane g100)
+#
+# Every read and guard of `check` again, and then it refuses unless both services run
+# exactly the two digests: a record is put only for a deployment that runs them. The
+# record is `release-record-from-ci.sh <gate run id> <commit> <api> <worker>`, which
+# reads GitHub only and refuses unless the gate run is a green push to main at the
+# commit and the images run published these two digests. It is put on the operations
+# task the way `release-deploy.sh --release-record` puts one, through
+# `release_run_task`, and the task's answer is read back from its log. What that needs
+# and the role holds (`infra/roots/production/ci_deploy.tf`): `ecs:RunTask` of the
+# operations family in the production cluster, the worker's two roles, the worker's log
+# group.
+#
+# The operations definition is Terraform's and does not track: it carries the worker
+# image of the last apply, not this deploy's (release.md 4.0). That image puts the
+# record; the record names this deploy's digests, and each process compares its own
+# half. So the digest the wrapper holds the task to is the definition's own, which must
+# be an `fss-prod-worker` image by digest, under the worker's roles and log group.
+#
+# The cluster, the family, the subnets and the security group are public identifiers the
+# workflow passes from repository variables, set from the production root's
+# `ci_deploy_*` outputs; nothing here reads Terraform state. The cluster name must be the
+# one this script acts on, so a variable that drifted from the root is a refusal.
+#
 # Offline seams, for `test/release/ciDeploy.check.ts`: FSS_REHEARSAL_AWS_COMMAND (the AWS
 # CLI), FSS_CI_CALLER_IDENTITY (the session ARN), FSS_CI_HEALTH_JSON (the `/health`
-# body), FSS_CI_WAIT_ATTEMPTS. There is no dry run: every step before `deploy` is a
+# body), FSS_CI_WAIT_ATTEMPTS, and for `record` FSS_GH_COMMAND (the `gh`
+# `release-record-from-ci.sh` asks). There is no dry run: every step before `deploy` is a
 # read, and the offline check drives the whole script against a stub CLI instead.
 
+CI_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=infra/scripts/release-common.sh
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/release-common.sh"
+source "$CI_SCRIPTS/release-common.sh"
 
 CI_PREFIX="$RELEASE_PRODUCTION_PREFIX"
 CI_ENVIRONMENT=production
@@ -117,9 +153,9 @@ ci_decide() {
 SUBCOMMAND=${1:-}
 shift || true
 case "$SUBCOMMAND" in
-  check | deploy) ;;
+  check | deploy | record) ;;
   *)
-    echo "usage: $(basename "$0") <check|deploy> --digests <image-digests.json> --commit <sha> --run-id <id> --run-attempt <n> --api-range <min>-<max> --worker-range <min>-<max> [--origin <https url>]" >&2
+    echo "usage: $(basename "$0") <check|deploy|record> --digests <image-digests.json> --commit <sha> --run-id <id> --run-attempt <n> --api-range <min>-<max> --worker-range <min>-<max> [--origin <https url>] [--gate-run-id <id> --cluster-name <name> --operations-family <family> --subnets <ids> --security-group <id>]" >&2
     exit 2
     ;;
 esac
@@ -131,8 +167,18 @@ RUN_ATTEMPT=''
 API_RANGE=''
 WORKER_RANGE=''
 ORIGIN=''
+GATE_RUN_ID=''
+RECORD_CLUSTER_NAME=''
+OPERATIONS_FAMILY=''
+TASK_SUBNETS=''
+TASK_SECURITY_GROUP=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --gate-run-id) GATE_RUN_ID=${2:-}; shift 2 ;;
+    --cluster-name) RECORD_CLUSTER_NAME=${2:-}; shift 2 ;;
+    --operations-family) OPERATIONS_FAMILY=${2:-}; shift 2 ;;
+    --subnets) TASK_SUBNETS=${2:-}; shift 2 ;;
+    --security-group) TASK_SECURITY_GROUP=${2:-}; shift 2 ;;
     --digests) DIGESTS=${2:-}; shift 2 ;;
     --commit) COMMIT=${2:-}; shift 2 ;;
     --run-id) RUN_ID=${2:-}; shift 2 ;;
@@ -155,6 +201,19 @@ for range in "$API_RANGE" "$WORKER_RANGE"; do
 done
 if [ "$SUBCOMMAND" = check ]; then
   [[ "$ORIGIN" =~ ^https://[A-Za-z0-9.-]+$ ]] || ci_fail "--origin '$ORIGIN' is not an https origin; production has no port-80 listener"
+fi
+if [ "$SUBCOMMAND" = record ]; then
+  # Five public identifiers, each judged before anything is asked. The last four come
+  # from repository variables (release.md 4.0); an empty one is a variable nobody set.
+  [[ "$GATE_RUN_ID" =~ ^[1-9][0-9]{0,19}$ ]] || ci_fail "--gate-run-id '$GATE_RUN_ID' is not a GitHub Actions run id"
+  [[ "$RECORD_CLUSTER_NAME" =~ ^${CI_PREFIX}-[a-z0-9-]{1,40}$ ]] \
+    || ci_fail "--cluster-name '$RECORD_CLUSTER_NAME' is not a ${CI_PREFIX} cluster name; set the repository variable FSS_PRODUCTION_CLUSTER_NAME (release.md 4.0)"
+  [[ "$OPERATIONS_FAMILY" =~ ^${CI_PREFIX}-[a-z0-9-]{1,40}$ ]] \
+    || ci_fail "--operations-family '$OPERATIONS_FAMILY' is not a ${CI_PREFIX} task definition family; set the repository variable FSS_PRODUCTION_OPERATIONS_TASK_FAMILY (release.md 4.0)"
+  [[ "$TASK_SUBNETS" =~ ^subnet-[0-9a-f]{8,17}(,subnet-[0-9a-f]{8,17}){0,5}$ ]] \
+    || ci_fail "--subnets '$TASK_SUBNETS' is not a comma-separated list of subnet ids; set the repository variable FSS_PRODUCTION_TASK_SUBNET_IDS (release.md 4.0)"
+  [[ "$TASK_SECURITY_GROUP" =~ ^sg-[0-9a-f]{8,17}$ ]] \
+    || ci_fail "--security-group '$TASK_SECURITY_GROUP' is not a security group id; set the repository variable FSS_PRODUCTION_TASK_SECURITY_GROUP_ID (release.md 4.0)"
 fi
 
 # The digests file the images run's publish job wrote, for exactly this commit and run.
@@ -385,6 +444,144 @@ fi
 ALREADY_RUNNING=0
 if [ "$(ci_field api digest)" = "$API_DIGEST" ] && [ "$(ci_field worker digest)" = "$WORKER_DIGEST" ]; then
   ALREADY_RUNNING=1
+fi
+
+# ---------------------------------------------------------------------------
+# record (lane g100)
+# ---------------------------------------------------------------------------
+if [ "$SUBCOMMAND" = record ]; then
+  if [ "$ALREADY_RUNNING" -ne 1 ]; then
+    ci_fail "production runs api $(ci_field api digest) and worker $(ci_field worker digest), not the deployed api $API_DIGEST and worker $WORKER_DIGEST. A release record is put only for a deployment that runs its digests."
+  fi
+  [ "$RECORD_CLUSTER_NAME" = "${CI_PREFIX}-cluster" ] \
+    || ci_fail "the repository variable FSS_PRODUCTION_CLUSTER_NAME names $RECORD_CLUSTER_NAME, and this deploy acts on ${CI_PREFIX}-cluster; set it again from terraform output -raw ci_deploy_cluster_name"
+
+  # 1. The record: GitHub only, from the gate run that was green on the images commit.
+  RECORD_REFERENCE="ci-gate-${GATE_RUN_ID}-${COMMIT:0:12}"
+  "$CI_SCRIPTS/release-record-from-ci.sh" "$GATE_RUN_ID" "$COMMIT" "$API_DIGEST" "$WORKER_DIGEST" \
+    --out "$CI_WORK/release-record.json" \
+    || ci_fail "release-record-from-ci.sh wrote no record for gate run $GATE_RUN_ID; its FAIL line above says why"
+  # As `release-deploy.sh --release-record` hands it to the task: standard base64, and
+  # only a record that is this deploy's.
+  RECORD_BASE64="$(FSS_RECORD="$CI_WORK/release-record.json" FSS_REFERENCE="$RECORD_REFERENCE" \
+    FSS_API="$API_DIGEST" FSS_WORKER="$WORKER_DIGEST" python3 -c '
+import base64, json, os, sys
+env = os.environ
+raw = open(env["FSS_RECORD"], "rb").read()
+record = json.loads(raw)
+artifacts = record.get("artifacts") or {}
+if record.get("schema") != "fss.release-record.v1" or record.get("source") != "ci-gate":
+    sys.exit("the record is not an fss.release-record.v1 from the CI gate")
+if record.get("releaseGateReference") != env["FSS_REFERENCE"]:
+    sys.exit("the record names {}, not {}".format(record.get("releaseGateReference"), env["FSS_REFERENCE"]))
+if artifacts.get("api") != env["FSS_API"] or artifacts.get("worker") != env["FSS_WORKER"]:
+    sys.exit("the record names other digests than the ones deployed")
+encoded = base64.b64encode(raw).decode("ascii")
+if len(encoded) > 6000:
+    sys.exit("the record is too large to hand to a one-off task as an argument")
+sys.stdout.write(encoded)
+')" || ci_fail "the record release-record-from-ci.sh wrote is not this deploy's"
+  rehearsal_log "release record $RECORD_REFERENCE built from gate run $GATE_RUN_ID (api $API_DIGEST, worker $WORKER_DIGEST)"
+
+  # 2. The operations definition as ECS holds it — the family's newest ACTIVE revision,
+  # which is the one Terraform registered — judged against the worker's running one. The
+  # session is already this account's and region's, and the answer's ARN is held to both.
+  release_aws "$CI_ENVIRONMENT" ecs describe-task-definition --task-definition "$OPERATIONS_FAMILY" --output json \
+    >"$CI_WORK/operations-definition.json" || ci_fail "ECS did not describe the task definition family $OPERATIONS_FAMILY"
+  OPERATIONS_FACTS="$(FSS_OPERATIONS="$CI_WORK/operations-definition.json" FSS_WORKER="$CI_WORK/worker-definition.json" \
+    FSS_FAMILY="$OPERATIONS_FAMILY" FSS_ACCOUNT="$ACCOUNT" FSS_REGION="$REGION" FSS_PREFIX="$CI_PREFIX" python3 - <<'PY'
+# ci-deploy-read-operations
+import json, os, re, sys
+env = os.environ
+
+def fail(message):
+    print("FAIL: " + message, file=sys.stderr)
+    sys.exit(1)
+
+operations = (json.load(open(env["FSS_OPERATIONS"], encoding="utf-8")) or {}).get("taskDefinition") or {}
+worker = (json.load(open(env["FSS_WORKER"], encoding="utf-8")) or {}).get("taskDefinition") or {}
+family = env["FSS_FAMILY"]
+arn = str(operations.get("taskDefinitionArn") or "")
+pattern = r"arn:aws:ecs:{}:{}:task-definition/{}:[0-9]+".format(re.escape(env["FSS_REGION"]), env["FSS_ACCOUNT"], re.escape(family))
+if operations.get("family") != family or operations.get("status") != "ACTIVE" or not re.fullmatch(pattern, arn):
+    fail("ECS answered {} ({}), not an ACTIVE revision of {} in this account and region".format(arn or "<nothing>", operations.get("status"), family))
+containers = operations.get("containerDefinitions") or []
+if len(containers) != 1 or containers[0].get("name") != "operations":
+    fail("{} must have exactly one container, named operations".format(arn))
+container = containers[0]
+repository = "{}.dkr.ecr.{}.amazonaws.com/{}-worker".format(env["FSS_ACCOUNT"], env["FSS_REGION"], env["FSS_PREFIX"])
+match = re.fullmatch(re.escape(repository) + r"@(sha256:[0-9a-f]{64})", str(container.get("image", "")))
+if not match:
+    fail("{} runs '{}', which is not {} by digest".format(arn, container.get("image"), repository))
+for field in ("taskRoleArn", "executionRoleArn"):
+    if not operations.get(field) or operations.get(field) != worker.get(field):
+        fail("{} runs under {} {}, and the worker under {}: the put may pass only the worker's roles".format(
+            arn, field, operations.get(field), worker.get(field)))
+worker_container = (worker.get("containerDefinitions") or [{}])[0]
+logs = (container.get("logConfiguration") or {}).get("options") or {}
+worker_logs = (worker_container.get("logConfiguration") or {}).get("options") or {}
+if not logs.get("awslogs-group") or logs.get("awslogs-group") != worker_logs.get("awslogs-group") or logs.get("awslogs-stream-prefix") != "operations":
+    fail("{} logs to {} under '{}', not to the worker's group under 'operations'".format(
+        arn, logs.get("awslogs-group"), logs.get("awslogs-stream-prefix")))
+secret = next((item.get("valueFrom", "") for item in worker_container.get("secrets") or [] if item.get("name") == "DATABASE_SECRET_ARN"), "")
+host = next((item.get("value", "") for item in worker_container.get("environment") or [] if item.get("name") == "FSS_DATABASE_HOST"), "")
+if not secret:
+    fail("the worker's definition names no DATABASE_SECRET_ARN to hold the operations task to")
+print(arn, match.group(1), logs["awslogs-group"], secret, host or "-")
+PY
+)" || exit 1
+  read -r OPERATIONS_REVISION OPERATIONS_DIGEST OPERATIONS_LOG_GROUP RUNTIME_SECRET_ARN DATABASE_HOST <<<"$OPERATIONS_FACTS"
+  [ "$DATABASE_HOST" != "-" ] || DATABASE_HOST=''
+  rehearsal_log "the put runs $OPERATIONS_REVISION (${CI_PREFIX}-worker@$OPERATIONS_DIGEST, the image of the last apply); the record it stores names worker $WORKER_DIGEST"
+
+  # 3. The put, as release-deploy.sh runs it. The network is the one the repository
+  # variables name; the worker group's zero inbound rules are what the production root's
+  # isolation test holds it to.
+  NETWORK_PLAN="$(FSS_SUBNETS="$TASK_SUBNETS" FSS_GROUP="$TASK_SECURITY_GROUP" python3 -c '
+import json, os, sys
+json.dump({"subnet_ids": os.environ["FSS_SUBNETS"].split(","), "security_group_id": os.environ["FSS_GROUP"],
+           "assign_public_ip": "ENABLED", "inbound_rule_count": 0}, sys.stdout)
+')"
+  export FSS_REHEARSAL_REPORTS="${FSS_REHEARSAL_REPORTS:-$CI_WORK/reports}"
+  rehearsal_log "fss admin release-record put --json-base64 \"\$RECORD_BASE64\" on the operations task (the record $RECORD_REFERENCE)"
+  release_run_task \
+    --step release-record-put \
+    --environment "$CI_ENVIRONMENT" \
+    --prefix "$CI_PREFIX" \
+    --account "$ACCOUNT" \
+    --region "$REGION" \
+    --cluster "$CLUSTER_ARN" \
+    --task-definition "$OPERATIONS_REVISION" \
+    --container operations \
+    --network-plan "$NETWORK_PLAN" \
+    --image-digest "$OPERATIONS_DIGEST" \
+    --database-host "$DATABASE_HOST" \
+    --secret-arn "$RUNTIME_SECRET_ARN" \
+    --log-group "$OPERATIONS_LOG_GROUP" \
+    --log-stream-prefix operations \
+    --capture "$CI_WORK/release-record-put.log" \
+    -- admin release-record put --json-base64 "$RECORD_BASE64" --report /tmp/fss-release-record.json \
+    || ci_fail "the operations task did not put the release record $RECORD_REFERENCE"
+  release_captured_report "$CI_WORK/release-record-put.log" "$CI_WORK/release-record-put.json" \
+    || ci_fail "the put's answer could not be read from the operations task's log"
+  RECORD_OUTCOME="$(FSS_FILE="$CI_WORK/release-record-put.json" FSS_REFERENCE="$RECORD_REFERENCE" \
+    FSS_API="$API_DIGEST" FSS_WORKER="$WORKER_DIGEST" python3 -c '
+import json, os, sys
+env = os.environ
+answer = json.load(open(env["FSS_FILE"], encoding="utf-8")) or {}
+if answer.get("outcome") not in ("created", "existing"):
+    sys.exit("the put answered {} ({}): {}".format(answer.get("outcome"), answer.get("reason"), answer.get("detail")))
+expected = {"reference": env["FSS_REFERENCE"], "source": "ci-gate", "suite": "pass",
+            "apiDigest": env["FSS_API"], "workerDigest": env["FSS_WORKER"]}
+different = [key for key, value in expected.items() if answer.get(key) != value]
+if different:
+    sys.exit("the stored record differs from the one put in {}".format(", ".join(different)))
+print(answer["outcome"])
+')" || ci_fail "the operations task did not store the release record $RECORD_REFERENCE as it was put"
+  ci_output release_record_reference "$RECORD_REFERENCE"
+  ci_output release_record_outcome "$RECORD_OUTCOME"
+  rehearsal_log "release record $RECORD_REFERENCE stored ($RECORD_OUTCOME): source ci-gate, api $API_DIGEST, worker $WORKER_DIGEST"
+  exit 0
 fi
 
 # ---------------------------------------------------------------------------

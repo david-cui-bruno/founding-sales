@@ -8,7 +8,7 @@ name: Greenfield deploy
 # schema, infrastructure, release-script or workflow change, which keeps the manual
 # path of `docs/greenfield/release.md` section 4.
 #
-# ## Five jobs, and which of them may hold a credential
+# ## Six jobs, and which of them may hold a credential
 #
 #   run      no checkout, no credential. The images run is a green publish of a push to
 #            main of this repository; its commit, id and attempt are this job's outputs,
@@ -16,7 +16,7 @@ name: Greenfield deploy
 #   ranges   the images commit, no credential. The one job that runs code from it for a
 #            value: the two schema ranges the images declare, emitted as validated
 #            scalars. Anything it prints is re-validated where it is used.
-#   deploy   the only job with `id-token: write`, in the `production-deploy` environment.
+#   deploy   a job with `id-token: write`, in the `production-deploy` environment.
 #            It checks out the images commit and runs nothing from it until an inline
 #            guard — this file's own code, not the repository's — has read the commit
 #            production's images were built from and found no protected path in any
@@ -25,6 +25,15 @@ name: Greenfield deploy
 #            anything under `apps/`, `packages/` or `scripts/`.
 #   smoke    the images commit, no credential: `scripts/productionSmoke.mjs` against the
 #            public origin, with the canary age the deploy job read as a scalar.
+#   record   the other job with `id-token: write`, in the same environment, and only
+#            after a deploy that rolled out and a smoke that passed (lane g100). It
+#            waits for the *Greenfield gate* run on the images commit to be green, then
+#            runs `infra/scripts/ci-deploy-app.sh record`: the ci-gate release record for
+#            the two digests (`release-record-from-ci.sh`), put with `fss admin
+#            release-record put` on the operations task. Once the owner's attestation
+#            names the release process (`ci-gate:main`, release.md 6), that record is
+#            what keeps the new worker sending. It runs only `infra/scripts/` from the
+#            images commit, which the deploy job's guard proved unchanged, and no Node.
 #   summary  one line, whatever happened.
 #
 # ## Where it stops
@@ -39,7 +48,12 @@ name: Greenfield deploy
 #     images run published;
 #   * `ci-deploy-app.sh deploy`: a registered revision that differs from the running one
 #     in more than the image, or a rollout ECS rolled back. The worker goes first and
-#     the API is not touched after a worker that failed.
+#     the API is not touched after a worker that failed;
+#   * `record`: a gate run that is not green on the images commit, a record
+#     `release-record-from-ci.sh` refuses to write, or a put the operations task did not
+#     make. The deploy has already rolled out and passed its smoke, so the run is red
+#     with one line: the record was not put, and sending holds for the new worker until
+#     the operator puts its record by hand (release.md 4.2).
 #
 # ## Two merges, and a rehearsal
 #
@@ -254,7 +268,7 @@ jobs:
             done
             for id in $(python3 - "$work" <<'PY'
           import glob, json, sys
-          wanted = {".github/workflows/greenfield-release.yml", ".github/workflows/greenfield-weekly-rehearsal.yml"}
+          wanted = {".github/workflows/greenfield-release.yml", ".github/workflows/greenfield-monthly-drill.yml"}
           ids = set()
           for path in glob.glob(sys.argv[1] + "/runs-*.json"):
               for run in (json.load(open(path, encoding="utf-8")) or {}).get("workflow_runs") or []:
@@ -469,7 +483,7 @@ jobs:
             done
             for id in $(python3 - "$work" <<'PY'
           import glob, json, sys
-          wanted = {".github/workflows/greenfield-release.yml", ".github/workflows/greenfield-weekly-rehearsal.yml"}
+          wanted = {".github/workflows/greenfield-release.yml", ".github/workflows/greenfield-monthly-drill.yml"}
           ids = set()
           for path in glob.glob(sys.argv[1] + "/runs-*.json"):
               for run in (json.load(open(path, encoding="utf-8")) or {}).get("workflow_runs") or []:
@@ -528,22 +542,8 @@ jobs:
             --commit "$COMMIT" --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" \
             --api-range "$API_RANGE" --worker-range "$WORKER_RANGE"
 
-      # HOOK (lane g96), NOT INTEGRATED: the release record for these digests.
-      # Lane g96 is building `infra/scripts/release-record-from-ci.sh`. This is where its
-      # record would be handed to `infra/scripts/release-deploy.sh ... --release-record`,
-      # after the rollout above has held both services to their digests and before the
-      # canary read, gated like the rollout on `steps.check.outputs.decision == 'deploy'`
-      # and `steps.deploy.outcome == 'success'`. It is a comment on purpose, because
-      # `fss-prod-ci-deploy` cannot do what that script does today: it reads the root's
-      # Terraform outputs, and this role has no state access; and the put runs on the
-      # operations task, which this role can neither run nor pass roles to. Wiring it
-      # means either those grants in `infra/roots/production/ci_deploy.tf` (state read,
-      # `ecs:RunTask` on the operations family, `iam:PassRole` on its two roles) or a
-      # put that needs none of them. The record must carry no secret value. Roughly:
-      #   record="$RUNNER_TEMP/release-record.json"
-      #   infra/scripts/release-record-from-ci.sh <arguments g96 defines> > "$record"
-      #   infra/scripts/release-deploy.sh infra/roots/production fss-prod \
-      #     --api-digest "<api digest>" --worker-digest "<worker digest>" --release-record "$record"
+      # The release record for these digests is put by the `record` job, after the
+      # smoke has passed (lane g100).
 
       - name: Read the canary age the smoke judges
         id: canary
@@ -638,9 +638,196 @@ jobs:
           echo "::error::the production smoke did not pass. The new revisions are running; the summary names them."
           exit 1
 
+  # The release record for the deployed digests (lane g100). After the smoke, because a
+  # record is the statement that these digests are fit to send under, and a deploy whose
+  # smoke failed has not earned it. Its own job, because the smoke holds no credential.
+  # Not in `fss-production-inventory`: the one thing it creates is an ECS task, which a
+  # rehearsal's inventory guard sets aside (`rehearsal-prefix-guard.sh`), and the
+  # workflow's own group already keeps it from overlapping the next deploy.
+  record:
+    name: Put the release record for the deployed digests
+    needs: [run, ranges, deploy, smoke]
+    if: needs.deploy.result == 'success' && needs.deploy.outputs.decision == 'deploy' && needs.smoke.result == 'success'
+    runs-on: ubuntu-24.04
+    # The gate wait (thirty minutes at most), then one one-off task of up to twenty.
+    timeout-minutes: 60
+    # The one OIDC subject fss-prod-ci-deploy trusts, as for the deploy job.
+    environment: production-deploy
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    outputs:
+      reference: ${{ steps.put.outputs.release_record_reference }}
+      outcome: ${{ steps.put.outputs.release_record_outcome }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Refuse any ambient cloud credential before the role is assumed
+        run: |
+          set -euo pipefail
+          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN \
+                      AWS_PROFILE AWS_ROLE_ARN AWS_WEB_IDENTITY_TOKEN_FILE; do
+            if [ -n "${!name:-}" ]; then
+              echo "::error::$name is set before the production CI deploy role was assumed."
+              exit 1
+            fi
+          done
+
+      - name: The scalars from the other jobs are what they claim to be
+        env:
+          COMMIT: ${{ needs.run.outputs.commit }}
+          RUN_ID: ${{ needs.run.outputs.run_id }}
+          RUN_ATTEMPT: ${{ needs.run.outputs.run_attempt }}
+          API_RANGE: ${{ needs.ranges.outputs.api_range }}
+          WORKER_RANGE: ${{ needs.ranges.outputs.worker_range }}
+        run: |
+          set -euo pipefail
+          [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::the images commit is not a commit"; exit 1; }
+          [[ "$RUN_ID" =~ ^[0-9]{1,20}$ ]] || { echo "::error::the images run id is not a run id"; exit 1; }
+          [[ "$RUN_ATTEMPT" =~ ^[0-9]{1,4}$ ]] || { echo "::error::the images run attempt is not an attempt"; exit 1; }
+          for range in "$API_RANGE" "$WORKER_RANGE"; do
+            [[ "$range" =~ ^[0-9]{1,4}-[0-9]{1,4}$ ]] || { echo "::error::'$range' is not a schema range"; exit 1; }
+          done
+
+      # The deploy starts when the images run completes, and the gate on the same push
+      # may still be running then. No credential is held while it waits.
+      - name: The gate run on the images commit, green
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ needs.run.outputs.commit }}
+          WAIT_MINUTES: '30'
+        run: |
+          set -euo pipefail
+          [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::the images commit is not a commit"; exit 1; }
+          minute=0
+          while :; do
+            gh api "repos/$GITHUB_REPOSITORY/actions/workflows/greenfield.yml/runs?head_sha=$COMMIT&event=push&branch=main&per_page=20" \
+              > "$RUNNER_TEMP/gate-runs.json"
+            verdict="$(FSS_FILE="$RUNNER_TEMP/gate-runs.json" python3 - <<'PY'
+          import json, os, re
+          commit, repository = os.environ["COMMIT"], os.environ["GITHUB_REPOSITORY"]
+          runs = (json.load(open(os.environ["FSS_FILE"], encoding="utf-8")) or {}).get("workflow_runs") or []
+          runs = [run for run in runs
+                  if str(run.get("path", "")).split("@")[0] == ".github/workflows/greenfield.yml"
+                  and run.get("event") == "push" and run.get("head_branch") == "main"
+                  and run.get("head_sha") == commit
+                  and (run.get("head_repository") or {}).get("full_name") == repository
+                  and re.fullmatch(r"[1-9][0-9]{0,19}", str(run.get("id", "")))]
+          if not runs:
+              print("none")
+          else:
+              run = max(runs, key=lambda run: (str(run.get("created_at", "")), int(run["id"])))
+              if run.get("status") != "completed":
+                  print("waiting {}".format(run["id"]))
+              elif run.get("conclusion") == "success":
+                  print("green {}".format(run["id"]))
+              else:
+                  print("red {} {}".format(run["id"], run.get("conclusion")))
+          PY
+          )"
+            case "$verdict" in
+              green\ *)
+                echo "gate_run_id=${verdict#green }" >> "$GITHUB_OUTPUT"
+                echo "Greenfield gate run ${verdict#green } is green on $COMMIT"
+                exit 0
+                ;;
+              red\ *)
+                echo "::error::the Greenfield gate on $COMMIT did not pass (run and conclusion: ${verdict#red }). No record is put for a commit the gate did not pass."
+                exit 1
+                ;;
+            esac
+            if [ "$minute" -ge "$WAIT_MINUTES" ]; then
+              echo "::error::no green Greenfield gate run on $COMMIT after $WAIT_MINUTES minutes (last seen: $verdict)"
+              exit 1
+            fi
+            echo "the Greenfield gate on $COMMIT: $verdict; waiting"
+            sleep 60
+            minute=$((minute + 1))
+          done
+
+      # The images commit, whose `infra/scripts/` the deploy job's guard proved identical
+      # to production's own commit before this job could start.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ needs.run.outputs.commit }}
+          persist-credentials: false
+
+      - name: Download the digests that run published
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ needs.run.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --name fss-image-digests \
+            --dir "$RUNNER_TEMP/fss-image-digests"
+          cat "$RUNNER_TEMP/fss-image-digests/image-digests.json"
+
+      # One hour: the put is one one-off task of up to twenty minutes.
+      - name: Assume the production CI deploy role
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
+        with:
+          role-to-assume: ${{ secrets.FSS_PRODUCTION_CI_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: fss-prod-ci-deploy-${{ github.run_id }}
+          role-duration-seconds: 3600
+
+      - name: The session is exactly the CI role, in the account its ARN names, in the region this deploys to
+        env:
+          ROLE_ARN: ${{ secrets.FSS_PRODUCTION_CI_ROLE_ARN }}
+          EXPECTED_REGION: ${{ vars.FSS_PRODUCTION_REGION || 'us-east-1' }}
+        run: |
+          set -euo pipefail
+          [[ "$ROLE_ARN" =~ ^arn:aws:iam::([0-9]{12}):role/fss-prod-ci-deploy$ ]] \
+            || { echo "::error::FSS_PRODUCTION_CI_ROLE_ARN is not arn:aws:iam::<account>:role/fss-prod-ci-deploy"; exit 1; }
+          account=${BASH_REMATCH[1]}
+          [ "$AWS_REGION" = "$EXPECTED_REGION" ] \
+            || { echo "::error::this job is configured for $AWS_REGION and production is in $EXPECTED_REGION"; exit 1; }
+          identity="$(aws sts get-caller-identity --query Arn --output text)"
+          [ "$identity" = "arn:aws:sts::${account}:assumed-role/fss-prod-ci-deploy/fss-prod-ci-deploy-${GITHUB_RUN_ID}" ] \
+            || { echo "::error::the session is $identity, not this run's session of $ROLE_ARN"; exit 1; }
+          echo "session $identity"
+
+      # The four network identifiers are public, and come from repository variables the
+      # operator set from the production root's outputs (release.md 4.0), never from
+      # Terraform state, which this role cannot read.
+      - name: Build the ci-gate record and put it on the operations task
+        id: put
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ needs.run.outputs.commit }}
+          RUN_ID: ${{ needs.run.outputs.run_id }}
+          RUN_ATTEMPT: ${{ needs.run.outputs.run_attempt }}
+          API_RANGE: ${{ needs.ranges.outputs.api_range }}
+          WORKER_RANGE: ${{ needs.ranges.outputs.worker_range }}
+          GATE_RUN_ID: ${{ steps.gate.outputs.gate_run_id }}
+          CLUSTER_NAME: ${{ vars.FSS_PRODUCTION_CLUSTER_NAME }}
+          OPERATIONS_FAMILY: ${{ vars.FSS_PRODUCTION_OPERATIONS_TASK_FAMILY }}
+          TASK_SUBNETS: ${{ vars.FSS_PRODUCTION_TASK_SUBNET_IDS }}
+          TASK_SECURITY_GROUP: ${{ vars.FSS_PRODUCTION_TASK_SECURITY_GROUP_ID }}
+        run: |
+          set -euo pipefail
+          infra/scripts/ci-deploy-app.sh record \
+            --digests "$RUNNER_TEMP/fss-image-digests/image-digests.json" \
+            --commit "$COMMIT" --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" \
+            --api-range "$API_RANGE" --worker-range "$WORKER_RANGE" \
+            --gate-run-id "$GATE_RUN_ID" --cluster-name "$CLUSTER_NAME" \
+            --operations-family "$OPERATIONS_FAMILY" \
+            --subnets "$TASK_SUBNETS" --security-group "$TASK_SECURITY_GROUP"
+
+      - name: The record was not put
+        if: failure()
+        env:
+          COMMIT: ${{ needs.run.outputs.commit }}
+        run: |
+          echo "::error::The release record for ${COMMIT:0:8} was NOT put. The deploy rolled out and passed its smoke; sending holds for the new worker until the operator puts its record by hand (docs/greenfield/release.md 4.2)."
+          exit 1
+
   summary:
     name: One line
-    needs: [run, ranges, deploy, smoke]
+    needs: [run, ranges, deploy, smoke, record]
     # Not for an images run that failed or was not a push to main: nothing was asked.
     if: always() && needs.run.result != 'skipped'
     runs-on: ubuntu-24.04
@@ -662,6 +849,9 @@ jobs:
           PREVIOUS_API: ${{ needs.deploy.outputs.previous_api_task_definition }}
           PREVIOUS_WORKER: ${{ needs.deploy.outputs.previous_worker_task_definition }}
           OBSERVED: ${{ needs.deploy.outputs.observed }}
+          RECORD_RESULT: ${{ needs.record.result }}
+          RECORD_REFERENCE: ${{ needs.record.outputs.reference }}
+          RECORD_OUTCOME: ${{ needs.record.outputs.outcome }}
         run: |
           set -euo pipefail
           short="${COMMIT:0:8}"
@@ -670,9 +860,12 @@ jobs:
             [ -z "$PREVIOUS_API$PREVIOUS_WORKER" ] || line="$line Before: worker ${PREVIOUS_WORKER##*/}, api ${PREVIOUS_API##*/}."
             [ -z "$OBSERVED" ] || line="$line Observed now: $OBSERVED."
             echo "::error::$line"
+          elif [ "$DECISION" = deploy ] && [ "$RECORD_RESULT" != success ]; then
+            line="Deployed $short to production (worker ${WORKER_DEFINITION##*/}, api ${API_DEFINITION##*/}, smoke passed), but the release record was NOT put (record ${RECORD_RESULT:-not run}): sending holds for the new worker until the operator puts its record by hand (docs/greenfield/release.md 4.2)."
+            echo "::error::$line"
           else
             case "$DECISION" in
-              deploy) line="Deployed $short to production: worker ${WORKER_DEFINITION##*/}, api ${API_DEFINITION##*/}, each held to its digest, smoke passed. Observed now: $OBSERVED." ;;
+              deploy) line="Deployed $short to production: worker ${WORKER_DEFINITION##*/}, api ${API_DEFINITION##*/}, each held to its digest, smoke passed, release record $RECORD_REFERENCE $RECORD_OUTCOME. Observed now: $OBSERVED." ;;
               current) line="Production already runs $short. Nothing deployed." ;;
               manual) line="Not deployed: $REASON. The manual path applies (docs/greenfield/release.md 4)." ;;
               *) line="Nothing decided." ;;

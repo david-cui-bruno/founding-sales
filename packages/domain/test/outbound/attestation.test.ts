@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { CI_GATE_MAIN_POLICY } from '@fss/contracts';
 import { repositoryContext, workspaceScope } from '../../db/workspaceScope.ts';
 import { updateSetting } from '../../settings/index.ts';
 import { dispatchOutboundMessage, readFence } from '../../outbound/index.ts';
@@ -257,5 +258,111 @@ describe('the send gate binds the attestation to the running worker', () => {
     const report = await dispatchWith(FIXTURE_WORKER_DIGEST);
     expect(report.outcome).toBe('held');
     expect(report.detail).toBe('release_record_not_passing');
+  });
+});
+
+/**
+ * Lane g100: the attestation may name the release process, `ci-gate:main`, rather than
+ * one record. The CI deploy puts a `ci-gate` record for every worker it rolls, so under
+ * the process attestation sending stays on across automatic deploys; a worker with no
+ * ci-gate record still holds, a rehearsal record is not admitted by the policy, and a
+ * named reference still binds only the record it names. Every email that leaves says,
+ * on the claim's ledger row, which attestation admitted it.
+ *
+ * Digests of their own (`5` the API, `8` and `9` two successive CI workers, `7` a worker
+ * only a rehearsal certified), so the records the cases above stored cannot answer here.
+ */
+describe('the send gate under the process attestation, ci-gate:main', () => {
+  const API = fixtureDigest('5');
+  const FIRST_CI_WORKER = fixtureDigest('8');
+  const NEXT_CI_WORKER = fixtureDigest('9');
+  const REHEARSED_WORKER = fixtureDigest('7');
+  let firstReference = '';
+
+  beforeAll(async () => {
+    firstReference = await storeFixtureCiGateRecord(world.database.session, '41000000301', { api: API, worker: FIRST_CI_WORKER });
+    await storeFixtureRecord(world.database.session, 'fss-rh-policy-rehearsal-only', { api: API, worker: REHEARSED_WORKER });
+  });
+
+  const enableWith = async (releaseGateReference: string): Promise<void> => {
+    const enabled = await updateSetting(adminContext(world.alpha), {
+      settingKey: 'sending_enabled',
+      value: { enabled: true, releaseGateReference },
+      changeNote: 'process attestation fixture',
+      runningApiDigest: API,
+    });
+    expect(enabled.ok).toBe(true);
+  };
+
+  const dispatchWith = async (workerImageDigest: string) => {
+    const fenceId = await world.prepare(world.alpha);
+    return await dispatchOutboundMessage(
+      world.systemContext(world.alpha.workspace.workspaceId),
+      world.sendDeps(world.alpha, { deploymentSendingEnabled: true, workerImageDigest }),
+      { outboundMessageId: fenceId },
+    );
+  };
+
+  /** The claim's ledger row: `prepared -> dispatching`, with the admission on it. */
+  const claimDetail = async (outboundMessageId: string): Promise<unknown> => {
+    const { rows } = await world.database.session.query<{ detail: unknown }>(
+      `SELECT detail FROM outbound_message_events
+        WHERE workspace_id = $1 AND outbound_message_id = $2 AND to_state = 'dispatching'`,
+      [world.alpha.workspace.workspaceId, outboundMessageId],
+    );
+    expect(rows).toHaveLength(1);
+    return rows[0]?.detail;
+  };
+
+  it('sends under a ci-gate record for this worker, and keeps sending after the next CI deploy puts its own', async () => {
+    await enableWith(CI_GATE_MAIN_POLICY);
+    const first = await dispatchWith(FIRST_CI_WORKER);
+    expect(first.outcome).toBe('sent');
+    expect(await claimDetail(first.outboundMessageId)).toEqual({
+      releaseAdmission: { attestation: CI_GATE_MAIN_POLICY, releaseGateReference: firstReference },
+    });
+
+    // The next app-only merge: CI rolls another worker and puts its record. Nobody
+    // attests again, and the new worker sends.
+    const nextReference = await storeFixtureCiGateRecord(world.database.session, '41000000302', {
+      api: API,
+      worker: NEXT_CI_WORKER,
+    });
+    const next = await dispatchWith(NEXT_CI_WORKER);
+    expect(next.outcome).toBe('sent');
+    expect(await claimDetail(next.outboundMessageId)).toEqual({
+      releaseAdmission: { attestation: CI_GATE_MAIN_POLICY, releaseGateReference: nextReference },
+    });
+  });
+
+  it('holds a worker no record names: a deploy whose record was not put', async () => {
+    await enableWith(CI_GATE_MAIN_POLICY);
+    const report = await dispatchWith(fixtureDigest('f'));
+    expect(report.outcome).toBe('held');
+    expect(report.refusal).toBe('workspace_sending_not_attested');
+    expect(report.detail).toBe('release_record_unknown');
+  });
+
+  it('holds a worker only a rehearsal record names: the policy admits ci-gate records alone', async () => {
+    await enableWith(CI_GATE_MAIN_POLICY);
+    const report = await dispatchWith(REHEARSED_WORKER);
+    expect(report.outcome).toBe('held');
+    expect(report.detail).toBe('release_record_unknown');
+  });
+
+  it('under a named reference, a ci-gate record for another reference admits nothing', async () => {
+    // The owner attested to the first CI record by name. The next worker has a ci-gate
+    // record of its own, which the named attestation does not reach.
+    await enableWith(firstReference);
+    const other = await dispatchWith(NEXT_CI_WORKER);
+    expect(other.outcome).toBe('held');
+    expect(other.detail).toBe('release_record_digest_mismatch');
+    expect(JSON.stringify(other)).not.toContain(firstReference);
+
+    const named = await dispatchWith(FIRST_CI_WORKER);
+    expect(named.outcome).toBe('sent');
+    expect(await claimDetail(named.outboundMessageId)).toEqual({
+      releaseAdmission: { attestation: 'reference', releaseGateReference: firstReference },
+    });
   });
 });

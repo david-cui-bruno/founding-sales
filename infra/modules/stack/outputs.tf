@@ -313,6 +313,11 @@ output "resource_names" {
   )
 }
 
+output "operations_task_definition_family" {
+  description = "Family of the operations task definition, which the production CI deploy runs the release record's put on (lane g100)."
+  value       = module.cluster.operations_task_definition_family
+}
+
 output "one_off_task_families" {
   description = "The three one-off task definition families: migration, operations, drill. Names, so a root test can assert them at plan time."
   value       = module.cluster.one_off_task_families

@@ -24,6 +24,13 @@
 # every one of them is `fss-prod` except the two rehearsal repositories, which only
 # the read statement names. A test over no statements passes every `alltrue`, so the
 # statement count is asserted too.
+#
+# **The release record's put (lane g100).** `ecs:RunTask` appears once, on the
+# operations family's revisions, under `ArnEquals` on the production cluster, so a call
+# naming another family or no cluster is refused; its tags are a `TagResource` only as
+# part of `RunTask`, on that cluster's tasks. The operations task runs as the worker's
+# two roles and logs to the worker's group, and the assertions below hold the put to
+# the `iam:PassRole` and the log read the role already had: no fifth role, no new group.
 
 mock_provider "aws" {
   override_during = apply
@@ -180,13 +187,14 @@ run "the_role_holds_exactly_the_actions_the_deploy_uses" {
       "ecs:DescribeTasks",
       "ecs:ListTasks",
       "ecs:RegisterTaskDefinition",
+      "ecs:RunTask",
       "ecs:TagResource",
       "ecs:UpdateService",
       "iam:PassRole",
       "logs:FilterLogEvents",
       "logs:GetLogEvents",
     ])
-    error_message = "The role holds exactly the promote, register, roll, watch and smoke actions. Anything more is a change to this test first."
+    error_message = "The role holds exactly the promote, register, roll, watch, smoke and record-put actions. Anything more is a change to this test first."
   }
 
   assert {
@@ -293,10 +301,19 @@ run "every_named_resource_is_production_s_but_the_two_images_it_reads" {
     error_message = "PassRole names the two services' task and execution roles, only for ECS. Never the migration or drill roles, and never a deployment role."
   }
 
-  # The one-off families, their roles and Terraform's own backend are not CI's.
+  # The migration and drill families, their roles and Terraform's own backend are not
+  # CI's. The operations family is named once, by the release record's put.
   assert {
-    condition     = !can(regex("migration|operations|drill|fss-prod-deploy|tfstate|tflock|secret", aws_iam_role_policy.ci_deploy.policy))
-    error_message = "The policy names no one-off family or role, not the Terraform deployment role, not the state bucket or lock table, and no secret."
+    condition     = !can(regex("migration|drill|fss-prod-deploy|tfstate|tflock|secret", aws_iam_role_policy.ci_deploy.policy))
+    error_message = "The policy names no migration or drill family or role, not the Terraform deployment role, not the state bucket or lock table, and no secret."
+  }
+
+  assert {
+    condition = [
+      for statement in jsondecode(aws_iam_role_policy.ci_deploy.policy).Statement :
+      statement.Sid if strcontains(jsonencode(statement), "operations")
+    ] == ["RunTheOperationsTaskInTheProductionCluster"]
+    error_message = "The operations family appears in one statement, the release record's put, and nowhere else."
   }
 
   # Each service may be pointed at its own family and nothing else, and only by a call
@@ -339,5 +356,64 @@ run "every_named_resource_is_production_s_but_the_two_images_it_reads" {
       contains(output.resource_names, name)
     ])
     error_message = "The cluster, services, task roles, repositories and log groups the policy names are all names the stack claims."
+  }
+}
+
+run "the_release_record_put_runs_the_operations_task_in_the_production_cluster_and_nothing_else" {
+  command = plan
+
+  assert {
+    condition = [
+      for statement in jsondecode(aws_iam_role_policy.ci_deploy.policy).Statement :
+      [statement.Sid, statement.Action, statement.Resource, statement.Condition] if contains(statement.Action, "ecs:RunTask")
+      ] == [[
+        "RunTheOperationsTaskInTheProductionCluster",
+        ["ecs:RunTask"],
+        ["arn:aws:ecs:us-east-1:123456789012:task-definition/fss-prod-operations:*"],
+        { ArnEquals = { "ecs:cluster" = "arn:aws:ecs:us-east-1:123456789012:cluster/fss-prod-cluster" } },
+    ]]
+    error_message = "RunTask stands alone in one statement: the operations family's revisions, under ArnEquals on the production cluster. Never a service family, never another cluster, never IfExists."
+  }
+
+  assert {
+    condition = [
+      for statement in jsondecode(aws_iam_role_policy.ci_deploy.policy).Statement :
+      [statement.Resource, statement.Condition] if contains(statement.Action, "ecs:TagResource")
+      ] == [
+      [
+        ["arn:aws:ecs:us-east-1:123456789012:task-definition/fss-prod-api:*", "arn:aws:ecs:us-east-1:123456789012:task-definition/fss-prod-worker:*"],
+        { StringEquals = { "ecs:CreateAction" = "RegisterTaskDefinition" } },
+      ],
+      [
+        ["arn:aws:ecs:us-east-1:123456789012:task/fss-prod-cluster/*"],
+        { StringEquals = { "ecs:CreateAction" = "RunTask" } },
+      ],
+    ]
+    error_message = "TagResource is granted only as part of a create: the two service revisions it registers, and the tasks it runs in the production cluster. Never a tag on anything that already exists."
+  }
+
+  assert {
+    condition = [
+      for statement in jsondecode(aws_iam_role_policy.ci_deploy.policy).Statement :
+      statement.Resource if contains(statement.Action, "ecs:DescribeTasks")
+    ] == [["arn:aws:ecs:us-east-1:123456789012:task/fss-prod-cluster/*"]]
+    error_message = "The put's task is read back with the DescribeTasks the role already had, on the production cluster's tasks."
+  }
+
+  # The operations task writes to the worker's log group, which the role already reads.
+  assert {
+    condition = alltrue([
+      for statement in jsondecode(aws_iam_role_policy.ci_deploy.policy).Statement :
+      contains(statement.Resource, "arn:aws:logs:us-east-1:123456789012:log-group:/fss/fss-prod/worker:*")
+      if contains(statement.Action, "logs:GetLogEvents")
+    ])
+    error_message = "logs:GetLogEvents covers the worker log group's streams, where the operations task writes its put's answer."
+  }
+
+  # The four identifiers the workflow launches the put with, from outputs rather than
+  # state. The two network ids are known only after an apply.
+  assert {
+    condition     = output.ci_deploy_cluster_name == "fss-prod-cluster" && output.ci_deploy_operations_task_family == "fss-prod-operations"
+    error_message = "The cluster and the operations family are root outputs for the repository variables FSS_PRODUCTION_CLUSTER_NAME and FSS_PRODUCTION_OPERATIONS_TASK_FAMILY."
   }
 }

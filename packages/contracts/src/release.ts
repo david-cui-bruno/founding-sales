@@ -57,6 +57,35 @@ export function isImageDigest(value: unknown): value is string {
 }
 
 /**
+ * The release process, as an attestation can name it (lane g100; the owner's decision
+ * of 25 September 2026 that app-only merges deploy themselves).
+ *
+ * Until g100 the owner's `sending_enabled` attestation named one record, so every CI
+ * deploy of a new worker digest held sending until somebody put a record for it and
+ * attested again, which is a person in the loop of every automatic deploy. The
+ * attestation may now name the process instead: `releaseGateReference: "ci-gate:main"`
+ * means *any stored record with `source: "ci-gate"`* — which only
+ * `infra/scripts/release-record-from-ci.sh` writes, and only from a green *Greenfield
+ * gate* run of a push to main at the record's commit — normally put by the CI deploy
+ * after its rollout and smoke passed. Each process still compares its own half of the
+ * record with its own digest, exactly as under a named reference; a rehearsal record is
+ * never admitted by the policy, only by its own reference.
+ */
+export const CI_GATE_MAIN_POLICY = 'ci-gate:main';
+
+/** What an attestation's `releaseGateReference` names: one record, or the process. */
+export type ReleaseAttestation =
+  | { readonly kind: 'reference'; readonly reference: string }
+  | { readonly kind: 'policy'; readonly policy: typeof CI_GATE_MAIN_POLICY };
+
+/** Read the attestation's `releaseGateReference`: the policy's exact name, or one reference. */
+export function releaseAttestationOf(releaseGateReference: string): ReleaseAttestation {
+  return releaseGateReference === CI_GATE_MAIN_POLICY
+    ? { kind: 'policy', policy: CI_GATE_MAIN_POLICY }
+    : { kind: 'reference', reference: releaseGateReference };
+}
+
+/**
  * `<rehearsal prefix>-<recordedAt>` from a rehearsal
  * (`fss-rh-202609250554-2026-09-25T07:20:44Z`), `ci-gate-<gate run id>-<first twelve
  * characters of the commit>` from the CI gate (`ciGateReleaseReference`). Bounded at
@@ -65,7 +94,11 @@ export function isImageDigest(value: unknown): value is string {
  */
 export const releaseGateReferenceSchema = z
   .string()
-  .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u, 'a release gate reference');
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u, 'a release gate reference')
+  // The process attestation's name is not a record's (lane g100): an attestation that
+  // says `ci-gate:main` must mean the policy and never one stored row that happens to
+  // carry the same string.
+  .refine(value => value !== CI_GATE_MAIN_POLICY, { message: `${CI_GATE_MAIN_POLICY} names the release process, not a record` });
 
 /** `date -u +%Y-%m-%dT%H:%M:%SZ`, which is what the script writes; fractions tolerated. */
 const recordedAtSchema = z
