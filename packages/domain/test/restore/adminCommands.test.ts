@@ -388,6 +388,39 @@ describe('fss admin restore-report and system-generation advance', () => {
     expect(unresolved.deadJobs).toBe(2);
   });
 
+  it('lists the open holds of ambiguous and uncertain replies by their real reason codes', async () => {
+    // Until 26 Sep 2026 the report looked for three codes no hold carries and missed
+    // `ambiguous_match`, so a restored database's ambiguous replies went uncounted.
+    const workspaceId = world.workspaces.alpha.workspaceId;
+    const hold = async (reasonCode: string, released: boolean): Promise<string> => {
+      const { rows } = await world.session.query<{ id: string }>(
+        `INSERT INTO active_holds (workspace_id, scope_kind, scope_key, reason_code, blocked_action_kinds, source_event_kind, released_at)
+         VALUES ($1, 'firm', $2, $3, ARRAY['email_send'], 'mail_message', ${released ? 'now()' : 'NULL'})
+         RETURNING id`,
+        [workspaceId, `restore-report-${reasonCode}-${String(released)}`, reasonCode],
+      );
+      return rows[0]?.id ?? '';
+    };
+    const ambiguous = await hold('ambiguous_match', false);
+    const uncertain = await hold('uncertain_reply', false);
+    const released = await hold('ambiguous_match', true);
+    const unrelated = await hold('daily_cap', false);
+
+    const listed = (await readUnresolvedExceptions(world.session)).ambiguousHeld.filter(entry =>
+      [ambiguous, uncertain, released, unrelated].includes(entry.holdId),
+    );
+    expect(listed.map(entry => [entry.holdId, entry.reasonCode]).sort()).toEqual(
+      [
+        [ambiguous, 'ambiguous_match'],
+        [uncertain, 'uncertain_reply'],
+      ].sort(),
+    );
+    await world.session.query('UPDATE active_holds SET released_at = now() WHERE workspace_id = $1 AND id = ANY($2::uuid[])', [
+      workspaceId,
+      [ambiguous, uncertain, unrelated],
+    ]);
+  });
+
   it('counts a repeated send as a step execution with two accepted sends, and there is none', async () => {
     expect(await countRepeatedSends(world.session)).toBe(0);
   });
