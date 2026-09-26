@@ -62,41 +62,38 @@ The policy is now `infra/policies/deployment-role-policy.json.tftpl`, rendered b
 ```bash
 cd <repo root>
 
-# 1. Render both, and read them.
-infra/scripts/render-deployment-role-policy.sh fss-rh   > /tmp/fss-rh-deploy-scope.json
-infra/scripts/render-deployment-role-policy.sh fss-prod > /tmp/fss-prod-deploy-scope.json
+# 1. Render both, and read them. No call of any kind.
+infra/scripts/policy.sh render fss-rh   > /tmp/fss-rh-deploy-scope.json
+infra/scripts/policy.sh render fss-prod > /tmp/fss-prod-deploy-scope.json
 
-infra/scripts/render-deployment-role-policy.sh fss-rh   --sids   # what is in it, by effect
-infra/scripts/render-deployment-role-policy.sh fss-prod --sids
+infra/scripts/policy.sh render fss-rh   --sids   # what is in it, by effect
+infra/scripts/policy.sh render fss-prod --sids
 
-# What is about to change, against what the role holds today.
-diff <(aws iam get-role-policy --role-name fss-rh-deploy --policy-name fss-rh-deploy-scope \
-         --query PolicyDocument | python3 -m json.tool) \
-     <(python3 -m json.tool /tmp/fss-rh-deploy-scope.json) || true
-
-# 2. Put them. The policy name is the one the roles already carry.
-aws iam put-role-policy --role-name fss-rh-deploy --policy-name fss-rh-deploy-scope \
-  --policy-document file:///tmp/fss-rh-deploy-scope.json
-
-aws iam put-role-policy --role-name fss-prod-deploy --policy-name fss-prod-deploy-scope \
-  --policy-document file:///tmp/fss-prod-deploy-scope.json
+# 2. Put them: the document `render --compact` prints, put with put-role-policy under the
+#    name the roles already carry, then read back with get-role-policy and compared. It
+#    prints which Sids it adds, removes and changes against what the role held, refuses a
+#    session in any other account, and production unless it is named.
+infra/scripts/policy.sh put fss-rh
+infra/scripts/policy.sh put fss-prod --environment production
 ```
+
+`policy.sh` (P7, 27 September 2026) replaces `render-deployment-role-policy.sh` and `check-deployment-role.sh`, which exec `policy.sh render` and `policy.sh check` with the same arguments.
 
 To keep the exact certificate ARNs the hand-written policies named, pass them; the default is every certificate in the account and region, because the ARNs themselves are the `rehearsal` environment secret `FSS_REHEARSAL_CERTIFICATE_ARN` and its production counterpart, and a repository that shipped them would hold a value the workflow deliberately keeps out of it. `acm:DescribeCertificate` is read-only either way.
 
 ```bash
 FSS_POLICY_CERTIFICATE_ARN=arn:aws:acm:us-east-1:326255650484:certificate/<rehearsal id> \
-  infra/scripts/render-deployment-role-policy.sh fss-rh > /tmp/fss-rh-deploy-scope.json
+  infra/scripts/policy.sh put fss-rh
 ```
 
 **3. Then the check, before any apply.** Read-only: it calls `aws iam simulate-principal-policy`, which evaluates a policy and performs nothing, against sample ARNs of the namespace that need not exist. It asks about every action of run 35628963637 and at least one per service, prints allowed or denied for each, and exits non-zero on any denial.
 
 ```bash
-infra/scripts/check-deployment-role.sh fss-rh-deploy   fss-rh
-infra/scripts/check-deployment-role.sh fss-prod-deploy fss-prod
+infra/scripts/policy.sh check fss-rh-deploy   fss-rh
+infra/scripts/policy.sh check fss-prod-deploy fss-prod
 
 # What it would ask, without asking: no credential, no call.
-FSS_CHECK_ROLE_DRY_RUN=1 infra/scripts/check-deployment-role.sh fss-rh-deploy fss-rh
+FSS_CHECK_ROLE_DRY_RUN=1 infra/scripts/policy.sh check fss-rh-deploy fss-rh
 ```
 
 Each role is asked only about its own namespace and the command refuses the other pairing, because simulating `fss-rh-deploy` against `fss-prod*` would print a wall of denials that are the boundary working and say nothing about the apply you are about to run.
@@ -110,7 +107,7 @@ Each role is asked only about its own namespace and the command refuses the othe
 CI is the exception. `aws-actions/configure-aws-credentials` has already assumed `fss-rh-deploy` through GitHub OIDC before Terraform starts, so the workflow's session **is** the role; assuming it again is role chaining onto the same role, which needs `fss-rh-deploy` to trust itself. It does not, and it must not — its trust is the OIDC subject alone, which is the whole boundary. So both rehearsal workflows pass `-var=assume_deployment_role=false`, and each one first runs
 
 ```bash
-infra/scripts/rehearsal-caller-identity.sh fss-rh-deploy
+infra/scripts/rehearsal.sh identity fss-rh-deploy
 ```
 
 which prints `aws sts get-caller-identity --query Arn` and refuses anything that is not `arn:aws:sts::326255650484:assumed-role/fss-rh-deploy/<session>` — a user, a different role, or a role whose name merely begins the same way. The flag says "use the credentials you already have"; that script is what makes sure they are the right ones. The default stays `true` in all three roots so that a forgotten flag is an `sts:AssumeRole` refusal rather than an apply running as whatever credential happened to be in the environment. `docs/archive/decisions/g12e-the-provider-does-not-reassume-its-own-session.md`.
@@ -349,7 +346,7 @@ Run the Appendix G scenarios here. Then tear the run down:
 terraform destroy -var="assume_deployment_role=false" -var="name_prefix=fss-rh-${RUN_ID}" ...same vars...
 ```
 
-`infra/scripts/rehearsal-teardown.sh` is what the workflow runs, and it repeats the caller-identity check before the destroy: the teardown step runs on `always()`, so it cannot assume the earlier step was reached. An identity that is not `fss-rh-deploy` stops the teardown with the environment still standing, which is the cheaper mistake.
+`infra/scripts/rehearsal.sh teardown` is what the workflow runs, and it repeats the caller-identity check before the destroy: the teardown step runs on `always()`, so it cannot assume the earlier step was reached. An identity that is not `fss-rh-deploy` stops the teardown with the environment still standing, which is the cheaper mistake.
 
 Teardown caveat: the rehearsal journal bucket uses **GOVERNANCE** object lock with a one-day retention. Objects written during the run refuse deletion until that day passes, so a same-day `destroy` leaves the bucket behind. Either wait a day, or have the rehearsal role carry `s3:BypassGovernanceRetention` scoped to `fss-rh-*` buckets only. Do not put that permission on the production role.
 
@@ -564,7 +561,7 @@ A freshly applied stack will show several alarms in `INSUFFICIENT_DATA` until th
 | Rotate a secret value | `aws secretsmanager put-secret-value`, then `--force-new-deployment`. Terraform is not involved. **Except `app-runtime-database`**, whose value is a live PostgreSQL password: a put on its own leaves a secret the database refuses. Put the new value, then `fss admin database-users ensure --rotate-password` to alter the role to match, then force the deployment — and never re-put it as part of a redeploy (`release.md` 5.1 and 8.0s). |
 | Add an alert recipient | append to the `alert_emails` literal in `infra/roots/production/main.tf` in a pull request, plan and apply, then confirm the subscription. |
 | Point production at a restored copy | `docs/greenfield/runbooks/restore.md` (c): `terraform plan -var="active_database_host=<the copy's address>"` with the rest of the section 3.0 list. The plan must replace exactly the `api`, `worker`, `migration` and `operations` task definitions, differing only in `FSS_DATABASE_HOST`, and update the two services in place. Unset (`null`), every task definition carries the managed instance's address, as before the variable existed. |
-| Tear down a rehearsal run | The release workflow does it on `always()`, through `infra/scripts/rehearsal-teardown.sh`: caller-identity check, then `terraform destroy` with the same `name_prefix` and `assume_deployment_role=false`. Mind the object-lock caveat in 3.1. |
+| Tear down a rehearsal run | The release workflow does it on `always()`, through `infra/scripts/rehearsal.sh teardown`: caller-identity check, then `terraform destroy` with the same `name_prefix` and `assume_deployment_role=false`. Mind the object-lock caveat in 3.1. |
 
 Never run `terraform destroy` in the production root. Deletion protection on the database and the load balancer will stop it part-way and leave the stack half-removed, which is worse than either state.
 

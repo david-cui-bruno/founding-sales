@@ -24,8 +24,6 @@ REHEARSAL_PREFIX_PATTERN='^fss-rh-[a-z0-9-]{3,18}$'
 # The old names.
 RELEASE_PRODUCTION_PREFIX=$PRODUCTION_PREFIX
 RELEASE_REHEARSAL_PREFIX_PATTERN=$REHEARSAL_PREFIX_PATTERN
-# The two rehearsal repositories that carry no run identifier (infra/roots/rehearsal-registry).
-REHEARSAL_STABLE_NAMES='fss-rh-api fss-rh-worker'
 
 # One-off task budget, log-stream grace and poll, and the image-pull retry (lane g80).
 RELEASE_DEFAULT_TIMEOUT_SECONDS=1200
@@ -71,19 +69,6 @@ rehearsal_write_report() {
 # ---------------------------------------------------------------------------
 # Namespaces
 # ---------------------------------------------------------------------------
-
-# `production`, `rehearsal-run`, `rehearsal-stable` or `foreign`; non-zero for anything a
-# rehearsal may not address.   rehearsal_classify_name <run prefix> <name>
-rehearsal_classify_name() {
-  local prefix=$1 name=$2 stable
-  case "$name" in "$PRODUCTION_PREFIX"*) echo production; return 1 ;; esac
-  for stable in $REHEARSAL_STABLE_NAMES; do
-    if [ "$name" = "$stable" ]; then echo rehearsal-stable; return 0; fi
-  done
-  case "$name" in "$prefix"*) echo rehearsal-run; return 0 ;; esac
-  echo foreign
-  return 1
-}
 
 rehearsal_require_prefix() {
   local prefix=${1:-}
@@ -208,103 +193,6 @@ elif isinstance(value, (str, int, float)):
 else:
     json.dump(value, sys.stdout)
 '
-}
-
-# ---------------------------------------------------------------------------
-# Rehearsal-only helpers (the prefix guard and the teardown; rehearsal.sh replaces them)
-# ---------------------------------------------------------------------------
-
-REHEARSAL_RUN_INVENTORY_MARKER='select names beginning'
-REHEARSAL_DRY_RUN_INVENTORY='["dry-run: no inventory was read"]'
-
-# A sorted JSON array of the ARNs of every resource whose Name tag is the run's.
-rehearsal_read_run_inventory() {
-  local prefix=${1:-}
-  rehearsal_require_prefix "$prefix" || return 1
-  rehearsal_refuse_production_arguments "$prefix" || return 1
-  if rehearsal_dry_run; then
-    rehearsal_plan "aws resourcegroupstaggingapi get-resources --tag-filters Key=Name --output json" \
-      "| $REHEARSAL_RUN_INVENTORY_MARKER $prefix"
-    return 0
-  fi
-  rehearsal_aws resourcegroupstaggingapi get-resources \
-    --tag-filters "Key=Name" \
-    --query 'ResourceTagMappingList[].{arn:ResourceARN,name:Tags[?Key==`Name`]|[0].Value}' \
-    --output json | rehearsal_select_run_names "$prefix"
-}
-
-rehearsal_select_run_names() {
-  FSS_RUN_PREFIX="${1:?a run prefix}" python3 -c '
-import json, os, sys
-prefix = os.environ["FSS_RUN_PREFIX"]
-rows = json.load(sys.stdin) or []
-arns = sorted(row["arn"] for row in rows
-              if isinstance(row.get("name"), str) and row.get("arn")
-              and (row["name"] == prefix or row["name"].startswith(prefix + "-")))
-json.dump(arns, sys.stdout, indent=2)
-sys.stdout.write("\n")
-'
-}
-
-# A cleanup step that finds nothing to clean is done: absence is recognised by the AWS
-# error code in parentheses, and nothing else is tolerated.
-#   rehearsal_tolerate_absent <what> <command> [argument...]
-REHEARSAL_ABSENCE_ERROR_CODES='DBInstanceNotFound DBInstanceNotFoundFault DBSnapshotNotFound DBSnapshotNotFoundFault NoSuchBucket ResourceNotFoundException ClusterNotFoundException ServiceNotFoundException NoSuchEntity'
-rehearsal_tolerate_absent() {
-  local what=$1 output status code
-  shift
-  set +e
-  output="$("$@" 2>&1)"
-  status=$?
-  set -e
-  if [ "$status" -eq 0 ]; then
-    if [ -n "$output" ]; then printf '%s\n' "$output"; fi
-    return 0
-  fi
-  for code in $REHEARSAL_ABSENCE_ERROR_CODES; do
-    case "$output" in
-      *"($code)"*) rehearsal_log "$what: already absent ($code), so this step is done" >&2; return 0 ;;
-    esac
-  done
-  printf '%s\n' "$output" >&2
-  echo "FAIL: $what did not fail because the resource was absent; it failed for another reason" >&2
-  return 1
-}
-
-# CI runs rehearsal Terraform with the assumption off, which is safe only in a session
-# of the rehearsal role; rehearsal_require_deployment_session proves it and sets the account.
-REHEARSAL_NO_ASSUME_VAR='-var=assume_deployment_role=false'
-REHEARSAL_SESSION_ACCOUNT=''
-rehearsal_require_deployment_session() {
-  local role=${1:-} identity pattern
-  if [ -z "$role" ]; then
-    echo "FAIL: which role the session must be is not optional" >&2
-    return 1
-  fi
-  case "$role" in
-    fss-rh-*) : ;;
-    *) echo "FAIL: '$role' is not a rehearsal deployment role; this check is for the fss-rh- namespace" >&2; return 1 ;;
-  esac
-  if [ "${FSS_REHEARSAL_CALLER_IDENTITY+set}" = "set" ]; then
-    identity=${FSS_REHEARSAL_CALLER_IDENTITY}
-  elif rehearsal_dry_run; then
-    rehearsal_plan "aws sts get-caller-identity --query Arn --output text"
-    rehearsal_plan "refuse unless it reads arn:aws:sts::<account>:assumed-role/$role/<session>"
-    return 0
-  else
-    identity="$(command aws sts get-caller-identity --query Arn --output text)"
-  fi
-  echo "caller identity: ${identity:-<none>}"
-  pattern="^arn:aws[a-z0-9-]*:sts::[0-9]{12}:assumed-role/${role}/.+$"
-  if [[ ! "$identity" =~ $pattern ]]; then
-    echo "FAIL: this session is ${identity:-<none>}, which is not an assumed-role session of $role." >&2
-    echo "      Rehearsal Terraform runs with ${REHEARSAL_NO_ASSUME_VAR}, so whatever this session is" >&2
-    echo "      is what the apply would act as. Refusing." >&2
-    return 1
-  fi
-  REHEARSAL_SESSION_ACCOUNT="${identity#arn:*:sts::}"
-  REHEARSAL_SESSION_ACCOUNT="${REHEARSAL_SESSION_ACCOUNT%%:*}"
-  rehearsal_log "the session is an assumed-role session of $role, so ${REHEARSAL_NO_ASSUME_VAR} is safe"
 }
 
 # ---------------------------------------------------------------------------

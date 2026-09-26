@@ -16,7 +16,7 @@ import { readRepositoryFile, repositoryPath } from './support/repository.ts';
  * David wrote both roles from that prose.
  *
  * So the policy ships: `infra/policies/deployment-role-policy.json.tftpl` rendered by
- * `infra/scripts/render-deployment-role-policy.sh <prefix>`, and
+ * `infra/scripts/policy.sh render <prefix>` (P7; the old name render-deployment-role-policy.sh execs it), and
  * `infra/policies/terraform-resource-actions.json` as the reviewable map from every
  * `resource "aws_*"` type in `infra/modules` and `infra/roots` to the actions Terraform
  * needs for it.
@@ -97,7 +97,7 @@ const STATE_KEY_TOKEN: Record<Prefix, string> = {
 };
 
 function render(prefix: Prefix, mode = '--compact'): PolicyDocument {
-  const result = spawnSync(repositoryPath('infra/scripts/render-deployment-role-policy.sh'), [prefix, mode], {
+  const result = spawnSync(repositoryPath('infra/scripts/policy.sh'), ['render', prefix, mode], {
     encoding: 'utf8',
   });
   expect(result.status, `rendering ${prefix}: ${result.stdout}${result.stderr}`).toBe(0);
@@ -586,9 +586,9 @@ describe('the journal deny exempts its deployer, and production keeps its postur
 });
 
 describe('the renderer refuses what it cannot render', () => {
-  const script = repositoryPath('infra/scripts/render-deployment-role-policy.sh');
+  const script = repositoryPath('infra/scripts/policy.sh');
   const run = (args: readonly string[]): { readonly code: number; readonly output: string } => {
-    const result = spawnSync(script, [...args], { encoding: 'utf8' });
+    const result = spawnSync(script, ['render', ...args], { encoding: 'utf8' });
     return { code: result.status ?? 1, output: `${result.stdout}${result.stderr}` };
   };
 
@@ -621,7 +621,7 @@ describe('the renderer refuses what it cannot render', () => {
     // deliberately keeps out of it, so the default is a wildcard and this is the override.
     const template = readRepositoryFile('infra/policies/deployment-role-policy.json.tftpl');
     expect(template).not.toMatch(/certificate\/[0-9a-f]{8}-/u);
-    const narrowed = spawnSync(script, ['fss-rh'], {
+    const narrowed = spawnSync(script, ['render', 'fss-rh'], {
       encoding: 'utf8',
       env: {
         ...process.env,
@@ -645,7 +645,7 @@ describe('the renderer refuses what it cannot render', () => {
 });
 
 /**
- * `infra/scripts/check-deployment-role.sh` is the command David runs before an apply.
+ * `infra/scripts/policy.sh check` (P7; the old name check-deployment-role.sh execs it) is the command David runs before an apply.
  *
  * It calls `aws iam simulate-principal-policy`, which this lane has no credential for and
  * must not obtain one for. What is tested here is everything around the call: the
@@ -660,7 +660,7 @@ describe('the renderer refuses what it cannot render', () => {
  * fourth rehearsal was refused, and one that answers with silence.
  */
 describe('the read-only check David runs before an apply', () => {
-  const script = repositoryPath('infra/scripts/check-deployment-role.sh');
+  const script = repositoryPath('infra/scripts/policy.sh');
 
   function stub(body: string): string {
     const directory = mkdtempSync(join(tmpdir(), 'fss-simulate-'));
@@ -688,7 +688,7 @@ done`;
     const environment: Record<string, string> = { ...process.env } as Record<string, string>;
     if (options.aws !== undefined) environment['FSS_CHECK_ROLE_AWS'] = options.aws;
     if (options.dryRun === true) environment['FSS_CHECK_ROLE_DRY_RUN'] = '1';
-    const result = spawnSync(script, [...args], { encoding: 'utf8', env: environment });
+    const result = spawnSync(script, ['check', ...args], { encoding: 'utf8', env: environment });
     return { code: result.status ?? 1, output: `${result.stdout}${result.stderr}` };
   }
 
@@ -759,7 +759,7 @@ done`;
     expect(code).toBe(1);
     expect(output).toContain('DENIED  cloudwatch:PutCompositeAlarm (implicitDeny)');
     expect(output).toContain('action(s) the next apply needs are denied');
-    expect(output).toContain('render-deployment-role-policy.sh fss-rh');
+    expect(output).toContain('policy.sh put fss-rh');
   });
 
   it('simulates one action per call, each against the resource it is really authorized on', () => {

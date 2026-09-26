@@ -248,7 +248,7 @@ jobs:
           role-session-name: fss-rh-images-${{ github.run_id }}
 
       - name: The assumed identity is the rehearsal role and nothing else
-        run: infra/scripts/rehearsal-caller-identity.sh fss-rh-deploy
+        run: infra/scripts/rehearsal.sh identity fss-rh-deploy
 
       - name: Push each image once, as ci-<commit>, and read its digest back
         env:

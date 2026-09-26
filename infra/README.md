@@ -30,8 +30,11 @@ infra/
     terraform-resource-actions.json     every resource "aws_*" type in this tree and the actions it needs
   scripts/
     offline-gate.sh                     the same checks CI runs, runnable by hand with no credentials
-    render-deployment-role-policy.sh    prints one role's policy document; makes no call
-    check-deployment-role.sh            asks IAM whether a role may do what the next apply needs; read-only
+    policy.sh                           the deployment roles' policy: render (no call), check (read-only
+                                        simulation), put (put, read back, compared)
+    rehearsal.sh                        the schema rehearsal's steps: prefix, identity, run-task, ranges,
+                                        teardown, guard
+    rollback.sh                         production back on a previous release's images (release.md 4.1a)
 ```
 
 ## Running the gate

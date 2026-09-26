@@ -6,8 +6,8 @@ import { describe, expect, it } from 'vitest';
 import { repositoryPath } from './support/repository.ts';
 
 /**
- * Lane R1: `infra/scripts/release-rollback.sh` puts production back on a previous
- * release's images — the checkout's own images, on a database their ranges accept, with
+ * Lane R1: `infra/scripts/rollback.sh` (P7; the old name `release-rollback.sh` execs it)
+ * puts production back on a previous release's images — the checkout's own images, on a database their ranges accept, with
  * sending as it runs — and refuses everything else before anything is written.
  *
  * The whole script is driven against three stub processes on PATH, `aws`, `terraform` and
@@ -38,9 +38,25 @@ import { repositoryPath } from './support/repository.ts';
  * which declares them as variables, is still given production's values as `-var`s. The
  * committed root also carries `certificate_arn = local.certificate_arn` in a module block,
  * which is not a literal and must not be read as one.
+ *
+ * **A boundary checked against nothing (review of PR 272).** A checkout older than main
+ * beed2d90 would re-create the deleted restore drill, so it is refused before anything is
+ * read from production. The world's repository has its own boundary commit, named to the
+ * script through `FSS_ROLLBACK_BOUNDARY_COMMIT`; a checkout after it plans, one before it
+ * is refused, and one that does not hold it is refused as well.
+ *
+ * **A restore that a routine rollback undoes (W3-S8, PR 282).** Between the restore
+ * runbook's steps (f) and (g) production runs on a copy, and every plan must carry
+ * `active_database_host`. The world's running definitions can name the copy while the
+ * root's `database_endpoint` still names the managed instance: without
+ * `--active-database-host` that is refused before any plan, with it the plan carries the
+ * copy, and a host that is not the running one is refused. On the managed instance, the
+ * plan carries nothing.
  */
 
-const SCRIPT = repositoryPath('infra/scripts/release-rollback.sh');
+const SCRIPT = repositoryPath('infra/scripts/rollback.sh');
+// The old name, a thin wrapper until the release helpers have moved (P7).
+const LEGACY = repositoryPath('infra/scripts/release-rollback.sh');
 const ACCOUNT = '123456789012';
 const REGISTRY = `${ACCOUNT}.dkr.ecr.us-east-1.amazonaws.com`;
 const CLUSTER = `arn:aws:ecs:us-east-1:${ACCOUNT}:cluster/fss-prod-cluster`;
@@ -48,6 +64,9 @@ const CERTIFICATE = `arn:aws:acm:us-east-1:${ACCOUNT}:certificate/11111111-2222-
 const TOPIC = `arn:aws:sns:us-east-1:${ACCOUNT}:fss-prod-alerts`;
 const HOSTNAME = 'api.example.invalid';
 const OTHER_COMMIT = 'fedcba9876543210fedcba9876543210fedcba98';
+/** The managed instance's address (the root's database_endpoint), and a restored copy's. */
+const MANAGED_HOST = 'fss-prod-pg.cabc123def45.us-east-1.rds.amazonaws.com';
+const COPY_HOST = 'fss-prod-pg-r20261001.cabc123def45.us-east-1.rds.amazonaws.com';
 
 const digest = (character: string): string => `sha256:${character.repeat(64)}`;
 /** What the rollback goes back to (the checkout's images), and what production runs now. */
@@ -73,9 +92,9 @@ const servicePlan = (name: Service, actions: readonly string[] = ['update']): Re
   name,
   change: { actions },
 });
-/** A rollback plan as Terraform shows it: five definitions replaced, two services re-pointed. */
+/** A rollback plan as Terraform shows it: four definitions replaced, two services re-pointed. */
 const GOOD_PLAN: readonly Record<string, unknown>[] = [
-  ...['api', 'worker', 'migration', 'operations', 'drill'].map(replaced),
+  ...['api', 'worker', 'migration', 'operations'].map(replaced),
   servicePlan('api'),
   servicePlan('worker'),
   { address: 'data.aws_caller_identity.current', mode: 'data', type: 'aws_caller_identity', name: 'current', change: { actions: ['read'] } },
@@ -117,15 +136,13 @@ def done(answer):
 def family_of(arn):
     return arn.rsplit("/", 1)[1].split(":")[0]
 
-def definition(service, revision, image, schema, sending, generation):
+def definition(service, revision, image, schema, sending):
     environment = [
         {"name": "FSS_ROLE", "value": service},
         {"name": "FSS_SCHEMA_MIN", "value": str(schema[0])},
         {"name": "FSS_SCHEMA_MAX", "value": str(schema[1])},
         {"name": "FSS_SENDING_ENABLED", "value": sending},
     ]
-    if generation is not None:
-        environment.append({"name": "FSS_EXPECTED_SYSTEM_GENERATION", "value": generation})
     if service == "api":
         environment.append({"name": "FSS_PUBLIC_ORIGIN", "value": "https://" + state["hostname"]})
     arn = "arn:aws:ecs:us-east-1:" + state["account"] + ":task-definition/fss-prod-" + service + ":" + str(revision)
@@ -155,7 +172,7 @@ if tool == "terraform":
         state["planned"] = planned
         save()
         open(plan_file, "w").write("a saved plan")
-        print("Plan: 5 to add, 2 to change, 5 to destroy.")
+        print("Plan: 4 to add, 2 to change, 4 to destroy.")
         sys.exit(0)
     if command == "show":
         if not os.path.exists(plan_file):
@@ -170,14 +187,14 @@ if tool == "terraform":
         for service, revision in (("api", 8), ("worker", 5)):
             schema = planned[service + "_schema_range"].strip("{}").replace("min=", "").replace("max=", "").split(",")
             fresh = definition(service, revision, planned[service + "_image"], (int(schema[0]), int(schema[1])),
-                               planned.get("sending_enabled", state["rootSending"]), planned.get("expected_system_generation"))
+                               planned.get("sending_enabled", state["rootSending"]))
             for arn, known in state["taskDefinitions"].items():
                 if family_of(arn) == "fss-prod-" + service:
                     known["taskDefinition"]["status"] = "INACTIVE"
             state["taskDefinitions"][fresh["taskDefinition"]["taskDefinitionArn"]] = fresh
             state["services"]["fss-prod-" + service]["taskDefinition"] = fresh["taskDefinition"]["taskDefinitionArn"]
         save()
-        print("Apply complete! Resources: 5 added, 2 changed, 5 destroyed.")
+        print("Apply complete! Resources: 4 added, 2 changed, 4 destroyed.")
         sys.exit(0)
     sys.stderr.write("the terraform stub does not know: " + " ".join(args) + "\n")
     sys.exit(2)
@@ -266,7 +283,6 @@ interface WorldOptions {
   readonly databaseVersion?: number;
   /** FSS_SENDING_ENABLED on each running task definition; false for both by default. */
   readonly sending?: Readonly<Record<Service, string>>;
-  readonly generation?: string;
   readonly rolling?: Service;
   /** The tags each old image carries; ci-<commit> on the API and the bare commit on the worker by default. */
   readonly tags?: (commit: string) => Partial<Record<Service, readonly string[]>>;
@@ -281,12 +297,23 @@ interface WorldOptions {
   readonly root?: 'literals' | 'variables';
   /** Committed literals that differ from what production runs; production's by default. */
   readonly committed?: Partial<Record<'certificate_arn' | 'api_hostname' | 'alert_emails' | 'sending_enabled', string>>;
+  /**
+   * Where the checkout's commit stands against the repository's PR 272 boundary: `after`
+   * it (the default), `before` it, or in a repository that does not hold it.
+   */
+  readonly boundary?: 'after' | 'before' | 'missing';
+  /** FSS_DATABASE_HOST on each running definition; the managed instance's for both by default. */
+  readonly databaseHost?: Readonly<Record<Service, string>>;
+  /** Whether the checkout's root declares active_database_host; it does by default. */
+  readonly declaresActiveHost?: boolean;
 }
 
 interface World {
   readonly home: string;
   readonly root: string;
   readonly commit: string;
+  /** The commit the script is told is the PR 272 boundary. */
+  readonly boundary: string;
   calls(): readonly Call[];
 }
 
@@ -315,6 +342,7 @@ function world(options: WorldOptions = {}): World {
   );
   writeFileSync(join(checkout, 'scripts/productionSmoke.mjs'), SMOKE);
   const sending = options.sending ?? { api: 'false', worker: 'false' };
+  const databaseHost = options.databaseHost ?? { api: MANAGED_HOST, worker: MANAGED_HOST };
   const committed = {
     certificate_arn: `"${CERTIFICATE}"`,
     api_hostname: `"${HOSTNAME}"`,
@@ -326,9 +354,14 @@ function world(options: WorldOptions = {}): World {
     writeFileSync(join(checkout, 'infra/roots/production/main.tf'), '# the production root before wave 1\n');
     writeFileSync(
       join(checkout, 'infra/roots/production/variables.tf'),
-      Object.keys(committed).map(name => `variable "${name}" {\n}\n`).join('\n'),
+      [...Object.keys(committed), ...(options.declaresActiveHost === false ? [] : ['active_database_host'])]
+        .map(name => `variable "${name}" {\n}\n`)
+        .join('\n'),
     );
   } else {
+    if (options.declaresActiveHost !== false) {
+      writeFileSync(join(checkout, 'infra/roots/production/variables.tf'), 'variable "active_database_host" {\n  default = null\n}\n');
+    }
     writeFileSync(
       join(checkout, 'infra/roots/production/main.tf'),
       [
@@ -350,9 +383,21 @@ function world(options: WorldOptions = {}): World {
       { cwd: checkout, encoding: 'utf8' },
     ).trim();
   git('init', '-q');
+  const place = options.boundary ?? 'after';
+  let boundary = 'f'.repeat(40);
+  if (place === 'after') {
+    git('commit', '-q', '--allow-empty', '-m', 'the PR 272 boundary');
+    boundary = git('rev-parse', 'HEAD');
+  }
   git('add', '.');
   git('commit', '-qm', 'the previous release');
   const commit = git('rev-parse', 'HEAD');
+  if (place === 'before') {
+    // The boundary comes after the release commit; the checkout stays at the release.
+    git('commit', '-q', '--allow-empty', '-m', 'the PR 272 boundary');
+    boundary = git('rev-parse', 'HEAD');
+    git('checkout', '-q', '--detach', commit);
+  }
   if (options.dirty === true) writeFileSync(join(checkout, 'infra/roots/production/override.tf'), '# not committed\n');
 
   const tags = options.tags?.(commit) ?? { api: [`ci-${commit}`], worker: [commit] };
@@ -362,7 +407,7 @@ function world(options: WorldOptions = {}): World {
       { name: 'FSS_SCHEMA_MIN', value: '16' },
       { name: 'FSS_SCHEMA_MAX', value: '16' },
       { name: 'FSS_SENDING_ENABLED', value: sending[service] },
-      ...(options.generation === undefined ? [] : [{ name: 'FSS_EXPECTED_SYSTEM_GENERATION', value: options.generation }]),
+      { name: 'FSS_DATABASE_HOST', value: databaseHost[service] },
       ...(service === 'api' ? [{ name: 'FSS_PUBLIC_ORIGIN', value: `https://${HOSTNAME}` }] : []),
     ];
     return {
@@ -409,6 +454,7 @@ function world(options: WorldOptions = {}): World {
       },
       worker_log_group_name: '/fss/fss-prod/worker',
       alert_topic_arn: TOPIC,
+      database_endpoint: `${MANAGED_HOST}:5432`,
     },
   };
   writeFileSync(join(home, 'state.json'), JSON.stringify(state));
@@ -416,6 +462,7 @@ function world(options: WorldOptions = {}): World {
     home,
     root: join(checkout, 'infra/roots/production'),
     commit,
+    boundary,
     calls: () =>
       existsSync(join(home, 'calls.jsonl'))
         ? readFileSync(join(home, 'calls.jsonl'), 'utf8')
@@ -431,12 +478,13 @@ interface Run {
   readonly output: string;
 }
 
-function rollback(stub: World, extra: readonly string[] = [], environment: Record<string, string> = {}): Run {
+function rollback(stub: World, extra: readonly string[] = [], environment: Record<string, string> = {}, script = SCRIPT): Run {
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),
     PATH: `${join(stub.home, 'bin')}:${process.env['PATH'] ?? ''}`,
     AWS_REGION: 'us-east-1',
     FSS_STUB_HOME: stub.home,
+    FSS_ROLLBACK_BOUNDARY_COMMIT: stub.boundary,
     FSS_REHEARSAL_REPORTS: mkdtempSync(join(tmpdir(), 'fss-rollback-reports-')),
     FSS_ROLLBACK_CANARY_SECONDS: '0',
     FSS_ROLLBACK_SMOKE_SECONDS: '0',
@@ -448,7 +496,7 @@ function rollback(stub: World, extra: readonly string[] = [], environment: Recor
   for (const name of ['FSS_REHEARSAL_AWS_COMMAND', 'TERRAFORM']) delete env[name];
   if (environment['FSS_REHEARSAL_DRY_RUN'] === undefined) delete env['FSS_REHEARSAL_DRY_RUN'];
   const result = spawnSync(
-    SCRIPT,
+    script,
     [stub.root, 'fss-prod', '--api-digest', OLD.api, '--worker-digest', OLD.worker, ...extra],
     { encoding: 'utf8', env },
   );
@@ -477,7 +525,7 @@ function expectRefusal(stub: World, run: Run, fragments: readonly string[], opti
   expect(existsSync(join(stub.root, 'rollback.tfplan'))).toBe(false);
 }
 
-describe('release-rollback.sh plans the previous release and stops', () => {
+describe('rollback.sh plans the previous release and stops', () => {
   it('plans the checkout’s images and ranges, with production’s settings as the root commits them, prints the plan, and writes nothing', () => {
     const stub = world();
     const run = rollback(stub);
@@ -498,7 +546,7 @@ describe('release-rollback.sh plans the previous release and stops', () => {
     expect(run.output).toContain(`fss-prod-api ${OLD.api} is tagged ci-${stub.commit}`);
     expect(run.output).toContain(`fss-prod-worker ${OLD.worker} is tagged ${stub.commit}`);
     expect(run.output).toContain('the database is at schema 16, which api 16-16 and worker 16-16 accept');
-    expect(run.output).toContain('Plan: 5 to add, 2 to change, 5 to destroy.');
+    expect(run.output).toContain('Plan: 4 to add, 2 to change, 4 to destroy.');
     expect(run.output).toContain(`replace ${CLUSTER_ADDRESS}.aws_ecs_task_definition.api`);
     expect(run.output).toContain(`update ${CLUSTER_ADDRESS}.aws_ecs_service.worker`);
     expect(run.output).toContain('Then run this again with --apply');
@@ -523,13 +571,12 @@ describe('release-rollback.sh plans the previous release and stops', () => {
     ]);
   });
 
-  it('with --apply applies, then deploys on the rolling path, then smokes, keeping sending and the pin as they run', () => {
-    const stub = world({ sending: { api: 'true', worker: 'true' }, generation: '1' });
+  it('with --apply applies, then deploys on the rolling path, then smokes, keeping sending as it runs', () => {
+    const stub = world({ sending: { api: 'true', worker: 'true' } });
     const run = rollback(stub, ['--apply']);
     expect(run.code, run.output).toBe(0);
-    // Sending is the committed `true`, which is what runs; the pin is always a -var.
+    // Sending is the committed `true`, which is what runs.
     expect(planVariables(stub).some(variable => variable.startsWith('-var=sending_enabled'))).toBe(false);
-    expect(planVariables(stub)).toContain('-var=expected_system_generation=1');
     const names = operations(stub);
     const applied = names.indexOf('terraform apply');
     const deployed = names.indexOf('aws ecs update-service');
@@ -551,12 +598,29 @@ describe('release-rollback.sh plans the previous release and stops', () => {
     const run = rollback(stub, ['--apply']);
     expect(run.code, run.output).toBe(0);
     expect(planVariables(stub)).toContain('-var=sending_enabled=false');
-    expect(planVariables(stub).some(variable => variable.startsWith('-var=expected_system_generation'))).toBe(false);
     expect(stub.calls().find(call => call.tool === 'smoke')?.args.slice(-2)).toEqual(['--expect-sending', 'disabled']);
   });
 });
 
-describe('release-rollback.sh refuses in one FAIL line, before anything is written', () => {
+describe('rollback.sh refuses in one FAIL line, before anything is written', () => {
+  it('refuses a checkout older than the PR 272 boundary before reading production: only the images roll back across it', () => {
+    const older = world({ boundary: 'before' });
+    const run = rollback(older, ['--apply']);
+    expectRefusal(older, run, [
+      `${older.commit} is older than ${older.boundary.slice(0, 8)} (PR 272)`,
+      "deleted the restore drill's task definition, roles, policies, metric filter and alarm",
+      'Across that boundary only the images roll back, without Terraform (release.md 4.1a), and infrastructure is repaired forward',
+    ]);
+    expect(older.calls(), 'nothing is read from production').toEqual([]);
+    // A checkout that does not hold the boundary commit cannot tell, and is refused too.
+    const unknown = world({ boundary: 'missing' });
+    const unanswered = rollback(unknown);
+    expectRefusal(unknown, unanswered, [`does not hold ${'f'.repeat(8)}, the merge of PR 272`, 'fetch origin there']);
+    expect(unknown.calls()).toEqual([]);
+    // The same world after the boundary plans.
+    expect(rollback(world()).code).toBe(0);
+  });
+
   it('refuses a digest that is not an image of the checked-out commit', () => {
     const stub = world({ tags: () => ({ api: [`ci-${OTHER_COMMIT}`] }) });
     expectRefusal(stub, rollback(stub), [
@@ -636,8 +700,8 @@ describe('release-rollback.sh refuses in one FAIL line, before anything is writt
       ],
       { planned: true },
     );
-    // The only Terraform call is the read of the alert topic's output: no plan.
-    expect(operations(stub).filter(name => name.startsWith('terraform'))).toEqual(['terraform output']);
+    // The only Terraform calls are the reads of two outputs (the database endpoint and the alert topic): no plan.
+    expect(operations(stub).filter(name => name.startsWith('terraform'))).toEqual(['terraform output', 'terraform output']);
     // The same world with the committed values production's plans.
     const agreeing = world();
     expect(rollback(agreeing).code).toBe(0);
@@ -651,6 +715,57 @@ describe('release-rollback.sh refuses in one FAIL line, before anything is writt
     expect(operations(stub)).not.toContain('terraform plan');
   });
 
+  it('refuses to plan during a restore unless --active-database-host names the copy production runs on, and then carries it', () => {
+    const restoring = { databaseHost: { api: COPY_HOST, worker: COPY_HOST } } as const;
+    const unnamed = world(restoring);
+    const run = rollback(unnamed, ['--apply']);
+    expectRefusal(
+      unnamed,
+      run,
+      [
+        `production's task definitions run on FSS_DATABASE_HOST=${COPY_HOST}, and the managed instance is ${MANAGED_HOST}`,
+        'a restore is in progress (docs/greenfield/runbooks/restore.md, between (f) and (g))',
+        `Run this again with --active-database-host ${COPY_HOST}`,
+      ],
+      { planned: true },
+    );
+    expect(operations(unnamed)).not.toContain('terraform plan');
+
+    const named = world(restoring);
+    const planned = rollback(named, ['--active-database-host', COPY_HOST]);
+    expect(planned.code, planned.output).toBe(0);
+    expect(planVariables(named)).toContain(`-var=active_database_host=${COPY_HOST}`);
+    expect(planVariables(named).at(-1)).toBe('-var=bootstrap=false');
+
+    // A host that is not the running one moves the database, which a rollback never does.
+    const elsewhere = world(restoring);
+    expectRefusal(elsewhere, rollback(elsewhere, ['--active-database-host', MANAGED_HOST]), [
+      `--active-database-host is ${MANAGED_HOST}, and production's task definitions run on FSS_DATABASE_HOST=${COPY_HOST}`,
+    ], { planned: true });
+    const managed = world();
+    expectRefusal(managed, rollback(managed, ['--active-database-host', COPY_HOST]), [
+      `--active-database-host is ${COPY_HOST}, and production's task definitions run on FSS_DATABASE_HOST=${MANAGED_HOST}`,
+    ], { planned: true });
+
+    // On the managed instance the plan names no host at all (the first test holds the whole list).
+    const normal = world();
+    expect(rollback(normal).code).toBe(0);
+    expect(planVariables(normal).some(variable => variable.startsWith('-var=active_database_host'))).toBe(false);
+  });
+
+  it('refuses a malformed host before anything, a root without the variable, and a host the two services disagree on', () => {
+    const malformed = world({ databaseHost: { api: COPY_HOST, worker: COPY_HOST } });
+    const run = rollback(malformed, ['--active-database-host', 'https://copy.example.invalid']);
+    expectRefusal(malformed, run, ["--active-database-host 'https://copy.example.invalid' is not a lower-case DNS hostname"]);
+    expect(malformed.calls()).toEqual([]);
+    const older = world({ databaseHost: { api: COPY_HOST, worker: COPY_HOST }, declaresActiveHost: false });
+    expectRefusal(older, rollback(older, ['--active-database-host', COPY_HOST]), ['declares no active_database_host']);
+    expect(older.calls(), 'refused from the checkout alone').toEqual([]);
+    // deploy.sh current reports the host per service, so the disagreement is its reading.
+    const split = world({ databaseHost: { api: COPY_HOST, worker: MANAGED_HOST } });
+    expectRefusal(split, rollback(split), [`FSS_DATABASE_HOST is ${COPY_HOST} on the API and ${MANAGED_HOST} on the worker`]);
+  });
+
   it('refuses a plan that replaces a service', () => {
     const plan = [...GOOD_PLAN.filter(change => change['address'] !== `${CLUSTER_ADDRESS}.aws_ecs_service.api`), servicePlan('api', ['delete', 'create'])];
     const stub = world({ plan });
@@ -658,7 +773,7 @@ describe('release-rollback.sh refuses in one FAIL line, before anything is writt
   });
 });
 
-describe('release-rollback.sh in a dry run', () => {
+describe('rollback.sh in a dry run, and through its old name', () => {
   it('prints every command, the apply, the deploy and the smoke included, and calls nothing', () => {
     const stub = world();
     const run = rollback(stub, ['--apply'], { FSS_REHEARSAL_DRY_RUN: '1' });
@@ -673,5 +788,23 @@ describe('release-rollback.sh in a dry run', () => {
     expect(run.output).toContain(`deploy.sh release ${stub.root} fss-prod --api-digest ${OLD.api} --worker-digest ${OLD.worker}`);
     expect(run.output).toContain('scripts/productionSmoke.mjs');
     expect(existsSync(join(stub.root, 'rollback.tfplan'))).toBe(false);
+  });
+
+  it('makes the same calls, prints the same plan and refuses the same way through release-rollback.sh', () => {
+    const restoring = { databaseHost: { api: COPY_HOST, worker: COPY_HOST } } as const;
+    const now = world(restoring);
+    const old = world(restoring);
+    const current = rollback(now, ['--apply', '--active-database-host', COPY_HOST]);
+    const legacy = rollback(old, ['--apply', '--active-database-host', COPY_HOST], {}, LEGACY);
+    expect(current.code, current.output).toBe(0);
+    expect(legacy.code, legacy.output).toBe(0);
+    expect(operations(old)).toEqual(operations(now));
+    expect(planVariables(old)).toEqual(planVariables(now));
+    const refusedNow = rollback(world({ databaseVersion: 17 }));
+    const refusedOld = rollback(world({ databaseVersion: 17 }), [], {}, LEGACY);
+    expect(refusedOld.code).toBe(refusedNow.code);
+    expect(failLines(refusedOld).map(line => line.replace(/[0-9a-f]{40}/gu, '<commit>'))).toEqual(
+      failLines(refusedNow).map(line => line.replace(/[0-9a-f]{40}/gu, '<commit>')),
+    );
   });
 });

@@ -17,8 +17,8 @@
 //
 //   1. `/healthz`  — liveness. No database, so it answers while the rest of the
 //                    process is having its worst day.
-//   2. `/readyz`   — readiness: the schema range is accepted, the system generation is
-//                    the one the operator pinned, the database answered.
+//   2. `/readyz`   — readiness: the database answered and the schema range is
+//                    accepted (there is no system generation to pin since W3-S8).
 //   3. `/health`   — the operator-facing report, which is where `sendingEnabled` is.
 //                    Compared with `--expect-sending`, the deployment state the operator
 //                    says this release should have (below).
