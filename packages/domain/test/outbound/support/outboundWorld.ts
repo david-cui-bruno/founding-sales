@@ -159,8 +159,8 @@ export async function createOutboundWorld(): Promise<OutboundWorld> {
     // suppression would refuse for a reason it is not about. `sendDeps` supplies the
     // deployment half for the same reason.
     //
-    // This *is* the vacuous-pass trap for the outbound suite and it is deliberate: the
-    // mutation check removes these two lines and requires the suite to fail. See
+    // This *is* the vacuous-pass trap for the outbound suite and it is deliberate:
+    // removing these two lines makes the suite fail. See
     // `packages/domain/test/outbound/attestation.test.ts`, which sets both halves
     // itself rather than relying on this.
     await context.db.query(

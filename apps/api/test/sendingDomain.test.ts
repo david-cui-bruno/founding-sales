@@ -37,8 +37,8 @@ import { issueSessionFor } from './support/sessionFixture.ts';
  * connect case reads `sending_domains` back — by count, and by the checklist columns
  * a reconnect must not reset. And "no row for gmail.com" is true of a callback that
  * registers nothing at all, so the consumer case runs after the positive one in the
- * same workspace, with the same route, and the positive case is what the mutation in
- * `scripts/releaseMutationCheck.mjs` breaks.
+ * same workspace, with the same route, and the positive case is the one a callback
+ * that registers nothing fails.
  */
 
 let fixture: AuthFixture;

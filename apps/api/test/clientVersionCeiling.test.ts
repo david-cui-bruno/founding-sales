@@ -37,8 +37,7 @@ import { issueSessionFor } from './support/sessionFixture.ts';
  *
  * The vacuous-pass trap is a list nobody reads: a policy whose `incompatible` entry is
  * published but never checked would pass every "admits" test. The refusal tests name a
- * listed build explicitly, and `scripts/releaseMutationCheck.mjs` removes the check to
- * prove they go red.
+ * listed build explicitly, so removing the check turns them red.
  */
 
 const LISTED = '1.4.1';

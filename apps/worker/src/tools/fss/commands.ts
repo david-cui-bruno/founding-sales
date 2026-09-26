@@ -6,9 +6,8 @@
  * the spelling it passes it, and `drillInvocations` extracts them from the script so
  * the two cannot drift. A flag nobody calls is not here.
  *
- * Parsing is separated from doing for the reason `apps/worker/tools/carry/cli.ts`
- * separated them: the whole argument surface is then testable without a database, a
- * cloud credential or a file, and an operator's typo is refused by name rather than
+ * Parsing is separated from doing so that the whole argument surface is testable
+ * without a database, a cloud credential or a file, and an operator's typo is refused by name rather than
  * silently treated as a default.
  *
  * ## Two output conventions, because the drill parses both

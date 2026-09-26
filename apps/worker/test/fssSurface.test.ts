@@ -256,8 +256,7 @@ describe('the dependency mode is fixed per command', () => {
     // The reason, not only the exit code. This live environment is also missing the
     // Gmail variables, so with the dependency-mode check gone `mailbox recover` still
     // exits 20, refused `deployment_incomplete` by the Gmail configuration one step
-    // later, and a test that read only the code stayed green (lane g54 found it when the
-    // mutation check first ran this suite for real).
+    // later, and a test that read only the code stayed green (lane g54 found it).
     const refusal = (stderr: string): unknown =>
       stderr
         .split('\n')
