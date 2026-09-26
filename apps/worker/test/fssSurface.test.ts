@@ -1,12 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync, readFileSync } from 'node:fs';
+import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 import { CLUSTER_URL_ENVIRONMENT_VARIABLE, asSession } from '@fss/domain/db/testing/testDatabase.ts';
-import { main } from '../src/tools/fss.ts';
+import { connectElsewhere, main } from '../src/tools/fss.ts';
 import { COMMAND_DEPENDENCIES, FSS_COMMANDS } from '../src/tools/fss/commands.ts';
 import { readToolConfig } from '../src/tools/fss/config.ts';
 import { ensureRuntimeDatabaseUser } from '../src/tools/fss/databaseUsers.ts';
@@ -259,7 +260,7 @@ describe('the dependency mode is fixed per command', () => {
   });
 
   it('refuses the Gmail-reading command in a deployment that names no Gmail seam', async () => {
-    const none = await run(['admin', 'mailbox', 'reconcile-sent', '--since', '2026-09-20T00:00:00Z', '--inventory', 'owner@example.test'], {
+    const none = await run(['admin', 'mailbox', 'reconcile-sent', '--since', '2026-09-20T00:00:00Z', '--inventory-host', 'fss-prod-pg.example.test'], {
       FSS_DEPENDENCIES: 'none',
     });
     expect(none.code).toBe(20);
@@ -270,7 +271,7 @@ describe('the dependency mode is fixed per command', () => {
     // The reason, not only the exit code. This live environment is missing the Gmail
     // variables, so the refusal must come from the deployment reader one step later —
     // proof that `live` itself is not what refused it, which it was until lane W3-S8.
-    const live = await run(['admin', 'mailbox', 'reconcile-sent', '--since', '2026-09-20T00:00:00Z', '--inventory', 'owner@example.test'], {
+    const live = await run(['admin', 'mailbox', 'reconcile-sent', '--since', '2026-09-20T00:00:00Z', '--inventory-host', 'fss-prod-pg.example.test'], {
       FSS_DEPENDENCIES: 'live',
     });
     expect(live.code).toBe(20);
@@ -281,10 +282,84 @@ describe('the dependency mode is fixed per command', () => {
     // A recorded deployment with no journal bucket registers no mail handler (composeHandlers),
     // so the command gets as far as asking for one.
     const recorded = await run(
-      ['admin', 'mailbox', 'reconcile-sent', '--since', '2026-09-20T00:00:00Z', '--inventory', 'owner@example.test'],
+      ['admin', 'mailbox', 'reconcile-sent', '--since', '2026-09-20T00:00:00Z', '--inventory-host', 'fss-prod-pg.example.test'],
       recordedEnvironment(),
     );
     expect(recorded.code).toBe(20);
     expect(refusal(recorded.stderr)).toBe('gmail_unconfigured');
+  });
+});
+
+describe('what fss hands the restore commands (lane W3-S8 review)', () => {
+  const refused = (stderr: string): unknown =>
+    stderr
+      .split('\n')
+      .filter(line => line.startsWith('{'))
+      .map(line => JSON.parse(line) as Record<string, unknown>)
+      .find(line => line['event'] === 'fss_refused')?.['reason'];
+
+  it('reaches another host with its own runtime credential, only the host changed', async () => {
+    // The copy's connection string names a host nothing resolves; the instance being
+    // replaced is the test cluster, reached by swapping in its host and nothing else.
+    const real = new URL(databaseUrl);
+    const copy = new URL(databaseUrl);
+    copy.hostname = 'fss-prod-pg-r0926.example.test';
+    const elsewhere = await connectElsewhere(readToolConfig({ DATABASE_URL: copy.toString() }), real.hostname);
+    try {
+      const { rows } = await elsewhere.session.query<{ name: string; app: string }>(
+        "SELECT current_database() AS name, current_setting('application_name') AS app",
+      );
+      expect(rows).toEqual([{ name: databaseName, app: 'fss-admin-inventory' }]);
+    } finally {
+      await elsewhere.close();
+    }
+  });
+
+  describe('holds release-restore', () => {
+    const taskArn = 'arn:aws:ecs:us-east-1:123456789012:task/fss-prod/0123456789abcdef0123456789abcdef';
+    const launcher = 'arn:aws:sts::123456789012:assumed-role/AWSReservedSSO_Admin_0123456789abcdef/david';
+    let server: Server;
+    let origin: string;
+
+    beforeAll(async () => {
+      // The ECS task metadata endpoint, on loopback: `/task` names the task, and
+      // anything under `/broken` fails.
+      server = createServer((request, response) => {
+        if (request.url === '/task') {
+          response.writeHead(200, { 'content-type': 'application/json' });
+          response.end(JSON.stringify({ TaskARN: taskArn, Family: 'fss-prod-operations' }));
+          return;
+        }
+        response.writeHead(500);
+        response.end();
+      });
+      await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+      const address = server.address();
+      if (address === null || typeof address === 'string') throw new Error('the metadata stub has no port');
+      origin = `http://127.0.0.1:${String(address.port)}`;
+    });
+
+    afterAll(async () => {
+      await new Promise<void>(resolve => server.close(() => resolve()));
+    });
+
+    const release = ['admin', 'holds', 'release-restore', '--note', 'nothing held here; checking the attribution'];
+
+    it('is attributed to the launcher the task was given and the task the metadata endpoint names', async () => {
+      const done = await run(release, { FSS_LAUNCHED_BY: launcher, ECS_CONTAINER_METADATA_URI_V4: origin });
+      expect(done.code).toBe(0);
+      expect(JSON.parse(done.stdout)).toMatchObject({ launchedBy: launcher, taskArn });
+    });
+
+    it('refuses without a launcher, and inside ECS without the task it runs as', async () => {
+      const nobody = await run(release, { ECS_CONTAINER_METADATA_URI_V4: origin });
+      expect(nobody.code).toBe(20);
+      expect(refused(nobody.stderr)).toBe('launcher_unknown');
+      const unnamed = await run(release, { FSS_LAUNCHED_BY: launcher, ECS_CONTAINER_METADATA_URI_V4: `${origin}/broken` });
+      expect(unnamed.code).toBe(20);
+      expect(refused(unnamed.stderr)).toBe('task_metadata_unreadable');
+      // The old attribution flag is gone, so an operator cannot name somebody else.
+      expect((await run([...release, '--admin-user', randomUUID()], { FSS_LAUNCHED_BY: launcher })).code).toBe(64);
+    });
   });
 });

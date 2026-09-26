@@ -105,7 +105,13 @@ export type SentMessageRecovery =
       readonly stepCompleted: boolean;
     }
   | { readonly outcome: 'unmatched'; readonly reason: 'no_live_enrollment' }
-  | { readonly outcome: 'unattached'; readonly reason: UnattachedReason; readonly firmIds: readonly string[] };
+  | {
+      readonly outcome: 'unattached';
+      readonly reason: UnattachedReason;
+      readonly firmIds: readonly string[];
+      /** The live enrollments that reach the recipient: what a person settles it among. */
+      readonly enrollmentIds: readonly string[];
+    };
 
 export interface RecoverSentMessageInput {
   readonly mailbox: { readonly id: string; readonly ownerUserId: string };
@@ -242,24 +248,25 @@ export async function recoverSentFolderMessage(
 
   // No fence at all: the send happened after the restore point.
   if (message.recipientAddress === null) {
-    return { outcome: 'unattached', reason: 'recipient_unreadable', firmIds: [] };
+    return { outcome: 'unattached', reason: 'recipient_unreadable', firmIds: [], enrollmentIds: [] };
   }
   const recipient = message.recipientAddress;
   const enrollments = await liveEnrollmentsReaching(context, recipient);
   const firmIds = [...new Set(enrollments.map(enrollment => enrollment.firmId))];
+  const enrollmentIds = enrollments.map(enrollment => enrollment.id);
   const only = enrollments[0];
   if (only === undefined) return { outcome: 'unmatched', reason: 'no_live_enrollment' };
-  if (enrollments.length > 1) return { outcome: 'unattached', reason: 'several_live_enrollments', firmIds };
+  if (enrollments.length > 1) return { outcome: 'unattached', reason: 'several_live_enrollments', firmIds, enrollmentIds };
   if (only.assignedUserId !== mailbox.ownerUserId) {
-    return { outcome: 'unattached', reason: 'assignee_not_mailbox_owner', firmIds };
+    return { outcome: 'unattached', reason: 'assignee_not_mailbox_owner', firmIds, enrollmentIds };
   }
 
   const execution = await nextUnfinishedExecution(context, only.id);
   if (execution === null || execution.channel !== 'email') {
-    return { outcome: 'unattached', reason: 'no_open_email_step', firmIds };
+    return { outcome: 'unattached', reason: 'no_open_email_step', firmIds, enrollmentIds };
   }
   if ((await readFenceByStepExecution(context, execution.id)) !== null) {
-    return { outcome: 'unattached', reason: 'open_step_has_fence', firmIds };
+    return { outcome: 'unattached', reason: 'open_step_has_fence', firmIds, enrollmentIds };
   }
 
   const route = await routeAt(context, only.contactId, recipient);

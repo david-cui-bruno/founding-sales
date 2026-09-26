@@ -15,6 +15,7 @@ import {
   suppressionJournalReplayCommand,
   type AdminInvocation,
   type AdminOutcome,
+  type LaunchIdentity,
 } from './fss/admin.ts';
 import {
   TOOL_ENVIRONMENT_VARIABLES,
@@ -209,6 +210,11 @@ async function adminInvocation(
     options: parsed.options,
     switches: parsed.switches,
   };
+  if (name === 'holds release-restore') {
+    const identity = await launchIdentity(environment);
+    if ('refusal' in identity) return identity;
+    return { ...base, launch: identity.launch };
+  }
   if (mode === 'database') return base;
   if (mode === 'journal') {
     return { ...base, journalSource: await resolveJournalSource(config) };
@@ -224,7 +230,68 @@ async function adminInvocation(
   }
   const resolved = await resolveMail(environment, config);
   if ('refusal' in resolved) return resolved;
-  return { ...base, mail: resolved.mail };
+  return { ...base, mail: resolved.mail, connectElsewhere: host => connectElsewhere(config, host) };
+}
+
+/**
+ * A session on `host` with this task's own runtime credential: the connection string
+ * with only the hostname changed, so the same user, password, database and TLS settings.
+ * `reconcile-sent` reads the instance being replaced this way (lane W3-S8 review). A
+ * host that does not answer within ten seconds is an error the command reports as
+ * `inventory_unreadable`; nothing is printed about the connection itself.
+ */
+export async function connectElsewhere(
+  config: ToolConfig,
+  host: string,
+): Promise<{ readonly session: SessionQueryable; close(): Promise<void> }> {
+  if (config.database === null) throw Object.assign(new Error('no runtime connection'), { code: 'runtime_credential_missing' });
+  const url = new URL(config.database.connectionString);
+  url.hostname = host;
+  const client = new pg.Client({
+    connectionString: url.toString(),
+    application_name: 'fss-admin-inventory',
+    connectionTimeoutMillis: 10_000,
+  });
+  try {
+    await client.connect();
+  } catch (error) {
+    await client.end().catch(() => undefined);
+    throw error;
+  }
+  return { session: asSession(client), close: () => client.end() };
+}
+
+/**
+ * Who launched this task and which task it is (`AdminInvocation.launch`).
+ *
+ * `FSS_LAUNCHED_BY` is the principal `aws sts get-caller-identity` answered in the
+ * launcher's shell (the runbook's `fss_task` passes it as a container override), and the
+ * task ARN comes from the ECS metadata endpoint, so CloudTrail's RunTask event for that
+ * ARN shows the same caller and the same override. Inside ECS a metadata endpoint that
+ * does not answer is a refusal, not a null ARN; outside ECS (the tests) the ARN is null.
+ */
+export async function launchIdentity(
+  environment: Readonly<Record<string, string | undefined>>,
+): Promise<{ readonly launch: LaunchIdentity } | { readonly refusal: AdminOutcome }> {
+  const launchedBy = environment['FSS_LAUNCHED_BY']?.trim() || null;
+  const metadata = environment['ECS_CONTAINER_METADATA_URI_V4']?.trim();
+  if (metadata === undefined || metadata.length === 0) return { launch: { launchedBy, taskArn: null } };
+  try {
+    const response = await fetch(`${metadata}/task`, { signal: AbortSignal.timeout(5_000) });
+    const body = response.ok ? ((await response.json()) as { readonly TaskARN?: unknown }) : null;
+    if (body === null || typeof body.TaskARN !== 'string' || body.TaskARN.length === 0) {
+      throw new Error('no TaskARN');
+    }
+    return { launch: { launchedBy, taskArn: body.TaskARN } };
+  } catch {
+    return {
+      refusal: {
+        ok: false,
+        reason: 'task_metadata_unreadable',
+        detail: 'the ECS task metadata endpoint did not name this task, so the release could not be tied to its RunTask event',
+      },
+    };
+  }
 }
 
 async function runCommand(

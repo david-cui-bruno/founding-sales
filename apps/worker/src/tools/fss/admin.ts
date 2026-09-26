@@ -15,7 +15,7 @@ import {
   recoverSentFolderMessage,
   type SentMessageRecovery,
 } from '@fss/domain/restore';
-import { releaseRecordSource, type HoldReasonCode } from '@fss/contracts';
+import { HOLD_REASON_CODES, releaseRecordSource, type HoldReasonCode } from '@fss/contracts';
 import type { MailWorkerOptions } from '../../handlers/mail.ts';
 import type { ToolConfig } from './config.ts';
 import { readOnlyGmail } from './readOnlyGmail.ts';
@@ -39,6 +39,29 @@ export interface AdminInvocation {
   /** Injected by the tests; resolved from the deployment in production. */
   readonly journalSource?: SuppressionJournalSource | undefined;
   readonly mail?: MailWorkerOptions | undefined;
+  /**
+   * A session on another database host with this task's own runtime credential: the
+   * instance being replaced, which `mailbox reconcile-sent` reads its inventory from.
+   * The caller closes it.
+   */
+  readonly connectElsewhere?: ((host: string) => Promise<ElsewhereSession>) | undefined;
+  /**
+   * Who launched this one-off task, as the launcher's shell verified it (`aws sts
+   * get-caller-identity`, passed as FSS_LAUNCHED_BY), and the task's own ARN from the ECS
+   * metadata endpoint. CloudTrail's RunTask event for that ARN names the same caller and
+   * the same override, which is what makes the pair checkable. Null outside ECS.
+   */
+  readonly launch?: LaunchIdentity | undefined;
+}
+
+export interface ElsewhereSession {
+  readonly session: SessionQueryable;
+  close(): Promise<void>;
+}
+
+export interface LaunchIdentity {
+  readonly launchedBy: string | null;
+  readonly taskArn: string | null;
 }
 
 export type AdminOutcome =
@@ -58,70 +81,167 @@ export type AdminOutcome =
 const accept = (value: Readonly<Record<string, unknown>>): AdminOutcome => ({ ok: true, value });
 const refuse = (reason: string, detail: string): AdminOutcome => ({ ok: false, reason, detail });
 
+/** What a hold opened for an unattached send names as its source (`--hold-unattached`). */
+export const UNATTACHED_SEND_HOLD_SOURCE = 'restore.unattached_send';
+
 // ---------------------------------------------------------------------------
 // The holds.
 // ---------------------------------------------------------------------------
 
+const isHoldReason = (value: string): value is HoldReasonCode => (HOLD_REASON_CODES as readonly string[]).includes(value);
+
 export async function holdsListCommand(invocation: AdminInvocation): Promise<AdminOutcome> {
-  const reason = invocation.options['--reason'] as HoldReasonCode | undefined;
-  const excludeReason = invocation.options['--exclude-reason'] as HoldReasonCode | undefined;
-  const holds = await listOpenHolds(invocation.session, { reason, excludeReason });
+  const reason = invocation.options['--reason'];
+  const excludeReason = invocation.options['--exclude-reason'];
+  // A misspelt reason is a refusal, not an empty list that reads as "none are open".
+  for (const value of [reason, excludeReason]) {
+    if (value !== undefined && !isHoldReason(value)) {
+      return refuse('reason_unknown', `${value} is not a hold reason code; the codes are ${HOLD_REASON_CODES.join(', ')}`);
+    }
+  }
+  const holds = await listOpenHolds(invocation.session, {
+    reason: reason as HoldReasonCode | undefined,
+    excludeReason: excludeReason as HoldReasonCode | undefined,
+  });
   return accept({ count: holds.length, reason: reason ?? null, excludeReason: excludeReason ?? null, holds });
 }
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+/** An IAM or STS principal ARN: what `aws sts get-caller-identity` answers. */
+const PRINCIPAL_ARN = /^arn:aws:(sts|iam)::\d{12}:(assumed-role|user|role)\/[\w+=,.@/-]+$/u;
+
+/** How an unattached-send hold was settled, as `holds release-restore --resolution` says. */
+export const UNATTACHED_RESOLUTIONS = ['ended-duplicate-enrollment', 'checked-no-duplicate'] as const;
+
+/** What the opening audit row of an unattached-send hold recorded (`holdUnattachedSend`). */
+async function unattachedHoldOpening(
+  session: SessionQueryable,
+  hold: { readonly workspaceId: string; readonly id: string },
+): Promise<{ readonly enrollmentIds: readonly string[] } | null> {
+  const { rows } = await session.query<{ detail: { enrollmentIds?: unknown } }>(
+    `SELECT detail FROM audit_events
+      WHERE workspace_id = $1 AND action = 'hold.restore_opened' AND subject_kind = 'hold' AND subject_id = $2
+      ORDER BY occurred_at LIMIT 1`,
+    [hold.workspaceId, hold.id],
+  );
+  const detail = rows[0]?.detail;
+  if (detail === undefined) return null;
+  const ids = Array.isArray(detail.enrollmentIds) ? detail.enrollmentIds.filter((id): id is string => typeof id === 'string') : [];
+  return { enrollmentIds: ids };
+}
 
 /**
- * `fss admin holds release-restore --admin-user <uuid> --note <text> [--hold <id>]`.
+ * `fss admin holds release-restore --note <text> [--hold <id>] [--resolution <how>]`.
  *
  * The audited clearance of a `restore_in_progress` hold (lane W3-S8). Nothing opens one
- * since the generation check went, and the generation advance that released them went
- * with it, so a hold left from before would otherwise block sending and dialing in its
- * workspace for good. This releases the open ones (or the one `--hold` names) through
- * the domain's own `releaseHold` and writes one `audit_events` row per hold, as the admin
- * named, with the note, in the same transaction. It refuses a user who is not an active
- * admin of the hold's workspace, an empty note, and a `--hold` that is not an open
- * restore hold; it touches no hold of any other reason. Run `fss admin holds list
- * --reason restore_in_progress` first and read what it would release.
+ * since the generation check went except `reconcile-sent --hold-unattached`, and the
+ * generation advance that released them went with it. So without this, a hold left from
+ * before, or one a restore opened, would block sending and dialing for good.
+ *
+ * **Who.** The launcher's verified principal and the task ARN (`AdminInvocation.launch`),
+ * never a user id the caller types. It refuses without a principal. Each audit row names
+ * it as the actor's detail, with `actor_kind = 'system'`, because the tool is never a
+ * user.
+ *
+ * **Which.** Without `--hold`, every open restore hold from before, but never one a
+ * restore opened for an unattached send: those are released one at a time, by id, with
+ * `--resolution`, and they are reported under `needsResolution` otherwise.
+ * `ended-duplicate-enrollment` is checked: at least one enrollment the send could have
+ * belonged to (recorded when the hold opened) must have ended since. `checked-no-duplicate`
+ * is a person's word, and the note has to say what they checked.
+ *
+ * **How.** `releaseHold` with the reason in the UPDATE itself, and one `audit_events` row
+ * (`hold.restore_released`) per hold in the same transaction. A named hold already
+ * released answers `outcome: 'already_released'`, exit 0, and releases nothing.
  */
 export async function holdsReleaseRestoreCommand(invocation: AdminInvocation): Promise<AdminOutcome> {
-  const adminUserId = (invocation.options['--admin-user'] ?? '').trim();
+  const launchedBy = invocation.launch?.launchedBy ?? null;
+  const taskArn = invocation.launch?.taskArn ?? null;
+  if (launchedBy === null || !PRINCIPAL_ARN.test(launchedBy)) {
+    return refuse(
+      'launcher_unknown',
+      'the task names no verified launcher: fss_task passes FSS_LAUNCHED_BY from `aws sts get-caller-identity`, and a release is attributed to nobody else',
+    );
+  }
   const note = (invocation.options['--note'] ?? '').trim();
-  if (!UUID.test(adminUserId)) return refuse('admin_invalid', '--admin-user is the id of the admin this release is attributed to');
   if (note.length === 0 || note.length > 500) {
     return refuse('note_invalid', '--note says why the hold is released, in at most 500 characters');
   }
-  const named = invocation.options['--hold'];
-  const open = await listOpenHolds(invocation.session, { reason: 'restore_in_progress' });
-  const chosen = named === undefined ? open : open.filter(hold => hold.id === named);
-  if (named !== undefined && chosen.length === 0) {
-    return refuse('hold_unknown', 'no open restore_in_progress hold has that id');
+  const resolution = invocation.options['--resolution'];
+  if (resolution !== undefined && !(UNATTACHED_RESOLUTIONS as readonly string[]).includes(resolution)) {
+    return refuse('resolution_unknown', `--resolution is one of ${UNATTACHED_RESOLUTIONS.join(', ')}`);
   }
-  for (const workspaceId of new Set(chosen.map(hold => hold.workspaceId))) {
-    const { rows } = await invocation.session.query<{ count: string }>(
-      `SELECT count(*)::text AS count FROM workspace_memberships
-        WHERE workspace_id = $1 AND user_id = $2 AND role = 'admin' AND status = 'active'`,
-      [workspaceId, adminUserId],
-    );
-    if (Number(rows[0]?.count ?? '0') < 1) {
-      return refuse('not_admin', `${adminUserId} is not an active admin of workspace ${workspaceId}`);
+  const named = invocation.options['--hold'];
+
+  const open = await listOpenHolds(invocation.session, { reason: 'restore_in_progress' });
+  let chosen: readonly (typeof open)[number][];
+  if (named === undefined) {
+    chosen = open.filter(hold => hold.sourceEventKind !== UNATTACHED_SEND_HOLD_SOURCE);
+  } else {
+    chosen = open.filter(hold => hold.id === named);
+    if (chosen.length === 0) {
+      const { rows } = await invocation.session.query<{ workspace_id: string }>(
+        `SELECT workspace_id FROM active_holds
+          WHERE id::text = $1 AND reason_code = 'restore_in_progress' AND released_at IS NOT NULL`,
+        [named],
+      );
+      if (rows.length > 0) {
+        return accept({ outcome: 'already_released', released: 0, alreadyReleased: [named], holds: [], needsResolution: [], launchedBy, taskArn });
+      }
+      return refuse('hold_unknown', 'no restore_in_progress hold has that id');
+    }
+    const hold = chosen[0];
+    if (hold !== undefined && hold.sourceEventKind === UNATTACHED_SEND_HOLD_SOURCE) {
+      if (resolution === undefined) {
+        return refuse('resolution_missing', `a hold opened for an unattached send is released with --resolution ${UNATTACHED_RESOLUTIONS.join(' | ')}, once the send is settled`);
+      }
+      if (resolution === 'ended-duplicate-enrollment') {
+        const opening = await unattachedHoldOpening(invocation.session, hold);
+        const ended =
+          opening === null || opening.enrollmentIds.length === 0
+            ? 0
+            : Number(
+                (
+                  await invocation.session.query<{ count: string }>(
+                    `SELECT count(*)::text AS count FROM sequence_enrollments
+                      WHERE workspace_id = $1 AND id = ANY($2::uuid[]) AND ended_at >= $3::timestamptz`,
+                    [hold.workspaceId, [...opening.enrollmentIds], hold.startedAt],
+                  )
+                ).rows[0]?.count ?? '0',
+              );
+        if (ended < 1) {
+          return refuse(
+            'resolution_unverified',
+            'none of the enrollments this send could have belonged to has ended since the hold opened: end the duplicate in the app first, or say checked-no-duplicate and why',
+          );
+        }
+      }
     }
   }
+  const needsResolution =
+    named === undefined ? open.filter(hold => hold.sourceEventKind === UNATTACHED_SEND_HOLD_SOURCE).map(hold => hold.id) : [];
 
   const released: Record<string, unknown>[] = [];
   for (const hold of chosen) {
     const context = repositoryContext(workspaceScope(hold.workspaceId, RESTORE_ACTOR), invocation.session);
     const outcome = await withTransaction(invocation.session, async () => {
-      const done = await releaseHold(context, hold.id);
+      const done = await releaseHold(context, hold.id, 'restore_in_progress');
       if (done === null) return null;
       await invocation.session.query(
         `INSERT INTO audit_events (workspace_id, actor_kind, actor_user_id, action, subject_kind, subject_id, detail)
-         VALUES ($1, 'admin', $2, 'hold.restore_released', 'hold', $3, $4::jsonb)`,
+         VALUES ($1, 'system', NULL, 'hold.restore_released', 'hold', $2, $3::jsonb)`,
         [
           hold.workspaceId,
-          adminUserId,
           hold.id,
-          JSON.stringify({ note, startedAt: done.startedAt, releasedAt: done.releasedAt, via: 'fss admin holds release-restore' }),
+          JSON.stringify({
+            note,
+            launchedBy,
+            taskArn,
+            source: hold.sourceEventKind,
+            ...(hold.sourceEventKind === UNATTACHED_SEND_HOLD_SOURCE ? { resolution } : {}),
+            startedAt: done.startedAt,
+            releasedAt: done.releasedAt,
+            via: 'fss admin holds release-restore',
+          }),
         ],
       );
       return done;
@@ -131,7 +251,16 @@ export async function holdsReleaseRestoreCommand(invocation: AdminInvocation): P
     }
   }
   const others = await listOpenHolds(invocation.session, { excludeReason: 'restore_in_progress' });
-  return accept({ released: released.length, holds: released, otherHoldsStillOpen: others.length, adminUserId, note });
+  return accept({
+    outcome: released.length > 0 ? 'released' : 'nothing_to_release',
+    released: released.length,
+    holds: released,
+    alreadyReleased: [],
+    needsResolution,
+    otherHoldsStillOpen: others.length,
+    launchedBy,
+    taskArn,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -220,12 +349,9 @@ async function everyMailbox(session: SessionQueryable): Promise<readonly Restore
 }
 
 /**
- * `fss admin mailbox list`. Read-only: every mailbox with its address and status.
- *
- * The restore runbook runs it against the instance being replaced, before anything
- * points at the copy, so the inventory `reconcile-sent` demands comes from the database
- * that knows every mailbox connected up to the failure, not from the copy, which knows
- * only those connected before the restore point.
+ * `fss admin mailbox list`. Read-only: every mailbox with its address and status, on
+ * whichever instance the task points at. `reconcile-sent` no longer takes its output:
+ * it reads the instance being replaced itself (`--inventory-host`).
  */
 export async function mailboxListCommand(invocation: AdminInvocation): Promise<AdminOutcome> {
   const mailboxes = await everyMailbox(invocation.session);
@@ -240,24 +366,115 @@ export async function mailboxListCommand(invocation: AdminInvocation): Promise<A
   });
 }
 
-/**
- * `--inventory a@example.com,b@example.com`: every mailbox address that could have sent
- * since the restore point, as the operator established it. Lower-cased, each one an
- * address, none repeated, and at least one.
- */
-export function parseInventory(value: string | undefined): readonly string[] | null {
-  const entries = (value ?? '')
-    .split(',')
-    .map(entry => entry.trim().toLowerCase())
-    .filter(entry => entry.length > 0);
-  if (entries.length === 0) return null;
-  if (new Set(entries).size !== entries.length) return null;
-  if (!entries.every(entry => /^[^@\s,]+@[^@\s,]+\.[^@\s,]+$/u.test(entry))) return null;
-  return entries;
+/** A DNS hostname as `active_database_host` takes one: lower case, at least one dot, no port. */
+const HOSTNAME = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/u;
+
+/** The host this invocation's own session connects to: the copy, during a restore. */
+function ownHost(config: ToolConfig): string | null {
+  if (config.database === null) return null;
+  try {
+    return new URL(config.database.connectionString).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
 }
 
-/** What a hold opened for an unattached send names as its source (`--hold-unattached`). */
-export const UNATTACHED_SEND_HOLD_SOURCE = 'restore.unattached_send';
+type InventoryRead =
+  | { readonly ok: true; readonly addresses: readonly string[] }
+  | { readonly ok: false; readonly outcome: AdminOutcome };
+
+/**
+ * Every mailbox connection an instance's audit trail records (`mailbox.connected`, written
+ * by `connectMailbox` in the same transaction as the mailbox row). `audit_events` is
+ * append-only for both application roles, so what the application damaged there it
+ * could only have added to.
+ */
+async function auditedConnections(
+  session: SessionQueryable,
+): Promise<readonly { readonly workspaceId: string; readonly mailboxId: string; readonly address: string }[]> {
+  const { rows } = await session.query<{ workspace_id: string; subject_id: string | null; address: string | null }>(
+    `SELECT DISTINCT workspace_id, subject_id, lower(btrim(detail->>'emailAddress')) AS address
+       FROM audit_events
+      WHERE action = 'mailbox.connected' AND subject_kind = 'mailbox'
+      ORDER BY workspace_id, subject_id, address`,
+  );
+  return rows.map(row => ({ workspaceId: row.workspace_id, mailboxId: row.subject_id ?? '', address: row.address ?? '' }));
+}
+
+/**
+ * The inventory: every mailbox address the instance being replaced has, in any status,
+ * and every address its audit trail says was ever connected, read by this command itself
+ * from `--inventory-host` with this task's runtime credential. Nobody types it (lane
+ * W3-S8 review). It refuses the copy's own host; a host it cannot read, which is the
+ * deleted-source case (`inventory_unreadable`); an instance with no mailbox; and an
+ * instance whose mailbox rows were damaged (`inventory_source_incomplete`): one that lacks
+ * a mailbox the copy has, or one its own audit trail records connecting. The application
+ * never deletes a mailbox row, so either means its list cannot be the whole list.
+ */
+async function readInventory(
+  invocation: AdminInvocation,
+  copy: readonly RestoreMailbox[],
+): Promise<InventoryRead> {
+  const host = (invocation.options['--inventory-host'] ?? '').trim().toLowerCase();
+  if (!HOSTNAME.test(host)) {
+    return {
+      ok: false,
+      outcome: refuse('inventory_host_invalid', '--inventory-host is the address of the instance being replaced: a hostname, no port'),
+    };
+  }
+  if (host === ownHost(invocation.config)) {
+    return {
+      ok: false,
+      outcome: refuse(
+        'inventory_host_is_the_copy',
+        'the inventory comes from the instance being replaced, never from the copy being reconciled, which cannot know a mailbox connected after the restore point',
+      ),
+    };
+  }
+  const unreadable = (why: string): InventoryRead => ({
+    ok: false,
+    outcome: refuse(
+      'inventory_unreadable',
+      `the instance being replaced at ${host} could not be read (${why}): without it nothing establishes which mailboxes could have sent since the restore point, and nothing starts`,
+    ),
+  });
+  if (invocation.connectElsewhere === undefined) return unreadable('this invocation cannot reach another host');
+  let source: readonly RestoreMailbox[];
+  let audited: Awaited<ReturnType<typeof auditedConnections>>;
+  try {
+    const elsewhere = await invocation.connectElsewhere(host);
+    try {
+      source = await everyMailbox(elsewhere.session);
+      audited = await auditedConnections(elsewhere.session);
+    } finally {
+      await elsewhere.close();
+    }
+  } catch (error) {
+    const code = (error as { readonly code?: unknown }).code;
+    return unreadable(typeof code === 'string' ? code : error instanceof Error ? error.name : 'error');
+  }
+  if (source.length === 0) {
+    return { ok: false, outcome: refuse('inventory_empty', `the instance at ${host} has no mailbox at all, so it is not the instance being replaced`) };
+  }
+  const sourceIds = new Set(source.map(mailbox => mailbox.id));
+  const missing = [
+    ...new Set([
+      ...copy.filter(mailbox => !sourceIds.has(mailbox.id)).map(mailbox => mailbox.id),
+      ...audited.filter(entry => !sourceIds.has(entry.mailboxId)).map(entry => entry.mailboxId || '(no id)'),
+    ]),
+  ];
+  if (missing.length > 0) {
+    return {
+      ok: false,
+      outcome: refuse(
+        'inventory_source_incomplete',
+        `the instance at ${host} lacks mailbox(es) the copy has or its own audit trail records connecting (${missing.join(', ')}): the application never deletes a mailbox row, so its list cannot be the whole list`,
+      ),
+    };
+  }
+  const addresses = [...source.map(mailbox => mailbox.address), ...audited.map(entry => entry.address)].filter(a => a.length > 0);
+  return { ok: true, addresses: [...new Set(addresses)].sort() };
+}
 
 /**
  * `--hold-unattached`: a send no single step can be named for holds what it could belong
@@ -269,10 +486,17 @@ export const UNATTACHED_SEND_HOLD_SOURCE = 'restore.unattached_send';
  */
 async function holdUnattachedSend(
   context: ReturnType<typeof repositoryContext>,
-  message: string,
-  firmIds: readonly string[],
+  input: {
+    readonly message: string;
+    readonly mailboxId: string;
+    readonly sentAt: string;
+    readonly reason: string;
+    readonly firmIds: readonly string[];
+    readonly enrollmentIds: readonly string[];
+  },
 ): Promise<readonly string[]> {
-  const scopes: readonly (string | null)[] = firmIds.length === 0 ? [null] : firmIds;
+  const { message } = input;
+  const scopes: readonly (string | null)[] = input.firmIds.length === 0 ? [null] : input.firmIds;
   const holdIds: string[] = [];
   for (const firmId of scopes) {
     const { rows } = await context.db.query<{ id: string }>(
@@ -282,20 +506,43 @@ async function holdUnattachedSend(
       [context.scope.workspaceId, UNATTACHED_SEND_HOLD_SOURCE, message, firmId],
     );
     const existing = rows[0]?.id;
-    holdIds.push(
-      existing ??
-        (await openHold(context, {
-          scopeKind: firmId === null ? 'workspace' : 'firm',
-          ...(firmId === null ? {} : { scopeKey: firmId }),
-          reasonCode: 'restore_in_progress',
-          blockedActionKinds: ALL_BLOCKED_ACTION_KINDS,
-          sourceEventKind: UNATTACHED_SEND_HOLD_SOURCE,
-          sourceEventId: message,
-          // Settled by a person who can see the Sent message; released afterwards with
-          // `fss admin holds release-restore`, which audits it.
-          recoveryAction: 'resolve_ambiguity',
-        })),
+    if (existing !== undefined) {
+      holdIds.push(existing);
+      continue;
+    }
+    const holdId = await openHold(context, {
+      scopeKind: firmId === null ? 'workspace' : 'firm',
+      ...(firmId === null ? {} : { scopeKey: firmId }),
+      reasonCode: 'restore_in_progress',
+      blockedActionKinds: ALL_BLOCKED_ACTION_KINDS,
+      sourceEventKind: UNATTACHED_SEND_HOLD_SOURCE,
+      sourceEventId: message,
+      // Settled by a person who can see the Sent message; released afterwards with
+      // `fss admin holds release-restore --resolution`, which audits it.
+      recoveryAction: 'resolve_ambiguity',
+    });
+    // The opening is audited like the release: what was held, why, and among which
+    // enrollments a person settles it (`holds release-restore` reads them back).
+    await context.db.query(
+      `INSERT INTO audit_events (workspace_id, actor_kind, actor_user_id, action, subject_kind, subject_id, detail)
+       VALUES ($1, 'system', NULL, 'hold.restore_opened', 'hold', $2, $3::jsonb)`,
+      [
+        context.scope.workspaceId,
+        holdId,
+        JSON.stringify({
+          source: UNATTACHED_SEND_HOLD_SOURCE,
+          message,
+          mailboxId: input.mailboxId,
+          sentAt: input.sentAt,
+          reason: input.reason,
+          scope: firmId === null ? 'workspace' : 'firm',
+          firmId,
+          enrollmentIds: input.enrollmentIds,
+          via: 'fss admin mailbox reconcile-sent --hold-unattached',
+        }),
+      ],
     );
+    holdIds.push(holdId);
   }
   return holdIds;
 }
@@ -366,25 +613,25 @@ function missingFenceLine(workspaceId: string, mailboxId: string, message: strin
     case 'unmatched':
       return { ...base, reason: recovery.reason };
     case 'unattached':
-      return { ...base, reason: recovery.reason, firmIds: recovery.firmIds };
+      return { ...base, reason: recovery.reason, firmIds: recovery.firmIds, enrollmentIds: recovery.enrollmentIds };
   }
 }
 
 /**
- * `fss admin mailbox reconcile-sent --since <instant> --inventory <address>[,<address>...]`.
+ * `fss admin mailbox reconcile-sent --since <instant> --inventory-host <host> [--hold-unattached]`.
  *
  * After a point-in-time restore, against the restored copy, with both services stopped
  * (`docs/greenfield/runbooks/restore.md`). A send made after the restore point is a
  * message in Gmail with no fence in the copy, and nothing in the sender would stop it
  * going again; this puts the fences back.
  *
- * **Which mailboxes.** The operator's `--inventory`: every address that could have sent
- * since the restore point, established from the instance being replaced (`fss admin
- * mailbox list`) and not from the copy, which cannot know a mailbox connected after the
- * restore point. Each inventory address is read in whatever status the copy has it; an
- * address the copy has no mailbox for is `mailbox_not_in_copy`. A mailbox the copy has
- * connected that the inventory does not name is read too, and is
- * `mailbox_not_in_inventory`, because the inventory was then not the whole list.
+ * **Which mailboxes.** Every address the instance being replaced has, or its audit trail
+ * says was ever connected (`readInventory`, from `--inventory-host`), never only the
+ * copy's, which cannot know a mailbox connected after the restore point; nobody types the
+ * list, and a source that cannot be read stops everything. Each inventory address is read
+ * in whatever status the copy has it; an address the copy has no mailbox for is
+ * `mailbox_not_in_copy`. A connected mailbox of the copy whose address the inventory lacks
+ * is read and reported `mailbox_not_in_inventory`.
  *
  * **The fences the copy holds.** Every fence in `dispatching` or `reconciling` started
  * since `--since` goes through `reconcileOutboundMessage`, the sweep's own function, a
@@ -418,18 +665,14 @@ export async function mailboxReconcileSentCommand(invocation: AdminInvocation): 
   if (!Number.isFinite(Date.parse(since))) {
     return refuse('since_invalid', '--since is the instant the Sent folder is read from: the restore point minus ten minutes');
   }
-  const inventory = parseInventory(invocation.options['--inventory']);
-  if (inventory === null) {
-    return refuse(
-      'inventory_invalid',
-      '--inventory is every mailbox address that could have sent since the restore point, comma-separated, at least one, none repeated',
-    );
-  }
+  const known = await everyMailbox(invocation.session);
+  const read = await readInventory(invocation, known);
+  if (!read.ok) return read.outcome;
+  const inventory = read.addresses;
 
   const holdUnattached = invocation.switches.has('--hold-unattached');
   const unresolved: Record<string, unknown>[] = [];
   const unattachedHeld: Record<string, unknown>[] = [];
-  const known = await everyMailbox(invocation.session);
   const chosen = new Map<string, RestoreMailbox>();
   for (const address of inventory) {
     const matches = known.filter(mailbox => mailbox.address === address);
@@ -490,9 +733,16 @@ export async function mailboxReconcileSentCommand(invocation: AdminInvocation): 
       missingFences.push(line);
       if (recovery.outcome === 'unattached') {
         if (holdUnattached) {
-          const firmIds = recovery.firmIds;
+          const { firmIds, enrollmentIds, reason } = recovery;
           const holdIds = await withTransaction(invocation.session, async () =>
-            holdUnattachedSend(context, redactedMessageId(message.rfcMessageId), firmIds),
+            holdUnattachedSend(context, {
+              message: redactedMessageId(message.rfcMessageId),
+              mailboxId: mailbox.id,
+              sentAt: message.sentAt,
+              reason,
+              firmIds,
+              enrollmentIds,
+            }),
           );
           unattachedHeld.push({ ...line, sentAt: message.sentAt, holdIds });
         } else {
@@ -513,6 +763,7 @@ export async function mailboxReconcileSentCommand(invocation: AdminInvocation): 
   const report = {
     since,
     until,
+    inventory_host: (invocation.options['--inventory-host'] ?? '').trim().toLowerCase(),
     inventory,
     mailboxes_scanned: mailboxes.length,
     fences_reconciled: fencesReconciled,
