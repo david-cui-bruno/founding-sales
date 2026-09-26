@@ -1,6 +1,15 @@
-import type { HoldReasonCode } from '@fss/contracts';
+import type { HoldReasonCode, StepChannel } from '@fss/contracts';
 import type { SequenceDelay } from '../src/rules/businessDays.ts';
-import type { StepChannel } from '../src/rules/cadence.ts';
+import {
+  STEP_CHANNELS,
+  type EnrollmentEndReason,
+  type EnrollmentState,
+  type SequenceStopCondition,
+  type SequenceVersionState,
+  type StepCompletionSource,
+  type StepExecutionState,
+  type StepResult,
+} from '@fss/contracts';
 
 /**
  * The sequences vocabulary (specification 11.1, 11.2, 11.3).
@@ -14,76 +23,11 @@ import type { StepChannel } from '../src/rules/cadence.ts';
  * so that the pure rule and the table agree by construction.
  */
 
-export type { SequenceDelay, StepChannel };
-
-/**
- * The channels a step may have. Migration 0019 took `linkedin_task`, the marker 0018
- * kept for the removed LinkedIn channel, out of both channel CHECKs (production stored
- * no LinkedIn step), so a stored step is always one of these.
- */
-export const STEP_CHANNELS = ['email', 'call_task'] as const satisfies readonly StepChannel[];
+export type { SequenceDelay };
 
 export function isStepChannel(value: string): value is StepChannel {
   return (STEP_CHANNELS as readonly string[]).includes(value);
 }
-
-export const SEQUENCE_VERSION_STATES = ['draft', 'published', 'retired'] as const;
-export type SequenceVersionState = (typeof SEQUENCE_VERSION_STATES)[number];
-
-/**
- * 11.2's terminal conditions. A version may not opt out of any of them.
- *
- * Migration 0018 removed `linkedin_reply` from every stored array, from the column's
- * default and from both CHECKs; the reader still keeps only these four (`toVersion` in
- * `rows.ts`).
- */
-export const SEQUENCE_STOP_CONDITIONS = [
-  'human_reply',
-  'engaged_call',
-  'opt_out_or_suppression',
-  'stage_closed',
-] as const;
-export type SequenceStopCondition = (typeof SEQUENCE_STOP_CONDITIONS)[number];
-
-export const ENROLLMENT_STATES = ['active', 'review_required', 'completed', 'stopped'] as const;
-export type EnrollmentState = (typeof ENROLLMENT_STATES)[number];
-
-/**
- * Why an enrollment ended. The first four are 11.2's terminal conditions as the
- * enrollment sees them; the rest are the ends that are not a prospect signal.
- */
-export const ENROLLMENT_END_REASONS = [
-  'human_reply',
-  'engaged_call',
-  'opt_out',
-  'firm_suppressed',
-  'stage_won',
-  'stage_lost',
-  'direct_send',
-  'send_skipped',
-  'reassignment',
-  'sequence_complete',
-  'admin_stop',
-] as const;
-export type EnrollmentEndReason = (typeof ENROLLMENT_END_REASONS)[number];
-
-export const STEP_EXECUTION_STATES = ['pending', 'held', 'dispatched', 'completed', 'cancelled'] as const;
-export type StepExecutionState = (typeof STEP_EXECUTION_STATES)[number];
-
-export const STEP_COMPLETION_SOURCES = ['call_log', 'send', 'admin', 'system'] as const;
-export type StepCompletionSource = (typeof STEP_COMPLETION_SOURCES)[number];
-
-export const STEP_RESULTS = [
-  'sent',
-  'skipped',
-  'no_email',
-  'voicemail_left',
-  'no_answer',
-  'busy',
-  'connected',
-  'not_applicable',
-] as const;
-export type StepResult = (typeof STEP_RESULTS)[number];
 
 /**
  * Every refusal this lane can return. Closed, because a route turns one into a stable

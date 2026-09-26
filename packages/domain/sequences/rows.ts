@@ -1,23 +1,20 @@
 import type { HoldReasonCode } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
+import { type EnrollmentRow, type SequenceStepRow, type SequenceVersionRow, type StepExecutionRow } from './types.ts';
 import {
   ENROLLMENT_END_REASONS,
   SEQUENCE_STOP_CONDITIONS,
   STEP_COMPLETION_SOURCES,
   STEP_RESULTS,
   type EnrollmentEndReason,
-  type EnrollmentRow,
   type EnrollmentState,
-  type SequenceStepRow,
   type SequenceStopCondition,
-  type SequenceVersionRow,
   type SequenceVersionState,
   type StepChannel,
   type StepCompletionSource,
-  type StepExecutionRow,
   type StepExecutionState,
   type StepResult,
-} from './types.ts';
+} from '@fss/contracts';
 
 /**
  * Reading the sequence tables, and nothing else.

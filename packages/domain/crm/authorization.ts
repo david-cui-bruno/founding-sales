@@ -1,5 +1,6 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
-import type { CrmRefusalCode, FirmRow } from './types.ts';
+import type { FirmRow } from './types.ts';
+import type { CrmRefusalCode } from '@fss/contracts';
 
 /**
  * Who may change a firm, and who may read what about it

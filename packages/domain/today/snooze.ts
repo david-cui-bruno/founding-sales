@@ -11,11 +11,11 @@ import {
   TODAY_PAUSE_SOURCE_EVENT_KIND,
   acceptToday,
   refuseToday,
-  type TodayItemKind,
   type TodayItemRow,
   type TodayResult,
   type TodaySnoozeRow,
 } from './types.ts';
+import { type TodayItemKind } from '@fss/contracts';
 
 /**
  * Snooze (specification 8.2, 4.3, 10.1).

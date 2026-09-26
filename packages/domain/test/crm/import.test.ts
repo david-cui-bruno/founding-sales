@@ -1,14 +1,16 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import type { SessionQueryable } from '../../db/queryable.ts';
-import { repositoryContext, workspaceScope, type RepositoryContext, type WorkspaceScope } from '../../db/workspaceScope.ts';
+import {
+  repositoryContext,
+  workspaceScope,
+  type RepositoryContext,
+  type WorkspaceScope,
+} from '../../db/workspaceScope.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
-import {
-  IMPORT_COLUMNS as CONTRACT_COLUMNS,
-  IMPORT_ISSUE_CODES as CONTRACT_ISSUE_CODES,
-} from '@fss/contracts';
-import { IMPORT_COLUMNS, IMPORT_ISSUE_CODES, commitImportRow, parseCsv, previewCsvImport } from '../../crm/import.ts';
+import { IMPORT_COLUMNS } from '@fss/contracts';
+import { commitImportRow, parseCsv, previewCsvImport } from '../../crm/import.ts';
 
 /**
  * Admin CSV import (specification 7.2, Appendix G 38).
@@ -71,14 +73,6 @@ describe('CSV import', () => {
 
   afterAll(async () => {
     await database.drop();
-  });
-
-  // ------------------------------------------------------------ the wire contract
-  it('agrees with @fss/contracts about the columns and the issue codes', () => {
-    // Two packages, one vocabulary. A column added to one and not the other is a
-    // preview whose `issues` a client cannot render, and it fails here instead.
-    expect([...IMPORT_COLUMNS]).toEqual([...CONTRACT_COLUMNS]);
-    expect([...IMPORT_ISSUE_CODES]).toEqual([...CONTRACT_ISSUE_CODES]);
   });
 
   // ------------------------------------------------------------------ the parser

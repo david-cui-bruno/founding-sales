@@ -1,11 +1,11 @@
-import type { CallOutcome, CallStepApplication, CallStepEffect } from '@fss/contracts';
+import type { CallOutcome, CallStepApplication, CallStepEffect, StepResult } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { addBusinessDays } from '../src/rules/businessDays.ts';
 import { localDate, localInstant, localParts } from '../src/rules/localClock.ts';
 import { calendarOfEnrollment } from '../sequences/enrollments.ts';
 import { completeStepExecution, rescheduleExecution } from '../sequences/executions.ts';
 import { lockStepWithEnrollment, readSequenceVersion } from '../sequences/rows.ts';
-import type { EnrollmentRow, StepExecutionRow, StepResult } from '../sequences/types.ts';
+import type { EnrollmentRow, StepExecutionRow } from '../sequences/types.ts';
 import { completeTodayItemsByKey } from '../today/snapshots.ts';
 import { callOutcomeEffects, type CallOutcomeEffects } from './outcomes.ts';
 

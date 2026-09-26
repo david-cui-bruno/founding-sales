@@ -1,4 +1,4 @@
-import type { BlockedActionKind, HoldReasonCode, PauseChannel } from '@fss/contracts';
+import { BLOCKED_ACTION_KINDS, type BlockedActionKind, type HoldReasonCode, type PauseChannel } from '@fss/contracts';
 
 /**
  * What the policy commands share (specification 10.1, 15).
@@ -85,11 +85,5 @@ export const CHANNEL_BLOCKED_ACTION_KINDS: Readonly<Record<PauseChannel, readonl
     research: Object.freeze(['research'] as const),
   });
 
-/** Everything a pause with no channel blocks. */
-export const ALL_BLOCKED_ACTION_KINDS: readonly BlockedActionKind[] = Object.freeze([
-  'email_send',
-  'call_task',
-  'dial_authorization',
-  'enrollment_advance',
-  'research',
-] as const);
+/** Everything a pause with no channel blocks: every action kind there is. */
+export const ALL_BLOCKED_ACTION_KINDS: readonly BlockedActionKind[] = Object.freeze([...BLOCKED_ACTION_KINDS]);

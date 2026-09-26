@@ -6,9 +6,9 @@ import {
   refuseSend,
   acceptSend,
   type OutboundOutcomeState,
-  type OutboundState,
   type SendResult,
 } from './types.ts';
+import { type OutboundState } from '@fss/contracts';
 
 /**
  * The outbound fence (specification 12.5, Appendix B).

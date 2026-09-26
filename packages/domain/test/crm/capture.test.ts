@@ -1,15 +1,16 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import type { SessionQueryable } from '../../db/queryable.ts';
-import { repositoryContext, workspaceScope, type RepositoryContext, type WorkspaceScope } from '../../db/workspaceScope.ts';
+import {
+  repositoryContext,
+  workspaceScope,
+  type RepositoryContext,
+  type WorkspaceScope,
+} from '../../db/workspaceScope.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
+import { IMPORT_COLUMNS } from '@fss/contracts';
 import {
-  IMPORT_FILE_REFUSALS as CONTRACT_FILE_REFUSALS,
-} from '@fss/contracts';
-import {
-  CSV_REFUSALS,
-  IMPORT_COLUMNS,
   addFirm,
   canonicalWebsite,
   commitImportRow,
@@ -89,10 +90,6 @@ describe('capturing firms: one row per contact, and Add firm', () => {
   });
 
   // ---------------------------------------------------------------- the file itself
-  it('agrees with @fss/contracts about the file refusals', () => {
-    expect([...CSV_REFUSALS]).toEqual([...CONTRACT_FILE_REFUSALS]);
-  });
-
   it('reads a spreadsheet header: a byte-order mark, spaces and capitals', () => {
     const parsed = parseCsv('﻿Firm Name,Website,Contact-Email\r\nBirch Test Advisors,birch.example.test,a@birch.example.test\r\n');
     expect(parsed.ok).toBe(true);

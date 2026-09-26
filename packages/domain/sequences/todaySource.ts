@@ -1,6 +1,7 @@
 import type { TodaySource } from '../today/build.ts';
-import type { TodayItemKind } from '../today/types.ts';
-import { isStepChannel, type StepChannel } from './types.ts';
+import type { TodayItemKind } from '@fss/contracts';
+import { isStepChannel } from './types.ts';
+import { type StepChannel } from '@fss/contracts';
 
 /**
  * Lane 3 of the Today list: due sequence work (specification 8.2).

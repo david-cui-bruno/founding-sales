@@ -12,8 +12,8 @@ import { applyManualModeStop } from '../sequences/terminalStops.ts';
 import { recordSuppression } from '../suppression/events.ts';
 import { type SuppressionJournal } from '../suppression/journal.ts';
 import { businessDateOf, completeTodayItem } from '../today/snapshots.ts';
-import type { ReplyDisposition } from '../src/rules/replyClassification.ts';
-import { REPLY_DISPOSITIONS } from '../src/rules/replyClassification.ts';
+import type { ReplyDisposition } from '@fss/contracts';
+import { REPLY_DISPOSITIONS } from '@fss/contracts';
 import { listClassifications, proposedDispositionOf } from './store.ts';
 import {
   acceptClassification,

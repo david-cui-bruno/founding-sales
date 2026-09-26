@@ -1,5 +1,5 @@
 import type { ClassifierCallOutcome } from '../../../classification/types.ts';
-import type { ReplyClass, ReplyDisposition } from '../../../src/rules/replyClassification.ts';
+import type { ReplyClass, ReplyDisposition } from '@fss/contracts';
 
 /**
  * The labelled reply corpus (specification 16.1's "LLM classifier harness: fixed

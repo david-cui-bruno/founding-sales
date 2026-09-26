@@ -1,4 +1,5 @@
-import type { ReplyClass, ReplyDisposition } from '../src/rules/replyClassification.ts';
+import type { ReplyClass, ReplyDisposition } from '@fss/contracts';
+import { CLASSIFIER_EFFORTS, CLASSIFIER_MODELS, type ClassifierEffort, type ClassifierModel } from '@fss/contracts';
 
 /**
  * What the model layer is, and what it is allowed to be (specification 8.3, 12.4).
@@ -27,30 +28,6 @@ import type { ReplyClass, ReplyDisposition } from '../src/rules/replyClassificat
 
 /** The prompt this package sends. Bumped whenever a byte of the system prompt moves. */
 export const CLASSIFIER_PROMPT_VERSION = 'g7b.replies.1';
-
-/**
- * The model ids David chooses between at launch, and the only ones
- * `classifier_settings_model_known` accepts.
- *
- * Claude Opus 5 is the default and has no dated form. Claude Haiku 4.5 has two
- * accepted spellings — the undated alias and the `-20251001` snapshot, which is how
- * David's environment documents it — and the API takes either, so both are here
- * rather than one of them being a refusal a person has to discover. They are the same
- * model to `MODEL_CAPABILITIES`; only the string differs.
- *
- * The list is an allow-list and not a shape rule: what makes an id acceptable is that
- * the adapter has been told what parameters it takes, which is a fact about this
- * table and not about the characters in the string.
- */
-export const CLASSIFIER_MODELS = [
-  'claude-opus-5',
-  'claude-haiku-4-5',
-  'claude-haiku-4-5-20251001',
-] as const;
-export type ClassifierModel = (typeof CLASSIFIER_MODELS)[number];
-
-export const CLASSIFIER_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
-export type ClassifierEffort = (typeof CLASSIFIER_EFFORTS)[number];
 
 /**
  * What each model will accept, so the adapter never sends a parameter that is a 400.

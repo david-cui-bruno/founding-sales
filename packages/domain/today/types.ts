@@ -1,3 +1,4 @@
+import { TODAY_ITEM_KINDS, type TodayItemKind, type TodayLane } from '@fss/contracts';
 /**
  * The Today vocabulary (specification 8.2, 8.3).
  *
@@ -5,29 +6,6 @@
  * for the same reason: a refusal is a value the command receipt can record, never an
  * exception that would roll the receipt back with the mutation.
  */
-
-/** 8.2's four lanes, in precedence order. The array order *is* the precedence. */
-export const TODAY_LANES = ['reply', 'callback', 'due_work', 'new_firm'] as const;
-export type TodayLane = (typeof TODAY_LANES)[number];
-
-/**
- * What one contact task is.
- *
- * Two kinds share the `due_work` lane because 8.2 names one lane for "due sequence
- * work" and the card counts them separately: "replies, emails due, calls due".
- *
- * LinkedIn tasks were removed on 25 September 2026, and migration 0018 deleted every
- * `linkedin_due` item and took the kind out of `today_items_kind_known`. `isTodayItemKind`
- * still guards the readers, because a kind column is text.
- */
-export const TODAY_ITEM_KINDS = [
-  'reply',
-  'callback',
-  'email_due',
-  'call_due',
-  'new_firm',
-] as const;
-export type TodayItemKind = (typeof TODAY_ITEM_KINDS)[number];
 
 export function isTodayItemKind(value: string): value is TodayItemKind {
   return (TODAY_ITEM_KINDS as readonly string[]).includes(value);

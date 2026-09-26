@@ -82,6 +82,7 @@ export const ENROLLMENT_END_REASONS = [
 export type EnrollmentEndReason = (typeof ENROLLMENT_END_REASONS)[number];
 
 export const STEP_COMPLETION_SOURCES = ['call_log', 'send', 'admin', 'system'] as const;
+export type StepCompletionSource = (typeof STEP_COMPLETION_SOURCES)[number];
 
 export const STEP_RESULTS = [
   'sent',
@@ -93,6 +94,7 @@ export const STEP_RESULTS = [
   'connected',
   'not_applicable',
 ] as const;
+export type StepResult = (typeof STEP_RESULTS)[number];
 
 /**
  * `template_versions.personalization_strategy`'s vocabulary (migration 0012). The
@@ -254,6 +256,7 @@ export type EnrollmentsResponse = z.infer<typeof enrollmentsResponseSchema>;
 // ---------------------------------------------------------------------------
 
 export const STEP_EXECUTION_STATES = ['pending', 'held', 'dispatched', 'completed', 'cancelled'] as const;
+export type StepExecutionState = (typeof STEP_EXECUTION_STATES)[number];
 
 /**
  * `decideResume`'s answers (`packages/domain/src/rules/holds.ts`), `still_held` and

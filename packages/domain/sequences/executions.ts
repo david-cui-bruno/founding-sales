@@ -33,11 +33,9 @@ import {
   type SequenceResult,
   type SequenceStepRow,
   type SequenceVersionRow,
-  type StepChannel,
-  type StepCompletionSource,
   type StepExecutionRow,
-  type StepResult,
 } from './types.ts';
+import { type StepChannel, type StepCompletionSource, type StepResult } from '@fss/contracts';
 import { templateVariablesFor } from './variables.ts';
 
 export { rescheduleExecution, type RescheduleInput } from './shifts.ts';

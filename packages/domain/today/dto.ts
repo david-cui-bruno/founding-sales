@@ -1,14 +1,8 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { currentCallingIdentityId } from '../dial/identities.ts';
 import { businessDateOf, listTodayCards, listTodayItems, workspaceBusinessTimeZone } from './snapshots.ts';
-import {
-  TODAY_PAUSE_SOURCE_EVENT_KIND,
-  callLogIdOfItemKey,
-  type TodayCounts,
-  type TodayItemKind,
-  type TodayItemRow,
-  type TodayLane,
-} from './types.ts';
+import { TODAY_PAUSE_SOURCE_EVENT_KIND, callLogIdOfItemKey, type TodayCounts, type TodayItemRow } from './types.ts';
+import { type TodayItemKind, type TodayLane } from '@fss/contracts';
 
 /**
  * What the API returns and the Mac shows (specification 8.2, 14.1, Appendix F).

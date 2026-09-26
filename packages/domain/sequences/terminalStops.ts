@@ -3,7 +3,7 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { MANUAL_MODE_ORIGINS, type ManualModeOrigin } from '../crm/events.ts';
 import { stopEnrollments } from './enrollments.ts';
-import type { EnrollmentEndReason } from './types.ts';
+import type { EnrollmentEndReason } from '@fss/contracts';
 
 /**
  * Subscribing to the CRM's terminal-stop outbox (specification 8.1, 7.3,

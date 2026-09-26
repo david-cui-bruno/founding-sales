@@ -9,7 +9,6 @@ import { decidePhoneOnEntry, decideRouteEligibility } from './routePolicy.ts';
 import {
   accept,
   refuse,
-  type CrmRefusalCode,
   type CrmResult,
   type RouteEligibility,
   type RouteKind,
@@ -17,6 +16,7 @@ import {
   type RouteSource,
   type TechnicalValidation,
 } from './types.ts';
+import { type CrmRefusalCode } from '@fss/contracts';
 
 /**
  * Phone routes and email addresses (specification 7.2, 7.4, 9.1).

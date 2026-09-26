@@ -4,7 +4,14 @@ import { decideAdminOnly } from './authorization.ts';
 import { createContact } from './contacts.ts';
 import { createFirm, resolveZoneForFirm } from './firms.ts';
 import { addEmailRoute, addPhoneRoute } from './routes.ts';
-import { actorUserId, type CrmRefusalCode, type RouteSource } from './types.ts';
+import { actorUserId, type RouteSource } from './types.ts';
+import {
+  type CrmRefusalCode,
+  IMPORT_COLUMNS,
+  type ImportColumn,
+  type ImportFileRefusal,
+  type ImportIssueCode,
+} from '@fss/contracts';
 
 /**
  * Admin CSV import (specification 7.2, Appendix G 38), and the Add firm form that is one
@@ -56,54 +63,10 @@ import { actorUserId, type CrmRefusalCode, type RouteSource } from './types.ts';
  * see it.
  */
 
-/** The columns a file may have, in the order `IMPORT_COLUMNS.join(',')` writes them. */
-export const IMPORT_COLUMNS = [
-  'firm_name',
-  'website',
-  'address_line',
-  'locality',
-  'region_code',
-  'postal_code',
-  'external_id',
-  'owner_user_id',
-  'contact_name',
-  'contact_title',
-  'contact_email',
-  'contact_phone',
-  'time_zone',
-] as const;
-export type ImportColumn = (typeof IMPORT_COLUMNS)[number];
-
-export const IMPORT_ISSUE_CODES = [
-  'firm_name_missing',
-  'website_invalid',
-  'region_code_invalid',
-  'postal_code_invalid',
-  'email_invalid',
-  'phone_invalid',
-  'contact_name_missing',
-  'owner_unknown',
-  'duplicate_in_file',
-  'duplicate_in_workspace',
-  'time_zone_invalid',
-  'firm_ambiguous',
-  'too_long',
-] as const;
-export type ImportIssueCode = (typeof IMPORT_ISSUE_CODES)[number];
-
 export interface ImportIssue {
   readonly column: ImportColumn;
   readonly code: ImportIssueCode;
 }
-
-export const CSV_REFUSALS = [
-  'csv_empty',
-  'csv_column_unknown',
-  'csv_column_repeated',
-  'csv_row_width',
-  'csv_too_many_rows',
-] as const;
-export type CsvRefusal = (typeof CSV_REFUSALS)[number];
 
 export interface CsvRow {
   /** The line number a person sees in their spreadsheet. The header is 1. */
@@ -123,7 +86,7 @@ export const MAX_IMPORT_ROWS = 2_000;
  * Every refusal a capture may answer with: the CRM's own codes, a whole file's, and a
  * row's issue codes, which is what a commit of a row the preview found at fault says.
  */
-export type ImportRefusal = CrmRefusalCode | CsvRefusal | ImportIssueCode;
+export type ImportRefusal = CrmRefusalCode | ImportFileRefusal | ImportIssueCode;
 
 /**
  * The outcome of a preview or a commit. A refusal names where it is: the column a row's
@@ -187,9 +150,9 @@ export function parseCsv(
   source: string,
 ):
   | { ok: true; value: ParsedCsv }
-  | { ok: false; reason: CsvRefusal; column: string | null; rowNumber: number | null } {
+  | { ok: false; reason: ImportFileRefusal; column: string | null; rowNumber: number | null } {
   const text = source.startsWith('﻿') ? source.slice(1) : source;
-  const refusal = (reason: CsvRefusal, column: string | null = null, rowNumber: number | null = null) =>
+  const refusal = (reason: ImportFileRefusal, column: string | null = null, rowNumber: number | null = null) =>
     ({ ok: false, reason, column, rowNumber }) as const;
   const records: string[][] = [];
   let field = '';

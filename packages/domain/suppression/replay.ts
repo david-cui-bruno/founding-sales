@@ -7,7 +7,7 @@ import { databaseNow } from '../policy/clock.ts';
 import { openHold } from '../policy/holds.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { claimFinalization } from './finalize.ts';
-import { readSuppressionEvent } from './events.ts';
+import { REVIEW_HOLD_BLOCKS, readSuppressionEvent } from './events.ts';
 import { SUPPRESSION_JOURNAL_SCHEMA, type SuppressionJournalRecord } from './journal.ts';
 
 /**
@@ -118,14 +118,6 @@ const TERMINAL_SOURCES: ReadonlySet<string> = new Set([
   'import',
   'deletion_tombstone',
 ]);
-
-/** Everything a suppression's review hold blocks. Mirrors `events.ts`. */
-const REVIEW_HOLD_BLOCKS = [
-  'email_send',
-  'call_task',
-  'dial_authorization',
-  'enrollment_advance',
-] as const;
 
 export interface ReplayInput {
   readonly records: readonly SuppressionJournalRecord[];

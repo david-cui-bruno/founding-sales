@@ -1,4 +1,11 @@
-import { resolveDelay, startAnchoredDueAt, type ResolvedDueInstant, type SequenceDelay, type WorkspaceHolidayCalendar } from './businessDays.ts';
+import {
+  resolveDelay,
+  startAnchoredDueAt,
+  type ResolvedDueInstant,
+  type SequenceDelay,
+  type WorkspaceHolidayCalendar,
+} from './businessDays.ts';
+import type { StepChannel } from '@fss/contracts';
 
 /**
  * The start-anchored due rule (specification 11.1 and 11.2): a step's delay is counted
@@ -7,8 +14,6 @@ import { resolveDelay, startAnchoredDueAt, type ResolvedDueInstant, type Sequenc
  * This module decides only when a step is due; it dials nothing, sends nothing and
  * writes nothing.
  */
-
-export type StepChannel = 'email' | 'call_task';
 
 export interface SequenceStep {
   readonly id: string;

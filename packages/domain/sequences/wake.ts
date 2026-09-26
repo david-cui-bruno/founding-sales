@@ -1,6 +1,6 @@
 import type { Queryable } from '../db/queryable.ts';
 import { CHANNEL_ACTION_KINDS, CHANNEL_PAUSE_KEYS } from './eligibility.ts';
-import type { StepChannel } from './types.ts';
+import type { StepChannel } from '@fss/contracts';
 
 /**
  * When a step execution is owed another look, and the job key that look runs under

@@ -4,9 +4,9 @@ import {
   CALLBACK_TIME_NEEDED_KEY_PREFIX,
   TODAY_ALGORITHM_VERSION,
   callbackTimeNeededItemKey,
-  type TodayItemKind,
   type TodaySourceKind,
 } from './types.ts';
+import { type TodayItemKind } from '@fss/contracts';
 
 /**
  * Building one workspace business date's list (specification 8.2, Appendix C).

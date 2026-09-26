@@ -8,12 +8,12 @@ import {
   acceptSequence,
   isStepChannel,
   refuseSequence,
-  type EnrollmentEndReason,
   type EnrollmentRow,
   type SequenceResult,
   type SequenceStepRow,
   type SequenceVersionRow,
 } from './types.ts';
+import { type EnrollmentEndReason } from '@fss/contracts';
 
 /**
  * Enrollment, and the terminal stop (specification 11.2, 7.3, 8.1, Appendix A).

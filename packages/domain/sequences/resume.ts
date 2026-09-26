@@ -1,4 +1,11 @@
-import { knownBlockedActionKinds, type BlockedActionKind, type HoldReasonCode } from '@fss/contracts';
+import {
+  knownBlockedActionKinds,
+  type BlockedActionKind,
+  type HoldReasonCode,
+  STEP_CHANNELS,
+  type StepChannel,
+  type StepExecutionState,
+} from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import {
   composeHolds,
@@ -10,16 +17,7 @@ import {
 import { CHANNEL_ACTION_KINDS, CHANNEL_PAUSE_KEYS } from './eligibility.ts';
 import { loadEnrollmentForUpdate, readEnrollment, unexecutedExecutions } from './rows.ts';
 import { rescheduleExecution } from './shifts.ts';
-import {
-  STEP_CHANNELS,
-  acceptSequence,
-  isStepChannel,
-  refuseSequence,
-  type EnrollmentRow,
-  type SequenceResult,
-  type StepChannel,
-  type StepExecutionState,
-} from './types.ts';
+import { acceptSequence, isStepChannel, refuseSequence, type EnrollmentRow, type SequenceResult } from './types.ts';
 import { holdAppliesSql } from './wake.ts';
 
 /**

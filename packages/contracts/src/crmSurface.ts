@@ -97,6 +97,7 @@ export const IMPORT_FILE_REFUSALS = [
   'csv_row_width',
   'csv_too_many_rows',
 ] as const;
+export type ImportFileRefusal = (typeof IMPORT_FILE_REFUSALS)[number];
 export const importFileRefusalSchema = z.enum(IMPORT_FILE_REFUSALS);
 
 /** One mebibyte of body is the API's limit; a file is bounded well below it. */

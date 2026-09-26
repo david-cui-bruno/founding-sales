@@ -1,3 +1,4 @@
+import type { OutboundState } from '@fss/contracts';
 /**
  * The vocabulary of at-most-once sending (specification 12.5 to 12.7, Appendix B).
  *
@@ -13,17 +14,6 @@
  * the request may have arrived. Every type here that could collapse it into "failed"
  * deliberately does not.
  */
-
-/** Appendix B's state machine, exactly. There is no seventh state. */
-export const OUTBOUND_STATES = [
-  'prepared',
-  'held',
-  'dispatching',
-  'reconciling',
-  'sent',
-  'unknown_terminal',
-] as const;
-export type OutboundState = (typeof OUTBOUND_STATES)[number];
 
 /** What `readOutboundOutcome` reports when no fence exists for an origin at all. */
 export type OutboundOutcomeState = OutboundState | 'absent';

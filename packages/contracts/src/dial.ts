@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { commandIdSchema } from './auth.ts';
 import { semanticVersionSchema } from './clientVersion.ts';
 import { e164, instant, uuid } from './foundationRows.ts';
+import { STEP_NO_ANSWER_ACTIONS } from './sequences.ts';
 
 /**
  * The wire contract of policy, suppression and dialing
@@ -197,8 +198,7 @@ export const callStepEffectSchema = z.enum(CALL_STEP_EFFECTS);
 export type CallStepEffect = z.infer<typeof callStepEffectSchema>;
 
 /** What a step configured for a no-answer does next, when the sequence says (9.1). */
-export const CALL_RETRY_BEHAVIOURS = ['advance', 'retry_call'] as const;
-export const callRetryBehaviourSchema = z.enum(CALL_RETRY_BEHAVIOURS);
+export const callRetryBehaviourSchema = z.enum(STEP_NO_ANSWER_ACTIONS);
 
 // ---------------------------------------------------------------------------
 // Suppression (specification 10.2)
