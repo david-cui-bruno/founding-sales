@@ -1,6 +1,7 @@
-import { expect, test } from 'playwright/test';
+import { expect, test, type Locator, type Page } from 'playwright/test';
 import { startAppServer, type AppServer } from './support/appServer.ts';
 import { desktopState } from './support/homeFixtures.ts';
+import { notConnectedMailbox } from './support/sessionFixtures.ts';
 
 /**
  * Lane g83: the update line in Home's sidebar, as a person sees and presses it.
@@ -109,27 +110,90 @@ test('Update now that finds the update shows it installing, with nothing left to
   await expect(page.getByRole('button')).toHaveCount(0);
 });
 
-test('while the launch update installs, Home is on screen and read-only, and says why', async ({ page }) => {
-  server = await startAppServer({ update: { kind: 'none' } });
+/** What the main process sends when the update state changes. */
+async function updateChanged(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    for (const listener of (globalThis as unknown as { __updateListeners: (() => void)[] }).__updateListeners) listener();
+  });
+}
+
+/** A real click at the control's centre: what `inert` refuses, unlike `element.click()`. */
+async function pressAt(page: Page, control: Locator): Promise<void> {
+  const box = await control.boundingBox();
+  if (box === null) throw new Error('the control is not on screen');
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+}
+
+const appInert = async (page: Page): Promise<boolean> =>
+  await page.locator('#app').evaluate(node => (node as HTMLElement).inert);
+
+test('while the launch update installs, the whole window is read-only — sidebar included — and says why', async ({ page }) => {
+  server = await startAppServer({ update: { kind: 'none' }, mailbox: notConnectedMailbox(), connectAnswer: notConnectedMailbox() });
   await page.goto(server.url());
   await expect(page.getByTestId('today-card')).toHaveCount(4);
   await expect(page.getByTestId('updating-banner')).toHaveCount(0);
+  // This Mac open, so its Connect Gmail and Sign out are on screen when the install starts.
+  await page.getByTestId('this-mac-summary').click();
+  await expect(page.getByTestId('mailbox-connect')).toBeVisible();
 
   server.update.setState({ kind: 'installing', version: '1.0.6' });
-  await page.evaluate(() => {
-    for (const listener of (globalThis as unknown as { __updateListeners: (() => void)[] }).__updateListeners) listener();
-  });
+  await updateChanged(page);
   await expect(page.getByTestId('updating-banner')).toContainText('Updating Callie to 1.0.6…');
-  await expect(page.getByTestId('column')).toHaveAttribute('aria-busy', 'true');
-  expect(await page.getByTestId('column').evaluate(node => (node as HTMLElement).inert)).toBe(true);
+  await expect(page.locator('#app')).toHaveAttribute('aria-busy', 'true');
+  expect(await appInert(page)).toBe(true);
   // Readable: the list is still there.
   await expect(page.getByTestId('today-card')).toHaveCount(4);
 
+  // Nothing presses: not the sidebar's Connect Gmail or Sign out, not a view, not a card.
+  await pressAt(page, page.getByTestId('mailbox-connect'));
+  await pressAt(page, page.getByTestId('sign-out'));
+  await pressAt(page, page.getByTestId('nav-firms'));
+  await pressAt(page, page.getByTestId('card-expand').first());
+  await page.waitForTimeout(200);
+  expect(called('mailbox.connect')).toEqual([]);
+  expect(called('callie.signOut')).toEqual([]);
+  expect(called('today.expand')).toEqual([]);
+  await expect(page.getByTestId('column')).toHaveAttribute('data-route', 'today');
+
   // An install that did not go ahead gives the page back.
   server.update.setState({ kind: 'none' });
-  await page.evaluate(() => {
-    for (const listener of (globalThis as unknown as { __updateListeners: (() => void)[] }).__updateListeners) listener();
-  });
+  await updateChanged(page);
   await expect(page.getByTestId('updating-banner')).toHaveCount(0);
-  expect(await page.getByTestId('column').evaluate(node => (node as HTMLElement).inert)).toBe(false);
+  expect(await appInert(page)).toBe(false);
+  await pressAt(page, page.getByTestId('nav-firms'));
+  await expect(page.getByTestId('column')).toHaveAttribute('data-route', 'firms');
+});
+
+test('while the launch update installs, the sign-in form is read-only too, and is given back after', async ({ page }) => {
+  server = await startAppServer({
+    desktop: desktopState({ screen: 'sign_in', device: null, today: null, rememberedWorkspace: null }),
+    update: { kind: 'none' },
+  });
+  await page.goto(server.url());
+  await page.getByTestId('workspace-id').fill('11111111-1111-4111-8111-111111111111');
+
+  server.update.setState({ kind: 'installing', version: '1.0.6' });
+  await updateChanged(page);
+  await expect(page.getByTestId('update-notice')).toHaveText('Updating Callie to 1.0.6…');
+  expect(await appInert(page)).toBe(true);
+  // The redraw that says so keeps what was typed.
+  await expect(page.getByTestId('workspace-id')).toHaveValue('11111111-1111-4111-8111-111111111111');
+  await pressAt(page, page.getByTestId('sign-in'));
+  await page.waitForTimeout(200);
+  expect(called('callie.signIn')).toEqual([]);
+
+  server.update.setState({ kind: 'none' });
+  await updateChanged(page);
+  await expect(page.getByTestId('update-notice')).toHaveCount(0);
+  expect(await appInert(page)).toBe(false);
+  await pressAt(page, page.getByTestId('sign-in'));
+  await expect.poll(() => called('callie.signIn').length).toBe(1);
+});
+
+test('Update now that finds the update leaves the upgrade screen read-only while it installs', async ({ page }) => {
+  server = await startAppServer({ desktop: blocked(), update: { kind: 'none' }, updateFound: '1.0.6' });
+  await page.goto(server.url());
+  await page.getByTestId('update-now').click();
+  await expect(page.getByTestId('update-notice')).toHaveText('Updating Callie to 1.0.6…');
+  expect(await appInert(page)).toBe(true);
 });

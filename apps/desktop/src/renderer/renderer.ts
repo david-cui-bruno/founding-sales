@@ -77,6 +77,19 @@ function element<K extends keyof HTMLElementTagNameMap>(
 let signInDraft: { readonly workspaceId: string; readonly deviceLabel: string } | null = null;
 
 /**
+ * Whatever is typed in a shown sign-in form, kept before the screen is drawn again — an
+ * update starting or ending redraws it too — so a redraw never empties the form.
+ */
+function keepSignInDraft(root: HTMLElement): void {
+  const fields = root.querySelector('[data-testid="sign-in-fields"]');
+  const workspace = root.querySelector('[data-testid="workspace-id"]');
+  const label = root.querySelector('[data-testid="device-label"]');
+  if (!(fields instanceof HTMLElement) || fields.hidden) return;
+  if (!(workspace instanceof HTMLInputElement) || !(label instanceof HTMLInputElement)) return;
+  signInDraft = { workspaceId: workspace.value, deviceLabel: label.value };
+}
+
+/**
  * The sign-in form. A Mac that has signed in before remembers its workspace and its name
  * (wave 1, `workspace.json`), so the form is the one button; "Use another workspace"
  * shows the two fields for the rare other one. A first sign-in shows them from the start.
@@ -283,16 +296,19 @@ function renderUpdateNow(root: HTMLElement): void {
 }
 
 /**
- * The launch update, while it is being put in place (wave 1): the column is read-only and
- * one line says why. It installs after the window opens — `confirmLaunch` records this
- * start first, and that order stays — so for those seconds Home is on screen and nothing
- * in it can be pressed. Callie restarts by itself when the new build is in place.
+ * The launch update, while it is being put in place (wave 1): the whole window is
+ * read-only — the sidebar's Connect Gmail and Sign out, the column, and on the signed-out
+ * screens the sign-in form and Update now — and one line says why. It installs after the
+ * window opens — `confirmLaunch` records this start first, and that order stays — so for
+ * those seconds the page is on screen and nothing in it can be pressed. Callie restarts
+ * by itself when the new build is in place. `shell` is null on the signed-out screens,
+ * whose banners already carry the "Updating Callie to …" line.
  */
-function showUpdating(root: HTMLElement, shell: Shell): void {
+function showUpdating(root: HTMLElement, shell: Shell | null): void {
   const installing = lastUpdate?.kind === 'installing' ? lastUpdate : null;
-  holdInert(shell.column, 'updating', installing !== null);
+  holdInert(root, 'updating', installing !== null);
   let line = root.querySelector('[data-testid="updating-banner"]');
-  if (installing === null) {
+  if (installing === null || shell === null) {
     line?.remove();
     return;
   }
@@ -507,9 +523,11 @@ export function render(state: DesktopState | null, options: { readonly busy?: bo
     mailboxWaiting = false;
     forgetHome();
   }
+  keepSignInDraft(root);
   root.replaceChildren();
   root.className = 'single';
   root.dataset['view'] = 'single';
+  showUpdating(root, null);
   root.append(element('h1', { text: view.heading, testId: 'heading' }));
 
   const banners = element('div', { className: 'banners', testId: 'banners' });
