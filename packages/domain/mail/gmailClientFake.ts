@@ -233,6 +233,41 @@ export function recordedGmailClient(fixture: GmailFixture): RecordedGmailClient 
     calls.push({ method, detail });
   };
 
+  /** `getMetadata` and `getSentMetadata`: the same fixture read, recorded under each name. */
+  const metadataOf = async (
+    method: string,
+    messageId: string,
+    headers: readonly string[],
+  ): Promise<GmailMessageMetadata | null> => {
+    record(method, { messageId, headers });
+    metadataReads.push(messageId);
+    for (const header of headers) requestedHeaders.add(header);
+    await Promise.resolve();
+    if (fixture.grantRevoked === true) {
+      throw new GmailClientError('unexpected_status', 'the fixture grant is revoked', 401);
+    }
+    const message = find(messageId);
+    if (message === undefined) return null;
+
+    // Only the allowlist comes back, whatever the fixture holds: that is the
+    // contract `format=metadata&metadataHeaders=` gives, and a fake that returned
+    // more would hide a lane asking for a header it is not allowed to read.
+    const wanted = new Set(headers.map(header => header.toLowerCase()));
+    const allowed: Record<string, string> = {};
+    for (const [name, value] of Object.entries(message.headers)) {
+      if (wanted.has(name.toLowerCase())) allowed[name] = value;
+    }
+    return {
+      id: message.id,
+      threadId: message.threadId,
+      internalDateEpochMilliseconds: message.internalDateEpochMilliseconds,
+      labelIds: message.labelIds ?? [],
+      headers: allowed,
+      attachments: message.attachments ?? [],
+      sizeEstimate: 1024,
+    };
+  };
+
   /** Every planned refusal, in the order a real client would hit them. */
   const refusal = (): 'grant_revoked' | 'rate_limited' | null => {
     if (fixture.grantRevoked === true) return 'grant_revoked';
@@ -405,35 +440,13 @@ export function recordedGmailClient(fixture: GmailFixture): RecordedGmailClient 
       };
     },
 
-    getMetadata: async (_access, messageId, headers): Promise<GmailMessageMetadata | null> => {
-      record('getMetadata', { messageId, headers });
-      metadataReads.push(messageId);
-      for (const header of headers) requestedHeaders.add(header);
-      await Promise.resolve();
-      if (fixture.grantRevoked === true) {
-        throw new GmailClientError('unexpected_status', 'the fixture grant is revoked', 401);
-      }
-      const message = find(messageId);
-      if (message === undefined) return null;
+    getMetadata: async (_access, messageId, headers): Promise<GmailMessageMetadata | null> =>
+      await metadataOf('getMetadata', messageId, headers),
 
-      // Only the allowlist comes back, whatever the fixture holds: that is the
-      // contract `format=metadata&metadataHeaders=` gives, and a fake that returned
-      // more would hide a lane asking for a header it is not allowed to read.
-      const wanted = new Set(headers.map(header => header.toLowerCase()));
-      const allowed: Record<string, string> = {};
-      for (const [name, value] of Object.entries(message.headers)) {
-        if (wanted.has(name.toLowerCase())) allowed[name] = value;
-      }
-      return {
-        id: message.id,
-        threadId: message.threadId,
-        internalDateEpochMilliseconds: message.internalDateEpochMilliseconds,
-        labelIds: message.labelIds ?? [],
-        headers: allowed,
-        attachments: message.attachments ?? [],
-        sizeEstimate: 1024,
-      };
-    },
+    // The fixture's messages are well formed, so the restore's strict read answers what
+    // the ordinary one does; a test of a malformed answer overrides it.
+    getSentMetadata: async (_access, messageId, headers): Promise<GmailMessageMetadata | null> =>
+      await metadataOf('getSentMetadata', messageId, headers),
 
     getBody: async (_access, messageId): Promise<GmailMessageBody | null> => {
       record('getBody', { messageId });

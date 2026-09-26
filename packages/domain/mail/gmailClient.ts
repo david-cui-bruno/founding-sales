@@ -242,6 +242,20 @@ export interface GmailClient {
    * metadata for each with the header allowlist and never a body.
    */
   listSentMessageIds(access: GmailAccessGrant, request: GmailListRequest): Promise<GmailListOutcome>;
+  /**
+   * `getMetadata` for the restore's Sent-folder scan, which reads "no FSS marker" as
+   * "not an FSS send" (lane W3-S8 third review). So it refuses, as `GmailClientError`
+   * `malformed_response`, any 200 that is not exactly one message's metadata: a body
+   * that is not a JSON object, an `id` that is not the requested one or not a string, no
+   * `threadId`, an `internalDate` that is not a positive decimal string, or a `payload`
+   * whose `headers` is not a list of `{ name, value }` strings. A 404 is null, as in
+   * `getMetadata`. The sync keeps `getMetadata` and its reading.
+   */
+  getSentMetadata(
+    access: GmailAccessGrant,
+    messageId: string,
+    headers: readonly string[],
+  ): Promise<GmailMessageMetadata | null>;
 }
 
 export interface GmailSendRequest {

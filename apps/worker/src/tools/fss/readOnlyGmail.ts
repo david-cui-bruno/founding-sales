@@ -40,6 +40,7 @@ export function readOnlyGmail(gmail: GmailClient): GmailClient {
     listHistory: async (access, request) => await gmail.listHistory(access, request),
     listMessageIds: async (access, request) => await gmail.listMessageIds(access, request),
     getMetadata: async (access, messageId, headers) => await gmail.getMetadata(access, messageId, headers),
+    getSentMetadata: async (access, messageId, headers) => await gmail.getSentMetadata(access, messageId, headers),
     searchSentByMessageId: async (access, rfcMessageId) => await gmail.searchSentByMessageId(access, rfcMessageId),
     listSentMessageIds: async (access, request) => await gmail.listSentMessageIds(access, request),
   };
