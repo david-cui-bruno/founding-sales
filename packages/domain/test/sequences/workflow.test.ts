@@ -16,6 +16,7 @@ import {
   listStepExecutions,
   proposeEnrollmentMigration,
   publishVersion,
+  readSequenceVersion,
   recordHolidayCalendar,
   recordingSendHandoff,
   replaceDraftSteps,
@@ -312,6 +313,32 @@ describe('the template lifecycle (11.1, 12.6)', () => {
       sequenceVersionId: version.value.sequenceVersionId,
     });
     expect(published).toEqual({ ok: false, reason: 'template_unapproved' });
+  });
+});
+
+describe('one draft per sequence (11.1)', () => {
+  it('answers a second draft request with the draft already there, and gives it the steps asked for', async () => {
+    const sequence = await createSequence(contextFor('alpha', 'admin'), { name: `Second draft ${String(Date.now())}` });
+    if (!sequence.ok) throw new Error(`the sequence was refused: ${sequence.reason}`);
+    const first = await createDraftVersion(contextFor('alpha', 'admin'), { sequenceId: sequence.value.id });
+    if (!first.ok) throw new Error(`the draft was refused: ${first.reason}`);
+
+    // No steps: the same draft, unchanged. Until 26 September 2026 this raised
+    // sequence_versions_one_draft, which the API answered as a 500.
+    expect(await createDraftVersion(contextFor('alpha', 'admin'), { sequenceId: sequence.value.id })).toEqual(first);
+
+    const call = {
+      ordinal: 1,
+      channel: 'call_task' as const,
+      delay: { unit: 'elapsed' as const, hours: 0 },
+      onNoAnswer: 'advance' as const,
+    };
+    expect(await createDraftVersion(contextFor('alpha', 'admin'), { sequenceId: sequence.value.id, steps: [call] })).toEqual(
+      first,
+    );
+    const draft = await readSequenceVersion(contextFor('alpha', 'admin'), first.value.sequenceVersionId);
+    expect(draft?.state).toBe('draft');
+    expect(draft?.steps.map(step => step.channel)).toEqual(['call_task']);
   });
 });
 

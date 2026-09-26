@@ -470,6 +470,21 @@ describe('the sequence, template and enrollment routes', () => {
     expect(sequenceVersionsResponseSchema.parse(versions.body).versions).toEqual([]);
   });
 
+  it('answers a second draft request with the draft already there, not a 500', async () => {
+    const created = await post('/sequences/create', adminToken, command({ name: 'Two drafts' }));
+    expect(created.status).toBe(200);
+    const twoDraftsSequenceId = String(resultOf(created)['id']);
+    const first = await post('/sequences/versions/draft', adminToken, command({ sequenceId: twoDraftsSequenceId }));
+    expect(first.status).toBe(200);
+    // A second command id, so this is a second request and not a replay of the first.
+    const second = await post('/sequences/versions/draft', adminToken, command({ sequenceId: twoDraftsSequenceId }));
+    expect(second.status).toBe(200);
+    expect(second.body['replayed']).toBe(false);
+    expect(resultOf(second)).toEqual(resultOf(first));
+    const versions = await post('/sequences/versions', adminToken, { sequenceId: twoDraftsSequenceId });
+    expect(sequenceVersionsResponseSchema.parse(versions.body).versions.map(version => version.state)).toEqual(['draft']);
+  });
+
   it('answers a path nobody mounted under these roots with not_found', async () => {
     // The LinkedIn task card's three paths went with LinkedIn on 25 September 2026.
     for (const path of [
