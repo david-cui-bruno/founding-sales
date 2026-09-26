@@ -1,137 +1,41 @@
 name: Greenfield release rehearsal
 
-# The rehearsal gate of specification 16.2, as a workflow.
+# The rehearsal a schema, infrastructure or release-script change gets (specification
+# 16.2; the cadence of lane g97, 25 September 2026). A dispatch only, never a push.
 #
-# "Any release touching database schema, sending, suppression, Gmail, restore or job
-# fencing runs the full recovery drill in an ephemeral rehearsal environment. The
-# rehearsal environment deploys the exact immutable API, worker and Electron artifacts
-# intended for production."
+# It creates a run-prefixed environment `fss-rh-<suffix>`, fills its secret entries,
+# migrates and deploys the two images by digest (migrate, then worker, then API),
+# bootstraps the workspace, checks the declared schema ranges against the deployed images
+# (Appendix G 22), runs the production smoke script against it, tears the run down, and
+# asserts that every durable resource carrying the run's prefix is gone (Appendix G 39).
 #
-# It creates a run-prefixed rehearsal environment, migrates, deploys the two images by
-# digest in the order migrate → worker → API, checks the declared schema ranges against
-# the deployed images, smokes, tears the run down with bypass-governance, and asserts that
-# nothing with the production prefix was touched and nothing of the run's own was left.
-# In `mode: full` it also runs the Appendix G suite and the restore drill (Appendix E 1
-# to 9), replays the suppression journal, reconstructs Gmail against the recorded fake,
-# and writes the release record last.
+# `stage` stops early or only cleans: `plan` plans and summarises and creates nothing;
+# `create` adds the apply; `deploy` adds the entries, the deploy, the bootstrap and the
+# smoke; `full` adds the schema ranges. `teardown` is not a rung on that ladder: it only
+# destroys the prefix named in `run_suffix` (required for it) and runs the guard, to
+# remove an orphan a failed teardown left.
 #
-# ## Two modes, and the cadence (lane g97, David's decision of 25 September 2026)
+# This workflow never pushes an image: the digests are inputs (CI's `fss-image-digests`),
+# and anything but `sha256:` plus 64 hex characters is refused. Every AWS step runs behind
+# the `rehearsal` environment as its one OIDC role, `fss-rh-deploy`, whose sessions last
+# 3600 seconds, so the role is assumed again, and verified again, before the teardown.
+# The teardown and the prefix guard run on `always()` and depend on no stage.
 #
-# `mode` says what the run is for, and `schema` is the default:
-#
-#   * `schema` — the rehearsal a schema, infrastructure or release-script change gets:
-#                create → fill the entries → migrate and deploy → bootstrap the workspace
-#                → the declared schema ranges against the deployed images → the
-#                production smoke script against the rehearsal → destroy → the guard.
-#                It skips the drill's evidence, the release suite (which already runs in
-#                the pull-request gate on every commit), the session renewal before the
-#                drill, the restore drill, the journal drill, and the release record and
-#                manifest. Target: under 45 minutes; the job stops at 90.
-#   * `full`   — everything, as before g97: the restore drill and the release gate, and
-#                the **only** run that writes a release record and a manifest. It runs
-#                on the first Sunday of each month from
-#                `.github/workflows/greenfield-monthly-drill.yml`, and by hand when
-#                anybody wants one. The job stops at 180 minutes.
-#
-# The weekly scheduled full rehearsal of lane g74 is switched off: its workflow became
-# the monthly drill. `stage` still stops a run early (`plan`, `create`, `deploy`) or only
-# cleans (`teardown`); its default is now `full`, which means "the whole of the chosen
-# mode", so a dispatch left at its defaults is the schema rehearsal and the record-writing
-# gate is always chosen (`mode: full`), never inherited.
-#
-# ## Five rules this file keeps
-#
-# **This workflow never pushes an image.** Since lane g74 the `publish` job of
-# `.github/workflows/greenfield-images.yml` pushes each main commit's images to the two
-# rehearsal repositories, by digest, and publishes the digests as the artifact
-# `fss-image-digests`; before it, David pushed from his Mac. Either way the digests are
-# inputs here, and the workflow refuses anything that is not `sha256:` plus 64 hex
-# characters — a mutable tag cannot carry the comparison the release gate exists to make.
-#
-# **Every AWS step is behind the `rehearsal` environment.** The one job declares
-# `environment: rehearsal`, which David enables and which carries the only OIDC role
-# this workflow may assume (`fss-rh-deploy`, scoped to `fss-rh-*`).
-#
-# **No run relies on a single one-hour session.** `fss-rh-deploy`'s MaxSessionDuration
-# is 3600 seconds and a `full` run is longer than that: on 24 September run
-# 35948178549 expired at exactly one hour, inside the restore drill, and took the
-# teardown and the production-prefix guard with it — a leaked environment and an
-# unverified guard. The credential is therefore assumed three times, not once: at the
-# start, again before the drill, and again — on `always()` — before the teardown, each
-# renewal followed by the same identity assertion.
-#
-# **The release scripts are checked on every pull request that touches them**, by
-# `.github/workflows/greenfield-infra.yml` (`bash -n` and shellcheck) and by the release
-# suite, which runs them with stubbed CLIs. This workflow has no pull-request job.
-#
-# **Teardown always runs.** A rehearsal environment left standing costs money and, far
-# worse, becomes a second place prospect-shaped data can live. `if: always()` — and
-# deliberately *not* `if: always() && <stage>`: the teardown and the production-prefix
-# assertion are what protect against a stage condition being wrong, so they are the two
-# steps that may not depend on one.
-#
-# ## Five stages, one gate, and one that only cleans
-#
-# Three credentialed rehearsals (21 September 2026) each stopped at the first error of a
-# class no offline check can see, and each cost about an hour for one error, because the
-# workflow had one mode. The `stage` input makes the cheap part runnable alone:
-#
-#   * `plan`   — identity, the run's own resources, `terraform init`, the tfvars file,
-#                `terraform plan` with the same variables the apply uses, and a summary
-#                of counts and addresses. Nothing is created.
-#   * `create` — the plan, then `terraform apply`, which names no variable of its own
-#                and reads the `run.auto.tfvars.json` the plan stage wrote. On a stack
-#                that already stands, `release-stop.sh` runs first (lane g70).
-#   * `deploy` — create, then the two database entries and `release-deploy.sh`, then the
-#                smoke.
-#   * `full`   — the whole of the chosen mode (above). Only `stage: full` with
-#                `mode: full` writes a release record.
-#
-# Those four nest: every step of one runs in the next, in either mode, and a
-# `mode: schema` run is a subset of the `mode: full` run at the same stage. That is a
-# property of the `if:` conditions.
-#
-#   * `teardown` — the fifth, and **not** a rung on that ladder. It runs identity, the
-#                run's own resources, the tfvars file and `terraform init` against the
-#                prefix named in `run_suffix`, and then the two steps every stage runs:
-#                `rehearsal-teardown.sh` and the production-untouched guard. It does not
-#                plan, does not apply, deploys nothing and writes no record. It exists
-#                to remove an orphan — the fourth credentialed run left
-#                `fss-rh-202609211659` standing when its journal bucket refused its own
-#                teardown — and for any future run whose teardown failed.
-#
-#                `run_suffix` is **required** for it, because an empty suffix becomes the
-#                current UTC timestamp and a teardown of a prefix that names nothing is
-#                a run that reports success for doing nothing.
-#
-# ## The monthly drill, and the manifest (lane g74, monthly since g97)
-#
-# `.github/workflows/greenfield-monthly-drill.yml` calls this workflow (`workflow_call`)
-# on the first Sunday of each month with `stage: full`, `mode: full`, the digests CI
-# published for the commit it runs at, that commit as the desktop stamp, and
-# `pinned_commit`, which makes the run refuse unless it checked out exactly that commit
-# and is a full-mode run. A called workflow runs from its caller's commit, so the pin
-# cannot drift from the checkout. Nothing else differs: the same jobs, the same
-# environment and role, the same guards.
-#
-# A green `mode: full` run writes, after the release record, the **release manifest**
-# (`infra/scripts/release-manifest.sh`): the checkout, the run, both digests and where
-# they came from, the desktop stamp and app version, and the record's reference and
-# SHA-256. The manifest is kept as the artifact `fss-release-manifest`.
+# Full mode, the monthly restore drill, the release record and the manifest were deleted
+# with the restore drill (W3-S8); a restore is rehearsed by hand from its runbook.
 
 on:
   workflow_dispatch:
     inputs:
       mode:
-        description: '`schema` (default): create, migrate and deploy, the schema ranges, the smoke, destroy; no record. `full`: adds the release suite, the restore drill and the release record.'
+        description: 'Only `schema`. Full mode was deleted with the restore drill (W3-S8); this input stays so dispatches passing -f mode=schema still start.'
         required: true
         type: choice
         default: 'schema'
         options:
           - schema
-          - full
       stage:
-        description: 'How far to go. `full` runs the whole of the chosen mode; `plan`, `create`, `deploy` stop early; `teardown` only cleans.'
+        description: 'How far to go. `full` runs the whole rehearsal; `plan`, `create`, `deploy` stop early; `teardown` only cleans.'
         required: true
         type: choice
         default: 'full'
@@ -158,47 +62,6 @@ on:
         required: false
         type: string
         default: ''
-  # The monthly drill (lane g97; g74's weekly caller before it). The same six inputs as
-  # a dispatch, and three only the monthly caller sets: the commit it pinned, and the CI
-  # run and commit that built its images. `mode` and `stage` are strings here because
-  # `workflow_call` has no choice type; the caller passes `full` for both.
-  workflow_call:
-    inputs:
-      mode:
-        type: string
-        required: false
-        default: 'schema'
-      stage:
-        type: string
-        required: true
-      api_image_digest:
-        type: string
-        required: true
-      worker_image_digest:
-        type: string
-        required: true
-      desktop_commit_stamp:
-        type: string
-        required: true
-      run_suffix:
-        type: string
-        required: false
-        default: ''
-      pinned_commit:
-        description: 'The commit the caller pinned; the run refuses unless it checked out exactly this one'
-        type: string
-        required: false
-        default: ''
-      images_ci_run_id:
-        description: 'The greenfield-images.yml run that published the two digests'
-        type: string
-        required: false
-        default: ''
-      images_ci_commit:
-        description: 'The commit that run built'
-        type: string
-        required: false
-        default: ''
 
 permissions:
   contents: read
@@ -207,10 +70,10 @@ permissions:
 #
 # Two rehearsals overlapping share the account's quotas and the two stable ECR
 # repositories, and each guard compares only its own run prefix since lane g97, so a
-# second run cannot spoil the first one's comparison — but two Multi-AZ databases and two
-# restore drills at once is spend nobody chose. The teardown is the other half: `if: always()` means a cancelled run still destroys what it made, so
-# `cancel-in-progress` is deliberately **false**. A queued run waits; it does not
-# shoot the one that is already holding the namespace.
+# second run cannot spoil the first one's comparison — but two Multi-AZ databases at once
+# is spend nobody chose. The teardown is the other half: `if: always()` means a cancelled
+# run still destroys what it made, so `cancel-in-progress` is deliberately **false**. A
+# queued run waits; it does not shoot the one that is already holding the namespace.
 concurrency:
   group: greenfield-rehearsal
   cancel-in-progress: false
@@ -227,18 +90,15 @@ jobs:
   # Manual only, and gated behind the repository environment named `rehearsal`, which
   # David enables and which holds the OIDC role.
   rehearsal:
-    name: Create, deploy, drill and destroy a rehearsal environment
-    # A dispatch, or the monthly caller (whose event this is when it is called: `schedule`,
-    # or `workflow_dispatch` when it was dispatched). Never a push or a pull request.
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    name: Create, deploy and destroy a rehearsal environment
+    # A dispatch only. Never a push or a pull request.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
-    # Shrunk to fit the mode (lane g97). A `schema` run is about 45 minutes: the create
-    # about 17, the deploy about 12, the bootstrap, the ranges and the smoke about 5, and
-    # the teardown. The long steps carry their own `timeout-minutes`, so a step that hangs
-    # fails itself and still leaves the teardown more than half an hour inside the 90. A
-    # `full` run keeps the 180 it has always had: it adds the release suite and the
-    # restore drill.
-    timeout-minutes: ${{ inputs.mode == 'full' && 180 || 90 }}
+    # A run is about 45 minutes (lane g97): the create about 17, the deploy about 12, the
+    # bootstrap, the ranges and the smoke about 5, and the teardown. The long steps carry
+    # their own `timeout-minutes`, so a step that hangs fails itself and still leaves the
+    # teardown more than half an hour inside the 90.
+    timeout-minutes: 90
     environment: rehearsal
     permissions:
       contents: read
@@ -252,8 +112,6 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-          # The manifest compares this commit with the commit CI built the images at.
-          fetch-depth: 0
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
@@ -278,30 +136,6 @@ jobs:
           if [ "${{ inputs.api_image_digest }}" = "${{ inputs.worker_image_digest }}" ]; then
             echo "::error::the two digests are identical; one image was pushed under both names"
             exit 1
-          fi
-          # The monthly caller pins all three artifacts to one commit (lane g74). A pinned
-          # run that checked out anything else, or whose desktop stamp is anything else,
-          # would rehearse code the pin never looked at, so it stops here; and a pinned
-          # run is the monthly drill, so it is `stage: full` and `mode: full`.
-          pinned='${{ inputs.pinned_commit }}'
-          if [ -n "$pinned" ]; then
-            if [ "$GITHUB_SHA" != "$pinned" ]; then
-              echo "::error::this run was pinned to $pinned and checked out $GITHUB_SHA"
-              exit 1
-            fi
-            if [ '${{ inputs.desktop_commit_stamp }}' != "$pinned" ]; then
-              echo "::error::a pinned run's desktop commit stamp must be the pinned commit $pinned"
-              exit 1
-            fi
-            if [ '${{ inputs.stage }}' != full ]; then
-              echo "::error::a pinned run is the monthly drill; stage '${{ inputs.stage }}' is not full"
-              exit 1
-            fi
-            if [ '${{ inputs.mode }}' != full ]; then
-              echo "::error::a pinned run is the monthly drill; mode '${{ inputs.mode }}' is not full"
-              exit 1
-            fi
-            echo "pinned to $pinned: checkout, desktop stamp and the images' inputs are this commit's"
           fi
 
       - name: Decide the run prefix
@@ -806,39 +640,8 @@ jobs:
             --display-name Rehearsal \
             --admin-email rehearsal-admin@usecallie.com
 
-      - name: Create the evidence the drill has to reconstruct
-        if: inputs.stage == 'full' && inputs.mode == 'full'
-        env:
-          FSS_RELEASE_WORKER_DIGEST: ${{ inputs.worker_image_digest }}
-        run: |
-          set -euo pipefail
-          # `docs/greenfield/restore-drill.md` 0.1: an accepted send, a prospect reply,
-          # a prospect-originated opt-out, a salesperson's own manual suppression inside
-          # its ten-minute window, an ordinary CRM edit and an applied migration. Nothing
-          # in the tree produced any of the first five in a deployed environment, so the
-          # drill refused on every fresh rehearsal — "the drill baseline has no sends, so
-          # reconstructing them would prove nothing" — which is exactly how run
-          # 35930664547 of 23 September 2026 ended, after the whole path before it had
-          # passed for the first time.
-          #
-          # It runs here, after the workspace exists and before anything measures the
-          # database, and only in a `full` run of `mode: full`: the evidence is for the
-          # restore drill, and the restore drill is a `mode: full` step. Production is
-          # never seeded, and the script has no flag that would let it be: it refuses
-          # any prefix that is not `fss-rh-<run>`, and the tool refuses again inside the
-          # container unless `FSS_DEPENDENCIES` is `recorded`.
-          #
-          # The second half of the evidence — the send and the edit the restore is meant
-          # to lose — is written by the drill itself, between reading the restore target
-          # and requesting the restore, because that is the only place it can go.
-          infra/scripts/release-seed-drill-evidence.sh infra/roots/rehearsal \
-            '${{ steps.prefix.outputs.prefix }}' \
-            --worker-digest '${{ inputs.worker_image_digest }}' \
-            --phase before \
-            --workspace-slug rehearsal
-
       - name: The declared schema ranges, against the deployed images
-        # Both modes: this is what a schema change is rehearsed for.
+        # This is what a schema change is rehearsed for.
         if: inputs.stage == 'full'
         timeout-minutes: 15
         run: |
@@ -915,91 +718,11 @@ jobs:
           NODE_OPTIONS="--experimental-transform-types --disable-warning=ExperimentalWarning" \
             node scripts/productionSmoke.mjs --origin "$origin" --canary-age-seconds "$age" --json
 
-      - name: Release suite (recorded mode, runner)
-        # `mode: full` only (lane g97): the suite already runs in the pull-request gate
-        # on every commit, so a schema rehearsal would be running it a second time.
-        if: inputs.stage == 'full' && inputs.mode == 'full'
-        env:
-          FSS_DEPENDENCIES: recorded
-        run: |
-          set -euo pipefail
-          npm ci --ignore-scripts --no-audit --no-fund
-          npm run test:ops
-
-      # The session this job assumed at its first step lasts an hour. The action is
-      # given no `role-duration-seconds` and `fss-rh-deploy`'s own MaxSessionDuration
-      # is 3600, so an hour is both the default and the ceiling — and a `full` run is
-      # longer than that. The eleventh full run (Actions 35948178549, 24 September)
-      # spent about seventeen minutes creating, twelve deploying, five on the
-      # bootstrap, the seed, the ranges and the smoke, and fifteen on the release
-      # suite; at exactly one hour the credential expired inside the drill's
-      # `aws rds wait db-instance-available` with `ExpiredToken`, and took the two
-      # always-on steps down with it — the environment leaked and the production-prefix
-      # guard never ran.
-      #
-      # So the session is renewed here, and again before the teardown, and each
-      # renewal is followed by the same identity assertion the first assumption makes:
-      # a renewal is a fresh assumption, and the steps after it act as whatever it
-      # produced. Raising the role's MaxSessionDuration and passing
-      # `role-duration-seconds: 7200` is the belt-and-braces follow-up; the role is
-      # defined outside this workflow, so it is not this change.
-      #
-      # aws-actions/configure-aws-credentials v4, the same pin as the first assumption.
-      - name: Renew the session before the restore drill
-        if: inputs.stage == 'full' && inputs.mode == 'full'
-        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
-        with:
-          role-to-assume: ${{ secrets.FSS_REHEARSAL_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-          role-session-name: ${{ steps.prefix.outputs.prefix }}
-
-      - name: The renewed identity is the rehearsal role and nothing else
-        if: inputs.stage == 'full' && inputs.mode == 'full'
-        run: |
-          set -euo pipefail
-          # The same check the first assumption gets, for the same reason: from here
-          # on this session is what every AWS call acts as, and a renewal that
-          # silently produced something else would be discovered by the resources it
-          # touched.
-          infra/scripts/rehearsal-caller-identity.sh fss-rh-deploy
-
-      - name: Restore drill, Appendix E steps 1 to 9
-        if: inputs.stage == 'full' && inputs.mode == 'full'
-        env:
-          FSS_RELEASE_WORKER_DIGEST: ${{ inputs.worker_image_digest }}
-          # Its step 7 runs `rehearsal-schema-ranges.sh` again, which launches the API
-          # task definition as well as the worker's, so it needs both digests.
-          FSS_RELEASE_API_DIGEST: ${{ inputs.api_image_digest }}
-        run: infra/scripts/rehearsal-restore-drill.sh '${{ steps.prefix.outputs.prefix }}'
-
-      - name: Suppression journal replay and Gmail reconstruction
-        if: inputs.stage == 'full' && inputs.mode == 'full'
-        env:
-          # No real mailbox exists in rehearsal unless David provides a rehearsal
-          # Google project, so the Gmail half runs against the recorded fake — chosen
-          # by name, never by omission (apps/*/src/bootstrap/deployment.ts).
-          FSS_DEPENDENCIES: recorded
-        run: |
-          set -euo pipefail
-          # The drill above already ran both (Appendix E steps 2 and 3). This step
-          # asserts the reports it left say what they must, so a drill that silently
-          # skipped a step cannot reach the release record.
-          python3 - "$FSS_REHEARSAL_REPORTS" <<'PY'
-          import json, pathlib, sys
-          reports = pathlib.Path(sys.argv[1])
-          replay = json.loads((reports / "journal-replay.json").read_text())
-          second = json.loads((reports / "journal-replay-second.json").read_text())
-          sent = json.loads((reports / "sent-reconcile.json").read_text())
-          assert replay.get("inserted", 0) >= 1, replay
-          assert second.get("inserted", 0) == 0, second
-          assert sent.get("resent", 0) == 0, sent
-          assert sent.get("tombstones", 0) >= 1, sent
-          print("journal replay idempotent; Gmail reconstruction produced tombstones and no resend")
-          PY
-
-      # The last renewal, and the one that matters most: the two steps below run on
-      # `always()`, which is precisely the case where the session may already be gone.
-      # On the eleventh full run both of them failed at their first call —
+      # The session the first assumption opened lasts an hour: the action is given no
+      # `role-duration-seconds` and `fss-rh-deploy`'s MaxSessionDuration is 3600, and the
+      # job may run for 90 minutes. The two steps below run on `always()`, which is
+      # precisely the case where the session may already be gone. On the eleventh full
+      # run (Actions 35948178549, 24 September) both of them failed at their first call —
       # `GetCallerIdentity … ExpiredToken`, exit 254 — so the run destroyed nothing and
       # proved nothing about production. Renewing first gives them a fresh hour
       # whatever happened above, and this step carries `always()` for the same reason
@@ -1045,69 +768,6 @@ jobs:
         if: always()
         working-directory: infra/roots/rehearsal
         run: ../../scripts/rehearsal-prefix-guard.sh '${{ steps.prefix.outputs.prefix }}' after
-
-      - name: Write the release record, last
-        if: inputs.stage == 'full' && inputs.mode == 'full'
-        run: |
-          set -euo pipefail
-          infra/scripts/rehearsal-release-record.sh \
-            '${{ steps.prefix.outputs.prefix }}' \
-            '${{ inputs.api_image_digest }}' \
-            '${{ inputs.worker_image_digest }}' \
-            '${{ inputs.desktop_commit_stamp }}' \
-            pass \
-            "$FSS_REHEARSAL_REPORTS/release-record.json"
-          cat "$FSS_REHEARSAL_REPORTS/release-record.json" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Write the release manifest beside the record
-        if: inputs.stage == 'full' && inputs.mode == 'full'
-        env:
-          # Public: the version the desktop build from this commit carries.
-          DESKTOP_APP_VERSION: ${{ vars.FSS_DESKTOP_APP_VERSION }}
-        run: |
-          set -euo pipefail
-          # Audit O09: one file that binds the checkout, the run, both digests and where
-          # they came from, the desktop stamp and version, and the record — by its
-          # SHA-256, so neither can be replaced under the other. Written only after the
-          # record, so only for a run that passed everything; checked at once by the
-          # same script, so a manifest that disagrees with its record never leaves the run.
-          infra/scripts/release-manifest.sh write \
-            "$FSS_REHEARSAL_REPORTS/release-record.json" \
-            "$FSS_REHEARSAL_REPORTS/release-manifest.json" \
-            --checkout "$GITHUB_SHA" \
-            --run "$GITHUB_RUN_ID" \
-            --attempt "$GITHUB_RUN_ATTEMPT" \
-            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
-            --event "$GITHUB_EVENT_NAME" \
-            --desktop-app-version "${DESKTOP_APP_VERSION:-}" \
-            --pinned-commit '${{ inputs.pinned_commit }}' \
-            --images-run '${{ inputs.images_ci_run_id }}' \
-            --images-commit '${{ inputs.images_ci_commit }}'
-          infra/scripts/release-manifest.sh verify \
-            "$FSS_REHEARSAL_REPORTS/release-manifest.json" \
-            "$FSS_REHEARSAL_REPORTS/release-record.json"
-          {
-            echo ''
-            echo '### Release manifest'
-            echo ''
-            echo '```json'
-            cat "$FSS_REHEARSAL_REPORTS/release-manifest.json"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      # actions/upload-artifact v4. Its own artifact, with a fixed name, so the operator
-      # downloads one small thing to promote and deploy.
-      - name: Keep the release manifest
-        if: inputs.stage == 'full' && inputs.mode == 'full'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: fss-release-manifest
-          path: |
-            ${{ env.FSS_REHEARSAL_REPORTS }}/release-manifest.json
-            ${{ env.FSS_REHEARSAL_REPORTS }}/release-record.json
-          include-hidden-files: true
-          if-no-files-found: error
-          retention-days: 90
 
       # actions/upload-artifact v4
       - name: Keep the reports

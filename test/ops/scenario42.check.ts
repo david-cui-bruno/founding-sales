@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { rehearsalReleaseRecordSchema, releaseRecordSchema } from '@fss/contracts';
+import { ciGateReleaseReference, releaseRecordSchema } from '@fss/contracts';
 import { effectiveSendingEnabled } from '@fss/domain/settings';
 import { SEND_REFUSAL_CODES } from '@fss/domain/outbound';
 import { DEPLOYMENT_ENVIRONMENT_VARIABLES as WORKER_VARIABLES } from '../../apps/worker/src/bootstrap/deployment.ts';
@@ -17,11 +17,11 @@ import { repositoryPath } from './support/repository.ts';
  * 16.2 in one sentence, and this lane's headline deliverable. Four conditions, and each
  * one is held by a different thing:
  *
- *   * **artifact digest** — `rehearsal-release-record.sh` refuses anything that is not
+ *   * **artifact digest** — the release record's contract refuses anything that is not
  *     `sha256:` plus 64 hex characters, and the cluster module's variable validation
  *     refuses a mutable tag;
- *   * **rehearsal gate** — the record is written last, from reports the rehearsal-only
- *     scenarios left behind, and only for a green suite;
+ *   * **release gate** — the record `record.sh from-ci` writes from the green CI
+ *     gate run on the deployed commit (lane g96);
  *   * **smoke tests** — `scripts/productionSmoke.mjs`, whose sixth check's expected
  *     answer is that sending is *off* before the enable (`--expect-sending`, whose
  *     default is `disabled`; lane g80);
@@ -92,136 +92,53 @@ describe('Appendix G 42: sending stays off until all four agree', () => {
 });
 
 /**
- * G12f: the one exemption stayed one exemption, and lane g97 removed it.
- *
- * `rehearsal_read_production_inventory` was allowed to name production, until lane g97
- * (25 September 2026) replaced the production diff with a comparison of the run's own
- * resources and the exemption went with it. Appendix G 42's record is the other thing
- * that reads a production name — the digests it compares are production's —
- * and it refuses every argument that names one. A change that widened the refusal into
- * a general allowance would show up here first: the record would accept
- * `fss-prod` as a rehearsal prefix and write a release gate reference for it.
- *
- * ## The vacuous-pass trap
- *
- * Asserting that the script still *contains* `rehearsal_refuse_production_arguments`
- * would pass against a guard whose refusal had become a warning, which is exactly the
- * shape of the bug this lane fixed (`rehearsal_aws` printed FAIL and returned 0). So
- * the script is run, with a production prefix and with a production name buried in an
- * argument that is not the prefix, and both must be refused with nothing written.
- */
-describe('Appendix G 42: the inventory exemption did not become a general one', () => {
-  const record = 'infra/scripts/rehearsal-release-record.sh';
-  const digest = (letter: string): string => `sha256:${letter.repeat(64)}`;
-
-  function writeRecord(args: readonly string[]): { readonly code: number; readonly output: string } {
-    const reports = mkdtempSync(join(tmpdir(), 'fss-record-'));
-    for (const report of ['restore-drill.txt', 'schema-ranges.txt', 'prefix-guard.txt']) {
-      writeFileSync(join(reports, report), 'prefix=fss-rh-case\n');
-    }
-    const out = join(reports, 'release-record.json');
-    const result = spawnSync(repositoryPath(record), [...args, out], {
-      encoding: 'utf8',
-      env: { ...process.env, FSS_REHEARSAL_REPORTS: reports, FSS_REHEARSAL_DRY_RUN: '1' },
-    });
-    return {
-      code: result.status ?? 1,
-      output: `${result.stdout}${result.stderr}${existsSync(out) ? readFileSync(out, 'utf8') : ''}`,
-    };
-  }
-
-  it('writes a record for a rehearsal prefix, which is the positive control', () => {
-    const { code, output } = writeRecord(['fss-rh-case', digest('a'), digest('b'), 'commit', 'pass']);
-
-    expect(code, output).toBe(0);
-    expect(output).toContain('"releaseGateReference": "fss-rh-case-');
-  });
-
-  it('refuses a production prefix', () => {
-    const { code, output } = writeRecord(['fss-prod', digest('a'), digest('b'), 'commit', 'pass']);
-
-    expect(code).not.toBe(0);
-    expect(output).not.toContain('releaseGateReference');
-  });
-
-  it('refuses a production name anywhere else in its arguments', () => {
-    // The desktop stamp is free text, so it is the argument a production name would
-    // reach the record through.
-    const { code, output } = writeRecord([
-      'fss-rh-case',
-      digest('a'),
-      digest('b'),
-      'fss-prod-desktop',
-      'pass',
-    ]);
-
-    expect(code).not.toBe(0);
-    expect(output).toContain('names a production resource');
-  });
-});
-
-/**
- * Lane g71: "the deployed commit/image digests match the rehearsal artifacts" is a
+ * Lane g71: "the deployed commit/image digests match the released artifacts" is a
  * comparison the software makes, not a sentence an admin reads.
  *
- * The record the rehearsal writes is stored (`fss admin release-record put`, run by
+ * The release record is stored (`fss admin release-record put`, run by
  * `release-deploy.sh --release-record`), the API refuses an enable whose record does
  * not pass or does not carry the API's own digest, and the worker refuses to send when
  * the record does not carry the worker's own. The behaviour is asserted in the domain,
- * API and worker suites; this is where the three pieces are held to each other.
+ * API and worker suites; this is where the deploy step is held to them.
  *
  * ## The vacuous-pass trap
  *
- * A contract the script's output was never parsed with would agree with the script
- * only until one of them renamed a field — and the first place that disagreement would
- * surface is David's production enable. So the script is *run* and its output parsed
- * with `releaseRecordSchema`, which is strict: a field the contract does not know, or
- * one it requires and the script dropped, fails here. And the deploy step is run in dry
- * mode rather than read, both with the flag (the put is planned, after the final
- * verify, carrying the file byte for byte) and without it (nothing about the deploy
- * changes).
+ * The deploy step is run in dry mode rather than read, both with the flag (the put is
+ * planned, after the final verify, carrying the file byte for byte) and without it
+ * (nothing about the deploy changes). The record it carries is a `ci-gate` record the
+ * contract accepts, so a record shape the contract no longer describes fails here
+ * rather than at the put. `record.check.ts` runs the script that writes it.
  */
 describe('Appendix G 42: the attestation is bound to the release record (lane g71)', () => {
   const digest = (letter: string): string => `sha256:${letter.repeat(64)}`;
 
-  function writeRecordWithScript(): Record<string, unknown> {
-    const reports = mkdtempSync(join(tmpdir(), 'fss-record-contract-'));
-    for (const report of ['restore-drill.txt', 'schema-ranges.txt', 'prefix-guard.txt']) {
-      writeFileSync(join(reports, report), 'prefix=fss-rh-contract result=pass');
-    }
-    const out = join(reports, 'release-record.json');
-    const result = spawnSync(
-      repositoryPath('infra/scripts/rehearsal-release-record.sh'),
-      ['fss-rh-contract', digest('a'), digest('b'), 'c'.repeat(40), 'pass', out],
-      { encoding: 'utf8', env: { ...process.env, FSS_REHEARSAL_REPORTS: reports, FSS_REHEARSAL_DRY_RUN: '1' } },
-    );
-    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-    return JSON.parse(readFileSync(out, 'utf8')) as Record<string, unknown>;
-  }
-
-  it('parses what rehearsal-release-record.sh writes with the contract the domain stores it by', () => {
-    const written = writeRecordWithScript();
-    const parsed = releaseRecordSchema.safeParse(written);
+  /** A `ci-gate` record for digests a and b, as `record.sh from-ci` writes one. */
+  function ciGateRecord(): Record<string, unknown> {
+    const commit = 'c'.repeat(40);
+    const gateRunId = '4242';
+    const record = {
+      schema: 'fss.release-record.v1',
+      source: 'ci-gate',
+      releaseGateReference: ciGateReleaseReference(gateRunId, commit),
+      recordedAt: '2026-09-26T12:00:00Z',
+      suite: 'pass',
+      commit,
+      gateRunId,
+      gateRunUrl: `https://github.com/example-owner/example-repo/actions/runs/${gateRunId}`,
+      imagesRunId: '4243',
+      artifacts: { api: digest('a'), worker: digest('b'), desktopCommitStamp: commit },
+      enablesSending: false,
+    };
+    const parsed = releaseRecordSchema.safeParse(record);
     expect(parsed.success, JSON.stringify(parsed.error?.issues ?? [])).toBe(true);
-    // Strict both ways: every field the script writes is one the contract names, and
-    // the digests the two rules compare are where the domain reads them. The script
-    // writes no `source`, which is how the contract knows a rehearsal record (lane g96).
-    expect(written).not.toHaveProperty('source');
-    expect(Object.keys(written).sort()).toEqual(
-      Object.keys(rehearsalReleaseRecordSchema.shape)
-        .filter(key => key !== 'source')
-        .sort(),
-    );
-    expect(parsed.data?.artifacts).toEqual({ api: digest('a'), worker: digest('b'), desktopCommitStamp: 'c'.repeat(40) });
-    expect(parsed.data?.suite).toBe('pass');
-    expect(parsed.data?.releaseGateReference.startsWith('fss-rh-contract-')).toBe(true);
-  });
+    return record;
+  }
 
   describe('release-deploy.sh --release-record', () => {
     const recordFile = (): { readonly path: string; readonly bytes: Buffer } => {
       const directory = mkdtempSync(join(tmpdir(), 'fss-deploy-record-'));
       const path = join(directory, 'release-record.json');
-      writeFileSync(path, `${JSON.stringify(writeRecordWithScript(), null, 2)}\n`);
+      writeFileSync(path, `${JSON.stringify(ciGateRecord(), null, 2)}\n`);
       return { path, bytes: readFileSync(path) };
     };
 
@@ -300,9 +217,6 @@ describe('Appendix G 42: the attestation is bound to the release record (lane g7
       expect(put, 'the release record put is not planned').toBeGreaterThan(verifyDeployed);
       const encoded = commands[put]?.[(commands[put]?.indexOf('--json-base64') ?? -2) + 1] ?? '';
       expect(Buffer.from(encoded, 'base64').equals(file.bytes)).toBe(true);
-      // The record names the rehearsal it certifies; the argument that carries it must
-      // not, or the production foreign-argument guard would refuse the launch.
-      expect(commands[put]?.join(' ')).not.toContain('fss-rh-');
       expect(report).toContain('release_record=planned');
     });
 
