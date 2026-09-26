@@ -161,6 +161,9 @@ if args[:2] == ["ecs", "register-task-definition"]:
     done({"taskDefinition": document, "tags": tags})
 if args[:2] == ["ecs", "deregister-task-definition"]:
     arn = value("--task-definition")
+    if state.get("deregisterRefused"):
+        sys.stderr.write("An error occurred (ThrottlingException) when calling the DeregisterTaskDefinition operation: Rate exceeded\n")
+        sys.exit(254)
     state["definitions"][arn]["taskDefinition"]["status"] = "INACTIVE"
     save()
     done({"taskDefinition": state["definitions"][arn]["taskDefinition"]})
@@ -190,7 +193,7 @@ interface World {
   readonly state: () => Record<string, unknown>;
 }
 
-function world(options: { readonly registered?: string; readonly exitCode?: number } = {}): World {
+function world(options: { readonly registered?: string; readonly exitCode?: number; readonly deregisterRefused?: boolean } = {}): World {
   const directory = mkdtempSync(join(tmpdir(), 'fss-preflight-stub-'));
   const reports = mkdtempSync(join(tmpdir(), 'fss-preflight-reports-'));
   writeFileSync(join(directory, 'aws'), AWS_STUB);
@@ -202,6 +205,7 @@ function world(options: { readonly registered?: string; readonly exitCode?: numb
       definitions: { [OPERATIONS]: operationsDefinition(options.registered ?? OLD) },
       answer: ANSWER,
       exitCode: options.exitCode ?? 0,
+      deregisterRefused: options.deregisterRefused ?? false,
     }),
   );
   return {
@@ -313,6 +317,19 @@ describe('A4: migration 0018’s preflight runs on the operations task before th
     const calls = callsOf(stub.state());
     expect(calls.filter(call => verb(call) === 'ecs deregister-task-definition')).toHaveLength(1);
     expect(existsSync(join(stub.reports, 'schema-preflight-0018.txt'))).toBe(false);
+  });
+
+  it('fails when ECS refuses to deregister its revision after a successful count, and names the revision', () => {
+    const stub = world({ deregisterRefused: true });
+    const run = runScript(['infra/roots/production', PREFIX, '--worker-digest', NEW], environment(stub));
+    expect(run.code, run.output).not.toBe(0);
+    expect(run.output).toContain('FAIL: could not deregister');
+    expect(run.output).toContain('aws ecs deregister-task-definition --task-definition arn:aws:ecs:');
+    // The count itself succeeded: the answer was read before the cleanup failed.
+    expect(run.output).toContain('refusesWithoutSetting');
+    const definitions = stub.state()['definitions'] as Record<string, { taskDefinition: { status: string } }>;
+    const active = Object.entries(definitions).filter(([arn, entry]) => arn !== OPERATIONS && entry.taskDefinition.status === 'ACTIVE');
+    expect(active).toHaveLength(1);
   });
 
   it('plans the same three steps in a dry run, with no credential and no call', () => {
