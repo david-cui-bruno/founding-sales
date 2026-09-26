@@ -4,7 +4,7 @@
 # fast." A merge to main that changes only application code is deployed to
 # production by `.github/workflows/greenfield-deploy.yml`, with no operator in the
 # loop. Schema and infrastructure changes keep the manual path: an operator reads a
-# plan of this root and applies it, and `infra/scripts/release-deploy.sh` does the
+# plan of this root and applies it, and `infra/scripts/deploy.sh release` does the
 # rest (`docs/greenfield/release.md` section 4).
 #
 # This role is what the workflow holds, and it is deliberately small. It is not
@@ -14,7 +14,7 @@
 #
 #   1. read the two images from the rehearsal repositories CI published them to, and
 #      copy them by digest into the two production repositories
-#      (`infra/scripts/release-promote.sh <image-digests.json> --app-only`);
+#      (`infra/scripts/images.sh promote <image-digests.json> --app-only`);
 #   2. read the two services and their task definitions, register a new revision of
 #      each carrying only the new image digest, and deregister a revision it
 #      registered when that revision differs from the running one in anything but
@@ -25,7 +25,7 @@
 #   5. read the canary metric the production smoke judges;
 #   6. put the release record for the two digests it deployed, after the smoke passed
 #      (lane g100): run the operations task in the production cluster, the one-off
-#      `fss admin release-record put --json-base64` that `release-deploy.sh
+#      `fss admin release-record put --json-base64` that `deploy.sh release
 #      --release-record` runs, and read that task's log for the put's answer.
 #
 # ## The residual this lane accepts, in two sentences
@@ -34,7 +34,7 @@
 # `fss-prod-worker` with any image pushed to their two repositories and roll it out,
 # because IAM has no condition on a task definition's contents and a main-branch
 # workflow can deploy whatever main contains; that is the price of continuous
-# deployment, and `ci-deploy-app.sh` narrows it in code by deriving every revision
+# deployment, and `deploy.sh ci` narrows it in code by deriving every revision
 # from the running one and deregistering any that differs in more than the image.
 # What bounds it is the `production-deploy` environment restricted to main, no
 # `id-token: write` in any job that runs code from the images commit, the exact OIDC
@@ -58,7 +58,7 @@
 # Once sending is on, the worker sends only under a stored release record naming its
 # digest, so a CI deploy that stored none would hold sending until somebody put one by
 # hand. So after the rollout and the smoke the workflow builds the ci-gate record
-# (`release-record-from-ci.sh`) and puts it the way `release-deploy.sh
+# (`record.sh from-ci`) and puts it the way `deploy.sh release
 # --release-record` does: `ecs:RunTask` of the operations family, which runs the
 # worker image under the worker's task and execution roles and writes to the worker's
 # log group with the stream prefix `operations` (`infra/modules/cluster`). So the
@@ -74,7 +74,7 @@
 # this role can run any `fss` command on the operations task, as the worker's task role
 # with the runtime database credential. It could already reach exactly that identity:
 # it registers worker revisions with any image in `fss-prod-worker` and rolls them. The
-# put adds a second way to the same identity, not a new one; `ci-deploy-app.sh record`
+# put adds a second way to the same identity, not a new one; `deploy.sh ci record`
 # runs one command, and the family, the cluster and the four roles `iam:PassRole`
 # names bound what any other call could reach.
 #
@@ -128,7 +128,7 @@
 # `infra/modules/cluster` gives `aws_ecs_task_definition.api` and `.worker`
 # `track_latest = true`, so Terraform reads the newest ACTIVE revision of each
 # family — the one CI registered — as its own. A plan given the deployed digests
-# (`infra/scripts/deployed-digests.sh fss-prod`) therefore shows no change to either
+# (`infra/scripts/deploy.sh current fss-prod`) therefore shows no change to either
 # task definition or either service, and an infrastructure change that does touch a
 # task definition registers the next revision from the running images and re-points
 # the service, exactly as it did before CI deployed anything. A plan given older
@@ -214,7 +214,7 @@ locals {
           Resource = ["*"]
         },
         {
-          # release-promote.sh reads each digest in the rehearsal repository and reads
+          # images.sh promote reads each digest in the rehearsal repository and reads
           # production back after the copy; `imagetools create` pulls the manifest and
           # its blobs from the source.
           Sid    = "ReadTheRehearsalAndProductionImages"

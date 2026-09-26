@@ -18,7 +18,7 @@ variable "assume_deployment_role" {
     `repo:…:environment:rehearsal` alone (Appendix G 39), so the second
     assumption is refused and must stay refused. Only the two rehearsal
     workflows pass false, and each proves what it is first with
-    `infra/scripts/rehearsal-caller-identity.sh`.
+    `infra/scripts/rehearsal.sh identity`.
 
     The flag chooses a credential path and never a plan:
     `infra/roots/*/tests/*.tftest.hcl` assert the same names and the same
@@ -125,7 +125,7 @@ variable "bootstrap" {
     A fresh environment has an empty database, and both binaries refuse to
     start unless the applied schema version is exactly the range they declare.
     So the first apply creates both services at desired count zero and
-    `infra/scripts/release-deploy.sh infra/roots/production fss-prod` scales
+    `infra/scripts/deploy.sh release infra/roots/production fss-prod` scales
     them — worker, then API — after the migration task and `fss verify` have
     both succeeded.
 
@@ -133,8 +133,8 @@ variable "bootstrap" {
     both services ignore later changes to `desired_count` (lane g70), so
     passing `true` to a running environment no longer scales it, and it is
     still never what an ordinary release wants. A schema release stops the
-    services with `infra/scripts/release-stop.sh ... --environment production`
-    before the apply, and `release-deploy.sh --schema-change` restores the
+    services with `infra/scripts/stop.sh ... --environment production`
+    before the apply, and `deploy.sh release --schema-change` restores the
     declared counts after the migration.
   EOT
   type        = bool

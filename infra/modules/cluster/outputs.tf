@@ -63,7 +63,7 @@ output "one_off_task_families" {
 
 output "deployment_plan" {
   description = <<-EOT
-    What `infra/scripts/release-deploy.sh` needs to know, read back from the
+    What `infra/scripts/deploy.sh release` needs to know, read back from the
     resources rather than echoed from the variables.
 
     `declared_desired_count` is what the service is *for*; `planned_desired_count`

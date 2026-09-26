@@ -10,7 +10,7 @@ import { z } from 'zod';
  * rehearsal artifacts" was an operator instruction rather than a rule.
  *
  * One thing writes one (lane g96, the owner's axiom 10B of 25 September 2026: the record
- * comes from the CI gate): `infra/scripts/release-record-from-ci.sh`, from the green
+ * comes from the CI gate): `infra/scripts/record.sh from-ci`, from the green
  * *Greenfield gate* run on the deployed commit and the green *Greenfield images* run
  * whose `fss-image-digests` names the same two digests. Its `source` is `ci-gate`.
  *
@@ -21,7 +21,7 @@ import { z } from 'zod';
  * refused: this contract no longer describes it.
  *
  * `fss.release-record.v1` is the id the table's CHECK (`0017_release_records.sql`) and
- * `release-deploy.sh --release-record` both read, and the binding
+ * `deploy.sh release --release-record` both read, and the binding
  * (`packages/domain/release/records.ts`) reads only the five columns the rules compare —
  * reference, suite, the two digests, the desktop stamp.
  *
@@ -59,7 +59,7 @@ export function isImageDigest(value: unknown): value is string {
  * attested again, which is a person in the loop of every automatic deploy. The
  * attestation may now name the process instead: `releaseGateReference: "ci-gate:main"`
  * means *any stored record with `source: "ci-gate"`* — which only
- * `infra/scripts/release-record-from-ci.sh` writes, and only from a green *Greenfield
+ * `infra/scripts/record.sh from-ci` writes, and only from a green *Greenfield
  * gate* run of a push to main at the record's commit — normally put by the CI deploy
  * after its rollout and smoke passed. Each process still compares its own half of the
  * record with its own digest, exactly as under a named reference; a rehearsal record is
@@ -141,7 +141,7 @@ export function ciGateReleaseReference(gateRunId: string, commit: string): strin
 }
 
 /**
- * The record `infra/scripts/release-record-from-ci.sh` writes (lane g96).
+ * The record `infra/scripts/record.sh from-ci` writes (lane g96).
  *
  * The same five fields the rules compare, and in place of the drill evidence the facts
  * the script checked: the commit, the *Greenfield gate* run that was green on it (id

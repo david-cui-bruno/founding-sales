@@ -3,11 +3,11 @@
 --
 -- A contract migration, like 0015 and 0018: both service ranges move to {19, 19} in
 -- the same release (`packages/domain/db/schemaRange.ts`), and the release is a
--- stop-migrate-start one (`release-deploy.sh --schema-change`). The images of the
+-- stop-migrate-start one (`deploy.sh release --schema-change`). The images of the
 -- previous release declare {18, 18} and refuse this schema at startup; nothing of
 -- theirs runs while it is applied, because both services are at zero first.
 --
--- `infra/scripts/schema-preflight-0019.sh` (`fss admin schema-preflight 0019`) prints,
+-- `infra/scripts/preflight.sh <root> <prefix> 0019` (`fss admin schema-preflight 0019`) prints,
 -- read-only and before the stop, every count below: what this file destroys, what it
 -- converts, and what would make it refuse. It exits 3 when this file would refuse, so
 -- the release chain stops before the services do.
@@ -157,7 +157,7 @@ BEGIN
         v_linkedin_steps, v_linkedin_executions, v_removed_executions, v_removed_shifts, v_removed_holds,
         v_removed_pauses, v_migrations, v_migration_items, v_migration_shifts, v_migration_superseded,
         v_migration_paused),
-      HINT = 'infra/scripts/schema-preflight-0019.sh prints the same counts before the stop. Decide with the owner, then amend 0019 before releasing it.';
+      HINT = 'infra/scripts/preflight.sh <root> <prefix> 0019 prints the same counts before the stop. Decide with the owner, then amend 0019 before releasing it.';
   END IF;
 END
 $refuse$;

@@ -50,9 +50,9 @@ migration produces.
 
 Where the ranges do not overlap, and from migration 0006 every declared range is a
 strict `{N,N}`, there is no rolling path and the order is stop, apply, deploy:
-`infra/scripts/release-stop.sh` scales both services to zero **before** the apply that
+`infra/scripts/stop.sh` scales both services to zero **before** the apply that
 registers the new task definitions, the apply replaces them and starts nothing, and
-`infra/scripts/release-deploy.sh --schema-change` refuses unless both are still at zero,
+`infra/scripts/deploy.sh release --schema-change` refuses unless both are still at zero,
 migrates, verifies and starts the worker and then the API (`docs/greenfield/release.md`
 4.1 and 8.0af). The worker exits non-zero when the database is outside its range
 (`WORKER_EXIT_CODES.schemaOutOfRange`) rather than writing rows another binary cannot

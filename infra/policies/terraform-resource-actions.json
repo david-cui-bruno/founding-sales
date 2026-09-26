@@ -612,7 +612,7 @@
       ]
     },
     {
-      "name": "infra/scripts/rehearsal-caller-identity.sh and rehearsal-prefix-guard.sh",
+      "name": "infra/scripts/rehearsal.sh identity, prefix and guard",
       "roles": [
         "fss-rh",
         "fss-prod"
@@ -624,7 +624,7 @@
       ]
     },
     {
-      "name": "infra/scripts/release-common.sh and release-deploy.sh: the one-off tasks and the two services",
+      "name": "infra/scripts/lib.sh and deploy.sh release: the one-off tasks and the two services",
       "roles": [
         "fss-rh",
         "fss-prod"
@@ -645,7 +645,7 @@
       ]
     },
     {
-      "name": "infra/scripts/rehearsal-teardown.sh: emptying the object-locked journal bucket",
+      "name": "infra/scripts/rehearsal.sh teardown: emptying the object-locked journal bucket",
       "roles": [
         "fss-rh"
       ],

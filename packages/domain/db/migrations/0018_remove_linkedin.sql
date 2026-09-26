@@ -121,7 +121,7 @@ BEGIN
       DETAIL = format(
         'sequence_steps.linkedin_message non-empty: %s; enrollment_linkedin_results rows: %s; contacts.linkedin_url: %s, of which %s do not fit beside the title in 200 characters',
         v_step_messages, v_results, v_contact_urls, v_unfit_urls),
-      HINT = 'infra/scripts/schema-preflight-0018.sh prints the same counts without stopping anything; fss migrate --remove-linkedin-history (release-deploy.sh --remove-linkedin-history) sets the session setting.';
+      HINT = 'infra/scripts/schema-preflight-0018.sh prints the same counts without stopping anything; fss migrate --remove-linkedin-history (deploy.sh release --remove-linkedin-history) sets the session setting.';
   END IF;
 END
 $remove_linkedin$;

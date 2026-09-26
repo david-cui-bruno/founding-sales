@@ -6,8 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { repositoryPath } from './support/repository.ts';
 
 /**
- * Lane R1: `infra/scripts/rollback.sh` (P7; the old name `release-rollback.sh` execs it)
- * puts production back on a previous release's images — the checkout's own images, on a database their ranges accept, with
+ * Lane R1: `infra/scripts/rollback.sh` (P7) puts production back on a previous release's images — the checkout's own images, on a database their ranges accept, with
  * sending as it runs — and refuses everything else before anything is written.
  *
  * The whole script is driven against three stub processes on PATH, `aws`, `terraform` and
@@ -55,8 +54,6 @@ import { repositoryPath } from './support/repository.ts';
  */
 
 const SCRIPT = repositoryPath('infra/scripts/rollback.sh');
-// The old name, a thin wrapper until the release helpers have moved (P7).
-const LEGACY = repositoryPath('infra/scripts/release-rollback.sh');
 const ACCOUNT = '123456789012';
 const REGISTRY = `${ACCOUNT}.dkr.ecr.us-east-1.amazonaws.com`;
 const CLUSTER = `arn:aws:ecs:us-east-1:${ACCOUNT}:cluster/fss-prod-cluster`;
@@ -486,7 +483,7 @@ interface Run {
   readonly output: string;
 }
 
-function rollback(stub: World, extra: readonly string[] = [], environment: Record<string, string> = {}, script = SCRIPT): Run {
+function rollback(stub: World, extra: readonly string[] = [], environment: Record<string, string> = {}): Run {
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),
     PATH: `${join(stub.home, 'bin')}:${process.env['PATH'] ?? ''}`,
@@ -504,7 +501,7 @@ function rollback(stub: World, extra: readonly string[] = [], environment: Recor
   for (const name of ['FSS_REHEARSAL_AWS_COMMAND', 'TERRAFORM']) delete env[name];
   if (environment['FSS_REHEARSAL_DRY_RUN'] === undefined) delete env['FSS_REHEARSAL_DRY_RUN'];
   const result = spawnSync(
-    script,
+    SCRIPT,
     [stub.root, 'fss-prod', '--api-digest', OLD.api, '--worker-digest', OLD.worker, ...extra],
     { encoding: 'utf8', env },
   );
@@ -819,7 +816,7 @@ describe('rollback.sh refuses in one FAIL line, before anything is written', () 
   });
 });
 
-describe('rollback.sh in a dry run, and through its old name', () => {
+describe('rollback.sh in a dry run', () => {
   it('prints every command, the apply, the deploy and the smoke included, and calls nothing', () => {
     const stub = world();
     const run = rollback(stub, ['--apply'], { FSS_REHEARSAL_DRY_RUN: '1' });
@@ -834,23 +831,5 @@ describe('rollback.sh in a dry run, and through its old name', () => {
     expect(run.output).toContain(`deploy.sh release ${stub.root} fss-prod --api-digest ${OLD.api} --worker-digest ${OLD.worker}`);
     expect(run.output).toContain('scripts/productionSmoke.mjs');
     expect(existsSync(join(stub.root, 'rollback.tfplan'))).toBe(false);
-  });
-
-  it('makes the same calls, prints the same plan and refuses the same way through release-rollback.sh', () => {
-    const restoring = { databaseHost: { api: COPY_HOST, worker: COPY_HOST } } as const;
-    const now = world(restoring);
-    const old = world(restoring);
-    const current = rollback(now, ['--apply', '--active-database-host', COPY_HOST]);
-    const legacy = rollback(old, ['--apply', '--active-database-host', COPY_HOST], {}, LEGACY);
-    expect(current.code, current.output).toBe(0);
-    expect(legacy.code, legacy.output).toBe(0);
-    expect(operations(old)).toEqual(operations(now));
-    expect(planVariables(old)).toEqual(planVariables(now));
-    const refusedNow = rollback(world({ databaseVersion: 17 }));
-    const refusedOld = rollback(world({ databaseVersion: 17 }), [], {}, LEGACY);
-    expect(refusedOld.code).toBe(refusedNow.code);
-    expect(failLines(refusedOld).map(line => line.replace(/[0-9a-f]{40}/gu, '<commit>'))).toEqual(
-      failLines(refusedNow).map(line => line.replace(/[0-9a-f]{40}/gu, '<commit>')),
-    );
   });
 });

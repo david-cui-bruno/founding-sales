@@ -14,7 +14,7 @@ variable "assume_deployment_role" {
     The default is true, as in the other two roots, so that acting without
     assuming anything is something a caller has to say rather than something
     that happens when a flag is forgotten. The workflow proves what its session
-    is first, with `infra/scripts/rehearsal-caller-identity.sh`.
+    is first, with `infra/scripts/rehearsal.sh identity`.
     `docs/archive/decisions/g12e-the-provider-does-not-reassume-its-own-session.md`.
   EOT
   type        = bool

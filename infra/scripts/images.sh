@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The two container images, from CI's build to production's repositories (P7, 26
-# September 2026; it replaces release-images.sh and release-promote.sh).
+# September 2026).
 #
 #   infra/scripts/images.sh inputs
 #   infra/scripts/images.sh verify  <image reference> <api|worker> <schema min> <schema max>

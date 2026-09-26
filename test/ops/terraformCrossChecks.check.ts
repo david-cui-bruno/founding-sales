@@ -285,7 +285,7 @@ describe('Terraform declares the task definitions CI deploys around (lane g91)',
     }
   });
 
-  it('runs the operations task, which ci-deploy-app.sh record checks, as the worker image, roles and log group', () => {
+  it('runs the operations task, which deploy.sh ci record checks, as the worker image, roles and log group', () => {
     const operations = block(cluster, 'resource "aws_ecs_task_definition" "operations" {');
     expect(operations).toContain('execution_role_arn       = aws_iam_role.worker_execution.arn');
     expect(operations).toContain('task_role_arn            = aws_iam_role.worker_task.arn');

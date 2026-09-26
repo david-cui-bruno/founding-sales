@@ -72,10 +72,8 @@ const failLines = (result: Run): readonly string[] => result.output.split('\n').
 
 describe('Appendix G 39: rehearsal.sh identity refuses every principal but the rehearsal role (G12e)', () => {
   it('accepts one identity and refuses five, and reads STS through the same seam as every other call', () => {
-    const judge = (identity: string, role?: string, script = SCRIPT): boolean =>
-      run(script, script === SCRIPT ? ['identity', ...(role === undefined ? [] : [role])] : role === undefined ? [] : [role], {
-        FSS_REHEARSAL_CALLER_IDENTITY: identity,
-      }).code === 0;
+    const judge = (identity: string, role?: string): boolean =>
+      run(SCRIPT, ['identity', ...(role === undefined ? [] : [role])], { FSS_REHEARSAL_CALLER_IDENTITY: identity }).code === 0;
 
     expect(judge(ROLE_SESSION)).toBe(true);
     // A user who happens to be allowed to run the workflow is not the role.
@@ -88,9 +86,6 @@ describe('Appendix G 39: rehearsal.sh identity refuses every principal but the r
     expect(judge('')).toBe(false);
     // Production's applies assume their role in the provider and never pass the flag.
     expect(judge('arn:aws:sts::123456789012:assumed-role/fss-prod-deploy/x', 'fss-prod-deploy')).toBe(false);
-    // The old name judges the same.
-    expect(judge(ROLE_SESSION, undefined, 'infra/scripts/rehearsal-caller-identity.sh')).toBe(true);
-    expect(judge('arn:aws:iam::123456789012:user/someone', undefined, 'infra/scripts/rehearsal-caller-identity.sh')).toBe(false);
 
     const stubs = mkdtempSync(join(tmpdir(), 'fss-identity-'));
     const aws = stubCommand(stubs, 'aws', `[ "$1 $2" = "sts get-caller-identity" ] || exit 9\necho '${ROLE_SESSION}'`);
@@ -100,7 +95,7 @@ describe('Appendix G 39: rehearsal.sh identity refuses every principal but the r
   });
 });
 
-describe('Appendix G 39: rehearsal.sh prefix, and the old guard phases', () => {
+describe('Appendix G 39: rehearsal.sh prefix', () => {
   it('accepts a rehearsal prefix and refuses production, a malformed prefix and none, before any credential', () => {
     expect(run(SCRIPT, ['prefix', 'fss-rh-202609271200']).code).toBe(0);
     for (const bad of ['fss-prod', 'fss-rh-X', 'fss-rh-', 'something']) {
@@ -111,13 +106,7 @@ describe('Appendix G 39: rehearsal.sh prefix, and the old guard phases', () => {
     expect(run(SCRIPT, ['prefix']).output).toContain('a rehearsal script needs a name prefix');
   });
 
-  it('maps the old phases: before is prefix, after is guard, plan is retired, and there is no dry run', () => {
-    const before = run('infra/scripts/rehearsal-prefix-guard.sh', ['fss-rh-202609271200', 'before']);
-    expect(before.code, before.output).toBe(0);
-    expect(before.output).toContain('run prefix fss-rh-202609271200: a rehearsal prefix');
-    const plan = run('infra/scripts/rehearsal-prefix-guard.sh', ['fss-rh-202609271200', 'plan', '/dev/null']);
-    expect(plan.code).toBe(1);
-    expect(plan.output).toContain('the plan phase is retired (P7)');
+  it('has no dry run: the offline suites drive it against stub CLIs', () => {
     const dry = run(SCRIPT, ['prefix', 'fss-rh-202609271200'], { FSS_REHEARSAL_DRY_RUN: '1' });
     expect(dry.code).toBe(1);
     expect(dry.output).toContain('rehearsal.sh has no dry run');
@@ -134,7 +123,7 @@ function inLib(body: string): Run {
   return { code: result.status ?? 1, output: `${result.stdout}${result.stderr}` };
 }
 
-describe('Appendix G 39: no rehearsal command may name production, wrapper or not', () => {
+describe('Appendix G 39: no rehearsal command may name production', () => {
   it('refuses the first credentialed run’s production query and a mutating command at the call, and plans neither', () => {
     // The exact command of Actions 35548888865, which refused itself; it is still refused.
     const query = inLib(`rehearsal_aws resourcegroupstaggingapi get-resources --tag-filters 'Key=Name,Values=fss-prod*'\necho "rc=$?"`);
@@ -246,7 +235,6 @@ echo "unexpected: $*" >&2; exit 9`;
     /** The create step writes this file beside the root; a teardown from a fresh checkout has none. */
     readonly tfvars?: boolean;
     readonly identity?: string;
-    readonly script?: string;
   }): Run & { readonly reports: string; readonly calls: readonly string[] } {
     const stubs = mkdtempSync(join(tmpdir(), 'fss-teardown-'));
     const reports = mkdtempSync(join(tmpdir(), 'fss-teardown-reports-'));
@@ -255,8 +243,8 @@ echo "unexpected: $*" >&2; exit 9`;
       writeFileSync(join(stubs, 'run.auto.tfvars.json'), JSON.stringify({ name_prefix: 'fss-rh-nothing', assume_deployment_role: false }));
     }
     const result = run(
-      options.script ?? SCRIPT,
-      options.script === undefined ? ['teardown', 'fss-rh-nothing'] : ['fss-rh-nothing'],
+      SCRIPT,
+      ['teardown', 'fss-rh-nothing'],
       {
         FSS_REHEARSAL_REPORTS: reports,
         FSS_REHEARSAL_CALLER_IDENTITY: options.identity ?? 'arn:aws:sts::123456789012:assumed-role/fss-rh-deploy/x',
@@ -294,14 +282,11 @@ echo "unexpected: $*" >&2; exit 9`;
     expect(readFileSync(join(reports, 'teardown.txt'), 'utf8')).toContain('nothing_left=true');
   });
 
-  it('still destroys when there is something in the state, so tolerance is not silence, and the old name does the same', () => {
+  it('still destroys when there is something in the state, so tolerance is not silence', () => {
     const now = teardown({ aws: NOTHING_EXISTS, terraform: STATE_HOLDS_THE_BUCKET });
     expect(now.code, now.output).toBe(0);
     expect(now.output).toContain('destroy: destroy -auto-approve -input=false -var=assume_deployment_role=false -var=name_prefix=fss-rh-nothing');
     expect(readFileSync(join(now.reports, 'teardown.txt'), 'utf8')).toContain('destroyed=true');
-    const old = teardown({ aws: NOTHING_EXISTS, terraform: STATE_HOLDS_THE_BUCKET, script: 'infra/scripts/rehearsal-teardown.sh' });
-    expect(old.code, old.output).toBe(0);
-    expect(old.calls).toEqual(now.calls);
   });
 
   it('names the journal bucket with the verified session’s account, empties it with the bypass, and deletes it after the destroy', () => {
@@ -397,15 +382,14 @@ describe('Appendix G 39: rehearsal.sh guard, after the teardown: an empty state,
     readonly leftovers?: string;
     readonly aws?: string;
     readonly identity?: string;
-    readonly script?: string;
     readonly reads?: string;
   }): Run & { readonly report: string | null; readonly calls: readonly string[] } {
     const stubs = mkdtempSync(join(tmpdir(), 'fss-guard-'));
     const reports = mkdtempSync(join(tmpdir(), 'fss-guard-reports-'));
     const record = join(stubs, 'calls');
     const result = run(
-      options.script ?? SCRIPT,
-      options.script === undefined ? ['guard', 'fss-rh-nothing'] : ['fss-rh-nothing', 'after'],
+      SCRIPT,
+      ['guard', 'fss-rh-nothing'],
       {
         FSS_REHEARSAL_REPORTS: reports,
         FSS_REHEARSAL_CALLER_IDENTITY: options.identity ?? 'arn:aws:sts::123456789012:assumed-role/fss-rh-deploy/x',
@@ -430,7 +414,7 @@ describe('Appendix G 39: rehearsal.sh guard, after the teardown: an empty state,
     };
   }
 
-  it('passes an empty state and a cloud that holds nothing of the run, reading all five sources, through either name', () => {
+  it('passes an empty state and a cloud that holds nothing of the run, reading all five sources', () => {
     const now = guard({ terraform: 'exit 0' });
     expect(now.code, now.output).toBe(0);
     expect(now.report).toBe('prefix=fss-rh-nothing production_untouched=true state_empty=true nothing_left=true state_read=true');
@@ -448,9 +432,6 @@ describe('Appendix G 39: rehearsal.sh guard, after the teardown: an empty state,
     expect(now.calls.join('\n')).toContain(`--key ${STATE_KEY}.tflock`);
     expect(now.calls.join('\n'), 'one page, in the shape the API returns it').toContain('cloudfront list-distributions --no-paginate');
     expect(now.calls.join('\n')).toContain(`--log-group-name-prefix /fss/fss-rh-nothing`);
-    const old = guard({ terraform: 'exit 0', script: 'infra/scripts/rehearsal-prefix-guard.sh' });
-    expect(old.code, old.output).toBe(0);
-    expect(old.report).toBe(now.report);
   });
 
   it('fails on an orphan of each class the state never recorded, naming it', () => {
@@ -801,7 +782,7 @@ describe('Appendix G 39: rehearsal.sh run-task launches on the run’s own defin
   const SECRET = 'arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-rh-check/app-runtime-database-a';
   const definition = (kind: string): string => `arn:aws:ecs:us-east-1:123456789012:task-definition/fss-rh-check-${kind}:1`;
 
-  function runTask(kind: string, script = SCRIPT, withDigest = true): Run & { readonly calls: readonly string[] } {
+  function runTask(kind: string, withDigest = true): Run & { readonly calls: readonly string[] } {
     const stubs = mkdtempSync(join(tmpdir(), 'fss-run-task-'));
     const record = join(stubs, 'calls');
     const aws = stubCommand(
@@ -813,7 +794,7 @@ describe('Appendix G 39: rehearsal.sh run-task launches on the run’s own defin
         `echo '{"tasks": [{"taskArn": "arn:aws:ecs:us-east-1:123456789012:task/fss-rh-check-cluster/0a1b"}], "failures": []}'`,
       ].join('\n'),
     );
-    const result = run(script, [...(script === SCRIPT ? ['run-task'] : []), 'fss-rh-check', 'verify', kind, '--', 'verify'], {
+    const result = run(SCRIPT, ['run-task', 'fss-rh-check', 'verify', kind, '--', 'verify'], {
       FSS_REHEARSAL_AWS_COMMAND: aws,
       AWS_REGION: 'us-east-1',
       FSS_RELEASE_RUN_ID: 'scenario39',
@@ -850,7 +831,7 @@ describe('Appendix G 39: rehearsal.sh run-task launches on the run’s own defin
     return { ...result, calls: existsSync(record) ? readFileSync(record, 'utf8').split('\n').filter(line => line !== '') : [] };
   }
 
-  it('launches an operations step and a migration step on their own definitions, the same through the old name', () => {
+  it('launches an operations step and a migration step on their own definitions', () => {
     const operations = runTask('operations');
     expect(operations.code, operations.output).toBe(0);
     expect(operations.calls).toHaveLength(1);
@@ -859,9 +840,6 @@ describe('Appendix G 39: rehearsal.sh run-task launches on the run’s own defin
     const migration = runTask('migration');
     expect(migration.code, migration.output).toBe(0);
     expect(migration.calls[0]).toContain(`--task-definition ${definition('migration')}`);
-    const old = runTask('operations', 'infra/scripts/rehearsal-run-task.sh');
-    expect(old.code, old.output).toBe(0);
-    expect(old.calls).toEqual(operations.calls);
   });
 
   it('refuses the drill and a launch with no digest, before any call', () => {
@@ -869,7 +847,7 @@ describe('Appendix G 39: rehearsal.sh run-task launches on the run’s own defin
     expect(drill.code).toBe(1);
     expect(drill.output).toContain("'drill' is not a task definition this rehearsal has");
     expect(drill.calls).toEqual([]);
-    const blind = runTask('operations', SCRIPT, false);
+    const blind = runTask('operations', false);
     expect(blind.code).toBe(1);
     expect(blind.output).toContain('FSS_RELEASE_WORKER_DIGEST is not set');
     expect(blind.calls).toEqual([]);

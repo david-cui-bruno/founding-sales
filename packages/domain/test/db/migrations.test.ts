@@ -98,7 +98,7 @@ describe('forward-only migrations on a fresh database', () => {
 describe('the schema release contract: stop, migrate, start', () => {
   /**
    * A schema release stops both services, applies the migrations and starts the new
-   * images (`release-deploy.sh --schema-change`). So the contract is not that the
+   * images (`deploy.sh release --schema-change`). So the contract is not that the
    * previous images accept the new schema — they refuse it, and must — but that each
    * side refuses the other's schema and accepts its own. Checked against a real
    * database that went from the previous version to this one with rows in it.

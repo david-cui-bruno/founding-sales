@@ -67,7 +67,7 @@ import {
 export const FSS_EXIT_CODES = Object.freeze({ ok: 0, refused: 20, failed: 21, usage: 64 });
 
 /**
- * The commands `infra/scripts/release-deploy.sh` runs on the *migration* task definition,
+ * The commands `infra/scripts/deploy.sh release` runs on the *migration* task definition,
  * which injects `MIGRATION_DATABASE_SECRET` and `FSS_RUNTIME_DATABASE_SECRET_ARN` and, by
  * design, no `DATABASE_SECRET_ARN` (infra/modules/cluster, `migration_task_secrets`).
  * They read their configuration with the runtime connection optional and work through

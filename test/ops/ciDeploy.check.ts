@@ -14,10 +14,9 @@ import { readRepositoryFile, repositoryPath } from './support/repository.ts';
  *
  * Three things are driven end to end rather than read: the workflow's inline
  * protected-path guard, in a real git history, against a stub AWS CLI that holds
- * production's images and their tags; `infra/scripts/deploy.sh ci` (P7; the old name
- * `ci-deploy-app.sh` execs it), against the same stub holding each service, each task
- * definition and the rehearsal repositories, and against stub `gh`s for its `gates` and
- * `download`; and `infra/scripts/deploy.sh current` (the old `deployed-digests.sh`). The
+ * production's images and their tags; `infra/scripts/deploy.sh ci`, against the same stub
+ * holding each service, each task definition and the rehearsal repositories, and against
+ * stub `gh`s for its `gates` and `download`; and `infra/scripts/deploy.sh current`. The
  * workflow itself is held to P6's shape (27 September 2026): five jobs, one gates job, the
  * record's put in the deploy job and its read-back in a job of its own after the smoke, no
  * push-time window, and the schema ranges read from the digests artifact, in 400 lines at
@@ -80,9 +79,6 @@ import { readRepositoryFile, repositoryPath } from './support/repository.ts';
  */
 
 const SCRIPT = repositoryPath('infra/scripts/deploy.sh');
-// The old names, thin wrappers until the release helpers have moved (P7).
-const LEGACY_CI = repositoryPath('infra/scripts/ci-deploy-app.sh');
-const LEGACY_CURRENT = repositoryPath('infra/scripts/deployed-digests.sh');
 const WORKFLOW = '.github/workflows/greenfield-deploy.yml';
 const ACCOUNT = '123456789012';
 const REGISTRY = `${ACCOUNT}.dkr.ecr.us-east-1.amazonaws.com`;
@@ -213,7 +209,7 @@ function operationsDefinition(options: OperationsOptions = {}): Record<string, u
 }
 
 /**
- * The AWS CLI, as far as the guard, the deploy and `deployed-digests.sh` call it.
+ * The AWS CLI, as far as the guard, the deploy and `deploy.sh current` call it.
  * Registering adds the family's next revision — with an extra environment variable when
  * `tamper` is set, as something between the request and the store might — and
  * `update-service` points the service at it unless the service is marked `fail`, when it
@@ -666,8 +662,6 @@ function runScript(
     readonly digests?: string;
     readonly identity?: string;
     readonly region?: string;
-    /** Through the old name, `ci-deploy-app.sh`, which must behave exactly the same. */
-    readonly legacy?: boolean;
     /** What each successive read of the gate's runs changes in the gate run (deploy only). */
     readonly gateScript?: readonly Record<string, unknown>[];
   } = {},
@@ -702,9 +696,7 @@ function runScript(
   };
   delete env['FSS_REHEARSAL_DRY_RUN'];
   delete env['FSS_PRODUCTION_REGION'];
-  const result = extra.legacy === true
-    ? spawnSync(LEGACY_CI, args, { encoding: 'utf8', env })
-    : spawnSync(SCRIPT, ['ci', ...args], { encoding: 'utf8', env });
+  const result = spawnSync(SCRIPT, ['ci', ...args], { encoding: 'utf8', env });
   return { code: result.status ?? 1, output: `${result.stdout}${result.stderr}`, outputs: readOutputs(outputs) };
 }
 
@@ -717,14 +709,6 @@ describe('check decides, and writes nothing', () => {
     expect(run.output).toContain(`fss-rh-api and fss-rh-worker hold ci-${COMMIT} as the two digests the artifact names`);
     expect(run.output).toContain('the running API declares 16-16 and the database is at 16');
     expect(writes(stub)).toEqual([]);
-  });
-
-  it('answers the same through the old name, ci-deploy-app.sh, which only execs deploy.sh ci', () => {
-    const now = runScript('check', world());
-    const old = runScript('check', world(), { legacy: true });
-    expect(old.code, old.output).toBe(now.code);
-    expect(old.outputs).toEqual(now.outputs);
-    expect(old.outputs['decision']).toBe('deploy');
   });
 
   it('leaves a service that is not running at its declared count to the operator', () => {
@@ -1650,7 +1634,7 @@ const HISTORY = (() => {
   git(directory, 'checkout', '-q', 'main');
   git(directory, 'merge', '-q', '--no-ff', '--no-commit', 'feature');
   mkdirSync(join(directory, 'infra/scripts'), { recursive: true });
-  writeFileSync(join(directory, 'infra/scripts/release-deploy.sh'), 'edited in the merge\n');
+  writeFileSync(join(directory, 'infra/scripts/deploy.sh'), 'edited in the merge\n');
   git(directory, 'add', '-A');
   git(directory, 'commit', '-q', '-m', 'mg');
   const mg = git(directory, 'rev-parse', 'HEAD');
@@ -1727,7 +1711,7 @@ describe('the protected-path guard reads every commit since production’s, befo
   it('sees an infrastructure edit made in a merge commit itself', () => {
     const run = guard(world(at(HISTORY.n1)), HISTORY.mg);
     expect(run.outputs['decision'], run.output).toBe('manual');
-    expect(run.outputs['reason']).toContain('infra/scripts/release-deploy.sh');
+    expect(run.outputs['reason']).toContain('infra/scripts/deploy.sh');
   });
 
   it('refuses a migration', () => {
@@ -1779,7 +1763,7 @@ describe('the protected-path guard reads every commit since production’s, befo
     const passed = guard(world(at(base)), app, directory);
     expect(passed.outputs['decision'], passed.output).toBe('pass');
     for (const path of [
-      'infra/scripts/ci-deploy-app.sh',
+      'infra/scripts/deploy.sh',
       'infra/policies/deployment-role-policy.json.tftpl',
       'packages/domain/db/migrations/0019_calls.sql',
       // The schema acceptance rule and the migration runner (lane A1): a change to how a
@@ -1967,14 +1951,6 @@ describe('deploy.sh current prints what an operator plan must be given, and refu
     expect(ahead.stdout).toBe('');
     expect(ahead.stderr).toContain(`its family's newest ACTIVE revision is ${definitionArn('worker', 5)}`);
     expect(ahead.stderr).toContain(`aws ecs deregister-task-definition --task-definition ${definitionArn('worker', 5)}`);
-  });
-
-  it('prints the same through the old name, deployed-digests.sh, which only execs deploy.sh current', () => {
-    const now = deployed(world(), '--var-flags');
-    const old = run([LEGACY_CURRENT], world(), ['--var-flags']);
-    expect(old.code, old.stderr).toBe(0);
-    expect(old.stdout).toBe(now.stdout);
-    expect(old.stdout.split('\n')).toHaveLength(5);
   });
 
   it('compares a saved plan’s images with the running ones before an apply, unless the release changes them on purpose', () => {

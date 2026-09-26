@@ -18,8 +18,7 @@ import { repositoryPath } from './support/repository.ts';
  * phase obey schema ranges."
  *
  * Rehearsal-only, because an image either starts against a database or it does not, and
- * nothing on a laptop can ask it that. `infra/scripts/rehearsal.sh ranges` (P7; the old
- * name `rehearsal-schema-ranges.sh` execs it) runs
+ * nothing on a laptop can ask it that. `infra/scripts/rehearsal.sh ranges` (P7) runs
  * the declared deploy order — migrate, then worker, then API — and then the reverse
  * cases through `--selftest`.
  *
@@ -100,7 +99,6 @@ describe('Appendix G 22: the declared ranges decide, and a non-overlap is the re
  */
 
 const SCHEMA_RANGES = 'infra/scripts/rehearsal.sh';
-const SCHEMA_RANGES_LEGACY = 'infra/scripts/rehearsal-schema-ranges.sh';
 const CHECK_PREFIX = 'fss-rh-check';
 const CHECK_API_DIGEST = `sha256:${'a'.repeat(64)}`;
 const CHECK_WORKER_DIGEST = `sha256:${'b'.repeat(64)}`;
@@ -113,8 +111,6 @@ interface RunOptions {
   readonly previousRegistered?: boolean;
   /** What the overlap case's container exits with, when there is one to run. */
   readonly previousExit?: number;
-  /** Through the old name, `rehearsal-schema-ranges.sh`, which only execs `rehearsal.sh ranges`. */
-  readonly legacy?: boolean;
 }
 
 interface SchemaRangeRun {
@@ -198,8 +194,8 @@ function runSchemaRanges(options: RunOptions): SchemaRangeRun {
   const directory = mkdtempSync(join(tmpdir(), 'fss-schema-ranges-'));
   const reports = mkdtempSync(join(tmpdir(), 'fss-schema-reports-'));
   const result = spawnSync(
-    repositoryPath(options.legacy === true ? SCHEMA_RANGES_LEGACY : SCHEMA_RANGES),
-    [...(options.legacy === true ? [] : ['ranges']), CHECK_PREFIX, '--api-digest', CHECK_API_DIGEST, '--worker-digest', CHECK_WORKER_DIGEST],
+    repositoryPath(SCHEMA_RANGES),
+    ['ranges', CHECK_PREFIX, '--api-digest', CHECK_API_DIGEST, '--worker-digest', CHECK_WORKER_DIGEST],
     {
       encoding: 'utf8',
       env: {
@@ -283,15 +279,6 @@ describe('Appendix G 22 (g38): the refusal cases measure the container, not the 
     expect(run.code).not.toBe(0);
     expect(run.output).toContain('exited 1 and this step requires exit 12');
   });
-
-  it('answers the same through the old name, rehearsal-schema-ranges.sh', () => {
-    for (const options of [{ staleExit: 12, previousRegistered: true, previousExit: 0 }, { staleExit: 0 }]) {
-      const current = runSchemaRanges(options);
-      const legacy = runSchemaRanges({ ...options, legacy: true });
-      expect(legacy.code, legacy.output).toBe(current.code);
-      expect(legacy.report).toBe(current.report);
-    }
-  });
 });
 
 /**
@@ -301,12 +288,11 @@ describe('Appendix G 22 (g38): the refusal cases measure the container, not the 
  * The independent review of 25 September found the order backwards. `terraform apply`
  * registers the release's task definitions, whose strict `{N,N}` range refuses the
  * schema the database is still at, and repointed the running services at them;
- * `release-deploy.sh --schema-change` (now `deploy.sh release`) then scaled them to zero in its step 1, after
+ * `deploy.sh release --schema-change` then scaled them to zero in its step 1, after
  * ECS had begun replacing working tasks with tasks that exit 12. The 04:41Z deploy of
  * schema 16 ran in exactly that order (`docs/greenfield/release.md` 8.0af).
  *
- * The order is now `stop.sh` → apply → `deploy.sh release --schema-change` (P7; the old names
- * `release-stop.sh` and `release-deploy.sh` exec them),
+ * The order is now `stop.sh` → apply → `deploy.sh release --schema-change`,
  * the apply cannot move a count (`ignore_changes`, asserted above and applied in
  * `infra/modules/cluster/tests/release_owns_the_count.tftest.hcl`), and step 1 is a
  * refusal rather than a scale.
@@ -831,7 +817,7 @@ describe('Appendix G 22 (g70), continued: the stop', () => {
 });
 
 /**
- * P7 (26 September 2026): the read-back, and the old names.
+ * P7 (26 September 2026): the read-back.
  *
  * The hand release stores the record before the plan (`record.sh put`), because the
  * worker admits a send only while a stored record names its digest. So the put at the
@@ -844,9 +830,8 @@ describe('Appendix G 22 (g70), continued: the stop', () => {
  *
  * A read-back that failed everything would pass the `created` case, so the `existing`
  * case must reach `deployed:` through the same fake, with the put as its only one-off.
- * And the old names are held to the new ones by what the fake CLI saw, call for call.
  */
-describe('P7: deploy.sh release reads the record back, and the old names are the new ones', () => {
+describe('P7: deploy.sh release reads the record back', () => {
   const REFERENCE = `${ORDER_PREFIX}-20260926`;
   const AT_COUNT = { api: { desired: 2, running: 2 }, worker: { desired: 1, running: 1 } } as const;
   const recordFile = (): string => {
@@ -914,24 +899,7 @@ describe('P7: deploy.sh release reads the record back, and the old names are the
     expect(run.report).toContain('release_record=created');
   });
 
-  it('makes the same calls and writes the same report through release-deploy.sh and release-stop.sh', () => {
-    const rolling = { api: { desired: 1, running: 1 }, worker: { desired: 1, running: 1 } } as const;
-    const cases = [
-      { now: DEPLOY, old: 'infra/scripts/release-deploy.sh', args: deployArgs(), oldArgs: deployArgs().slice(1), services: rolling },
-      { now: STOP, old: 'infra/scripts/release-stop.sh', args: ['infra/roots/rehearsal', ORDER_PREFIX], oldArgs: ['infra/roots/rehearsal', ORDER_PREFIX], services: RUNNING },
-    ] as const;
-    for (const { now, old, args, oldArgs, services } of cases) {
-      const current = runOrder(now, args, services);
-      const legacy = runOrder(old, oldArgs, services);
-      expect(current.code, current.output).toBe(0);
-      expect(legacy.code, legacy.output).toBe(0);
-      expect(legacy.calls).toEqual(current.calls);
-      expect(legacy.report).toEqual(current.report);
-    }
-  });
-
-  it('bootstraps through release-bootstrap-workspace.sh with the same calls, report and exit status, refusal included', () => {
-    const OLD = 'infra/scripts/release-bootstrap-workspace.sh';
+  it('bootstraps the first workspace in one one-off task, and refuses without a worker digest', () => {
     const flags = ['--slug', 'rehearsal', '--display-name', 'Rehearsal', '--admin-email', 'rehearsal-admin@usecallie.com'];
     const args = ['infra/roots/rehearsal', ORDER_PREFIX, '--worker-digest', ORDER_WORKER_DIGEST, ...flags];
     const workspace = '0b6f7d2e-1c3a-4e5f-8a9b-0c1d2e3f4a5b';
@@ -952,25 +920,17 @@ describe('P7: deploy.sh release reads the record back, and the old names are the
       }),
     };
     const current = runOrder(DEPLOY, ['bootstrap', ...args], RUNNING, options);
-    const legacy = runOrder(OLD, args, RUNNING, options);
     expect(current.code, current.output).toBe(0);
-    expect(legacy.code, legacy.output).toBe(0);
     expect(launched(current.calls), 'one one-off task: the bootstrap').toHaveLength(1);
-    expect(legacy.calls).toEqual(current.calls);
-    expect(legacy.report).toEqual(current.report);
     expect(current.report).toContain(`workspace_id=${workspace} slug=rehearsal workspace=created admin=created membership=created role=admin`);
 
-    // A refusal: the same exit status, the same FAIL line, and nothing asked, both ways.
+    // A refusal: one FAIL line, and nothing asked of AWS.
     const failLines = (run: OrderRun): readonly string[] => run.output.split('\n').filter(line => line.startsWith('FAIL:'));
-    const refusedNow = runOrder(DEPLOY, ['bootstrap', 'infra/roots/rehearsal', ORDER_PREFIX, ...flags], RUNNING, options);
-    const refusedOld = runOrder(OLD, ['infra/roots/rehearsal', ORDER_PREFIX, ...flags], RUNNING, options);
-    expect(refusedNow.code).toBe(1);
-    expect(refusedOld.code).toBe(1);
-    expect(failLines(refusedNow)).toHaveLength(1);
-    expect(failLines(refusedNow)[0]).toContain('--worker-digest is required');
-    expect(failLines(refusedOld)).toEqual(failLines(refusedNow));
-    expect(refusedNow.calls).toEqual([]);
-    expect(refusedOld.calls).toEqual([]);
-    expect(refusedNow.report).toBeNull();
+    const refused = runOrder(DEPLOY, ['bootstrap', 'infra/roots/rehearsal', ORDER_PREFIX, ...flags], RUNNING, options);
+    expect(refused.code).toBe(1);
+    expect(failLines(refused)).toHaveLength(1);
+    expect(failLines(refused)[0]).toContain('--worker-digest is required');
+    expect(refused.calls).toEqual([]);
+    expect(refused.report).toBeNull();
   });
 });

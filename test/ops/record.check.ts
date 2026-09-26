@@ -218,12 +218,6 @@ describe('record.sh from-ci writes the ci-gate record from a green gate and its 
     expect(readFileSync(second.out, 'utf8')).toBe(written);
   });
 
-  it('is what the old name release-record-from-ci.sh runs', () => {
-    const old = fromCi(greenWorld(), GREEN, {}, repositoryPath('infra/scripts/release-record-from-ci.sh'), []);
-    expect(old.status, old.stderr).toBe(0);
-    expect(JSON.parse(old.stdout)).toMatchObject({ releaseGateReference: REFERENCE });
-  });
-
   it('accepts the gate file under another display name, and a path with a ref', () => {
     for (const change of [{ name: 'Renamed gate' }, { path: '.github/workflows/greenfield.yml@refs/heads/main' }]) {
       const world = greenWorld();
@@ -543,20 +537,6 @@ describe('record.sh put stores the record before the rollout, on the operations 
     expect(run.code, run.output).toBe(0);
     expect(run.output).toMatch(/PLAN aws ecs run-task .*"command": \["admin", "release-record", "put", "--json-base64"/u);
     expect(run.report).toContain('release_record=planned');
-  });
-
-  it('is what release-deploy.sh --record-only runs, which still refuses a schema change', () => {
-    const script = repositoryPath('infra/scripts/release-deploy.sh');
-    const args = ['infra/roots/production', 'fss-prod', '--record-only', '--api-digest', API, '--worker-digest', WORKER, '--release-record', '<file>'];
-    const run = store(args, {}, script);
-    expect(run.code, run.output).toBe(0);
-    expect(run.runTasks).toHaveLength(1);
-    expect(run.output).toContain('"outcome": "created"');
-    expect(run.report).toContain('stage=put');
-    const schema = store([...args, '--schema-change'], {}, script);
-    expect(schema.code).not.toBe(0);
-    expect(schema.output).toContain('means nothing here');
-    expect(schema.runTasks).toEqual([]);
   });
 });
 

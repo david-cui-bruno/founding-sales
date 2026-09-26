@@ -8,17 +8,17 @@
 #
 # A schema-change release registers task definitions whose strict schema range
 # refuses the schema the database is still at. Until 25 September the stop came
-# after the apply, inside `infra/scripts/release-deploy.sh`, and the apply had
+# after the apply, inside `infra/scripts/deploy.sh release`, and the apply had
 # already pointed the running services at those definitions: the 04:41Z deploy of
 # schema 16 ran in that order (`docs/greenfield/release.md` 8.0af). The order is
-# now `release-stop.sh`, then the apply, then `release-deploy.sh --schema-change`,
+# now `stop.sh`, then the apply, then `deploy.sh release --schema-change`,
 # and it only holds if the apply cannot start what the stop stopped. That is
 # `ignore_changes = [desired_count]` on both services.
 #
 # `lifecycle` is not an attribute a test can read, so these runs are applies with
 # state between them and they assert what the lifecycle does, not that it exists:
 #
-#   1. the stack is created at zero, which is where `release-stop.sh` leaves a
+#   1. the stack is created at zero, which is where `stop.sh` leaves a
 #      standing one (and where a bootstrap creates a fresh one);
 #   2. the release's apply, with the bootstrap off, new images and a new strict
 #      range. Without `ignore_changes` this is the apply that set the declared two
@@ -28,7 +28,7 @@
 #      rolls the services on to the new revision at whatever count they run.
 #
 # The declared counts still reach `output.deployment_plan`, because they are what
-# `release-deploy.sh` scales to after the migration. The vacuous-pass trap is a
+# `deploy.sh release` scales to after the migration. The vacuous-pass trap is a
 # count that stays at zero because nothing declared anything else, so the second
 # run asserts the declared numbers too.
 
@@ -102,7 +102,7 @@ run "the_schema_release_apply_moves_the_task_definitions_and_starts_nothing" {
   assert {
     condition = (output.deployment_plan.api.declared_desired_count == 2
     && output.deployment_plan.worker.declared_desired_count == 1)
-    error_message = "The declared counts must still reach deployment_plan: release-deploy.sh scales to them after the migration."
+    error_message = "The declared counts must still reach deployment_plan: deploy.sh release scales to them after the migration."
   }
 
   # The rolling half. The lifecycle ignores the count and nothing else: the task

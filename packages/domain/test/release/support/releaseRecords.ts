@@ -75,7 +75,7 @@ export async function storeFixtureRecord(
 }
 
 /**
- * A record from the CI gate (lane g96): the shape `release-record-from-ci.sh` writes,
+ * A record from the CI gate (lane g96): the shape `record.sh from-ci` writes,
  * with no drill evidence. The run id is the only thing a test varies, so each case gets
  * its own reference (`ci-gate-<run>-<commit>`); the commit is repeated letters.
  */

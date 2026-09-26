@@ -483,7 +483,7 @@ resource "aws_ecs_task_definition" "api" {
   # Terraform read the newest ACTIVE revision of the family as this resource, rather
   # than the revision it registered itself, so:
   #
-  #   * a plan given the deployed digests (`infra/scripts/deployed-digests.sh`) shows
+  #   * a plan given the deployed digests (`infra/scripts/deploy.sh current`) shows
   #     no change here and none to the service — Terraform does not fight CI;
   #   * a plan that changes anything else here (an environment variable, a secret, the
   #     schema range of a schema release) registers the next revision from those
@@ -493,7 +493,7 @@ resource "aws_ecs_task_definition" "api" {
   #     drift rule (`docs/greenfield/release.md` 4.0).
   #
   # The services deliberately do not ignore `task_definition`: the manual schema path
-  # depends on the apply re-pointing them (`release-deploy.sh --schema-change` scales
+  # depends on the apply re-pointing them (`deploy.sh release --schema-change` scales
   # whatever they name), and so does every infrastructure change to a definition. The
   # one-off definitions below do not track: CI never registers them.
   track_latest = true
@@ -624,7 +624,7 @@ resource "aws_ecs_task_definition" "worker" {
 
 # ---------------------------------------------------------------------------
 # The two one-off task definitions. Neither has a service; both are launched by
-# `infra/scripts/release-deploy.sh` through `infra/scripts/rehearsal-run-task.sh`,
+# `infra/scripts/deploy.sh release` through `infra/scripts/rehearsal.sh run-task`,
 # which reads the exit code and the log stream.
 #
 # They carry the worker image at the release digest because the database is
@@ -772,10 +772,10 @@ resource "aws_ecs_service" "api" {
   # An apply that changes a task definition updates the service in place and ECS
   # rolls it: that is the rolling release, and it still happens. What an apply no
   # longer does is move the count. A schema-change release stops both services with
-  # `infra/scripts/release-stop.sh` *before* the apply, because the task definitions
+  # `infra/scripts/stop.sh` *before* the apply, because the task definitions
   # the apply registers declare a strict schema range the database has not reached
   # yet; an apply that put the declared count back would start tasks that exit 12 and
-  # undo the stop it came after. `infra/scripts/release-deploy.sh` sets the declared
+  # undo the stop it came after. `infra/scripts/deploy.sh release` sets the declared
   # count (`output.deployment_plan`) in steps 5 and 6 of every deploy, rolling or
   # schema, so the number still comes from the root; it just no longer arrives
   # through the apply. `docs/archive/decisions/g12h-bootstrap-is-a-root-variable.md`, "Amended".

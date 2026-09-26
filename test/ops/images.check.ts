@@ -81,7 +81,8 @@ describe('images.sh record writes the digests and the schema range each image de
   it('is what the images workflow records, with the ranges it just verified the images against', () => {
     const workflow = readRepositoryFile('.github/workflows/greenfield-images.yml');
     expect(workflow).toContain('--api-range "$API_SCHEMA_MIN-$API_SCHEMA_MAX" --worker-range "$WORKER_SCHEMA_MIN-$WORKER_SCHEMA_MAX"');
-    expect(workflow).not.toContain('release-images.sh');
+    // The names PR 5 deleted; a workflow naming one would fail at the first step.
+    for (const gone of ['release-images.sh', 'release-promote.sh']) expect(workflow, gone).not.toContain(gone);
   });
 });
 
@@ -213,10 +214,9 @@ function inputFile(content: string): string {
   return path;
 }
 
-function promote(input: string, state: Readonly<Record<string, unknown>>, args: readonly string[] = [], script = IMAGES) {
+function promote(input: string, state: Readonly<Record<string, unknown>>, args: readonly string[] = []) {
   const { aws, docker } = registryStubs(state);
-  const prefix = script === IMAGES ? ['promote'] : [];
-  const result = run([...prefix, input, ...args], { FSS_REHEARSAL_AWS_COMMAND: aws.command, FSS_DOCKER_COMMAND: docker.command }, undefined, script);
+  const result = run(['promote', input, ...args], { FSS_REHEARSAL_AWS_COMMAND: aws.command, FSS_DOCKER_COMMAND: docker.command });
   return { ...result, aws, docker };
 }
 
@@ -240,8 +240,8 @@ describe('images.sh promote copies the CI digests into production by digest, nev
     expect(result.stdout).toContain(`api fss-prod-api ${digest('a')} copied`);
   });
 
-  it('is what release-promote.sh runs, and takes --app-only', () => {
-    const result = promote(inputFile(digestsFor(COMMIT)), registry(), ['--app-only'], repositoryPath('infra/scripts/release-promote.sh'));
+  it('takes --app-only, and copies the worker under it', () => {
+    const result = promote(inputFile(digestsFor(COMMIT)), registry(), ['--app-only']);
     expect(result.code, result.stderr).toBe(0);
     expect(result.stdout).toContain(`worker fss-prod-worker ${digest('b')} copied`);
   });

@@ -13,9 +13,7 @@
 #       -var= flags: there is no per-service host variable.
 #   deploy.sh ci        gates|gate|download|check|record|deploy|canary  (the CI path; flags under "ci" below)
 #
-# It replaces release-deploy.sh (release), release-bootstrap-workspace.sh (bootstrap),
-# deployed-digests.sh (current) and ci-deploy-app.sh (ci), which exec it with the same
-# flags. The stop before a schema release is stop.sh; the record put before the plan is
+# The stop before a schema release is stop.sh; the record put before the plan is
 # record.sh put. Dry run (release, bootstrap): FSS_REHEARSAL_DRY_RUN=1 prints every
 # command and needs no credential.
 #
@@ -609,7 +607,7 @@ deploy_current() {
 # ===========================================================================
 # ci
 # ===========================================================================
-CI_PREFIX="$RELEASE_PRODUCTION_PREFIX"
+CI_PREFIX="$PRODUCTION_PREFIX"
 CI_ENVIRONMENT=production
 CI_ROLE="${CI_PREFIX}-ci-deploy"
 # The production account and region; the workflow sets neither, so the defaults hold.

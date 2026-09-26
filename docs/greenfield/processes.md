@@ -390,8 +390,8 @@ and the worker refuses to send when the record does not carry its own
 idempotent by reference: the same record is `existing`, and a different record under a
 stored reference is refused `release_record_conflict`. It runs on the operations task,
 as the runtime identity, which may insert into `release_records` and read it, and do
-nothing else. `release-deploy.sh --record-only --release-record <file>` runs it alone,
-before the apply, and `release-deploy.sh --release-record <file>` runs it again after the
+nothing else. `record.sh put ... --release-record <file>` runs it alone,
+before the apply, and `deploy.sh release --release-record <file>` runs it again after the
 final verify, where it answers `existing`; the CI deploy puts it before the rollout
 (`docs/greenfield/release.md` 4.0). `--json-base64` is that form, because a one-off task
 is handed only arguments.
@@ -457,7 +457,7 @@ to prove the credential the services are about to use reaches the database, and 
 DDL identity must not read the journal or a mailbox. The third, `<prefix>-drill`, held
 both and went with the restore drill (lane W3-S8).
 
-`infra/scripts/release-common.sh` is the wrapper. It checks the account, the region,
+`infra/scripts/lib.sh` is the wrapper. It checks the account, the region,
 the cluster's `Environment` tag, full ARNs in this namespace, the registered image
 digest against the release's, the network against the root's own output, and the
 credential entry the definition resolves — all before the launch. Afterwards it reads

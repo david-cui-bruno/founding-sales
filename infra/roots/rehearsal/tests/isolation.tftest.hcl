@@ -208,7 +208,7 @@ run "the_topology_answers_are_the_rehearsal_defaults_at_one_plus_one" {
   # root's `bootstrap` default is `true` and the apply creates both services at zero
   # (G12h): the database has no schema yet and both binaries refuse to start unless
   # the applied version is exactly the range they declare.
-  # `infra/scripts/release-deploy.sh` scales them to the declared counts after the
+  # `infra/scripts/deploy.sh release` scales them to the declared counts after the
   # migration task and `fss verify` succeed, and it reads those counts from
   # `deployment_plan` rather than from a literal — which is why both numbers are
   # asserted here rather than only the one the plan happens to show.
@@ -228,7 +228,7 @@ run "the_topology_answers_are_the_rehearsal_defaults_at_one_plus_one" {
 # satisfied by a root that could only ever create services at zero. It is a plan with
 # no state, so it shows the count a service is *created* at: since lane g70 both
 # services carry `ignore_changes = [desired_count]`, and a re-apply of a standing
-# environment leaves the running count to `release-stop.sh` and `release-deploy.sh`
+# environment leaves the running count to `stop.sh` and `deploy.sh release`
 # (`infra/modules/cluster/tests/release_owns_the_count.tftest.hcl` applies that;
 # `docs/archive/decisions/g12h-bootstrap-is-a-root-variable.md`, "Amended").
 run "a_rehearsal_re_apply_declares_the_real_counts" {
@@ -334,8 +334,8 @@ run "the_rehearsal_tasks_are_told_a_push_audience_they_can_start_with" {
 # whatever credential is lying around whenever somebody forgets the flag, and a
 # root whose refusal — `sts:AssumeRole` on a role that trusts only the OIDC
 # subject — is the boundary working. `.github/workflows/greenfield-release.yml`
-# and `infra/scripts/rehearsal-teardown.sh` pass `assume_deployment_role=false`
-# explicitly, after `infra/scripts/rehearsal-caller-identity.sh` has proved the
+# and `infra/scripts/rehearsal.sh teardown` pass `assume_deployment_role=false`
+# explicitly, after `infra/scripts/rehearsal.sh identity` has proved the
 # session really is `fss-rh-deploy`.
 #
 # A tftest cannot observe any of that: `mock_provider "aws"` replaces the

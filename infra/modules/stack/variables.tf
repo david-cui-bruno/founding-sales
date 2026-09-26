@@ -152,7 +152,7 @@ variable "api_desired_count" {
 variable "bootstrap" {
   description = <<-EOT
     True on the first apply of a fresh environment: both services are created
-    at desired count zero and `infra/scripts/release-deploy.sh` scales them
+    at desired count zero and `infra/scripts/deploy.sh release` scales them
     after the migration task and `fss verify` succeed, worker before API.
 
     A fresh environment cannot start its services before the schema exists.

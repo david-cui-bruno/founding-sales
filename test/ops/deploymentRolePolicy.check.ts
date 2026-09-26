@@ -16,7 +16,7 @@ import { readRepositoryFile, repositoryPath } from './support/repository.ts';
  * David wrote both roles from that prose.
  *
  * So the policy ships: `infra/policies/deployment-role-policy.json.tftpl` rendered by
- * `infra/scripts/policy.sh render <prefix>` (P7; the old name render-deployment-role-policy.sh execs it), and
+ * `infra/scripts/policy.sh render <prefix>` (P7), and
  * `infra/policies/terraform-resource-actions.json` as the reviewable map from every
  * `resource "aws_*"` type in `infra/modules` and `infra/roots` to the actions Terraform
  * needs for it.
@@ -645,7 +645,7 @@ describe('the renderer refuses what it cannot render', () => {
 });
 
 /**
- * `infra/scripts/policy.sh check` (P7; the old name check-deployment-role.sh execs it) is the command David runs before an apply.
+ * `infra/scripts/policy.sh check` (P7) is the command David runs before an apply.
  *
  * It calls `aws iam simulate-principal-policy`, which this lane has no credential for and
  * must not obtain one for. What is tested here is everything around the call: the

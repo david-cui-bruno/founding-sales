@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # A migration's preflight counts, read-only, before its schema release stops anything
-# (P7, 27 September 2026; lane W2-M wrote the first, for 0019, and schema-preflight-0019.sh
-# now execs this with `0019`).
+# (P7, 27 September 2026; lane W2-M wrote the first of these, for 0019).
 #
 #   infra/scripts/preflight.sh <root> <prefix> <migration> --worker-digest D
 #
@@ -39,8 +38,8 @@
 # `counts.blocking`. `refuses=true` means the migration would refuse: do not release it;
 # take the blocking counts to the owner, and amend the migration before it is applied
 # anywhere. A migration whose report carries more than that is named in PREFLIGHT_EXTRAS
-# below, which is how 0019's ten further fields survived this script replacing its own:
-# the line it writes is what schema-preflight-0019.sh wrote, to the field.
+# below, which is how 0019's ten further fields survived this script replacing the one
+# lane W2-M wrote for it: the line it writes is what that one wrote, to the field.
 #
 # Exit status: 0 when the migration would apply; 3 when it would refuse; 1 when anything
 # failed — the launch, the answer, or the deregistration of the preflight's own revision,

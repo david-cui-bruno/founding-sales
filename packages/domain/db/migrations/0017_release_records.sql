@@ -14,7 +14,7 @@
 -- and nothing read it.
 --
 -- This table is where that record goes (`fss admin release-record put`, run by
--- `release-deploy.sh --release-record`), and two rules read it:
+-- `deploy.sh release --release-record`), and two rules read it:
 --
 --   * the API refuses `sending_enabled = { enabled: true, releaseGateReference: R }`
 --     unless R is a row here whose suite is `pass` and whose `api_digest` is the

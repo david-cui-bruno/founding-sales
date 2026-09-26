@@ -17,7 +17,7 @@ import type { Queryable } from '../db/queryable.ts';
  * 16.2 asks three things before production sends: the mandatory rehearsal scenarios
  * passed, "the deployed commit/image digests match the rehearsal artifacts", and an
  * authenticated admin enabled sending. A record of the first is written by the CI gate
- * since lane g96 (`infra/scripts/release-record-from-ci.sh`, `source: "ci-gate"`, the
+ * since lane g96 (`infra/scripts/record.sh from-ci`, `source: "ci-gate"`, the
  * owner's axiom 10B); a green `full` rehearsal wrote them before it, and the rows it
  * stored are still read by their reference. The admin's attestation names that record's
  * `releaseGateReference`, and this file is what makes the middle clause a comparison
@@ -285,7 +285,7 @@ export async function bindReleaseRecord(
  *
  * `record` is what `readCiGateRecordFor` found for the running digest. The policy
  * admits a record only when the CI gate wrote it — `source: "ci-gate"`, which only
- * `release-record-from-ci.sh` writes, from a green gate run of a push to main at the
+ * `record.sh from-ci` writes, from a green gate run of a push to main at the
  * record's commit — so a rehearsal record is refused here even when it names this
  * digest; it binds only under its own reference, and only outside production. The
  * order starts with the identity, because the policy finds its record *by* the running
