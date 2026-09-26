@@ -80,62 +80,15 @@ variable "container_port" {
   default     = 8080
 }
 
-variable "api_cpu" {
-  description = "Fargate CPU units for the API task. 1024 is one vCPU."
-  type        = number
-  default     = 512
-}
-
-variable "api_memory" {
-  description = "Fargate memory in MiB for the API task."
-  type        = number
-  default     = 1024
-}
-
-variable "worker_cpu" {
-  description = "Fargate CPU units for the worker task."
-  type        = number
-  default     = 512
-}
-
-variable "worker_memory" {
-  description = "Fargate memory in MiB for the worker task."
-  type        = number
-  default     = 1024
-}
-
-variable "cpu_architecture" {
-  description = "X86_64 or ARM64. ARM64 Fargate is cheaper but the image must be built for it."
-  type        = string
-  default     = "X86_64"
-
-  validation {
-    condition     = contains(["X86_64", "ARM64"], var.cpu_architecture)
-    error_message = "cpu_architecture must be X86_64 or ARM64."
-  }
-}
-
 variable "api_desired_count" {
   description = "Number of API tasks."
   type        = number
   default     = 2
 }
 
-variable "worker_desired_count" {
-  description = "Number of worker tasks. The scheduler pass serializes on a transaction advisory lock, so more than one is safe."
-  type        = number
-  default     = 1
-}
-
 variable "target_group_arn" {
   description = "ALB target group the API service registers with."
   type        = string
-}
-
-variable "health_check_grace_period_seconds" {
-  description = "Seconds the API service ignores load-balancer health checks after a task starts."
-  type        = number
-  default     = 60
 }
 
 variable "api_log_group_name" {
@@ -270,18 +223,6 @@ variable "bootstrap" {
   EOT
   type        = bool
   default     = false
-}
-
-variable "migration_cpu" {
-  description = "Fargate CPU units for the one-off migration and operations tasks."
-  type        = number
-  default     = 512
-}
-
-variable "migration_memory" {
-  description = "Fargate memory in MiB for the one-off migration and operations tasks."
-  type        = number
-  default     = 1024
 }
 
 variable "tags" {

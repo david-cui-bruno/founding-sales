@@ -115,59 +115,6 @@ variable "worker_schema_range" {
   })
 }
 
-variable "api_cpu" {
-  description = "Fargate CPU units for the API task. Production's 0.5 vCPU, because the rehearsal runs the same image under the same limits."
-  type        = number
-  default     = 512
-}
-
-variable "api_memory" {
-  description = "Fargate memory in MiB for the API task. Production's 1 GiB: a rehearsal that never reached the production memory limit could not observe an OOM production would."
-  type        = number
-  default     = 1024
-}
-
-variable "worker_cpu" {
-  description = "Fargate CPU units for the worker task. Production's 0.5 vCPU."
-  type        = number
-  default     = 512
-}
-
-variable "worker_memory" {
-  description = "Fargate memory in MiB for the worker task. Production's 1 GiB."
-  type        = number
-  default     = 1024
-}
-
-variable "cpu_architecture" {
-  description = <<-EOT
-    X86_64 or ARM64, and the answer is ARM64, the same as production's: the
-    rehearsal deploys the exact digests proposed for production and those are
-    `linux/arm64` manifests. A rehearsal on the other architecture would not
-    start at all, which is the cheapest possible failure and still the wrong
-    one to discover from a stuck deployment rather than from a plan.
-  EOT
-  type        = string
-  default     = "ARM64"
-
-  validation {
-    condition     = contains(["X86_64", "ARM64"], var.cpu_architecture)
-    error_message = "cpu_architecture must be exactly X86_64 or ARM64. ECS takes the uppercase enum, not Docker's linux/arm64 spelling."
-  }
-}
-
-variable "api_desired_count" {
-  description = "Number of API tasks."
-  type        = number
-  default     = 1
-}
-
-variable "worker_desired_count" {
-  description = "Number of worker tasks."
-  type        = number
-  default     = 1
-}
-
 variable "dependencies_mode" {
   description = <<-EOT
     `FSS_DEPENDENCIES` on both task definitions, and the rehearsal default is

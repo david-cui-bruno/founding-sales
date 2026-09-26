@@ -13,6 +13,11 @@
 # Both services run the deployment circuit breaker with rollback, so a task
 # that cannot pass its health check returns the service to the last good
 # definition rather than draining the healthy one.
+#
+# Every task is 0.5 vCPU and 1 GiB on ARM64 Linux (David, 20 September 2026):
+# `greenfield-images.yml` builds `--platform linux/arm64` and nothing else, so
+# an X86_64 task would ask Fargate for a manifest that is not in the index, never
+# start, and fail as a pull error rather than as a plan somebody could read.
 
 locals {
   api_task_role_name            = "${var.name_prefix}-api-task"
@@ -46,8 +51,11 @@ locals {
   # apply of a fresh environment and scaled by the shared deploy script once the
   # migration task and `fss verify` have succeeded. These numbers reach a service
   # on create only: both services ignore later changes to `desired_count`.
-  api_desired_count    = var.bootstrap ? 0 : var.api_desired_count
-  worker_desired_count = var.bootstrap ? 0 : var.worker_desired_count
+  api_desired_count = var.bootstrap ? 0 : var.api_desired_count
+  # One worker: the scheduler pass serializes on a transaction advisory lock, so
+  # more would be safe, and one is what the workload needs.
+  worker_declared_desired_count = 1
+  worker_desired_count          = var.bootstrap ? 0 : local.worker_declared_desired_count
 
   common_environment = merge(var.environment, {
     FSS_NAME_PREFIX      = var.name_prefix
@@ -463,8 +471,8 @@ resource "aws_ecs_task_definition" "api" {
   family                   = "${var.name_prefix}-api"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = tostring(var.api_cpu)
-  memory                   = tostring(var.api_memory)
+  cpu                      = "512"
+  memory                   = "1024"
   execution_role_arn       = aws_iam_role.api_execution.arn
   task_role_arn            = aws_iam_role.api_task.arn
 
@@ -492,7 +500,7 @@ resource "aws_ecs_task_definition" "api" {
 
   runtime_platform {
     operating_system_family = "LINUX"
-    cpu_architecture        = var.cpu_architecture
+    cpu_architecture        = "ARM64"
   }
 
   container_definitions = jsonencode([
@@ -553,8 +561,8 @@ resource "aws_ecs_task_definition" "worker" {
   family                   = "${var.name_prefix}-worker"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = tostring(var.worker_cpu)
-  memory                   = tostring(var.worker_memory)
+  cpu                      = "512"
+  memory                   = "1024"
   execution_role_arn       = aws_iam_role.worker_execution.arn
   task_role_arn            = aws_iam_role.worker_task.arn
 
@@ -564,7 +572,7 @@ resource "aws_ecs_task_definition" "worker" {
 
   runtime_platform {
     operating_system_family = "LINUX"
-    cpu_architecture        = var.cpu_architecture
+    cpu_architecture        = "ARM64"
   }
 
   container_definitions = jsonencode([
@@ -624,14 +632,14 @@ resource "aws_ecs_task_definition" "migration" {
   family                   = "${var.name_prefix}-migration"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = tostring(var.migration_cpu)
-  memory                   = tostring(var.migration_memory)
+  cpu                      = "512"
+  memory                   = "1024"
   execution_role_arn       = aws_iam_role.migration_execution.arn
   task_role_arn            = aws_iam_role.migration_task.arn
 
   runtime_platform {
     operating_system_family = "LINUX"
-    cpu_architecture        = var.cpu_architecture
+    cpu_architecture        = "ARM64"
   }
 
   container_definitions = jsonencode([
@@ -674,14 +682,14 @@ resource "aws_ecs_task_definition" "operations" {
   family                   = "${var.name_prefix}-operations"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = tostring(var.migration_cpu)
-  memory                   = tostring(var.migration_memory)
+  cpu                      = "512"
+  memory                   = "1024"
   execution_role_arn       = aws_iam_role.worker_execution.arn
   task_role_arn            = aws_iam_role.worker_task.arn
 
   runtime_platform {
     operating_system_family = "LINUX"
-    cpu_architecture        = var.cpu_architecture
+    cpu_architecture        = "ARM64"
   }
 
   container_definitions = jsonencode([
@@ -732,7 +740,7 @@ resource "aws_ecs_service" "api" {
 
   enable_ecs_managed_tags = true
 
-  health_check_grace_period_seconds = var.health_check_grace_period_seconds
+  health_check_grace_period_seconds = 60
 
   deployment_maximum_percent         = 200
   deployment_minimum_healthy_percent = 100

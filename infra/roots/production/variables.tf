@@ -82,66 +82,6 @@ variable "worker_schema_range" {
   })
 }
 
-variable "api_cpu" {
-  description = "Fargate CPU units for the API task."
-  type        = number
-  default     = 512
-}
-
-variable "api_memory" {
-  description = "Fargate memory in MiB for the API task."
-  type        = number
-  default     = 1024
-}
-
-variable "worker_cpu" {
-  description = "Fargate CPU units for the worker task."
-  type        = number
-  default     = 512
-}
-
-variable "worker_memory" {
-  description = "Fargate memory in MiB for the worker task."
-  type        = number
-  default     = 1024
-}
-
-variable "api_desired_count" {
-  description = "Number of API tasks."
-  type        = number
-  default     = 2
-}
-
-variable "worker_desired_count" {
-  description = "Number of worker tasks."
-  type        = number
-  default     = 1
-}
-
-variable "cpu_architecture" {
-  description = <<-EOT
-    X86_64 or ARM64, and the answer is ARM64 (David, 20 September 2026).
-
-    This is a default rather than a tfvars entry on purpose: `infra/.gitignore`
-    ignores `*.tfvars`, so an answer written there is an answer the repository
-    never sees and CI can never check. `greenfield-images.yml` builds
-    `--platform linux/arm64` and nothing else, so X86_64 here asks Fargate for
-    a manifest that is not in the index: the task never starts, the circuit
-    breaker rolls back, and the error arrives as a pull failure rather than as
-    a plan somebody could have read. `infra/roots/*/tests/isolation.tftest.hcl`
-    asserts the planned task definitions, not this value.
-  EOT
-  type        = string
-  default     = "ARM64"
-
-  # Repeated from the cluster module deliberately: a refusal should name the
-  # variable the operator typed, not one three modules down.
-  validation {
-    condition     = contains(["X86_64", "ARM64"], var.cpu_architecture)
-    error_message = "cpu_architecture must be exactly X86_64 or ARM64. ECS takes the uppercase enum, not Docker's linux/arm64 spelling."
-  }
-}
-
 variable "dependencies_mode" {
   description = <<-EOT
     `FSS_DEPENDENCIES` on both task definitions. Production is `live`: every

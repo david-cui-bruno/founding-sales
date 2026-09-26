@@ -70,14 +70,9 @@ module "stack" {
   api_schema_range    = var.api_schema_range
   worker_schema_range = var.worker_schema_range
 
-  api_cpu              = var.api_cpu
-  api_memory           = var.api_memory
-  worker_cpu           = var.worker_cpu
-  worker_memory        = var.worker_memory
-  cpu_architecture     = var.cpu_architecture
-  api_desired_count    = var.api_desired_count
-  worker_desired_count = var.worker_desired_count
-  bootstrap            = var.bootstrap
+  # One API task; production runs two. Sizes and architecture are production's.
+  api_desired_count = 1
+  bootstrap         = var.bootstrap
 
   # A run deploys from the stable rehearsal repositories, which exist before it
   # does and outlive it. infra/roots/rehearsal-registry owns them.

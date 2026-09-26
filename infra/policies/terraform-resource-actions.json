@@ -629,7 +629,7 @@
         "fss-rh",
         "fss-prod"
       ],
-      "why": "fss migrate, fss admin database-users ensure, fss verify and fss drill run as one-off ECS tasks inside the VPC, and the deploy scales the two services.",
+      "why": "fss migrate, fss admin database-users ensure and fss verify run as one-off ECS tasks inside the VPC, and the deploy scales the two services.",
       "actions": [
         "ecs:DescribeClusters",
         "ecs:DescribeTaskDefinition",
@@ -642,23 +642,6 @@
         "iam:PassRole",
         "logs:GetLogEvents",
         "logs:DescribeLogStreams"
-      ]
-    },
-    {
-      "name": "infra/scripts/rehearsal-restore-drill.sh: Appendix E steps 1 to 9",
-      "roles": [
-        "fss-rh"
-      ],
-      "why": "The point-in-time restore, the wait, the teardown of the restored instance and any snapshot the run left, and step 1's alarm: the history of <prefix>-restore-generation-mismatch since the drill began (lane g56).",
-      "actions": [
-        "rds:RestoreDBInstanceToPointInTime",
-        "rds:DescribeDBInstances",
-        "rds:DescribeDBSnapshots",
-        "rds:DeleteDBInstance",
-        "rds:DeleteDBSnapshot",
-        "kms:CreateGrant",
-        "kms:DescribeKey",
-        "cloudwatch:DescribeAlarmHistory"
       ]
     },
     {

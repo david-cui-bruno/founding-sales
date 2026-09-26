@@ -18,16 +18,6 @@ output "worker_service_name" {
   value       = aws_ecs_service.worker.name
 }
 
-output "api_task_role_arn" {
-  description = "API task role ARN. The only principal permitted to append to the suppression journal."
-  value       = aws_iam_role.api_task.arn
-}
-
-output "worker_task_role_arn" {
-  description = "Worker task role ARN."
-  value       = aws_iam_role.worker_task.arn
-}
-
 output "api_task_role_name" {
   description = "API task role name."
   value       = aws_iam_role.api_task.name
@@ -38,49 +28,14 @@ output "worker_task_role_name" {
   value       = aws_iam_role.worker_task.name
 }
 
-output "api_execution_role_arn" {
-  description = "API execution role ARN."
-  value       = aws_iam_role.api_execution.arn
-}
-
-output "worker_execution_role_arn" {
-  description = "Worker execution role ARN."
-  value       = aws_iam_role.worker_execution.arn
-}
-
-output "api_task_definition_arn" {
-  description = "Current API task definition ARN."
-  value       = aws_ecs_task_definition.api.arn
-}
-
-output "worker_task_definition_arn" {
-  description = "Current worker task definition ARN."
-  value       = aws_ecs_task_definition.worker.arn
-}
-
-output "migration_task_role_arn" {
-  description = "Migration task role ARN. The identity `fss migrate` runs as."
-  value       = aws_iam_role.migration_task.arn
-}
-
 output "migration_task_role_name" {
   description = "Migration task role name."
   value       = aws_iam_role.migration_task.name
 }
 
-output "migration_execution_role_arn" {
-  description = "Migration execution role ARN. The only identity in this module that may resolve the migration database entry."
-  value       = aws_iam_role.migration_execution.arn
-}
-
 output "migration_task_definition_arn" {
   description = "Task definition `fss migrate` and `fss admin database-users ensure` run under. Launched as a one-off task; it has no service."
   value       = aws_ecs_task_definition.migration.arn
-}
-
-output "migration_task_definition_family" {
-  description = "Family name of the migration task definition, which is what a run-task argument names."
-  value       = aws_ecs_task_definition.migration.family
 }
 
 output "operations_task_definition_arn" {
@@ -129,7 +84,7 @@ output "deployment_plan" {
     }
     worker = {
       service_name           = aws_ecs_service.worker.name
-      declared_desired_count = var.worker_desired_count
+      declared_desired_count = local.worker_declared_desired_count
       planned_desired_count  = aws_ecs_service.worker.desired_count
     }
     migration_task_definition  = aws_ecs_task_definition.migration.arn
@@ -145,11 +100,6 @@ output "api_environment" {
 output "worker_environment" {
   description = "Non-secret environment of the worker service's task definition, for offline assertions. Never contains a credential."
   value       = local.worker_environment
-}
-
-output "secret_environment_names" {
-  description = "Environment variable names the API task resolves from Secrets Manager at task start."
-  value       = sort(keys(local.api_task_secrets))
 }
 
 output "task_secret_names" {
