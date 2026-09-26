@@ -159,6 +159,23 @@ const STATE_KEY = 'fss/greenfield/rehearsal/fss-rh-nothing/terraform.tfstate';
 const notFound = (code: string): string => `echo "An error occurred (${code}) when calling it" >&2; exit 254`;
 
 /**
+ * One page of `cloudfront list-distributions --no-paginate --query DistributionList`, in
+ * the shape a real account answers it: the coordinator read an account with three
+ * distributions on 27 September 2026 and got `IsTruncated`, `Items`, `Marker`, `MaxItems`
+ * and `Quantity`. (The CLI's own pagination merges the pages and leaves `Items` alone,
+ * which is why the reader passes `--no-paginate`.)
+ */
+const distributions = (...items: readonly Record<string, unknown>[]): string =>
+  JSON.stringify({ IsTruncated: false, Items: items, Marker: '', MaxItems: 100, Quantity: items.length });
+
+/** One distribution, as the list holds it. */
+const distribution = (id: string, comment: string, origins: readonly string[] = []): Record<string, unknown> => ({
+  Id: id,
+  Comment: comment,
+  Origins: { Items: origins.map(DomainName => ({ DomainName })) },
+});
+
+/**
  * The five readings `leftovers` makes, each answering "nothing of this run", and the
  * status of a candidate of every settling class, each answering "gone or inactive". A
  * stub that wants one of them to answer otherwise puts its own `case` before this one.
@@ -168,13 +185,13 @@ const NOTHING_LEFT = [
   '  "resourcegroupstaggingapi get-resources") echo "[]"; exit 0 ;;',
   '  "rds describe-db-instances") echo "[]"; exit 0 ;;',
   '  "rds describe-db-snapshots") echo "[]"; exit 0 ;;',
-  '  "cloudfront list-distributions") echo \'{"Quantity":0}\'; exit 0 ;;',
+  `  "cloudfront list-distributions") echo '${distributions()}'; exit 0 ;;`,
   '  "logs describe-log-groups") echo "[]"; exit 0 ;;',
   '  "s3api head-object") echo "An error occurred (404) when calling the HeadObject operation: Not Found" >&2; exit 254 ;;',
   '  "dynamodb get-item") echo "None"; exit 0 ;;',
-  '  "ecs describe-services") printf "INACTIVE\\t0\\t0\\n"; exit 0 ;;',
-  '  "ecs describe-clusters") echo "INACTIVE"; exit 0 ;;',
-  '  "ecs describe-tasks") echo "STOPPED"; exit 0 ;;',
+  '  "ecs describe-services") printf "INACTIVE\\t0\\t0\\tNone\\n"; exit 0 ;;',
+  '  "ecs describe-clusters") printf "INACTIVE\\tNone\\n"; exit 0 ;;',
+  '  "ecs describe-tasks") printf "STOPPED\\tNone\\n"; exit 0 ;;',
   '  "ecs describe-task-definition") echo "INACTIVE"; exit 0 ;;',
   `  "ec2 describe-network-interfaces") ${notFound('InvalidNetworkInterfaceID.NotFound')} ;;`,
   `  "ec2 describe-security-groups") ${notFound('InvalidGroup.NotFound')} ;;`,
@@ -429,6 +446,7 @@ describe('Appendix G 39: rehearsal.sh guard, after the teardown: an empty state,
       'dynamodb get-item',
     ]);
     expect(now.calls.join('\n')).toContain(`--key ${STATE_KEY}.tflock`);
+    expect(now.calls.join('\n'), 'one page, in the shape the API returns it').toContain('cloudfront list-distributions --no-paginate');
     expect(now.calls.join('\n')).toContain(`--log-group-name-prefix /fss/fss-rh-nothing`);
     const old = guard({ terraform: 'exit 0', script: 'infra/scripts/rehearsal-prefix-guard.sh' });
     expect(old.code, old.output).toBe(0);
@@ -447,12 +465,15 @@ describe('Appendix G 39: rehearsal.sh guard, after the teardown: an empty state,
       ['a manual snapshot', `  "rds describe-db-snapshots") echo '["fss-rh-nothing-pg-final"]'; exit 0 ;;`, 'snapshot fss-rh-nothing-pg-final'],
       [
         'a distribution, by its comment',
-        `  "cloudfront list-distributions") echo '{"Quantity":1,"Items":[{"Id":"E111","Comment":"fss-rh-nothing Electron package distribution.","Origins":{"Items":[]}}]}'; exit 0 ;;`,
+        `  "cloudfront list-distributions") echo '${distributions(distribution('E111', 'fss-rh-nothing Electron package distribution.'))}'; exit 0 ;;`,
         'distribution E111',
       ],
       [
         'a distribution, by its origin, beside another account’s',
-        `  "cloudfront list-distributions") echo '{"Quantity":2,"Items":[{"Id":"E222","Comment":"somebody else","Origins":{"Items":[{"DomainName":"other.example.invalid"}]}},{"Id":"E333","Comment":"no comment","Origins":{"Items":[{"DomainName":"fss-rh-nothing-updates.s3.us-east-1.amazonaws.com"}]}}]}'; exit 0 ;;`,
+        `  "cloudfront list-distributions") echo '${distributions(
+          distribution('E222', 'somebody else', ['other.example.invalid']),
+          distribution('E333', 'no comment', ['fss-rh-nothing-updates.s3.us-east-1.amazonaws.com']),
+        )}'; exit 0 ;;`,
         'distribution E333',
       ],
       ['a log group, by name', `  "logs describe-log-groups") echo '["/fss/fss-rh-nothing/worker"]'; exit 0 ;;`, 'log group /fss/fss-rh-nothing/worker'],
@@ -502,10 +523,10 @@ describe('Appendix G 39: rehearsal.sh guard, after the teardown: an empty state,
     // The P1 of the review of PR 292b: being of a settling class is not being settled.
     // An ACTIVE service, an Enabled key or a live security group is what a failed teardown leaves.
     for (const [what, arn, answers, named] of [
-      ['an ACTIVE service', ARN.service, ['  "ecs describe-services") printf "ACTIVE\\t2\\t0\\n"; exit 0 ;;'], `ecs-service ${ARN.service} (ACTIVE, 2 running, 0 pending)`],
-      ['a service draining with a task still on it', ARN.service, ['  "ecs describe-services") printf "DRAINING\\t1\\t0\\n"; exit 0 ;;'], `ecs-service ${ARN.service} (DRAINING, 1 running, 0 pending)`],
-      ['an ACTIVE cluster', ARN.cluster, ['  "ecs describe-clusters") echo "ACTIVE"; exit 0 ;;'], `ecs-cluster ${ARN.cluster} (ACTIVE)`],
-      ['a task still running', ARN.task, ['  "ecs describe-tasks") echo "RUNNING"; exit 0 ;;'], `ecs-task ${ARN.task} (RUNNING)`],
+      ['an ACTIVE service', ARN.service, ['  "ecs describe-services") printf "ACTIVE\\t2\\t0\\tNone\\n"; exit 0 ;;'], `ecs-service ${ARN.service} (ACTIVE, 2 running, 0 pending)`],
+      ['a service draining with a task still on it', ARN.service, ['  "ecs describe-services") printf "DRAINING\\t1\\t0\\tNone\\n"; exit 0 ;;'], `ecs-service ${ARN.service} (DRAINING, 1 running, 0 pending)`],
+      ['an ACTIVE cluster', ARN.cluster, ['  "ecs describe-clusters") printf "ACTIVE\\tNone\\n"; exit 0 ;;'], `ecs-cluster ${ARN.cluster} (ACTIVE)`],
+      ['a task still running', ARN.task, ['  "ecs describe-tasks") printf "RUNNING\\tNone\\n"; exit 0 ;;'], `ecs-task ${ARN.task} (RUNNING)`],
       ['a task definition still ACTIVE', ARN.definition, ['  "ecs describe-task-definition") echo "ACTIVE"; exit 0 ;;'], `ecs-task-definition ${ARN.definition} (ACTIVE)`],
       ['an interface EC2 still has', ARN.interface, ['  "ec2 describe-network-interfaces") echo "in-use"; exit 0 ;;'], `network-interface ${ARN.interface} (still there, in-use)`],
       [
@@ -626,18 +647,28 @@ describe('Appendix G 39: rehearsal.sh guard, after the teardown: an empty state,
       ['an RDS answer that is not a list', `  "rds describe-db-instances") echo '{"DBInstances":[]}'; exit 0 ;;`, 'the RDS instances answered something that is not a list of identifiers'],
       ['an RDS list of something other than names', `  "rds describe-db-snapshots") echo '[{"id":"x"}]'; exit 0 ;;`, 'the RDS snapshots answered something that is not a list of identifiers'],
       ['a CloudFront answer that is not a distribution list', '  "cloudfront list-distributions") echo "[]"; exit 0 ;;', 'CloudFront answered something that is not a distribution list'],
-      ['a count of one and no distribution listed', `  "cloudfront list-distributions") echo '{"Quantity":1}'; exit 0 ;;`, 'CloudFront says it has 1 distribution(s) and listed none of them'],
-      ['a list with no count', `  "cloudfront list-distributions") echo '{"Items":[{"Id":"E123"}]}'; exit 0 ;;`, 'CloudFront answered a distribution list with no readable Quantity'],
-      ['a count of none and a distribution listed', `  "cloudfront list-distributions") echo '{"Quantity":0,"Items":[{"Id":"E123"}]}'; exit 0 ;;`, 'CloudFront says it has no distribution and listed some anyway'],
-      ['a distribution with no id', `  "cloudfront list-distributions") echo '{"Quantity":1,"Items":[{"Comment":"fss-rh-nothing"}]}'; exit 0 ;;`, 'CloudFront listed something that is not a distribution'],
+      // The CLI's merged answer: an Items member and nothing else. The reader asks for one
+      // page so that it can check the count and the truncation (review of PR 292d).
+      ['the CLI’s own merged pages', `  "cloudfront list-distributions") echo '{"Items":[{"Id":"E123"}]}'; exit 0 ;;`, 'CloudFront answered a distribution list with no readable IsTruncated'],
+      ['a page that says there are more', `  "cloudfront list-distributions") echo '{"IsTruncated":true,"Items":[],"Quantity":0}'; exit 0 ;;`, 'more than one page of distributions; the guard cannot read them all'],
+      ['a count of one and no distribution listed', `  "cloudfront list-distributions") echo '{"IsTruncated":false,"Quantity":1}'; exit 0 ;;`, 'CloudFront says it has 1 distribution(s) and listed none of them'],
+      ['a count of one and an empty list', `  "cloudfront list-distributions") echo '{"IsTruncated":false,"Quantity":1,"Items":[]}'; exit 0 ;;`, 'CloudFront says it has 1 distribution(s) and listed 0'],
+      [
+        'a count of two and one distribution listed',
+        `  "cloudfront list-distributions") echo '{"IsTruncated":false,"Quantity":2,"Items":[${JSON.stringify(distribution('E222', 'somebody else'))}]}'; exit 0 ;;`,
+        'CloudFront says it has 2 distribution(s) and listed 1',
+      ],
+      ['a negative count', `  "cloudfront list-distributions") echo '{"IsTruncated":false,"Quantity":-1}'; exit 0 ;;`, 'CloudFront answered a distribution list with no readable Quantity'],
+      ['a count of none and a distribution listed', `  "cloudfront list-distributions") echo '{"IsTruncated":false,"Quantity":0,"Items":[{"Id":"E123"}]}'; exit 0 ;;`, 'CloudFront says it has no distribution and listed some anyway'],
+      ['a distribution with no id', `  "cloudfront list-distributions") echo '{"IsTruncated":false,"Quantity":1,"Items":[{"Comment":"fss-rh-nothing"}]}'; exit 0 ;;`, 'CloudFront listed something that is not a distribution'],
       [
         'a distribution with no readable comment',
-        `  "cloudfront list-distributions") echo '{"Quantity":1,"Items":[{"Id":"E123","Origins":{"Items":[]}}]}'; exit 0 ;;`,
+        `  "cloudfront list-distributions") echo '{"IsTruncated":false,"Quantity":1,"Items":[{"Id":"E123","Origins":{"Items":[]}}]}'; exit 0 ;;`,
         'CloudFront listed a distribution with no readable comment or origins',
       ],
       [
         'a distribution with no readable origins',
-        `  "cloudfront list-distributions") echo '{"Quantity":1,"Items":[{"Id":"E123","Comment":"another account"}]}'; exit 0 ;;`,
+        `  "cloudfront list-distributions") echo '{"IsTruncated":false,"Quantity":1,"Items":[{"Id":"E123","Comment":"another account"}]}'; exit 0 ;;`,
         'CloudFront listed a distribution with no readable comment or origins',
       ],
       ['a log-group answer that is not a list of names', '  "logs describe-log-groups") echo "[1]"; exit 0 ;;', 'answered something that is not a list of names'],
@@ -660,11 +691,35 @@ describe('Appendix G 39: rehearsal.sh guard, after the teardown: an empty state,
       ['a rule that answered None', ARN.rule, '  "ec2 describe-security-group-rules") echo "None"; exit 0 ;;', "the security group rule sgr-0a answered 'None'"],
       ['a key that answered nothing', ARN.key, '  "kms describe-key") exit 0 ;;', `the KMS key ${ARN.key} answered '<nothing>'`],
       ['a backup that answered None', ARN.backup, '  "rds describe-db-instance-automated-backups") echo "None"; exit 0 ;;', `the automated backup ${ARN.backup} answered 'None'`],
+      ['a group that answered nothing', ARN.group, '  "ec2 describe-security-groups") exit 0 ;;', "the security group sg-0a answered '<nothing>'"],
+      ['a group that answered None', ARN.group, '  "ec2 describe-security-groups") echo "None"; exit 0 ;;', "the security group sg-0a answered 'None'"],
+      // A whole answer with a field nobody read: `None 0 0` skipped the VPC check and
+      // settled the group as ruleless (review of PR 292d).
+      ['a group whose VPC is None', ARN.group, '  "ec2 describe-security-groups") printf "None\\t0\\t0\\n"; exit 0 ;;', "the security group sg-0a answered 'None' for its VPC"],
+      [
+        'a group whose rule count is None',
+        ARN.group,
+        '  "ec2 describe-security-groups") printf "vpc-0a\\tNone\\t0\\n"; exit 0 ;;',
+        "the security group sg-0a answered 'None' for its ingress rule count",
+      ],
+      [
+        'a service whose counts are None',
+        ARN.service,
+        '  "ecs describe-services") printf "ACTIVE\\tNone\\tNone\\tNone\\n"; exit 0 ;;',
+        `the ECS service ${ARN.service} answered 'None' for its running count`,
+      ],
+      [
+        'a service whose count is not a number',
+        ARN.service,
+        '  "ecs describe-services") printf "ACTIVE\\t2\\tsome\\tNone\\n"; exit 0 ;;',
+        `the ECS service ${ARN.service} answered 'some' for its pending count, which is not a whole number`,
+      ],
     ] as const) {
       const unread = guard({ terraform: 'exit 0', leftovers: answering(taggedWith(arn), answer) });
       expect(unread.code, `${what}: ${unread.output}`).toBe(1);
       expect(unread.output, what).toContain(named);
-      expect(unread.output, what).toContain('an empty answer is not an absence');
+      // An empty answer, and an answer nobody can read, are both not an absence.
+      expect(unread.output, what).toContain('is not an absence: nothing here can say whether this');
       expect(unread.report, what).toBeNull();
     }
     // A malformed identifier means the identifier could not be read, not that it is gone.
@@ -673,7 +728,51 @@ describe('Appendix G 39: rehearsal.sh guard, after the teardown: an empty state,
       leftovers: answering(taggedWith(ARN.group), `  "ec2 describe-security-groups") ${notFound('InvalidGroup.Malformed')} ;;`),
     });
     expect(malformed.code, malformed.output).toBe(1);
-    expect(malformed.output).toContain('could not be read, and not because it is gone');
+    expect(malformed.output).toContain('the identifier itself could not be read');
+    expect(malformed.output).toContain('a resource that was deleted answers NotFound instead');
+  });
+
+  it('settles an ECS candidate on ECS’s own MISSING, and on no other mixture', () => {
+    // ECS reports absence with exit 0 and a `failures` entry: a deleted service, task or
+    // cluster the tagging API still lists answers None for its state and MISSING for the
+    // reason. Taking None alone for absence would set aside a service that is running;
+    // refusing None altogether would fail every teardown (the coordinator's reading of the
+    // real account, 27 September 2026).
+    const CANNOT_DESCRIBE = 'An error occurred (ClientException) when calling the DescribeTaskDefinition operation: Unable to describe task definition.';
+    for (const [what, arn, answer] of [
+      ['a service', ARN.service, '  "ecs describe-services") printf "None\\tNone\\tNone\\tMISSING\\n"; exit 0 ;;'],
+      ['a cluster', ARN.cluster, '  "ecs describe-clusters") printf "None\\tMISSING\\n"; exit 0 ;;'],
+      ['a task', ARN.task, '  "ecs describe-tasks") printf "None\\tMISSING\\n"; exit 0 ;;'],
+      ['a definition ECS cannot describe', ARN.definition, `  "ecs describe-task-definition") echo "${CANNOT_DESCRIBE}" >&2; exit 254 ;;`],
+    ] as const) {
+      const gone = guard({ terraform: 'exit 0', leftovers: answering(taggedWith(arn), answer) });
+      expect(gone.code, `${what}: ${gone.output}`).toBe(0);
+      expect(gone.output, what).toContain('set aside, read as gone, inactive or pending deletion');
+      expect(gone.report, what).toContain('nothing_left=true');
+    }
+    for (const [what, arn, answer, named] of [
+      ['a service with no state and no reason', ARN.service, '  "ecs describe-services") printf "None\\tNone\\tNone\\tNone\\n"; exit 0 ;;', 'answered None for its state and no failure reason at all'],
+      ['a cluster with no state and no reason', ARN.cluster, '  "ecs describe-clusters") printf "None\\tNone\\n"; exit 0 ;;', 'answered None for its state and no failure reason at all'],
+      ['a service both running and MISSING', ARN.service, '  "ecs describe-services") printf "ACTIVE\\t1\\t0\\tMISSING\\n"; exit 0 ;;', 'in one breath, which is not an absence anything can read'],
+      ['a reason that is neither', ARN.task, '  "ecs describe-tasks") printf "None\\tINVALID_PARAMETER\\n"; exit 0 ;;', "answered the failure reason 'INVALID_PARAMETER'"],
+      [
+        'a definition refused for another reason',
+        ARN.definition,
+        '  "ecs describe-task-definition") echo "An error occurred (ClientException) when calling it" >&2; exit 254 ;;',
+        'could not be read, and not because it is gone',
+      ],
+      [
+        'a definition refused the credential',
+        ARN.definition,
+        '  "ecs describe-task-definition") echo "An error occurred (AccessDeniedException) when calling it" >&2; exit 254 ;;',
+        'could not be read, and not because it is gone',
+      ],
+    ] as const) {
+      const unread = guard({ terraform: 'exit 0', leftovers: answering(taggedWith(arn), answer) });
+      expect(unread.code, `${what}: ${unread.output}`).toBe(1);
+      expect(unread.output, what).toContain(named);
+      expect(unread.report, what).toBeNull();
+    }
   });
 
   it('refuses to assert anything on no reading at all', () => {

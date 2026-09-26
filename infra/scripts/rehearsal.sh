@@ -570,6 +570,15 @@ rehearsal_read_or_absent() {
       *"($code)"*) REHEARSAL_READ_ABSENT=yes; REHEARSAL_READ_OUTPUT=''; return 0 ;;
     esac
   done
+  case "$REHEARSAL_READ_OUTPUT" in
+    *".Malformed)"*)
+      # A never-issued identifier is malformed; one EC2 issued and then deleted answers
+      # NotFound. So this is the identifier that could not be read, not the thing that is
+      # gone, and saying which is the difference between a typo and a leftover.
+      printf '%s\n' "$REHEARSAL_READ_OUTPUT" >&2
+      rehearsal_fail "$what: the identifier itself could not be read — AWS calls it malformed, above — so nothing here can say whether it is still there; a resource that was deleted answers NotFound instead. Read it by hand, and run stage=teardown again."
+      ;;
+  esac
   printf '%s\n' "$REHEARSAL_READ_OUTPUT" >&2
   rehearsal_fail "$what could not be read, and not because it is gone; the guard cannot say whether the run left it behind"
 }
@@ -586,11 +595,62 @@ rehearsal_require_state() {
   esac
 }
 
+# One field of a multi-field answer. The answer can be there while a field of it is not:
+# `None 0 0` from describe-security-groups is a VPC nobody read, and reading it as "no VPC"
+# skipped the VPC check and settled the group (review of PR 292d).
+#   rehearsal_require_field <class> <identifier> <what it is> <which field> <value> [number]
+rehearsal_require_field() {
+  local kind=$1 identifier=$2 what=$3 field=$4 value=$5 form=${6:-word}
+  case "$value" in
+    '' | None)
+      rehearsal_fail "$what $identifier answered '${value:-<nothing>}' for $field, and an empty answer is not an absence: nothing here can say whether this $kind of the run is still there. Read it by hand, and run stage=teardown again."
+      ;;
+  esac
+  if [ "$form" = number ]; then
+    case "$value" in
+      *[!0-9]*)
+        rehearsal_fail "$what $identifier answered '$value' for $field, which is not a whole number, and an unreadable answer is not an absence: nothing here can say whether this $kind of the run is still there. Read it by hand, and run stage=teardown again."
+        ;;
+    esac
+  fi
+}
+
+# ECS reports absence with exit 0 and a `failures` entry, not an error code: a service,
+# task or cluster that is gone answers `None` for every state field and `MISSING` for the
+# reason, and a live one answers its state and `None` for the reason (the coordinator's
+# reading of the real account, 27 September 2026). That pairing, and only it, is ECS
+# saying the thing is not there; every other mixture is an answer nobody can read, and a
+# guard that took `None` alone for absence would set aside a service that is still running.
+# Returns 0 when it is gone, 1 when it is there, and stops everything otherwise.
+#   rehearsal_ecs_absent <class> <identifier> <what it is> <failure reason> <state field>...
+rehearsal_ecs_absent() {
+  local kind=$1 identifier=$2 what=$3 reason=$4 field all_none=yes
+  shift 4
+  for field in "$@"; do
+    [ "$field" = None ] || all_none=no
+  done
+  case "$reason" in
+    MISSING)
+      [ "$all_none" = yes ] \
+        || rehearsal_fail "$what $identifier answered the state '$*' and the failure reason MISSING in one breath, which is not an absence anything can read: nothing here can say whether this $kind of the run is still there. Read it by hand, and run stage=teardown again."
+      return 0
+      ;;
+    None)
+      [ "$all_none" = no ] \
+        || rehearsal_fail "$what $identifier answered None for its state and no failure reason at all, and an empty answer is not an absence: nothing here can say whether this $kind of the run is still there. Read it by hand, and run stage=teardown again."
+      return 1
+      ;;
+    *)
+      rehearsal_fail "$what $identifier answered the failure reason '$reason', which is neither MISSING nor None, and an unreadable answer is not an absence: nothing here can say whether this $kind of the run is still there. Read it by hand, and run stage=teardown again."
+      ;;
+  esac
+}
+
 # Is this candidate really settled? Sets REHEARSAL_SETTLED (yes|no) and
 # REHEARSAL_STATE_DETAIL, the state it was read in, which a leftover line carries.
 #   rehearsal_settling_state <class> <arn>
 rehearsal_settling_state() {
-  local kind=$1 arn=$2 resource cluster identifier state running pending vpc rules egress
+  local kind=$1 arn=$2 resource cluster identifier state running pending reason status vpc rules egress
   resource="${arn#arn:*:*:*:*:}"
   identifier="${resource#*/}"
   REHEARSAL_SETTLED=no
@@ -599,15 +659,21 @@ rehearsal_settling_state() {
     ecs-service)
       cluster="${identifier%%/*}"
       rehearsal_read_or_absent "the ECS service $arn" ecs describe-services --cluster "$cluster" --services "$arn" \
-        --query 'services[0].[status,runningCount,pendingCount]' --output text || return 1
+        --query '[services[0].status, services[0].runningCount, services[0].pendingCount, failures[0].reason]' --output text || return 1
       if [ "$REHEARSAL_READ_ABSENT" = yes ]; then
-        REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="ECS has no such service"; return 0
+        REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="ECS has no such cluster"; return 0
       fi
       rehearsal_require_state "$kind" "$arn" "the ECS service"
-      read -r state running pending <<EOF
+      read -r state running pending reason <<EOF
 $REHEARSAL_READ_OUTPUT
 EOF
-      REHEARSAL_STATE_DETAIL="$state, ${running:-?} running, ${pending:-?} pending"
+      if rehearsal_ecs_absent "$kind" "$arn" "the ECS service" "$reason" "$state" "$running" "$pending"; then
+        REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="ECS has no such service (MISSING)"; return 0
+      fi
+      rehearsal_require_field "$kind" "$arn" "the ECS service" "its status" "$state"
+      rehearsal_require_field "$kind" "$arn" "the ECS service" "its running count" "$running" number
+      rehearsal_require_field "$kind" "$arn" "the ECS service" "its pending count" "$pending" number
+      REHEARSAL_STATE_DETAIL="$state, $running running, $pending pending"
       case "$state" in
         INACTIVE) REHEARSAL_SETTLED=yes ;;
         DRAINING) if [ "$running" = 0 ] && [ "$pending" = 0 ]; then REHEARSAL_SETTLED=yes; fi ;;
@@ -615,12 +681,17 @@ EOF
       ;;
     ecs-cluster)
       rehearsal_read_or_absent "the ECS cluster $arn" ecs describe-clusters --clusters "$arn" \
-        --query 'clusters[0].status' --output text || return 1
+        --query '[clusters[0].status, failures[0].reason]' --output text || return 1
       if [ "$REHEARSAL_READ_ABSENT" = yes ]; then
         REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="ECS has no such cluster"; return 0
       fi
       rehearsal_require_state "$kind" "$arn" "the ECS cluster"
-      state=$REHEARSAL_READ_OUTPUT
+      read -r state reason <<EOF
+$REHEARSAL_READ_OUTPUT
+EOF
+      if rehearsal_ecs_absent "$kind" "$arn" "the ECS cluster" "$reason" "$state"; then
+        REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="ECS has no such cluster (MISSING)"; return 0
+      fi
       REHEARSAL_STATE_DETAIL="$state"
       case "$state" in
         INACTIVE) REHEARSAL_SETTLED=yes ;;
@@ -629,22 +700,36 @@ EOF
     ecs-task)
       cluster="${identifier%%/*}"
       rehearsal_read_or_absent "the ECS task $arn" ecs describe-tasks --cluster "$cluster" --tasks "$arn" \
-        --query 'tasks[0].lastStatus' --output text || return 1
+        --query '[tasks[0].lastStatus, failures[0].reason]' --output text || return 1
       if [ "$REHEARSAL_READ_ABSENT" = yes ]; then
-        REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="ECS has no such task"; return 0
+        REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="ECS has no such cluster"; return 0
       fi
       rehearsal_require_state "$kind" "$arn" "the ECS task"
-      state=$REHEARSAL_READ_OUTPUT
+      read -r state reason <<EOF
+$REHEARSAL_READ_OUTPUT
+EOF
+      if rehearsal_ecs_absent "$kind" "$arn" "the ECS task" "$reason" "$state"; then
+        REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="ECS has no such task (MISSING)"; return 0
+      fi
       REHEARSAL_STATE_DETAIL="$state"
       case "$state" in
         STOPPED) REHEARSAL_SETTLED=yes ;;
       esac
       ;;
     ecs-task-definition)
-      rehearsal_read_or_absent "the task definition $arn" ecs describe-task-definition --task-definition "$arn" \
-        --query 'taskDefinition.status' --output text || return 1
-      if [ "$REHEARSAL_READ_ABSENT" = yes ]; then
-        REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="ECS has no such task definition"; return 0
+      # A purged or never-registered definition is a `(ClientException) … Unable to
+      # describe task definition`, not a NotFound code, and both halves are required:
+      # ClientException alone is also what a malformed request and an AccessDenied get
+      # (the same pair `ranges_definition` reads).
+      REHEARSAL_READ_OUTPUT="$(rehearsal_aws ecs describe-task-definition --task-definition "$arn" \
+        --query 'taskDefinition.status' --output text 2>&1)" && status=0 || status=$?
+      if [ "$status" -ne 0 ]; then
+        case "$REHEARSAL_READ_OUTPUT" in
+          *"(ClientException)"*"Unable to describe task definition"*)
+            REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="ECS has no such task definition"; return 0 ;;
+        esac
+        printf '%s\n' "$REHEARSAL_READ_OUTPUT" >&2
+        rehearsal_fail "the task definition $arn could not be read, and not because it is gone; the guard cannot say whether the run left it behind"
       fi
       rehearsal_require_state "$kind" "$arn" "the task definition"
       state=$REHEARSAL_READ_OUTPUT
@@ -672,15 +757,16 @@ EOF
       read -r vpc rules egress <<EOF
 $REHEARSAL_READ_OUTPUT
 EOF
-      REHEARSAL_STATE_DETAIL="still there in ${vpc:-no vpc}, ${rules:-?} ingress and ${egress:-?} egress rule(s)"
-      if [ -n "$vpc" ] && [ "$vpc" != None ]; then
-        rehearsal_read_or_absent "the VPC $vpc of security group $identifier" ec2 describe-vpcs --vpc-ids "$vpc" \
-          --query 'Vpcs[0].VpcId' --output text || return 1
-        if [ "$REHEARSAL_READ_ABSENT" = yes ]; then
-          REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="its VPC $vpc is gone"; return 0
-        fi
-        rehearsal_require_state "$kind" "$vpc" "the VPC of security group $identifier"
+      rehearsal_require_field "$kind" "$identifier" "the security group" "its VPC" "$vpc"
+      rehearsal_require_field "$kind" "$identifier" "the security group" "its ingress rule count" "$rules" number
+      rehearsal_require_field "$kind" "$identifier" "the security group" "its egress rule count" "$egress" number
+      REHEARSAL_STATE_DETAIL="still there in $vpc, $rules ingress and $egress egress rule(s)"
+      rehearsal_read_or_absent "the VPC $vpc of security group $identifier" ec2 describe-vpcs --vpc-ids "$vpc" \
+        --query 'Vpcs[0].VpcId' --output text || return 1
+      if [ "$REHEARSAL_READ_ABSENT" = yes ]; then
+        REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="its VPC $vpc is gone"; return 0
       fi
+      rehearsal_require_state "$kind" "$vpc" "the VPC of security group $identifier"
       if [ "$rules" = 0 ] && [ "$egress" = 0 ]; then
         rehearsal_read_or_absent "the interfaces of security group $identifier" ec2 describe-network-interfaces \
           --filters "Name=group-id,Values=$identifier" --query 'NetworkInterfaces[].NetworkInterfaceId' --output text || return 1
@@ -717,6 +803,12 @@ EOF
       esac
       ;;
     rds-auto-backup)
+      # By ARN, which is what the tagging API listed. A live backup answers `active`; a
+      # well-formed ARN RDS does not know answers `(InvalidParameterValue)`, which is not
+      # an absence code and so fails closed. `DBInstanceAutomatedBackupNotFound` is what
+      # the `--db-instance-identifier` form answers, and it stays the one gone code: no
+      # reading of a really removed backup has been made yet (the coordinator's probes,
+      # 27 September 2026), and a guard may not guess which one it is.
       rehearsal_read_or_absent "the automated backup $arn" rds describe-db-instance-automated-backups \
         --db-instance-automated-backups-arn "$arn" --query 'DBInstanceAutomatedBackups[0].Status' --output text || return 1
       if [ "$REHEARSAL_READ_ABSENT" = yes ]; then
@@ -845,14 +937,19 @@ PY
 # CloudFront: a distribution is visible the moment it exists, tagged or not.
 rehearsal_cloudfront_leftovers() {
   local prefix=$1 listed
-  listed="$(rehearsal_aws cloudfront list-distributions --query 'DistributionList' --output json)" \
+  # `--no-paginate`, because the CLI's own pagination merges the pages into an answer with
+  # an Items member and nothing else: no Quantity to check the count against, and no
+  # IsTruncated to say whether it is the whole list (the admin profile's reading, 27
+  # September 2026). One page, in the shape the API returns it.
+  listed="$(rehearsal_aws cloudfront list-distributions --no-paginate --query 'DistributionList' --output json)" \
     || rehearsal_fail "the CloudFront distributions could not be listed; the guard cannot say the run left none"
   FSS_JSON="$listed" FSS_PREFIX="$prefix" python3 - <<'PY' || return 1
-# rehearsal-cloudfront-leftovers: the distribution list, read as one. An account with no
-# distribution answers Quantity 0 and no Items member, which is the one legitimate empty;
-# anything else that does not hold together is a reading that failed, not an empty one
-# (review of PR 292c). A distribution missing from a list that says it has one, or an item
-# with no readable comment or origins, would otherwise pass for nothing left behind.
+# rehearsal-cloudfront-leftovers: one page of the distribution list, read whole. It must
+# say it is the only page, count what it lists, and list what it counts. An account with no
+# distribution answers Quantity 0 and an empty or absent Items, which is the one legitimate
+# empty; anything else that does not hold together is a reading that failed, not an empty
+# one (reviews of PR 292c and 292d). A list that says it has one distribution and names
+# none, or names one that is somebody else's, would otherwise pass for nothing left behind.
 import json, os, sys
 env = os.environ
 prefix = env["FSS_PREFIX"]
@@ -863,13 +960,20 @@ except ValueError:
     listed = False
 if not isinstance(listed, dict):
     sys.exit("FAIL: CloudFront answered something that is not a distribution list: " + raw[:200])
+truncated = listed.get("IsTruncated")
+if not isinstance(truncated, bool):
+    sys.exit("FAIL: CloudFront answered a distribution list with no readable IsTruncated: " + raw[:200])
+if truncated:
+    sys.exit("FAIL: more than one page of distributions; the guard cannot read them all: " + raw[:200])
 quantity = listed.get("Quantity")
-if isinstance(quantity, bool) or not isinstance(quantity, int):
+if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity < 0:
     sys.exit("FAIL: CloudFront answered a distribution list with no readable Quantity: " + raw[:200])
 items = listed.get("Items")
 if quantity > 0:
     if not isinstance(items, list):
         sys.exit("FAIL: CloudFront says it has {} distribution(s) and listed none of them: {}".format(quantity, raw[:200]))
+    if len(items) != quantity:
+        sys.exit("FAIL: CloudFront says it has {} distribution(s) and listed {}: {}".format(quantity, len(items), raw[:200]))
 elif items not in (None, []):
     sys.exit("FAIL: CloudFront says it has no distribution and listed some anyway: " + raw[:200])
 for item in items or []:
