@@ -165,7 +165,6 @@ describe("the dashboard's sending figures", () => {
       domain: outbound.collidingDomain,
       authenticationPasses: true,
       automatedSendingEnabled: true,
-      personalGmailGuardPer24h: 4000,
     });
     expect(theAdmins.posture.ramps).toEqual([
       {

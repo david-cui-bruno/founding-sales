@@ -69,7 +69,6 @@ COPY apps/worker/src apps/worker/src
 COPY packages/domain/db packages/domain/db
 COPY packages/domain/crm packages/domain/crm
 COPY packages/domain/jobs packages/domain/jobs
-COPY packages/domain/research packages/domain/research
 COPY packages/domain/today packages/domain/today
 COPY packages/domain/src packages/domain/src
 COPY packages/domain/crm packages/domain/crm
@@ -88,9 +87,8 @@ COPY packages/domain/restore packages/domain/restore
 COPY packages/domain/release packages/domain/release
 COPY packages/contracts/src packages/contracts/src
 
-# The test harness is never in the image: it starts a PostgreSQL cluster, and
-# the recorded research fixtures are test data.
-RUN rm -rf packages/domain/db/testing packages/domain/research/testing
+# The test harness is never in the image: it starts a PostgreSQL cluster.
+RUN rm -rf packages/domain/db/testing
 
 # The liveness file the ECS health check stats lives here. When the task
 # definition sets `readonlyRootFilesystem`, /tmp must be a tmpfs volume;

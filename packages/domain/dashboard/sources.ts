@@ -64,7 +64,6 @@ export interface DomainPosture {
   readonly domain: string;
   readonly authenticationPasses: boolean;
   readonly automatedSendingEnabled: boolean;
-  readonly personalGmailGuardPer24h: number;
 }
 
 /** One mailbox's ramp, as 12.7 computes it. `effectiveCap` is derived, never stored. */

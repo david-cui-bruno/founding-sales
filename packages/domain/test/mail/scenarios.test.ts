@@ -150,6 +150,35 @@ describe('metadata first, body only after a match (12.3)', () => {
     expect(rows[0]).toEqual({ matched: false, metadata_only: true });
   });
 
+  it('records a message to more recipients than the table holds, and the sync page still completes', async () => {
+    // Until 26 Sep 2026 a 201st To address failed `mail_messages_recipients_bounded`,
+    // which failed the whole page the message arrived on and every message after it.
+    const to = Array.from({ length: 250 }, (_unused, index) => `merge${String(index)}@elsewhere.example.test`).join(', ');
+    world = await createMailWorld({
+      alphaMessages: [
+        fixtureMessage({ id: 'merge1', historyId: '1001', from: 'sales.alpha@example.test', to }),
+        fixtureMessage({
+          id: 'after1',
+          historyId: '1002',
+          from: 'stranger@elsewhere.example.test',
+          to: 'sales.alpha@example.test',
+        }),
+      ],
+    });
+    const w = world;
+    await completeBaseline(w, w.alpha);
+
+    const { rows } = await w.database.session.query<{ provider_message_id: string; recipients: number }>(
+      `SELECT provider_message_id, cardinality(header_to) AS recipients FROM mail_messages
+        WHERE workspace_id = $1 ORDER BY provider_message_id`,
+      [w.alpha.workspace.workspaceId],
+    );
+    expect(rows).toEqual([
+      { provider_message_id: 'after1', recipients: 1 },
+      { provider_message_id: 'merge1', recipients: 200 },
+    ]);
+  });
+
   it('fetches a body once a participant matches, and never asks for attachment bytes', async () => {
     world = await createMailWorld({
       alphaMessages: [

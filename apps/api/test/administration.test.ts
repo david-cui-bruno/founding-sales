@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
-  DEFAULT_ALERT_THRESHOLDS,
   RELEASE_RECORD_SCHEMA_ID,
   SETTING_KEYS,
   pipelineBoardResponseSchema,
@@ -140,7 +139,6 @@ describe('the administration surface', () => {
     expect(settings.map(entry => entry.settingKey)).toEqual([...SETTING_KEYS]);
     expect(settings.every(entry => entry.version === 0)).toBe(true);
     const elsewhere = answer.body['elsewhere'] as readonly { path: string }[];
-    expect(elsewhere.map(entry => entry.path)).toContain('/research/config');
     expect(elsewhere.map(entry => entry.path)).toContain('/postures/calling-window');
   });
 
@@ -261,8 +259,8 @@ describe('the administration surface', () => {
       '/settings/update',
       salespersonToken,
       command({
-        settingKey: 'alert_thresholds',
-        value: { ...DEFAULT_ALERT_THRESHOLDS, canaryStaleSeconds: 600 },
+        settingKey: 'business_time_zone',
+        value: { timeZone: 'America/Chicago' },
         changeNote: 'trying it on',
       }),
     );
@@ -274,9 +272,9 @@ describe('the administration surface', () => {
       '/settings/update',
       adminToken,
       command({
-        settingKey: 'alert_thresholds',
-        value: { ...DEFAULT_ALERT_THRESHOLDS, canaryStaleSeconds: 600 },
-        changeNote: 'the canary was noisy',
+        settingKey: 'business_time_zone',
+        value: { timeZone: 'America/Chicago' },
+        changeNote: 'the founder moved',
       }),
     );
     expect(accepted.status).toBe(200);
@@ -285,62 +283,75 @@ describe('the administration surface', () => {
     expect(accepted.body).toMatchObject({
       status: 'accepted',
       replayed: false,
-      result: { previousVersion: 0, current: { settingKey: 'alert_thresholds', version: 1 } },
+      result: { previousVersion: 0, current: { settingKey: 'business_time_zone', version: 1 } },
     });
   });
 
   it('replays a settings command from its receipt rather than writing a second version', async () => {
     const payload = command({
-      settingKey: 'client_version_range',
-      value: { minimum: '1.0.0', maximum: '1.4.0' },
-      changeNote: 'the new build is out',
+      settingKey: 'business_time_zone',
+      value: { timeZone: 'America/Denver' },
+      changeNote: 'moved again',
     });
     const first = await call('POST', '/settings/update', adminToken, payload);
     const again = await call('POST', '/settings/update', adminToken, payload);
     expect(first.body).toMatchObject({ status: 'accepted', replayed: false });
     expect(again.body).toMatchObject({ status: 'accepted', replayed: true });
-    expect((again.body['result'] as { current: { version: number } }).current.version).toBe(1);
+    expect((again.body['result'] as { current: { version: number } }).current.version).toBe(2);
 
-    const history = await call('POST', '/settings/history', adminToken, { settingKey: 'client_version_range' });
-    expect((history.body['versions'] as readonly unknown[]).length).toBe(1);
+    const history = await call('POST', '/settings/history', adminToken, { settingKey: 'business_time_zone' });
+    expect((history.body['versions'] as readonly unknown[]).length).toBe(2);
     // D04: the value each version set and the value in force now are on the wire, and
     // the contract declares both, so the Mac can show what changed and not only when.
     expect(wireDrift(settingHistoryResponseSchema, history.body)).toEqual([]);
     const parsed = settingHistoryResponseSchema.parse(history.body);
-    expect(parsed.versions[0]?.value).toEqual({ minimum: '1.0.0', maximum: '1.4.0' });
-    expect(parsed.current).toEqual({ value: { minimum: '1.0.0', maximum: '1.4.0' }, version: 1 });
+    expect(parsed.versions[0]?.value).toEqual({ timeZone: 'America/Denver' });
+    expect(parsed.current).toEqual({ value: { timeZone: 'America/Denver' }, version: 2 });
   });
 
-  it('refuses a value past a bound with a named reason and writes no version', async () => {
+  it('refuses a value its key does not accept with a named reason and writes no version', async () => {
     // The envelope is valid, so this is a 409 rather than a 400: the server chose
-    // the validator from the key, and the value did not pass it. 13.3's warning
-    // threshold is not something a client can raise above its critical one.
+    // the validator from the key, and the value did not pass it.
     const answer = await call(
       'POST',
       '/settings/update',
       adminToken,
       command({
-        settingKey: 'alert_thresholds',
-        value: { ...DEFAULT_ALERT_THRESHOLDS, oldestJobAgeWarningSeconds: 1200 },
-        changeNote: 'warning above critical',
+        settingKey: 'business_time_zone',
+        value: { timeZone: 'nowhere' },
+        changeNote: 'not a zone',
       }),
     );
     expect(answer.status).toBe(409);
     expect(answer.body).toMatchObject({ status: 'refused', reason: 'invalid_value' });
-    const history = await call('POST', '/settings/history', adminToken, { settingKey: 'alert_thresholds' });
-    expect((history.body['current'] as { version: number }).version).toBe(1);
+    const history = await call('POST', '/settings/history', adminToken, { settingKey: 'business_time_zone' });
+    expect((history.body['current'] as { version: number }).version).toBe(2);
   });
 
   it('answers the history of a key with its current version and every earlier one', async () => {
     const history = await call('POST', '/settings/history', salespersonToken, {
-      settingKey: 'alert_thresholds',
+      settingKey: 'business_time_zone',
     });
     expect(history.status).toBe(200);
-    expect(history.body['settingKey']).toBe('alert_thresholds');
-    expect((history.body['current'] as { version: number }).version).toBe(1);
+    expect(history.body['settingKey']).toBe('business_time_zone');
+    expect((history.body['current'] as { version: number }).version).toBe(2);
 
     const unknownKey = await call('POST', '/settings/history', adminToken, { settingKey: 'not_a_key' });
     expect(unknownKey.status).toBe(400);
+  });
+
+  it('refuses the two retired slices as malformed requests', async () => {
+    for (const settingKey of ['alert_thresholds', 'client_version_range']) {
+      const history = await call('POST', '/settings/history', adminToken, { settingKey });
+      expect(history.status, settingKey).toBe(400);
+      const update = await call(
+        'POST',
+        '/settings/update',
+        adminToken,
+        command({ settingKey, value: {}, changeNote: 'a retired slice' }),
+      );
+      expect(update.status, settingKey).toBe(400);
+    }
   });
 
   it('does not serve the slices that belong to other lanes', async () => {

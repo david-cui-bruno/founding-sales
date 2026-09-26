@@ -18,4 +18,5 @@ export {
   type TemplateRefusalCode,
   type TemplateResult,
   type TemplateVersionRow,
+  type TemplateVersionWithWarnings,
 } from './templates.ts';

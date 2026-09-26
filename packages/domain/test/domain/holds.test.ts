@@ -4,9 +4,7 @@ import {
   LONG_HOLD_REVIEW_MILLISECONDS,
   composeHolds,
   decideResume,
-  mergeIntervals,
   shiftDueInstant,
-  shiftSchedule,
   unionDuration,
   type HoldRecord,
   type Interval,
@@ -49,17 +47,14 @@ function randoms(seed: number): () => number {
 describe('interval union', () => {
   it('merges overlapping and touching intervals and drops empty ones', () => {
     expect(
-      mergeIntervals([
+      unionDuration([
         { start: 0, end: 10 },
         { start: 5, end: 12 },
         { start: 12, end: 20 },
         { start: 30, end: 30 },
         { start: 40, end: 45 },
       ]),
-    ).toEqual([
-      { start: 0, end: 20 },
-      { start: 40, end: 45 },
-    ]);
+    ).toBe(25);
   });
 
   it('counts two overlapping day-long holds as one day, not two', () => {
@@ -179,18 +174,8 @@ describe('resuming after the holds clear', () => {
 });
 
 describe('shifting the schedule', () => {
-  it('moves unexecuted work and leaves executed history alone', () => {
-    const shifted = shiftSchedule(
-      [
-        { id: 'one', dueAt: '2026-09-01T12:00:00.000Z', executed: true },
-        { id: 'two', dueAt: '2026-09-04T12:00:00.000Z', executed: false },
-      ],
-      2 * DAY,
-    );
-    expect(shifted).toEqual([
-      { id: 'one', dueAt: '2026-09-01T12:00:00.000Z', shifted: false },
-      { id: 'two', dueAt: '2026-09-06T12:00:00.000Z', shifted: true },
-    ]);
+  it('moves an unexecuted due instant forward by the union', () => {
+    expect(shiftDueInstant('2026-09-04T12:00:00.000Z', 2 * DAY)).toBe('2026-09-06T12:00:00.000Z');
   });
 
   it('refuses to move work earlier', () => {

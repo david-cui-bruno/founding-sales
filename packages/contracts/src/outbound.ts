@@ -18,7 +18,7 @@ import { instant, uuid } from './foundationRows.ts';
 export const OUTBOUND_STATES = ['prepared', 'held', 'dispatching', 'reconciling', 'sent', 'unknown_terminal'] as const;
 export type OutboundState = (typeof OUTBOUND_STATES)[number];
 
-/** `describeDomain` in the route: the checklist, the enable, the guard and the opt-out rule. */
+/** `describeDomain` in the route: the checklist and the enable. */
 export const sendingDomainStatusSchema = z.object({
   domain: z.string().min(1).max(253),
   spfPass: z.boolean(),
@@ -27,12 +27,21 @@ export const sendingDomainStatusSchema = z.object({
   postmasterReviewedAt: instant.nullable(),
   authenticationPasses: z.boolean(),
   automatedSendingEnabled: z.boolean(),
+  /**
+   * @deprecated The personal-Gmail guard was deleted on 26 Sep 2026; the API sends the
+   * constant 4000. Kept because desktops up to 1.0.10 parse it as required. Remove in
+   * wave 2, after desktop 1.0.11 (which must read it as optional) is in use.
+   */
   personalGmailGuardPer24h: z.number().int().min(0),
+  /** @deprecated Always `true`; see `personalGmailGuardPer24h`. */
   replyOnlyOptOut: z.boolean(),
 });
 export type SendingDomainStatus = z.infer<typeof sendingDomainStatusSchema>;
 
-/** `DomainGuardDecision`, asked of a personal-Gmail recipient. */
+/**
+ * @deprecated The guard was deleted on 26 Sep 2026; the API answers a constant decision
+ * that always allows. Kept for desktops up to 1.0.10; remove in wave 2.
+ */
 export const domainGuardDecisionSchema = z.object({
   allowed: z.boolean(),
   applies: z.boolean(),
@@ -42,8 +51,8 @@ export const domainGuardDecisionSchema = z.object({
 });
 
 /**
- * `personalGmailRecipientsInWindow`: FSS's own sends, the direct ones the sync
- * imported, and their sum. An object, never a number (release.md 8.0ae).
+ * @deprecated The recipient count went with the guard on 26 Sep 2026; the API answers
+ * zeros. Kept for desktops up to 1.0.10; remove in wave 2.
  */
 export const personalGmailRecipientsSchema = z.object({
   automated: z.number().int().min(0),
@@ -92,8 +101,9 @@ export const outboundFenceStatusSchema = z.object({
 export const outboundStatusResponseSchema = z.object({
   /** Null for a workspace with no sending domain. */
   domain: sendingDomainStatusSchema.nullable(),
-  /** Null exactly when `domain` is: the guard is a property of the domain. */
+  /** @deprecated A constant; null exactly when `domain` is. Remove in wave 2. */
   guard: domainGuardDecisionSchema.nullable(),
+  /** @deprecated Zeros. Remove in wave 2. */
   personalGmailRecipients: personalGmailRecipientsSchema,
   doubt: outboundDoubtSchema,
   ramp: mailboxRampStatusSchema.nullable(),

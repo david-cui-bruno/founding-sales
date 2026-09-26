@@ -112,10 +112,9 @@ export const DEPLOYMENT_ENVIRONMENT_VARIABLES = Object.freeze({
   pushTopic: 'FSS_GMAIL_PUSH_TOPIC',
   hostedDomain: 'FSS_GOOGLE_HOSTED_DOMAIN',
   sendingEnabled: 'FSS_SENDING_ENABLED',
-  researchProviders: 'FSS_RESEARCH_PROVIDERS',
   gmailOAuthClient: 'google-gmail-oauth-client',
   oidcClient: 'google-oidc-client',
-  // No classifier key and no research credential: the API reads neither, and since
+  // No classifier key: the API does not read it, and since
   // lane g81 its task definition is handed neither (`infra/modules/cluster`).
   // ---- the API's own ----
   sessionSigningKey: 'session-signing-key',

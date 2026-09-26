@@ -34,3 +34,21 @@ export const TEMPLATE_VARIABLE_NAMES = [
   'contact_title',
 ] as const;
 export type TemplateVariableName = (typeof TEMPLATE_VARIABLE_NAMES)[number];
+
+/**
+ * What a template approval warns about and still approves (26 September 2026).
+ *
+ * Until then each of these refused the approval: more than 89 words, more than one link
+ * in the body or any link in the subject, and any price, percentage or guarantee
+ * wording. They are copy advice, not rules a send depends on, so the approval (and the
+ * create before it) answers them as `warnings` beside the version. What still refuses
+ * is what a send or the law depends on: the sign-off and stop line at the end, no
+ * markup, plain text, a one-line subject, and only variables Callie can fill.
+ */
+export const TEMPLATE_WARNING_CODES = [
+  'template_body_too_long',
+  'template_body_multiple_urls',
+  'template_subject_url',
+  'template_pricing_or_guarantee_language',
+] as const;
+export type TemplateWarningCode = (typeof TEMPLATE_WARNING_CODES)[number];

@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { callingIdentityChangeResultSchema, callingIdentityDtoSchema, callingIdentityListSchema, wireDrift } from '@fss/contracts';
 import { POSTURE_STATEMENT_KEYS } from '@fss/domain';
 import { repositoryContext, workspaceScope } from '@fss/domain/db';
-import { buildTodaySnapshot, businessDateOf, promoteTodayItem } from '@fss/domain/today';
+import { buildTodaySnapshot, businessDateOf, upsertTodayItem } from '@fss/domain/today';
 import type { AddressInfo } from 'node:net';
 import { poolConnections } from '../src/bootstrap/connections.ts';
 import { recordingLogger } from '../src/bootstrap/log.ts';
@@ -160,7 +160,7 @@ describe('the calling-number routes', () => {
     const now = (clock.rows[0]?.now ?? new Date()).toISOString();
     const businessDate = await businessDateOf(worker(), now);
     await buildTodaySnapshot(worker(), { businessDate, now });
-    await promoteTodayItem(worker(), {
+    await upsertTodayItem(worker(), {
       businessDate,
       firmId,
       contactId,

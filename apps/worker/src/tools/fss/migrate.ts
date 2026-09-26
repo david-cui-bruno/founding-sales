@@ -2,8 +2,6 @@ import type { SessionQueryable } from '@fss/domain/db';
 import {
   CURRENT_SCHEMA_VERSION,
   API_SCHEMA_RANGE,
-  LINKEDIN_REMOVAL_REFUSAL_SQLSTATE,
-  REMOVE_LINKEDIN_HISTORY_SETTING,
   WORKER_SCHEMA_RANGE,
   applyMigrations,
   loadMigrations,
@@ -37,7 +35,7 @@ import {
  * privilege, and the report says which role actually ran.
  */
 
-export type MigrateRefusal = 'not_migration_role' | 'runs_as_app_runtime' | 'linkedin_history_present' | 'failed';
+export type MigrateRefusal = 'not_migration_role' | 'runs_as_app_runtime' | 'failed';
 
 export interface MigrateRoleReport {
   readonly connectedRole: string;
@@ -54,8 +52,6 @@ export interface MigrateReport {
   readonly applied: readonly { readonly version: number; readonly name: string }[];
   readonly currentSchemaVersion: number;
   readonly role: MigrateRoleReport;
-  /** True when `--remove-linkedin-history` let migration 0018 erase LinkedIn history. */
-  readonly removeLinkedInHistory: boolean;
 }
 
 export type MigrateResult =
@@ -101,15 +97,6 @@ export interface MigrateOptions {
    * It is a flag rather than a default because the default has to be the refusal.
    */
   readonly allowAnyRole?: boolean | undefined;
-  /**
-   * `--remove-linkedin-history` (lane A4): sets `fss.remove_linkedin_history = 'on'` on
-   * this session, which is the only thing that lets migration 0018 erase a step's
-   * LinkedIn message, a recorded LinkedIn result or a contact URL that does not fit
-   * beside the title. An operator passes it only after the owner has seen
-   * `infra/scripts/schema-preflight-0018.sh`'s counts; without it 0018 refuses, names
-   * the counts and changes nothing.
-   */
-  readonly removeLinkedInHistory?: boolean | undefined;
 }
 
 export async function runMigrate(session: SessionQueryable, options: MigrateOptions = {}): Promise<MigrateResult> {
@@ -134,23 +121,7 @@ export async function runMigrate(session: SessionQueryable, options: MigrateOpti
   }
 
   const schemaVersionBefore = await readAppliedSchemaVersion(session);
-  const removeLinkedInHistory = options.removeLinkedInHistory === true;
-  // Session-level, not SET LOCAL: the runner opens its own transaction per migration.
-  // Reset afterwards whatever happened, so the setting never outlives this command.
-  if (removeLinkedInHistory) await session.query(`SET ${REMOVE_LINKEDIN_HISTORY_SETTING} = 'on'`);
-  let applied: Awaited<ReturnType<typeof applyMigrations>>;
-  try {
-    applied = await applyMigrations(session);
-  } catch (error) {
-    // 0018's refusal is an answer for the owner, not a crash: the counts are the
-    // message, and schema 17 is untouched because the migration is one transaction.
-    if ((error as { code?: unknown }).code === LINKEDIN_REMOVAL_REFUSAL_SQLSTATE && error instanceof Error) {
-      return { ok: false, reason: 'linkedin_history_present', detail: error.message };
-    }
-    throw error;
-  } finally {
-    if (removeLinkedInHistory) await session.query(`RESET ${REMOVE_LINKEDIN_HISTORY_SETTING}`);
-  }
+  const applied = await applyMigrations(session);
   const schemaVersionAfter = await readAppliedSchemaVersion(session);
 
   return {
@@ -163,7 +134,6 @@ export async function runMigrate(session: SessionQueryable, options: MigrateOpti
       // Re-read after the run: the role the migration created is the role the next one
       // must be, and an operator reading the report needs to see which it was.
       role: role.migrationRoleExists ? role : await readMigrationRole(session),
-      removeLinkedInHistory,
     },
   };
 }

@@ -16,6 +16,7 @@ import {
   listStepExecutions,
   proposeEnrollmentMigration,
   publishVersion,
+  readSequenceVersion,
   recordHolidayCalendar,
   recordingSendHandoff,
   replaceDraftSteps,
@@ -244,8 +245,25 @@ describe('the template lifecycle (11.1, 12.6)', () => {
     expect(approved.ok).toBe(false);
     if (approved.ok) return;
     expect(approved.reason).toBe('template_unapproved');
-    expect(approved.issues).toContain('template_footer_missing');
-    expect(approved.issues).toContain('template_pricing_or_guarantee_language');
+    expect(approved.issues).toEqual(['template_footer_missing']);
+  });
+
+  it('approves a body past the copy limits and answers the warnings with the version', async () => {
+    const created = await createTemplateVersion(contextFor('alpha', 'admin'), {
+      name: 'Copy advice',
+      subject: 'Our pricing for you',
+      body: fixtureBody(`${'Word '.repeat(90)}See https://one.example.test and https://two.example.test.`),
+      footer: { signOff: FIXTURE_SIGN_OFF },
+      requiredVariables: [],
+    });
+    if (!created.ok) throw new Error(`the template was refused: ${created.reason}`);
+    const expected = ['template_body_multiple_urls', 'template_body_too_long', 'template_pricing_or_guarantee_language'];
+    expect([...created.value.warnings].sort()).toEqual(expected);
+
+    const approved = await approveTemplateVersion(contextFor('alpha', 'admin'), { templateVersionId: created.value.id });
+    if (!approved.ok) throw new Error(`the approval was refused: ${approved.reason}`);
+    expect(approved.value.approvedAt).not.toBeNull();
+    expect([...approved.value.warnings].sort()).toEqual(expected);
   });
 
   it('approves a body that satisfies them, and refuses a salesperson who tries', async () => {
@@ -312,6 +330,32 @@ describe('the template lifecycle (11.1, 12.6)', () => {
       sequenceVersionId: version.value.sequenceVersionId,
     });
     expect(published).toEqual({ ok: false, reason: 'template_unapproved' });
+  });
+});
+
+describe('one draft per sequence (11.1)', () => {
+  it('answers a second draft request with the draft already there, and gives it the steps asked for', async () => {
+    const sequence = await createSequence(contextFor('alpha', 'admin'), { name: `Second draft ${String(Date.now())}` });
+    if (!sequence.ok) throw new Error(`the sequence was refused: ${sequence.reason}`);
+    const first = await createDraftVersion(contextFor('alpha', 'admin'), { sequenceId: sequence.value.id });
+    if (!first.ok) throw new Error(`the draft was refused: ${first.reason}`);
+
+    // No steps: the same draft, unchanged. Until 26 September 2026 this raised
+    // sequence_versions_one_draft, which the API answered as a 500.
+    expect(await createDraftVersion(contextFor('alpha', 'admin'), { sequenceId: sequence.value.id })).toEqual(first);
+
+    const call = {
+      ordinal: 1,
+      channel: 'call_task' as const,
+      delay: { unit: 'elapsed' as const, hours: 0 },
+      onNoAnswer: 'advance' as const,
+    };
+    expect(await createDraftVersion(contextFor('alpha', 'admin'), { sequenceId: sequence.value.id, steps: [call] })).toEqual(
+      first,
+    );
+    const draft = await readSequenceVersion(contextFor('alpha', 'admin'), first.value.sequenceVersionId);
+    expect(draft?.state).toBe('draft');
+    expect(draft?.steps.map(step => step.channel)).toEqual(['call_task']);
   });
 });
 

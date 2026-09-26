@@ -15,15 +15,15 @@ import type { DueWorkSource } from '../scheduler/schedulerPass.ts';
 /**
  * The `classify.reply` handler and its due-work source (12.4, 13.1).
  *
- * The body is in `@fss/domain/classification`, for the reason G4's finalizer, G10's
- * research handlers and G7's mail handlers keep theirs there: everything it touches
+ * The body is in `@fss/domain/classification`, for the reason G4's finalizer and
+ * G7's mail handlers keep theirs there: everything it touches
  * is domain code, and the at-least-once harness registers it without importing the
  * worker. What this file owns is the composition — which adapter this deployment was
  * given, and therefore whether it claims the kind at all.
  *
  * ## A worker with no API key registers nothing
  *
- * Exactly as `mailHandlers(undefined)` and `researchHandlers({ providers: {} })` do.
+ * Exactly as `mailHandlers(undefined)` does.
  * A deployment that has not been handed `FSS_LLM_CLASSIFIER_API_KEY` leaves
  * `classify.reply` unclaimed in the queue rather than failing it twice per message
  * and producing a dead job for every reply. The queue is durable; the reply is

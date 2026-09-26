@@ -47,7 +47,6 @@ import {
 
 export const WEBHOOK_REFUSALS = [
   'token_missing',
-  'token_unreadable',
   'body_unreadable',
   'mailbox_unknown',
   'mailbox_inactive',

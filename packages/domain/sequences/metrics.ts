@@ -43,7 +43,7 @@ import { CLOCK_CLEARING_HOLDS } from './executions.ts';
  * workspace under a restore hold "mostly running" until each step's day arrived.
  *
  * **Counted** means every section 15 reason except the ones in
- * `EXPECTED_HOLD_REASONS`: `scoped_pause`, and the four that clear with the clock.
+ * `EXPECTED_HOLD_REASONS`: `scoped_pause`, and the three that clear with the clock.
  *
  *   * `scoped_pause` is every stop somebody chose. An administrator's pause at any
  *     scope and a salesperson's Today delay open holds with it, and the send hand-off
@@ -52,8 +52,8 @@ import { CLOCK_CLEARING_HOLDS } from './executions.ts';
  *     sending domain (`refusalFor` in `apps/worker/src/handlers/outboundSendHandoff.ts`).
  *     Production runs with sending disabled until the rehearsal gate passes and an
  *     admin enables it (4.2, 16.2), and that state must not page anybody on its own.
- *   * `daily_cap`, `domain_cap`, `outside_email_window` and
- *     `send_unknown_reconciling` are `CLOCK_CLEARING_HOLDS`: the pacing rules of
+ *   * `daily_cap`, `outside_email_window` and `send_unknown_reconciling` are
+ *     `CLOCK_CLEARING_HOLDS`: the pacing rules of
  *     Appendix D and a fence waiting on Gmail's Sent index. The worker re-asks them on
  *     its own, and a cap reached is the system working as designed.
  *

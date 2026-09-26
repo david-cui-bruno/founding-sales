@@ -3,8 +3,10 @@ import {
   decideTemplateApproval,
   renderTemplate,
   templateContentHash,
+  templateTextWarnings,
   type FooterConfiguration,
   type RenderDecision,
+  type TemplateWarningCode,
 } from '../src/index.ts';
 
 /**
@@ -13,8 +15,8 @@ import {
  * The table is migration 0009's, created by the mail lane one pull request early;
  * this is the repository over it, and the rules it applies are G0's pure ones in
  * `packages/domain/src/rules/templates.ts`. Nothing here re-implements a rule: the
- * word list, the footer requirement and the content hash are one function that the
- * approval calls and the send later re-checks against.
+ * footer requirement, the copy warnings and the content hash are one function that
+ * the approval calls and the send later re-checks against.
  *
  * Three things are the database's rather than this file's, and are stated here so a
  * reader does not go looking for them:
@@ -43,7 +45,6 @@ export const TEMPLATE_REFUSAL_CODES = [
   'template_unapproved',
   'template_already_approved',
   'template_retired',
-  'version_taken',
 ] as const;
 export type TemplateRefusalCode = (typeof TEMPLATE_REFUSAL_CODES)[number];
 
@@ -64,6 +65,18 @@ export interface TemplateVersionRow {
   readonly approvedAt: string | null;
   readonly retiredAt: string | null;
   readonly personalizationStrategy: string | null;
+}
+
+/**
+ * A version as a create or an approval answers it: the row, and the copy warnings its
+ * text raises (`templateTextWarnings`). Warnings never refuse; they are for the author.
+ */
+export interface TemplateVersionWithWarnings extends TemplateVersionRow {
+  readonly warnings: readonly TemplateWarningCode[];
+}
+
+function withWarnings(row: TemplateVersionRow): TemplateVersionWithWarnings {
+  return { ...row, warnings: templateTextWarnings({ subject: row.subject, body: row.body }) };
 }
 
 const COLUMNS = `id, template_id, version, name, subject, body, content_hash, footer_sign_off,
@@ -149,7 +162,7 @@ export interface CreateTemplateVersionInput {
 export async function createTemplateVersion(
   context: RepositoryContext,
   input: CreateTemplateVersionInput,
-): Promise<TemplateResult<TemplateVersionRow>> {
+): Promise<TemplateResult<TemplateVersionWithWarnings>> {
   if (!isAdminScope(context.scope)) return { ok: false, reason: 'admin_only' };
   if (input.name.trim().length === 0) return { ok: false, reason: 'invalid_input' };
 
@@ -187,7 +200,7 @@ export async function createTemplateVersion(
   );
   const row = rows[0];
   if (row === undefined) return { ok: false, reason: 'invalid_input' };
-  return { ok: true, value: toTemplate(row) };
+  return { ok: true, value: withWarnings(toTemplate(row)) };
 }
 
 async function newTemplateId(context: RepositoryContext): Promise<string> {
@@ -202,12 +215,13 @@ async function newTemplateId(context: RepositoryContext): Promise<string> {
  *
  * `decideTemplateApproval` returns every issue rather than the first, and they travel
  * back on the refusal, because an author fixing one rule at a time is a worse day
- * than an author fixing four at once.
+ * than an author fixing four at once. An approved version comes back with its copy
+ * warnings, which approve anyway.
  */
 export async function approveTemplateVersion(
   context: RepositoryContext,
   input: { readonly templateVersionId: string },
-): Promise<TemplateResult<TemplateVersionRow>> {
+): Promise<TemplateResult<TemplateVersionWithWarnings>> {
   if (!isAdminScope(context.scope)) return { ok: false, reason: 'admin_only' };
   if (context.scope.actor.kind !== 'user') return { ok: false, reason: 'admin_only' };
 
@@ -245,7 +259,7 @@ export async function approveTemplateVersion(
   );
   const row = rows[0];
   if (row === undefined) return { ok: false, reason: 'template_unknown' };
-  return { ok: true, value: toTemplate(row) };
+  return { ok: true, value: { ...toTemplate(row), warnings: decision.warnings } };
 }
 
 /**

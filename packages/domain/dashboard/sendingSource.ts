@@ -291,7 +291,6 @@ async function sendingPosture(
             domain: domain.domain,
             authenticationPasses: authenticationPasses(domain),
             automatedSendingEnabled: domain.automatedSendingEnabled,
-            personalGmailGuardPer24h: domain.personalGmailGuardPer24h,
           },
     ramps,
   };

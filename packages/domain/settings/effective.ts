@@ -1,15 +1,10 @@
-import {
-  DEFAULT_ALERT_THRESHOLDS,
-  alertThresholdsSchema,
-  sendingEnabledSettingSchema,
-  type AlertThresholds,
-} from '@fss/contracts';
+import { sendingEnabledSettingSchema } from '@fss/contracts';
 
 /**
  * What a stored setting *means*, as pure functions.
  *
- * Each one answers a question some other lane will ask — "may I send", "what is the
- * canary threshold" — and none of it touches a database. The reads in `store.ts`
+ * Each one answers a question some other lane will ask — "may I send" — and none of
+ * it touches a database. The reads in `store.ts`
  * return whatever is stored; these turn that into the one number or boolean the
  * caller may act on.
  *
@@ -58,8 +53,3 @@ export function effectiveSendingEnabled(deploymentEnabled: boolean, storedSettin
   return parsed.data.enabled;
 }
 
-/** 13.3's thresholds, or the release defaults when the stored value is unreadable. */
-export function alertThresholdsOf(storedSetting: unknown): AlertThresholds {
-  const parsed = alertThresholdsSchema.safeParse(storedSetting);
-  return parsed.success ? parsed.data : DEFAULT_ALERT_THRESHOLDS;
-}

@@ -5,6 +5,7 @@ import {
   resumePreviewResponseSchema,
   sequenceVersionsResponseSchema,
   sequencesResponseSchema,
+  templateCommandResultSchema,
   templateVersionsResponseSchema,
   wireDrift,
 } from '@fss/contracts';
@@ -208,6 +209,30 @@ describe('the sequence, template and enrollment routes', () => {
     );
     expect(approved.status).toBe(200);
     expect(resultOf(approved)['approvedAt']).not.toBeNull();
+    expect(resultOf(approved)['warnings']).toEqual([]);
+  });
+
+  it('approves a template past the copy limits and answers its warnings', async () => {
+    const created = await post(
+      '/templates/create',
+      adminToken,
+      command({
+        name: 'Copy advice',
+        subject: 'A 20% price cut',
+        body: `${'Word '.repeat(90)}See https://one.example.test and https://two.example.test.\n\n${SIGN_OFF}\n${SENDING_STOP_LINE}`,
+        footerSignOff: SIGN_OFF,
+        requiredVariables: [],
+      }),
+    );
+    expect(created.status).toBe(200);
+    const expected = ['template_body_multiple_urls', 'template_body_too_long', 'template_pricing_or_guarantee_language'];
+    expect(templateCommandResultSchema.parse(resultOf(created)).warnings.sort()).toEqual(expected);
+
+    const approved = await post('/templates/approve', adminToken, command({ templateVersionId: String(resultOf(created)['id']) }));
+    expect(approved.status).toBe(200);
+    const result = templateCommandResultSchema.parse(resultOf(approved));
+    expect(result.approvedAt).not.toBeNull();
+    expect(result.warnings.sort()).toEqual(expected);
   });
 
   it('publishes a sequence version and refuses a salesperson who tries', async () => {
@@ -468,6 +493,21 @@ describe('the sequence, template and enrollment routes', () => {
     expect(refused.body['reason']).toBe('invalid_input');
     const versions = await post('/sequences/versions', adminToken, { sequenceId: refusedSequenceId });
     expect(sequenceVersionsResponseSchema.parse(versions.body).versions).toEqual([]);
+  });
+
+  it('answers a second draft request with the draft already there, not a 500', async () => {
+    const created = await post('/sequences/create', adminToken, command({ name: 'Two drafts' }));
+    expect(created.status).toBe(200);
+    const twoDraftsSequenceId = String(resultOf(created)['id']);
+    const first = await post('/sequences/versions/draft', adminToken, command({ sequenceId: twoDraftsSequenceId }));
+    expect(first.status).toBe(200);
+    // A second command id, so this is a second request and not a replay of the first.
+    const second = await post('/sequences/versions/draft', adminToken, command({ sequenceId: twoDraftsSequenceId }));
+    expect(second.status).toBe(200);
+    expect(second.body['replayed']).toBe(false);
+    expect(resultOf(second)).toEqual(resultOf(first));
+    const versions = await post('/sequences/versions', adminToken, { sequenceId: twoDraftsSequenceId });
+    expect(sequenceVersionsResponseSchema.parse(versions.body).versions.map(version => version.state)).toEqual(['draft']);
   });
 
   it('answers a path nobody mounted under these roots with not_found', async () => {

@@ -126,9 +126,11 @@ export interface CreateDraftVersionInput {
  * is that command: with no steps it copies the newest published version, which is
  * what an editor's "edit" button does ("Edit as a new draft" on the Mac).
  *
- * There is at most one draft per sequence, refused by
- * `sequence_versions_one_draft`. Two editors racing get one draft and one refusal
- * rather than two drafts that silently diverge.
+ * There is at most one draft per sequence (`sequence_versions_one_draft`), so a second
+ * request answers the draft that is already there — with the steps it was given, when
+ * it was given any — rather than inserting a second one. Until 26 September 2026 it
+ * inserted, the constraint raised, and `runCommand` answered 500. The sequence row is
+ * locked first, so two requests racing see the same draft.
  *
  * The steps are checked before the version row is written (lane D1): a refusal commits
  * with its receipt, so a check after the insert left an empty draft behind every time.
@@ -144,6 +146,19 @@ export async function createDraftVersion(
     [context.scope.workspaceId, input.sequenceId],
   );
   if (sequence.length === 0) return refuseSequence('sequence_unknown');
+
+  const { rows: drafts } = await context.db.query<{ id: string; version: number }>(
+    `SELECT id, version FROM sequence_versions WHERE workspace_id = $1 AND sequence_id = $2 AND state = 'draft'`,
+    [context.scope.workspaceId, input.sequenceId],
+  );
+  const draft = drafts[0];
+  if (draft !== undefined) {
+    if (input.steps !== undefined) {
+      const written = await replaceDraftSteps(context, { sequenceVersionId: draft.id, steps: input.steps });
+      if (!written.ok) return written;
+    }
+    return acceptSequence({ sequenceVersionId: draft.id, version: Number(draft.version) });
+  }
 
   const { rows: next } = await context.db.query<{ next: number; newest_published: string | null }>(
     `SELECT coalesce(max(version), 0) + 1 AS next,

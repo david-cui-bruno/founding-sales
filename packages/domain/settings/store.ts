@@ -3,8 +3,8 @@ import {
   RELEASE_RECORD_BINDING_REFUSAL_CODES,
   SETTING_KEYS,
   SETTING_VALUE_SCHEMAS,
+  type ActiveSettingKey,
   type SendingEnabledSetting,
-  type SettingKey,
 } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { isAdminScope } from '../db/workspaceScope.ts';
@@ -14,7 +14,7 @@ import { isKnownTimeZone } from '../src/rules/localClock.ts';
 
 /**
  * Versioned administrative configuration with a change history
- * (specification 10.1, 13.3, 16.2).
+ * (specification 10.1, 16.2).
  *
  * Three rules, and they are the whole file.
  *
@@ -59,7 +59,7 @@ export type SettingsResult<T> =
   | { readonly ok: false; readonly reason: SettingsRefusalCode };
 
 export interface SettingVersionRow {
-  readonly settingKey: SettingKey;
+  readonly settingKey: ActiveSettingKey;
   readonly version: number;
   readonly value: unknown;
   readonly changeNote: string | null;
@@ -70,7 +70,7 @@ export interface SettingVersionRow {
 
 /** One slice as it stands. `version` is 0 when no admin has ever set it. */
 export interface CurrentSetting {
-  readonly settingKey: SettingKey;
+  readonly settingKey: ActiveSettingKey;
   readonly value: unknown;
   readonly version: number;
   readonly changedAt: string | null;
@@ -79,7 +79,7 @@ export interface CurrentSetting {
 }
 
 interface SettingDbRow {
-  readonly setting_key: SettingKey;
+  readonly setting_key: ActiveSettingKey;
   readonly version: number;
   readonly value: unknown;
   readonly change_note: string | null;
@@ -141,7 +141,7 @@ export async function readCurrentSettings(context: RepositoryContext): Promise<r
 }
 
 /** One slice, typed by its key's schema. Falls back to the default. */
-export async function readSetting<K extends SettingKey>(
+export async function readSetting<K extends ActiveSettingKey>(
   context: RepositoryContext,
   key: K,
 ): Promise<{ readonly value: unknown; readonly version: number }> {
@@ -158,7 +158,7 @@ export async function readSetting<K extends SettingKey>(
 /** Every version of one key, newest first. 10.1's "reason history". */
 export async function readSettingHistory(
   context: RepositoryContext,
-  key: SettingKey,
+  key: ActiveSettingKey,
   options: { readonly limit?: number } = {},
 ): Promise<readonly SettingVersionRow[]> {
   const { rows } = await context.db.query<SettingDbRow>(
@@ -172,7 +172,7 @@ export async function readSettingHistory(
 }
 
 export interface UpdateSettingInput {
-  readonly settingKey: SettingKey;
+  readonly settingKey: ActiveSettingKey;
   readonly value: unknown;
   readonly changeNote: string;
   readonly commandId?: string | undefined;

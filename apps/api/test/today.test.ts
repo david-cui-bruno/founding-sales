@@ -8,7 +8,7 @@ import {
   wireDrift,
 } from '@fss/contracts';
 import { repositoryContext, workspaceScope } from '@fss/domain/db';
-import { buildTodaySnapshot, businessDateOf, promoteTodayItem } from '@fss/domain/today';
+import { buildTodaySnapshot, businessDateOf, upsertTodayItem } from '@fss/domain/today';
 import { localNoopSuppressionJournal } from '../src/journal/index.ts';
 import { dispatch, type ApiRequest } from '../src/server.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
@@ -139,7 +139,7 @@ describe('the Today routes', () => {
     businessDate = await businessDateOf(worker(), now);
     await buildTodaySnapshot(worker(), { businessDate, now });
 
-    manualItemId = await promoteTodayItem(worker(), {
+    manualItemId = await upsertTodayItem(worker(), {
       businessDate,
       firmId,
       contactId,
@@ -149,7 +149,7 @@ describe('the Today routes', () => {
       sourceKind: 'step_execution',
       automated: false,
     });
-    automatedItemId = await promoteTodayItem(worker(), {
+    automatedItemId = await upsertTodayItem(worker(), {
       businessDate,
       firmId,
       contactId,

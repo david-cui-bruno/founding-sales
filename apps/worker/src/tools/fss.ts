@@ -23,7 +23,6 @@ import {
   restoreHoldsOpenCommand,
   restoreReportCommand,
   schedulerRunOnceCommand,
-  schemaPreflight0018Command,
   suppressionJournalReplayCommand,
   systemGenerationAdvanceCommand,
   type AdminInvocation,
@@ -55,15 +54,13 @@ import {
  *   node apps/worker/src/tools/fss.ts migrate
  *   node apps/worker/src/tools/fss.ts admin counts --as-of 2026-09-20T12:00:00Z
  *
- * ## Why it lives in `apps/worker/src/tools` rather than beside the carry
+ * ## Why it lives in `apps/worker/src/tools`
  *
- * `apps/worker/tools/carry` is excluded from the worker image on purpose: the carry
- * runs on an operator's machine against the old stack, and the image has no business
- * carrying it. This tool is the opposite. It has to run **inside the VPC**, because
- * the database is not publicly reachable, and the only thing already there that can
- * reach it is the worker image. `Dockerfile.worker` copies `apps/worker/src`, so
- * putting the tool under `src/tools` ships it with no Dockerfile change and with the
- * same allow-list the `imageClosure` test already enforces. It is a command override
+ * It has to run **inside the VPC**, because the database is not publicly reachable,
+ * and the only thing already there that can reach it is the worker image.
+ * `Dockerfile.worker` copies `apps/worker/src`, so putting the tool under `src/tools`
+ * ships it with no Dockerfile change and with the same allow-list the `imageClosure`
+ * test already enforces. It is a command override
  * of the same image, which also means it is the same code, the same dependency set and
  * the same configuration reader as the worker that will run afterwards.
  *
@@ -182,7 +179,6 @@ const ADMIN_COMMANDS: Readonly<Record<string, AdminRunner>> = Object.freeze({
   'restore-holds open': restoreHoldsOpenCommand,
   'release-record put': releaseRecordPutCommand,
   'release-record show': releaseRecordShowCommand,
-  'schema-preflight 0018': schemaPreflight0018Command,
 });
 
 async function report(path: string | undefined, value: unknown): Promise<void> {
@@ -267,10 +263,7 @@ async function runCommand(
 
   if (path === 'migrate' || path === 'migrate up') {
     if (migrationSession === null) return missingMigrationCredential();
-    const outcome = await runMigrate(migrationSession, {
-      allowAnyRole: switches.has('--allow-any-role'),
-      removeLinkedInHistory: switches.has('--remove-linkedin-history'),
-    });
+    const outcome = await runMigrate(migrationSession, { allowAnyRole: switches.has('--allow-any-role') });
     return outcome.ok ? { ok: true, value: { ...outcome.value } } : { ok: false, reason: outcome.reason, detail: outcome.detail };
   }
   if (path === 'admin database-users ensure') {

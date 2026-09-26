@@ -102,9 +102,9 @@ export { rescheduleExecution, type RescheduleInput } from './shifts.ts';
  *
  * Every other reason in section 15 is cleared by somebody: an administrator lifts a
  * pause, an approver approves a template, a salesperson fixes a route, and the
- * release re-arms the step through `resumeEnrollment`. These four are not — a daily
- * cap ends with the business date, a domain guard with its rolling window, a window
- * with the firm's morning, and a reconciling fence with the Gmail Sent folder — so a
+ * release re-arms the step through `resumeEnrollment`. These three are not — a daily
+ * cap ends with the business date, a window with the firm's morning, and a
+ * reconciling fence with the Gmail Sent folder — so a
  * step held for one of them is put back on the queue instead of waiting for a person
  * who has nothing to do. `not_before` is what keeps that from being a spin: the step
  * is invisible to the scheduler until the interval has passed.
@@ -114,7 +114,6 @@ export { rescheduleExecution, type RescheduleInput } from './shifts.ts';
  */
 export const CLOCK_CLEARING_HOLDS: Partial<Record<HoldReasonCode, number>> = {
   daily_cap: 60 * 60 * 1000,
-  domain_cap: 60 * 60 * 1000,
   outside_email_window: 60 * 60 * 1000,
   send_unknown_reconciling: 5 * 60 * 1000,
 };

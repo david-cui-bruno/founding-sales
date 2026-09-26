@@ -440,15 +440,8 @@ async function openStepHold(
   const holdReason = holdReasonForRefusal(reason);
   if (holdReason !== null) {
     await openHold(context, {
-      // Firm-scoped, including the domain guard.
-      //
-      // 12.6 says reaching the guard "holds further affected sends", and *affected*
-      // is the operative word: a recipient who is not on personal Gmail is not
-      // covered by Google's bulk-sender rule, and a workspace-scoped hold would stop
-      // them too — an outage on traffic nobody objected to. The enforcement of
-      // "cannot be bypassed with extra mailboxes" is not this hold's scope but
-      // `decideDomainGuard`, which counts the whole domain and runs on every send.
-      // The hold's job is to stop the automation churning and to be visible.
+      // Firm-scoped: the hold's job is to stop the automation churning on this firm
+      // and to be visible, not to stop sends nobody objected to.
       scopeKind: 'firm',
       scopeKey: fence.firmId,
       reasonCode: holdReason,
@@ -457,8 +450,8 @@ async function openStepHold(
       sourceEventId: fence.id,
       // `recovery_action` is a closed vocabulary in migration 0001, not free text,
       // because it is what a control offers a person as a *button*. Most of these
-      // refusals have no button: a cap, a window and the domain guard lift when time
-      // passes, and offering "release" for them would be offering to break the rule.
+      // refusals have no button: a cap and a window lift when time passes, and
+      // offering "release" for them would be offering to break the rule.
       // The fence's own `held_reason` carries the detail an operator reads.
       ...(holdReason === 'mailbox_disconnected' || holdReason === 'coverage_incomplete'
         ? { recoveryAction: 'reconnect_mailbox' as const }

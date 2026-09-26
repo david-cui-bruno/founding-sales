@@ -1,3 +1,4 @@
+import type { HoldReasonCode } from '@fss/contracts';
 import type { Queryable } from '../db/queryable.ts';
 import type { RestoreCounts } from './counts.ts';
 
@@ -39,8 +40,13 @@ export interface UnresolvedExceptions {
   readonly deadJobs: number;
 }
 
-/** The hold reasons an ambiguous or uncertain reply opens (12.4, section 15). */
-const AMBIGUITY_REASONS = ['reply_ambiguous', 'reply_uncertain', 'ambiguous_reply', 'uncertain_reply'] as const;
+/**
+ * The hold reasons an ambiguous or uncertain reply opens (12.4, section 15): a reply
+ * that matched more than one opportunity (`mail/matching.ts`) and a reply the
+ * classifier could not settle. Typed against the closed set, so a code that is not a
+ * hold reason cannot be listed here again.
+ */
+const AMBIGUITY_REASONS: readonly HoldReasonCode[] = ['ambiguous_match', 'uncertain_reply'];
 
 export async function readUnresolvedExceptions(db: Queryable): Promise<UnresolvedExceptions> {
   const fences = await db.query<{

@@ -35,13 +35,8 @@ export const TERMINAL_OUTBOUND_STATES: ReadonlySet<OutboundState> = new Set<Outb
 ]);
 
 /**
- * Why a send did not happen.
- *
- * Every one of these sets the fence `held` and leaves it able to try again later,
- * except `domain_guard`, which 12.6 says "requires a reviewed product-policy change".
- * The fence is still held rather than terminal — the guard is a rolling window and
- * will pass — but the hold it opens is not in `RECOVERABLE_HOLD_REASON_CODES`, so no
- * control can clear it early.
+ * Why a send did not happen. Every one of these sets the fence `held` and leaves it
+ * able to try again later.
  */
 export const SEND_REFUSAL_CODES = [
   'fence_unknown',
@@ -71,7 +66,6 @@ export const SEND_REFUSAL_CODES = [
   'handle_suppressed',
   'outside_email_window',
   'daily_cap',
-  'domain_guard',
   'rate_limited',
   'recipient_rejected',
   'provider_refusal',
@@ -130,24 +124,11 @@ export const RAMP_HARD_CEILING = 100;
 /** 12.7: "they may raise a mailbox to 75". The most an admin may set without a release. */
 export const RAMP_ADMIN_RAISE_LIMIT = 75;
 
-/** 12.6's rolling primary-domain guard. */
-export const DEFAULT_PERSONAL_GMAIL_GUARD = 4000;
-export const DOMAIN_GUARD_WINDOW_HOURS = 24;
-
 /**
- * The recipient domains 12.6's guard counts.
- *
- * Google's bulk-sender rules are about "personal Gmail accounts", which are
- * `gmail.com` and its historical alias `googlemail.com`. A Workspace mailbox on a
- * customer's own domain is not one, and counting it would make the guard fire on
- * traffic the rule does not cover.
+ * Personal Gmail, `gmail.com` and its historical alias `googlemail.com`: never a
+ * sending domain, because nobody at Callie can attest to its DNS.
  */
 export const PERSONAL_GMAIL_DOMAINS: ReadonlySet<string> = new Set(['gmail.com', 'googlemail.com']);
-
-export function isPersonalGmailAddress(address: string): boolean {
-  const at = address.lastIndexOf('@');
-  return at > 0 && PERSONAL_GMAIL_DOMAINS.has(address.slice(at + 1).toLowerCase());
-}
 
 /** Appendix B: "a bounded 24-hour observation window with backoff". */
 export const RECONCILE_WINDOW_HOURS = 24;

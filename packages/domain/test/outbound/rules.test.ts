@@ -1,8 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  ACCOUNT_HEADROOM_RESERVE,
-  ACCOUNT_OPERATIONAL_CEILING,
-  GMAIL_ACCOUNT_DAILY_LIMIT,
   RAMP_ADMIN_RAISE_LIMIT,
   RAMP_HARD_CEILING,
   RAMP_RAISE_HEALTHY_STREAK,
@@ -12,7 +9,6 @@ import {
   deterministicMessageId,
   effectiveDailyCap,
   fenceIdOfMessageId,
-  isPersonalGmailAddress,
   raiseAllowance,
   raiseRefusal,
   rampHealthFailure,
@@ -23,7 +19,7 @@ import {
 } from '../../outbound/index.ts';
 
 /**
- * The rules of 12.6 and 12.7 that need no database.
+ * The rules of 12.7 that need no database.
  *
  * The ramp table is the part of this lane a reader is most likely to check against
  * the specification by eye, so it is asserted row by row rather than by a formula
@@ -109,15 +105,6 @@ describe('the reputation ramp (12.7)', () => {
     expect(RAMP_ADMIN_RAISE_LIMIT).toBeLessThan(RAMP_HARD_CEILING);
   });
 
-  it('S07: keeps a reserve of Google’s account limit that automated sending never plans to use', () => {
-    expect(GMAIL_ACCOUNT_DAILY_LIMIT).toBe(2000);
-    expect(ACCOUNT_OPERATIONAL_CEILING).toBe(GMAIL_ACCOUNT_DAILY_LIMIT - ACCOUNT_HEADROOM_RESERVE);
-    expect(ACCOUNT_HEADROOM_RESERVE).toBeGreaterThan(0);
-    // The automated cap alone can never reach the ceiling, so it only bites for an
-    // account a person is already sending a great deal from by hand.
-    expect(RAMP_HARD_CEILING).toBeLessThan(ACCOUNT_OPERATIONAL_CEILING);
-  });
-
   it('advances only on 12.7’s health conditions, and names the one that failed', () => {
     const healthy = {
       authenticationPasses: true,
@@ -152,19 +139,6 @@ describe('the reputation ramp (12.7)', () => {
     // One in five is twenty per cent, and on a five-send day that is one bad address.
     expect(rampHealthFailure(smallDay)).toBeNull();
     expect(rampHealthFailure({ ...smallDay, bounces: 2 })).toBe('bounce_rate');
-  });
-});
-
-describe('the domain guard (12.6)', () => {
-  it('counts personal Gmail and its alias, and nothing else', () => {
-    expect(isPersonalGmailAddress('someone@gmail.com')).toBe(true);
-    expect(isPersonalGmailAddress('someone@googlemail.com')).toBe(true);
-    expect(isPersonalGmailAddress('SOMEONE@GMAIL.COM')).toBe(true);
-    // A Workspace mailbox on a customer's own domain is not a personal Gmail account,
-    // and Google's bulk-sender rule is not about it.
-    expect(isPersonalGmailAddress('someone@northwind.example.test')).toBe(false);
-    expect(isPersonalGmailAddress('someone@mail.gmail.com.example.test')).toBe(false);
-    expect(isPersonalGmailAddress('not-an-address')).toBe(false);
   });
 });
 

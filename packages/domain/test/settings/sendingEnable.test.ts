@@ -27,8 +27,7 @@ import {
  * Every refusal below would also be produced by a command that refused every enable,
  * so the first case is the positive control, and each refusal differs from it in
  * exactly one fact: the reference, the suite, the running digest, or its absence.
- * `scripts/releaseMutationCheck.mjs` removes the suite comparison and requires this
- * file to go red.
+ * Removing the suite comparison turns this file red.
  */
 
 describe('enabling production sending', () => {

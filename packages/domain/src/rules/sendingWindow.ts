@@ -98,24 +98,3 @@ export function placeEmailSend(
     sourceZone: zone,
   };
 }
-
-/**
- * Pacing inside a window (specification 11.2: "Sends are paced throughout the window;
- * they are never released as a start-of-window burst").
- *
- * Spreads `count` sends evenly across the band that `firstSendAt` falls in, starting
- * at the first send rather than at the window's open, so a placement that landed at
- * 09:30 paces from 09:30. Returns instants in order; an empty count returns nothing.
- */
-export function paceWithinWindow(placement: EmailSendPlacement, zone: string, count: number): string[] {
-  if (!Number.isInteger(count) || count <= 0) return [];
-  const parts = localParts(placement.sendAt, zone);
-  const bandEndMinute =
-    placement.band === 'morning' ? EMAIL_WINDOW.preferredEndMinute : EMAIL_WINDOW.closeMinute;
-  const start = Date.parse(placement.sendAt);
-  const end = Date.parse(localInstant(parts.date, { hour: 0, minute: bandEndMinute }, zone));
-  const span = Math.max(end - start, 0);
-  // `count` sends occupy `count` slots, so the last one starts before the band closes.
-  const step = count === 0 ? 0 : Math.floor(span / count);
-  return Array.from({ length: count }, (_unused, index) => new Date(start + step * index).toISOString());
-}

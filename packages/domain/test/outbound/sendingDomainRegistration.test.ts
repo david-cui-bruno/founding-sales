@@ -28,8 +28,8 @@ import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts
  * A registration that inserted nothing and returned `existing` would satisfy every
  * idempotence assertion in this file. So the first case asserts `created`, reads the
  * row back through `readPrimarySendingDomain`, and records a checklist on it — the
- * call that failed in production — and the mutation check in
- * `scripts/releaseMutationCheck.mjs` removes the insert and expects this file to go red.
+ * call that failed in production — so a registration that inserts nothing turns this
+ * file red.
  */
 
 let database: TestDatabase;
@@ -121,8 +121,6 @@ describe('registerSendingDomain', () => {
       dmarcPass: false,
       postmasterReviewedAt: null,
       automatedSendingEnabled: false,
-      personalGmailGuardPer24h: 4000,
-      replyOnlyOptOut: true,
     });
 
     // What Administration reads, and the command that answered `domain_unknown` in

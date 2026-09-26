@@ -4,9 +4,10 @@ import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts
 
 /**
  * One vocabulary, two places. Migration 0001 seeds `hold_reason_codes` and
- * `@fss/contracts` exports the enum; if they ever disagree, a hold created by the
- * worker would be refused by a foreign key or accepted with a code the client
- * cannot render. This test is the reason that cannot happen quietly.
+ * `@fss/contracts` exports the enum; a code the contract has and the table lacks would
+ * make a hold the worker creates fail its foreign key. The table may still carry codes
+ * nothing opens any more (`domain_cap` and `dead_job`, retired 26 Sep 2026) until a
+ * later migration deletes them, so the contract is a subset of the seeds.
  */
 describe('the closed reason-code set in the database', () => {
   let database: TestDatabase;
@@ -19,18 +20,20 @@ describe('the closed reason-code set in the database', () => {
     await database.drop();
   });
 
-  it('seeds exactly the codes @fss/contracts declares', async () => {
+  it('seeds every code @fss/contracts declares', async () => {
     const { rows } = await database.session.query<{ code: string }>(
       'SELECT code FROM hold_reason_codes ORDER BY code',
     );
-    expect(rows.map(row => row.code)).toEqual([...HOLD_REASON_CODES].sort());
+    const seeded = rows.map(row => row.code);
+    for (const code of HOLD_REASON_CODES) expect(seeded, code).toContain(code);
   });
 
   it('agrees with @fss/contracts about which holds expose a recovery control', async () => {
     const { rows } = await database.session.query<{ code: string; recoverable: boolean }>(
       'SELECT code, recoverable FROM hold_reason_codes',
     );
-    for (const row of rows) {
+    const declared: readonly string[] = HOLD_REASON_CODES;
+    for (const row of rows.filter(entry => declared.includes(entry.code))) {
       expect(row.recoverable, row.code).toBe(isRecoverableHoldReason(row.code as (typeof HOLD_REASON_CODES)[number]));
     }
   });

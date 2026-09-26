@@ -1,6 +1,5 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
-import { businessDateOf, completeTodayItem, upsertTodayItem, type UpsertTodayItemInput } from './snapshots.ts';
-import type { TodayItemKind, TodaySourceKind } from './types.ts';
+import { businessDateOf, completeTodayItem, upsertTodayItem } from './snapshots.ts';
 
 /**
  * Event-driven promotion (specification 8.2, Appendix A).
@@ -16,30 +15,13 @@ import type { TodayItemKind, TodaySourceKind } from './types.ts';
  * or not at all, which is the whole of the sentence above. The Today tests prove it by
  * rolling the callback back and finding no entry.
  *
- * **Replies are this function.** The classification lane (G7) has not been written,
- * so there is no table to put a trigger on. `promoteTodayItem` is the interface it
- * calls instead, in the same transaction as the message and its holds — Appendix A's
- * "Record uncertain or ambiguous reply" row commits "message, candidates, independent
- * active holds, Today entries, audit" together, and this is the fourth of those.
- *
- * The same function serves the sequences lane (G8) for due work. Both pass their own
- * `source_kind` and a deterministic `item_key`, so a replayed command or a handler run
- * twice produces one task rather than two — the upsert's key, not this function's
- * care.
+ * **Replies are `promoteReply`**, called in the same transaction as the message and
+ * its holds — Appendix A's "Record uncertain or ambiguous reply" row commits "message,
+ * candidates, independent active holds, Today entries, audit" together, and this is
+ * the fourth of those. A deterministic `item_key` means a replayed command or a
+ * handler run twice produces one task rather than two — the upsert's key, not this
+ * function's care.
  */
-
-export interface PromoteTodayItemInput extends UpsertTodayItemInput {
-  readonly kind: TodayItemKind;
-  readonly sourceKind: TodaySourceKind;
-}
-
-/** Put one task on a business date's list, or move the one already there. */
-export async function promoteTodayItem(
-  context: RepositoryContext,
-  input: PromoteTodayItemInput,
-): Promise<string> {
-  return await upsertTodayItem(context, input);
-}
 
 export interface PromoteReplyInput {
   readonly firmId: string;
@@ -64,7 +46,7 @@ export interface PromoteReplyInput {
  * classification lane. The lane and the shell are here.
  */
 export async function promoteReply(context: RepositoryContext, input: PromoteReplyInput): Promise<string> {
-  return await promoteTodayItem(context, {
+  return await upsertTodayItem(context, {
     businessDate: await businessDateOf(context, input.receivedAt),
     firmId: input.firmId,
     ...(input.contactId === undefined ? {} : { contactId: input.contactId }),

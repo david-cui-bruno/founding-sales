@@ -26,8 +26,8 @@ import {
 /**
  * What a deployed worker was actually given, and what it refuses to start without.
  *
- * Before this file the worker called `mailHandlers(undefined)`,
- * `researchHandlers({ providers: {} })` and `outboundSendHandoff()` with no deps, and
+ * Before this file the worker called `mailHandlers(undefined)` and
+ * `outboundSendHandoff()` with no deps, and
  * the comments above those calls said, honestly, that the change which reads a
  * deployment's client secret and KMS key would be reviewed on its own. This is that
  * change. Its whole job is to make the difference between "this deployment has no
@@ -43,7 +43,7 @@ import {
  *   * `recorded` — the rehearsal selection: the recorded Gmail fake and a local
  *     envelope key, chosen **explicitly**. A rehearsal that reached the fakes by
  *     omission would be a rehearsal that proved nothing about the production path.
- *   * `none` — no Gmail, no classifier, no research; the three job kinds wait in the
+ *   * `none` — no Gmail and no classifier; their job kinds wait in the
  *     queue unclaimed. This is the shape this repository shipped before today and it
  *     stays available for a laptop — but `FSS_ENVIRONMENT=production` refuses it.
  *
@@ -110,7 +110,6 @@ export const DEPLOYMENT_ENVIRONMENT_VARIABLES = Object.freeze({
   pushTopic: 'FSS_GMAIL_PUSH_TOPIC',
   hostedDomain: 'FSS_GOOGLE_HOSTED_DOMAIN',
   sendingEnabled: 'FSS_SENDING_ENABLED',
-  researchProviders: 'FSS_RESEARCH_PROVIDERS',
   /** The ECS `secrets` block names each entry by its logical Secrets Manager name, */
   gmailOAuthClient: 'google-gmail-oauth-client',
   oidcClient: 'google-oidc-client',
@@ -120,7 +119,7 @@ export const DEPLOYMENT_ENVIRONMENT_VARIABLES = Object.freeze({
    * `llm-classifier-api-key`, the task definition injected it under that name, and
    * the deployed worker never had a classifier. `infra/modules/cluster` maps the
    * entry to this name and `test/release/processSecrets.check.ts` holds the three
-   * equal. `research-provider-credentials` is gone from here: nothing reads it.
+   * equal.
    */
   classifierApiKey: CLASSIFIER_SECRET_ENVIRONMENT_VARIABLES.llm_classifier_api_key,
 } as const);
@@ -253,8 +252,6 @@ export interface WorkerDeployment {
   readonly sendingEnabled: boolean;
   /** The journal bucket, or null when none is configured. A name, not a credential. */
   readonly journalBucket: string | null;
-  /** What the operator declared about research. `none` is a declaration, not a default. */
-  readonly researchProviders: 'none' | 'recorded';
 }
 
 function dependencySelection(environment: Environment): DependencySelection {
@@ -290,34 +287,6 @@ function booleanFlag(environment: Environment, name: string): boolean {
   if (raw === 'true') return true;
   if (raw === 'false') return false;
   throw new DeploymentConfigError('INVALID', `${name} must be true or false`);
-}
-
-function researchSelection(environment: Environment, dependencies: DependencySelection): 'none' | 'recorded' {
-  const raw = environment[VARIABLES.researchProviders]?.trim().toLowerCase();
-  if (raw === undefined || raw.length === 0) {
-    // 7.4's providers have no live adapter in this repository — the only
-    // implementations are the recorded fixtures (docs/decisions/g10-provider-fixtures-only.md).
-    // A `live` deployment must therefore *say* that research is absent rather than
-    // discover it, which is what `researchHandlers({ providers: {} })` used to do
-    // silently.
-    if (dependencies === 'live') {
-      throw new DeploymentConfigError(
-        'MISSING',
-        `${VARIABLES.researchProviders} must be set to none or recorded; there is no live research adapter in this build`,
-      );
-    }
-    return 'none';
-  }
-  if (raw !== 'none' && raw !== 'recorded') {
-    throw new DeploymentConfigError('INVALID', `${VARIABLES.researchProviders} must be none or recorded`);
-  }
-  if (raw === 'recorded' && dependencies === 'live') {
-    throw new DeploymentConfigError(
-      'INVALID',
-      `${VARIABLES.researchProviders} may not be recorded when ${VARIABLES.dependencies} is live`,
-    );
-  }
-  return raw;
 }
 
 interface ResolvedMailConfig {
@@ -456,7 +425,6 @@ export async function readWorkerDeployment(
       gmail: undefined,
       sendingEnabled,
       journalBucket: journalBucket.length > 0 ? journalBucket : null,
-      researchProviders: researchSelection(environment, dependencies),
     };
   }
 
@@ -477,7 +445,6 @@ export async function readWorkerDeployment(
     gmail: await readGmailDeployment(environment, dependencies, options),
     sendingEnabled,
     journalBucket: journalBucket.length > 0 ? journalBucket : null,
-    researchProviders: researchSelection(environment, dependencies),
   };
 }
 
@@ -502,7 +469,6 @@ export function describeDeployment(deployment: WorkerDeployment): LogFields {
     hosted_domain_source: deployment.gmail?.hostedDomainSource ?? 'absent',
     oauth_secret_configured: deployment.gmail?.secrets.names().length === 1,
     journal: deployment.journalBucket === null ? 'absent' : 'configured',
-    research_providers: deployment.researchProviders,
     sending_enabled: deployment.sendingEnabled,
   };
 }

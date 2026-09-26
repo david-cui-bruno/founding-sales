@@ -10,8 +10,5 @@ export {
   type SettingsResult,
   type UpdateSettingInput,
 } from './store.ts';
-export {
-  alertThresholdsOf,
-  effectiveSendingEnabled,
-} from './effective.ts';
+export { effectiveSendingEnabled } from './effective.ts';
 export { SETTINGS_ELSEWHERE, type SettingsElsewhere } from './elsewhere.ts';

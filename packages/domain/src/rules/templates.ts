@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { SENDING_STOP_LINE } from '@fss/contracts';
+import { SENDING_STOP_LINE, TEMPLATE_WARNING_CODES, type TemplateWarningCode } from '@fss/contracts';
 
 /**
  * Template content hash and footer block (specification 11.1, 12.6).
@@ -11,6 +11,9 @@ import { SENDING_STOP_LINE } from '@fss/contracts';
  *     subject and body — so an approval is bound to bytes rather than to a name, and
  *     an edit leaves the approval behind;
  *   * a body may not be approved unless it ends with the footer block.
+ *
+ * The copy rules — word count, links, price and guarantee wording — are warnings since
+ * 26 September 2026 (`TEMPLATE_WARNING_CODES`): an approval reports them and approves.
  *
  * The block is the sign-off and then the stop line. It carried a postal address
  * between the two until 22 September 2026;
@@ -25,7 +28,7 @@ import { SENDING_STOP_LINE } from '@fss/contracts';
  */
 
 /** The one stop line every approved body ends with. It lives in `@fss/contracts` so the Mac reads the same bytes. */
-export { SENDING_STOP_LINE };
+export { SENDING_STOP_LINE, TEMPLATE_WARNING_CODES, type TemplateWarningCode };
 
 export const TEMPLATE_SUBJECT_MAX_LENGTH = 160;
 export const TEMPLATE_BODY_MAX_LENGTH = 4000;
@@ -33,9 +36,9 @@ export const TEMPLATE_MAX_WORDS = 89;
 export const TEMPLATE_MAX_URLS = 1;
 
 /**
- * No pricing and no guarantees. Ordinary words that merely describe a customer's own
- * cost are not on this list: the refusal is about claims the sender makes, not about
- * what the recipient already pays.
+ * Pricing and guarantee wording, which an approval warns about. Ordinary words that
+ * merely describe a customer's own cost are not on this list: the warning is about
+ * claims the sender makes, not about what the recipient already pays.
  */
 export const TEMPLATE_FORBIDDEN_PHRASES: readonly string[] = Object.freeze([
   'guarantee', 'guaranteed', 'guarantees', 'warranty', 'pricing', 'price', 'priced', 'prices', 'discount',
@@ -111,14 +114,11 @@ export function templateTextIssues(text: TemplateText, rules: TemplateRules): st
   if (subject.length > TEMPLATE_SUBJECT_MAX_LENGTH) issues.push('template_subject_too_long');
   // eslint-disable-next-line no-control-regex -- control characters are exactly what this refuses
   if (/[\x00-\x1f\x7f]/.test(subject)) issues.push('template_subject_not_one_line');
-  if (countUrls(subject) > 0) issues.push('template_subject_url');
 
   if (body.length > TEMPLATE_BODY_MAX_LENGTH) issues.push('template_body_too_long_in_characters');
   // eslint-disable-next-line no-control-regex -- control characters are exactly what this refuses
   if (/[\x00-\x08\x0b-\x1f\x7f]|\r/.test(body)) issues.push('template_body_not_plain_text');
   if (/<[a-z/!][^>]*>/i.test(body)) issues.push('template_body_markup');
-  if (countWords(body) > TEMPLATE_MAX_WORDS) issues.push('template_body_too_long');
-  if (countUrls(body) > TEMPLATE_MAX_URLS) issues.push('template_body_multiple_urls');
 
   // 12.6: the body ends with the sign-off and then the stop line, so the sentence that
   // says how to stop is the last thing a prospect reads. `endsWith`, not `includes`:
@@ -129,16 +129,6 @@ export function templateTextIssues(text: TemplateText, rules: TemplateRules): st
     issues.push('template_required_sentence_missing');
   }
 
-  const lowered = `${subject}\n${body}`.toLowerCase();
-  if (
-    TEMPLATE_FORBIDDEN_PHRASES.some(phrase =>
-      new RegExp(`(^|[^a-z])${phrase.replace(/[-.]/g, '\\$&')}([^a-z]|$)`).test(lowered),
-    ) ||
-    /[$€£]\s?\d|\d\s?%/.test(lowered)
-  ) {
-    issues.push('template_pricing_or_guarantee_language');
-  }
-
   const allowed = new Set(rules.allowedVariables);
   const used = [...placeholders(subject), ...placeholders(body)];
   if (used.some(name => !allowed.has(name))) issues.push('template_unknown_variable');
@@ -146,22 +136,48 @@ export function templateTextIssues(text: TemplateText, rules: TemplateRules): st
   return issues;
 }
 
+/** The copy advice a template's text raises. None of it stops an approval. */
+export function templateTextWarnings(text: TemplateText): TemplateWarningCode[] {
+  const warnings: TemplateWarningCode[] = [];
+  const { subject, body } = text;
+  if (countWords(body) > TEMPLATE_MAX_WORDS) warnings.push('template_body_too_long');
+  if (countUrls(body) > TEMPLATE_MAX_URLS) warnings.push('template_body_multiple_urls');
+  if (countUrls(subject) > 0) warnings.push('template_subject_url');
+  const lowered = `${subject}\n${body}`.toLowerCase();
+  if (
+    TEMPLATE_FORBIDDEN_PHRASES.some(phrase =>
+      new RegExp(`(^|[^a-z])${phrase.replace(/[-.]/g, '\\$&')}([^a-z]|$)`).test(lowered),
+    ) ||
+    /[$€£]\s?\d|\d\s?%/.test(lowered)
+  ) {
+    warnings.push('template_pricing_or_guarantee_language');
+  }
+  return warnings;
+}
+
 export type TemplateApprovalDecision =
-  | { readonly approved: true; readonly contentHash: string }
-  | { readonly approved: false; readonly reason: 'template_unapproved'; readonly issues: readonly string[] };
+  | { readonly approved: true; readonly contentHash: string; readonly warnings: readonly TemplateWarningCode[] }
+  | {
+      readonly approved: false;
+      readonly reason: 'template_unapproved';
+      readonly issues: readonly string[];
+      readonly warnings: readonly TemplateWarningCode[];
+    };
 
 /**
  * Whether a template may carry a standing approval. Approving is never sending; this
- * only decides whether a later send is permitted to use the text at all.
+ * only decides whether a later send is permitted to use the text at all. The warnings
+ * travel either way.
  */
 export function decideTemplateApproval(
   template: TemplateIdentity & TemplateText,
   rules: TemplateRules,
 ): TemplateApprovalDecision {
   const issues = templateTextIssues(template, rules);
+  const warnings = templateTextWarnings(template);
   return issues.length === 0
-    ? { approved: true, contentHash: templateContentHash(template) }
-    : { approved: false, reason: 'template_unapproved', issues };
+    ? { approved: true, contentHash: templateContentHash(template), warnings }
+    : { approved: false, reason: 'template_unapproved', issues, warnings };
 }
 
 export type RenderDecision =

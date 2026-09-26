@@ -15,7 +15,6 @@
 !packages/domain/db
 !packages/domain/crm
 !packages/domain/jobs
-!packages/domain/research
 !packages/domain/today
 !packages/domain/src
 !packages/domain/crm
@@ -37,10 +36,7 @@
 
 # The harness starts a PostgreSQL cluster and belongs to the test run, never
 # to an image, and no test or fixture is part of a production container.
-# `research/testing` holds the recorded provider fixtures and is not matched by
-# `**/test/**`, so it is named here as well.
 packages/domain/db/testing
-packages/domain/research/testing
 **/*.test.ts
 **/test/**
 **/node_modules

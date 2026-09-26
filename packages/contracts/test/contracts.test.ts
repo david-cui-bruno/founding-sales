@@ -37,7 +37,6 @@ describe('the closed reason-code set', () => {
       'posture_overlapping',
       'posture_overdue',
       'restore_in_progress',
-      'domain_cap',
       'send_unknown_reconciling',
     ] as const) {
       expect(isRecoverableHoldReason(code), code).toBe(false);
@@ -45,7 +44,7 @@ describe('the closed reason-code set', () => {
   });
 
   it('exposes a control for the holds that have one', () => {
-    for (const code of ['mailbox_disconnected', 'uncertain_reply', 'ambiguous_match', 'dead_job', 'long_hold_review'] as const) {
+    for (const code of ['mailbox_disconnected', 'uncertain_reply', 'ambiguous_match', 'long_hold_review'] as const) {
       expect(isRecoverableHoldReason(code), code).toBe(true);
     }
   });

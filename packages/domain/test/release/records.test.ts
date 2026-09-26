@@ -34,9 +34,8 @@ import {
  * A binding that always refused would pass every refusal case here and make sending
  * impossible, which is safe and useless; one that always accepted would pass the
  * positive control and make the rule decorative. So each refusal is paired with the
- * passing case that differs from it in exactly one fact, and the mutation check
- * removes the suite and digest comparisons and requires the settings and gate suites
- * to go red.
+ * passing case that differs from it in exactly one fact, so removing the suite and
+ * digest comparisons turns the settings and gate suites red.
  */
 
 describe('storing a release record', () => {

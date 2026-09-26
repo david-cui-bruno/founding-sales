@@ -19,7 +19,6 @@ export const HOLD_REASON_CODES = [
   'template_unapproved',
   'missing_variables',
   'daily_cap',
-  'domain_cap',
   'route_missing',
   'route_candidate',
   'route_invalid',
@@ -39,7 +38,6 @@ export const HOLD_REASON_CODES = [
   'provider_refusal',
   'send_unknown_reconciling',
   'send_unknown_terminal',
-  'dead_job',
   'long_hold_review',
   'restore_in_progress',
 ] as const;
@@ -66,7 +64,6 @@ export const RECOVERABLE_HOLD_REASON_CODES: ReadonlySet<HoldReasonCode> = new Se
   'reassignment',
   'provider_refusal',
   'send_unknown_terminal',
-  'dead_job',
   'long_hold_review',
 ]);
 
@@ -105,7 +102,6 @@ export const HOLD_RECOVERY_ACTIONS = [
   'resolve_ambiguity',
   'release_pause',
   'mark_delivered_or_skipped',
-  'requeue_job',
   'advance_generation',
 ] as const;
 export const holdRecoveryActionSchema = z.enum(HOLD_RECOVERY_ACTIONS);

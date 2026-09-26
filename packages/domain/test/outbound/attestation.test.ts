@@ -30,8 +30,8 @@ import {
  * where *nothing* can send: a stale hold, a closed window, an unauthenticated domain
  * would each produce the same `held`. So every case here is paired. The first test
  * proves the world sends when all three facts are true, and the refusal tests each
- * remove exactly one fact and assert the refusal *names* it. Remove the positive
- * control and the mutation check in `scripts/releaseMutationCheck.mjs` fails.
+ * remove exactly one fact and assert the refusal *names* it. The positive control is
+ * what keeps the refusal tests honest.
  */
 
 let world: OutboundWorld;

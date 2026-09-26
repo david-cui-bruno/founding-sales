@@ -1,17 +1,11 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import {
-  ALERT_THRESHOLD_TERRAFORM_VARIABLES,
-  DEFAULT_ALERT_THRESHOLDS,
-  DEFAULT_SETTING_VALUES,
-  SETTING_KEYS,
-} from '@fss/contracts';
+import { DEFAULT_SETTING_VALUES, RETIRED_SETTING_KEYS, SETTING_KEYS } from '@fss/contracts';
 import { withTransaction } from '../../db/queryable.ts';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
 import {
-  alertThresholdsOf,
   effectiveSendingEnabled,
   readCurrentSettings,
   readSetting,
@@ -23,21 +17,15 @@ import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts
 import { FIXTURE_API_DIGEST, storeFixtureRecord } from '../release/support/releaseRecords.ts';
 
 /**
- * Versioned administrative configuration (specification 10.1, 13.3, 16.2).
+ * Versioned administrative configuration (specification 10.1, 16.2).
  *
  * The two-workspace fixture is the frame, as it is for every database test here: the
  * same key set exists in both, and a change in one is invisible in the other.
  *
- * The last two tests in this file are contract tests rather than behaviour tests.
- * One reads `infra/modules/alerts/variables.tf` and fails when a threshold default
- * here disagrees with the Terraform default there — 13.3's thresholds are one set of
- * numbers, and two copies of one set of numbers drift. The other reads the migration
- * and fails when its CHECK and `SETTING_KEYS` disagree about which keys exist.
+ * The last test reads the migration and fails when `SETTING_KEYS` names a key its
+ * CHECK does not allow.
  */
 
-const ALERT_VARIABLES_TF = fileURLToPath(
-  new URL('../../../../infra/modules/alerts/variables.tf', import.meta.url),
-);
 const MIGRATION = fileURLToPath(new URL('../../db/migrations/', import.meta.url));
 
 describe('workspace settings', () => {
@@ -82,98 +70,48 @@ describe('workspace settings', () => {
     }
   });
 
+  it('answers neither retired slice, even when an old row is stored', async () => {
+    // Migration 0015's CHECK still allows both keys, so a row written before they were
+    // retired can still be in the table. It is never answered.
+    await database.session.query(
+      `INSERT INTO workspace_settings (workspace_id, setting_key, version, value, change_note, changed_by_user_id)
+       VALUES ($1, 'client_version_range', 1, '{"minimum":"1.0.0","maximum":"1.4.0"}'::jsonb, 'old row', $2)`,
+      [seeded.beta.workspaceId, seeded.beta.admin.userId],
+    );
+    const keys = (await readCurrentSettings(betaAdmin)).map(entry => entry.settingKey);
+    expect(keys).toEqual([...SETTING_KEYS]);
+    for (const retired of RETIRED_SETTING_KEYS) expect(keys as readonly string[]).not.toContain(retired);
+  });
+
   it('refuses a salesperson and writes nothing', async () => {
     const outcome = await updateSetting(salesperson, {
-      settingKey: 'client_version_range',
-      value: { minimum: '1.0.0', maximum: '1.4.0' },
+      settingKey: 'business_time_zone',
+      value: { timeZone: 'America/Chicago' },
       changeNote: 'trying it on',
     });
     expect(outcome).toEqual({ ok: false, reason: 'admin_only' });
-    expect((await readSetting(admin, 'client_version_range')).version).toBe(0);
+    expect((await readSetting(admin, 'business_time_zone')).version).toBe(0);
   });
 
   it('refuses a value its key does not accept, including one that breaks a bound', async () => {
     const malformed = await updateSetting(admin, {
-      settingKey: 'alert_thresholds',
-      value: { ...DEFAULT_ALERT_THRESHOLDS, canaryStaleSeconds: 'soon' },
-      changeNote: 'a word is not a number of seconds',
+      settingKey: 'business_time_zone',
+      value: { timeZone: 42 },
+      changeNote: 'a number is not a zone',
     });
     expect(malformed).toEqual({ ok: false, reason: 'invalid_value' });
 
-    // The bound that is a relationship rather than a range: 13.3's warning threshold
-    // must stay below its critical one, or the pair of alarms is meaningless.
-    const inverted = await updateSetting(admin, {
-      settingKey: 'alert_thresholds',
-      value: { ...DEFAULT_ALERT_THRESHOLDS, oldestJobAgeWarningSeconds: 1200 },
-      changeNote: 'warning above critical',
+    // The bound that is a relationship rather than a shape: enabling sending names the
+    // release gate it passed.
+    const unnamed = await updateSetting(admin, {
+      settingKey: 'sending_enabled',
+      value: { enabled: true, releaseGateReference: null },
+      changeNote: 'no gate named',
     });
-    expect(inverted).toEqual({ ok: false, reason: 'invalid_value' });
+    expect(unnamed).toEqual({ ok: false, reason: 'invalid_value' });
 
-    // And a key the schema simply does not know a shape for.
-    const wrongShape = await updateSetting(admin, {
-      settingKey: 'client_version_range',
-      value: { minimum: 'one', maximum: '1.4.0' },
-      changeNote: 'not a semantic version',
-    });
-    expect(wrongShape).toEqual({ ok: false, reason: 'invalid_value' });
-
-    expect((await readSetting(admin, 'alert_thresholds')).version).toBe(0);
-  });
-
-  it('versions every change, supersedes the previous one and keeps the history', async () => {
-    const first = await updateSetting(admin, {
-      settingKey: 'alert_thresholds',
-      value: { ...DEFAULT_ALERT_THRESHOLDS, canaryStaleSeconds: 600 },
-      changeNote: 'the canary was noisy',
-    });
-    expect(first.ok).toBe(true);
-    if (!first.ok) return;
-    expect(first.value.current.version).toBe(1);
-    expect(first.value.previousVersion).toBe(0);
-
-    const second = await updateSetting(admin, {
-      settingKey: 'alert_thresholds',
-      value: { ...DEFAULT_ALERT_THRESHOLDS, canaryStaleSeconds: 420 },
-      changeNote: 'tightened again',
-    });
-    expect(second.ok).toBe(true);
-    if (!second.ok) return;
-    expect(second.value.current.version).toBe(2);
-    expect(second.value.previousVersion).toBe(1);
-
-    const history = await readSettingHistory(admin, 'alert_thresholds');
-    expect(history.map(entry => entry.version)).toEqual([2, 1]);
-    expect(history[0]?.supersededAt).toBeNull();
-    expect(history[1]?.supersededAt).not.toBeNull();
-    expect(history[1]?.changeNote).toBe('the canary was noisy');
-    expect(history.every(entry => entry.changedByUserId === seeded.alpha.admin.userId)).toBe(true);
-
-    // At most one current version per key. The partial unique index is the invariant;
-    // this asserts the command respects it rather than relying on it.
-    const currentRows = await database.session.query<{ count: string }>(
-      `SELECT count(*)::text AS count FROM workspace_settings
-        WHERE workspace_id = $1 AND setting_key = 'alert_thresholds' AND superseded_at IS NULL`,
-      [seeded.alpha.workspaceId],
-    );
-    expect(currentRows.rows[0]?.count).toBe('1');
-  });
-
-  it('keeps the other workspace at its default', async () => {
-    expect((await readSetting(betaAdmin, 'alert_thresholds')).version).toBe(0);
-    expect((await readSetting(betaAdmin, 'alert_thresholds')).value).toEqual(
-      DEFAULT_SETTING_VALUES.alert_thresholds,
-    );
-    const beta = await updateSetting(betaAdmin, {
-      settingKey: 'alert_thresholds',
-      value: { ...DEFAULT_ALERT_THRESHOLDS, deadJobUnresolvedSeconds: 7200 },
-      changeNote: 'the other workspace',
-    });
-    expect(beta.ok).toBe(true);
-    if (!beta.ok) return;
-    // Version numbering is per workspace and per key; beta's first change is its
-    // version 1 even though alpha is already on 2.
-    expect(beta.value.current.version).toBe(1);
-    expect((await readSetting(admin, 'alert_thresholds')).version).toBe(2);
+    expect((await readSetting(admin, 'business_time_zone')).version).toBe(0);
+    expect((await readSetting(admin, 'sending_enabled')).version).toBe(0);
   });
 
   it('commits the business zone with the workspace column and refuses an unknown zone', async () => {
@@ -215,6 +153,52 @@ describe('workspace settings', () => {
     expect(rows[0]?.detail).toMatchObject({ version: 1, previousVersion: 0 });
     // The detail carries identifiers and codes, never the configured value itself.
     expect(JSON.stringify(rows[0]?.detail)).not.toContain('America/Chicago');
+  });
+
+  it('versions every change, supersedes the previous one and keeps the history', async () => {
+    const second = await updateSetting(admin, {
+      settingKey: 'business_time_zone',
+      value: { timeZone: 'America/Denver' },
+      changeNote: 'moved again',
+    });
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    expect(second.value.current.version).toBe(2);
+    expect(second.value.previousVersion).toBe(1);
+
+    const history = await readSettingHistory(admin, 'business_time_zone');
+    expect(history.map(entry => entry.version)).toEqual([2, 1]);
+    expect(history[0]?.supersededAt).toBeNull();
+    expect(history[1]?.supersededAt).not.toBeNull();
+    expect(history[1]?.changeNote).toBe('the founder moved');
+    expect(history.every(entry => entry.changedByUserId === seeded.alpha.admin.userId)).toBe(true);
+
+    // At most one current version per key. The partial unique index is the invariant;
+    // this asserts the command respects it rather than relying on it.
+    const currentRows = await database.session.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM workspace_settings
+        WHERE workspace_id = $1 AND setting_key = 'business_time_zone' AND superseded_at IS NULL`,
+      [seeded.alpha.workspaceId],
+    );
+    expect(currentRows.rows[0]?.count).toBe('1');
+  });
+
+  it('keeps the other workspace at its default', async () => {
+    expect((await readSetting(betaAdmin, 'business_time_zone')).version).toBe(0);
+    expect((await readSetting(betaAdmin, 'business_time_zone')).value).toEqual(
+      DEFAULT_SETTING_VALUES.business_time_zone,
+    );
+    const beta = await updateSetting(betaAdmin, {
+      settingKey: 'business_time_zone',
+      value: { timeZone: 'America/Los_Angeles' },
+      changeNote: 'the other workspace',
+    });
+    expect(beta.ok).toBe(true);
+    if (!beta.ok) return;
+    // Version numbering is per workspace and per key; beta's first change is its
+    // version 1 even though alpha is already on 2.
+    expect(beta.value.current.version).toBe(1);
+    expect((await readSetting(admin, 'business_time_zone')).version).toBe(2);
   });
 
   it('serializes two admins saving the same slice at the same instant', async () => {
@@ -294,15 +278,6 @@ describe('what a stored setting means', () => {
     expect(SETTING_KEYS).not.toContain('holiday_calendar');
     expect(Object.keys(DEFAULT_SETTING_VALUES)).not.toContain('holiday_calendar');
   });
-
-  it('falls back to the release thresholds when the stored value cannot be read', () => {
-    expect(alertThresholdsOf({})).toEqual(DEFAULT_ALERT_THRESHOLDS);
-    expect(alertThresholdsOf({ ...DEFAULT_ALERT_THRESHOLDS, canaryStaleSeconds: 600 }).canaryStaleSeconds).toBe(600);
-    // The warning threshold must stay below the critical one, or the pair is refused.
-    expect(
-      alertThresholdsOf({ ...DEFAULT_ALERT_THRESHOLDS, oldestJobAgeWarningSeconds: 1200 }),
-    ).toEqual(DEFAULT_ALERT_THRESHOLDS);
-  });
 });
 
 describe('what a sending pause cannot reach', () => {
@@ -339,28 +314,13 @@ describe('what a sending pause cannot reach', () => {
   });
 });
 
-describe('the thresholds are one set of numbers', () => {
-  it('agrees with the Terraform defaults the alarms are built from', () => {
-    const text = readFileSync(ALERT_VARIABLES_TF, 'utf8');
-    let compared = 0;
-    for (const [field, variable] of Object.entries(ALERT_THRESHOLD_TERRAFORM_VARIABLES)) {
-      if (variable === null) continue;
-      const block = text.slice(text.indexOf(`variable "${variable}" {`));
-      const value = /default\s+= (\d+)/u.exec(block)?.[1];
-      expect(value, `${variable} has no default in variables.tf`).toBeDefined();
-      expect(Number(value), variable).toBe(DEFAULT_ALERT_THRESHOLDS[field as keyof typeof DEFAULT_ALERT_THRESHOLDS]);
-      compared += 1;
-    }
-    // Eight of the ten fields are Terraform variables. The Today deadline is a
-    // workspace-local time of day and the held fraction is a literal inside a
-    // metric-math expression; neither has a variable to compare with.
-    expect(compared, 'the Terraform comparison covered nothing').toBe(8);
-  });
-
-  it('keeps the migration s key set equal to SETTING_KEYS', () => {
+describe('the key set', () => {
+  it('names only keys the migration s CHECK allows', () => {
     // The *last* migration that writes the CHECK wins, because a later one may narrow
     // it: migration 0013 created it with five keys and 0015 replaced it with four when
-    // the postal footer stopped being a slice. Sorting the file names rather than
+    // the postal footer stopped being a slice. Two of those four are retired and the
+    // CHECK keeps allowing them until a later migration narrows it, so the active keys
+    // are a subset of the allowance rather than equal to it. Sorting the file names rather than
     // naming one is also why a renumber during development does not break this: the
     // coordinator assigns migration numbers.
     const files = readdirSync(MIGRATION)
@@ -373,6 +333,6 @@ describe('the thresholds are one set of numbers', () => {
       .filter((block): block is string => block !== undefined);
     expect(blocks.length, 'no migration declares workspace_settings_key_known').toBeGreaterThan(0);
     const keys = [...(blocks.at(-1) ?? '').matchAll(/'([a-z_]+)'/gu)].map(match => match[1]);
-    expect(keys.sort()).toEqual([...SETTING_KEYS].sort());
+    for (const key of SETTING_KEYS) expect(keys, key).toContain(key);
   });
 });

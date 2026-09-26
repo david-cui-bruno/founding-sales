@@ -12,7 +12,7 @@ import {
   businessDateOf,
   cancelTodaySnooze,
   listTodayItems,
-  promoteTodayItem,
+  upsertTodayItem,
   readTodayFirm,
   readTodayList,
   snoozeTodayItem,
@@ -162,7 +162,7 @@ describe('scenario 33: many contacts at one firm are one card', () => {
     let minute = 0;
     for (const row of rows) {
       minute += 1;
-      await promoteTodayItem(context, {
+      await upsertTodayItem(context, {
         businessDate,
         firmId: crm.alpha.firmId,
         contactId: row.id,
@@ -294,7 +294,7 @@ describe('promotions commit with their source event (8.2, Appendix A)', () => {
   it('a promoted reply takes the firm to the reply lane over everything else', async () => {
     // Latest instant on the card, and still first: lane precedence beats the clock.
     const late = await localInstant('23:00');
-    await promoteTodayItem(worker(seeded.alpha.workspaceId), {
+    await upsertTodayItem(worker(seeded.alpha.workspaceId), {
       businessDate,
       firmId: crm.alpha.firmId,
       contactId: crm.alpha.contactId,
@@ -326,7 +326,7 @@ describe('snooze (8.2)', () => {
     await clearToday();
     await buildBoth();
     const context = worker(seeded.alpha.workspaceId);
-    manualItemId = await promoteTodayItem(context, {
+    manualItemId = await upsertTodayItem(context, {
       businessDate,
       firmId: crm.alpha.firmId,
       itemKey: 'step-execution:manual-call',
@@ -335,7 +335,7 @@ describe('snooze (8.2)', () => {
       sourceKind: 'step_execution',
       automated: false,
     });
-    automatedItemId = await promoteTodayItem(context, {
+    automatedItemId = await upsertTodayItem(context, {
       businessDate,
       firmId: crm.alpha.firmId,
       itemKey: 'step-execution:automated-email',
