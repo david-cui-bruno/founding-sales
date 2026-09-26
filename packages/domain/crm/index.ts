@@ -139,9 +139,7 @@ export {
 export {
   canonicalFirmOf,
   listFirmAliases,
-  mergeContacts,
   mergeFirms,
-  type MergeContactsInput,
   type MergeFirmsInput,
   type MergeOutcome,
 } from './merges.ts';
@@ -156,23 +154,6 @@ export {
   type FirmReadDto,
   type RouteDto,
 } from './dto.ts';
-
-export {
-  DEFAULT_SEARCH_LIMIT,
-  MAX_SEARCH_LIMIT,
-  NARROW_MATCH_FIELDS,
-  SEARCH_MATCH_FIELDS,
-  SEQUENCE_STATUS_FILTERS,
-  WIDE_MATCH_FIELDS,
-  likePattern,
-  searchFirms,
-  type SearchFilters,
-  type SearchHit,
-  type SearchInput,
-  type SearchMatchField,
-  type SearchOutcome,
-  type SequenceStatusFilter,
-} from './search.ts';
 
 export {
   CSV_REFUSALS,
@@ -206,8 +187,6 @@ export {
   type ImportRowOutcome,
   type ParsedCsv,
 } from './import.ts';
-
-export { exportFirms, type ExportInput, type FirmExport } from './exports.ts';
 
 export {
   readFirmPage,

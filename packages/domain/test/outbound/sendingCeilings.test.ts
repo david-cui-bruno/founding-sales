@@ -3,6 +3,7 @@ import {
   RAMP_RAISE_HEALTHY_STREAK,
   dispatchOutboundMessage,
   readRamp,
+  overrideRaise,
   setAdminCap,
   type SendReport,
 } from '../../outbound/index.ts';
@@ -98,14 +99,14 @@ async function seedVerdicts(verdicts: readonly ('healthy' | 'unhealthy' | 'quiet
 }
 
 /** Put one business date's counters where a test wants them. */
-async function setDay(businessDate: string, counts: { readonly automated?: number; readonly direct?: number }): Promise<void> {
+async function setDay(businessDate: string, counts: { readonly automated?: number }): Promise<void> {
   await session().query(
-    `INSERT INTO mailbox_send_days (workspace_id, mailbox_id, business_date, automated_sent, direct_sent, cap_granted)
-     VALUES ($1, $2, $3::date, $4, $5, 100)
+    `INSERT INTO mailbox_send_days (workspace_id, mailbox_id, business_date, automated_sent, cap_granted)
+     VALUES ($1, $2, $3::date, $4, 100)
      ON CONFLICT (workspace_id, mailbox_id, business_date)
-     DO UPDATE SET automated_sent = EXCLUDED.automated_sent, direct_sent = EXCLUDED.direct_sent,
+     DO UPDATE SET automated_sent = EXCLUDED.automated_sent,
                    cap_granted = greatest(mailbox_send_days.cap_granted, EXCLUDED.cap_granted), updated_at = now()`,
-    [workspaceId(), mailboxId(), businessDate, counts.automated ?? 0, counts.direct ?? 0],
+    [workspaceId(), mailboxId(), businessDate, counts.automated ?? 0],
   );
 }
 
@@ -164,54 +165,50 @@ describe('S06: a raise to 75 is earned by sustained healthy results', () => {
     expect(cleared.ok && cleared.effectiveCap).toBe(50);
   });
 
-  it('the bypass: a stored raise on a mailbox’s first day still sends only the schedule’s five', async () => {
+  it('honours a stored raise at the send as written, and the daily cap still holds at it (wave 2, S4.6)', async () => {
     const at = '2026-10-06T13:00:00.000Z';
     const today = await businessDate(at);
-    // A raise to 75 written to the row, as the command wrote one before g87.
+    // A raise to 75 on a mailbox's first day: the admin's decision since the override.
     await setRamp(0, 75);
     await setDay(today, { automated: 5 });
-
-    const first = await freshFence('bypass');
-    const held = await dispatch(first.fenceId, at);
-    expect(held.report.outcome, why(held.report)).toBe('held');
-    expect(held.report.refusal).toBe('daily_cap');
-    expect(held.report.detail).toBe('automated 5/5');
-    expect(held.sends).toBe(0);
-
-    // The same raise, once earned, is the cap in force: the refusal was the rule.
-    await setRamp(40, 75);
-    await seedVerdicts(earnedStreak());
-    const second = await freshFence('bypass-earned');
-    const sent = await dispatch(second.fenceId, at);
-    expect(sent.report.outcome, why(sent.report)).toBe('sent');
-  });
-
-  it('the gate asks again before every send: a raise stops counting the day its health lapses', async () => {
-    const at = '2026-10-07T13:00:00.000Z';
-    const today = await businessDate(at);
-    await setRamp(40);
-    await seedVerdicts(earnedStreak());
-    const raised = await setAdminCap(context(), { mailboxId: mailboxId(), adminUserId: adminUserId(), raiseTo: 75 });
-    expect(raised.ok).toBe(true);
-    await setDay(today, { automated: 50 });
-
-    // Fifty already today: under the earned 75, so it goes.
-    const first = await freshFence('lapse-before');
+    const first = await freshFence('raised');
     const sent = await dispatch(first.fenceId, at);
     expect(sent.report.outcome, why(sent.report)).toBe('sent');
 
-    // A late bounce condemns the most recent closed day (lane G22): the streak is
-    // broken, the stored raise is unchanged, and the schedule's fifty governs today.
-    await session().query(
-      `UPDATE mailbox_send_days SET healthy = false WHERE workspace_id = $1 AND mailbox_id = $2 AND business_date = $3::date`,
-      [workspaceId(), mailboxId(), `2026-08-${String(RAMP_RAISE_HEALTHY_STREAK).padStart(2, '0')}`],
-    );
-    expect((await readRamp(context(), mailboxId()))?.raisedDailyCap).toBe(75);
-    const second = await freshFence('lapse-after');
+    // The cap itself is checked exactly as before: the send that would pass it is held.
+    await setDay(today, { automated: 75 });
+    const second = await freshFence('raised-full');
     const held = await dispatch(second.fenceId, at);
     expect(held.report.outcome, why(held.report)).toBe('held');
     expect(held.report.refusal).toBe('daily_cap');
-    expect(held.report.detail).toBe('automated 51/50');
+    expect(held.report.detail).toBe('automated 75/75');
     expect(held.sends).toBe(0);
+  });
+
+  it('overrides the raise lock up to the ceiling of 100, with the unmet part of the rule as a warning', async () => {
+    await setRamp(12);
+    await seedVerdicts(earnedStreak());
+    const early = await overrideRaise(context(), { mailboxId: mailboxId(), adminUserId: adminUserId(), raiseTo: 90 });
+    expect(early).toMatchObject({ ok: true, effectiveCap: 90, warning: 'ramp_not_settled', ramp: { raisedDailyCap: 90 } });
+
+    // The admin's lowering still wins over any raise.
+    const lowered = await setAdminCap(context(), { mailboxId: mailboxId(), adminUserId: adminUserId(), lowerTo: 10 });
+    expect(lowered.ok && lowered.effectiveCap).toBe(10);
+    await setAdminCap(context(), { mailboxId: mailboxId(), adminUserId: adminUserId(), lowerTo: null });
+
+    await setRamp(40);
+    const earned = await overrideRaise(context(), { mailboxId: mailboxId(), adminUserId: adminUserId(), raiseTo: 100 });
+    expect(earned).toMatchObject({ ok: true, effectiveCap: 100, warning: null });
+
+    const cleared = await overrideRaise(context(), { mailboxId: mailboxId(), adminUserId: adminUserId(), raiseTo: null });
+    expect(cleared).toMatchObject({ ok: true, effectiveCap: 50, warning: null, ramp: { raisedDailyCap: null } });
+
+    expect(await overrideRaise(context(), { mailboxId: mailboxId(), adminUserId: adminUserId(), raiseTo: 101 })).toEqual({
+      ok: false,
+      reason: 'cap_out_of_range',
+    });
+    expect(
+      await overrideRaise(context(), { mailboxId: '00000000-0000-4000-8000-000000000000', adminUserId: adminUserId(), raiseTo: 60 }),
+    ).toEqual({ ok: false, reason: 'mailbox_unknown' });
   });
 });

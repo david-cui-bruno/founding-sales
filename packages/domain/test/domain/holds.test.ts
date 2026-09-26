@@ -1,7 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  LONG_HOLD_REVIEW_DAYS,
-  LONG_HOLD_REVIEW_MILLISECONDS,
   composeHolds,
   decideResume,
   shiftDueInstant,
@@ -150,26 +148,25 @@ describe('resuming after the holds clear', () => {
     });
   });
 
-  it('requires review when the union exceeds seven days and resumes when it does not', () => {
-    const short = [hold('a', 0, 7 * 24)];
-    expect(decideResume(composeHolds({ holds: short, now: at(200) }))).toEqual({
+  it('resumes a hold of any length once it clears, shifting by the whole union (wave 2, S4.1)', () => {
+    const week = [hold('a', 0, 7 * 24)];
+    expect(decideResume(composeHolds({ holds: week, now: at(200) }))).toEqual({
       kind: 'resume',
-      shiftMilliseconds: LONG_HOLD_REVIEW_MILLISECONDS,
+      shiftMilliseconds: 7 * DAY,
     });
 
-    const long = [hold('a', 0, 7 * 24 + 1)];
-    expect(decideResume(composeHolds({ holds: long, now: at(300) }))).toEqual({
-      kind: 'review_required',
-      unionMilliseconds: LONG_HOLD_REVIEW_MILLISECONDS + HOUR,
-      reviewDays: LONG_HOLD_REVIEW_DAYS,
+    const fortnight = [hold('a', 0, 14 * 24 + 1)];
+    expect(decideResume(composeHolds({ holds: fortnight, now: at(400) }))).toEqual({
+      kind: 'resume',
+      shiftMilliseconds: 14 * DAY + HOUR,
     });
   });
 
-  it('does not let two overlapping holds add up to a review that neither earned', () => {
+  it('counts two overlapping holds once in the shift', () => {
     // Two five-day holds that ran side by side delayed the work by six days, not ten.
     const composition = composeHolds({ holds: [hold('a', 0, 120), hold('b', 24, 144)], now: at(200) });
     expect(composition.unionMilliseconds).toBe(6 * DAY);
-    expect(composition.requiresReview).toBe(false);
+    expect(decideResume(composition)).toEqual({ kind: 'resume', shiftMilliseconds: 6 * DAY });
   });
 });
 

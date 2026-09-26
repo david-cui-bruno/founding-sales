@@ -7,7 +7,7 @@ import {
   listStepExecutions,
   previewResume,
   readEnrollment,
-  resumeAfterReview,
+  resumeEnrollment,
   stopEnrollments,
 } from '../../sequences/index.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
@@ -17,11 +17,10 @@ import { seedSequences, type SeededSequences } from './support/sequenceFixtures.
 /**
  * "Review and resume" shows the review (lane g88, audit G06; specification 4.3).
  *
- * "A union longer than seven days requires the salesperson to review the rendered future
- * steps and explicitly resume." Until g88 the Mac's button resumed at once and rendered
- * nothing. `previewResume` is what it renders now, and this file holds it to two
- * promises: it changes nothing, and the dates it shows are the dates the confirmation
- * gives the steps.
+ * Installed desktops up to 1.0.11 show `previewResume` before they confirm a resume, for
+ * an enrollment an older release left in `review_required` (a long hold resumes on its
+ * own since wave 2, S4.1). This file holds it to two promises: it changes nothing, and
+ * the dates it shows are the dates the confirmation gives the steps.
  *
  * **The vacuous-pass trap.** A preview whose `proposedDueAt` equals `dueAt` agrees with a
  * resume that moves nothing, and a nine-day hold that the fixture forgot to release would
@@ -116,7 +115,7 @@ describe('previewResume (4.3, audit G06)', () => {
     const preview = await previewResume(contextFor('alpha', 'salesperson'), { enrollmentId });
     expect(preview.ok).toBe(true);
     if (!preview.ok) return;
-    expect(preview.value.kind).toBe('review_required');
+    expect(preview.value.kind).toBe('resume');
     expect(preview.value.firmTimeZone).toBe('America/New_York');
     expect(preview.value.holds.map(hold => hold.reasonCode)).toEqual(['scoped_pause']);
     expect(preview.value.shiftMilliseconds / DAY).toBeGreaterThan(8.9);
@@ -126,7 +125,7 @@ describe('previewResume (4.3, audit G06)', () => {
     expect(step?.channel).toBe('email');
     expect(Date.parse(step?.proposedDueAt ?? '') - Date.parse(step?.dueAt ?? '')).toBe(preview.value.shiftMilliseconds);
 
-    // A read: the enrollment is not even flagged for review by looking.
+    // A read: looking changes nothing.
     expect(await snapshot(enrollmentId)).toBe(before);
   });
 
@@ -136,8 +135,8 @@ describe('previewResume (4.3, audit G06)', () => {
     const preview = await previewResume(contextFor('alpha', 'salesperson'), { enrollmentId });
     if (!preview.ok) throw new Error(preview.reason);
 
-    const resumed = await resumeAfterReview(contextFor('alpha', 'salesperson'), { enrollmentId });
-    // After the review it is a resume, by the shift the review showed.
+    const resumed = await resumeEnrollment(contextFor('alpha', 'salesperson'), { enrollmentId });
+    // The confirmation is a resume, by the shift the review showed.
     expect(resumed.ok && resumed.value.kind).toBe('resume');
     expect(resumed.ok && resumed.value.shiftMilliseconds).toBe(preview.value.shiftMilliseconds);
     const steps = await listStepExecutions(contextFor('alpha', 'admin'), { enrollmentId });

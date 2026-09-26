@@ -60,7 +60,7 @@ export interface RoutingOptions {
    * it and never held.
    */
   readonly mail?: MailRoutingDeps;
-  /** The structured log the CloudWatch metric filters read. Absent in unit tests. */
+  /** The structured log; the safety metric filters read it. Absent in unit tests. */
   readonly log?: Logger | undefined;
   /**
    * Appendix E step 1: the generation an operator pinned, or null when none is.

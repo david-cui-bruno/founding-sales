@@ -83,6 +83,13 @@ export const todayTaskDtoSchema = z.object({
   stepExecutionId: uuid.nullable().optional(),
   callLogId: uuid.nullable().optional(),
   pauseHoldId: uuid.nullable().optional(),
+  /**
+   * Wave 2 (S4.1), card version 2 only: whole days a held sequence step has waited since
+   * it fell due, for "held N days"; null when the step is not held. A hold of any length
+   * resumes on its own once its causes clear. Optional, and stripped by desktops up to
+   * 1.0.11, whose schema does not name it.
+   */
+  heldDays: z.number().int().min(0).nullable().optional(),
 });
 export type TodayTaskDto = z.infer<typeof todayTaskDtoSchema>;
 
@@ -160,8 +167,9 @@ export type TodaySnoozeResult = z.infer<typeof todaySnoozeResultSchema>;
 /**
  * What `/today/pause/release` returns inside the command envelope: the Resume control
  * on a paused automated task (lane g79, C22). `resume` is what the enrollment did
- * next under 4.3: resumed with its shift, still held by another hold, or sent to
- * review; `not_applicable` for a firm-scoped pause.
+ * next under 4.3: resumed with its shift, or still held by another hold;
+ * `not_applicable` for a firm-scoped pause. `review_required` went with the seven-day
+ * review (wave 2, S4.1) and is never sent: @deprecated value (remove after desktop 1.0.12).
  */
 export const todayPauseReleaseResultSchema = z.object({
   holdId: uuid,

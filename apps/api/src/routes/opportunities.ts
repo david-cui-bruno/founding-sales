@@ -1,25 +1,16 @@
-import {
-  changeStageCommandSchema,
-  openOpportunityCommandSchema,
-  reopenOpportunityCommandSchema,
-  setManualCommandSchema,
-} from '@fss/contracts';
-import { changeStage, openOpportunity, reopenOpportunity, setManualControlMode } from '@fss/domain/crm';
+import { changeStageCommandSchema, openOpportunityCommandSchema } from '@fss/contracts';
+import { changeStage, openOpportunity } from '@fss/domain/crm';
 import { REFUSAL_STATUS, contextForPrincipal, redactError, requirePrincipal, runCrmCommand } from './crmSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**
  * Opportunity commands (specification 7.3, 8.1, Appendix A "Stage change").
  *
- * Four commands and no reads: an opportunity is never read on its own, because
+ * Two commands and no reads: an opportunity is never read on its own, because
  * Appendix F's visibility is the firm's and the firm read already carries the stage,
  * the status and the control mode. An endpoint that answered "here is opportunity X"
- * would be a second place to get the read matrix wrong.
- *
- * `/opportunities/reopen` is separate from `/opportunities/open` on purpose. Section
- * 8.1 calls reopening "an explicit command", and giving it its own path is what makes
- * it explicit in the client too — there is no way to reopen by accident by posting an
- * open with the wrong firm id.
+ * would be a second place to get the read matrix wrong. (`/opportunities/reopen` and
+ * `/opportunities/manual` had no caller and went in wave 2, S6.)
  */
 export async function routeOpportunities(request: ApiRequest, options: RoutingOptions): Promise<RouteResult | null> {
   if (!request.path.startsWith('/opportunities')) return null;
@@ -48,25 +39,6 @@ export async function routeOpportunities(request: ApiRequest, options: RoutingOp
           opportunityId: body.opportunityId,
           toStageKey: body.toStageKey,
           reason: body.reason,
-          commandId: body.commandId,
-        }),
-      );
-    case '/opportunities/reopen':
-      return await runCrmCommand(deps, reopenOpportunityCommandSchema, 'opportunity.reopened', async (repository, body) =>
-        await reopenOpportunity(repository, {
-          firmId: body.firmId,
-          reason: body.reason,
-          commandId: body.commandId,
-        }),
-      );
-    case '/opportunities/manual':
-      return await runCrmCommand(deps, setManualCommandSchema, 'opportunity.manual', async (repository, body) =>
-        await setManualControlMode(repository, {
-          opportunityId: body.opportunityId,
-          reason: body.reason,
-          // A person inside the workspace deciding, not one of 7.3's prospect
-          // signals: the stop the worker drains records `admin_stop` (lane G22).
-          origin: 'salesperson_command',
           commandId: body.commandId,
         }),
       );

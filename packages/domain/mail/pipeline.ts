@@ -1,9 +1,6 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
-import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { fenceForOutgoingMessage } from '../outbound/fence.ts';
-import { countDirectSend, effectiveDailyCap, ensureRamp } from '../outbound/ramp.ts';
 import type { SuppressionJournal } from '../suppression/index.ts';
-import { businessDateOf } from '../today/snapshots.ts';
 import { classifyReply } from '../src/rules/replyClassification.ts';
 import {
   applyClassificationEffects,
@@ -15,7 +12,7 @@ import type { GmailAccessGrant, GmailClient, GmailOAuthConfig } from './gmailCli
 import { findMatchCandidates, recordMatches } from './matching.ts';
 import { normalizeMetadata, recordMessage, storeMessageBody } from './messages.ts';
 import type { ReplyPromoter } from './replyLane.ts';
-import { METADATA_HEADERS, type MailMessageRow, type MailboxRow } from './types.ts';
+import { METADATA_HEADERS, type MailboxRow } from './types.ts';
 
 /**
  * What happens to one batch of Gmail message ids, whichever job found them
@@ -46,8 +43,6 @@ export interface MessagePipelineReport {
   readonly holdsOpened: number;
   readonly suppressionsRecorded: number;
   readonly directSendsSwitchedToManual: number;
-  /** Outgoing messages counted against 12.7's operational headroom (lane G15). */
-  readonly directSendsCounted: number;
   /** Outgoing messages this import matched to a fence FSS had already counted. */
   readonly automatedSendsRecognised: number;
   /** The newest `internalDate` seen, which is what a coverage watermark may claim. */
@@ -63,50 +58,9 @@ export const EMPTY_PIPELINE_REPORT: MessagePipelineReport = Object.freeze({
   holdsOpened: 0,
   suppressionsRecorded: 0,
   directSendsSwitchedToManual: 0,
-  directSendsCounted: 0,
   automatedSendsRecognised: 0,
   newestInternalDate: null,
 });
-
-/**
- * Count one imported outgoing message against 12.7's operational headroom (lane G15).
- *
- * "All outgoing Gmail messages, including direct sends, count toward operational
- * headroom. Automated capacity is conservatively reserved so sync lag cannot approach
- * Google's account ceiling." `countDirectSend` is the `direct_sent` column and it is
- * deliberately *not* the automated cap: the cap is FSS's own restraint and a person
- * writing their own email is not FSS.
- *
- * A message with a fence is one FSS sent, and `countAutomatedSend` counted it before
- * it left. Counting it here as well would double every sequence email in the day's
- * headroom, so the fence lookup is the guard and `stored.inserted` is the other half:
- * a duplicate push or a recovery pass re-reading the same id inserts no message row
- * and therefore counts nothing.
- *
- * Returns whether it counted, for the report.
- */
-async function countOutgoingAgainstHeadroom(
-  context: RepositoryContext,
-  message: MailMessageRow,
-): Promise<boolean> {
-  const fenceId = await fenceForOutgoingMessage(context, {
-    mailboxId: message.mailboxId,
-    rfcMessageId: message.rfcMessageId,
-    providerMessageId: message.providerMessageId,
-  });
-  if (fenceId !== null) return false;
-  // A direct send switches its firm to manual a moment later, which takes the send
-  // gate; taking it here, before the day's counter, keeps the lock order a dispatch
-  // claim uses (gate, then counter) and so keeps the two from deadlocking (lane g77).
-  await lockSendGateForStopFact(context);
-  const ramp = await ensureRamp(context, message.mailboxId);
-  await countDirectSend(context, {
-    mailboxId: message.mailboxId,
-    businessDate: await businessDateOf(context, message.internalDate),
-    cap: effectiveDailyCap(ramp),
-  });
-  return true;
-}
 
 export async function processMessageIds(
   context: RepositoryContext,
@@ -125,7 +79,6 @@ export async function processMessageIds(
   let holdsOpened = 0;
   let suppressionsRecorded = 0;
   let directSendsSwitchedToManual = 0;
-  let directSendsCounted = 0;
   let automatedSendsRecognised = 0;
   let newestInternalDate: string | null = null;
 
@@ -142,13 +95,6 @@ export async function processMessageIds(
     if (stored.inserted) messagesRecorded += 1;
     if (newestInternalDate === null || stored.message.internalDate > newestInternalDate) {
       newestInternalDate = stored.message.internalDate;
-    }
-
-    // 12.7: "All outgoing Gmail messages, including direct sends, count toward
-    // operational headroom." Before the match, because the headroom is a fact about
-    // the mailbox and an outgoing message nobody could match still left the account.
-    if (stored.message.direction === 'outgoing' && stored.inserted) {
-      if (await countOutgoingAgainstHeadroom(context, stored.message)) directSendsCounted += 1;
     }
 
     // Step 2: match, in 12.3's order, first rule that finds anything winning.
@@ -227,7 +173,6 @@ export async function processMessageIds(
     holdsOpened,
     suppressionsRecorded,
     directSendsSwitchedToManual,
-    directSendsCounted,
     automatedSendsRecognised,
     newestInternalDate,
   };

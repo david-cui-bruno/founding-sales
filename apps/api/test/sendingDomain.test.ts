@@ -10,11 +10,10 @@ import {
   type MailPublicConfig,
 } from '@fss/domain/mail';
 import { recordAuthenticationChecklist } from '@fss/domain/outbound';
-import { dispatch, type ApiOptions, type ApiRequest } from '../src/server.ts';
+import { dispatch, type ApiOptions } from '../src/server.ts';
 import { recordingLogger } from '../src/bootstrap/log.ts';
 import type { MailRoutingDeps } from '../src/routes/types.ts';
-import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture, type SeededMember } from './support/authFixture.ts';
-import { issueSessionFor } from './support/sessionFixture.ts';
+import { createAuthFixture, type AuthFixture, type SeededMember } from './support/authFixture.ts';
 
 /**
  * How a sending domain comes to exist, through the real dispatcher (lane g57).
@@ -25,9 +24,8 @@ import { issueSessionFor } from './support/sessionFixture.ts';
  * no checkbox, because nothing in the tree inserted a `sending_domains` row and the
  * checklist command is an UPDATE that answers `domain_unknown` without one.
  *
- * Two surfaces are proved here. `POST /outbound/domain` is the admin's, and is refused
- * to a salesperson with the same redacted 403 every `/outbound/*` path gives. The Gmail
- * callback is the zero-step one: a connected mailbox's domain becomes the workspace's
+ * The Gmail callback is the surface proved here (`POST /outbound/domain`, the admin's
+ * fallback, had no caller and went in wave 2, S6): a connected mailbox's domain becomes the workspace's
  * sending domain, once, and a registration that fails never turns a connected mailbox
  * into a "not connected" page.
  *
@@ -87,28 +85,6 @@ function baseOptions(overrides: Partial<ApiOptions> = {}): ApiOptions {
   };
 }
 
-async function post(
-  path: string,
-  token: string | null,
-  body: unknown,
-): Promise<{ status: number; body: Record<string, unknown> }> {
-  const request: ApiRequest = {
-    method: 'POST',
-    path,
-    query: new URLSearchParams(),
-    headers: token === null ? {} : { authorization: `Bearer ${token}` },
-    body,
-  };
-  const result = await dispatch(request, baseOptions());
-  return { status: result.status, body: result.body as Record<string, unknown> };
-}
-
-const command = (extra: Record<string, unknown> = {}): Record<string, unknown> => ({
-  commandId: randomUUID(),
-  clientVersion: CURRENT_CLIENT_VERSION,
-  ...extra,
-});
-
 /** Complete a Gmail grant for `member` of `workspaceId`, the way Google's redirect does. */
 async function callback(
   workspaceId: string,
@@ -167,109 +143,6 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await fixture.stop();
-});
-
-describe('POST /outbound/domain', () => {
-  let adminToken: string;
-  let salespersonToken: string;
-
-  beforeAll(async () => {
-    adminToken = (await issueSessionFor(fixture, fixture.beta, fixture.beta.admin)).accessToken;
-    salespersonToken = (await issueSessionFor(fixture, fixture.beta, fixture.beta.salesperson)).accessToken;
-  });
-
-  it('is refused without a session, and to a salesperson with the redacted 403 and no row', async () => {
-    expect((await post('/outbound/domain', null, command({ domain: 'sending.example.test' }))).status).toBe(401);
-    const forbidden = await post('/outbound/domain', salespersonToken, command({ domain: 'sending.example.test' }));
-    expect(forbidden.status).toBe(403);
-    // The same body every `/outbound/*` refusal gives a salesperson, and nothing in it
-    // about what exists on the other side.
-    const reference = await post('/outbound/status', salespersonToken, {});
-    expect(forbidden.body).toEqual(reference.body);
-    expect(JSON.stringify(forbidden.body)).not.toContain('sending.example.test');
-    expect(await domainsOf(fixture.beta.workspaceId)).toEqual([]);
-  });
-
-  it('registers the domain as primary with the checklist unticked, and Administration can then record it', async () => {
-    const before = await post('/outbound/status', adminToken, {});
-    // The production state this lane exists for.
-    expect(before.body['domain']).toBeNull();
-
-    const registered = await post('/outbound/domain', adminToken, command({ domain: '  Sending.Example.Test ' }));
-    expect(registered.status).toBe(200);
-    const result = registered.body['result'] as Record<string, unknown>;
-    expect(result).toMatchObject({
-      domain: 'sending.example.test',
-      isPrimary: true,
-      outcome: 'created',
-      spfPass: false,
-      dkimPass: false,
-      dmarcPass: false,
-      postmasterReviewedAt: null,
-      authenticationPasses: false,
-      automatedSendingEnabled: false,
-    });
-
-    // What the desktop reads: a domain, so the checkboxes render.
-    const after = await post('/outbound/status', adminToken, {});
-    expect((after.body['domain'] as Record<string, unknown>)['domain']).toBe('sending.example.test');
-
-    // And the checklist the admin could not record before now lands on the row.
-    const recorded = await post(
-      '/outbound/authentication',
-      adminToken,
-      command({
-        domain: 'sending.example.test',
-        spfPass: true,
-        dkimPass: true,
-        dmarcPass: true,
-        postmasterReviewed: true,
-        automatedSendingEnabled: false,
-      }),
-    );
-    expect(recorded.status).toBe(200);
-    expect((recorded.body['result'] as Record<string, unknown>)['authenticationPasses']).toBe(true);
-
-    // The command went through the receipt, the way every sibling command does.
-    const receipts = await fixture.db.query<{ count: string }>(
-      "SELECT count(*)::text AS count FROM command_receipts WHERE workspace_id = $1 AND command_kind = 'register_sending_domain'",
-      [fixture.beta.workspaceId],
-    );
-    expect(receipts.rows[0]?.count).toBe('1');
-    expect(await registrationAudits(fixture.beta.workspaceId)).toEqual([
-      { domain: 'sending.example.test', isPrimary: true, registeredBy: 'admin' },
-    ]);
-  });
-
-  it('answers a second registration with the row as it is, never resetting the checklist', async () => {
-    const again = await post('/outbound/domain', adminToken, command({ domain: 'sending.example.test' }));
-    expect(again.status).toBe(200);
-    expect(again.body['result']).toMatchObject({ outcome: 'existing', isPrimary: true, authenticationPasses: true });
-    const rows = await domainsOf(fixture.beta.workspaceId);
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ spf_pass: true, dkim_pass: true, dmarc_pass: true });
-
-    // A second domain is registered beside the primary, never instead of it.
-    const second = await post('/outbound/domain', adminToken, command({ domain: 'other.example.test' }));
-    expect(second.body['result']).toMatchObject({ outcome: 'created', isPrimary: false });
-    const status = await post('/outbound/status', adminToken, {});
-    expect((status.body['domain'] as Record<string, unknown>)['domain']).toBe('sending.example.test');
-  });
-
-  it('refuses an address, a URL and personal Gmail, and writes nothing', async () => {
-    const before = await domainsOf(fixture.beta.workspaceId);
-    for (const [domain, reason] of [
-      ['callie@sending.example.test', 'domain_invalid'],
-      ['https://sending.example.test', 'domain_invalid'],
-      ['gmail.com', 'personal_gmail_domain'],
-      ['GoogleMail.com', 'personal_gmail_domain'],
-    ] as const) {
-      const refused = await post('/outbound/domain', adminToken, command({ domain }));
-      expect(refused.status, domain).toBe(409);
-      expect(refused.body['reason'], domain).toBe(reason);
-    }
-    expect(await domainsOf(fixture.beta.workspaceId)).toEqual(before);
-  });
 });
 
 describe('the Gmail callback registers the connected mailbox’s domain', () => {

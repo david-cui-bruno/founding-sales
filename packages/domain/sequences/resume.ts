@@ -29,9 +29,16 @@ import { holdAppliesSql } from './wake.ts';
  * and 31).
  *
  * "When all applicable holds clear, unexecuted work shifts by the union of blocking
- * intervals. A union longer than seven days requires the salesperson to review the
- * rendered future steps and explicitly resume. Every resume performs a fresh
- * eligibility check."
+ * intervals. Every resume performs a fresh eligibility check."
+ *
+ * A union longer than seven days used to send the enrollment to `review_required`,
+ * where only a person's explicit resume got it out (wave 2, S4.1). Now it resumes on
+ * its own like any other: once, by the union, when the last applicable hold clears. An
+ * enrollment an older release left in `review_required` is taken by the same path — the
+ * scheduler wakes it (`wake.ts`) and `runDueStepExecution` resumes it — so no row waits
+ * for a person who has nothing to decide. The safety that matters is not the length of
+ * the hold but what is still true when it ends, and that is the fresh eligibility check:
+ * suppression and tombstones, coverage, uncertain replies, windows and caps.
  *
  * The arithmetic is G0's, in `packages/domain/src/rules/holds.ts`, and it is a union
  * rather than a sum for the reason that file states: two holds that ran side by side
@@ -56,9 +63,8 @@ import { holdAppliesSql } from './wake.ts';
  * pause a week later shifted them four — the first three again. Every applied resume
  * writes its `hold_union` rows in `step_execution_shifts` at one instant, so the window
  * now starts at the later of the enrollment's start and the last of those rows: an
- * interval is counted by the first resume that applies it and by no later one. The
- * seven-day review is asked of that same window, which is the blocking episode that
- * just ended, not the enrollment's lifetime total.
+ * interval is counted by the first resume that applies it and by no later one — the
+ * blocking episode that just ended, not the enrollment's lifetime total.
  *
  * ## The holds eligibility asks about (lane g82, audit C10)
  *
@@ -66,7 +72,7 @@ import { holdAppliesSql } from './wake.ts';
  * included, which it used to omit — through the same `holdAppliesSql` the scheduler's
  * wake uses, and for the action kinds of the work that is actually next: that step's
  * channel and `enrollment_advance`, as `holdSource` asks. A pause of the call channel
- * does not shift, or send to review, an enrollment whose next step is an email.
+ * does not shift an enrollment whose next step is an email.
  *
  * The holds this enrollment's own fences opened are not counted. They are a dispatch
  * attempt waiting on its cap or window, or a send in doubt, and 12.5 says a send
@@ -227,14 +233,6 @@ async function resumeDecisionFor(
   return { holds, composition, decision: decideResume(composition) };
 }
 
-/**
- * How far a confirmed resume moves the unexecuted steps: the decision's shift, or — after
- * a person reviewed a long hold — the whole union the review was about.
- */
-function confirmedShiftMilliseconds(decision: ResumeDecision, composition: ReturnType<typeof composeHolds>): number {
-  return decision.kind === 'resume' ? decision.shiftMilliseconds : composition.unionMilliseconds;
-}
-
 export interface ResumeOutcome {
   readonly kind: ResumeDecision['kind'];
   readonly shiftMilliseconds: number;
@@ -246,19 +244,18 @@ export interface ResumeOutcome {
 /**
  * Reconsider an enrollment's holds and do what the decision says.
  *
- * Three answers and no fourth, straight from `decideResume`:
+ * Two answers, straight from `decideResume`:
  *
- *   * `still_held` — something is open; nothing moves.
- *   * `review_required` — the union exceeded seven days. The enrollment goes to
- *     `review_required`, which `runDueStepExecution` treats as a hold with the
- *     `long_hold_review` reason, and only an explicit `resumeAfterReview` gets it out.
- *   * `resume` — every unexecuted step moves forward by the union, each move
- *     recorded as a shift, and the enrollment is active again.
+ *   * `still_held` — something is open; nothing moves, and the enrollment keeps its
+ *     state (an older release's `review_required` included) until the next release.
+ *   * `resume` — every unexecuted step moves forward by the union, each move recorded
+ *     as a shift, and the enrollment is `active` again, whatever state it was in.
  *
- * Two callers. The salesperson's explicit resume after a long hold
- * (`resumeAfterReview`), and — since lane g82 (audit C05) — `runDueStepExecution`
- * itself, as the first thing it does with a held step the scheduler woke because no
- * open hold blocks it any more. Releasing a hold is every lane's own statement
+ * Three callers: `runDueStepExecution`, as the first thing it does with a held step the
+ * scheduler woke because no open hold blocks it any more, or with any step of an
+ * enrollment an older release left in `review_required` (audit C05, wave 2 S4.1); the
+ * Today pause's Resume; and `POST /enrollments/resume`, which installed desktops call
+ * after the review they show. Releasing a hold is every lane's own statement
  * (`releaseHoldsOfEvent`, `releasePause`, the mailbox proof); none of them has to know
  * that a sequence is waiting, because the wake notices the release on the next pass.
  *
@@ -273,7 +270,7 @@ export interface ResumeOutcome {
  */
 export async function resumeEnrollment(
   context: RepositoryContext,
-  input: { readonly enrollmentId: string; readonly afterReview?: boolean | undefined },
+  input: { readonly enrollmentId: string },
 ): Promise<SequenceResult<ResumeOutcome>> {
   const enrollment = await loadEnrollmentForUpdate(context, input.enrollmentId);
   if (enrollment === null) return refuseSequence('enrollment_unknown');
@@ -291,26 +288,7 @@ export async function resumeEnrollment(
     });
   }
 
-  // A salesperson who has reviewed the rendered future steps may resume a long hold;
-  // nothing else may. `afterReview` is the explicit act 4.3 requires, and it is the
-  // only path that turns a `review_required` enrollment back into an active one.
-  if (decision.kind === 'review_required' && input.afterReview !== true) {
-    await context.db.query(
-      `UPDATE sequence_enrollments
-          SET state = 'review_required', review_union_milliseconds = $3, updated_at = now()
-        WHERE workspace_id = $1 AND id = $2 AND ended_at IS NULL`,
-      [context.scope.workspaceId, enrollment.id, decision.unionMilliseconds],
-    );
-    return acceptSequence({
-      kind: 'review_required',
-      shiftMilliseconds: 0,
-      unionMilliseconds: decision.unionMilliseconds,
-      openHoldIds: [],
-      executionsShifted: 0,
-    });
-  }
-
-  const shiftMilliseconds = confirmedShiftMilliseconds(decision, composition);
+  const shiftMilliseconds = decision.shiftMilliseconds;
   const pending = await unexecutedExecutions(context, enrollment.id);
   let shifted = 0;
   for (const execution of pending) {
@@ -356,19 +334,6 @@ export async function resumeEnrollment(
   });
 }
 
-/**
- * The salesperson's explicit resume after reviewing a long hold (4.3, Appendix G 31).
- *
- * Deliberately a second function rather than a flag on the first, so that the
- * endpoint that a control is wired to cannot be the one an automatic pass calls.
- */
-export async function resumeAfterReview(
-  context: RepositoryContext,
-  input: { readonly enrollmentId: string },
-): Promise<SequenceResult<ResumeOutcome>> {
-  return await resumeEnrollment(context, { enrollmentId: input.enrollmentId, afterReview: true });
-}
-
 interface ResumePreviewStepDates {
   readonly stepExecutionId: string;
   readonly ordinal: number;
@@ -409,8 +374,9 @@ export interface ResumePreviewHold {
  * What "Review and resume" shows before anything is pressed (4.3; lane g88, audit G06).
  *
  * `kind` is `decideResume`'s answer. `still_held` means something is open and a resume
- * would move nothing; `review_required` and `resume` both mean a confirmation would
- * shift every unexecuted step by `shiftMilliseconds`, which `steps` has already applied.
+ * would move nothing; `resume` means a confirmation would shift every unexecuted step by
+ * `shiftMilliseconds`, which `steps` has already applied. Installed desktops up to 1.0.11
+ * show it for an enrollment an older release left in `review_required`.
  */
 export interface ResumePreview {
   readonly enrollmentId: string;
@@ -425,15 +391,13 @@ export interface ResumePreview {
 }
 
 /**
- * The review 4.3 asks for: "a union longer than seven days requires the salesperson to
- * review the rendered future steps and explicitly resume" (lane g88, audit G06).
+ * The dates a resume would give the unexecuted steps (lane g88, audit G06).
  *
- * A read, and nothing else: no lock, no state change, not even the `review_required`
- * flag an automatic reconsideration writes. It computes what `resumeAfterReview` would
- * do at this instant with the same function that does it, and applies the shift to each
- * unexecuted step with the same `shiftDueInstant`. The confirmation that follows runs
- * the decision again under its lock, because a hold may open in between and the
- * resume, not the preview, is the thing that has to be right.
+ * A read, and nothing else: no lock and no state change. It computes what
+ * `resumeEnrollment` would do at this instant with the same function that does it, and
+ * applies the shift to each unexecuted step with the same `shiftDueInstant`. The
+ * confirmation that follows runs the decision again under its lock, because a hold may
+ * open in between and the resume, not the preview, is the thing that has to be right.
  *
  * A salesperson may preview only their own enrollment; an admin any. The dates are due
  * instants, not send times: an email still waits for its window and its cap.
@@ -451,7 +415,7 @@ export async function previewResume(
   if (enrollment.endedAt !== null) return refuseSequence('enrollment_not_live');
 
   const { holds, composition, decision } = await resumeDecisionFor(context, enrollment);
-  const shift = decision.kind === 'still_held' ? 0 : confirmedShiftMilliseconds(decision, composition);
+  const shift = decision.kind === 'still_held' ? 0 : decision.shiftMilliseconds;
   const pending = await unexecutedExecutions(context, enrollment.id, { lock: false });
 
   return acceptSequence({

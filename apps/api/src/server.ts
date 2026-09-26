@@ -100,7 +100,7 @@ export interface ApiOptions {
   readonly suppressionJournal?: SuppressionJournal;
   /** Extra route modules, so a lane mounts without editing this file. */
   readonly extraRoutes?: readonly RouteModule[] | undefined;
-  /** The structured log the CloudWatch metric filters read. Absent in unit tests. */
+  /** The structured log; the safety metric filters read it. Absent in unit tests. */
   readonly log?: Logger | undefined;
   /**
    * Which API image this process is (lane g71): a `sha256:` digest from the ECS task
@@ -280,9 +280,8 @@ function send(
  * answer: the client gets a broken pipe instead of a 413.
  */
 function refuse(response: ServerResponse, log: Logger | undefined, code: RefusalCode, path: string): void {
-  // `$.event = "refusal"` with the `reason` dimension, which
-  // `infra/modules/observability/main.tf` turns into the `Refusals` metric. The path
-  // is the requested route, never a query string and never a body.
+  // One `refusal` line with the reason, for whoever reads the log. The path is the
+  // requested route, never a query string and never a body.
   log?.log('info', 'refusal', { reason: code, path });
   send(response, REFUSAL_STATUS[code], redactError(code), undefined, { connection: 'close' });
 }
@@ -370,7 +369,7 @@ async function handle(
       optionsForRequest(options, connection.session),
     );
     if (result.status >= 400) {
-      // `reason` stays the HTTP status: it is the Refusals metric's dimension. `code` is
+      // `reason` stays the HTTP status, as every earlier line has it. `code` is
       // what the body said (lane g69), so a 409 from `/calling-identities/register`
       // reads `number_invalid` or `number_registered_to_another` rather than a bare
       // status that fits five refusals. Only a code-shaped string is taken, never the
@@ -389,8 +388,8 @@ async function handle(
       send(response, REFUSAL_STATUS.database_busy, redactError('database_busy'));
       return;
     }
-    // `level: "error"` is the ApiErrors metric filter. The caller learns nothing
-    // about why: the why may name a table, a path or a prospect.
+    // Logged at `error`, with the cause. The caller learns nothing about why: the why
+    // may name a table, a path or a prospect.
     options.log?.log('error', 'request_failed', { path, ...errorFields(error) });
     send(response, REFUSAL_STATUS.internal_error, redactError('internal_error'));
   } finally {

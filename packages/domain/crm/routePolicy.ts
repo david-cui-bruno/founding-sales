@@ -74,3 +74,40 @@ export function decideRouteEligibility(
   }
   return { eligibility: 'usable', policyVersion: policy.version };
 }
+
+/**
+ * The policy version a phone number takes on entry (wave 2, S4.4).
+ *
+ * A call is a `tel:` handoff from the Mac: nothing Callie runs sees the line, so there is
+ * no provider to validate a phone number and no confidence to wait for. A number the
+ * founder typed, imported or took from a reply is usable the moment it is recorded, and
+ * `phone_routes_usable_is_evidenced` (0004) is satisfied with the defaults this names:
+ * validation `passed`, a confidence of 1 unless the source supplied one, and this
+ * version. A number that failed validation is still `invalid`.
+ */
+export const PHONE_ON_ENTRY_POLICY_VERSION = 'phone-on-entry.1';
+
+/** The evidence and eligibility a phone route is written with (wave 2, S4.4). */
+export function decidePhoneOnEntry(input: {
+  readonly technicalValidation: TechnicalValidation;
+  readonly associationConfidence: number | null;
+}): RouteEligibilityDecision & {
+  readonly technicalValidation: TechnicalValidation;
+  readonly associationConfidence: number | null;
+} {
+  if (input.technicalValidation === 'failed') {
+    return {
+      eligibility: 'invalid',
+      policyVersion: null,
+      technicalValidation: 'failed',
+      associationConfidence: input.associationConfidence,
+    };
+  }
+  const confidence = input.associationConfidence;
+  return {
+    eligibility: 'usable',
+    policyVersion: PHONE_ON_ENTRY_POLICY_VERSION,
+    technicalValidation: 'passed',
+    associationConfidence: confidence === null || !Number.isFinite(confidence) ? 1 : confidence,
+  };
+}

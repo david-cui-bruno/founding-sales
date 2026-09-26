@@ -4,7 +4,6 @@ import { repositoryContext, workspaceScope, type RepositoryContext } from '../..
 import { databaseNow, listApplicableHolds, openHold, releaseHold } from '../../policy/index.ts';
 import { changeStage, emitCrmDomainEvent, setManualControlMode } from '../../crm/index.ts';
 import { enrollmentFacts } from '../../dashboard/index.ts';
-import { LONG_HOLD_REVIEW_MILLISECONDS } from '../../src/index.ts';
 import {
   allowAllEligibility,
   consumeTerminalStops,
@@ -13,6 +12,7 @@ import {
   dispatchPreparedStep,
   enrollContact,
   listStepExecutions,
+  listStepWakes,
   publishVersion,
   readEnrollment,
   recordingSendHandoff,
@@ -340,39 +340,130 @@ describe('scenario 28: two overlapping holds, cleared in both orders', () => {
   });
 });
 
-describe('scenario 31: a hold longer than seven days needs review', () => {
-  it('refuses to resume and marks the enrollment for review', async () => {
-    const enrollmentId = await enrollAlpha();
+describe('scenario 31, since wave 2 (S4.1): a hold longer than seven days resumes on its own', () => {
+  const DAY = 86_400_000;
+
+  /** A nine-day firm pause over a ten-day-old enrollment, released or still open. */
+  async function nineDayPause(enrollmentId: string, options: { readonly release: boolean }): Promise<string> {
     await backdateStart(enrollmentId, '10 days');
+    const due = new Date(Date.parse(await databaseNow(worker())) - 10 * DAY).toISOString();
+    await setDue(enrollmentId, due);
     const context = contextFor('alpha', 'admin');
     const hold = await openHold(context, {
       scopeKind: 'firm',
       scopeKey: crm.alpha.firmId,
-      reasonCode: 'scoped_pause',
+      reasonCode: options.release ? 'scoped_pause' : 'uncertain_reply',
       blockedActionKinds: ['email_send', 'enrollment_advance'],
       sourceEventKind: 'test.long',
     });
+    await database.session.query(`UPDATE active_holds SET started_at = now() - interval '9 days' WHERE id = $1`, [hold]);
+    if (options.release) await releaseHold(context, hold);
+    return due;
+  }
+
+  /** What an older release wrote for a hold past seven days: the enrollment and its held step. */
+  async function asAnOlderReleaseLeftIt(enrollmentId: string): Promise<string> {
     await database.session.query(
-      `UPDATE active_holds SET started_at = now() - interval '9 days' WHERE id = $1`,
-      [hold],
+      `UPDATE sequence_enrollments SET state = 'review_required', review_union_milliseconds = $3
+        WHERE workspace_id = $1 AND id = $2`,
+      [seeded.alpha.workspaceId, enrollmentId, 9 * DAY],
     );
-    await releaseHold(context, hold);
+    const { rows } = await database.session.query<{ id: string }>(
+      `UPDATE step_executions
+          SET state = 'held', hold_reason_code = 'long_hold_review', not_before = now() - interval '1 hour'
+        WHERE workspace_id = $1 AND enrollment_id = $2 AND state IN ('pending', 'held')
+        RETURNING id`,
+      [seeded.alpha.workspaceId, enrollmentId],
+    );
+    return rows[0]?.id ?? '';
+  }
 
-    const decided = await resumeEnrollment(context, { enrollmentId });
-    expect(decided.ok && decided.value.kind).toBe('review_required');
+  async function dueAtOf(stepExecutionId: string): Promise<number> {
+    const { rows } = await database.session.query<{ due_at: Date }>('SELECT due_at FROM step_executions WHERE id = $1', [
+      stepExecutionId,
+    ]);
+    return rows[0]?.due_at.getTime() ?? Number.NaN;
+  }
+
+  it('shifts once by the whole union and stays active when the long hold clears', async () => {
+    const enrollmentId = await enrollAlpha();
+    await nineDayPause(enrollmentId, { release: true });
+
+    const decided = await resumeEnrollment(contextFor('alpha', 'admin'), { enrollmentId });
+    expect(decided.ok && decided.value.kind).toBe('resume');
+    const days = decided.ok ? decided.value.shiftMilliseconds / DAY : 0;
+    expect(days).toBeGreaterThan(8.9);
+    expect(days).toBeLessThan(9.1);
     const enrollment = await readEnrollment(worker(), { enrollmentId });
-    expect(enrollment?.state).toBe('review_required');
-    expect(enrollment?.reviewUnionMilliseconds ?? 0).toBeGreaterThan(LONG_HOLD_REVIEW_MILLISECONDS);
+    expect(enrollment?.state).toBe('active');
+    expect(enrollment?.reviewUnionMilliseconds).toBeNull();
 
-    // A due step of an enrollment awaiting review does not run.
+    // A second reconsideration moves nothing: the window starts at the applied shift.
+    const again = await resumeEnrollment(contextFor('alpha', 'admin'), { enrollmentId });
+    expect(again.ok && again.value.executionsShifted).toBe(0);
+  });
+
+  it('takes an enrollment an older release left in review_required through the scheduler: woken, shifted once, active', async () => {
+    const enrollmentId = await enrollAlpha();
+    const due = await nineDayPause(enrollmentId, { release: true });
+    const stepExecutionId = await asAnOlderReleaseLeftIt(enrollmentId);
+
+    const now = await databaseNow(worker());
+    const wakes = await listStepWakes(database.session, { now });
+    expect(wakes.map(wake => wake.stepExecutionId)).toContain(stepExecutionId);
+
     const outcome = await runDueStepExecution(worker(), {
-      enrollmentId,
-      now: await databaseNow(worker()),
+      stepExecutionId,
+      now,
       eligibility: allowAllEligibility(),
       sendHandoff: recordingSendHandoff(),
     });
-    expect(outcome.kind).toBe('held');
-    expect(outcome.kind === 'held' ? outcome.reasonCode : '').toBe('long_hold_review');
+    expect(outcome.kind).not.toBe('held');
+    expect(outcome.kind).not.toBe('nothing_to_do');
+
+    const enrollment = await readEnrollment(worker(), { enrollmentId });
+    expect(enrollment?.state).toBe('active');
+    expect(enrollment?.reviewUnionMilliseconds).toBeNull();
+    const { rows: shifts } = await database.session.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM step_execution_shifts WHERE enrollment_id = $1 AND reason = 'hold_union'`,
+      [enrollmentId],
+    );
+    expect(shifts[0]?.count).toBe('1');
+    // The union moved it nine days; a send-window placement may move it further, never less.
+    expect((await dueAtOf(stepExecutionId)) - Date.parse(due)).toBeGreaterThanOrEqual(8.9 * DAY);
+  });
+
+  it('never resumes through a hold that is still open: the review_required row stays held, and is not woken', async () => {
+    const enrollmentId = await enrollAlpha();
+    await nineDayPause(enrollmentId, { release: false });
+    const stepExecutionId = await asAnOlderReleaseLeftIt(enrollmentId);
+
+    const now = await databaseNow(worker());
+    const wakes = await listStepWakes(database.session, { now });
+    expect(wakes.map(wake => wake.stepExecutionId)).not.toContain(stepExecutionId);
+
+    const outcome = await runDueStepExecution(worker(), {
+      stepExecutionId,
+      now,
+      eligibility: allowAllEligibility(),
+      sendHandoff: recordingSendHandoff(),
+    });
+    expect(outcome).toEqual({ kind: 'held', stepExecutionId, reasonCode: 'uncertain_reply' });
+    expect((await readEnrollment(worker(), { enrollmentId }))?.state).toBe('review_required');
+  });
+
+  it('never resumes through what eligibility refuses once the holds are gone: the step is held for it', async () => {
+    const enrollmentId = await enrollAlpha();
+    await nineDayPause(enrollmentId, { release: true });
+    const stepExecutionId = await asAnOlderReleaseLeftIt(enrollmentId);
+
+    const outcome = await runDueStepExecution(worker(), {
+      stepExecutionId,
+      now: await databaseNow(worker()),
+      eligibility: { evaluate: async () => await Promise.resolve({ ok: false, reasonCode: 'firm_suppressed' }) },
+      sendHandoff: recordingSendHandoff(),
+    });
+    expect(outcome).toEqual({ kind: 'held', stepExecutionId, reasonCode: 'firm_suppressed' });
   });
 });
 

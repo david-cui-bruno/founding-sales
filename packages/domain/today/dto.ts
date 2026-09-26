@@ -82,6 +82,13 @@ export interface TodayTaskDtoV2 extends TodayTaskDto {
   readonly stepExecutionId: string | null;
   readonly callLogId: string | null;
   readonly pauseHoldId: string | null;
+  /**
+   * For a sequence step the worker is holding: whole days since it fell due, which is
+   * how long it has been waiting ("held 3 days"). Null for anything not held. A hold of
+   * any length resumes on its own once its causes clear (wave 2, S4.1), so this is
+   * what the card shows instead of asking for a review.
+   */
+  readonly heldDays: number | null;
 }
 
 /**
@@ -203,6 +210,32 @@ async function pausesByItem(
   return found;
 }
 
+const DAY_MILLISECONDS = 24 * 60 * 60 * 1000;
+
+/**
+ * How many whole days each held step behind these tasks has waited since it fell due
+ * (wave 2, S4.1). One read of the executions; a step that is not `held` is absent.
+ */
+async function heldDaysByExecution(
+  context: RepositoryContext,
+  items: readonly TodayItemRow[],
+  now: string,
+): Promise<ReadonlyMap<string, number>> {
+  const ids = items
+    .filter(item => item.sourceKind === 'step_execution' && item.sourceId !== null)
+    .map(item => item.sourceId as string);
+  if (ids.length === 0) return new Map();
+  const { rows } = await context.db.query<{ id: string; due_at: Date }>(
+    `SELECT id, due_at FROM step_executions
+      WHERE workspace_id = $1 AND id = ANY($2::uuid[]) AND state = 'held'`,
+    [context.scope.workspaceId, ids],
+  );
+  const at = Date.parse(now);
+  return new Map(
+    rows.map(row => [row.id, Math.max(Math.floor((at - row.due_at.getTime()) / DAY_MILLISECONDS), 0)]),
+  );
+}
+
 /** The action kind a paused automated task blocks. The same table `snooze.ts` opens holds with. */
 const PAUSED_ACTION_KIND: Readonly<Record<TodayItemKind, string | null>> = Object.freeze({
   reply: null,
@@ -272,6 +305,7 @@ export async function readTodayFirm(
 
   const items = await listTodayItems(context, { businessDate: snapshotDate, firmId: input.firmId });
   const pauses = await pausesByItem(context, input.firmId, items);
+  const held = await heldDaysByExecution(context, items, input.now);
 
   // Unretired numbers at this firm, with the version `authorizeDial` will compare.
   // Candidates are included and marked rather than hidden: "no number" and "a number
@@ -316,6 +350,7 @@ export async function readTodayFirm(
       stepExecutionId: item.sourceKind === 'step_execution' ? item.sourceId : null,
       callLogId: callLogIdOfItemKey(item.itemKey),
       pauseHoldId: pauses.get(item.id) ?? null,
+      heldDays: item.sourceKind === 'step_execution' && item.sourceId !== null ? (held.get(item.sourceId) ?? null) : null,
     })),
     routes: routes.rows.map(row => ({
       routeId: row.id,

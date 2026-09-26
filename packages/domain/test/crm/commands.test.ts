@@ -15,7 +15,6 @@ import {
   changeStage,
   createContact,
   createFirm,
-  mergeContacts,
   mergeFirms,
   readFirmForActor,
   recordEvidence,
@@ -336,28 +335,35 @@ describe('CRM commands', () => {
 
   // --------------------------------------------------------------- routes
   describe('routes', () => {
-    it('adds a weak route as a candidate and only a verified one as usable', async () => {
+    it('adds a phone number usable on entry, with the evidence the CHECK asks for, and a failed one as invalid', async () => {
       await inRolledBackTransaction(assignee, async context => {
-        const weak = await addPhoneRoute(context, {
+        // Wave 2 (S4.4): no confirm step, whatever the source said about its confidence.
+        const entered = await addPhoneRoute(context, {
           firmId: crm.alpha.firmId,
           e164: '+14015550155',
           source: 'research_provider',
           associationConfidence: 0.4,
         });
-        expect(weak).toMatchObject({ ok: true });
-        if (!weak.ok) return;
-        expect(weak.value.eligibility).toBe('candidate');
-
-        const verified = await verifyRoute(context, {
-          routeKind: 'phone',
-          routeId: weak.value.id,
-          technicalValidation: 'passed',
-          associationConfidence: 0.95,
+        expect(entered).toMatchObject({ ok: true });
+        if (!entered.ok) return;
+        expect(entered.value).toMatchObject({
+          eligibility: 'usable',
+          technical_validation: 'passed',
+          eligibility_policy_version: 'phone-on-entry.1',
         });
-        expect(verified).toMatchObject({ ok: true });
-        if (!verified.ok) return;
-        expect(verified.value.eligibility).toBe('usable');
-        expect(verified.value.version).toBe(weak.value.version + 1);
+        expect(Number(entered.value.association_confidence)).toBe(0.4);
+
+        const bare = await addPhoneRoute(context, { firmId: crm.alpha.firmId, e164: '+14015550156', source: 'import' });
+        expect(bare.ok && [bare.value.eligibility, Number(bare.value.association_confidence)]).toEqual(['usable', 1]);
+
+        // A test that says the line is dead still wins: a failure is a new retrieval.
+        const failed = await verifyRoute(context, {
+          routeKind: 'phone',
+          routeId: entered.value.id,
+          technicalValidation: 'failed',
+        });
+        expect(failed.ok && failed.value.eligibility).toBe('invalid');
+        expect(failed.ok && failed.value.version).toBe(entered.value.version + 1);
       });
     });
 
@@ -502,11 +508,13 @@ describe('CRM commands', () => {
         );
         expect(source.rows[0]).toMatchObject({ status: 'merged', merged_into_firm_id: crm.alpha.firmId });
 
-        const mergeEvents = await context.db.query<{ record_kind: string }>(
-          'SELECT record_kind FROM record_merge_events WHERE workspace_id = $1 AND source_id = $2',
+        // The merge's record is its audit event (record_merge_events has no writer since
+        // wave 2; migration 0019 drops it).
+        const audited = await context.db.query<{ subject_id: string }>(
+          "SELECT subject_id FROM audit_events WHERE workspace_id = $1 AND action = 'firm.merged' AND detail->>'sourceFirmId' = $2",
           [seeded.alpha.workspaceId, duplicate.value.id],
         );
-        expect(mergeEvents.rows).toHaveLength(1);
+        expect(audited.rows).toEqual([{ subject_id: crm.alpha.firmId }]);
       });
     });
 
@@ -525,39 +533,6 @@ describe('CRM commands', () => {
         expect(merged).toMatchObject({ ok: false, reason: 'merge_conflicts' });
         if (merged.ok) return;
         expect(merged.conflicts?.map(conflict => conflict.field)).toContain('website');
-      });
-    });
-
-    it('merges two contacts at the same firm and refuses two at different firms', async () => {
-      await inRolledBackTransaction(admin, async context => {
-        const second = await createContact(context, {
-          firmId: crm.alpha.firmId,
-          fullName: 'Dana Example (dup)',
-          externalId: 'legacy-contact-3',
-        });
-        if (!second.ok) return;
-        const merged = await mergeContacts(context, {
-          sourceContactId: second.value.id,
-          targetContactId: crm.alpha.contactId,
-        });
-        expect(merged).toMatchObject({ ok: true });
-
-        const elsewhere = await createFirm(context, {
-          name: 'Elsewhere Test Firm',
-          assignedUserId: seeded.alpha.salesperson.userId,
-        });
-        if (!elsewhere.ok) return;
-        const otherContact = await createContact(context, {
-          firmId: elsewhere.value.id,
-          fullName: 'Someone Else',
-        });
-        if (!otherContact.ok) return;
-        expect(
-          await mergeContacts(context, {
-            sourceContactId: otherContact.value.id,
-            targetContactId: crm.alpha.contactId,
-          }),
-        ).toMatchObject({ ok: false, reason: 'merge_cross_firm' });
       });
     });
 

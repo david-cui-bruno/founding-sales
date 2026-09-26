@@ -103,7 +103,7 @@ export async function routeSettings(request: ApiRequest, options: RoutingOptions
     const outcome = await updateSetting(repository, {
       settingKey: body.settingKey,
       value: body.value,
-      changeNote: body.changeNote,
+      ...(body.changeNote === undefined ? {} : { changeNote: body.changeNote }),
       commandId: body.commandId,
       // 16.2, lane g71: an enable names a release record whose API digest is this
       // process's own. The domain refuses in the same transaction; the route only

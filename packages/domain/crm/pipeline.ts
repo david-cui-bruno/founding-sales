@@ -301,7 +301,7 @@ export interface ReopenOutcome {
  * The configured policy in version one is: a new opportunity, linked to the one it
  * came from, starting at the first non-terminal stage and in **manual** control mode.
  * A new row rather than an un-closing keeps the closed opportunity's stage history
- * intact and keeps `record_merge_events`-style history honest; manual mode is what
+ * intact and keeps the record's history honest; manual mode is what
  * makes "never silently restarts" true, because an automated reopen would be eligible
  * for the sequences that were running when it closed.
  */

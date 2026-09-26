@@ -27,7 +27,8 @@ import { CLOCK_CLEARING_HOLDS } from './executions.ts';
  * **Held** is every live enrollment whose next work is blocked, right now, by a hold
  * nobody chose. An enrollment is held when any of these is true:
  *
- *   1. it is `review_required` — 4.3's long-hold review, which only a person resumes;
+ *   1. it is `review_required` — the long-hold review an older release wrote, which the
+ *      scheduler now resumes on its own once the holds clear (wave 2, S4.1);
  *   2. one of its step executions is `held` with a counted reason — what the worker
  *      concluded the last time it tried the step, including the reasons that have no
  *      `active_holds` row at all (a missing route, an unapproved template, an owner

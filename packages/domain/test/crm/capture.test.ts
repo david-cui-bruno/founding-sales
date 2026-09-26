@@ -170,14 +170,24 @@ describe('capturing firms: one row per contact, and Add firm', () => {
     );
     expect(firm.rows[0]).toEqual({ assigned_user_id: seeded.alpha.admin.userId, time_zone: 'America/New_York', time_zone_source: 'state_default' });
 
-    // Imported routes are candidates: a spreadsheet is not a technical validation.
-    const routes = await session.query<{ eligibility: string; source: string }>(
-      `SELECT eligibility, source FROM email_addresses WHERE workspace_id = $1 AND firm_id = $2
-       UNION ALL SELECT eligibility, source FROM phone_routes WHERE workspace_id = $1 AND firm_id = $2`,
+    // Imported addresses are candidates until the worker checks them; an imported phone
+    // number is usable on entry (wave 2, S4.4), with the evidence 0004's CHECK asks for.
+    const routes = await session.query<{ kind: string; eligibility: string; source: string; evidenced: boolean }>(
+      `SELECT 'email' AS kind, eligibility, source, false AS evidenced
+         FROM email_addresses WHERE workspace_id = $1 AND firm_id = $2
+       UNION ALL
+       SELECT 'phone', eligibility, source,
+              technical_validation = 'passed' AND association_confidence IS NOT NULL
+              AND eligibility_policy_version = 'phone-on-entry.1'
+         FROM phone_routes WHERE workspace_id = $1 AND firm_id = $2`,
       [seeded.alpha.workspaceId, firmId],
     );
     expect(routes.rows).toHaveLength(3);
-    expect(routes.rows.every(route => route.eligibility === 'candidate' && route.source === 'import')).toBe(true);
+    expect(routes.rows.every(route => route.source === 'import')).toBe(true);
+    expect(routes.rows.filter(route => route.kind === 'email').every(route => route.eligibility === 'candidate')).toBe(true);
+    const phones = routes.rows.filter(route => route.kind === 'phone');
+    expect(phones.length).toBeGreaterThan(0);
+    expect(phones.every(route => route.eligibility === 'usable' && route.evidenced)).toBe(true);
   });
 
   it('adds a new person to a firm already here, and refuses one who is already at it by email or by name', async () => {
@@ -272,7 +282,7 @@ describe('capturing firms: one row per contact, and Add firm', () => {
   });
 
   // ------------------------------------------------------------------------ Add firm
-  it('adds a firm with its first contact for a salesperson, assigned to them, routes as candidates', async () => {
+  it('adds a firm with its first contact for a salesperson, assigned to them, the phone usable at once', async () => {
     const added = await addFirm(context(salesperson), {
       firm: { name: 'Maple Test Planning', website: 'maple.example.test', timeZone: 'America/New_York' },
       contact: { fullName: 'Rae Placeholder', title: 'Founder', email: 'Rae@Maple.example.test', phone: '(401) 555-0122' },
@@ -296,7 +306,7 @@ describe('capturing firms: one row per contact, and Add firm', () => {
       [seeded.alpha.workspaceId, added.value.firmId],
     );
     expect(routes.rows).toEqual([
-      { value: '+14015550122', eligibility: 'candidate', source: 'salesperson' },
+      { value: '+14015550122', eligibility: 'usable', source: 'salesperson' },
       { value: 'rae@maple.example.test', eligibility: 'candidate', source: 'salesperson' },
     ]);
   });

@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
 import { databaseNow } from '../../policy/index.ts';
-import { buildTodaySnapshot, businessDateOf, readTodayList } from '../../today/index.ts';
+import { buildTodaySnapshot, businessDateOf, readTodayFirm, readTodayList } from '../../today/index.ts';
 import { approveTemplateVersion, createTemplateVersion, retireTemplateVersion } from '../../templates/index.ts';
 import {
   allowAllEligibility,
@@ -224,6 +224,37 @@ describe('the Today source: lane 3 is due sequence work (8.2)', () => {
     expect(betaList.cards).toHaveLength(0);
     const alphaList = await readTodayList(contextFor('alpha', 'admin'), { now });
     expect(alphaList.cards.map(card => card.firmId)).toEqual([crm.alpha.firmId]);
+  });
+});
+
+describe('a held step says how long it has been held (wave 2, S4.1)', () => {
+  it('answers heldDays on the expanded card for a held step, and null for one that is not', async () => {
+    const now = await databaseNow(worker());
+    const held = await enroll('alpha');
+    await setDue('alpha', held, new Date(Date.parse(now) - 3 * 86_400_000 - 60_000).toISOString());
+    await database.session.query(
+      `UPDATE step_executions SET state = 'held', hold_reason_code = 'mailbox_disconnected'
+        WHERE workspace_id = $1 AND enrollment_id = $2`,
+      [seeded.alpha.workspaceId, held],
+    );
+    const { rows } = await database.session.query<{ id: string }>(
+      `INSERT INTO contacts (workspace_id, firm_id, full_name) VALUES ($1, $2, $3) RETURNING id`,
+      [seeded.alpha.workspaceId, crm.alpha.firmId, 'Alex Example'],
+    );
+    const pending = await enroll('alpha', rows[0]?.id ?? '');
+    await setDue('alpha', pending, now);
+
+    await buildTodaySnapshot(worker(), {
+      businessDate: await businessDateOf(worker(), now),
+      now,
+      sources: [dueSequenceWorkSource()],
+    });
+    const page = await readTodayFirm(contextFor('alpha', 'salesperson'), { firmId: crm.alpha.firmId, now });
+    const byExecution = new Map(page?.tasks.map(task => [task.stepExecutionId, task.heldDays]));
+    const [heldStep] = await listStepExecutions(worker(), { enrollmentId: held });
+    const [pendingStep] = await listStepExecutions(worker(), { enrollmentId: pending });
+    expect(byExecution.get(heldStep?.id ?? '')).toBe(3);
+    expect(byExecution.get(pendingStep?.id ?? '')).toBeNull();
   });
 });
 

@@ -22,7 +22,7 @@ import {
  *
  * "Salespeople may snooze manual tasks with a required reason and explicit return
  * instant. Automated sends are not snoozed ad hoc; delaying them creates a recorded
- * hold."
+ * hold." The reason is optional since wave 2 (S4.7): none is stored as "snoozed".
  *
  * Two sentences, two different things, and this file is where they stay apart.
  *
@@ -121,9 +121,16 @@ export type SnoozeOutcome =
       readonly scope: 'enrollment' | 'firm';
     };
 
+/**
+ * The reason a snooze stores when the person gave none (wave 2, S4.7): the non-empty
+ * placeholder `today_snoozes_reason_present` (0008) requires until migration 0019.
+ */
+export const DEFAULT_SNOOZE_REASON = 'snoozed';
+
 export interface SnoozeTodayItemInput {
   readonly itemId: string;
-  readonly reason: string;
+  /** Optional since wave 2 (S4.7): blank or absent is `DEFAULT_SNOOZE_REASON`. */
+  readonly reason?: string | undefined;
   /**
    * The explicit instant a manual task comes back; 8.2 requires one and there is no
    * default. Not required for an automated task, which is paused until released.
@@ -154,8 +161,7 @@ export async function snoozeTodayItem(
   const actor = context.scope.actor;
   if (actor.kind !== 'user') return refuseToday('invalid_input');
 
-  const reason = input.reason.trim();
-  if (reason.length === 0) return refuseToday('snooze_reason_required');
+  const reason = input.reason?.trim() || DEFAULT_SNOOZE_REASON;
   if (reason.length > SNOOZE_REASON_MAX) return refuseToday('invalid_input');
   if (input.returnAt !== undefined && !Number.isFinite(Date.parse(input.returnAt))) {
     return refuseToday('invalid_input');
@@ -264,8 +270,8 @@ export async function snoozeTodayItem(
 export interface ReleasedTodayPause {
   readonly holdId: string;
   readonly releasedAt: string;
-  /** What the enrollment did next (4.3): resumed and shifted, still held, or sent to review. */
-  readonly resume: 'resume' | 'still_held' | 'review_required' | 'not_applicable';
+  /** What the enrollment did next (4.3): resumed and shifted, or still held. */
+  readonly resume: 'resume' | 'still_held' | 'not_applicable';
 }
 
 /**
@@ -276,8 +282,8 @@ export interface ReleasedTodayPause {
  * pause on the same work is out of reach of this control by construction — the
  * `source_event_kind` is the filter. The enrollment is then asked to resume in the
  * same transaction, which shifts its unexecuted steps by the union of the intervals
- * that blocked it, leaves it held if something else still does, or sends a pause
- * longer than seven days to review.
+ * that blocked it, or leaves it held if something else still does. A pause longer
+ * than seven days resumes like a short one (wave 2, S4.1).
  */
 export async function releaseTodayPause(
   context: RepositoryContext,

@@ -58,6 +58,11 @@ export type SequenceStopCondition = (typeof SEQUENCE_STOP_CONDITIONS)[number];
 
 export const STEP_NO_ANSWER_ACTIONS = ['advance', 'retry_call'] as const;
 
+/**
+ * `review_required` is only ever read now: an older release wrote it for a hold longer
+ * than seven days, and the scheduler resumes such an enrollment once its holds clear
+ * (wave 2, S4.1). @deprecated value `review_required` (remove after migration 0019).
+ */
 export const ENROLLMENT_STATES = ['active', 'review_required', 'completed', 'stopped'] as const;
 export type EnrollmentState = (typeof ENROLLMENT_STATES)[number];
 
@@ -240,7 +245,11 @@ export type EnrollmentsResponse = z.infer<typeof enrollmentsResponseSchema>;
 
 export const STEP_EXECUTION_STATES = ['pending', 'held', 'dispatched', 'completed', 'cancelled'] as const;
 
-/** `decideResume`'s three answers (`packages/domain/src/rules/holds.ts`). */
+/**
+ * `decideResume`'s answers (`packages/domain/src/rules/holds.ts`), `still_held` and
+ * `resume`, and `review_required`, which went with the seven-day review (wave 2, S4.1)
+ * and is never sent. @deprecated value `review_required` (remove after desktop 1.0.12).
+ */
 export const RESUME_DECISION_KINDS = ['still_held', 'review_required', 'resume'] as const;
 export type ResumeDecisionKind = (typeof RESUME_DECISION_KINDS)[number];
 

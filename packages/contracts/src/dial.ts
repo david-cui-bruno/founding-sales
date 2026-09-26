@@ -29,12 +29,14 @@ export const DIAL_HOLD_REFUSAL_CODES = [
   'handle_suppressed',
   'manual_suppression_review',
   'route_missing',
+  /** @deprecated never answered for a dial since wave 2 (S4.4): a phone is usable on entry. */
   'route_candidate',
   'route_invalid',
   'route_retired',
   'outside_calling_window',
   'posture_missing',
   'posture_overlapping',
+  /** @deprecated never answered since wave 2 (S4.2): a posture has no yearly expiry. */
   'posture_overdue',
   'scoped_pause',
   'restore_in_progress',
@@ -59,6 +61,7 @@ export const DIAL_REQUEST_REFUSAL_CODES = [
   'route_version_stale',
   'identity_missing',
   'identity_not_owned',
+  /** @deprecated never answered since wave 2 (S4.3): a number is attested when added. */
   'identity_unverified',
   'identity_disabled',
   'identity_shared_line_disabled',
@@ -136,8 +139,9 @@ export const callingIdentityDtoSchema = z.strictObject({
   disabledAt: instant.nullable(),
   /**
    * Whether this is the number the owner's Today cards dial from: the most recently
-   * attested of their verified, enabled numbers, chosen by the server so the Mac shows
-   * the choice rather than re-deriving it.
+   * added or attested of their numbers that are not retired (wave 2, S4.3: a number is
+   * attested when added, and one an older release left unverified is usable), chosen by
+   * the server so the Mac shows the choice rather than re-deriving it.
    */
   usedForCalls: z.boolean(),
   createdAt: instant,
@@ -395,6 +399,44 @@ export type CallLogDto = z.infer<typeof callLogDtoSchema>;
 
 const commandEnvelope = { commandId: commandIdSchema, clientVersion: semanticVersionSchema };
 
+/**
+ * `POST /dial/check` (wave 2, S4.5): is this firm callable now, and through which number.
+ * A read — no command envelope, no receipt, nothing written. `routeId` names the number
+ * the card would dial; without it the answer is about the firm alone.
+ */
+export const dialCheckRequestSchema = z.strictObject({
+  firmId: uuid,
+  routeId: uuid.optional(),
+});
+export type DialCheckRequest = z.infer<typeof dialCheckRequestSchema>;
+
+/**
+ * The advice: `callable`, and every reason that applies (not only the first), in 9.2's
+ * order. The Mac shows the reasons, opens `telUri` itself when the person presses Call,
+ * and logs the call afterwards with `POST /calls/log`, which needs no ticket.
+ */
+export const dialAdviceSchema = z.object({
+  firmId: uuid,
+  callable: z.boolean(),
+  reasons: z.array(dialRefusalCodeSchema),
+  routeId: uuid.nullable(),
+  e164: e164.nullable(),
+  telUri: z.string().regex(/^tel:\+[1-9][0-9]{7,14}$/u, 'a tel: URI for an E.164 number').nullable(),
+  firmTimeZone: z.string().max(64).nullable(),
+  firmLocalTime: z.string().max(5).nullable(),
+  at: instant,
+});
+export type DialAdvice = z.infer<typeof dialAdviceSchema>;
+
+/** `POST /dial/check`'s answer. */
+export const dialCheckResponseSchema = z.object({ advice: dialAdviceSchema });
+export type DialCheckResponse = z.infer<typeof dialCheckResponseSchema>;
+
+/**
+ * @deprecated (remove after desktop 1.0.12) — the ticket pair `/dial/authorize` and
+ * `/dial/consume` stays for desktops up to 1.0.11; a newer Mac asks `POST /dial/check`,
+ * opens `tel:` and logs the call (wave 2, S4.5).
+ */
 export const authorizeDialCommandSchema = z.strictObject({
   ...commandEnvelope,
   firmId: uuid,
@@ -405,6 +447,7 @@ export const authorizeDialCommandSchema = z.strictObject({
   callingIdentityId: uuid,
 });
 
+/** @deprecated (remove after desktop 1.0.12) — see `authorizeDialCommandSchema`. */
 export const consumeDialTicketCommandSchema = z.strictObject({
   ...commandEnvelope,
   ticketId: uuid,
@@ -560,28 +603,12 @@ export const scheduleCallbackCommandSchema = z.strictObject({
   dueAt: instant.optional(),
 });
 
-export const recordSuppressionCommandSchema = z.strictObject({
-  ...commandEnvelope,
-  scope: suppressionScopeSchema,
-  /** Required for a firm suppression; context for a handle one. */
-  firmId: uuid.optional(),
-  /** Required for a handle suppression: the raw number or address, canonicalized server-side. */
-  value: z.string().trim().min(3).max(320).optional(),
-  source: z.enum(['prospect_opt_out', 'prospect_do_not_call', 'salesperson_manual', 'import']),
-  reason: z.string().trim().min(1).max(500).optional(),
-});
-
-export const correctSuppressionCommandSchema = z.strictObject({
-  ...commandEnvelope,
-  eventId: z.string().min(1).max(200),
-});
-
-export const supersedeSuppressionCommandSchema = z.strictObject({
-  ...commandEnvelope,
-  eventId: z.string().min(1).max(200),
-  reason: adminSupersessionReasonSchema,
-});
-
+/**
+ * Record one state's posture with its statements ticked one by one.
+ * @deprecated (remove after desktop 1.0.12) — `allowCallingStatesCommandSchema` puts
+ * several states on the "OK to call" list with one confirmation (wave 2, S4.2 and D5).
+ * Still accepted for desktops up to 1.0.11; `reviewAt` is stored and never enforced.
+ */
 export const recordStatePostureCommandSchema = z.strictObject({
   ...commandEnvelope,
   state: z.string().regex(/^[A-Z]{2}$/u),
@@ -591,6 +618,29 @@ export const recordStatePostureCommandSchema = z.strictObject({
   confirmedStatements: z.array(z.string().min(1).max(80)).min(1),
   note: z.string().trim().min(1).max(1000).optional(),
 });
+
+/**
+ * `POST /postures/allow` (wave 2, S4.2 and D5's API half): put several states on the
+ * "OK to call" list at once. `confirmed` is a literal `true`, the one confirmation the
+ * founder gives for every state named, so no client records a posture without sending
+ * the statement; the server records every statement of `GET /postures/reference` as
+ * confirmed, the domain's citations and database time. A state already on the list is
+ * left alone. There is no review date and no expiry; revoking is `/postures/revoke`.
+ */
+export const allowCallingStatesCommandSchema = z.strictObject({
+  ...commandEnvelope,
+  states: z.array(z.string().regex(/^[A-Za-z]{2}$/u)).min(1).max(60),
+  confirmed: z.literal(true),
+  note: z.string().trim().max(1000).optional(),
+});
+
+/** What `POST /postures/allow` answers inside the command envelope. */
+export const allowCallingStatesResultSchema = z.object({
+  postures: z.array(statePostureViewSchema),
+  added: z.array(z.string().regex(/^[A-Z]{2}$/u)),
+  alreadyAllowed: z.array(z.string().regex(/^[A-Z]{2}$/u)),
+});
+export type AllowCallingStatesResult = z.infer<typeof allowCallingStatesResultSchema>;
 
 export const revokeStatePostureCommandSchema = z.strictObject({
   ...commandEnvelope,
@@ -623,7 +673,8 @@ export const completeCallbackCommandSchema = z.strictObject({
 });
 
 /**
- * Register a calling number (lane g60).
+ * Register a calling number (lane g60). Since wave 2 (S4.3) the number is attested as it
+ * is added: verified and enabled, with who and when, and usable for calls at once.
  *
  * The number travels as typed — trimmed, and at most 32 characters — and is
  * normalized by the domain, which strips spaces, dots, hyphens and parentheses after a
@@ -641,6 +692,11 @@ export const registerCallingIdentityCommandSchema = z.strictObject({
  * The attestation: "this is the number I place calls from". `attested` is a literal
  * `true` so that no client can verify a number without sending the statement; the
  * method recorded is decided by who sends it, never by the body.
+ *
+ * @deprecated (remove after desktop 1.0.12) — `POST /calling-identities/register` attests
+ * the number it adds (wave 2, S4.3), and no dial asks for an attestation. Still accepted
+ * for desktops up to 1.0.11: it attests a number an older release left unverified, and
+ * answers `existing` for any other.
  */
 export const attestCallingIdentityCommandSchema = z.strictObject({
   ...commandEnvelope,

@@ -5,9 +5,13 @@ import { repositoryContext, workspaceScope, type RepositoryContext } from '../..
 import { POSTURE_STATEMENT_KEYS, selectApplicablePosture } from '../../src/rules/statePosture.ts';
 import { CALLING_WINDOW_FLOOR } from '../../src/rules/callingWindow.ts';
 import {
+  allowCallingStates,
+  applicablePosture,
   currentCallingWindow,
+  databaseNow,
   evaluateConfiguredCallingWindow,
   listApplicableHolds,
+  listStatePostures,
   openPause,
   recordStatePosture,
   releasePause,
@@ -156,6 +160,53 @@ describe('scenario 25: zero, one and two applicable postures', () => {
         confirmedStatements: [...POSTURE_STATEMENT_KEYS],
       }),
     ).toEqual({ ok: false, reason: 'admin_only' });
+  });
+});
+
+describe('the "OK to call" list (wave 2, S4.2 and D5)', () => {
+  it('puts several states on the list in one command, with every statement confirmed and no end', async () => {
+    const allowed = await allowCallingStates(admin(), { states: ['ny', 'NJ', 'ny'], note: 'Checked both.' });
+    if (!allowed.ok) throw new Error(`expected the states, got ${allowed.reason}`);
+    expect(allowed.value.added).toEqual(['NY', 'NJ']);
+    expect(allowed.value.alreadyAllowed).toEqual([]);
+    for (const posture of allowed.value.postures) {
+      expect(posture.confirmedStatements).toEqual([...POSTURE_STATEMENT_KEYS].sort());
+      expect(posture.effectiveTo).toBeNull();
+      expect(posture.rulesRevision).toBe(2);
+    }
+    expect(await applicablePosture(salesperson(), 'NJ', await databaseNow(admin()))).toMatchObject({
+      decision: { kind: 'applies' },
+    });
+
+    // Pressing it again is harmless: a state already on the list is left as it was.
+    const again = await allowCallingStates(admin(), { states: ['NJ', 'PA'] });
+    if (!again.ok) throw new Error(`expected the states, got ${again.reason}`);
+    expect(again.value.added).toEqual(['PA']);
+    expect(again.value.alreadyAllowed).toEqual(['NJ']);
+    expect(again.value.postures.map(posture => posture.id)[0]).toBe(allowed.value.postures[1]?.id);
+  });
+
+  it('reads an old posture row whose review date passed as still in force', async () => {
+    await database.session.query(
+      `INSERT INTO state_postures (workspace_id, state, revision, effective_from, review_at, rules_revision,
+                                   confirmed_statements, confirmed_by_user_id)
+       VALUES ($1, 'VT', 1, TIMESTAMPTZ '2024-01-01 00:00:00+00', TIMESTAMPTZ '2025-01-01 00:00:00+00', 2,
+               ARRAY['businessToBusiness']::text[], $2)`,
+      [seeded.alpha.workspaceId, seeded.alpha.admin.userId],
+    );
+    const [old] = await listStatePostures(salesperson(), { state: 'VT' });
+    expect(old?.reviewAt).toBe('2025-01-01T00:00:00.000Z');
+    expect(await applicablePosture(salesperson(), 'VT', await databaseNow(admin()))).toMatchObject({
+      decision: { kind: 'applies' },
+    });
+    const allowed = await allowCallingStates(admin(), { states: ['VT'] });
+    expect(allowed.ok && allowed.value.alreadyAllowed).toEqual(['VT']);
+  });
+
+  it('is admin-only and refuses a state that is not one', async () => {
+    expect(await allowCallingStates(salesperson(), { states: ['CT'] })).toEqual({ ok: false, reason: 'admin_only' });
+    expect(await allowCallingStates(admin(), { states: ['CT', 'ZZ'] })).toEqual({ ok: false, reason: 'invalid_input' });
+    expect(await allowCallingStates(admin(), { states: [] })).toEqual({ ok: false, reason: 'invalid_input' });
   });
 });
 

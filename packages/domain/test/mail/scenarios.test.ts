@@ -840,10 +840,9 @@ describe('the Gmail watch (12.3, 13.3)', () => {
 /**
  * What the import tells 12.7's ramp (lane G15).
  *
- * G7-2 built `countDirectSend` and `recordDaySignal` and no caller. The counters they
- * write are the whole of `rampHealthFailure`'s evidence, so until this lane every day
- * was judged on zeros and `mailbox_send_days.direct_sent` was always zero however much
- * a salesperson sent by hand.
+ * G7-2 built `recordDaySignal` and no caller. The counters it writes are the whole of
+ * `rampHealthFailure`'s evidence, so until this lane every day was judged on zeros.
+ * (The direct-send counter is gone since wave 2: nothing read it.)
  *
  * Every instant below comes from the clock. The business date is read back from
  * PostgreSQL in the workspace's own zone, which is where `mailbox_send_days` keeps its
@@ -867,68 +866,18 @@ describe('the import feeds the reputation ramp (12.7)', () => {
     workspaceId: string,
     mailboxId: string,
     businessDate: string,
-  ): Promise<{ automated_sent: number; direct_sent: number; bounces: number; opt_outs: number } | undefined> => {
+  ): Promise<{ automated_sent: number; bounces: number; opt_outs: number } | undefined> => {
     const { rows } = await w.database.session.query<{
       automated_sent: number;
-      direct_sent: number;
       bounces: number;
       opt_outs: number;
     }>(
-      `SELECT automated_sent, direct_sent, bounces, opt_outs FROM mailbox_send_days
+      `SELECT automated_sent, bounces, opt_outs FROM mailbox_send_days
         WHERE workspace_id = $1 AND mailbox_id = $2 AND business_date = $3::date`,
       [workspaceId, mailboxId, businessDate],
     );
     return rows[0];
   };
-
-  it('counts an imported direct send against the day, once however often it is imported', async () => {
-    world = await createMailWorld();
-    const w = world;
-    await completeBaseline(w, w.alpha);
-    const context = w.systemContext(w.alpha.workspace.workspaceId);
-    const sentAt = Date.now();
-
-    w.alpha.messages.push(
-      fixtureMessage({
-        id: 'headroom1',
-        historyId: '1200',
-        from: w.alpha.address,
-        to: PROSPECT,
-        labelIds: ['SENT'],
-        internalDateEpochMilliseconds: sentAt,
-      }),
-    );
-
-    const first = await runMailSync(context, w.syncDeps(w.alpha), { mailboxId: w.alpha.mailboxId });
-    expect(first.directSendsCounted).toBe(1);
-    expect(first.automatedSendsRecognised).toBe(0);
-
-    const businessDate = await businessDateOfInstant(
-      w,
-      context.scope.workspaceId,
-      new Date(sentAt).toISOString(),
-    );
-    const counted = await day(w, context.scope.workspaceId, w.alpha.mailboxId, businessDate);
-    expect(counted?.direct_sent).toBe(1);
-    // 12.7: a direct send is never counted against the automated cap, because the cap
-    // is FSS's own restraint and a person writing their own email is not FSS.
-    expect(counted?.automated_sent).toBe(0);
-
-    // The same message again — a duplicate push, a recovery pass. `recordMessage`
-    // inserts nothing, so nothing is counted.
-    await w.database.session.query(
-      "UPDATE mailboxes SET history_id = '1199' WHERE workspace_id = $1 AND id = $2",
-      [context.scope.workspaceId, w.alpha.mailboxId],
-    );
-    const second = await runMailSync(context, w.syncDeps(w.alpha), { mailboxId: w.alpha.mailboxId });
-    expect(second.directSendsCounted).toBe(0);
-    const again = await day(w, context.scope.workspaceId, w.alpha.mailboxId, businessDate);
-    expect(again?.direct_sent).toBe(1);
-
-    // And nothing reached the other workspace's mailbox.
-    const betaDay = await day(w, w.beta.workspace.workspaceId, w.beta.mailboxId, businessDate);
-    expect(betaDay).toBeUndefined();
-  });
 
   it('recognises its own send by its fence, and neither counts it nor makes the firm manual', async () => {
     world = await createMailWorld();
@@ -965,9 +914,6 @@ describe('the import feeds the reputation ramp (12.7)', () => {
 
     const report = await runMailSync(context, w.syncDeps(w.alpha), { mailboxId: w.alpha.mailboxId });
     expect(report.automatedSendsRecognised).toBe(1);
-    // Counted once, at dispatch, by `countAutomatedSend`. A second count here would
-    // double every sequence email in the day's headroom.
-    expect(report.directSendsCounted).toBe(0);
     // 7.3 reserves manual mode for a *direct* send. Switching here would terminally
     // stop the enrollment that had just sent step one.
     expect(report.directSendsSwitchedToManual).toBe(0);

@@ -142,7 +142,6 @@ export const SEQUENCE_REFUSAL_CODES = [
   'execution_not_pending',
   'execution_wrong_channel',
   'still_held',
-  'review_required',
   'migration_unknown',
   'migration_not_approved',
   'migration_already_applied',

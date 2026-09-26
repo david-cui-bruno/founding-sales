@@ -340,6 +340,20 @@ describe('the administration surface', () => {
     expect(unknownKey.status).toBe(400);
   });
 
+  it('accepts a save with no note and records "Changed on the Mac" (D5)', async () => {
+    const saved = await call(
+      'POST',
+      '/settings/update',
+      adminToken,
+      command({ settingKey: 'business_time_zone', value: { timeZone: 'America/Phoenix' } }),
+    );
+    expect(saved.status).toBe(200);
+    const history = await call('POST', '/settings/history', adminToken, { settingKey: 'business_time_zone' });
+    const parsed = settingHistoryResponseSchema.parse(history.body);
+    expect(parsed.versions[0]?.changeNote).toBe('Changed on the Mac');
+    expect(parsed.current?.version).toBe(3);
+  });
+
   it('refuses the two retired slices as malformed requests', async () => {
     for (const settingKey of ['alert_thresholds', 'client_version_range']) {
       const history = await call('POST', '/settings/history', adminToken, { settingKey });
@@ -382,14 +396,10 @@ describe('the administration surface', () => {
     expect(answer.status).toBe(200);
     // The audience is decided from the scope and never taken from the request.
     expect(answer.body['audience']).toBe('assigned');
-    // Every lane has landed, so every figure is real. The one thing still
-    // unavailable is the segment breakdown, and it is unavailable because no table
-    // in the build has a segment rather than because a lane is late.
-    expect(answer.body['sending']).toMatchObject({ available: true, sent: 0 });
+    // Every figure is real. Sending carries the two counts the Mac shows (S6).
+    expect(answer.body['sending']).toEqual({ available: true, sent: 0, held: 0 });
     expect(answer.body['enrollments']).toMatchObject({ available: true, started: 0 });
     expect(answer.body['classifier']).toMatchObject({ available: true, callsAttempted: 0 });
-    const sending = answer.body['sending'] as { bySegment: unknown };
-    expect(sending.bySegment).toMatchObject({ available: false, owner: 'unassigned' });
 
     expect((await call('POST', '/dashboard', salespersonToken, {})).status).toBe(400);
     expect(

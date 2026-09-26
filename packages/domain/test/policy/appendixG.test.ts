@@ -185,12 +185,13 @@ describe('scenario 17: no replay ever yields a second allow', () => {
     };
     expect(await authorizeDial(context, input)).toMatchObject({ allowed: true });
 
-    // (a) posture expiry: review date in the past.
+    // (a) a review date in the past no longer expires the posture (wave 2, S4.2): an old
+    // row is read, and the dial is still allowed.
     await database.session.query(
       "UPDATE state_postures SET review_at = TIMESTAMPTZ '2026-02-01 00:00:00+00' WHERE workspace_id = $1",
       [seeded.beta.workspaceId],
     );
-    expect(await authorizeDial(context, input)).toEqual({ allowed: false, reason: 'posture_overdue' });
+    expect(await authorizeDial(context, input)).toMatchObject({ allowed: true });
     await database.session.query(
       "UPDATE state_postures SET review_at = TIMESTAMPTZ '2027-01-01 00:00:00+00' WHERE workspace_id = $1",
       [seeded.beta.workspaceId],
@@ -222,6 +223,27 @@ describe('scenario 17: no replay ever yields a second allow', () => {
     });
     expect(suppression.ok).toBe(true);
     expect(await authorizeDial(context, input)).toEqual({ allowed: false, reason: 'firm_suppressed' });
+  });
+});
+
+describe('wave 2 (S4.3, S4.4): what an older release stored is dialled as it stands', () => {
+  it('authorizes a phone route stored as a candidate with no evidence, from a calling number never attested', async () => {
+    const { rows: route } = await database.session.query<{ id: string; version: number }>(
+      `INSERT INTO phone_routes (workspace_id, firm_id, contact_id, e164, source, retrieved_at)
+       VALUES ($1, $2, $3, '+14015550188', 'import', now()) RETURNING id, version`,
+      [seeded.alpha.workspaceId, crm.alpha.firmId, crm.alpha.contactId],
+    );
+    const { rows: identity } = await database.session.query<{ id: string }>(
+      "INSERT INTO calling_identities (workspace_id, owner_user_id, e164) VALUES ($1, $2, '+14015550189') RETURNING id",
+      [seeded.alpha.workspaceId, seeded.alpha.salesperson.userId],
+    );
+    const decision = await authorizeDial(salespersonContext(), {
+      ...dialInput(),
+      routeId: route[0]?.id ?? '',
+      routeVersion: Number(route[0]?.version ?? 1),
+      callingIdentityId: identity[0]?.id ?? '',
+    });
+    expect(decision).toMatchObject({ allowed: true, evidence: { e164: '+14015550188' } });
   });
 });
 

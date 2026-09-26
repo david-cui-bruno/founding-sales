@@ -9,7 +9,7 @@ import {
   listStepExecutions,
   previewResume,
   proposeEnrollmentMigration,
-  resumeAfterReview,
+  resumeEnrollment,
   stopEnrollments,
 } from '@fss/domain/sequences';
 import {
@@ -173,9 +173,11 @@ export async function routeEnrollments(
     });
   }
 
+  // Installed desktops up to 1.0.11 confirm a review here. Since wave 2 (S4.1) a long
+  // hold resumes on its own, so this is the same resume the scheduler runs, asked now.
   if (request.path === '/enrollments/resume') {
     return await runPolicyCommand(deps, enrollmentSchema, 'resume_enrollment', async (context, body) =>
-      await resumeAfterReview(context, { enrollmentId: body.enrollmentId }),
+      await resumeEnrollment(context, { enrollmentId: body.enrollmentId }),
     );
   }
 

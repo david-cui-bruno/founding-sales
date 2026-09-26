@@ -49,6 +49,10 @@ import type { StepChannel } from './types.ts';
  *   4.3 requires (C05). A held step no hold row explains — a route that is missing, a
  *   template not yet approved, coverage that went stale — is asked again when its
  *   `not_before` passes, which `holdExecution` pushes out by the reason's interval.
+ * * **Work of an enrollment an older release left in `review_required`** (wave 2,
+ *   S4.1), on the same terms as an active one's. A long hold no longer waits for a
+ *   person, and the handler's resume evaluation is what moves such an enrollment back
+ *   to `active` — once its holds have cleared, and not before.
  * * **Dispatched work that has sat for `DISPATCH_RECOVERY_GRACE_SECONDS`** (C03). The
  *   step's transaction marks the execution `dispatched` in the same commit that
  *   prepares its fence, and the claim happens after; a worker that dies in between
@@ -172,7 +176,7 @@ export async function listStepWakes(
        JOIN sequence_enrollments n
          ON n.workspace_id = e.workspace_id AND n.id = e.enrollment_id
       WHERE n.ended_at IS NULL
-        AND n.state = 'active'
+        AND n.state IN ('active', 'review_required')
         AND (
               (e.state IN ('pending', 'held')
                AND e.due_at <= $1::timestamptz

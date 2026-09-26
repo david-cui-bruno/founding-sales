@@ -9,17 +9,13 @@ export {
 
 export {
   unavailableDashboardSources,
-  type Breakdown,
   type ClassifierFacts,
   type DashboardAudience,
   type DashboardSources,
   type DashboardWindow,
-  type DomainPosture,
   type EnrollmentFacts,
   type KeyedCount,
-  type RampPosture,
   type SendingFacts,
-  type SendingPosture,
   type Unavailable,
 } from './sources.ts';
 

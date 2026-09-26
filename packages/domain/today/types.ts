@@ -64,6 +64,8 @@ export const TODAY_REFUSAL_CODES = [
   'firm_unknown',
   'item_unknown',
   'item_not_open',
+  // @deprecated (remove after desktop 1.0.12): no longer produced since S4.7 made the
+  // reason optional; kept so desktop 1.0.11's copy for it still has a code to name.
   'snooze_reason_required',
   'snooze_return_not_future',
   'snooze_unknown',

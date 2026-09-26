@@ -5,7 +5,7 @@ import { readSetting } from '../settings/store.ts';
 import { firstSuppressed } from '../suppression/effective.ts';
 import { localParts } from '../src/index.ts';
 import { businessDateOf } from '../today/snapshots.ts';
-import { dailyCapInForce, ensureRamp, openSendDay, type RampRow, type SendDayRow } from './ramp.ts';
+import { effectiveDailyCap, ensureRamp, openSendDay, type RampRow, type SendDayRow } from './ramp.ts';
 import { decideStepPermission, dispatchHolidayCalendar, insideSendingWindow } from './stepPermission.ts';
 import { authenticationPasses, readPrimarySendingDomain, type SendingDomainRow } from './domainGuard.ts';
 import { refuseSend, acceptSend, type SendResult } from './types.ts';
@@ -206,11 +206,10 @@ export async function decideSend(
   // held by yesterday's cap and sent today is today's send, and charging it to
   // yesterday would both spend a closed day and leave today's allowance untouched.
   //
-  // The cap is the one in force *now* (lane g87, S06): a stored admin raise lifts it
-  // only while the mailbox has finished the schedule and kept its last ten sending
-  // days healthy, and otherwise the schedule governs today.
+  // The cap in force now: the schedule, or the admin's raise as written (wave 2, S4.6),
+  // lowered by the admin's lowering, never above 100.
   const ramp = await ensureRamp(context, mailbox.id);
-  const cap = await dailyCapInForce(context, ramp);
+  const cap = effectiveDailyCap(ramp);
   const businessDate = await businessDateOf(context, now.toISOString());
   const day = await openSendDay(context, { mailboxId: mailbox.id, businessDate, cap });
   if (day.automatedSent >= cap) {

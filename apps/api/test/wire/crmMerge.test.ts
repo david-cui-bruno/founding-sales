@@ -4,9 +4,10 @@ import { mayMutate, mergeRefusalSchema, wireDrift } from '@fss/contracts';
 import { CONTAINER_CLIENT_VERSIONS } from '../../src/bootstrap/main.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from '../support/authFixture.ts';
 import { issueSessionFor } from '../support/sessionFixture.ts';
+import { seedFirm } from '../support/crmSeed.ts';
 import { conflictsOf, createCrmBridge } from '../../../desktop/src/main/crmBridge.ts';
 import { MERGE_HEADING, buildFirmWorkspaceView, mergeSubmittable } from '../../../desktop/src/renderer/firmWorkspaceView.ts';
-import { DESKTOP_VERSION_UNDER_TEST, desktopClient, routeAnswer } from '../support/wireThrough.ts';
+import { DESKTOP_VERSION_UNDER_TEST, desktopClient } from '../support/wireThrough.ts';
 
 /**
  * A refused merge reaches the conflict screen (release.md 8.0aj; lane g78, audit item
@@ -37,16 +38,8 @@ describe('8.0aj: a refused merge opens the conflict screen (lane g78)', () => {
   let targetId = '';
   let sourceId = '';
 
-  const command = (extra: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> => ({
-    commandId: randomUUID(),
-    clientVersion: CURRENT_CLIENT_VERSION,
-    ...extra,
-  });
-  const created = async (fields: Readonly<Record<string, unknown>>): Promise<string> => {
-    const answer = await routeAnswer(fixture, 'POST', '/firms/create', adminToken, command(fields));
-    expect(answer.status).toBe(200);
-    return String((answer.body as { result: { id: string } }).result.id);
-  };
+  const created = async (fields: { name: string; website: string; locality?: string }): Promise<string> =>
+    await seedFirm(fixture, fields);
 
   const bridge = () =>
     createCrmBridge({

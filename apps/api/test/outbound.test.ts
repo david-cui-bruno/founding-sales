@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { outboundStatusResponseSchema, wireDrift } from '@fss/contracts';
+import { outboundStatusResponseSchema, overrideMailboxRaiseResultSchema, wireDrift } from '@fss/contracts';
 import { dispatch, type ApiRequest } from '../src/server.ts';
 import {
   createAuthFixture,
@@ -79,7 +79,7 @@ describe('the outbound admin routes', () => {
       '/outbound/resolve',
       '/outbound/authentication',
       '/outbound/cap',
-      '/outbound/domain',
+      '/outbound/cap/override',
       '/outbound/status',
     ]) {
       expect((await post(path, null, command())).status, path).toBe(401);
@@ -214,6 +214,32 @@ describe('the outbound admin routes', () => {
     // Clearing only the lowering leaves the raise where it was: absent is not null.
     const restored = await post('/outbound/cap', adminToken, command({ mailboxId, lowerTo: null }));
     expect((restored.body['result'] as { effectiveCap: number }).effectiveCap).toBe(75);
+  });
+
+  it('overrides the raise lock up to 100 with a warning, and the status reads the cap in force (wave 2, S4.6)', async () => {
+    const mailbox = await fixture.db.query<{ id: string }>(
+      `INSERT INTO mailboxes (workspace_id, owner_user_id, email_address)
+       VALUES ($1, $2, $3) RETURNING id`,
+      [fixture.alpha.workspaceId, fixture.alpha.admin.userId, `admin.cap@${fixture.hostedDomain}`],
+    );
+    const mailboxId = mailbox.rows[0]?.id ?? '';
+
+    const raised = await post('/outbound/cap/override', adminToken, command({ mailboxId, raiseTo: 100 }));
+    expect(raised.status).toBe(200);
+    expect(wireDrift(overrideMailboxRaiseResultSchema, raised.body['result'])).toEqual([]);
+    expect(raised.body['result']).toMatchObject({
+      mailboxId,
+      effectiveCap: 100,
+      raisedDailyCap: 100,
+      healthySendingDays: 0,
+      warning: 'ramp_not_settled',
+    });
+    const status = await post('/outbound/status', adminToken, { mailboxId });
+    expect((status.body['ramp'] as { effectiveCap: number }).effectiveCap).toBe(100);
+
+    expect((await post('/outbound/cap/override', adminToken, command({ mailboxId, raiseTo: 101 }))).status).toBe(400);
+    const cleared = await post('/outbound/cap/override', adminToken, command({ mailboxId, raiseTo: null }));
+    expect(cleared.body['result']).toMatchObject({ effectiveCap: 5, raisedDailyCap: null, warning: null });
   });
 
   it('12.5: refuses to resolve a fence that is not unknown_terminal', async () => {

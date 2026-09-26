@@ -6,6 +6,7 @@ import { openHold, releaseHold } from '@fss/domain/policy';
 import { dispatch, type ApiRequest } from '../src/server.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
+import { seedContact, seedFirm } from './support/crmSeed.ts';
 
 /**
  * The two endpoints lane g88 added, through the real dispatcher: the resume review and
@@ -63,19 +64,19 @@ describe('lane g88 through the API', () => {
     adminToken = (await issueSessionFor(fixture, fixture.alpha, fixture.alpha.admin)).accessToken;
     salespersonToken = (await issueSessionFor(fixture, fixture.alpha, fixture.alpha.salesperson)).accessToken;
 
-    const firm = await post(
-      '/firms/create',
-      adminToken,
-      command({ name: 'Linden Test Advisors', regionCode: 'RI', postalCode: '02903', assignedUserId: fixture.alpha.salesperson.userId }),
-    );
-    firmId = String(result(firm)['id']);
+    firmId = await seedFirm(fixture, {
+      name: 'Linden Test Advisors',
+      regionCode: 'RI',
+      postalCode: '02903',
+      assignedUserId: fixture.alpha.salesperson.userId,
+    });
     await fixture.db.query(
       `UPDATE firms SET time_zone = 'America/New_York', time_zone_confidence = 'high',
               time_zone_source = 'postal', time_zone_rule_version = 'firm-zone.1'
         WHERE workspace_id = $1 AND id = $2`,
       [fixture.alpha.workspaceId, firmId],
     );
-    contactId = String(result(await post('/contacts/create', salespersonToken, command({ firmId, fullName: 'Rowan Placeholder', title: 'Principal' })))['id']);
+    contactId = await seedContact(fixture, { firmId, fullName: 'Rowan Placeholder', title: 'Principal' });
     const opportunityId = String(result(await post('/opportunities/open', salespersonToken, command({ firmId })))['id']);
 
     const signOff = 'Sam Example\nCallie';
@@ -136,7 +137,8 @@ describe('lane g88 through the API', () => {
     expect(answer.status).toBe(200);
     expect(wireDrift(resumePreviewResponseSchema, answer.body)).toEqual([]);
     const { preview } = resumePreviewResponseSchema.parse(answer.body);
-    expect(preview.kind).toBe('review_required');
+    // A long hold resumes on its own since wave 2 (S4.1); the review says so.
+    expect(preview.kind).toBe('resume');
     expect(preview.steps).toHaveLength(1);
     const moved = Date.parse(preview.steps[0]?.proposedDueAt ?? '') - Date.parse(preview.steps[0]?.dueAt ?? '');
     expect(moved / 86_400_000).toBeGreaterThan(8.9);
@@ -155,14 +157,23 @@ describe('lane g88 through the API', () => {
     expect((await post('/enrollments/resume/preview', salespersonToken, { enrollmentId: randomUUID() })).status).toBe(404);
   });
 
-  it('confirms a captured phone number as a command, and refuses an email address at the door', async () => {
+  it('adds a captured phone number usable at once (wave 2, S4.4)', async () => {
     const added = await post(
       '/contacts/routes/add',
       salespersonToken,
-      command({ firmId, contactId, routeKind: 'phone', value: '+14015550141', source: 'import' }),
+      command({ firmId, contactId, routeKind: 'phone', value: '+14015550142', source: 'import' }),
     );
-    const routeId = String(result(added)['id']);
-    expect(result(added)['eligibility']).toBe('candidate');
+    expect(added.status).toBe(200);
+    expect([result(added)['eligibility'], result(added)['version']]).toEqual(['usable', 1]);
+  });
+
+  it('confirms a number an older release stored as a candidate, as a command, and refuses an email address at the door', async () => {
+    const { rows } = await fixture.db.query<{ id: string }>(
+      `INSERT INTO phone_routes (workspace_id, firm_id, contact_id, e164, source, retrieved_at)
+       VALUES ($1, $2, $3, '+14015550141', 'import', now()) RETURNING id`,
+      [fixture.alpha.workspaceId, firmId, contactId],
+    );
+    const routeId = rows[0]?.id ?? '';
 
     const stale = await post('/contacts/routes/confirm', salespersonToken, command({ routeKind: 'phone', routeId, routeVersion: 2 }));
     expect(stale.status).toBe(409);

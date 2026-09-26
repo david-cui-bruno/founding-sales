@@ -12,6 +12,7 @@ import {
 import { CONTAINER_CLIENT_VERSIONS } from '../../src/bootstrap/main.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from '../support/authFixture.ts';
 import { issueSessionFor } from '../support/sessionFixture.ts';
+import { seedContact, seedFirm } from '../support/crmSeed.ts';
 import { createSequenceBridge } from '../../../desktop/src/main/sequenceBridge.ts';
 import { sequenceScreen } from '../../../desktop/src/renderer/sequenceView.ts';
 import {
@@ -76,11 +77,7 @@ describe('8.0aj: the sequence editor reads a populated version and its enrollmen
   const post = async (path: string, token: string, body: Readonly<Record<string, unknown>>) =>
     await routeAnswer(fixture, 'POST', path, token, body);
 
-  const contact = async (fullName: string): Promise<string> => {
-    const created = await post('/contacts/create', salespersonToken, command({ firmId, fullName }));
-    expect(created.status).toBe(200);
-    return String(result(created)['id']);
-  };
+  const contact = async (fullName: string): Promise<string> => await seedContact(fixture, { firmId, fullName });
 
   const bridgeFor = (token: string, role: 'admin' | 'salesperson') =>
     createSequenceBridge({
@@ -94,13 +91,12 @@ describe('8.0aj: the sequence editor reads a populated version and its enrollmen
     salespersonToken = (await issueSessionFor(fixture, fixture.alpha, fixture.alpha.salesperson, { deviceLabel: 'Sales Mac' }))
       .accessToken;
 
-    const firm = await post(
-      '/firms/create',
-      adminToken,
-      command({ name: 'Northwind Test Holdings', regionCode: 'RI', postalCode: '02903', assignedUserId: fixture.alpha.salesperson.userId }),
-    );
-    expect(firm.status).toBe(200);
-    firmId = String(result(firm)['id']);
+    firmId = await seedFirm(fixture, {
+      name: 'Northwind Test Holdings',
+      regionCode: 'RI',
+      postalCode: '02903',
+      assignedUserId: fixture.alpha.salesperson.userId,
+    });
     await fixture.db.query(
       `UPDATE firms SET time_zone = 'America/New_York', time_zone_confidence = 'high',
               time_zone_source = 'postal', time_zone_rule_version = 'firm-zone.1'

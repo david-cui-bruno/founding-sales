@@ -13,6 +13,7 @@ import { localNoopSuppressionJournal } from '../src/journal/index.ts';
 import { dispatch, type ApiRequest } from '../src/server.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
+import { seedContact, seedFirm } from './support/crmSeed.ts';
 
 /**
  * The Today endpoints, through the real dispatcher with real sessions
@@ -123,16 +124,8 @@ describe('the Today routes', () => {
       })
     ).accessToken;
 
-    const created = await post(
-      '/firms/create',
-      adminToken,
-      command({ name: 'Northwind Test Holdings', regionCode: 'RI', assignedUserId: assigneeUserId }),
-    );
-    expect(created.status).toBe(200);
-    firmId = String(resultOf(created)['id']);
-    const contact = await post('/contacts/create', assigneeToken, command({ firmId, fullName: 'Dana Example' }));
-    expect(contact.status).toBe(200);
-    contactId = String(resultOf(contact)['id']);
+    firmId = await seedFirm(fixture, { name: 'Northwind Test Holdings', regionCode: 'RI', assignedUserId: assigneeUserId });
+    contactId = await seedContact(fixture, { firmId, fullName: 'Dana Example' });
 
     const clock = await fixture.db.query<{ now: Date }>('SELECT now() AS now');
     const now = (clock.rows[0]?.now ?? new Date()).toISOString();
@@ -270,11 +263,14 @@ describe('the Today routes', () => {
     expect(rows[0]?.count).toBe('1');
   });
 
-  it('refuses a snooze with no reason before it reaches the domain at all', async () => {
+  it('takes a snooze with no reason or a blank one to the domain (S4.7: the reason is optional)', async () => {
     const returnAt = new Date(Date.now() + 2 * 86_400_000).toISOString();
-    expect(
-      (await post('/today/snooze', assigneeToken, command({ itemId: manualItemId, reason: '  ', returnAt }))).status,
-    ).toBe(400);
+    // The task is already snoozed, so the domain answers; the shape check no longer refuses.
+    for (const body of [command({ itemId: manualItemId, returnAt }), command({ itemId: manualItemId, reason: '  ', returnAt })]) {
+      const answer = await post('/today/snooze', assigneeToken, body);
+      expect(answer.status).toBe(409);
+      expect(answer.body['reason']).toBe('item_not_open');
+    }
   });
 
   it('holds an automated send rather than snoozing it, and the server decides which', async () => {

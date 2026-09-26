@@ -150,7 +150,6 @@ export {
 export {
   holdsAffectingEnrollment,
   previewResume,
-  resumeAfterReview,
   resumeEnrollment,
   type ResumeOutcome,
   type ResumePreview,

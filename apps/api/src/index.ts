@@ -33,6 +33,4 @@ export {
 export { apiRouteModules } from './routes/modules.ts';
 export { DEFAULT_UPGRADE_URL, type RoutingOptions } from './routes/types.ts';
 export { routeAuth } from './routes/auth.ts';
-export { routeAdminMemberships } from './routes/admin/memberships.ts';
-export { routeAdminDevices } from './routes/admin/devices.ts';
 export * from './auth/index.ts';

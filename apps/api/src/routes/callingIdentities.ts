@@ -29,8 +29,8 @@ export const CALLING_IDENTITY_PATHS: readonly string[] = [
 /**
  * A salesperson's own calling number (specification 9.1; lane g60).
  *
- * 9.2's second step refuses every dial whose calling identity is not "active, verified
- * and owned by the actor", and until this module nothing could make one. Four
+ * 9.2's second step refuses every dial whose calling identity is not the actor's own and
+ * active, and until this module nothing could make one. Four
  * endpoints, in the dial family and on its shared helper, so every mutation carries
  * the 5.3 envelope and its receipt commits with the row:
  *
@@ -39,10 +39,11 @@ export const CALLING_IDENTITY_PATHS: readonly string[] = [
  *     (`docs/decisions/g3b-reads-are-posts.md` applies to requests that would put a
  *     prospect's data in an access log; this one has none).
  *   * `POST /calling-identities/register` — any active member, for themselves; an
- *     admin, for any active member.
- *   * `POST /calling-identities/attest` — the owner's statement that this is the number
- *     they place calls from, or an admin's on their behalf. The body must carry
- *     `attested: true`; the method recorded is decided by who sends it.
+ *     admin, for any active member. Since wave 2 (S4.3) the number is attested as it is
+ *     added, and usable for calls at once.
+ *   * `POST /calling-identities/attest` — deprecated (remove after desktop 1.0.12), kept
+ *     for desktops up to 1.0.11: attests a number an older release left unverified, and
+ *     answers `existing` for any other. The body must carry `attested: true`.
  *   * `POST /calling-identities/disable` — retire a number. The row stays.
  *
  * No route decides who may do what: the domain command does, from the scope, in the

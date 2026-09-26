@@ -12,6 +12,7 @@ import { createApiServer, dispatch, refusalCodeOf, type ApiRequest } from '../sr
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
 import { testRequestPool } from './support/poolFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';
+import { seedContact, seedFirm } from './support/crmSeed.ts';
 
 /**
  * The calling-number endpoints, through the real dispatcher with real sessions
@@ -116,17 +117,14 @@ describe('the calling-number routes', () => {
 
     // A firm assigned to the salesperson, with a usable phone route, a resolved zone
     // and a posture: everything 9.2 needs except the calling identity.
-    const created = await post(
-      '/firms/create',
-      adminToken,
-      command({ name: 'Northwind Test Holdings', regionCode: 'RI', postalCode: '02903', assignedUserId: salespersonUserId }),
-    );
-    expect(created.status).toBe(200);
-    firmId = String(resultOf(created)['id']);
+    firmId = await seedFirm(fixture, {
+      name: 'Northwind Test Holdings',
+      regionCode: 'RI',
+      postalCode: '02903',
+      assignedUserId: salespersonUserId,
+    });
     expect((await post('/firms/resolve-zone', adminToken, command({ firmId }))).status).toBe(200);
-    const contact = await post('/contacts/create', salespersonToken, command({ firmId, fullName: 'Dana Example' }));
-    expect(contact.status).toBe(200);
-    contactId = String(resultOf(contact)['id']);
+    contactId = await seedContact(fixture, { firmId, fullName: 'Dana Example' });
     const route = await post(
       '/contacts/routes/add',
       salespersonToken,
@@ -197,7 +195,7 @@ describe('the calling-number routes', () => {
     ).toBe(400);
   });
 
-  it('takes a salesperson from no Call button to an authorized dial, through these routes alone', async () => {
+  it('takes a salesperson from no Call button to an authorized dial with one registration (wave 2, S4.3)', async () => {
     // Where production was: no number, and a card with nothing to call from.
     expect((await send('GET', '/calling-identities', salespersonToken)).body).toEqual({ identities: [] });
     expect(await expandedIdentity()).toBeNull();
@@ -212,46 +210,19 @@ describe('the calling-number routes', () => {
     // The Mac reads a calling-number change with `@fss/contracts`' schema since lane g78.
     expect(wireDrift(callingIdentityChangeResultSchema, resultOf(registered))).toEqual([]);
     const identity = identityOf(registered);
+    // Attested as it is added: verified and enabled, with who and how.
     expect(identity).toMatchObject({
       ownerUserId: salespersonUserId,
       e164: '+14015550150',
       label: 'Mobile',
-      verificationStatus: 'unverified',
-      enabled: false,
-      usedForCalls: false,
-    });
-    // Registered is not verified: still no Call button, and the dial is refused at step 2.
-    expect(await expandedIdentity()).toBeNull();
-    const early = await post(
-      '/dial/authorize',
-      salespersonToken,
-      command({ firmId, contactId, routeId, routeVersion, callingIdentityId: identity.id }),
-    );
-    expect(early.status).toBe(409);
-    expect(early.body['reason']).toBe('identity_unverified');
-
-    const attestCommand = command({ identityId: identity.id, attested: true });
-    const attested = await post('/calling-identities/attest', salespersonToken, attestCommand);
-    expect(attested.status, JSON.stringify(attested.body)).toBe(200);
-    expect(wireDrift(callingIdentityChangeResultSchema, resultOf(attested))).toEqual([]);
-    expect(identityOf(attested)).toMatchObject({
       verificationStatus: 'verified',
       enabled: true,
       verifiedByUserId: salespersonUserId,
       verificationMethod: 'owner_attestation',
       usedForCalls: true,
     });
-    // A retried press is the same command: the receipt answers, nothing is attested twice.
-    const replay = await post('/calling-identities/attest', salespersonToken, attestCommand);
-    expect(replay.status).toBe(200);
-    expect(replay.body['replayed']).toBe(true);
-    const audits = await fixture.db.query<{ count: string }>(
-      "SELECT count(*)::text AS count FROM audit_events WHERE action = 'calling_identity.attested' AND subject_id = $1",
-      [identity.id],
-    );
-    expect(audits.rows[0]?.count).toBe('1');
 
-    // The card now carries the number, and 9.2 gets past its second step.
+    // The card carries the number at once, and 9.2 gets past its second step.
     expect(await expandedIdentity()).toBe(identity.id);
     const dial = await post(
       '/dial/authorize',
@@ -266,6 +237,22 @@ describe('the calling-number routes', () => {
       expect(dial.status).toBe(409);
       expect(dial.body['reason']).toBe('outside_calling_window');
     }
+
+    // Desktop 1.0.11 still presses Attest: the deprecated route answers `existing`, and a
+    // retried press is the same command, so nothing is attested twice.
+    const attestCommand = command({ identityId: identity.id, attested: true });
+    const attested = await post('/calling-identities/attest', salespersonToken, attestCommand);
+    expect(attested.status, JSON.stringify(attested.body)).toBe(200);
+    expect(wireDrift(callingIdentityChangeResultSchema, resultOf(attested))).toEqual([]);
+    expect(resultOf(attested)['outcome']).toBe('existing');
+    const replay = await post('/calling-identities/attest', salespersonToken, attestCommand);
+    expect(replay.status).toBe(200);
+    expect(replay.body['replayed']).toBe(true);
+    const audits = await fixture.db.query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM audit_events WHERE action = 'calling_identity.attested' AND subject_id = $1",
+      [identity.id],
+    );
+    expect(audits.rows[0]?.count).toBe('0');
 
     const listed = callingIdentityListSchema.parse((await send('GET', '/calling-identities', salespersonToken)).body);
     expect(listed.identities.map(entry => [entry.id, entry.usedForCalls])).toEqual([[identity.id, true]]);
@@ -352,7 +339,7 @@ describe('the calling-number routes', () => {
   it('logs a refusal with the code its body carries, over the real server, and never the number typed (lane g69)', async () => {
     // Production logged `POST /calling-identities/register → 409` on 25 September 2026
     // and nothing else, and a 409 here is any of five refusals. The line now carries
-    // the body's code beside the status the Refusals metric counts by.
+    // the body's code beside the status.
     const log = recordingLogger();
     // The server takes connections, not a session (lane g75): a pool over this file's database.
     const pool = testRequestPool(fixture.database);

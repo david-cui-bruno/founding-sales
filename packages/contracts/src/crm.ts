@@ -189,53 +189,10 @@ export type PipelineStageDto = z.infer<typeof pipelineStageDtoSchema>;
 
 const commandEnvelope = { commandId: commandIdSchema, clientVersion: semanticVersionSchema };
 
-export const createFirmCommandSchema = z.strictObject({
-  ...commandEnvelope,
-  name: firmNameSchema,
-  website: websiteSchema.optional(),
-  addressLine: z.string().trim().min(1).max(300).optional(),
-  locality: z.string().trim().min(1).max(120).optional(),
-  regionCode: regionCodeSchema.optional(),
-  postalCode: postalCodeSchema.optional(),
-  countryCode: regionCodeSchema.optional(),
-  assignedUserId: uuid.optional(),
-  externalId: z.string().trim().min(1).max(320).optional(),
-});
-
-export const updateFirmCommandSchema = z.strictObject({
-  ...commandEnvelope,
-  firmId: uuid,
-  patch: z.strictObject({
-    name: firmNameSchema.optional(),
-    website: websiteSchema.nullable().optional(),
-    addressLine: z.string().trim().min(1).max(300).nullable().optional(),
-    locality: z.string().trim().min(1).max(120).nullable().optional(),
-    regionCode: regionCodeSchema.nullable().optional(),
-    postalCode: postalCodeSchema.nullable().optional(),
-    countryCode: regionCodeSchema.optional(),
-  }),
-});
-
-export const reassignFirmCommandSchema = z.strictObject({
-  ...commandEnvelope,
-  firmId: uuid,
-  toUserId: uuid,
-  reason: reasonSchema.optional(),
-});
-
 export const resolveFirmZoneCommandSchema = z.strictObject({
   ...commandEnvelope,
   firmId: uuid,
   recordedZone: ianaTimeZone.optional(),
-});
-
-export const createContactCommandSchema = z.strictObject({
-  ...commandEnvelope,
-  firmId: uuid,
-  fullName: contactNameSchema,
-  title: z.string().trim().min(1).max(200).optional(),
-  isPrimary: z.boolean().optional(),
-  externalId: z.string().trim().min(1).max(320).optional(),
 });
 
 export const updateContactCommandSchema = z.strictObject({
@@ -274,6 +231,10 @@ export const verifyRouteCommandSchema = z.strictObject({
  * is the whole of that rule on the wire, and `docs/decisions/g88-founder-authoring-and-review.md`
  * says why an email address is not confirmed by hand. `routeVersion` is the version the
  * person was looking at; a route that has moved since is refused `route_version_stale`.
+ *
+ * @deprecated (remove after desktop 1.0.12) — a phone number is usable on entry since
+ * wave 2 (S4.4), and a dial accepts one an older release stored as a candidate. Still
+ * accepted for desktops up to 1.0.11, which offer "Confirm this number" for such a row.
  */
 export const confirmRouteCommandSchema = z.strictObject({
   ...commandEnvelope,
@@ -317,30 +278,11 @@ export const changeStageCommandSchema = z.strictObject({
   reason: reasonSchema.optional(),
 });
 
-export const reopenOpportunityCommandSchema = z.strictObject({
-  ...commandEnvelope,
-  firmId: uuid,
-  reason: reasonSchema,
-});
-
-export const setManualCommandSchema = z.strictObject({
-  ...commandEnvelope,
-  opportunityId: uuid,
-  reason: reasonSchema,
-});
-
 export const mergeFirmsCommandSchema = z.strictObject({
   ...commandEnvelope,
   sourceFirmId: uuid,
   targetFirmId: uuid,
   /** Conflicting fields the person has resolved, by column name. */
-  resolutions: z.record(z.string(), z.string()).optional(),
-});
-
-export const mergeContactsCommandSchema = z.strictObject({
-  ...commandEnvelope,
-  sourceContactId: uuid,
-  targetContactId: uuid,
   resolutions: z.record(z.string(), z.string()).optional(),
 });
 

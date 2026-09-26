@@ -110,3 +110,32 @@ export const outboundStatusResponseSchema = z.object({
   fence: outboundFenceStatusSchema.nullable(),
 });
 export type OutboundStatusResponse = z.infer<typeof outboundStatusResponseSchema>;
+
+/**
+ * `POST /outbound/cap/override` (wave 2, S4.6): the admin raises a mailbox's daily cap to
+ * any number up to the hard ceiling of 100, earned or not, or clears the raise with
+ * null. The daily cap is still enforced at every send; `POST /outbound/cap` keeps its
+ * lowering and its earned-raise refusals for desktops up to 1.0.11.
+ */
+export const overrideMailboxRaiseCommandSchema = z.strictObject({
+  commandId: uuid,
+  clientVersion: z.string().min(1).max(32),
+  mailboxId: uuid,
+  raiseTo: z.number().int().min(1).max(100).nullable(),
+});
+export type OverrideMailboxRaiseCommand = z.infer<typeof overrideMailboxRaiseCommandSchema>;
+
+/**
+ * What the override answers inside the command envelope. `warning` is the part of the
+ * earned-raise rule the mailbox has not met — six healthy weeks (`ramp_not_settled`), or
+ * ten healthy sending days in a row (`health_not_sustained`) — for the Mac to show beside
+ * the new cap; null when the raise is earned or cleared.
+ */
+export const overrideMailboxRaiseResultSchema = z.object({
+  mailboxId: uuid,
+  effectiveCap: z.number().int().min(0).max(100),
+  raisedDailyCap: z.number().int().min(1).max(100).nullable(),
+  healthySendingDays: z.number().int().min(0),
+  warning: z.enum(['ramp_not_settled', 'health_not_sustained']).nullable(),
+});
+export type OverrideMailboxRaiseResult = z.infer<typeof overrideMailboxRaiseResultSchema>;

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
-import { classifierFacts, enrollmentFacts, sendingFacts } from '../../dashboard/index.ts';
+import { classifierFacts, enrollmentFacts } from '../../dashboard/index.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
 import { seedMail, type SeededMail } from '../db/support/mailFixtures.ts';
@@ -10,7 +10,7 @@ import { seedOutbound, type SeededOutbound } from '../db/support/outboundFixture
 
 /**
  * The last two declared-unavailable dashboard figures, wired to G8's and G7b's
- * tables, and the `bySequence` breakdown that needed both lanes to be real.
+ * tables.
  *
  * The same two questions as the sending source: are the figures right, and does a
  * salesperson's copy stay inside the read matrix? The frame is the shared
@@ -46,7 +46,6 @@ describe("the dashboard's enrollment and classifier figures", () => {
   let assignee: RepositoryContext;
   let colleague: RepositoryContext;
   let betaAdmin: RepositoryContext;
-  let sequenceId: string;
   let otherUserId: string;
 
   beforeAll(async () => {
@@ -66,7 +65,7 @@ describe("the dashboard's enrollment and classifier figures", () => {
       [seeded.alpha.workspaceId, otherUserId],
     );
 
-    sequenceId = await seedSequenceWorld(
+    await seedSequenceWorld(
       database,
       seeded.alpha,
       crm.alpha,
@@ -184,24 +183,6 @@ describe("the dashboard's enrollment and classifier figures", () => {
     expect(none.callsAttempted).toBe(0);
     expect(none.confirmations).toBe(0);
     expect(none.correctionRate).toBeNull();
-  });
-
-  // ------------------------------------------------------------- bySequence
-
-  it('breaks sends down by sequence now that a fence can be joined to one', async () => {
-    const facts = await sendingFacts(admin, WINDOW, WORKSPACE);
-    const bySequence = facts.bySequence as readonly { key: string; sent: number }[];
-    expect(bySequence.find(entry => entry.key === sequenceId)).toEqual({
-      key: sequenceId,
-      sent: 1,
-      replies: 0,
-      positiveReplies: 0,
-    });
-    // The shared fixture's own sent fence has no enrollment, and `none` is the
-    // honest key for it rather than a row quietly dropped from the breakdown.
-    expect(bySequence.find(entry => entry.key === 'none')?.sent).toBe(1);
-    // And still says so where no table has the answer at all.
-    expect(facts.bySegment).toMatchObject({ available: false, owner: 'unassigned' });
   });
 });
 

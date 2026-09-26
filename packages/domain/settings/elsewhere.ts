@@ -30,8 +30,6 @@ export interface SettingsElsewhere {
 }
 
 export const SETTINGS_ELSEWHERE: readonly SettingsElsewhere[] = Object.freeze([
-  { topic: 'Memberships and roles', path: '/admin/memberships', ownedBy: 'G2 identity' },
-  { topic: 'Devices', path: '/admin/devices', ownedBy: 'G2 identity' },
   { topic: 'Pipeline stages', path: '/pipeline/stages', ownedBy: 'G9 (this lane), over G3a tables' },
   // G8's `workspace_holiday_calendars`, versioned because every stored due instant
   // freezes the calendar version it was computed from. The settings page shows the
@@ -49,7 +47,6 @@ export const SETTINGS_ELSEWHERE: readonly SettingsElsewhere[] = Object.freeze([
   { topic: 'State postures', path: '/postures', ownedBy: 'G4 policy' },
   { topic: 'Calling window', path: '/postures/calling-window', ownedBy: 'G4 policy' },
   { topic: 'Pauses', path: '/pauses', ownedBy: 'G4 policy' },
-  { topic: 'Suppressions', path: '/suppressions', ownedBy: 'G4 suppression' },
   { topic: 'Mailbox connection', path: '/gmail/status', ownedBy: 'G7 Gmail' },
   { topic: 'Dead jobs', path: '/admin/jobs/dead', ownedBy: 'G5 jobs' },
   { topic: 'Alerts and acknowledgement', path: '/admin/alerts', ownedBy: 'G5 jobs' },

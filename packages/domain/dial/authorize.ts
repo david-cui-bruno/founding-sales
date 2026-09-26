@@ -6,6 +6,7 @@ import { currentCallingWindow, evaluateConfiguredCallingWindow } from '../policy
 import { listApplicableHolds } from '../policy/holds.ts';
 import { applicablePosture } from '../policy/postures.ts';
 import { firstSuppressed } from '../suppression/effective.ts';
+import { USABLE_CALLING_IDENTITY_SQL } from './identities.ts';
 import type { EffectiveSuppression } from '../suppression/effective.ts';
 
 /**
@@ -15,8 +16,10 @@ import type { EffectiveSuppression } from '../suppression/effective.ts';
  * in order, and first refusal wins:
  *
  *   1. Effective firm, number, or relevant contact-handle suppression
- *   2. Active verified calling identity owned by the actor
- *   3. Active unretired usable route at the displayed version
+ *   2. Active verified calling identity owned by the actor (since wave 2, S4.3: owned
+ *      and not retired — a number is attested when it is added)
+ *   3. Active unretired usable route at the displayed version (since wave 2, S4.4, a
+ *      stored `candidate` phone counts as usable: numbers are usable on entry)
  *   4. Actor assignment and permission
  *   5. Known firm state and confidently established actual IANA zone
  *   6. Exactly one applicable state posture whose effective range contains database
@@ -72,8 +75,7 @@ export interface AuthorizeDialInput {
 interface IdentityRow {
   readonly id: string;
   readonly owner_user_id: string | null;
-  readonly verification_status: 'unverified' | 'verified';
-  readonly enabled: boolean;
+  readonly usable: boolean;
   readonly [column: string]: unknown;
 }
 
@@ -87,8 +89,12 @@ interface PhoneRouteRow {
   readonly [column: string]: unknown;
 }
 
-const ELIGIBILITY_REFUSAL: Readonly<Record<'candidate' | 'invalid' | 'retired', DialRefusalCode>> = Object.freeze({
-  candidate: 'route_candidate',
+/**
+ * The phone eligibilities a dial refuses. `candidate` is not one since wave 2 (S4.4): a
+ * number is usable on entry, and one an older release stored as a candidate is dialled
+ * as it stands, so `route_candidate` is never answered.
+ */
+const ELIGIBILITY_REFUSAL: Readonly<Partial<Record<PhoneRouteRow['eligibility'], DialRefusalCode>>> = Object.freeze({
   invalid: 'route_invalid',
   retired: 'route_retired',
 });
@@ -103,10 +109,10 @@ const refused = (reason: DialRefusalCode): DialDecision => ({ allowed: false, re
  * one that is easy to miss: a prospect who asked to stop on their mobile has not
  * given permission for their desk line, and both are the same person.
  */
-async function suppressionKeys(
+export async function suppressionKeys(
   context: RepositoryContext,
   firm: FirmRow,
-  route: PhoneRouteRow | null,
+  route: Pick<PhoneRouteRow, 'e164' | 'contact_id'> | null,
   contactId: string | undefined,
 ): Promise<readonly { readonly scope: 'firm' | 'handle'; readonly canonicalKey: string }[]> {
   const keys: { scope: 'firm' | 'handle'; canonicalKey: string }[] = [
@@ -151,8 +157,12 @@ export async function authorizeDial(
   if (suppression !== null) return refused(suppressionRefusal(suppression));
 
   // ---- 2. Calling identity ------------------------------------------------
+  // Attested when added since wave 2 (S4.3): a number is the actor's own and not retired,
+  // and one an older release registered without an attestation is usable as it stands.
+  // `identity_unverified` is never answered.
   const identityResult = await context.db.query<IdentityRow>(
-    'SELECT id, owner_user_id, verification_status, enabled FROM calling_identities WHERE workspace_id = $1 AND id = $2',
+    `SELECT id, owner_user_id, ${USABLE_CALLING_IDENTITY_SQL} AS usable
+       FROM calling_identities WHERE workspace_id = $1 AND id = $2`,
     [context.scope.workspaceId, input.callingIdentityId],
   );
   const identity = identityResult.rows[0];
@@ -161,8 +171,7 @@ export async function authorizeDial(
   // until shared-line entitlements exist." Named separately from `identity_not_owned`
   // because it is a product state, not a mistake by this caller.
   if (identity.owner_user_id === null) return refused('identity_shared_line_disabled');
-  if (identity.verification_status !== 'verified') return refused('identity_unverified');
-  if (!identity.enabled) return refused('identity_disabled');
+  if (!identity.usable) return refused('identity_disabled');
   // The worker never dials. A system scope asking for a dial authorization has no
   // actor to own an identity, and "owned by the acting salesperson" cannot be true.
   if (actor.kind !== 'user') return refused('identity_not_owned');
@@ -174,7 +183,8 @@ export async function authorizeDial(
   // is looking at a number that has since been replaced or retired, and the honest
   // answer is "your card is out of date", not the new route's state.
   if (route.version !== input.routeVersion) return refused('route_version_stale');
-  if (route.eligibility !== 'usable') return refused(ELIGIBILITY_REFUSAL[route.eligibility]);
+  const ineligible = ELIGIBILITY_REFUSAL[route.eligibility];
+  if (ineligible !== undefined) return refused(ineligible);
   if (input.contactId !== undefined && route.contact_id !== null && route.contact_id !== input.contactId) {
     return refused('route_missing');
   }

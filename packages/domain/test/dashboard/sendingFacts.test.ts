@@ -9,7 +9,8 @@ import { seedMail, type SeededMail } from '../db/support/mailFixtures.ts';
 import { seedOutbound, type SeededOutbound } from '../db/support/outboundFixtures.ts';
 
 /**
- * 13.4's sending figures, read from G7-2's tables (migration 0010).
+ * 13.4's sending figures, read from G7-2's tables (migration 0010): the two counts the
+ * Mac shows, `sent` and `held` (wave 2, S6 cut the rest).
  *
  * Until G7-2 landed, `DashboardSources.sending` answered `{ available: false }` on
  * purpose — "nothing can tell you how many were skipped" is a different sentence to
@@ -25,10 +26,6 @@ import { seedOutbound, type SeededOutbound } from '../db/support/outboundFixture
 
 const WINDOW = { from: '2026-09-01T00:00:00.000Z', to: '2026-10-01T00:00:00.000Z' };
 const SOURCES = liveDashboardSources();
-
-/** The fixture's sent fence: 2026-09-02 13:00:02Z, `America/New_York` — Wednesday, 09. */
-const SENT_WEEKDAY = '3';
-const SENT_HOUR = '09';
 
 describe("the dashboard's sending figures", () => {
   let database: TestDatabase;
@@ -67,29 +64,8 @@ describe("the dashboard's sending figures", () => {
       [seeded.alpha.workspaceId, otherUserId],
     );
 
-    // A reply on the sent fence's thread, and the disposition a person would confirm.
-    const reply = await database.session.query<{ id: string }>(
-      `INSERT INTO mail_messages (workspace_id, mailbox_id, provider_message_id, provider_thread_id,
-                                  direction, internal_date, header_from, matched)
-       VALUES ($1, $2, $3, $4, 'incoming', TIMESTAMPTZ '2026-09-03 15:00:00+00', $5, true)
-       RETURNING id`,
-      [
-        seeded.alpha.workspaceId,
-        mail.alpha.mailboxId,
-        `reply-${randomUUID().replaceAll('-', '')}`,
-        `${outbound.collidingProviderMessageId}-thread`,
-        'prospect.alpha@example.test',
-      ],
-    );
-    await database.session.query(
-      `INSERT INTO mail_message_classifications (workspace_id, mail_message_id, layer, class,
-                                                 suggested_disposition, requires_confirmation, rules_version)
-       VALUES ($1, $2, 'deterministic', 'human', 'interested', true, 'reply-rules.1')`,
-      [seeded.alpha.workspaceId, reply.rows[0]?.id ?? ''],
-    );
-
     // A held fence and two that ended `unknown_terminal`, one of which an admin
-    // resolved as skipped, so the four counts 13.4 names are all non-zero.
+    // resolved as skipped: only the held one counts beside the sent one.
     await insertFence(database, seeded.alpha.workspaceId, mail.alpha.mailboxId, crm.alpha, outbound, {
       state: 'held',
       suffix: 'held',
@@ -105,14 +81,6 @@ describe("the dashboard's sending figures", () => {
       resolverUserId: seeded.alpha.admin.userId,
     });
 
-    // A send day that closed unhealthy, with provider errors on it.
-    await database.session.query(
-      `UPDATE mailbox_send_days SET provider_errors = 2, healthy = false,
-              closed_at = TIMESTAMPTZ '2026-09-02 23:00:00+00'
-        WHERE workspace_id = $1 AND mailbox_id = $2`,
-      [seeded.alpha.workspaceId, mail.alpha.mailboxId],
-    );
-
     assignee = contextFor(database, seeded.alpha.workspaceId, seeded.alpha.salesperson.userId, 'salesperson');
     colleague = contextFor(database, seeded.alpha.workspaceId, otherUserId, 'salesperson');
     admin = contextFor(database, seeded.alpha.workspaceId, seeded.alpha.admin.userId, 'admin');
@@ -123,91 +91,20 @@ describe("the dashboard's sending figures", () => {
     await database.drop();
   });
 
-  it('counts sent, held, unknown and skipped from the fence, for the workspace', async () => {
-    expect(await facts(admin)).toMatchObject({
-      available: true,
-      sent: 1,
-      held: 1,
-      unknown: 1,
-      skipped: 1,
-      resolvedDelivered: 0,
-    });
+  it('counts sent and held from the fence, for the workspace, and nothing else', async () => {
+    expect(await facts(admin)).toEqual({ available: true, sent: 1, held: 1 });
   });
 
-  it('sums provider deferrals and unhealthy send days from the ramp tables', async () => {
-    const theAdmins = await facts(admin);
-    expect(theAdmins.providerDeferrals).toBe(2);
-    expect(theAdmins.reputationWarnings).toBe(1);
-  });
-
-  it('breaks sends down by template version, weekday and local send hour in the firm zone', async () => {
-    const theAdmins = await facts(admin);
-    expect(theAdmins.byTemplateVersion).toEqual([
-      { key: outbound.alpha.templateVersionId, sent: 1, replies: 1, positiveReplies: 1 },
-    ]);
-    expect(theAdmins.byWeekday).toEqual([{ key: SENT_WEEKDAY, sent: 1, replies: 1, positiveReplies: 1 }]);
-    expect(theAdmins.byLocalSendHour).toEqual([{ key: SENT_HOUR, sent: 1, replies: 1, positiveReplies: 1 }]);
-  });
-
-  it('says which breakdowns no table can answer rather than showing them empty', async () => {
-    const theAdmins = await facts(admin);
-    // `bySequence` is real since G8 landed: this fixture's fence is a draft send
-    // with no enrollment, and `none` is the honest key for one.
-    expect(theAdmins.bySequence).toEqual([{ key: 'none', sent: 1, replies: 1, positiveReplies: 1 }]);
-    // `bySegment` is the one that stayed unavailable, and now provably: migrations
-    // 0001 to 0013 define no segment anywhere, so there is nobody to own it.
-    expect(theAdmins.bySegment).toMatchObject({ available: false, owner: 'unassigned' });
-  });
-
-  it('shows an admin the domain posture and every ramp', async () => {
-    const theAdmins = await facts(admin);
-    expect(theAdmins.posture.domain).toEqual({
-      domain: outbound.collidingDomain,
-      authenticationPasses: true,
-      automatedSendingEnabled: true,
-    });
-    expect(theAdmins.posture.ramps).toEqual([
-      {
-        mailboxId: mail.alpha.mailboxId,
-        healthySendingDays: 3,
-        effectiveCap: 5,
-        adminDailyCap: null,
-        raisedDailyCap: null,
-        lastHealthFailure: null,
-      },
-    ]);
-  });
-
-  it("gives a salesperson their own firms' sends and their own mailbox's ramp, and no domain posture", async () => {
-    const theirs = await facts(assignee);
-    expect(theirs).toMatchObject({ sent: 1, held: 1, unknown: 1, skipped: 1 });
-    expect(theirs.posture.domain).toBeNull();
-    expect(theirs.posture.ramps).toHaveLength(1);
-    expect(theirs.posture.ramps[0]?.mailboxId).toBe(mail.alpha.mailboxId);
+  it("gives a salesperson their own firms' sends", async () => {
+    expect(await facts(assignee)).toEqual({ available: true, sent: 1, held: 1 });
   });
 
   it("shows a colleague nothing of another salesperson's sending", async () => {
-    const theirs = await facts(colleague);
-    expect(theirs).toMatchObject({
-      sent: 0,
-      held: 0,
-      unknown: 0,
-      skipped: 0,
-      providerDeferrals: 0,
-      reputationWarnings: 0,
-    });
-    expect(theirs.byTemplateVersion).toEqual([]);
-    expect(theirs.posture.ramps).toEqual([]);
+    expect(await facts(colleague)).toEqual({ available: true, sent: 0, held: 0 });
   });
 
   it("counts none of the other workspace's identical rows", async () => {
-    const theirs = await facts(betaAdmin);
-    expect(theirs).toMatchObject({ sent: 1, held: 0, unknown: 0, skipped: 0 });
-    // Beta's mailbox never replied, so its one send has no reply on it — which is
-    // the assertion that alpha's reply was not counted across the boundary.
-    expect(theirs.byTemplateVersion).toEqual([
-      { key: outbound.beta.templateVersionId, sent: 1, replies: 0, positiveReplies: 0 },
-    ]);
+    expect(await facts(betaAdmin)).toEqual({ available: true, sent: 1, held: 0 });
   });
 
   it('counts nothing outside the window', async () => {
@@ -216,7 +113,7 @@ describe("the dashboard's sending figures", () => {
       { from: '2026-10-01T00:00:00.000Z', to: '2026-11-01T00:00:00.000Z' },
       { onlyAssignedTo: null },
     );
-    expect(answer).toMatchObject({ available: true, sent: 0, held: 0, unknown: 0, skipped: 0 });
+    expect(answer).toEqual({ available: true, sent: 0, held: 0 });
   });
 });
 

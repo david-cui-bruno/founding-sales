@@ -2,7 +2,6 @@ import {
   addRouteCommandSchema,
   checkRouteCommandSchema,
   confirmRouteCommandSchema,
-  createContactCommandSchema,
   retireRouteCommandSchema,
   updateContactCommandSchema,
   verifyRouteCommandSchema,
@@ -11,7 +10,6 @@ import {
   addEmailRoute,
   addPhoneRoute,
   confirmPhoneRoute,
-  createContact,
   listContacts,
   requestEmailRouteValidation,
   retireRoute,
@@ -28,6 +26,9 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  * a route belongs to a contact or to the firm, and the authorization that governs
  * both is the firm's assignment. There is no `/routes/...` path for a caller to reach
  * a number without naming the firm it belongs to.
+ *
+ * (`/contacts/create` had no caller and went in wave 2, S6: the Mac adds a contact
+ * with its firm through `/crm/firms/add` or an import.)
  *
  * `/contacts/routes/add` takes a `routeKind` and one `value` rather than two shapes,
  * because the command is the same command; which table it lands in is a detail of
@@ -71,16 +72,6 @@ export async function routeContacts(request: ApiRequest, options: RoutingOptions
   }
 
   switch (request.path) {
-    case '/contacts/create':
-      return await runCrmCommand(deps, createContactCommandSchema, 'contact.created', async (repository, body) =>
-        await createContact(repository, {
-          firmId: body.firmId,
-          fullName: body.fullName,
-          title: body.title,
-          isPrimary: body.isPrimary,
-          externalId: body.externalId,
-        }),
-      );
     case '/contacts/update':
       return await runCrmCommand(deps, updateContactCommandSchema, 'contact.updated', async (repository, body) =>
         await updateContact(repository, { contactId: body.contactId, patch: body.patch }),

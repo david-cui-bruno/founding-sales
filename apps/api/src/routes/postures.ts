@@ -1,4 +1,5 @@
 import {
+  allowCallingStatesCommandSchema,
   recordStatePostureCommandSchema,
   revokeStatePostureCommandSchema,
   setCallingWindowCommandSchema,
@@ -13,6 +14,7 @@ import {
   type PostureCitation,
 } from '@fss/domain';
 import {
+  allowCallingStates,
   currentCallingWindow,
   listStatePostures,
   recordStatePosture,
@@ -33,6 +35,7 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  */
 export const POSTURE_PATHS: readonly string[] = [
   '/postures',
+  '/postures/allow',
   '/postures/calling-window',
   '/postures/record',
   '/postures/reference',
@@ -105,7 +108,9 @@ export function postureReference(): Readonly<Record<string, unknown>> {
  * and can never widen it.
  *
  * The reads are open to any authenticated member. A salesperson who sees the
- * refusal `posture_overdue` on a card should be able to see which posture it was.
+ * refusal `posture_missing` on a card should be able to see which states are listed.
+ * A posture has no yearly expiry since wave 2 (S4.2); `/postures/allow` lists several
+ * states at once, and `/postures/record` stays for desktops up to 1.0.11.
  */
 export async function routePostures(request: ApiRequest, options: RoutingOptions): Promise<RouteResult | null> {
   if (!request.path.startsWith('/postures')) return null;
@@ -132,6 +137,21 @@ export async function routePostures(request: ApiRequest, options: RoutingOptions
   }
 
   switch (request.path) {
+    // Wave 2 (S4.2, D5): several states onto the "OK to call" list, one confirmation.
+    case '/postures/allow':
+      return await runPolicyCommand(
+        deps,
+        allowCallingStatesCommandSchema,
+        'allow_calling_states',
+        async (repository, body) =>
+          await inSavepoint(repository, async () =>
+            await allowCallingStates(repository, {
+              states: body.states,
+              ...(body.note === undefined ? {} : { note: body.note }),
+            }),
+          ),
+      );
+    // Deprecated (remove after desktop 1.0.12): one state, statements ticked one by one.
     case '/postures/record':
       return await runPolicyCommand(
         deps,
