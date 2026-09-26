@@ -4,7 +4,6 @@ import { repositoryContext, workspaceScope, type RepositoryContext } from '../..
 import { databaseNow } from '../../policy/index.ts';
 import { buildTodaySnapshot, businessDateOf, readTodayFirm, readTodayList } from '../../today/index.ts';
 import { approveTemplateVersion, createTemplateVersion, readTemplateVersion, updateTemplateVersion } from '../../templates/index.ts';
-import { updateSetting } from '../../settings/index.ts';
 import {
   allowAllEligibility,
   completeStepExecution,
@@ -483,7 +482,7 @@ describe('templates edit in place (wave 2, S3)', () => {
     ).toEqual({ ok: false, reason: 'template_retired' });
   });
 
-  it('sends the edited text from a step not yet prepared, and composes one footer when a postal address is set', async () => {
+  it('sends the edited text, byte for byte, from a step not yet prepared', async () => {
     const templateVersionId = sequences.alpha.template.templateVersionId;
     const enrollmentId = await enroll('alpha');
     // Monday 09:00 New York, inside the window.
@@ -501,47 +500,51 @@ describe('templates edit in place (wave 2, S3)', () => {
     if (!edited.ok) throw new Error(`the edit was refused: ${edited.reason}`);
     expect(edited.value.approvedAt).not.toBeNull();
 
-    // With a postal address, the footer is composed at send: the legacy body's own
-    // sign-off and stop line are not doubled.
-    const address = '1 Example Way\nProvidence, RI 02903';
-    expect((await updateSetting(contextFor('alpha', 'admin'), { settingKey: 'postal_address', value: { address } })).ok).toBe(true);
-    try {
-      const handoff = recordingSendHandoff();
-      const outcome = await runDueStepExecution(worker(), {
-        enrollmentId,
-        now: '2026-09-21T13:00:00Z',
-        eligibility: allowAllEligibility(),
-        sendHandoff: handoff,
-      });
-      expect(outcome.kind).toBe('handed_to_send');
-      const [request] = handoff.prepared;
-      expect(request?.templateContentHash).toBe(edited.value.contentHash);
-      expect(request?.body).toBe(`Edited after enrolment.\n\n${FIXTURE_SIGN_OFF}\n${address}\n${SENDING_STOP_LINE}`);
-      expect(request?.body.split(SENDING_STOP_LINE)).toHaveLength(2);
-    } finally {
-      await updateSetting(contextFor('alpha', 'admin'), { settingKey: 'postal_address', value: { address: null } });
-    }
+    const handoff = recordingSendHandoff();
+    const outcome = await runDueStepExecution(worker(), {
+      enrollmentId,
+      now: '2026-09-21T13:00:00Z',
+      eligibility: allowAllEligibility(),
+      sendHandoff: handoff,
+    });
+    expect(outcome.kind).toBe('handed_to_send');
+    const [request] = handoff.prepared;
+    expect(request?.templateContentHash).toBe(edited.value.contentHash);
+    // The rendered body is the approved body: nothing is appended or stripped at send.
+    expect(request?.body).toBe(fixtureBody('Edited after enrolment.'));
+    expect(request?.body.endsWith(`${FIXTURE_SIGN_OFF}\n${SENDING_STOP_LINE}`)).toBe(true);
   });
 
-  it('approves a body with no footer while a postal address is set, and not once it is unset', async () => {
-    const address = '1 Example Way, Providence, RI 02903';
-    expect((await updateSetting(contextFor('alpha', 'admin'), { settingKey: 'postal_address', value: { address } })).ok).toBe(true);
-    try {
-      const created = await createTemplateVersion(contextFor('alpha', 'admin'), {
-        ...text('ignored'),
-        body: 'Just the words; the server adds the footer.',
-        approve: true,
-      });
-      expect(created.ok).toBe(true);
-    } finally {
-      await updateSetting(contextFor('alpha', 'admin'), { settingKey: 'postal_address', value: { address: null } });
-    }
-    const refused = await createTemplateVersion(contextFor('alpha', 'admin'), {
-      ...text('ignored'),
-      body: 'Just the words; the server adds the footer.',
-      approve: true,
+  it('never leaves an approved version without the footer: no setting waives the rule, and the rule is the guard', async () => {
+    // Migration 0019 dropped the stop-line CHECK, so every path that grants or keeps an
+    // approval must refuse a body that does not end with the sign-off and stop line.
+    const bare = { ...text('ignored'), body: 'Just the words, no footer.' };
+    expect(await createTemplateVersion(contextFor('alpha', 'admin'), { ...bare, approve: true })).toEqual({
+      ok: false,
+      reason: 'template_unapproved',
+      issues: ['template_footer_missing'],
     });
-    expect(refused).toEqual({ ok: false, reason: 'template_unapproved', issues: ['template_footer_missing'] });
+    const draft = await createTemplateVersion(contextFor('alpha', 'admin'), bare);
+    if (!draft.ok) throw new Error(`the draft was refused: ${draft.reason}`);
+    expect(draft.value).toMatchObject({ approvedAt: null, issues: ['template_footer_missing'] });
+    expect(await approveTemplateVersion(contextFor('alpha', 'admin'), { templateVersionId: draft.value.id })).toEqual({
+      ok: false,
+      reason: 'template_unapproved',
+      issues: ['template_footer_missing'],
+    });
+    const id = await approvedTemplate('Approved, then stripped.');
+    expect(
+      await updateTemplateVersion(contextFor('alpha', 'admin'), { ...bare, templateVersionId: id, approve: true }),
+    ).toMatchObject({ ok: false, reason: 'template_unapproved' });
+    const stripped = await updateTemplateVersion(contextFor('alpha', 'admin'), { ...bare, templateVersionId: id });
+    expect(stripped.ok && stripped.value.approvedAt).toBeNull();
+
+    const { rows } = await database.session.query<{ count: string }>(
+      `SELECT count(*) AS count FROM template_versions
+        WHERE approved_at IS NOT NULL AND right(body, length($1)) <> $1`,
+      [SENDING_STOP_LINE],
+    );
+    expect(Number(rows[0]?.count)).toBe(0);
   });
 });
 

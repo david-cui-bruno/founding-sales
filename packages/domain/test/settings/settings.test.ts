@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { DEFAULT_SETTING_VALUES, SETTING_KEYS, SNAPSHOT_SETTING_KEYS } from '@fss/contracts';
+import { DEFAULT_SETTING_VALUES, SETTING_KEYS } from '@fss/contracts';
 import { withTransaction } from '../../db/queryable.ts';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
@@ -9,7 +9,6 @@ import {
   DEFAULT_SETTING_CHANGE_NOTE,
   effectiveSendingEnabled,
   readCurrentSettings,
-  readPostalAddress,
   readSetting,
   readSettingHistory,
   updateSetting,
@@ -62,38 +61,14 @@ describe('workspace settings', () => {
     await database.drop();
   });
 
-  it('answers with every snapshot key at its default before anybody has configured anything', async () => {
+  it('answers with every key at its default before anybody has configured anything', async () => {
     const current = await readCurrentSettings(admin);
-    // Every key but postal_address, which desktop 1.0.11's strict snapshot parser does
-    // not know (`SNAPSHOT_SETTING_KEYS`).
-    expect(current.map(entry => entry.settingKey)).toEqual([...SNAPSHOT_SETTING_KEYS]);
-    expect(SETTING_KEYS.filter(key => !(SNAPSHOT_SETTING_KEYS as readonly string[]).includes(key))).toEqual([
-      'postal_address',
-    ]);
+    expect(current.map(entry => entry.settingKey)).toEqual([...SETTING_KEYS]);
     for (const entry of current) {
       expect(entry.version, entry.settingKey).toBe(0);
       expect(entry.changedAt, entry.settingKey).toBeNull();
       expect(entry.value, entry.settingKey).toEqual(DEFAULT_SETTING_VALUES[entry.settingKey]);
     }
-  });
-
-  it('sets, reads and unsets the postal address, and refuses one that is not plain text', async () => {
-    expect(await readPostalAddress(admin)).toBeNull();
-    const set = await updateSetting(admin, {
-      settingKey: 'postal_address',
-      value: { address: '1 Example Way\nProvidence, RI 02903' },
-    });
-    expect(set.ok).toBe(true);
-    expect(await readPostalAddress(admin)).toBe('1 Example Way\nProvidence, RI 02903');
-    expect(await readPostalAddress(betaAdmin)).toBeNull();
-    const history = await readSettingHistory(admin, 'postal_address', { limit: 1 });
-    expect(history[0]).toMatchObject({ settingKey: 'postal_address', supersededAt: null });
-
-    const markup = await updateSetting(admin, { settingKey: 'postal_address', value: { address: 'Tab\there' } });
-    expect(markup).toEqual({ ok: false, reason: 'invalid_value' });
-
-    expect((await updateSetting(admin, { settingKey: 'postal_address', value: { address: null } })).ok).toBe(true);
-    expect(await readPostalAddress(admin)).toBeNull();
   });
 
   it('refuses a salesperson and writes nothing', async () => {

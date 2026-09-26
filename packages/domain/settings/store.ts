@@ -1,9 +1,8 @@
 import {
   DEFAULT_SETTING_VALUES,
   RELEASE_RECORD_BINDING_REFUSAL_CODES,
+  SETTING_KEYS,
   SETTING_VALUE_SCHEMAS,
-  SNAPSHOT_SETTING_KEYS,
-  postalAddressSettingSchema,
   type ActiveSettingKey,
   type SendingEnabledSetting,
 } from '@fss/contracts';
@@ -110,9 +109,6 @@ function toVersion(row: SettingDbRow): SettingVersionRow {
  * A key with no row is not absent from the answer: it is present with its default and
  * `version: 0`. A settings page that had to know which keys exist in order to render
  * them would drift from the key set every time one is added.
- *
- * `postal_address` is not listed yet (`SNAPSHOT_SETTING_KEYS`): desktop 1.0.11 refuses a
- * snapshot naming a key it does not know. Its history answers it.
  */
 export async function readCurrentSettings(context: RepositoryContext): Promise<readonly CurrentSetting[]> {
   const { rows } = await context.db.query<SettingDbRow>(
@@ -121,7 +117,7 @@ export async function readCurrentSettings(context: RepositoryContext): Promise<r
     [context.scope.workspaceId],
   );
   const byKey = new Map(rows.map(row => [row.setting_key, row]));
-  return SNAPSHOT_SETTING_KEYS.map(key => {
+  return SETTING_KEYS.map(key => {
     const row = byKey.get(key);
     if (row === undefined) {
       return {
@@ -332,15 +328,4 @@ export async function updateSetting(
       },
     },
   };
-}
-
-/**
- * The workspace's postal address, or null when none is set (wave 2, S3). When it is set
- * the worker composes an automated email's footer at send (`composeSendFooter`) and a
- * template's approval no longer requires one in the body.
- */
-export async function readPostalAddress(context: RepositoryContext): Promise<string | null> {
-  const { value } = await readSetting(context, 'postal_address');
-  const parsed = postalAddressSettingSchema.safeParse(value);
-  return parsed.success ? parsed.data.address : null;
 }

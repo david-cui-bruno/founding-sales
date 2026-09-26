@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   RELEASE_RECORD_SCHEMA_ID,
-  SNAPSHOT_SETTING_KEYS,
+  SETTING_KEYS,
   pipelineBoardResponseSchema,
   pipelineStagesResponseSchema,
   publishedClientVersions,
@@ -136,8 +136,7 @@ describe('the administration surface', () => {
     const answer = await call('GET', '/settings', salespersonToken);
     expect(answer.status).toBe(200);
     const settings = answer.body['settings'] as readonly { settingKey: string; version: number }[];
-    // Every key but postal_address, which desktop 1.0.11's strict parser does not know.
-    expect(settings.map(entry => entry.settingKey)).toEqual([...SNAPSHOT_SETTING_KEYS]);
+    expect(settings.map(entry => entry.settingKey)).toEqual([...SETTING_KEYS]);
     expect(settings.every(entry => entry.version === 0)).toBe(true);
     const elsewhere = answer.body['elsewhere'] as readonly { path: string }[];
     expect(elsewhere.map(entry => entry.path)).toContain('/postures/calling-window');

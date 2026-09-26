@@ -38,7 +38,7 @@ export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum:
 /**
  * Migration 0019 drops what the previous images still name (research, the enrollment
  * migration tables, `direct_sent`, `record_merge_events`) and the new images need its
- * relaxed triggers and `postal_address` key, so neither range reaches back to 18.
+ * relaxed triggers, so neither range reaches back to 18.
  */
 export const API_SCHEMA_RANGE: SchemaRange = { minimum: 19, maximum: 19 };
 export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 19, maximum: 19 };
