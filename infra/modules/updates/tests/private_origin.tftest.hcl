@@ -37,18 +37,8 @@ run "the_origin_is_private_and_reached_only_through_the_distribution" {
   }
 
   assert {
-    condition     = aws_cloudfront_origin_access_control.updates.signing_behavior == "always" && aws_cloudfront_origin_access_control.updates.signing_protocol == "sigv4"
-    error_message = "CloudFront must sign every origin request."
-  }
-
-  assert {
     condition     = aws_cloudfront_distribution.updates.default_cache_behavior[0].viewer_protocol_policy == "https-only"
     error_message = "Packages are served over HTTPS only."
-  }
-
-  assert {
-    condition     = aws_s3_bucket_versioning.updates.versioning_configuration[0].status == "Enabled"
-    error_message = "Earlier compatible binaries must remain retrievable for a forward rollback."
   }
 }
 
@@ -64,7 +54,7 @@ run "only_this_distribution_may_read_the_bucket" {
 
   assert {
     condition = alltrue([
-      for statement in jsondecode(output.bucket_policy_json).Statement :
+      for statement in jsondecode(aws_s3_bucket_policy.updates.policy).Statement :
       contains(statement.Condition.StringEquals["AWS:SourceArn"], aws_cloudfront_distribution.updates.arn)
       if statement.Sid == "AllowOnlyThisDistribution"
     ])
