@@ -1,11 +1,7 @@
-import {
-  dispatchOutboundMessage,
-  holdReasonForRefusal,
-  prepareOutboundMessage,
-  readOutboundOutcome,
-  type OutboundSendDeps,
-} from '@fss/domain/outbound';
-import { SEND_HANDOFF_REFUSALS, type SendHandoff, type SendHandoffRefusal } from '@fss/domain/sequences';
+import { prepareOutboundMessage, readOutboundOutcome } from '@fss/domain/outbound/fence.ts';
+import { holdReasonForRefusal } from '@fss/domain/outbound/gate.ts';
+import { dispatchOutboundMessage, type OutboundSendDeps } from '@fss/domain/outbound/send.ts';
+import { SEND_HANDOFF_REFUSALS, type SendHandoff, type SendHandoffRefusal } from '@fss/domain/sequences/sendHandoff.ts';
 
 /**
  * G8's `SendHandoff`, over G7-2's fence (specification 11.2, 12.2, 12.5, Appendix B).
@@ -74,7 +70,7 @@ export function outboundSendHandoff(options: OutboundSendHandoffOptions = {}): S
         state: outcome.state,
         dispatchedAt: outcome.dispatchedAt,
         heldReason: outcome.heldReason,
-        // Lane g82: the fence a woken step re-dispatches, and the admin's answer to an
+        // The fence a woken step re-dispatches, and the admin's answer to an
         // `unknown_terminal` one, which is what continues or stops the sequence.
         outboundMessageId: outcome.outboundMessageId,
         adminResolution: outcome.adminResolution,
@@ -92,7 +88,7 @@ export function outboundSendHandoff(options: OutboundSendHandoffOptions = {}): S
  * sending switched off, no sending domain, a fence somebody else owns — is an
  * administrative state that stops sending, which is what `scoped_pause` names.
  *
- * `step_ineligible` (lane g77) is the step's own eligibility refusing at the claim, and
+ * `step_ineligible` is the step's own eligibility refusing at the claim, and
  * its detail begins with the section 15 code that refused: that code is the step's
  * reason when the hand-off vocabulary has it, and `scoped_pause` otherwise.
  */

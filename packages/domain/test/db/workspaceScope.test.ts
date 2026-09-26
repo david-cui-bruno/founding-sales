@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
+import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import { WorkspaceScopeError, isAdminScope, workspaceId, workspaceScope, type WorkspaceScope } from '../../db/workspaceScope.ts';
 import { payloadHash, seedTwoWorkspaces, type TwoWorkspaces } from './support/fixtures.ts';
 

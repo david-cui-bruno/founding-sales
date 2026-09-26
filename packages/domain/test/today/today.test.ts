@@ -1,23 +1,17 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
+import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import type { SessionQueryable } from '../../db/queryable.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
-import { databaseNow, listApplicableHolds } from '../../policy/index.ts';
-import { completeCallback, createCallback } from '../../dial/index.ts';
-import { reassignFirm } from '../../crm/index.ts';
+import { databaseNow } from '../../policy/clock.ts';
+import { listApplicableHolds } from '../../policy/holds.ts';
+import { completeCallback, createCallback } from '../../dial/callbacks.ts';
+import { reassignFirm } from '../../crm/firms.ts';
 import { localParts } from '../../src/rules/localClock.ts';
-import {
-  DEFAULT_SNOOZE_REASON,
-  TODAY_ALGORITHM_VERSION,
-  buildTodaySnapshot,
-  businessDateOf,
-  cancelTodaySnooze,
-  listTodayItems,
-  upsertTodayItem,
-  readTodayFirm,
-  readTodayList,
-  snoozeTodayItem,
-} from '../../today/index.ts';
+import { buildTodaySnapshot } from '../../today/build.ts';
+import { readTodayFirm, readTodayList } from '../../today/dto.ts';
+import { businessDateOf, listTodayItems, upsertTodayItem } from '../../today/snapshots.ts';
+import { DEFAULT_SNOOZE_REASON, cancelTodaySnooze, snoozeTodayItem } from '../../today/snooze.ts';
+import { TODAY_ALGORITHM_VERSION } from '../../today/types.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
 
@@ -402,7 +396,7 @@ describe('snooze (8.2)', () => {
     );
     expect(rows[0]?.count).toBe('0');
 
-    // Lane g79 (C22): a pause, not a hidden hold. The task stays on the card, marked
+    // C22: a pause, not a hidden hold. The task stays on the card, marked
     // with the hold its Resume control releases, and pressing Pause again answers with
     // the same hold rather than stacking a second one.
     const items = await listTodayItems(salesperson(), { businessDate, firmId: crm.alpha.firmId });

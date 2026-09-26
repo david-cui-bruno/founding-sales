@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
+import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
-import { recordingSuppressionJournal } from '../../suppression/index.ts';
-import { enrollContact } from '../../sequences/index.ts';
-import { commitDeletion, previewDeletion } from '../../retention/index.ts';
+import { recordingSuppressionJournal } from '../../suppression/journal.ts';
+import { enrollContact } from '../../sequences/enrollments.ts';
+import { commitDeletion, previewDeletion } from '../../retention/deletion.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
 import { seedMail, type SeededMail } from '../db/support/mailFixtures.ts';

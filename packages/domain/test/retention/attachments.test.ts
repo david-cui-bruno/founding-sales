@@ -1,10 +1,10 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
+import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import type { SessionQueryable } from '../../db/queryable.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
-import { readAttachmentReferences } from '../../retention/index.ts';
+import { readAttachmentReferences } from '../../retention/attachments.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
 import { seedMail, type SeededMail } from '../db/support/mailFixtures.ts';

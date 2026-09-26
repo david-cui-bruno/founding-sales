@@ -4,16 +4,17 @@ import {
   reorderPipelineStagesCommandSchema,
   retirePipelineStageCommandSchema,
 } from '@fss/contracts';
+import { readPipelineBoardForActor } from '@fss/domain/crm/board.ts';
+import { listPipelineStages } from '@fss/domain/crm/pipeline.ts';
 import {
   createPipelineStage,
-  listPipelineStages,
-  readPipelineBoardForActor,
   renamePipelineStage,
   reorderPipelineStages,
   retirePipelineStage,
-} from '@fss/domain/crm';
-import { REFUSAL_STATUS, contextForPrincipal, redactError, requirePrincipal } from './crmSupport.ts';
+} from '@fss/domain/crm/stageAdmin.ts';
+import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { policyRouteDeps, runPolicyCommand } from './dialSupport.ts';
+import { contextForPrincipal, requirePrincipal } from './routeSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**
@@ -25,7 +26,7 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  * stage name. Retired stages are included and say so, because a historical
  * opportunity may still sit in one and a client that dropped it would render a blank.
  *
- * `POST /pipeline/board` is lane G9's answer to the gap G6 recorded in
+ * `POST /pipeline/board` answers the gap recorded in
  * `docs/decisions/g6-pipeline-board-opportunity-ids.md`: one scoped read that carries
  * the open opportunity id for the firms the caller could actually change, so the
  * board can offer a stage control where one would work and G3b's

@@ -1,17 +1,17 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
+import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import type { SessionQueryable } from '../../db/queryable.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
+import { authorizeDial } from '../../dial/authorize.ts';
 import {
-  authorizeDial,
   currentCallingIdentityId,
   disableCallingIdentity,
   listOwnCallingIdentities,
   normalizeCallingNumber,
   registerCallingIdentity,
   verifyCallingIdentity,
-} from '../../dial/index.ts';
+} from '../../dial/identities.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
 import { seedPolicy, type SeededPolicy } from '../db/support/policyFixtures.ts';

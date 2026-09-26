@@ -1,16 +1,15 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing';
-import { repositoryContext, workspaceScope } from '@fss/domain/db';
-import { HandlerRegistry, jobIdempotencyKey, runTwiceUnderStolenLease } from '@fss/domain/jobs';
+import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing/testDatabase.ts';
+import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
+import { runTwiceUnderStolenLease } from '@fss/domain/jobs/atLeastOnce.ts';
+import { HandlerRegistry } from '@fss/domain/jobs/handlerRegistry.ts';
+import { jobIdempotencyKey } from '@fss/domain/jobs/jobKinds.ts';
 import { MANUAL_SUPPRESSION_CORRECTION_SECONDS } from '@fss/contracts';
-import {
-  finalizeManualSuppression,
-  isSuppressed,
-  readFinalization,
-  recordSuppression,
-  recordingSuppressionJournal,
-  suppressionFinalizeHandler,
-} from '@fss/domain/suppression';
+import { isSuppressed } from '@fss/domain/suppression/effective.ts';
+import { recordSuppression } from '@fss/domain/suppression/events.ts';
+import { finalizeManualSuppression, readFinalization } from '@fss/domain/suppression/finalize.ts';
+import { suppressionFinalizeHandler } from '@fss/domain/suppression/handler.ts';
+import { recordingSuppressionJournal } from '@fss/domain/suppression/journal.ts';
 import { suppressionFinalizeJobHandler } from '../src/handlers/suppressionFinalize.ts';
 import { runClaimedJob } from '../src/runner/jobRunner.ts';
 

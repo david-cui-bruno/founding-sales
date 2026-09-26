@@ -3,16 +3,16 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DEFAULT_SETTING_VALUES, SETTING_KEYS } from '@fss/contracts';
 import { withTransaction } from '../../db/queryable.ts';
-import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
+import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
+import { effectiveSendingEnabled } from '../../settings/effective.ts';
 import {
   DEFAULT_SETTING_CHANGE_NOTE,
-  effectiveSendingEnabled,
   readCurrentSettings,
   readSetting,
   readSettingHistory,
   updateSetting,
-} from '../../settings/index.ts';
+} from '../../settings/store.ts';
 import { ALL_BLOCKED_ACTION_KINDS, CHANNEL_BLOCKED_ACTION_KINDS } from '../../policy/types.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { FIXTURE_API_DIGEST, storeFixtureRecord } from '../release/support/releaseRecords.ts';
@@ -214,7 +214,7 @@ describe('workspace settings', () => {
 
     // `sending_enabled` is the one slice no earlier test in this file has written, so
     // the two saves really are version 1 and version 2. It was `postal_footer` until
-    // migration 0015 removed that slice. Since lane g71 an enable names a stored,
+    // migration 0015 removed that slice. An enable names a stored,
     // passing release record bound to the running API, so both references are stored
     // first and both saves say which API image they are.
     await storeFixtureRecord(database.session, 'rehearsal-2026-09-20-a');

@@ -116,7 +116,7 @@ export const METRIC_OWNERS: Readonly<Record<string, MetricOwner>> = Object.freez
 
   // Emitted by `collectTodayMetrics` in `packages/domain/today/metrics.ts` on every
   // metric pass, from the day's `today.build` job and the workspace zone rather than
-  // from `today_snapshots`, which a workspace with no firms never writes (lane g67).
+  // from `today_snapshots`, which a workspace with no firms never writes.
   TodaySnapshotMissing: 'today',
 
   // Emitted by `collectMailMetrics` in `packages/domain/mail/metrics.ts`: the soonest
@@ -129,7 +129,7 @@ export const METRIC_OWNERS: Readonly<Record<string, MetricOwner>> = Object.freez
   // connected, or one its owner disconnected, alarmed as a missed check (audit O15).
   MailboxCheckHeartbeat: 'mail',
   // Emitted by `collectMailMetrics` while a mailbox is connected and `ready`: the
-  // stalest coverage watermark's age by the send gate's freshness rule (lane g81).
+  // stalest coverage watermark's age by the send gate's freshness rule.
   MailboxCoverageAgeSeconds: 'mail',
   // Emitted by `collectOutboundMetrics` in `packages/domain/outbound/metrics.ts`, which
   // can ask 12.6's "sent in the last 30 days" of `outbound_messages`. The mail lane's
@@ -139,7 +139,7 @@ export const METRIC_OWNERS: Readonly<Record<string, MetricOwner>> = Object.freez
 
   // Emitted by `collectSequenceMetrics` in `packages/domain/sequences/metrics.ts` on
   // every metric pass, 0 and 0 when nothing is enrolled: the two inputs of the
-  // `all_sequences_held` metric-math alarm (lane g72).
+  // `all_sequences_held` metric-math alarm.
   ActiveEnrollments: 'sequences',
   HeldEnrollments: 'sequences',
 

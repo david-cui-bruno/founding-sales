@@ -2,18 +2,14 @@ import { mkdtempSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing';
-import { WORKER_SCHEMA_RANGE, type SessionQueryable } from '@fss/domain/db';
-import {
-  HandlerRegistry,
-  MetricError,
-  canaryHandler,
-  enqueueJob,
-  raiseCriticalAlert,
-  recordingMetricSink,
-  type JobHandler,
-  type MetricSink,
-} from '@fss/domain/jobs';
+import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing/testDatabase.ts';
+import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
+import { WORKER_SCHEMA_RANGE } from '@fss/domain/db/schemaRange.ts';
+import { canaryHandler } from '@fss/domain/jobs/canary.ts';
+import { raiseCriticalAlert } from '@fss/domain/jobs/criticalAlerts.ts';
+import { HandlerRegistry, type JobHandler } from '@fss/domain/jobs/handlerRegistry.ts';
+import { enqueueJob } from '@fss/domain/jobs/jobStore.ts';
+import { MetricError, recordingMetricSink, type MetricSink } from '@fss/domain/jobs/metrics.ts';
 import { canarySource } from '../src/scheduler/sources.ts';
 import { readWorkerConfig, type WorkerConfig } from '../src/bootstrap/config.ts';
 import { recordingLogger } from '../src/bootstrap/log.ts';

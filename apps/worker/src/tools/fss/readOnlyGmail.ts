@@ -1,4 +1,4 @@
-import type { GmailClient } from '@fss/domain/mail';
+import type { GmailClient } from '@fss/domain/mail/gmailClient.ts';
 
 /**
  * The Gmail client `fss admin mailbox reconcile-sent` is handed (lane W3-S8).

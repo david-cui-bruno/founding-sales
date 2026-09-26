@@ -4,8 +4,8 @@ import type { StepExecutionRow } from './types.ts';
 /**
  * Moving an unexecuted step, and the record of why (specification 4.3, 11.2).
  *
- * Its own module since lane g82, because both the step runner (`executions.ts`) and the
- * resume (`resume.ts`) move steps, and the runner now asks the resume first — a held
+ * Its own module because both the step runner (`executions.ts`) and the resume
+ * (`resume.ts`) move steps, and the runner now asks the resume first — a held
  * step woken by a released hold is resumed before it is run (audit C05).
  */
 

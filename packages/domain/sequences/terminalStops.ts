@@ -3,16 +3,15 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { MANUAL_MODE_ORIGINS, type ManualModeOrigin } from '../crm/events.ts';
 import { stopEnrollments } from './enrollments.ts';
-import type { EnrollmentEndReason } from './types.ts';
+import type { EnrollmentEndReason } from '@fss/contracts';
 
 /**
  * Subscribing to the CRM's terminal-stop outbox (specification 8.1, 7.3,
  * `docs/decisions/g3a-domain-event-outbox.md`).
  *
- * Section 8.1: "Closing an opportunity stops its active enrollments." Lane G3a wrote
+ * Section 8.1: "Closing an opportunity stops its active enrollments." The CRM writes
  * the signal — an `opportunity.terminal_stop` row in `crm_domain_events`, committed
- * in the transaction that changed the stage — and said plainly that until this lane
- * subscribes, closing an opportunity stops nothing. This is the subscription.
+ * in the transaction that changed the stage — and this is the subscription.
  *
  * ## Why this reads the table rather than calling `readCrmDomainEvents`
  *
@@ -38,16 +37,15 @@ import type { EnrollmentEndReason } from './types.ts';
  * corroborate, and inventing `stage_lost` for it would put a reason in the history
  * that never happened.
  *
- * ## Two kinds, not one (lane G15)
+ * ## Two kinds, not one
  *
  * 8.1's close is `opportunity.terminal_stop`. 7.3's other half — manual is entered by
  * a confirmed human email reply, an engaged call outcome or a direct Gmail send, and
  * "current active enrollments end terminally" — is
- * `opportunity.manual_mode`, and until lane G15 nothing acted on that either, so a
- * confirmed reply set the control mode and left the sequence running. Invariant 3 says
- * it must not, so this consumer reads both kinds.
+ * `opportunity.manual_mode`. Invariant 3 says a confirmed reply must not leave the
+ * sequence running, so this consumer reads both kinds.
  *
- * The end reason for a manual-mode stop is the event's own origin (lane G22).
+ * The end reason for a manual-mode stop is the event's own origin.
  * `setManualControlMode` writes one of `MANUAL_MODE_ORIGINS` into
  * `crm_domain_events.detail.origin`, so an engaged call ends its enrollments
  * `engaged_call` and a direct Gmail send ends them `direct_send`, which is what 7.3's
@@ -116,8 +114,8 @@ const KNOWN_ORIGINS: ReadonlySet<string> = new Set(MANUAL_MODE_ORIGINS);
  * The end reason one manual-mode event gives the enrollments it stops.
  *
  * An absent or unrecognised origin is `human_reply`, and deliberately: every
- * `opportunity.manual_mode` row written before lane G22 carries no origin, and
- * `human_reply` is the reason lane G15 recorded for all of them. A drain that refused
+ * older `opportunity.manual_mode` row carries no origin, and `human_reply` is the
+ * reason recorded for all of them. A drain that refused
  * such an event would leave a sequence running after a firm had said no, which is the
  * one outcome invariant 3 forbids.
  */
@@ -173,10 +171,9 @@ export async function consumeTerminalStops(
     // 7.3's manual paragraph is firm-wide — "terminally stop every active enrollment
     // for the firm across contacts", which Appendix A's "Confirm human reply" row
     // repeats as "all firm enrollments" — while 8.1's close is about one opportunity.
-    // G15 scoped both to the opportunity, which every `opportunity.%` event names, so
-    // an enrollment still live against a firm's earlier closed opportunity survived a
-    // reply that said no. Lane G22 widened the manual arm to the firm, which is the
-    // sentence, and is a widening only ever in the safe direction.
+    // So the manual arm is the firm, which is the sentence (scoping it to the
+    // opportunity would let an enrollment live against a firm's earlier closed
+    // opportunity survive a reply that said no), and the close is the opportunity.
     const manual = event.event_kind === 'opportunity.manual_mode';
     const reason = manual
       ? manualModeEndReason(event.origin)
@@ -211,14 +208,13 @@ export async function consumeTerminalStops(
 
 /**
  * The terminal stop a manual-mode transition owes, applied by the caller that caused
- * it (7.3, Appendix A "Confirm human reply", lane G22).
+ * it (7.3, Appendix A "Confirm human reply").
  *
  * 7.3 does not describe this as background work. "A confirmed human reply performs
  * **one transaction**: record and classify the message; set manual; terminally stop
  * every active enrollment for the firm across contacts; cancel unclaimed executions;
  * ... and write the audit event." Appendix A's row is the same list under "commits
- * together". Lane G15's drain was the first thing that stopped these enrollments at
- * all, and it is still the net; but a stop that waits for the next one-minute pass
+ * together". The drain is the net; but a stop that waits for the next one-minute pass
  * leaves the sequence live in the meantime, and a pass that fails for a reason of its
  * own — another workspace event in the same batch, the suppression-marker half of the
  * same job — rolls the stop back with it.

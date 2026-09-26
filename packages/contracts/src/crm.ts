@@ -31,7 +31,7 @@ export const CRM_REFUSAL_CODES = [
   'contact_merged',
   'route_unknown',
   'route_retired',
-  // Lane g88: `/contacts/routes/confirm` on a number that changed since it was shown,
+  // `/contacts/routes/confirm` on a number that changed since it was shown,
   // or on one whose validation failed.
   'route_version_stale',
   'route_invalid',
@@ -59,43 +59,29 @@ export const CRM_REFUSAL_CODES = [
   'merge_already_performed',
   'invalid_input',
 ] as const;
-export const crmRefusalCodeSchema = z.enum(CRM_REFUSAL_CODES);
-export type CrmRefusalCode = z.infer<typeof crmRefusalCodeSchema>;
+export type CrmRefusalCode = (typeof CRM_REFUSAL_CODES)[number];
 
 // ---------------------------------------------------------------------------
 // Shared field shapes
 // ---------------------------------------------------------------------------
 
-/** A US state or territory code. Shape only; `@fss/domain` knows the list. */
-export const regionCodeSchema = z.string().regex(/^[A-Z]{2}$/, 'a two-letter region code');
-export const postalCodeSchema = z
-  .string()
-  .regex(/^[A-Za-z0-9][A-Za-z0-9 -]{1,11}$/, 'a postal code');
-export const websiteSchema = z.url().max(500).startsWith('http');
-export const firmNameSchema = z.string().trim().min(1).max(300);
-export const contactNameSchema = z.string().trim().min(1).max(200);
-export const emailAddressSchema = z
-  .string()
-  .max(320)
-  .regex(/^[^@\s]+@[^@\s]+\.[^@\s]+$/u, 'an email address');
-export const reasonSchema = z.string().trim().min(1).max(500);
+const firmNameSchema = z.string().trim().min(1).max(300);
+const contactNameSchema = z.string().trim().min(1).max(200);
+const reasonSchema = z.string().trim().min(1).max(500);
 
 export const routeEligibilitySchema = z.enum(['candidate', 'usable', 'invalid', 'retired']);
-export type RouteEligibility = z.infer<typeof routeEligibilitySchema>;
 
-export const routeKindSchema = z.enum(['phone', 'email']);
-export type RouteKind = z.infer<typeof routeKindSchema>;
+const routeKindSchema = z.enum(['phone', 'email']);
 
-export const routeSourceSchema = z.enum(['research_provider', 'salesperson', 'import', 'website', 'reply']);
-export const technicalValidationSchema = z.enum(['unknown', 'passed', 'failed']);
+const routeSourceSchema = z.enum(['research_provider', 'salesperson', 'import', 'website', 'reply']);
+const technicalValidationSchema = z.enum(['unknown', 'passed', 'failed']);
 
-export const controlModeSchema = z.enum(['automated', 'manual']);
-export type ControlMode = z.infer<typeof controlModeSchema>;
+const controlModeSchema = z.enum(['automated', 'manual']);
 
-export const opportunityStatusSchema = z.enum(['open', 'won', 'lost']);
+const opportunityStatusSchema = z.enum(['open', 'won', 'lost']);
 
 /** Why a firm has no established zone. `authorizeDial` refuses every one of them (9.2). */
-export const zoneUnresolvedReasonSchema = z.enum([
+const zoneUnresolvedReasonSchema = z.enum([
   'no_location',
   'state_spans_zones',
   'state_unknown',
@@ -124,7 +110,7 @@ export const firmIdentityDtoSchema = z.strictObject({
 });
 export type FirmIdentityDto = z.infer<typeof firmIdentityDtoSchema>;
 
-export const contactDtoSchema = z.strictObject({
+const contactDtoSchema = z.strictObject({
   id: uuid,
   fullName: contactNameSchema,
   title: z.string().nullable(),
@@ -141,7 +127,7 @@ export const routeDtoSchema = z.strictObject({
   /** The version the card shows; `authorize_dial` compares against it (9.1). */
   version: z.number().int().min(1),
   /*
-   * Lane g90: the route's technical validation (7.4), sent only in the Firm page's
+   * The route's technical validation (7.4), sent only in the Firm page's
    * second version (`pageVersion: 2`). Optional so the first version still parses: a
    * desktop released before g90 (1.0.5) parses this object strictly with a schema of its
    * own, and the API answers it without the key.
@@ -168,9 +154,8 @@ export const firmReadDtoSchema = z.discriminatedUnion('visibility', [
   z.strictObject({ visibility: z.literal('any_active_member'), firm: firmIdentityDtoSchema }),
   z.strictObject({ visibility: z.literal('assigned_or_admin'), firm: firmDetailDtoSchema }),
 ]);
-export type FirmReadDto = z.infer<typeof firmReadDtoSchema>;
 
-export const pipelineStageDtoSchema = z.strictObject({
+const pipelineStageDtoSchema = z.strictObject({
   id: uuid,
   key: z.string(),
   displayName: z.string(),
@@ -227,7 +212,7 @@ export const verifyRouteCommandSchema = z.strictObject({
 });
 
 /**
- * A person confirms a phone number reaches the firm (lane g88). Phone only: the literal
+ * A person confirms a phone number reaches the firm. Phone only: the literal
  * is the whole of that rule on the wire, and `docs/decisions/g88-founder-authoring-and-review.md`
  * says why an email address is not confirmed by hand. `routeVersion` is the version the
  * person was looking at; a route that has moved since is refused `route_version_stale`.
@@ -244,7 +229,7 @@ export const confirmRouteCommandSchema = z.strictObject({
 });
 
 /**
- * "Check again" on an address nobody has checked yet (lane g90): one more `route.validate`
+ * "Check again" on an address nobody has checked yet: one more `route.validate`
  * job for the email route at the version the person was looking at. Email only — a number
  * is confirmed by a person, not checked by the worker — and it changes nothing about the
  * route itself; the worker's answer does. A route that has moved since is refused
@@ -297,7 +282,7 @@ export const recordEvidenceCommandSchema = z.strictObject({
 });
 
 /** A merge conflict shown for resolution rather than decided (7.2). */
-export const mergeConflictSchema = z.strictObject({
+const mergeConflictSchema = z.strictObject({
   field: z.string(),
   source: z.string().nullable(),
   target: z.string().nullable(),
@@ -305,7 +290,7 @@ export const mergeConflictSchema = z.strictObject({
 export type MergeConflict = z.infer<typeof mergeConflictSchema>;
 
 // ---------------------------------------------------------------------------
-// What the Mac parses back (lane g78)
+// What the Mac parses back
 //
 // The wrappers around the DTOs above. The CRM window and Administration each declared
 // their own copy of the first three; the board's id map was a record of any strings.
@@ -314,11 +299,9 @@ export type MergeConflict = z.infer<typeof mergeConflictSchema>;
 
 /** `GET /pipeline/stages`. */
 export const pipelineStagesResponseSchema = z.object({ stages: z.array(pipelineStageDtoSchema) });
-export type PipelineStagesResponse = z.infer<typeof pipelineStagesResponseSchema>;
 
 /** `GET /firms`: Appendix F row 1 for every firm the caller may list. */
 export const firmListResponseSchema = z.object({ firms: z.array(firmIdentityDtoSchema) });
-export type FirmListResponse = z.infer<typeof firmListResponseSchema>;
 
 /** `POST /pipeline/board`: `PipelineBoardDto` in `packages/domain/crm/board.ts`. */
 export const pipelineBoardResponseSchema = z.object({
@@ -327,13 +310,12 @@ export const pipelineBoardResponseSchema = z.object({
   opportunityIdByFirmId: z.record(uuid, uuid),
   unplacedFirms: z.array(firmIdentityDtoSchema),
 });
-export type PipelineBoardResponse = z.infer<typeof pipelineBoardResponseSchema>;
 
 /**
  * A refused `POST /merges/firms` or `/merges/contacts` (audit item D05).
  *
- * `conflicts` is present when the refusal is `merge_conflicts`, on the first answer and,
- * since lane g78, on a replay too: the receipt keeps the conflicts beside the reason, so
+ * `conflicts` is present when the refusal is `merge_conflicts`, on the first answer and
+ * on a replay too: the receipt keeps the conflicts beside the reason, so
  * a Mac that retries the same command id still reaches the conflict screen.
  */
 export const mergeRefusalSchema = z.object({
@@ -342,7 +324,6 @@ export const mergeRefusalSchema = z.object({
   reason: z.string().min(1).max(80),
   conflicts: z.array(mergeConflictSchema).optional(),
 });
-export type MergeRefusal = z.infer<typeof mergeRefusalSchema>;
 
 /** Kept exported so a caller can assert a value is really an E.164 route. */
 export { e164 as phoneRouteValueSchema };

@@ -1,7 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { withTransaction } from '../../db/index.ts';
-import { decideSend, dispatchOutboundMessage, readFence } from '../../outbound/index.ts';
-import { openHold } from '../../policy/index.ts';
+import { withTransaction } from '../../db/queryable.ts';
+import { readFence } from '../../outbound/fence.ts';
+import { decideSend } from '../../outbound/gate.ts';
+import { dispatchOutboundMessage } from '../../outbound/send.ts';
+import { openHold } from '../../policy/holds.ts';
 import {
   createOutboundWorld,
   type OutboundWorld,

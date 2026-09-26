@@ -1,27 +1,23 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { makeStepExecution } from '../../db/testing/index.ts';
-import { openHold, releaseHold, type OpenHoldInput } from '../../policy/index.ts';
-import { readFence } from '../../outbound/index.ts';
-import {
-  holdSource,
-  listStepWakes,
-  readStepExecution,
-  resumeEnrollment,
-} from '../../sequences/index.ts';
+import { makeStepExecution } from '../../db/testing/stepExecutions.ts';
+import { openHold, releaseHold, type OpenHoldInput } from '../../policy/holds.ts';
+import { readFence } from '../../outbound/fence.ts';
+import { holdSource } from '../../sequences/eligibility.ts';
+import { resumeEnrollment } from '../../sequences/resume.ts';
+import { readStepExecution } from '../../sequences/rows.ts';
+import { listStepWakes } from '../../sequences/wake.ts';
 import { createOutboundWorld, type OutboundWorld } from '../outbound/support/outboundWorld.ts';
 import { prepareFor, seedFirm, type SeededFirm } from '../outbound/support/dispatchFixtures.ts';
 
 /**
  * Which held steps the scheduler wakes, and that it agrees with eligibility about why
- * (lane g82: audit C05, C10).
+ * (audit C05, C10).
  *
  * `listStepWakes` skips a held step while an open hold blocks it and takes it on the
  * first pass after the release; `holdSource` — the eligibility read the step's run and
  * the dispatch claim both make — refuses it for exactly as long; and the resume that
  * the run starts with (4.3) sees the same hold open. Three readers, one answer, for
- * every scope `active_holds` can carry. Before lane g82 the wake took no held step
- * but four clock-clearing reasons, whose jobs then never ran again, and the resume
- * asked five scopes of the seven.
+ * every scope `active_holds` can carry.
  *
  * A vacuous pass would be a hold that blocks nothing, so each case also requires the
  * step to be woken, and the eligibility to pass, once the hold is released.

@@ -1,16 +1,19 @@
 import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { decideFirmMutation } from '../crm/authorization.ts';
-import { readFirm, setManualControlMode } from '../crm/index.ts';
+import { readFirm } from '../crm/firms.ts';
+import { setManualControlMode } from '../crm/pipeline.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
-import { createCallback } from '../dial/index.ts';
-import { listMatches, readMessage } from '../mail/index.ts';
+import { createCallback } from '../dial/callbacks.ts';
+import { listMatches } from '../mail/matching.ts';
+import { readMessage } from '../mail/messages.ts';
 import { recordDaySignal } from '../outbound/ramp.ts';
 import { releaseHoldsOfEvent } from '../policy/holds.ts';
 import { applyManualModeStop } from '../sequences/terminalStops.ts';
-import { recordSuppression, type SuppressionJournal } from '../suppression/index.ts';
-import { businessDateOf, completeTodayItem } from '../today/index.ts';
-import type { ReplyDisposition } from '../src/rules/replyClassification.ts';
-import { REPLY_DISPOSITIONS } from '../src/rules/replyClassification.ts';
+import { recordSuppression } from '../suppression/events.ts';
+import type { SuppressionJournal } from '../suppression/journal.ts';
+import { businessDateOf, completeTodayItem } from '../today/snapshots.ts';
+import type { ReplyDisposition } from '@fss/contracts';
+import { REPLY_DISPOSITIONS } from '@fss/contracts';
 import { listClassifications, proposedDispositionOf } from './store.ts';
 import {
   acceptClassification,
@@ -273,8 +276,8 @@ export async function confirmReplyDisposition(
     suppressionRecorded = handle.value.eventId;
     consequences.push('handle_suppressed');
 
-    // 12.7's ramp reads the day's opt-outs, and a confirmed `opt_out` is one
-    // (lane G15). Counted here rather than inside `recordSuppression`, because most
+    // 12.7's ramp reads the day's opt-outs, and a confirmed `opt_out` is one.
+    // Counted here rather than inside `recordSuppression`, because most
     // suppressions have no mailbox and no day: an import and a do-not-call from a
     // phone call are not deliverability signals about a mailbox's sending.
     //

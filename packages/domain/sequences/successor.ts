@@ -1,17 +1,16 @@
 import {
-  addCalendarDays,
   isBusinessDay,
   nextBusinessDayOnOrAfter,
   resolveDelay,
-  resolveStepDue,
   type ResolvedDueInstant,
-  type SequenceStep,
   type WorkspaceHolidayCalendar,
-} from '../src/index.ts';
+} from '../src/rules/businessDays.ts';
+import { resolveStepDue, type SequenceStep } from '../src/rules/cadence.ts';
+import { addCalendarDays } from '../src/rules/localClock.ts';
 
 /**
  * When a completed step's successor is due (specification 11.2, 12.5, Appendix B;
- * lane g82, audit C11).
+ * Audit C11).
  *
  * The cadence the salesperson reviews is start-anchored: the editor labels every delay
  * "N business days after enrollment" and `resolveStepDue` counts it from the

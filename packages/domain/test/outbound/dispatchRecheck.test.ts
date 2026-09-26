@@ -3,15 +3,14 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { withTransaction } from '../../db/queryable.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
 import { setManualControlMode } from '../../crm/pipeline.ts';
-import { COVERAGE_FRESHNESS_SECONDS, runMailSync } from '../../mail/index.ts';
-import {
-  claimedAutomatedSends,
-  dispatchOutboundMessage,
-  readFence,
-  type SendReport,
-} from '../../outbound/index.ts';
-import { openHold, releaseHold } from '../../policy/index.ts';
-import { recordHolidayCalendar, stopEnrollments } from '../../sequences/index.ts';
+import { COVERAGE_FRESHNESS_SECONDS } from '../../mail/coverage.ts';
+import { runMailSync } from '../../mail/sync.ts';
+import { readFence } from '../../outbound/fence.ts';
+import { claimedAutomatedSends } from '../../outbound/ramp.ts';
+import { dispatchOutboundMessage, type SendReport } from '../../outbound/send.ts';
+import { openHold, releaseHold } from '../../policy/holds.ts';
+import { recordHolidayCalendar } from '../../sequences/calendars.ts';
+import { stopEnrollments } from '../../sequences/enrollments.ts';
 import {
   TEMPLATE_BODY,
   TEMPLATE_SUBJECT,
@@ -21,7 +20,7 @@ import {
 import { automatedSent, prepareFor, seedFirm } from './support/dispatchFixtures.ts';
 
 /**
- * The dispatch re-asks everything, immediately before the claim (lane g77: S02, S03,
+ * The dispatch re-asks everything, immediately before the claim (S02, S03,
  * S05, S09).
  *
  * Each scenario prepares a fence while the world is sendable, changes one fact the

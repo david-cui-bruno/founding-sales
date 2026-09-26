@@ -1,11 +1,7 @@
-import type { SessionQueryable } from '@fss/domain/db';
-import { WORKER_SCHEMA_RANGE, checkSchemaRange } from '@fss/domain/db';
-import {
-  SCHEDULER_ADVISORY_LOCK_KEY,
-  enqueueJob,
-  recordHeartbeat,
-  type JobSpecification,
-} from '@fss/domain/jobs';
+import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
+import { WORKER_SCHEMA_RANGE, checkSchemaRange } from '@fss/domain/db/schemaRange.ts';
+import { recordHeartbeat } from '@fss/domain/jobs/heartbeats.ts';
+import { enqueueJob, type JobSpecification } from '@fss/domain/jobs/jobStore.ts';
 
 /**
  * The one-minute scheduler pass (specification 13.1).
@@ -33,6 +29,14 @@ import {
  * * **It declares its schema range.** A scheduler that does not understand the
  *   database does not materialize work into it.
  */
+
+/**
+ * The transaction advisory lock the pass holds. A stable literal, not a hash of a
+ * version, a deployment id or a table name: two binaries of different releases must
+ * collide on it. Deliberately not the migration runner's key, so a migration and a
+ * scheduler pass do not block each other.
+ */
+export const SCHEDULER_ADVISORY_LOCK_KEY = 6_243_912_004_771_002;
 
 export interface DueWorkSource {
   /** For the report, and for the structured log line. Not a business identifier. */

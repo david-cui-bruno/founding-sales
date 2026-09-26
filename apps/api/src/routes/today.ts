@@ -1,7 +1,9 @@
 import { TODAY_CARD_VERSION, todayFirmRequestSchema } from '@fss/contracts';
-import { databaseNow } from '@fss/domain/policy';
-import { readTodayFirm, readTodayList, todayFirmVersion1 } from '@fss/domain/today';
-import { REFUSAL_STATUS, contextForPrincipal, policyRouteDeps, redactError } from './dialSupport.ts';
+import { databaseNow } from '@fss/domain/policy/clock.ts';
+import { readTodayFirm, readTodayList, todayFirmVersion1 } from '@fss/domain/today/dto.ts';
+import { REFUSAL_STATUS, redactError } from '../limits.ts';
+import { policyRouteDeps } from './dialSupport.ts';
+import { contextForPrincipal } from './routeSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**
@@ -27,9 +29,9 @@ export const TODAY_PATHS: readonly string[] = ['/today', '/today/firm'];
 
 /*
  * `cardVersion: 2` (`todayFirmRequestSchema` in `@fss/contracts`) asks for the tasks
- * with the identities lane g79 added: the callback, the step execution, the call that
- * needs a callback time, and the pause. Without it the card is G6's shape exactly,
- * because a desktop released before g79 parses the card with a strict schema and
+ * with their identities: the callback, the step execution, the call that needs a
+ * callback time, and the pause. Without it the card is the first shape exactly,
+ * because an older desktop parses the card with a strict schema and
  * would refuse a field it has never heard of.
  */
 

@@ -22,7 +22,7 @@ import type { MetricDatum } from '../jobs/metrics.ts';
  * "Disconnected" here means the grant is gone without anyone choosing it: `revoked`,
  * which is what a refused refresh (`holdForRevokedGrant`) and a departure write. A
  * mailbox its owner disconnected with the disconnect command is `disconnected`, and is
- * not a mailbox that stopped (lane g81, audit O15): until then it too alarmed as
+ * not a mailbox that stopped (audit O15): until then it too alarmed as
  * critical 48 hours after the owner chose it.
  */
 

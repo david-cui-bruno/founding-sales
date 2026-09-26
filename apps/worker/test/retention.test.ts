@@ -1,8 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing';
-import { workspaceScope } from '@fss/domain/db';
-import { HandlerRegistry, runTwiceUnderStolenLease } from '@fss/domain/jobs';
-import { RETENTION_LEDGER_KINDS, retentionBatchJobKey, retentionPeriodOf } from '@fss/domain/retention';
+import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing/testDatabase.ts';
+import { workspaceScope } from '@fss/domain/db/workspaceScope.ts';
+import { runTwiceUnderStolenLease } from '@fss/domain/jobs/atLeastOnce.ts';
+import { HandlerRegistry } from '@fss/domain/jobs/handlerRegistry.ts';
+import { RETENTION_LEDGER_KINDS, retentionBatchJobKey, retentionPeriodOf } from '@fss/domain/retention/kinds.ts';
 import { runClaimedJob } from '../src/runner/jobRunner.ts';
 import { runSchedulerPass } from '../src/scheduler/schedulerPass.ts';
 import { retentionBatchJobHandler, retentionSource } from '../src/handlers/retention.ts';

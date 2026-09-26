@@ -1,6 +1,7 @@
 import { FIRM_PAGE_VERSION, firmPageRequestSchema } from '@fss/contracts';
-import { readFirmPage } from '@fss/domain/crm';
-import { REFUSAL_STATUS, contextForPrincipal, redactError, requirePrincipal } from './crmSupport.ts';
+import { readFirmPage } from '@fss/domain/crm/firmPage.ts';
+import { REFUSAL_STATUS, redactError } from '../limits.ts';
+import { contextForPrincipal, requirePrincipal } from './routeSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**
@@ -36,7 +37,7 @@ export async function routeFirmPage(request: ApiRequest, options: RoutingOptions
   const parsed = firmPageRequestSchema.safeParse(request.body);
   if (!parsed.success) return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };
 
-  // Lane g90: `pageVersion: 2` puts each route's technical validation on it. Without it
+  // `pageVersion: 2` puts each route's technical validation on it. Without it
   // the answer is the shape an installed 1.0.5 parses strictly.
   const page = await readFirmPage(scoped.context, {
     firmId: parsed.data.firmId,

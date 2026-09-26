@@ -1,25 +1,20 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
+import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
-import { databaseNow, listApplicableHolds, openHold, releaseHold } from '../../policy/index.ts';
-import { changeStage, emitCrmDomainEvent, setManualControlMode } from '../../crm/index.ts';
-import { enrollmentFacts } from '../../dashboard/index.ts';
-import {
-  allowAllEligibility,
-  consumeTerminalStops,
-  createDraftVersion,
-  createSequence,
-  dispatchPreparedStep,
-  enrollContact,
-  listStepExecutions,
-  listStepWakes,
-  publishVersion,
-  readEnrollment,
-  recordingSendHandoff,
-  resumeEnrollment,
-  runDueStepExecution,
-  type RecordingSendHandoff,
-} from '../../sequences/index.ts';
+import { databaseNow } from '../../policy/clock.ts';
+import { listApplicableHolds, openHold, releaseHold } from '../../policy/holds.ts';
+import { emitCrmDomainEvent } from '../../crm/events.ts';
+import { changeStage, setManualControlMode } from '../../crm/pipeline.ts';
+import { enrollmentFacts } from '../../dashboard/enrollmentSource.ts';
+import { createDraftVersion, createSequence, publishVersion } from '../../sequences/definitions.ts';
+import { allowAllEligibility } from '../../sequences/eligibility.ts';
+import { enrollContact } from '../../sequences/enrollments.ts';
+import { dispatchPreparedStep, runDueStepExecution } from '../../sequences/executions.ts';
+import { resumeEnrollment } from '../../sequences/resume.ts';
+import { listStepExecutions, readEnrollment } from '../../sequences/rows.ts';
+import { recordingSendHandoff, type RecordingSendHandoff } from '../../sequences/sendHandoff.ts';
+import { consumeTerminalStops } from '../../sequences/terminalStops.ts';
+import { listStepWakes } from '../../sequences/wake.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
 import { seedSequences, type SeededSequences } from './support/sequenceFixtures.ts';

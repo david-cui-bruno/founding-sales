@@ -6,7 +6,8 @@ import {
   sessionRenewRequestSchema,
   type ClientVersionNotice,
 } from '@fss/contracts';
-import { authenticate, claimSignIn, endSession, handleCallback, renewSession } from '../auth/index.ts';
+import { authenticate, endSession, renewSession } from '../auth/sessions.ts';
+import { claimSignIn, handleCallback } from '../auth/signIn.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
@@ -43,8 +44,8 @@ const REFUSED_PAGE = CALLBACK_PAGE('Sign-in refused', 'Return to Callie; it will
 
 function notice(options: RoutingOptions): ClientVersionNotice {
   return clientVersionNoticeSchema.parse({
-    // The range a 1.0.x Mac can parse: the policy's minimum and its ceiling's top
-    // (lane g78). The incompatible list is enforced here, never published.
+    // The range a 1.0.x Mac can parse: the policy's minimum and its ceiling's top.
+    // The incompatible list is enforced here, never published.
     supported: publishedClientVersions(options.supportedClientVersions),
     upgradeUrl: options.upgradeUrl,
     instruction:

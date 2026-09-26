@@ -1,4 +1,4 @@
-import { REPLY_CLASSES, REPLY_DISPOSITIONS } from '../src/rules/replyClassification.ts';
+import { REPLY_CLASSES, REPLY_DISPOSITIONS } from '@fss/contracts';
 import type { CallbackProposal, ModelSuggestion } from './types.ts';
 
 /**

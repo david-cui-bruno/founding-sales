@@ -2,17 +2,14 @@ import {
   settingHistoryRequestSchema,
   updateSettingCommandSchema,
 } from '@fss/contracts';
-import {
-  SETTINGS_ELSEWHERE,
-  effectiveSendingEnabled,
-  readCurrentSettings,
-  readSetting,
-  readSettingHistory,
-  updateSetting,
-} from '@fss/domain/settings';
-import { attestedReleaseBinding } from '@fss/domain/release';
-import { currentHolidayCalendar } from '@fss/domain/sequences';
-import { REFUSAL_STATUS, contextForPrincipal, policyRouteDeps, redactError, runPolicyCommand } from './dialSupport.ts';
+import { effectiveSendingEnabled } from '@fss/domain/settings/effective.ts';
+import { SETTINGS_ELSEWHERE } from '@fss/domain/settings/elsewhere.ts';
+import { readCurrentSettings, readSetting, readSettingHistory, updateSetting } from '@fss/domain/settings/store.ts';
+import { attestedReleaseBinding } from '@fss/domain/release/records.ts';
+import { currentHolidayCalendar } from '@fss/domain/sequences/calendars.ts';
+import { REFUSAL_STATUS, redactError } from '../limits.ts';
+import { policyRouteDeps, runPolicyCommand } from './dialSupport.ts';
+import { contextForPrincipal } from './routeSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**
@@ -34,7 +31,7 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  * not offer an edit of it, and the edit goes to G8's command.
  *
  * Enabling production sending is refused unless the attested reference is a stored,
- * passing release record whose API digest is this API's own (lane g71); the refusal
+ * passing release record whose API digest is this API's own; the refusal
  * codes are the domain's, `release_record_unknown`, `release_record_not_passing`,
  * `release_record_identity_unknown` and `release_record_digest_mismatch`.
  *
@@ -73,7 +70,7 @@ export async function routeSettings(request: ApiRequest, options: RoutingOptions
         // 16.2 is two switches ANDed. Both are shown, because an admin who has
         // enabled sending and still cannot send needs to see which half is off.
         deploymentSendingEnabled: options.sendingEnabled,
-        // And, since lane g71, only when the attested release record binds to this
+        // And only when the attested release record binds to this
         // API's own image: after a deploy of digests nobody rehearsed, the page says
         // sending is off, which is what the worker's gate is about to say too.
         effectiveSendingEnabled:
@@ -105,7 +102,7 @@ export async function routeSettings(request: ApiRequest, options: RoutingOptions
       value: body.value,
       ...(body.changeNote === undefined ? {} : { changeNote: body.changeNote }),
       commandId: body.commandId,
-      // 16.2, lane g71: an enable names a release record whose API digest is this
+      // 16.2: an enable names a release record whose API digest is this
       // process's own. The domain refuses in the same transaction; the route only
       // says which image it is.
       runningApiDigest: options.imageDigest,

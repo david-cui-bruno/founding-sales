@@ -1,16 +1,14 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { withTransaction } from '../../db/queryable.ts';
 import { setManualControlMode } from '../../crm/pipeline.ts';
-import { runMailSync } from '../../mail/index.ts';
-import {
-  claimedAutomatedSends,
-  dispatchOutboundMessage,
-  readFence,
-  type SendReport,
-} from '../../outbound/index.ts';
-import { lockSendGateForDispatch, openHold } from '../../policy/index.ts';
+import { runMailSync } from '../../mail/sync.ts';
+import { readFence } from '../../outbound/fence.ts';
+import { claimedAutomatedSends } from '../../outbound/ramp.ts';
+import { dispatchOutboundMessage, type SendReport } from '../../outbound/send.ts';
+import { openHold } from '../../policy/holds.ts';
+import { lockSendGateForDispatch } from '../../policy/sendGate.ts';
 import { applyManualModeStop } from '../../sequences/terminalStops.ts';
-import { recordSuppression } from '../../suppression/index.ts';
+import { recordSuppression } from '../../suppression/events.ts';
 import { fixtureMessage } from '../mail/support/mailWorld.ts';
 import {
   FIXTURE_BUSINESS_DATE,
@@ -33,7 +31,7 @@ import {
 } from './support/dispatchFixtures.ts';
 
 /**
- * Appendix G 3 and 6 with the race window actually entered (lane g77: S01, T02, C25).
+ * Appendix G 3 and 6 with the race window actually entered (S01, T02, C25).
  *
  * Appendix G 3: "Worker pauses after eligibility read, reply commits, worker resumes: no
  * external action after the reply linearizes." The release check that stood for it

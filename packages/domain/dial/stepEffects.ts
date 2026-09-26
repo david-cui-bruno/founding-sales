@@ -1,24 +1,19 @@
-import type { CallOutcome, CallStepApplication, CallStepEffect } from '@fss/contracts';
+import type { CallOutcome, CallStepApplication, CallStepEffect, StepResult } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { addBusinessDays } from '../src/rules/businessDays.ts';
 import { localDate, localInstant, localParts } from '../src/rules/localClock.ts';
 import { calendarOfEnrollment } from '../sequences/enrollments.ts';
 import { completeStepExecution, rescheduleExecution } from '../sequences/executions.ts';
 import { lockStepWithEnrollment, readSequenceVersion } from '../sequences/rows.ts';
-import type { EnrollmentRow, StepExecutionRow, StepResult } from '../sequences/types.ts';
+import type { EnrollmentRow, StepExecutionRow } from '../sequences/types.ts';
 import { completeTodayItemsByKey } from '../today/snapshots.ts';
 import { callOutcomeEffects, type CallOutcomeEffects } from './outcomes.ts';
 
 /**
  * What a logged call does to the sequence step it was placed for (specification 9.1,
- * 11.2, Appendix A "Log call outcome", Appendix G 26; lane g79, audit item C04).
- *
- * G4 recorded a `step_effect` on the call log and applied nothing: "no enrollment
- * table exists yet, so the decided effect is recorded here rather than applied", with
- * `step_execution_id` left for the sequences lane to fill in, and the no-answer
- * behaviour taken from the request. The sequences lane arrived and nobody came back,
- * so a logged voicemail left its call task on Today for ever and the cadence stalled
- * behind it. This file is the coming back.
+ * 11.2, Appendix A "Log call outcome", Appendix G 26; audit item C04): without it a
+ * logged voicemail would leave its call task on Today for ever and the cadence would
+ * stall behind it.
  *
  * ## Bound, not inferred
  *

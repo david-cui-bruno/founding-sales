@@ -1,21 +1,23 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
+import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import { CI_GATE_MAIN_POLICY } from '@fss/contracts';
 import {
   ECS_METADATA_VARIABLE,
   IMAGE_DIGEST_VARIABLE,
-  bindReleaseAttestation,
   digestFromContainerMetadata,
   discoverImageDigest,
+} from '../../release/identity.ts';
+import {
+  bindReleaseAttestation,
   putReleaseRecord,
   readCiGateRecordFor,
   readReleaseRecord,
   releasePolicyBinding,
   releaseRecordBinding,
   type StoredReleaseRecord,
-} from '../../release/index.ts';
+} from '../../release/records.ts';
 import {
   FIXTURE_API_DIGEST,
   FIXTURE_CI_COMMIT,

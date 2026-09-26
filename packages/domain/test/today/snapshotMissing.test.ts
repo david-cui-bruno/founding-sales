@@ -1,23 +1,17 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
+import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
+import { jobIdempotencyKey } from '../../jobs/jobKinds.ts';
+import { claimJobs, completeJob, enqueueJob, failJob, type ClaimedJob } from '../../jobs/jobStore.ts';
+import { recordingMetricSink } from '../../jobs/metrics.ts';
 import {
-  claimJobs,
-  completeJob,
-  enqueueJob,
-  failJob,
-  jobIdempotencyKey,
-  recordingMetricSink,
-  type ClaimedJob,
-} from '../../jobs/index.ts';
-import {
-  TODAY_ALGORITHM_VERSION,
   TODAY_SNAPSHOT_DEADLINE_LOCAL_MINUTE,
   collectTodayMetrics,
   readTodaySnapshotStatus,
-} from '../../today/index.ts';
+} from '../../today/metrics.ts';
+import { TODAY_ALGORITHM_VERSION } from '../../today/types.ts';
 
 /**
- * `TodaySnapshotMissing` against a real PostgreSQL (specification 8.2, 13.3; lane g67).
+ * `TodaySnapshotMissing` against a real PostgreSQL (specification 8.2, 13.3).
  *
  * 13.3 alarms on "Today snapshot absent at 05:10 workspace time", and the gauge
  * answers it from the `today.build` job rather than from `today_snapshots`, because a

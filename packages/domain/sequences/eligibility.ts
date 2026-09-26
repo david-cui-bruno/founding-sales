@@ -1,8 +1,8 @@
-import type { BlockedActionKind, HoldReasonCode, PauseChannel } from '@fss/contracts';
+import type { BlockedActionKind, HoldReasonCode, PauseChannel, StepChannel } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { coverageRefusal, readMailboxCoverage } from '../mail/coverage.ts';
-import { listApplicableHolds } from '../policy/index.ts';
-import type { StepChannel, StepExecutionRow } from './types.ts';
+import { listApplicableHolds } from '../policy/holds.ts';
+import type { StepExecutionRow } from './types.ts';
 
 /**
  * The eligibility re-read (specification 11.2, Appendix G 3 and 6).
@@ -40,7 +40,7 @@ import type { StepChannel, StepExecutionRow } from './types.ts';
  * unassigned salesperson should be told the firm is suppressed rather than that it is
  * not theirs, because the suppression is the more important fact.
  *
- * ## One implementation, asked twice (lane g77)
+ * ## One implementation, asked twice
  *
  * The composition is asked when a due step is prepared (`runDueStepExecution`) and
  * again, by the sending lane, immediately before the dispatch claim
@@ -124,7 +124,7 @@ export const CHANNEL_PAUSE_KEYS: Readonly<Record<StepChannel, PauseChannel>> = O
  * does not stop ... manual calling unless calling is separately paused" applied to a
  * sequence rather than to a dial.
  *
- * Every scope `active_holds` has is asked (lane g77). Until then this source named no
+ * Every scope `active_holds` has is asked. Until then this source named no
  * mailbox and no channel, so an administrator's pause of the owner's mailbox, or of
  * the email channel, held nothing here — `openPause` writes both scopes, and the send
  * gate asked about the mailbox but not the channel. The owner's mailbox is the one the
@@ -182,7 +182,7 @@ export function controlModeSource(): StepEligibilitySource {
 }
 
 /**
- * The enrollment (11.2, 4.3; lane g77).
+ * The enrollment (11.2, 4.3).
  *
  * `runDueStepExecution` asks this before it asks anything else and answers
  * `nothing_to_do` for an ended enrollment, so at preparation this source only ever
@@ -315,11 +315,10 @@ export function emailRouteSource(): StepEligibilitySource {
 }
 
 /**
- * The route a fence froze, re-read at dispatch (7.2, 12.4, Appendix B; lane g77).
+ * The route a fence froze, re-read at dispatch (7.2, 12.4, Appendix B).
  *
  * `usable` and nothing else: a `candidate` was never cleared to receive automated
- * mail, and before lane g77 the dispatch gate let one through because it refused only
- * `invalid` and `retired`. And the *version* must be the one the fence froze. A route
+ * mail. And the *version* must be the one the fence froze. A route
  * whose eligibility changed bumps its version (`email_addresses_version_increases`), so
  * a different version is a route that has been re-decided since these bytes were
  * addressed — invalidated by a bounce and restored, say — and the decision the fence
@@ -360,7 +359,7 @@ async function frozenRouteOutcome(
  * and this catches the case of an owner who has never connected a mailbox at all,
  * which no hold covers because nothing ever opened one.
  *
- * Coverage is *proven* coverage (lane g77): `ready` and a watermark no older than
+ * Coverage is *proven* coverage: `ready` and a watermark no older than
  * `COVERAGE_FRESHNESS_SECONDS`. A mailbox that stays `ready` while every sync is rate
  * limited is exactly the unhealthy coverage 12.6 holds for, and `mail/coverage.ts` is
  * the one place that says what fresh means.
@@ -380,7 +379,7 @@ export function mailboxSource(): StepEligibilitySource {
  * The template's standing approval (11.1, 12.2).
  *
  * At dispatch the question is about the version the fence's bytes were rendered from,
- * which is `frozen.templateVersionId` (lane g77): an approval withdrawn after the bytes
+ * which is `frozen.templateVersionId`: an approval withdrawn after the bytes
  * were decided withdraws the bytes too.
  */
 export function templateApprovalSource(): StepEligibilitySource {

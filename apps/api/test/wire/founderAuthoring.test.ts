@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { repositoryContext, workspaceScope } from '@fss/domain/db';
-import { openHold, releaseHold } from '@fss/domain/policy';
+import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
+import { openHold, releaseHold } from '@fss/domain/policy/holds.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from '../support/authFixture.ts';
 import { issueSessionFor } from '../support/sessionFixture.ts';
 import { createCrmBridge } from '../../../desktop/src/main/crmBridge.ts';
@@ -11,8 +11,8 @@ import { desktopClient } from '../support/wireThrough.ts';
 
 /**
  * A founder authors a sequence, starts a firm on it, and reviews a long hold before
- * resuming it — all from the Mac (release.md 8.0au; lane g88, audit G03, G06, C20 and the
- * route-usability gap lane g84 reported).
+ * resuming it — all from the Mac (release.md 8.0au; audit G03, G06, C20 and the
+ * route-usability gap).
  *
  * Until g88 the sequence editor could show a sequence and could not make one: `saveDraft`
  * was declared, exposed by the preload script and registered by nobody, there was no way
@@ -42,7 +42,7 @@ import { desktopClient } from '../support/wireThrough.ts';
  * bridge, and read back from `contacts` as null.
  */
 
-describe('8.0au: a founder authors, enrols, confirms a number and reviews a resume from the Mac (lane g88)', () => {
+describe('8.0au: a founder authors, enrols, confirms a number and reviews a resume from the Mac', () => {
   let fixture: AuthFixture;
   let adminToken = '';
   let firmId = '';

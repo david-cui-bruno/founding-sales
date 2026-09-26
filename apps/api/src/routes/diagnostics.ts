@@ -1,9 +1,13 @@
 import { publishedClientVersions } from '@fss/contracts';
-import { API_SCHEMA_RANGE, readAppliedSchemaVersion } from '@fss/domain/db';
-import { readDiagnostics } from '@fss/domain/dashboard';
-import { attestedReleaseBinding } from '@fss/domain/release';
-import { effectiveSendingEnabled, readSetting } from '@fss/domain/settings';
-import { REFUSAL_STATUS, contextForPrincipal, policyRouteDeps, redactError } from './dialSupport.ts';
+import { readAppliedSchemaVersion } from '@fss/domain/db/migrationRunner.ts';
+import { API_SCHEMA_RANGE } from '@fss/domain/db/schemaRange.ts';
+import { readDiagnostics } from '@fss/domain/dashboard/diagnostics.ts';
+import { attestedReleaseBinding } from '@fss/domain/release/records.ts';
+import { effectiveSendingEnabled } from '@fss/domain/settings/effective.ts';
+import { readSetting } from '@fss/domain/settings/store.ts';
+import { REFUSAL_STATUS, redactError } from '../limits.ts';
+import { policyRouteDeps } from './dialSupport.ts';
+import { contextForPrincipal } from './routeSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**

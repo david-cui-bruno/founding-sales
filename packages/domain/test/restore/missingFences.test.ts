@@ -6,33 +6,28 @@ import {
   recordedSentThreadId,
   type GmailFixtureMessage,
   type RecordedGmailClient,
-} from '../../mail/index.ts';
+} from '../../mail/gmailClientFake.ts';
 import {
   SENT_FOLDER_PRE_DISPATCH_PROVENANCE,
   SENT_TOMBSTONE_PROVENANCE,
   SENT_TOMBSTONE_RULE_VERSION,
-  deterministicMessageId,
-  dispatchOutboundMessage,
-  fssFenceIdOfSentMessage,
   insertSentTombstone,
   prepareOutboundMessage,
   readFence,
   readFenceEvents,
   readOutboundOutcome,
-  scanSentFolder,
-  type OutboundSendDeps,
-} from '../../outbound/index.ts';
+} from '../../outbound/fence.ts';
+import { dispatchOutboundMessage, type OutboundSendDeps } from '../../outbound/send.ts';
+import { scanSentFolder } from '../../outbound/sentFolder.ts';
+import { deterministicMessageId, fssFenceIdOfSentMessage } from '../../outbound/types.ts';
 import {
   RESTORE_SENT_SCAN_SKEW_SECONDS,
   recoverSentFolderMessage,
   type SentMessageRecovery,
 } from '../../restore/index.ts';
-import {
-  allowAllEligibility,
-  dispatchPreparedStep,
-  runDueStepExecution,
-  type SendHandoff,
-} from '../../sequences/index.ts';
+import { allowAllEligibility } from '../../sequences/eligibility.ts';
+import { dispatchPreparedStep, runDueStepExecution } from '../../sequences/executions.ts';
+import type { SendHandoff } from '../../sequences/sendHandoff.ts';
 import {
   CLOSED_INSTANT,
   OPEN_INSTANT,

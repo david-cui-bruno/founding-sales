@@ -1,11 +1,6 @@
 import { MODEL_SUGGESTION_JSON_SCHEMA } from './schema.ts';
-import {
-  CLASSIFIER_PROMPT_VERSION,
-  MODEL_CAPABILITIES,
-  SERVER_SIDE_FALLBACK_BETA,
-  type ClassifierEffort,
-  type ClassifierModel,
-} from './types.ts';
+import { CLASSIFIER_PROMPT_VERSION, MODEL_CAPABILITIES, SERVER_SIDE_FALLBACK_BETA } from './types.ts';
+import type { ClassifierEffort, ClassifierModel } from '@fss/contracts';
 
 /**
  * The system prompt, and the one function that turns a message into a request.

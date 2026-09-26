@@ -1,3 +1,4 @@
+import type { OutboundState } from '@fss/contracts';
 /**
  * The vocabulary of at-most-once sending (specification 12.5 to 12.7, Appendix B).
  *
@@ -13,17 +14,6 @@
  * the request may have arrived. Every type here that could collapse it into "failed"
  * deliberately does not.
  */
-
-/** Appendix B's state machine, exactly. There is no seventh state. */
-export const OUTBOUND_STATES = [
-  'prepared',
-  'held',
-  'dispatching',
-  'reconciling',
-  'sent',
-  'unknown_terminal',
-] as const;
-export type OutboundState = (typeof OUTBOUND_STATES)[number];
 
 /** What `readOutboundOutcome` reports when no fence exists for an origin at all. */
 export type OutboundOutcomeState = OutboundState | 'absent';
@@ -70,7 +60,7 @@ export const SEND_REFUSAL_CODES = [
   'recipient_rejected',
   'provider_refusal',
   /**
-   * The step's own eligibility said no at the last moment (lane g77): a reply's hold, a
+   * The step's own eligibility said no at the last moment: a reply's hold, a
    * pause, manual mode, a stopped enrollment, a reassignment. The detail is section
    * 15's code. It opens no hold of its own, because whatever refused already is one —
    * see `sendRefusalForIneligibility` in `stepPermission.ts`.
@@ -167,7 +157,7 @@ const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 
 /**
  * The fence id a message in one mailbox's Sent folder carries, if FSS sent it from that
- * mailbox, or null (Appendix E step 3, lane g73).
+ * mailbox, or null (Appendix E step 3).
  *
  * The marker is the *whole* deterministic Message-ID, not a prefix of it:
  * `<fss.{fence uuid}@{the sending mailbox's domain}>`, exactly as

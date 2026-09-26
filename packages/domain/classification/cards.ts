@@ -1,9 +1,12 @@
-import type { HoldReasonCode } from '@fss/contracts';
+import type { HoldReasonCode, ReplyDisposition, ReplyNextAction } from '@fss/contracts';
 import { isRecoverableHoldReason, knownBlockedActionKinds } from '@fss/contracts';
-import { decideFirmRead, readContact, readFirm, readOpportunity } from '../crm/index.ts';
+import { decideFirmRead } from '../crm/authorization.ts';
+import { readContact } from '../crm/contacts.ts';
+import { readFirm } from '../crm/firms.ts';
+import { readOpportunity } from '../crm/pipeline.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
-import { listMatches, readMessage, readMessageBody } from '../mail/index.ts';
-import type { ReplyDisposition } from '../src/rules/replyClassification.ts';
+import { listMatches } from '../mail/matching.ts';
+import { readMessage, readMessageBody } from '../mail/messages.ts';
 import { listClassifications, proposedDispositionOf, type ClassificationRow } from './store.ts';
 import { readConfirmation, type ReplyConfirmationRow } from './confirmations.ts';
 
@@ -42,14 +45,6 @@ import { readConfirmation, type ReplyConfirmationRow } from './confirmations.ts'
  * excerpt is a quotation from the body and is redacted with it; a card that redacted
  * the body and printed a sentence of it would be the same leak with more steps.
  */
-
-export const REPLY_NEXT_ACTIONS = [
-  'confirm_disposition',
-  'resolve_ambiguity',
-  'review_bounce',
-  'nothing_to_do',
-] as const;
-export type ReplyNextAction = (typeof REPLY_NEXT_ACTIONS)[number];
 
 export interface ReplyCardHoldDto {
   readonly holdId: string;

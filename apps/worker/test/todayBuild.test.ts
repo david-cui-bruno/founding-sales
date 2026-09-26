@@ -1,8 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing';
-import { repositoryContext, workspaceScope } from '@fss/domain/db';
-import { HandlerRegistry, runTwiceUnderStolenLease } from '@fss/domain/jobs';
-import { TODAY_ALGORITHM_VERSION, businessDateOf, readTodayList } from '@fss/domain/today';
+import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing/testDatabase.ts';
+import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
+import { runTwiceUnderStolenLease } from '@fss/domain/jobs/atLeastOnce.ts';
+import { HandlerRegistry } from '@fss/domain/jobs/handlerRegistry.ts';
+import { readTodayList } from '@fss/domain/today/dto.ts';
+import { businessDateOf } from '@fss/domain/today/snapshots.ts';
+import { TODAY_ALGORITHM_VERSION } from '@fss/domain/today/types.ts';
 import { runClaimedJob } from '../src/runner/jobRunner.ts';
 import { runSchedulerPass } from '../src/scheduler/schedulerPass.ts';
 import {

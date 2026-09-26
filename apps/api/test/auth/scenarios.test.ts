@@ -1,14 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import {
-  authenticate,
-  claimSignIn,
-  handleCallback,
-  renewSession,
-  runCommand,
-  startSignIn,
-  type SessionGrant,
-} from '../../src/auth/index.ts';
+import { runCommand } from '../../src/auth/commands.ts';
+import { authenticate, renewSession } from '../../src/auth/sessions.ts';
+import { claimSignIn, handleCallback, startSignIn } from '../../src/auth/signIn.ts';
+import type { SessionGrant } from '@fss/contracts';
 import {
   CURRENT_CLIENT_VERSION,
   OUTDATED_CLIENT_VERSION,
@@ -345,7 +340,7 @@ describe('Appendix G 40: a minimum-client-version increase blocks mutation', () 
     expect(started).toMatchObject({
       started: false,
       refusal: 'client_upgrade_required',
-      // The published range of the fixture's `1.4.x` ceiling (lane g78).
+      // The published range of the fixture's `1.4.x` ceiling.
       supportedClientVersions: { minimum: '1.2.0', maximum: '1.4.999' },
     });
   });

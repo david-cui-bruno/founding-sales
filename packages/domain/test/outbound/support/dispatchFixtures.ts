@@ -1,13 +1,14 @@
 import pg from 'pg';
 import type { SessionQueryable } from '../../../db/queryable.ts';
-import { asSession, CLUSTER_URL_ENVIRONMENT_VARIABLE } from '../../../db/testing/index.ts';
+import { asSession, CLUSTER_URL_ENVIRONMENT_VARIABLE } from '../../../db/testing/testDatabase.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../../db/workspaceScope.ts';
-import type { GmailClient, RecordedGmailClient } from '../../../mail/index.ts';
+import type { GmailClient } from '../../../mail/gmailClient.ts';
+import type { RecordedGmailClient } from '../../../mail/gmailClientFake.ts';
 import { firstStageId } from '../../db/support/crmFixtures.ts';
 import type { OutboundWorld, OutboundWorldMailbox } from './outboundWorld.ts';
 
 /**
- * What the lane g77 dispatch tests share: a firm of their own, a second and third real
+ * What the dispatch tests share: a firm of their own, a second and third real
  * connection, and a Gmail client with a pause in the one place the dispatch path has a
  * pause — the token refresh between its first read and its claim.
  *

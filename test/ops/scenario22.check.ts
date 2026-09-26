@@ -10,7 +10,7 @@ import {
   WORKER_SCHEMA_RANGE,
   acceptsSchemaVersion,
   type SchemaRange,
-} from '@fss/domain/db';
+} from '@fss/domain/db/schemaRange.ts';
 import { repositoryPath } from './support/repository.ts';
 
 /**

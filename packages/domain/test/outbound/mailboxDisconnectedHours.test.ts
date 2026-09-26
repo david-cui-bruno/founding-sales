@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
+import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import { collectOutboundMetrics, mailboxDisconnectedHours } from '../../outbound/metrics.ts';
 import { seedTwoWorkspaces } from '../db/support/fixtures.ts';
 
 /**
  * `MailboxDisconnectedHours` counts a grant that was lost, not a mailbox its owner
- * disconnected (audit O15, lane g81).
+ * disconnected (audit O15).
  *
  * 12.6 alarms on "a mailbox that sent in the last 30 days and remains disconnected for
  * 48 hours". The query read `status IN ('disconnected', 'revoked')`, so a salesperson who

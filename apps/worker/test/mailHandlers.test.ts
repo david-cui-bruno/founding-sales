@@ -1,32 +1,27 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, makeStepExecution, type TestDatabase } from '@fss/domain/db/testing';
-import { repositoryContext, workspaceScope, type RepositoryContext, type SessionQueryable } from '@fss/domain/db';
-import {
-  HandlerRegistry,
-  JOB_KIND_PROTECTION,
-  claimJobs,
-  enqueueJob,
-  readHeartbeats,
-  runTwiceUnderStolenLease,
-} from '@fss/domain/jobs';
-import {
-  coalesceMailSync,
-  localEnvelopeCipher,
-  recordedGmailClient,
-  recordingReplyPromoter,
-  storeRefreshToken,
-  type GmailFixture,
-  type GmailOAuthConfig,
-  type RecordedGmailClient,
-} from '@fss/domain/mail';
-import { recordingSuppressionJournal } from '@fss/domain/suppression';
+import { makeStepExecution } from '@fss/domain/db/testing/stepExecutions.ts';
+import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing/testDatabase.ts';
+import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
+import { repositoryContext, workspaceScope, type RepositoryContext } from '@fss/domain/db/workspaceScope.ts';
+import { runTwiceUnderStolenLease } from '@fss/domain/jobs/atLeastOnce.ts';
+import { HandlerRegistry } from '@fss/domain/jobs/handlerRegistry.ts';
+import { readHeartbeats } from '@fss/domain/jobs/heartbeats.ts';
+import { JOB_KIND_PROTECTION } from '@fss/domain/jobs/jobKinds.ts';
+import { claimJobs, enqueueJob } from '@fss/domain/jobs/jobStore.ts';
+import { coalesceMailSync } from '@fss/domain/mail/coalesce.ts';
+import { localEnvelopeCipher } from '@fss/domain/mail/envelope.ts';
+import type { GmailOAuthConfig } from '@fss/domain/mail/gmailClient.ts';
+import { recordedGmailClient, type GmailFixture, type RecordedGmailClient } from '@fss/domain/mail/gmailClientFake.ts';
+import { recordingReplyPromoter } from '@fss/domain/mail/replyLane.ts';
+import { storeRefreshToken } from '@fss/domain/mail/tokens.ts';
+import { recordingSuppressionJournal } from '@fss/domain/suppression/journal.ts';
 import {
   beginReconciling,
   claimForDispatch,
   prepareOutboundMessage,
   renderedHash,
-} from '@fss/domain/outbound';
+} from '@fss/domain/outbound/fence.ts';
 import { runClaimedJob } from '../src/runner/jobRunner.ts';
 import { MAIL_JOB_KINDS, mailHandlers, todayReplyPromoter, type MailWorkerOptions } from '../src/handlers/mail.ts';
 import { mailRecoverySource, mailSyncReconciliationSource, watchRenewalSource } from '../src/scheduler/mailSources.ts';

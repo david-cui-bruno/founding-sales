@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
+import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import type { SessionQueryable } from '../../db/queryable.ts';
 import {
   repositoryContext,
@@ -9,22 +9,13 @@ import {
 } from '../../db/workspaceScope.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
-import {
-  addEmailRoute,
-  addPhoneRoute,
-  changeStage,
-  createContact,
-  createFirm,
-  mergeFirms,
-  readFirmForActor,
-  recordEvidence,
-  reopenOpportunity,
-  retireRoute,
-  reassignFirm,
-  resolveZoneForFirm,
-  updateFirm,
-  verifyRoute,
-} from '../../crm/index.ts';
+import { createContact } from '../../crm/contacts.ts';
+import { readFirmForActor } from '../../crm/dto.ts';
+import { recordEvidence } from '../../crm/evidence.ts';
+import { createFirm, reassignFirm, resolveZoneForFirm, updateFirm } from '../../crm/firms.ts';
+import { mergeFirms } from '../../crm/merges.ts';
+import { changeStage, reopenOpportunity } from '../../crm/pipeline.ts';
+import { addEmailRoute, addPhoneRoute, retireRoute, verifyRoute } from '../../crm/routes.ts';
 
 /**
  * The CRM commands against a real PostgreSQL.

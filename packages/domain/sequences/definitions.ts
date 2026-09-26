@@ -1,5 +1,5 @@
 import { isAdminScope, type RepositoryContext } from '../db/workspaceScope.ts';
-import { readTemplateVersion } from '../templates/index.ts';
+import { readTemplateVersion } from '../templates/templates.ts';
 import { listSequenceVersions, readSequenceSteps, readSequenceVersion } from './rows.ts';
 import {
   acceptSequence,
@@ -10,8 +10,8 @@ import {
   type SequenceRow,
   type SequenceStepRow,
   type SequenceVersionRow,
-  type StepChannel,
 } from './types.ts';
+import type { StepChannel } from '@fss/contracts';
 
 /**
  * Sequence definition and publication (specification 11.1; wave 2, S3).

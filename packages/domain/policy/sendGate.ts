@@ -3,7 +3,7 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
 /**
  * The send gate: the lock that makes "no send after a stop commits" a property of the
  * database rather than of timing (specification 11.2, 7.3, 10.2, 12.6, Appendix A,
- * Appendix G 3 and 6; lane g77).
+ * Appendix G 3 and 6).
  *
  * 11.2 says the worker "re-reads inside the claiming transaction" before every
  * external action. A re-read is only half of that sentence. Under PostgreSQL's READ

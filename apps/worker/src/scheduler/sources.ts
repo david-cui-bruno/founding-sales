@@ -1,5 +1,7 @@
-import type { SessionQueryable } from '@fss/domain/db';
-import { canaryJobKey, insertCanaryRun, quarterHourOf, type JobSpecification } from '@fss/domain/jobs';
+import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
+import { canaryJobKey, insertCanaryRun } from '@fss/domain/jobs/canary.ts';
+import { quarterHourOf } from '@fss/domain/jobs/jobKinds.ts';
+import type { JobSpecification } from '@fss/domain/jobs/jobStore.ts';
 import type { DueWorkSource } from './schedulerPass.ts';
 
 /**

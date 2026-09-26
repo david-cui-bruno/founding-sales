@@ -1,23 +1,21 @@
 import { randomBytes } from 'node:crypto';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../../db/workspaceScope.ts';
-import { createTestDatabase, type TestDatabase } from '../../../db/testing/index.ts';
+import { createTestDatabase, type TestDatabase } from '../../../db/testing/testDatabase.ts';
 import { seedTwoWorkspaces, type SeededWorkspace, type TwoWorkspaces } from '../../db/support/fixtures.ts';
 import { seedCrm, firstStageId, type SeededCrm } from '../../db/support/crmFixtures.ts';
-import { recordingSuppressionJournal, type RecordingSuppressionJournal } from '../../../suppression/index.ts';
+import { recordingSuppressionJournal, type RecordingSuppressionJournal } from '../../../suppression/journal.ts';
+import type { MailPublicConfig } from '../../../mail/config.ts';
+import { localEnvelopeCipher, type EnvelopeCipher } from '../../../mail/envelope.ts';
 import {
-  completeGmailGrant,
-  localEnvelopeCipher,
   recordedGmailClient,
-  recordingReplyPromoter,
-  signGrantState,
-  staticSecretProvider,
-  type EnvelopeCipher,
   type GmailFixture,
   type GmailFixtureMessage,
-  type MailPublicConfig,
-  type MailSyncDeps,
   type RecordedGmailClient,
-} from '../../../mail/index.ts';
+} from '../../../mail/gmailClientFake.ts';
+import { completeGmailGrant, signGrantState } from '../../../mail/oauth.ts';
+import { recordingReplyPromoter } from '../../../mail/replyLane.ts';
+import { staticSecretProvider } from '../../../mail/secretProvider.ts';
+import type { MailSyncDeps } from '../../../mail/sync.ts';
 
 /**
  * One connected mailbox in each of two workspaces, on a real PostgreSQL, with a

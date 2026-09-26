@@ -1,8 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase } from '../../db/testing/index.ts';
+import { createTestDatabase } from '../../db/testing/testDatabase.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
-import { databaseNow } from '../../policy/index.ts';
-import { buildTodaySnapshot, businessDateOf, readTodayList } from '../../today/index.ts';
+import { databaseNow } from '../../policy/clock.ts';
+import { buildTodaySnapshot } from '../../today/build.ts';
+import { readTodayList } from '../../today/dto.ts';
+import { businessDateOf } from '../../today/snapshots.ts';
 import { seedTwoWorkspaces } from '../db/support/fixtures.ts';
 
 /**

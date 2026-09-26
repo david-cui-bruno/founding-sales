@@ -10,8 +10,7 @@ import { MERGE_HEADING, buildFirmWorkspaceView, mergeSubmittable } from '../../.
 import { DESKTOP_VERSION_UNDER_TEST, desktopClient } from '../support/wireThrough.ts';
 
 /**
- * A refused merge reaches the conflict screen (release.md 8.0aj; lane g78, audit item
- * D05).
+ * A refused merge reaches the conflict screen (release.md 8.0aj; audit item D05).
  *
  * `POST /merges/firms` refuses a merge whose records disagree with `merge_conflicts`
  * and the fields in question (`apps/api/src/routes/merges.ts`), and G3b built the
@@ -32,7 +31,7 @@ import { DESKTOP_VERSION_UNDER_TEST, desktopClient } from '../support/wireThroug
  * carry the same list.
  */
 
-describe('8.0aj: a refused merge opens the conflict screen (lane g78)', () => {
+describe('8.0aj: a refused merge opens the conflict screen', () => {
   let fixture: AuthFixture;
   let adminToken = '';
   let targetId = '';

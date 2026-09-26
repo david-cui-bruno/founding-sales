@@ -1,10 +1,13 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { repositoryContext, withTransaction, workspaceScope, type SessionQueryable } from '@fss/domain/db';
-import { listConnectedMailboxes, type MailboxRow } from '@fss/domain/mail';
-import { reconcileOutboundMessage, scanSentFolder } from '@fss/domain/outbound';
-import { putReleaseRecord, readReleaseRecord, type StoredReleaseRecord } from '@fss/domain/release';
-import { replaySuppressionJournal, type SuppressionJournalSource } from '@fss/domain/suppression';
+import { withTransaction, type SessionQueryable } from '@fss/domain/db/queryable.ts';
+import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
+import { listConnectedMailboxes } from '@fss/domain/mail/mailboxes.ts';
+import type { MailboxRow } from '@fss/domain/mail/types.ts';
+import { reconcileOutboundMessage } from '@fss/domain/outbound/reconcile.ts';
+import { scanSentFolder } from '@fss/domain/outbound/sentFolder.ts';
+import { putReleaseRecord, readReleaseRecord, type StoredReleaseRecord } from '@fss/domain/release/records.ts';
+import { replaySuppressionJournal, type SuppressionJournalSource } from '@fss/domain/suppression/replay.ts';
 import {
   RESTORE_ACTOR,
   listOpenHolds,

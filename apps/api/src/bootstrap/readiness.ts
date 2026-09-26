@@ -1,4 +1,4 @@
-import { API_SCHEMA_RANGE, checkSchemaRange } from '@fss/domain/db';
+import { API_SCHEMA_RANGE, checkSchemaRange } from '@fss/domain/db/schemaRange.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { DatabaseBusyError } from './connections.ts';
 import type { BootstrapResponse, ReadinessInputs, RouteModule } from './routeRegistry.ts';
@@ -12,11 +12,11 @@ import type { BootstrapResponse, ReadinessInputs, RouteModule } from './routeReg
  * that queries a database restarts every task in the fleet the moment the database
  * hiccups, which is the opposite of what it is for.
  *
- * **`/readyz`** answers "should this task be given traffic", and since lane g81 it is
- * what the load balancer target group asks (`infra/modules/edge`, `health_check_path`
- * default `/readyz`). It fails closed when the database cannot answer or when the
- * applied schema version is outside the range this binary accepts (4.2). Since lane g86
- * the same report also gates every other request
+ * **`/readyz`** answers "should this task be given traffic", and it is what the load
+ * balancer target group asks (`infra/modules/edge/main.tf`, the literal `/readyz`). It
+ * fails closed when the database cannot answer or when the applied schema version is
+ * outside the range this binary accepts (4.2). Since lane g86 the same report also gates
+ * every other request
  * (`readinessGate.ts`): a task that is not ready answers 503 `not_ready` rather than
  * running a route while the load balancer is still deciding.
  *

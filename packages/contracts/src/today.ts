@@ -12,8 +12,8 @@ import { businessDate, e164, ianaTimeZone, instant, uuid } from './foundationRow
  * three copies of one shape is three places for the next field to be missed, and two
  * details were narrower than the server: a firm name is up to 300 characters
  * (`firmNameSchema` in `./crm.ts`) where the copies said 200, and a route's number is
- * E.164, not any short string. The vocabularies are `packages/domain/today/types.ts`'s,
- * compared with the domain's lists by `apps/api/test/wireVocabulary.test.ts`.
+ * E.164, not any short string. The vocabularies are declared here and the domain
+ * imports them.
  *
  * The encrypted 24-hour cache keeps its own strict schema in
  * `apps/desktop/src/shared/contract.ts`: what may be written to disk is a retention
@@ -30,12 +30,11 @@ export type TodayItemKind = (typeof TODAY_ITEM_KINDS)[number];
 
 const firmName = z.string().min(1).max(300);
 
-export const todayCountsSchema = z.object({
+const todayCountsSchema = z.object({
   replies: z.number().int().min(0),
   emailsDue: z.number().int().min(0),
   callsDue: z.number().int().min(0),
 });
-export type TodayCounts = z.infer<typeof todayCountsSchema>;
 
 export const todayCardDtoSchema = z.object({
   firmId: uuid,
@@ -53,9 +52,8 @@ export const todayListResponseSchema = z.object({
   businessTimeZone: ianaTimeZone,
   cards: z.array(todayCardDtoSchema),
 });
-export type TodayListResponse = z.infer<typeof todayListResponseSchema>;
 
-export const todayTaskDtoSchema = z.object({
+const todayTaskDtoSchema = z.object({
   itemId: uuid,
   contactId: uuid.nullable(),
   contactName: z.string().max(200).nullable(),
@@ -67,7 +65,7 @@ export const todayTaskDtoSchema = z.object({
   automated: z.boolean(),
   snoozeUntil: instant.nullable(),
   /*
-   * The card's second version (lane g79), sent only to a request with
+   * The card's second version, sent only to a request with
    * `cardVersion: 2`. Optional so the first version still parses: a desktop released
    * before g79 parses the task with a strict schema of its own, and the API answers it
    * without these keys.
@@ -93,7 +91,7 @@ export const todayTaskDtoSchema = z.object({
 });
 export type TodayTaskDto = z.infer<typeof todayTaskDtoSchema>;
 
-/** The card version that carries the four task identities above (lane g79). */
+/** The card version that carries the four task identities above. */
 export const TODAY_CARD_VERSION = 2;
 
 /**
@@ -104,13 +102,12 @@ export const todayFirmRequestSchema = z.strictObject({
   firmId: uuid,
   cardVersion: z.literal(TODAY_CARD_VERSION).optional(),
 });
-export type TodayFirmRequest = z.infer<typeof todayFirmRequestSchema>;
 
 /**
  * One dialable route on an expanded card (9.1, 9.2). The version is the one
  * `authorizeDial` compares, so a stale card cannot dial a replaced number.
  */
-export const todayRouteDtoSchema = z.object({
+const todayRouteDtoSchema = z.object({
   routeId: uuid,
   contactId: uuid.nullable(),
   e164,
@@ -152,7 +149,7 @@ export const todaySnoozeResultSchema = z.discriminatedUnion('outcome', [
   /**
    * An automated send is paused rather than snoozed, with the hold that blocks it (4.3).
    * `scope` says what the pause covers: the task's own enrollment, or the firm when the
-   * task belongs to no enrollment (lane g79, C22). Optional so an answer from an API
+   * task belongs to no enrollment (C22). Optional so an answer from an API
    * that predates it still parses.
    */
   z.object({
@@ -166,7 +163,7 @@ export type TodaySnoozeResult = z.infer<typeof todaySnoozeResultSchema>;
 
 /**
  * What `/today/pause/release` returns inside the command envelope: the Resume control
- * on a paused automated task (lane g79, C22). `resume` is what the enrollment did
+ * on a paused automated task (C22). `resume` is what the enrollment did
  * next under 4.3: resumed with its shift, or still held by another hold;
  * `not_applicable` for a firm-scoped pause. `review_required` went with the seven-day
  * review (wave 2, S4.1) and is never sent: @deprecated value (remove after desktop 1.0.12).
@@ -176,4 +173,3 @@ export const todayPauseReleaseResultSchema = z.object({
   releasedAt: instant,
   resume: z.enum(['resume', 'still_held', 'review_required', 'not_applicable']),
 });
-export type TodayPauseReleaseResult = z.infer<typeof todayPauseReleaseResultSchema>;

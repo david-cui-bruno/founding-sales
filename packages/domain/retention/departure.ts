@@ -1,3 +1,4 @@
+import { BLOCKED_ACTION_KINDS } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { isAdminScope } from '../db/workspaceScope.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
@@ -93,14 +94,6 @@ export interface DepartureOutcome {
   /** True when this call found the departure already recorded. Nothing was revoked. */
   readonly replayed: boolean;
 }
-
-const HELD_ACTION_KINDS = [
-  'email_send',
-  'call_task',
-  'dial_authorization',
-  'enrollment_advance',
-  'research',
-] as const;
 
 async function countOf(context: RepositoryContext, sql: string, values: readonly unknown[]): Promise<number> {
   const { rows } = await context.db.query<{ count: string }>(sql, values);
@@ -219,7 +212,7 @@ export async function commitDeparture(
 
   const workspace = context.scope.workspaceId;
   // A departure revokes the owner's mailbox and holds their firms and enrollments:
-  // stop facts, so the send gate first (lane g77, `policy/sendGate.ts`).
+  // stop facts, so the send gate first (`policy/sendGate.ts`).
   await lockSendGateForStopFact(context);
   const membership = await loadMembership(context, input.userId);
   if (membership === null) return refuse('membership_unknown');
@@ -321,7 +314,7 @@ export async function commitDeparture(
              AND h.released_at IS NULL
         )
      RETURNING id`,
-    [workspace, input.userId, [...HELD_ACTION_KINDS], departureId],
+    [workspace, input.userId, [...BLOCKED_ACTION_KINDS], departureId],
   );
 
   // And one per live enrollment assigned to them, for the enrollments a firm hold
@@ -344,7 +337,7 @@ export async function commitDeparture(
              AND h.released_at IS NULL
         )
      RETURNING id`,
-    [workspace, input.userId, [...HELD_ACTION_KINDS], departureId],
+    [workspace, input.userId, [...BLOCKED_ACTION_KINDS], departureId],
   );
 
   const outcome: DepartureOutcome = {

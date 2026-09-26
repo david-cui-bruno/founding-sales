@@ -2,25 +2,17 @@ import { z } from 'zod';
 import { overrideMailboxRaiseCommandSchema } from '@fss/contracts';
 import {
   authenticationPasses,
-  outboundDoubtCounts,
-  overrideRaise,
-  readFence,
-  readFenceEvents,
   readPrimarySendingDomain,
-  readRampStanding,
   recordAuthenticationChecklist,
-  resolveUnknownTerminal,
-  setAdminCap,
   setAutomatedSendingEnabled,
   type SendingDomainRow,
-} from '@fss/domain/outbound';
-import {
-  REFUSAL_STATUS,
-  contextForPrincipal,
-  mailRouteDeps,
-  redactError,
-  runMailCommand,
-} from './mailSupport.ts';
+} from '@fss/domain/outbound/domainGuard.ts';
+import { readFence, readFenceEvents, resolveUnknownTerminal } from '@fss/domain/outbound/fence.ts';
+import { outboundDoubtCounts } from '@fss/domain/outbound/metrics.ts';
+import { overrideRaise, readRampStanding, setAdminCap } from '@fss/domain/outbound/ramp.ts';
+import { REFUSAL_STATUS, redactError } from '../limits.ts';
+import { mailRouteDeps } from './mailSupport.ts';
+import { contextForPrincipal, runRouteCommand } from './routeSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**
@@ -36,7 +28,7 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  *     results they may raise a mailbox to 75". The raise is refused, with the part of
  *     the rule not met, unless the mailbox has finished the schedule
  *     (`ramp_not_settled`) and kept its last ten closed sending days healthy
- *     (`health_not_sustained`) — lane g87, audit S06. Unchanged for desktop 1.0.11;
+ *     (`health_not_sustained`) — audit S06. Unchanged for desktop 1.0.11;
  *   * `/outbound/cap/override` — wave 2 (S4.6): the admin raises a mailbox to any cap up
  *     to the ceiling of 100, or clears the raise, earned or not, and the answer's
  *     `warning` names the part of the rule not met. The daily cap is still enforced at
@@ -129,7 +121,7 @@ export async function routeOutbound(request: ApiRequest, options: RoutingOptions
   }
 
   if (request.path === '/outbound/resolve') {
-    return await runMailCommand(
+    return await runRouteCommand(
       deps,
       resolveCommandSchema,
       'resolve_outbound_message',
@@ -156,7 +148,7 @@ export async function routeOutbound(request: ApiRequest, options: RoutingOptions
   }
 
   if (request.path === '/outbound/authentication') {
-    return await runMailCommand(
+    return await runRouteCommand(
       deps,
       authenticationCommandSchema,
       'record_sending_authentication',
@@ -184,7 +176,7 @@ export async function routeOutbound(request: ApiRequest, options: RoutingOptions
   }
 
   if (request.path === '/outbound/cap') {
-    return await runMailCommand(deps, capCommandSchema, 'set_mailbox_cap', async (context, body) => {
+    return await runRouteCommand(deps, capCommandSchema, 'set_mailbox_cap', async (context, body) => {
       const outcome = await setAdminCap(context, {
         mailboxId: body.mailboxId,
         adminUserId: deps.principal.userId,
@@ -204,7 +196,7 @@ export async function routeOutbound(request: ApiRequest, options: RoutingOptions
   }
 
   if (request.path === '/outbound/cap/override') {
-    return await runMailCommand(deps, overrideMailboxRaiseCommandSchema, 'override_mailbox_raise', async (context, body) => {
+    return await runRouteCommand(deps, overrideMailboxRaiseCommandSchema, 'override_mailbox_raise', async (context, body) => {
       const outcome = await overrideRaise(context, {
         mailboxId: body.mailboxId,
         adminUserId: deps.principal.userId,

@@ -1,12 +1,6 @@
-import type { SessionQueryable } from '@fss/domain/db';
-import {
-  CURRENT_SCHEMA_VERSION,
-  API_SCHEMA_RANGE,
-  WORKER_SCHEMA_RANGE,
-  applyMigrations,
-  loadMigrations,
-  readAppliedSchemaVersion,
-} from '@fss/domain/db';
+import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
+import { applyMigrations, loadMigrations, readAppliedSchemaVersion } from '@fss/domain/db/migrationRunner.ts';
+import { CURRENT_SCHEMA_VERSION, API_SCHEMA_RANGE, WORKER_SCHEMA_RANGE } from '@fss/domain/db/schemaRange.ts';
 
 /**
  * `fss migrate` and `fss schema-version` (specification 4.2, 16.1; Appendix E step 7).

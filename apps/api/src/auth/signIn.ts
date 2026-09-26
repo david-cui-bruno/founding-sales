@@ -1,4 +1,4 @@
-import { withTransaction, type QueryResultRowLike } from '@fss/domain/db';
+import { withTransaction, type QueryResultRowLike } from '@fss/domain/db/queryable.ts';
 import {
   PROVISIONAL_GOOGLE_SUB_PREFIX,
   clientCompatibility,

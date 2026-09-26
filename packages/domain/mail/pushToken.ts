@@ -70,12 +70,8 @@ export type PushTokenDecision =
  *
  * Pub/Sub mints the OIDC token it presents with `exp` an hour after `iat`, and it sends
  * the *same* token with every delivery until it mints the next one. A genuine push can
- * therefore carry a token up to an hour old. The bound was 600 seconds until lane g63,
- * and production refused every push whose token was past its eleventh minute as
- * `too_old`: 138 `gmail_push_too_old` refusals in three hours on 24 and 25 September
- * 2026, with the mailbox kept current only by the scheduler's one-minute sweep. A
- * refused push is retried with the same token, so the retries were refused as well
- * until Google rotated it.
+ * therefore carry a token up to an hour old, and a refused push is retried with the
+ * same token until Google rotates it.
  *
  * A token more than an hour old is still refused, whatever its `exp` says; that is the
  * replay bound. The hour is a fact about Google, not a deployment choice, so

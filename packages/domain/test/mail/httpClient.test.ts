@@ -1,15 +1,9 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import {
-  GMAIL_SCOPES,
-  METADATA_HEADERS,
-  classifyStatus,
-  createGmailHttpClient,
-  readBodyText,
-  type GmailClient,
-  type GmailOAuthConfig,
-} from '../../mail/index.ts';
+import type { GmailClient, GmailOAuthConfig } from '../../mail/gmailClient.ts';
+import { classifyStatus, createGmailHttpClient, readBodyText } from '../../mail/gmailClientHttp.ts';
+import { GMAIL_SCOPES, METADATA_HEADERS } from '../../mail/types.ts';
 
 /**
  * The one Gmail implementation that speaks HTTP, against a loopback server.
@@ -224,7 +218,7 @@ describe('the Gmail HTTP client', () => {
 
   /**
    * A `users.history.list` answer in the shape Google documents, not the shape the
-   * adapter expects (lane g76, audit item C06).
+   * adapter expects (audit item C06).
    *
    * https://developers.google.com/gmail/api/reference/rest/v1/users.history/list —
    * `ListHistoryResponse` is `{ history: History[], nextPageToken, historyId }`, where
@@ -319,7 +313,7 @@ describe('the Gmail HTTP client', () => {
     expect(new URL(lastRequest().url, origin).searchParams.get('q')).toBe('after:1757000000 before:1758000000');
   });
 
-  it('lists the Sent folder by the same epoch-second bounds, trash included (lane g73)', async () => {
+  it('lists the Sent folder by the same epoch-second bounds, trash included', async () => {
     answer('/gmail/v1/users/me/messages', 200, { messages: [{ id: 'm-6' }], nextPageToken: 'next' });
     const listed = await client.listSentMessageIds(access, {
       afterEpochSeconds: 1_757_000_000,

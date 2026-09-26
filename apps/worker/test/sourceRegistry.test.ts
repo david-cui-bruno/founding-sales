@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { JOB_KINDS, JOB_KIND_PROTECTION } from '@fss/domain/jobs';
+import { JOB_KINDS, JOB_KIND_PROTECTION } from '@fss/domain/jobs/jobKinds.ts';
 import { workerDueWorkSources } from '../src/bootstrap/main.ts';
 
 /**

@@ -1,21 +1,17 @@
 import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
-import {
-  CLASSIFIER_MODELS,
-  CLASSIFIER_PROMPT_VERSION,
-  MODEL_CAPABILITIES,
-  CLASSIFIER_SYSTEM_PROMPT,
-  classifyReplyWithModel,
-  confirmReplyDisposition,
-  listReplyCards,
-  readClassifierSettings,
-  readReplyCard,
-  updateClassifierSettings,
-} from '../../classification/index.ts';
+import { listReplyCards, readReplyCard } from '../../classification/cards.ts';
+import { classifyReplyWithModel } from '../../classification/classify.ts';
+import { confirmReplyDisposition } from '../../classification/confirmations.ts';
+import { CLASSIFIER_SYSTEM_PROMPT } from '../../classification/prompt.ts';
+import { readClassifierSettings, updateClassifierSettings } from '../../classification/settings.ts';
+import { CLASSIFIER_PROMPT_VERSION, MODEL_CAPABILITIES } from '../../classification/types.ts';
+import { CLASSIFIER_MODELS } from '@fss/contracts';
 import { repositoryContext, workspaceScope } from '../../db/workspaceScope.ts';
 import { openHold } from '../../policy/holds.ts';
-import { replyItemKey, resolveAmbiguity } from '../../mail/index.ts';
-import { businessDateOf } from '../../today/index.ts';
+import { resolveAmbiguity } from '../../mail/matching.ts';
+import { replyItemKey } from '../../mail/replyLane.ts';
+import { businessDateOf } from '../../today/snapshots.ts';
 import { REPLY_CORPUS } from '../corpus/replies/cases.ts';
 import { seedAnotherFirm } from '../mail/support/mailWorld.ts';
 import { createClassifierWorld, type ClassifierWorld } from './support/classifierWorld.ts';

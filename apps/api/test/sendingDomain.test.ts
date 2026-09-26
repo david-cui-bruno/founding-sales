@@ -1,15 +1,14 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { repositoryContext, workspaceScope, type SessionQueryable } from '@fss/domain/db';
-import {
-  fixturePushTokens,
-  localEnvelopeCipher,
-  recordedGmailClient,
-  signGrantState,
-  staticSecretProvider,
-  type MailPublicConfig,
-} from '@fss/domain/mail';
-import { recordAuthenticationChecklist } from '@fss/domain/outbound';
+import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
+import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
+import type { MailPublicConfig } from '@fss/domain/mail/config.ts';
+import { localEnvelopeCipher } from '@fss/domain/mail/envelope.ts';
+import { recordedGmailClient } from '@fss/domain/mail/gmailClientFake.ts';
+import { signGrantState } from '@fss/domain/mail/oauth.ts';
+import { fixturePushTokens } from '@fss/domain/mail/pushToken.ts';
+import { staticSecretProvider } from '@fss/domain/mail/secretProvider.ts';
+import { recordAuthenticationChecklist } from '@fss/domain/outbound/domainGuard.ts';
 import { dispatch, type ApiOptions } from '../src/server.ts';
 import { recordingLogger } from '../src/bootstrap/log.ts';
 import type { MailRoutingDeps } from '../src/routes/types.ts';

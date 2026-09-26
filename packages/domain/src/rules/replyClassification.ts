@@ -1,3 +1,4 @@
+import { REPLY_CLASSES, REPLY_DISPOSITIONS, type ReplyClass, type ReplyDisposition } from '@fss/contracts';
 /**
  * Deterministic reply classification (specification 12.4).
  *
@@ -14,20 +15,6 @@
  * create a suppression from ambiguous language, commit an extracted callback, or
  * resume automation.
  */
-
-export const REPLY_CLASSES = ['human', 'uncertain', 'automated', 'bounce', 'opt_out'] as const;
-export type ReplyClass = (typeof REPLY_CLASSES)[number];
-
-/** The standard dispositions of specification 8.3. Advisory until a person confirms one. */
-export const REPLY_DISPOSITIONS = [
-  'interested',
-  'referral_or_wrong_person',
-  'follow_up_later',
-  'not_interested',
-  'opt_out',
-  'other',
-] as const;
-export type ReplyDisposition = (typeof REPLY_DISPOSITIONS)[number];
 
 export interface ReplyHeaders {
   /** RFC 3834. Any value other than `no` marks an automatic response. */

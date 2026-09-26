@@ -46,7 +46,7 @@ export const CRM_DOMAIN_EVENT_KINDS = [
 export type CrmDomainEventKind = (typeof CRM_DOMAIN_EVENT_KINDS)[number];
 
 /**
- * How an opportunity came to be manual (7.3, lane G22).
+ * How an opportunity came to be manual (7.3).
  *
  * 7.3 names the ways in — a confirmed human email reply, an engaged call outcome or a
  * direct Gmail send (its user-recorded LinkedIn reply went with LinkedIn on 25

@@ -11,11 +11,11 @@ import {
   TODAY_PAUSE_SOURCE_EVENT_KIND,
   acceptToday,
   refuseToday,
-  type TodayItemKind,
   type TodayItemRow,
   type TodayResult,
   type TodaySnoozeRow,
 } from './types.ts';
+import type { TodayItemKind } from '@fss/contracts';
 
 /**
  * Snooze (specification 8.2, 4.3, 10.1).
@@ -38,7 +38,7 @@ import {
  * worst of the two. So the command opens an `active_holds` row for the action kind the
  * task belongs to.
  *
- * ## A pause, not a timed snooze (lane g79, audit item C22)
+ * ## A pause, not a timed snooze (audit item C22)
  *
  * G6 opened that hold against the whole firm, closed the day's task, and kept the
  * return instant the person typed only as audit metadata: a "snooze until Thursday"
@@ -275,7 +275,7 @@ export interface ReleasedTodayPause {
 }
 
 /**
- * Release a paused automated task (lane g79, audit item C22).
+ * Release a paused automated task (audit item C22).
  *
  * Exactly the hold a Today pause opened, and only such a hold: "clearing one hold
  * never clears another" (4.3), so a mailbox hold, a suppression review or an admin's

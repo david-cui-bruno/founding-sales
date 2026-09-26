@@ -3,7 +3,7 @@ import { attestedReleaseBinding, type ReleaseAdmission } from '../release/record
 import { effectiveSendingEnabled } from '../settings/effective.ts';
 import { readSetting } from '../settings/store.ts';
 import { firstSuppressed } from '../suppression/effective.ts';
-import { localParts } from '../src/index.ts';
+import { localParts } from '../src/rules/localClock.ts';
 import { businessDateOf } from '../today/snapshots.ts';
 import { effectiveDailyCap, ensureRamp, openSendDay, type RampRow, type SendDayRow } from './ramp.ts';
 import { decideStepPermission, dispatchHolidayCalendar, insideSendingWindow } from './stepPermission.ts';

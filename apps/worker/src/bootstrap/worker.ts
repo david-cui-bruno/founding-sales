@@ -1,9 +1,10 @@
-import type { SessionQueryable } from '@fss/domain/db';
-import { MetricError, collectJobMetrics, type HandlerRegistry, type MetricDatum, type MetricSink } from '@fss/domain/jobs';
-import { collectMailMetrics } from '@fss/domain/mail';
-import { collectOutboundMetrics } from '@fss/domain/outbound';
-import { collectSequenceMetrics } from '@fss/domain/sequences';
-import { collectTodayMetrics } from '@fss/domain/today';
+import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
+import type { HandlerRegistry } from '@fss/domain/jobs/handlerRegistry.ts';
+import { MetricError, collectJobMetrics, type MetricDatum, type MetricSink } from '@fss/domain/jobs/metrics.ts';
+import { collectMailMetrics } from '@fss/domain/mail/metrics.ts';
+import { collectOutboundMetrics } from '@fss/domain/outbound/metrics.ts';
+import { collectSequenceMetrics } from '@fss/domain/sequences/metrics.ts';
+import { collectTodayMetrics } from '@fss/domain/today/metrics.ts';
 import { checkWorkerStartup, type WorkerStartupReport } from '../index.ts';
 import { runOnce } from '../runner/jobRunner.ts';
 import { runSchedulerPass, type DueWorkSource } from '../scheduler/schedulerPass.ts';

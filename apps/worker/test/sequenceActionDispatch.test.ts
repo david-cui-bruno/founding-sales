@@ -1,11 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { setManualControlMode } from '@fss/domain/crm';
-import { withTransaction } from '@fss/domain/db';
-import { makeStepExecution } from '@fss/domain/db/testing';
-import { HandlerRegistry, claimJobs, enqueueJob } from '@fss/domain/jobs';
-import type { GmailClient } from '@fss/domain/mail';
-import { claimedAutomatedSends, readFenceByStepExecution } from '@fss/domain/outbound';
-import { applyManualModeStop, listStepExecutions } from '@fss/domain/sequences';
+import { setManualControlMode } from '@fss/domain/crm/pipeline.ts';
+import { withTransaction } from '@fss/domain/db/queryable.ts';
+import { makeStepExecution } from '@fss/domain/db/testing/stepExecutions.ts';
+import { HandlerRegistry } from '@fss/domain/jobs/handlerRegistry.ts';
+import { claimJobs, enqueueJob } from '@fss/domain/jobs/jobStore.ts';
+import type { GmailClient } from '@fss/domain/mail/gmailClient.ts';
+import { readFenceByStepExecution } from '@fss/domain/outbound/fence.ts';
+import { claimedAutomatedSends } from '@fss/domain/outbound/ramp.ts';
+import { listStepExecutions } from '@fss/domain/sequences/rows.ts';
+import { applyManualModeStop } from '@fss/domain/sequences/terminalStops.ts';
 import {
   createOutboundWorld,
   type OutboundWorld,
@@ -22,7 +25,7 @@ import { sequenceActionJobHandler } from '../src/handlers/sequenceAction.ts';
 import { runClaimedJob } from '../src/runner/jobRunner.ts';
 
 /**
- * The real `sequence.action` handler through the fixed dispatch path (lane g77).
+ * The real `sequence.action` handler through the fixed dispatch path.
  *
  * `sequenceAction.test.ts` proves the job's shape with a recording hand-off. This file
  * wires the one production uses — `outboundSendHandoff` over G7-2's fence, the default

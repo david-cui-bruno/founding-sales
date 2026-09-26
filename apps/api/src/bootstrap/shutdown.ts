@@ -3,7 +3,7 @@ import type { ApiHeartbeat } from './heartbeat.ts';
 import type { Logger } from './log.ts';
 
 /**
- * How the API stops on `SIGTERM` (lane g75).
+ * How the API stops on `SIGTERM`.
  *
  * In order, inside one budget (`FSS_API_SHUTDOWN_TIMEOUT_MS`, 20 s by default, under
  * the task's 30 s `stopTimeout`):

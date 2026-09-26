@@ -1,13 +1,11 @@
-import type { SessionQueryable } from '@fss/domain/db';
-import { jobIdempotencyKey, type JobSpecification } from '@fss/domain/jobs';
-import {
-  coalesceMailSync,
-  listIncompleteRecoveries,
-  listMailboxesDueForSync,
-  listWatchesDue,
-  rearmRecoveryJob,
-} from '@fss/domain/mail';
-import { listMailboxesToReconcile } from '@fss/domain/outbound';
+import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
+import { jobIdempotencyKey } from '@fss/domain/jobs/jobKinds.ts';
+import type { JobSpecification } from '@fss/domain/jobs/jobStore.ts';
+import { coalesceMailSync } from '@fss/domain/mail/coalesce.ts';
+import { listMailboxesDueForSync } from '@fss/domain/mail/mailboxes.ts';
+import { listIncompleteRecoveries, rearmRecoveryJob } from '@fss/domain/mail/recover.ts';
+import { listWatchesDue } from '@fss/domain/mail/watch.ts';
+import { listMailboxesToReconcile } from '@fss/domain/outbound/reconcile.ts';
 import type { DueWorkSource } from './schedulerPass.ts';
 
 /**
@@ -43,9 +41,7 @@ import type { DueWorkSource } from './schedulerPass.ts';
  *
  * It asks for one check of every connected, `ready` mailbox on **every** pass, so a
  * mailbox with no new mail is still read once a minute and its heartbeat means what
- * the `mailbox_heartbeat_missed` alarm reads it as (`MAILBOX_CHECK_INTERVAL_SECONDS`,
- * lane g58). Until 24 September 2026 it asked only for a mailbox five minutes past its
- * last sync, and the alarm fired between healthy checks.
+ * the `mailbox_heartbeat_missed` alarm reads it as (`MAILBOX_CHECK_INTERVAL_SECONDS`).
  *
  * `coalesceMailSync` rather than `enqueueJob`, so a mailbox with a queued or `running`
  * sync merges rather than duplicating, and a mailbox with a `dead` sync stays dead:

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { clientVersionPolicySchema } from '@fss/contracts';
-import type { SessionQueryable } from '@fss/domain/db';
+import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 import { RouteRegistryError, createRouteRegistry, type RouteModule } from '../src/bootstrap/routeRegistry.ts';
 import { mountedRoutes } from '../src/bootstrap/routes.ts';
 import { apiRouteModules } from '../src/routes/modules.ts';

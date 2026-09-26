@@ -1,8 +1,8 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing';
-import type { SessionQueryable } from '@fss/domain/db';
-import type { AuthConfig, AuthDeps } from '../../src/auth/index.ts';
-import { createGoogleClient, httpFetch } from '../../src/auth/index.ts';
+import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing/testDatabase.ts';
+import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
+import type { AuthConfig, AuthDeps } from '../../src/auth/config.ts';
+import { createGoogleClient, httpFetch } from '../../src/auth/googleClient.ts';
 import { startGoogleStub, type GoogleStub } from './googleStub.ts';
 
 /**
@@ -100,7 +100,7 @@ export function authConfigFor(google: GoogleStub): AuthConfig {
       fullSignInSeconds: 30 * 24 * 3600,
       authorizationRequestSeconds: 600,
     },
-    // A ceiling on the 1.4 line: 1.2.0 to 1.4.999 are admitted (lane g78). The fixture's
+    // A ceiling on the 1.4 line: 1.2.0 to 1.4.999 are admitted. The fixture's
     // current client is 1.4.0 and its outdated one 1.0.0, as before.
     supportedClientVersions: { minimum: '1.2.0', ceiling: '1.4.x', incompatible: [] },
     stateSigningKey: randomBytes(32),

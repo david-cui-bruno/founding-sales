@@ -29,7 +29,7 @@ import { applyCallToStep, effectsForBoundStep, loadBoundCallStep, type BoundStep
 
 /**
  * Logging a call and applying what it means (specification 9.1, Appendix A "Log call
- * outcome"; lane g79).
+ * outcome").
  *
  * "Call logging always records what occurred, even if no valid ticket exists; it
  * never refuses history."

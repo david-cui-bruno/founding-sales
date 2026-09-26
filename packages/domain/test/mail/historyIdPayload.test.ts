@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { payloadHistoryId } from '../../mail/index.ts';
+import { payloadHistoryId } from '../../mail/coalesce.ts';
 
 /**
  * Appendix G 10: "Duplicate push notifications during reconciliation and one direct

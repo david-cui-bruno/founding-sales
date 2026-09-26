@@ -1,15 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { CRM_REFUSAL_CODES as CONTRACT_CODES } from '@fss/contracts';
 import { resolveFirmZone } from '../../src/rules/statePosture.ts';
 import {
-  CRM_REFUSAL_CODES,
-  FIRM_ZONE_SOURCES,
   ROUTE_ELIGIBILITY_POLICY,
   ROUTE_ELIGIBILITY_POLICY_VERSION,
   decideRouteEligibility,
-  postalPrefix,
-  zoneForPostalCode,
-} from '../../crm/index.ts';
+} from '../../crm/routePolicy.ts';
+import { FIRM_ZONE_SOURCES, postalPrefix, zoneForPostalCode } from '../../crm/zone.ts';
 
 /**
  * The CRM's pure rules: the versioned route-eligibility policy of section 7.4 and the
@@ -17,12 +13,6 @@ import {
  * needs one — and both are read by `authorizeDial` and by research, so they have to be
  * decidable without one.
  */
-
-describe('the refusal vocabulary', () => {
-  it('is the same set in the domain and on the wire', () => {
-    expect([...CRM_REFUSAL_CODES].sort()).toEqual([...CONTRACT_CODES].sort());
-  });
-});
 
 describe('route eligibility (7.4)', () => {
   it('leaves an unvalidated route a candidate however confident the provider is', () => {

@@ -1,12 +1,7 @@
 /**
- * The outcome shape every command in this lane answers with.
- *
- * Deliberately the same two-field shape `apps/api/src/routes/dialSupport.ts` types
- * its `LaneResult` as, so a route is `runPolicyCommand(deps, schema, kind, work)` and
- * nothing in between has to translate. The refusal codes are a closed union per
- * command rather than one lane-wide set, because "the reasons a deletion can be
- * refused" and "the reasons a departure can be refused" are different questions and
- * a caller should not have to handle the other one's answers.
+ * The outcome shape every retention command answers with. The refusal codes are a
+ * closed union per command, and `commandResultOf` in `apps/api/src/routes/retentionSupport.ts`
+ * widens it to the route's `CommandResult`.
  */
 
 export type RetentionResult<T, Reason extends string> =

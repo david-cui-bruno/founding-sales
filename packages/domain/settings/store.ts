@@ -34,14 +34,14 @@ import { isKnownTimeZone } from '../src/rules/localClock.ts';
  * second caller cannot reach the mutation past a route-level guard.
  *
  * **Enabling production sending names a release record that binds to this API**
- * (16.2, lane g71). `sending_enabled` with `enabled: true` is refused unless its
+ * (16.2). `sending_enabled` with `enabled: true` is refused unless its
  * `releaseGateReference` is a stored `release_records` row whose suite is `pass` and
  * whose API digest is the digest of the API image making the write — the caller
  * passes that digest in as `runningApiDigest`. The four refusals are the release
  * record's binding refusals, and they are made here for the same reason as the
  * others: a check at the route would be a check a second caller could walk past.
  * `enabled: false` is always accepted, because turning sending off must never need a
- * rehearsal. Since lane g100 the reference may be the release process, `ci-gate:main`:
+ * rehearsal. The reference may be the release process, `ci-gate:main`:
  * the enable then needs a stored, passing `ci-gate` record naming this API's digest.
  */
 

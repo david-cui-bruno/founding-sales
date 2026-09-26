@@ -18,7 +18,7 @@ import { DESKTOP_VERSION_UNDER_TEST, desktopClient, routeAnswer, shapeOf } from 
 
 /**
  * The reply window reads the classifier at every effort the server accepts (release.md
- * 8.0aj; lane g78, audit item D03).
+ * 8.0aj; audit item D03).
  *
  * `/replies/settings` answers `ClassifierSettings`, whose effort is one of `low`,
  * `medium`, `high`, `xhigh` and `max` (`CLASSIFIER_EFFORTS`,
@@ -43,7 +43,7 @@ import { DESKTOP_VERSION_UNDER_TEST, desktopClient, routeAnswer, shapeOf } from 
  * failed to parse would leave `open` null and fail here.
  */
 
-describe('8.0aj: the reply window reads the classifier at max (lane g78)', () => {
+describe('8.0aj: the reply window reads the classifier at max', () => {
   let fixture: AuthFixture;
   let assigneeToken = '';
   let adminToken = '';

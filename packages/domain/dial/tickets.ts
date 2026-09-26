@@ -20,7 +20,7 @@ import { authorizeDial, type AuthorizeDialInput, type DialEvidence } from './aut
  *    the same command is refused by the database even if it reached this far — by a
  *    different device, say, or after a receipt was archived.
  *
- * Consumption locks the ticket row, re-runs `authorizeDial` (lane g79, audit S10),
+ * Consumption locks the ticket row, re-runs `authorizeDial` (audit S10),
  * then marks it consumed with a conditional `UPDATE`. Two Macs racing the same ticket
  * serialize on the row lock: the second reads it consumed and is told
  * `already_consumed`. The conditional update stays as the second guard.
@@ -191,7 +191,7 @@ interface ConsumableTicketRow {
  * and consumed by another is either a bug or a stolen session, and in both cases the
  * answer is no.
  *
- * ## The decision is taken again here (lane g79, audit item S10)
+ * ## The decision is taken again here (audit item S10)
  *
  * G4 checked the workspace, the device, the expiry and prior consumption, and nothing
  * else — so a suppression, a retired or replaced route, a disabled calling identity,

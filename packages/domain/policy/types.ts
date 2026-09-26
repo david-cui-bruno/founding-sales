@@ -1,4 +1,4 @@
-import type { BlockedActionKind, HoldReasonCode, PauseChannel } from '@fss/contracts';
+import { BLOCKED_ACTION_KINDS, type BlockedActionKind, type HoldReasonCode, type PauseChannel } from '@fss/contracts';
 
 /**
  * What the policy commands share (specification 10.1, 15).
@@ -21,7 +21,7 @@ export const POLICY_REFUSAL_CODES = [
   'callback_not_open',
   'window_not_narrower',
   'invalid_input',
-  // Lane g79: calls and callbacks. Each is a fact about the request, decided before
+  // Calls and callbacks. Each is a fact about the request, decided before
   // anything is written, so a refusal never leaves a partial write behind (C14).
   /** The supplied `dueAt` is not what the local date, time and zone resolve to (C18). */
   'callback_instant_mismatch',
@@ -85,11 +85,5 @@ export const CHANNEL_BLOCKED_ACTION_KINDS: Readonly<Record<PauseChannel, readonl
     research: Object.freeze(['research'] as const),
   });
 
-/** Everything a pause with no channel blocks. */
-export const ALL_BLOCKED_ACTION_KINDS: readonly BlockedActionKind[] = Object.freeze([
-  'email_send',
-  'call_task',
-  'dial_authorization',
-  'enrollment_advance',
-  'research',
-] as const);
+/** Everything a pause with no channel blocks: every action kind there is. */
+export const ALL_BLOCKED_ACTION_KINDS: readonly BlockedActionKind[] = Object.freeze([...BLOCKED_ACTION_KINDS]);

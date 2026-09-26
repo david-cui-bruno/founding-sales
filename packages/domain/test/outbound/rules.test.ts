@@ -1,20 +1,22 @@
 import { describe, expect, it } from 'vitest';
+import { renderedHash } from '../../outbound/fence.ts';
 import {
-  RAMP_HARD_CEILING,
   RAMP_RAISE_HEALTHY_STREAK,
-  RAMP_SETTLED_CAP,
   RAMP_SETTLED_DAY,
-  RECONCILE_BACKOFF_SECONDS,
-  deterministicMessageId,
   effectiveDailyCap,
-  fenceIdOfMessageId,
   raiseRefusal,
   rampHealthFailure,
-  reconcileBackoffSeconds,
-  renderedHash,
   scheduledCap,
   type RampRow,
-} from '../../outbound/index.ts';
+} from '../../outbound/ramp.ts';
+import {
+  RAMP_HARD_CEILING,
+  RAMP_SETTLED_CAP,
+  RECONCILE_BACKOFF_SECONDS,
+  deterministicMessageId,
+  fenceIdOfMessageId,
+  reconcileBackoffSeconds,
+} from '../../outbound/types.ts';
 
 /**
  * The rules of 12.7 that need no database.

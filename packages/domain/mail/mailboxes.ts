@@ -123,15 +123,8 @@ export async function listConnectedMailboxes(context: RepositoryContext): Promis
  * heartbeat promises.
  *
  * 12.3 is "one-minute reconciliation repairs delayed or dropped notifications", and
- * 13.3 alarms on "three missed one-minute mailbox checks". Until lane g58 the sweep
- * only coalesced a sync for a mailbox that had gone five minutes without one, so a
- * mailbox with no new mail was checked every five minutes while its heartbeat promised
- * sixty seconds. On 24 September 2026, with one connected mailbox and sending off,
- * `MailboxCheckHeartbeat` was fresh only when a push happened to arrive — every two to
- * four minutes — and `fss-prod-mailbox-heartbeat-missed` went ALARM and OK twice in an
- * hour on a healthy worker.
- *
- * So the check is the scheduler pass itself: every pass asks for one `mail.sync` of
+ * 13.3 alarms on "three missed one-minute mailbox checks". So the check is the
+ * scheduler pass itself: every pass asks for one `mail.sync` of
  * every connected, `ready` mailbox, whether or not a push synced it a moment ago, and
  * the coalescing upsert makes the ask a no-op while a check is already queued or
  * running. A check with nothing new is one token refresh and one `history.list` from

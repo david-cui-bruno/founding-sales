@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { claimForDispatch, dispatchOutboundMessage, readFence } from '../../outbound/index.ts';
+import { claimForDispatch, readFence } from '../../outbound/fence.ts';
+import { dispatchOutboundMessage } from '../../outbound/send.ts';
 import {
   createOutboundWorld,
   type OutboundWorld,

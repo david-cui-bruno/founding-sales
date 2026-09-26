@@ -1,6 +1,8 @@
 import { completeCallbackCommandSchema, scheduleCallbackCommandSchema } from '@fss/contracts';
-import { completeCallback, listCallbacks, scheduleCallbackForCall } from '@fss/domain/dial';
-import { REFUSAL_STATUS, contextForPrincipal, policyRouteDeps, redactError, runPolicyCommand } from './dialSupport.ts';
+import { completeCallback, listCallbacks, scheduleCallbackForCall } from '@fss/domain/dial/callbacks.ts';
+import { REFUSAL_STATUS, redactError } from '../limits.ts';
+import { policyRouteDeps, runPolicyCommand } from './dialSupport.ts';
+import { contextForPrincipal } from './routeSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**
@@ -26,7 +28,7 @@ export const CALLBACK_PATHS: readonly string[] = [
  * without the call it belongs to, which is how a callback ends up with no record of
  * why it exists.
  *
- * `/callbacks/schedule` (lane g79) is not that second way. It gives a callback that a
+ * `/callbacks/schedule` is not that second way. It gives a callback that a
  * recorded call already asked for — "call me back", with no time confirmed yet — the
  * instant the salesperson now confirms, beside that call. Without a recorded
  * `callback_requested` call to name it refuses, so every callback still has the call

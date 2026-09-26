@@ -1,10 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
+import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
 import { ROUTE_ELIGIBILITY_POLICY_VERSION } from '../../crm/routePolicy.ts';
 import {
-  addEmailRoute,
-  addPhoneRoute,
   checkMailDomain,
   emailValidationCheckRound,
   emailValidationSweepRounds,
@@ -13,19 +11,18 @@ import {
   mxVerdict,
   parseEmailAddress,
   parseRouteValidationPayload,
-  recordEmailRouteValidation,
-  retireRoute,
   runEmailRouteValidation,
   validateEmailAddress,
   vouchedConfidenceFor,
   type MailDomainResolver,
   type MailExchangeRecord,
-} from '../../crm/index.ts';
+} from '../../crm/routeValidation.ts';
+import { addEmailRoute, addPhoneRoute, recordEmailRouteValidation, retireRoute } from '../../crm/routes.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
 
 /**
- * Email technical validation (specification 7.4; lane g90): the decision table of
+ * Email technical validation (specification 7.4): the decision table of
  * `email-validation.1`, and the one write it makes.
  *
  * Before g90 an address added or imported from the Mac was `unknown` and `candidate` for

@@ -1,26 +1,25 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
+import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
-import { databaseNow, openHold } from '../../policy/index.ts';
+import { databaseNow } from '../../policy/clock.ts';
+import { openHold } from '../../policy/holds.ts';
+import { allowAllEligibility } from '../../sequences/eligibility.ts';
+import { enrollContact } from '../../sequences/enrollments.ts';
 import {
-  COMPLETION_ANCHOR_RULE_SUFFIX,
   DEFAULT_HOLD_RECHECK_MILLISECONDS,
-  allowAllEligibility,
   dispatchPreparedStep,
-  enrollContact,
-  listStepExecutions,
-  readEnrollment,
-  recordingSendHandoff,
-  resumeEnrollment,
   runDueStepExecution,
-  type RecordingSendHandoff,
-} from '../../sequences/index.ts';
+} from '../../sequences/executions.ts';
+import { resumeEnrollment } from '../../sequences/resume.ts';
+import { listStepExecutions, readEnrollment } from '../../sequences/rows.ts';
+import { recordingSendHandoff, type RecordingSendHandoff } from '../../sequences/sendHandoff.ts';
+import { COMPLETION_ANCHOR_RULE_SUFFIX } from '../../sequences/successor.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
 import { seedSequences, type SeededSequences } from './support/sequenceFixtures.ts';
 
 /**
- * A step run more than once (lane g82: audit C05, C09, C11).
+ * A step run more than once (audit C05, C09, C11).
  *
  * * **C11** — a completed step's successor is the start-anchored plan while steps run on
  *   time, and the plan's spacing counted from when the step actually happened when it

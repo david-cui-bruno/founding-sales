@@ -1,16 +1,15 @@
 import { createSign, generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { GoogleOidcConfig } from '../../src/auth/config.ts';
 import {
   createGoogleClient,
-  handleCallback,
-  sha256Hex,
-  startSignIn,
-  validateIdToken,
-  type GoogleOidcConfig,
   type HttpFetch,
   type HttpRequest,
   type HttpResponse,
-} from '../../src/auth/index.ts';
+} from '../../src/auth/googleClient.ts';
+import { validateIdToken } from '../../src/auth/idToken.ts';
+import { handleCallback, startSignIn } from '../../src/auth/signIn.ts';
+import { sha256Hex } from '../../src/auth/tokens.ts';
 import { GOOGLE_OIDC_DISCOVERY_URL, GOOGLE_OIDC_ISSUER } from '../../src/bootstrap/deployment.ts';
 import { recordingLogger } from '../../src/bootstrap/log.ts';
 import { CURRENT_CLIENT_VERSION, createAuthFixture, stateOf, type AuthFixture } from '../support/authFixture.ts';

@@ -1,17 +1,13 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
-import {
-  accessForMailbox,
-  headerValue,
-  normalizeAddressList,
-  readMailbox,
-  type EnvelopeCipher,
-  type GmailClient,
-  type GmailOAuthConfig,
-} from '../mail/index.ts';
+import type { EnvelopeCipher } from '../mail/envelope.ts';
+import { headerValue, type GmailClient, type GmailOAuthConfig } from '../mail/gmailClient.ts';
+import { readMailbox } from '../mail/mailboxes.ts';
+import { accessForMailbox } from '../mail/sync.ts';
+import { normalizeAddressList } from '../mail/types.ts';
 import { fssFenceIdOfSentMessage } from './types.ts';
 
 /**
- * Listing one mailbox's Sent folder for the sends FSS made (Appendix E step 3, lane g73).
+ * Listing one mailbox's Sent folder for the sends FSS made (Appendix E step 3).
  *
  * Appendix E.3: "Search every mailbox Sent folder from the restore point minus ten
  * minutes for FSS Message-IDs; insert sent tombstones for missing fences." Until this

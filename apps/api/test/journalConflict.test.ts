@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { SuppressionJournalError, type SuppressionJournalRecord } from '@fss/domain/suppression';
+import { SuppressionJournalError, type SuppressionJournalRecord } from '@fss/domain/suppression/journal.ts';
 import { loadJournalPutObject, type S3JournalSdk } from '../src/bootstrap/deployment.ts';
 import { recordingLogger } from '../src/bootstrap/log.ts';
 import { resolveSuppressionJournal } from '../src/journal/index.ts';

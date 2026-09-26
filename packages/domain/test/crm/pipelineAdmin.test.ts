@@ -1,15 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
+import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
+import { readPipelineBoardForActor } from '../../crm/board.ts';
+import { listPipelineStages } from '../../crm/pipeline.ts';
 import {
   createPipelineStage,
-  listPipelineStages,
-  readPipelineBoardForActor,
   renamePipelineStage,
   reorderPipelineStages,
   retirePipelineStage,
-} from '../../crm/index.ts';
+} from '../../crm/stageAdmin.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
 

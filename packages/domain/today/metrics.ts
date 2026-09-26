@@ -4,7 +4,7 @@ import type { MetricDatum } from '../jobs/metrics.ts';
 import { TODAY_ALGORITHM_VERSION } from './types.ts';
 
 /**
- * The Today lane's gauge, `TodaySnapshotMissing` (specification 8.2, 13.3; lane g67).
+ * The Today lane's gauge, `TodaySnapshotMissing` (specification 8.2, 13.3).
  *
  * 13.3 alarms on "Today snapshot absent at 05:10 workspace time". The alarm in
  * `infra/modules/alerts/main.tf` is `Maximum >= 1` over one five-minute period with

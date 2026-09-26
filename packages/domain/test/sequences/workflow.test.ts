@@ -1,25 +1,30 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
+import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
-import { databaseNow } from '../../policy/index.ts';
-import { buildTodaySnapshot, businessDateOf, readTodayFirm, readTodayList } from '../../today/index.ts';
-import { approveTemplateVersion, createTemplateVersion, readTemplateVersion, updateTemplateVersion } from '../../templates/index.ts';
+import { databaseNow } from '../../policy/clock.ts';
+import { buildTodaySnapshot } from '../../today/build.ts';
+import { readTodayFirm, readTodayList } from '../../today/dto.ts';
+import { businessDateOf } from '../../today/snapshots.ts';
 import {
-  allowAllEligibility,
-  completeStepExecution,
+  approveTemplateVersion,
+  createTemplateVersion,
+  readTemplateVersion,
+  updateTemplateVersion,
+} from '../../templates/templates.ts';
+import { recordHolidayCalendar } from '../../sequences/calendars.ts';
+import {
   createDraftVersion,
   createSequence,
-  dueSequenceWorkSource,
-  enrollContact,
-  listStepExecutions,
   publishVersion,
-  readSequenceVersion,
-  recordHolidayCalendar,
-  recordingSendHandoff,
   retireVersion,
-  runDueStepExecution,
   saveSteps,
-} from '../../sequences/index.ts';
+} from '../../sequences/definitions.ts';
+import { allowAllEligibility } from '../../sequences/eligibility.ts';
+import { enrollContact } from '../../sequences/enrollments.ts';
+import { completeStepExecution, runDueStepExecution } from '../../sequences/executions.ts';
+import { listStepExecutions, readSequenceVersion } from '../../sequences/rows.ts';
+import { recordingSendHandoff } from '../../sequences/sendHandoff.ts';
+import { dueSequenceWorkSource } from '../../sequences/todaySource.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
 import { SENDING_STOP_LINE } from '@fss/contracts';

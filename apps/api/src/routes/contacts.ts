@@ -6,17 +6,11 @@ import {
   updateContactCommandSchema,
   verifyRouteCommandSchema,
 } from '@fss/contracts';
-import {
-  addEmailRoute,
-  addPhoneRoute,
-  confirmPhoneRoute,
-  listContacts,
-  requestEmailRouteValidation,
-  retireRoute,
-  updateContact,
-  verifyRoute,
-} from '@fss/domain/crm';
-import { REFUSAL_STATUS, contextForPrincipal, redactError, requirePrincipal, runCrmCommand } from './crmSupport.ts';
+import { listContacts, updateContact } from '@fss/domain/crm/contacts.ts';
+import { requestEmailRouteValidation } from '@fss/domain/crm/routeValidation.ts';
+import { addEmailRoute, addPhoneRoute, confirmPhoneRoute, retireRoute, verifyRoute } from '@fss/domain/crm/routes.ts';
+import { REFUSAL_STATUS, redactError } from '../limits.ts';
+import { contextForPrincipal, requirePrincipal, runRouteCommand } from './routeSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**
@@ -73,11 +67,11 @@ export async function routeContacts(request: ApiRequest, options: RoutingOptions
 
   switch (request.path) {
     case '/contacts/update':
-      return await runCrmCommand(deps, updateContactCommandSchema, 'contact.updated', async (repository, body) =>
+      return await runRouteCommand(deps, updateContactCommandSchema, 'contact.updated', async (repository, body) =>
         await updateContact(repository, { contactId: body.contactId, patch: body.patch }),
       );
     case '/contacts/routes/add':
-      return await runCrmCommand(deps, addRouteCommandSchema, 'route.added', async (repository, body) => {
+      return await runRouteCommand(deps, addRouteCommandSchema, 'route.added', async (repository, body) => {
         const shared = {
           firmId: body.firmId,
           contactId: body.contactId,
@@ -90,7 +84,7 @@ export async function routeContacts(request: ApiRequest, options: RoutingOptions
           : await addEmailRoute(repository, { ...shared, address: body.value });
       });
     case '/contacts/routes/verify':
-      return await runCrmCommand(deps, verifyRouteCommandSchema, 'route.verified', async (repository, body) =>
+      return await runRouteCommand(deps, verifyRouteCommandSchema, 'route.verified', async (repository, body) =>
         await verifyRoute(repository, {
           routeKind: body.routeKind,
           routeId: body.routeId,
@@ -99,16 +93,16 @@ export async function routeContacts(request: ApiRequest, options: RoutingOptions
         }),
       );
     case '/contacts/routes/confirm':
-      // Lane g88: a person confirms a phone number reaches the firm. The command records
+      // A person confirms a phone number reaches the firm. The command records
       // who and when (its receipt and its audit event); the route policy decides what
       // the confirmation makes the route, and the version moves with it.
-      return await runCrmCommand(deps, confirmRouteCommandSchema, 'route.confirmed', async (repository, body) =>
+      return await runRouteCommand(deps, confirmRouteCommandSchema, 'route.confirmed', async (repository, body) =>
         await confirmPhoneRoute(repository, { routeId: body.routeId, routeVersion: body.routeVersion }),
       );
     case '/contacts/routes/check':
-      // Lane g90: "Check again" on an address still being checked. It queues one more
+      // "Check again" on an address still being checked. It queues one more
       // `route.validate` job and changes nothing about the route; the worker's answer does.
-      return await runCrmCommand(deps, checkRouteCommandSchema, 'route.check_requested', async (repository, body) =>
+      return await runRouteCommand(deps, checkRouteCommandSchema, 'route.check_requested', async (repository, body) =>
         await requestEmailRouteValidation(repository, {
           routeId: body.routeId,
           routeVersion: body.routeVersion,
@@ -116,7 +110,7 @@ export async function routeContacts(request: ApiRequest, options: RoutingOptions
         }),
       );
     case '/contacts/routes/retire':
-      return await runCrmCommand(deps, retireRouteCommandSchema, 'route.retired', async (repository, body) =>
+      return await runRouteCommand(deps, retireRouteCommandSchema, 'route.retired', async (repository, body) =>
         await retireRoute(repository, {
           routeKind: body.routeKind,
           routeId: body.routeId,

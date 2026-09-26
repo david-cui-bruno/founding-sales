@@ -1,18 +1,12 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import {
-  RAMP_RAISE_HEALTHY_STREAK,
-  dispatchOutboundMessage,
-  readRamp,
-  overrideRaise,
-  setAdminCap,
-  type SendReport,
-} from '../../outbound/index.ts';
+import { RAMP_RAISE_HEALTHY_STREAK, readRamp, overrideRaise, setAdminCap } from '../../outbound/ramp.ts';
+import { dispatchOutboundMessage, type SendReport } from '../../outbound/send.ts';
 import { businessDateOf } from '../../today/snapshots.ts';
 import { createOutboundWorld, type OutboundWorld } from './support/outboundWorld.ts';
 import { prepareFor, seedFirm, type SeededFirm } from './support/dispatchFixtures.ts';
 
 /**
- * The ramp raise, against a real PostgreSQL (lane g87, audit S06). 12.7: "After
+ * The ramp raise, against a real PostgreSQL (audit S06). 12.7: "After
  * sustained healthy results they may raise a mailbox to 75". Before g87 a raise to 75
  * was accepted for a mailbox on its first day and replaced the schedule, so the ramp
  * was one admin click deep.
@@ -26,7 +20,7 @@ import { prepareFor, seedFirm, type SeededFirm } from './support/dispatchFixture
  * firm hold and the next dispatch would otherwise refuse for that.
  *
  * Every date is chosen by the instant the dispatch is judged at (the cap counts on the
- * claim's business date, lane g77), and no two groups share one.
+ * claim's business date), and no two groups share one.
  */
 
 let world: OutboundWorld;

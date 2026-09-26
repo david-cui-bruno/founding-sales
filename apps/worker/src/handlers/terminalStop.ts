@@ -1,10 +1,13 @@
-import { repositoryContext, type SessionQueryable } from '@fss/domain/db';
-import { jobIdempotencyKey, type JobHandler, type JobSpecification } from '@fss/domain/jobs';
+import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
+import { repositoryContext } from '@fss/domain/db/workspaceScope.ts';
+import type { JobHandler } from '@fss/domain/jobs/handlerRegistry.ts';
+import { jobIdempotencyKey } from '@fss/domain/jobs/jobKinds.ts';
+import type { JobSpecification } from '@fss/domain/jobs/jobStore.ts';
 import {
   consumeSuppressionStops,
   consumeTerminalStops,
   readTerminalStopWork,
-} from '@fss/domain/sequences';
+} from '@fss/domain/sequences/terminalStops.ts';
 import type { DueWorkSource } from '../scheduler/schedulerPass.ts';
 
 /**

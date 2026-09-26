@@ -1,4 +1,5 @@
-import { readAppliedSchemaVersion, type SessionQueryable } from '@fss/domain/db';
+import { readAppliedSchemaVersion } from '@fss/domain/db/migrationRunner.ts';
+import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 import type { AdminInvocation, AdminOutcome } from './admin.ts';
 
 /**

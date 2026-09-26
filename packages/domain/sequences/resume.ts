@@ -1,4 +1,11 @@
-import { knownBlockedActionKinds, type BlockedActionKind, type HoldReasonCode } from '@fss/contracts';
+import {
+  knownBlockedActionKinds,
+  type BlockedActionKind,
+  type HoldReasonCode,
+  STEP_CHANNELS,
+  type StepChannel,
+  type StepExecutionState,
+} from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import {
   composeHolds,
@@ -6,20 +13,11 @@ import {
   shiftDueInstant,
   type HoldRecord,
   type ResumeDecision,
-} from '../src/index.ts';
+} from '../src/rules/holds.ts';
 import { CHANNEL_ACTION_KINDS, CHANNEL_PAUSE_KEYS } from './eligibility.ts';
 import { loadEnrollmentForUpdate, readEnrollment, unexecutedExecutions } from './rows.ts';
 import { rescheduleExecution } from './shifts.ts';
-import {
-  STEP_CHANNELS,
-  acceptSequence,
-  isStepChannel,
-  refuseSequence,
-  type EnrollmentRow,
-  type SequenceResult,
-  type StepChannel,
-  type StepExecutionState,
-} from './types.ts';
+import { acceptSequence, isStepChannel, refuseSequence, type EnrollmentRow, type SequenceResult } from './types.ts';
 import { holdAppliesSql } from './wake.ts';
 
 /**
@@ -54,7 +52,7 @@ import { holdAppliesSql } from './wake.ts';
  * The window starts at the enrollment's own `started_at`, so a hold that closed
  * before this contact was ever enrolled does not push their first email out.
  *
- * ## Only what has not been applied (lane g82, audit C09)
+ * ## Only what has not been applied (audit C09)
  *
  * A resume used to count every interval since the enrollment started, every time. The
  * first release of a three-day pause shifted the steps three days; a second, one-day
@@ -64,7 +62,7 @@ import { holdAppliesSql } from './wake.ts';
  * interval is counted by the first resume that applies it and by no later one — the
  * blocking episode that just ended, not the enrollment's lifetime total.
  *
- * ## The holds eligibility asks about (lane g82, audit C10)
+ * ## The holds eligibility asks about (audit C10)
  *
  * The query matches every scope `active_holds` can carry — mailbox and channel
  * included, which it used to omit — through the same `holdAppliesSql` the scheduler's
@@ -201,7 +199,7 @@ async function nextChannel(context: RepositoryContext, enrollmentId: string): Pr
 /**
  * The holds, their composition and `decideResume`'s answer for one enrollment, now.
  *
- * One function, called by the resume and by its preview (lane g88), so that the dates a
+ * One function, called by the resume and by its preview, so that the dates a
  * person reviews are the dates a confirmation applies: the same window, the same next
  * channel, the same action kinds, the same database clock. A preview computed by a
  * second copy of these lines would be a promise the resume need not keep.
@@ -355,7 +353,7 @@ export interface ResumePreviewHold {
 }
 
 /**
- * What "Review and resume" shows before anything is pressed (4.3; lane g88, audit G06).
+ * What "Review and resume" shows before anything is pressed (4.3; audit G06).
  *
  * `kind` is `decideResume`'s answer. `still_held` means something is open and a resume
  * would move nothing; `resume` means a confirmation would shift every unexecuted step by
@@ -375,7 +373,7 @@ export interface ResumePreview {
 }
 
 /**
- * The dates a resume would give the unexecuted steps (lane g88, audit G06).
+ * The dates a resume would give the unexecuted steps (audit G06).
  *
  * A read, and nothing else: no lock and no state change. It computes what
  * `resumeEnrollment` would do at this instant with the same function that does it, and

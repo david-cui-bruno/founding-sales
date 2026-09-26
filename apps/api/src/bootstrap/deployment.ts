@@ -1,44 +1,40 @@
 import { createPublicKey, type KeyObject } from 'node:crypto';
+import type { MailPublicConfig } from '@fss/domain/mail/config.ts';
+import { envelopeCipher, localDataKeyWrapper } from '@fss/domain/mail/envelope.ts';
+import { kmsDataKeyWrapper, loadKmsTransport } from '@fss/domain/mail/envelopeKms.ts';
+import { recordedGmailClient } from '@fss/domain/mail/gmailClientFake.ts';
+import { createGmailHttpClient, httpFetch, type HttpFetch } from '@fss/domain/mail/gmailClientHttp.ts';
 import {
-  createGmailHttpClient,
-  envelopeCipher,
-  httpFetch,
-  kmsDataKeyWrapper,
-  loadKmsTransport,
-  localDataKeyWrapper,
   publicKeyPushTokenVerifier,
-  recordedGmailClient,
-  staticSecretProvider,
-  type HttpFetch,
-  type MailPublicConfig,
   type PushTokenClaims,
   type PushTokenVerifier,
-} from '@fss/domain/mail';
-import { journalObjectKey, type SuppressionJournal, type SuppressionJournalRecord } from '@fss/domain/suppression';
+} from '@fss/domain/mail/pushToken.ts';
+import { staticSecretProvider } from '@fss/domain/mail/secretProvider.ts';
+import type { SuppressionJournal } from '@fss/domain/suppression/journal.ts';
 import {
-  createGoogleClient,
-  httpFetch as authHttpFetch,
-  type GoogleClient,
-  type GoogleOidcConfig,
-  type SessionPolicy,
-} from '../auth/index.ts';
+  DeploymentConfigError,
+  SHARED_DEPLOYMENT_VARIABLES,
+  REHEARSAL_MAILBOX_ADDRESS,
+  readBooleanFlag,
+  readDependencySelection,
+  readGoogleClientBundle,
+  readMailPublicConfig,
+  requiredVariable,
+  type DependencySelection,
+  type DeploymentEnvironment,
+  type PublicIdentifierSource,
+} from '@fss/domain/release/deployment.ts';
+import type { GoogleOidcConfig, SessionPolicy } from '../auth/config.ts';
+import { createGoogleClient, httpFetch as authHttpFetch, type GoogleClient } from '../auth/googleClient.ts';
 import { createLogger, type LogFields, type Logger } from './log.ts';
-import {
-  journalBody,
-  requireDurableJournal,
-  resolveSuppressionJournal,
-  type JournalPutObject,
-} from '../journal/index.ts';
+import { requireDurableJournal, resolveSuppressionJournal, type JournalPutObject } from '../journal/index.ts';
 import { DEFAULT_UPGRADE_URL, type MailRoutingDeps } from '../routes/types.ts';
 
 /**
  * What a deployed API was actually given, and what it refuses to start without.
  *
- * The API's version of `apps/worker/src/bootstrap/deployment.ts`, and deliberately its
- * mirror image: the same switch, the same variable names, the same rule that a
- * production process may not reach a fallback by omission.
- * `test/release/scenario42.check.ts` compares the two variable maps and fails when
- * they drift.
+ * The switch, the shared variable names and the Google bundle are read by
+ * `@fss/domain/release/deployment.ts`, the same code the worker reads them with.
  *
  * Three things a deployed API has that the worker does not.
  *
@@ -56,13 +52,7 @@ import { DEFAULT_UPGRADE_URL, type MailRoutingDeps } from '../routes/types.ts';
  * opt-out acknowledged with nothing to replay from after a restore. A live deployment
  * goes through `requireDurableJournal`, which throws rather than returning the no-op.
  *
- * **16.2's deployment flag.** The API reported `sendingEnabled: false` as a literal.
- * It is now read, so a release that has passed its gate can turn it on without a code
- * change, and `false` is still what an unset variable means.
- *
- * **Google sign-in.** G12 left `ApiOptions.auth` absent on purpose and said why: an
- * OIDC client half-built by a release lane is worse than one that is honestly missing.
- * G12b builds it whole. A live deployment reads the `google-oidc-client` secret, fixes
+ * **Google sign-in.** A live deployment reads the `google-oidc-client` secret, fixes
  * the redirect URI from `FSS_PUBLIC_ORIGIN`, restricts `hd` to the Workspace domain the
  * task environment carries, and takes the PKCE/state HMAC key from
  * `session-signing-key`. Any part missing is a refusal to start, because an API with no
@@ -71,57 +61,19 @@ import { DEFAULT_UPGRADE_URL, type MailRoutingDeps } from '../routes/types.ts';
  * omission. A rehearsal names its own client, exactly as it names its own push verifier.
  */
 
-export type DeploymentConfigErrorCode =
-  | 'DEPENDENCIES_UNSET'
-  | 'DEPENDENCIES_INVALID'
-  | 'PRODUCTION_REQUIRES_LIVE'
-  | 'MISSING'
-  | 'INVALID';
-
-export class DeploymentConfigError extends Error {
-  constructor(
-    readonly code: DeploymentConfigErrorCode,
-    message: string,
-  ) {
-    super(message);
-    this.name = 'DeploymentConfigError';
-  }
-}
-
-export type DependencySelection = 'live' | 'recorded' | 'none';
-
-type Environment = Readonly<Record<string, string | undefined>>;
+/** Re-exported for the callers that name the API's reader (`bootstrap/main.ts`, the ops checks). */
+export { DeploymentConfigError };
 
 /**
- * The deployment contract, as data.
- *
- * Kept equal to `apps/worker/src/bootstrap/deployment.ts`'s map for every name the two
- * processes share; the release suite compares them. The two entries only the API reads
- * are below the line.
+ * The deployment contract, as data: the shared names and the two only the API reads.
+ * No classifier key: the API does not read it and its task definition is not handed one.
  */
 export const DEPLOYMENT_ENVIRONMENT_VARIABLES = Object.freeze({
-  environmentName: 'FSS_ENVIRONMENT',
-  dependencies: 'FSS_DEPENDENCIES',
-  region: 'AWS_REGION',
-  publicOrigin: 'FSS_PUBLIC_ORIGIN',
-  envelopeKeyId: 'FSS_ENVELOPE_KEY_ID',
-  journalBucket: 'FSS_JOURNAL_BUCKET',
-  pushAudience: 'FSS_GMAIL_PUSH_AUDIENCE',
-  pushServiceAccount: 'FSS_GMAIL_PUSH_SERVICE_ACCOUNT',
-  /** Public identifiers `infra/modules/stack` puts in both task definitions (G12b). */
-  pushTopic: 'FSS_GMAIL_PUSH_TOPIC',
-  hostedDomain: 'FSS_GOOGLE_HOSTED_DOMAIN',
-  sendingEnabled: 'FSS_SENDING_ENABLED',
-  gmailOAuthClient: 'google-gmail-oauth-client',
-  oidcClient: 'google-oidc-client',
-  // No classifier key: the API does not read it, and since
-  // lane g81 its task definition is handed neither (`infra/modules/cluster`).
-  // ---- the API's own ----
+  ...SHARED_DEPLOYMENT_VARIABLES,
   sessionSigningKey: 'session-signing-key',
   /**
-   * The address `/auth/client-version` publishes as `upgradeUrl` (lane g86). A public
-   * identifier: the production root sets it from `desktop_upgrade_url` on the API task
-   * definition alone.
+   * The address `/auth/client-version` publishes as `upgradeUrl`. A public identifier:
+   * the production root sets it from `desktop_upgrade_url` on the API task definition alone.
    */
   upgradeUrl: 'FSS_DESKTOP_UPGRADE_URL',
 } as const);
@@ -157,93 +109,6 @@ export const DEPLOYED_SESSION_POLICY: SessionPolicy = Object.freeze({
   fullSignInSeconds: 30 * 24 * 3600,
   authorizationRequestSeconds: 600,
 });
-
-function required(environment: Environment, name: string): string {
-  const value = environment[name]?.trim();
-  if (value === undefined || value.length === 0) {
-    throw new DeploymentConfigError('MISSING', `${name} is not set`);
-  }
-  return value;
-}
-
-export interface GoogleClientBundle {
-  readonly clientId: string;
-  readonly clientSecret: string;
-  /** Public identifiers, now carried by the environment; the secret is the fallback. */
-  readonly pushTopic: string | null;
-  readonly hostedDomain: string | null;
-}
-
-/** Which of the two places a public identifier was actually read from. */
-export type PublicIdentifierSource = 'environment' | 'secret';
-
-/**
- * The same JSON the worker reads, parsed by the same rules.
- *
- * Duplicated rather than shared because `apps/api` and `apps/worker` are separate npm
- * workspaces with no dependency between them, and a shared home for it would have to
- * be `packages/domain`, which this lane does not own. The release suite asserts the
- * two agree on every field name.
- *
- * Both secrets — `google-gmail-oauth-client` and `google-oidc-client` — have this
- * shape. Only the client id and secret are required: `push_topic` and `hosted_domain`
- * are public identifiers that the task environment carries since G12b, and they are
- * read here only as a one-release fallback.
- */
-export function readGoogleClientBundle(raw: string, variableName: string): GoogleClientBundle {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new DeploymentConfigError('INVALID', `${variableName} does not hold a JSON object`);
-  }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    throw new DeploymentConfigError('INVALID', `${variableName} does not hold a JSON object`);
-  }
-  const bundle = parsed as Record<string, unknown>;
-  const field = (name: string): string => {
-    const value = bundle[name];
-    if (typeof value !== 'string' || value.trim().length === 0) {
-      throw new DeploymentConfigError('INVALID', `${variableName} does not carry ${name}`);
-    }
-    return value.trim();
-  };
-  const optional = (name: string): string | null => {
-    const value = bundle[name];
-    return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
-  };
-  return {
-    clientId: field('client_id'),
-    clientSecret: field('client_secret'),
-    pushTopic: optional('push_topic'),
-    hostedDomain: optional('hosted_domain'),
-  };
-}
-
-/**
- * A public identifier the task environment carries, with the secret as fallback.
- *
- * The environment wins when both are present, so an operator who has re-applied the
- * infrastructure does not also have to rewrite the secret. When neither has it, the
- * refusal names *both* places it looked.
- */
-export function resolvePublicIdentifier(
-  environment: Environment,
-  variableName: string,
-  fallback: string | null,
-  secretName: string,
-  secretField: string,
-): { readonly value: string; readonly source: PublicIdentifierSource } {
-  const fromEnvironment = environment[variableName]?.trim();
-  if (fromEnvironment !== undefined && fromEnvironment.length > 0) {
-    return { value: fromEnvironment, source: 'environment' };
-  }
-  if (fallback !== null) return { value: fallback, source: 'secret' };
-  throw new DeploymentConfigError(
-    'MISSING',
-    `${variableName} is not set and ${secretName} carries no ${secretField}`,
-  );
-}
 
 /**
  * The signing key, as base64 DER or raw base64 bytes, never as PEM.
@@ -369,7 +234,7 @@ export type UpgradeUrlSource = 'environment' | 'placeholder';
 export interface ApiDeployment {
   readonly environmentName: string;
   readonly dependencies: DependencySelection;
-  /** What `/auth/client-version` publishes as `upgradeUrl` (lane g86). */
+  /** What `/auth/client-version` publishes as `upgradeUrl`. */
   readonly upgradeUrl: string;
   readonly upgradeUrlSource: UpgradeUrlSource;
   /** Absent when `dependencies` is `none`; the four mail paths then answer not_found. */
@@ -389,47 +254,15 @@ export interface ApiDeployment {
   readonly hostedDomainSource: PublicIdentifierSource | 'absent';
 }
 
-function dependencySelection(environment: Environment): DependencySelection {
-  const raw = environment[VARIABLES.dependencies]?.trim().toLowerCase();
-  const environmentName = environment[VARIABLES.environmentName]?.trim().toLowerCase() ?? 'unset';
-  if (raw === undefined || raw.length === 0) {
-    if (environmentName === 'production') {
-      throw new DeploymentConfigError(
-        'DEPENDENCIES_UNSET',
-        `${VARIABLES.dependencies} must be set to live in a production deployment`,
-      );
-    }
-    return 'none';
-  }
-  if (raw !== 'live' && raw !== 'recorded' && raw !== 'none') {
-    throw new DeploymentConfigError('DEPENDENCIES_INVALID', `${VARIABLES.dependencies} must be live, recorded or none`);
-  }
-  if (environmentName === 'production' && raw !== 'live') {
-    throw new DeploymentConfigError(
-      'PRODUCTION_REQUIRES_LIVE',
-      `${VARIABLES.environmentName} is production, so ${VARIABLES.dependencies} may only be live`,
-    );
-  }
-  return raw;
-}
-
-function booleanFlag(environment: Environment, name: string): boolean {
-  const raw = environment[name]?.trim().toLowerCase();
-  if (raw === undefined || raw.length === 0) return false;
-  if (raw === 'true') return true;
-  if (raw === 'false') return false;
-  throw new DeploymentConfigError('INVALID', `${name} must be true or false`);
-}
-
 /**
- * The upgrade notice's address (lane g86).
+ * The upgrade notice's address.
  *
  * Until this lane every API published `https://callie.example/downloads/mac`, a
  * placeholder nobody could download from. The production root now sets
  * `FSS_DESKTOP_UPGRADE_URL` to the signed update manifest the desktop reads
  * (`docs/decisions/g86-the-upgrade-notice-names-the-update-channel.md`). It is
- * machine-facing: since lane g83 the Mac installs from that manifest itself, and the
- * upgrade screen shows a sentence, never this address.
+ * machine-facing: the Mac installs from that manifest itself, and the upgrade screen
+ * shows a sentence, never this address.
  *
  * Unset outside production is the placeholder, which is what a laptop and a rehearsal
  * publish. Unset in production is a refusal to start, the rule this file keeps for every
@@ -439,7 +272,7 @@ function booleanFlag(environment: Environment, name: string): boolean {
  * `https://` address — no credentials, query or fragment, so never a signed URL — and
  * production refuses the placeholder by value too.
  */
-export function readUpgradeUrl(environment: Environment): { readonly value: string; readonly source: UpgradeUrlSource } {
+export function readUpgradeUrl(environment: DeploymentEnvironment): { readonly value: string; readonly source: UpgradeUrlSource } {
   const name = VARIABLES.upgradeUrl;
   const raw = environment[name]?.trim() ?? '';
   const production = environment[VARIABLES.environmentName]?.trim().toLowerCase() === 'production';
@@ -476,12 +309,12 @@ export interface ReadApiDeploymentOptions {
 }
 
 export async function readApiDeployment(
-  environment: Environment,
+  environment: DeploymentEnvironment,
   options: ReadApiDeploymentOptions = {},
 ): Promise<ApiDeployment> {
   const environmentName = environment[VARIABLES.environmentName]?.trim() ?? 'unset';
-  const dependencies = dependencySelection(environment);
-  const sendingEnabled = booleanFlag(environment, VARIABLES.sendingEnabled);
+  const dependencies = readDependencySelection(environment);
+  const sendingEnabled = readBooleanFlag(environment, VARIABLES.sendingEnabled);
   const upgrade = readUpgradeUrl(environment);
   const bucket = environment[VARIABLES.journalBucket]?.trim() ?? '';
 
@@ -515,39 +348,13 @@ export async function readApiDeployment(
   }
 
   const bundle = readGoogleClientBundle(
-    required(environment, VARIABLES.gmailOAuthClient),
+    requiredVariable(environment, VARIABLES.gmailOAuthClient),
     VARIABLES.gmailOAuthClient,
   );
-  const origin = required(environment, VARIABLES.publicOrigin).replace(/\/+$/u, '');
-  const pushTopic = resolvePublicIdentifier(
-    environment,
-    VARIABLES.pushTopic,
-    bundle.pushTopic,
-    VARIABLES.gmailOAuthClient,
-    'push_topic',
-  );
-  const hostedDomain = resolvePublicIdentifier(
-    environment,
-    VARIABLES.hostedDomain,
-    bundle.hostedDomain,
-    VARIABLES.gmailOAuthClient,
-    'hosted_domain',
-  );
-  const config: MailPublicConfig = {
-    clientId: bundle.clientId,
-    redirectUri: `${origin}/oauth/gmail/callback`,
-    authorizationEndpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
-    tokenEndpoint: 'https://oauth2.googleapis.com/token',
-    revocationEndpoint: 'https://oauth2.googleapis.com/revoke',
-    apiBaseUrl: 'https://gmail.googleapis.com',
-    pushTopicName: pushTopic.value,
-    pushAudience: required(environment, VARIABLES.pushAudience),
-    pushServiceAccountEmail: required(environment, VARIABLES.pushServiceAccount),
-    hostedDomain: hostedDomain.value,
-    baselineDays: 30,
-  };
+  const { config, pushTopicSource, hostedDomainSource } = readMailPublicConfig(bundle, environment);
+  const origin = requiredVariable(environment, VARIABLES.publicOrigin).replace(/\/+$/u, '');
   const stateSigningKey = readSigningKey(
-    required(environment, VARIABLES.sessionSigningKey),
+    requiredVariable(environment, VARIABLES.sessionSigningKey),
     VARIABLES.sessionSigningKey,
   );
   const secrets = staticSecretProvider({ gmail_oauth_client_secret: bundle.clientSecret });
@@ -555,14 +362,14 @@ export async function readApiDeployment(
   // 5.1's sign-in client, which is *not* the Gmail one: a separate registration with
   // `openid email profile` only, and one redirect URI per environment fixed by the
   // API's own hostname (docs/decisions/g2-redirect-target.md).
-  const signInBundle = readGoogleClientBundle(required(environment, VARIABLES.oidcClient), VARIABLES.oidcClient);
+  const signInBundle = readGoogleClientBundle(requiredVariable(environment, VARIABLES.oidcClient), VARIABLES.oidcClient);
   const oidc: GoogleOidcConfig = {
     issuer: GOOGLE_OIDC_ISSUER,
     discoveryUrl: GOOGLE_OIDC_DISCOVERY_URL,
     clientId: signInBundle.clientId,
     clientSecret: signInBundle.clientSecret,
     redirectUri: `${origin}/auth/google/callback`,
-    hostedDomain: hostedDomain.value,
+    hostedDomain: config.hostedDomain,
     clockSkewSeconds: OIDC_CLOCK_SKEW_SECONDS,
   };
 
@@ -587,7 +394,7 @@ export async function readApiDeployment(
       upgradeUrl: upgrade.value,
       upgradeUrlSource: upgrade.source,
       mail: {
-        gmail: recordedGmailClient({ emailAddress: 'rehearsal@rehearsal.invalid', historyId: '1', messages: [] }),
+        gmail: recordedGmailClient({ emailAddress: REHEARSAL_MAILBOX_ADDRESS, historyId: '1', messages: [] }),
         config,
         secrets,
         cipher: envelopeCipher(localDataKeyWrapper('rehearsal-envelope')),
@@ -603,13 +410,13 @@ export async function readApiDeployment(
       gmailSource: 'recorded',
       pushVerifierSource: 'fixture',
       signInSource: 'fixture',
-      pushTopicSource: pushTopic.source,
-      hostedDomainSource: hostedDomain.source,
+      pushTopicSource,
+      hostedDomainSource,
     };
   }
 
-  const region = required(environment, VARIABLES.region);
-  const keyId = required(environment, VARIABLES.envelopeKeyId);
+  const region = requiredVariable(environment, VARIABLES.region);
+  const keyId = requiredVariable(environment, VARIABLES.envelopeKeyId);
   const transport = await (options.loadKms ?? loadKmsTransport)(region);
   return {
     environmentName,
@@ -641,8 +448,8 @@ export async function readApiDeployment(
     gmailSource: 'https',
     pushVerifierSource: 'google_jwks',
     signInSource: 'google',
-    pushTopicSource: pushTopic.source,
-    hostedDomainSource: hostedDomain.source,
+    pushTopicSource,
+    hostedDomainSource,
   };
 }
 
@@ -707,7 +514,7 @@ export interface S3JournalSdk {
  * A `412 PreconditionFailed` is success: `IfNoneMatch: '*'` means a replayed
  * deterministic id does not overwrite an object that is already durable, and the key
  * *is* that id, so an object at it is this event. A `409 ConditionalRequestConflict`
- * is not (audit S12, lane g81). It says another write to the same key was in flight,
+ * is not (audit S12). It says another write to the same key was in flight,
  * and that write may yet fail, so it proves nothing is durable. Until this lane both
  * were `already_present`, which let a conflict acknowledge a suppression no object
  * recorded. It now throws like any other refusal, `createS3SuppressionJournal` turns
@@ -750,10 +557,3 @@ export async function loadJournalPutObject(
     }
   };
 }
-
-/** Re-exported so the release suite can compare the two processes' bodies. */
-export function apiJournalBody(record: SuppressionJournalRecord): string {
-  return journalBody(record);
-}
-
-export { journalObjectKey };

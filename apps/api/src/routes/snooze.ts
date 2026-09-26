@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import { commandIdSchema, instant, semanticVersionSchema, uuid } from '@fss/contracts';
-import { SNOOZE_REASON_MAX, cancelTodaySnooze, releaseTodayPause, snoozeTodayItem } from '@fss/domain/today';
-import { REFUSAL_STATUS, policyRouteDeps, redactError, runPolicyCommand } from './dialSupport.ts';
+import { SNOOZE_REASON_MAX, cancelTodaySnooze, releaseTodayPause, snoozeTodayItem } from '@fss/domain/today/snooze.ts';
+import { REFUSAL_STATUS, redactError } from '../limits.ts';
+import { policyRouteDeps, runPolicyCommand } from './dialSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**
@@ -26,7 +27,7 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 export const SNOOZE_PATHS: readonly string[] = ['/today/snooze', '/today/snooze/cancel', '/today/pause/release'];
 
 /**
- * `returnAt` is optional since lane g79: a manual task still needs it (the domain
+ * `returnAt` is optional: a manual task still needs it (the domain
  * refuses `snooze_return_required` without it), and an automated task's pause is
  * released by a person rather than by a clock, so the Mac no longer asks for one.
  */
@@ -38,7 +39,7 @@ const snoozeCommandSchema = z.strictObject({
   returnAt: instant.optional(),
 });
 
-/** The Resume control on a paused automated task (lane g79, audit C22). */
+/** The Resume control on a paused automated task (audit C22). */
 const releasePauseCommandSchema = z.strictObject({
   commandId: commandIdSchema,
   clientVersion: semanticVersionSchema,

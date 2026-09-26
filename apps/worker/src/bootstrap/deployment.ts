@@ -1,229 +1,57 @@
+import type { MailPublicConfig } from '@fss/domain/mail/config.ts';
+import { envelopeCipher, localDataKeyWrapper, type EnvelopeCipher } from '@fss/domain/mail/envelope.ts';
+import { kmsDataKeyWrapper, loadKmsTransport, recordedSeamDataKeyWrapper } from '@fss/domain/mail/envelopeKms.ts';
+import type { GmailClient, GmailOAuthConfig } from '@fss/domain/mail/gmailClient.ts';
+import { recordedGmailClient } from '@fss/domain/mail/gmailClientFake.ts';
+import { createGmailHttpClient, httpFetch } from '@fss/domain/mail/gmailClientHttp.ts';
+import { staticSecretProvider, type SecretProvider } from '@fss/domain/mail/secretProvider.ts';
+import { CLASSIFIER_SECRET_ENVIRONMENT_VARIABLES } from '@fss/domain/classification/anthropicClient.ts';
 import {
-  createGmailHttpClient,
-  envelopeCipher,
-  httpFetch,
-  kmsDataKeyWrapper,
-  loadKmsTransport,
-  localDataKeyWrapper,
-  recordedGmailClient,
-  recordedSeamDataKeyWrapper,
-  staticSecretProvider,
-  type EnvelopeCipher,
-  type GmailClient,
-  type GmailOAuthConfig,
-  type MailPublicConfig,
-  type SecretProvider,
-} from '@fss/domain/mail';
-import { CLASSIFIER_SECRET_ENVIRONMENT_VARIABLES } from '@fss/domain/classification';
-import { createLogger, type LogFields, type Logger } from './log.ts';
+  DeploymentConfigError,
+  REHEARSAL_MAILBOX_ADDRESS,
+  SHARED_DEPLOYMENT_VARIABLES,
+  readBooleanFlag,
+  readDependencySelection,
+  readGoogleClientBundle,
+  readMailPublicConfig,
+  requiredVariable,
+  type DependencySelection,
+  type DeploymentEnvironment,
+  type PublicIdentifierSource,
+} from '@fss/domain/release/deployment.ts';
 import {
   SuppressionJournalError,
+  journalObjectBody,
   journalObjectKey,
   type SuppressionJournal,
-  type SuppressionJournalRecord,
-} from '@fss/domain/suppression';
+} from '@fss/domain/suppression/journal.ts';
+import { createLogger, type LogFields, type Logger } from './log.ts';
 
 /**
- * What a deployed worker was actually given, and what it refuses to start without.
+ * What a deployed worker was actually given, and what it refuses to start without: the
+ * difference between "this deployment has no Gmail configuration" and "this deployment
+ * was *meant* to have one and does not" is a refusal to start rather than a queue that
+ * quietly never drains.
  *
- * Before this file the worker called `mailHandlers(undefined)` and
- * `outboundSendHandoff()` with no deps, and
- * the comments above those calls said, honestly, that the change which reads a
- * deployment's client secret and KMS key would be reviewed on its own. This is that
- * change. Its whole job is to make the difference between "this deployment has no
- * Gmail configuration" and "this deployment was *meant* to have one and does not" a
- * refusal to start rather than a queue that quietly never drains.
- *
- * ## One switch, three values, and no default
- *
- * `FSS_DEPENDENCIES` is the switch and it has no fallback in production:
- *
- *   * `live` — build every real adapter from the deployed configuration. Any missing
- *     part is a `DeploymentConfigError` and the process exits.
- *   * `recorded` — the rehearsal selection: the recorded Gmail fake and a local
- *     envelope key, chosen **explicitly**. A rehearsal that reached the fakes by
- *     omission would be a rehearsal that proved nothing about the production path.
- *   * `none` — no Gmail and no classifier; their job kinds wait in the
- *     queue unclaimed. This is the shape this repository shipped before today and it
- *     stays available for a laptop — but `FSS_ENVIRONMENT=production` refuses it.
- *
- * That last refusal is the point of the whole file, and `test/release/scenario42` and
- * `apps/worker/test/deployment.test.ts` are the two places it is asserted: a
- * production process must never reach a no-op by accident, only by a value somebody
- * typed.
- *
- * ## The Google configuration is one operator-written secret
- *
- * The task definition injects Secrets Manager values under the logical names
- * `infra/modules/secrets` created (`google-gmail-oauth-client`, `llm-classifier-api-key`
- * and so on), so those are the environment variable names this file reads. Two
- * *public* identifiers the Gmail lane needs — the Pub/Sub topic `users.watch` names and
- * the Workspace domain a connectable mailbox must belong to — used to travel in that
- * same JSON, because nothing in the task environment carried them. G12b put them in
- * the environment (`FSS_GMAIL_PUSH_TOPIC`, `FSS_GOOGLE_HOSTED_DOMAIN`) through
- * `infra/modules/stack`'s environment map, and the JSON stays readable as a fallback
- * for one release. See
- * `docs/decisions/g12b-two-public-identifiers-move-out-of-the-secret.md` and
- * `docs/greenfield/release.md` 1.6.
- *
- * Nothing here logs a value. `describeDeployment` names the parts and their sources.
+ * The switch, the shared variable names and the Google bundle are read by
+ * `@fss/domain/release/deployment.ts`, the same code the API reads them with. Nothing
+ * here logs a value; `describeDeployment` names the parts and their sources.
  */
 
-export type DependencySelection = 'live' | 'recorded' | 'none';
+/** Re-exported for the callers that name the worker's reader (`bootstrap/main.ts`, `tools/fss.ts`). */
+export { DeploymentConfigError };
 
-export type DeploymentConfigErrorCode =
-  | 'DEPENDENCIES_UNSET'
-  | 'DEPENDENCIES_INVALID'
-  | 'PRODUCTION_REQUIRES_LIVE'
-  | 'MISSING'
-  | 'INVALID';
-
-export class DeploymentConfigError extends Error {
-  constructor(
-    readonly code: DeploymentConfigErrorCode,
-    message: string,
-  ) {
-    super(message);
-    this.name = 'DeploymentConfigError';
-  }
-}
-
-type Environment = Readonly<Record<string, string | undefined>>;
-
-/**
- * Every environment variable a deployed process reads that is not its own role's.
- *
- * Exported as data because two processes read the same deployment and must not drift:
- * `test/release/scenario42.check.ts` compares this map with the API's and fails when
- * they disagree about a name.
- */
+/** The deployment contract, as data: the shared names and the one only the worker reads. */
 export const DEPLOYMENT_ENVIRONMENT_VARIABLES = Object.freeze({
-  environmentName: 'FSS_ENVIRONMENT',
-  dependencies: 'FSS_DEPENDENCIES',
-  region: 'AWS_REGION',
-  publicOrigin: 'FSS_PUBLIC_ORIGIN',
-  envelopeKeyId: 'FSS_ENVELOPE_KEY_ID',
-  journalBucket: 'FSS_JOURNAL_BUCKET',
-  pushAudience: 'FSS_GMAIL_PUSH_AUDIENCE',
-  pushServiceAccount: 'FSS_GMAIL_PUSH_SERVICE_ACCOUNT',
-  /** Public identifiers `infra/modules/stack` puts in both task definitions (G12b). */
-  pushTopic: 'FSS_GMAIL_PUSH_TOPIC',
-  hostedDomain: 'FSS_GOOGLE_HOSTED_DOMAIN',
-  sendingEnabled: 'FSS_SENDING_ENABLED',
-  /** The ECS `secrets` block names each entry by its logical Secrets Manager name, */
-  gmailOAuthClient: 'google-gmail-oauth-client',
-  oidcClient: 'google-oidc-client',
+  ...SHARED_DEPLOYMENT_VARIABLES,
   /**
-   * except this one, which the classifier reads as `FSS_LLM_CLASSIFIER_API_KEY`
-   * (`environmentClassifierSecrets`). Until lane g81 this said
-   * `llm-classifier-api-key`, the task definition injected it under that name, and
-   * the deployed worker never had a classifier. `infra/modules/cluster` maps the
-   * entry to this name and `test/release/processSecrets.check.ts` holds the three
-   * equal.
+   * Not a logical secret name: the classifier reads the key as `FSS_LLM_CLASSIFIER_API_KEY`
+   * (`environmentClassifierSecrets`), and `infra/modules/cluster` maps the entry to it.
    */
   classifierApiKey: CLASSIFIER_SECRET_ENVIRONMENT_VARIABLES.llm_classifier_api_key,
 } as const);
 
 const VARIABLES = DEPLOYMENT_ENVIRONMENT_VARIABLES;
-
-function required(environment: Environment, name: string): string {
-  const value = environment[name]?.trim();
-  if (value === undefined || value.length === 0) {
-    // The name, never the value: an environment variable is an operator's input.
-    throw new DeploymentConfigError('MISSING', `${name} is not set`);
-  }
-  return value;
-}
-
-/**
- * The Google client bundle an operator pasted, as JSON.
- *
- * The client id and secret are refused rather than defaulted: each is a thing a
- * deployment either knows or must not pretend to know.
- *
- * `push_topic` and `hosted_domain` are **public identifiers** and are now carried by
- * the task environment (`FSS_GMAIL_PUSH_TOPIC`, `FSS_GOOGLE_HOSTED_DOMAIN`). They
- * remain readable here for one release so a deployment written against G12's shape
- * still starts; `resolvePublicIdentifier` prefers the environment and refuses when
- * neither source has one. See
- * `docs/decisions/g12b-two-public-identifiers-move-out-of-the-secret.md`.
- */
-export interface GoogleClientBundle {
-  readonly clientId: string;
-  readonly clientSecret: string;
-  readonly pushTopic: string | null;
-  readonly hostedDomain: string | null;
-}
-
-/** Which of the two places a public identifier was actually read from. */
-export type PublicIdentifierSource = 'environment' | 'secret';
-
-export function readGoogleClientBundle(raw: string, variableName: string): GoogleClientBundle {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new DeploymentConfigError('INVALID', `${variableName} does not hold a JSON object`);
-  }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    throw new DeploymentConfigError('INVALID', `${variableName} does not hold a JSON object`);
-  }
-  const bundle = parsed as Record<string, unknown>;
-  const field = (name: string): string => {
-    const value = bundle[name];
-    if (typeof value !== 'string' || value.trim().length === 0) {
-      throw new DeploymentConfigError('INVALID', `${variableName} does not carry ${name}`);
-    }
-    return value.trim();
-  };
-  const optional = (name: string): string | null => {
-    const value = bundle[name];
-    return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
-  };
-  return {
-    clientId: field('client_id'),
-    clientSecret: field('client_secret'),
-    pushTopic: optional('push_topic'),
-    hostedDomain: optional('hosted_domain'),
-  };
-}
-
-/**
- * A public identifier the task environment carries, with the secret as fallback.
- *
- * The environment wins when both are present, so an operator who has re-applied the
- * infrastructure does not also have to rewrite the secret. When neither has it the
- * refusal names *both* places it looked, because "hosted_domain is missing" sends an
- * operator to the wrong console.
- */
-export function resolvePublicIdentifier(
-  environment: Environment,
-  variableName: string,
-  fallback: string | null,
-  secretName: string,
-  secretField: string,
-): { readonly value: string; readonly source: PublicIdentifierSource } {
-  const fromEnvironment = environment[variableName]?.trim();
-  if (fromEnvironment !== undefined && fromEnvironment.length > 0) {
-    return { value: fromEnvironment, source: 'environment' };
-  }
-  if (fallback !== null) return { value: fallback, source: 'secret' };
-  throw new DeploymentConfigError(
-    'MISSING',
-    `${variableName} is not set and ${secretName} carries no ${secretField}`,
-  );
-}
-
-/** 12.3's "configured recent-history interval", in days. */
-export const DEFAULT_BASELINE_DAYS = 30;
-
-/**
- * The address the recorded Gmail fake answers for in a rehearsal.
- *
- * `.invalid` is reserved by RFC 2606 and can never be a real mailbox, so a rehearsal
- * that somehow reached a real Gmail with this would fail rather than touch anybody.
- */
-export const REHEARSAL_MAILBOX_ADDRESS = 'rehearsal@rehearsal.invalid';
 
 export interface GmailDeployment {
   readonly config: MailPublicConfig;
@@ -254,82 +82,6 @@ export interface WorkerDeployment {
   readonly journalBucket: string | null;
 }
 
-function dependencySelection(environment: Environment): DependencySelection {
-  const raw = environment[VARIABLES.dependencies]?.trim().toLowerCase();
-  const environmentName = environment[VARIABLES.environmentName]?.trim().toLowerCase() ?? 'unset';
-  if (raw === undefined || raw.length === 0) {
-    // A production process that read no switch would run with whatever the code's
-    // fallback happened to be, which is how a build ends up sending nothing and
-    // reporting nothing. Outside production the absence is allowed and means `none`.
-    if (environmentName === 'production') {
-      throw new DeploymentConfigError(
-        'DEPENDENCIES_UNSET',
-        `${VARIABLES.dependencies} must be set to live in a production deployment`,
-      );
-    }
-    return 'none';
-  }
-  if (raw !== 'live' && raw !== 'recorded' && raw !== 'none') {
-    throw new DeploymentConfigError('DEPENDENCIES_INVALID', `${VARIABLES.dependencies} must be live, recorded or none`);
-  }
-  if (environmentName === 'production' && raw !== 'live') {
-    throw new DeploymentConfigError(
-      'PRODUCTION_REQUIRES_LIVE',
-      `${VARIABLES.environmentName} is production, so ${VARIABLES.dependencies} may only be live`,
-    );
-  }
-  return raw;
-}
-
-function booleanFlag(environment: Environment, name: string): boolean {
-  const raw = environment[name]?.trim().toLowerCase();
-  if (raw === undefined || raw.length === 0) return false;
-  if (raw === 'true') return true;
-  if (raw === 'false') return false;
-  throw new DeploymentConfigError('INVALID', `${name} must be true or false`);
-}
-
-interface ResolvedMailConfig {
-  readonly config: MailPublicConfig;
-  readonly pushTopicSource: PublicIdentifierSource;
-  readonly hostedDomainSource: PublicIdentifierSource;
-}
-
-function mailConfigOf(bundle: GoogleClientBundle, environment: Environment): ResolvedMailConfig {
-  const origin = required(environment, VARIABLES.publicOrigin).replace(/\/+$/u, '');
-  const pushTopic = resolvePublicIdentifier(
-    environment,
-    VARIABLES.pushTopic,
-    bundle.pushTopic,
-    VARIABLES.gmailOAuthClient,
-    'push_topic',
-  );
-  const hostedDomain = resolvePublicIdentifier(
-    environment,
-    VARIABLES.hostedDomain,
-    bundle.hostedDomain,
-    VARIABLES.gmailOAuthClient,
-    'hosted_domain',
-  );
-  const config: MailPublicConfig = {
-    clientId: bundle.clientId,
-    // Exactly what is registered with Google. The registration in
-    // `.context/FSS-GREENFIELD-ACCOUNT-IDENTIFIERS-20260920.md` is this path on the
-    // API's own origin, so it is derived rather than configured twice.
-    redirectUri: `${origin}/oauth/gmail/callback`,
-    authorizationEndpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
-    tokenEndpoint: 'https://oauth2.googleapis.com/token',
-    revocationEndpoint: 'https://oauth2.googleapis.com/revoke',
-    apiBaseUrl: 'https://gmail.googleapis.com',
-    pushTopicName: pushTopic.value,
-    pushAudience: required(environment, VARIABLES.pushAudience),
-    pushServiceAccountEmail: required(environment, VARIABLES.pushServiceAccount),
-    hostedDomain: hostedDomain.value,
-    baselineDays: DEFAULT_BASELINE_DAYS,
-  };
-  return { config, pushTopicSource: pushTopic.source, hostedDomainSource: hostedDomain.source };
-}
-
 /**
  * The Gmail configuration, built once at startup.
  *
@@ -338,15 +90,15 @@ function mailConfigOf(bundle: GoogleClientBundle, environment: Environment): Res
  * in this file that can reach the network.
  */
 export async function readGmailDeployment(
-  environment: Environment,
+  environment: DeploymentEnvironment,
   dependencies: DependencySelection,
   options: { readonly loadKms?: typeof loadKmsTransport } = {},
 ): Promise<GmailDeployment> {
   const bundle = readGoogleClientBundle(
-    required(environment, VARIABLES.gmailOAuthClient),
+    requiredVariable(environment, VARIABLES.gmailOAuthClient),
     VARIABLES.gmailOAuthClient,
   );
-  const { config, pushTopicSource, hostedDomainSource } = mailConfigOf(bundle, environment);
+  const { config, pushTopicSource, hostedDomainSource } = readMailPublicConfig(bundle, environment);
   const secrets = staticSecretProvider({ gmail_oauth_client_secret: bundle.clientSecret });
   const oauth: GmailOAuthConfig = {
     clientId: config.clientId,
@@ -376,7 +128,7 @@ export async function readGmailDeployment(
       ? envelopeCipher(
           recordedSeamDataKeyWrapper({
             keyId: envelopeKeyId,
-            transport: await (options.loadKms ?? loadKmsTransport)(required(environment, VARIABLES.region)),
+            transport: await (options.loadKms ?? loadKmsTransport)(requiredVariable(environment, VARIABLES.region)),
           }),
         )
       : envelopeCipher(localDataKeyWrapper('rehearsal-envelope'));
@@ -393,8 +145,8 @@ export async function readGmailDeployment(
     };
   }
 
-  const region = required(environment, VARIABLES.region);
-  const keyId = required(environment, VARIABLES.envelopeKeyId);
+  const region = requiredVariable(environment, VARIABLES.region);
+  const keyId = requiredVariable(environment, VARIABLES.envelopeKeyId);
   const transport = await (options.loadKms ?? loadKmsTransport)(region);
   return {
     config,
@@ -410,13 +162,13 @@ export async function readGmailDeployment(
 }
 
 export async function readWorkerDeployment(
-  environment: Environment,
+  environment: DeploymentEnvironment,
   options: { readonly loadKms?: typeof loadKmsTransport } = {},
 ): Promise<WorkerDeployment> {
   const environmentName = environment[VARIABLES.environmentName]?.trim() ?? 'unset';
-  const dependencies = dependencySelection(environment);
+  const dependencies = readDependencySelection(environment);
   const journalBucket = environment[VARIABLES.journalBucket]?.trim() ?? '';
-  const sendingEnabled = booleanFlag(environment, VARIABLES.sendingEnabled);
+  const sendingEnabled = readBooleanFlag(environment, VARIABLES.sendingEnabled);
 
   if (dependencies === 'none') {
     return {
@@ -542,7 +294,7 @@ export async function loadS3SuppressionJournal(options: {
           new sdk.PutObjectCommand({
             Bucket: options.bucket,
             Key: journalObjectKey(record),
-            Body: journalRecordBody(record),
+            Body: journalObjectBody(record),
             ContentType: 'application/json',
             IfNoneMatch: '*',
           }),
@@ -563,29 +315,4 @@ export async function loadS3SuppressionJournal(options: {
       }
     },
   };
-}
-
-/**
- * The body of a journal object: identifiers and codes, never a name or a note.
- *
- * The same shape `apps/api/src/journal/index.ts` writes, and
- * `test/release/scenario11.check.ts` asserts the two agree field for field — a replay
- * that could not read what the other process wrote would be a replay that loses
- * suppressions, which Appendix E's step 2 exists to prevent.
- */
-export function journalRecordBody(record: SuppressionJournalRecord): string {
-  return JSON.stringify({
-    schema: 'fss.suppression.v1',
-    eventId: record.eventId,
-    workspaceId: record.workspaceId,
-    scope: record.scope,
-    canonicalKey: record.canonicalKey,
-    canonicalizerVersion: record.canonicalizerVersion,
-    source: record.source,
-    actorUserId: record.actorUserId,
-    commandId: record.commandId,
-    supersedesEventId: record.supersedesEventId,
-    supersessionReason: record.supersessionReason,
-    recordedAt: record.recordedAt,
-  });
 }

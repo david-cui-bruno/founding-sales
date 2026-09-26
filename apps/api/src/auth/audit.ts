@@ -1,4 +1,4 @@
-import type { Queryable } from '@fss/domain/db';
+import type { Queryable } from '@fss/domain/db/queryable.ts';
 import {
   VISIBILITY_OF_READ,
   type ReadVisibilityClass,

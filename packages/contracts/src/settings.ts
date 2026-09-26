@@ -57,58 +57,25 @@ export type ActiveSettingKey = (typeof SETTING_KEYS)[number];
  * changed nothing: the API takes its client range from the deployment and CloudWatch
  * takes its thresholds from Terraform. The server no longer answers, accepts or
  * reports a history for either. The wire vocabulary still names them only because the
- * Mac's settings rows and their tests do; remove this list, `DEFAULT_ALERT_THRESHOLDS`
- * and `AlertThresholds` once the desktop has dropped them. Migration 0019 deleted their
- * rows and took both keys out of the table's CHECK.
+ * Mac's settings rows and their tests do; remove this list once the desktop has
+ * dropped them. Migration 0019 deleted their rows and took both keys out of the
+ * table's CHECK.
  */
-export const RETIRED_SETTING_KEYS = ['alert_thresholds', 'client_version_range'] as const;
+const RETIRED_SETTING_KEYS = ['alert_thresholds', 'client_version_range'] as const;
 
 /** A key the wire may name: an active one, or (deprecated) a retired one. */
 export type SettingKey = ActiveSettingKey | (typeof RETIRED_SETTING_KEYS)[number];
 
 // ---------------------------------------------------------------------------
-// Deprecated: the retired thresholds slice, still read by the Mac's settings form
+// The slices
 // ---------------------------------------------------------------------------
 
-/** @deprecated See `RETIRED_SETTING_KEYS`. */
-export interface AlertThresholds {
-  readonly todaySnapshotDeadlineLocalTime: string;
-  readonly heartbeatMissedChecks: number;
-  readonly oldestJobAgeWarningSeconds: number;
-  readonly oldestJobAgeCriticalSeconds: number;
-  readonly gmailWatchExpiryHours: number;
-  readonly canaryStaleSeconds: number;
-  readonly allSequencesHeldFraction: number;
-  readonly deadJobUnresolvedSeconds: number;
-  readonly mailboxDisconnectedHours: number;
-  readonly unacknowledgedCriticalSeconds: number;
-}
-
-/** @deprecated See `RETIRED_SETTING_KEYS`. The alarms read Terraform's values. */
-export const DEFAULT_ALERT_THRESHOLDS: AlertThresholds = Object.freeze({
-  todaySnapshotDeadlineLocalTime: '05:10',
-  heartbeatMissedChecks: 3,
-  oldestJobAgeWarningSeconds: 300,
-  oldestJobAgeCriticalSeconds: 900,
-  gmailWatchExpiryHours: 48,
-  canaryStaleSeconds: 300,
-  allSequencesHeldFraction: 1,
-  deadJobUnresolvedSeconds: 3600,
-  mailboxDisconnectedHours: 48,
-  unacknowledgedCriticalSeconds: 3600,
-});
-
-// ---------------------------------------------------------------------------
-// The other slices
-// ---------------------------------------------------------------------------
-
-export const ianaTimeZoneSchema = z
+const ianaTimeZoneSchema = z
   .string()
   .regex(/^[A-Za-z][A-Za-z0-9_+-]*(\/[A-Za-z0-9_+-]+){1,2}$/, 'an IANA time zone');
 
 /** Appendix D: "A configurable workspace business zone initialized to America/New_York." */
-export const businessTimeZoneSettingSchema = z.strictObject({ timeZone: ianaTimeZoneSchema });
-export type BusinessTimeZoneSetting = z.infer<typeof businessTimeZoneSettingSchema>;
+const businessTimeZoneSettingSchema = z.strictObject({ timeZone: ianaTimeZoneSchema });
 
 /*
  * 10.1's postal footer was a slice here until 22 September 2026. David decided an
@@ -175,9 +142,9 @@ export const DEFAULT_SETTING_VALUES: Readonly<Record<ActiveSettingKey, unknown> 
 const commandEnvelope = { commandId: commandIdSchema, clientVersion: semanticVersionSchema };
 
 /** Every key a response may carry, the retired two included (deprecated). */
-export const settingKeySchema = z.enum([...SETTING_KEYS, ...RETIRED_SETTING_KEYS]);
+const settingKeySchema = z.enum([...SETTING_KEYS, ...RETIRED_SETTING_KEYS]);
 /** The keys a command or a history request may name: the server refuses a retired one. */
-export const activeSettingKeySchema = z.enum(SETTING_KEYS);
+const activeSettingKeySchema = z.enum(SETTING_KEYS);
 
 export const updateSettingCommandSchema = z.strictObject({
   ...commandEnvelope,
@@ -190,19 +157,6 @@ export const updateSettingCommandSchema = z.strictObject({
    */
   changeNote: z.string().trim().max(500).optional(),
 });
-export type UpdateSettingCommand = z.infer<typeof updateSettingCommandSchema>;
-
-/** One version of one setting. The history is every row; the current one has no successor. */
-export const settingVersionSchema = z.strictObject({
-  settingKey: settingKeySchema,
-  version: z.number().int().min(1),
-  value: z.unknown(),
-  changeNote: z.string().nullable(),
-  changedByUserId: uuid.nullable(),
-  changedAt: instant,
-  supersededAt: instant.nullable(),
-});
-export type SettingVersion = z.infer<typeof settingVersionSchema>;
 
 /** What `GET /settings` answers: every slice, at its current version. */
 export const settingsSnapshotSchema = z.strictObject({
@@ -245,13 +199,6 @@ export const settingsSnapshotSchema = z.strictObject({
   effectiveSendingEnabled: z.boolean(),
 });
 
-/** The calendar command the settings page sends, which is G8's `/sequences/holidays`. */
-export const recordHolidayCalendarCommandSchema = z.strictObject({
-  /** A new version name: an edit supersedes, it never rewrites. */
-  version: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,39}$/u),
-  dates: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/u)).max(400),
-});
-export type RecordHolidayCalendarCommand = z.infer<typeof recordHolidayCalendarCommandSchema>;
 export type SettingsSnapshot = z.infer<typeof settingsSnapshotSchema>;
 
 // ---------------------------------------------------------------------------
@@ -270,8 +217,8 @@ export type SettingsSnapshot = z.infer<typeof settingsSnapshotSchema>;
  * one Won and one Lost, and a retired stage that came back would change the meaning
  * of every opportunity that sat in it while it was retired.
  */
-export const pipelineStageKeySchema = z.string().regex(/^[a-z][a-z0-9_]{1,39}$/u, 'a pipeline stage key');
-export const pipelineStageNameSchema = z.string().trim().min(1).max(80);
+const pipelineStageKeySchema = z.string().regex(/^[a-z][a-z0-9_]{1,39}$/u, 'a pipeline stage key');
+const pipelineStageNameSchema = z.string().trim().min(1).max(80);
 
 export const createPipelineStageCommandSchema = z.strictObject({
   ...commandEnvelope,
@@ -309,7 +256,7 @@ export const retirePipelineStageCommandSchema = z.strictObject({
  * not choose is a figure two people compare and disagree about. The upper bound is
  * exclusive, so two adjacent windows never double-count a row.
  */
-export const dashboardWindowSchema = z
+const dashboardWindowSchema = z
   .strictObject({ from: instant, to: instant })
   .refine(value => Date.parse(value.from) < Date.parse(value.to), {
     message: 'the window starts before it ends',
@@ -318,7 +265,6 @@ export const dashboardWindowSchema = z
 export const dashboardRequestSchema = z.strictObject({
   window: dashboardWindowSchema,
 });
-export type DashboardRequest = z.infer<typeof dashboardRequestSchema>;
 
 export const settingHistoryRequestSchema = z.strictObject({
   settingKey: activeSettingKeySchema,
@@ -457,8 +403,6 @@ export const diagnosticsResponseSchema = z.object({
   mailboxVisibility: z.enum(['all', 'own']),
 });
 export type DiagnosticsResponse = z.infer<typeof diagnosticsResponseSchema>;
-
-export const settingsResponseSchema = settingsSnapshotSchema;
 
 /**
  * `POST /settings/history`: the slice's current value and every version, newest first

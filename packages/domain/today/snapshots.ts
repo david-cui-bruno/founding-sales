@@ -2,12 +2,11 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
 import {
   isTodayItemKind,
   type TodayCardRow,
-  type TodayItemKind,
   type TodayItemRow,
   type TodayItemStatus,
-  type TodayLane,
   type TodaySourceKind,
 } from './types.ts';
+import type { TodayItemKind, TodayLane } from '@fss/contracts';
 
 /**
  * Reading and writing the Today tables (specification 8.2).
@@ -268,7 +267,7 @@ export async function completeTodayItem(
 }
 
 /**
- * Finish every open task with this key at this firm, on any date (lane g79).
+ * Finish every open task with this key at this firm, on any date.
  *
  * A needs-a-time callback and a sequence step's task are both carried from day to day
  * under one key, and what finishes them — a scheduled callback, a recorded call — is

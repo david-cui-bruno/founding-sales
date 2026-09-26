@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { mayMutate } from '@fss/contracts';
-import { POSTURE_STATEMENTS } from '@fss/domain';
+import { POSTURE_STATEMENTS } from '@fss/domain/src/rules/statePosture.ts';
 import { CONTAINER_CLIENT_VERSIONS } from '../../src/bootstrap/main.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from '../support/authFixture.ts';
 import { issueSessionFor } from '../support/sessionFixture.ts';
@@ -11,8 +11,8 @@ import { adminViewOf } from '../../../desktop/src/renderer/settingsView.ts';
 import { DESKTOP_VERSION_UNDER_TEST, desktopClient } from '../support/wireThrough.ts';
 
 /**
- * A founder adds, imports and permits from the Mac (release.md 8.0aq; lane g84, audit
- * items G02 and G04).
+ * A founder adds, imports and permits from the Mac (release.md 8.0aq; audit items G02
+ * and G04).
  *
  * Before g84 the only way a firm reached the workspace was a CSV sent to
  * `/import/commit` by something other than the Mac, and the only way a state posture was
@@ -37,7 +37,7 @@ import { DESKTOP_VERSION_UNDER_TEST, desktopClient } from '../support/wireThroug
  * route answered 500. It must come back as the sentence.
  */
 
-describe('8.0aq: Add firm, Import and the postures form reach the real routes (lane g84)', () => {
+describe('8.0aq: Add firm, Import and the postures form reach the real routes', () => {
   let fixture: AuthFixture;
   let adminToken = '';
   let salespersonToken = '';

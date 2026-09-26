@@ -1,11 +1,8 @@
 import { createHash } from 'node:crypto';
-import type { GmailFixture, RecordedGmailClient } from '../../../mail/index.ts';
-import {
-  prepareOutboundMessage,
-  type OutboundEmailRequest,
-  type OutboundSendDeps,
-  type ReconcileDeps,
-} from '../../../outbound/index.ts';
+import type { GmailFixture, RecordedGmailClient } from '../../../mail/gmailClientFake.ts';
+import { prepareOutboundMessage, type OutboundEmailRequest } from '../../../outbound/fence.ts';
+import type { ReconcileDeps } from '../../../outbound/reconcile.ts';
+import type { OutboundSendDeps } from '../../../outbound/send.ts';
 import { createMailWorld, type MailWorld, type MailWorldMailbox } from '../../mail/support/mailWorld.ts';
 import { makeStepExecution } from '../../../db/testing/stepExecutions.ts';
 import { FIXTURE_WORKER_DIGEST, storeFixtureRecord } from '../../release/support/releaseRecords.ts';
@@ -95,7 +92,7 @@ function templateHash(templateId: string, version: number, subject: string, body
 export async function createOutboundWorld(): Promise<OutboundWorld> {
   const world = await createMailWorld();
 
-  // Lane g71: the release record the world's attestation names. A deployment fact
+  // The release record the world's attestation names. A deployment fact
   // rather than a workspace one, so it is stored once, and its worker digest is the one
   // `sendDeps` says this worker is running. Without it every send would hold with
   // `workspace_sending_not_attested` for a reason no cap, window or suppression
@@ -221,7 +218,7 @@ export async function createOutboundWorld(): Promise<OutboundWorld> {
       // world that omitted it would hold every send with
       // `workspace_sending_not_attested` and prove nothing about caps or windows.
       deploymentSendingEnabled: true,
-      // Lane g71: the worker image this world runs, which the stored record names.
+      // The worker image this world runs, which the stored record names.
       workerImageDigest: FIXTURE_WORKER_DIGEST,
       ...overrides,
     };
@@ -266,7 +263,7 @@ export async function createOutboundWorld(): Promise<OutboundWorld> {
       // An override is honoured rather than replaced, because the scenario that puts
       // the same id in two workspaces is about exactly that id.
       const requested = overrides.stepExecutionId;
-      // The enrollment describes the same work as the fence (lane g77): the dispatch
+      // The enrollment describes the same work as the fence: the dispatch
       // re-asks the step's eligibility and refuses a fence whose firm, opportunity or
       // owner is not its enrollment's, so a firm override reaches the enrollment too.
       const firmId = overrides.firmId ?? firm.firmId;

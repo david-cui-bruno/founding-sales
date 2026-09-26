@@ -1,5 +1,5 @@
 import type pg from 'pg';
-import { CLUSTER_URL_ENVIRONMENT_VARIABLE, type TestDatabase } from '@fss/domain/db/testing';
+import { CLUSTER_URL_ENVIRONMENT_VARIABLE, type TestDatabase } from '@fss/domain/db/testing/testDatabase.ts';
 import { createRequestPool, type RequestPoolOptions } from '../../src/bootstrap/connections.ts';
 import { recordingLogger, type Logger } from '../../src/bootstrap/log.ts';
 

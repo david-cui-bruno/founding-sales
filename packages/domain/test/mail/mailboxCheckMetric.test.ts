@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
-import { METRIC_OWNERS, collectJobMetrics, type MetricDatum } from '../../jobs/index.ts';
-import { MAIL_METRIC_NAMES, collectMailMetrics, recordMailboxHeartbeat } from '../../mail/index.ts';
+import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
+import { METRIC_OWNERS, collectJobMetrics, type MetricDatum } from '../../jobs/metrics.ts';
+import { recordMailboxHeartbeat } from '../../mail/mailboxes.ts';
+import { MAIL_METRIC_NAMES, collectMailMetrics } from '../../mail/metrics.ts';
 import { seedTwoWorkspaces } from '../db/support/fixtures.ts';
 
 /**
- * A mailbox nobody means to have connected is not a critically broken one (audit O15,
- * lane g81).
+ * A mailbox nobody means to have connected is not a critically broken one (audit O15).
  *
  * `mailbox_heartbeat_missed` treats a missing `MailboxCheckHeartbeat` as a missed
  * check, and the job lane used to publish the metric from whatever mailbox heartbeat

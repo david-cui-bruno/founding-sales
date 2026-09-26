@@ -1,5 +1,5 @@
 import { isAdminScope, type RepositoryContext } from '../db/workspaceScope.ts';
-import { EMPTY_HOLIDAY_CALENDAR, type WorkspaceHolidayCalendar } from '../src/index.ts';
+import { EMPTY_HOLIDAY_CALENDAR, type WorkspaceHolidayCalendar } from '../src/rules/businessDays.ts';
 import { acceptSequence, refuseSequence, type SequenceResult } from './types.ts';
 
 /**

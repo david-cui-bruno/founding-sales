@@ -1,5 +1,6 @@
-import type { Queryable, RepositoryContext, WorkspaceScope } from '@fss/domain/db';
-import { repositoryContext, workspaceScope } from '@fss/domain/db';
+import type { Queryable } from '@fss/domain/db/queryable.ts';
+import type { RepositoryContext, WorkspaceScope } from '@fss/domain/db/workspaceScope.ts';
+import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
 
 /**
  * Typed workspace scope wiring (specification 5.1, 5.3 and 6).

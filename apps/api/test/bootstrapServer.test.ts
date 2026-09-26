@@ -1,7 +1,7 @@
 import { connect, type AddressInfo } from 'node:net';
 import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing';
+import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing/testDatabase.ts';
 import { clientVersionPolicySchema } from '@fss/contracts';
 import { MAX_REQUEST_BYTES } from '../src/limits.ts';
 import { createApiServer } from '../src/server.ts';

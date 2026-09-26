@@ -1,4 +1,5 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
+import type { CrmRefusalCode } from '@fss/contracts';
 
 /**
  * The CRM commands' shared vocabulary (specification 7.2, 7.3, 8.1, 15).
@@ -11,46 +12,6 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
  * ordinary outcome that the command middleware records in its receipt, and throwing
  * would roll the receipt back with the mutation.
  */
-
-export const CRM_REFUSAL_CODES = [
-  // Records
-  'firm_unknown',
-  'firm_merged',
-  'contact_unknown',
-  'contact_merged',
-  'route_unknown',
-  'route_retired',
-  // Lane g88: a person confirming a number they were not looking at, or one tested dead.
-  'route_version_stale',
-  'route_invalid',
-  'evidence_unknown',
-  // Authorization (Appendix G 7)
-  'not_assigned',
-  'admin_only',
-  'assignee_unknown',
-  // Pipeline
-  'stage_unknown',
-  'stage_retired',
-  // Stage administration (8.1: "rename, reorder, add, or retire *nonterminal* stages")
-  'stage_key_exists',
-  'stage_terminal',
-  'stage_last_active',
-  'opportunity_unknown',
-  'opportunity_closed',
-  'opportunity_open_exists',
-  'opportunity_not_closed',
-  'lost_reason_required',
-  // Zone (section 9.2)
-  'zone_unresolved',
-  // Merges
-  'merge_same_record',
-  'merge_cross_firm',
-  'merge_conflicts',
-  'merge_already_performed',
-  // Input
-  'invalid_input',
-] as const;
-export type CrmRefusalCode = (typeof CRM_REFUSAL_CODES)[number];
 
 /** A canonical value the two records disagree about, shown for resolution (7.2). */
 export interface MergeConflict {

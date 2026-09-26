@@ -3,15 +3,13 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { gmailConnectResultSchema, gmailStatusSchema } from '@fss/contracts';
 import {
   GMAIL_API_BASE_URL,
-  GMAIL_SCOPES,
   GOOGLE_AUTHORIZATION_ENDPOINT,
   GOOGLE_REVOCATION_ENDPOINT,
   GOOGLE_TOKEN_ENDPOINT,
-  localEnvelopeCipher,
-  type HttpFetch,
-  type HttpRequest,
-  type HttpResponse,
-} from '@fss/domain/mail';
+} from '@fss/domain/mail/config.ts';
+import { localEnvelopeCipher } from '@fss/domain/mail/envelope.ts';
+import type { HttpFetch, HttpRequest, HttpResponse } from '@fss/domain/mail/gmailClientHttp.ts';
+import { GMAIL_SCOPES } from '@fss/domain/mail/types.ts';
 import { DEPLOYMENT_ENVIRONMENT_VARIABLES, readApiDeployment, type ApiDeployment } from '../src/bootstrap/deployment.ts';
 import type { MailRoutingDeps } from '../src/routes/types.ts';
 import { dispatch, type ApiRequest } from '../src/server.ts';

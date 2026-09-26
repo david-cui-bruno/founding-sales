@@ -1,17 +1,16 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { recordSuppression } from '../../suppression/index.ts';
+import { recordSuppression } from '../../suppression/events.ts';
 import {
   claimForDispatch,
-  dispatchOutboundMessage,
-  listMailboxesToReconcile,
-  outboundRecoveryFloor,
   readFence,
   readFenceEvents,
   readOutboundOutcome,
-  reconcileOutboundMessage,
   resolveUnknownTerminal,
-  setAdminCap,
-} from '../../outbound/index.ts';
+} from '../../outbound/fence.ts';
+import { setAdminCap } from '../../outbound/ramp.ts';
+import { listMailboxesToReconcile, reconcileOutboundMessage } from '../../outbound/reconcile.ts';
+import { outboundRecoveryFloor } from '../../outbound/recoveryFloor.ts';
+import { dispatchOutboundMessage } from '../../outbound/send.ts';
 import {
   CLOSED_INSTANT,
   FIXTURE_BUSINESS_DATE,
@@ -138,7 +137,7 @@ describe('at-most-once sending', () => {
     );
     expect(held.rows.map(row => row.reason_code)).toContain('send_unknown_reconciling');
 
-    // 12.7's third health condition, wired in lane G15: the dispatch that did not
+    // 12.7's third health condition: the dispatch that did not
     // answer `ok` is the only provider complaint FSS can observe, and the day it
     // happened on records it. Without this the ramp judged every day on nothing.
     const signalled = await context().db.query<{ provider_errors: number }>(
@@ -325,7 +324,7 @@ describe('at-most-once sending', () => {
     // Its own business date, so the earlier scenarios' sends are not this test's
     // counters. `cap_granted` never decreases, so the row is made here at one.
     //
-    // The date is the *dispatch clock's* (lane g77, S05): the cap counts on the
+    // The date is the *dispatch clock's* (S05): the cap counts on the
     // business date of the claim, not the one the placement planned, so the day this
     // test is about is chosen by the instant it dispatches at — Thursday 24 September,
     // 13:00 UTC, inside the fixture firm's window and on that date in the workspace's

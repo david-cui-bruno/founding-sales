@@ -1,6 +1,6 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { fenceForOutgoingMessage } from '../outbound/fence.ts';
-import type { SuppressionJournal } from '../suppression/index.ts';
+import type { SuppressionJournal } from '../suppression/journal.ts';
 import { classifyReply } from '../src/rules/replyClassification.ts';
 import {
   applyClassificationEffects,
@@ -111,8 +111,8 @@ export async function processMessageIds(
     holdsOpened += matches.holdIds.length;
 
     if (stored.message.direction === 'outgoing') {
-      // 12.2 and Appendix G 19, and the fence lookup the comment here used to promise
-      // (lane G15). 7.3 makes a *direct* Gmail send enter manual mode; a sequence step
+      // 12.2 and Appendix G 19, and the fence lookup the comment here used to promise.
+      // 7.3 makes a *direct* Gmail send enter manual mode; a sequence step
       // FSS sent itself is not one, and switching its own opportunity to manual would
       // terminally stop the enrollment that had just sent step one.
       const fenceId = await fenceForOutgoingMessage(context, {

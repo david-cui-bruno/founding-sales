@@ -1,8 +1,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { CI_GATE_MAIN_POLICY } from '@fss/contracts';
 import { repositoryContext, workspaceScope } from '../../db/workspaceScope.ts';
-import { updateSetting } from '../../settings/index.ts';
-import { dispatchOutboundMessage, readFence } from '../../outbound/index.ts';
+import { updateSetting } from '../../settings/store.ts';
+import { readFence } from '../../outbound/fence.ts';
+import { dispatchOutboundMessage } from '../../outbound/send.ts';
 import { createOutboundWorld, type OutboundWorld, type OutboundWorldMailbox } from './support/outboundWorld.ts';
 import {
   FIXTURE_API_DIGEST,

@@ -1,5 +1,5 @@
-import type { SessionQueryable } from '@fss/domain/db';
-import { recordHeartbeat } from '@fss/domain/jobs';
+import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
+import { recordHeartbeat } from '@fss/domain/jobs/heartbeats.ts';
 import { errorFields, type Logger } from './log.ts';
 
 /**

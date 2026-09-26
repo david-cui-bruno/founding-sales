@@ -6,7 +6,7 @@ import {
   unionDuration,
   type HoldRecord,
   type Interval,
-} from '../../src/index.ts';
+} from '../../src/rules/holds.ts';
 
 /**
  * Hold composition (specification 4.3, Appendix G 28 and 31).

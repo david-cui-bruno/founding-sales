@@ -1,11 +1,8 @@
-import type { SessionQueryable } from '@fss/domain/db';
-import type { JobHandler, JobSpecification } from '@fss/domain/jobs';
-import {
-  RETENTION_LEDGER_KINDS,
-  retentionBatchHandler,
-  retentionBatchJobKey,
-  retentionPeriodOf,
-} from '@fss/domain/retention';
+import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
+import type { JobHandler } from '@fss/domain/jobs/handlerRegistry.ts';
+import type { JobSpecification } from '@fss/domain/jobs/jobStore.ts';
+import { retentionBatchHandler } from '@fss/domain/retention/handler.ts';
+import { RETENTION_LEDGER_KINDS, retentionBatchJobKey, retentionPeriodOf } from '@fss/domain/retention/kinds.ts';
 import type { DueWorkSource } from '../scheduler/schedulerPass.ts';
 
 /**

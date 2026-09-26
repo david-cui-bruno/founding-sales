@@ -99,8 +99,8 @@ RUN rm -rf packages/domain/db/testing
 # in either process that needs a writable path.
 USER node
 
-# The load balancer target group health-checks the same path
-# (infra/modules/edge/variables.tf, health_check_path).
+# The load balancer target group asks /readyz (infra/modules/edge/main.tf); the
+# container health check below asks /healthz, which touches no database.
 EXPOSE 8080
 
 # `infra/modules/cluster/variables.tf` runs the same command through ECS. This

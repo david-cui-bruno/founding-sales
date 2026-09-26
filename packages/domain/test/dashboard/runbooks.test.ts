@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { ALARM_RUNBOOKS, RUNBOOK_DIRECTORY, RUNBOOK_SECTIONS, runbookPathOf } from '../../dashboard/index.ts';
+import { ALARM_RUNBOOKS, RUNBOOK_DIRECTORY, RUNBOOK_SECTIONS, runbookPathOf } from '../../dashboard/runbooks.ts';
 
 /**
  * Every alarm the infrastructure raises has a runbook, and every runbook names an

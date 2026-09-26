@@ -1,26 +1,18 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import {
-  classifyReplyWithModel,
-  confirmReplyDisposition,
-  listReplyCards,
-  readConfirmation,
-  readReplyCard,
-} from '../../classification/index.ts';
+import { listReplyCards, readReplyCard } from '../../classification/cards.ts';
+import { classifyReplyWithModel } from '../../classification/classify.ts';
+import { confirmReplyDisposition, readConfirmation } from '../../classification/confirmations.ts';
 import type { Queryable } from '../../db/queryable.ts';
 import { withTransaction } from '../../db/queryable.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
-import {
-  consumeSuppressionStops,
-  consumeTerminalStops,
-  enrollContact,
-  listStepExecutions,
-  readEnrollment,
-} from '../../sequences/index.ts';
+import { enrollContact } from '../../sequences/enrollments.ts';
+import { listStepExecutions, readEnrollment } from '../../sequences/rows.ts';
+import { consumeSuppressionStops, consumeTerminalStops } from '../../sequences/terminalStops.ts';
 import { seedSequences } from '../sequences/support/sequenceFixtures.ts';
-import { readOpportunity } from '../../crm/index.ts';
+import { readOpportunity } from '../../crm/pipeline.ts';
 import { listApplicableHolds } from '../../policy/holds.ts';
-import { isSuppressed } from '../../suppression/index.ts';
-import { businessDateOf } from '../../today/index.ts';
+import { isSuppressed } from '../../suppression/effective.ts';
+import { businessDateOf } from '../../today/snapshots.ts';
 import { REPLY_CORPUS } from '../corpus/replies/cases.ts';
 import { createClassifierWorld, type ClassifierWorld } from './support/classifierWorld.ts';
 
@@ -263,7 +255,7 @@ describe('committing a callback the model only proposed', () => {
 });
 
 /**
- * 7.3, and Appendix A's "Confirm human reply" row (lane G22, the G15 follow-up).
+ * 7.3, and Appendix A's "Confirm human reply" row (the G15 follow-up).
  *
  * 7.3: "A confirmed human reply performs **one transaction**: record and classify the
  * message; set manual; terminally stop every active enrollment for the firm across
@@ -273,8 +265,8 @@ describe('committing a callback the model only proposed', () => {
  * nonterminal executions" and what commits together is "manual mode, terminal
  * enrollment stops, execution cancel/hold, Today reply entry, audit".
  *
- * Lane G15 wired a worker drain for the `opportunity.manual_mode` signal, which is the
- * right safety net and the wrong place for this stop. Between the confirmation and the
+ * The worker drains the `opportunity.manual_mode` signal, which is the right safety
+ * net and the wrong place for this stop. Between the confirmation and the
  * next one-minute pass the sequence is still live; and the drain does the firm's stop
  * alongside every other event in the workspace and the whole suppression-marker
  * stream, so a failure anywhere in that pass rolls the stop back with it. The stop

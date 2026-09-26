@@ -1,20 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import {
   BUSINESS_DAY_RULE_VERSION,
-  LocalClockError,
   addBusinessDays,
-  addCalendarDays,
   isBusinessDay,
+  resolveDelay,
+  startAnchoredDueAt,
+  type WorkspaceHolidayCalendar,
+} from '../../src/rules/businessDays.ts';
+import {
+  LocalClockError,
+  addCalendarDays,
   isKnownTimeZone,
   localDate,
   localInstant,
   localParts,
-  placeEmailSend,
-  resolveDelay,
-  startAnchoredDueAt,
   zoneOffsetMinutes,
-  type WorkspaceHolidayCalendar,
-} from '../../src/index.ts';
+} from '../../src/rules/localClock.ts';
+import { placeEmailSend } from '../../src/rules/sendingWindow.ts';
 
 /**
  * Calendar arithmetic. Every case names its zone; none of them reads the host's.

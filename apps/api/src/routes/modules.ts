@@ -10,35 +10,34 @@ import { IMPORT_PATHS, routeImport } from './import.ts';
 import { routeMerges } from './merges.ts';
 import { routeOpportunities } from './opportunities.ts';
 import { PIPELINE_PATHS, routePipeline } from './pipeline.ts';
-// Lane G7's Gmail surface.
+// The Gmail surface.
 import { GMAIL_PATHS, routeGmail } from './gmail.ts';
 import { PUBSUB_PATHS, routePubSub } from './pubsub.ts';
 import { MESSAGE_PATHS, routeMessages } from './messages.ts';
 import { OUTBOUND_PATHS, routeOutbound } from './outbound.ts';
-// Lane G7b's reply cards and the classifier's configuration.
+// The reply cards and the classifier's configuration.
 import { REPLY_PATHS, routeReplies } from './replies.ts';
-// Lane G4's policy, suppression and dialing surface.
+// The policy, suppression and dialing surface.
 import { CALLBACK_PATHS, routeCallbacks } from './callbacks.ts';
 import { CALL_PATHS, routeCalls } from './calls.ts';
 import { DIAL_PATHS, routeDial } from './dial.ts';
-// Lane g60's calling numbers: the identity a dial is placed from.
+// The calling numbers: the identity a dial is placed from.
 import { CALLING_IDENTITY_PATHS, routeCallingIdentities } from './callingIdentities.ts';
 import { PAUSE_PATHS, routePauses } from './pauses.ts';
 import { POSTURE_PATHS, routePostures } from './postures.ts';
 import { SUPPRESSION_PATHS, routeSuppressions } from './suppressions.ts';
-// Lane G8's sequences, templates and enrollments.
+// Sequences, templates and enrollments.
 import { ENROLLMENT_PATHS, routeEnrollments } from './enrollments.ts';
 import { SEQUENCE_PATHS, routeSequences } from './sequences.ts';
 import { TEMPLATE_PATHS, routeTemplates } from './templates.ts';
-// Lane G9's administration, dashboard and Diagnostics surface.
+// Administration, the dashboard and Diagnostics.
 import { DASHBOARD_PATHS, routeDashboard } from './dashboard.ts';
 import { DIAGNOSTICS_PATHS, routeDiagnostics } from './diagnostics.ts';
 import { SETTINGS_PATHS, routeSettings } from './settings.ts';
-// Lane G6's Today list.
+// The Today list.
 import { SNOOZE_PATHS, routeSnooze } from './snooze.ts';
 import { TODAY_PATHS, routeToday } from './today.ts';
-// Lane G14's deletion requests and attachment link (the retention reads and the
-// departure routes had no caller and went in wave 2, S6).
+// The deletion requests and the attachment link.
 import { RETENTION_PATHS, routeRetention } from './retention.ts';
 import { ATTACHMENT_PATHS, routeAttachments } from './retentionAttachments.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
@@ -46,13 +45,10 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 /**
  * Every route this API serves, as registry modules.
  *
- * G0 chose one handler and no framework, and G5b turned "which endpoints does this
- * process serve" into a list that is read rather than inferred from a chain of
- * imports (`apps/api/src/bootstrap/routeRegistry.ts`). Until this lane, G2's and
- * G3a's routers were a `for` loop in `server.ts` that asked each module in turn
- * whether the path was its own — which is exactly the fall-through the registry
- * exists to prevent: a module that forgets its guard answers for somebody else's
- * path, and the one with the authorization in it may be the one that never runs.
+ * One handler and no framework: "which endpoints does this process serve" is a list
+ * that is read rather than inferred from a chain of imports
+ * (`apps/api/src/bootstrap/routeRegistry.ts`), so no module can fall through and
+ * answer for somebody else's path.
  *
  * So each router is declared here with the paths it owns. Two are exact. The rest
  * are prefixes, for the routers that already answer `not_found` for the unknown
@@ -131,14 +127,14 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     moduleOf('opportunities', { prefixes: ['/opportunities'] }, routeOpportunities, routing),
     moduleOf('pipeline', { paths: PIPELINE_PATHS }, routePipeline, routing),
     moduleOf('merges', { prefixes: ['/merges'] }, routeMerges, routing),
-    // Lane G3b's CRM surface. Exact paths, which is what every new endpoint should
-    // be: the prefixes above are a record of the routers that already existed in
-    // that shape, not an invitation.
+    // The CRM surface. Exact paths, which is what every new endpoint should be: the
+    // prefixes above are a record of the routers that already existed in that shape,
+    // not an invitation.
     moduleOf('firm-page', { paths: FIRM_PAGE_PATHS }, routeFirmPage, routing),
     moduleOf('import', { paths: IMPORT_PATHS }, routeImport, routing),
-    // Lane g84's Add firm form: one row of an import, typed. Exact, like its neighbours.
+    // The Add firm form: one row of an import, typed. Exact, like its neighbours.
     moduleOf('add-firm', { paths: ADD_FIRM_PATHS }, routeAddFirm, routing),
-    // Lane G4's policy, suppression and dialing surface. Exact paths throughout, for
+    // The policy, suppression and dialing surface. Exact paths throughout, for
     // the reason above. `/dial/authorize` and `/dial/consume` are declared separately
     // rather than as a `/dial` prefix because a mistyped dialing path must be
     // `not_found` and not an unauthorized call: the registry is the only thing that
@@ -150,8 +146,7 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     moduleOf('calls', { paths: CALL_PATHS }, routeCalls, routing),
     moduleOf('callbacks', { paths: CALLBACK_PATHS }, routeCallbacks, routing),
     moduleOf('pauses', { paths: PAUSE_PATHS }, routePauses, routing),
-    // Lane G7's Gmail surface. Exact paths again, and two of them are not this
-    // lane's to choose: `/oauth/gmail/callback` is the redirect URI registered in
+    // The Gmail surface. Exact paths again, and two of them are not ours to choose: `/oauth/gmail/callback` is the redirect URI registered in
     // Google's console, and `/integrations/gmail/push` is both the Pub/Sub push
     // endpoint and the OIDC audience the subscription mints its token for
     // (`infra/modules/stack`, `gmail_push_path`). Renaming either without the other
@@ -159,25 +154,25 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     moduleOf('gmail', { paths: GMAIL_PATHS }, routeGmail, routing),
     moduleOf('gmail-push', { paths: PUBSUB_PATHS }, routePubSub, routing),
     moduleOf('messages', { paths: MESSAGE_PATHS }, routeMessages, routing),
-    // Lane G7b's reply cards (8.3). Exact paths, and `/replies/settings` is
+    // The reply cards (8.3). Exact paths, and `/replies/settings` is
     // separate from `/replies/settings/update` for the reason the two snooze paths
     // are separate from `/today`: a read and a command under one prefix would let
     // one claim answer for both, and the registry can only promise about the paths
     // it was told.
     moduleOf('replies', { paths: REPLY_PATHS }, routeReplies, routing),
-    // Lane G7-2's four admin surfaces. Exact paths, and not an `/outbound` prefix:
+    // The four outbound admin surfaces. Exact paths, and not an `/outbound` prefix:
     // an unknown path under that root is a typo in a command that marks a send
     // delivered or opens the sending gate, and `not_found` from the registry says so
     // before any module sees it.
     moduleOf('outbound', { paths: OUTBOUND_PATHS }, routeOutbound, routing),
-    // Lane G6's Today list. Exact paths, and two modules rather than one: the list
+    // The Today list. Exact paths, and two modules rather than one: the list
     // and the expansion are reads, the two snooze paths are commands with receipts,
     // and a `/today` prefix would have let one claim answer for both. The registry
     // refuses a prefix that swallows another module's exact path, so declaring
     // `/today` and `/today/snooze` separately is what keeps them separable at all.
     moduleOf('today', { paths: TODAY_PATHS }, routeToday, routing),
     moduleOf('snooze', { paths: SNOOZE_PATHS }, routeSnooze, routing),
-    // Lane G8's sequences, templates and enrollments. Exact paths again, and three
+    // Sequences, templates and enrollments. Exact paths again, and three
     // modules rather than one: `/sequences` publishes the plan, `/templates`
     // approves the bytes that may be sent, and `/enrollments` is the only family a
     // salesperson rather than an admin calls. A single `/sequences` prefix would
@@ -186,15 +181,15 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     moduleOf('sequences', { paths: SEQUENCE_PATHS }, routeSequences, routing),
     moduleOf('templates', { paths: TEMPLATE_PATHS }, routeTemplates, routing),
     moduleOf('enrollments', { paths: ENROLLMENT_PATHS }, routeEnrollments, routing),
-    // Lane G9's administration surface. Exact paths, and three modules rather than
-    // one: settings is a read and a command family, the dashboard is one aggregate
-    // read and Diagnostics is an operational read with its own visibility rule. A
-    // single `/admin` prefix would have swallowed G5's job and alert paths, which
-    // the registry refuses outright.
+    // The administration surface. Exact paths, and three modules rather than one:
+    // settings is a read and a command family, the dashboard is one aggregate read and
+    // Diagnostics is an operational read with its own visibility rule. A single
+    // `/admin` prefix would have swallowed the job and alert paths, which the registry
+    // refuses outright.
     moduleOf('settings', { paths: SETTINGS_PATHS }, routeSettings, routing),
     moduleOf('dashboard', { paths: DASHBOARD_PATHS }, routeDashboard, routing),
     moduleOf('diagnostics', { paths: DIAGNOSTICS_PATHS }, routeDiagnostics, routing),
-    // Lane G14. Exact paths: the deletion pair, and the attachment link, the one read
+    // Exact paths: the deletion pair, and the attachment link, the one read
     // in the system that hands out a Gmail URL. An unknown path near a command that
     // deletes prospect data must be `not_found` before any module sees it.
     moduleOf('retention', { paths: RETENTION_PATHS }, routeRetention, routing),

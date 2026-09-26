@@ -1,19 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing';
-import { API_SCHEMA_RANGE, CURRENT_SCHEMA_VERSION } from '@fss/domain/db';
+import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing/testDatabase.ts';
+import { API_SCHEMA_RANGE, CURRENT_SCHEMA_VERSION } from '@fss/domain/db/schemaRange.ts';
 import { clientVersionPolicySchema } from '@fss/contracts';
-import {
-  MAX_REQUEST_BYTES,
-  REFUSAL_STATUS,
-  buildHealthReport,
-  checkEnvelope,
-  contextFor,
-  redactError,
-  route,
-  scopeForPrincipal,
-  systemScope,
-  type VerifiedPrincipal,
-} from '../src/index.ts';
+import { buildHealthReport } from '../src/health.ts';
+import { MAX_REQUEST_BYTES, REFUSAL_STATUS, checkEnvelope, redactError } from '../src/limits.ts';
+import { contextFor, scopeForPrincipal, systemScope, type VerifiedPrincipal } from '../src/scope.ts';
+import { route } from '../src/server.ts';
 
 const CLIENT_VERSIONS = clientVersionPolicySchema.parse({ minimum: '1.0.0', ceiling: '1.0.x', incompatible: [] });
 

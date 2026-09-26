@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { SENDING_STOP_LINE, resumePreviewResponseSchema, wireDrift } from '@fss/contracts';
-import { repositoryContext, workspaceScope } from '@fss/domain/db';
-import { openHold, releaseHold } from '@fss/domain/policy';
+import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
+import { openHold, releaseHold } from '@fss/domain/policy/holds.ts';
 import { dispatch, type ApiRequest } from '../src/server.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';
 import { issueSessionFor } from './support/sessionFixture.ts';

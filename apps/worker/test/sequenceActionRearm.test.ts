@@ -1,14 +1,12 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { makeStepExecution } from '@fss/domain/db/testing';
-import {
-  HandlerRegistry,
-  claimJobs,
-  reclaimExpiredLeases,
-  type ClaimedJob,
-} from '@fss/domain/jobs';
-import type { GmailClient, RecordedGmailClient } from '@fss/domain/mail';
-import { readFenceByStepExecution, readFenceEvents, setAdminCap } from '@fss/domain/outbound';
-import { openHold, releaseHold } from '@fss/domain/policy';
+import { makeStepExecution } from '@fss/domain/db/testing/stepExecutions.ts';
+import { HandlerRegistry } from '@fss/domain/jobs/handlerRegistry.ts';
+import { claimJobs, reclaimExpiredLeases, type ClaimedJob } from '@fss/domain/jobs/jobStore.ts';
+import type { GmailClient } from '@fss/domain/mail/gmailClient.ts';
+import type { RecordedGmailClient } from '@fss/domain/mail/gmailClientFake.ts';
+import { readFenceByStepExecution, readFenceEvents } from '@fss/domain/outbound/fence.ts';
+import { setAdminCap } from '@fss/domain/outbound/ramp.ts';
+import { openHold, releaseHold } from '@fss/domain/policy/holds.ts';
 import {
   createOutboundWorld,
   type OutboundWorld,
@@ -27,13 +25,11 @@ import { runSchedulerPass } from '../src/scheduler/schedulerPass.ts';
 
 /**
  * The `sequence.action` wake, end to end: the scheduler's source, the runner and the
- * handler over G7-2's real fence, with only Gmail recorded (lane g82: audit C02, C03,
+ * handler over G7-2's real fence, with only Gmail recorded (audit C02, C03,
  * C05).
  *
  * * **C02** — a step the day's cap held is asked again once its hour has passed, under a
- *   new job, and sent once. Before lane g82 its first job's key, `step-execution:{id}`,
- *   was `done`, the scheduler's second insert collided with it, and the step never ran
- *   again.
+ *   new job, and sent once, rather than colliding with its first job's `done` key.
  * * **C03** — the worker dies between the step's transaction (which marks the step
  *   `dispatched` and prepares its fence) and the dispatch claim: the backend is killed
  *   inside the claiming transaction, exactly the gap in which the old retry read

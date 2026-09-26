@@ -1,9 +1,10 @@
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing';
-import { WORKER_SCHEMA_RANGE } from '@fss/domain/db';
-import { HandlerRegistry, recordingMetricSink, type MetricDatum } from '@fss/domain/jobs';
+import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing/testDatabase.ts';
+import { WORKER_SCHEMA_RANGE } from '@fss/domain/db/schemaRange.ts';
+import { HandlerRegistry } from '@fss/domain/jobs/handlerRegistry.ts';
+import { recordingMetricSink, type MetricDatum } from '@fss/domain/jobs/metrics.ts';
 import { readWorkerConfig } from '../src/bootstrap/config.ts';
 import { recordingLogger } from '../src/bootstrap/log.ts';
 import { startWorker } from '../src/bootstrap/worker.ts';
@@ -12,7 +13,7 @@ import { todayBuildJobHandler, todayBuildJobKey, todayBuildSource } from '../src
 
 /**
  * `TodaySnapshotMissing` through the real worker, in production's shape: one
- * workspace, zero firms (specification 8.2, 13.3; lane g67).
+ * workspace, zero firms (specification 8.2, 13.3).
  *
  * The domain tests decide the semantics case by case. This file proves the chain the
  * alarm depends on — the scheduler pass materializes the day's `today.build`, a runner

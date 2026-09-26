@@ -1,23 +1,16 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { repositoryContext, workspaceScope } from '../../db/index.ts';
-import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
-import { METRIC_OWNERS } from '../../jobs/index.ts';
-import {
-  COVERAGE_FRESHNESS_SECONDS,
-  MAIL_METRIC_NAMES,
-  collectMailMetrics,
-  coverageRefusal,
-  mailboxCoverageAgeSeconds,
-  readMailboxCoverage,
-} from '../../mail/index.ts';
+import { repositoryContext, workspaceScope } from '../../db/workspaceScope.ts';
+import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
+import { METRIC_OWNERS } from '../../jobs/metrics.ts';
+import { COVERAGE_FRESHNESS_SECONDS, coverageRefusal, readMailboxCoverage } from '../../mail/coverage.ts';
+import { MAIL_METRIC_NAMES, collectMailMetrics, mailboxCoverageAgeSeconds } from '../../mail/metrics.ts';
 import { seedTwoWorkspaces } from '../db/support/fixtures.ts';
 
 /**
- * `MailboxCoverageAgeSeconds` says what the send gate will say (lane g81).
+ * `MailboxCoverageAgeSeconds` says what the send gate will say.
  *
- * Since lane g77 the send path holds every automated email for an owner whose coverage
- * watermark is older than `COVERAGE_FRESHNESS_SECONDS`, and nothing outside the Mac
- * showed whether sync was advancing. The worker now publishes the stalest connected,
+ * The send path holds every automated email for an owner whose coverage watermark is
+ * older than `COVERAGE_FRESHNESS_SECONDS`, so the worker publishes the stalest connected,
  * `ready` mailbox's watermark age, and the warning `mailbox_coverage_stale` alarms
  * above the same fifteen minutes.
  *

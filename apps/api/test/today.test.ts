@@ -7,8 +7,9 @@ import {
   todaySnoozeResultSchema,
   wireDrift,
 } from '@fss/contracts';
-import { repositoryContext, workspaceScope } from '@fss/domain/db';
-import { buildTodaySnapshot, businessDateOf, upsertTodayItem } from '@fss/domain/today';
+import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
+import { buildTodaySnapshot } from '@fss/domain/today/build.ts';
+import { businessDateOf, upsertTodayItem } from '@fss/domain/today/snapshots.ts';
 import { localNoopSuppressionJournal } from '../src/journal/index.ts';
 import { dispatch, type ApiRequest } from '../src/server.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from './support/authFixture.ts';

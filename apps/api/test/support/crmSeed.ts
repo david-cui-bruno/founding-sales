@@ -1,5 +1,6 @@
-import { createContact, createFirm, type CreateContactInput, type CreateFirmInput } from '@fss/domain/crm';
-import { repositoryContext, workspaceScope } from '@fss/domain/db';
+import { createContact, type CreateContactInput } from '@fss/domain/crm/contacts.ts';
+import { createFirm, type CreateFirmInput } from '@fss/domain/crm/firms.ts';
+import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
 import type { AuthFixture, SeededWorkspace } from './authFixture.ts';
 
 /**

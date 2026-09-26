@@ -9,8 +9,8 @@ import { settingHistoryAnswer } from '../../../desktop/test/support/settingHisto
 import { DESKTOP_VERSION_UNDER_TEST, desktopClient, routeAnswer, shapeOf } from '../support/wireThrough.ts';
 
 /**
- * A setting's history says what changed, not only when (release.md 8.0aj; lane g78,
- * audit item D04).
+ * A setting's history says what changed, not only when (release.md 8.0aj; audit item
+ * D04).
  *
  * `POST /settings/history` answers the slice's current value and every version with the
  * value it set (`readSettingHistory`, `packages/domain/settings/store.ts`). Desktop
@@ -28,7 +28,7 @@ import { DESKTOP_VERSION_UNDER_TEST, desktopClient, routeAnswer, shapeOf } from 
  * is held to the route's answer key for key and type for type.
  */
 
-describe('8.0aj: the settings history shows the values (lane g78)', () => {
+describe('8.0aj: the settings history shows the values', () => {
   let fixture: AuthFixture;
   let adminToken = '';
 

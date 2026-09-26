@@ -21,17 +21,17 @@ import { firmReadDtoSchema } from './crm.ts';
  */
 
 // ---------------------------------------------------------------------------
-// Admin CSV import (Appendix G 38) and Add firm (lane g84, audit item G02)
+// Admin CSV import (Appendix G 38) and Add firm (audit item G02)
 // ---------------------------------------------------------------------------
 
 /**
  * The columns a file may have. The header row names them, in any order and any subset;
  * `firm_name` is the one every row needs. One row is one contact, with the firm's
- * columns repeated on each of that firm's rows (lane g84): the first row that names a
+ * columns repeated on each of that firm's rows: the first row that names a
  * firm creates it, and the rows after it add their contacts to it.
  *
- * `time_zone` joined in lane g84, at the end, so a file written to the old list is
- * still a file this one reads. The header is read case-insensitively and a space or a
+ * `time_zone` is last, so a file written to the twelve-column list is still a file
+ * this one reads. The header is read case-insensitively and a space or a
  * hyphen reads as an underscore, so `Firm name` is `firm_name`.
  */
 export const IMPORT_COLUMNS = [
@@ -49,7 +49,7 @@ export const IMPORT_COLUMNS = [
   'contact_phone',
   'time_zone',
 ] as const;
-export const importColumnSchema = z.enum(IMPORT_COLUMNS);
+const importColumnSchema = z.enum(IMPORT_COLUMNS);
 export type ImportColumn = z.infer<typeof importColumnSchema>;
 
 /**
@@ -62,7 +62,6 @@ export type ImportColumn = z.infer<typeof importColumnSchema>;
  * contact (`attach`). `firm_ambiguous` is a row whose website or name matches two firms
  * here, which only a merge can settle; `time_zone_invalid` is a zone this runtime cannot
  * place on a clock; `too_long` is a cell longer than the column the database keeps it in.
- * The last three joined in lane g84.
  */
 export const IMPORT_ISSUE_CODES = [
   'firm_name_missing',
@@ -79,7 +78,7 @@ export const IMPORT_ISSUE_CODES = [
   'firm_ambiguous',
   'too_long',
 ] as const;
-export const importIssueCodeSchema = z.enum(IMPORT_ISSUE_CODES);
+const importIssueCodeSchema = z.enum(IMPORT_ISSUE_CODES);
 export type ImportIssueCode = z.infer<typeof importIssueCodeSchema>;
 
 export const importIssueSchema = z.object({ column: importColumnSchema, code: importIssueCodeSchema });
@@ -97,14 +96,14 @@ export const IMPORT_FILE_REFUSALS = [
   'csv_row_width',
   'csv_too_many_rows',
 ] as const;
-export const importFileRefusalSchema = z.enum(IMPORT_FILE_REFUSALS);
+export type ImportFileRefusal = (typeof IMPORT_FILE_REFUSALS)[number];
 
 /** One mebibyte of body is the API's limit; a file is bounded well below it. */
 export const importPreviewRequestSchema = z.strictObject({ csv: z.string().min(1).max(512 * 1024) });
 
 /** `create` makes the firm; `attach` adds the row's contact to a firm that is here or made above. */
-export const IMPORT_ROW_OUTCOMES = ['create', 'attach', 'duplicate', 'invalid'] as const;
-export const importRowOutcomeSchema = z.enum(IMPORT_ROW_OUTCOMES);
+const IMPORT_ROW_OUTCOMES = ['create', 'attach', 'duplicate', 'invalid'] as const;
+const importRowOutcomeSchema = z.enum(IMPORT_ROW_OUTCOMES);
 export type ImportRowOutcomeDto = z.infer<typeof importRowOutcomeSchema>;
 
 /**
@@ -113,7 +112,7 @@ export type ImportRowOutcomeDto = z.infer<typeof importRowOutcomeSchema>;
  * earlier row of the same file creates. Scoped like every other read, so a firm in the
  * workspace next door is never a match and never named.
  */
-export const importFirmMatchSchema = z.discriminatedUnion('kind', [
+const importFirmMatchSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('existing'),
     firmId: uuid,
@@ -122,9 +121,8 @@ export const importFirmMatchSchema = z.discriminatedUnion('kind', [
   }),
   z.object({ kind: z.literal('in_file'), rowNumber: z.number().int().min(2), matchedOn: z.enum(['domain', 'name']) }),
 ]);
-export type ImportFirmMatchDto = z.infer<typeof importFirmMatchSchema>;
 
-export const importPreviewRowSchema = z.object({
+const importPreviewRowSchema = z.object({
   rowNumber: z.number().int().min(2),
   outcome: importRowOutcomeSchema,
   issues: z.array(importIssueSchema),
@@ -157,14 +155,13 @@ export const importPreviewResponseSchema = z.object({
 });
 export type ImportPreviewResponse = z.infer<typeof importPreviewResponseSchema>;
 
-/** A file refused whole, at the preview or the commit (lane g84). 409, like every refusal. */
+/** A file refused whole, at the preview or the commit. 409, like every refusal. */
 export const importFileRefusalResponseSchema = z.object({
   status: z.literal('refused'),
   reason: z.string().min(1).max(80),
   column: z.string().max(200).nullable(),
   rowNumber: z.number().int().min(1).nullable(),
 });
-export type ImportFileRefusalResponse = z.infer<typeof importFileRefusalResponseSchema>;
 
 /**
  * The commit.
@@ -187,11 +184,11 @@ export const importCommitRequestSchema = z.strictObject({
 
 /**
  * One row's answer. A refusal names the row, its code and, where one field is at fault,
- * the column (lane g84): `{ rowNumber: 7, status: 'refused', reason: 'email_invalid',
+ * the column: `{ rowNumber: 7, status: 'refused', reason: 'email_invalid',
  * column: 'contact_email' }`. `outcome` says whether an accepted row made its firm or
- * added a contact to one; a receipt written before lane g84 replays without it.
+ * added a contact to one; an older receipt replays without it.
  */
-export const importCommitResultSchema = z.object({
+const importCommitResultSchema = z.object({
   rowNumber: z.number().int().min(2),
   status: z.enum(['accepted', 'refused']),
   replayed: z.boolean(),
@@ -213,7 +210,7 @@ export type ImportCommitResponse = z.infer<typeof importCommitResponseSchema>;
 
 /**
  * `POST /crm/firms/add`: the Add firm form, which is one row of an import typed into a
- * form (lane g84). The same draft, the same validation, the same duplicate rules and
+ * form. The same draft, the same validation, the same duplicate rules and
  * the same commit as a CSV row, under one receipt. Every value is a string as the person
  * typed it; the domain trims, canonicalizes and refuses, and a refusal names each field
  * by its import column so the form marks the one at fault.
@@ -240,16 +237,14 @@ export const addFirmCommandSchema = z.strictObject({
     })
     .optional(),
 });
-export type AddFirmCommand = z.infer<typeof addFirmCommandSchema>;
 
 export const addFirmResultSchema = z.object({
   firmId: uuid,
   contactId: uuid.nullable(),
   routeIds: z.array(uuid),
 });
-export type AddFirmResult = z.infer<typeof addFirmResultSchema>;
 
-/** The accepted answer, in the envelope every command answers with (crmSupport). */
+/** The accepted answer, in the envelope every command answers with (routeSupport). */
 export const addFirmAcceptedSchema = z.object({
   status: z.literal('accepted'),
   replayed: z.boolean(),
@@ -268,14 +263,13 @@ export const addFirmRefusalSchema = z.object({
   issues: z.array(importIssueSchema).optional(),
   firmId: uuid.optional(),
 });
-export type AddFirmRefusal = z.infer<typeof addFirmRefusalSchema>;
 
 // ---------------------------------------------------------------------------
 // The Firm page read (7.2, 7.3, 8.1, 15)
 // ---------------------------------------------------------------------------
 
 /**
- * The Firm page read's second version (lane g90): each route carries its
+ * The Firm page read's second version: each route carries its
  * `technicalValidation`. Without `pageVersion` the answer is the first version exactly,
  * which is what an installed 1.0.5 asks for and parses strictly; any other version is a
  * malformed request rather than a guess.
@@ -287,7 +281,7 @@ export const firmPageRequestSchema = z.strictObject({
   pageVersion: z.literal(FIRM_PAGE_VERSION).optional(),
 });
 
-export const stageEventDtoSchema = z.strictObject({
+const stageEventDtoSchema = z.strictObject({
   id: uuid,
   occurredAt: z.iso.datetime(),
   fromStageKey: z.string().nullable(),
@@ -296,18 +290,16 @@ export const stageEventDtoSchema = z.strictObject({
   /** Section 8.1: "Lost changes require a reason". Null for every other change. */
   reason: z.string().nullable(),
 });
-export type StageEventDto = z.infer<typeof stageEventDtoSchema>;
 
-export const firmHoldDtoSchema = z.strictObject({
+const firmHoldDtoSchema = z.strictObject({
   id: uuid,
   reasonCode: holdReasonCodeSchema,
   blockedActionKinds: z.array(z.string()),
   startedAt: z.iso.datetime(),
   recoveryAction: z.string().nullable(),
 });
-export type FirmHoldDto = z.infer<typeof firmHoldDtoSchema>;
 
-export const opportunitySummaryDtoSchema = z.strictObject({
+const opportunitySummaryDtoSchema = z.strictObject({
   id: uuid,
   status: z.enum(['open', 'won', 'lost']),
   stageKey: z.string(),

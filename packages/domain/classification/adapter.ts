@@ -5,10 +5,9 @@ import {
   CLASSIFIER_PROMPT_VERSION,
   MODEL_CAPABILITIES,
   type ClassifierCallRecord,
-  type ClassifierEffort,
-  type ClassifierModel,
   type ModelSuggestion,
 } from './types.ts';
+import type { ClassifierEffort, ClassifierModel } from '@fss/contracts';
 
 /**
  * The adapter: one request, one answer, and every way the answer can be useless

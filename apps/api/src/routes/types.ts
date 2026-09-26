@@ -1,8 +1,9 @@
 import type { ClientVersionPolicy } from '@fss/contracts';
-import type { SessionQueryable } from '@fss/domain/db';
-import type { SuppressionJournal } from '@fss/domain/suppression';
-import type { MailGrantDeps, PushTokenVerifier } from '@fss/domain/mail';
-import type { AuthDeps } from '../auth/index.ts';
+import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
+import type { SuppressionJournal } from '@fss/domain/suppression/journal.ts';
+import type { MailGrantDeps } from '@fss/domain/mail/oauth.ts';
+import type { PushTokenVerifier } from '@fss/domain/mail/pushToken.ts';
+import type { AuthDeps } from '../auth/config.ts';
 import type { Logger } from '../bootstrap/log.ts';
 
 /**

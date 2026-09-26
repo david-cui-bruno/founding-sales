@@ -1,24 +1,24 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
+import { anthropicReplyClassifier } from '../../classification/adapter.ts';
 import {
-  CLASSIFIER_PROMPT_VERSION,
   CLASSIFIER_SECRET_ENVIRONMENT_VARIABLES,
-  CLASSIFIER_SYSTEM_PROMPT,
   ClassifierSecretError,
-  MODEL_SUGGESTION_JSON_SCHEMA,
-  anthropicReplyClassifier,
-  buildClassifierRequest,
-  cacheablePrefix,
   describeClassifierSecrets,
   environmentClassifierSecrets,
-  excerptIsVerbatim,
-  readModelSuggestion,
   staticClassifierSecrets,
   type AnthropicMessageResponse,
   type AnthropicMessagesTransport,
+} from '../../classification/anthropicClient.ts';
+import {
+  CLASSIFIER_SYSTEM_PROMPT,
+  buildClassifierRequest,
   type ClassifierInput,
   type ClassifierRequest,
-} from '../../classification/index.ts';
+} from '../../classification/prompt.ts';
+import { cacheablePrefix } from '../../classification/recorded.ts';
+import { MODEL_SUGGESTION_JSON_SCHEMA, excerptIsVerbatim, readModelSuggestion } from '../../classification/schema.ts';
+import { CLASSIFIER_PROMPT_VERSION } from '../../classification/types.ts';
 
 /**
  * The request we actually send, the answers we refuse, and the key we never hold.

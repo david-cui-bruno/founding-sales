@@ -1,32 +1,27 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { withTransaction } from '../../db/queryable.ts';
 import type { RepositoryContext } from '../../db/workspaceScope.ts';
-import { makeStepExecution } from '../../db/testing/index.ts';
-import type { GmailClient, RecordedGmailClient } from '../../mail/index.ts';
+import { makeStepExecution } from '../../db/testing/stepExecutions.ts';
+import type { GmailClient } from '../../mail/gmailClient.ts';
+import type { RecordedGmailClient } from '../../mail/gmailClientFake.ts';
 import {
-  claimedAutomatedSends,
-  dispatchOutboundMessage,
-  holdReasonForRefusal,
   prepareOutboundMessage,
   readFenceByStepExecution,
   readFenceEvents,
   readOutboundOutcome,
-  setAdminCap,
-  type OutboundSendDeps,
-} from '../../outbound/index.ts';
-import {
-  composeEligibility,
-  dispatchPreparedStep,
-  runDueStepExecution,
-  type SendHandoff,
-  type SendHandoffRefusal,
-} from '../../sequences/index.ts';
+} from '../../outbound/fence.ts';
+import { holdReasonForRefusal } from '../../outbound/gate.ts';
+import { claimedAutomatedSends, setAdminCap } from '../../outbound/ramp.ts';
+import { dispatchOutboundMessage, type OutboundSendDeps } from '../../outbound/send.ts';
+import { composeEligibility } from '../../sequences/eligibility.ts';
+import { dispatchPreparedStep, runDueStepExecution } from '../../sequences/executions.ts';
+import type { SendHandoff, SendHandoffRefusal } from '../../sequences/sendHandoff.ts';
 import { createOutboundWorld, type OutboundWorld } from './support/outboundWorld.ts';
 import { automatedSent, openExtraSession, seedFirm, type ExtraSession } from './support/dispatchFixtures.ts';
 
 /**
- * A step's second look at its own fence, through the real dispatch path (lane g82:
- * audit C02, C03).
+ * A step's second look at its own fence, through the real dispatch path (audit C02,
+ * C03).
  *
  * The sequence engine used to dispatch a fence only in the job that prepared it. Now a
  * step woken again — its cap cleared, its worker died before the claim — finds the

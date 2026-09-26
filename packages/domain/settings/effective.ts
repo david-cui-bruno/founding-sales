@@ -38,8 +38,7 @@ import { sendingEnabledSettingSchema } from '@fss/contracts';
  * `sending_domains.automated_sending_enabled`, which is the DNS authentication gate
  * and not this. See `docs/decisions/g9-two-slices-that-belong-to-other-lanes.md`.
  *
- * It is the two switches and nothing more, and since lane g71 it is not the whole of
- * 16.2: the reference the attestation carries must also name a stored, passing release
+ * It is the two switches and nothing more, and it is not the whole of 16.2: the reference the attestation carries must also name a stored, passing release
  * record whose digest is the running image's. That comparison needs a database read
  * and the caller's own digest, so it is `attestedReleaseBinding` in
  * `packages/domain/release/records.ts`, and every caller that asks "may we send" asks

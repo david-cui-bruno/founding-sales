@@ -2,7 +2,7 @@ import type { z } from 'zod';
 
 /**
  * How a response schema in this package is held to the route that sends it
- * (lane g78, audit items D07 and B01).
+ * (audit items D07 and B01).
  *
  * Every response DTO here is a `z.object`, which *strips* a key it does not declare
  * rather than refusing the whole answer. That is the Mac's half, and it is deliberate:

@@ -4,7 +4,7 @@ import type { SeededCrm } from './crmFixtures.ts';
 import type { SeededMail } from './mailFixtures.ts';
 
 /**
- * A failing insert for every constraint migration 0011 adds (lane G7b: the model
+ * A failing insert for every constraint migration 0011 adds (the model
  * layer's three columns, the workspace's classifier settings, the append-only call
  * log and the salesperson's confirmed disposition).
  *

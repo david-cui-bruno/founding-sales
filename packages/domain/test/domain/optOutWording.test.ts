@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { authoredText, classifyReply, hasExplicitOptOut, type ReplyMessage } from '../../src/index.ts';
+import {
+  authoredText,
+  classifyReply,
+  hasExplicitOptOut,
+  type ReplyMessage,
+} from '../../src/rules/replyClassification.ts';
 
 /**
  * Appendix G 35: "Ambiguous opt-out wording holds for review; explicit stop wording

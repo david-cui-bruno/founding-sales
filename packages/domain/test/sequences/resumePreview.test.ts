@@ -1,21 +1,16 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
+import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
-import { openHold, releaseHold } from '../../policy/index.ts';
-import {
-  enrollContact,
-  listStepExecutions,
-  previewResume,
-  readEnrollment,
-  resumeEnrollment,
-  stopEnrollments,
-} from '../../sequences/index.ts';
+import { openHold, releaseHold } from '../../policy/holds.ts';
+import { enrollContact, stopEnrollments } from '../../sequences/enrollments.ts';
+import { previewResume, resumeEnrollment } from '../../sequences/resume.ts';
+import { listStepExecutions, readEnrollment } from '../../sequences/rows.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
 import { seedSequences, type SeededSequences } from './support/sequenceFixtures.ts';
 
 /**
- * "Review and resume" shows the review (lane g88, audit G06; specification 4.3).
+ * "Review and resume" shows the review (audit G06; specification 4.3).
  *
  * Installed desktops up to 1.0.11 show `previewResume` before they confirm a resume, for
  * an enrollment an older release left in `review_required` (a long hold resumes on its

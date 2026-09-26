@@ -1,13 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
+import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import type { SessionQueryable } from '../../db/queryable.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
-import {
-  RETENTION_LEDGER_KINDS,
-  readRetentionPolicies,
-  retentionPeriodOf,
-  runRetentionBatch,
-} from '../../retention/index.ts';
+import { RETENTION_LEDGER_KINDS, retentionPeriodOf } from '../../retention/kinds.ts';
+import { readRetentionPolicies } from '../../retention/policies.ts';
+import { runRetentionBatch } from '../../retention/runs.ts';
 import { mayCorrectSuppression } from '../../src/rules/suppressionCanonicalization.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
@@ -353,7 +350,7 @@ describe('no retention job can touch suppression events or audit events', () => 
   });
 
   it('declares no retention target for either table', async () => {
-    const { RETENTION_TARGETS } = await import('../../retention/index.ts');
+    const { RETENTION_TARGETS } = await import('../../retention/targets.ts');
     const reachable = RETENTION_TARGETS.flatMap(target =>
       target.state === 'implemented' ? [...target.tables] : [],
     );

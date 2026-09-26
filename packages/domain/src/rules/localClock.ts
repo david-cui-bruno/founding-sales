@@ -10,7 +10,7 @@
  * host's zone, so a test on a European laptop and a test on a UTC CI runner agree.
  *
  * The resolution itself — `localParts`, `zoneOffsetMinutes`, `localInstant` and the
- * DST gap and fold rule — lives in `@fss/contracts` since lane g79, because the Mac
+ * DST gap and fold rule — lives in `@fss/contracts`, because the Mac
  * resolves a callback's wall clock too and one rule must have one implementation
  * (audit item C18). It is re-exported here unchanged, so every domain caller and
  * `@fss/domain`'s own export surface keep the names they had.

@@ -1,33 +1,28 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
+import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
+import { canaryCompletionAgeSeconds, completeCanaryRun, insertCanaryRun } from '../../jobs/canary.ts';
+import { incrementDailyCounter, readDailyCounter } from '../../jobs/counters.ts';
+import {
+  acknowledgeCriticalAlert,
+  listOpenAlerts,
+  raiseCriticalAlert,
+  resolveCriticalAlert,
+  unacknowledgedCriticalAlertAgeSeconds,
+} from '../../jobs/criticalAlerts.ts';
+import { readHeartbeats, recordHeartbeat } from '../../jobs/heartbeats.ts';
+import { quarterHourOf } from '../../jobs/jobKinds.ts';
+import { claimJobs, completeJob, enqueueJob, failJob } from '../../jobs/jobStore.ts';
 import {
   METRIC_OWNERS,
   MetricError,
-  acknowledgeCriticalAlert,
-  canaryCompletionAgeSeconds,
-  claimJobs,
   collectJobMetrics,
-  completeCanaryRun,
-  completeJob,
   createMetricSink,
-  enqueueJob,
-  failJob,
-  incrementDailyCounter,
-  insertCanaryRun,
-  listOpenAlerts,
-  quarterHourOf,
-  raiseCriticalAlert,
-  readDailyCounter,
-  readHeartbeats,
-  recordHeartbeat,
   recordingMetricSink,
-  resolveCriticalAlert,
-  unacknowledgedCriticalAlertAgeSeconds,
   type MetricDatum,
-} from '../../jobs/index.ts';
+} from '../../jobs/metrics.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 
 /**

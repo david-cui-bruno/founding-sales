@@ -1,4 +1,4 @@
-import type { SessionQueryable } from '@fss/domain/db';
+import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 import { DatabaseBusyError } from './connections.ts';
 import type { Logger } from './log.ts';
 import {

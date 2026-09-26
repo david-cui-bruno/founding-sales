@@ -5,7 +5,7 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
  * ambiguous reply").
  *
  * Appendix A puts the Today reply entry in the *same transaction* as the message, its
- * candidates and their holds. Lane G6 owns `today_items` and exports
+ * candidates and their holds. The Today lane owns `today_items` and exports
  * `promoteReply(context, { firmId, contactId?, messageId, receivedAt })` from
  * `@fss/domain/today`, which writes one item with `item_key` `reply-message:<id>`,
  * kind `reply`, `source_kind` `reply_message`, in lane 1.

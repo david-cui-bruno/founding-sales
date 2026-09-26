@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { SessionQueryable } from '@fss/domain/db';
+import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 import { readSchemaVersionReport } from './migrate.ts';
 import { describeToolConfig, type ToolConfig } from './config.ts';
 

@@ -1,10 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
+import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
+import { DEFAULT_BACKOFF, backoffSeconds } from '../../jobs/backoff.ts';
 import {
-  DEFAULT_BACKOFF,
   archiveCompletedPayloads,
-  backoffSeconds,
   claimJobs,
   completeJob,
   enqueueJob,
@@ -14,7 +13,7 @@ import {
   renewLease,
   requeueDeadJob,
   type ClaimedJob,
-} from '../../jobs/index.ts';
+} from '../../jobs/jobStore.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 
 /**

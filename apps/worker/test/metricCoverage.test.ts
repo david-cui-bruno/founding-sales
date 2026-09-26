@@ -3,23 +3,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing';
-import { WORKER_SCHEMA_RANGE } from '@fss/domain/db';
-import {
-  HandlerRegistry,
-  JOB_METRIC_NAMES,
-  METRIC_OWNERS,
-  canaryHandler,
-  enqueueJob,
-  raiseCriticalAlert,
-  recordHeartbeat,
-  recordingMetricSink,
-  type MetricOwner,
-} from '@fss/domain/jobs';
-import { MAIL_METRIC_NAMES } from '@fss/domain/mail';
-import { OUTBOUND_METRIC_NAMES } from '@fss/domain/outbound';
-import { SEQUENCE_METRIC_NAMES } from '@fss/domain/sequences';
-import { TODAY_METRIC_NAMES } from '@fss/domain/today';
+import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing/testDatabase.ts';
+import { WORKER_SCHEMA_RANGE } from '@fss/domain/db/schemaRange.ts';
+import { canaryHandler } from '@fss/domain/jobs/canary.ts';
+import { raiseCriticalAlert } from '@fss/domain/jobs/criticalAlerts.ts';
+import { HandlerRegistry } from '@fss/domain/jobs/handlerRegistry.ts';
+import { recordHeartbeat } from '@fss/domain/jobs/heartbeats.ts';
+import { enqueueJob } from '@fss/domain/jobs/jobStore.ts';
+import { JOB_METRIC_NAMES, METRIC_OWNERS, recordingMetricSink, type MetricOwner } from '@fss/domain/jobs/metrics.ts';
+import { MAIL_METRIC_NAMES } from '@fss/domain/mail/metrics.ts';
+import { OUTBOUND_METRIC_NAMES } from '@fss/domain/outbound/metrics.ts';
+import { SEQUENCE_METRIC_NAMES } from '@fss/domain/sequences/metrics.ts';
+import { TODAY_METRIC_NAMES } from '@fss/domain/today/metrics.ts';
 import { canarySource } from '../src/scheduler/sources.ts';
 import { APPLICATION_RAISED_METRICS } from '../src/bootstrap/metricCoverage.ts';
 import { readWorkerConfig } from '../src/bootstrap/config.ts';
@@ -132,13 +127,13 @@ const EXPECTED_PUBLISHED = [
   'UnacknowledgedCriticalAlertAgeSeconds',
   'MailboxCheckHeartbeat',
   'GmailWatchHoursToExpiry',
-  // Published while a mailbox is connected and ready (lane g81); the fixture's has
+  // Published while a mailbox is connected and ready; the fixture's has
   // no watermark yet, which the gauge reads as one second past the window.
   'MailboxCoverageAgeSeconds',
   'MailboxDisconnectedHours',
-  // Published on every pass, 0 or 1, whatever the time of day (lane g67).
+  // Published on every pass, 0 or 1, whatever the time of day.
   'TodaySnapshotMissing',
-  // Published on every pass, 0 and 0 here because nothing is enrolled (lane g72).
+  // Published on every pass, 0 and 0 here because nothing is enrolled.
   'ActiveEnrollments',
   'HeldEnrollments',
 ] as const;
@@ -189,7 +184,7 @@ describe('every alarm metric has something that emits it', () => {
     // something to report: GmailWatchHoursToExpiry and MailboxCheckHeartbeat. The
     // watch gauge is silent when no mailbox is connected, and its alarm treats
     // missing data as not breaching; the check heartbeat reads 1 then, because its
-    // alarm treats missing data as a missed check (lane g81, audit O15).
+    // alarm treats missing data as a missed check (audit O15).
     const mailWorkspace = workspaces[0] ?? '';
     const user = await database.session.query<{ id: string }>(
       `INSERT INTO users (google_sub, email, display_name)

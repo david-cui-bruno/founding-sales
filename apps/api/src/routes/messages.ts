@@ -1,15 +1,11 @@
-import { listMatches, listMessagesForOpportunity, readMessageBody, resolveAmbiguity } from '@fss/domain/mail';
-import { decideFirmRead, readFirm } from '@fss/domain/crm';
-import { readOpportunity } from '@fss/domain/crm';
-import {
-  REFUSAL_STATUS,
-  contextForPrincipal,
-  listMessagesRequestSchema,
-  mailRouteDeps,
-  redactError,
-  resolveAmbiguityCommandSchema,
-  runMailCommand,
-} from './mailSupport.ts';
+import { listMatches, resolveAmbiguity } from '@fss/domain/mail/matching.ts';
+import { listMessagesForOpportunity, readMessageBody } from '@fss/domain/mail/messages.ts';
+import { decideFirmRead } from '@fss/domain/crm/authorization.ts';
+import { readFirm } from '@fss/domain/crm/firms.ts';
+import { readOpportunity } from '@fss/domain/crm/pipeline.ts';
+import { REFUSAL_STATUS, redactError } from '../limits.ts';
+import { listMessagesRequestSchema, mailRouteDeps, resolveAmbiguityCommandSchema } from './mailSupport.ts';
+import { contextForPrincipal, runRouteCommand } from './routeSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**
@@ -42,7 +38,7 @@ export async function routeMessages(request: ApiRequest, options: RoutingOptions
   const deps = prepared.deps;
 
   if (request.path === '/messages/resolve-ambiguity') {
-    return await runMailCommand(
+    return await runRouteCommand(
       deps,
       resolveAmbiguityCommandSchema,
       'resolve_message_ambiguity',

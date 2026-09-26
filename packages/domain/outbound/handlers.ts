@@ -1,6 +1,7 @@
 import type { JobHandler } from '../jobs/handlerRegistry.ts';
 import { repositoryContext } from '../db/workspaceScope.ts';
-import { payloadMailboxId, recordMailboxHeartbeat } from '../mail/index.ts';
+import { payloadMailboxId } from '../mail/coalesce.ts';
+import { recordMailboxHeartbeat } from '../mail/mailboxes.ts';
 import { reconcileMailbox, type ReconcileDeps } from './reconcile.ts';
 
 /**

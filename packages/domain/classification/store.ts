@@ -1,6 +1,6 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import type { SessionQueryable } from '../db/queryable.ts';
-import type { ReplyClass, ReplyDisposition } from '../src/rules/replyClassification.ts';
+import type { ReplyClass, ReplyDisposition } from '@fss/contracts';
 import { CLASSIFIER_PROMPT_VERSION, type ClassifierCallRecord, type ModelSuggestion } from './types.ts';
 
 /**

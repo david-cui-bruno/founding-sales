@@ -27,9 +27,9 @@ import { z } from 'zod';
  *
  * The shape lives here, in `@fss/contracts`, for the reason every other wire shape
  * does: two places have to agree about it and neither may import the other. The
- * script writes it and the domain stores it. `test/ops/releaseRecordFromCi.check.ts` runs
- * the script and parses what it wrote with `releaseRecordSchema`, so a field renamed on
- * either side fails the release suite rather than the production enable.
+ * script writes it and the domain stores it; the ops checks run the scripts and parse
+ * what they wrote with `releaseRecordSchema`, so a field renamed on either side fails
+ * the gate rather than the production enable.
  *
  * **Strict, on purpose.** An unknown field is refused rather than stripped: a record
  * from a script this contract no longer describes is a record nobody has reviewed the
@@ -43,8 +43,8 @@ export const RELEASE_RECORD_SCHEMA_ID = 'fss.release-record.v1';
  * module refuses a task definition image without it, and the comparison the gate makes
  * is only meaningful between two of these: a tag is mutable.
  */
-export const IMAGE_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/u;
-export const imageDigestSchema = z.string().regex(IMAGE_DIGEST_PATTERN, 'an image digest');
+const IMAGE_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/u;
+const imageDigestSchema = z.string().regex(IMAGE_DIGEST_PATTERN, 'an image digest');
 
 export function isImageDigest(value: unknown): value is string {
   return typeof value === 'string' && IMAGE_DIGEST_PATTERN.test(value);
@@ -68,7 +68,7 @@ export function isImageDigest(value: unknown): value is string {
 export const CI_GATE_MAIN_POLICY = 'ci-gate:main';
 
 /** What an attestation's `releaseGateReference` names: one record, or the process. */
-export type ReleaseAttestation =
+type ReleaseAttestation =
   | { readonly kind: 'reference'; readonly reference: string }
   | { readonly kind: 'policy'; readonly policy: typeof CI_GATE_MAIN_POLICY };
 
@@ -108,9 +108,9 @@ const recordedAtSchema = z
  * A contract that refused every other word would make that rule unreachable and its
  * test vacuous.
  */
-export const releaseSuiteSchema = z.string().regex(/^[a-z][a-z_]{0,39}$/u, 'a suite verdict');
+const releaseSuiteSchema = z.string().regex(/^[a-z][a-z_]{0,39}$/u, 'a suite verdict');
 
-export const releaseArtifactsSchema = z
+const releaseArtifactsSchema = z
   .strictObject({
     api: imageDigestSchema,
     worker: imageDigestSchema,
@@ -126,11 +126,10 @@ export const releaseArtifactsSchema = z
  * Who wrote a stored record. Only `ci-gate` is written now; `rehearsal` names the records
  * a `full` rehearsal stored before lane W3-S8, which carry no `source` at all.
  */
-export const RELEASE_RECORD_SOURCES = ['ci-gate', 'rehearsal'] as const;
-export type ReleaseRecordSource = (typeof RELEASE_RECORD_SOURCES)[number];
+type ReleaseRecordSource = 'ci-gate' | 'rehearsal';
 
 /** A full forty-character lower-case commit, which is what GitHub reports as `headSha`. */
-export const COMMIT_SHA_PATTERN = /^[0-9a-f]{40}$/u;
+const COMMIT_SHA_PATTERN = /^[0-9a-f]{40}$/u;
 /** A GitHub Actions run id (`databaseId`), as a string so no reader rounds it. */
 const RUN_ID_PATTERN = /^[1-9][0-9]{0,19}$/u;
 /** `gh run view --json url`: the run's page, and nothing after the id. */
@@ -196,7 +195,6 @@ export type CiGateReleaseRecord = z.infer<typeof ciGateReleaseRecordSchema>;
 
 /** The record `fss admin release-record put` accepts: the CI gate's, and nothing else. */
 export const releaseRecordSchema = ciGateReleaseRecordSchema;
-export type ReleaseRecord = z.infer<typeof releaseRecordSchema>;
 
 /**
  * `ci-gate` or `rehearsal`, for a stored record. Read from the stored JSON rather than
@@ -230,5 +228,4 @@ export const RELEASE_RECORD_BINDING_REFUSAL_CODES = [
 export type ReleaseRecordBindingRefusal = (typeof RELEASE_RECORD_BINDING_REFUSAL_CODES)[number];
 
 /** Why `fss admin release-record put` stored nothing. */
-export const RELEASE_RECORD_PUT_REFUSAL_CODES = ['release_record_invalid', 'release_record_conflict'] as const;
-export type ReleaseRecordPutRefusal = (typeof RELEASE_RECORD_PUT_REFUSAL_CODES)[number];
+export type ReleaseRecordPutRefusal = 'release_record_invalid' | 'release_record_conflict';

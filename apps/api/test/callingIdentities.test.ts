@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { callingIdentityChangeResultSchema, callingIdentityDtoSchema, callingIdentityListSchema, wireDrift } from '@fss/contracts';
-import { POSTURE_STATEMENT_KEYS } from '@fss/domain';
-import { repositoryContext, workspaceScope } from '@fss/domain/db';
-import { buildTodaySnapshot, businessDateOf, upsertTodayItem } from '@fss/domain/today';
+import { POSTURE_STATEMENT_KEYS } from '@fss/domain/src/rules/statePosture.ts';
+import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
+import { buildTodaySnapshot } from '@fss/domain/today/build.ts';
+import { businessDateOf, upsertTodayItem } from '@fss/domain/today/snapshots.ts';
 import type { AddressInfo } from 'node:net';
 import { poolConnections } from '../src/bootstrap/connections.ts';
 import { recordingLogger } from '../src/bootstrap/log.ts';

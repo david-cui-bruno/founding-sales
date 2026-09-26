@@ -1,26 +1,30 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase } from '../../db/testing/index.ts';
+import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import type { SessionQueryable } from '../../db/queryable.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
 import { POSTURE_STATEMENT_KEYS, selectApplicablePosture } from '../../src/rules/statePosture.ts';
 import { CALLING_WINDOW_FLOOR } from '../../src/rules/callingWindow.ts';
 import {
+  currentCallingWindow,
+  evaluateConfiguredCallingWindow,
+  setCallingWindow,
+} from '../../policy/callingWindows.ts';
+import { databaseNow } from '../../policy/clock.ts';
+import { listApplicableHolds } from '../../policy/holds.ts';
+import { openPause, releasePause } from '../../policy/pauses.ts';
+import {
   allowCallingStates,
   applicablePosture,
-  currentCallingWindow,
-  databaseNow,
-  evaluateConfiguredCallingWindow,
-  listApplicableHolds,
   listStatePostures,
-  openPause,
   recordStatePosture,
-  releasePause,
   revokeStatePosture,
-  setCallingWindow,
-} from '../../policy/index.ts';
-import { authorizeDial, callOutcomeEffects, logCallOutcome } from '../../dial/index.ts';
-import { isSuppressed, recordingSuppressionJournal } from '../../suppression/index.ts';
-import { readOpenOpportunity } from '../../crm/index.ts';
+} from '../../policy/postures.ts';
+import { authorizeDial } from '../../dial/authorize.ts';
+import { logCallOutcome } from '../../dial/calls.ts';
+import { callOutcomeEffects } from '../../dial/outcomes.ts';
+import { isSuppressed } from '../../suppression/effective.ts';
+import { recordingSuppressionJournal } from '../../suppression/journal.ts';
+import { readOpenOpportunity } from '../../crm/pipeline.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
 import { POSTURE_STATE, seedPolicy, type SeededPolicy } from '../db/support/policyFixtures.ts';

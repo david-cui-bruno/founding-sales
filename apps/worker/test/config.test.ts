@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { WORKER_SCHEMA_RANGE } from '@fss/domain/db';
+import { WORKER_SCHEMA_RANGE } from '@fss/domain/db/schemaRange.ts';
 import { ConfigError, describeWorkerConfig, readWorkerConfig } from '../src/bootstrap/config.ts';
 
 /**

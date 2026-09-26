@@ -1,5 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { CLUSTER_URL_ENVIRONMENT_VARIABLE, createTestDatabase, type TestDatabase } from '@fss/domain/db/testing';
+import {
+  CLUSTER_URL_ENVIRONMENT_VARIABLE,
+  createTestDatabase,
+  type TestDatabase,
+} from '@fss/domain/db/testing/testDatabase.ts';
 import { MIGRATION_IDENTITY_COMMANDS, main } from '../src/tools/fss.ts';
 import { parseFssCommand } from '../src/tools/fss/commands.ts';
 

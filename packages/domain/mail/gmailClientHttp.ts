@@ -417,11 +417,8 @@ export function createGmailHttpClient(options: GmailHttpOptions): GmailClient {
       // a `History` is `{ id, messages, messagesAdded, messagesDeleted, labelsAdded,
       // labelsRemoved }`: https://developers.google.com/gmail/api/reference/rest/v1/users.history/list
       // and https://developers.google.com/gmail/api/reference/rest/v1/users.history#History.
-      // The record's own id is `id`. Until lane g76 this read `historyId`, which is a
-      // field of `Message` and never of `History`, found nothing, and fell back to the
-      // start cursor, so a capped sync wrote back the cursor it began from and read the
-      // same first fifty messages every minute (audit item C06). A record without a
-      // usable id is now a malformed page: there is no cursor it could safely stand for.
+      // The record's own id is `id` (`historyId` is a field of `Message`, never of
+      // `History`; audit item C06). A record without a usable id is a malformed page: there is no cursor it could safely stand for.
       const json = parseJson(response.body);
       const records: GmailHistoryRecord[] = [];
       for (const entry of Array.isArray(json?.['history']) ? (json['history'] as unknown[]) : []) {
@@ -460,7 +457,7 @@ export function createGmailHttpClient(options: GmailHttpOptions): GmailClient {
     listMessageIds: async (access, request: GmailListRequest): Promise<GmailListOutcome> =>
       await listIds(access, '', request, 'the Gmail message listing failed'),
 
-    // Lane g73: the same listing, narrowed to the Sent folder. Trashed messages stay in
+    // The same listing, narrowed to the Sent folder. Trashed messages stay in
     // (`includeSpamTrash`), because a salesperson who deleted an FSS email from Sent did
     // not unsend it, and Appendix E step 3 is looking for sends, not for tidy folders.
     listSentMessageIds: async (access, request: GmailListRequest): Promise<GmailListOutcome> =>

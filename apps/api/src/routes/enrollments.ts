@@ -1,21 +1,12 @@
 import { z } from 'zod';
 import { commandIdSchema, semanticVersionSchema, uuid } from '@fss/contracts';
-import { databaseNow } from '@fss/domain/policy';
-import {
-  enrollContact,
-  listEnrollments,
-  listStepExecutions,
-  previewResume,
-  resumeEnrollment,
-  stopEnrollments,
-} from '@fss/domain/sequences';
-import {
-  REFUSAL_STATUS,
-  contextForPrincipal,
-  policyRouteDeps,
-  redactError,
-  runPolicyCommand,
-} from './dialSupport.ts';
+import { databaseNow } from '@fss/domain/policy/clock.ts';
+import { enrollContact, stopEnrollments } from '@fss/domain/sequences/enrollments.ts';
+import { previewResume, resumeEnrollment } from '@fss/domain/sequences/resume.ts';
+import { listEnrollments, listStepExecutions } from '@fss/domain/sequences/rows.ts';
+import { REFUSAL_STATUS, redactError } from '../limits.ts';
+import { policyRouteDeps, runPolicyCommand } from './dialSupport.ts';
+import { contextForPrincipal } from './routeSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**
@@ -115,7 +106,7 @@ export async function routeEnrollments(
   }
 
   if (request.path === '/enrollments/resume/preview') {
-    // "Review and resume" (4.3; lane g88, audit G06): the future steps and the dates a
+    // "Review and resume" (4.3; audit G06): the future steps and the dates a
     // confirmation would give them, computed by the function the confirmation runs. A
     // read — nothing is locked or written — so the person can look and walk away.
     const parsed = previewSchema.safeParse(request.body);

@@ -1,23 +1,20 @@
 import type { HoldReasonCode } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
+import type { EnrollmentRow, SequenceStepRow, SequenceVersionRow, StepExecutionRow } from './types.ts';
 import {
   ENROLLMENT_END_REASONS,
   SEQUENCE_STOP_CONDITIONS,
   STEP_COMPLETION_SOURCES,
   STEP_RESULTS,
   type EnrollmentEndReason,
-  type EnrollmentRow,
   type EnrollmentState,
-  type SequenceStepRow,
   type SequenceStopCondition,
-  type SequenceVersionRow,
   type SequenceVersionState,
   type StepChannel,
   type StepCompletionSource,
-  type StepExecutionRow,
   type StepExecutionState,
   type StepResult,
-} from './types.ts';
+} from '@fss/contracts';
 
 /**
  * Reading the sequence tables, and nothing else.
@@ -383,7 +380,7 @@ export async function nextUnfinishedExecution(
  * Every execution of an enrollment that has not run yet. What a shift and a stop touch.
  *
  * Locked by default, because every caller but one is about to move or cancel them. The
- * one is the resume preview (lane g88), which only reads what a resume would move and
+ * one is the resume preview, which only reads what a resume would move and
  * must not hold a lock a read has no transaction for.
  */
 export async function unexecutedExecutions(

@@ -4,9 +4,9 @@ import {
   CALLBACK_TIME_NEEDED_KEY_PREFIX,
   TODAY_ALGORITHM_VERSION,
   callbackTimeNeededItemKey,
-  type TodayItemKind,
   type TodaySourceKind,
 } from './types.ts';
+import type { TodayItemKind } from '@fss/contracts';
 
 /**
  * Building one workspace business date's list (specification 8.2, Appendix C).
@@ -69,7 +69,7 @@ export interface TodaySource {
  * moves on to today's list rather than staying on the day it was promised for, which
  * is the same rule `today_callback_changed` applies when one is confirmed.
  *
- * And every recorded "call me back" that has no callback yet (lane g79, audit C13):
+ * And every recorded "call me back" that has no callback yet (audit C13):
  * a `callback_requested` call with no `callbacks` row naming it, whose needs-a-time
  * task nobody has finished. `logCallOutcome` promotes the task the moment the call is
  * recorded; this carries it to each following day until a time is set (which creates
@@ -151,7 +151,7 @@ export function callbackSource(): TodaySource {
  * this lane is for (7.4: "Research never initiates outreach ... enrollment and first
  * contact are deliberate salesperson actions").
  *
- * "No opportunity at all" means never had one (lane g88, audit C19). The join reads only
+ * "No opportunity at all" means never had one (audit C19). The join reads only
  * the open opportunity, so a firm whose opportunity was Won or Lost used to read as a
  * firm with none, and came back the next morning as a new firm to call — a client, or
  * somebody who had said no. A firm with a closed opportunity has been worked; it is not

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { API_SCHEMA_RANGE } from '@fss/domain/db';
+import { API_SCHEMA_RANGE } from '@fss/domain/db/schemaRange.ts';
 import { readApiConfig } from '../src/bootstrap/config.ts';
 
 /**

@@ -5,20 +5,15 @@ import {
   disconnectMailbox,
   readOwnMailbox,
   verifyGrantState,
-} from '@fss/domain/mail';
-import { withTransaction, type RepositoryContext, type SessionQueryable } from '@fss/domain/db';
-import { registerMailboxSendingDomain } from '@fss/domain/outbound';
+} from '@fss/domain/mail/oauth.ts';
+import { withTransaction, type SessionQueryable } from '@fss/domain/db/queryable.ts';
+import type { RepositoryContext } from '@fss/domain/db/workspaceScope.ts';
+import { registerMailboxSendingDomain } from '@fss/domain/outbound/domainGuard.ts';
 import { errorFields, type Logger } from '../bootstrap/log.ts';
-import {
-  REFUSAL_STATUS,
-  connectMailboxCommandSchema,
-  contextForPrincipal,
-  disconnectMailboxCommandSchema,
-  mailRouteDeps,
-  membershipScope,
-  redactError,
-  runMailCommand,
-} from './mailSupport.ts';
+import { connectMailboxCommandSchema, disconnectMailboxCommandSchema } from '@fss/contracts';
+import { REFUSAL_STATUS, redactError } from '../limits.ts';
+import { mailRouteDeps, membershipScope } from './mailSupport.ts';
+import { contextForPrincipal, runRouteCommand } from './routeSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
 
 /**
@@ -129,14 +124,14 @@ export async function routeGmail(request: ApiRequest, options: RoutingOptions): 
 
   switch (request.path) {
     case '/gmail/connect':
-      return await runMailCommand(
+      return await runRouteCommand(
         deps,
         connectMailboxCommandSchema,
         'connect_mailbox',
         async context => await beginGmailGrant(context, mail),
       );
     case '/gmail/disconnect':
-      return await runMailCommand(
+      return await runRouteCommand(
         deps,
         disconnectMailboxCommandSchema,
         'disconnect_mailbox',
@@ -149,7 +144,7 @@ export async function routeGmail(request: ApiRequest, options: RoutingOptions): 
 }
 
 /**
- * A connected mailbox's domain is the workspace's sending domain (lane g57).
+ * A connected mailbox's domain is the workspace's sending domain.
  *
  * Runs after `completeGmailGrant` has returned, so the mailbox, its token and its
  * coverage hold are already written, and nothing here can undo them: a registration

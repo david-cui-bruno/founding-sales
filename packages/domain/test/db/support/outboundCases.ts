@@ -7,7 +7,7 @@ import { FIXTURE_BODY, FIXTURE_SUBJECT } from './outboundFixtures.ts';
 import { makeStepExecution } from '../../../db/testing/stepExecutions.ts';
 
 /**
- * A failing insert for every constraint migration 0010 adds (lane G7-2: the outbound
+ * A failing insert for every constraint migration 0010 adds (the outbound
  * fence, its append-only event ledger, the sending domain, the reputation ramp and
  * the per-day counters).
  *

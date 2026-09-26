@@ -1,4 +1,5 @@
-import { TODAY_LANES, type TodayCounts, type TodayItemKind, type TodayLane } from './types.ts';
+import type { TodayCounts } from './types.ts';
+import { TODAY_LANES, type TodayItemKind, type TodayLane } from '@fss/contracts';
 
 /**
  * Lane precedence and ordering (specification 8.2), as pure functions.
