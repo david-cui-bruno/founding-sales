@@ -25,6 +25,10 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  * `runPolicyCommand`'s plain refusal shape for the approval — the reason code is
  * `template_unapproved` and the issues travel beside it.
  *
+ * The copy rules (word count, links, price and guarantee wording) never refuse: a
+ * create and an approval answer them as `warnings` on the accepted version
+ * (`templateCommandResultSchema` in `@fss/contracts`).
+ *
  * There is no endpoint that edits an approved version, and there never will be. The
  * database refuses it by trigger; the absence here is so that nobody has to find that
  * out from a 500.

@@ -5,6 +5,7 @@ import {
   resumePreviewResponseSchema,
   sequenceVersionsResponseSchema,
   sequencesResponseSchema,
+  templateCommandResultSchema,
   templateVersionsResponseSchema,
   wireDrift,
 } from '@fss/contracts';
@@ -208,6 +209,30 @@ describe('the sequence, template and enrollment routes', () => {
     );
     expect(approved.status).toBe(200);
     expect(resultOf(approved)['approvedAt']).not.toBeNull();
+    expect(resultOf(approved)['warnings']).toEqual([]);
+  });
+
+  it('approves a template past the copy limits and answers its warnings', async () => {
+    const created = await post(
+      '/templates/create',
+      adminToken,
+      command({
+        name: 'Copy advice',
+        subject: 'A 20% price cut',
+        body: `${'Word '.repeat(90)}See https://one.example.test and https://two.example.test.\n\n${SIGN_OFF}\n${SENDING_STOP_LINE}`,
+        footerSignOff: SIGN_OFF,
+        requiredVariables: [],
+      }),
+    );
+    expect(created.status).toBe(200);
+    const expected = ['template_body_multiple_urls', 'template_body_too_long', 'template_pricing_or_guarantee_language'];
+    expect(templateCommandResultSchema.parse(resultOf(created)).warnings.sort()).toEqual(expected);
+
+    const approved = await post('/templates/approve', adminToken, command({ templateVersionId: String(resultOf(created)['id']) }));
+    expect(approved.status).toBe(200);
+    const result = templateCommandResultSchema.parse(resultOf(approved));
+    expect(result.approvedAt).not.toBeNull();
+    expect(result.warnings.sort()).toEqual(expected);
   });
 
   it('publishes a sequence version and refuses a salesperson who tries', async () => {

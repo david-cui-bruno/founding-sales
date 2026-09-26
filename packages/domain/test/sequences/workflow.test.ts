@@ -245,8 +245,25 @@ describe('the template lifecycle (11.1, 12.6)', () => {
     expect(approved.ok).toBe(false);
     if (approved.ok) return;
     expect(approved.reason).toBe('template_unapproved');
-    expect(approved.issues).toContain('template_footer_missing');
-    expect(approved.issues).toContain('template_pricing_or_guarantee_language');
+    expect(approved.issues).toEqual(['template_footer_missing']);
+  });
+
+  it('approves a body past the copy limits and answers the warnings with the version', async () => {
+    const created = await createTemplateVersion(contextFor('alpha', 'admin'), {
+      name: 'Copy advice',
+      subject: 'Our pricing for you',
+      body: fixtureBody(`${'Word '.repeat(90)}See https://one.example.test and https://two.example.test.`),
+      footer: { signOff: FIXTURE_SIGN_OFF },
+      requiredVariables: [],
+    });
+    if (!created.ok) throw new Error(`the template was refused: ${created.reason}`);
+    const expected = ['template_body_multiple_urls', 'template_body_too_long', 'template_pricing_or_guarantee_language'];
+    expect([...created.value.warnings].sort()).toEqual(expected);
+
+    const approved = await approveTemplateVersion(contextFor('alpha', 'admin'), { templateVersionId: created.value.id });
+    if (!approved.ok) throw new Error(`the approval was refused: ${approved.reason}`);
+    expect(approved.value.approvedAt).not.toBeNull();
+    expect([...approved.value.warnings].sort()).toEqual(expected);
   });
 
   it('approves a body that satisfies them, and refuses a salesperson who tries', async () => {

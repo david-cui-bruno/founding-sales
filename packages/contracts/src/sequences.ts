@@ -182,6 +182,15 @@ export const templateVersionDtoSchema = z.object({
 export type TemplateVersionDto = z.infer<typeof templateVersionDtoSchema>;
 
 /**
+ * The accepted result of `POST /templates/create` and `POST /templates/approve`: the
+ * version, and the copy warnings its text raises (`TEMPLATE_WARNING_CODES` in
+ * `./templates.ts`). Strings rather than the enum, so a warning added later cannot make
+ * an older Mac refuse the answer.
+ */
+export const templateCommandResultSchema = templateVersionDtoSchema.extend({ warnings: z.array(z.string()) });
+export type TemplateCommandResult = z.infer<typeof templateCommandResultSchema>;
+
+/**
  * One enrollment, as `toEnrollment` maps it. The four fields a Mac once refused (D02)
  * are the ones that make an enrollment explainable: the opportunity it serves, the
  * salesperson it belongs to, and the zone and holiday calendar frozen onto every due

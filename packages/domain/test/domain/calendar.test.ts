@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   BUSINESS_DAY_RULE_VERSION,
-  EMAIL_WINDOW,
   LocalClockError,
   addBusinessDays,
   addCalendarDays,

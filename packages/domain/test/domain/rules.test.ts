@@ -28,6 +28,7 @@ import {
   stateDefaultZone,
   templateContentHash,
   templateTextIssues,
+  templateTextWarnings,
   type FirmZoneSource,
   type ReplyMessage,
   type SequenceStep,
@@ -374,14 +375,39 @@ describe('templates', () => {
   });
 
   it('names every rule a body breaks, not only the first', () => {
-    const issues = templateTextIssues(
-      { subject: 'Read https://example.test now', body: 'We guarantee a 50% discount. {surprise}' },
+    const text = { subject: 'Read https://example.test now', body: 'We guarantee a 50% discount. {surprise}' };
+    expect(templateTextIssues(text, rules).sort()).toEqual(['template_footer_missing', 'template_unknown_variable']);
+    expect(templateTextWarnings(text).sort()).toEqual(['template_pricing_or_guarantee_language', 'template_subject_url']);
+  });
+
+  it('keeps refusing what a send or the law depends on', () => {
+    const refusals = (subject: string, text: string): string[] => templateTextIssues({ subject, body: text }, rules);
+    expect(refusals('A note', 'No stop line.')).toContain('template_footer_missing');
+    expect(refusals('A note', `<p>Hello</p>\n\n${footerBlock(FOOTER)}`)).toContain('template_body_markup');
+    expect(refusals('A note', `Hello\u0007.\n\n${footerBlock(FOOTER)}`)).toContain('template_body_not_plain_text');
+    expect(refusals('Two\nlines', body)).toContain('template_subject_not_one_line');
+    expect(refusals('   ', body)).toContain('template_subject_empty');
+    expect(refusals('S'.repeat(161), body)).toContain('template_subject_too_long');
+    expect(refusals('Hi {nobody}', body)).toContain('template_unknown_variable');
+  });
+
+  it('approves a body past the copy limits, and warns about each one', () => {
+    const long = `${'Word '.repeat(90)}See https://one.example.test and https://two.example.test for a 20% price cut.\n\n${footerBlock(FOOTER)}`;
+    const decision = decideTemplateApproval(
+      { templateId: 'T1', version: 1, subject: 'Look https://example.test', body: long },
       rules,
     );
-    expect(issues).toContain('template_subject_url');
-    expect(issues).toContain('template_footer_missing');
-    expect(issues).toContain('template_pricing_or_guarantee_language');
-    expect(issues).toContain('template_unknown_variable');
+    expect(decision).toMatchObject({ approved: true });
+    expect([...decision.warnings].sort()).toEqual([
+      'template_body_multiple_urls',
+      'template_body_too_long',
+      'template_pricing_or_guarantee_language',
+      'template_subject_url',
+    ]);
+    expect(decideTemplateApproval({ templateId: 'T1', version: 1, subject: 'A short note', body }, rules)).toMatchObject({
+      approved: true,
+      warnings: [],
+    });
   });
 
   it('approves a body that satisfies every rule and refuses one that does not', () => {
