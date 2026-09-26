@@ -2,46 +2,36 @@ import type { SessionQueryable } from './queryable.ts';
 import { readAppliedSchemaVersion } from './migrationRunner.ts';
 
 /**
- * The schema version this source tree produces and the one both services accept.
+ * The schema this source tree produces and the only one either service accepts.
  *
- * Every range is a point, `{N, N}`: a release that changes the schema is deployed with
- * `infra/scripts/release-deploy.sh … --schema-change`, which stops both services, applies
- * the migrations and starts the new images (docs/greenfield/release.md). So the
- * previous release's images never meet the new schema, and the new images never meet
- * the old one; each refuses the other at startup (`checkSchemaRange`).
- *
- * A schema release moves the current version and both service ranges.
- * `test/db/migrations.test.ts` holds the contract against a real database: the images of
- * the release before, which declare `{N-1, N-1}` for both services, refuse the new
- * version, and the new images accept it.
+ * A release that changes the schema stops both services, applies the migrations and
+ * starts the new images (`infra/scripts/release-deploy.sh … --schema-change`,
+ * docs/greenfield/release.md), so an image only ever meets its own schema and refuses
+ * any other at startup (`checkSchemaRange`). A schema release changes this number and
+ * nothing else here; `test/db/migrations.test.ts` holds it to the last migration.
  */
+export const REQUIRED_SCHEMA = 19;
 
 export interface SchemaRange {
   readonly minimum: number;
   readonly maximum: number;
 }
 
-/** The highest migration version this source tree contains. */
-export const CURRENT_SCHEMA_VERSION = 19;
+/**
+ * The names the release scripts and workflows read from this file with `node`
+ * (`rehearsal-schema-ranges.sh`, `release-rollback.sh`, `productionSmoke.mjs`, the image
+ * and deploy workflows). Keep the names; every value derives from `REQUIRED_SCHEMA`.
+ */
+export const CURRENT_SCHEMA_VERSION = REQUIRED_SCHEMA;
+export const API_SCHEMA_RANGE: SchemaRange = { minimum: REQUIRED_SCHEMA, maximum: REQUIRED_SCHEMA };
+export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: REQUIRED_SCHEMA, maximum: REQUIRED_SCHEMA };
 
 /**
- * The overlap input of Appendix G 22's rehearsal step (`infra/scripts/rehearsal-schema-ranges.sh`,
- * `test/ops/scenario22.check.ts`), widened to the current version as every schema release
- * before did. It is **not** what the previous images accept: those declare `{18, 18}` and
- * refuse schema 19, which `test/db/migrations.test.ts` asserts. The rehearsal's overlap
- * case launches a `-previous` family nothing registers, so it records
- * `skipped_no_previous` either way. (Making this `{18, 18}` needs the three overlap checks
- * in `scenario22.check.ts` changed with it.)
+ * The overlap input of Appendix G 22's rehearsal step (`rehearsal-schema-ranges.sh`,
+ * `test/ops/scenario22.check.ts`). It is not what the previous images accept: those
+ * require the schema before this one and refuse `REQUIRED_SCHEMA`.
  */
-export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: 19 };
-
-/**
- * Migration 0019 drops what the previous images still name (research, the enrollment
- * migration tables, `direct_sent`, `record_merge_events`) and the new images need its
- * relaxed triggers, so neither range reaches back to 18.
- */
-export const API_SCHEMA_RANGE: SchemaRange = { minimum: 19, maximum: 19 };
-export const WORKER_SCHEMA_RANGE: SchemaRange = { minimum: 19, maximum: 19 };
+export const PREVIOUS_RELEASE_SCHEMA_RANGE: SchemaRange = { minimum: 1, maximum: REQUIRED_SCHEMA };
 
 export function acceptsSchemaVersion(range: SchemaRange, version: number): boolean {
   return Number.isInteger(version) && version >= range.minimum && version <= range.maximum;
