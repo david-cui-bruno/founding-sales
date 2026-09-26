@@ -18,29 +18,6 @@ variable "aws_account_id" {
   }
 }
 
-variable "price_class" {
-  description = "CloudFront price class. One salesperson on one continent does not need the global class."
-  type        = string
-  default     = "PriceClass_100"
-
-  validation {
-    condition     = contains(["PriceClass_100", "PriceClass_200", "PriceClass_All"], var.price_class)
-    error_message = "price_class must be PriceClass_100, PriceClass_200 or PriceClass_All."
-  }
-}
-
-variable "noncurrent_version_expiration_days" {
-  description = "Days a superseded package version is kept. Rollback needs earlier compatible binaries."
-  type        = number
-  default     = 365
-}
-
-variable "force_destroy" {
-  description = "Allow Terraform to empty the bucket on destroy."
-  type        = bool
-  default     = false
-}
-
 variable "tags" {
   description = "Tags merged into every resource in this module."
   type        = map(string)

@@ -327,8 +327,6 @@ module "updates" {
 
   name_prefix    = var.name_prefix
   aws_account_id = var.aws_account_id
-  price_class    = var.updates_price_class
-  force_destroy  = var.destroyable
   tags           = local.tags
 }
 

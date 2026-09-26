@@ -4,6 +4,11 @@
 # through an origin access control, and the bucket policy admits only that one
 # distribution. Package integrity is the Electron signature and the update
 # manifest, not the transport, but the transport is still TLS only.
+#
+# Production only (the stack's count): a rehearsal publishes no package. A
+# superseded package version is kept for a year, so an earlier compatible build
+# is still there for a forward rollback, and the bucket refuses a destroy while
+# it holds any.
 
 locals {
   bucket_name = "${var.name_prefix}-updates-${var.aws_account_id}"
@@ -11,7 +16,7 @@ locals {
 
 resource "aws_s3_bucket" "updates" {
   bucket        = local.bucket_name
-  force_destroy = var.force_destroy
+  force_destroy = false
 
   tags = merge(var.tags, { Name = local.bucket_name })
 }
@@ -61,7 +66,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "updates" {
     filter {}
 
     noncurrent_version_expiration {
-      noncurrent_days = var.noncurrent_version_expiration_days
+      noncurrent_days = 365
     }
 
     abort_incomplete_multipart_upload {
@@ -84,7 +89,7 @@ resource "aws_cloudfront_distribution" "updates" {
   enabled         = true
   is_ipv6_enabled = true
   comment         = "${var.name_prefix} Electron package distribution."
-  price_class     = var.price_class
+  price_class     = "PriceClass_100" # one salesperson on one continent
 
   origin {
     origin_id                = "s3-updates"

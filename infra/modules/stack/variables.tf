@@ -407,12 +407,6 @@ variable "log_retention_days" {
   default     = 90
 }
 
-variable "updates_price_class" {
-  description = "CloudFront price class for the Electron package distribution, which only production builds."
-  type        = string
-  default     = "PriceClass_100"
-}
-
 # ---------------------------------------------------------------------------
 # Gmail push
 # ---------------------------------------------------------------------------
