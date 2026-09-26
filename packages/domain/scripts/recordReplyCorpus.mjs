@@ -2,10 +2,11 @@
  * Re-record the reply corpus against the live model.
  *
  * This is the one thing in the repository that reaches Anthropic, and it is a
- * developer tool a person runs deliberately. **It costs money.** CI never runs it,
- * no test imports it, and it refuses to start without both an API key and an
- * explicit `--model`, because a default model here would mean re-recording against
- * whichever one somebody last edited a constant to.
+ * developer tool a person runs deliberately. **It costs money.** CI never records
+ * with it (`test/classification/recordScript.test.ts` runs only its dry run, which
+ * sends nothing, so a module it loads that moves fails there), and it refuses to start
+ * without both an API key and an explicit `--model`, because a default model here
+ * would mean re-recording against whichever one somebody last edited a constant to.
  *
  *   FSS_LLM_CLASSIFIER_API_KEY=… \
  *     node --experimental-transform-types --disable-warning=ExperimentalWarning \
@@ -87,8 +88,10 @@ async function main() {
   const model = modelIndex === -1 ? undefined : argv[modelIndex + 1];
   const dryRun = argv.includes('--dry-run');
 
-  const { CLASSIFIER_MODELS, CLASSIFIER_PROMPT_VERSION, buildClassifierRequest, loadAnthropicTransport,
-    environmentClassifierSecrets } = await import('../classification/index.ts');
+  const { CLASSIFIER_MODELS } = await import('@fss/contracts');
+  const { CLASSIFIER_PROMPT_VERSION } = await import('../classification/types.ts');
+  const { buildClassifierRequest } = await import('../classification/prompt.ts');
+  const { environmentClassifierSecrets, loadAnthropicTransport } = await import('../classification/anthropicClient.ts');
   const { REPLY_CORPUS } = await import('../test/corpus/replies/cases.ts');
   const { authoredText } = await import('../src/rules/replyClassification.ts');
 

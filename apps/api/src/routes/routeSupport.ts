@@ -31,15 +31,14 @@ export interface RouteDeps {
 /**
  * What a command's work answers: a value, or the reason it refused.
  *
- * The reason is a bare `string` rather than one area's refusal union: every area's
- * codes go into the same receipt column, so the shared runner takes the looser type and
- * each domain command keeps its own narrow one at its own boundary.
+ * A union, so the compiler checks that an acceptance carries its value and a refusal its
+ * reason. The reason is a bare `string` rather than one area's refusal union: every
+ * area's codes go into the same receipt column, so the shared runner takes the looser
+ * type and each domain command keeps its own narrow one at its own boundary.
  */
-export interface CommandResult<T> {
-  readonly ok: boolean;
-  readonly value?: T;
-  readonly reason?: string;
-}
+export type CommandResult<T> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly reason: string };
 
 /** Authenticate, or the refusal to return. Reads and writes both need a principal. */
 export async function requirePrincipal(
@@ -115,7 +114,7 @@ export async function runRouteCommand<Schema extends z.ZodType<{ commandId: stri
   const outcome = await runCommand(deps.auth, deps.principal, { commandId, kind, payload, clientVersion }, async context => {
     const result = await work(context, body);
     if (result.ok) return { status: 'accepted', result: result.value ?? null };
-    return { status: 'refused', reason: result.reason ?? 'refused' };
+    return { status: 'refused', reason: result.reason };
   });
   return commandReply(outcome);
 }
