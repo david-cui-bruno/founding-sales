@@ -149,6 +149,14 @@ resource "aws_lambda_function" "digest" {
     }
   }
 
+  # Lambda encrypts the environment at rest in the caller's session. Left to the
+  # AWS-managed aws/lambda key, the first production apply (25 September 2026) was
+  # refused: that key carries no NamePrefix tag, so the deployment role's
+  # NoDeploymentKmsDataAccessOutsideThisNamespaceOrTerraformState deny covers it. The
+  # topic's key is this namespace's, which the deployment role may use and the
+  # function's own role already decrypts with. The variables hold no secret.
+  kms_key_arn = local.topic_key_arn
+
   logging_config {
     log_format = "Text"
     log_group  = aws_cloudwatch_log_group.digest.name
