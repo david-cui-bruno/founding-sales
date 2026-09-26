@@ -29,7 +29,8 @@
 # Offline test: set `FSS_REHEARSAL_CALLER_IDENTITY` to the ARN to judge, and no AWS
 # call is made at all.
 
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rehearsal-common.sh"
+# shellcheck source=infra/scripts/lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 ROLE=${1:-fss-rh-deploy}
 rehearsal_refuse_production_arguments "$ROLE"

@@ -92,8 +92,8 @@
 # checkout (its commit and its ranges), which is local.
 
 ROLLBACK_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=infra/scripts/release-common.sh
-source "$ROLLBACK_SCRIPTS/release-common.sh"
+# shellcheck source=infra/scripts/lib.sh
+source "$ROLLBACK_SCRIPTS/lib.sh"
 
 PLAN_FILE=rollback.tfplan
 

@@ -331,90 +331,13 @@ describe('Appendix G 42: the attestation is bound to the release record (lane g7
       }
     });
 
-    // The operations definition as ECS would describe it before the apply: the running
-    // release's worker image, the primary's host, the runtime credential entry.
-    const operationsDefinition = (image: string): string =>
-      JSON.stringify({
-        taskDefinitionArn: 'arn:aws:ecs:us-east-1:123456789012:task-definition/fss-prod-operations:1',
-        containerDefinitions: [
-          {
-            name: 'operations',
-            image,
-            environment: [{ name: 'FSS_DATABASE_HOST', value: 'fss-prod-pg.example' }],
-            secrets: [
-              {
-                name: 'DATABASE_SECRET_ARN',
-                valueFrom: 'arn:aws:secretsmanager:us-east-1:123456789012:secret:fss-prod/app-runtime-database-a',
-              },
-            ],
-          },
-        ],
-      });
-    const WORKER_REPOSITORY = '123456789012.dkr.ecr.us-east-1.amazonaws.com/fss-prod-worker';
-
-    it('stores the record alone with --record-only, before any deploy step, on the operations definition as it runs', () => {
-      // 26 September 2026: the worker admits a send only under a stored record naming its
-      // digest, so the hand release stores the record before the apply. The put is the one
-      // command; it runs the running release's image (c), and the record names the new one.
+    it('refuses a record naming other digests than the release, before anything is planned', () => {
       const file = recordFile();
-      const { code, output, report } = dryDeploy(
-        ['--record-only', '--api-digest', digest('a'), '--release-record', file.path],
-        { FSS_RELEASE_TASK_DEFINITION: operationsDefinition(`${WORKER_REPOSITORY}@${digest('c')}`) },
-      );
-      expect(code, output).toBe(0);
-      const commands = plannedCommands(output);
-      expect(commands.map(command => command.slice(0, 3).join(' '))).toEqual(['admin release-record put']);
-      const encoded = commands[0]?.[(commands[0]?.indexOf('--json-base64') ?? -2) + 1] ?? '';
-      expect(Buffer.from(encoded, 'base64').equals(file.bytes)).toBe(true);
-      for (const deployStep of ['update-service', 'services-stable', 'fss-verify', 'fss-migrate']) {
-        expect(output).not.toContain(deployStep);
-      }
-      expect(report).toContain('record_only=yes');
-      expect(report).toContain(`operations_digest=${digest('c')}`);
-      expect(report).toContain('release_record=planned');
-    });
-
-    it('refuses --record-only without a record, with --schema-change, or without both digests', () => {
-      const file = recordFile();
-      for (const [extra, expected] of [
-        [['--record-only', '--api-digest', digest('a')], 'needs --release-record'],
-        [['--record-only', '--schema-change', '--api-digest', digest('a'), '--release-record', file.path], 'means nothing here'],
-        [['--record-only', '--release-record', file.path], 'needs --api-digest and --worker-digest'],
-      ] as const) {
-        const { code, output } = dryDeploy(extra);
-        expect(code, extra.join(' ')).not.toBe(0);
-        expect(output).toContain(expected);
-        expect(plannedCommands(output)).toEqual([]);
-      }
-    });
-
-    it('refuses a record naming other digests than the release, on either path, before anything is planned', () => {
-      const file = recordFile();
-      for (const extra of [
-        ['--record-only', '--api-digest', digest('d'), '--release-record', file.path],
-        ['--api-digest', digest('d'), '--release-record', file.path],
-      ]) {
-        const { code, output } = dryDeploy(extra);
-        expect(code, extra.join(' ')).not.toBe(0);
-        expect(output).toContain(`names api ${digest('a')} (this release: ${digest('d')})`);
-        expect(plannedCommands(output)).toEqual([]);
-        expect(output).not.toContain('update-service');
-      }
-    });
-
-    it('refuses --record-only when the operations definition is not a worker image by digest', () => {
-      const file = recordFile();
-      for (const image of [
-        `123456789012.dkr.ecr.us-east-1.amazonaws.com/fss-prod-api@${digest('c')}`,
-        `${WORKER_REPOSITORY}:latest`,
-      ]) {
-        const { code, output } = dryDeploy(['--record-only', '--api-digest', digest('a'), '--release-record', file.path], {
-          FSS_RELEASE_TASK_DEFINITION: operationsDefinition(image),
-        });
-        expect(code, image).not.toBe(0);
-        expect(output).toContain('is not the worker image by digest');
-        expect(plannedCommands(output)).toEqual([]);
-      }
+      const { code, output } = dryDeploy(['--api-digest', digest('d'), '--release-record', file.path]);
+      expect(code).not.toBe(0);
+      expect(output).toContain(`names api ${digest('a')} (this release: ${digest('d')})`);
+      expect(plannedCommands(output)).toEqual([]);
+      expect(output).not.toContain('update-service');
     });
 
     it('refuses before anything is scaled when the file is not a release record', () => {

@@ -60,8 +60,8 @@
 #
 # Offline seams: FSS_REHEARSAL_AWS_COMMAND (the AWS CLI) and FSS_RELEASE_ACCOUNT.
 
-# shellcheck source=infra/scripts/release-common.sh
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/release-common.sh"
+# shellcheck source=infra/scripts/lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 PREFIX=${1:-}
 shift || true

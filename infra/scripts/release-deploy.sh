@@ -90,23 +90,10 @@
 #
 # ## --record-only: the record before the rollout (26 September 2026)
 #
-# The worker admits a send only when a stored record names its own digest. A put that
-# comes last leaves every new worker task that starts during the rollout without one, so
-# a step due then is refused `release_record_unknown` and waits up to an hour. So the hand
-# release stores the record first:
-#
-#   release-deploy.sh ... --record-only  ->  plan  ->  apply  ->  release-deploy.sh ... --release-record
-#
-# `--record-only` does the put and nothing else: no count, no wait, no one-off task but the
-# put, and it exits. It runs on the operations task definition the root outputs now, which
-# before the apply is the running release's, so the task is held to that definition's own
-# image — an `<prefix>-worker` image by digest in this account and region — and not to
-# `--worker-digest`, which is what the record names. That is the rule the CI record step
-# and the put-alone command of release.md 6 already follow. The record's digests must be
-# the two digests given, and the put's answer must be `created` or `existing` and name
-# them. The put at the end of the deploy stays and answers `existing`: it is the check that
-# the record is there for the deployment now running. A record stored for a rollout that
-# never completes is inert, because no running process has its digests.
+# The worker admits a send only when a stored record names its own digest, so the hand
+# release stores the record first:  record.sh put  ->  plan  ->  apply  ->  this script.
+# `--record-only` is the old name of `record.sh put` and execs it (P7). The put at the end
+# of a deploy given `--release-record` stays and answers `existing`.
 #
 # Stop-during-migration is the policy (`docs/greenfield/release.md` 4.1): every
 # declared range from migration 0006 onwards is a strict `{N,N}`, so there is no
@@ -139,13 +126,13 @@
 # Production applies stay local and are David's (`fss-prod-deploy` trusts no OIDC
 # subject, by decision); the rehearsal runs in CI. They run this script. The
 # difference is the credentials in the shell and the root in argument one, and
-# `release-common.sh` refuses a rehearsal command that names production *and* a
+# `lib.sh` refuses a rehearsal command that names production *and* a
 # production command that names a rehearsal run.
 #
 # Dry run: FSS_REHEARSAL_DRY_RUN=1 prints every command and needs no credential.
 
-# shellcheck source=infra/scripts/release-common.sh
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/release-common.sh"
+# shellcheck source=infra/scripts/lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 ROOT_DIRECTORY=${1:-}
 PREFIX=${2:-}
@@ -185,59 +172,15 @@ if [ "$RECORD_ONLY" = "1" ]; then
     echo "FAIL: --record-only needs --api-digest and --worker-digest: the record must name exactly the release it is stored for." >&2
     exit 1
   fi
+  # P7: the put before the rollout is `record.sh put`; this flag is its old name.
+  exec "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/record.sh" put "$ROOT_DIRECTORY" "$PREFIX" \
+    --api-digest "$API_DIGEST" --worker-digest "$WORKER_DIGEST" --release-record "$RELEASE_RECORD"
 fi
 
-# The release record, read and encoded before anything is scaled, so a missing or
-# malformed file is a refusal in the first second rather than after the deploy.
-#
-# It travels to the task as standard base64, for two reasons. A one-off task can be
-# handed nothing but arguments, and the record's JSON is braces, quotes and newlines.
-# And the record *names the rehearsal it certifies* — that is what a release record is
-# — so its text contains `fss-rh-`, which `release_refuse_foreign_arguments` refuses in
-# a production command because such an argument would normally be a rehearsal resource
-# the command is about to act on. This command acts on nothing but this environment's
-# database; the rehearsal is its subject, not its target. The shape is checked here and
-# the whole record against the contract by the tool, before anything is written.
-RELEASE_RECORD_BASE64=''
+# The release record, judged before anything is scaled: an fss.release-record.v1 that
+# names this release's digests (lib.sh release_record_base64).
 if [ -n "$RELEASE_RECORD" ]; then
-  if [ ! -r "$RELEASE_RECORD" ]; then
-    echo "FAIL: --release-record names '$RELEASE_RECORD', which cannot be read. Pass the release-record.json the green rehearsal run wrote." >&2
-    exit 1
-  fi
-  if ! RELEASE_RECORD_BASE64="$(FSS_RECORD="$RELEASE_RECORD" python3 -c '
-import base64, json, os, sys
-path = os.environ["FSS_RECORD"]
-raw = open(path, "rb").read()
-record = json.loads(raw)
-if not isinstance(record, dict) or record.get("schema") != "fss.release-record.v1":
-    sys.exit("the file is not an fss.release-record.v1")
-if not str(record.get("releaseGateReference", "")):
-    sys.exit("the record carries no releaseGateReference")
-encoded = base64.b64encode(raw).decode("ascii")
-if len(encoded) > 6000:
-    sys.exit("the record is too large to hand to a one-off task as an argument")
-sys.stdout.write(encoded)
-')"; then
-    echo "FAIL: --release-record '$RELEASE_RECORD' is not a release record this script can hand to the task." >&2
-    exit 1
-  fi
-  # The record must be this release's: a record naming other digests would be stored for
-  # nothing, and on the --record-only path it would be stored ahead of a rollout it does not
-  # cover. A digest not given (a dry run without --api-digest) is not compared.
-  RECORD_DIGEST_PROBLEM="$(FSS_RECORD="$RELEASE_RECORD" FSS_API="$API_DIGEST" FSS_WORKER="$WORKER_DIGEST" python3 -c '
-import json, os
-artifacts = json.load(open(os.environ["FSS_RECORD"], "rb")).get("artifacts") or {}
-problems = []
-for name, variable in (("api", "FSS_API"), ("worker", "FSS_WORKER")):
-    given = os.environ[variable]
-    if given and artifacts.get(name) != given:
-        problems.append("{} {} (this release: {})".format(name, artifacts.get(name), given))
-print("; ".join(problems))
-')"
-  if [ -n "$RECORD_DIGEST_PROBLEM" ]; then
-    echo "FAIL: --release-record '$RELEASE_RECORD' names $RECORD_DIGEST_PROBLEM. Build the record for the digests being released (release.md 4.2)." >&2
-    exit 1
-  fi
+  release_record_base64 "$RELEASE_RECORD" "$API_DIGEST" "$WORKER_DIGEST" > /dev/null || exit 1
 fi
 
 ENVIRONMENT="$(release_environment_for_prefix "$PREFIX")"
@@ -305,10 +248,6 @@ done
 # A bootstrap is an empty database, which is the largest schema change there is. The
 # rolling path launches no migration, so a bootstrap without the flag would start two
 # services against a database they refuse.
-if [ "$BOOTSTRAP" = "true" ] && [ "$RECORD_ONLY" = "1" ]; then
-  echo "FAIL: the plan says bootstrap=true: before its first apply there is no database to store a record in. Put it with the deploy (--release-record)." >&2
-  exit 1
-fi
 if [ "$BOOTSTRAP" = "true" ] && [ "$SCHEMA_CHANGE" != "1" ]; then
   echo "FAIL: the plan says bootstrap=true, and a bootstrap creates an empty database. Run this with --schema-change." >&2
   exit 1
@@ -353,95 +292,6 @@ fi
 
 rehearsal_log "cluster $CLUSTER_ARN"
 rehearsal_log "services $WORKER_SERVICE (-> $WORKER_TARGET) and $API_SERVICE (-> $API_TARGET); bootstrap=$BOOTSTRAP"
-
-# ---------------------------------------------------------------------------
-# The put, on either path. On the operations task, as the runtime identity, like
-# `verify`: `release_records` is append-only for that role, which may insert and read and
-# nothing else. Idempotent, so a second put of the same file answers `existing`. The
-# answer is printed, because the reference and the two digests in it are what the admin
-# compares before attesting, and it must name this release's digests.
-#
-#   put_release_record <step> <image digest the operations task is held to>
-# ---------------------------------------------------------------------------
-RELEASE_RECORD_OUTCOME=none
-put_release_record() {
-  local step=$1 image_digest=$2 capture answer
-  capture="$REPORTS/$step.log"
-  rehearsal_log "$step: fss admin release-record put --json-base64 \"\$RELEASE_RECORD_BASE64\" --report /tmp/fss-release-record.json (the record in $RELEASE_RECORD)"
-  release_run_task \
-    --step "$step" \
-    --environment "$ENVIRONMENT" \
-    --prefix "$PREFIX" \
-    --account "$ACCOUNT" \
-    --region "$REGION" \
-    --cluster "$CLUSTER_ARN" \
-    --task-definition "$OPERATIONS_TASK_DEFINITION" \
-    --container operations \
-    --network-plan "$NETWORK_PLAN" \
-    --image-digest "$image_digest" \
-    --database-host "$DATABASE_HOST" \
-    --secret-arn "$RUNTIME_SECRET_ARN" \
-    --log-group "$LOG_GROUP" \
-    --log-stream-prefix operations \
-    --capture "$capture" \
-    -- admin release-record put --json-base64 "$RELEASE_RECORD_BASE64" --report /tmp/fss-release-record.json
-  if rehearsal_dry_run; then
-    rehearsal_plan "read the task's log stream, print the put's answer from $REPORTS/$step.json, and require created or existing for api ${API_DIGEST:-<the api digest>} and worker $WORKER_DIGEST"
-    RELEASE_RECORD_OUTCOME=planned
-    return 0
-  fi
-  release_captured_report "$capture" "$REPORTS/$step.json"
-  rehearsal_log "release record stored:"
-  cat "$REPORTS/$step.json"
-  answer="$(FSS_FILE="$REPORTS/$step.json" FSS_API="$API_DIGEST" FSS_WORKER="$WORKER_DIGEST" python3 -c '
-import json, os, sys
-env = os.environ
-answer = json.load(open(env["FSS_FILE"], encoding="utf-8")) or {}
-if answer.get("outcome") not in ("created", "existing"):
-    sys.exit("the put answered {} ({}): {}".format(answer.get("outcome"), answer.get("reason"), answer.get("detail")))
-different = [key for key, value in (("apiDigest", env["FSS_API"]), ("workerDigest", env["FSS_WORKER"])) if value and answer.get(key) != value]
-if different:
-    sys.exit("the stored record differs from this release in {}".format(", ".join(different)))
-print(answer["outcome"])
-')" || { echo "FAIL: $step: the operations task did not store the release record in $RELEASE_RECORD for this release (above)." >&2; exit 1; }
-  RELEASE_RECORD_OUTCOME=$answer
-}
-
-# ---------------------------------------------------------------------------
-# --record-only: the put before the apply, and nothing else.
-#
-# The operations definition the root outputs now is the running release's, so its image
-# is the running worker's, not --worker-digest. It is read from ECS and must be this
-# environment's worker repository by digest; the wrapper then holds the task to exactly
-# that image, with the database host and credential entry this release names.
-# ---------------------------------------------------------------------------
-if [ "$RECORD_ONLY" = "1" ]; then
-  OPERATIONS_DEFINITION="$(release_task_definition "$ENVIRONMENT" "$OPERATIONS_TASK_DEFINITION")"
-  if [ -n "$OPERATIONS_DEFINITION" ]; then
-    OPERATIONS_DIGEST="$(FSS_JSON="$OPERATIONS_DEFINITION" FSS_REPOSITORY="${ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com/${PREFIX}-worker" python3 -c '
-import json, os, re, sys
-definition = json.loads(os.environ["FSS_JSON"]) or {}
-image = next((str(entry.get("image", "")) for entry in definition.get("containerDefinitions") or [] if entry.get("name") == "operations"), "")
-match = re.fullmatch(re.escape(os.environ["FSS_REPOSITORY"]) + r"@(sha256:[0-9a-f]{64})", image)
-if not match:
-    sys.exit("the operations task definition runs {!r}, which is not {} by digest".format(image, os.environ["FSS_REPOSITORY"]))
-print(match.group(1))
-')" || { echo "FAIL: --record-only: the operations task definition is not the worker image by digest (above); nothing was put." >&2; exit 1; }
-  else
-    # A dry run with no fixture read no definition; the plan says which image it would be.
-    OPERATIONS_DIGEST='<read-from-the-operations-definition>'
-  fi
-  if [ "$OPERATIONS_DIGEST" = "$WORKER_DIGEST" ]; then
-    rehearsal_log "record only: the operations task definition already runs this release's worker image ($WORKER_DIGEST): the apply has run"
-  else
-    rehearsal_log "record only: the put runs the operations task definition as it is now ($OPERATIONS_DIGEST, the running release's worker image); the record names api $API_DIGEST and worker $WORKER_DIGEST"
-  fi
-  put_release_record release-record-put-before-rollout "$OPERATIONS_DIGEST"
-  rehearsal_write_report "release-deploy.txt" \
-    "prefix=$PREFIX environment=$ENVIRONMENT record_only=yes api_digest=$API_DIGEST worker_digest=$WORKER_DIGEST operations_digest=$OPERATIONS_DIGEST release_record=$RELEASE_RECORD_OUTCOME"
-  rehearsal_log "record only: release record $RELEASE_RECORD_OUTCOME; nothing was deployed. Next: the plan, the apply, then this script without --record-only."
-  exit 0
-fi
 
 scale() { # scale <service> <count>
   local service=$1 count=$2
@@ -611,8 +461,11 @@ fi
 # the deployment now running has its record. The apply has registered the new operations
 # definition, so the task is held to this release's worker digest.
 # ---------------------------------------------------------------------------
+RELEASE_RECORD_OUTCOME=none
 if [ -n "$RELEASE_RECORD" ]; then
-  put_release_record release-record-put "$WORKER_DIGEST"
+  rehearsal_log "the record again: fss admin release-record put --json-base64 \"\$RELEASE_RECORD_BASE64\" --report /tmp/fss-release-record.json (on the operations task, lib.sh release_record_put)"
+  release_record_put release-record-put "$RELEASE_RECORD" "$ENVIRONMENT" "$PREFIX" "$ACCOUNT" "$REGION" "$CLUSTER_ARN" \
+    "$OPERATIONS_TASK_DEFINITION" "$WORKER_DIGEST" "$NETWORK_PLAN" "$DATABASE_HOST" "$RUNTIME_SECRET_ARN" "$LOG_GROUP" || exit 1
 fi
 
 rehearsal_write_report "release-deploy.txt" \

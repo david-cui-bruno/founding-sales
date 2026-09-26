@@ -64,11 +64,8 @@
 #
 # Dry run: FSS_REHEARSAL_DRY_RUN=1 prints the plan and needs no credential.
 
-# shellcheck source=infra/scripts/release-common.sh
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/release-common.sh"
-# `release-common.sh` sources `rehearsal-common.sh` itself, for the production-name
-# refusal, the dry-run mode and the reports directory. Sourcing both here would run
-# `set -euo pipefail` and redeclare every constant twice for no gain.
+# shellcheck source=infra/scripts/lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 PREFIX=${1:-}
 shift 1 2>/dev/null || true

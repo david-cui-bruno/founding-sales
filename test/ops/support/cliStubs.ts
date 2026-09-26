@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 /**
  * Stand-ins for the three CLIs lane g74's scripts call — `gh`, `aws` and `docker` —
- * for the offline checks in `rehearsalCadence.check.ts` and `releaseManifest.check.ts`.
+ * for the offline checks in `images.check.ts` and `releaseManifest.check.ts`.
  *
  * Each is a small Python program, written to a temporary directory, that answers from a
  * JSON state file and appends every call to a log, one JSON line per call. The log is
@@ -113,7 +113,7 @@ if args[:2] == ["ecr", "describe-images"]:
     query = value("--query") or ""
     if kind == "imageDigest":
         if wanted in repository.get("digests", []):
-            # Lane g86: the two other questions release-promote.sh asks of a digest.
+            # Lane g86: the two other questions images.sh promote asks of a digest.
             if "imageManifestMediaType" in query:
                 print((repository.get("mediaTypes") or {}).get(wanted, "application/vnd.oci.image.manifest.v1+json"))
             elif "imageTags" in query:
