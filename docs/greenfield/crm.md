@@ -35,7 +35,7 @@ packages/domain/crm/events.ts                the outbox later lanes subscribe to
 packages/domain/crm/dto.ts                   Appendix F's two firm DTOs
 packages/contracts/src/crm.ts                the wire contract
 apps/api/src/routes/{firms,contacts,opportunities,pipeline,merges}.ts
-apps/api/src/routes/crmSupport.ts            what the five route modules share
+apps/api/src/routes/routeSupport.ts          what every route module shares
 ```
 
 ## The three rules a reader should carry
