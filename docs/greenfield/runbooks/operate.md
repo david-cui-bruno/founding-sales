@@ -1,0 +1,170 @@
+# Operating FSS
+
+The one page for running production. `docs/greenfield/release.md` holds the invariants underneath it, `docs/greenfield/infra-apply-runbook.md` how the infrastructure comes into existence, and `runbooks/restore.md` the restore.
+
+## The shape
+
+One workspace and one salesperson. Two processes run in AWS us-east-1, account `326255650484`, under the name prefix `fss-prod`: an API (`fss-prod-api`, two Fargate tasks) and a worker (`fss-prod-worker`, one), in the cluster `fss-prod-cluster`, behind a load balancer at `https://api.usecallie.com`. Their database is one Multi-AZ RDS PostgreSQL 16 instance, private — `publicly_accessible = false`, no NAT gateway, no bastion — so anything that must reach it runs as a one-off ECS task inside the VPC. The Mac app is an Electron build published to the CloudFront updates distribution, which every Mac reads at `releases/darwin-arm64/latest.json`. Sending is on.
+
+- **Four task definitions**, all from `infra/modules/cluster`: `fss-prod-api` and `fss-prod-worker`, which the services run and which carry `track_latest = true`, so Terraform reads CI's newest ACTIVE revision as its own; and the one-off `fss-prod-migration` and `fss-prod-operations`, which carry the worker image of the last apply.
+- **The schema is 19**, and every declared range is a strict `{N,N}` (`packages/domain/db/schemaRange.ts`), so no build straddles a schema change and a schema release is an outage on purpose. Migrations are forward-only and immutable once applied: the runner checksums each file's bytes.
+- **Four Terraform roots** under `infra/roots/`: `production`, `production-google` (the Gmail push objects; needs Google application-default credentials, which lapse about every 17 hours), `rehearsal`, `rehearsal-registry`. Production and rehearsal have distinct state keys, roles and namespaces, and `infra/scripts/lib.sh` refuses at the call any rehearsal command naming `fss-prod`.
+- **Ten scripts and no others** in `infra/scripts/`: `deploy.sh`, `images.sh`, `lib.sh`, `offline-gate.sh`, `policy.sh`, `preflight.sh`, `record.sh`, `rehearsal.sh`, `rollback.sh`, `stop.sh`. Each one's header is its usage.
+- Metrics go to `FSS/fss-prod`, never the bare `FSS`. Plan from main only, at the commit being released. `infra/scripts/deploy.sh current fss-prod` is the first command of any manual release: it prints `api_image=`, `worker_image=`, `api_schema_range=`, `worker_schema_range=` — the four a plan is made from — and then the two services' database hosts.
+
+## An app change
+
+Merge to main. *Greenfield images* publishes the two images and *Greenfield deploy* (`.github/workflows/greenfield-deploy.yml`) deploys them itself as `fss-prod-ci-deploy`: it reads the gate, promotes the digests, puts the release record **before** the rollout, rolls the worker and then the API, smokes, and reads the record back. Nothing to run.
+
+Check that the run is green, that its summary names both new revisions, and that the read-back job says `existing`. A read-back that fails after a passing smoke does not hold sending: the record went in before the rollout.
+
+**The `manual` answer.** The workflow reads every commit between production's own commit and the images commit, and answers `manual` — a green run, a notice, nothing touched — when one of them changed `infra/**` (`infra/scripts/` included), a migration, `packages/domain/db/schemaRange.ts`, `migrationRunner.ts`, `queryable.ts`, `scripts/productionSmoke.mjs`, `.github/**`, or a path its list does not know. It also answers `manual` when a running image carries no commit tag, and it keeps answering `manual` until production runs images built after the change.
+
+The hand path is steps 3 to 5 of the next section without `--schema-change` and without the stop: the record, `images.sh promote`, the apply, `deploy.sh release`, the smoke. Release the protected change that way, then the first app merge after it the same way; from the merge after that, CI takes over again.
+
+## A schema or infrastructure release
+
+Rehearse, then stop, apply, deploy, smoke — with the admin profile, from a checkout of main at the release commit.
+
+**1. Read-only first.** `infra/scripts/policy.sh check fss-prod-deploy fss-prod`, and for a migration `infra/scripts/preflight.sh infra/roots/production fss-prod <migration> --worker-digest "$worker_digest"`, which counts inside a rolled-back READ ONLY transaction while both services still run and exits 3 when the migration would refuse.
+
+**2. The rehearsal**, dispatch only, in its own `fss-rh-<suffix>` namespace:
+
+```bash
+gh workflow run greenfield-release.yml --ref main -f mode=schema -f stage=full \
+  -f api_image_digest="$api_digest" -f worker_image_digest="$worker_digest" \
+  -f desktop_commit_stamp="$RELEASE_COMMIT"
+```
+
+`stage` is `plan`, `create`, `deploy`, `full` or `teardown`; each of the first four runs everything before it, and one is worth running only once the one before it passed. About 45 minutes at `full`. An app-only or desktop-only release needs no rehearsal.
+
+**3. The record, before the plan.** The worker admits a send only while a stored record names its own digest, so a put after the rollout leaves every worker task that starts during it without one.
+
+```bash
+export GITHUB_REPOSITORY=david-cui-bruno/founding-sales
+infra/scripts/images.sh pin "$(git rev-parse HEAD)" /tmp/fss-ci/image-pin.json > /tmp/fss-ci/pin.env
+. /tmp/fss-ci/pin.env   # api_digest worker_digest images_run_id images_commit gate_run_id
+infra/scripts/record.sh from-ci "$gate_run_id" "$images_commit" "$api_digest" "$worker_digest" \
+  --images-run "$images_run_id" --out /tmp/fss-ci/release-record.json
+infra/scripts/record.sh put infra/roots/production fss-prod \
+  --api-digest "$api_digest" --worker-digest "$worker_digest" \
+  --release-record /tmp/fss-ci/release-record.json
+```
+
+**4. Promote, stop, apply, deploy.**
+
+```bash
+infra/scripts/images.sh promote /tmp/fss-ci/image-pin.json
+infra/scripts/stop.sh infra/roots/production fss-prod --environment production
+(cd infra/roots/production && terraform apply production.tfplan)
+infra/scripts/deploy.sh release infra/roots/production fss-prod --schema-change \
+  --api-digest "$api_digest" --worker-digest "$worker_digest" \
+  --release-record /tmp/fss-ci/release-record.json
+```
+
+The stop takes the API to zero first, then the worker, each waited on and read back at zero; the apply cannot restart them (`ignore_changes = [desired_count]`); `--schema-change` refuses unless both are still at zero, then migrates, ensures the database users, verifies, starts the worker and then the API, and reads the record back, which must answer `existing`. An infrastructure change that moves no migration takes neither the stop nor the flag. Read both commands first with `FSS_REHEARSAL_DRY_RUN=1`, which prints every call and makes none.
+
+**5. Smoke.**
+
+```bash
+AGE=$(aws cloudwatch get-metric-statistics --namespace FSS/fss-prod \
+  --metric-name CanaryCompletionAgeSeconds --statistics Maximum \
+  --start-time "$(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ)" \
+  --end-time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --period 300 \
+  --query 'reverse(sort_by(Datapoints,&Timestamp))[0].Maximum' --output text)
+NODE_OPTIONS="--experimental-transform-types --disable-warning=ExperimentalWarning" \
+  node scripts/productionSmoke.mjs --origin https://api.usecallie.com \
+    --canary-age-seconds "$AGE" --expect-sending enabled
+```
+
+**A migration is immutable once applied**: a mistake is repaired by a later migration, never by editing the file, and the database never rolls back. **During a restore** (`runbooks/restore.md`, between its steps (f) and (g)) every production plan and apply must carry `-var=active_database_host=<the copy's address>`; `deploy.sh current fss-prod` prints the host each service runs on.
+
+## A desktop release
+
+The API goes first: publish a build only after the release it belongs to is deployed. Dispatch it, then publish it yourself — that workflow reaches no cloud and holds no AWS credential.
+
+```bash
+gh workflow run greenfield-desktop.yml --ref main -f release=true \
+  -f desktop_commit_stamp="$RELEASE_COMMIT"
+```
+
+The run signs, notarizes and staples, and leaves the artifact `callie-macos-arm64-<version>` on itself, holding `Callie-<version>-arm64.zip` and `latest.json`. Publish with an operator session, **the zip first**: a manifest naming an object that is not there yet is refused by every Mac, which is safe but looks like an outage.
+
+```bash
+aws s3 cp "Callie-$VERSION-arm64.zip" \
+  "s3://$BUCKET/releases/darwin-arm64/$VERSION/Callie-$VERSION-arm64.zip"
+aws s3 cp latest.json "s3://$BUCKET/releases/darwin-arm64/latest.json" --cache-control 'max-age=300'
+aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION" \
+  --paths '/releases/darwin-arm64/latest.json'
+```
+
+`BUCKET` is `fss-prod-updates-326255650484`; the distribution is the one whose domain name `terraform output -raw updates_distribution_domain_name` prints.
+
+## Sending
+
+Two halves, and both must hold. The deployment half is `FSS_SENDING_ENABLED=true`, from the committed `sending_enabled = true` in `infra/roots/production/main.tf`: changing it is a pull request, a read plan and an apply. The owner's half is an attestation written as an authenticated admin, naming a stored release record.
+
+Production is attested under the **process form**, `ci-gate:main`, which admits any stored record with `source: "ci-gate"` that names the running digest. Only `record.sh from-ci` writes one, and only from a green *Greenfield gate* run of a push to main at the record's commit — so every CI deploy keeps sending on and nobody attests again. To go back to one release at a time, attest naming that record's `releaseGateReference`, which `record.sh put` prints back as `reference`.
+
+**The send window** is 08:00 to 17:00, Monday to Friday, in the firm's own zone, minus the workspace holiday calendar, with 08:00 to 12:00 the preferred band. Outside it a send is refused `outside_email_window` and waits. The release half refuses with `release_record_unknown` (no `ci-gate` record names this worker: the hold after a deploy whose record was not put), `release_record_not_passing`, `release_record_digest_mismatch`, or `release_record_identity_unknown` (the process cannot read its own digest — fail-closed). Turning sending off is always accepted and takes effect at once; it does not cancel a fence already dispatching.
+
+One e-mail a day says whether anything is wrong: the daily digest, below.
+
+## Recovery
+
+**Data wrong rather than code:** `runbooks/restore.md`, end to end. It is signed off and hand-run, and there is no faster version.
+
+**Code wrong:** roll the images back, and **only the images**.
+
+```bash
+git -C ~/fss-prod checkout --detach <the previous release's commit>   # then terraform init there
+infra/scripts/rollback.sh ~/fss-prod/infra/roots/production fss-prod \
+  --api-digest "$PREVIOUS_API_DIGEST" --worker-digest "$PREVIOUS_WORKER_DIGEST"
+# plans, prints the plan, stops. Add --apply to plan again, apply, deploy and smoke.
+```
+
+It refuses a checkout older than main `beed2d90`, and one that does not hold that commit: older Terraform declares the deleted restore drill, and a plan of it would create it again. **Never run Terraform across that boundary** — beyond it only the images move, by hand from main with `-var=api_image=…@<digest>` and `-var=worker_image=…@<digest>`, and the infrastructure is repaired forward. It refuses a rollback across a schema change too: after a migration the previous images refuse the schema at startup, so the paths are forward repair or a restore.
+
+## Rehearsal clean-up
+
+Every stage tears itself down and runs the guard on `always()`. When a run left something standing, dispatch the teardown stage — which needs the image inputs even though it reads none of them, because `workflow_dispatch` cannot require an input for one stage only:
+
+```bash
+gh workflow run greenfield-release.yml --ref main -f mode=schema \
+  -f stage=teardown -f run_suffix=<the prefix to destroy> \
+  -f api_image_digest="$api_digest" -f worker_image_digest="$worker_digest" \
+  -f desktop_commit_stamp="$RELEASE_COMMIT"
+```
+
+`run_suffix` is required for it; every other stage falls back to a fresh timestamp, which would report `destroyed=nothing_created` and leave the orphan standing.
+
+`infra/scripts/rehearsal.sh guard <prefix>` proves four facts: the run's Terraform state is empty, or the root was never initialised; the session is an assumed-role session of `fss-rh-deploy`, whose policy cannot address `fss-prod*`; nothing in the cloud still carries the run prefix; and neither lock record of the state key is left. The last two are `rehearsal.sh leftovers <prefix>`, which anyone can run by hand.
+
+**A red guard means read by hand whatever it names, then dispatch `stage=teardown` again.** It fails closed on any answer it cannot read — a reading that cannot be made is not an absence. It reads the account, and not only the state, because the cancelled run of 26 September 2026 left an RDS instance, a load balancer and a CloudFront distribution that an empty state said nothing about. A cancelled `create` also leaves its state lock held and a teardown cannot take it: `terraform force-unlock <the lock id the error printed>` against that run's state key first, after reading the lock's `Who` and `Created` — a lock held by a running run is a run you must let finish.
+
+## Secrets
+
+Seven Secrets Manager entries, created empty by Terraform and listed in `infra/modules/secrets/main.tf`: `google-oidc-client`, `google-gmail-oauth-client`, `session-signing-key`, `device-credential-pepper`, `llm-classifier-api-key`, `migration-database` and `app-runtime-database`, each under `fss-prod/`. RDS manages an eighth, the master user secret, which nothing in the cluster may read.
+
+Terraform never writes, reads or plans a value. A value goes in from stdin, so it reaches neither shell history nor the process table, and then the tasks are made to pick it up:
+
+```bash
+aws secretsmanager put-secret-value --secret-id fss-prod/<entry> --secret-string file:///dev/stdin
+# paste, then Ctrl-D
+aws ecs update-service --cluster fss-prod-cluster --service fss-prod-api --force-new-deployment
+```
+
+A task whose `secrets` block names an empty entry does not start at all, so entries are filled before a deploy, never after. **No secret value belongs in a file, a `tfvars`, a plan, a directive or a message** — only the entry's name does. The OAuth client secrets are pasted this way; Google access for `production-google` is application-default credentials in a browser and nothing else.
+
+## Alarms
+
+Every threshold is one CloudWatch alarm over a metric the applications publish to `FSS/fss-prod`, and they roll up into exactly two composites: `fss-prod-critical` over every critical condition and `fss-prod-warning` over every warning. `ALARM` on a composite means at least one of its members is in `ALARM` now; `OK` means none is. Nothing e-mails on a transition.
+
+The one e-mail is the **daily alarm digest** at **07:00 America/New_York** (evaluated in that zone, so it does not move at the daylight-saving changes), subject `Callie daily alarm digest — <date>`, to the addresses in `alert_emails`. It lists every `fss-prod-` alarm that is not `OK` now, `ALARM` first and then `INSUFFICIENT_DATA`, then every state change of the last 24 hours. A quiet day is one line: `All N alarms OK.` To have it now: `aws lambda invoke --function-name fss-prod-alarm-digest /dev/null`. To read the state without waiting:
+
+```bash
+aws cloudwatch describe-alarms --state-value ALARM --alarm-name-prefix fss-prod- \
+  --alarm-types MetricAlarm CompositeAlarm --query '[MetricAlarms, CompositeAlarms][].AlarmName'
+```
+
+One page per alarm sits beside this one, named after the alarm key; `runbooks/README.md` says what they share. Read `## What must stay held` first: for most of these the blockage is the safety property, and clearing it is how a duplicate email or a prohibited call happens.

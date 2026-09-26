@@ -43,11 +43,15 @@ function alarmKeysInTerraform(): Set<string> {
   return keys;
 }
 
+/** Pages in the directory that are not one alarm's runbook. */
+const NOT_AN_ALARM_PAGE = new Set(['README.md', 'restore.md', 'operate.md']);
+
 function runbookFiles(): Set<string> {
   return new Set(
     readdirSync(new URL('../../../../docs/greenfield/runbooks/', import.meta.url).pathname)
-      // `restore.md` is a procedure (the point-in-time restore), not an alarm's runbook.
-      .filter(name => name.endsWith('.md') && name !== 'README.md' && name !== 'restore.md')
+      // `restore.md` (the point-in-time restore) and `operate.md` (the operating
+      // runbook) are procedures, not alarms' runbooks.
+      .filter(name => name.endsWith('.md') && !NOT_AN_ALARM_PAGE.has(name))
       .map(name => name.slice(0, -'.md'.length)),
   );
 }
