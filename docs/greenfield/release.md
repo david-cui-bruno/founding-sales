@@ -37,7 +37,7 @@ Done once, before 24 September 2026, and archived: sections 1.1 to 1.7 are in [`
 
 ## 2. The images
 
-Nothing is built on a Mac, and nothing is ever rebuilt for production.
+Nothing is built on a Mac, and nothing is ever rebuilt for production. The order the first release needed, and why the desktop build came last — section **2.0**, which other documents still cite — is in [`docs/archive/release-first.md`](../archive/release-first.md).
 
 ### 2.1 Where a digest comes from, and what makes it trustworthy
 
