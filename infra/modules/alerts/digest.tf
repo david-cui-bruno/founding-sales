@@ -57,7 +57,7 @@ locals {
         Sid      = "EncryptForTheAlertTopic"
         Effect   = "Allow"
         Action   = ["kms:Decrypt", "kms:GenerateDataKey"]
-        Resource = local.topic_key_arn
+        Resource = var.kms_key_arn
       },
       {
         Sid      = "WriteItsOwnLogGroup"
@@ -155,7 +155,7 @@ resource "aws_lambda_function" "digest" {
   # NoDeploymentKmsDataAccessOutsideThisNamespaceOrTerraformState deny covers it. The
   # topic's key is this namespace's, which the deployment role may use and the
   # function's own role already decrypts with. The variables hold no secret.
-  kms_key_arn = local.topic_key_arn
+  kms_key_arn = var.kms_key_arn
 
   logging_config {
     log_format = "Text"

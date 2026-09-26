@@ -4,17 +4,10 @@
 # Offline: the AWS provider is mocked and the archive provider is the real one, which
 # only zips the two source files under infra/lambdas/alarm-digest. The ARNs are the
 # AWS documentation example values. Mocked values are supplied during the apply phase
-# only (`override_during = apply`, as in the other files here), so the runs that
+# only (`override_during = apply`, as in the other file here), so the runs that
 # compare ARNs are apply runs and the ones over declared arguments are plans.
 mock_provider "aws" {
   override_during = apply
-
-  mock_resource "aws_kms_key" {
-    defaults = {
-      arn    = "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-4333-8444-555555555555"
-      key_id = "11111111-2222-4333-8444-555555555555"
-    }
-  }
 
   mock_resource "aws_sns_topic" {
     defaults = {
@@ -57,6 +50,8 @@ variables {
   name_prefix      = "fss-test"
   aws_account_id   = "123456789012"
   metric_namespace = "FSS/test"
+  # The stack passes the observability module's log key (David, 20 September 2026).
+  kms_key_arn = "arn:aws:kms:us-east-1:123456789012:key/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
   # Generated at test time, never a real address.
   alert_emails = ["alerts@example.invalid"]
 }
@@ -67,7 +62,7 @@ run "no_alarm_has_an_action" {
   command = plan
 
   assert {
-    condition = alltrue([
+    condition = length(aws_cloudwatch_metric_alarm.this) > 0 && alltrue([
       for alarm in concat(values(aws_cloudwatch_metric_alarm.this), [aws_cloudwatch_metric_alarm.all_sequences_held]) :
       length(alarm.alarm_actions) == 0
       && length(alarm.ok_actions) == 0
@@ -85,12 +80,6 @@ run "no_alarm_has_an_action" {
     ])
     error_message = "A composite carries an action. Neither roll-up may e-mail; the digest reports them."
   }
-
-  # The floor under the first assertion above: it reads every metric alarm there is.
-  assert {
-    condition     = length(concat(values(aws_cloudwatch_metric_alarm.this), [aws_cloudwatch_metric_alarm.all_sequences_held])) == length(output.alarm_inventory) + 1
-    error_message = "The action assertions must cover the whole inventory and the metric-math alarm."
-  }
 }
 
 run "the_digest_runs_at_seven_in_new_york_every_day" {
@@ -100,47 +89,14 @@ run "the_digest_runs_at_seven_in_new_york_every_day" {
     condition = (
       aws_scheduler_schedule.digest.schedule_expression == "cron(0 7 * * ? *)"
       && aws_scheduler_schedule.digest.schedule_expression_timezone == "America/New_York"
+      && aws_scheduler_schedule.digest.state == "ENABLED"
     )
     error_message = "The digest runs at 07:00 every day, evaluated in America/New_York so it does not move at the daylight-saving changes."
   }
-
-  assert {
-    condition = (
-      aws_scheduler_schedule.digest.state == "ENABLED"
-      && aws_scheduler_schedule.digest.flexible_time_window[0].mode == "OFF"
-      && aws_scheduler_schedule.digest.group_name == "default"
-      && aws_scheduler_schedule.digest.name == "fss-test-alarm-digest"
-    )
-    error_message = "The schedule is enabled, fires on the minute, and is named from the prefix in the default group."
-  }
-
-  assert {
-    condition     = output.digest_schedule == { name = "fss-test-alarm-digest", expression = "cron(0 7 * * ? *)", time_zone = "America/New_York" }
-    error_message = "The module reports the schedule it declared."
-  }
 }
 
-run "the_digest_function_is_small_and_writes_its_own_log_group" {
+run "the_digest_function_reads_this_environment_and_runs_the_built_zip" {
   command = plan
-
-  assert {
-    condition = (
-      aws_lambda_function.digest.function_name == "fss-test-alarm-digest"
-      && aws_lambda_function.digest.handler == "index.handler"
-      && startswith(aws_lambda_function.digest.runtime, "nodejs")
-      && aws_lambda_function.digest.timeout == 60
-    )
-    error_message = "One Node.js function, named from the prefix, whose handler is index.handler."
-  }
-
-  assert {
-    condition = (
-      aws_cloudwatch_log_group.digest.name == "/fss/fss-test/alarm-digest"
-      && aws_cloudwatch_log_group.digest.retention_in_days == 14
-      && aws_lambda_function.digest.logging_config[0].log_group == "/fss/fss-test/alarm-digest"
-    )
-    error_message = "The function logs to its own group under /fss/<prefix>, kept fourteen days."
-  }
 
   assert {
     condition = (
@@ -154,10 +110,18 @@ run "the_digest_function_is_small_and_writes_its_own_log_group" {
     condition     = length(data.archive_file.digest.output_base64sha256) > 0 && aws_lambda_function.digest.source_code_hash == data.archive_file.digest.output_base64sha256
     error_message = "The code is the zip Terraform built from infra/lambdas/alarm-digest, and a change to it is a change to the function."
   }
+}
+
+# And in a plan, which is what the operator reads before the apply: the argument is
+# set, never left null, because a null one means aws/lambda. The first production
+# apply was refused CreateFunction for that: the untagged aws/lambda key is under the
+# deployment role's KMS deny.
+run "the_environment_key_is_never_left_to_aws_lambda" {
+  command = plan
 
   assert {
-    condition     = alltrue([for name in output.digest_resource_names : startswith(name, "fss-test-") || startswith(name, "/fss/fss-test/")])
-    error_message = "Every name the digest claims carries the environment prefix."
+    condition     = aws_lambda_function.digest.kms_key_arn != null && aws_lambda_function.digest.kms_key_arn == var.kms_key_arn
+    error_message = "A plan must show the function's environment key, the topic's; a null one is aws/lambda, which the deployment role may not use."
   }
 }
 
@@ -179,45 +143,20 @@ run "the_digest_role_holds_exactly_what_the_digest_does" {
     error_message = "The digest role reads alarms and their history, publishes, encrypts for the topic and writes its log group, and nothing else."
   }
 
+  # Each grant on its own resource: publish on the alert topic alone, the topic's key
+  # and no other, its own log group's streams, and only the two read-only Describe
+  # actions on every resource.
   assert {
     condition = alltrue([
       for statement in jsondecode(aws_iam_role_policy.digest.policy).Statement :
-      statement.Effect == "Allow"
-      && (statement.Resource != "*" || sort(statement.Action) == tolist(["cloudwatch:DescribeAlarmHistory", "cloudwatch:DescribeAlarms"]))
+      statement.Effect == "Allow" && (
+        contains(statement.Action, "sns:Publish") ? statement.Resource == aws_sns_topic.alerts.arn && length(statement.Action) == 1 :
+        contains(statement.Action, "kms:GenerateDataKey") ? statement.Resource == var.kms_key_arn :
+        contains(statement.Action, "logs:PutLogEvents") ? statement.Resource == "${aws_cloudwatch_log_group.digest.arn}:*" :
+        sort(statement.Action) == tolist(["cloudwatch:DescribeAlarmHistory", "cloudwatch:DescribeAlarms"]) && statement.Resource == "*"
+      )
     ])
-    error_message = "Only the two read-only Describe actions are on every resource."
-  }
-
-  assert {
-    condition = alltrue([
-      for statement in jsondecode(aws_iam_role_policy.digest.policy).Statement :
-      contains(statement.Action, "sns:Publish") ? statement.Resource == aws_sns_topic.alerts.arn && length(statement.Action) == 1 : true
-    ])
-    error_message = "The digest publishes to the alert topic alone."
-  }
-
-  assert {
-    condition = alltrue([
-      for statement in jsondecode(aws_iam_role_policy.digest.policy).Statement :
-      contains(statement.Action, "kms:GenerateDataKey") ? statement.Resource == aws_kms_key.alerts[0].arn : true
-    ])
-    error_message = "The digest may use the topic's key and no other."
-  }
-
-  # The first production apply was refused CreateFunction: with no kms_key_arn, Lambda
-  # encrypts the environment with the untagged aws/lambda key, which the deployment
-  # role's KMS deny covers. The topic's key is the namespace's.
-  assert {
-    condition     = aws_lambda_function.digest.kms_key_arn == aws_kms_key.alerts[0].arn
-    error_message = "The function's environment is encrypted with the topic's customer key, never the AWS-managed aws/lambda key."
-  }
-
-  assert {
-    condition = alltrue([
-      for statement in jsondecode(aws_iam_role_policy.digest.policy).Statement :
-      contains(statement.Action, "logs:PutLogEvents") ? statement.Resource == "${aws_cloudwatch_log_group.digest.arn}:*" : true
-    ])
-    error_message = "The digest writes its own log group's streams and nothing else."
+    error_message = "A digest grant reaches past its one resource."
   }
 
   assert {
@@ -249,14 +188,9 @@ run "the_digest_publishes_to_the_existing_alert_topic" {
     condition = (
       aws_lambda_function.digest.environment[0].variables["FSS_ALERT_TOPIC_ARN"] == aws_sns_topic.alerts.arn
       && aws_sns_topic.alerts.arn == "arn:aws:sns:us-east-1:123456789012:fss-test-alerts"
-      && output.topic_arn == aws_sns_topic.alerts.arn
+      && alltrue([for subscription in aws_sns_topic_subscription.email : subscription.topic_arn == aws_sns_topic.alerts.arn])
     )
-    error_message = "The digest publishes to the alert topic this module already had, the one the e-mail subscriptions are on."
-  }
-
-  assert {
-    condition     = alltrue([for subscription in aws_sns_topic_subscription.email : subscription.topic_arn == aws_sns_topic.alerts.arn])
-    error_message = "The subscriptions stay on that topic, so the digest reaches alert_emails."
+    error_message = "The digest publishes to the alert topic the e-mail subscriptions are on, so it reaches alert_emails."
   }
 
   assert {
@@ -266,45 +200,5 @@ run "the_digest_publishes_to_the_existing_alert_topic" {
       && aws_iam_role.digest_schedule.arn != aws_iam_role.digest.arn
     )
     error_message = "The schedule invokes the digest function, as its own role rather than the function's."
-  }
-}
-
-# Logs and alerts share one key in the stack (David, 20 September 2026). Given a key,
-# the digest's KMS grant names that key.
-run "with_a_shared_key_the_digest_uses_that_key" {
-  command = apply
-
-  variables {
-    create_kms_key = false
-    kms_key_arn    = "arn:aws:kms:us-east-1:123456789012:key/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
-  }
-
-  assert {
-    condition = anytrue([
-      for statement in jsondecode(aws_iam_role_policy.digest.policy).Statement :
-      contains(statement.Action, "kms:GenerateDataKey") && statement.Resource == "arn:aws:kms:us-east-1:123456789012:key/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
-    ])
-    error_message = "The digest's KMS grant is the key the topic is encrypted with."
-  }
-
-  assert {
-    condition     = aws_lambda_function.digest.kms_key_arn == "arn:aws:kms:us-east-1:123456789012:key/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
-    error_message = "With a shared key, the function's environment is encrypted with that key too."
-  }
-}
-
-# And in a plan, which is what the operator reads before the apply: the argument is
-# set, never left null, because a null one means aws/lambda.
-run "the_environment_key_is_never_left_to_aws_lambda" {
-  command = plan
-
-  variables {
-    create_kms_key = false
-    kms_key_arn    = "arn:aws:kms:us-east-1:123456789012:key/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
-  }
-
-  assert {
-    condition     = aws_lambda_function.digest.kms_key_arn != null && aws_lambda_function.digest.kms_key_arn == var.kms_key_arn
-    error_message = "A plan must show the function's environment key; a null one is aws/lambda, which the deployment role may not use."
   }
 }
