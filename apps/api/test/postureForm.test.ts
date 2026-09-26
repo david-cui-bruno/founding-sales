@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  allowCallingStatesResultSchema,
   postureReferenceResponseSchema,
   statePostureListResponseSchema,
   statePostureViewSchema,
@@ -122,6 +123,29 @@ describe('the postures form’s reads and commands', () => {
     const again = await record(adminToken, 'RI', '2026-10-01T04:00:00.000Z');
     expect(again.status).toBe(200);
     expect(statePostureViewSchema.parse(again.body['result']).revision).toBe(2);
+  });
+
+  it('puts several states on the "OK to call" list with one confirmation, exactly as the contract says (wave 2)', async () => {
+    const allow = async (token: string, body: Record<string, unknown>) =>
+      await call('POST', '/postures/allow', token, { commandId: randomUUID(), clientVersion: CURRENT_CLIENT_VERSION, ...body });
+
+    const answer = await allow(adminToken, { states: ['CT', 'nh'], confirmed: true });
+    expect(answer.status).toBe(200);
+    expect(wireDrift(allowCallingStatesResultSchema, answer.body['result'])).toEqual([]);
+    const result = allowCallingStatesResultSchema.parse(answer.body['result']);
+    expect([result.added, result.alreadyAllowed]).toEqual([['CT', 'NH'], []]);
+    expect(result.postures.map(posture => [posture.state, posture.effectiveTo])).toEqual([
+      ['CT', null],
+      ['NH', null],
+    ]);
+
+    const again = allowCallingStatesResultSchema.parse((await allow(adminToken, { states: ['NH'], confirmed: true })).body['result']);
+    expect(again.alreadyAllowed).toEqual(['NH']);
+
+    // The confirmation is required, and so is being an admin.
+    expect((await allow(adminToken, { states: ['ME'] })).status).toBe(400);
+    const refused = await allow(salespersonToken, { states: ['ME'], confirmed: true });
+    expect([refused.status, refused.body['reason']]).toEqual([409, 'admin_only']);
   });
 
   it('keeps recording to admins', async () => {

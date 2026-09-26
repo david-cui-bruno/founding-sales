@@ -185,12 +185,13 @@ describe('scenario 17: no replay ever yields a second allow', () => {
     };
     expect(await authorizeDial(context, input)).toMatchObject({ allowed: true });
 
-    // (a) posture expiry: review date in the past.
+    // (a) a review date in the past no longer expires the posture (wave 2, S4.2): an old
+    // row is read, and the dial is still allowed.
     await database.session.query(
       "UPDATE state_postures SET review_at = TIMESTAMPTZ '2026-02-01 00:00:00+00' WHERE workspace_id = $1",
       [seeded.beta.workspaceId],
     );
-    expect(await authorizeDial(context, input)).toEqual({ allowed: false, reason: 'posture_overdue' });
+    expect(await authorizeDial(context, input)).toMatchObject({ allowed: true });
     await database.session.query(
       "UPDATE state_postures SET review_at = TIMESTAMPTZ '2027-01-01 00:00:00+00' WHERE workspace_id = $1",
       [seeded.beta.workspaceId],

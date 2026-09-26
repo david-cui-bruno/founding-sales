@@ -30,7 +30,8 @@ import { acceptPolicy, refusePolicy, type PolicyResult } from './types.ts';
  *
  * **Zero and two rows both fail.** The exclusion constraint in migration 0006 makes
  * two applicable rows impossible to write; `selectApplicablePosture` in the domain
- * makes zero and two both a refusal to read. Appendix G 25 asks for exactly that
+ * makes zero and two both a refusal to read. A posture has no yearly expiry since wave
+ * 2 (S4.2): the list is the states that are OK to call, until one is revoked. Appendix G 25 asks for exactly that
  * asymmetry to be visible from the outside: "policy versions with zero, one, and two
  * applicable rows fail, allow, and fail respectively".
  *
@@ -141,7 +142,10 @@ export interface RecordStatePostureInput {
   readonly state: string;
   readonly effectiveFrom: string;
   readonly effectiveTo?: string | undefined;
-  /** Defaults to one calendar year after `effectiveFrom`, from `postureReviewAt`. */
+  /**
+   * Stored, never enforced (wave 2, S4.2). Defaults to one calendar year after
+   * `effectiveFrom`, from `postureReviewAt`, which satisfies schema 18's CHECK.
+   */
   readonly reviewAt?: string | undefined;
   readonly confirmedStatements: readonly string[];
   readonly note?: string | undefined;
@@ -179,16 +183,7 @@ export async function recordStatePosture(
   if (!Number.isFinite(effectiveFrom)) return refusePolicy('invalid_input');
   const reviewAt = input.reviewAt ?? postureReviewAt(input.effectiveFrom);
 
-  const rule = STATE_POSTURE_RULES[state as keyof typeof STATE_POSTURE_RULES] as
-    | (typeof STATE_POSTURE_RULES)[keyof typeof STATE_POSTURE_RULES]
-    | undefined;
-  const sources =
-    rule === undefined
-      ? []
-      : [
-          { title: rule.citation.title, url: rule.citation.url },
-          ...rule.furtherCitations.map(citation => ({ title: citation.title, url: citation.url })),
-        ];
+  const sources = postureSources(state);
 
   try {
     const { rows } = await context.db.query<PostureDbRow>(
@@ -226,6 +221,105 @@ export async function recordStatePosture(
     }
     throw error;
   }
+}
+
+/** The citations a posture for this state records: the domain's, never the caller's. */
+function postureSources(state: string): readonly { readonly title: string; readonly url: string }[] {
+  const rule = STATE_POSTURE_RULES[state as keyof typeof STATE_POSTURE_RULES] as
+    | (typeof STATE_POSTURE_RULES)[keyof typeof STATE_POSTURE_RULES]
+    | undefined;
+  return rule === undefined
+    ? []
+    : [
+        { title: rule.citation.title, url: rule.citation.url },
+        ...rule.furtherCitations.map(citation => ({ title: citation.title, url: citation.url })),
+      ];
+}
+
+export interface AllowedStates {
+  /** The posture now in force for each state asked about, in the order asked. */
+  readonly postures: readonly StatePostureRow[];
+  /** The states this command put on the list. */
+  readonly added: readonly string[];
+  /** The states that were already on it and were left exactly as they were. */
+  readonly alreadyAllowed: readonly string[];
+}
+
+/**
+ * Put several states on the "OK to call" list at once (wave 2, S4.2 and D5's API half).
+ *
+ * One confirmation covers every state named: the command carries the founder's
+ * statement, so each new row records all of `POSTURE_STATEMENTS` as confirmed, the
+ * current `POSTURE_RULES_REVISION` and the domain's own citations for its state —
+ * exactly what `recordStatePosture` records for one state with every box ticked. A
+ * state already in force is left alone and reported, so pressing it twice is harmless.
+ * The row takes effect now and has no end; revoking it is `revokeStatePosture`. Its
+ * `review_at` is `postureReviewAt`'s, stored for schema 18's CHECK and never enforced.
+ *
+ * `posture_overlapping` is still possible, for a state with a posture recorded to begin
+ * in the future: the insert overlaps it and the database refuses. The whole command is
+ * refused then, and the route's savepoint takes back any state it had added.
+ */
+export async function allowCallingStates(
+  context: RepositoryContext,
+  input: { readonly states: readonly string[]; readonly note?: string | undefined },
+): Promise<PolicyResult<AllowedStates>> {
+  if (!isAdminScope(context.scope)) return refusePolicy('admin_only');
+  const actor = context.scope.actor;
+  if (actor.kind !== 'user') return refusePolicy('admin_only');
+
+  const states = [...new Set(input.states.map(state => state.trim().toUpperCase()))];
+  if (states.length === 0 || states.some(state => !isUsStateCode(state))) return refusePolicy('invalid_input');
+  const note = input.note?.trim() ?? '';
+  if (note.length > 1000) return refusePolicy('invalid_input');
+
+  const { rows: clock } = await context.db.query<{ now: Date }>('SELECT now() AS now');
+  const at = (clock[0]?.now ?? new Date()).toISOString();
+  const statements = [...POSTURE_STATEMENT_KEYS].sort();
+
+  const postures: StatePostureRow[] = [];
+  const added: string[] = [];
+  const alreadyAllowed: string[] = [];
+  for (const state of states) {
+    const current = await applicablePosture(context, state, at);
+    if ('posture' in current) {
+      postures.push(current.posture);
+      alreadyAllowed.push(state);
+      continue;
+    }
+    try {
+      const { rows } = await context.db.query<PostureDbRow>(
+        `INSERT INTO state_postures
+           (workspace_id, state, revision, effective_from, effective_to, review_at, rules_revision,
+            confirmed_statements, sources, confirmed_by_user_id, note)
+         VALUES ($1, $2,
+                 (SELECT coalesce(max(revision), 0) + 1 FROM state_postures WHERE workspace_id = $1 AND state = $2),
+                 $3::timestamptz, NULL, $4::timestamptz, $5, $6::text[], $7::jsonb, $8, $9)
+         RETURNING ${POSTURE_COLUMNS}`,
+        [
+          context.scope.workspaceId,
+          state,
+          at,
+          postureReviewAt(at),
+          POSTURE_RULES_REVISION,
+          statements,
+          JSON.stringify(postureSources(state)),
+          actor.userId,
+          note.length === 0 ? null : note,
+        ],
+      );
+      const row = rows[0];
+      if (row === undefined) return refusePolicy('invalid_input');
+      postures.push(toPosture(row));
+      added.push(state);
+    } catch (error) {
+      if (typeof error === 'object' && error !== null && (error as { code?: string }).code === OVERLAP_SQLSTATE) {
+        return refusePolicy('posture_overlapping');
+      }
+      throw error;
+    }
+  }
+  return acceptPolicy({ postures, added, alreadyAllowed });
 }
 
 /** Revoke a posture. A revocation is a column, so the row and its history stay readable. */

@@ -286,16 +286,17 @@ describe('state posture', () => {
       kind: 'refused',
       reason: 'posture_overlapping',
     });
-    expect(
-      selectApplicablePosture([{ ...base, reviewAt: '2026-09-01T00:00:00.000Z' }], 'RI', now),
-    ).toEqual({ kind: 'refused', reason: 'posture_overdue' });
+    // No yearly expiry since wave 2 (S4.2): a stored review date that has passed is read
+    // and ignored, so an old posture row still applies.
+    const pastReview = { ...base, reviewAt: '2026-09-01T00:00:00.000Z' };
+    expect(selectApplicablePosture([pastReview], 'RI', now)).toEqual({ kind: 'applies', posture: pastReview });
     expect(selectApplicablePosture([{ ...base, revokedAt: now }], 'RI', now)).toEqual({
       kind: 'refused',
       reason: 'posture_missing',
     });
   });
 
-  it('puts review one calendar year after confirmation', () => {
+  it('stores a review date one calendar year after confirmation, for the schema 18 CHECK', () => {
     expect(postureReviewAt('2026-09-19T12:00:00.000Z')).toBe('2027-09-19T12:00:00.000Z');
   });
 });

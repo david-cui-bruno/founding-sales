@@ -113,6 +113,7 @@ describe('what the API mounts', () => {
       '/pipeline/stages/reorder',
       '/pipeline/stages/retire',
       '/postures',
+      '/postures/allow',
       '/postures/calling-window',
       '/postures/record',
       '/postures/reference',

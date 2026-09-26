@@ -582,6 +582,12 @@ export const supersedeSuppressionCommandSchema = z.strictObject({
   reason: adminSupersessionReasonSchema,
 });
 
+/**
+ * Record one state's posture with its statements ticked one by one.
+ * @deprecated (remove after desktop 1.0.12) — `allowCallingStatesCommandSchema` puts
+ * several states on the "OK to call" list with one confirmation (wave 2, S4.2 and D5).
+ * Still accepted for desktops up to 1.0.11; `reviewAt` is stored and never enforced.
+ */
 export const recordStatePostureCommandSchema = z.strictObject({
   ...commandEnvelope,
   state: z.string().regex(/^[A-Z]{2}$/u),
@@ -591,6 +597,29 @@ export const recordStatePostureCommandSchema = z.strictObject({
   confirmedStatements: z.array(z.string().min(1).max(80)).min(1),
   note: z.string().trim().min(1).max(1000).optional(),
 });
+
+/**
+ * `POST /postures/allow` (wave 2, S4.2 and D5's API half): put several states on the
+ * "OK to call" list at once. `confirmed` is a literal `true`, the one confirmation the
+ * founder gives for every state named, so no client records a posture without sending
+ * the statement; the server records every statement of `GET /postures/reference` as
+ * confirmed, the domain's citations and database time. A state already on the list is
+ * left alone. There is no review date and no expiry; revoking is `/postures/revoke`.
+ */
+export const allowCallingStatesCommandSchema = z.strictObject({
+  ...commandEnvelope,
+  states: z.array(z.string().regex(/^[A-Za-z]{2}$/u)).min(1).max(60),
+  confirmed: z.literal(true),
+  note: z.string().trim().max(1000).optional(),
+});
+
+/** What `POST /postures/allow` answers inside the command envelope. */
+export const allowCallingStatesResultSchema = z.object({
+  postures: z.array(statePostureViewSchema),
+  added: z.array(z.string().regex(/^[A-Z]{2}$/u)),
+  alreadyAllowed: z.array(z.string().regex(/^[A-Z]{2}$/u)),
+});
+export type AllowCallingStatesResult = z.infer<typeof allowCallingStatesResultSchema>;
 
 export const revokeStatePostureCommandSchema = z.strictObject({
   ...commandEnvelope,

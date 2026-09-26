@@ -34,10 +34,12 @@ export {
 } from './holds.ts';
 
 export {
+  allowCallingStates,
   applicablePosture,
   listStatePostures,
   recordStatePosture,
   revokeStatePosture,
+  type AllowedStates,
   type ApplicablePosture,
   type RecordStatePostureInput,
   type StatePostureRow,

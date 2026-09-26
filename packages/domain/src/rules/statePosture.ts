@@ -338,12 +338,16 @@ export interface StatePostureRecord {
 
 export type PostureDecision =
   | { readonly kind: 'applies'; readonly posture: StatePostureRecord }
-  | { readonly kind: 'refused'; readonly reason: 'posture_missing' | 'posture_overlapping' | 'posture_overdue' };
+  | { readonly kind: 'refused'; readonly reason: 'posture_missing' | 'posture_overlapping' };
 
 /**
- * Exactly one applicable posture whose effective range contains database time and
- * whose review date has not passed. Zero or several fail closed (Appendix G 25:
- * "policy versions with zero, one, and two applicable rows fail, allow, and fail").
+ * Exactly one applicable posture whose effective range contains database time. Zero or
+ * several fail closed (Appendix G 25: "policy versions with zero, one, and two
+ * applicable rows fail, allow, and fail").
+ *
+ * The review date no longer decides anything (wave 2, S4.2): a state on the "OK to call"
+ * list stays on it until it is revoked, and a stored `review_at` that has passed is
+ * read and ignored. `posture_overdue` is never answered.
  */
 export function selectApplicablePosture(
   postures: readonly StatePostureRecord[],
@@ -364,17 +368,18 @@ export function selectApplicablePosture(
     return Number.isFinite(to) && to > at;
   });
 
-  if (applicable.length === 0) return { kind: 'refused', reason: 'posture_missing' };
   if (applicable.length > 1) return { kind: 'refused', reason: 'posture_overlapping' };
-
   const only = applicable[0];
   if (only === undefined) return { kind: 'refused', reason: 'posture_missing' };
-  const reviewAt = Date.parse(only.reviewAt);
-  if (!Number.isFinite(reviewAt) || reviewAt <= at) return { kind: 'refused', reason: 'posture_overdue' };
   return { kind: 'applies', posture: only };
 }
 
-/** Review falls due one calendar year after confirmation (same UTC month, day and time). */
+/**
+ * The `review_at` a new posture stores: one calendar year after it takes effect (same
+ * UTC month, day and time). Written only because schema 18 requires the column and its
+ * `state_postures_review_after_effective` CHECK until migration 0019; nothing reads it
+ * for a decision since wave 2 (S4.2).
+ */
 export function postureReviewAt(confirmedAt: string): string {
   const parsed = Date.parse(confirmedAt);
   if (!Number.isFinite(parsed)) throw new TypeError('a posture confirmation is an ISO 8601 instant');
