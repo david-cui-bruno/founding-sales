@@ -172,13 +172,11 @@ describe('g81: every task gets the secrets its process reads', () => {
 });
 
 describe('the target group polls readiness, and the container check stays on liveness (g81)', () => {
-  const edgeVariables = readRepositoryFile('infra/modules/edge/variables.tf');
   const healthCheck = block(block(readRepositoryFile('infra/modules/edge/main.tf'), 'resource "aws_lb_target_group" "api" {'), 'health_check {');
 
   it('polls the path the API answers readiness on, and treats not-ready as unhealthy', () => {
     expect(READINESS_PATH).toBe('/readyz');
-    expect(healthCheck).toContain('path                = var.health_check_path');
-    expect(block(edgeVariables, 'variable "health_check_path" {')).toContain(`default     = "${READINESS_PATH}"`);
+    expect(healthCheck).toContain(`path                = "${READINESS_PATH}"`);
     expect(healthCheck).toContain('matcher             = "200"');
     expect(NOT_READY_STATUS).toBe(503);
   });

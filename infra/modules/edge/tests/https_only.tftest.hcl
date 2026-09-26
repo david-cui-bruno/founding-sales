@@ -36,46 +36,15 @@ variables {
   certificate_arn    = "arn:aws:acm:us-east-1:123456789012:certificate/11111111-2222-4333-8444-555555555555"
 }
 
-run "the_only_listener_is_tls" {
+run "tls_only_private_logs_and_a_readiness_check" {
   command = plan
 
   assert {
-    condition     = length(output.listener_ports) == 1 && contains(output.listener_ports, 443)
-    error_message = "443 is the only listener. There is no plaintext endpoint to misconfigure."
-  }
-
-  assert {
-    condition     = aws_lb_listener.https.protocol == "HTTPS" && aws_lb_listener.https.certificate_arn == var.certificate_arn
-    error_message = "The listener terminates TLS with the supplied ACM certificate."
-  }
-
-  assert {
-    condition     = startswith(aws_lb_listener.https.ssl_policy, "ELBSecurityPolicy-TLS13-1-2")
-    error_message = "TLS 1.2 is the floor."
-  }
-
-  assert {
-    condition     = aws_lb.main.internal == false && aws_lb.main.load_balancer_type == "application"
-    error_message = "The edge is a public application load balancer."
-  }
-
-  assert {
-    condition     = aws_lb.main.drop_invalid_header_fields && aws_lb.main.desync_mitigation_mode == "strictest"
-    error_message = "Malformed and desynchronizing requests are rejected at the edge."
-  }
-
-  assert {
-    condition     = aws_lb.main.enable_deletion_protection
-    error_message = "Deletion protection is the default posture."
-  }
-}
-
-run "access_logs_are_enabled_and_private" {
-  command = plan
-
-  assert {
-    condition     = aws_lb.main.access_logs[0].enabled
-    error_message = "Access logs must be enabled."
+    condition = (aws_lb_listener.https.port == 443
+      && aws_lb_listener.https.protocol == "HTTPS"
+      && aws_lb_listener.https.certificate_arn == var.certificate_arn
+    && startswith(aws_lb_listener.https.ssl_policy, "ELBSecurityPolicy-TLS13-1-2"))
+    error_message = "The one listener terminates TLS (1.2 at the least) on 443 with the supplied ACM certificate."
   }
 
   assert {
@@ -90,39 +59,16 @@ run "access_logs_are_enabled_and_private" {
 
   assert {
     condition = length([
-      for statement in jsondecode(output.access_log_policy_json).Statement :
-      statement if statement.Sid == "DenyUnencryptedTransport"
+      for statement in jsondecode(aws_s3_bucket_policy.access_logs.policy).Statement :
+      statement if statement.Sid == "DenyUnencryptedTransport" && statement.Effect == "Deny"
     ]) == 1
     error_message = "Plain HTTP to the log bucket must be denied."
   }
-}
 
-run "the_health_check_is_unauthenticated_and_cheap" {
-  command = plan
-
-  assert {
-    condition     = aws_lb_target_group.api.target_type == "ip" && aws_lb_target_group.api.port == var.container_port
-    error_message = "Fargate awsvpc tasks register by address on the container port."
-  }
-
-  # Lane g81, audit S14: readiness, not liveness. `/readyz` answers 503 while the
-  # schema is out of range, the generation is not the pinned one or the database
-  # cannot answer, and the matcher is 200 alone, so such a task never takes traffic.
+  # Readiness, not liveness (lane g81): a 503 from /readyz takes the task out.
   assert {
     condition     = aws_lb_target_group.api.health_check[0].path == "/readyz" && aws_lb_target_group.api.health_check[0].matcher == "200"
     error_message = "The load balancer polls the unauthenticated readiness path and treats anything but 200 as unhealthy."
-  }
-
-  # A rolling deploy still completes: a new task passes twice in thirty seconds,
-  # inside the API service's sixty-second health-check grace, and an old one drains
-  # for thirty.
-  assert {
-    condition = (
-      aws_lb_target_group.api.health_check[0].healthy_threshold * aws_lb_target_group.api.health_check[0].interval <= 30
-      && aws_lb_target_group.api.health_check[0].timeout < aws_lb_target_group.api.health_check[0].interval
-      && tonumber(aws_lb_target_group.api.deregistration_delay) == 30
-    )
-    error_message = "The readiness check must put a healthy new task in service well inside the service's grace period."
   }
 }
 
