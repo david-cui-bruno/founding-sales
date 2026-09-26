@@ -90,9 +90,9 @@ jobs:
           echo "server_version=$version"
           case "$version" in 16.*) ;; *) echo "expected PostgreSQL 16"; exit 1;; esac
       - name: Install
-        # --ignore-scripts: the old trees' postinstall builds Electron and two native
-        # modules, none of which this job runs. The greenfield packages have no build
-        # step, and embedded-postgres is unused here because the service container is.
+        # --ignore-scripts: the root postinstall fetches the Electron binary, which this
+        # job never runs. The greenfield packages have no build step, and
+        # embedded-postgres is unused here because the service container is.
         run: |
           set -euo pipefail
           npm ci --ignore-scripts --no-audit --no-fund

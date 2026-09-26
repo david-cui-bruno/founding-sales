@@ -3,7 +3,7 @@
 # Preserve all 222 detectors, rule-specific allowances, global regexes/stopwords.
 # Deliberate changes: remove all 25 global path exemptions, use array allowlists,
 # and append only the independently reviewed bootstrap and public-regex spans.
-# Do not extend defaults again. test/verifySecretsConfig.test.mjs pins parity.
+# Do not extend defaults again.
 # Context/private-data selection remains exclusively in scripts/verifySecrets.mjs.
 #
 # MIT License
@@ -3198,6 +3198,8 @@ regex = '''(?i)[\w.-]{0,50}?(?:zendesk)(?:[ \t\w.-]{0,20})[\s'"]{0,3}(?:=|>|:{1,
 keywords = ["zendesk"]
 
 # Independently classified empty initializers, not a credential or a path waiver.
+# The file was deleted with the old trees (lane g95); Git history is scanned in full
+# and still holds it, so the exception stays.
 # Match-only targeting is unsafe because the detector truncates the second RHS.
 [[allowlists]]
 description = "Exact bootstrap empty-key initialization, full LF source span only"
@@ -3214,7 +3216,7 @@ condition = "AND"
 paths = ['''\A\.gitleaks\.toml\z''']
 regexTarget = "line"
 regexes = ['''\A\n?\x72\x65\x67\x65\x78\x20\x3d\x20\x27\x27\x27\x62\x65\x64\x72\x6f\x63\x6b\x2d\x61\x70\x69\x2d\x6b\x65\x79\x2d\x59\x6d\x56\x6b\x63\x6d\x39\x6a\x61\x79\x35\x68\x62\x57\x46\x36\x62\x32\x35\x68\x64\x33\x4d\x75\x59\x32\x39\x74\x27\x27\x27\z''']
-# Exact public preload API inventory, not a credential or a file waiver. Git history is scanned in full, so the three lines retired on 17 and 18 September 2026 stay pinned; the current line names no LinkedIn namespace and needs no exception.
+# Exact public preload API inventory, not a credential or a file waiver. Git history is scanned in full, so the three lines retired on 17 and 18 September 2026 stay pinned; the file itself was deleted with the old trees (lane g95).
 [[allowlists]]
 description = "Exact public preload namespace inventory only: the three lines retired on 17 and 18 September 2026"
 targetRules = ["linkedin-client-id"]

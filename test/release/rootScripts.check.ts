@@ -2,39 +2,45 @@ import { describe, expect, it } from 'vitest';
 import { readRepositoryFile } from './support/coverage.ts';
 
 /**
- * The repository root's defaults are the greenfield product (lane g89, audit item G10).
+ * The repository root is the greenfield workspace root and nothing else (lanes g89, g95).
  *
- * Until lane g89 the root `package.json` belonged to the previous-generation Electron
- * app: `npm start` was Electron Forge, `npm test`, `npm run typecheck` and `npm run lint`
- * ran the old trees' gate, and `postinstall` built two native modules for it. The old
- * app is unused, and its code stays until David decides its deletion, so its scripts
- * stay too, all under a `legacy:` prefix (`docs/greenfield/legacy.md`).
- *
- * This file holds that shape: the bare defaults are greenfield, every unprefixed script
- * is one this file names, the install builds nothing of the old app, and no greenfield
- * script reaches a `legacy:` one.
+ * Lane g89 made the root defaults greenfield and moved the previous-generation Electron
+ * app's scripts under a `legacy:` prefix. Lane g95 deleted that app (`src/`, `client/`,
+ * `cloud/`, `native/`, `tests/`, its scripts, configs and dependencies; the last tree
+ * is the `legacy-final` tag). This file holds the result: the bare defaults are
+ * greenfield, every root script is one this file names, no `legacy:` script or old-app
+ * dependency comes back, the install builds nothing, and every `npm run` target exists.
  *
  * ## The vacuous-pass traps, named
  *
- * Two.
+ * Three.
  *
- * "No unprefixed script is legacy" is true of a reader that found no scripts. Closed by
- * comparing the unprefixed names with an exact list, which an empty object fails, and by
- * pinning the three defaults to their exact commands.
+ * "No script is legacy" is true of a reader that found no scripts. Closed by comparing
+ * the script names with an exact list, which an empty object fails, and by pinning the
+ * three defaults to their exact commands.
  *
  * "Every `npm run` target exists" is true of a parser that found no `npm run` in any
- * script. Closed by requiring it to find the targets of `gate:greenfield` and of
- * `legacy:setup` before judging the rest.
+ * script. Closed by requiring it to find the targets of `gate:greenfield` before
+ * judging the rest.
+ *
+ * "No old-app dependency" is true of a reader that found no dependencies. Closed by
+ * requiring the root devDependencies to be exactly the lint and test tooling the root
+ * scripts run.
  */
 
 interface Manifest {
   readonly scripts: Readonly<Record<string, string>>;
+  readonly dependencies?: Readonly<Record<string, string>>;
+  readonly devDependencies?: Readonly<Record<string, string>>;
+  readonly main?: string;
+  readonly workspaces?: readonly string[];
 }
 
-const scripts = (JSON.parse(readRepositoryFile('package.json')) as Manifest).scripts;
+const manifest = JSON.parse(readRepositoryFile('package.json')) as Manifest;
+const scripts = manifest.scripts;
 
-/** Every root script without the `legacy:` prefix: the greenfield ones and the one shared check. */
-const UNPREFIXED = [
+/** Every root script. */
+const SCRIPTS = [
   'gate:greenfield',
   'lint',
   'lint:greenfield',
@@ -49,10 +55,22 @@ const UNPREFIXED = [
   'test:release:mutation',
   'typecheck',
   'typecheck:greenfield',
-  // The Gitleaks scan of the history and the tree. It guards the whole repository,
-  // and `.github/workflows/ci.yml` and `greenfield-infra.yml` run it by this name.
+  // The Gitleaks scan of the history and the tree. `.github/workflows/ci.yml` and
+  // `greenfield-infra.yml` run it by this name.
   'verify:secrets',
   'verify:desktop:package',
+] as const;
+
+/** The root's own devDependencies: what `lint:root-scripts`, `lint:greenfield`, `typecheck:greenfield` and `test:release` run. */
+const DEV_DEPENDENCIES = [
+  '@eslint/js',
+  '@typescript-eslint/eslint-plugin',
+  '@typescript-eslint/parser',
+  'eslint',
+  'eslint-plugin-import',
+  'globals',
+  'typescript',
+  'vitest',
 ] as const;
 
 /** The root scripts each `npm run <name>` in `command` names; a `--workspace` run names a package's script. */
@@ -67,40 +85,32 @@ function rootTargets(command: string): string[] {
     });
 }
 
-describe('the repository root defaults to the greenfield product', () => {
+describe('the repository root is the greenfield workspace root', () => {
   it('runs the greenfield typecheck, lint and tests for the bare names', () => {
     expect(scripts['typecheck']).toBe('npm run typecheck:greenfield');
     expect(scripts['lint']).toBe('npm run lint:greenfield && npm run lint:root-scripts');
     expect(scripts['test']).toBe('npm run test:greenfield && npm run test:release');
-    // Unchanged by lane g89, and what `.github/workflows/greenfield.yml` runs.
+    // What `.github/workflows/greenfield.yml` runs.
     expect(scripts['gate:greenfield']).toBe(
       'npm run typecheck:greenfield && npm run lint:greenfield && npm run test:greenfield && npm run test:release',
     );
   });
 
-  it('has no bare start: nothing greenfield is a development runner, and the old one is legacy:start', () => {
+  it('has exactly the named scripts: no start, no legacy: script', () => {
     expect(scripts['start']).toBeUndefined();
-    expect(scripts['legacy:start']).toBe('electron-forge start');
+    expect(Object.keys(scripts).filter(name => name.startsWith('legacy:'))).toEqual([]);
+    expect(Object.keys(scripts).sort()).toEqual([...SCRIPTS].sort());
   });
 
-  it('prefixes every other script legacy:', () => {
-    const unprefixed = Object.keys(scripts)
-      .filter(name => !name.startsWith('legacy:'))
-      .sort();
-    expect(unprefixed).toEqual([...UNPREFIXED].sort());
-  });
-
-  it('builds nothing of the old app on install', () => {
+  it('builds nothing on install', () => {
     // The Electron binary, which the desktop host tests need (docs/greenfield/install.md).
-    // The old app's safe-log-fs and SQLite rebuilds are `npm run legacy:setup`.
     expect(scripts['postinstall']).toBe('install-electron --no');
     for (const hook of ['preinstall', 'install', 'preprepare', 'prepare', 'postprepare']) {
       expect(scripts[hook], hook).toBeUndefined();
     }
-    expect(scripts['legacy:setup']).toBe('npm run legacy:build:safe-log-fs && npm run legacy:rebuild');
   });
 
-  it('never reaches a legacy script from a greenfield one, and every npm run target exists', () => {
+  it('every npm run target exists', () => {
     // The floor: the parser finds the targets it must find.
     expect(rootTargets(scripts['gate:greenfield'] ?? '')).toEqual([
       'typecheck:greenfield',
@@ -108,16 +118,19 @@ describe('the repository root defaults to the greenfield product', () => {
       'test:greenfield',
       'test:release',
     ]);
-    expect(rootTargets(scripts['legacy:setup'] ?? '')).toEqual(['legacy:build:safe-log-fs', 'legacy:rebuild']);
     expect(rootTargets(scripts['test:greenfield'] ?? '')).toEqual([]);
 
     for (const [name, command] of Object.entries(scripts)) {
       for (const target of rootTargets(command)) {
         expect(scripts[target], `${name} runs npm run ${target}, which does not exist`).toBeDefined();
-        if (!name.startsWith('legacy:')) {
-          expect(target.startsWith('legacy:'), `${name} reaches ${target}`).toBe(false);
-        }
       }
     }
+  });
+
+  it('depends on nothing of the old app: no runtime dependencies, only the lint and test tooling', () => {
+    expect(manifest.workspaces).toEqual(['apps/*', 'packages/*']);
+    expect(manifest.main).toBeUndefined();
+    expect(manifest.dependencies).toBeUndefined();
+    expect(Object.keys(manifest.devDependencies ?? {}).sort()).toEqual([...DEV_DEPENDENCIES].sort());
   });
 });

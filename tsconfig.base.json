@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/tsconfig",
-  "// Purpose": "Shared strict TypeScript settings for the greenfield workspace (apps/*, packages/*). The old trees keep the root tsconfig.json.",
+  "// Purpose": "Shared strict TypeScript settings for the workspace (apps/*, packages/*, test/release). There is no root tsconfig.json: each package and test/release extends this file.",
   "compilerOptions": {
     "target": "ES2023",
     "lib": ["ES2023"],

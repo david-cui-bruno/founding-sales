@@ -1,10 +1,8 @@
 # The greenfield workspace
 
-The new tree lives beside the old one in the same repository. The root
-`package.json` is the npm workspace root; the old trees (`src/`, `client/`, `cloud/`,
-`tests/`, `native/`) are untouched and keep their own gate, which runs as
-`npm run legacy:*` and only in CI when a change touches them
-(`docs/greenfield/legacy.md`).
+The greenfield tree is the whole repository: the previous-generation app was deleted
+in lane g95 (`docs/greenfield/legacy.md`; the tag `legacy-final` holds it). The root
+`package.json` is the npm workspace root.
 
 ```
 apps/api          the API: health, request limits, redacted errors, scope wiring,
@@ -26,8 +24,7 @@ npm ci --no-audit --no-fund
 
 Since lane g89 the root `postinstall` only fetches the Electron binary
 (`install-electron`, from the local cache when it is there), which
-`npm run test:desktop:host` needs; it no longer builds the old app's two native
-modules. The dependencies' own install scripts still run, and one of them is needed
+`npm run test:desktop:host` needs, and nothing else. The dependencies' own install scripts still run, and one of them is needed
 locally: the PostgreSQL 16 binaries ship as real files but their version symlinks
 (`libzstd.1.dylib` and friends) are created by `@embedded-postgres/darwin-arm64`'s
 `postinstall`. Without it `postgres` fails with `Library not loaded`.
@@ -53,11 +50,8 @@ npm run test:desktop:e2e    # the window, in chromium; not part of the gate
 `docs/decisions/g2-desktop-test-layers.md`.
 
 `npm run typecheck`, `npm run lint` and `npm test` are the greenfield defaults:
-`typecheck:greenfield`; `lint:greenfield` plus `lint:root-scripts` (the greenfield
-scripts at the root, under the root ESLint config that has always linted them); and
-`test:greenfield` plus `test:release`. The old gate is `npm run legacy:typecheck`,
-`legacy:test`, `legacy:lint` and `legacy:lint:tracked`; it excludes `apps/` and
-`packages/` and behaves exactly as it did before (`docs/greenfield/legacy.md`).
+`typecheck:greenfield`; `lint:greenfield` plus `lint:root-scripts` (the scripts at the
+root, under `eslint.config.mjs`); and `test:greenfield` plus `test:release`.
 
 ## The database harness
 

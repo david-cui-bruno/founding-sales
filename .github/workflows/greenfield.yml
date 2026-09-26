@@ -7,8 +7,8 @@ permissions:
   contents: read
 jobs:
   greenfield:
-    # The greenfield workspace only: apps/*, packages/*. The old trees keep the
-    # "Source security gate" workflow, which this job never touches.
+    # The workspace: apps/*, packages/* and test/release. The secret scan and the root
+    # scripts' lint are the "Source security gate" workflow (ci.yml).
     #
     # ubuntu, not macos: this job's only host requirement is a PostgreSQL 16 service
     # container, which GitHub provides on Linux runners. The macOS-specific parts of
@@ -63,9 +63,9 @@ jobs:
           echo "server_version=$version"
           case "$version" in 16.*) ;; *) echo "expected PostgreSQL 16"; exit 1;; esac
       - name: Install
-        # --ignore-scripts: the old trees' postinstall builds Electron and two native
-        # modules, none of which this job runs. The greenfield packages have no build
-        # step, and embedded-postgres is unused here because the service container is.
+        # --ignore-scripts: the root postinstall fetches the Electron binary, which this
+        # job never runs. The greenfield packages have no build step, and
+        # embedded-postgres is unused here because the service container is.
         run: |
           set -euo pipefail
           npm ci --ignore-scripts --no-audit --no-fund

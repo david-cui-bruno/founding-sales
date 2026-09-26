@@ -135,8 +135,8 @@ recognise. Do the same by hand, once per shell, before every step below.
 Each account needs its own state bucket, lock table and state key. `cloud/scripts/bootstrap-terraform-state.sh`
 is the script that created the shared account's, but it **pins the shared account id and
 the shared table name** (`expected_account_id`, `expected_table`) and writes a recovery
-receipt under `~/.callie-bootstrap-receipts`. It is part of the old tree and this lane
-did not change it. Either adapt it for the new account or do the minimal thing by hand;
+receipt under `~/.callie-bootstrap-receipts`. It was part of the old tree, which lane g95
+deleted; the tag `legacy-final` holds it. Either adapt it for the new account or do the minimal thing by hand;
 the minimal thing is four resources.
 
 For each account, with a session in that account:

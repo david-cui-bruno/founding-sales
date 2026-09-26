@@ -104,8 +104,8 @@ jobs:
       - name: Install
         run: |
           set -euo pipefail
-          # --ignore-scripts for the same reason as the Linux gate: the old
-          # trees' postinstall builds two native modules this job never runs.
+          # --ignore-scripts: the Electron binary is the one install script this
+          # job needs, and the next step runs it explicitly.
           npm ci --ignore-scripts --no-audit --no-fund
 
       - name: Fetch the Electron binary

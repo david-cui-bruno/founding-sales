@@ -7,7 +7,7 @@
  * `@electron/fuses` prints, so a mismatch names the fuse a person can look up.
  *
  * `LoadBrowserProcessSpecificV8Snapshot` is off for the reason the old client
- * recorded in `build/electronFuses.ts`: Electron 44's stock arm64 bundle ships no
+ * recorded in `build/electronFuses.ts` (deleted in lane g95; tag `legacy-final`): Electron 44's stock arm64 bundle ships no
  * `browser_v8_context_snapshot` file, and enabling the fuse makes that supported
  * runtime die with SIGTRAP at launch.
  */
