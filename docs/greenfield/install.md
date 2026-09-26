@@ -26,7 +26,8 @@ rehearsal and after the production apply, because it needs a CloudFront hostname
 the apply creates. `docs/greenfield/release.md` section 2.0 is the order, and it is not
 rearrangeable. As of 20 September 2026 eight of the nine signing secrets are not set and
 `FSS_UPDATE_CHANNEL_URL` does not exist, so the release job fails closed at its first
-step and names them; the host job, which needs nothing, runs on every pull request.
+step and names them; the host job, which needs nothing, runs nightly and on every
+dispatch (not on pull requests: the desktop's typecheck and unit tests are in the gate).
 
 ## What David must set
 
@@ -100,8 +101,8 @@ minimum version and the upgrade prompt leads nowhere.
 
 `Actions → Greenfield desktop → Run workflow`, on the release commit, with **release**
 ticked and `desktop_commit_stamp` set to that same commit. Without **release**, the
-workflow runs only the host job, which needs no credential at all and runs on every
-pull request.
+workflow runs only the host job, which needs no credential at all and also runs
+nightly.
 
 The stamp field is the release record's (`docs/greenfield/release.md` section 2.0): the
 desktop commit stamp *is* the release commit, known before any build, and the workflow
@@ -714,12 +715,8 @@ npm run test:desktop:e2e       # the window, in chromium
 npm run test:desktop:host      # macOS only: real Keychain, a real bundle, Launch Services
 ```
 
-The gate also reads `.github/workflows/greenfield-desktop.yml`
-(`test/packaging/releaseWorkflow.test.ts`): every action pinned to a commit sha, every
-secret only ever the value of an env entry named after it, no shell tracing, the
-dirty-tree refusal before the build, a summary of public facts only, and a host job
-holding no credential. Editing the workflow without reading that test is how a pin
-becomes a tag again.
+The gate lints every workflow with actionlint (the `workflows` job of
+`.github/workflows/greenfield.yml`).
 
 An unsigned smoke package, locally, which passes everything that does not need Apple —
 including the window check — takes about a minute:
