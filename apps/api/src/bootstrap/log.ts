@@ -2,13 +2,13 @@
  * Structured, redacted process logging.
  *
  * A near-copy of `apps/worker/src/bootstrap/log.ts`. The two processes must produce
- * the same line shape because the same metric filters read both log groups, and
+ * the same line shape because the safety metric filters read both log groups, and
  * neither app may import the other. When a third process appears, or the first shared
  * platform package does, this belongs there; see docs/decisions/g5b-process-shape.md.
  *
- * The shape is not free: `infra/modules/observability/main.tf` turns log events into
- * CloudWatch metrics with filter patterns over `$.level` and `$.event`, so every line
- * is one JSON object with those two fields at the top level. A line that is not JSON,
+ * The shape is not free: `infra/modules/observability/main.tf` turns the safety events
+ * into CloudWatch metrics with filter patterns over `$.event`, so every line is one
+ * JSON object with `level` and `event` at the top level. A line that is not JSON,
  * or that carries the event name somewhere else, is a metric that never increments.
  *
  * Values are primitives only, truncated, and any field whose *name* looks like a

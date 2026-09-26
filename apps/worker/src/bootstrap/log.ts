@@ -1,9 +1,9 @@
 /**
  * Structured, redacted process logging.
  *
- * The shape is not free: `infra/modules/observability/main.tf` turns log events into
- * CloudWatch metrics with filter patterns over `$.level` and `$.event`, so every line
- * is one JSON object with those two fields at the top level. A line that is not JSON,
+ * The shape is not free: `infra/modules/observability/main.tf` turns the safety events
+ * into CloudWatch metrics with filter patterns over `$.event`, so every line is one
+ * JSON object with `level` and `event` at the top level. A line that is not JSON,
  * or that carries the event name somewhere else, is a metric that never increments.
  *
  * Values are primitives only, truncated, and any field whose *name* looks like a

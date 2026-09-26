@@ -352,7 +352,7 @@ describe('the calling-number routes', () => {
   it('logs a refusal with the code its body carries, over the real server, and never the number typed (lane g69)', async () => {
     // Production logged `POST /calling-identities/register → 409` on 25 September 2026
     // and nothing else, and a 409 here is any of five refusals. The line now carries
-    // the body's code beside the status the Refusals metric counts by.
+    // the body's code beside the status.
     const log = recordingLogger();
     // The server takes connections, not a session (lane g75): a pool over this file's database.
     const pool = testRequestPool(fixture.database);

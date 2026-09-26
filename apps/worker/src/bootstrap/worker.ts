@@ -139,7 +139,6 @@ export async function startWorker(options: WorkerProcessOptions): Promise<Worker
   let deadJobWatermark = now().toISOString();
 
   const logLoopFailure = (loop: string, error: unknown): void => {
-    // `level: error` is what the ApiErrors/WorkerErrors metric filters count.
     log.log('error', 'worker_loop_failed', { loop, ...errorFields(error) });
   };
   const onError = (loop: string) => (error: unknown) => {
@@ -175,7 +174,7 @@ export async function startWorker(options: WorkerProcessOptions): Promise<Worker
     },
   });
 
-  /** One dead job per line, because the metric filter counts events, not values. */
+  /** One dead job per line, with its kind, so the log names each one. */
   const reportDeadJobs = async (session: SessionQueryable): Promise<void> => {
     const { rows } = await session.query<{ kind: string; error_code: string | null; dead_at: string }>(
       `SELECT kind, error_code, dead_at::text AS dead_at
@@ -186,7 +185,6 @@ export async function startWorker(options: WorkerProcessOptions): Promise<Worker
       [deadJobWatermark],
     );
     for (const row of rows) {
-      // `$.event = "job_dead"` with the `kind` dimension: observability/main.tf.
       log.log('error', 'job_dead', { kind: row.kind, error_code: row.error_code });
       if (row.dead_at > deadJobWatermark) deadJobWatermark = row.dead_at;
     }
