@@ -227,15 +227,9 @@ module "cluster" {
   api_schema_range    = var.api_schema_range
   worker_schema_range = var.worker_schema_range
 
-  container_port       = var.container_port
-  api_cpu              = var.api_cpu
-  api_memory           = var.api_memory
-  worker_cpu           = var.worker_cpu
-  worker_memory        = var.worker_memory
-  cpu_architecture     = var.cpu_architecture
-  api_desired_count    = var.api_desired_count
-  worker_desired_count = var.worker_desired_count
-  bootstrap            = var.bootstrap
+  container_port    = var.container_port
+  api_desired_count = var.api_desired_count
+  bootstrap         = var.bootstrap
 
   target_group_arn      = module.edge.target_group_arn
   api_log_group_name    = module.observability.log_group_names["api"]

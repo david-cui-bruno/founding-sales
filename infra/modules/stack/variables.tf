@@ -184,46 +184,10 @@ variable "worker_schema_range" {
   })
 }
 
-variable "api_cpu" {
-  description = "Fargate CPU units for the API task."
-  type        = number
-  default     = 512
-}
-
-variable "api_memory" {
-  description = "Fargate memory in MiB for the API task."
-  type        = number
-  default     = 1024
-}
-
-variable "worker_cpu" {
-  description = "Fargate CPU units for the worker task."
-  type        = number
-  default     = 512
-}
-
-variable "worker_memory" {
-  description = "Fargate memory in MiB for the worker task."
-  type        = number
-  default     = 1024
-}
-
-variable "cpu_architecture" {
-  description = "X86_64 or ARM64."
-  type        = string
-  default     = "X86_64"
-}
-
 variable "api_desired_count" {
   description = "Number of API tasks."
   type        = number
   default     = 2
-}
-
-variable "worker_desired_count" {
-  description = "Number of worker tasks."
-  type        = number
-  default     = 1
 }
 
 variable "bootstrap" {

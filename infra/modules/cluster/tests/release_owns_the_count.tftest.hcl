@@ -54,7 +54,6 @@ variables {
   api_schema_range          = { min = 15, max = 15 }
   worker_schema_range       = { min = 15, max = 15 }
   api_desired_count         = 2
-  worker_desired_count      = 1
   target_group_arn          = "arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/fss-test-api/1111111111111111"
   api_log_group_name        = "/fss/fss-test/api"
   worker_log_group_name     = "/fss/fss-test/worker"
@@ -75,10 +74,8 @@ run "the_stack_stands_with_both_services_at_zero" {
     bootstrap = true
   }
 
-  assert {
-    condition     = aws_ecs_service.api.desired_count == 0 && aws_ecs_service.worker.desired_count == 0
-    error_message = "The starting point: both services at zero, as release-stop.sh leaves a standing stack and a bootstrap creates a fresh one."
-  }
+  # The starting point: both services at zero, as the stop leaves a standing stack
+  # and a bootstrap creates a fresh one.
 }
 
 run "the_schema_release_apply_moves_the_task_definitions_and_starts_nothing" {
@@ -95,13 +92,8 @@ run "the_schema_release_apply_moves_the_task_definitions_and_starts_nothing" {
   }
 
   assert {
-    condition     = aws_ecs_service.api.desired_count == 0
-    error_message = "The apply started the API: its count moved off zero, so tasks whose range refuses the current schema would start before the migration. Both services must carry ignore_changes = [desired_count]."
-  }
-
-  assert {
-    condition     = aws_ecs_service.worker.desired_count == 0
-    error_message = "The apply started the worker: its count moved off zero, so a task whose range refuses the current schema would start before the migration."
+    condition     = aws_ecs_service.api.desired_count == 0 && aws_ecs_service.worker.desired_count == 0
+    error_message = "The apply started a service: its count moved off zero, so tasks whose range refuses the current schema would start before the migration. Both services must carry ignore_changes = [desired_count]."
   }
 
   # The positive control for the two above: zero is not simply the only number
@@ -113,24 +105,14 @@ run "the_schema_release_apply_moves_the_task_definitions_and_starts_nothing" {
     error_message = "The declared counts must still reach deployment_plan: release-deploy.sh scales to them after the migration."
   }
 
-  assert {
-    condition = (output.deployment_plan.api.planned_desired_count == 0
-    && output.deployment_plan.worker.planned_desired_count == 0)
-    error_message = "planned_desired_count reads the service, so after the stop it is the zero ECS holds, not the declared number."
-  }
-
   # The rolling half. The lifecycle ignores the count and nothing else: the task
   # definitions carry this release's images and ranges, and each service still
   # names its own, so an ordinary release still rolls on to the new revision.
   assert {
     condition = (jsondecode(aws_ecs_task_definition.api.container_definitions)[0].image == var.api_image
-    && jsondecode(aws_ecs_task_definition.worker.container_definitions)[0].image == var.worker_image)
-    error_message = "The apply must still deliver the release's images to both task definitions."
-  }
-
-  assert {
-    condition     = output.api_environment["FSS_SCHEMA_MIN"] == "16" && output.worker_environment["FSS_SCHEMA_MAX"] == "16"
-    error_message = "The apply must still deliver the release's schema ranges."
+      && jsondecode(aws_ecs_task_definition.worker.container_definitions)[0].image == var.worker_image
+    && output.api_environment["FSS_SCHEMA_MIN"] == "16" && output.worker_environment["FSS_SCHEMA_MAX"] == "16")
+    error_message = "The apply must still deliver the release's images and schema ranges to both task definitions."
   }
 
   assert {

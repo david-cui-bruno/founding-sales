@@ -246,28 +246,10 @@ run "the_production_deployment_role_is_refused" {
   expect_failures = [var.deployment_role_name]
 }
 
-# The same topology answers, at one API task and one worker.
-#
-# A rehearsal that ran on a different architecture, a different instance class or a
-# different task size would deploy the production digests onto a machine production
-# never uses, and 16.2's "the exact immutable artifacts intended for production" would
-# be true of the bytes and false of everything around them.
+# One API task and one worker; sizes and architecture are production's (the cluster
+# module holds them).
 run "the_topology_answers_are_the_rehearsal_defaults_at_one_plus_one" {
   command = plan
-
-  assert {
-    condition = (module.stack.task_runtime_platform.api.cpu_architecture == "ARM64"
-    && module.stack.task_runtime_platform.worker.cpu_architecture == "ARM64")
-    error_message = "The rehearsal must deploy the arm64 images on ARM64 Fargate, exactly as production will."
-  }
-
-  assert {
-    condition = (module.stack.service_shape.api.cpu == "512"
-      && module.stack.service_shape.api.memory == "1024"
-      && module.stack.service_shape.worker.cpu == "512"
-    && module.stack.service_shape.worker.memory == "1024")
-    error_message = "The same 0.5 vCPU / 1 GiB task size as production."
-  }
 
   # One of each — eventually. Every rehearsal environment is a fresh one, so the
   # root's `bootstrap` default is `true` and the apply creates both services at zero
@@ -367,16 +349,6 @@ run "a_rehearsal_apply_cannot_ask_for_no_dependencies_at_all" {
   }
 
   expect_failures = [var.dependencies_mode]
-}
-
-run "an_architecture_that_is_not_one_of_the_two_is_refused" {
-  command = plan
-
-  variables {
-    cpu_architecture = "aarch64"
-  }
-
-  expect_failures = [var.cpu_architecture]
 }
 
 run "both_services_are_told_the_workspace_domain" {

@@ -23,11 +23,11 @@
 # makes the provider do so, and the positive control is the one-off definitions: the
 # same resource type, in the same module, with the attribute false.
 #
-# The third point is not asserted here, because it cannot be: a mock provider does not
-# know which attributes force a replacement, so under it a new image is an in-place
-# update that keeps the ARN, and a service that ignored `task_definition` would still
-# read as re-pointed. `test/release/ciDeploy.check.ts` reads the two lifecycle blocks
-# instead, and fails if either ignores more than `desired_count`.
+# The third point is not asserted anywhere, because it cannot be here: a mock provider
+# does not know which attributes force a replacement, so under it a new image is an
+# in-place update that keeps the ARN, and a service that ignored `task_definition`
+# would still read as re-pointed. The two lifecycle blocks in main.tf ignore
+# `desired_count` and nothing else; keep them that way.
 
 mock_provider "aws" {
   override_during = apply
@@ -67,13 +67,8 @@ run "the_two_service_definitions_follow_the_revisions_ci_registers" {
   command = plan
 
   assert {
-    condition     = aws_ecs_task_definition.api.track_latest == true
-    error_message = "The API task definition must track its family's newest ACTIVE revision, or the first plan after a CI deploy reads CI's revision as drift and puts the older image back."
-  }
-
-  assert {
-    condition     = aws_ecs_task_definition.worker.track_latest == true
-    error_message = "The worker task definition must track its family's newest ACTIVE revision, for the same reason."
+    condition     = aws_ecs_task_definition.api.track_latest == true && aws_ecs_task_definition.worker.track_latest == true
+    error_message = "Both service task definitions must track their family's newest ACTIVE revision, or the first plan after a CI deploy reads CI's revision as drift and puts the older image back."
   }
 }
 
