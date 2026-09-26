@@ -116,6 +116,33 @@ const COLLECTOR_METRIC_NAMES: Readonly<Record<Exclude<MetricOwner, 'log_derived'
   sequences: SEQUENCE_METRIC_NAMES,
 };
 
+/**
+ * The names the first test asserts the worker published. The wait below polls for all
+ * of them (and for every collector claim in `METRIC_OWNERS`, which the last test
+ * holds to the same standard): waiting for a subset and asserting the rest raced the
+ * heartbeats under load, about once in fifteen runs.
+ */
+const EXPECTED_PUBLISHED = [
+  'SchedulerHeartbeat',
+  'WorkerHeartbeat',
+  'ApiHeartbeat',
+  'OldestRunnableJobAgeSeconds',
+  'DeadJobOldestAgeSeconds',
+  'CanaryCompletionAgeSeconds',
+  'UnacknowledgedCriticalAlertAgeSeconds',
+  'MailboxCheckHeartbeat',
+  'GmailWatchHoursToExpiry',
+  // Published while a mailbox is connected and ready (lane g81); the fixture's has
+  // no watermark yet, which the gauge reads as one second past the window.
+  'MailboxCoverageAgeSeconds',
+  'MailboxDisconnectedHours',
+  // Published on every pass, 0 or 1, whatever the time of day (lane g67).
+  'TodaySnapshotMissing',
+  // Published on every pass, 0 and 0 here because nothing is enrolled (lane g72).
+  'ActiveEnrollments',
+  'HeldEnrollments',
+] as const;
+
 describe('every alarm metric has something that emits it', () => {
   let database: TestDatabase;
   let published: Set<string>;
@@ -246,17 +273,13 @@ describe('every alarm metric has something that emits it', () => {
     });
 
     const deadline = Date.now() + 15_000;
-    const wanted = [
-      'CanaryCompletionAgeSeconds',
-      'OldestRunnableJobAgeSeconds',
-      'DeadJobOldestAgeSeconds',
-      'GmailWatchHoursToExpiry',
-      'MailboxDisconnectedHours',
-      'TodaySnapshotMissing',
-      'ActiveEnrollments',
-      'HeldEnrollments',
-    ];
-    while (Date.now() < deadline && !wanted.every(name => sink.published.some(datum => datum.name === name))) {
+    const wanted = new Set<string>([
+      ...EXPECTED_PUBLISHED,
+      ...Object.entries(METRIC_OWNERS)
+        .filter(([, owner]) => owner !== 'log_derived')
+        .map(([name]) => name),
+    ]);
+    while (Date.now() < deadline && ![...wanted].every(name => sink.published.some(datum => datum.name === name))) {
       await new Promise(resolve => setTimeout(resolve, 20));
     }
     await worker.stop('test');
@@ -268,26 +291,7 @@ describe('every alarm metric has something that emits it', () => {
   });
 
   it('publishes every job metric the alarms read', () => {
-    for (const name of [
-      'SchedulerHeartbeat',
-      'WorkerHeartbeat',
-      'ApiHeartbeat',
-      'OldestRunnableJobAgeSeconds',
-      'DeadJobOldestAgeSeconds',
-      'CanaryCompletionAgeSeconds',
-      'UnacknowledgedCriticalAlertAgeSeconds',
-      'MailboxCheckHeartbeat',
-      'GmailWatchHoursToExpiry',
-      // Published while a mailbox is connected and ready (lane g81); the fixture's has
-      // no watermark yet, which the gauge reads as one second past the window.
-      'MailboxCoverageAgeSeconds',
-      'MailboxDisconnectedHours',
-      // Published on every pass, 0 or 1, whatever the time of day (lane g67).
-      'TodaySnapshotMissing',
-      // Published on every pass, 0 and 0 here because nothing is enrolled (lane g72).
-      'ActiveEnrollments',
-      'HeldEnrollments',
-    ]) {
+    for (const name of EXPECTED_PUBLISHED) {
       expect([...published].includes(name), `${name} was never published by the worker`).toBe(true);
     }
   });
