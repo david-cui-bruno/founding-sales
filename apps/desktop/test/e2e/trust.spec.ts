@@ -169,28 +169,31 @@ test('a command outside the setting rows holds its own button too: the holiday c
 test('an answer that lands late does not put an older view back on the screen', async ({ page }) => {
   /*
    * P2. Every one of these bridges answers with the whole view, so the last answer
-   * written *is* the view. Now that two commands may be in flight at once (P1-4), a
-   * slow one can land after a quick one and put the older state back — here, a Save
-   * held on the wire landing after the history was opened would take the history off
-   * the screen again, a moment after the person asked for it.
+   * written *is* the view. Now that two commands may be in flight at once (P1-4),
+   * answers land in whatever order the server produces them — and a *read* issued while
+   * a Save is on the wire carries a state read before that Save committed. Landing
+   * last, it takes the saved value off the screen a moment after the row accepted it.
    */
   server = await startAppServer({ admin: adminState() });
   await page.goto(server.url('#admin'));
+  await expect(page.getByTestId('summary-business_time_zone')).toHaveText('Central (Chicago)');
 
+  // The Save is accepted first, but its answer is held on the wire.
   const release = server.hold('settings.saveSetting');
   await page.getByTestId('field-business_time_zone-timeZone').selectOption('America/Denver');
   await page.getByTestId('save-business_time_zone').click();
   await expect.poll(() => called('settings.saveSetting').length).toBe(1);
 
-  // Asked for after the Save, answered before it: this is the newer view.
+  // A read issued after it and answered before it: the state it carries is the one the
+  // server held *before* the Save was applied.
   await page.getByTestId('history-business_time_zone').click();
-  const history = page.getByTestId('setting-business_time_zone').getByTestId('setting-history');
-  await expect(history).toBeVisible();
+  await expect.poll(() => called('settings.openHistory').length).toBe(1);
 
   release();
   await expect(page.getByTestId('save-business_time_zone')).not.toHaveAttribute('aria-busy', 'true');
-  // Still there: the older answer was dropped rather than drawn.
-  await expect(history).toBeVisible();
+
+  // The value the person saved is what is on screen, not the one the read carried.
+  await expect(page.getByTestId('summary-business_time_zone')).toHaveText('Mountain (Denver)');
 });
 
 test('a Mac that has signed in before is one button: no workspace, no name', async ({ page }) => {

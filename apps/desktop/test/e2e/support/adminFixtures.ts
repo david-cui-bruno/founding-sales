@@ -253,7 +253,34 @@ export function adminAnswer(
   // An admin-only refusal arrives as its code, which the view turns into one
   // sentence. This is what a salesperson gets.
   if (method === 'saveSetting') {
-    state = { ...state, notice: state.role === 'admin' ? null : 'admin_only' };
+    /*
+     * The saved value is in the answer, as the real bridge's is: the route writes the
+     * slice and the bridge re-reads, so the state a command answers with already has
+     * the change in it. A fixture that only set a notice could not tell a spec whether
+     * what is on screen is the saved value or a stale read drawn over it (1.0.13, P2).
+     */
+    const saved = argument as { settingKey?: string; value?: unknown; changeNote?: string } | null;
+    const admin = state.role === 'admin';
+    state = {
+      ...state,
+      notice: admin ? null : 'admin_only',
+      settings:
+        !admin || state.settings === null || saved?.settingKey === undefined
+          ? state.settings
+          : {
+              ...state.settings,
+              settings: state.settings.settings.map(row =>
+                row.settingKey === saved.settingKey
+                  ? {
+                      ...row,
+                      value: saved.value as typeof row.value,
+                      version: row.version + 1,
+                      changeNote: saved.changeNote ?? null,
+                    }
+                  : row,
+              ),
+            },
+    };
   }
   // The history the route answers (lane g78): values included, which is what
   // the window draws as "from" and "to".

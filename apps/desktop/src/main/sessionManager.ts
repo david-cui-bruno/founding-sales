@@ -228,13 +228,44 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
    * the window still has to hear about, because the line under the sign-in form says
    * the server has yet to be told and now it has been.
    */
+  /**
+   * The generation has moved for a transition that has not been announced yet.
+   *
+   * It is not a second counter: it says whether `announce` still owes this transition
+   * its increment, so that beginning one and announcing it move the number once.
+   */
+  let advanced = false;
+
+  /**
+   * Start a transition: move the number *before* anything is emptied (1.0.13, item 4).
+   *
+   * The order matters. A `/today` read or a bridge method already on the wire is judged
+   * by this number, and the emptying is asynchronous — a cache wipe is a file being
+   * removed. Moving the number afterwards leaves a window between the wipe and the
+   * move in which a late answer still looks current and writes itself back on to the
+   * disk that was just cleared. Moving it first closes the window: anything that lands
+   * from here on already sees a number it does not recognise.
+   */
+  const beginTransition = (): void => {
+    if (advanced) return;
+    generation += 1;
+    advanced = true;
+  };
+
   const announce = (reason: string, force = false): void => {
     const identity = identityOf();
     const first = announced === undefined;
-    if (!first && identity === announced && !force) return;
+    if (!first && identity === announced && !force) {
+      advanced = false;
+      return;
+    }
     announced = identity;
-    if (first) return;
-    generation += 1;
+    if (first) {
+      advanced = false;
+      return;
+    }
+    beginTransition();
+    advanced = false;
     const change: SessionChange = { generation, identity, reason };
     for (const listener of listeners) listener(change);
   };
@@ -248,6 +279,9 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
    * and leaving the last role's list in the cache is leaving it to be read.
    */
   const dropHeldData = async (): Promise<void> => {
+    // Before the first `await`: see `beginTransition`. Everything below this line is
+    // asynchronous, and everything already on the wire is judged by that number.
+    beginTransition();
     await options.cache.wipe();
     today = null;
     asOf = null;
@@ -263,6 +297,8 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
     notice = reason;
     announce(reason, true);
   };
+
+
 
   /**
    * The device secret, with "there is none" told apart from "could not ask" (P1-3).
@@ -321,8 +357,14 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
    * **It forgets only the registration it started on** (P0-B). A retry can be on the
    * wire for minutes, and in that time somebody may sign in again: a `forget()` bound
    * to nothing would then delete the *new* registration and the new Keychain secret.
-   * The device id and the session generation are captured at entry and checked before
-   * anything is deleted; if either has moved, the answer is dropped.
+   * The device id is captured at entry and checked before anything is deleted.
+   *
+   * **`true` means the sign-out is over, and nothing else.** Exactly three things make
+   * it true: the server confirmed; the server said the registration is already over
+   * (`ENDS_THE_REGISTRATION`); or the registration is no longer on this Mac. A flag
+   * moving, a number moving, a screen changing — none of those is an answer from the
+   * server, and none of them may return `true`, because `true` stops the clock and lets
+   * a waiting sign-in overwrite the credential this Mac needs to end that device.
    *
    * **A refusal that ends the registration is a finished sign-out.** `device_revoked`
    * and the rest mean the server has no device left to end. So does
@@ -342,10 +384,23 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
     if (signingOut !== null) return await signingOut;
     if (device === null || device.signOutPending !== true) return true;
     const owner = device.deviceId;
-    const mine = generation;
-    /** The registration this attempt started on is still the one on this Mac. */
-    const stillMine = (): boolean =>
-      generation === mine && device !== null && device.deviceId === owner && device.signOutPending === true;
+    /**
+     * The registration this attempt started on is still the one this Mac owes.
+     *
+     * **By the device id, never by the session generation** (1.0.13, P0). The generation
+     * moves for reasons that have nothing to do with the registration — a refusal by
+     * client version announces a transition on the very same pending device — and an
+     * ownership test that read the generation called those attempts "somebody else's".
+     * The three lines below then reported a sign-out that had *failed* as finished: the
+     * clock stopped, and a sign-in waiting on the lock went ahead and overwrote the one
+     * `device-secret` this Mac holds, leaving a device active at the server that nothing
+     * here could ever revoke.
+     *
+     * Every sign-in registers a new device, so the id is what identifies a registration;
+     * `signOutPending` is the second half, because a new registration written over the
+     * same id would not be pending and is not this attempt's to end.
+     */
+    const stillMine = (): boolean => device !== null && device.deviceId === owner && device.signOutPending === true;
 
     signingOut = (async (): Promise<boolean> => {
       /*
@@ -356,6 +411,8 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
        */
       if (withToken !== undefined) {
         const told = await options.api.signOut(withToken);
+        // Nothing left on this Mac to end: the registration went while the call was on
+        // the wire. That is one of the three ways this returns `true`.
         if (!stillMine()) return true;
         if (told.ok || (!told.offline && ENDS_THE_REGISTRATION.has(told.reason))) {
           await forget('signed_out');
@@ -681,9 +738,15 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
       if (sessionGeneration !== generation) return;
       notice = reason;
       await dropHeldData();
-      if (sessionGeneration !== generation) return;
+      /*
+       * From here the comparison is with *this* transition's number rather than the
+       * caller's: emptying this Mac moves it (`beginTransition`), so the caller's number
+       * is deliberately out of date from this line on. What must still stop the work is
+       * a *further* move — somebody signing in while `store.forget()` is in flight.
+       */
+      const ours = generation;
       await options.store.forget();
-      if (sessionGeneration !== generation) return;
+      if (ours !== generation) return;
       device = null;
       session = null;
       announce(reason, true);
@@ -926,6 +989,10 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
       const fallBackToCache = async (): Promise<DesktopState> => {
         if (device === null || generation !== mine) return snapshot();
         const cached = await options.cache.read();
+        // Again, after the read: the file is read asynchronously and a sign-out can land
+        // while it is being read. Assigning what came back would put the last person's
+        // list into the state the next one is about to be shown (item 4).
+        if (device === null || generation !== mine) return snapshot();
         if (cached.state === 'fresh') {
           today = cached.today;
           asOf = cached.asOf;
@@ -941,6 +1008,8 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
       // No live session — expired and unrenewable, most often because the server did
       // not answer. That is the outage case, and it reads from the cache too.
       const live = await liveSession();
+      // Renewing is a round trip of its own, and a role change inside it is a transition.
+      if (generation !== mine) return snapshot();
       if (live === null) return await fallBackToCache();
 
       const outcome = await options.api.today(live.accessToken);

@@ -23,6 +23,14 @@
  * whatever the late method stored, which is the same guarantee and one place to read.
  */
 
+/**
+ * How many times a clear is repeated when the session keeps moving under it.
+ *
+ * Three is a bound rather than a guarantee: it stops an unbounded loop while covering
+ * the case this exists for, which is one more transition landing during one clear.
+ */
+const CLEAR_PASSES = 3;
+
 /** Anything with a `forget` that clears it and answers its empty state. */
 export interface Forgettable {
   forget(): Promise<unknown>;
@@ -63,11 +71,18 @@ export function guardIdentity<H extends Forgettable>(host: H, generation: () => 
              *
              * `forget()` is itself asynchronous, so the generation is taken again before
              * it and checked after (P2): another transition during the clear means
-             * something may have landed behind it, and it is cleared once more.
+             * something may have landed behind it, and it is cleared again. Bounded at
+             * three passes — a fourth move means this Mac is transitioning continuously,
+             * and the transition that is happening will clear the bridge itself.
              */
-            const at = generation();
-            const empty = await host.forget();
-            return at === generation() ? empty : await host.forget();
+            let empty: unknown = null;
+            for (let pass = 0; pass < CLEAR_PASSES; pass += 1) {
+              const at = generation();
+              empty = await host.forget();
+              // Nothing moved while that clear was running, so nothing landed behind it.
+              if (at === generation()) break;
+            }
+            return empty;
           };
   }
   return wrapped as H;

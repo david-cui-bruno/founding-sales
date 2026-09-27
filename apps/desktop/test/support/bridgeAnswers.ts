@@ -145,6 +145,56 @@ const settingsBody = {
   effectiveSendingEnabled: false,
 };
 
+/**
+ * `POST /enrollments` for a firm: an empty list with a time on it.
+ *
+ * Empty and still valid, which is the point — the *list* is what the Firm page's
+ * Sequences section reads next, and an invalid body here stopped the bridge before it
+ * reached `/sequences/versions` at all, hiding that call from the registry (item 10).
+ */
+const enrollmentsBody = { asOf: '2026-09-21T13:00:00.000Z', enrollments: [] };
+
+/** `POST /sequences/versions` for one sequence: one published version. */
+const sequenceVersionsBody = {
+  versions: [
+    {
+      id: FIXTURE_IDS.otherSequence,
+      sequenceId: FIXTURE_IDS.sequence,
+      version: 1,
+      state: 'published' as const,
+      steps: [],
+      publishedAt: '2026-09-20T10:00:00.000Z',
+      retiredAt: null,
+    },
+  ],
+};
+
+/** `POST /import/preview`: one row that would create a firm. */
+const importPreviewBody = {
+  rows: [
+    {
+      rowNumber: 2,
+      outcome: 'create' as const,
+      issues: [],
+      firm: {
+        name: 'Aspen Test Wealth',
+        website: null,
+        addressLine: null,
+        locality: null,
+        regionCode: null,
+        postalCode: null,
+        externalId: null,
+        ownerUserId: null,
+        timeZone: null,
+      },
+      contact: null,
+      routes: [],
+      match: null,
+    },
+  ],
+  counts: { create: 1, attach: 0, duplicate: 0, invalid: 0 },
+};
+
 export const BRIDGE_ANSWERS: Readonly<Record<string, unknown>> = Object.freeze({
   '/today/firm': todayFirmBody,
   '/replies': { businessDate: '2026-09-21', cards: [replyCardBody] },
@@ -159,6 +209,10 @@ export const BRIDGE_ANSWERS: Readonly<Record<string, unknown>> = Object.freeze({
       { id: FIXTURE_IDS.sequence, name: 'Referrals', description: null, archivedAt: null },
     ],
   },
+  '/enrollments': enrollmentsBody,
+  '/import/preview': importPreviewBody,
+  '/replies/card': replyCardBody,
+  '/sequences/versions': sequenceVersionsBody,
   '/gmail/status': {
     connected: true,
     mailbox: {

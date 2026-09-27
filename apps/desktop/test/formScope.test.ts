@@ -50,6 +50,18 @@ const AREAS = [
 ] as const;
 
 /**
+ * The code with its prose taken out.
+ *
+ * Every rule below is about what the program does, and this file is full of sentences
+ * naming the very keys it checks for. A comment mentioning `'holidays'` would satisfy a
+ * search for it and hide a control that never asks — so the comments go first, both
+ * block and line, before anything is matched.
+ */
+function code(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//gu, '').replace(/(^|[^:])\/\/.*$/gmu, '$1');
+}
+
+/**
  * The names a hook hands to `command(...)`, reduced to what a consumer can match on: a
  * literal key, or the constant part of a template like `setting:${...}` → `setting:`.
  */
@@ -62,40 +74,56 @@ function formsIn(source: string): readonly string[] {
   return [...names];
 }
 
+/**
+ * The names a view asks `busy(...)` about — the other end of the same agreement.
+ *
+ * `busy` arrives under several names: the hook's own `busy`, a prop called `saving` or
+ * `adding`, or a function passed down as `changing`/`retiring`. What they all look like
+ * at the point of use is a call whose argument is the key, so that is what is matched.
+ */
+function consumedIn(source: string): readonly string[] {
+  const names = new Set<string>();
+  for (const match of source.matchAll(/busy\(\s*'([a-z-]+)'\s*\)/gu)) if (match[1] !== undefined) names.add(match[1]);
+  for (const match of source.matchAll(/busy\(\s*`([a-z-]+):\$\{/gu)) if (match[1] !== undefined) names.add(`${match[1]}:`);
+  for (const match of source.matchAll(/todayForm\.([a-z]+)\(/gu)) if (match[1] !== undefined) names.add(match[1]);
+  return [...names];
+}
+
 async function read(path: string): Promise<string> {
   return await readFile(join(renderer, path), 'utf8');
 }
 
 describe('a command holds its own form and nothing else', () => {
   for (const { area, hook, views } of AREAS) {
-    it(`${area}: every form name a command takes is read by a control`, async () => {
-      const source = await read(hook);
+    it(`${area}: the names the commands take and the names the controls read are the same set`, async () => {
+      const source = code(await read(hook));
       const forms = formsIn(source);
       expect(forms.length, `${hook} hands out no form names`).toBeGreaterThan(0);
 
-      const consumers = (await Promise.all(views.map(async view => await read(view)))).join('\n');
-      const unread = forms.filter(form => {
-        // `busy('holidays')`, `busy(\`setting:${key}\`)`, or a named prop derived from
-        // one — `busy('sending-cap')` threaded in as `capping`. All three are the same
-        // question asked of the same map, so matching the name is what matters.
-        const literal = `'${form}'`;
-        const templated = `\`${form}`;
-        const viaTodayForm = `todayForm.${form}(`;
-        return !consumers.includes(literal) && !consumers.includes(templated) && !consumers.includes(viaTodayForm);
-      });
+      const consumers = (await Promise.all(views.map(async view => code(await read(view))))).join('\n');
+      const consumed = consumedIn(consumers);
 
-      expect(unread, `${area} takes a form key no control waits on`).toEqual([]);
+      // One direction: a key a command takes that nothing waits on — the form stays
+      // pressable while its own command is on the wire.
+      expect([...forms].sort(), `${area} takes a form key no control waits on`).toEqual(
+        [...forms].filter(form => consumed.includes(form)).sort(),
+      );
+      // The other: a key a control waits on that no command ever takes — a control
+      // disabled by a name nothing sets, or left behind by a rename.
+      expect([...consumed].sort(), `${area} waits on a form key no command takes`).toEqual(
+        [...consumed].filter(form => forms.includes(form)).sort(),
+      );
     });
   }
 
   it('Replies names its forms by the card, and every control on a card asks for that card', async () => {
     // The only area whose form name is an id rather than a word: one reply card is one
     // form, so its own `messageId` is the name and nothing else can match it.
-    const hook = await read('replies/useReplies.ts');
+    const hook = code(await read('replies/useReplies.ts'));
     expect(hook).toContain('apply(api()?.command(\'replies.confirm\', input), input.messageId)');
     expect(hook).toContain('apply(api()?.command(\'replies.resolve\', input), input.messageId)');
 
-    const view = await read('replies/RepliesView.tsx');
+    const view = code(await read('replies/RepliesView.tsx'));
     for (const control of ['confirm', 'candidate-submit', 'reply-open']) {
       expect(view, `the ${control} control does not wait on its own card`).toContain(`data-testid="${control}"`);
     }
@@ -108,7 +136,7 @@ describe('a command holds its own form and nothing else', () => {
     // anywhere in the view rather than this form's own.
     for (const { views } of [...AREAS, { views: ['replies/RepliesView.tsx'] as const }]) {
       for (const view of views) {
-        const source = await read(view);
+        const source = code(await read(view));
         expect(source, `${view} disables a control on the view's whole pending count`).not.toMatch(
           /disabled=\{[^}]*\bpending\b/u,
         );

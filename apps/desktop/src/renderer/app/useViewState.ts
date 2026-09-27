@@ -116,20 +116,38 @@ export function useViewState<T>(options: {
   }, []);
 
   /*
-   * The order answers are *kept* in, which is not the order they arrive in (1.0.13, P2).
+   * Which answer wins when two are in flight (1.0.13, P2).
    *
    * Every one of these bridges answers with the whole view, so the last answer written
-   * is the view. Once two forms may be saving at once (P1-4) a slow first save can land
-   * after a quick second one and put the older state back on the screen — the second
-   * row's new value visibly reverting a moment after it was accepted. Each call takes
-   * the next number on the way out; an answer is kept only if no higher number has been
-   * kept already. The numbers are per mounted view, which is what a Query key is.
+   * *is* the view. Once two forms may be saving at once (P1-4) they land in whatever
+   * order the server and the main process produce them, and "last one wins" is wrong in
+   * both directions:
+   *
+   *   * a **read** issued before a command finished carries a state read *before* the
+   *     command committed. Landing last, it takes the saved value off the screen a
+   *     moment after the row accepted it. So a read is dropped if any command for this
+   *     view completed after that read was issued.
+   *   * a **command**'s accepted answer is the state the main process holds having
+   *     applied it, and it is always drawn. Two commands are ordered between themselves
+   *     by when they were issued: an older one may not overwrite a newer one's answer.
+   *
+   * The numbers are per mounted view, which is what a Query key is. Nothing here is a
+   * clock; `issued` only orders the calls of one view against each other.
    */
   const issued = useRef(0);
-  const applied = useRef(0);
+  /** The number of the newest command answer drawn. */
+  const commandApplied = useRef(0);
+  /**
+   * How far the numbering had got the last time a command finished.
+   *
+   * Every read issued at or before that point was asked for while that command was
+   * still on the wire, so what it carries may be the state from before the command
+   * committed — whatever order the two answers arrive in.
+   */
+  const staleBefore = useRef(0);
 
   const keep = useCallback(
-    (next: Promise<T>, form: string | null): void => {
+    (next: Promise<T>, form: string | null, kind: 'read' | 'command'): void => {
       setPending(count => count + 1);
       hold(form, 1);
       const started = guard.now();
@@ -140,10 +158,19 @@ export function useViewState<T>(options: {
           value => {
             // The answer to a question asked by somebody who has since left this Mac.
             if (!guard.fresh(started)) return;
-            // An answer older than one already on screen. The newer call read the same
-            // state from the same process, so nothing is lost by dropping this.
-            if (ordinal < applied.current) return;
-            applied.current = ordinal;
+            if (kind === 'command') {
+              // Everything asked for up to this moment predates this command's answer.
+              staleBefore.current = Math.max(staleBefore.current, issued.current);
+              // An older command's answer behind a newer one's: the newer state already
+              // has this change in it, because the main process applied them in order.
+              if (ordinal < commandApplied.current) return;
+              commandApplied.current = ordinal;
+            } else if (ordinal <= staleBefore.current) {
+              // A read asked for while a command was on the wire. What it carries may be
+              // the state from before that command committed, and drawing it would undo
+              // what the person just saw accepted.
+              return;
+            }
             client.setQueryData([key, identity, started, reason], value);
           },
           (error: unknown) => {
@@ -162,7 +189,7 @@ export function useViewState<T>(options: {
     (next: (bridge: OperationApi) => Promise<T>): void => {
       const bridge = operations();
       if (bridge === undefined) return;
-      keep(next(bridge), null);
+      keep(next(bridge), null, 'read');
     },
     [keep],
   );
@@ -171,7 +198,7 @@ export function useViewState<T>(options: {
     (form: string, next: (bridge: OperationApi) => Promise<T>): void => {
       const bridge = operations();
       if (bridge === undefined) return;
-      keep(next(bridge), form);
+      keep(next(bridge), form, 'command');
     },
     [keep],
   );

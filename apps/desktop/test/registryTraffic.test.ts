@@ -8,7 +8,7 @@ import { createAdminBridge } from '../src/main/settingsBridge.ts';
 import { createTodayBridge } from '../src/main/todayBridge.ts';
 import { createDialHandoff } from '../src/main/dialHandoff.ts';
 import { OPERATIONS, OPERATION_NAMES, type OperationName } from '../src/shared/operations.ts';
-import { BRIDGE_ANSWERS } from './support/bridgeAnswers.ts';
+import { BRIDGE_ANSWERS, FIXTURE_IDS } from './support/bridgeAnswers.ts';
 
 /**
  * Every request a bridge makes is declared in the registry (1.0.13, P1-5).
@@ -65,25 +65,24 @@ function requestsOf(): { readonly seen: string[]; readonly api: ReturnType<typeo
   return { seen, api };
 }
 
+/**
+ * The session as the main process holds it. `today` carries a business zone because
+ * Today's snooze and callback resolve a wall clock against it and refuse without one —
+ * a session with no list would stop those two before they reached the server, and hide
+ * their calls from this check.
+ */
+const held = {
+  online: true,
+  stale: false,
+  asOf: null,
+  mayMutate: true,
+  device: { role: 'admin' as const },
+  today: { snapshotDate: '2026-09-21', businessTimeZone: 'America/New_York', cards: [] },
+};
+
 const session = {
-  state: async () =>
-    await Promise.resolve({
-      online: true,
-      stale: false,
-      asOf: null,
-      mayMutate: true,
-      device: { role: 'admin' as const },
-      today: null,
-    }),
-  refreshToday: async () =>
-    await Promise.resolve({
-      online: true,
-      stale: false,
-      asOf: null,
-      mayMutate: true,
-      device: { role: 'admin' as const },
-      today: null,
-    }),
+  state: async () => await Promise.resolve(held),
+  refreshToday: async () => await Promise.resolve(held),
 };
 
 /** One call of every operation, with an input its schema accepts. */
@@ -94,8 +93,8 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
   'today.scheduleCallback': { callLogId: UUID, localDate: '2026-09-28', localTime: '09:00' },
   'today.releasePause': { holdId: UUID },
   'replies.open': { messageId: UUID },
-  'replies.confirm': { messageId: UUID, classification: 'human_reply', callback: null },
-  'replies.resolve': { messageId: UUID, classification: 'human_reply' },
+  'replies.confirm': { messageId: FIXTURE_IDS.message, classification: 'human_reply', callback: null },
+  'replies.resolve': { messageId: FIXTURE_IDS.message, opportunityId: FIXTURE_IDS.opportunity },
   'crm.openFirm': { firmId: UUID },
   'crm.saveContact': { contactId: UUID, fullName: 'Kim Placeholder', title: null, makePrimary: false },
   'crm.changeStage': { opportunityId: UUID, toStageKey: 'new', reason: null },
@@ -147,6 +146,24 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
   'diagnostics.resolveSend': { outboundMessageId: UUID, resolution: 'delivered' },
 });
 
+/**
+ * What has to have happened before an operation can reach the server at all.
+ *
+ * Resolving an ambiguity needs the card it is about to be open; enrolling and opening an
+ * opportunity need a firm page; committing an import needs a previewed file. Their
+ * traffic is not recorded — the recorder is made fresh afterwards — so what is compared
+ * is still one operation's own requests.
+ */
+const PRIME: Readonly<Partial<Record<OperationName, readonly [string, unknown][]>>> = Object.freeze({
+  // The card has to be the one being resolved, and one of its own candidates chosen:
+  // the bridge refuses anything else before it asks the server, which is right and
+  // would make this check pass by asking nothing.
+  'replies.resolve': [['open', { messageId: FIXTURE_IDS.message }]],
+  'crm.openOpportunity': [['openFirm', { firmId: UUID }]],
+  'crm.enroll': [['openFirm', { firmId: UUID }]],
+  'crm.commitImport': [['previewImport', { fileName: 'firms.csv', csv: 'name\nAspen Test Wealth\n' }]],
+});
+
 type Host = Readonly<Record<string, ((input?: unknown) => Promise<unknown>) | undefined>>;
 
 function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<string, Host>> {
@@ -179,6 +196,7 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
 describe('the registry records the traffic the bridges actually make', () => {
   it('declares every request, method and query string included', async () => {
     const undeclared: string[] = [];
+    const asked = new Set<OperationName>();
     for (const name of OPERATION_NAMES) {
       // Diagnostics is answered from `operationHost.ts` against the client directly
       // rather than from a bridge; `operations.test.ts` holds its two paths.
@@ -186,13 +204,34 @@ describe('the registry records the traffic the bridges actually make', () => {
       if (family === 'diagnostics') continue;
       const { seen, api } = requestsOf();
       const host = hostsFor(api)[family];
+      for (const [primed, input] of PRIME[name] ?? []) await host?.[primed]?.(input);
+      seen.length = 0;
       const call = host?.[method];
       if (call === undefined) throw new Error(`no host method for ${name}`);
       await call(INPUTS[name] ?? {});
+      if (seen.length > 0) asked.add(name);
       const declared = new Set(OPERATIONS[name].calls.map(entry => `${entry.method} ${entry.path}`));
       for (const request of new Set(seen)) if (!declared.has(request)) undeclared.push(`${name}: ${request}`);
     }
     expect(undeclared).toEqual([]);
+
+    // And every operation that says it reaches the server really did reach it: a
+    // fixture that stopped a bridge before its first call would otherwise make this
+    // check pass by asking nothing.
+    /*
+     * `today.refresh` is the one operation whose declared path is not this bridge's to
+     * ask for: `POST /today` is the *session manager's* read, made through
+     * `session.refreshToday()`, and `desktop.test.ts` holds it. Everything else that
+     * declares a call has to have made one here.
+     */
+    const silent = OPERATION_NAMES.filter(
+      name =>
+        !name.startsWith('diagnostics.') &&
+        name !== 'today.refresh' &&
+        OPERATIONS[name].calls.length > 0 &&
+        !asked.has(name),
+    );
+    expect(silent).toEqual([]);
   });
 
   it('really drives the conditional second calls, so the check above is not vacuous', async () => {
@@ -207,6 +246,9 @@ describe('the registry records the traffic the bridges actually make', () => {
       ['today.expand', 'POST /dial/check'],
       ['replies.refresh', 'POST /replies/settings'],
       ['crm.openFirm', 'GET /sequences'],
+      ['crm.openFirm', 'POST /sequences/versions'],
+      // The merge opens the firm it merged into, which reads the same three (item 10).
+      ['crm.resolveMerge', 'POST /sequences/versions'],
       ['settings.show', 'GET /postures'],
     ];
     for (const [name, request] of branches) {

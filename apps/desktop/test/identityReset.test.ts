@@ -1,4 +1,13 @@
 import { describe, expect, it } from 'vitest';
+
+/** Wait for something another task does, without a fixed tick. */
+async function eventually(condition: () => boolean, what: string): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (condition()) return;
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  throw new Error(`timed out waiting for ${what}`);
+}
 import { createAuthedClient } from '../src/main/authedClient.ts';
 import { createCrmBridge } from '../src/main/crmBridge.ts';
 import { createMailboxBridge } from '../src/main/mailboxBridge.ts';
@@ -65,9 +74,20 @@ function bridgesUnder(generation: { value: number }): {
    * server can give them nothing: what is left is what was kept in this process.
    */
   serveNothing(): void;
+  /**
+   * Hold the *next* call inside the server until `release` is called. Only the next:
+   * the reset that runs while it is held reads through the same server, and holding
+   * everything would deadlock the test rather than order it.
+   */
+  holdNextCall(): void;
+  release(): void;
+  /** Whether at least one call is waiting inside the server now. */
+  holding(): boolean;
 } {
   const answered: string[] = [];
   let serving = true;
+  let holdNext = 0;
+  const waiting: (() => void)[] = [];
   const api = createAuthedClient({
     baseUrl: 'https://api.example.test/',
     clientVersion: '1.0.13',
@@ -75,6 +95,12 @@ function bridgesUnder(generation: { value: number }): {
     send: async url => {
       const path = new URL(url).pathname;
       answered.push(path);
+      if (holdNext > 0) {
+        holdNext -= 1;
+        await new Promise<void>(resolve => {
+          waiting.push(resolve);
+        });
+      }
       const body = serving ? BRIDGE_ANSWERS[path] : undefined;
       // Anything this file has not written an answer for is a refusal, so a bridge that
       // needed it fails its own "before" assertion rather than looking empty by accident.
@@ -115,7 +141,20 @@ function bridgesUnder(generation: { value: number }): {
       ) as unknown as Forgettable & Record<string, unknown>,
     ],
   ]);
-  return { named, answered, serveNothing: () => { serving = false; } };
+  return {
+    named,
+    answered,
+    serveNothing: () => {
+      serving = false;
+    },
+    holdNextCall: () => {
+      holdNext += 1;
+    },
+    release: () => {
+      for (const resume of waiting.splice(0)) resume();
+    },
+    holding: () => waiting.length > 0,
+  };
 }
 
 /**
@@ -257,15 +296,20 @@ describe('every bridge forgets when the person changes (P0-A)', () => {
   it('does not repopulate a bridge when the stale read lands after the reset', async () => {
     for (const [name, read] of Object.entries(FIRST_READ)) {
       const generation = { value: 1 };
-      const { named, serveNothing } = bridgesUnder(generation);
+      const { named, serveNothing, holdNextCall, release, holding } = bridgesUnder(generation);
       const bridge = named.get(name);
       if (bridge === undefined) throw new Error(`no bridge named ${name}`);
       const call = bridge[read.method] as (argument?: unknown) => Promise<unknown>;
 
-      // In flight when the person leaves, and the reset runs before it lands.
+      // Held inside the server, so the order is the test's and not the scheduler's: the
+      // read is on the wire, the person leaves, the reset runs, and only then does the
+      // answer arrive.
+      holdNextCall();
       const started = call.call(bridge, read.input);
+      await eventually(() => holding(), `${name} to reach the server`);
       generation.value = 2;
       await resetBridges([bridge]);
+      release();
       await started;
       serveNothing();
 
@@ -330,6 +374,69 @@ describe('guardIdentity (P0-A)', () => {
 
     expect(await guarded.read()).toBe('the answer');
     expect(forgets.count).toBe(0);
+  });
+
+  it('clears again when the session moves during a clear, and stops after three passes', async () => {
+    /*
+     * `forget()` is asynchronous. A transition landing while one is running can put
+     * something into the bridge behind it — the clear returns having missed it. So the
+     * generation is taken before each clear and checked after, and the clear repeats.
+     * The bound is three: a Mac transitioning continuously is being cleared by those
+     * transitions anyway, and an unbounded loop here would never answer the caller.
+     */
+    let generation = 1;
+    const clears: number[] = [];
+    const held: { release: (() => void) | null } = { release: null };
+    const host = {
+      read: async () => await Promise.resolve('the answer'),
+      forget: async (): Promise<string> => {
+        clears.push(generation);
+        // Held open, so the test can move the session while this clear is running.
+        await new Promise<void>(resolve => {
+          held.release = resolve;
+        });
+        return 'empty';
+      },
+    };
+    const guarded = guardIdentity(host, () => generation);
+
+    const started = guarded.read();
+    generation = 2;
+    // Let the read finish and reach the first clear.
+    await eventually(() => held.release !== null, 'the first clear to start');
+
+    // Every clear finds the session has moved again, so every one is repeated.
+    for (let pass = 0; pass < 4; pass += 1) {
+      const waiting = held.release;
+      held.release = null;
+      generation += 1;
+      waiting?.();
+      await eventually(() => held.release !== null || clears.length >= 3, 'the next clear');
+      if (held.release === null) break;
+    }
+    held.release?.();
+
+    expect(await started).toBe('empty');
+    expect(clears).toHaveLength(3);
+  });
+
+  it('stops clearing as soon as one clear finishes with nothing moving under it', async () => {
+    let generation = 1;
+    let clears = 0;
+    const host = {
+      read: async () => await Promise.resolve('the answer'),
+      forget: async (): Promise<string> => {
+        clears += 1;
+        return await Promise.resolve('empty');
+      },
+    };
+    const guarded = guardIdentity(host, () => generation);
+
+    const started = guarded.read();
+    generation = 2;
+
+    expect(await started).toBe('empty');
+    expect(clears).toBe(1);
   });
 
   it('does not wrap forget itself, and keeps what is not a function', async () => {
