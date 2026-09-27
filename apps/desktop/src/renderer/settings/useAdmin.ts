@@ -74,37 +74,37 @@ export function useAdmin(tab: SettingsTab, identity: string | null, generation: 
         read(api => api.read('settings.show', { screen: screenForTab(next) }));
       },
       saveSetting: input => {
-        command(api => api.command('settings.saveSetting', input));
+        command(`setting:${input.settingKey}`, api => api.command('settings.saveSetting', input));
       },
       openHistory: settingKey => {
         read(api => api.read('settings.openHistory', { settingKey }));
       },
       retireStage: stageKey => {
-        command(api => api.command('settings.retireStage', { stageKey }));
+        command(`stage:${stageKey}`, api => api.command('settings.retireStage', { stageKey }));
       },
       acknowledgeAlert: alertId => {
-        command(api => api.command('settings.acknowledgeAlert', { alertId }));
+        command(`alert:${alertId}`, api => api.command('settings.acknowledgeAlert', { alertId }));
       },
       setSendingCap: input => {
-        command(api => api.command('settings.setSendingCap', input));
+        command('sending-cap', api => api.command('settings.setSendingCap', input));
       },
       recordSendingAuthentication: input => {
-        command(api => api.command('settings.recordSendingAuthentication', input));
+        command('sending-domain', api => api.command('settings.recordSendingAuthentication', input));
       },
       recordHolidayCalendar: input => {
-        command(api => api.command('settings.recordHolidayCalendar', input));
+        command('holidays', api => api.command('settings.recordHolidayCalendar', input));
       },
       addCallingNumber: input => {
-        command(api => api.command('settings.addCallingNumber', input));
+        command('calling-number', api => api.command('settings.addCallingNumber', input));
       },
       retireCallingNumber: identityId => {
-        command(api => api.command('settings.retireCallingNumber', { identityId }));
+        command(`calling-number:${identityId}`, api => api.command('settings.retireCallingNumber', { identityId }));
       },
       allowStates: input => {
-        command(api => api.command('settings.allowStates', input));
+        command('postures', api => api.command('settings.allowStates', input));
       },
       revokePosture: postureId => {
-        command(api => api.command('settings.revokePosture', { postureId }));
+        command(`posture:${postureId}`, api => api.command('settings.revokePosture', { postureId }));
       },
     }),
     [read, command],

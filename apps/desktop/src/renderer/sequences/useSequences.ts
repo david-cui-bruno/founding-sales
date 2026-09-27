@@ -41,19 +41,21 @@ export function useSequences(identity: string | null, generation: number, guard:
         read(api => api.read('sequences.openSequence', { sequenceId }));
       },
       createSequence: name => {
-        command(api => api.command('sequences.createSequence', { name }));
+        command('new-sequence', api => api.command('sequences.createSequence', { name }));
       },
       saveSteps: input => {
-        command(api => api.command('sequences.saveSteps', { sequenceVersionId: input.sequenceVersionId, steps: [...input.steps] }));
+        command(`steps:${input.sequenceVersionId}`, api =>
+          api.command('sequences.saveSteps', { sequenceVersionId: input.sequenceVersionId, steps: [...input.steps] }),
+        );
       },
       saveTemplate: draft => {
-        command(api => api.command('sequences.saveTemplate', draft));
+        command('template-form', api => api.command('sequences.saveTemplate', draft));
       },
       publish: sequenceVersionId => {
-        command(api => api.command('sequences.publish', { sequenceVersionId }));
+        command(`version:${sequenceVersionId}`, api => api.command('sequences.publish', { sequenceVersionId }));
       },
       retire: sequenceVersionId => {
-        command(api => api.command('sequences.retire', { sequenceVersionId }));
+        command(`version:${sequenceVersionId}`, api => api.command('sequences.retire', { sequenceVersionId }));
       },
     }),
     [read, command],

@@ -239,10 +239,14 @@ test('the route is in the address, so the View menu’s Reload comes back to the
 
 test('leaving Replies while a read is in flight does not leave the next view inert', async ({ page }) => {
   /*
-   * The column belongs to the shell, and Replies makes it read-only while a call is on
-   * the wire so a second press of Confirm sends nothing. Until 1.0.12 nothing released
-   * that hold when the view was left: navigating during the call left `inert` on the
-   * column, and every view drawn after it could be read and not touched.
+   * A read left on the wire when the view is left.
+   *
+   * Until 1.0.12 Replies made the whole column `inert` while a call was on the wire and
+   * nothing released that hold when the view was left: navigating during the call left
+   * `inert` on the column, and every view drawn after it could be read and not touched.
+   * Since the review of 1.0.13 the hold is the card's own (P1-4) and goes when the card
+   * does, which is the same guarantee with nothing to release — so what is asserted here
+   * is the outcome rather than the mechanism.
    */
   server = await startAppServer({ replies: replyState() });
   await page.goto(server.url('#replies'));
@@ -250,7 +254,10 @@ test('leaving Replies while a read is in flight does not leave the next view ine
 
   const release = server.hold('replies.open');
   await page.getByTestId('reply-open').nth(0).click();
-  await expect(page.getByTestId('column')).toHaveAttribute('aria-busy', 'true');
+  await expect(page.getByTestId('reply-open').nth(0)).toHaveAttribute('aria-busy', 'true');
+  // The read holds that card's own button; Refresh and the sidebar are not waiting for it.
+  await expect(page.getByTestId('refresh')).toBeEnabled();
+  await expect(page.getByTestId('nav-today')).toBeEnabled();
 
   // Away while it is still holding, and the answer lands in a window that has left.
   await page.getByTestId('nav-today').click();
@@ -276,7 +283,9 @@ test('leaving Replies while a command is in flight strands nothing and brings no
 
   const release = server.hold('replies.confirm');
   await page.getByTestId('confirm').click();
-  await expect(page.getByTestId('column')).toHaveAttribute('aria-busy', 'true');
+  await expect(page.getByTestId('confirm')).toHaveAttribute('aria-busy', 'true');
+  // This card waits for its own confirmation; the sidebar is not part of the form.
+  await expect(page.getByTestId('nav-today')).toBeEnabled();
 
   await page.getByTestId('nav-today').click();
   release();
@@ -293,8 +302,8 @@ test('leaving Replies while a command is in flight strands nothing and brings no
 test('a confirmation held across a session change brings no reply back', async ({ page }) => {
   // The same command race as the navigation one, at the other transition: the person
   // signs out, or this Mac is revoked, while a confirmation is on the wire. The view
-  // goes with the session, the hold on the column goes with it, and nothing the
-  // command would have re-read is drawn.
+  // goes with the session, the card's hold goes with it, and nothing the command would
+  // have re-read is drawn.
   server = await startAppServer({ replies: replyState() });
   await page.goto(server.url('#replies'));
   await page.getByTestId('reply-open').nth(0).click();
@@ -302,7 +311,7 @@ test('a confirmation held across a session change brings no reply back', async (
 
   const release = server.hold('replies.confirm');
   await page.getByTestId('confirm').click();
-  await expect(page.getByTestId('column')).toHaveAttribute('aria-busy', 'true');
+  await expect(page.getByTestId('confirm')).toHaveAttribute('aria-busy', 'true');
 
   await page.evaluate(() => {
     const listeners = (globalThis as { __sessionListeners?: ((change: unknown) => void)[] }).__sessionListeners ?? [];

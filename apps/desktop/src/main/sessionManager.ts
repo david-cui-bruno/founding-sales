@@ -46,6 +46,13 @@ import type { OfflineCache } from './offlineCache.ts';
  * at the API, not instead of it: the API is the authority, and this is what stops the
  * app offering a person a button that cannot work.
  *
+ * **Every identity transition empties this Mac.** A sign-out (confirmed *or* waiting to
+ * be told to the server), another workspace, a role the server now gives this
+ * membership, a revocation: each wipes the encrypted Today cache and the list held in
+ * memory before it announces, and `registerWindows` resets every bridge's snapshot on
+ * the announcement. Announcing first and wiping later is how a page drawn for the last
+ * person stayed on screen, and how a stale answer landed in the next one's window.
+ *
  * **Offline is a fact, not a gate (wave 1).** `online` says whether the last call reached
  * the server, and every call says so — the bridges' own calls report through
  * `noteConnection` — so one failed renewal after the Mac wakes no longer greys out every
@@ -69,6 +76,11 @@ export interface SessionManagerOptions {
   readonly sleep?: (ms: number) => Promise<void>;
   /** Renew this long before the access session actually expires. */
   readonly renewMarginMs?: number;
+  /** How often to try a sign-out the server has not been told about (A2, P1-1). */
+  readonly signOutRetryMs?: number;
+  /** Injected so a test can drive the retry clock; the real ones by default. */
+  readonly setInterval?: (run: () => void, ms: number) => ReturnType<typeof setInterval>;
+  readonly clearInterval?: (handle: ReturnType<typeof setInterval>) => void;
 }
 
 export interface SessionManager {
@@ -120,6 +132,23 @@ export interface SessionManager {
 /** The name a Mac signs in under when nobody has named it. */
 export const DEFAULT_DEVICE_LABEL = 'This Mac';
 
+/**
+ * Refusals that mean the server has no usable device here any more (wave 3b, A2).
+ *
+ * The same list as `REVOCATIONS`, used for a different question: not "must this Mac
+ * wipe" but "is there anything left to sign out". `reauthentication_required` is in it
+ * for the reason written on `finishSignOut`.
+ */
+const ENDS_THE_REGISTRATION = new Set([
+  'device_revoked',
+  'membership_inactive',
+  'credential_reuse',
+  'credential_unknown',
+  'credential_expired',
+  'reauthentication_required',
+  'session_ended',
+]);
+
 /** Refusals that mean this Mac's registration is over and its cache must go. */
 const REVOCATIONS = new Set([
   'device_revoked',
@@ -135,11 +164,25 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
   const claimTimeoutMs = options.claimTimeoutMs ?? 300_000;
   const claimIntervalMs = options.claimIntervalMs ?? 1000;
   const renewMarginMs = options.renewMarginMs ?? 60_000;
+  const signOutRetryMs = options.signOutRetryMs ?? 60_000;
+  const startTimer = options.setInterval ?? ((run, ms) => setInterval(run, ms));
+  const stopTimer = options.clearInterval ?? ((handle) => { clearInterval(handle); });
+  let retrying: ReturnType<typeof setInterval> | null = null;
   const sleep = options.sleep ?? (async (ms: number) => { await new Promise(resolve => setTimeout(resolve, ms)); });
 
   let device: StoredDevice | null = null;
   let session: StoredSession | null = null;
   let supported: ClientVersionRange | null = null;
+  /**
+   * The API refused this build by version (P1-2).
+   *
+   * A refusal says so without saying what the supported range now is, so the range this
+   * build last read cannot be trusted to decide the screen: until 1.0.13's review a
+   * `client_upgrade_required` from an open was a notice under a Today the person could
+   * still press. It is the upgrade screen and no mutation from the refusal onwards, and
+   * it clears only when a call is accepted again.
+   */
+  let refusedForVersion = false;
   let online = true;
   let notice: string | null = null;
   let today: CachedToday | null = null;
@@ -177,10 +220,18 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
   const identityOf = (): string | null =>
     device === null || !signedIn() ? null : `${device.workspaceId}/${device.deviceId}/${device.role}`;
 
-  const announce = (reason: string): void => {
+  /**
+   * Tell the window a transition happened.
+   *
+   * Normally the identity changing is what makes it one. `force` is for the transitions
+   * whose identity is already null on both sides — a pending sign-out completing — which
+   * the window still has to hear about, because the line under the sign-in form says
+   * the server has yet to be told and now it has been.
+   */
+  const announce = (reason: string, force = false): void => {
     const identity = identityOf();
     const first = announced === undefined;
-    if (!first && identity === announced) return;
+    if (!first && identity === announced && !force) return;
     announced = identity;
     if (first) return;
     generation += 1;
@@ -188,21 +239,53 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
     for (const listener of listeners) listener(change);
   };
 
-  const forget = async (reason: string): Promise<void> => {
+  /**
+   * Everything this Mac was holding for the person who is leaving it.
+   *
+   * The encrypted cache on disk and the list in memory, together, before the window is
+   * told. Called by every identity transition, not only by a completed sign-out: a
+   * sign-out waiting to be told to the server, and a role change, are transitions too,
+   * and leaving the last role's list in the cache is leaving it to be read.
+   */
+  const dropHeldData = async (): Promise<void> => {
     await options.cache.wipe();
-    await options.store.forget();
-    device = null;
-    session = null;
     today = null;
     asOf = null;
     stale = false;
     devices = null;
+  };
+
+  const forget = async (reason: string): Promise<void> => {
+    await dropHeldData();
+    await options.store.forget();
+    device = null;
+    session = null;
     notice = reason;
-    announce(reason);
+    announce(reason, true);
+  };
+
+  /**
+   * The device secret, with "there is none" told apart from "could not ask" (P1-3).
+   *
+   * A locked Keychain, a killed `security`, a daemon that is not answering: every one
+   * of those used to read as "no secret", and the startup check (A3) would then wipe a
+   * perfectly good registration. Only `errSecItemNotFound` is absence; anything else is
+   * a failure to ask, and nothing is forgotten for it.
+   */
+  const readDeviceSecret = async (): Promise<
+    { readonly kind: 'secret'; readonly value: string } | { readonly kind: 'absent' } | { readonly kind: 'unreadable' }
+  > => {
+    try {
+      const value = await options.store.deviceSecret();
+      return value === null ? { kind: 'absent' } : { kind: 'secret', value };
+    } catch {
+      return { kind: 'unreadable' };
+    }
   };
 
   const noteRefusal = async (reason: string): Promise<void> => {
     notice = reason;
+    if (reason === 'client_upgrade_required') refusedForVersion = true;
     if (REVOCATIONS.has(reason)) await forget(reason);
   };
 
@@ -215,41 +298,109 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
    * Tell the server about a sign-out this Mac has already shown (wave 3b, A2).
    *
    * Open, sign out, and only then forget: the sign-out call needs a token, and the
-   * device secret is the only credential that gets one. A refusal that means the
-   * registration is already over is a finished sign-out — the server has no device
-   * left to end — so the secret goes then too. Anything else leaves the flag where it
-   * is for the next attempt.
+   * device secret is the only credential that gets one. (The *immediate* sign-out does
+   * not come through here when this Mac already holds a live session — see `signOut` —
+   * because the token in hand is the one the call needs.)
+   *
+   * **It forgets only the registration it started on** (P0-B). A retry can be on the
+   * wire for minutes, and in that time somebody may sign in again: a `forget()` bound
+   * to nothing would then delete the *new* registration and the new Keychain secret.
+   * The device id and the session generation are captured at entry and checked before
+   * anything is deleted; if either has moved, the answer is dropped.
+   *
+   * **A refusal that ends the registration is a finished sign-out.** `device_revoked`
+   * and the rest mean the server has no device left to end. So does
+   * `reauthentication_required`, which is the one worth writing down: a device's
+   * `reauthenticate_after` is set once at the claim and never moves, so past that
+   * instant that device can never mint a session again on any path — open, renew or
+   * command — and the row, whatever its status column says, cannot be used by anybody.
+   * There is nothing this Mac could do with the secret afterwards, and keeping it to
+   * retry for ever would be keeping a secret for a device that is already inert.
+   *
+   * Anything else — offline, a 500, a Keychain that could not be asked — leaves the
+   * flag where it is for the next attempt.
    */
+  let signingOut: Promise<boolean> | null = null;
+
   const finishSignOut = async (): Promise<boolean> => {
+    if (signingOut !== null) return await signingOut;
     if (device === null || device.signOutPending !== true) return true;
-    const secret = await options.store.deviceSecret();
-    if (secret === null) {
-      await forget('signed_out');
-      return true;
-    }
-    const opened = await options.api.openSession({
-      workspaceId: device.workspaceId,
-      deviceId: device.deviceId,
-      deviceSecret: secret,
-    });
-    if (!opened.ok) {
-      online = !opened.offline;
-      if (opened.offline || !REVOCATIONS.has(opened.reason)) {
+    const owner = device.deviceId;
+    const mine = generation;
+    /** The registration this attempt started on is still the one on this Mac. */
+    const stillMine = (): boolean =>
+      generation === mine && device !== null && device.deviceId === owner && device.signOutPending === true;
+
+    signingOut = (async (): Promise<boolean> => {
+      const secret = await readDeviceSecret();
+      if (secret.kind === 'unreadable') {
+        notice = 'keychain_unreadable';
+        return false;
+      }
+      if (secret.kind === 'absent') {
+        if (stillMine()) await forget('signed_out');
+        return true;
+      }
+      const opened = await options.api.openSession({
+        workspaceId: device?.workspaceId ?? '',
+        deviceId: owner,
+        deviceSecret: secret.value,
+      });
+      if (!opened.ok) {
+        if (!stillMine()) return true;
+        online = !opened.offline;
+        if (opened.offline || !ENDS_THE_REGISTRATION.has(opened.reason)) {
+          notice = 'sign_out_pending';
+          return false;
+        }
+        await forget('signed_out');
+        return true;
+      }
+      online = true;
+      const told = await options.api.signOut(opened.value.accessToken);
+      if (!stillMine()) return true;
+      if (!told.ok && (told.offline || !ENDS_THE_REGISTRATION.has(told.reason))) {
+        online = !told.offline;
         notice = 'sign_out_pending';
         return false;
       }
       await forget('signed_out');
       return true;
+    })();
+    try {
+      return await signingOut;
+    } finally {
+      signingOut = null;
     }
-    online = true;
-    const told = await options.api.signOut(opened.value.accessToken);
-    if (!told.ok && (told.offline || !REVOCATIONS.has(told.reason))) {
-      online = !told.offline;
-      notice = 'sign_out_pending';
-      return false;
-    }
-    await forget('signed_out');
-    return true;
+  };
+
+  /**
+   * Try again, on a clock, while a sign-out is owed to the server (P1-1).
+   *
+   * `noteConnection` was the whole of the reconnect trigger until the review, and its
+   * only production caller is the authenticated client — which a pending Mac never
+   * uses, because nothing but the retry may use the credential it is keeping. So the
+   * retry never fired, and the line under the sign-in form never went away. A timer is
+   * what a Mac with nothing else to say to the server has: it starts when the flag is
+   * set and at launch, and stops the moment the sign-out lands.
+   */
+  const startSignOutRetries = (): void => {
+    if (retrying !== null || device === null || device.signOutPending !== true) return;
+    retrying = startTimer(() => {
+      if (device === null || device.signOutPending !== true) {
+        stopSignOutRetries();
+        return;
+      }
+      void finishSignOut().then(done => {
+        if (done) stopSignOutRetries();
+      });
+    }, signOutRetryMs);
+  };
+
+  const stopSignOutRetries = (): void => {
+    if (retrying === null) return;
+    stopTimer(retrying);
+    retrying = null;
   };
 
   /**
@@ -284,25 +435,37 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
      * `device.json` says this Mac is paired and the Keychain has no `device-secret`:
      * a Mac restored without its Keychain, or one whose item somebody removed. There
      * is nothing to present and nothing to wait for, so the registration goes here,
-     * before anything reads with it — including a leftover `refresh-credential`, which
-     * `forget()` removes with the rest and which nothing has asked for since wave 3b.
+     * before anything reads with it.
+     *
+     * A Keychain that could not be *asked* is a different thing and is not a reason to
+     * forget anything: the notice says so and the registration stays (P1-3).
      */
-    if (device !== null && (await options.store.deviceSecret()) === null) {
-      await options.cache.wipe();
-      await options.store.forget();
-      device = null;
-      session = null;
-      today = null;
-      asOf = null;
-      stale = false;
-      notice = 'not_signed_in';
+    if (device !== null) {
+      const secret = await readDeviceSecret();
+      if (secret.kind === 'absent') {
+        await dropHeldData();
+        await options.store.forget();
+        device = null;
+        session = null;
+        notice = 'not_signed_in';
+      } else if (secret.kind === 'unreadable') {
+        notice = 'keychain_unreadable';
+      } else {
+        // P2-2: 1.0.12's rotating credential has no caller and no reason to sit in the
+        // Keychain until the next sign-out. It goes at the first startup that finds it.
+        await options.store.forgetRefreshCredential();
+      }
     }
     // Records who this Mac is without announcing it: starting up is not a transition.
     announce('loaded');
     // A sign-out this Mac showed but never told the server about (A2). Not awaited by
     // the caller: the window is already the sign-in form, and this only decides whether
     // the line under it goes away.
-    if (device !== null && device.signOutPending === true) void finishSignOut();
+    if (device !== null && device.signOutPending === true) {
+      void finishSignOut().then(done => {
+        if (!done) startSignOutRetries();
+      });
+    }
   };
 
   /**
@@ -318,16 +481,21 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
     renewal = (async (): Promise<ApiOutcome<StoredSession>> => {
       const registration = device;
       if (registration === null) return { ok: false, reason: 'not_signed_in', offline: false };
-      const secret = await options.store.deviceSecret();
-      if (secret === null) {
+      const secret = await readDeviceSecret();
+      if (secret.kind === 'absent') {
         await forget('not_signed_in');
         return { ok: false, reason: 'not_signed_in', offline: false };
+      }
+      if (secret.kind === 'unreadable') {
+        // The Keychain could not answer. Nothing is forgotten for that (P1-3).
+        notice = 'keychain_unreadable';
+        return { ok: false, reason: 'keychain_unreadable', offline: false };
       }
       renewals += 1;
       const outcome = await options.api.openSession({
         workspaceId: registration.workspaceId,
         deviceId: registration.deviceId,
-        deviceSecret: secret,
+        deviceSecret: secret.value,
       });
       if (!outcome.ok) {
         online = !outcome.offline;
@@ -335,6 +503,7 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
         return outcome;
       }
       online = true;
+      refusedForVersion = false;
       supported = outcome.value.supportedClientVersions;
       const opened: StoredSession = {
         accessToken: outcome.value.accessToken,
@@ -351,8 +520,11 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
         const current: StoredDevice = { ...device, role: outcome.value.role };
         device = current;
         await options.store.saveDevice(current);
-        // The window is holding a page drawn for the old role. It goes now, not at the
-        // next read: 8.2's difference between the two roles is what is on the screen.
+        // The window is holding a page drawn for the old role, and the cache is holding
+        // a list read under it. Both go now, not at the next read: 8.2's difference
+        // between the two roles is what is on the screen, and a salesperson's Today is
+        // not an admin's.
+        await dropHeldData();
         announce('role_changed');
       }
       return { ok: true, value: opened };
@@ -381,6 +553,7 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
   };
 
   const screenOf = (): DesktopState['screen'] => {
+    if (refusedForVersion) return 'upgrade_required';
     if (supported !== null && clientCompatibility(supported, options.clientVersion).kind === 'upgrade_required') {
       return 'upgrade_required';
     }
@@ -405,7 +578,7 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
       online,
       stale,
       asOf,
-      mayMutate: signedIn() && (supported === null || mayMutate(supported, options.clientVersion)),
+      mayMutate: signedIn() && !refusedForVersion && (supported === null || mayMutate(supported, options.clientVersion)),
       notice,
       today,
       rememberedWorkspace: remembered,
@@ -418,9 +591,19 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
     noteConnection(reachable) {
       const returned = reachable && !online;
       online = reachable;
-      // Back online with a sign-out still owed to the server (A2). One attempt, not a
-      // loop: every later call that reaches the server comes through here too.
-      if (returned && device !== null && device.signOutPending === true) void finishSignOut();
+      /*
+       * Back online with a sign-out still owed to the server (A2).
+       *
+       * A pending Mac makes no authenticated calls, so in production nothing reaches
+       * this while one is owed — the clock in `startSignOutRetries` is what actually
+       * finishes it (P1-1). This stays because it costs one attempt and it is the
+       * fastest path when something *does* reach the server.
+       */
+      if (returned && device !== null && device.signOutPending === true) {
+        void finishSignOut().then(done => {
+          if (done) stopSignOutRetries();
+        });
+      }
     },
 
     async noteAuthRefusal(reason, sessionGeneration) {
@@ -442,16 +625,13 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
       await ensureLoaded();
       if (sessionGeneration !== generation) return;
       notice = reason;
-      await options.cache.wipe();
+      await dropHeldData();
       if (sessionGeneration !== generation) return;
       await options.store.forget();
       if (sessionGeneration !== generation) return;
       device = null;
       session = null;
-      today = null;
-      asOf = null;
-      stale = false;
-      announce(reason);
+      announce(reason, true);
     },
 
     sessionGeneration: () => generation,
@@ -486,6 +666,18 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
 
     async signIn(input) {
       await ensureLoaded();
+      /*
+       * A sign-out still on the wire finishes before a sign-in starts (P0-B).
+       *
+       * Without this the two interleave: the sign-in writes the new registration and
+       * the new Keychain secret, and the retry — which began on the old one — reaches
+       * its `forget()` afterwards and deletes them. `finishSignOut` also refuses to
+       * forget a registration that is no longer the one it started on, so this is the
+       * second of two locks rather than the only one; a person pressing Sign in should
+       * not have to race anything.
+       */
+      if (signingOut !== null) await signingOut.catch(() => false);
+      stopSignOutRetries();
       notice = null;
       const workspaceId = input.workspaceId ?? remembered?.workspaceId ?? null;
       const deviceLabel = input.deviceLabel ?? remembered?.deviceLabel ?? DEFAULT_DEVICE_LABEL;
@@ -523,6 +715,16 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
           // build never stores it and never presents it: the device secret is what
           // `POST /auth/session/open` takes, and it is the only one kept.
           await options.store.save(registered, { deviceSecret: grant.deviceSecret });
+          /*
+           * Anything still held belongs to somebody else.
+           *
+           * Every way into a new registration passes a transition that has already
+           * wiped — a sign-out confirmed or pending, a revocation — so this is normally
+           * nothing to do, and it is conditional so that it stays nothing to do rather
+           * than a second wipe on every sign-in. It is here because "normally" is not
+           * a guarantee and a stale list is the one thing that must not survive.
+           */
+          if (today !== null) await dropHeldData();
           device = registered;
           session = {
             accessToken: grant.accessToken,
@@ -530,6 +732,7 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
             reauthenticateAfter: grant.reauthenticateAfter,
           };
           supported = grant.supportedClientVersions;
+          refusedForVersion = false;
           notice = null;
           await remember({ workspaceId: grant.workspaceId, deviceLabel });
           // Somebody else may have been here a moment ago; the window empties what it
@@ -567,15 +770,42 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
     async signOut() {
       await ensureLoaded();
       if (device === null) return snapshot();
-      if (device.signOutPending !== true) {
-        const pending: StoredDevice = { ...device, signOutPending: true };
-        device = pending;
-        await options.store.saveDevice(pending);
-        // The window empties now: what is on screen is the last person's.
-        notice = 'signed_out';
-        announce('signed_out');
+      if (device.signOutPending === true) {
+        await finishSignOut();
+        startSignOutRetries();
+        return snapshot();
       }
-      await finishSignOut();
+
+      // The token in hand is the one the sign-out needs (P0-C). Opening a second
+      // session to end the first is a round trip for nothing, and a round trip that
+      // can fail; only the retry path, which holds no token, has to open first.
+      const held =
+        session !== null && Date.parse(session.accessTokenExpiresAt) > options.now().getTime() ? session : null;
+
+      const pending: StoredDevice = { ...device, signOutPending: true };
+      device = pending;
+      await options.store.saveDevice(pending);
+      // The window empties now, and so does this Mac: what is on screen and what is in
+      // the cache are the last person's (P0-A).
+      session = null;
+      await dropHeldData();
+      notice = 'signed_out';
+      announce('signed_out');
+
+      if (held !== null) {
+        const told = await options.api.signOut(held.accessToken);
+        if (told.ok || (!told.offline && ENDS_THE_REGISTRATION.has(told.reason))) {
+          await forget('signed_out');
+          return snapshot();
+        }
+        online = !told.offline;
+        notice = 'sign_out_pending';
+        startSignOutRetries();
+        return snapshot();
+      }
+
+      const done = await finishSignOut();
+      if (!done) startSignOutRetries();
       return snapshot();
     },
 
@@ -660,7 +890,7 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
       // A sign-out waiting to be told to the server is a signed-out Mac: the credential
       // it is keeping is for the retry and nothing else (A2).
       if (!signedIn()) return { allowed: false, refusal: 'not_signed_in' };
-      if (supported !== null && !mayMutate(supported, options.clientVersion)) {
+      if (refusedForVersion || (supported !== null && !mayMutate(supported, options.clientVersion))) {
         return { allowed: false, refusal: 'client_upgrade_required' };
       }
       return { allowed: true };

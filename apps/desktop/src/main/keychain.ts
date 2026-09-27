@@ -82,13 +82,19 @@ export function keychainCommand(
   }
 }
 
+/**
+ * `errSecItemNotFound`, as `security` exits it. The one code that means "no such item"
+ * rather than "this Keychain could not answer" (1.0.13, P1-3).
+ */
+export const ITEM_NOT_FOUND = 44;
+
 export class KeychainError extends Error {
   // An explicit field, not a constructor parameter property: the package step loads
   // main-process files under Node's strip-only TypeScript, which refuses parameter
   // properties (lane g86; `test/packaging/stripOnly.test.ts`).
-  readonly reason: 'unavailable' | 'write_failed' | 'remove_failed';
+  readonly reason: 'unavailable' | 'read_failed' | 'write_failed' | 'remove_failed';
 
-  constructor(reason: 'unavailable' | 'write_failed' | 'remove_failed') {
+  constructor(reason: 'unavailable' | 'read_failed' | 'write_failed' | 'remove_failed') {
     super(`keychain_${reason}`);
     this.reason = reason;
     this.name = 'KeychainError';
@@ -135,9 +141,17 @@ export function createKeychainVault(options: KeychainVaultOptions): SecretVault 
   return {
     async read(account) {
       const result = await run('read', account);
-      // `security` exits 44 when the item is not there. Anything else non-zero is a
-      // real failure, but an absent secret is a normal state: this Mac is not paired.
-      if (result.code !== 0) return null;
+      /*
+       * Only 44 is absence (1.0.13, P1-3).
+       *
+       * `security` exits 44 — `errSecItemNotFound` — when there is no such item, and an
+       * absent secret is a normal state: this Mac is not paired. Every other non-zero
+       * exit is a Keychain that could not be *asked*: locked, denied, a keychain file
+       * that will not open. Reading those as "nothing there" is how a Mac would decide
+       * its owner had signed out and delete a registration that was never gone.
+       */
+      if (result.code === ITEM_NOT_FOUND) return null;
+      if (result.code !== 0) throw new KeychainError('read_failed');
       const value = result.stdout.trim();
       return value.length === 0 ? null : value;
     },

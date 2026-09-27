@@ -47,11 +47,14 @@ export function StepEditor({
   panel,
   version,
   state,
+  saving,
   onSave,
 }: {
   readonly panel: VersionPanel;
   readonly version: SequenceVersion;
   readonly state: SequenceState;
+  /** This version's own Save is on the wire; another version's is not this one's wait. */
+  readonly saving: boolean;
   onSave(steps: readonly DraftStep[]): void;
 }): JSX.Element {
   const [steps, setSteps] = useState<readonly DraftStep[]>(() => draftStepsOf(version));
@@ -276,7 +279,8 @@ export function StepEditor({
         <Button
           size="sm"
           data-testid="draft-save"
-          disabled={!panel.editable || !changed || issues.length > 0}
+          disabled={!panel.editable || !changed || issues.length > 0 || saving}
+          {...(saving ? { 'aria-busy': true } : {})}
           onClick={() => {
             onSave(steps);
           }}

@@ -99,20 +99,25 @@ function Holidays({ view, actions }: { readonly view: AdminView; readonly action
 export function Administration({
   view,
   actions,
+  busy,
 }: {
   readonly view: AdminView;
   readonly actions: AdminActions;
+  /** Whether one named form's own command is on the wire; the sections do not share. */
+  busy(form: string): boolean;
 }): JSX.Element {
   return (
     <>
       <CallingNumberSection
         section={view.callingNumber}
+        adding={busy('calling-number')}
         onAdd={actions.addCallingNumber}
         onRetire={actions.retireCallingNumber}
       />
       {view.postures === null ? null : (
         <PosturesSection
           section={view.postures}
+          adding={busy('postures')}
           onAllow={actions.allowStates}
           onRevoke={actions.revokePosture}
           onRetry={() => {
@@ -133,6 +138,7 @@ export function Administration({
               key={row.settingKey}
               row={row}
               history={view.history}
+              saving={busy(`setting:${row.settingKey}`)}
               onSave={actions.saveSetting}
               onHistory={actions.openHistory}
             />

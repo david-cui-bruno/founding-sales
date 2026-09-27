@@ -1,7 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import type { OperationApi } from '../../shared/operations.ts';
-import { holdInert } from '../busy.ts';
 import { operations } from './bridges.ts';
 import type { Generation } from './generation.ts';
 
@@ -17,9 +16,12 @@ import type { Generation } from './generation.ts';
  *   * the answer is kept **under the person signed in and the session generation**, so a
  *     sign-out, another workspace or a changed role drops it with everything else, and a
  *     read still on the wire when that happens writes nothing (`generation.ts`);
- *   * the column is **read-only while one of this view's commands is on the wire**, under
- *     this view's own reason, so a second press of Save sends nothing and an update being
- *     installed and a command in flight neither release the other;
+ *   * **the form that sent a command is the only thing that waits for it.** A second
+ *     press of that Save sends nothing; a Save somewhere else on the page, and reading
+ *     the page at all, are unaffected. Until the review of 1.0.13 one command made the
+ *     whole column inert, which is a page that stops answering because one field was
+ *     saved — and worse on a page like Administration, where the sections are
+ *     independent. `busy(form)` is the scope, and the form name is the caller's;
  *   * a bridge that *rejects* — an IPC fault, never a refusal, which arrives as a state —
  *     leaves what was on screen and says nothing in a dialog.
  *
@@ -31,14 +33,22 @@ export interface ViewState<T> {
   readonly state: T | null;
   /** How many calls are in flight; the view is `aria-busy` while any are. */
   readonly pending: number;
-  /** How many of those are commands. The column is read-only while any is on the wire. */
+  /** How many of those are commands. */
   readonly commands: number;
+  /**
+   * Whether this form's own command is on the wire.
+   *
+   * The name is the caller's, and it names *the thing being saved* rather than the
+   * control — `setting:business_time_zone`, `contact:<id>` — so two rows of the same
+   * kind wait for their own command and not for each other's.
+   */
+  busy(form: string): boolean;
   /** Whether the registry is present at all: a page built without the preload has none. */
   readonly available: boolean;
-  /** A read. Its answer replaces the state; it does not hold the column. */
+  /** A read. Its answer replaces the state; nothing waits for it. */
   read(next: (api: OperationApi) => Promise<T>): void;
-  /** A command. The column is read-only until it answers. */
-  command(next: (api: OperationApi) => Promise<T>): void;
+  /** A command. `busy(form)` is true until it answers. */
+  command(form: string, next: (api: OperationApi) => Promise<T>): void;
 }
 
 let views = 0;
@@ -58,17 +68,17 @@ export function useViewState<T>(options: {
   const available = api !== undefined;
   const enabled = identity !== null && available;
   const [pending, setPending] = useState(0);
-  const [commands, setCommands] = useState(0);
+  /** The forms whose command is on the wire, each with how many (a press each). */
+  const [inFlight, setInFlight] = useState<ReadonlyMap<string, number>>(() => new Map());
+  const commands = [...inFlight.values()].reduce((total, count) => total + count, 0);
   /*
-   * One name per mounted view.
+   * One name per mounted view, and part of the Query key.
    *
-   * It is the inert reason, so two views' commands never release each other's hold on
-   * the column; and it is part of the Query key, so *asking for a view is asking the
-   * main process what it is holding now*. The shell mounts these afresh whenever
-   * somebody navigates (`viewKeyOf`'s epoch), and a key without the mount in it would
-   * mean a second visit drew the cache and asked nothing — pressing Firms while a firm
-   * page was open would stay on the firm, and an answer still on the wire from the last
-   * mount would land in the view that replaced it.
+   * *Asking for a view is asking the main process what it is holding now.* The shell
+   * mounts these afresh whenever somebody navigates (`viewKeyOf`'s epoch), and a key
+   * without the mount in it would mean a second visit drew the cache and asked nothing
+   * — pressing Firms while a firm page was open would stay on the firm, and an answer
+   * still on the wire from the last mount would land in the view that replaced it.
    */
   const reason = useMemo(() => {
     views += 1;
@@ -94,10 +104,21 @@ export function useViewState<T>(options: {
     retry: false,
   });
 
+  const hold = useCallback((form: string | null, by: 1 | -1): void => {
+    if (form === null) return;
+    setInFlight(current => {
+      const next = new Map(current);
+      const count = (next.get(form) ?? 0) + by;
+      if (count <= 0) next.delete(form);
+      else next.set(form, count);
+      return next;
+    });
+  }, []);
+
   const keep = useCallback(
-    (next: Promise<T>, isCommand: boolean): void => {
+    (next: Promise<T>, form: string | null): void => {
       setPending(count => count + 1);
-      if (isCommand) setCommands(count => count + 1);
+      hold(form, 1);
       const started = guard.now();
       void next
         .then(
@@ -112,42 +133,34 @@ export function useViewState<T>(options: {
         )
         .finally(() => {
           setPending(count => count - 1);
-          if (isCommand) setCommands(count => count - 1);
+          hold(form, -1);
         });
     },
-    [client, guard, identity, key, reason],
+    [client, guard, hold, identity, key, reason],
   );
 
   const read = useCallback(
     (next: (bridge: OperationApi) => Promise<T>): void => {
       const bridge = operations();
       if (bridge === undefined) return;
-      keep(next(bridge), false);
+      keep(next(bridge), null);
     },
     [keep],
   );
 
   const command = useCallback(
-    (next: (bridge: OperationApi) => Promise<T>): void => {
+    (form: string, next: (bridge: OperationApi) => Promise<T>): void => {
       const bridge = operations();
       if (bridge === undefined) return;
-      keep(next(bridge), true);
+      keep(next(bridge), form);
     },
     [keep],
   );
 
-  useEffect(() => {
-    // The column, not whichever node this view happens to draw into: the rule is about
-    // the whole column, as it was when each view was its own window.
-    const column = document.querySelector('[data-region="column"]');
-    if (column instanceof HTMLElement) holdInert(column, reason, commands > 0);
-    return () => {
-      if (column instanceof HTMLElement) holdInert(column, reason, false);
-    };
-  }, [commands, reason]);
+  const busy = useCallback((form: string): boolean => inFlight.has(form), [inFlight]);
 
   return useMemo(
-    () => ({ state: query.data ?? null, pending, commands, available, read, command }),
-    [query.data, pending, commands, available, read, command],
+    () => ({ state: query.data ?? null, pending, commands, available, busy, read, command }),
+    [query.data, pending, commands, available, busy, read, command],
   );
 }

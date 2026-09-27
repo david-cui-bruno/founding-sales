@@ -62,6 +62,8 @@ export interface SequenceBridgeDeps {
 }
 
 export interface SequenceBridgeHost {
+  /** Drop the snapshot on an identity transition (1.0.13, P0-A). */
+  forget(): Promise<SequenceState>;
   state(): Promise<SequenceState>;
   openSequence(input: { readonly sequenceId: string }): Promise<SequenceState>;
   createSequence(input: { readonly name: string }): Promise<SequenceState>;
@@ -162,6 +164,20 @@ export function createSequenceBridge(deps: SequenceBridgeDeps): SequenceBridgeHo
   };
 
   const host: SequenceBridgeHost = {
+    /**
+     * Forget everything this bridge is holding (1.0.13, P0-A).
+     *
+     * Called on every identity transition, from `registerWindows`. Nothing here is the
+     * next person's to read, and a snapshot kept across a sign-out is the last person's
+     * work shown to somebody else.
+     */
+    async forget() {
+      selectedSequenceId = null;
+      notice = null;
+      warnings = [];
+      return await compose();
+    },
+
     state: compose,
 
     openSequence: async input => {

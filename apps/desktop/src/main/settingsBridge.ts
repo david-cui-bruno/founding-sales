@@ -128,6 +128,8 @@ export interface AdminBridgeDeps {
 }
 
 export interface AdminBridgeHost {
+  /** Drop the snapshot on an identity transition (1.0.13, P0-A). */
+  forget(): Promise<AdminState>;
   state(): Promise<AdminState>;
   show(input: { readonly screen: AdminScreen }): Promise<AdminState>;
   saveSetting(input: SaveSettingInput): Promise<AdminState>;
@@ -384,6 +386,29 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
   };
 
   return {
+    /**
+     * Forget everything this bridge is holding (1.0.13, P0-A).
+     *
+     * Called on every identity transition, from `registerWindows`. Nothing here is the
+     * next person's to read, and a snapshot kept across a sign-out is the last person's
+     * work shown to somebody else.
+     */
+    async forget() {
+      screen = 'settings';
+      notice = null;
+      settings = null;
+      dashboard = null;
+      diagnostics = null;
+      stages = [];
+      history = null;
+      sendingAdmin = null;
+      sendingReadError = null;
+      callingNumbers = null;
+      postures = null;
+      roleSeen = null;
+      return await snapshot();
+    },
+
     async state() {
       const { role } = await currentRole();
       if (settings === null) await loadSettings();

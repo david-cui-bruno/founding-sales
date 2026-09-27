@@ -49,6 +49,14 @@ export interface DeviceStore {
   saveDevice(device: StoredDevice): Promise<void>;
   /** The long-lived credential this Mac opens a session with, or null when it has none. */
   deviceSecret(): Promise<string | null>;
+  /**
+   * Remove 1.0.12's rotating credential, if this Mac still has one.
+   *
+   * Nothing has read it since wave 3b, and a secret nothing reads is a secret nobody
+   * notices is still there. It goes at the first startup of this build that finds a
+   * registration, rather than waiting for a sign-out that may never come.
+   */
+  forgetRefreshCredential(): Promise<void>;
   /** Removes `device.json` and both Keychain accounts. The remembered workspace stays. */
   forget(): Promise<void>;
   /** The last sign-in's workspace and name, or null when this Mac has none. */
@@ -97,6 +105,10 @@ export function createDeviceStore(options: DeviceStoreOptions): DeviceStore {
 
     async deviceSecret() {
       return await options.vault.read(DEVICE_SECRET_ACCOUNT);
+    },
+
+    async forgetRefreshCredential() {
+      await options.vault.remove(REFRESH_CREDENTIAL_ACCOUNT);
     },
 
     async forget() {

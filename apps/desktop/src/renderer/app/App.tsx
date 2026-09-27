@@ -112,16 +112,6 @@ function Column({
     if (column !== null) column.scrollTop = 0;
   }, [key]);
 
-  const inFlight = today.commands;
-  useEffect(() => {
-    // The column is read-only while one of Today's commands is on the wire, through the
-    // same `holdInert` the hand-rolled views use — so an update being installed and a
-    // command in flight each hold it under their own reason and neither releases the
-    // other.
-    const column = columnRef.current;
-    if (column !== null) holdInert(column, 'today-command', inFlight > 0);
-  }, [inFlight]);
-
   return (
     <>
       <Sidebar

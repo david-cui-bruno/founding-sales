@@ -19,11 +19,14 @@ import { Textarea } from '../ui/textarea.tsx';
  */
 export function PosturesSection({
   section,
+  adding,
   onAllow,
   onRevoke,
   onRetry,
 }: {
   readonly section: PosturesSectionView;
+  /** This section's own Add is on the wire. Nothing else on the page waits for it. */
+  readonly adding: boolean;
   onAllow(input: AllowStatesInput): void;
   onRevoke(postureId: string): void;
   onRetry(): void;
@@ -102,7 +105,7 @@ export function PosturesSection({
                 <input
                   type="checkbox"
                   data-testid={`posture-state-${option.value}`}
-                  disabled={!section.editable}
+                  disabled={!section.editable || adding}
                   checked={selected.includes(option.value)}
                   onChange={event => {
                     setChosen(current =>
@@ -158,7 +161,7 @@ export function PosturesSection({
               type="checkbox"
               data-testid="posture-confirmed"
               className="mt-1"
-              disabled={!section.editable}
+              disabled={!section.editable || adding}
               checked={confirmed}
               onChange={event => {
                 setConfirmed(event.target.checked);
@@ -175,7 +178,7 @@ export function PosturesSection({
             rows={2}
             maxLength={1000}
             placeholder="Where you read it, or your registration number"
-            disabled={!section.editable}
+            disabled={!section.editable || adding}
             value={note}
             onChange={event => {
               setNote(event.target.value);
@@ -186,7 +189,8 @@ export function PosturesSection({
         <div className="flex items-center gap-2">
           <Button
             data-testid="posture-record"
-            disabled={!section.editable}
+            disabled={!section.editable || adding}
+            {...(adding ? { 'aria-busy': true } : {})}
             onClick={() => {
               setShown(true);
               if (issues.length > 0 || !confirmed) return;

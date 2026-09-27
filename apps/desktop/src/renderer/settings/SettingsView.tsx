@@ -105,7 +105,7 @@ export function SettingsView({
           </div>
 
           {tabForScreen(view.screen) === 'administration' ? (
-            <Administration view={view} actions={admin.actions} />
+            <Administration view={view} actions={admin.actions} busy={admin.busy} />
           ) : tabForScreen(view.screen) === 'dashboard' ? (
             <Panels view={view} />
           ) : (

@@ -1,28 +1,18 @@
-import { useEffect, type JSX, type RefObject } from 'react';
-import { holdInert } from '../busy.ts';
+import type { JSX, RefObject } from 'react';
 import { RepliesView } from './RepliesView.tsx';
 import { useReplies } from './useReplies.ts';
 
 /**
  * The Replies route: the hook and the view, in one component so that leaving the route
  * unmounts both and the reply content goes with them.
+ *
+ * It takes the column and does nothing to it (1.0.13, P1-4). Until the review this view
+ * made the whole column `inert` while any call was on the wire — so confirming one reply
+ * froze every other card, Refresh and the sidebar, and leaving the route mid-call had to
+ * be remembered to release the hold. What waits now is the card whose button was pressed:
+ * `replies.busy(messageId)` in `RepliesView`, released by the same call that took it.
  */
-export function RepliesRoute({ column }: { readonly column: RefObject<HTMLElement | null> }): JSX.Element | null {
+export function RepliesRoute({ column: _column }: { readonly column: RefObject<HTMLElement | null> }): JSX.Element | null {
   const replies = useReplies();
-  const pending = replies.pending;
-
-  useEffect(() => {
-    // Read-only while a call is on the wire, so a second press of Confirm sends nothing.
-    const element = column.current;
-    if (element === null) return;
-    holdInert(element, 'reply-command', pending > 0);
-    // The column is the shell's, not this view's: leaving Replies while a read or a
-    // command was in flight used to leave the hold on it, and every view drawn after
-    // that was inert. The hold is this component's to release, so it releases it.
-    return () => {
-      holdInert(element, 'reply-command', false);
-    };
-  }, [column, pending]);
-
   return <RepliesView replies={replies} />;
 }

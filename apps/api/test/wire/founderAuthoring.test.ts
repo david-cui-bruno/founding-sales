@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
 import { openHold, releaseHold } from '@fss/domain/policy/holds.ts';
+import { resumeEnrollment } from '@fss/domain/sequences/resume.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from '../support/authFixture.ts';
 import { issueSessionFor } from '../support/sessionFixture.ts';
 import { createCrmBridge } from '../../../desktop/src/main/crmBridge.ts';
@@ -175,18 +176,36 @@ describe('8.0au: a founder authors, enrols, confirms a number and reviews a resu
   });
 
   /**
-   * A long hold resumes by itself (wave 2, S4.1).
+   * A long hold resumes by itself, and the steps get the dates it owes them (wave 2, S4.1).
    *
    * The Mac's "Review and resume" is gone with the seven-day review: nothing here calls
-   * `/enrollments/resume/preview` or `/enrollments/resume`, and what the view shows
-   * about an enrollment is that it is running.
+   * `/enrollments/resume/preview` or `/enrollments/resume`. What replaced the press is
+   * the scheduler's own reconsideration, so this drives that — and asks the database for
+   * the step's new date rather than asking the view for a sentence.
+   *
+   * **The vacuous pass this refuses.** A resume that moved nothing would still leave the
+   * enrollment `active` and still read "1 running" on the panel. So the dates are read
+   * before and after, and every unexecuted step must have moved by the whole of the
+   * nine-day pause — the same assertion the review-and-confirm version of this check made
+   * about the dates it proposed.
    */
-  it('lists who is enrolled, and asks neither resume route', async () => {
+  it('gives every step the date the nine-day pause owes it, and asks neither resume route', async () => {
     await fixture.db.query(`UPDATE sequence_enrollments SET started_at = now() - interval '10 days' WHERE id = $1`, [enrollmentId]);
     const admin = repositoryContext(
       workspaceScope(fixture.alpha.workspaceId, { kind: 'user', userId: fixture.alpha.admin.userId, role: 'admin' }),
       fixture.db,
     );
+    const dueDates = async (): Promise<string[]> => {
+      const { rows } = await fixture.db.query<{ due_at: Date }>(
+        `SELECT due_at FROM step_executions
+          WHERE enrollment_id = $1 AND state IN ('pending', 'held') ORDER BY ordinal`,
+        [enrollmentId],
+      );
+      return rows.map(row => row.due_at.toISOString());
+    };
+    const before = await dueDates();
+    expect(before).not.toHaveLength(0);
+
     const hold = await openHold(admin, {
       scopeKind: 'firm',
       scopeKey: firmId,
@@ -196,6 +215,21 @@ describe('8.0au: a founder authors, enrols, confirms a number and reviews a resu
     });
     await fixture.db.query(`UPDATE active_holds SET started_at = now() - interval '9 days' WHERE id = $1`, [hold]);
     await releaseHold(admin, hold);
+
+    // What the scheduler does on its next pass, with nobody pressing anything.
+    const resumed = await resumeEnrollment(admin, { enrollmentId });
+    expect(resumed.ok).toBe(true);
+    const outcome = resumed.ok ? resumed.value : null;
+    expect(outcome?.kind).toBe('resume');
+    expect(outcome?.executionsShifted).toBe(before.length);
+    const shift = outcome?.shiftMilliseconds ?? 0;
+    // The nine days the firm was paused, and not a default of nothing.
+    expect(shift / 86_400_000).toBeGreaterThan(8.9);
+    expect(shift / 86_400_000).toBeLessThan(9.1);
+
+    // Exactly where the union puts them: every step, to the millisecond.
+    const after = await dueDates();
+    expect(after).toEqual(before.map(due => new Date(Date.parse(due) + shift).toISOString()));
 
     const bridge = sequences();
     const state = await bridge.state();

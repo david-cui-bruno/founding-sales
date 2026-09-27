@@ -5,6 +5,7 @@ import { createApiClient, fetchSend } from './apiClient.ts';
 import { createAuthedClient } from './authedClient.ts';
 import { createDialHandoff } from './dialHandoff.ts';
 import { createTelLaunchDriver, isBrowserLink } from './telHandoff.ts';
+import { resetBridges } from './identityReset.ts';
 import { createImportHandoff, IMPORT_FILE_FILTERS } from './importHandoff.ts';
 import { registerWindowBridges } from './todayWindow.ts';
 import { windowMenuTemplate } from './windowMenu.ts';
@@ -226,20 +227,26 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
     // The consent screen goes to the system browser exactly as sign-in opens it (5.1).
     mailbox: { api, session, openExternally },
     chooseImportFile: importHandoff.choose,
+    sessionGeneration: () => manager.sessionGeneration(),
   });
 
   /*
-   * A session transition empties the window (1.0.12).
+   * A session transition empties this Mac (1.0.12; every bridge since 1.0.13's review).
    *
-   * The main process is where it is known — a sign-out, another workspace, a role the
-   * renewal came back with, a revoked device seen as an authenticated refusal — and
-   * until now the renderer found out by noticing that a state it happened to read
-   * looked different. Two things happen the moment it is known: the reply bridge drops
-   * the lane and the one body it holds, and the window is told so it can empty its
-   * request cache and everything anybody had typed.
+   * The main process is where it is known — a sign-out confirmed or still owed to the
+   * server, another workspace, a role the server now gives this membership, a revoked
+   * device seen as an authenticated refusal — and the renderer used to find out by
+   * noticing that a state it happened to read looked different.
+   *
+   * Three things happen the moment it is known. The session manager has already wiped
+   * the encrypted Today cache and the list in memory. **Every** bridge drops its
+   * snapshot here — until the review only Replies did, so the CRM bridge would answer
+   * the next person's first read with the last one's firm page, and Settings with the
+   * last one's numbers and figures. And the window is told, so it empties its request
+   * cache and everything anybody had typed.
    */
   manager.onSessionChange(change => {
-    void bridges.replies.forget();
+    void resetBridges([bridges.today, bridges.replies, bridges.crm, bridges.sequences, bridges.settings, bridges.mailbox]);
     sendSessionChange(change);
   });
 

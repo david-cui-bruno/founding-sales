@@ -110,6 +110,7 @@ export function FirmsRoute({
           page={state.firm}
           sequences={state.sequences}
           actionsEnabled={view.actionsEnabled}
+          busy={crm.busy}
           redactionNotice={view.redactionNotice}
           onSaveContact={crm.actions.saveContact}
           onCheckRoute={crm.actions.checkRoute}
@@ -119,7 +120,7 @@ export function FirmsRoute({
       ) : state.screen === 'add_firm' && state.addFirm !== null ? (
         <AddFirmForm
           view={state.addFirm}
-          actionsEnabled={view.actionsEnabled}
+          actionsEnabled={view.actionsEnabled && !crm.busy('add-firm')}
           onSubmit={crm.actions.addFirm}
           onCancel={crm.actions.openPipeline}
           onOpenFirm={crm.actions.openFirm}
@@ -127,7 +128,7 @@ export function FirmsRoute({
       ) : state.screen === 'import' && state.import !== null ? (
         <ImportScreen
           view={state.import}
-          actionsEnabled={view.actionsEnabled && state.role === 'admin'}
+          actionsEnabled={view.actionsEnabled && state.role === 'admin' && !crm.busy('import')}
           onChooseFile={crm.actions.chooseImportFile}
           onCommit={crm.actions.commitImport}
           onDone={crm.actions.openPipeline}
@@ -137,7 +138,7 @@ export function FirmsRoute({
           merge={state.merge}
           // 7.2 and 5.2: a merge is an explicit audited command and an admin's. A
           // salesperson sees the conflicts and cannot commit the choice.
-          actionsEnabled={view.actionsEnabled && state.role === 'admin'}
+          actionsEnabled={view.actionsEnabled && state.role === 'admin' && !crm.busy('merge')}
           onResolve={crm.actions.resolveMerge}
         />
       ) : state.screen === 'pipeline' && state.pipeline !== null ? (

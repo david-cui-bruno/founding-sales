@@ -28,6 +28,9 @@ import { Textarea } from '../ui/textarea.tsx';
  *
  * The change note is optional and a Save without one is never dropped: the bridge sends
  * "Changed on the Mac" so the server's history keeps one per version.
+ *
+ * `saving` is this row's own command, not the page's: pressing Save here waits for this
+ * setting and leaves every other section of Administration alone.
  */
 
 function Control({
@@ -107,11 +110,14 @@ function Control({
 export function SettingRow({
   row,
   history,
+  saving,
   onSave,
   onHistory,
 }: {
   readonly row: SettingRowView;
   readonly history: AdminView['history'];
+  /** This row's own Save is on the wire. */
+  readonly saving: boolean;
   onSave(input: { readonly settingKey: ActiveSettingKey; readonly value: unknown; readonly changeNote: string }): void;
   onHistory(settingKey: ActiveSettingKey): void;
 }): JSX.Element {
@@ -138,7 +144,7 @@ export function SettingRow({
 
       <fieldset
         data-testid={`value-${row.settingKey}`}
-        disabled={!row.editable}
+        disabled={!row.editable || saving}
         {...(row.editable ? {} : { 'aria-disabled': true })}
         className="mt-2 flex flex-col gap-3"
       >
@@ -159,7 +165,7 @@ export function SettingRow({
               key={field.key}
               settingKey={row.settingKey}
               field={field}
-              editable={row.editable}
+              editable={row.editable && !saving}
               value={values[field.key] ?? field.value}
               onChange={next => {
                 setValues(current => ({ ...current, [field.key]: next }));
@@ -174,7 +180,7 @@ export function SettingRow({
           data-testid={`note-${row.settingKey}`}
           aria-label="Why (optional)"
           placeholder="Why (optional)"
-          disabled={!row.editable}
+          disabled={!row.editable || saving}
           value={note}
           onChange={event => {
             setNote(event.target.value);
@@ -184,7 +190,8 @@ export function SettingRow({
         <Button
           size="sm"
           data-testid={`save-${row.settingKey}`}
-          disabled={!row.editable}
+          disabled={!row.editable || saving}
+          {...(saving ? { 'aria-busy': true } : {})}
           onClick={() => {
             if (fields === null) {
               let parsed: unknown;

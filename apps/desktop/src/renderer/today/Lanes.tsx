@@ -6,7 +6,7 @@ import type { CardView, TodayScreenView } from '../todayView.ts';
 import { Button } from '../ui/button.tsx';
 import { OutcomeForm } from './OutcomeForm.tsx';
 import { TaskRow } from './TaskRow.tsx';
-import type { TodayActions } from './useToday.ts';
+import { todayForm, type TodayActions } from './useToday.ts';
 
 /**
  * The Today lanes (specification 8.2, 8.3, 9.1, 14.2).
@@ -44,7 +44,8 @@ function DialPanel({
         <div key={entry.route.routeId} data-testid="dial-route" className="flex flex-wrap items-center gap-2">
           <Button
             data-testid="dial"
-            disabled={!entry.enabled}
+            disabled={!entry.enabled || actions.busy(todayForm.dial(entry.route.routeId))}
+            {...(actions.busy(todayForm.dial(entry.route.routeId)) ? { 'aria-busy': true } : {})}
             onClick={() => {
               actions.dial({ firmId, contactId: entry.route.contactId, routeId: entry.route.routeId });
             }}
@@ -144,9 +145,11 @@ function Card({
             variant="outline"
             size="sm"
             data-testid="card-expand"
+            disabled={actions.busy(todayForm.card(entry.card.firmId))}
+            {...(actions.busy(todayForm.card(entry.card.firmId)) ? { 'aria-busy': true } : {})}
             onClick={() => {
-              if (entry.expanded) actions.collapse();
-            else actions.expand(entry.card.firmId);
+              if (entry.expanded) actions.collapse(entry.card.firmId);
+              else actions.expand(entry.card.firmId);
             }}
           >
             {entry.expanded ? 'Close' : 'Open'}

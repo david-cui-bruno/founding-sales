@@ -17,10 +17,13 @@ import { Field, Row, RowActions, RowMain, Rows, Section } from '../ui/layout.tsx
  */
 export function CallingNumberSection({
   section,
+  adding,
   onAdd,
   onRetire,
 }: {
   readonly section: CallingNumberSectionView;
+  /** This section's own Add is on the wire. Nothing else on the page waits for it. */
+  readonly adding: boolean;
   onAdd(input: { readonly e164: string; readonly label: string }): void;
   onRetire(identityId: string): void;
 }): JSX.Element {
@@ -70,7 +73,7 @@ export function CallingNumberSection({
             type="tel"
             placeholder="+1 401 555 0123"
             autoComplete="off"
-            disabled={!section.canAdd}
+            disabled={!section.canAdd || adding}
             {...(missing ? { 'aria-invalid': true } : {})}
             value={e164}
             onChange={event => {
@@ -87,7 +90,7 @@ export function CallingNumberSection({
             placeholder="Mobile"
             autoComplete="off"
             maxLength={80}
-            disabled={!section.canAdd}
+            disabled={!section.canAdd || adding}
             value={label}
             onChange={event => {
               setLabel(event.target.value);
@@ -97,7 +100,8 @@ export function CallingNumberSection({
         </Field>
         <Button
           data-testid="calling-number-add"
-          disabled={!section.canAdd}
+          disabled={!section.canAdd || adding}
+          {...(adding ? { 'aria-busy': true } : {})}
           onClick={() => {
             if (e164.trim() === '') {
               setMissing(true);

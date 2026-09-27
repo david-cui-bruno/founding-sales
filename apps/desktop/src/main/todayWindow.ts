@@ -1,6 +1,7 @@
 import { ipcMain } from 'electron';
 import { DIAL_IPC_CHANNELS, IMPORT_IPC_CHANNELS } from '../shared/operations.ts';
 import { createCrmBridge, type CrmBridgeDeps, type CrmBridgeHost } from './crmBridge.ts';
+import { guardIdentity } from './identityReset.ts';
 import { createImportHandoff, type ImportHandoff } from './importHandoff.ts';
 import { createMailboxBridge, type MailboxBridgeDeps, type MailboxBridgeHost } from './mailboxBridge.ts';
 import { registerOperations } from './operationHost.ts';
@@ -54,6 +55,14 @@ export interface WindowBridgeDeps {
   readonly mailbox: MailboxBridgeDeps;
   /** macOS's open panel, for the one thing the registry does not carry. */
   readonly chooseImportFile: ImportHandoff['choose'];
+  /**
+   * The session's transition counter (1.0.13, P0-A).
+   *
+   * Every bridge method notes it on the way in; an answer that arrives under a
+   * different number belongs to a person who has left this Mac, and it is thrown away
+   * rather than stored. Absent in the tests that build bridges without a session.
+   */
+  readonly sessionGeneration?: () => number;
 }
 
 /**
@@ -68,12 +77,14 @@ export interface WindowBridgeDeps {
  * where that belongs.
  */
 export function registerWindowBridges(deps: WindowBridgeDeps): WindowBridges {
-  const today = createTodayBridge(deps.today);
-  const replies = createReplyBridge(deps.replies);
-  const crm = createCrmBridge(deps.crm);
-  const sequences = createSequenceBridge(deps.sequences);
-  const settings = createAdminBridge(deps.settings);
-  const mailbox = createMailboxBridge(deps.mailbox);
+  const generation = deps.sessionGeneration ?? (() => 0);
+  const guard = <H extends { forget(): Promise<unknown> }>(host: H): H => guardIdentity(host, generation);
+  const today = guard(createTodayBridge(deps.today));
+  const replies = guard(createReplyBridge(deps.replies));
+  const crm = guard(createCrmBridge(deps.crm));
+  const sequences = guard(createSequenceBridge(deps.sequences));
+  const settings = guard(createAdminBridge(deps.settings));
+  const mailbox = guard(createMailboxBridge(deps.mailbox));
   registerOperations({ api: deps.today.api, today, replies, crm, sequences, settings, mailbox }, handleOnce);
 
   handleOnce(DIAL_IPC_CHANNELS.call, async argument => {

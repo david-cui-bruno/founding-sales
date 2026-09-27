@@ -4,9 +4,6 @@
   "private": true,
   "type": "module",
   "description": "The thin Electron client: sign-in, device, session, version gate and the expiring offline cache.",
-  "exports": {
-    ".": "./src/main/index.ts"
-  },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",

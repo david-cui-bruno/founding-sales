@@ -233,7 +233,12 @@ export function SequencesRoute({
               }}
               className="h-7 w-52 text-xs"
             />
-            <Button type="submit" size="sm" data-testid="new-sequence-create" disabled={!screen.canAuthor}>
+            <Button
+              type="submit"
+              size="sm"
+              data-testid="new-sequence-create"
+              disabled={!screen.canAuthor || sequences.busy('new-sequence')}
+            >
               New sequence
             </Button>
           </form>
@@ -284,7 +289,7 @@ export function SequencesRoute({
                   <Button
                     size="sm"
                     data-testid="version-publish"
-                    disabled={!panel.canPublish}
+                    disabled={!panel.canPublish || sequences.busy(`version:${panel.id}`)}
                     onClick={() => {
                       sequences.actions.publish(panel.id);
                     }}
@@ -297,7 +302,7 @@ export function SequencesRoute({
                     size="sm"
                     variant="quiet"
                     data-testid="version-retire"
-                    disabled={!panel.canRetire}
+                    disabled={!panel.canRetire || sequences.busy(`version:${panel.id}`)}
                     onClick={() => {
                       sequences.actions.retire(panel.id);
                     }}
@@ -324,6 +329,7 @@ export function SequencesRoute({
                 panel={panel}
                 version={version}
                 state={state}
+                saving={sequences.busy(`steps:${panel.id}`)}
                 onSave={steps => {
                   sequences.actions.saveSteps({ sequenceVersionId: panel.id, steps });
                 }}
@@ -401,7 +407,7 @@ export function SequencesRoute({
       {formOpen ? (
         <TemplateForm
           editing={editing}
-          enabled={screen.canAuthor}
+          enabled={screen.canAuthor && !sequences.busy('template-form')}
           issues={serverIssues}
           onSave={draft => {
             sequences.actions.saveTemplate(draft);

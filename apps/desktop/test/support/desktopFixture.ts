@@ -29,6 +29,12 @@ export interface ApiScript {
   refuse(path: string, reason: string): void;
   /** Make every call throw, as an unreachable server does. */
   offline(value: boolean): void;
+  /** Stop the next call to this path inside the server, until `release`. */
+  hold(path: string): void;
+  /** Let one held call finish. */
+  release(path: string): void;
+  /** Whether a call to this path is waiting inside the server now. */
+  holding(path: string): boolean;
   /** How many times each path was called. */
   readonly calls: Map<string, number>;
   /** Hand out a session grant for a claim. */
@@ -59,6 +65,10 @@ export interface DesktopFixture {
   readonly openedUrls: string[];
   /** Let a held cache wipe finish. Null until one is waiting. */
   releaseCacheWipe(): void;
+  /** Whether a held cache wipe is waiting now. */
+  wipeHeld(): boolean;
+  /** How many times the encrypted cache has been wiped. */
+  cacheWipes(): number;
   readonly workspaceId: string;
   advance(ms: number): void;
   stop(): Promise<void>;
@@ -98,6 +108,13 @@ export async function createDesktopFixture(
      * needs the wipe to stop where it can reach it.
      */
     readonly holdCacheWipe?: boolean;
+    /**
+     * The sign-out retry's clock (A2, P1-1). A pending sign-out tries again on an
+     * interval; a test that wants to drive that tick needs the interval in its hand
+     * rather than a real 60-second wait.
+     */
+    readonly setInterval?: (run: () => void, ms: number) => ReturnType<typeof setInterval>;
+    readonly clearInterval?: (handle: ReturnType<typeof setInterval>) => void;
   } = {},
 ): Promise<DesktopFixture> {
   const directory = await mkdtemp(join(tmpdir(), 'fss-desktop-'));
@@ -123,6 +140,14 @@ export async function createDesktopFixture(
   let todayValue: CachedToday = sampleToday(workspaceId);
   const refusals = new Map<string, string[]>();
   const calls = new Map<string, number>();
+  /*
+   * Calls a test wants to catch in flight (P0-B). A sign-out retry can be on the wire
+   * for as long as the server takes, and the races worth testing all happen in that
+   * window; `hold` says "stop the next call to this path inside the server", and
+   * `release` lets it finish.
+   */
+  const holds = new Map<string, number>();
+  const waiting = new Map<string, (() => void)[]>();
   const openedUrls: string[] = [];
 
   const grantFor = (forWorkspace: string): SessionGrant => {
@@ -146,6 +171,13 @@ export async function createDesktopFixture(
     const path = new URL(url).pathname;
     const body: Record<string, unknown> = init.body === undefined ? {} : (JSON.parse(init.body) as Record<string, unknown>);
     calls.set(path, (calls.get(path) ?? 0) + 1);
+    const heldCount = holds.get(path) ?? 0;
+    if (heldCount > 0) {
+      holds.set(path, heldCount - 1);
+      await new Promise<void>(resolve => {
+        waiting.set(path, [...(waiting.get(path) ?? []), resolve]);
+      });
+    }
     if (offline) throw new Error('the server did not answer');
 
     const queued = refusals.get(path)?.shift();
@@ -234,9 +266,12 @@ export async function createDesktopFixture(
   // The *first* wipe only: everything after it runs normally, so a sign-out driven
   // while the held one is waiting does not wait behind it.
   let holdNextWipe = options.holdCacheWipe === true;
+  /* How many times this Mac was emptied. A transition that wipes nothing is P0-A. */
+  let wipes = 0;
   const cache = {
     ...realCache,
     wipe: async () => {
+      wipes += 1;
       if (holdNextWipe) {
         holdNextWipe = false;
         await new Promise<void>(resolve => {
@@ -261,6 +296,8 @@ export async function createDesktopFixture(
     sleep: async () => {
       await Promise.resolve();
     },
+    ...(options.setInterval === undefined ? {} : { setInterval: options.setInterval }),
+    ...(options.clearInterval === undefined ? {} : { clearInterval: options.clearInterval }),
   });
 
   return {
@@ -268,6 +305,8 @@ export async function createDesktopFixture(
       releaseWipe?.();
       releaseWipe = null;
     },
+    wipeHeld: () => releaseWipe !== null,
+    cacheWipes: () => wipes,
     directory,
     vault,
     api,
@@ -287,6 +326,16 @@ export async function createDesktopFixture(
       offline: value => {
         offline = value;
       },
+      hold: path => {
+        holds.set(path, (holds.get(path) ?? 0) + 1);
+      },
+      release: path => {
+        const queue = waiting.get(path) ?? [];
+        const next = queue.shift();
+        waiting.set(path, queue);
+        next?.();
+      },
+      holding: path => (waiting.get(path) ?? []).length > 0,
       grantFor,
       today: value => {
         todayValue = value;

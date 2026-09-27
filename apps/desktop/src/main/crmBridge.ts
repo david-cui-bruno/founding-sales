@@ -97,6 +97,8 @@ export interface CrmBridgeDeps {
 }
 
 export interface CrmBridgeHost {
+  /** Drop the snapshot on an identity transition (1.0.13, P0-A). */
+  forget(): Promise<CrmState>;
   state(): Promise<CrmState>;
   openFirm(input: { readonly firmId: string }): Promise<CrmState>;
   openPipeline(): Promise<CrmState>;
@@ -374,6 +376,27 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
   };
 
   return {
+    /**
+     * Forget everything this bridge is holding (1.0.13, P0-A).
+     *
+     * Called on every identity transition, from `registerWindows`. Nothing here is the
+     * next person's to read, and a snapshot kept across a sign-out is the last person's
+     * work shown to somebody else.
+     */
+    async forget() {
+      screen = 'pipeline';
+      firm = null;
+      pipeline = null;
+      merge = null;
+      notice = null;
+      addFirmView = null;
+      importView = null;
+      importCsv = null;
+      importCommandIds = new Map();
+      sequences = null;
+      return await snapshot();
+    },
+
     async state() {
       if (pipeline === null && firm === null) await loadPipeline();
       return await snapshot();

@@ -79,6 +79,8 @@ export interface MailboxBridgeDeps {
 }
 
 export interface MailboxBridgeHost {
+  /** Drop the snapshot on an identity transition (1.0.13, P0-A). */
+  forget(): Promise<MailboxState>;
   state(): Promise<MailboxState>;
   refresh(): Promise<MailboxState>;
   connect(): Promise<MailboxState>;
@@ -170,6 +172,22 @@ export function createMailboxBridge(deps: MailboxBridgeDeps): MailboxBridgeHost 
   };
 
   return {
+    /**
+     * Forget everything this bridge is holding (1.0.13, P0-A).
+     *
+     * Called on every identity transition, from `registerWindows`. Nothing here is the
+     * next person's to read, and a snapshot kept across a sign-out is the last person's
+     * work shown to somebody else.
+     */
+    async forget() {
+      status = null;
+      connecting = false;
+      readNotice = null;
+      connectNotice = null;
+      attempt += 1;
+      return await snapshot();
+    },
+
     async state() {
       await read();
       return await snapshot();

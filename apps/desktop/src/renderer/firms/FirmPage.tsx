@@ -160,13 +160,19 @@ function EmailRoutes({
  * is legal, but "nobody is the main contact here any more" is a decision, and an unticked
  * box is not one.
  */
+/**
+ * One contact, editable in place. `saving` is this contact's own Save: two rows of the
+ * same firm wait for their own command and not for each other's.
+ */
 function ContactRow({
   contact,
   enabled,
+  saving,
   onSave,
 }: {
   readonly contact: ContactDto;
   readonly enabled: boolean;
+  readonly saving: boolean;
   onSave(edit: ContactEdit): void;
 }): JSX.Element {
   const [fullName, setFullName] = useState(contact.fullName);
@@ -180,7 +186,7 @@ function ContactRow({
           data-testid="contact-name"
           aria-label="Name"
           autoComplete="off"
-          disabled={!enabled}
+          disabled={!enabled || saving}
           value={fullName}
           onChange={event => {
             setFullName(event.target.value);
@@ -191,7 +197,7 @@ function ContactRow({
           data-testid="contact-title"
           aria-label="Title"
           autoComplete="off"
-          disabled={!enabled}
+          disabled={!enabled || saving}
           value={title}
           onChange={event => {
             setTitle(event.target.value);
@@ -205,7 +211,7 @@ function ContactRow({
           data-testid="contact-primary"
           checked={primary}
           // Already the primary: the box records that and there is nothing to ask for.
-          disabled={!enabled || contact.isPrimary}
+          disabled={!enabled || saving || contact.isPrimary}
           onChange={event => {
             setPrimary(event.target.checked);
           }}
@@ -218,7 +224,8 @@ function ContactRow({
           size="sm"
           variant="outline"
           data-testid="contact-save"
-          disabled={!enabled || !changed}
+          disabled={!enabled || !changed || saving}
+          {...(saving ? { 'aria-busy': true } : {})}
           onClick={() => {
             onSave({
               contactId: contact.id,
@@ -447,6 +454,7 @@ export function FirmPage({
   page,
   sequences,
   actionsEnabled,
+  busy,
   redactionNotice,
   onSaveContact,
   onCheckRoute,
@@ -456,6 +464,8 @@ export function FirmPage({
   readonly page: FirmPageResponse;
   readonly sequences: FirmSequencesView | null;
   readonly actionsEnabled: boolean;
+  /** Whether one named form's own command is on the wire (1.0.13, after the review). */
+  busy(form: string): boolean;
   readonly redactionNotice: string | null;
   onSaveContact(edit: ContactEdit): void;
   onCheckRoute(request: CheckRouteRequest): void;
@@ -485,7 +495,13 @@ export function FirmPage({
             ) : (
               <Rows data-testid="contacts-list">
                 {detail.contacts.map(contact => (
-                  <ContactRow key={contact.id} contact={contact} enabled={actionsEnabled} onSave={onSaveContact} />
+                  <ContactRow
+                    key={contact.id}
+                    contact={contact}
+                    enabled={actionsEnabled}
+                    saving={busy(`contact:${contact.id}`)}
+                    onSave={onSaveContact}
+                  />
                 ))}
               </Rows>
             )}

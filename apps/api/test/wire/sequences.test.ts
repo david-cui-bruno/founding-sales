@@ -66,6 +66,7 @@ describe('8.0aj: the sequence editor reads a populated version and its enrollmen
   let sequenceId = '';
   let sequenceVersionId = '';
   let heldEnrollmentId = '';
+  let liveEnrollmentId = '';
 
   const command = (extra: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> => ({
     commandId: randomUUID(),
@@ -145,6 +146,7 @@ describe('8.0aj: the sequence editor reads a populated version and its enrollmen
       command({ sequenceVersionId, opportunityId, firmId, contactId: await contact('Dana Example') }),
     );
     expect(live.status).toBe(200);
+    liveEnrollmentId = String(result(live)['enrollmentId']);
     const held = await post(
       '/enrollments/enroll',
       salespersonToken,
@@ -174,7 +176,7 @@ describe('8.0aj: the sequence editor reads a populated version and its enrollmen
     expect(state.versions[0]?.steps.map(step => step.sequenceVersionId)).toEqual([sequenceVersionId, sequenceVersionId]);
     // Since wave 2 (S4.1) a long hold resumes by itself and there is no review to
     // offer, so the slice is every enrollment of this sequence rather than the held ones.
-    expect(state.enrollments.map(entry => entry.id)).toContain(heldEnrollmentId);
+    expect([...state.enrollments.map(entry => entry.id)].sort()).toEqual([heldEnrollmentId, liveEnrollmentId].sort());
     expect(state.enrollments.find(entry => entry.id === heldEnrollmentId)).toMatchObject({
       opportunityId,
       firmTimeZone: 'America/New_York',
@@ -189,7 +191,9 @@ describe('8.0aj: the sequence editor reads a populated version and its enrollmen
     ]);
     expect(screen.templates.map(panel => [panel.label, panel.approved])).toEqual([['First touch v1', true]]);
     expect(screen.enrollments?.rows.map(row => row.sequenceVersionId)).toEqual([sequenceVersionId]);
-    expect(screen.enrollments?.rows[0]?.line).toContain('Version 1 —');
+    // Both seeded enrollments, counted on the one published version: the panel says how
+    // many are working through it, not merely that the version is there.
+    expect(screen.enrollments?.rows.map(row => row.line)).toEqual(['Version 1 — 2 running']);
   });
 
   it('holds the desktop’s unit fixtures to the routes: the same keys, the same types, all the way down', async () => {

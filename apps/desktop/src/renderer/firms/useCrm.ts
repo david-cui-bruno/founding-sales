@@ -94,31 +94,31 @@ export function useCrm(
       chooseImportFile: () => {
         const bridge = importBridge();
         if (bridge === undefined) return;
-        command(async () => await bridge.choose());
+        command('import', async () => await bridge.choose());
       },
       addFirm: draft => {
-        command(api => api.command('crm.addFirm', draft));
+        command('add-firm', api => api.command('crm.addFirm', draft));
       },
       commitImport: () => {
-        command(api => api.command('crm.commitImport', {}));
+        command('import', api => api.command('crm.commitImport', {}));
       },
       saveContact: edit => {
-        command(api => api.command('crm.saveContact', edit));
+        command(`contact:${edit.contactId}`, api => api.command('crm.saveContact', edit));
       },
       changeStage: change => {
-        command(api => api.command('crm.changeStage', change));
+        command('stage', api => api.command('crm.changeStage', change));
       },
       resolveMerge: resolution => {
-        command(api => api.command('crm.resolveMerge', resolution));
+        command('merge', api => api.command('crm.resolveMerge', resolution));
       },
       openOpportunity: () => {
-        command(api => api.command('crm.openOpportunity', {}));
+        command('opportunity', api => api.command('crm.openOpportunity', {}));
       },
       enroll: request => {
-        command(api => api.command('crm.enroll', request));
+        command('enroll', api => api.command('crm.enroll', request));
       },
       checkRoute: request => {
-        command(api => api.command('crm.checkRoute', request));
+        command(`route:${request.routeId}`, api => api.command('crm.checkRoute', request));
       },
     }),
     [read, command],
