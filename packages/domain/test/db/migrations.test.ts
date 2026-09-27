@@ -273,7 +273,9 @@ describe('migration 0019 on a production-shaped schema-18 database', () => {
     researchRowsBefore = 0;
     for (const table of RESEARCH_TABLES) researchRowsBefore += await countOf(database.session, `SELECT count(*) AS count FROM ${table}`);
     const { applyMigrations } = await import('../../db/migrationRunner.ts');
-    await applyMigrations(database.session);
+    // Through 19 and no further: this block is about what 0019 did to a schema-18
+    // database, and every later migration would be a second subject in it.
+    await applyMigrations(database.session, { throughVersion: 19 });
   });
 
   afterAll(async () => {
@@ -359,8 +361,9 @@ describe('migration 0019 on a production-shaped schema-18 database', () => {
         "SELECT count(*) AS count FROM workspace_settings WHERE setting_key IN ('alert_thresholds', 'client_version_range')",
       ),
     ).toBe(0);
-    // A retired key, and the postal address the deferred footer-at-send would have used
-    // (wave 3): neither is a setting on schema 19.
+    // A retired key, and the postal address: neither is a setting on schema 19. The
+    // address becomes one on 20 (`migration0020.test.ts`), which is the whole of that
+    // migration; here it is still refused.
     for (const key of ['client_version_range', 'postal_address']) {
       await expect(
         database.session.query(
@@ -483,7 +486,7 @@ describe('migration 0019 refuses (FS019) while a value it drops is stored', () =
     expect(await countOf(database.session, 'SELECT count(*) AS count FROM research_pages')).toBe(1);
 
     await database.session.query('DELETE FROM research_pages');
-    await applyMigrations(database.session);
+    await applyMigrations(database.session, { throughVersion: 19 });
     expect(await readAppliedSchemaVersion(database.session)).toBe(19);
     expect(await tableExists(database.session, 'research_providers')).toBe(false);
   });

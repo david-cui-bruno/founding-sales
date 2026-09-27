@@ -15,6 +15,7 @@ import {
   type OutboundFenceRow,
 } from './fence.ts';
 import { reconcileFenceFooter } from './footer.ts';
+import type { SendFooterPolicy } from '../src/rules/templates.ts';
 import { decideSend, holdReasonForRefusal, type SendGateDeps, type SendPlan } from './gate.ts';
 import { countAutomatedSend, recordDaySignal } from './ramp.ts';
 import { RECONCILE_WINDOW_HOURS, type SendRefusalCode } from './types.ts';
@@ -95,6 +96,16 @@ export interface OutboundSendDeps extends SendGateDeps {
   /** Identifies this worker in the fence's ledger. Never a credential. */
   readonly actor?: string | undefined;
   readonly reconcileWindowHours?: number | undefined;
+  /**
+   * Whether a workspace with no `postal_address` may send (lane W3-F).
+   *
+   * Absent everywhere in production: the answer is `SEND_FOOTER_POLICY` in
+   * `packages/domain/src/rules/templates.ts`, and **flipping that constant is the whole
+   * of the change** the owner would make to refuse every send until the address is
+   * configured. It is a dependency here only so both positions can be driven in a test
+   * without editing the constant.
+   */
+  readonly footerPolicy?: SendFooterPolicy | undefined;
 }
 
 export type SendOutcome =
@@ -360,6 +371,7 @@ async function recheckAndClaim(
     // rewritten here or not sent at all. A fence already composed is a read and no write.
     const footer = await reconcileFenceFooter(context, fence, {
       ...(deps.actor === undefined ? {} : { actor: deps.actor }),
+      ...(deps.footerPolicy === undefined ? {} : { policy: deps.footerPolicy }),
     });
     if (!footer.reconciled) {
       const held = await holdFence(context, {

@@ -1,0 +1,218 @@
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { SENDING_STOP_LINE } from '@fss/contracts';
+import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
+import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
+import { allowAllEligibility } from '../../sequences/eligibility.ts';
+import { enrollContact } from '../../sequences/enrollments.ts';
+import { runDueStepExecution } from '../../sequences/executions.ts';
+import { recordingSendHandoff } from '../../sequences/sendHandoff.ts';
+import { listStepExecutions } from '../../sequences/rows.ts';
+import { updateTemplateVersion } from '../../templates/templates.ts';
+import { sendFooterBlock } from '../../src/rules/templates.ts';
+import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
+import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
+import { FIXTURE_SIGN_OFF, fixtureBody, seedSequences, type SeededSequences } from './support/sequenceFixtures.ts';
+
+/**
+ * The step composes the footer **before** it hands anything to the send (lane W3-F,
+ * migration 0020).
+ *
+ * `runEmailStep` renders, composes and only then calls `prepare`, so the bytes that
+ * cross the hand-off are the bytes the fence freezes. A body that cannot be given exactly
+ * one final stop line inside the fence's 4,000 characters holds the step **with no fence
+ * created at all** — the review's "check the final rendered body before fence insertion
+ * and return a handled hold".
+ *
+ * ## The vacuous-pass trap
+ *
+ * A hold is easy to produce by breaking the world. Each case here asserts what the
+ * hand-off received as well as what the step became, and the hold case asserts that the
+ * hand-off received *nothing*: a fence prepared and then held would pass a weaker test
+ * and would be the bug.
+ */
+
+let database: TestDatabase;
+let seeded: TwoWorkspaces;
+let crm: SeededCrm;
+let sequences: SeededSequences;
+
+const ADDRESS = '1 Example Way, Suite 2\nProvidence, RI 02903';
+const DUE = '2026-09-21T13:00:00Z';
+
+const contextFor = (who: 'admin' | 'salesperson'): RepositoryContext =>
+  repositoryContext(
+    workspaceScope(seeded.alpha.workspaceId, { kind: 'user', userId: seeded.alpha[who].userId, role: who }),
+    database.session,
+  );
+
+const worker = (): RepositoryContext =>
+  repositoryContext(
+    workspaceScope(seeded.alpha.workspaceId, { kind: 'system', component: 'worker' }),
+    database.session,
+  );
+
+async function setPostalAddress(address: string | null): Promise<void> {
+  await database.session.query(
+    `UPDATE workspace_settings SET superseded_at = greatest(now(), changed_at), superseded_by_version = version + 1
+      WHERE workspace_id = $1 AND setting_key = 'postal_address' AND superseded_at IS NULL`,
+    [seeded.alpha.workspaceId],
+  );
+  const { rows } = await database.session.query<{ next: number }>(
+    `SELECT coalesce(max(version), 0) + 1 AS next FROM workspace_settings
+      WHERE workspace_id = $1 AND setting_key = 'postal_address'`,
+    [seeded.alpha.workspaceId],
+  );
+  await database.session.query(
+    `INSERT INTO workspace_settings (workspace_id, setting_key, version, value, change_note, changed_by_user_id)
+     VALUES ($1, 'postal_address', $2, $3::jsonb, 'fixture', $4)`,
+    [seeded.alpha.workspaceId, Number(rows[0]?.next ?? 1), JSON.stringify({ address }), seeded.alpha.admin.userId],
+  );
+}
+
+/** The seeded template, edited in place to `body` and kept approved. */
+async function templateBody(body: string): Promise<void> {
+  const edited = await updateTemplateVersion(contextFor('admin'), {
+    name: 'Seeded, edited',
+    subject: 'Hello {firm_name}',
+    body,
+    footer: { signOff: FIXTURE_SIGN_OFF },
+    requiredVariables: ['firm_name'],
+    templateVersionId: sequences.alpha.template.templateVersionId,
+    approve: true,
+  });
+  if (!edited.ok) throw new Error(`the template edit was refused: ${edited.reason}`);
+}
+
+async function setDue(enrollmentId: string): Promise<void> {
+  await database.session.query(
+    `UPDATE step_executions SET due_at = $3::timestamptz, not_before = $3::timestamptz, original_due_at = $3::timestamptz
+      WHERE workspace_id = $1 AND enrollment_id = $2 AND state IN ('pending', 'held')`,
+    [seeded.alpha.workspaceId, enrollmentId, DUE],
+  );
+}
+
+async function enrolledAndDue(): Promise<string> {
+  const result = await enrollContact(contextFor('salesperson'), {
+    sequenceVersionId: sequences.alpha.publishedVersionId,
+    opportunityId: crm.alpha.opportunityId,
+    firmId: crm.alpha.firmId,
+    contactId: crm.alpha.contactId,
+  });
+  if (!result.ok) throw new Error(`the enrollment fixture was refused: ${result.reason}`);
+  await setDue(result.value.enrollmentId);
+  return result.value.enrollmentId;
+}
+
+beforeAll(async () => {
+  database = await createTestDatabase();
+  seeded = await seedTwoWorkspaces(database.session);
+  crm = await seedCrm(database.session, seeded);
+  sequences = await seedSequences(database.session, seeded);
+});
+
+afterAll(async () => {
+  await database.drop();
+});
+
+beforeEach(async () => {
+  await database.session.query('DELETE FROM step_execution_shifts');
+  await database.session.query('DELETE FROM step_executions');
+  await database.session.query('DELETE FROM sequence_enrollments');
+  await database.session.query('DELETE FROM active_holds');
+  await templateBody(fixtureBody('A short note about {firm_name}.'));
+});
+
+describe('the step hands over composed bytes', () => {
+  it('appends the sign-off, the configured address and one stop line', async () => {
+    await setPostalAddress(ADDRESS);
+    const enrollmentId = await enrolledAndDue();
+    const handoff = recordingSendHandoff();
+    const outcome = await runDueStepExecution(worker(), {
+      enrollmentId,
+      now: DUE,
+      eligibility: allowAllEligibility(),
+      sendHandoff: handoff,
+    });
+    expect(outcome.kind).toBe('handed_to_send');
+    const [request] = handoff.prepared;
+    expect(request?.body).toBe(
+      `A short note about ${crm.collidingFirmName}.\n\n${sendFooterBlock({
+        signOff: FIXTURE_SIGN_OFF,
+        postalAddress: ADDRESS,
+      })}`,
+    );
+    expect(request?.body.split(SENDING_STOP_LINE)).toHaveLength(2);
+  });
+
+  it('hands over today’s bytes exactly when no address is configured', async () => {
+    await setPostalAddress(null);
+    const enrollmentId = await enrolledAndDue();
+    const handoff = recordingSendHandoff();
+    expect(
+      (await runDueStepExecution(worker(), {
+        enrollmentId,
+        now: DUE,
+        eligibility: allowAllEligibility(),
+        sendHandoff: handoff,
+      })).kind,
+    ).toBe('handed_to_send');
+    expect(handoff.prepared[0]?.body).toBe(fixtureBody(`A short note about ${crm.collidingFirmName}.`));
+  });
+
+  it('composes a footerless approved body too: the shapes meet at the hand-off', async () => {
+    await setPostalAddress(ADDRESS);
+    await templateBody('A short note about {firm_name}.');
+    const enrollmentId = await enrolledAndDue();
+    const handoff = recordingSendHandoff();
+    expect(
+      (await runDueStepExecution(worker(), {
+        enrollmentId,
+        now: DUE,
+        eligibility: allowAllEligibility(),
+        sendHandoff: handoff,
+      })).kind,
+    ).toBe('handed_to_send');
+    expect(handoff.prepared[0]?.body).toBe(
+      `A short note about ${crm.collidingFirmName}.\n\n${sendFooterBlock({
+        signOff: FIXTURE_SIGN_OFF,
+        postalAddress: ADDRESS,
+      })}`,
+    );
+  });
+
+  it('holds the step before any fence exists when the composed body would pass 4,000', async () => {
+    await setPostalAddress(null);
+    const footer = `${FIXTURE_SIGN_OFF}\n${SENDING_STOP_LINE}`;
+    // The longest body the template rules admit with no address: 4,000 composed.
+    await templateBody(`${'x'.repeat(4000 - footer.length - 2)}\n\n${footer}`);
+    await setPostalAddress(ADDRESS);
+
+    const enrollmentId = await enrolledAndDue();
+    const handoff = recordingSendHandoff();
+    const outcome = await runDueStepExecution(worker(), {
+      enrollmentId,
+      now: DUE,
+      eligibility: allowAllEligibility(),
+      sendHandoff: handoff,
+    });
+    expect(outcome).toMatchObject({ kind: 'held', reasonCode: 'template_unapproved' });
+    // Nothing was handed over: the hold happens before the fence, not after it.
+    expect(handoff.prepared).toEqual([]);
+    const [execution] = await listStepExecutions(worker(), { enrollmentId });
+    expect(execution).toMatchObject({ state: 'held', holdReasonCode: 'template_unapproved' });
+
+    // Clear the address and the same step goes: the refusal was the length.
+    await setPostalAddress(null);
+    await setDue(enrollmentId);
+    const second = recordingSendHandoff();
+    expect(
+      (await runDueStepExecution(worker(), {
+        enrollmentId,
+        now: DUE,
+        eligibility: allowAllEligibility(),
+        sendHandoff: second,
+      })).kind,
+    ).toBe('handed_to_send');
+    expect(second.prepared[0]?.body).toHaveLength(4000);
+  });
+});
