@@ -4,6 +4,7 @@ import {
   type ReplyCard,
   type ReplyDisposition,
   type ReplyState,
+  type ReplySummary,
 } from './replyContract.ts';
 
 /**
@@ -70,7 +71,8 @@ const DISPOSITION_CONSEQUENCES: Readonly<Record<ReplyDisposition, string>> = Obj
     'Callie stops automated sending for this firm and hands it to you. It does not move the deal forward on its own.',
   referral_or_wrong_person:
     'Callie stops automated sending for this firm and hands it to you. Add the right contact on the firm page.',
-  follow_up_later: 'Callie stops automated sending and books the callback you enter below.',
+  follow_up_later:
+    'Callie stops automated sending. Enter a day and a time below and it books that callback; leave them empty and it is a follow-up with no date on it.',
   not_interested:
     'Callie stops automated sending and suggests marking the deal Lost. It does not close anything — that is your call on the firm page.',
   opt_out:
@@ -92,6 +94,24 @@ export const CONFIRM_LABELS: Readonly<Record<ReplyDisposition, string>> = Object
   opt_out: 'Stop automated sending and record a do-not-contact',
   other: 'Stop automated sending and take this firm over',
 });
+
+/** What Confirm says with no date entered for a follow-up: what will actually happen. */
+export const FOLLOW_UP_WITHOUT_DATE = 'Stop automated sending and note a follow-up — no date yet';
+
+/**
+ * What the button says, and it says exactly what pressing it will do (1.0.12).
+ *
+ * `callbackBooked` is whether a day has actually been typed. The domain books a callback
+ * **only if one was supplied** (`confirmations.ts`), so "book the callback" on an empty
+ * form was a button promising something that would not happen — the one thing D5.1's
+ * guard about naming the effect exists to prevent. With a date it books; without one it
+ * stops automation and leaves a follow-up with no date, and the button says so.
+ */
+export function confirmLabel(chosen: ReplyDisposition | null, callbackBooked: boolean): string {
+  if (chosen === null) return 'Choose what this reply means';
+  if (chosen === 'follow_up_later' && !callbackBooked) return FOLLOW_UP_WITHOUT_DATE;
+  return CONFIRM_LABELS[chosen];
+}
 
 const CLASS_LABELS: Readonly<Record<string, string>> = Object.freeze({
   human_reply: 'A person wrote this',
@@ -188,7 +208,7 @@ export interface ReplyCardView {
 interface ReplyScreenView {
   readonly heading: string;
   readonly banners: readonly BannerView[];
-  readonly summaries: readonly { readonly card: ReplyCard; readonly line: string; readonly open: boolean }[];
+  readonly summaries: readonly { readonly card: ReplySummary; readonly line: string; readonly open: boolean }[];
   readonly card: ReplyCardView | null;
   readonly emptyMessage: string | null;
   /** What the workspace is paying for, for the person reading a suggestion. */
@@ -328,7 +348,10 @@ export function buildReplyCardView(
     // A card whose model had no guess still opens with nothing chosen, and then this
     // stays false until somebody chooses.
     confirmEnabled: mayAct && answerable && chosen !== null,
-    confirmLabel: chosen === null ? 'Choose what this reply means' : CONFIRM_LABELS[chosen],
+    // Without the date somebody has typed — which is the form's, not this state's — a
+    // follow-up reads as the dateless one it would be. `RepliesView` calls
+    // `confirmLabel` again with the field's value and shows that.
+    confirmLabel: confirmLabel(chosen, false),
     nextAction: card.nextAction,
     ambiguity: card.nextAction === 'resolve_ambiguity' ? card.impact.candidates : [],
     // A member who may not read the message is not asked which conversation it is.
@@ -342,15 +365,16 @@ export function candidateLabel(candidate: ReplyCandidate): string {
   return candidate.firmName.trim() === '' ? 'A firm Callie could not name' : candidate.firmName;
 }
 
-function summaryLine(card: ReplyCard): string {
+/** One line per card. Built from the summary, which has no body in it to leak. */
+function summaryLine(card: ReplySummary): string {
   const who = card.contactName ?? card.from ?? 'Unknown sender';
   const what =
     card.nextAction === 'resolve_ambiguity'
       ? 'Which conversation?'
       : card.nextAction === 'review_bounce'
         ? 'Delivery failure'
-        : card.confirmation !== null
-          ? DISPOSITION_LABELS[card.confirmation.disposition]
+        : card.confirmedDisposition !== null
+          ? DISPOSITION_LABELS[card.confirmedDisposition]
           : card.proposedDisposition === null
             ? 'Needs an answer'
             : `Callie suggests: ${DISPOSITION_LABELS[card.proposedDisposition]}`;

@@ -73,7 +73,10 @@ export function useReplies(): Replies {
     return () => {
       generation.current += 1;
       // Nothing a reply card carried outlives the view: not the body, not the sender's
-      // name, not the model's quotation from it.
+      // name, not the model's quotation from it. That is true of the main process too —
+      // it held the lane and the open card until 1.0.12 — so leaving the view tells it
+      // to forget, and a read still on the wire will not store what it brings back.
+      void api()?.read('replies.forget', {});
       setState(null);
       setPicked(null);
     };

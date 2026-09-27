@@ -8,7 +8,7 @@ import { compileStylesheet } from '../../../scripts/styles.ts';
 import type { DesktopState, MailboxState } from '../../../src/shared/contract.ts';
 import type { UpdateStatus } from '../../../src/shared/updateContract.ts';
 import type { CrmState } from '../../../src/renderer/firmWorkspaceContract.ts';
-import type { ReplyState } from '../../../src/renderer/replyContract.ts';
+
 import type { SequenceState } from '../../../src/renderer/sequenceContract.ts';
 import type { AdminState } from '../../../src/renderer/settingsContract.ts';
 import type { TodayState } from '../../../src/renderer/todayContract.ts';
@@ -16,7 +16,7 @@ import { EMPTY_SEQUENCE_STATE } from '../../../src/renderer/sequenceView.ts';
 import { adminAnswer, adminState } from './adminFixtures.ts';
 import { crmAnswer, crmState } from './crmFixtures.ts';
 import { connectedMailbox, desktopState, readyAdmin, todayAnswer, todayState } from './homeFixtures.ts';
-import { replyAnswer, replyState } from './replyFixtures.ts';
+import { replyAnswer, replyState, replyWire, type ReplyLane } from './replyFixtures.ts';
 import { signedInState, signedOutState } from './sessionFixtures.ts';
 
 /**
@@ -99,7 +99,7 @@ export interface AppServerOptions {
   /** `loadDashboard` answers with no figures for the window asked, as a refused read does. */
   readonly figuresFail?: boolean;
   readonly crm?: CrmState;
-  readonly replies?: ReplyState;
+  readonly replies?: ReplyLane;
   /** What each `sequences.state` answers, one per call; the last repeats. */
   readonly sequences?: readonly SequenceState[];
   /** The state a sequences method moves the window to, by method name. */
@@ -131,7 +131,7 @@ export interface AppServer {
   readonly today: BridgeHandle<TodayState>;
   readonly admin: BridgeHandle<AdminState>;
   readonly crm: BridgeHandle<CrmState>;
-  readonly replies: BridgeHandle<ReplyState>;
+  readonly replies: BridgeHandle<ReplyLane>;
   readonly sequences: BridgeHandle<SequenceState>;
   readonly update: BridgeHandle<UpdateStatus>;
   /**
@@ -211,7 +211,8 @@ const METHODS: Readonly<Record<string, { readonly global: string; readonly metho
 
 /** `onNavigate` and `onChange` keep the page's listener where a spec can call it, as the main process's messages do. */
 const LISTENERS: Readonly<Record<string, string>> = {
-  callie: `onNavigate(listener) { (globalThis.__navigateListeners ??= []).push(listener); },`,
+  callie: `onNavigate(listener) { (globalThis.__navigateListeners ??= []).push(listener); },
+  onSessionChange(listener) { (globalThis.__sessionListeners ??= []).push(listener); },`,
   update: `onChange(listener) { (globalThis.__updateListeners ??= []).push(listener); },`,
 };
 
@@ -366,7 +367,9 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     }
     if (bridge === 'replies') {
       replies = replyAnswer(replies, name, argument, mine);
-      return replies;
+      // The window is handed summaries and the open card, never the lane's bodies —
+      // the same reduction `replySummaryOf` makes in the main process.
+      return replyWire(replies);
     }
     if (bridge === 'diagnostics') {
       if (name === 'sendStatus') return { fence };

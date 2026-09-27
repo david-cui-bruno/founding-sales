@@ -230,6 +230,13 @@ export const OPERATIONS = {
     output: replyStateSchema,
     transform: 'the card is held only while it is open, and never cached',
   },
+  'replies.forget': {
+    kind: 'read',
+    http: null,
+    input: nothing,
+    output: replyStateSchema,
+    transform: 'drops the lane, the open card and the one body held for it; a read still in flight will not store what it brings back',
+  },
   'replies.collapse': {
     kind: 'read',
     http: null,

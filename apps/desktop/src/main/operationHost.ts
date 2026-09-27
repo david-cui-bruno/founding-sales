@@ -70,6 +70,7 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     'replies.refresh': async () => await deps.replies.refresh(),
     'replies.open': async (input: { readonly messageId: string }) => await deps.replies.open(input),
     'replies.collapse': async () => await deps.replies.collapse(),
+    'replies.forget': async () => await deps.replies.forget(),
     'replies.confirm': async (input: Parameters<ReplyBridgeHost['confirm']>[0]) => await deps.replies.confirm(input),
     'replies.resolve': async (input: Parameters<ReplyBridgeHost['resolve']>[0]) => await deps.replies.resolve(input),
 

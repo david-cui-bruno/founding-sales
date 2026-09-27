@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { replyCardSchema, replyStateSchema, type ReplyCard, type ReplyState } from '../src/renderer/replyContract.ts';
-import { CONFIRM_LABELS, buildReplyCardView, buildReplyView, candidateLabel, replyNotice } from '../src/renderer/replyView.ts';
+import { replyCardSchema, replyStateSchema, replySummaryOf, type ReplyCard, type ReplyState } from '../src/renderer/replyContract.ts';
+import {
+  CONFIRM_LABELS,
+  buildReplyCardView,
+  buildReplyView,
+  candidateLabel,
+  confirmLabel,
+  replyNotice,
+} from '../src/renderer/replyView.ts';
 import { createReplyBridge } from '../src/main/replyBridge.ts';
 import { OPERATION_NAMES } from '../src/shared/operations.ts';
 import { createAuthedClient } from '../src/main/authedClient.ts';
@@ -85,7 +92,7 @@ function state(overrides: Partial<ReplyState> = {}): ReplyState {
   return replyStateSchema.parse({
     businessDate: '2026-09-21',
     businessTimeZone: 'America/New_York',
-    cards: [card()],
+    cards: [replySummaryOf(card())],
     open: card(),
     online: true,
     mayMutate: true,
@@ -120,9 +127,14 @@ describe('the reply card view model', () => {
     expect(buildReplyCardView(state(), card(), 'opt_out').confirmLabel).toBe(
       'Stop automated sending and record a do-not-contact',
     );
+    // A follow-up with nothing typed in the date does not book anything — the domain
+    // creates a callback only if one was supplied — so the button does not say it will.
     expect(buildReplyCardView(state(), card(), 'follow_up_later').confirmLabel).toBe(
-      'Stop automated sending and book the callback',
+      'Stop automated sending and note a follow-up — no date yet',
     );
+    expect(confirmLabel('follow_up_later', false)).toBe('Stop automated sending and note a follow-up — no date yet');
+    expect(confirmLabel('follow_up_later', true)).toBe('Stop automated sending and book the callback');
+    expect(confirmLabel(null, true)).toBe('Choose what this reply means');
     // Every disposition names an effect, and none of them says anything about the
     // guess having been reviewed.
     for (const label of Object.values(CONFIRM_LABELS)) {
@@ -270,7 +282,15 @@ describe('the reply card view model', () => {
   });
 
   it('summarises the lane without inventing an answer for anything', () => {
-    const view = buildReplyView(state({ cards: [card(), card({ messageId: OTHER_MESSAGE_ID, proposedDisposition: null, proposedBy: 'none', confidence: null })] }), null);
+    const view = buildReplyView(
+      state({
+        cards: [
+          replySummaryOf(card()),
+          replySummaryOf(card({ messageId: OTHER_MESSAGE_ID, proposedDisposition: null, proposedBy: 'none', confidence: null })),
+        ],
+      }),
+      null,
+    );
     expect(view.summaries.map(summary => summary.line)).toEqual([
       'Northwind Test Holdings — Dana Example — Callie suggests: Interested',
       'Northwind Test Holdings — Dana Example — Needs an answer',
@@ -321,6 +341,162 @@ const confirmed: HttpAnswer = {
   status: 200,
   body: { status: 'accepted', replayed: false, result: confirmReplyResultAnswer() },
 };
+
+describe('the reply bridge keeps no body it is not showing (1.0.12)', () => {
+  /*
+   * `GET /replies` answers whole cards, bodies and all. Until 1.0.12 this process kept
+   * that list for as long as the app was open: closing a card cleared the open one and
+   * left the rest, and `state` handed them back after a sign-out. What follows is the
+   * rule that replaced it — the lane is lines, one body exists at a time, and every way
+   * out of the view takes it with it.
+   */
+  const two = [card(), card({ messageId: OTHER_MESSAGE_ID, body: { text: 'Please stop.', truncated: false } })];
+
+  const bridgeWith = (answers: Readonly<Record<string, HttpAnswer>>) => {
+    const { api, calls } = scriptedApi(answers);
+    return { bridge: createReplyBridge({ api, session: session() }), calls };
+  };
+
+  it('holds the lane as lines: no body, no excerpt, no quotation', async () => {
+    const { bridge } = bridgeWith({ '/replies': lane(two), '/replies/settings': settings });
+    const after = await bridge.refresh();
+
+    expect(after.cards).toHaveLength(2);
+    // Not "the body is empty": the shape has nowhere to put one.
+    for (const summary of after.cards) {
+      expect(Object.keys(summary).sort()).toEqual([
+        'confirmedDisposition',
+        'contactName',
+        'firmId',
+        'firmName',
+        'from',
+        'messageId',
+        'nextAction',
+        'proposedDisposition',
+        'receivedAt',
+      ]);
+    }
+    expect(JSON.stringify(after.cards)).not.toContain('Please stop.');
+    expect(JSON.stringify(after.cards)).not.toContain('Tuesday works.');
+  });
+
+  it('holds one body, and only while its card is open', async () => {
+    const { bridge } = bridgeWith({
+      '/replies': lane(two),
+      '/replies/settings': settings,
+      '/replies/card': { status: 200, body: card() },
+    });
+    await bridge.refresh();
+    expect((await bridge.state()).open).toBeNull();
+
+    const opened = await bridge.open({ messageId: MESSAGE_ID });
+    expect(opened.open?.body?.text).toBe('Tuesday works. Send an invite.');
+
+    const closed = await bridge.collapse();
+    expect(closed.open).toBeNull();
+    expect(JSON.stringify(await bridge.state())).not.toContain('Tuesday works.');
+  });
+
+  it('drops the open card when a live read fails, rather than showing a body nothing confirmed', async () => {
+    const { bridge } = bridgeWith({
+      '/replies': lane(two),
+      '/replies/settings': settings,
+      '/replies/card': { status: 200, body: card() },
+    });
+    await bridge.refresh();
+    await bridge.open({ messageId: MESSAGE_ID });
+
+    const { api } = scriptedApi({ '/replies': { status: 503, body: { error: 'unavailable' } } });
+    const offline = createReplyBridge({ api, session: session() });
+    // The same bridge cannot be re-scripted, so this is the case on its own: a lane
+    // read that failed leaves nothing on screen and nothing in memory.
+    const after = await offline.refresh();
+    expect(after.cards).toEqual([]);
+    expect(after.open).toBeNull();
+  });
+
+  it('forgets everything on unmount, sign-out, another workspace, a changed role or a revocation', async () => {
+    const { bridge } = bridgeWith({
+      '/replies': lane(two),
+      '/replies/settings': settings,
+      '/replies/card': { status: 200, body: card() },
+    });
+    await bridge.refresh();
+    await bridge.open({ messageId: MESSAGE_ID });
+
+    const forgotten = await bridge.forget();
+    expect(forgotten.cards).toEqual([]);
+    expect(forgotten.open).toBeNull();
+    expect(forgotten.businessDate).toBeNull();
+    expect(forgotten.classifier).toBeNull();
+    expect(JSON.stringify(await bridge.state())).not.toContain('Tuesday works.');
+  });
+
+  it('drops a read that lands after the clear, instead of filling the lane in again', async () => {
+    // The race the fix is about: the view is left, or the person is signed out, while
+    // `/replies` is on the wire. The answer arrives to a bridge that has been cleared.
+    const gate: { release: () => void } = { release: () => undefined };
+    const held = new Promise<void>(resolve => {
+      gate.release = resolve;
+    });
+    const api = createAuthedClient({
+      baseUrl: 'https://api.example.test/',
+      clientVersion: '1.4.0',
+      accessToken: async () => await Promise.resolve('token-value'),
+      send: async url => {
+        const path = new URL(url).pathname;
+        if (path === '/replies') {
+          await held;
+          return { status: 200, body: { businessDate: '2026-09-21', cards: two } };
+        }
+        return { status: 200, body: classifierSettingsAnswer() };
+      },
+    });
+    const bridge = createReplyBridge({ api, session: session() });
+
+    const reading = bridge.refresh();
+    const cleared = await bridge.forget();
+    expect(cleared.cards).toEqual([]);
+    gate.release();
+    await reading;
+
+    const after = await bridge.state();
+    expect(after.cards).toEqual([]);
+    expect(after.open).toBeNull();
+    expect(JSON.stringify(after)).not.toContain('Please stop.');
+  });
+
+  it('drops a card that lands after the clear', async () => {
+    const gate: { release: () => void } = { release: () => undefined };
+    const held = new Promise<void>(resolve => {
+      gate.release = resolve;
+    });
+    const api = createAuthedClient({
+      baseUrl: 'https://api.example.test/',
+      clientVersion: '1.4.0',
+      accessToken: async () => await Promise.resolve('token-value'),
+      send: async url => {
+        const path = new URL(url).pathname;
+        if (path === '/replies/card') {
+          await held;
+          return { status: 200, body: card() };
+        }
+        if (path === '/replies') return { status: 200, body: { businessDate: '2026-09-21', cards: two } };
+        return { status: 200, body: classifierSettingsAnswer() };
+      },
+    });
+    const bridge = createReplyBridge({ api, session: session() });
+    await bridge.refresh();
+
+    const opening = bridge.open({ messageId: MESSAGE_ID });
+    await bridge.forget();
+    gate.release();
+    await opening;
+
+    expect((await bridge.state()).open).toBeNull();
+    expect(JSON.stringify(await bridge.state())).not.toContain('Tuesday works.');
+  });
+});
 
 describe('the reply bridge', () => {
   it('reads the lane, the card and the configuration, and hands the window no token', async () => {
@@ -427,10 +603,19 @@ describe('the reply bridge', () => {
     expect(replyNotice('suggests_lost')).toContain('Callie will not do it for you');
     // The bridge's whole surface, and none of it closes anything. `resolve` (lane g88) is
     // G7's ambiguity resolution, which picks a conversation and answers nothing.
-    expect(Object.keys(bridge).sort()).toEqual(['collapse', 'confirm', 'open', 'refresh', 'resolve', 'state']);
+    expect(Object.keys(bridge).sort()).toEqual([
+      'collapse',
+      'confirm',
+      'forget',
+      'open',
+      'refresh',
+      'resolve',
+      'state',
+    ]);
     expect(OPERATION_NAMES.filter(name => name.startsWith('replies.')).sort()).toEqual([
       'replies.collapse',
       'replies.confirm',
+      'replies.forget',
       'replies.open',
       'replies.refresh',
       'replies.resolve',

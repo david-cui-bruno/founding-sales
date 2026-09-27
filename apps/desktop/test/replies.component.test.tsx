@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RepliesRoute } from '../src/renderer/replies/RepliesRoute.tsx';
 import type { OperationApi, OperationName } from '../src/shared/operations.ts';
 import type { ReplyState } from '../src/renderer/replyContract.ts';
-import { MESSAGE_ID, replyCard, replyState } from './e2e/support/replyFixtures.ts';
+import { MESSAGE_ID, replyCard, replyState, replyWire } from './e2e/support/replyFixtures.ts';
 import { replyConfirmationAnswer } from './support/replyAnswers.ts';
 
 /**
@@ -25,8 +25,10 @@ import { replyConfirmationAnswer } from './support/replyAnswers.ts';
 
 const BODY = 'Tuesday works. Send an invite.';
 
-const state = (overrides: Partial<ReplyState> = {}): ReplyState =>
-  replyState({ open: replyCard(), ...overrides });
+const state = (overrides: Partial<ReplyState> = {}): ReplyState => ({
+  ...replyWire(replyState({ open: replyCard() })),
+  ...overrides,
+});
 
 type Scripted = Readonly<Partial<Record<OperationName, (input: unknown) => Promise<ReplyState>>>>;
 

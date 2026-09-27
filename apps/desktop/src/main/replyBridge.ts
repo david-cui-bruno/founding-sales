@@ -6,9 +6,11 @@ import {
 } from '@fss/contracts';
 import {
   replyStateSchema,
+  replySummaryOf,
   type ConfirmReplyRequest,
   type ReplyCard,
   type ReplyState,
+  type ReplySummary,
   type ResolveReplyRequest,
 } from '../renderer/replyContract.ts';
 import type { AuthedClient } from './authedClient.ts';
@@ -81,14 +83,30 @@ export interface ReplyBridgeHost {
   collapse(): Promise<ReplyState>;
   confirm(input: ConfirmReplyRequest): Promise<ReplyState>;
   resolve(input: ResolveReplyRequest): Promise<ReplyState>;
+  /**
+   * Drop everything: the lane, the open card and the body in it (1.0.12).
+   *
+   * Called when the view unmounts and when the session changes — a sign-out, another
+   * workspace, a changed role, a revoked device. A read already on the wire when this
+   * happens does not store what it brings back: it was made for somebody who is no
+   * longer the person at this Mac.
+   */
+  forget(): Promise<ReplyState>;
 }
 
 export function createReplyBridge(deps: ReplyBridgeDeps): ReplyBridgeHost {
-  let cards: readonly ReplyCard[] = [];
+  let cards: readonly ReplySummary[] = [];
   let businessDate: string | null = null;
   let open: ReplyCard | null = null;
   let classifier: ReplyState['classifier'] = null;
   let notice: string | null = null;
+  /*
+   * Bumped by `forget`. Every load takes a copy before it awaits and compares after:
+   * an answer from before the clear is dropped rather than stored, which is the
+   * difference between "the lane is empty" and "the lane is empty until the read that
+   * was already in flight fills it in again".
+   */
+  let generation = 0;
 
   const snapshot = async (): Promise<ReplyState> => {
     const session = await deps.session.state();
@@ -114,19 +132,26 @@ export function createReplyBridge(deps: ReplyBridgeDeps): ReplyBridgeHost {
   };
 
   const loadLane = async (): Promise<void> => {
+    const mine = generation;
     const lane = await deps.api.read('/replies', value => replyListResponseSchema.parse(value), {});
+    if (mine !== generation) return;
     if (!lane.ok) {
       // 4.2: nothing here is cached, so an outage is an empty lane and a notice —
-      // never a stale card somebody might answer.
+      // never a stale card somebody might answer. The open card goes with it: a body
+      // is held only while a live read says it is still there to read.
       cards = [];
       businessDate = null;
+      open = null;
       note(lane, null);
       return;
     }
-    cards = lane.value.cards;
+    // The bodies are dropped here, where the answer is parsed. Nothing downstream has
+    // to remember to: `cards` is a shape that cannot hold one.
+    cards = lane.value.cards.map(replySummaryOf);
     businessDate = lane.value.businessDate;
     notice = null;
     const settings = await deps.api.read('/replies/settings', value => classifierSettingsResponseSchema.parse(value), {});
+    if (mine !== generation) return;
     // The three the window shows. The caps and who changed them last stay on the server.
     classifier = settings.ok
       ? { enabled: settings.value.enabled, modelName: settings.value.modelName, effort: settings.value.effort }
@@ -134,7 +159,11 @@ export function createReplyBridge(deps: ReplyBridgeDeps): ReplyBridgeHost {
   };
 
   const loadCard = async (messageId: string): Promise<void> => {
+    const mine = generation;
     const card = await deps.api.read('/replies/card', value => replyCardDtoSchema.parse(value), { messageId });
+    // A card that arrives after a clear is not kept: the person it was read for has
+    // signed out, changed workspace, or left the view.
+    if (mine !== generation) return;
     if (!card.ok) {
       open = null;
       note(card, null);
@@ -160,6 +189,16 @@ export function createReplyBridge(deps: ReplyBridgeDeps): ReplyBridgeHost {
 
     async collapse() {
       open = null;
+      notice = null;
+      return await snapshot();
+    },
+
+    async forget() {
+      generation += 1;
+      cards = [];
+      businessDate = null;
+      open = null;
+      classifier = null;
       notice = null;
       return await snapshot();
     },

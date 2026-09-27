@@ -1,7 +1,11 @@
 import { z } from 'zod';
 import {
   CLASSIFIER_EFFORTS,
+  REPLY_DISPOSITIONS,
+  REPLY_NEXT_ACTIONS,
+  instant,
   replyCardDtoSchema,
+  uuid,
   type ReplyCandidateDto,
   type ReplyCardDto,
   type ReplyDisposition,
@@ -49,11 +53,54 @@ export type ReplyCandidate = ReplyCandidateDto;
 /** One reply card, exactly as `/replies/card` returned it. */
 export type ReplyCard = ReplyCardDto;
 
+/**
+ * One row of the lane, and **it cannot hold a message body** (1.0.12).
+ *
+ * `GET /replies` answers full cards, bodies and all, and until 1.0.12 the main process
+ * kept that whole list in memory for as long as the app was open: closing a card cleared
+ * the open one and left the rest, and `replies.state` could hand them back after a
+ * sign-out. What the list on screen actually shows is one line per card — the firm, who
+ * wrote, and what Callie makes of it — so that is all this shape can carry, and the body
+ * is dropped where the answer is parsed rather than where it is drawn.
+ *
+ * A body exists in exactly one place after this: `open`, the card somebody is reading.
+ */
+export const replySummarySchema = z.strictObject({
+  messageId: uuid,
+  receivedAt: instant,
+  firmId: uuid,
+  firmName: z.string().min(1).max(300),
+  /** The sender as the list names them; never the message. */
+  from: z.string().max(320).nullable(),
+  contactName: z.string().max(200).nullable(),
+  nextAction: z.enum(REPLY_NEXT_ACTIONS),
+  proposedDisposition: z.enum(REPLY_DISPOSITIONS).nullable(),
+  /** What was confirmed, if it was; the note and the consequences stay on the server. */
+  confirmedDisposition: z.enum(REPLY_DISPOSITIONS).nullable(),
+});
+export type ReplySummary = z.infer<typeof replySummarySchema>;
+
+/** One wire card, reduced to the line the lane shows. The only place this is done. */
+export function replySummaryOf(card: ReplyCardDto): ReplySummary {
+  return {
+    messageId: card.messageId,
+    receivedAt: card.receivedAt,
+    firmId: card.firmId,
+    firmName: card.firmName,
+    from: card.from,
+    contactName: card.contactName,
+    nextAction: card.nextAction,
+    proposedDisposition: card.proposedDisposition,
+    confirmedDisposition: card.confirmation?.disposition ?? null,
+  };
+}
+
 export const replyStateSchema = z.strictObject({
   /** Null before the first read, and after a sign-out. */
   businessDate: z.iso.date().nullable(),
   businessTimeZone: z.string().max(64).nullable(),
-  cards: z.array(replyCardDtoSchema),
+  /** The lane, as lines. No body reaches the window except the open card's. */
+  cards: z.array(replySummarySchema),
   /** The card the person opened, or null. */
   open: replyCardDtoSchema.nullable(),
   /** Whether the cloud answered the last time we asked. */
