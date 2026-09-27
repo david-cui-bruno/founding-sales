@@ -29,6 +29,15 @@ export interface AuthedClientOptions {
    * The session manager keeps it as `online`, so the next answer clears the banner.
    */
   readonly onConnection?: (reachable: boolean) => void;
+  /**
+   * A call the server refused as unauthenticated (1.0.12): its status and its reason.
+   *
+   * The sign-in and renewal paths have always told the session manager what they were
+   * refused with; the six bridges' own calls did not, so a device revoked while the
+   * window was open went on answering from a session the server had already ended.
+   * Only 401 and 403 are reported: a 409 from a command is the command's business.
+   */
+  readonly onAuthRefusal?: (reason: string, status: number) => void;
 }
 
 export interface AuthedClient {
@@ -69,6 +78,9 @@ export function createAuthedClient(options: AuthedClientOptions): AuthedClient {
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
       options.onConnection?.(true);
+      if (answer.status === 401 || answer.status === 403) {
+        options.onAuthRefusal?.(refusalOf(answer.body, answer.status), answer.status);
+      }
       if (answer.status < 200 || answer.status >= 300) {
         // The body travels with the code (lane g78, D05). A refused merge's conflicts
         // are the screen a person resolves; reducing the answer to its reason here is

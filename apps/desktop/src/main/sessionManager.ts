@@ -4,6 +4,7 @@ import {
   type CachedToday,
   type DesktopState,
   type RememberedWorkspace,
+  type SessionChange,
   type StoredDevice,
   type StoredSession,
 } from '../shared/contract.ts';
@@ -85,6 +86,18 @@ export interface SessionManager {
    * all, false only when it could not be reached. `authedClient` reports every call here.
    */
   noteConnection(reachable: boolean): void;
+  /**
+   * What an authenticated bridge call was refused with (1.0.12). The sign-in and
+   * renewal paths have always come through `noteRefusal`; the six bridges' own calls
+   * did not, so a device revoked while the window was open kept answering from a
+   * session the server had already ended. A refusal in `REVOCATIONS` wipes here exactly
+   * as it does there, and the window is told.
+   */
+  noteAuthRefusal(reason: string): Promise<void>;
+  /** The number of session transitions so far. A read made under an older one is stale. */
+  sessionGeneration(): number;
+  /** Told on every transition: sign-out, another workspace, a changed role, a wipe. */
+  onSessionChange(listener: (change: SessionChange) => void): void;
 }
 
 /** The name a Mac signs in under when nobody has named it. */
@@ -121,6 +134,33 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
   // The one in-flight renewal. Every caller awaits this same promise.
   let renewal: Promise<ApiOutcome<StoredSession>> | null = null;
 
+  /*
+   * Session transitions (1.0.12). `generation` counts them and `announced` is the
+   * identity the window was last told about; `undefined` means it has not been told
+   * anything yet, which is the state this process starts in and is not a transition.
+   *
+   * The identity is the workspace, the device and the role, because all three change
+   * what a person may see: a promoted salesperson is shown a Domain row and a sending
+   * section, and everything read under the old role has to go.
+   */
+  let generation = 0;
+  let announced: string | null | undefined;
+  const listeners: ((change: SessionChange) => void)[] = [];
+
+  const identityOf = (): string | null =>
+    device === null ? null : `${device.workspaceId}/${device.deviceId}/${device.role}`;
+
+  const announce = (reason: string): void => {
+    const identity = identityOf();
+    const first = announced === undefined;
+    if (!first && identity === announced) return;
+    announced = identity;
+    if (first) return;
+    generation += 1;
+    const change: SessionChange = { generation, identity, reason };
+    for (const listener of listeners) listener(change);
+  };
+
   const forget = async (reason: string): Promise<void> => {
     await options.cache.wipe();
     await options.store.forget();
@@ -130,6 +170,7 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
     asOf = null;
     stale = false;
     notice = reason;
+    announce(reason);
   };
 
   const noteRefusal = async (reason: string): Promise<void> => {
@@ -163,6 +204,8 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
       asOf = cached.asOf;
       stale = true;
     }
+    // Records who this Mac is without announcing it: starting up is not a transition.
+    announce('loaded');
   };
 
   /** Renew, at most once at a time. Concurrent callers share the one attempt. */
@@ -197,6 +240,9 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
         const current: StoredDevice = { ...device, role: outcome.value.role };
         device = current;
         await options.store.saveDevice(current);
+        // The window is holding a page drawn for the old role. It goes now, not at the
+        // next read: 8.2's difference between the two roles is what is on the screen.
+        announce('role_changed');
       }
       return { ok: true, value: renewed };
     })();
@@ -252,6 +298,20 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
 
     noteConnection(reachable) {
       online = reachable;
+    },
+
+    async noteAuthRefusal(reason) {
+      // Only the refusals that mean the registration is over. Everything else a bridge
+      // is refused with is the bridge's own notice to show, not a reason to wipe.
+      if (!REVOCATIONS.has(reason)) return;
+      await ensureLoaded();
+      await noteRefusal(reason);
+    },
+
+    sessionGeneration: () => generation,
+
+    onSessionChange(listener) {
+      listeners.push(listener);
     },
 
     async accessToken() {
@@ -324,6 +384,9 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
           supported = grant.supportedClientVersions;
           notice = null;
           await remember({ workspaceId: grant.workspaceId, deviceLabel });
+          // Somebody else may have been here a moment ago; the window empties what it
+          // was holding before it draws anything of this person's.
+          announce('signed_in');
           return snapshot();
         }
         // `handoff_unknown` means the browser has not finished; anything else is over.

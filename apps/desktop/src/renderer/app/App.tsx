@@ -79,7 +79,7 @@ function Column({
       lanes instanceof HTMLElement && active instanceof HTMLElement && lanes.contains(active) && active.matches('input, textarea, select');
     return focused || typed;
   }, [typed]);
-  const today = useToday(session.identity, isTyping);
+  const today = useToday(session.identity, session.generation, isTyping);
 
   const todayView = today.state === null ? null : buildTodayView(today.state);
   const view = buildHomeView(
@@ -218,15 +218,29 @@ export function App(): JSX.Element {
   const installing = session.update?.kind === 'installing' ? session.update : null;
   const signedIn = session.desktop !== null && session.desktop.screen === 'today' && session.desktop.device !== null;
 
+  const generation = session.generation;
+  const lastGeneration = useRef(generation);
   const lastIdentity = useRef<string | null>(null);
   useEffect(() => {
-    // Nothing one person read stays for the next: the request cache goes with them, on
-    // sign-out, on another workspace and on a changed role. Not on the first sign-in,
-    // which would throw away the reads the shell has only just started.
-    const before = lastIdentity.current;
+    /*
+     * Nothing one person read stays for the next.
+     *
+     * Two things can say so and both do. The main process **tells** the window, the
+     * moment it knows: a sign-out, another workspace, a role the renewal came back
+     * with, a device the server says is revoked — `session.generation` moves and the
+     * cache goes at once, rather than when something next happens to be read. And the
+     * identity is still watched, because a build without the session bridge (the
+     * harness runs one on purpose) has no event to hear.
+     *
+     * The first sign-in is neither: there is nothing of anybody else's to throw away,
+     * and clearing there would discard the reads the shell has only just started.
+     */
+    const beforeIdentity = lastIdentity.current;
+    const beforeGeneration = lastGeneration.current;
     lastIdentity.current = identity;
-    if (before !== null && before !== identity) client.clear();
-  }, [client, identity]);
+    lastGeneration.current = generation;
+    if (generation !== beforeGeneration || (beforeIdentity !== null && beforeIdentity !== identity)) client.clear();
+  }, [client, identity, generation]);
 
   useEffect(() => {
     if (identity !== null) setSignInDraft(null);
@@ -252,7 +266,9 @@ export function App(): JSX.Element {
   return (
     <>
       {signedIn ? (
-        <DraftsProvider key={identity ?? 'signed-out'}>
+        // Everything typed and unsent is keyed on the person *and* the transition, so a
+        // sign-out, another workspace, a changed role or a revocation empties it at once.
+        <DraftsProvider key={`${identity ?? 'signed-out'}:${String(generation)}`}>
           <Column route={route} epoch={epoch} session={session} desktop={session.desktop} onNavigate={navigate} />
         </DraftsProvider>
       ) : (

@@ -63,7 +63,16 @@ export interface Today {
   autoRefresh(trigger: 'focus' | 'tick', now?: number): void;
 }
 
-export function useToday(identity: string | null, isTyping: () => boolean): Today {
+/**
+ * The list, keyed on the person **and on the session generation** (1.0.12).
+ *
+ * A read is made under a generation and lands under one. When the main process reports a
+ * transition — a sign-out, another workspace, a changed role, a revoked device — the
+ * number moves, and a read that was already on the wire writes nothing: it is dropped at
+ * the `keep` below and its key is not the key anything is watching. Without that, a
+ * `/today` read started as one person could repopulate the cache `App` had just emptied.
+ */
+export function useToday(identity: string | null, generation: number, isTyping: () => boolean): Today {
   const client = useQueryClient();
   const enabled = identity !== null && api() !== undefined;
   const [pending, setPending] = useState(0);
@@ -74,8 +83,11 @@ export function useToday(identity: string | null, isTyping: () => boolean): Toda
   const typing = useRef(isTyping);
   typing.current = isTyping;
 
+  const session = useRef(generation);
+  session.current = generation;
+
   const query = useQuery({
-    queryKey: [TODAY_KEY, identity],
+    queryKey: [TODAY_KEY, identity, generation],
     // The cached list first, so the morning's list is on screen without a press.
     queryFn: async () => (await api()?.read('today.state', {})) ?? null,
     enabled,
@@ -89,10 +101,13 @@ export function useToday(identity: string | null, isTyping: () => boolean): Toda
     (next: Promise<TodayState>, read: boolean): void => {
       setPending(count => count + 1);
       if (!read) setCommands(count => count + 1);
+      const mine = session.current;
       void next
         .then(
           value => {
-            client.setQueryData([TODAY_KEY, identity], value);
+            // The answer to a question asked by somebody who has since left this Mac.
+            if (mine !== session.current) return;
+            client.setQueryData([TODAY_KEY, identity, mine], value);
             if (read) setRefreshAnswered(true);
           },
           // A bridge that rejects — an IPC fault, never a refusal, which arrives as a

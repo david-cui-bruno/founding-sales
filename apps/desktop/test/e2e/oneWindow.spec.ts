@@ -2,7 +2,7 @@ import { expect, test, type Page } from 'playwright/test';
 import { navigateByMenu, startAppServer, type AppServer } from './support/appServer.ts';
 import { FIRM_ID, crmState, pipelineView } from './support/crmFixtures.ts';
 import { EXAMPLE_WORKSPACE, signedOutState } from './support/sessionFixtures.ts';
-import { REPLY_FIRM_ID } from './support/homeFixtures.ts';
+import { REPLY_FIRM_ID, expandedFirm, todayState } from './support/homeFixtures.ts';
 import { FIRM_ID as REPLY_CARD_FIRM_ID, replyCard, replyState } from './support/replyFixtures.ts';
 
 /**
@@ -233,4 +233,63 @@ test('the route is in the address, so the View menu’s Reload comes back to the
   await page.reload();
   await expect(page.getByTestId('heading')).toHaveText('Pipeline');
   await expect(page.getByTestId('nav-firms')).toHaveAttribute('aria-current', 'page');
+});
+
+test('leaving Replies while a read is in flight does not leave the next view inert', async ({ page }) => {
+  /*
+   * The column belongs to the shell, and Replies makes it read-only while a call is on
+   * the wire so a second press of Confirm sends nothing. Until 1.0.12 nothing released
+   * that hold when the view was left: navigating during the call left `inert` on the
+   * column, and every view drawn after it could be read and not touched.
+   */
+  server = await startAppServer({ replies: replyState() });
+  await page.goto(server.url('#replies'));
+  await expect(page.getByTestId('reply-list')).toBeVisible();
+
+  const release = server.hold('replies.open');
+  await page.getByTestId('reply-open').nth(0).click();
+  await expect(page.getByTestId('column')).toHaveAttribute('aria-busy', 'true');
+
+  // Away while it is still holding, and the answer lands in a window that has left.
+  await page.getByTestId('nav-today').click();
+  release();
+
+  await expect(page.getByTestId('column')).toHaveAttribute('data-route', 'today');
+  await expect(page.getByTestId('column')).not.toHaveAttribute('aria-busy', 'true');
+  expect(await page.getByTestId('column').evaluate(element => (element as HTMLElement).inert)).toBe(false);
+  // And the view drawn there can actually be used.
+  await expect(page.getByTestId('refresh')).toBeEnabled();
+  await page.getByTestId('refresh').click();
+  await expect.poll(() => server.called('today.refresh').length).toBeGreaterThan(0);
+});
+
+test('a session change empties the window: the cache and everything typed go at once', async ({ page }) => {
+  /*
+   * The main process says the person, the workspace or the role changed — or that this
+   * Mac's registration is over. Until 1.0.12 the renderer found out by noticing that a
+   * state it happened to read looked different, so the last person's list, figures and
+   * half-written snooze reason stayed on screen until something asked.
+   */
+  server = await startAppServer({ today: todayState({ expanded: expandedFirm() }) });
+  await page.goto(server.url());
+  await expect(page.getByTestId('today-card').first()).toBeVisible();
+  await page.getByTestId('snooze-reason').nth(1).fill('Waiting on their board');
+
+  // The sidebar's reads are keyed on the person alone, so the only thing that makes
+  // them happen again is the cache having been emptied.
+  const adminBefore = server.called('admin.state').length;
+  const readsBefore = server.called('today.state').length + server.called('today.refresh').length;
+  await page.evaluate(() => {
+    const listeners = (globalThis as { __sessionListeners?: ((change: unknown) => void)[] }).__sessionListeners ?? [];
+    for (const listener of listeners) listener({ generation: 1, identity: null, reason: 'device_revoked' });
+  });
+
+  // The list and the sidebar are read again rather than served from the cache the last
+  // person filled…
+  await expect.poll(() => server.called('admin.state').length).toBeGreaterThan(adminBefore);
+  await expect
+    .poll(() => server.called('today.state').length + server.called('today.refresh').length)
+    .toBeGreaterThan(readsBefore);
+  // …and what was typed is not the next person's to read.
+  await expect(page.getByTestId('snooze-reason').nth(1)).toHaveValue('');
 });

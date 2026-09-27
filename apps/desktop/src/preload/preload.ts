@@ -16,6 +16,7 @@ import {
   desktopStateSchema,
   mailboxStateSchema,
   navigationTargetOf,
+  sessionChangeSchema,
   type DesktopBridge,
   type DesktopState,
   type MailboxBridge,
@@ -127,6 +128,14 @@ const bridge: DesktopBridge = {
     ipcRenderer.on(IPC_CHANNELS.navigate, (_event, name: unknown) => {
       const target = navigationTargetOf(name);
       if (target !== null) listener(target);
+    });
+  },
+  // A transition the main process saw (1.0.12). Parsed here like everything else that
+  // crosses this boundary: a message that is not one of these is not delivered at all.
+  onSessionChange: listener => {
+    ipcRenderer.on(IPC_CHANNELS.sessionChanged, (_event, raw: unknown) => {
+      const parsed = sessionChangeSchema.safeParse(raw);
+      if (parsed.success) listener(parsed.data);
     });
   },
 };

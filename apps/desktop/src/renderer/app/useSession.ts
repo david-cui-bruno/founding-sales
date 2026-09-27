@@ -28,6 +28,15 @@ export interface Session {
    * to remember to clear. Null when nobody is signed in.
    */
   readonly identity: string | null;
+  /**
+   * How many session transitions the main process has reported (1.0.12).
+   *
+   * Everything a view has in flight was asked for under one of these. An answer that
+   * arrives under an older one is dropped: a `/today` read started as one person must
+   * not land in a window that now belongs to another, and a sign-out must empty the
+   * window when it happens rather than when something next happens to be read.
+   */
+  readonly generation: number;
   signIn(input: { readonly workspaceId?: string | undefined; readonly deviceLabel?: string | undefined }): Promise<void>;
   signOut(): Promise<void>;
   /** Read the session again — after a command, so the banners follow what it found. */
@@ -49,6 +58,7 @@ export function useSession(): Session {
   const [mailbox, setMailbox] = useState<MailboxState | null>(null);
   const [mailboxWaiting, setMailboxWaiting] = useState(false);
   const [update, setUpdate] = useState<UpdateStatus | null>(null);
+  const [generation, setGeneration] = useState(0);
   const identity = identityOf(desktop);
   const identityRef = useRef(identity);
   identityRef.current = identity;
@@ -122,6 +132,16 @@ export function useSession(): Session {
   }, []);
 
   useEffect(() => {
+    // The main process saw the session change: a sign-out, another workspace, a role the
+    // renewal came back with, or a revoked device seen as an authenticated refusal. The
+    // window empties itself now — `App` clears the request cache and the drafts on this
+    // number changing — and reads the session again so the screen follows.
+    desktopBridge().onSessionChange(change => {
+      setGeneration(change.generation);
+      setMailbox(null);
+      setMailboxWaiting(false);
+      void reread();
+    });
     updateBridge()?.onChange(() => {
       void loadUpdate();
     });
@@ -161,6 +181,7 @@ export function useSession(): Session {
       mailboxWaiting,
       update,
       identity,
+      generation,
       signIn,
       signOut,
       reread,
@@ -176,6 +197,7 @@ export function useSession(): Session {
       mailboxWaiting,
       update,
       identity,
+      generation,
       signIn,
       signOut,
       reread,

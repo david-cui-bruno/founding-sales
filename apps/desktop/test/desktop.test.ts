@@ -17,7 +17,14 @@ import { buildScreenView } from '../src/renderer/viewModel.ts';
 import { createAuthedClient } from '../src/main/authedClient.ts';
 import { createAdminBridge } from '../src/main/settingsBridge.ts';
 import { outboundStatusAnswer } from './support/outboundStatus.ts';
-import { NAVIGATION_TARGETS, ROUTE_NAMES, desktopStateSchema, navigationTargetOf, routeNameOf } from '../src/shared/contract.ts';
+import {
+  NAVIGATION_TARGETS,
+  ROUTE_NAMES,
+  desktopStateSchema,
+  navigationTargetOf,
+  routeNameOf,
+  type SessionChange,
+} from '../src/shared/contract.ts';
 import { IPC_CHANNELS } from '../src/main/ipc.ts';
 import { DEEP_LINKS, deepLinkRoute, windowMenuTemplate } from '../src/main/windowMenu.ts';
 import { routeOf, routeText, sidebarRowOf } from '../src/renderer/routes.ts';
@@ -110,6 +117,114 @@ describe('sign-in through the system browser', () => {
     expect(state.screen).toBe('sign_in');
     expect(state.notice).toBe('membership_required');
     expect(state.device).toBeNull();
+  });
+});
+
+describe('session transitions the window is told about (1.0.12)', () => {
+  /*
+   * Until 1.0.12 the renderer found out that the person had changed by noticing that a
+   * state it happened to read looked different, which is one read too late: everything
+   * it was holding — the request cache, the reply lane, what somebody had typed — was
+   * still the last person's until something asked. These are the four transitions, as
+   * the main process sees them.
+   */
+  const changes = (mac: Awaited<ReturnType<typeof started>>): { readonly seen: SessionChange[] } => {
+    const seen: SessionChange[] = [];
+    mac.manager.onSessionChange(change => seen.push(change));
+    return { seen };
+  };
+
+  it('says nothing at startup: being signed in already is not a transition', async () => {
+    const mac = await started();
+    const { seen } = changes(mac);
+    await mac.manager.state();
+    expect(seen).toEqual([]);
+    expect(mac.manager.sessionGeneration()).toBe(0);
+  });
+
+  it('announces a sign-in and the sign-out after it, with the identity each leaves behind', async () => {
+    const mac = await started();
+    const { seen } = changes(mac);
+    await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: "David's MacBook" });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.reason).toBe('signed_in');
+    expect(seen[0]?.identity).toContain(mac.workspaceId);
+    expect(seen[0]?.identity).toContain('salesperson');
+
+    await mac.manager.signOut();
+    expect(seen).toHaveLength(2);
+    expect(seen[1]).toMatchObject({ reason: 'signed_out', identity: null, generation: 2 });
+    // Another workspace is this pair: the window is emptied twice, and the second
+    // sign-in announces the new one.
+  });
+
+  it('announces a role a renewal came back with, without a sign-out', async () => {
+    const mac = await started();
+    await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
+    const { seen } = changes(mac);
+
+    mac.script.role('admin');
+    // Past the renewal margin: the next token this Mac needs is a renewed one.
+    mac.advance(3_600_000);
+    await mac.manager.accessToken();
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.reason).toBe('role_changed');
+    expect(seen[0]?.identity).toContain('admin');
+  });
+
+  it('announces a revocation a bridge call was refused with, and wipes', async () => {
+    const mac = await started();
+    await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
+    const { seen } = changes(mac);
+
+    // What `authedClient` reports when one of the six bridges is answered 401.
+    await mac.manager.noteAuthRefusal('device_revoked');
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ reason: 'device_revoked', identity: null });
+    const state = await mac.manager.state();
+    expect(state.device).toBeNull();
+    expect(state.notice).toBe('device_revoked');
+    expect(mac.vault.entries.has(DEVICE_SECRET_ACCOUNT)).toBe(false);
+  });
+
+  it('is not a wipe for a refusal that is not one: a 403 on one call is that call’s business', async () => {
+    const mac = await started();
+    await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
+    const { seen } = changes(mac);
+
+    await mac.manager.noteAuthRefusal('not_assigned');
+
+    expect(seen).toEqual([]);
+    expect((await mac.manager.state()).device).not.toBeNull();
+  });
+});
+
+describe('the authenticated client reports what it was refused with (1.0.12)', () => {
+  const clientWith = (status: number, body: unknown, refusals: { reason: string; status: number }[]) =>
+    createAuthedClient({
+      baseUrl: 'https://api.example.test/',
+      clientVersion: '1.4.0',
+      accessToken: async () => await Promise.resolve('token-value'),
+      send: async () => await Promise.resolve({ status, body }),
+      onAuthRefusal: (reason, refusedStatus) => refusals.push({ reason, status: refusedStatus }),
+    });
+
+  it('tells the session manager about a 401 and a 403, by reason', async () => {
+    const refusals: { reason: string; status: number }[] = [];
+    await clientWith(401, { error: 'device_revoked' }, refusals).read('/today', value => value, {});
+    await clientWith(403, { reason: 'not_assigned' }, refusals).read('/today', value => value, {});
+    expect(refusals).toEqual([
+      { reason: 'device_revoked', status: 401 },
+      { reason: 'not_assigned', status: 403 },
+    ]);
+  });
+
+  it('says nothing about a refusal that is not about authentication', async () => {
+    const refusals: { reason: string; status: number }[] = [];
+    await clientWith(409, { error: 'already_confirmed' }, refusals).read('/replies/card', value => value, {});
+    expect(refusals).toEqual([]);
   });
 });
 
@@ -603,6 +718,9 @@ describe('one window: the routes the menu and deep links may name (wave 1)', () 
       'callie:sign-out',
       'callie:refresh-today',
       'callie:navigate',
+      // 1.0.12: main to page, and it opens nothing either — it says the session the
+      // page was drawing for is over.
+      'callie:session-changed',
     ]);
   });
 });

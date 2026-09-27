@@ -197,6 +197,24 @@ export function navigationTargetOf(value: unknown): NavigationTarget | null {
   return NAVIGATION_TARGETS.find(target => target === value) ?? null;
 }
 
+/**
+ * A session transition, as the main process saw it (1.0.12).
+ *
+ * `generation` counts them. Every read a view has in flight was made under one, and an
+ * answer that arrives under an older one is dropped rather than drawn: without that, a
+ * `/today` read started as one person can land after another has signed in.
+ *
+ * `identity` is the workspace, the device and the role — public metadata, the same three
+ * the sidebar already shows. No token and no refresh credential crosses this boundary.
+ */
+export const sessionChangeSchema = z.strictObject({
+  generation: z.number().int().min(0),
+  identity: z.string().max(200).nullable(),
+  /** A stable code: `signed_out`, `signed_in`, `role_changed`, or the refusal that wiped. */
+  reason: z.string().max(80),
+});
+export type SessionChange = z.infer<typeof sessionChangeSchema>;
+
 export interface DesktopBridge {
   state(): Promise<DesktopState>;
   /**
@@ -212,6 +230,13 @@ export interface DesktopBridge {
    * value against `NAVIGATION_TARGETS` before it gets here.
    */
   onNavigate(listener: (target: NavigationTarget) => void): void;
+  /**
+   * Sign-out, another workspace, a changed role, a revoked device: the page clears its
+   * request cache and everything anybody had typed, at once. The main process sends it
+   * because the main process is where it is known — the renderer used to find out by
+   * noticing that a state it read looked different, which is one read too late.
+   */
+  onSessionChange(listener: (change: SessionChange) => void): void;
 }
 
 // ---------------------------------------------------------------------------
