@@ -132,7 +132,7 @@ where it landed. `docs/greenfield/sending.md` rule 6 has the arithmetic, and
 the enrollment the switch stops records `direct_send` rather than `human_reply`
 (`docs/greenfield/crm.md`, "The manual-mode origin").
 
-### 6. There is no unsubscribe link, anywhere — and no postal address either
+### 6. There is no unsubscribe link, anywhere
 
 A reply-to-stop footer only. `template_versions` enforces it:
 
@@ -152,13 +152,15 @@ The whole footer is two lines — the workspace sign-off, then
 Reply "stop" and I will not email you again.
 ```
 
-`footerBlock` in `packages/domain/src/rules/templates.ts` builds it and the approval
-refuses a body that does not end with it (`template_footer_missing`). Between the two
-lines there was a postal address until 22 September 2026; David decided there is
-none, migration 0015 dropped `template_versions.footer_postal_address`, and
-`docs/archive/decisions/g20-automated-email-carries-no-postal-address.md` records the decision
-and the three specification lines it deviates from. Nothing is appended at send time:
-the footer is inside the approved body, which is why the content hash covers it.
+Since migration 0020 there is a third line between them when the workspace has
+configured one: the `postal_address` setting
+(`docs/greenfield/settings.md`). The block is **composed at send** —
+`composeSendBody` in `packages/domain/src/rules/templates.ts`, called before the fence
+stores a body and its hash — so the bytes the fence freezes are the bytes Gmail receives.
+An approval may carry the legacy block inside the body or none at all; composition
+recognises and replaces the legacy one, and the fence refuses any body that does not end
+with exactly one stop line. With no address configured the block is the two lines above,
+byte for byte, and sending continues.
 
 ## The matching order
 

@@ -4,6 +4,7 @@ import {
   createTestDatabase,
   type TestDatabase,
 } from '@fss/domain/db/testing/testDatabase.ts';
+import { CURRENT_SCHEMA_VERSION } from '@fss/domain/db/schemaRange.ts';
 import { MIGRATION_IDENTITY_COMMANDS, main } from '../src/tools/fss.ts';
 import { parseFssCommand } from '../src/tools/fss/commands.ts';
 
@@ -154,11 +155,13 @@ describe('fss and migration 0019', () => {
     const preflight = JSON.parse((await run(['admin', 'schema-preflight', '0019'])).stdout) as Record<string, unknown>;
     expect(preflight['refuses']).toBe(false);
 
+    // `migrate` applies everything unapplied, so a later migration rides along; 0019 is
+    // the one this file is about and it is the first of them.
     const { code, stdout } = await run(['migrate']);
     expect(code).toBe(0);
     const report = JSON.parse(stdout) as Record<string, unknown>;
-    expect(report).toMatchObject({ schemaVersionBefore: 18, schemaVersionAfter: 19 });
-    expect(report['applied']).toEqual([{ version: 19, name: 'wave2_cleanup' }]);
+    expect(report).toMatchObject({ schemaVersionBefore: 18, schemaVersionAfter: CURRENT_SCHEMA_VERSION });
+    expect(report['applied']).toContainEqual({ version: 19, name: 'wave2_cleanup' });
 
     const after = await run(['admin', 'schema-preflight', '0019']);
     expect(after.code).toBe(20);

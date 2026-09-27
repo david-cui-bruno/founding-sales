@@ -63,10 +63,12 @@ describe('the administration surface', () => {
     imageDigest: string | null = RUNNING_API_DIGEST,
     production: boolean | null = null,
   ): Promise<{ status: number; body: Record<string, unknown> }> => {
+    // A query string travels in the path, as it does on the wire: `GET /settings?include=…`.
+    const [route, search] = path.split('?');
     const request: ApiRequest = {
       method,
-      path,
-      query: new URLSearchParams(),
+      path: route ?? path,
+      query: new URLSearchParams(search ?? ''),
       headers: token === null ? {} : { authorization: `Bearer ${token}` },
       body,
     };
@@ -152,10 +154,68 @@ describe('the administration surface', () => {
     const answer = await call('GET', '/settings', salespersonToken);
     expect(answer.status).toBe(200);
     const settings = answer.body['settings'] as readonly { settingKey: string; version: number }[];
-    expect(settings.map(entry => entry.settingKey)).toEqual([...SETTING_KEYS]);
+    // Every key but the one the installed desktop cannot parse: see the test below.
+    expect(settings.map(entry => entry.settingKey)).toEqual(
+      [...SETTING_KEYS].filter(key => key !== 'postal_address'),
+    );
     expect(settings.every(entry => entry.version === 0)).toBe(true);
     const elsewhere = answer.body['elsewhere'] as readonly { path: string }[];
     expect(elsewhere.map(entry => entry.path)).toContain('/postures/calling-window');
+  });
+
+  /**
+   * Compatibility with the desktop that is installed (lane W3-F).
+   *
+   * `settingsSnapshotSchema` is strict and its `settingKey` is an enum, so an entry for a
+   * key the installed build has never heard of does not degrade — it throws, and the
+   * settings page loses every section. So `postal_address` is in the key set, the update
+   * command and the history, and it is left out of the snapshot unless the caller asks
+   * for it by name.
+   */
+  it('keeps the postal address out of the snapshot unless the caller asks for it', async () => {
+    const saved = await call(
+      'POST',
+      '/settings/update',
+      adminToken,
+      command({ settingKey: 'postal_address', value: { address: '1 Example Way' }, changeNote: 'the office' }),
+    );
+    expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+
+    const unasked = await call('GET', '/settings', adminToken);
+    const keys = (unasked.body['settings'] as readonly { settingKey: string }[]).map(entry => entry.settingKey);
+    expect(keys).not.toContain('postal_address');
+
+    const asked = await call('GET', '/settings?include=postal_address', adminToken);
+    const entry = (asked.body['settings'] as readonly { settingKey: string; value: unknown; version: number }[]).find(
+      row => row.settingKey === 'postal_address',
+    );
+    expect(entry).toMatchObject({ value: { address: '1 Example Way' }, version: 1 });
+
+    // A key nobody hides is not admitted by the parameter, and neither is a typo.
+    const nonsense = await call('GET', '/settings?include=sending_enabled,not_a_key', adminToken);
+    expect((nonsense.body['settings'] as readonly { settingKey: string }[]).map(row => row.settingKey)).toEqual(keys);
+
+    // The history answers about it whatever the snapshot does.
+    const history = await call('POST', '/settings/history', adminToken, { settingKey: 'postal_address' });
+    expect(history.status).toBe(200);
+    expect(history.body['current']).toEqual({ value: { address: '1 Example Way' }, version: 1 });
+
+    // And it is cleared with a null, which the command accepts and a bad value does not.
+    const refused = await call(
+      'POST',
+      '/settings/update',
+      adminToken,
+      command({ settingKey: 'postal_address', value: { address: 'https://example.test' } }),
+    );
+    expect(refused.status).toBe(409);
+    expect(refused.body).toMatchObject({ status: 'refused', reason: 'invalid_value' });
+    const cleared = await call(
+      'POST',
+      '/settings/update',
+      adminToken,
+      command({ settingKey: 'postal_address', value: { address: null } }),
+    );
+    expect(cleared.status, JSON.stringify(cleared.body)).toBe(200);
   });
 
   it('shows both halves of the production sending switch', async () => {
