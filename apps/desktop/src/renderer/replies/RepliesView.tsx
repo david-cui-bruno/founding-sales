@@ -1,7 +1,7 @@
 import { useState, type JSX } from 'react';
 import { navigate } from '../routes.ts';
 import type { ReplyState } from '../replyContract.ts';
-import { buildReplyView, candidateLabel, type ReplyCardView } from '../replyView.ts';
+import { buildReplyView, candidateLabel, confirmLabel, type ReplyCardView } from '../replyView.ts';
 import { Alert } from '../ui/alert.tsx';
 import { Button } from '../ui/button.tsx';
 import { Input } from '../ui/input.tsx';
@@ -268,7 +268,7 @@ function Answer({
             setNote('');
           }}
         >
-          {card.confirmLabel}
+          {confirmLabel(chosen, card.callbackOffered && callbackDate !== '')}
         </Button>
       </div>
     </div>

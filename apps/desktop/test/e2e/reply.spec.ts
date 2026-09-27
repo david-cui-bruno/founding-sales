@@ -4,9 +4,10 @@ import {
   OTHER_MESSAGE_ID,
   replyCard,
   replyState,
+  type ReplyLane,
 } from './support/replyFixtures.ts';
 import { startAppServer, type AppServer, type BridgeHandle } from './support/appServer.ts';
-import type { ReplyState } from '../../src/renderer/replyContract.ts';
+
 
 /**
  * The Replies view, driven end to end against the one test harness
@@ -27,13 +28,13 @@ import type { ReplyState } from '../../src/renderer/replyContract.ts';
  */
 
 let app: AppServer;
-let server: BridgeHandle<ReplyState>;
+let server: BridgeHandle<ReplyLane>;
 
 test.afterEach(async () => {
   await app.stop();
 });
 
-async function openReplies(page: Page, state: ReplyState): Promise<void> {
+async function openReplies(page: Page, state: ReplyLane): Promise<void> {
   app = await startAppServer({ replies: state });
   server = app.replies;
   await page.goto(app.url('#replies'));
@@ -92,12 +93,43 @@ test('⚠ D5.1: the guess is selected, Enter and Space confirm nothing, and the 
   // keystroke in any field reaches the command — from the focus the card opens with,
   // and from every field on it.
   const keys = ['Enter', 'Space'];
+  // The focus the card opens with, said out loud: nothing on the card has it, and in
+  // particular Confirm does not — so the first Enter or Space after a card opens goes
+  // to the document and reaches no command at all.
+  const opening = await page.evaluate(() => {
+    const active = document.activeElement;
+    return {
+      testid: active instanceof HTMLElement ? (active.dataset['testid'] ?? null) : null,
+      insideCard: active instanceof HTMLElement && active.closest('[data-testid="reply-card"]') !== null,
+    };
+  });
+  expect(opening).toEqual({ testid: null, insideCard: false });
   for (const key of keys) await page.keyboard.press(key);
   for (const field of ['choice-interested', 'choice-opt_out', 'note']) {
     await page.getByTestId(field).focus();
     for (const key of keys) await page.keyboard.press(key);
   }
+  // The firm-wide do-not-contact is the widest consequence on the card, and it is a
+  // checkbox, where Space is the key that would tick it. Neither key confirms, and
+  // Space on the box ticks the box and sends nothing.
+  await page.getByTestId('choice-opt_out').check();
+  await page.getByTestId('firm-wide').focus();
+  for (const key of keys) await page.keyboard.press(key);
+  await expect(page.getByTestId('firm-wide')).toBeChecked();
+  expect(server.calls.filter(call => call.method === 'confirm')).toHaveLength(0);
+  await page.getByTestId('firm-wide').uncheck();
+
   await page.getByTestId('choice-follow_up_later').check();
+
+  // ⚠ D5.1 again: the button says what pressing it will do, and a follow-up with no
+  // date does not book a callback — the domain creates one only if a date is supplied.
+  await expect(page.getByTestId('callback-date')).toHaveValue('');
+  await expect(page.getByTestId('confirm')).toHaveText('Stop automated sending and note a follow-up — no date yet');
+  await page.getByTestId('callback-date').fill('2026-09-28');
+  await expect(page.getByTestId('confirm')).toHaveText('Stop automated sending and book the callback');
+  await page.getByTestId('callback-date').fill('');
+  await expect(page.getByTestId('confirm')).toHaveText('Stop automated sending and note a follow-up — no date yet');
+
   for (const field of ['callback-date', 'callback-time']) {
     await page.getByTestId(field).focus();
     for (const key of keys) await page.keyboard.press(key);
@@ -279,4 +311,19 @@ test('is readable and unpressable when Callie cannot reach the server', async ({
     'Callie cannot reach the server, and replies are never kept on this Mac.',
   );
   await expect(page.getByTestId('reply-summary')).toHaveCount(0);
+});
+
+test('leaving Replies tells the main process to forget the lane and the body it was holding', async ({ page }) => {
+  // The window keeps nothing — and since 1.0.12 neither does the process behind it.
+  // `/replies` answers whole cards, so a lane left in memory is a set of messages
+  // somebody wrote, sitting there until the app is quit.
+  await openReplies(page, replyState());
+  await expect(page.getByTestId('reply-list')).toBeVisible();
+  await page.getByTestId('reply-open').nth(0).click();
+  await expect(page.getByTestId('reply-card')).toBeVisible();
+  expect(app.called('replies.forget')).toEqual([]);
+
+  await page.getByTestId('nav-today').click();
+  await expect(page.getByTestId('column')).toHaveAttribute('data-route', 'today');
+  await expect.poll(() => app.called('replies.forget').length).toBe(1);
 });

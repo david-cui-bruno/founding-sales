@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { createDialHandoff } from '../src/main/dialHandoff.ts';
 import type { SchemeHandlers } from '../src/main/launchServices.ts';
-import { HANDLER_PROOF_MILLISECONDS, createTelLaunchDriver, isTelUri, NotATelUriError } from '../src/main/telHandoff.ts';
+import {
+  HANDLER_PROOF_MILLISECONDS,
+  createTelLaunchDriver,
+  isBrowserLink,
+  isTelUri,
+  NotATelUriError,
+} from '../src/main/telHandoff.ts';
 
 /**
  * The `tel:` opener (specification 9.2, 14.2, 17).
@@ -189,5 +195,35 @@ describe('the handoff, end to end through the real logic', () => {
     });
     await expect(driver.openTelUri('https://example.test/')).rejects.toBeInstanceOf(NotATelUriError);
     expect(opened).toEqual([]);
+  });
+});
+
+/**
+ * The other door out of this process (1.0.12).
+ *
+ * The named handoff above is not the only thing that can ask macOS to open a URL: the
+ * window's `setWindowOpenHandler` passes a link the page asked for to `shell.openExternal`
+ * so it opens in the person's own browser. Until 1.0.12 it passed *any* URL, so a
+ * renderer that called `window.open('tel:+15550101')` placed a call with no
+ * `POST /dial/check` having said the number may be called, no record of what was dialled,
+ * and none of the advice the card shows. Dialling has one door, and this is not it.
+ */
+describe('the window-open handler is for web links only', () => {
+  it('lets a browser link through', () => {
+    expect(isBrowserLink('https://callie.example/downloads/mac')).toBe(true);
+    expect(isBrowserLink('http://127.0.0.1:8080/runbook')).toBe(true);
+  });
+
+  it('refuses tel:, and every other scheme that reaches the operating system', () => {
+    expect(isBrowserLink('tel:+15550101')).toBe(false);
+    expect(isBrowserLink('TEL:+15550101')).toBe(false);
+    expect(isBrowserLink('facetime:+15550101')).toBe(false);
+    expect(isBrowserLink('mailto:someone@example.test')).toBe(false);
+    expect(isBrowserLink('file:///Users/somebody/.ssh/id_ed25519')).toBe(false);
+    expect(isBrowserLink('callie-app://bundle/index.html')).toBe(false);
+    expect(isBrowserLink('javascript:alert(1)')).toBe(false);
+    expect(isBrowserLink('x-apple.systempreferences:com.apple.preference')).toBe(false);
+    expect(isBrowserLink('not a url at all')).toBe(false);
+    expect(isBrowserLink('')).toBe(false);
   });
 });

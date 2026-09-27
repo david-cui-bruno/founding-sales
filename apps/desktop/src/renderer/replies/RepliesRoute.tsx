@@ -14,7 +14,14 @@ export function RepliesRoute({ column }: { readonly column: RefObject<HTMLElemen
   useEffect(() => {
     // Read-only while a call is on the wire, so a second press of Confirm sends nothing.
     const element = column.current;
-    if (element !== null) holdInert(element, 'reply-command', pending > 0);
+    if (element === null) return;
+    holdInert(element, 'reply-command', pending > 0);
+    // The column is the shell's, not this view's: leaving Replies while a read or a
+    // command was in flight used to leave the hold on it, and every view drawn after
+    // that was inert. The hold is this component's to release, so it releases it.
+    return () => {
+      holdInert(element, 'reply-command', false);
+    };
   }, [column, pending]);
 
   return <RepliesView replies={replies} />;

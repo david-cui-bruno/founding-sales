@@ -112,3 +112,26 @@ export function createTelLaunchDriver(deps: TelLaunchDriverDeps = {}): PhoneLaun
     },
   };
 }
+
+/**
+ * Whether a URL is something the system browser should be handed (1.0.12).
+ *
+ * The window's `setWindowOpenHandler` gives a link the page asked for to
+ * `shell.openExternal`, so it opens where a person can see the address bar. Until 1.0.12
+ * it gave it *any* URL, which made `window.open('tel:…')` a way to place a call without
+ * `POST /dial/check`, without the exact-URI match below, and without the call being
+ * recorded — every guard in this file, gone round.
+ *
+ * `https:` is the whole of it in practice; `http:` is kept for a runbook on a local
+ * address. Everything else a URL can name — `tel:`, `facetime:`, `mailto:`, `file:`,
+ * `callie-app:`, `javascript:`, a scheme some other application registered — is refused.
+ * Dialling has one door and it is `dialHandoff.ts`.
+ */
+export function isBrowserLink(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:';
+  } catch {
+    return false;
+  }
+}
