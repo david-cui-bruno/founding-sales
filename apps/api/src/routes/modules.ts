@@ -4,6 +4,7 @@ import type { BootstrapRequest, BootstrapResponse, RouteModule } from '../bootst
 import { ADD_FIRM_PATHS, routeAddFirm } from './addFirm.ts';
 import { routeAuth } from './auth.ts';
 import { routeContacts } from './contacts.ts';
+import { DEVICE_PATHS, routeDevices } from './devices.ts';
 import { FIRM_PAGE_PATHS, routeFirmPage } from './firmPage.ts';
 import { routeFirms } from './firms.ts';
 import { IMPORT_PATHS, routeImport } from './import.ts';
@@ -122,6 +123,10 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
   return [
     healthModule(routing),
     moduleOf('auth', { prefixes: ['/auth'] }, routeAuth, routing),
+    // This workspace's Macs and the revocation (wave 3b). Exact paths, and beside
+    // `auth` rather than under it: `/auth` is what a Mac calls with no session, and
+    // these two are the opposite — an authenticated read and an authenticated command.
+    moduleOf('devices', { paths: DEVICE_PATHS }, routeDevices, routing),
     moduleOf('firms', { prefixes: ['/firms'] }, routeFirms, routing),
     moduleOf('contacts', { prefixes: ['/contacts'] }, routeContacts, routing),
     moduleOf('opportunities', { prefixes: ['/opportunities'] }, routeOpportunities, routing),
