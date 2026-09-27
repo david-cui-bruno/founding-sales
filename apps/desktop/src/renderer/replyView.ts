@@ -17,10 +17,18 @@ import {
  *
  * Four rules live here.
  *
- * **The suggestion is never the answer, and never a default.** `chosen` is a
- * parameter, `confirmEnabled` is false until it is non-null, and nothing in this file
- * computes it from the card. A person's click is the only thing that fills it in. See
- * `docs/decisions/g7b-the-suggestion-is-not-a-default.md`.
+ * **⚠ The suggestion is the starting answer, and it is labelled as one (D5.1).** The
+ * owner decided on 26 September 2026 that the card should open with Callie's guess
+ * already chosen, knowingly reversing G7b's "the suggestion is not a default"
+ * (`docs/archive/decisions/g7b-the-suggestion-is-not-a-default.md`). `chosen` is still a
+ * parameter and nothing in this file computes it from the card: the view supplies the
+ * guess when a card opens, so what is selected is always a value some code chose on the
+ * person's behalf and the page says whose guess it is, right beside it.
+ *
+ * The guards that came with the decision are the view's, in `replies/RepliesView.tsx`:
+ * Confirm is a `type="button"` with no form around it, so no keystroke anywhere on the
+ * card can confirm; the button names what confirming will actually do; and nothing
+ * anywhere says an uncorrected confirmation means the guess was read.
  *
  * **Confidence is a number on the screen and nothing else.** It appears in one label
  * and in no condition. A threshold here would be exactly the thing 12.4 refuses: a
@@ -68,6 +76,21 @@ export const DISPOSITION_CONSEQUENCES: Readonly<Record<ReplyDisposition, string>
   opt_out:
     'Callie stops automated sending and records a do-not-contact for this address. Tick the box below to cover the whole firm.',
   other: 'Callie stops automated sending for this firm and hands it to you.',
+});
+
+/**
+ * What the Confirm button says, and it says the effect rather than the label of the
+ * choice: "Confirm: Asked not to be contacted" is agreement with a classification, and
+ * "Stop automation and record a do-not-contact" is the thing that is about to happen.
+ * D5.1 asks for the second, because the guess arrives already selected.
+ */
+export const CONFIRM_LABELS: Readonly<Record<ReplyDisposition, string>> = Object.freeze({
+  interested: 'Stop automated sending and take this firm over',
+  referral_or_wrong_person: 'Stop automated sending and take this firm over',
+  follow_up_later: 'Stop automated sending and book the callback',
+  not_interested: 'Stop automated sending and record: not interested',
+  opt_out: 'Stop automated sending and record a do-not-contact',
+  other: 'Stop automated sending and take this firm over',
 });
 
 export const CLASS_LABELS: Readonly<Record<string, string>> = Object.freeze({
@@ -152,6 +175,7 @@ export interface ReplyCardView {
   readonly callbackRequired: boolean;
   readonly firmWideOptOutOffered: boolean;
   readonly confirmEnabled: boolean;
+  /** What pressing Confirm will do, in the words of the command that does it. */
   readonly confirmLabel: string;
   readonly nextAction: ReplyCard['nextAction'];
   /** Present only while an ambiguity is unresolved; resolving it is G7's command. */
@@ -301,9 +325,10 @@ export function buildReplyCardView(
     // person agreeing to something that then did not happen.
     callbackRequired: callbackOffered && card.callbackProposal !== null,
     firmWideOptOutOffered: chosen === 'opt_out',
-    // Everything above may be true and this stays false until somebody chooses.
+    // A card whose model had no guess still opens with nothing chosen, and then this
+    // stays false until somebody chooses.
     confirmEnabled: mayAct && answerable && chosen !== null,
-    confirmLabel: chosen === null ? 'Choose what this reply means' : `Confirm: ${DISPOSITION_LABELS[chosen]}`,
+    confirmLabel: chosen === null ? 'Choose what this reply means' : CONFIRM_LABELS[chosen],
     nextAction: card.nextAction,
     ambiguity: card.nextAction === 'resolve_ambiguity' ? card.impact.candidates : [],
     // A member who may not read the message is not asked which conversation it is.

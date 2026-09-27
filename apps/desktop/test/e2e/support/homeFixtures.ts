@@ -233,13 +233,13 @@ export { dashboard, diagnostics, sendingPosture };
 
 /** `callieToday`, scripted: the outcomes G6's Today window specs used. What each proves is in the spec. */
 /** `POST /dial/check` saying yes for the expanded card's one usable number. */
-export const CALLABLE_ADVICE = {
+export const CALLABLE_ADVICE: TodayState['dialAdvice'][number] = {
   routeId: ROUTE_ID,
   callable: true,
   reasons: [],
   e164: '+14015550187',
   firmLocalTime: '09:05',
-} as const;
+};
 
 export function todayAnswer(state: TodayState, method: string, argument: unknown, _calls: readonly Call[]): TodayState {
   if (method === 'expand') {

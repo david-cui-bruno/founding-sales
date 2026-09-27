@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'rea
 import * as firmWorkspace from '../firmWorkspace.ts';
 import type { DesktopState } from '../../shared/contract.ts';
 import { buildHomeView } from '../homeView.ts';
-import * as replyPage from '../replyPage.ts';
+import { RepliesRoute } from '../replies/RepliesRoute.tsx';
 import * as sequenceEditor from '../sequenceEditor.ts';
 import { buildTodayView } from '../todayView.ts';
 import { TodayColumn } from '../today/TodayColumn.tsx';
@@ -184,7 +184,7 @@ function Column({
         ) : route.name === 'settings' ? (
           <SettingsView key={key} mountKey={key} route={route} />
         ) : route.name === 'replies' ? (
-          <LegacyView key={key} mountKey={key} view={replyPage} route={route} />
+          <RepliesRoute key={key} column={columnRef} />
         ) : route.name === 'sequences' ? (
           <LegacyView key={key} mountKey={key} view={sequenceEditor} route={route} />
         ) : (

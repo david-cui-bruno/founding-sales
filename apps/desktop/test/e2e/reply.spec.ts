@@ -14,10 +14,16 @@ import type { ReplyState } from '../../src/renderer/replyContract.ts';
  *
  * The renderer is the shipped file; only the bridge is substituted, so what these
  * specs prove is what a person actually sees and can press. Four of them are the
- * authority boundary as a person experiences it: the suggestion is visible and
- * nothing is selected, Confirm is dead until they choose, a body they may not read is
- * not on the page at all, and a reply that looks lost says so without offering to
- * close anything.
+ * authority boundary as a person experiences it: ⚠ the guess is selected and labelled as
+ * a guess and nothing but the Confirm button can send it, a body they may not read is
+ * not on the page at all, and a reply that looks lost says so without offering to close
+ * anything.
+ *
+ * ⚠ **D5.1 (26 September 2026).** The owner decided the card should open with Callie's
+ * guess already chosen, knowingly reversing G7b's "the suggestion is not a default". The
+ * test below replaces G7b's "nothing is selected" with the three things that decision was
+ * made conditional on: the guess is selected, no keystroke anywhere confirms, and the
+ * button names what confirming will do.
  */
 
 let app: AppServer;
@@ -65,7 +71,7 @@ test('a message body that looks like markup is shown as text', async ({ page }) 
   await expect(page.locator('img')).toHaveCount(0);
 });
 
-test('shows the suggestion, selects nothing, and keeps Confirm dead until a person chooses', async ({ page }) => {
+test('⚠ D5.1: the guess is selected, Enter and Space confirm nothing, and the button names the effect', async ({ page }) => {
   await openReplies(page, replyState());
   await page.getByTestId('reply-open').nth(0).click();
 
@@ -73,18 +79,33 @@ test('shows the suggestion, selects nothing, and keeps Confirm dead until a pers
   await expect(page.getByTestId('suggestion-confidence')).toHaveText('Confident (0.88)');
   await expect(page.getByTestId('suggestion-excerpt')).toHaveText('Tuesday works.');
   await expect(page.getByTestId('suggestion-by')).toHaveText('claude-opus-5, prompt g7b.replies.1');
-  // The hint is beside the choice; the radio is not checked. 12.4's boundary, as a
-  // person meets it: the model's answer is on screen and is not the form's state.
+  // The guess fills the form in, and says beside the choice that it is a guess.
+  await expect(page.getByTestId('choice-interested')).toBeChecked();
   await expect(page.getByTestId('suggested-hint')).toHaveCount(1);
-  await expect(page.getByTestId('choice-interested')).not.toBeChecked();
-  await expect(page.getByTestId('confirm')).toBeDisabled();
-  await expect(page.getByTestId('confirm')).toHaveText('Choose what this reply means');
-
-  await page.getByTestId('choice-interested').check();
-  await expect(page.getByTestId('confirm')).toBeEnabled();
-  await expect(page.getByTestId('confirm')).toHaveText('Confirm: Interested');
   await expect(page.getByTestId('consequence')).toContainText('stops automated sending');
 
+  // The button names what confirming does, not the label of the choice.
+  await expect(page.getByTestId('confirm')).toBeEnabled();
+  await expect(page.getByTestId('confirm')).toHaveText('Stop automated sending and take this firm over');
+
+  // D5.1's guard. Nothing but that button confirms: there is no form to submit, so no
+  // keystroke in any field reaches the command — from the focus the card opens with,
+  // and from every field on it.
+  const keys = ['Enter', 'Space'];
+  for (const key of keys) await page.keyboard.press(key);
+  for (const field of ['choice-interested', 'choice-opt_out', 'note']) {
+    await page.getByTestId(field).focus();
+    for (const key of keys) await page.keyboard.press(key);
+  }
+  await page.getByTestId('choice-follow_up_later').check();
+  for (const field of ['callback-date', 'callback-time']) {
+    await page.getByTestId(field).focus();
+    for (const key of keys) await page.keyboard.press(key);
+  }
+  expect(server.calls.filter(call => call.method === 'confirm')).toHaveLength(0);
+
+  // Pressing the button is the one way, and what it sends is what the form says now.
+  await page.getByTestId('choice-interested').check();
   await page.getByTestId('confirm').click();
   await expect(page.getByTestId('banner-info')).toHaveText('Recorded.');
   expect(server.calls.filter(call => call.method === 'confirm')).toHaveLength(1);
@@ -95,6 +116,36 @@ test('shows the suggestion, selects nothing, and keeps Confirm dead until a pers
     firmWideOptOut: false,
     note: '',
   });
+});
+
+test('a card Callie had no guess for opens with nothing chosen, and Confirm is dead until it has one', async ({ page }) => {
+  await openReplies(page, replyState({ cards: [replyCard({ proposedDisposition: null, proposedBy: 'none', confidence: null })] }));
+  await page.getByTestId('reply-open').nth(0).click();
+
+  await expect(page.getByTestId('suggested-hint')).toHaveCount(0);
+  for (const choice of ['interested', 'follow_up_later', 'not_interested', 'opt_out', 'other', 'referral_or_wrong_person']) {
+    await expect(page.getByTestId(`choice-${choice}`)).not.toBeChecked();
+  }
+  await expect(page.getByTestId('confirm')).toBeDisabled();
+  await expect(page.getByTestId('confirm')).toHaveText('Choose what this reply means');
+});
+
+test('a different card is a different question: the guess does not travel between them', async ({ page }) => {
+  await openReplies(
+    page,
+    replyState({
+      cards: [
+        replyCard(),
+        replyCard({ messageId: OTHER_MESSAGE_ID, proposedDisposition: 'opt_out', proposedBy: 'model' }),
+      ],
+    }),
+  );
+
+  await page.getByTestId('reply-open').nth(0).click();
+  await expect(page.getByTestId('choice-interested')).toBeChecked();
+  await page.getByTestId('reply-open').nth(1).click();
+  await expect(page.getByTestId('choice-opt_out')).toBeChecked();
+  await expect(page.getByTestId('choice-interested')).not.toBeChecked();
 });
 
 test('asks for the callback the model only proposed, prefilled and still the person’s', async ({ page }) => {

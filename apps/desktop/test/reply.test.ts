@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { replyCardSchema, replyStateSchema, type ReplyCard, type ReplyState } from '../src/renderer/replyContract.ts';
-import { buildReplyCardView, buildReplyView, candidateLabel, replyNotice } from '../src/renderer/replyView.ts';
+import { CONFIRM_LABELS, buildReplyCardView, buildReplyView, candidateLabel, replyNotice } from '../src/renderer/replyView.ts';
 import { REPLY_IPC_CHANNELS, createReplyBridge } from '../src/main/replyBridge.ts';
 import { createAuthedClient } from '../src/main/authedClient.ts';
 import type { HttpAnswer } from '../src/main/apiClient.ts';
@@ -95,7 +95,10 @@ function state(overrides: Partial<ReplyState> = {}): ReplyState {
 }
 
 describe('the reply card view model', () => {
-  it('shows the suggestion and selects nothing: a confirmation is a person’s click', () => {
+  it('shows the suggestion, marks it as one, and names the effect on the button (⚠ D5.1)', () => {
+    // The view model still takes `chosen` as a parameter and computes nothing from the
+    // card: the *view* fills it in with the guess when a card opens (D5.1), which is why
+    // `chosen: null` is still a card with nothing selected and a dead button.
     const view = buildReplyCardView(state(), card(), null);
     expect(view.suggestion?.dispositionLabel).toBe('Interested');
     expect(view.suggestion?.source).toBe('model');
@@ -109,7 +112,23 @@ describe('the reply card view model', () => {
 
     const chosen = buildReplyCardView(state(), card(), 'interested');
     expect(chosen.confirmEnabled).toBe(true);
-    expect(chosen.confirmLabel).toBe('Confirm: Interested');
+    // The words of the command that is about to run, not the label of the choice: with
+    // the guess already selected, "Confirm: Interested" would be a button that asks for
+    // agreement with a classification rather than for an effect.
+    expect(chosen.confirmLabel).toBe('Stop automated sending and take this firm over');
+    expect(buildReplyCardView(state(), card(), 'opt_out').confirmLabel).toBe(
+      'Stop automated sending and record a do-not-contact',
+    );
+    expect(buildReplyCardView(state(), card(), 'follow_up_later').confirmLabel).toBe(
+      'Stop automated sending and book the callback',
+    );
+    // Every disposition names an effect, and none of them says anything about the
+    // guess having been reviewed.
+    for (const label of Object.values(CONFIRM_LABELS)) {
+      expect(label).toContain('Stop automated sending');
+      expect(label.toLowerCase()).not.toContain('review');
+      expect(label.toLowerCase()).not.toContain('confirm');
+    }
   });
 
   it('never treats confidence as permission', () => {
