@@ -22,7 +22,7 @@ import { desktopBridge } from './bridges.ts';
  * the sidebar follow, `epoch` does not move, and nothing is mounted again.
  */
 
-export interface RouteState {
+interface RouteState {
   readonly route: Route;
   /** Bumped by `navigate` only. The column's key, so the same route again is a fresh view. */
   readonly epoch: number;
@@ -39,7 +39,7 @@ function remember(next: Route): void {
  * The route a page was loaded on. The main process loads the window without a hash, so
  * the app opens on Today; the specs load one straight onto a route, and so does Reload.
  */
-export function initialRoute(): Route {
+function initialRoute(): Route {
   return routeOf(decodeURIComponent(location.hash.slice(1))) ?? { name: 'today' };
 }
 

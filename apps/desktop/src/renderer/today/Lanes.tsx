@@ -22,7 +22,7 @@ import type { TodayActions } from './useToday.ts';
  * an answer arrives, so nothing steals focus from what somebody is typing into.
  */
 
-export interface LanesContent {
+interface LanesContent {
   readonly sections: readonly LaneSection[];
   /** One grey line in place of the lanes, or null when there are cards. */
   readonly emptyLine: string | null;

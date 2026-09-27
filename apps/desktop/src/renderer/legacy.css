@@ -1,5 +1,21 @@
 /*
- * Callie's one stylesheet, shared by every window (lane g65).
+ * The hand-rolled views' stylesheet (lane g65, scoped in 1.0.12).
+ *
+ * Firms, Sequences and the three Settings tabs are still page modules that draw their
+ * own DOM, and they were drawn against the element styles below: a `button` is a button
+ * because this file says so, not because the page asked for a class. In 1.0.12 the
+ * shell, Today and Replies became React with Tailwind, and rules like that reached them
+ * too — a `ghost` button came out with the legacy border, because nothing in the utility
+ * layer sets `border` for it to beat.
+ *
+ * So the whole file is `@scope ([data-legacy])`: it applies inside a `LegacyView` host
+ * and nowhere else. That also retires the `main.view` prefix the old shell needed — it
+ * put `class="column view"` on the column so these rules could be told apart from the
+ * window's own — because the scope now says the same thing structurally.
+ *
+ * Outside the scope: the colours these rules use, and `box-sizing`, which everything on
+ * the page assumes and Tailwind would have given us with a preflight this release does
+ * not take.
  *
  * Mockup A2, "minimal, with design principles from Notion", which David approved on
  * 25 September 2026 (docs/decisions/g65-today-is-the-home.md):
@@ -9,13 +25,10 @@
  *   - dividers instead of cards;
  *   - colour only as a 7px dot or a small tag, never as a filled banner;
  *   - row actions that appear on hover (and on keyboard focus);
- *   - keyboard shortcuts shown beside the windows they open;
- *   - system status in Home's sidebar rather than in banners;
  *   - an empty state that says what to do next.
  *
- * Light only. Every window's markup is styled by element and by the class names its page
- * already writes, so a page gets this design without being rewritten. Test ids are never
- * styled: they are what the specs read, and a restyle must not be able to move them.
+ * Light only. Test ids are never styled: they are what the specs read, and a restyle
+ * must not be able to move them.
  */
 
 :root {
@@ -43,42 +56,15 @@
   box-sizing: border-box;
 }
 
-html,
-body {
-  min-height: 100%;
-}
-
-body {
-  margin: 0;
-  background: #fff;
-  color: var(--ink);
-  font: 15px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
-  -webkit-font-smoothing: antialiased;
-}
-
-/* ------------------------------------------------------------------------- */
-/* The column every window is                                                 */
-/* ------------------------------------------------------------------------- */
-
-#app {
-  max-width: 860px;
-  margin: 0 auto;
-  padding: 48px 56px 80px;
-}
-
-#app.single {
-  max-width: 520px;
-  padding-top: 12vh;
-}
-
-#app.shell {
-  display: grid;
-  grid-template-columns: 220px minmax(0, 1fr);
-  max-width: none;
-  min-height: 100vh;
-  margin: 0;
-  padding: 0;
-}
+/*
+ * Everything below styles a hand-rolled page and nothing else. The host is the `div`
+ * `LegacyView` renders (`data-legacy`), which is `display: contents`, so the module's
+ * own markup is laid out by the shell's column exactly as before.
+ *
+ * The rules are not indented into the block: they are the same rules they were, and a
+ * reindentation would have hidden the deletions in this commit behind 700 changed lines.
+ */
+@scope ([data-legacy]) {
 
 /* ------------------------------------------------------------------------- */
 /* Type                                                                       */
@@ -147,48 +133,14 @@ kbd {
 .unavailable,
 .provenance,
 .hint,
-.runbook,
-.by,
-.limitation,
-.truncated {
+.runbook {
   color: var(--ink-3);
   font-size: 13px;
-}
-
-.visually-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
 }
 
 /* ------------------------------------------------------------------------- */
 /* Dots, tags and quiet notice lines                                          */
 /* ------------------------------------------------------------------------- */
-
-.dot {
-  display: inline-block;
-  flex: none;
-  width: 7px;
-  height: 7px;
-  margin-right: 8px;
-  background: rgba(55, 53, 47, 0.2);
-  border-radius: 50%;
-}
-
-.dot-ok {
-  background: var(--ok);
-}
-
-.dot-warn {
-  background: var(--warn);
-}
-
-.dot-stop {
-  background: var(--stop);
-}
 
 .tag {
   padding: 1px 6px;
@@ -204,11 +156,6 @@ kbd {
   background: var(--ok-tag);
 }
 
-.tag-stop {
-  color: var(--stop);
-  background: var(--stop-tag);
-}
-
 /*
  * A notice is a line of grey text with a dot, not a coloured box: offline, stale, a
  * refusal, "Snoozed.". The dot's colour is the only thing the tone changes.
@@ -222,9 +169,7 @@ kbd {
 }
 
 .banner,
-.notice,
-.mailbox-notice,
-.outcome .warning:not(:empty) {
+.notice {
   display: flex;
   align-items: flex-start;
   gap: 8px;
@@ -234,9 +179,7 @@ kbd {
 }
 
 .banner::before,
-.notice::before,
-.mailbox-notice::before,
-.outcome .warning:not(:empty)::before {
+.notice::before {
   content: '';
   flex: none;
   width: 7px;
@@ -246,19 +189,8 @@ kbd {
   border-radius: 50%;
 }
 
-.banner-warning::before,
-.mailbox-notice::before,
-.outcome .warning:not(:empty)::before {
+.banner-warning::before {
   background: var(--warn);
-}
-
-.banner-blocking {
-  color: var(--ink);
-  font-weight: 500;
-}
-
-.banner-blocking::before {
-  background: var(--stop);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -399,22 +331,18 @@ ol {
 
 /* Lists of things are rows with dividers, never boxes. */
 .rows,
-.reply-list,
 .sequence-list,
 .settings,
 .stages,
 .calling-numbers,
 .alerts,
 .ramps,
-.elsewhere,
-.signals,
-.tasks {
+.elsewhere {
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.reply-list > li,
 .sequence-list > li,
 .settings > li,
 .stages > li,
@@ -426,7 +354,6 @@ ol {
   border-top: 1px solid var(--line);
 }
 
-.reply-list > li,
 .sequence-list > li,
 .settings > li,
 .stages > li,
@@ -441,7 +368,6 @@ ol {
   padding: 9px 6px;
 }
 
-.reply-list > li:last-child,
 .sequence-list > li:last-child,
 .settings > li:last-child,
 .stages > li:last-child,
@@ -451,16 +377,6 @@ ol {
 .elsewhere > li:last-child,
 .rows > li:last-child {
   border-bottom: 1px solid var(--line);
-}
-
-.signals > li {
-  display: inline-block;
-  margin: 0 6px 6px 0;
-  padding: 1px 6px;
-  color: var(--ink-2);
-  background: var(--tag);
-  border-radius: 3px;
-  font-size: 12px;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -505,8 +421,7 @@ ol {
 }
 
 .row:hover .row-actions,
-.row:focus-within .row-actions,
-.expanded > .row .row-actions {
+.row:focus-within .row-actions {
   opacity: 1;
 }
 
@@ -523,172 +438,7 @@ ol {
   border-bottom: 1px solid var(--line);
 }
 
-/* ------------------------------------------------------------------------- */
-/* Home: the sidebar                                                          */
-/* ------------------------------------------------------------------------- */
-
-.sidebar {
-  position: sticky;
-  top: 0;
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
-  padding: 14px 8px;
-  overflow-y: auto;
-  background: var(--sidebar);
-  border-right: 1px solid var(--line);
-  font-size: 14px;
-}
-
-.workspace {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 10px;
-  padding: 6px 8px;
-  font-weight: 600;
-}
-
-.workspace-mark {
-  display: grid;
-  place-items: center;
-  width: 20px;
-  height: 20px;
-  color: #fff;
-  background: var(--ink);
-  border-radius: 4px;
-  font-size: 12px;
-}
-
-.nav {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.nav-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  width: 100%;
-  padding: 5px 8px;
-  color: var(--ink-2);
-  text-align: left;
-  background: transparent;
-  border: 0;
-  font-size: 14px;
-  line-height: 1.5;
-}
-
-.nav-row[aria-current='page'] {
-  color: var(--ink);
-  background: var(--hover);
-  font-weight: 500;
-}
-
-.sidebar-label {
-  margin: 18px 8px 6px;
-  color: var(--ink-3);
-  font-size: 11px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.status {
-  margin: 0;
-  padding: 0 8px;
-  color: var(--ink-2);
-  list-style: none;
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.status-row {
-  display: flex;
-  align-items: flex-start;
-  padding: 2px 0;
-  overflow-wrap: anywhere;
-}
-
-.status-row .dot {
-  margin-top: 0.5em;
-}
-
-/* Lane g83: the update row's Restart to update, a quiet link under its words. */
-.status-row-action {
-  flex-wrap: wrap;
-}
-
-button.status-action {
-  margin: 1px 0 0 15px;
-  padding: 0 2px;
-  color: var(--ink);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-  background: transparent;
-  border: 0;
-  font-size: 13px;
-}
-
-.this-mac {
-  margin-top: auto;
-  padding: 10px 8px 4px;
-  border-top: 1px solid var(--line);
-  font-size: 13px;
-}
-
-.this-mac > summary {
-  color: var(--ink-2);
-}
-
-.this-mac .device {
-  padding-top: 8px;
-}
-
-.this-mac dl {
-  grid-template-columns: minmax(0, 1fr);
-  gap: 0;
-  font-size: 12.5px;
-}
-
-.this-mac dt {
-  margin-top: 6px;
-  color: var(--ink-3);
-  font-size: 11px;
-}
-
-.device-controls {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 10px;
-}
-
-.mailbox-hint,
-.mailbox-notice {
-  margin: 8px 0 0;
-  font-size: 12.5px;
-}
-
-.mailbox-hint {
-  color: var(--ink-2);
-}
-
-/* ------------------------------------------------------------------------- */
-/* Home: the column                                                           */
-/* ------------------------------------------------------------------------- */
-
-.column {
-  min-width: 0;
-  max-width: 860px;
-  padding: 56px 72px 80px;
-}
-
-.column-head h1 {
-  font-size: 34px;
-}
-
-/* The way back from a firm to the board: a grey link above the heading. */
+/* The way back from the firm page to the board: a grey link above the heading. */
 button.back-link {
   margin: -28px 0 12px -8px;
   padding: 2px 8px;
@@ -696,256 +446,40 @@ button.back-link {
   font-size: 13px;
 }
 
-/* A reply card's firm, with its page one hover away. */
-.card-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.summary-line {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  margin: 0 0 22px;
-}
-
+/* What an import found, over its list of rows. */
 .summary {
   min-height: 1.5em;
   margin: 0;
   color: var(--ink-2);
 }
 
-.lane:first-child .section-head {
-  margin-top: 12px;
-}
-
-/* The expanded firm, under its own row. */
-.today-firm {
-  padding: 4px 6px 14px 24px;
-  border-top: 1px solid var(--line);
-  font-size: 14px;
-}
-
-/* A task on one line: when, what, and its snooze or hold on hover. */
-.task {
-  display: grid;
-  grid-template-columns: 96px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 4px 12px;
-  padding: 6px 0;
-}
-
-.task .when {
-  color: var(--ink-3);
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
-}
-
-.task .what {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  min-width: 0;
-}
-
-.task .who {
-  color: var(--ink-2);
-  font-size: 13.5px;
-}
-
-.task .tag {
-  margin-top: 2px;
-}
-
-.snooze {
-  display: flex;
-  gap: 6px;
-  opacity: 0;
-  transition: opacity 0.12s;
-}
-
-.task:hover .snooze,
-.task:focus-within .snooze {
-  opacity: 1;
-}
-
-@media (hover: none) {
-  .snooze {
-    opacity: 1;
-  }
-}
-
-.snooze input {
-  font-size: 13px;
-}
-
-.snooze input[type='text'] {
-  width: 120px;
-}
-
-/* Lane g79: "Callback — needs a time" keeps its day and time in view, not on hover. */
-.schedule {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-}
-
-.schedule input {
-  font-size: 13px;
-}
-
-.schedule .quiet,
-.outcome .quiet {
-  margin: 0;
-  font-size: 12.5px;
-}
-
-.schedule .quiet:empty,
-.outcome .quiet:empty {
-  display: none;
-}
-
-.dial {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin: 10px 0;
-}
-
-.dial .limitation {
-  flex-basis: 100%;
-  margin: 0;
-  font-size: 12.5px;
-}
-
-.outcome {
-  display: grid;
-  gap: 8px;
-  max-width: 520px;
-  margin-top: 10px;
-}
-
-.outcome select,
-.outcome button {
-  justify-self: start;
-}
-
-.outcome .problem {
-  margin: 0;
-  color: var(--ink-2);
-  font-size: 13px;
-}
-
-.outcome .problem:empty,
-.outcome .warning:empty {
-  display: none;
-}
-
-/* The last seven days. */
-.figures {
-  margin-top: 44px;
-}
-
-.figure-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 18px;
-  padding-top: 12px;
-  border-top: 1px solid var(--line);
-}
-
-.figure-label {
-  color: var(--ink-3);
-  font-size: 12px;
-}
-
-.figure-value {
-  margin-top: 2px;
-  font-size: 22px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-
-.figure-value small {
-  margin-left: 6px;
-  color: var(--ink-2);
-  font-size: 12px;
-  font-weight: 400;
-}
-
-.figures .quiet {
-  margin: 10px 0 0;
-}
-
-.needs {
-  margin-top: 34px;
-}
-
-.needs .label {
-  overflow-wrap: anywhere;
-}
-
-/* ------------------------------------------------------------------------- */
-/* Sign in                                                                    */
-/* ------------------------------------------------------------------------- */
-
-.single h1 {
-  margin-bottom: 18px;
-}
-
-.sign-in label {
-  display: block;
-  margin-bottom: 14px;
-  font-size: 13px;
-}
-
-.sign-in input {
-  display: block;
-  width: 100%;
-  margin-top: 4px;
-  padding: 8px 10px;
-  font-size: 15px;
-}
-
-.sign-in button {
-  margin-top: 6px;
-  padding: 8px 14px;
-  font-size: 14px;
-}
-
 /* ------------------------------------------------------------------------- */
 /* The other views: Replies, Firms, Sequences, Administration, Dashboard      */
 /* ------------------------------------------------------------------------- */
 
-main.view > section,
-main.view .panel,
-main.view .reply-card {
+:scope > section,
+.panel {
   margin-top: 8px;
 }
 
-main.view section input:not([type='checkbox'], [type='radio']),
-main.view section select,
-main.view section textarea,
-main.view .settings input:not([type='checkbox'], [type='radio']),
-main.view .settings textarea {
+section input:not([type='checkbox'], [type='radio']),
+section select,
+section textarea,
+.settings input:not([type='checkbox'], [type='radio']),
+.settings textarea {
   margin: 4px 6px 4px 0;
 }
 
-main.view section button,
-main.view .settings button,
-main.view .stages button,
-main.view .ramps button,
-main.view .alerts button,
-main.view .calling-numbers button {
+section button,
+.settings button,
+.stages button,
+.ramps button,
+.alerts button,
+.calling-numbers button {
   margin: 4px 6px 4px 0;
 }
 
-main.view section label {
+section label {
   display: inline-flex;
   align-items: center;
   margin: 4px 14px 4px 0;
@@ -1056,14 +590,14 @@ main.view section label {
   margin: 6px 0;
 }
 
-main.view .field label {
+.field label {
   display: block;
   margin: 0;
   font-size: 13px;
 }
 
-main.view .field input:not([type='checkbox'], [type='radio']),
-main.view .field select {
+.field input:not([type='checkbox'], [type='radio']),
+.field select {
   margin: 0;
 }
 
@@ -1098,7 +632,7 @@ main.view .field select {
 }
 
 /* The postures form: a statement per line, the box beside its words. */
-main.view .posture-statement {
+.posture-statement {
   display: flex;
   align-items: flex-start;
   gap: 6px;
@@ -1108,7 +642,7 @@ main.view .posture-statement {
   font-size: 13.5px;
 }
 
-main.view .posture-statement input {
+.posture-statement input {
   margin-top: 3px;
 }
 
@@ -1116,12 +650,6 @@ main.view .posture-statement input {
   max-width: 680px;
   color: var(--ink-2);
   font-size: 13.5px;
-}
-
-.updated {
-  margin: -14px 0 18px;
-  color: var(--ink-3);
-  font-size: 13px;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -1136,8 +664,8 @@ main.view .posture-statement input {
   gap: 4px 8px;
 }
 
-main.view .row-main.step-fields select,
-main.view .row-main.step-fields input {
+.row-main.step-fields select,
+.row-main.step-fields input {
   margin: 0;
 }
 
@@ -1164,8 +692,7 @@ input.narrow {
 
 .version-details,
 .template-details,
-.setting-details,
-.route-details {
+.setting-details {
   margin: 4px 0 8px;
   color: var(--ink-2);
   font-size: 13px;
@@ -1187,11 +714,6 @@ h3 .tag,
 }
 
 /* The reply's candidate firms: one choice per line. */
-main.view .candidate-choice {
-  display: flex;
-  margin: 4px 0;
-}
-
 /* Lane g90: where an address's validation stands, beside its version. */
 .route-validation {
   margin-left: 8px;
@@ -1199,51 +721,11 @@ main.view .candidate-choice {
   font-size: 13px;
 }
 
-/* ------------------------------------------------------------------------- */
-/* Wave 1: read-only moments                                                  */
-/* ------------------------------------------------------------------------- */
-
-/* The launch update being put in place: one grey line across the column. */
-.updating-banner {
-  position: fixed;
-  top: 0;
-  right: 0;
-  left: 220px;
-  z-index: 10;
-  margin: 0;
-  padding: 10px 72px;
-  color: var(--ink-2);
-  font-size: 13.5px;
-  background: #fff;
-  border-bottom: 1px solid var(--line);
-}
-
-/* A command on the wire: the column stays readable and dims a little. */
-.column[aria-busy='true'] {
-  opacity: 0.72;
-  transition: opacity 120ms ease-in 150ms;
-}
-
-/* The launch update: the whole window is read-only, and everything but its line dims. */
-#app[aria-busy='true'] > .sidebar,
-#app[aria-busy='true'] > .column,
-#app[aria-busy='true'] > form {
-  opacity: 0.72;
-}
-
-/* The sign-in form's fields, hidden once a workspace is remembered. */
-.sign-in-fields[hidden] {
-  display: none;
-}
-
-.sign-in .btn-quiet {
-  margin-top: 8px;
-  color: var(--ink-2);
-}
-
 /* A template's copy advice (wave 1): grey, under the email; it never stops the save. */
 .field-advice {
   margin: 4px 0 0;
   color: var(--ink-2);
   font-size: 13px;
+}
+
 }

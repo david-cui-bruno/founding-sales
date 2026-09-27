@@ -17,7 +17,7 @@ export interface BannerView {
   readonly text: string;
 }
 
-export interface ScreenView {
+interface ScreenView {
   readonly screen: DesktopState['screen'];
   readonly heading: string;
   readonly banners: readonly BannerView[];
@@ -47,8 +47,8 @@ const NOTICES: Readonly<Record<string, string>> = Object.freeze({
   workspace_required: 'Enter the workspace ID to sign in on this Mac the first time.',
 });
 
-export const UPGRADE_HEADING = 'Update Callie';
-export const SIGN_IN_HEADING = 'Sign in with Google';
+const UPGRADE_HEADING = 'Update Callie';
+const SIGN_IN_HEADING = 'Sign in with Google';
 export const TODAY_HEADING = 'Today';
 
 export function buildScreenView(state: DesktopState): ScreenView {
@@ -102,10 +102,10 @@ export const MAILBOX_ROW_LABEL = 'Mailbox';
 export const CONNECT_GMAIL_LABEL = 'Connect Gmail';
 /** The same words the sign-in button uses while the browser has the person. */
 export const MAILBOX_WAITING_LABEL = 'Waiting for your browser…';
-export const MAILBOX_WAITING_HINT =
+const MAILBOX_WAITING_HINT =
   'Finish in your browser. If it says Gmail not connected, press Refresh, then Connect Gmail again.';
 
-export interface MailboxView {
+interface MailboxView {
   /** The row's value: what the server last said, never a guess. */
   readonly text: string;
   /**
@@ -144,7 +144,7 @@ export function mailboxNoticeSentence(code: string): string {
 }
 
 /** "callie@usecallie.com · connected · baseline pending". */
-export function mailboxStatusLine(
+function mailboxStatusLine(
   mailbox: NonNullable<NonNullable<MailboxState['status']>['mailbox']>,
 ): string {
   // The baseline state only means something for a mailbox that is connected.

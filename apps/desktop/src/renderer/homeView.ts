@@ -38,9 +38,9 @@ export const CHECKING = 'Checking…';
 export const FIGURES_LABEL = 'Last 7 days';
 export const FIGURES_UNREAD = 'Callie could not read the last 7 days.';
 /** The window the figures cover, ending now. Seven days of milliseconds, not a calendar week. */
-export const FIGURES_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const FIGURES_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
-export const LANE_SECTION_LABELS: Readonly<Record<TodayLane, string>> = Object.freeze({
+const LANE_SECTION_LABELS: Readonly<Record<TodayLane, string>> = Object.freeze({
   reply: 'Replies',
   callback: 'Callbacks',
   due_work: 'Due today',
@@ -108,7 +108,7 @@ export interface HomeInput {
   readonly update?: UpdateStatus | null;
 }
 
-export type Tone = 'ok' | 'warn' | 'stop' | 'none';
+type Tone = 'ok' | 'warn' | 'stop' | 'none';
 
 export interface StatusRow {
   readonly key: 'mailbox' | 'calling' | 'sending' | 'domain' | 'system' | 'update';
@@ -118,7 +118,7 @@ export interface StatusRow {
   readonly action?: 'restart_to_update';
 }
 
-export type NeedsAction =
+type NeedsAction =
   | { readonly kind: 'connect_mailbox'; readonly label: string; readonly enabled: boolean }
   | { readonly kind: 'open'; readonly route: Route; readonly label: string };
 
@@ -130,14 +130,14 @@ export interface NeedsRow {
   readonly action: NeedsAction;
 }
 
-export interface FigureCell {
+interface FigureCell {
   readonly key: 'replies' | 'calls' | 'holds' | 'emails';
   readonly label: string;
   readonly value: string;
   readonly note: string | null;
 }
 
-export interface FiguresView {
+interface FiguresView {
   readonly label: string;
   readonly cells: readonly FigureCell[];
   /** One grey line when the figures could not be read, or null. */

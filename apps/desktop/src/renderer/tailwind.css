@@ -8,21 +8,24 @@
  * stays `style-src 'self'` with one static file, and Tailwind's compilation needs no
  * download after `npm ci` — it is a dependency like esbuild.
  *
- * **No preflight in 1.0.12.** Tailwind's reset is a global one, and the views that are
- * still hand-rolled DOM (Firms, Sequences, the three Settings tabs) were drawn against
- * the element styles in `legacy.css`. So the theme and the utilities are imported and
- * the reset is not; `legacy.css` keeps those views exactly as they were. U2 converts the
- * rest and may take preflight then.
+ * **Preflight is in `base`, under `legacy`.** Tailwind's reset is a global one and the
+ * views that are still hand-rolled DOM (Firms, Sequences, the three Settings tabs) were
+ * drawn against the element styles in `legacy.css` — so the order of the layers is what
+ * keeps both true. Preflight gives a React button no border and no background for the
+ * utilities to fight; `legacy.css`, one layer above it, gives a hand-rolled button the
+ * border it has always had. Neither reaches the other, because `legacy.css` is
+ * `@scope ([data-legacy])` and applies only inside a `LegacyView` host.
  *
  * **`legacy.css` sits in its own layer, below the utilities.** Unlayered CSS outranks
  * every layer, so importing it plainly would let `button { … }` beat `class="rounded-md"`
- * on a React button. In the `legacy` layer it still beats the theme and is still beaten
+ * on a React button. In the `legacy` layer it still beats preflight and is still beaten
  * by any utility a converted view asks for, which is the order this release needs.
  */
 
 @layer theme, base, legacy, components, utilities;
 
 @import 'tailwindcss/theme.css' layer(theme);
+@import 'tailwindcss/preflight.css' layer(base);
 @import './legacy.css' layer(legacy);
 @import 'tailwindcss/utilities.css' layer(utilities);
 @import 'tw-animate-css';
@@ -121,9 +124,10 @@
   }
 
   body {
+    margin: 0;
     background: var(--background);
     color: var(--foreground);
-    font-family: var(--font-system);
+    font: 15px/1.5 var(--font-system);
     -webkit-font-smoothing: antialiased;
   }
 

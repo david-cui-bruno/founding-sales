@@ -49,7 +49,7 @@ export interface BannerView {
   readonly text: string;
 }
 
-export const DISPOSITION_LABELS: Readonly<Record<ReplyDisposition, string>> = Object.freeze({
+const DISPOSITION_LABELS: Readonly<Record<ReplyDisposition, string>> = Object.freeze({
   interested: 'Interested',
   referral_or_wrong_person: 'Wrong person, or referred me on',
   follow_up_later: 'Asked me to follow up later',
@@ -65,7 +65,7 @@ export const DISPOSITION_LABELS: Readonly<Record<ReplyDisposition, string>> = Ob
  * `confirmReplyDisposition` grows or loses a consequence, the sentence a person reads
  * before pressing the button is one edit away and one test away.
  */
-export const DISPOSITION_CONSEQUENCES: Readonly<Record<ReplyDisposition, string>> = Object.freeze({
+const DISPOSITION_CONSEQUENCES: Readonly<Record<ReplyDisposition, string>> = Object.freeze({
   interested:
     'Callie stops automated sending for this firm and hands it to you. It does not move the deal forward on its own.',
   referral_or_wrong_person:
@@ -93,7 +93,7 @@ export const CONFIRM_LABELS: Readonly<Record<ReplyDisposition, string>> = Object
   other: 'Stop automated sending and take this firm over',
 });
 
-export const CLASS_LABELS: Readonly<Record<string, string>> = Object.freeze({
+const CLASS_LABELS: Readonly<Record<string, string>> = Object.freeze({
   human_reply: 'A person wrote this',
   automated: 'Automatic response',
   bounce: 'Delivery failure',
@@ -131,7 +131,7 @@ export function replyNotice(code: string): string {
   return NOTICES[code] ?? code;
 }
 
-export interface DispositionChoiceView {
+interface DispositionChoiceView {
   readonly disposition: ReplyDisposition;
   readonly label: string;
   readonly consequence: string;
@@ -140,7 +140,7 @@ export interface DispositionChoiceView {
   readonly selected: boolean;
 }
 
-export interface SuggestionView {
+interface SuggestionView {
   /** "Interested", or null when only a rule spoke. */
   readonly dispositionLabel: string | null;
   /** Which layer proposed it: a person correcting a rule is not correcting a model. */
@@ -185,7 +185,7 @@ export interface ReplyCardView {
   readonly banners: readonly BannerView[];
 }
 
-export interface ReplyScreenView {
+interface ReplyScreenView {
   readonly heading: string;
   readonly banners: readonly BannerView[];
   readonly summaries: readonly { readonly card: ReplyCard; readonly line: string; readonly open: boolean }[];
@@ -195,7 +195,7 @@ export interface ReplyScreenView {
   readonly classifierLine: string | null;
 }
 
-export const REPLY_HEADING = 'Replies';
+const REPLY_HEADING = 'Replies';
 const EMPTY_LIST = 'No replies to read.';
 const EMPTY_OFFLINE = 'Callie cannot reach the server, and replies are never kept on this Mac.';
 

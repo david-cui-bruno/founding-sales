@@ -17,8 +17,8 @@ import { Label } from '../ui/label.tsx';
  * itself, which is why there is nothing else on it to press.
  */
 
-export const UPDATE_NOW_LABEL = 'Update now';
-export const NO_UPDATE_YET = 'No update is available yet. Callie checks again every six hours.';
+const UPDATE_NOW_LABEL = 'Update now';
+const NO_UPDATE_YET = 'No update is available yet. Callie checks again every six hours.';
 const CHECK_FAILED = 'Callie could not check for an update just now.';
 
 export interface SignInDraft {

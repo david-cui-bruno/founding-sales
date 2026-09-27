@@ -68,7 +68,7 @@ export type TodayFirm = TodayFirmResponse;
  * everything the window is told, and there is no field on it a renderer could turn into
  * something to open.
  */
-export const dialAdviceViewSchema = z.strictObject({
+const dialAdviceViewSchema = z.strictObject({
   routeId: uuid,
   callable: z.boolean(),
   /**

@@ -23,7 +23,7 @@ export { NAVIGATION_TARGETS, ROUTE_NAMES, SETTINGS_TABS, navigationTargetOf, rou
 export type { NavigationTarget, RouteName, SettingsTab } from '../shared/contract.ts';
 
 /** Where Settings scrolls to when Needs you opened it. */
-export const ADMIN_SECTIONS = ['calling-number', 'sending-admin', 'alerts'] as const;
+const ADMIN_SECTIONS = ['calling-number', 'sending-admin', 'alerts'] as const;
 export type AdminSection = (typeof ADMIN_SECTIONS)[number];
 
 export type Route =
@@ -43,7 +43,7 @@ export type Route =
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
 /** The tab that holds what an old `admin/<section>` link used to open. */
-export function tabForSection(section: AdminSection): SettingsTab {
+function tabForSection(section: AdminSection): SettingsTab {
   return section === 'alerts' ? 'diagnostics' : 'administration';
 }
 

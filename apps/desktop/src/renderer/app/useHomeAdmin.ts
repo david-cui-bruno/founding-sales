@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo } from 'react';
 import { figuresWindow, type FiguresRead } from '../homeView.ts';
 import type { AdminState } from '../settingsContract.ts';
@@ -26,11 +26,6 @@ export interface HomeAdmin {
 
 const ADMIN_KEY = 'admin';
 const FIGURES_KEY = 'figures';
-
-export function clearHomeAdmin(client: QueryClient): void {
-  void client.removeQueries({ queryKey: [ADMIN_KEY] });
-  void client.removeQueries({ queryKey: [FIGURES_KEY] });
-}
 
 export function useHomeAdmin(identity: string | null): HomeAdmin {
   const client = useQueryClient();

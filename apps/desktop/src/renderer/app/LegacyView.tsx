@@ -46,5 +46,7 @@ export function LegacyView({
     };
   }, [view, mountKey]);
 
-  return <div ref={host} data-testid="legacy-view" className="contents" />;
+  // `data-legacy` is the scope root of `legacy.css`: those rules apply inside this host
+  // and nowhere else, which is what keeps `button { … }` off a React button.
+  return <div ref={host} data-legacy data-testid="legacy-view" className="contents" />;
 }

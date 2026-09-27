@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { useCallback, useEffect, useRef, useState, type JSX } from 'react';
+import { useCallback, useEffect, useRef, useState, type JSX, type ReactNode } from 'react';
 import * as firmWorkspace from '../firmWorkspace.ts';
 import type { DesktopState } from '../../shared/contract.ts';
 import { buildHomeView } from '../homeView.ts';
@@ -181,14 +181,33 @@ function Column({
         ) : route.name === 'replies' ? (
           <RepliesRoute key={key} column={columnRef} />
         ) : route.name === 'sequences' ? (
-          <LegacyView key={key} mountKey={key} view={sequenceEditor} route={route} />
+          <Page>
+            <LegacyView key={key} mountKey={key} view={sequenceEditor} route={route} />
+          </Page>
         ) : (
-          <LegacyView key={key} mountKey={key} view={firmWorkspace} route={route} />
+          <Page>
+            <LegacyView key={key} mountKey={key} view={firmWorkspace} route={route} />
+          </Page>
         )}
       </main>
     </>
   );
 }
+
+/**
+ * The column every route is drawn in: one 860px measure, the same padding, whoever draws
+ * it. Today, Replies and Settings each carry it themselves; the two views that are still
+ * page modules are given it here, because the shell owns the column and they own what is
+ * in it.
+ */
+function Page({ children }: { readonly children: ReactNode }): JSX.Element {
+  return <div className="mx-auto flex w-full max-w-[860px] flex-col px-12 pt-10 pb-20">{children}</div>;
+}
+
+/** `#app` as the shell: the sidebar at a fixed width and the column taking the rest. */
+const SHELL_LAYOUT = 'grid min-h-screen grid-cols-[220px_minmax(0,1fr)]';
+/** `#app` as a single page: signing in, waiting for the browser, the upgrade notice. */
+const PAGE_LAYOUT = 'mx-auto max-w-[520px] px-14 pt-[12vh] pb-20';
 
 export function App(): JSX.Element {
   const session = useSession();
@@ -216,7 +235,10 @@ export function App(): JSX.Element {
   useEffect(() => {
     const root = document.querySelector('#app');
     if (!(root instanceof HTMLElement)) return;
-    root.className = signedIn ? 'shell' : 'single';
+    // The window's own layout, on the one element React does not render: the shell is
+    // the sidebar and the column, and every other screen is a narrow page. `data-view`
+    // is what a spec and a bug report read; the classes are what draws it.
+    root.className = signedIn ? SHELL_LAYOUT : PAGE_LAYOUT;
     root.dataset['view'] = signedIn ? 'shell' : 'single';
     // The launch update, while it is being put in place (wave 1): the whole window is
     // read-only and one line says why. It installs after the window opens — `confirmLaunch`

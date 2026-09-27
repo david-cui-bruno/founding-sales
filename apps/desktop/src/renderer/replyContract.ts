@@ -4,10 +4,7 @@ import {
   replyCardDtoSchema,
   type ReplyCandidateDto,
   type ReplyCardDto,
-  type ReplyConfirmationDto,
   type ReplyDisposition,
-  type ReplyHoldDto,
-  type ReplySignalDto,
 } from '@fss/contracts';
 
 /**
@@ -48,10 +45,7 @@ export {
   type ReplyDisposition,
   type ReplyNextAction,
 } from '@fss/contracts';
-export type ReplyHold = ReplyHoldDto;
-export type ReplySignal = ReplySignalDto;
 export type ReplyCandidate = ReplyCandidateDto;
-export type ReplyConfirmation = ReplyConfirmationDto;
 /** One reply card, exactly as `/replies/card` returned it. */
 export type ReplyCard = ReplyCardDto;
 

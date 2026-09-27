@@ -34,14 +34,14 @@ export interface BannerView {
   readonly text: string;
 }
 
-export const LANE_LABELS: Readonly<Record<TodayCard['lane'], string>> = Object.freeze({
+const LANE_LABELS: Readonly<Record<TodayCard['lane'], string>> = Object.freeze({
   reply: 'Reply',
   callback: 'Callback',
   due_work: 'Due today',
   new_firm: 'New firm',
 });
 
-export const TASK_LABELS: Readonly<Record<TodayTask['kind'], string>> = Object.freeze({
+const TASK_LABELS: Readonly<Record<TodayTask['kind'], string>> = Object.freeze({
   reply: 'Reply to read',
   callback: 'Callback',
   email_due: 'Email due',
@@ -93,12 +93,12 @@ const DIAL_REASONS: Readonly<Record<string, string>> = Object.freeze({
 });
 
 /** The one place a dial reason becomes English. Unknown codes are shown as-is. */
-export function dialReasonSentence(code: string): string {
+function dialReasonSentence(code: string): string {
   return DIAL_REASONS[code] ?? code;
 }
 
 /** One number on the expanded card: what it is, and whether the server will advise it. */
-export interface DialRouteView {
+interface DialRouteView {
   readonly route: TodayRoute;
   readonly advice: DialAdviceView | null;
   /** True when the server said callable and the window may send a command at all. */
@@ -206,7 +206,7 @@ export interface TodayScreenView {
 
 export const TODAY_HEADING = 'Today';
 /** A callback a recorded call asked for without a time (lane g79, C13). */
-export const NEEDS_TIME_LABEL = 'Callback — needs a time';
+const NEEDS_TIME_LABEL = 'Callback — needs a time';
 const EMPTY_LIST = 'Nothing is due today.';
 const EMPTY_OFFLINE = 'Callie has no saved list for today.';
 
@@ -341,7 +341,7 @@ export const FOCUS_REFRESH_AFTER_MS = 60_000;
 /** How often Home looks at the clock: the "Updated" line's minutes, and the rollover. */
 export const TODAY_TICK_MS = 30_000;
 /** The business day's rollover, and the second look for a slow build. */
-export const ROLLOVER_TIMES: readonly string[] = Object.freeze(['05:00', '05:10']);
+const ROLLOVER_TIMES: readonly string[] = Object.freeze(['05:00', '05:10']);
 
 /** The day before a `YYYY-MM-DD`, as one. */
 function previousDate(date: string): string {

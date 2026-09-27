@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { OperationInput } from '../../shared/operations.ts';
 import type { TodayState } from '../todayContract.ts';
@@ -23,10 +23,6 @@ import { TODAY_TICK_MS, refreshDue } from '../todayView.ts';
  */
 
 const TODAY_KEY = 'today';
-
-export function clearToday(client: QueryClient): void {
-  void client.removeQueries({ queryKey: [TODAY_KEY] });
-}
 
 const api = (): NonNullable<typeof globalThis.callieApi> | undefined => globalThis.callieApi;
 const dialBridge = (): NonNullable<typeof globalThis.callieDial> | undefined => globalThis.callieDial;
