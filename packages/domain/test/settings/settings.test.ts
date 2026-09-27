@@ -13,6 +13,7 @@ import {
   readSettingHistory,
   updateSetting,
 } from '../../settings/store.ts';
+import { readWorkspacePostalAddress } from '../../settings/postalAddress.ts';
 import { ALL_BLOCKED_ACTION_KINDS, CHANNEL_BLOCKED_ACTION_KINDS } from '../../policy/types.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { FIXTURE_API_DIGEST, storeFixtureCiGateRecord } from '../release/support/releaseRecords.ts';
@@ -245,6 +246,88 @@ describe('workspace settings', () => {
       [seeded.alpha.workspaceId],
     );
     expect(currentRows.rows[0]?.count).toBe('1');
+  });
+});
+
+/**
+ * The `postal_address` key (migration 0020, lane W3-F).
+ *
+ * The value is appended to every automated body, so its bounds are the interesting part:
+ * a link, markup, "unsubscribe" or 201 characters would each be a defect in mail that has
+ * already left. Clearing it is a version like any other, and an absent address is the
+ * default rather than an error.
+ */
+describe('the postal address', () => {
+  let database: TestDatabase;
+  let seeded: TwoWorkspaces;
+  let admin: RepositoryContext;
+  const address = '1 Example Way, Suite 2\nProvidence, RI 02903';
+
+  beforeAll(async () => {
+    database = await createTestDatabase();
+    seeded = await seedTwoWorkspaces(database.session);
+    admin = repositoryContext(
+      workspaceScope(seeded.alpha.workspaceId, { kind: 'user', userId: seeded.alpha.admin.userId, role: 'admin' }),
+      database.session,
+    );
+  });
+
+  afterAll(async () => {
+    await database.drop();
+  });
+
+  it('is absent by default, and an absent address is not an error', async () => {
+    expect(DEFAULT_SETTING_VALUES['postal_address']).toEqual({ address: null });
+    expect(await readWorkspacePostalAddress(admin)).toBeNull();
+  });
+
+  it('stores a bounded plain-text address and reads it back for the footer', async () => {
+    const saved = await updateSetting(admin, {
+      settingKey: 'postal_address',
+      value: { address },
+      changeNote: 'the registered office',
+    });
+    expect(saved.ok).toBe(true);
+    expect(await readWorkspacePostalAddress(admin)).toBe(address);
+  });
+
+  it('refuses a link, markup, an unsubscribe word, an empty string and 201 characters', async () => {
+    for (const value of [
+      { address: 'Visit https://example.test' },
+      { address: 'Suite <b>2</b>' },
+      { address: 'Unsubscribe by post: 1 Example Way' },
+      { address: '' },
+      { address: 'x'.repeat(201) },
+      { address: 42 },
+      { address: 'Suite 2', extra: 'nope' },
+    ]) {
+      expect(
+        await updateSetting(admin, { settingKey: 'postal_address', value, changeNote: 'trying it on' }),
+        JSON.stringify(value).slice(0, 60),
+      ).toEqual({ ok: false, reason: 'invalid_value' });
+    }
+    // Nothing a refusal touched: the address stored above still stands.
+    expect(await readWorkspacePostalAddress(admin)).toBe(address);
+  });
+
+  it('clears with a null, which is a new version and not a deletion', async () => {
+    const cleared = await updateSetting(admin, {
+      settingKey: 'postal_address',
+      value: { address: null },
+      changeNote: 'the office moved; nothing to print yet',
+    });
+    expect(cleared.ok && cleared.value.current.version).toBe(2);
+    expect(await readWorkspacePostalAddress(admin)).toBeNull();
+    const history = await readSettingHistory(admin, 'postal_address');
+    expect(history.map(entry => entry.value)).toEqual([{ address: null }, { address }]);
+  });
+
+  it('is one workspace’s address and never the other’s', async () => {
+    const beta = repositoryContext(
+      workspaceScope(seeded.beta.workspaceId, { kind: 'user', userId: seeded.beta.admin.userId, role: 'admin' }),
+      database.session,
+    );
+    expect(await readWorkspacePostalAddress(beta)).toBeNull();
   });
 });
 

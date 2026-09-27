@@ -111,6 +111,21 @@ export interface GmailMessageBody {
   readonly text: string;
   /** A body the fetch truncated cannot prove an opt-out: the sentence may continue. */
   readonly truncated: boolean;
+  /**
+   * The id the *response* carried, which is not always the id the caller asked for.
+   *
+   * A caller that reads a body to prove what a particular message says compares the two
+   * and treats a mismatch as unread (`readSentMessageBytes`; review of PR 296). The
+   * classification path does not care: it reads the body of whatever it was handed.
+   */
+  readonly messageId: string;
+  /**
+   * True when the text came from a `text/plain` part.
+   *
+   * False means it is `readBodyText`'s flattening of the HTML part — good enough to
+   * classify a reply, and never good enough to record as the bytes a prospect received.
+   */
+  readonly plainText: boolean;
 }
 
 /** One message one history record changed, in the ways FSS asks `history.list` for. */

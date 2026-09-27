@@ -49,7 +49,7 @@ import { instant, uuid } from './foundationRows.ts';
  * reviewed postmaster — that a jsonb blob cannot express. See
  * `docs/decisions/g9-two-slices-that-belong-to-other-lanes.md`.
  */
-export const SETTING_KEYS = ['business_time_zone', 'sending_enabled'] as const;
+export const SETTING_KEYS = ['business_time_zone', 'sending_enabled', 'postal_address'] as const;
 export type ActiveSettingKey = (typeof SETTING_KEYS)[number];
 
 /**
@@ -77,14 +77,41 @@ const ianaTimeZoneSchema = z
 /** Appendix D: "A configurable workspace business zone initialized to America/New_York." */
 const businessTimeZoneSettingSchema = z.strictObject({ timeZone: ianaTimeZoneSchema });
 
-/*
- * 10.1's postal footer was a slice here until 22 September 2026. David decided an
- * automated email carries no postal address, so there is nothing to configure and the
- * slice is gone rather than left empty; migration 0015 removed the key from the
- * table's CHECK. `docs/decisions/g20-automated-email-carries-no-postal-address.md`.
- * 12.6 is unaffected: the footer still ends with the reply-to-stop sentence, and
- * `SENDING_STOP_LINE` in `./templates.ts` is that sentence.
+/**
+ * 10.1's postal footer, back as a setting (migration 0020, lane W3-F, 27 September 2026).
+ *
+ * It was a slice here until 22 September 2026, when David decided an automated email
+ * carries no postal address and migration 0015 dropped the column the old footer used.
+ * `docs/archive/decisions/g20-automated-email-carries-no-postal-address.md` says how it
+ * comes back: "reversing it is a new migration, not a revert" — a **new settings key**,
+ * not the dropped column, a new slice and a new rule. This is that key; migration 0020
+ * widens `workspace_settings_key_known` to admit it and nothing else.
+ *
+ * The value is plain text and bounded, because it is appended to every automated body:
+ * at most 200 characters, no markup, no link and no "unsubscribe" (which the fence's own
+ * CHECK refuses in a body). `{ "address": null }` clears it, and a cleared address is not
+ * an error: the footer is then the sign-off and the stop line, exactly today's bytes, and
+ * sending continues. The switch that would make it compulsory is `SEND_FOOTER_POLICY`
+ * in `packages/domain/src/rules/templates.ts`.
  */
+export const POSTAL_ADDRESS_MAX_LENGTH = 200;
+
+const postalAddressTextSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(POSTAL_ADDRESS_MAX_LENGTH)
+  // eslint-disable-next-line no-control-regex -- control characters are exactly what this refuses
+  .refine(value => !/[\x00-\x09\x0b-\x1f\x7f]|\r/.test(value), 'plain text, on one or more lines')
+  .refine(value => !/<[a-z/!][^>]*>/i.test(value), 'no markup')
+  .refine(value => !/https?:\/\/|www\./i.test(value), 'no link')
+  .refine(value => !/unsubscribe/i.test(value), 'no unsubscribe wording');
+
+export const postalAddressSettingSchema = z.strictObject({
+  /** The address the footer carries, or null when the workspace has configured none. */
+  address: postalAddressTextSchema.nullable(),
+});
+export type PostalAddressSetting = z.infer<typeof postalAddressSettingSchema>;
 
 /**
  * 16.2: "Production sending remains disabled until ... an authenticated admin enables
@@ -123,6 +150,7 @@ export type SendingEnabledSetting = z.infer<typeof sendingEnabledSettingSchema>;
 export const SETTING_VALUE_SCHEMAS = {
   business_time_zone: businessTimeZoneSettingSchema,
   sending_enabled: sendingEnabledSettingSchema,
+  postal_address: postalAddressSettingSchema,
 } as const satisfies Record<ActiveSettingKey, z.ZodType>;
 
 /**
@@ -133,6 +161,8 @@ export const DEFAULT_SETTING_VALUES: Readonly<Record<ActiveSettingKey, unknown> 
   Object.freeze({
     business_time_zone: { timeZone: 'America/New_York' },
     sending_enabled: { enabled: false, releaseGateReference: null },
+    // No address until an admin configures one, and no address is not an error.
+    postal_address: { address: null },
   });
 
 // ---------------------------------------------------------------------------

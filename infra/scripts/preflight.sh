@@ -19,8 +19,8 @@
 # `fss admin schema-preflight <migration>` counts inside a READ ONLY transaction it rolls
 # back, on a one-off task of the operations definition, as the runtime identity, through
 # lib.sh's release_run_task and its guards; the answer is read back out of the log stream.
-# The command exists only for a migration the tool knows (`0019` today); any other answers
-# `command_unknown` from the tool, and this fails.
+# The command exists only for a migration the tool knows (`0019` and `0020` today); any
+# other answers `command_unknown` from the tool, and this fails.
 #
 # The command is new in the release it belongs to, and before the apply the operations
 # definition still runs the previous release's image. So when the registered image is not
@@ -39,7 +39,12 @@
 # take the blocking counts to the owner, and amend the migration before it is applied
 # anywhere. A migration whose report carries more than that is named in PREFLIGHT_EXTRAS
 # below, which is how 0019's ten further fields survived this script replacing the one
-# lane W2-M wrote for it: the line it writes is what that one wrote, to the field.
+# lane W2-M wrote for it: the line it writes is what that one wrote, to the field. 0020
+# (lane W3-F) has seventeen of its own: the settings rows by key, the unsent fences to
+# recompose, the templates whose legacy footer block is deduped, the ids of anything that
+# will be held for repair rather than sent — which is *not* a blocker — and the ids of any
+# body that would not fit once the footer is composed, which is the only thing 0020
+# refuses on.
 #
 # Exit status: 0 when the migration would apply; 3 when it would refuse; 1 when anything
 # failed — the launch, the answer, or the deregistration of the preflight's own revision,
@@ -239,7 +244,46 @@ def extras_0019():
     ]
 
 
-PREFLIGHT_EXTRAS = {"0019": extras_0019}
+def extras_0020():
+    # Lane W3-F. 0020 destroys nothing — it widens one CHECK — so its report is about
+    # what the *release* changes: the settings table the CHECK is replaced over, the
+    # unsent fences whose footer the claim lock will recompose, the templates whose
+    # legacy block composition will dedupe, and the bodies that would not fit once
+    # composed (the only thing 0020 refuses on).
+    settings = counts.get("settings") or []
+    fences = counts.get("fences") or {}
+    templates = counts.get("templates") or {}
+    oversize = counts.get("oversize") or {}
+    with_address = oversize.get("withMaxAddress") or {}
+    repair = counts.get("repair") or {}
+
+    def names(values):
+        return ",".join(values) if values else "none"
+
+    return [
+        ("settings_rows_by_key",
+         ",".join("%s:%s" % (row.get("settingKey", "?"), row.get("versions", "?")) for row in settings) or "none"),
+        ("settings_current_rows", sum(int(row.get("current", 0)) for row in settings) if settings else 0),
+        ("fences_prepared", fences.get("prepared", "unknown")),
+        ("fences_held", fences.get("held", "unknown")),
+        ("fences_to_recompose", fences.get("recomposed", "unknown")),
+        ("fences_already_composed", fences.get("alreadyComposed", "unknown")),
+        ("fences_without_template_version", fences.get("withoutTemplateVersion", "unknown")),
+        ("fences_held_for_repair", fences.get("heldForRepair", "unknown")),
+        ("templates_legacy_footer_deduped", templates.get("legacyFooterBlock", "unknown")),
+        ("templates_footerless", templates.get("footerless", "unknown")),
+        ("templates_ambiguous_footer", templates.get("ambiguousFooter", "unknown")),
+        ("postal_address_configured", str((counts.get("postalAddress") or {}).get("configured", "unknown")).lower()),
+        ("oversize_fences", names(oversize.get("fenceIds"))),
+        ("oversize_templates", names(oversize.get("templateVersionIds"))),
+        ("oversize_with_max_address",
+         len(with_address.get("fenceIds") or []) + len(with_address.get("templateVersionIds") or [])),
+        ("repair_fences", names(repair.get("fenceIds"))),
+        ("repair_templates", names(repair.get("templateVersionIds"))),
+    ]
+
+
+PREFLIGHT_EXTRAS = {"0019": extras_0019, "0020": extras_0020}
 fields = [("schema", report.get("schemaVersion", "unknown")), ("refuses", str(report.get("refuses", "unknown")).lower())]
 fields += [("blocking_" + key, value) for key, value in sorted(blocking.items())]
 fields += PREFLIGHT_EXTRAS.get(os.environ["FSS_MIGRATION"], list)()

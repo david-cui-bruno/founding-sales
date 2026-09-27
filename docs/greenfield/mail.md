@@ -132,19 +132,26 @@ where it landed. `docs/greenfield/sending.md` rule 6 has the arithmetic, and
 the enrollment the switch stops records `direct_send` rather than `human_reply`
 (`docs/greenfield/crm.md`, "The manual-mode origin").
 
-### 6. There is no unsubscribe link, anywhere — and no postal address either
+### 6. There is no unsubscribe link, anywhere
 
-A reply-to-stop footer only. `template_versions` enforces it:
+A reply-to-stop footer only. One CHECK is left on `template_versions`, and it is the
+one about the link:
 
 ```sql
 CONSTRAINT template_versions_no_unsubscribe_link
-  CHECK (body !~* 'unsubscribe' AND subject !~* 'unsubscribe'),
-CONSTRAINT template_versions_approved_has_stop_line
-  CHECK (position('Reply "stop"' IN body) > 0)
+  CHECK (body !~* 'unsubscribe' AND subject !~* 'unsubscribe')
 ```
 
-and an approved version is immutable by trigger. G8 extends this table with nullable
-columns; it does not create it.
+The other two guards this section used to name are gone, and their absence is the
+point of the rules that replaced them. Migration 0019 dropped
+`template_versions_approved_has_stop_line` and the approved-version immutability
+trigger, because wave 2 (S3) made an approved version editable in place. So the stop
+line is no longer a column CHECK: it is enforced where the bytes are decided — the
+approval rule (`templateTextIssues`) and, since migration 0020, the composition at
+send and the fence's own guard, which refuses to store a body that does not end with
+exactly one stop line. `outbound_messages_no_unsubscribe_link` still restates the link
+rule on the bytes that actually leave. G8 extends this table with nullable columns; it
+does not create it.
 
 The whole footer is two lines — the workspace sign-off, then
 
@@ -152,13 +159,16 @@ The whole footer is two lines — the workspace sign-off, then
 Reply "stop" and I will not email you again.
 ```
 
-`footerBlock` in `packages/domain/src/rules/templates.ts` builds it and the approval
-refuses a body that does not end with it (`template_footer_missing`). Between the two
-lines there was a postal address until 22 September 2026; David decided there is
-none, migration 0015 dropped `template_versions.footer_postal_address`, and
-`docs/archive/decisions/g20-automated-email-carries-no-postal-address.md` records the decision
-and the three specification lines it deviates from. Nothing is appended at send time:
-the footer is inside the approved body, which is why the content hash covers it.
+Since migration 0020 there is a third line between them when the workspace has
+configured one: the `postal_address` setting
+(`docs/greenfield/settings.md`). The block is **composed at send** —
+`composeSendBody` in `packages/domain/src/rules/templates.ts`, called before the fence
+stores a body and its hash — so the bytes the fence freezes are the bytes Gmail receives.
+An approval may carry the legacy block inside the body or none at all; composition
+replaces a block it can rebuild from recorded configuration, holds a body whose trailing
+stop line it cannot account for, and checks its own output — so the fence never stores a
+body without exactly one final stop line, and never one with two. With no address
+configured the block is the two lines above, byte for byte, and sending continues.
 
 ## The matching order
 

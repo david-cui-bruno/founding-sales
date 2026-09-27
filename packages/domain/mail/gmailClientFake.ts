@@ -454,7 +454,15 @@ export function recordedGmailClient(fixture: GmailFixture): RecordedGmailClient 
       await Promise.resolve();
       const message = find(messageId);
       if (message === undefined || message.body === undefined) return null;
-      return { text: message.body, truncated: message.bodyTruncated ?? false };
+      return {
+        text: message.body,
+        truncated: message.bodyTruncated ?? false,
+        // The fixture's messages are well formed: the answer is about the message that
+        // was asked for, and its body is the plain text the fixture set. A test of the
+        // other cases overrides this method.
+        messageId,
+        plainText: true,
+      };
     },
 
     sendMessage: async (_access, request: GmailSendRequest): Promise<GmailSendOutcome> => {

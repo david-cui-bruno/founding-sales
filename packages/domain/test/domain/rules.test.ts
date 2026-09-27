@@ -31,9 +31,13 @@ import {
 } from '../../src/rules/suppressionCanonicalization.ts';
 import {
   SENDING_STOP_LINE,
+  SENT_BODY_MAX_LENGTH,
+  composeSendBody,
   decideTemplateApproval,
   footerBlock,
   renderTemplate,
+  sendBodyIssue,
+  sendFooterBlock,
   templateContentHash,
   templateTextIssues,
   templateTextWarnings,
@@ -41,11 +45,13 @@ import {
 
 const NEW_YORK = 'America/New_York';
 
-// A fictional workspace sign-off. No repository file carries a real contact detail,
-// and since G20 no footer carries a postal address at all.
+// A fictional workspace sign-off. No repository file carries a real contact detail.
 const FOOTER = {
   signOff: 'Best,\nA. Salesperson\nFounder, Example\nexample.test',
 };
+
+/** A fictional postal address, of the shape the `postal_address` setting holds. */
+const ADDRESS = '1 Example Way, Suite 2\nProvidence, RI 02903';
 
 describe('suppression canonicalisation', () => {
   it('makes one spelling of a United States number', () => {
@@ -380,14 +386,23 @@ describe('templates', () => {
   });
 
   it('names every rule a body breaks, not only the first', () => {
-    const text = { subject: 'Read https://example.test now', body: 'We guarantee a 50% discount. {surprise}' };
+    const text = {
+      subject: 'Read https://example.test now',
+      body: `We guarantee a 50% discount. {surprise}\n${SENDING_STOP_LINE}\nAnd a postscript.`,
+    };
     expect(templateTextIssues(text, rules).sort()).toEqual(['template_footer_missing', 'template_unknown_variable']);
     expect(templateTextWarnings(text).sort()).toEqual(['template_pricing_or_guarantee_language', 'template_subject_url']);
   });
 
   it('keeps refusing what a send or the law depends on', () => {
     const refusals = (subject: string, text: string): string[] => templateTextIssues({ subject, body: text }, rules);
-    expect(refusals('A note', 'No stop line.')).toContain('template_footer_missing');
+    // A footerless body is approvable since the footer is composed at send; a body that
+    // carries the stop line somewhere that is not a final block is not, because composing
+    // it would leave two.
+    expect(refusals('A note', 'No stop line.')).toEqual([]);
+    expect(refusals('A note', `${SENDING_STOP_LINE}\n\nAnd then some more words.`)).toContain(
+      'template_footer_missing',
+    );
     expect(refusals('A note', `<p>Hello</p>\n\n${footerBlock(FOOTER)}`)).toContain('template_body_markup');
     expect(refusals('A note', `Hello\u0007.\n\n${footerBlock(FOOTER)}`)).toContain('template_body_not_plain_text');
     expect(refusals('Two\nlines', body)).toContain('template_subject_not_one_line');
@@ -419,7 +434,7 @@ describe('templates', () => {
     const approved = decideTemplateApproval({ templateId: 'T1', version: 1, subject: 'A short note', body }, rules);
     expect(approved.approved).toBe(true);
     const refused = decideTemplateApproval(
-      { templateId: 'T1', version: 1, subject: 'A short note', body: 'No footer here.' },
+      { templateId: 'T1', version: 1, subject: 'A short note', body: `${SENDING_STOP_LINE} And more after it.` },
       rules,
     );
     expect(refused).toMatchObject({ approved: false, reason: 'template_unapproved' });
@@ -435,6 +450,164 @@ describe('templates', () => {
       reason: 'missing_variables',
       missing: ['firm'],
     });
+  });
+});
+
+/**
+ * The footer composed at send (lane W3-F, migration 0020; the P0 list of
+ * `.context/reviews/GPT6-PR264-0019-20260926.md`).
+ *
+ * ## The vacuous-pass traps, named
+ *
+ * **A composition that is only tested on the shape it produces.** Every case here starts
+ * from a body somebody could really have approved: the legacy shape desktop 1.0.11
+ * requires, the footerless shape its successor writes, one with an address that has since
+ * changed, and the `Hi David` body whose greeting ends with the sign-off's own words.
+ *
+ * **A switch tested in one position.** `postalAddressRequired` is exercised false *and*
+ * true, because the whole point of it is that flipping it is a decision and not a design.
+ */
+describe('the footer is composed at send', () => {
+  const FOOTERLESS = 'Hi Acme, a short note about resident maintenance requests.';
+  const legacy = `${FOOTERLESS}\n\n${footerBlock(FOOTER)}`;
+
+  it('gives every body exactly one final stop line, in either shape and with or without an address', () => {
+    for (const body of [legacy, FOOTERLESS]) {
+      for (const postalAddress of [null, ADDRESS]) {
+        const decision = composeSendBody(body, { ...FOOTER, postalAddress });
+        expect(decision.composed, body).toBe(true);
+        if (!decision.composed) continue;
+        expect(decision.body.endsWith(SENDING_STOP_LINE)).toBe(true);
+        expect(decision.body.split(SENDING_STOP_LINE)).toHaveLength(2);
+        expect(sendBodyIssue(decision.body)).toBeNull();
+        expect(decision.body.includes(ADDRESS)).toBe(postalAddress !== null);
+        // The words are never touched, whatever the footer does.
+        expect(decision.body.startsWith(FOOTERLESS)).toBe(true);
+      }
+    }
+  });
+
+  it('is exactly today’s bytes when no address is configured, so the release changes nothing it need not', () => {
+    const decision = composeSendBody(legacy, { ...FOOTER, postalAddress: null });
+    expect(decision).toMatchObject({ composed: true, body: legacy, changed: false, deduped: true });
+  });
+
+  it('is idempotent: composing a composed body rewrites nothing', () => {
+    const once = composeSendBody(legacy, { ...FOOTER, postalAddress: ADDRESS });
+    expect(once.composed).toBe(true);
+    if (!once.composed) return;
+    expect(once.changed).toBe(true);
+    const twice = composeSendBody(once.body, { ...FOOTER, postalAddress: ADDRESS });
+    expect(twice).toMatchObject({ composed: true, body: once.body, changed: false });
+  });
+
+  it('replaces an address it recorded, and refuses to touch one it never did', () => {
+    const OLD = '9 Old Road\nProvidence, RI 02903';
+    const stale = `${FOOTERLESS}\n\n${sendFooterBlock({ ...FOOTER, postalAddress: OLD })}`;
+
+    // Provenance: the old address is a version of this workspace's own setting, so the
+    // block it wrote is a block the composition can rebuild — and therefore replace.
+    const moved = composeSendBody(stale, { ...FOOTER, postalAddress: ADDRESS, recordedAddresses: [OLD] });
+    expect(moved).toMatchObject({ composed: true, deduped: true });
+    if (!moved.composed) return;
+    expect(moved.body).toBe(`${FOOTERLESS}\n\n${sendFooterBlock({ ...FOOTER, postalAddress: ADDRESS })}`);
+    expect(moved.body).not.toContain('9 Old Road');
+    expect(composeSendBody(stale, { ...FOOTER, postalAddress: null, recordedAddresses: [OLD] })).toMatchObject({
+      composed: true,
+      body: legacy,
+    });
+
+    // Without that record the same bytes are just lines nobody can account for, so the
+    // body is held rather than edited. This is the five-line legacy address case too.
+    expect(composeSendBody(stale, { ...FOOTER, postalAddress: ADDRESS })).toEqual({
+      composed: false,
+      reason: 'footer_ambiguous',
+    });
+  });
+
+  it('refuses a sign-off that contains the stop sentence, at approval and at composition', () => {
+    const doubled = { signOff: `Best,\n${SENDING_STOP_LINE}` };
+    expect(templateTextIssues({ subject: 'A note', body: FOOTERLESS }, { footer: doubled, allowedVariables: [] })).toEqual([
+      'template_sign_off_repeats_stop_line',
+    ]);
+    expect(composeSendBody(FOOTERLESS, doubled)).toEqual({
+      composed: false,
+      reason: 'composed_body_not_sendable',
+      detail: 'stop_line_repeated',
+    });
+  });
+
+  it('holds a body whose trailing lines it cannot account for, rather than deleting them', () => {
+    // The reviewer's case: `Please call Tuesday.` is not an address, and a rule that
+    // guessed by counting lines would send the email without it.
+    const prose = `Hello.\n\nSam\nPlease call Tuesday.\n${SENDING_STOP_LINE}`;
+    expect(composeSendBody(prose, { signOff: 'Sam', postalAddress: ADDRESS })).toEqual({
+      composed: false,
+      reason: 'footer_ambiguous',
+    });
+    expect(
+      templateTextIssues({ subject: 'A note', body: prose }, { footer: { signOff: 'Sam' }, allowedVariables: [] }),
+    ).toEqual(['template_footer_missing']);
+  });
+
+  it('never strips the sign-off a second time: `Hi David` keeps its name (review of PR 264)', () => {
+    const rules = { signOff: 'David' };
+    const body = `Hello there.\n\nHi David\n${SENDING_STOP_LINE}`;
+    // The characters of a block are there and the block is not: `David` does not start
+    // its line. Nothing is removed and nothing is composed — the body is held, which is
+    // the only answer that can neither lose a word nor send two stop lines.
+    expect(composeSendBody(body, { ...rules, postalAddress: ADDRESS })).toEqual({
+      composed: false,
+      reason: 'footer_ambiguous',
+    });
+    // And the block on its own line *is* recognised, which is what bounds the removal.
+    const proper = `Hello there.\n\nDavid\n${SENDING_STOP_LINE}`;
+    expect(composeSendBody(proper, { ...rules, postalAddress: null })).toMatchObject({
+      composed: true,
+      deduped: true,
+      body: proper,
+    });
+  });
+
+  it('refuses rather than duplicating a stop line the body carries elsewhere', () => {
+    expect(composeSendBody(`${SENDING_STOP_LINE}\n\nA postscript.`, FOOTER)).toEqual({
+      composed: false,
+      reason: 'footer_ambiguous',
+    });
+  });
+
+  it('refuses a composed body past the fence’s 4,000 characters, and names the length', () => {
+    const footer = sendFooterBlock({ ...FOOTER, postalAddress: ADDRESS });
+    const words = 'x'.repeat(SENT_BODY_MAX_LENGTH - footer.length);
+    const decision = composeSendBody(words, { ...FOOTER, postalAddress: ADDRESS });
+    expect(decision).toMatchObject({ composed: false, reason: 'composed_body_too_long' });
+    // One character shorter than the two newlines it costs, and it fits.
+    const fits = composeSendBody('x'.repeat(SENT_BODY_MAX_LENGTH - footer.length - 2), {
+      ...FOOTER,
+      postalAddress: ADDRESS,
+    });
+    expect(fits.composed).toBe(true);
+    if (fits.composed) expect(fits.body).toHaveLength(SENT_BODY_MAX_LENGTH);
+  });
+
+  it('sends on without an address by default, and refuses every send with the switch flipped', () => {
+    const withoutAddress = composeSendBody(legacy, { ...FOOTER, postalAddress: null }, { postalAddressRequired: false });
+    expect(withoutAddress).toMatchObject({ composed: true, body: legacy });
+    expect(composeSendBody(legacy, { ...FOOTER, postalAddress: null }, { postalAddressRequired: true })).toEqual({
+      composed: false,
+      reason: 'postal_address_required',
+    });
+    // The switch is about an *absent* address, never about a configured one.
+    expect(
+      composeSendBody(legacy, { ...FOOTER, postalAddress: ADDRESS }, { postalAddressRequired: true }),
+    ).toMatchObject({ composed: true });
+  });
+
+  it('says what is wrong with bytes about to be frozen on a fence', () => {
+    expect(sendBodyIssue(legacy)).toBeNull();
+    expect(sendBodyIssue(FOOTERLESS)).toBe('footer_missing');
+    expect(sendBodyIssue(`${SENDING_STOP_LINE}\n\n${legacy}`)).toBe('stop_line_repeated');
+    expect(sendBodyIssue(`${'x'.repeat(SENT_BODY_MAX_LENGTH)}\n${SENDING_STOP_LINE}`)).toBe('body_too_long');
   });
 });
 

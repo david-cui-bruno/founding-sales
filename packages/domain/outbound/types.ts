@@ -51,6 +51,20 @@ export const SEND_REFUSAL_CODES = [
   'sending_domain_unknown',
   'template_unapproved',
   'template_mismatch',
+  /**
+   * The bytes handed to the fence are not the bytes a send may carry: no final stop
+   * line, the stop line more than once, or a composed body past the column's 4,000
+   * characters (lane W3-F). The fence refuses rather than storing them, so no footerless
+   * body can ever be frozen, and the step holds `template_unapproved` — the text is what
+   * has to change.
+   */
+  'footer_not_composed',
+  /**
+   * `SEND_FOOTER_POLICY.postalAddressRequired` is on and the workspace has configured no
+   * `postal_address`. Off by default: an absent address composes the sign-off and the
+   * stop line, and sending continues.
+   */
+  'postal_address_required',
   'route_invalid',
   'firm_suppressed',
   'handle_suppressed',

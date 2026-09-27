@@ -301,6 +301,7 @@ fss admin mailbox reconcile-sent --since <instant> --restore-point <T> --invento
 fss admin restore-marker put --marker <uuid> --restore-point <T> --instance <DbiResourceId>
 fss admin workspace bootstrap --slug <slug> ...    the first workspace and its admin
 fss admin schema-preflight 0019                    the one-off check before migration 0019
+fss admin schema-preflight 0020                    the one-off check before migration 0020
 fss admin release-record put --json <file> | --json-base64 <value>
 fss admin release-record show --reference <releaseGateReference>
 ```
@@ -492,7 +493,7 @@ outright when the connected role *is* `app_runtime`, before `--allow-any-role` i
 
 **The dependency mode is fixed per command**, as data in `COMMAND_DEPENDENCIES`, not as
 whatever the environment happens to say: `holds list`, `holds release-restore`, `mailbox list`, `restore-marker put`, `workspace bootstrap`,
-`release-record`, `schema-preflight 0019` and `database-users ensure` reach PostgreSQL and
+`release-record`, `schema-preflight 0019`, `schema-preflight 0020` and `database-users ensure` reach PostgreSQL and
 nothing else — no deployment is read, so they cannot reach Gmail, KMS or S3 in a fully
 configured production task (`holds release-restore` also reads the task's own ECS
 metadata endpoint for its ARN); `suppression-journal replay` reaches the configured journal

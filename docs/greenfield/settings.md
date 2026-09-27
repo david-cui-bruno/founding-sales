@@ -40,8 +40,8 @@ docs/greenfield/runbooks/*.md                      one page per alarm
 
 ## What this lane stores, and what it deliberately does not
 
-`workspace_settings` holds two active slices: the workspace business zone and the
-production sending attestation. The alarm thresholds and the supported client-version
+`workspace_settings` holds three active slices: the workspace business zone, the
+production sending attestation and the postal address. The alarm thresholds and the supported client-version
 range were retired on 26 September 2026 (lane W1-C): the alarms read Terraform's values
 and the API's client-version policy is code, so neither slice was read by anything.
 Migration 0019 deleted every row of both, superseded versions included, and narrowed
@@ -49,15 +49,44 @@ Migration 0019 deleted every row of both, superseded versions included, and narr
 `RETIRED_SETTING_KEYS`, so the wire vocabulary still parses one; a command or a history
 request that names one is refused.
 
-It held a fifth, `postal_footer`, until 22 September 2026. David decided that an
-automated email carries no postal address, so there is nothing to configure: the key
-is gone from `SETTING_KEYS`, migration 0015 deleted every row of the slice and
-narrowed `workspace_settings_key_known` to the four above, and the Mac's
-administration page has no section for it. It is not in `SETTINGS_ELSEWHERE` either,
-because that list is navigation and there is nowhere to go. See
-`docs/archive/decisions/g20-automated-email-carries-no-postal-address.md`. The footer itself
-survives — it is the sign-off and the reply-to-stop line, and it lives on the approved
-template version rather than in configuration.
+### The postal address (migration 0020, 27 September 2026)
+
+It held a slice called `postal_footer` until 22 September 2026, when David decided that
+an automated email carries no postal address: the key left `SETTING_KEYS`, migration
+0015 deleted every row of it, and `template_versions.footer_postal_address` was dropped
+(`docs/archive/decisions/g20-automated-email-carries-no-postal-address.md`). That decision
+was reversed on 27 September, the way the decision itself says it must be — "reversing it
+is a new migration, not a revert". So the address is back as **a new key**, not the old
+column and not the old slice:
+
+* `postal_address`, whose value is `{ "address": "…" }` or `{ "address": null }`: plain
+  text, at most 200 characters, no markup, no link and no "unsubscribe" wording. Null
+  clears it, and a cleared address is not an error.
+* Migration 0020 widens `workspace_settings_key_known` to admit it and does nothing else.
+* The footer is **composed at send** from the template version's sign-off, this address
+  and the stop line (`composeSendBody`, `packages/domain/outbound/footer.ts`), before the
+  outbound fence stores the body and its hash, and under the same locks the claim holds —
+  so the footer a send carries is the configuration as it stood at the claim, not a
+  moment earlier. The stored template is not rewritten and an approval never depends on
+  whether an address is configured; what a send carries differs from the approved body
+  in the footer block, which is system text, and in nothing else.
+* **A footer it cannot account for is held, not edited.** The composition replaces a
+  trailing block only when it can rebuild that block from something recorded: the
+  sign-off on the template version, with no address or with an address a version of this
+  setting holds. A body that ends in a stop line it cannot account for — an address that
+  was never configured here, a sign-off edited since, a greeting that happens to end with
+  the sign-off's words, prose after the block — is refused (`footer_ambiguous`): the step
+  holds, nothing is sent, and a person fixes the text. `fss admin schema-preflight 0020`
+  names every stored template and unsent fence in that state before the release.
+* With **no address configured the footer is the sign-off and the stop line** — today's
+  bytes exactly — and sending continues. `SEND_FOOTER_POLICY.postalAddressRequired` in
+  `packages/domain/src/rules/templates.ts` is the one switch that would refuse every send
+  until an address is configured; it is false, and flipping it is the whole change.
+* `GET /settings` leaves the key out of its snapshot unless the caller asks for it
+  (`GET /settings?include=postal_address`), because desktop 1.0.11 parses the snapshot
+  strictly and an unknown key would throw away the whole settings page. The update
+  command and `POST /settings/history` answer for it from any caller. The parameter goes
+  when that desktop is no longer installed.
 
 **The rule that decides what is in it:** a `jsonb` settings slice is for an operator
 knob that nothing joins to, nothing constrains, and nothing freezes a version of.

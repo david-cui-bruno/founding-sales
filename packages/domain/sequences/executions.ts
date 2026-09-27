@@ -4,6 +4,7 @@ import { openHold, releaseHoldsOfEvent } from '../policy/holds.ts';
 import type { WorkspaceHolidayCalendar } from '../src/rules/businessDays.ts';
 import { placeEmailSend } from '../src/rules/sendingWindow.ts';
 import { readTemplateVersion, renderTemplateVersion } from '../templates/templates.ts';
+import { composeBodyForWorkspace } from '../outbound/footer.ts';
 import { businessDateOf } from '../today/snapshots.ts';
 import { calendarOfEnrollment, completeEnrollment, stepForCadence, stopEnrollments } from './enrollments.ts';
 import { CHANNEL_ACTION_KINDS, type StepEligibility } from './eligibility.ts';
@@ -449,6 +450,26 @@ async function runEmailStep(
     });
   }
 
+  // The footer, composed **before** the fence stores anything (lane W3-F, migration
+  // 0020). The approved body may carry the legacy block or none at all; either way the
+  // bytes handed over end with the sign-off, the workspace's `postal_address` when it has
+  // one, and exactly one stop line. A body that cannot be given one — the stop line
+  // somewhere else in the text, a composed body past the fence's 4,000 characters, or the
+  // address switch on with nothing configured — holds the step here, with nothing written
+  // and no fence created.
+  const composed = await composeBodyForWorkspace(context, {
+    body: rendered.body,
+    signOff: template.footerSignOff,
+  });
+  if (!composed.composed) {
+    return await holdExecution(
+      context,
+      execution,
+      composed.reason === 'postal_address_required' ? 'scoped_pause' : 'template_unapproved',
+      { detail: [composed.reason] },
+    );
+  }
+
   const route = await usableEmailRoute(context, enrollment.contactId);
   if (route === null) return await holdExecution(context, execution, 'route_missing');
 
@@ -464,7 +485,8 @@ async function runEmailStep(
     emailAddressId: route.id,
     toAddress: route.address,
     subject: rendered.subject,
-    body: rendered.body,
+    // The composed bytes, not the rendered ones: what the fence freezes is what leaves.
+    body: composed.body,
     sendAt: placement.sendAt,
     sourceZone: placement.sourceZone,
     ruleVersion: execution.ruleVersion,

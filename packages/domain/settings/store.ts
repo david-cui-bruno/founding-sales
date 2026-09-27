@@ -46,6 +46,34 @@ import { isKnownTimeZone } from '../src/rules/localClock.ts';
  * A production API binds only `ci-gate` records under either form.
  */
 
+/**
+ * The advisory lock one slice's writers queue on, by name.
+ *
+ * `updateSetting` takes it EXCLUSIVE for the whole of its transaction, so two admins
+ * saving the same slice queue rather than collide. Since lane W3-F a *reader* can take
+ * the same lock SHARED (`lockSettingForRead`) to hold a value still for the length of its
+ * own transaction: the send's claim does that for `postal_address`, which is how the
+ * footer a fence is about to carry cannot be changed between the read and the claim.
+ */
+export function settingLockName(workspaceId: string, settingKey: ActiveSettingKey): string {
+  return `${workspaceId}:${settingKey}`;
+}
+
+/**
+ * Hold one slice still until this transaction ends (review of PR 296, P1).
+ *
+ * SHARED, so two readers never queue on each other and a claim is never slowed by
+ * another claim; a writer of the same slice waits for both. Outside a transaction it is
+ * a no-op in the honest sense — `pg_advisory_xact_lock_shared` in autocommit releases at
+ * once — so a caller that needs the guarantee opens its transaction first. The claim
+ * does (`recheckAndClaim`).
+ */
+export async function lockSettingForRead(context: RepositoryContext, settingKey: ActiveSettingKey): Promise<void> {
+  await context.db.query('SELECT pg_advisory_xact_lock_shared(hashtextextended($1, 0))', [
+    settingLockName(context.scope.workspaceId, settingKey),
+  ]);
+}
+
 export const SETTINGS_REFUSAL_CODES = [
   'admin_only',
   'invalid_value',
@@ -254,8 +282,10 @@ export async function updateSetting(
     }
   }
 
+  // The same name a reader may hold SHARED (`lockSettingForRead`), so a send's claim and
+  // an admin's save of the slice it is about to use are serialised.
   await context.db.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
-    `${context.scope.workspaceId}:${input.settingKey}`,
+    settingLockName(context.scope.workspaceId, input.settingKey),
   ]);
 
   const currentRead = await context.db.query<SettingDbRow>(

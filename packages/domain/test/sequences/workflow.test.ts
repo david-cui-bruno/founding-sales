@@ -265,7 +265,8 @@ describe('the template lifecycle (11.1, 12.6)', () => {
     const created = await createTemplateVersion(contextFor('alpha', 'admin'), {
       name: 'Too much',
       subject: 'Our pricing for you',
-      body: 'No footer.',
+      // A stop line that is not the final block: composing this body would leave two.
+      body: `${SENDING_STOP_LINE}\n\nAnd a postscript after it.`,
       footer: { signOff: FIXTURE_SIGN_OFF },
       requiredVariables: [],
     });
@@ -412,7 +413,7 @@ describe('templates edit in place (wave 2, S3)', () => {
     expect(created.value).toMatchObject({ approvedAt: expect.any(String) as unknown as string, issues: [] });
     const refused = await createTemplateVersion(contextFor('alpha', 'admin'), {
       ...text('ignored'),
-      body: 'No footer.',
+      body: `${SENDING_STOP_LINE}\n\nAnd a postscript after it.`,
       approve: true,
     });
     expect(refused).toEqual({ ok: false, reason: 'template_unapproved', issues: ['template_footer_missing'] });
@@ -437,7 +438,7 @@ describe('templates edit in place (wave 2, S3)', () => {
     const id = await approvedTemplate('Approved wording.');
     const edited = await updateTemplateVersion(contextFor('alpha', 'admin'), {
       ...text('ignored'),
-      body: 'The footer went missing.',
+      body: `The stop line moved.\n${SENDING_STOP_LINE}\nAnd then more words.`,
       templateVersionId: id,
     });
     if (!edited.ok) throw new Error(`the edit was refused: ${edited.reason}`);
@@ -449,7 +450,7 @@ describe('templates edit in place (wave 2, S3)', () => {
     const before = await readTemplateVersion(contextFor('alpha', 'admin'), id);
     const refused = await updateTemplateVersion(contextFor('alpha', 'admin'), {
       ...text('ignored'),
-      body: 'No footer, {nobody_knows_this}.',
+      body: `${SENDING_STOP_LINE} then {nobody_knows_this}.`,
       templateVersionId: id,
       approve: true,
     });
@@ -515,21 +516,36 @@ describe('templates edit in place (wave 2, S3)', () => {
     expect(outcome.kind).toBe('handed_to_send');
     const [request] = handoff.prepared;
     expect(request?.templateContentHash).toBe(edited.value.contentHash);
-    // The rendered body is the approved body: nothing is appended or stripped at send.
+    // The composed body, which with no address configured is byte for byte the approved
+    // body: the legacy block is recognised and replaced by the same bytes (lane W3-F).
     expect(request?.body).toBe(fixtureBody('Edited after enrolment.'));
     expect(request?.body.endsWith(`${FIXTURE_SIGN_OFF}\n${SENDING_STOP_LINE}`)).toBe(true);
   });
 
-  it('never leaves an approved version without the footer: no setting waives the rule, and the rule is the guard', async () => {
-    // Migration 0019 dropped the stop-line CHECK, so every path that grants or keeps an
-    // approval must refuse a body that does not end with the sign-off and stop line.
-    const bare = { ...text('ignored'), body: 'Just the words, no footer.' };
-    expect(await createTemplateVersion(contextFor('alpha', 'admin'), { ...bare, approve: true })).toEqual({
+  it('approves both shapes, legacy and footerless, and refuses a stop line that is not the final block', async () => {
+    // Lane W3-F: the footer is composed at send, so a footerless body is approvable —
+    // desktop 1.0.12 writes them — and so is the legacy shape desktop 1.0.11 requires
+    // before it will enable Approve. What is never approvable is a body carrying the
+    // stop line somewhere else, because composing it would send two.
+    const footerless = { ...text('ignored'), body: 'Just the words, no footer.' };
+    const approvedFooterless = await createTemplateVersion(contextFor('alpha', 'admin'), {
+      ...footerless,
+      approve: true,
+    });
+    if (!approvedFooterless.ok) throw new Error(`the footerless body was refused: ${approvedFooterless.reason}`);
+    expect(approvedFooterless.value).toMatchObject({ approvedAt: expect.any(String) as unknown as string, issues: [] });
+
+    const legacy = await createTemplateVersion(contextFor('alpha', 'admin'), { ...text('The legacy shape.'), approve: true });
+    if (!legacy.ok) throw new Error(`the legacy body was refused: ${legacy.reason}`);
+    expect(legacy.value.body.endsWith(`${FIXTURE_SIGN_OFF}\n${SENDING_STOP_LINE}`)).toBe(true);
+
+    const misplaced = { ...text('ignored'), body: `${SENDING_STOP_LINE}\n\nAnd a postscript.` };
+    expect(await createTemplateVersion(contextFor('alpha', 'admin'), { ...misplaced, approve: true })).toEqual({
       ok: false,
       reason: 'template_unapproved',
       issues: ['template_footer_missing'],
     });
-    const draft = await createTemplateVersion(contextFor('alpha', 'admin'), bare);
+    const draft = await createTemplateVersion(contextFor('alpha', 'admin'), misplaced);
     if (!draft.ok) throw new Error(`the draft was refused: ${draft.reason}`);
     expect(draft.value).toMatchObject({ approvedAt: null, issues: ['template_footer_missing'] });
     expect(await approveTemplateVersion(contextFor('alpha', 'admin'), { templateVersionId: draft.value.id })).toEqual({
@@ -537,16 +553,19 @@ describe('templates edit in place (wave 2, S3)', () => {
       reason: 'template_unapproved',
       issues: ['template_footer_missing'],
     });
-    const id = await approvedTemplate('Approved, then stripped.');
+    const id = await approvedTemplate('Approved, then broken.');
     expect(
-      await updateTemplateVersion(contextFor('alpha', 'admin'), { ...bare, templateVersionId: id, approve: true }),
+      await updateTemplateVersion(contextFor('alpha', 'admin'), { ...misplaced, templateVersionId: id, approve: true }),
     ).toMatchObject({ ok: false, reason: 'template_unapproved' });
-    const stripped = await updateTemplateVersion(contextFor('alpha', 'admin'), { ...bare, templateVersionId: id });
-    expect(stripped.ok && stripped.value.approvedAt).toBeNull();
+    const broken = await updateTemplateVersion(contextFor('alpha', 'admin'), { ...misplaced, templateVersionId: id });
+    expect(broken.ok && broken.value.approvedAt).toBeNull();
 
+    // Whatever shape they are in, no approved body carries the stop line twice: the
+    // composition would have nowhere to put the one it appends.
     const { rows } = await database.session.query<{ count: string }>(
       `SELECT count(*) AS count FROM template_versions
-        WHERE approved_at IS NOT NULL AND right(body, length($1)) <> $1`,
+        WHERE approved_at IS NOT NULL
+          AND (length(body) - length(replace(body, $1, ''))) / length($1) > 1`,
       [SENDING_STOP_LINE],
     );
     expect(Number(rows[0]?.count)).toBe(0);

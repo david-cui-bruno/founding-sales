@@ -170,6 +170,11 @@ export function readBodyText(payload: MessagePart | undefined): string {
     .trim();
 }
 
+/** Whether the message carries a `text/plain` part at all: what `readBodyText` preferred. */
+export function hasPlainTextPart(payload: MessagePart | undefined): boolean {
+  return payload !== undefined && findPart(payload, 'text/plain') !== null;
+}
+
 function findPart(part: MessagePart, mimeType: string): string | null {
   if (part.mimeType === mimeType && typeof part.body?.data === 'string') return part.body.data;
   for (const child of part.parts ?? []) {
@@ -585,8 +590,20 @@ export function createGmailHttpClient(options: GmailHttpOptions): GmailClient {
       }
       const json = parseJson(response.body);
       if (json === null) throw new GmailClientError('malformed_response', 'the Gmail body read was not JSON');
-      const text = readBodyText(json['payload'] as MessagePart | undefined);
-      return { text: text.slice(0, maxBody), truncated: text.length > maxBody };
+      // The answer must be about the message that was asked for. A 200 carrying another
+      // id is not a body this caller may use for anything (review of PR 296).
+      const answeredId = asString(json['id']);
+      if (answeredId !== null && answeredId !== messageId) {
+        throw new GmailClientError('malformed_response', 'the Gmail body read answered another message');
+      }
+      const payload = json['payload'] as MessagePart | undefined;
+      const text = readBodyText(payload);
+      return {
+        text: text.slice(0, maxBody),
+        truncated: text.length > maxBody,
+        messageId: answeredId ?? messageId,
+        plainText: hasPlainTextPart(payload),
+      };
     },
 
     sendMessage: async (access, request: GmailSendRequest): Promise<GmailSendOutcome> => {

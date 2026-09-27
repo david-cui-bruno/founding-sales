@@ -70,6 +70,8 @@ export const COMMAND_DEPENDENCIES: Readonly<Record<string, DependencyMode>> = Ob
   'release-record show': 'database',
   // Lane W2-M. Counts, in a READ ONLY transaction, and nothing else.
   'schema-preflight 0019': 'database',
+  // Lane W3-F, the same shape for migration 0020.
+  'schema-preflight 0020': 'database',
   'suppression-journal replay': 'journal',
   'mailbox reconcile-sent': 'gmail-read',
 });
@@ -207,6 +209,17 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     booleanFlags: [],
     requiredFlags: [],
     summary: 'what migration 0019 destroys, archives, relaxes or refuses on, counted read-only on schema 18',
+  },
+  {
+    // Lane W3-F. What `infra/scripts/preflight.sh <root> <prefix> 0020` runs before the
+    // postal-address release stops anything: the settings rows by key, the unsent fences
+    // whose footer will be recomposed, the templates whose legacy block will be deduped,
+    // and every body that would not fit once composed.
+    path: ['admin', 'schema-preflight', '0020'],
+    valueFlags: [...REPORTABLE],
+    booleanFlags: [],
+    requiredFlags: [],
+    summary: 'what migration 0020 recomposes, dedupes or refuses on, counted read-only on schema 19',
   },
 ]);
 

@@ -13,10 +13,15 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
  * a body containing `Hi ,` would be a fence that must never dispatch, and the honest
  * shape is that it is never created. So this lane renders, and passes finished bytes
  * together with the template version id and its content hash; the sending lane
- * re-checks the hash against `template_versions` and freezes the envelope. The footer
- * is already inside the approved body (the template rules refuse an approval without
- * it; migration 0019 dropped the CHECK that repeated them), so nothing is appended at
- * send time.
+ * re-checks the hash against `template_versions` and freezes the envelope.
+ *
+ * The **footer is composed before the hand-off** (lane W3-F, migration 0020): the
+ * sign-off, the workspace's `postal_address` when it has one, and the stop line are
+ * appended to the rendered body by `outbound/footer.ts` while the step is still deciding,
+ * so the bytes that cross this seam are the bytes the fence freezes and the bytes Gmail
+ * receives. An approved body may carry the legacy block inside it or none at all; the
+ * composition recognises and replaces the legacy one, and the fence refuses any body that
+ * does not end with exactly one stop line.
  *
  * The fence's *state machine* is G7-2's; driving it is not. Appendix C has no send job
  * kind, so `sequence.action` calls `dispatch` as well — after the step's transaction
@@ -56,7 +61,7 @@ export interface OutboundEmailRequest {
   readonly toAddress: string;
   /** Rendered. A missing variable never reaches here; it holds the step. */
   readonly subject: string;
-  /** Rendered, footer included. */
+  /** Rendered **and composed**: the footer block is already the last thing in it. */
   readonly body: string;
   /** Where the window rule placed it (11.2, Appendix D). UTC. */
   readonly sendAt: string;

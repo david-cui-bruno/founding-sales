@@ -134,9 +134,11 @@ describe('the sequence, template and enrollment routes', () => {
       '/templates/create',
       adminToken,
       command({
-        name: 'Missing footer',
+        name: 'A stop line in the wrong place',
         subject: 'Hello',
-        body: 'No footer here at all.',
+        // Footerless is approvable since lane W3-F (the footer is composed at send); a
+        // stop line that is not the final block is not, because composing would leave two.
+        body: `${SENDING_STOP_LINE}\n\nAnd a postscript after it.`,
         footerSignOff: SIGN_OFF,
         requiredVariables: [],
       }),
@@ -338,7 +340,7 @@ describe('the sequence, template and enrollment routes', () => {
     const refused = await post(
       '/templates/update',
       adminToken,
-      command({ ...payload, body: 'The footer went missing.', approve: true }),
+      command({ ...payload, body: `${SENDING_STOP_LINE}\n\nAnd a postscript after it.`, approve: true }),
     );
     expect(refused.status).toBe(409);
     expect(refused.body['reason']).toBe('template_unapproved:template_footer_missing');
