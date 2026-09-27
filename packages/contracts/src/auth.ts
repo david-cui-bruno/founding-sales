@@ -12,13 +12,19 @@ import { instant, membershipRoleSchema, uuid } from './foundationRows.ts';
  * codes"; `AUTH_REFUSAL_CODES` is that set for identity, and the API never invents a
  * string outside it. A caller may switch on the code; the message is for a person.
  *
- * **A secret is carried by the two shapes that name one, and nowhere else.**
- * `sessionGrantSchema` is the only response that carries an access token, a refresh
- * credential or a device secret, and `deviceSessionRequestSchema` is the only request
- * that carries one: from wave 3b the Mac presents its long-lived device secret to open
- * a session, exactly as it presents the rotating refresh credential to renew one, and
- * both travel in the JSON body over TLS. Nothing that describes a stored row — the
- * device list below — has a field that could hold either.
+ * **Five shapes carry a secret, and each carries a named one in a named direction.**
+ * Responses: `sessionGrantSchema` (the claim) carries the access token, the rotating
+ * refresh credential and the device secret, and is the only shape that ever carries
+ * the device secret outwards — once, at registration; `sessionRenewalSchema` (a
+ * renewal) carries the access token and the next refresh credential, never the device
+ * secret; `deviceSessionSchema` (an open) carries the access token and nothing else,
+ * because the credential it was opened with does not rotate. Requests:
+ * `sessionRenewRequestSchema` carries the rotating refresh credential, and
+ * `deviceSessionRequestSchema` carries the device secret — from wave 3b the Mac
+ * presents the secret it has kept in its Keychain since the claim, in the JSON body
+ * over TLS, exactly as it presents the refresh credential to renew. Everything that
+ * describes a stored row — `deviceListSchema` below — has no field that could hold any
+ * of them, and no shape in this file carries a secret in both directions.
  */
 
 // ---------------------------------------------------------------------------
