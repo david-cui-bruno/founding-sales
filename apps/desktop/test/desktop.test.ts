@@ -42,6 +42,19 @@ afterEach(async () => {
   fixture = null;
 });
 
+/**
+ * Wait for something the app does without being awaited: the sign-out retry (A2) is
+ * started by a launch and by the connection returning, and neither hands a promise to
+ * a caller. A fixed tick is a flake under load; this is the condition itself.
+ */
+async function eventually(condition: () => boolean, what: string): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (condition()) return;
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  throw new Error(`timed out waiting for ${what}`);
+}
+
 async function started(options?: Parameters<typeof createDesktopFixture>[0]): Promise<DesktopFixture> {
   fixture = await createDesktopFixture(options);
   return fixture;
@@ -84,10 +97,11 @@ describe('sign-in through the system browser', () => {
     expect(state.screen).toBe('today');
     expect(state.device?.deviceLabel).toBe("David's MacBook");
 
-    // The two secrets are in the vault and nowhere else. The file on disk holds
-    // identifiers only, and a grep over it finds neither.
+    // The one secret is in the vault and nowhere else. The file on disk holds
+    // identifiers only, and a grep over it finds nothing. The rotating credential the
+    // grant still carries for desktop 1.0.12 is not stored at all since wave 3b.
     expect(mac.vault.entries.has(DEVICE_SECRET_ACCOUNT)).toBe(true);
-    expect(mac.vault.entries.has(REFRESH_CREDENTIAL_ACCOUNT)).toBe(true);
+    expect(mac.vault.entries.has(REFRESH_CREDENTIAL_ACCOUNT)).toBe(false);
     const onDisk = await readFile(join(mac.directory, DEVICE_FILE), 'utf8');
     for (const value of mac.vault.entries.values()) expect(onDisk).not.toContain(value);
     expect(JSON.stringify(state)).not.toContain(mac.vault.entries.get(DEVICE_SECRET_ACCOUNT) ?? 'x');
@@ -344,7 +358,9 @@ describe('the remembered workspace (wave 1)', () => {
     await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: "David's MacBook" });
     const out = await mac.manager.signOut();
     expect(out.device).toBeNull();
-    // Sign out removes device.json and both secrets, and leaves workspace.json.
+    // Sign out tells the server, then removes device.json and both Keychain accounts,
+    // and leaves workspace.json (wave 3b, A2).
+    expect(mac.script.calls.get('/auth/sign-out')).toBe(1);
     await expect(readFile(join(mac.directory, DEVICE_FILE), 'utf8')).rejects.toThrow();
     expect(out.rememberedWorkspace).toEqual({ workspaceId: mac.workspaceId, deviceLabel: "David's MacBook" });
     const onDisk = await readFile(join(mac.directory, WORKSPACE_FILE), 'utf8');
@@ -442,7 +458,7 @@ describe('online follows every call (wave 1)', () => {
   });
 });
 
-describe('serialised session renewal', () => {
+describe('serialised session opens', () => {
   it('renews once however many callers notice the expiry at the same moment', async () => {
     const mac = await started();
     await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
@@ -457,34 +473,35 @@ describe('serialised session renewal', () => {
       mac.manager.refreshToday(),
     ]);
 
-    // One renewal, not four. Presenting one refresh credential twice is reuse, and
-    // reuse revokes the device (specification 5.3).
+    // One open, not four. The device secret does not rotate, so a second open is not
+    // reuse — but four calls for one expiry is four calls, and one is enough.
     expect(mac.manager.renewalCount()).toBe(before + 1);
-    expect(mac.script.calls.get('/auth/session/renew')).toBe(1);
+    expect(mac.script.calls.get('/auth/session/open')).toBe(1);
+    expect(mac.script.calls.get('/auth/session/renew')).toBeUndefined();
   });
 
-  it('renews before the session actually expires rather than after a refusal', async () => {
+  it('opens before the session actually expires rather than after a refusal', async () => {
     const mac = await started();
     await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
     mac.advance(3_600_000 - 30_000);
     await mac.manager.refreshToday();
-    expect(mac.script.calls.get('/auth/session/renew')).toBe(1);
+    expect(mac.script.calls.get('/auth/session/open')).toBe(1);
   });
 });
 
-describe('the role a renewal carries (lane g69)', () => {
+describe('the role an open carries (lane g69)', () => {
   it('applies the role the server now gives, keeps it on disk without a secret, and survives a restart', async () => {
     const mac = await started();
     const signedIn = await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
     expect(signedIn.device?.role).toBe('salesperson');
 
-    // An admin promotes this membership. The Mac learns it at its next renewal, not at
+    // An admin promotes this membership. The Mac learns it at its next open, not at
     // its next sign-in: until g69 it kept `salesperson` until then, and Administration
     // never asked for the sending posture.
     mac.script.role('admin');
     mac.advance(3_600_001);
     await mac.manager.refreshToday();
-    expect(mac.script.calls.get('/auth/session/renew')).toBe(1);
+    expect(mac.script.calls.get('/auth/session/open')).toBe(1);
     expect((await mac.manager.state()).device?.role).toBe('admin');
 
     const onDisk = JSON.parse(await readFile(join(mac.directory, DEVICE_FILE), 'utf8')) as { role: string };
@@ -506,7 +523,7 @@ describe('the role a renewal carries (lane g69)', () => {
     expect((await reopened.state()).device?.role).toBe('admin');
   });
 
-  it('reaches an open Administration window: the posture a salesperson never asked for is read once the renewal says admin', async () => {
+  it('reaches an open Administration window: the posture a salesperson never asked for is read once the open says admin', async () => {
     const mac = await started();
     await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
     const asked: string[] = [];
@@ -553,7 +570,7 @@ describe('the role a renewal carries (lane g69)', () => {
     mac.script.role('salesperson');
     mac.advance(3_600_001);
     await mac.manager.refreshToday();
-    expect(mac.script.calls.get('/auth/session/renew')).toBe(2);
+    expect(mac.script.calls.get('/auth/session/open')).toBe(2);
     expect((await mac.manager.state()).device?.role).toBe('salesperson');
   });
 });
@@ -664,6 +681,7 @@ describe('the sign-in screen offline (wave 1)', () => {
       notice: 'offline',
       today: null,
       rememberedWorkspace: null,
+      devices: null,
     });
     const view = buildScreenView(state);
     expect(view.banners.map(banner => banner.text)).toEqual(['Callie cannot reach the server.']);
@@ -826,6 +844,8 @@ describe('one window: the routes the menu and deep links may name (wave 1)', () 
       'callie:state',
       'callie:sign-in',
       'callie:sign-out',
+      'callie:devices',
+      'callie:device-revoke',
       'callie:navigate',
       // 1.0.12: main to page, and it opens nothing either — it says the session the
       // page was drawing for is over.
@@ -872,5 +892,218 @@ describe('the Window menu (wave 1)', () => {
       'editMenu',
       'viewMenu',
     ]);
+  });
+});
+
+/**
+ * The device secret as this Mac's long-lived credential (wave 3b, audit item S7).
+ *
+ * The defect it closes: until wave 3b the only credential a running Mac held was the
+ * rotating refresh credential, so losing it — a Mac restored from a backup, a second
+ * window that had already spent it — meant a full Google sign-in. The device secret is
+ * minted once at the claim, kept in the Keychain, never rotated, and
+ * `POST /auth/session/open` takes it. `/auth/session/renew` has no caller here.
+ */
+describe('opening a session with the device secret (wave 3b, S7)', () => {
+  it('opens with the Keychain secret, twice, and never renews', async () => {
+    const mac = await started();
+    await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
+    expect(mac.vault.entries.get(DEVICE_SECRET_ACCOUNT)).toBe(mac.script.grantedSecret());
+
+    mac.advance(3_600_001);
+    await mac.manager.refreshToday();
+    mac.advance(3_600_001);
+    await mac.manager.refreshToday();
+
+    // Two opens with the same secret: opening twice is not reuse, so nothing rotates
+    // and nothing is spent. The Keychain still holds the one it was given at the claim.
+    expect(mac.script.calls.get('/auth/session/open')).toBe(2);
+    expect(mac.script.calls.get('/auth/session/renew')).toBeUndefined();
+    expect(mac.vault.entries.get(DEVICE_SECRET_ACCOUNT)).toBe(mac.script.grantedSecret());
+    expect(mac.vault.entries.has(REFRESH_CREDENTIAL_ACCOUNT)).toBe(false);
+  });
+
+  it('a Mac signed out under the old server is told to sign in again, not retried forever', async () => {
+    const mac = await started();
+    await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
+    // The server has this device as revoked: a sign-out somebody made elsewhere.
+    mac.script.refuse('/auth/session/open', 'device_revoked');
+    mac.advance(3_600_001);
+    const state = await mac.manager.refreshToday();
+    expect(state.screen).toBe('sign_in');
+    expect(state.notice).toBe('device_revoked');
+    await expect(readFile(join(mac.directory, DEVICE_FILE), 'utf8')).rejects.toThrow();
+    expect(mac.vault.entries.has(DEVICE_SECRET_ACCOUNT)).toBe(false);
+  });
+
+  /**
+   * A3: `device.json` names a registration the Keychain has no secret for.
+   *
+   * A Mac restored without its Keychain, or one whose item somebody removed. There is
+   * nothing to present and no amount of waiting will find it, so the registration goes
+   * at startup — with a leftover `refresh-credential` item, which nothing has asked for
+   * since wave 3b and which must not outlive the registration it belonged to.
+   */
+  it('wipes a registration whose device secret is gone, at startup, with its leftovers', async () => {
+    const mac = await started();
+    await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
+    // What 1.0.12 left behind, beside a Keychain somebody has emptied of the secret.
+    await mac.vault.write(REFRESH_CREDENTIAL_ACCOUNT, 'fssr1.a.b.1.leftover');
+    await mac.vault.remove(DEVICE_SECRET_ACCOUNT);
+
+    const reopened = createSessionManager({
+      api: mac.api,
+      store: createDeviceStore({ directory: mac.directory, vault: mac.vault }),
+      cache: createOfflineCache({ directory: mac.directory, vault: mac.vault, now: () => new Date('2026-09-21T10:00:01.000Z') }),
+      clientVersion: CLIENT_VERSION,
+      now: () => new Date('2026-09-21T10:00:01.000Z'),
+      openInBrowser: async () => {
+        await Promise.resolve();
+      },
+    });
+
+    const state = await reopened.state();
+    expect(state.screen).toBe('sign_in');
+    expect(state.device).toBeNull();
+    expect(state.notice).toBe('not_signed_in');
+    await expect(readFile(join(mac.directory, DEVICE_FILE), 'utf8')).rejects.toThrow();
+    expect(mac.vault.entries.has(REFRESH_CREDENTIAL_ACCOUNT)).toBe(false);
+    // And nothing was asked of the server about a registration that cannot be used.
+    expect(mac.script.calls.get('/auth/session/open')).toBeUndefined();
+  });
+
+  it('wipes it at an open too, when the item goes while the app is running', async () => {
+    const mac = await started();
+    await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
+    await mac.vault.remove(DEVICE_SECRET_ACCOUNT);
+    mac.advance(3_600_001);
+    const state = await mac.manager.refreshToday();
+    expect(state.screen).toBe('sign_in');
+    expect(state.notice).toBe('not_signed_in');
+    expect(mac.script.calls.get('/auth/session/open')).toBeUndefined();
+  });
+});
+
+/**
+ * A2: a sign-out tells the server first, and forgets the Keychain secret after.
+ *
+ * The other order leaves a device the workspace still counts as active and nothing on
+ * this Mac able to revoke it.
+ */
+describe('signing out (wave 3b, A2)', () => {
+  it('tells the server, then forgets, when it can reach it', async () => {
+    const mac = await started();
+    await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
+    const out = await mac.manager.signOut();
+
+    expect(mac.script.calls.get('/auth/sign-out')).toBe(1);
+    expect(mac.script.deviceActive()).toBe(false);
+    expect(out.screen).toBe('sign_in');
+    expect(out.device).toBeNull();
+    expect(out.notice).toBe('signed_out');
+    expect(mac.vault.entries.has(DEVICE_SECRET_ACCOUNT)).toBe(false);
+    await expect(readFile(join(mac.directory, DEVICE_FILE), 'utf8')).rejects.toThrow();
+  });
+
+  it('shows the signed-out screen offline, keeps the secret, and finishes when it is back', async () => {
+    const mac = await started();
+    await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
+    const kept = mac.vault.entries.get(DEVICE_SECRET_ACCOUNT);
+
+    mac.script.offline(true);
+    const pending = await mac.manager.signOut();
+    // Signed out here and now, with one line saying what is left to do.
+    expect(pending.screen).toBe('sign_in');
+    expect(pending.device).toBeNull();
+    expect(pending.notice).toBe('sign_out_pending');
+    expect(buildScreenView(pending).banners.map(banner => banner.text)).toContain(
+      'This Mac still has to tell the server it signed out; Callie retries when it is back online.',
+    );
+    // The secret and the ids are kept, and nothing but the retry may use them.
+    expect(mac.vault.entries.get(DEVICE_SECRET_ACCOUNT)).toBe(kept);
+    expect(JSON.parse(await readFile(join(mac.directory, DEVICE_FILE), 'utf8'))).toMatchObject({ signOutPending: true });
+    expect(await mac.manager.accessToken()).toBeNull();
+    expect(await mac.manager.mayMutateNow()).toEqual({ allowed: false, refusal: 'not_signed_in' });
+    expect(mac.script.calls.get('/auth/sign-out')).toBeUndefined();
+
+    // Back online: open, sign out, forget — in that order.
+    mac.script.offline(false);
+    mac.manager.noteConnection(true);
+    await eventually(() => mac.script.calls.get('/auth/sign-out') === 1, 'the sign-out to reach the server');
+    expect(mac.script.calls.get('/auth/sign-out')).toBe(1);
+    expect(mac.script.deviceActive()).toBe(false);
+    await eventually(() => !mac.vault.entries.has(DEVICE_SECRET_ACCOUNT), 'the secret to be forgotten');
+    await expect(readFile(join(mac.directory, DEVICE_FILE), 'utf8')).rejects.toThrow();
+  });
+
+  it('finishes a sign-out left pending by a previous run, at the next launch', async () => {
+    const mac = await started();
+    await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
+    mac.script.offline(true);
+    await mac.manager.signOut();
+    mac.script.offline(false);
+
+    // The app opened again over the same directory and Keychain.
+    const reopened = createSessionManager({
+      api: mac.api,
+      store: createDeviceStore({ directory: mac.directory, vault: mac.vault }),
+      cache: createOfflineCache({ directory: mac.directory, vault: mac.vault, now: () => new Date('2026-09-21T10:00:01.000Z') }),
+      clientVersion: CLIENT_VERSION,
+      now: () => new Date('2026-09-21T10:00:01.000Z'),
+      openInBrowser: async () => {
+        await Promise.resolve();
+      },
+    });
+    // The window sees the sign-in form from the first read, whatever the retry does.
+    expect((await reopened.state()).screen).toBe('sign_in');
+    await eventually(() => mac.script.calls.get('/auth/sign-out') === 1, 'the sign-out to reach the server');
+    await eventually(() => !mac.vault.entries.has(DEVICE_SECRET_ACCOUNT), 'the secret to be forgotten');
+  });
+});
+
+/** A4: the workspace's other Macs, and signing one of them out. */
+describe('the other Macs in the workspace (wave 3b, A4)', () => {
+  const OTHER = '99999999-9999-4999-8999-999999999999';
+
+  it('lists them beside this one, and signs one out by id', async () => {
+    const mac = await started();
+    await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
+    mac.script.otherDevices([
+      {
+        deviceId: OTHER,
+        deviceLabel: "David's old MacBook",
+        status: 'active',
+        registeredAt: '2026-09-01T12:00:00.000Z',
+        lastSeenAt: '2026-09-19T12:00:00.000Z',
+        clientVersion: '1.0.12',
+        thisDevice: false,
+      },
+    ]);
+
+    const listed = await mac.manager.listDevices();
+    expect(listed.devices?.map(entry => [entry.deviceLabel, entry.thisDevice])).toEqual([
+      ['This Mac', true],
+      ["David's old MacBook", false],
+    ]);
+
+    const revoked = await mac.manager.revokeDevice({ deviceId: OTHER });
+    expect(revoked.notice).toBe('device_revoked_elsewhere');
+    expect(revoked.devices?.find(entry => entry.deviceId === OTHER)?.status).toBe('revoked');
+    // This Mac is still signed in: it revoked somebody else's.
+    expect(revoked.device).not.toBeNull();
+    expect(mac.vault.entries.has(DEVICE_SECRET_ACCOUNT)).toBe(true);
+  });
+
+  it('revoking this Mac is this Mac signing out, and the server has already been told', async () => {
+    const mac = await started();
+    const signedIn = await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
+    const mine = signedIn.device?.deviceId ?? '';
+
+    const after = await mac.manager.revokeDevice({ deviceId: mine });
+    expect(after.screen).toBe('sign_in');
+    expect(after.device).toBeNull();
+    expect(after.notice).toBe('signed_out');
+    expect(mac.vault.entries.has(DEVICE_SECRET_ACCOUNT)).toBe(false);
+    await expect(readFile(join(mac.directory, DEVICE_FILE), 'utf8')).rejects.toThrow();
   });
 });

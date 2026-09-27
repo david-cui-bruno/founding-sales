@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { BUNDLE_STYLESHEET, BUNDLE_STYLESHEET_SOURCE, BUNDLE_WINDOWS } from '../../../src/main/bundleScheme.ts';
 import { compileStylesheet } from '../../../scripts/styles.ts';
-import type { DesktopState, MailboxState } from '../../../src/shared/contract.ts';
+import type { DeviceList, DesktopState, MailboxState } from '../../../src/shared/contract.ts';
 import type { UpdateStatus } from '../../../src/shared/updateContract.ts';
 import type { CrmState } from '../../../src/renderer/firmWorkspaceContract.ts';
 
@@ -90,6 +90,12 @@ type Optional = 'callieApi' | 'callieImport';
 export interface AppServerOptions {
   readonly desktop?: DesktopState;
   readonly mailbox?: MailboxState;
+  /** What `callie.listDevices` answers with (wave 3b, A4). */
+  readonly devices?: DeviceList;
+  /** What `callie.revokeDevice` moves the session to; the default marks the Mac revoked. */
+  readonly revokeAnswer?: DesktopState;
+  /** What `callie.signOut` answers; the default is a plain signed-out session. */
+  readonly signOutAnswer?: DesktopState;
   /** What `callieMailbox.connect` answers; connected by default. */
   readonly connectAnswer?: MailboxState;
   readonly today?: TodayState;
@@ -151,7 +157,7 @@ export interface AppServer {
  * URI rather than answering with one, and choosing a CSV, which opens macOS's dialog.
  */
 const METHODS: Readonly<Record<string, { readonly global: string; readonly methods: readonly string[] }>> = {
-  callie: { global: 'callie', methods: ['state', 'signIn', 'signOut'] },
+  callie: { global: 'callie', methods: ['state', 'signIn', 'signOut', 'listDevices', 'revokeDevice'] },
   update: { global: 'callieUpdate', methods: ['state', 'restart', 'checkNow'] },
 };
 
@@ -292,7 +298,23 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     const mine = of(bridge);
     if (bridge === 'callie') {
       if (name === 'signIn') desktop = options.signInAnswer ?? signedInState();
-      if (name === 'signOut') desktop = signedOutState({ notice: 'signed_out' });
+      if (name === 'signOut') desktop = options.signOutAnswer ?? signedOutState({ notice: 'signed_out' });
+      // Wave 3b: the workspace's Macs are read on demand, and revoking one answers the
+      // same session state with that Mac marked. The real main process decides what
+      // revoking *this* Mac means; here a spec scripts the answer it wants.
+      if (name === 'listDevices') desktop = { ...desktop, devices: options.devices ?? [] };
+      if (name === 'revokeDevice') {
+        const asked = (argument as { deviceId?: string } | null)?.deviceId;
+        desktop =
+          options.revokeAnswer ??
+          {
+            ...desktop,
+            notice: 'device_revoked_elsewhere',
+            devices: (desktop.devices ?? []).map(entry =>
+              entry.deviceId === asked ? { ...entry, status: 'revoked' as const } : entry,
+            ),
+          };
+      }
       return desktop;
     }
     if (bridge === 'mailbox') {

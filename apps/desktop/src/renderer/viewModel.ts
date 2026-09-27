@@ -44,6 +44,11 @@ const NOTICES: Readonly<Record<string, string>> = Object.freeze({
   handoff_expired: 'That sign-in took too long. Start it again.',
   sign_in_timed_out: 'The browser did not finish signing in. Start it again.',
   signed_out: 'Signed out.',
+  // Wave 3b, S7: the sign-out is shown at once and the server is told when it can be.
+  // Until it is, this Mac keeps the credential it needs to say so, and nothing else.
+  sign_out_pending: 'This Mac still has to tell the server it signed out; Callie retries when it is back online.',
+  not_signed_in: 'This Mac needs to sign in with Google again.',
+  device_revoked_elsewhere: 'That Mac was signed out.',
   offline: OFFLINE_SENTENCE,
   workspace_required: 'Enter the workspace ID to sign in on this Mac the first time.',
 });

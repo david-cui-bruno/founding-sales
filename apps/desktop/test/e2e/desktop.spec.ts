@@ -2,6 +2,7 @@ import { expect, test, type Page } from 'playwright/test';
 import { startAppServer, type AppServer, type AppServerOptions } from './support/appServer.ts';
 import { todayState } from './support/homeFixtures.ts';
 import {
+  EXAMPLE_DEVICE,
   EXAMPLE_WORKSPACE,
   connectedMailbox,
   notConnectedMailbox,
@@ -118,6 +119,84 @@ test('signing out returns to the sign-in form and says so', async ({ page }) => 
   await expect(page.getByTestId('heading')).toHaveText('Sign in with Google');
   await expect(page.getByTestId('banner-info')).toContainText('Signed out');
   await expect(page.getByTestId('device-panel')).toHaveCount(0);
+});
+
+/**
+ * The workspace's other Macs (wave 3b, S7, A4).
+ *
+ * Read when "This Mac" is opened and not before: a list of somebody's machines is not
+ * something Home needs to draw, and `GET /devices` is a call nobody made until they
+ * asked for it. The control is named for what it does to the Mac in the row.
+ */
+test('This Mac lists the workspace’s other Macs, and signs one of them out', async ({ page }) => {
+  const OTHER = '99999999-9999-4999-8999-999999999999';
+  server = await startAppServer(
+    session({
+      desktop: signedInState(),
+      devices: [
+        {
+          deviceId: EXAMPLE_DEVICE,
+          deviceLabel: "David's MacBook",
+          status: 'active',
+          registeredAt: '2026-09-01T12:00:00.000Z',
+          lastSeenAt: '2026-09-21T09:00:00.000Z',
+          clientVersion: '1.4.0',
+          thisDevice: true,
+        },
+        {
+          deviceId: OTHER,
+          deviceLabel: 'The office iMac',
+          status: 'active',
+          registeredAt: '2026-08-01T12:00:00.000Z',
+          lastSeenAt: null,
+          clientVersion: null,
+          thisDevice: false,
+        },
+      ],
+    }),
+  );
+  await page.goto(server.url());
+
+  // Nothing is asked for until the panel is opened.
+  expect(server.called('callie.listDevices')).toHaveLength(0);
+  await openThisMac(page);
+  await expect.poll(() => server.called('callie.listDevices')).toHaveLength(1);
+
+  // This Mac is not one of "the other Macs": it is the panel.
+  await expect(page.getByTestId('other-mac')).toHaveCount(1);
+  await expect(page.getByTestId('other-mac-line')).toContainText('The office iMac');
+  await expect(page.getByTestId('other-mac-line')).toContainText('signed in');
+  // Never seen, so the date it was added — in the Mac's own locale, not an ISO instant.
+  await expect(page.getByTestId('other-mac-line')).toContainText('never (added ');
+  await expect(page.getByTestId('other-mac-line')).not.toContainText('2026-08-01T');
+
+  await page.getByTestId(`revoke-${OTHER}`).click();
+  await expect.poll(() => server.called('callie.revokeDevice')).toEqual([{ deviceId: OTHER }]);
+  await expect(page.getByTestId('other-mac-line')).toContainText('signed out');
+  await expect(page.getByTestId(`revoke-${OTHER}`)).toHaveCount(0);
+  // And this Mac is still signed in: it signed somebody else's out.
+  await expect(page.getByTestId('device-panel')).toBeVisible();
+  await expect(page.getByTestId('banner-info')).toContainText('That Mac was signed out.');
+});
+
+test('a sign-out the server has not been told about says so, and the window is signed out anyway', async ({ page }) => {
+  // A2: the Keychain secret is forgotten only once the server has confirmed, so a
+  // sign-out pressed offline is shown at once with one line about what is left to do.
+  server = await startAppServer(
+    session({
+      desktop: signedInState(),
+      signOutAnswer: signedOutState({ notice: 'sign_out_pending', online: false }),
+    }),
+  );
+  await page.goto(server.url());
+  await openThisMac(page);
+  await page.getByTestId('sign-out').click();
+
+  await expect(page.getByTestId('heading')).toHaveText('Sign in with Google');
+  await expect(page.getByTestId('device-panel')).toHaveCount(0);
+  await expect(page.getByTestId('banner-info')).toHaveText(
+    'This Mac still has to tell the server it signed out; Callie retries when it is back online.',
+  );
 });
 
 test('a device name that looks like markup is shown as text', async ({ page }) => {

@@ -7,8 +7,8 @@ import {
   clientVersionRangeSchema,
   deviceSecretSchema,
   instant,
+  deviceListSchema,
   membershipRoleSchema,
-  refreshCredentialSchema,
   signInStartResponseSchema,
   uuid,
   type SignInStartResponse,
@@ -33,7 +33,15 @@ import {
 // Main-process state. Never crosses the bridge.
 // ---------------------------------------------------------------------------
 
-/** The public part of the device registration. The secret lives in the Keychain. */
+/**
+ * The public part of the device registration. The secret lives in the Keychain.
+ *
+ * `signOutPending` is the one piece of state a sign-out leaves behind (wave 3b, S7).
+ * Signing out tells the server first and forgets the Keychain secret only once the
+ * server has confirmed, so a sign-out pressed offline has to be finished later: the
+ * flag survives a relaunch, the window shows the signed-out screen from the moment it
+ * is set, and nothing but the retry may use the credential it is keeping.
+ */
 export const storedDeviceSchema = z.strictObject({
   workspaceId: uuid,
   userId: uuid,
@@ -42,17 +50,34 @@ export const storedDeviceSchema = z.strictObject({
   deviceLabel: z.string().min(1).max(120),
   apiBaseUrl: z.url(),
   registeredAt: instant,
+  /** Absent on a Mac registered before wave 3b, which is the same as false. */
+  signOutPending: z.boolean().optional(),
 });
 export type StoredDevice = z.infer<typeof storedDeviceSchema>;
 
-/** Held in memory only. A restart signs in again with the refresh credential. */
+/**
+ * Held in memory only. A restart opens a session again with the device secret.
+ *
+ * No refresh credential since wave 3b (S7): the Mac's long-lived credential is the
+ * device secret it was given once at the claim and keeps in the Keychain, and
+ * `POST /auth/session/open` takes it. Nothing rotates, so there is nothing to lose —
+ * which is the defect this closed: a Mac restored from a backup, or one whose
+ * credential a second window had already spent, had to sign in with Google again.
+ */
 export const storedSessionSchema = z.strictObject({
   accessToken: accessTokenSchema,
   accessTokenExpiresAt: instant,
-  refreshCredential: refreshCredentialSchema,
   reauthenticateAfter: instant,
 });
 export type StoredSession = z.infer<typeof storedSessionSchema>;
+
+/**
+ * The workspace's Macs, as `GET /devices` lists them (wave 3b, A4).
+ *
+ * A row shape with no secret in it: a label, a status and two instants, which is what
+ * a person needs to recognise a Mac they left somewhere and take it away.
+ */
+export { deviceListSchema, type DeviceList, type DeviceListEntry } from '@fss/contracts';
 
 /**
  * `POST /auth/sign-in/start`'s answer: `@fss/contracts`' `signInStartResponseSchema`,
@@ -151,6 +176,11 @@ export const desktopStateSchema = z.strictObject({
   today: cachedTodaySchema.nullable(),
   /** The last sign-in's workspace and name, so sign-in need not ask for them; null on a new Mac. */
   rememberedWorkspace: rememberedWorkspaceSchema.nullable(),
+  /**
+   * The workspace's Macs, or null before anybody asked (wave 3b, A4). Read on demand:
+   * "This Mac" asks when it is opened, and every other view is answered without it.
+   */
+  devices: deviceListSchema.nullable(),
 });
 export type DesktopState = z.infer<typeof desktopStateSchema>;
 
@@ -223,6 +253,13 @@ export interface DesktopBridge {
    */
   signIn(input: { readonly workspaceId?: string | undefined; readonly deviceLabel?: string | undefined }): Promise<DesktopState>;
   signOut(): Promise<DesktopState>;
+  /** The workspace's Macs, read now (wave 3b). Answered into `DesktopState.devices`. */
+  listDevices(): Promise<DesktopState>;
+  /**
+   * Sign one of the workspace's Macs out. This Mac's own id is a sign-out and goes the
+   * same way: the server is told, and only then is the Keychain secret forgotten.
+   */
+  revokeDevice(input: { readonly deviceId: string }): Promise<DesktopState>;
   /**
    * The Window menu and deep links: called with one of the seven navigation targets
    * whenever the main process asks the window to show that view. The preload checks the

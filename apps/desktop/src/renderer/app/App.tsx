@@ -144,6 +144,13 @@ function Column({
               onSignOut={() => {
                 void session.signOut();
               }}
+              opened={thisMacOpen}
+              onListDevices={() => {
+                void session.listDevices();
+              }}
+              onRevokeDevice={deviceId => {
+                void session.revokeDevice(deviceId);
+              }}
             />
           )
         }

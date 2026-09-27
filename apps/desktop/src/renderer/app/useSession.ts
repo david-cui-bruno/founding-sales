@@ -46,6 +46,10 @@ export interface Session {
   readonly guard: Generation;
   signIn(input: { readonly workspaceId?: string | undefined; readonly deviceLabel?: string | undefined }): Promise<void>;
   signOut(): Promise<void>;
+  /** The workspace's other Macs, read when "This Mac" is opened (wave 3b). */
+  listDevices(): Promise<void>;
+  /** Sign one of them out. This Mac's own id is this Mac signing out. */
+  revokeDevice(deviceId: string): Promise<void>;
   /** Read the session again — after a command, so the banners follow what it found. */
   reread(): Promise<void>;
   connectMailbox(): Promise<void>;
@@ -131,6 +135,14 @@ export function useSession(): Session {
     setDesktop(await desktopBridge().signOut());
   }, []);
 
+  const listDevices = useCallback(async (): Promise<void> => {
+    setDesktop(await desktopBridge().listDevices());
+  }, []);
+
+  const revokeDevice = useCallback(async (deviceId: string): Promise<void> => {
+    setDesktop(await desktopBridge().revokeDevice({ deviceId }));
+  }, []);
+
   const restartToUpdate = useCallback((): void => {
     const bridge = updateBridge();
     if (bridge === undefined) return;
@@ -199,6 +211,8 @@ export function useSession(): Session {
       guard,
       signIn,
       signOut,
+      listDevices,
+      revokeDevice,
       reread,
       connectMailbox,
       refreshMailbox,
@@ -216,6 +230,8 @@ export function useSession(): Session {
       guard,
       signIn,
       signOut,
+      listDevices,
+      revokeDevice,
       reread,
       connectMailbox,
       refreshMailbox,

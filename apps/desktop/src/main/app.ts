@@ -57,6 +57,9 @@ const signInInputSchema = z.strictObject({
   deviceLabel: z.string().trim().min(1).max(120).optional(),
 });
 
+/** One Mac to sign out (wave 3b). A uuid and nothing else. */
+const revokeDeviceInputSchema = z.strictObject({ deviceId: uuid });
+
 export function buildSessionManager(configuration: DesktopConfiguration): SessionManager {
   const vault = createKeychainVault({ service: configuration.keychainService });
   return createSessionManager({
@@ -89,6 +92,14 @@ export function registerBridge(manager: SessionManager): void {
     return await manager.signIn(parsed.data);
   });
   ipcMain.handle(IPC_CHANNELS.signOut, async () => await manager.signOut());
+  ipcMain.handle(IPC_CHANNELS.devices, async () => await manager.listDevices());
+  ipcMain.handle(IPC_CHANNELS.revokeDevice, async (_event, raw: unknown) => {
+    // The renderer's word is never taken for a shape, here least of all: the argument
+    // names a device to end.
+    const parsed = revokeDeviceInputSchema.safeParse(raw);
+    if (!parsed.success) return await manager.state();
+    return await manager.revokeDevice(parsed.data);
+  });
 }
 
 /** The one window, whether its page has loaded, and a route asked for before it had. */

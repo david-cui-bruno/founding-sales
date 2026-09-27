@@ -168,37 +168,45 @@ describe('8.0aq: Add firm, Import and the postures form reach the real routes', 
     expect(view.banners.map(banner => banner.text)).toContain('Imported, except the rows listed below.');
   });
 
-  it('records a posture from the form, refuses an overlap in words, and revokes it', async () => {
+  /**
+   * Wave 2, S4.2 and D5: several states, one confirmation, no dates.
+   *
+   * The form used to take one state, a day it took effect, a review date and the
+   * reference's statements ticked one at a time — four ways to get a decision wrong
+   * before it was recorded. `POST /postures/allow` takes the list and the one
+   * confirmation, and the server copies the statements and the citations from the
+   * release, because the software records a posture and does not author its sources.
+   */
+  it('adds states from the form with one confirmation, says which were already there, and revokes one', async () => {
     const admin = createAdminBridge({ api: desktopClient(fixture, adminToken), session: session('admin') });
     const opened = await admin.state();
     expect(opened.postures?.reference?.statements.map(entry => entry.key)).toEqual(Object.keys(POSTURE_STATEMENTS));
     expect(opened.postures?.records).toEqual([]);
 
-    const input = {
-      state: 'ri',
-      effectiveFromDate: '2026-09-01',
-      reviewDate: '',
-      confirmedStatements: Object.keys(POSTURE_STATEMENTS),
+    const added = await admin.allowStates({
+      states: ['ri', 'MA'],
+      confirmed: true,
       note: 'Read the registration page.',
-    };
-    const recorded = await admin.recordPosture(input);
-    expect(recorded.notice).toBe('posture_recorded');
-    const posture = recorded.postures?.records?.[0];
-    // Midnight on 1 September in the business zone (New York, EDT), and a year's review.
-    expect([posture?.state, posture?.effectiveFrom, posture?.reviewAt]).toEqual([
-      'RI',
-      '2026-09-01T04:00:00.000Z',
-      '2027-09-01T04:00:00.000Z',
-    ]);
+    });
+    expect(added.notice).toBe('posture_recorded');
+    const recorded = added.postures?.records ?? [];
+    expect([...recorded].map(row => row.state).sort()).toEqual(['MA', 'RI']);
+    // The server's own statements and citations, from the release rather than the body.
+    expect([...(recorded[0]?.confirmedStatements ?? [])].sort()).toEqual(Object.keys(POSTURE_STATEMENTS).sort());
+    expect(recorded[0]?.revokedAt).toBeNull();
 
-    const overlapping = await admin.recordPosture({ ...input, effectiveFromDate: '2026-10-01' });
-    expect(overlapping.notice).toBe('posture_overlapping');
-    expect(adminViewOf(overlapping).notice).toContain('already has a posture in force for part of that time');
+    // Every state named is already on the list: said so, and nothing written twice.
+    const again = await admin.allowStates({ states: ['RI'], confirmed: true, note: '' });
+    expect(again.notice).toBe('posture_already_allowed');
+    expect(again.postures?.records).toHaveLength(2);
+    expect(adminViewOf(again).notice).toBe('Those states were already on the list.');
 
-    const revoked = await admin.revokePosture({ postureId: posture?.id ?? '' });
+    const rhodeIsland = recorded.find(row => row.state === 'RI');
+    const revoked = await admin.revokePosture({ postureId: rhodeIsland?.id ?? '' });
     expect(revoked.notice).toBe('posture_revoked');
-    expect(revoked.postures?.records?.[0]?.revokedAt).not.toBeNull();
-    expect((await admin.recordPosture({ ...input, effectiveFromDate: '2026-10-01' })).notice).toBe('posture_recorded');
+    expect(revoked.postures?.records?.find(row => row.id === rhodeIsland?.id)?.revokedAt).not.toBeNull();
+    // Off the list, so it can be added again.
+    expect((await admin.allowStates({ states: ['RI'], confirmed: true, note: '' })).notice).toBe('posture_recorded');
   });
 
   it('is a build the deployed API accepts', () => {

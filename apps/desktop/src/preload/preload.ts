@@ -92,6 +92,8 @@ const bridge: DesktopBridge = {
   signOut: async () => await invokeDesktop(IPC_CHANNELS.signOut),
   // The menu's ⌘1–⌘6, and the deep links. A target outside the closed set is dropped
   // here, so the page is only ever told one of them.
+  listDevices: async () => await invokeDesktop(IPC_CHANNELS.devices),
+  revokeDevice: async input => await invokeDesktop(IPC_CHANNELS.revokeDevice, { deviceId: input.deviceId }),
   onNavigate: listener => {
     ipcRenderer.on(IPC_CHANNELS.navigate, (_event, name: unknown) => {
       const target = navigationTargetOf(name);

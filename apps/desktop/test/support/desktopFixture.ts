@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { ClientVersionRange, SessionGrant, SessionRenewal } from '@fss/contracts';
+import type { ClientVersionRange, DeviceList, DeviceSession, SessionGrant } from '@fss/contracts';
 import { createApiClient, type ApiClient, type HttpAnswer, type HttpSend } from '../../src/main/apiClient.ts';
 import { createDeviceStore } from '../../src/main/deviceStore.ts';
 import { createMemoryVault, type SecretVault } from '../../src/main/keychain.ts';
@@ -36,9 +36,14 @@ export interface ApiScript {
   today(value: CachedToday): void;
   /** Claims answer `handoff_unknown` until this is set. */
   browserFinished(value: boolean): void;
-  latestCredential(): string | null;
+  /** The device secret the last grant handed out: what an open must present. */
+  grantedSecret(): string | null;
+  /** Whether the server still has this device. A sign-out sets it false. */
+  deviceActive(): boolean;
+  /** The other Macs `GET /devices` lists beside this one. */
+  otherDevices(value: DeviceList): void;
   /**
-   * The membership's role as the server holds it now. Every later claim and renewal
+   * The membership's role as the server holds it now. Every later claim and open
    * answers with it; `salesperson` until a test says otherwise (lane g69: an admin
    * promoting a salesperson is the case the renewal used to lose).
    */
@@ -105,8 +110,15 @@ export async function createDesktopFixture(
   let current = Date.parse('2026-09-21T09:00:00.000Z');
   let offline = false;
   let browserFinished = false;
-  let generation = 1;
-  let latest: string | null = null;
+  /*
+   * The rotating credential the grant still carries, for desktop 1.0.12 (wave 3b).
+   * Nothing on this Mac stores it and nothing presents it: one generation, never
+   * advanced, because there is no route left that would advance it.
+   */
+  const generation = 1;
+  let granted: string | null = null;
+  let deviceActive = true;
+  let others: DeviceList = [];
   let role: 'admin' | 'salesperson' = 'salesperson';
   let todayValue: CachedToday = sampleToday(workspaceId);
   const refusals = new Map<string, string[]>();
@@ -114,23 +126,25 @@ export async function createDesktopFixture(
   const openedUrls: string[] = [];
 
   const grantFor = (forWorkspace: string): SessionGrant => {
-    latest = credential(forWorkspace, deviceId, generation);
+    granted = secret();
+    deviceActive = true;
     return {
       workspaceId: forWorkspace,
       userId,
       role,
       deviceId,
-      deviceSecret: secret(),
+      deviceSecret: granted,
       accessToken: token(forWorkspace),
       accessTokenExpiresAt: new Date(current + 3_600_000).toISOString(),
-      refreshCredential: latest,
+      refreshCredential: credential(forWorkspace, deviceId, generation),
       reauthenticateAfter: new Date(current + 30 * 24 * 3_600_000).toISOString(),
       supportedClientVersions: supported,
     };
   };
 
-  const send: HttpSend = async (url, _init) => {
+  const send: HttpSend = async (url, init) => {
     const path = new URL(url).pathname;
+    const body: Record<string, unknown> = init.body === undefined ? {} : (JSON.parse(init.body) as Record<string, unknown>);
     calls.set(path, (calls.get(path) ?? 0) + 1);
     if (offline) throw new Error('the server did not answer');
 
@@ -158,24 +172,54 @@ export async function createDesktopFixture(
       case '/auth/sign-in/claim':
         if (!browserFinished) return await Promise.resolve({ status: 401, body: { error: 'handoff_unknown' } });
         return await Promise.resolve(answer(grantFor(workspaceId)));
-      case '/auth/session/renew': {
-        generation += 1;
-        latest = credential(workspaceId, deviceId, generation);
-        const renewal: SessionRenewal = {
+      /*
+       * Wave 3b, S7. The secret does not rotate, so opening twice is not reuse and the
+       * answer carries no credential; a device the server has signed out answers
+       * `device_revoked` rather than `credential_unknown`, which is what tells a Mac
+       * restored from a backup to sign in with Google again.
+       */
+      case '/auth/session/open': {
+        if (!deviceActive) return await Promise.resolve({ status: 401, body: { error: 'device_revoked' } });
+        if (granted === null || body['deviceSecret'] !== granted) {
+          return await Promise.resolve({ status: 401, body: { error: 'credential_unknown' } });
+        }
+        const opened: DeviceSession = {
           workspaceId,
           userId,
           role,
           deviceId,
           accessToken: token(workspaceId),
           accessTokenExpiresAt: new Date(current + 3_600_000).toISOString(),
-          refreshCredential: latest,
           reauthenticateAfter: new Date(current + 30 * 24 * 3_600_000).toISOString(),
           supportedClientVersions: supported,
         };
-        return await Promise.resolve(answer(renewal));
+        return await Promise.resolve(answer(opened));
       }
       case '/auth/sign-out':
+        deviceActive = false;
         return await Promise.resolve(answer({ signedOut: true }));
+      case '/devices':
+        return await Promise.resolve(
+          answer([
+            {
+              deviceId,
+              deviceLabel: 'This Mac',
+              status: deviceActive ? ('active' as const) : ('revoked' as const),
+              registeredAt: new Date(current - 86_400_000).toISOString(),
+              lastSeenAt: new Date(current).toISOString(),
+              clientVersion,
+              thisDevice: true,
+            },
+            ...others,
+          ]),
+        );
+      case '/devices/revoke': {
+        const asked = body['deviceId'];
+        const mine = asked === deviceId;
+        if (mine) deviceActive = false;
+        else others = others.map(entry => (entry.deviceId === asked ? { ...entry, status: 'revoked' as const } : entry));
+        return await Promise.resolve(answer({ revoked: true, deviceId: String(asked), thisDevice: mine }));
+      }
       case '/today':
         return await Promise.resolve(answer(todayValue));
       default:
@@ -250,7 +294,11 @@ export async function createDesktopFixture(
       browserFinished: value => {
         browserFinished = value;
       },
-      latestCredential: () => latest,
+      grantedSecret: () => granted,
+      deviceActive: () => deviceActive,
+      otherDevices: value => {
+        others = value;
+      },
       role: value => {
         role = value;
       },

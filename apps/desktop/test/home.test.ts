@@ -99,6 +99,7 @@ function desktop(role: 'admin' | 'salesperson' = 'admin', overrides: Partial<Des
     notice: null,
     today: { workspaceId: WORKSPACE, snapshotDate: '2026-09-25', businessTimeZone: 'America/New_York', cards: [...CARDS] },
     rememberedWorkspace: { workspaceId: WORKSPACE, deviceLabel: 'Test Mac' },
+    devices: null,
     ...overrides,
   };
 }

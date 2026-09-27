@@ -23,6 +23,7 @@ export function signedOutState(overrides: Partial<DesktopState> = {}): DesktopSt
     notice: null,
     today: null,
     rememberedWorkspace: null,
+    devices: null,
     ...overrides,
   };
 }
