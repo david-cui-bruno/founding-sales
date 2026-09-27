@@ -1,106 +1,38 @@
-import type {
-  DashboardResponse,
-  DiagnosticsResponse,
-  PostureReferenceResponse,
-  SettingHistoryResponse,
-  SettingKey,
-  SettingsSnapshot,
-  StatePostureView,
+import { z } from 'zod';
+import {
+  SETTING_KEYS,
+  dashboardResponseSchema,
+  diagnosticsResponseSchema,
+  postureReferenceResponseSchema,
+  settingHistoryResponseSchema,
+  settingsSnapshotSchema,
+  statePostureViewSchema,
+  uuid,
 } from '@fss/contracts';
 
 /**
- * The administration window's contract (specification 10.1, 13.3, 13.4, 14.2).
+ * What Settings is given (specification 10.1, 13.3, 13.4, 14.2).
  *
- * One window with three screens — Settings, Dashboard, Diagnostics — because they are
- * the three things a person opens when they are *not* selling: configuring, looking
- * at results, and finding out why something is not working. The one personal setting
- * lives here too: "Your calling number" (lane g60), without which Today has no Call
- * button. The Today window stays
- * small and fast; this one is opened, used and closed, exactly as G3b said of the CRM
- * windows.
+ * One view with three tabs — Administration, Dashboard, Diagnostics — because they are
+ * the three things a person opens when they are *not* selling: configuring, looking at
+ * results, and finding out why something is not working. The one personal setting lives
+ * here too: "Your calling number" (lane g60), without which Today has no Call button.
  *
  * The renderer holds no rule. It never decides who may change a setting, never
  * computes an effective cap and never works out whether sending is on: it renders
  * what the API said, including the API's own `effectiveSendingEnabled`. Section 14.2:
  * the client "contains no authoritative sequence, suppression, policy, eligibility,
  * or send logic".
+ *
+ * Since 1.0.13 the state is a **schema** rather than an interface, because it crosses
+ * the operation registry (`src/shared/operations.ts`) and both sides of that boundary
+ * parse what they are handed. The parts that are a route's answer are the contracts'
+ * own schemas; the parts that are this window's projection are declared here, where the
+ * projection is made.
  */
 
-export type AdminScreen = 'settings' | 'dashboard' | 'diagnostics';
-
-export interface AdminState {
-  readonly screen: AdminScreen;
-  readonly role: 'admin' | 'salesperson';
-  readonly online: boolean;
-  /** False offline or below the minimum client version: every control is inert. */
-  readonly mayMutate: boolean;
-  /** The last refusal code, verbatim, for the view to turn into one sentence. */
-  readonly notice: string | null;
-  readonly settings: SettingsSnapshot | null;
-  readonly dashboard: DashboardResponse | null;
-  readonly diagnostics: DiagnosticsResponse | null;
-  /** The pipeline, for the stage-administration section. */
-  readonly stages: readonly PipelineStageRowView[];
-  /** The history of one slice, when a person opened it. */
-  readonly history: SettingHistoryView | null;
-  /**
-   * G7-2's sending posture, for the section that edits it. Null for a salesperson:
-   * every `/outbound/*` path is admin-only with a redacted 403, so their page does
-   * not ask and offers no control.
-   */
-  readonly sendingAdmin: SendingAdminView | null;
-  /**
-   * Why an admin's `/outbound/status` read failed, as the refusal code — `offline`,
-   * `unreadable_answer`, `http_500` and the like — or null when it did not fail or was
-   * not asked (lane g69). The section says it could not read the status rather than
-   * vanishing, which is how a parse failure on every answer went unseen until 8.0ae.
-   */
-  readonly sendingReadError: string | null;
-  /**
-   * The person's own calling numbers (9.1; lane g60), as `GET /calling-identities`
-   * answered them. Every role has this section: a number is the person's own, and 9.2
-   * refuses a dial from anybody else's. Null when the read did not answer — offline,
-   * refused, or an API older than the route — which the section says rather than
-   * showing an empty list that would read as "you have no number".
-   */
-  readonly callingNumbers: readonly CallingNumberView[] | null;
-  /**
-   * State postures (9.2 step 6; lane g84, audit item G04): the reference texts the form
-   * shows and the postures recorded, as `GET /postures/reference` and `GET /postures`
-   * answered them. Absent in a state built before g84.
-   */
-  readonly postures?: PosturesState | null;
-}
-
-/**
- * What the postures form reads. `reference` is the release's own words — the statements
- * and the quoted rules — and `records` every posture ever recorded, revoked ones too.
- * Either is null when its read did not answer, and `readError` names why, so the section
- * says it could not read them rather than showing an empty list that would read as
- * "no state has a posture".
- */
-export interface PosturesState {
-  readonly reference: PostureReferenceResponse | null;
-  readonly records: readonly StatePostureView[] | null;
-  readonly readError: string | null;
-}
-
-/**
- * A posture as the form collects it (lane g84). The dates are local calendar dates in the
- * workspace's business zone; the main process turns them into instants with the domain's
- * clock, as it does a callback's, so the window does no zone arithmetic.
- */
-export interface RecordPostureInput {
-  readonly state: string;
-  /** `YYYY-MM-DD`: the day the posture takes effect, from midnight in the business zone. */
-  readonly effectiveFromDate: string;
-  /** `YYYY-MM-DD`, or empty for the default: one year after it takes effect. */
-  readonly reviewDate: string;
-  /** The statement keys the person ticked. The server refuses anything short of all of them. */
-  readonly confirmedStatements: readonly string[];
-  /** Where the person read it, a registration number; empty for none. */
-  readonly note: string;
-}
+export const SETTINGS_TAB_SCREENS = ['settings', 'dashboard', 'diagnostics'] as const;
+export type AdminScreen = (typeof SETTINGS_TAB_SCREENS)[number];
 
 /**
  * One of the person's calling numbers, kept verbatim from the server.
@@ -108,30 +40,32 @@ export interface RecordPostureInput {
  * `usedForCalls` is the server's choice of which number Today dials from, so the page
  * shows it rather than working it out from the dates.
  */
-export interface CallingNumberView {
-  readonly id: string;
-  readonly e164: string;
-  readonly label: string | null;
-  readonly verificationStatus: 'unverified' | 'verified';
-  readonly enabled: boolean;
-  readonly verifiedAt: string | null;
-  readonly verificationMethod: 'owner_attestation' | 'admin_attestation' | null;
-  readonly disabledAt: string | null;
-  readonly usedForCalls: boolean;
-}
+export const callingNumberViewSchema = z.object({
+  id: uuid,
+  e164: z.string().max(32),
+  label: z.string().max(200).nullable(),
+  verificationStatus: z.enum(['unverified', 'verified']),
+  enabled: z.boolean(),
+  verifiedAt: z.string().max(40).nullable(),
+  verificationMethod: z.enum(['owner_attestation', 'admin_attestation']).nullable(),
+  disabledAt: z.string().max(40).nullable(),
+  usedForCalls: z.boolean(),
+});
+export type CallingNumberView = z.infer<typeof callingNumberViewSchema>;
 
 /**
- * Add a calling number, and attest it in the same press when the person ticked the
- * statement. The number is sent as typed; the server normalizes it and refuses
- * anything that is not `+`, a country code and the rest (`number_invalid`).
+ * What the postures section reads. `reference` is the release's own words — the
+ * statements and the quoted rules — and `records` every posture ever recorded, revoked
+ * ones too. Either is null when its read did not answer, and `readError` names why, so
+ * the section says it could not read them rather than showing an empty list that would
+ * read as "no state has a posture".
  */
-export interface AddCallingNumberInput {
-  readonly e164: string;
-  /** Empty for no label. */
-  readonly label: string;
-  /** "This is the number I place calls from." Unticked adds the number unverified. */
-  readonly attested: boolean;
-}
+export const posturesStateSchema = z.object({
+  reference: postureReferenceResponseSchema.nullable(),
+  records: z.array(statePostureViewSchema).nullable(),
+  readError: z.string().max(80).nullable(),
+});
+export type PosturesState = z.infer<typeof posturesStateSchema>;
 
 /**
  * What `/outbound/status` said, kept verbatim.
@@ -141,32 +75,120 @@ export interface AddCallingNumberInput {
  * computed from `healthy_sending_days` — the cap is never stored, and a client that
  * recomputed it would be a second implementation of 12.7's schedule.
  */
-export interface SendingAdminView {
-  readonly domain: {
-    readonly domain: string;
-    readonly spfPass: boolean;
-    readonly dkimPass: boolean;
-    readonly dmarcPass: boolean;
-    readonly postmasterReviewedAt: string | null;
-    readonly authenticationPasses: boolean;
-    readonly automatedSendingEnabled: boolean;
-  } | null;
-  readonly ramps: readonly {
-    readonly mailboxId: string;
-    readonly healthySendingDays: number;
-    readonly effectiveCap: number;
-    readonly adminDailyCap: number | null;
-    readonly raisedDailyCap: number | null;
-    readonly lastHealthFailure: string | null;
-  }[];
-}
+export const sendingAdminViewSchema = z.object({
+  domain: z
+    .object({
+      domain: z.string().max(253),
+      spfPass: z.boolean(),
+      dkimPass: z.boolean(),
+      dmarcPass: z.boolean(),
+      postmasterReviewedAt: z.string().max(40).nullable(),
+      authenticationPasses: z.boolean(),
+      automatedSendingEnabled: z.boolean(),
+    })
+    .nullable(),
+  ramps: z.array(
+    z.object({
+      mailboxId: uuid,
+      healthySendingDays: z.number().int(),
+      effectiveCap: z.number().int(),
+      adminDailyCap: z.number().int().nullable(),
+      raisedDailyCap: z.number().int().nullable(),
+      lastHealthFailure: z.string().max(40).nullable(),
+    }),
+  ),
+});
+export type SendingAdminView = z.infer<typeof sendingAdminViewSchema>;
+
+export const pipelineStageRowViewSchema = z.object({
+  key: z.string().max(80),
+  displayName: z.string().max(200),
+  position: z.number().int(),
+  terminalKind: z.enum(['won', 'lost']).nullable(),
+  retired: z.boolean(),
+});
+export type PipelineStageRowView = z.infer<typeof pipelineStageRowViewSchema>;
+
+/**
+ * `POST /settings/history` as the API answered it, values included (lane g78, D04):
+ * the slice's current value and version, and every version with the value it set.
+ */
+export type SettingHistoryView = z.infer<typeof settingHistoryResponseSchema>;
+
+export const adminStateSchema = z.strictObject({
+  screen: z.enum(SETTINGS_TAB_SCREENS),
+  role: z.enum(['admin', 'salesperson']),
+  online: z.boolean(),
+  /** False offline or below the minimum client version: every control is inert. */
+  mayMutate: z.boolean(),
+  /** The last refusal code, verbatim, for the view to turn into one sentence. */
+  notice: z.string().max(200).nullable(),
+  settings: settingsSnapshotSchema.nullable(),
+  dashboard: dashboardResponseSchema.nullable(),
+  diagnostics: diagnosticsResponseSchema.nullable(),
+  /** The pipeline, for the stage-administration section. */
+  stages: z.array(pipelineStageRowViewSchema),
+  /** The history of one slice, when a person opened it. */
+  history: settingHistoryResponseSchema.nullable(),
+  /**
+   * G7-2's sending posture, for the section that edits it. Null for a salesperson:
+   * every `/outbound/*` path is admin-only with a redacted 403, so their page does
+   * not ask and offers no control.
+   */
+  sendingAdmin: sendingAdminViewSchema.nullable(),
+  /**
+   * Why an admin's `/outbound/status` read failed, as the refusal code, or null when it
+   * did not fail or was not asked (lane g69). The section says it could not read the
+   * status rather than vanishing, which is how a parse failure went unseen until 8.0ae.
+   */
+  sendingReadError: z.string().max(80).nullable(),
+  /**
+   * The person's own calling numbers (9.1; lane g60). Null when the read did not answer,
+   * which the section says rather than showing an empty list that would read as "you
+   * have no number".
+   */
+  callingNumbers: z.array(callingNumberViewSchema).nullable(),
+  /** The states on the "OK to call" list and the texts the section shows (9.2 step 6). */
+  postures: posturesStateSchema.nullable(),
+});
+export type AdminState = z.infer<typeof adminStateSchema>;
+
+/**
+ * Put several states on the "OK to call" list with one confirmation (wave 2, S4.2; D5).
+ *
+ * `POST /postures/allow` takes the list and the literal `confirmed: true`, and records
+ * every statement of `GET /postures/reference` as confirmed, with the domain's own
+ * citations — invariant 7's "software records and enforces legal posture; it does not
+ * invent it", with the founder ticking one box for the list rather than four per state.
+ */
+export const allowStatesInputSchema = z.strictObject({
+  states: z.array(z.string().regex(/^[A-Za-z]{2}$/u)).min(1).max(60),
+  confirmed: z.literal(true),
+  /** Where it was read, or a registration number; empty for none. */
+  note: z.string().max(1000),
+});
+export type AllowStatesInput = z.infer<typeof allowStatesInputSchema>;
+
+/**
+ * Add a calling number. Since wave 2 (S4.3) the number is attested as it is added:
+ * verified, enabled and usable for calls at once, so there is nothing left to tick.
+ * The number is sent as typed; the server normalizes it and refuses anything that is
+ * not `+`, a country code and the rest (`number_invalid`).
+ */
+export const addCallingNumberInputSchema = z.strictObject({
+  e164: z.string().trim().min(1).max(32),
+  /** Empty for no label. */
+  label: z.string().max(200),
+});
+export type AddCallingNumberInput = z.infer<typeof addCallingNumberInputSchema>;
 
 /** 12.7's two admin decisions about a cap. Absent and null differ: null clears. */
-export interface SetSendingCapInput {
-  readonly mailboxId: string;
-  readonly lowerTo?: number | null;
-  readonly raiseTo?: number | null;
-}
+export const setSendingCapInputSchema = z.strictObject({
+  mailboxId: uuid,
+  lowerTo: z.number().int().nullable().optional(),
+  raiseTo: z.number().int().nullable().optional(),
+});
+export type SetSendingCapInput = z.infer<typeof setSendingCapInputSchema>;
 
 /**
  * A new holiday calendar, which supersedes rather than edits.
@@ -175,67 +197,41 @@ export interface SetSendingCapInput {
  * will appear frozen on every due instant computed under it — and a name somebody
  * chose ("2027-federal") is readable in an incident where a serial number is not.
  */
-export interface RecordHolidayCalendarInput {
-  readonly version: string;
+export const recordHolidayCalendarInputSchema = z.strictObject({
+  version: z.string().max(40),
   /** Local calendar dates, `YYYY-MM-DD`. */
-  readonly dates: readonly string[];
-}
+  dates: z.array(z.string().max(10)).max(400),
+});
+export type RecordHolidayCalendarInput = z.infer<typeof recordHolidayCalendarInputSchema>;
 
 /** 12.7's checklist, which is a person saying they looked: FSS never queries DNS. */
-export interface RecordSendingAuthenticationInput {
-  readonly domain: string;
-  readonly spfPass: boolean;
-  readonly dkimPass: boolean;
-  readonly dmarcPass: boolean;
-  readonly postmasterReviewed: boolean;
-  readonly automatedSendingEnabled: boolean;
-}
-
-export interface PipelineStageRowView {
-  readonly key: string;
-  readonly displayName: string;
-  readonly position: number;
-  readonly terminalKind: 'won' | 'lost' | null;
-  readonly retired: boolean;
-}
+export const recordSendingAuthenticationInputSchema = z.strictObject({
+  domain: z.string().max(253),
+  spfPass: z.boolean(),
+  dkimPass: z.boolean(),
+  dmarcPass: z.boolean(),
+  postmasterReviewed: z.boolean(),
+  automatedSendingEnabled: z.boolean(),
+});
+export type RecordSendingAuthenticationInput = z.infer<typeof recordSendingAuthenticationInputSchema>;
 
 /**
- * `POST /settings/history` as the API answered it, values included (lane g78, D04):
- * the slice's current value and version, and every version with the value it set.
- * Until g78 this carried four fields per version and no value at all, so History could
- * say when something changed and never what.
+ * A key a command may name: the active three. The two retired in wave 1 are still in the
+ * wire vocabulary, because a server from before that deletion still reports them, but
+ * nothing may be written to them — so the type of a Save is narrower than the type of a
+ * row, and that is the point.
  */
-export type SettingHistoryView = SettingHistoryResponse;
+export const activeSettingKeySchema = z.enum(SETTING_KEYS);
+export type ActiveSettingKey = z.infer<typeof activeSettingKeySchema>;
 
-export interface SaveSettingInput {
-  readonly settingKey: SettingKey;
-  readonly value: unknown;
+export const saveSettingInputSchema = z.strictObject({
+  settingKey: activeSettingKeySchema,
+  value: z.unknown(),
   /** Optional in effect: empty is sent as "Changed on the Mac" (wave 1). */
+  changeNote: z.string().max(500),
+});
+export type SaveSettingInput = {
+  readonly settingKey: ActiveSettingKey;
+  readonly value: unknown;
   readonly changeNote: string;
-}
-
-export interface AdminBridge {
-  state(): Promise<AdminState>;
-  show(input: { readonly screen: AdminScreen }): Promise<AdminState>;
-  saveSetting(input: SaveSettingInput): Promise<AdminState>;
-  openHistory(input: { readonly settingKey: SettingKey }): Promise<AdminState>;
-  loadDashboard(input: { readonly from: string; readonly to: string }): Promise<AdminState>;
-  createStage(input: { readonly key: string; readonly displayName: string }): Promise<AdminState>;
-  renameStage(input: { readonly stageKey: string; readonly displayName: string }): Promise<AdminState>;
-  reorderStages(input: { readonly stageKeys: readonly string[] }): Promise<AdminState>;
-  retireStage(input: { readonly stageKey: string }): Promise<AdminState>;
-  acknowledgeAlert(input: { readonly alertId: string }): Promise<AdminState>;
-  setSendingCap(input: SetSendingCapInput): Promise<AdminState>;
-  recordSendingAuthentication(input: RecordSendingAuthenticationInput): Promise<AdminState>;
-  recordHolidayCalendar(input: RecordHolidayCalendarInput): Promise<AdminState>;
-  addCallingNumber(input: AddCallingNumberInput): Promise<AdminState>;
-  attestCallingNumber(input: { readonly identityId: string }): Promise<AdminState>;
-  retireCallingNumber(input: { readonly identityId: string }): Promise<AdminState>;
-  /** Lane g84: record a state posture, and revoke one. */
-  recordPosture(input: RecordPostureInput): Promise<AdminState>;
-  revokePosture(input: { readonly postureId: string }): Promise<AdminState>;
-}
-
-declare global {
-  var callieAdmin: AdminBridge | undefined;
-}
+};

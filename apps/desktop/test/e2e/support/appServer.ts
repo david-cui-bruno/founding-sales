@@ -85,7 +85,7 @@ export interface BridgeHandle<S> {
   setState(state: S): void;
 }
 
-type Optional = 'callieMailbox' | 'callieApi' | 'callieAdmin' | 'callieCrm' | 'callieSequences';
+type Optional = 'callieApi' | 'callieImport';
 
 export interface AppServerOptions {
   readonly desktop?: DesktopState;
@@ -142,70 +142,16 @@ export interface AppServer {
   stop(): Promise<void>;
 }
 
+/**
+ * The globals that are *not* the registry (1.0.13).
+ *
+ * Until 1.0.13 every view had a named channel of its own and this table was six
+ * objects long. The registry replaced them, so what is left is the shell's own bridge,
+ * the updater's, and the two handoffs that are not operations: dialling, which opens a
+ * URI rather than answering with one, and choosing a CSV, which opens macOS's dialog.
+ */
 const METHODS: Readonly<Record<string, { readonly global: string; readonly methods: readonly string[] }>> = {
-  callie: { global: 'callie', methods: ['state', 'signIn', 'signOut', 'refreshToday'] },
-  mailbox: { global: 'callieMailbox', methods: ['state', 'refresh', 'connect'] },
-  crm: {
-    global: 'callieCrm',
-    methods: [
-      'state',
-      'openFirm',
-      'openPipeline',
-      'saveContact',
-      'changeStage',
-      'resolveMerge',
-      'openAddFirm',
-      'addFirm',
-      'openImport',
-      'previewImport',
-      'commitImport',
-      'openOpportunity',
-      'enroll',
-      'confirmRoute',
-      'checkRoute',
-    ],
-  },
-  sequences: {
-    global: 'callieSequences',
-    methods: [
-      'state',
-      'openSequence',
-      'createSequence',
-      'createDraft',
-      'saveDraft',
-      'createTemplate',
-      'reviewEnrollment',
-      'closeReview',
-      'publish',
-      'retire',
-      'approveTemplate',
-      'enroll',
-      'resumeEnrollment',
-    ],
-  },
-  admin: {
-    global: 'callieAdmin',
-    methods: [
-      'state',
-      'show',
-      'saveSetting',
-      'openHistory',
-      'loadDashboard',
-      'createStage',
-      'renameStage',
-      'reorderStages',
-      'retireStage',
-      'acknowledgeAlert',
-      'setSendingCap',
-      'recordSendingAuthentication',
-      'recordHolidayCalendar',
-      'addCallingNumber',
-      'attestCallingNumber',
-      'retireCallingNumber',
-      'recordPosture',
-      'revokePosture',
-    ],
-  },
+  callie: { global: 'callie', methods: ['state', 'signIn', 'signOut'] },
   update: { global: 'callieUpdate', methods: ['state', 'restart', 'checkNow'] },
 };
 
@@ -231,9 +177,19 @@ globalThis.callieDial = {
   async call(input) { return await ask('today.dial', input ?? null); },
 };`;
 
+/**
+ * The import handoff, faked. The real one opens macOS's open panel, reads the file and
+ * posts the preview, all in the main process; here it is one call a spec can script
+ * with `importAnswer`, because a page that never names a path has nothing else to show.
+ */
+const IMPORT_API = `globalThis.callieImport = {
+  async choose() { return await ask('crm.chooseImportFile', null); },
+};`;
+
 function bridgeScript(installed: readonly string[]): string {
   const objects = installed.map(name => {
     if (name === 'api') return OPERATION_API;
+    if (name === 'import') return IMPORT_API;
     const entry = METHODS[name];
     if (entry === undefined) throw new Error(`no such bridge ${name}`);
     const methods = entry.methods.map(method => `  async ${method}(input) { return await ask('${name}.${method}', input); },`);
@@ -295,8 +251,9 @@ async function readBody(request: IncomingMessage): Promise<unknown> {
 export async function startAppServer(options: AppServerOptions = {}): Promise<AppServer> {
   const script = await transpile();
   const without = new Set<string>(options.without ?? []);
-  const installed = ['callie', 'mailbox', 'api', 'crm', 'sequences', 'admin', ...(options.update === undefined ? [] : ['update'])].filter(
-    name => !without.has(name === 'api' ? 'callieApi' : (METHODS[name]?.global ?? '')),
+  const GLOBAL_OF: Readonly<Record<string, string>> = { api: 'callieApi', import: 'callieImport' };
+  const installed = ['callie', 'api', 'import', ...(options.update === undefined ? [] : ['update'])].filter(
+    name => !without.has((GLOBAL_OF[name] ?? METHODS[name]?.global ?? '') as Optional),
   );
   const html = (await readFile(`${pageDirectory}index.html`, 'utf8'))
     .replace('<script type="module"', '<script src="./bridge.js"></script>\n    <script type="module"')
@@ -357,7 +314,9 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       }
       return today;
     }
-    if (bridge === 'admin') {
+    // `settings.*` since 1.0.13: the family is the registry's name for what used to be
+    // the administration bridge, and `adminFixtures.ts` answers by method name.
+    if (bridge === 'settings') {
       admin = adminAnswer(admin, name, argument, mine, options.figuresFail === true);
       return admin;
     }
@@ -456,7 +415,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       },
     },
     today: handle('today', () => today, state => { today = state; }),
-    admin: handle('admin', () => admin, state => { admin = state; }),
+    admin: handle('settings', () => admin, state => { admin = state; }),
     crm: handle('crm', () => crm, state => { crm = state; }),
     replies: handle('replies', () => replies, state => { replies = state; }),
     sequences: handle('sequences', () => sequences, state => { sequences = state; }),

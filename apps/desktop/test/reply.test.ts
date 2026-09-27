@@ -261,7 +261,7 @@ describe('the reply card view model', () => {
     expect(buildReplyCardView(state({ mayMutate: false }), card(), 'interested').confirmEnabled).toBe(false);
     // Nothing is cached, so an outage is an empty lane rather than a stale card.
     const view = buildReplyView(state({ online: false, cards: [], open: null }), null);
-    expect(view.emptyMessage).toBe('Callie cannot reach the server, and replies are never kept on this Mac.');
+    expect(view.emptyMessage).toBe('Callie cannot reach the server. Replies are never kept on this Mac.');
   });
 
   it('says the same thing above the button as on it, on both kinds of follow-up card', () => {

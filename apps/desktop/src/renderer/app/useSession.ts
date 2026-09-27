@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { DesktopState, MailboxState } from '../../shared/contract.ts';
 import type { UpdateStatus } from '../../shared/updateContract.ts';
-import { desktopBridge, mailboxBridge, updateBridge } from './bridges.ts';
+import { desktopBridge, operations, updateBridge } from './bridges.ts';
 import { useSessionGeneration, type Generation } from './generation.ts';
 
 /**
@@ -77,29 +77,29 @@ export function useSession(): Session {
   }, [guard]);
 
   const loadMailbox = useCallback(async (): Promise<void> => {
-    const bridge = mailboxBridge();
-    if (bridge === undefined || identityRef.current === null) return;
+    const api = operations();
+    if (api === undefined || identityRef.current === null) return;
     // The address of a mailbox that was somebody else's is exactly the kind of answer
     // that used to arrive a moment after the window had been emptied.
     const keep = guard.keep(setMailbox);
-    keep(await bridge.state());
+    keep(await api.read('mailbox.state', {}));
   }, [guard]);
 
   const refreshMailbox = useCallback(async (): Promise<void> => {
-    const bridge = mailboxBridge();
-    if (bridge === undefined || identityRef.current === null) return;
+    const api = operations();
+    if (api === undefined || identityRef.current === null) return;
     setMailboxWaiting(false);
     const keep = guard.keep(setMailbox);
-    keep(await bridge.refresh());
+    keep(await api.read('mailbox.refresh', {}));
   }, [guard]);
 
   const connectMailbox = useCallback(async (): Promise<void> => {
-    const bridge = mailboxBridge();
-    if (bridge === undefined) return;
+    const api = operations();
+    if (api === undefined) return;
     setMailboxWaiting(true);
     const keep = guard.keep(setMailbox);
     try {
-      keep(await bridge.connect());
+      keep(await api.command('mailbox.connect', {}));
     } finally {
       setMailboxWaiting(false);
     }

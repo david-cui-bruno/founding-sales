@@ -12,9 +12,8 @@ import postcss from 'postcss';
  * is a build script, so it may import a development dependency; nothing here ships.
  *
  * PostCSS rather than the CLI: the CLI is a second process to spawn and a second place
- * for the input path to be written down. `from` is the real path, which is how the
- * `@import` of `legacy.css` beside it resolves and how Tailwind knows where `@source`
- * is relative to.
+ * for the input path to be written down. `from` is the real path, which is how every
+ * `@import` in it resolves and how Tailwind knows where `@source` is relative to.
  */
 export async function compileStylesheet(entry: string): Promise<string> {
   const source = await readFile(entry, 'utf8');

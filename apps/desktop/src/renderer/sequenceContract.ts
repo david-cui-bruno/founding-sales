@@ -3,15 +3,12 @@ import {
   STEP_CHANNELS,
   STEP_NO_ANSWER_ACTIONS,
   enrollmentDtoSchema,
-  instant,
-  resumePreviewSchema,
   sequenceDelaySchema,
   sequenceSummaryDtoSchema,
   sequenceVersionDtoSchema,
   templateVersionDtoSchema,
   uuid,
   type EnrollmentDto,
-  type ResumePreviewDto,
   type SequenceDelay as SequenceDelayDto,
   type SequenceStepDto,
   type SequenceSummaryDto,
@@ -54,7 +51,13 @@ export type SequenceStep = SequenceStepDto;
 export type SequenceVersion = SequenceVersionDto;
 export type SequenceSummary = SequenceSummaryDto;
 export type TemplateVersion = TemplateVersionDto;
-/** One enrollment, as the Firm page's enrollment panel and the hold review read it (11.2). */
+/**
+ * One enrollment: a contact working through a version of a sequence (11.2).
+ *
+ * Read-only here. Since wave 2 there is nothing to confirm about one — an enrollment
+ * held a long time resumes on its own (S4.1) — so the Sequences view lists who is in
+ * flight and leaves it at that.
+ */
 export type Enrollment = EnrollmentDto;
 
 /**
@@ -71,10 +74,10 @@ export const SEQUENCE_READ_SLICES = ['sequences', 'versions', 'templates', 'enro
 export type SequenceReadSlice = (typeof SEQUENCE_READ_SLICES)[number];
 
 /**
- * One step of a draft, as the editor holds it and as it is sent (lane g88, audit G03).
+ * One step as the editor holds it and as it is sent (lane g88, audit G03).
  *
- * No ordinal: a step's number is its place in the list, assigned when the draft is saved,
- * so a reorder can never leave the gap `publishVersion` refuses.
+ * No ordinal: a step's number is its place in the list, assigned when it is saved, so a
+ * reorder can never leave the gap `publishVersion` refuses.
  */
 export const draftStepSchema = z.strictObject({
   channel: z.enum(STEP_CHANNELS),
@@ -85,43 +88,33 @@ export const draftStepSchema = z.strictObject({
 export type DraftStep = z.infer<typeof draftStepSchema>;
 
 /**
- * A template version as the form writes it (lane g88). `body` is what the person typed;
- * the sign-off and the stop line are appended by the bridge, so the footer 12.6 requires
- * is always the last thing in the email and never something the person had to type.
+ * A template version as the form writes it (lane g88; wave 2, S3).
+ *
+ * `body` is what the person typed; the sign-off and the stop line are appended by the
+ * bridge, so the footer 12.6 requires is always the last thing in the email and never
+ * something the person had to type. `templateVersionId` names the version being edited
+ * **in place** — since wave 2 a version is edited rather than superseded, and the same
+ * command approves it, so writing and approving are one press.
  */
 export interface TemplateDraft {
-  /** The template this is a new version of, or null for a new template. */
-  readonly templateId: string | null;
+  /** The version being edited in place, or null for a new template. */
+  readonly templateVersionId: string | null;
   readonly name: string;
   readonly subject: string;
   readonly body: string;
   readonly signOff: string;
 }
 
-/**
- * What "Review and resume" shows (lane g88, audit G06): the server's preview of the
- * resume, and the database time it was computed at. Present only while the person is
- * looking at it; the confirmation is the one action it offers.
- */
-export const resumeReviewSchema = z.strictObject({
-  asOf: instant,
-  preview: resumePreviewSchema,
-});
-export type ResumeReview = z.infer<typeof resumeReviewSchema>;
-export type ResumePreview = ResumePreviewDto;
-
 export const sequenceStateSchema = z.strictObject({
   online: z.boolean(),
   mayMutate: z.boolean(),
   isAdmin: z.boolean(),
-  /** Database time as of the last answer. Every deadline is compared against this. */
-  asOf: instant.nullable(),
   sequences: z.array(sequenceSummaryDtoSchema),
   selectedSequenceId: uuid.nullable(),
   versions: z.array(sequenceVersionDtoSchema),
   templates: z.array(templateVersionDtoSchema),
-  /** Enrollments needing the long-hold review screen (4.3). */
-  heldEnrollments: z.array(enrollmentDtoSchema),
+  /** Everyone in flight, in any sequence; the view shows the chosen sequence's own. */
+  enrollments: z.array(enrollmentDtoSchema),
   /** One per slice: the refusal code of the read that filled it, or null. */
   readErrors: z.strictObject({
     sequences: readErrorSchema,
@@ -129,8 +122,6 @@ export const sequenceStateSchema = z.strictObject({
     templates: readErrorSchema,
     enrollments: readErrorSchema,
   }),
-  /** The resume review the person opened, or null (lane g88). */
-  resumeReview: resumeReviewSchema.nullable(),
   notice: z.string().max(400).nullable(),
   /**
    * The copy warnings the last template create or approval answered (wave 1): codes such
@@ -141,36 +132,8 @@ export const sequenceStateSchema = z.strictObject({
 });
 export type SequenceState = z.infer<typeof sequenceStateSchema>;
 
-export interface SequenceBridge {
-  state(): Promise<SequenceState>;
-  openSequence(input: { readonly sequenceId: string }): Promise<SequenceState>;
-  /** Lane g88: creates the sequence and its first, empty draft, and opens it. */
-  createSequence(input: { readonly name: string }): Promise<SequenceState>;
-  /** Lane g88: a new draft of a published sequence, copying its newest published steps. */
-  createDraft(input: { readonly sequenceId: string }): Promise<SequenceState>;
-  saveDraft(input: { readonly sequenceVersionId: string; readonly steps: readonly DraftStep[] }): Promise<SequenceState>;
-  /** Lane g88: writes an unapproved template version. Approval stays its own act. */
-  createTemplate(input: TemplateDraft): Promise<SequenceState>;
-  publish(input: { readonly sequenceVersionId: string }): Promise<SequenceState>;
-  retire(input: { readonly sequenceVersionId: string }): Promise<SequenceState>;
-  approveTemplate(input: { readonly templateVersionId: string }): Promise<SequenceState>;
-  enroll(input: {
-    readonly sequenceVersionId: string;
-    readonly opportunityId: string;
-    readonly firmId: string;
-    readonly contactId: string;
-  }): Promise<SequenceState>;
-  /** Lane g88: read the resume review for one held enrollment. */
-  reviewEnrollment(input: { readonly enrollmentId: string }): Promise<SequenceState>;
-  closeReview(): Promise<SequenceState>;
-  /**
-   * The confirmation. Since lane g88 it resumes only the enrollment whose review is on
-   * screen; asked for any other, it opens that one's review instead.
-   */
-  resumeEnrollment(input: { readonly enrollmentId: string }): Promise<SequenceState>;
-}
-
-declare global {
-  /** The bridge the preload script installs, exactly as G2's `callie` is installed. */
-  var callieSequences: SequenceBridge | undefined;
-}
+/**
+ * The long-hold review went with the seven-day review itself (wave 2, S4.1): an
+ * enrollment held that long resumes on its own, `review_required` is never sent, and
+ * neither `/enrollments/resume/preview` nor `/enrollments/resume` has a caller here.
+ */

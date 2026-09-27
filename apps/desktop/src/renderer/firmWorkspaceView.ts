@@ -1,4 +1,5 @@
 import { IMPORT_ISSUE_CODES, type RouteDto } from '@fss/contracts';
+import { OFFLINE_BANNER } from './readError.ts';
 import type { CrmScreen, CrmState, MergeView } from './firmWorkspaceContract.ts';
 
 /**
@@ -46,7 +47,7 @@ export const IMPORT_HEADING = 'Import firms';
  * person who cannot file one.
  */
 export const CRM_NOTICES: Readonly<Record<string, string>> = Object.freeze({
-  offline: 'Callie cannot reach the server. Changes will fail until it reconnects.',
+  offline: OFFLINE_BANNER,
   client_upgrade_required: 'This version of Callie is out of date. Install the current build to continue.',
   not_assigned: 'This firm is assigned to somebody else, so it cannot be changed here.',
   admin_only: 'Only an administrator can do that.',
@@ -72,12 +73,7 @@ export const CRM_NOTICES: Readonly<Record<string, string>> = Object.freeze({
   import_file_too_large: 'That file is larger than 512 KB. Split it and import each part.',
   duplicate_in_workspace: 'That firm is already here. Open it, or change the website or the name.',
   malformed_body: 'Callie could not send that. Check the fields and try again.',
-  // Lane g88: confirming a number, putting a firm in the pipeline, enrolling a contact.
-  route_confirmed: 'Number confirmed. It can be called now.',
-  route_version_stale: 'That number changed since this page was drawn. Look again before confirming it.',
-  route_invalid: 'That number failed validation, so it cannot be confirmed by hand. Add the right number instead.',
-  route_retired: 'That number was retired.',
-  route_unknown: 'That number is no longer here.',
+  // Lane g88: putting a firm in the pipeline, enrolling a contact.
   opportunity_opened: 'In the pipeline, at the first stage.',
   opportunity_open_exists: 'This firm is already in the pipeline.',
   enrolled: 'Enrolled. The first step is on its way to Today.',
@@ -114,7 +110,6 @@ const INFO_NOTICES: ReadonlySet<string> = new Set([
   'stage_changed',
   'firm_added',
   'imported',
-  'route_confirmed',
   'opportunity_opened',
   'enrolled',
   'route_check_queued',
@@ -143,7 +138,7 @@ export function buildFirmWorkspaceView(state: CrmState): FirmWorkspaceView {
   const showsDetail = state.firm !== null && state.firm.visibility === 'assigned_or_admin';
   const redactionNotice =
     state.firm !== null && !showsDetail
-      ? 'This firm is assigned to somebody else. You can see who it is and where it stands, and nothing else.'
+      ? 'This firm is assigned to somebody else, so only where it stands is shown here.'
       : null;
 
   return {

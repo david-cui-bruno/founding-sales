@@ -1,4 +1,5 @@
 import type { DesktopState, MailboxState } from '../shared/contract.ts';
+import { OFFLINE_SENTENCE } from './readError.ts';
 
 /**
  * What the window shows, as a pure function of the state the main process sent.
@@ -43,7 +44,7 @@ const NOTICES: Readonly<Record<string, string>> = Object.freeze({
   handoff_expired: 'That sign-in took too long. Start it again.',
   sign_in_timed_out: 'The browser did not finish signing in. Start it again.',
   signed_out: 'Signed out.',
-  offline: 'Callie cannot reach the server.',
+  offline: OFFLINE_SENTENCE,
   workspace_required: 'Enter the workspace ID to sign in on this Mac the first time.',
 });
 
@@ -127,7 +128,7 @@ const SYNC_LABELS: Readonly<Record<NonNullable<NonNullable<MailboxState['status'
   });
 
 const MAILBOX_NOTICES: Readonly<Record<string, string>> = Object.freeze({
-  offline: 'Callie cannot reach the server.',
+  offline: OFFLINE_SENTENCE,
   not_signed_in: 'Sign in before connecting Gmail.',
   client_upgrade_required: 'This version of Callie is out of date. Install the current build to continue.',
   mailbox_already_connected: 'Gmail is already connected.',

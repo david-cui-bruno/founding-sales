@@ -106,7 +106,7 @@ test('the sidebar names the four selling views with their keys, and Settings at 
   // The column changes and the sidebar stays: no second window, no reload.
   await page.getByTestId('nav-settings').click();
   await expect(page.getByTestId('heading')).toHaveText('Settings');
-  await expect(page.getByTestId('tab-settings')).toHaveClass(/tab-current/u);
+  await expect(page.getByTestId('tab-settings')).toHaveAttribute('aria-current', 'page');
   await expect(page.getByTestId('nav-settings')).toHaveAttribute('aria-current', 'page');
   await expect(page.getByTestId('column')).toHaveAttribute('data-route', 'settings/administration');
 
@@ -119,7 +119,7 @@ test('the sidebar names the four selling views with their keys, and Settings at 
   await expect(page.getByTestId('heading')).toHaveText('Replies');
   await expect(page.getByTestId('nav-replies')).toHaveAttribute('aria-current', 'page');
   await expect(page.getByTestId('nav-today')).not.toHaveAttribute('aria-current', 'page');
-  expect(called('admin.show')).toEqual([{ screen: 'settings' }, { screen: 'dashboard' }]);
+  expect(called('settings.show')).toEqual([{ screen: 'settings' }, { screen: 'dashboard' }]);
 });
 
 test('the sidebar says what state the system is in, in dots and words', async ({ page }) => {
@@ -172,7 +172,7 @@ test('Needs you lists only what the bridges say is missing, and each row does it
   await rows.filter({ hasText: 'Add your calling number' }).getByTestId('needs-open').click();
   await expect(page.getByTestId('calling-number')).toBeInViewport();
   await expect(page.getByTestId('nav-settings')).toHaveAttribute('aria-current', 'page');
-  expect(called('admin.show')).toEqual([{ screen: 'settings' }]);
+  expect(called('settings.show')).toEqual([{ screen: 'settings' }]);
 });
 
 test('each Needs-you Open lands on its own section: the domain in Settings, the alerts in Diagnostics', async ({ page }) => {
@@ -183,15 +183,15 @@ test('each Needs-you Open lands on its own section: the domain in Settings, the 
   await expect(page.getByTestId('sending-admin')).toBeInViewport();
   await page.getByTestId('nav-today').click();
   await page.getByTestId('needs-row').filter({ hasText: 'alert to acknowledge' }).getByTestId('needs-open').click();
-  await expect(page.getByTestId('tab-diagnostics')).toHaveClass(/tab-current/u);
+  await expect(page.getByTestId('tab-diagnostics')).toHaveAttribute('aria-current', 'page');
   await expect(page.getByTestId('alerts')).toBeInViewport();
-  expect(called('admin.show')).toEqual([{ screen: 'settings' }, { screen: 'diagnostics' }]);
+  expect(called('settings.show')).toEqual([{ screen: 'settings' }, { screen: 'diagnostics' }]);
 });
 
-test('a saved number that is not attested is asked to be attested, not added again (lane g69)', async ({ page }) => {
-  // What an unticked Add leaves behind: the number is registered, unverified and
-  // disabled, and Today still has no Call button. Until g69 Home said "Add your calling
-  // number" and "No calling number" here, and a second Add is what that invites.
+test('a number an older Callie left unattested is asked for again, in the one row (wave 2, S4.3)', async ({ page }) => {
+  // Registering a number attests it since wave 2, so an unverified number can only be
+  // one an older version of Callie left behind. Today still has no Call button, and the
+  // one thing to do about it is to add the number again — which is what the row says.
   server = await startAppServer({
     admin: readyAdmin({
       callingNumbers: [
@@ -201,15 +201,17 @@ test('a saved number that is not attested is asked to be attested, not added aga
   });
   await page.goto(server.url());
 
-  await expect(page.getByTestId('status-calling')).toHaveText('Calling number needs attestation');
+  await expect(page.getByTestId('status-calling')).toHaveText('No calling number');
   await expect(page.getByTestId('status-calling')).toHaveAttribute('data-tone', 'warn');
-  await expect(page.getByTestId('needs-label')).toHaveText(['Attest your calling number']);
-  await expect(page.getByTestId('needs-detail')).toHaveText(['Your number is saved. Open Your calling number and attest it.']);
+  await expect(page.getByTestId('needs-label')).toHaveText(['Add your calling number']);
+  await expect(page.getByTestId('needs-detail')).toHaveText([
+    'The number you have was never confirmed, so Callie cannot call from it. Add it again.',
+  ]);
 
-  // Administration opens at Your calling number, where the saved row has its own Attest button.
+  // Administration opens at Your calling number, where the form is.
   await page.getByTestId('needs-row').getByTestId('needs-open').click();
   await expect(page.getByTestId('calling-number')).toBeInViewport();
-  await expect(page.getByTestId('calling-number-summary')).toContainText('None of your numbers is attested');
+  await expect(page.getByTestId('calling-number-summary')).toContainText('None of your numbers is in use');
 });
 
 test('with everything in order, Needs you says so in one grey line', async ({ page }) => {
@@ -247,7 +249,7 @@ test('the last 7 days are read over the last seven days, and a figure not in thi
   await expect(page.getByTestId('figure-emails')).toHaveText('Emails sent—not in this build');
   await expect(page.getByTestId('figures-line')).toHaveCount(0);
 
-  const [window] = called('admin.loadDashboard') as { from: string; to: string }[];
+  const [window] = called('settings.loadDashboard') as { from: string; to: string }[];
   if (window === undefined) throw new Error('no dashboard read');
   expect(Date.parse(window.to) - Date.parse(window.from)).toBe(7 * 24 * 60 * 60 * 1000);
 });
@@ -362,10 +364,10 @@ test('what a person is typing survives the window regaining focus', async ({ pag
   await settled(page);
 
   await page.getByTestId('snooze-reason').nth(1).fill('Waiting on their board');
-  const reads = called('admin.state').length;
+  const reads = called('settings.state').length;
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   // The sidebar is read again on focus; the lanes, which hold the text, are not redrawn.
-  await expect.poll(() => called('admin.state').length).toBeGreaterThan(reads);
+  await expect.poll(() => called('settings.state').length).toBeGreaterThan(reads);
   await expect(page.getByTestId('snooze-reason').nth(1)).toHaveValue('Waiting on their board');
 });
 
@@ -401,9 +403,9 @@ test('a read Home makes by itself keeps the focus and the caret where they were'
     (field as HTMLInputElement).setSelectionRange(12, 12);
   });
 
-  const reads = called('admin.state').length;
+  const reads = called('settings.state').length;
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-  await expect.poll(() => called('admin.state').length).toBeGreaterThan(reads);
+  await expect.poll(() => called('settings.state').length).toBeGreaterThan(reads);
 
   const after = await reason.evaluate(field => ({
     focused: document.activeElement === field,
@@ -631,8 +633,15 @@ test('an empty list says what to do next in one grey line', async ({ page }) => 
   await expect(page.getByTestId('summary')).toHaveText('');
 });
 
-test('a page built without the Today and administration bridges says so where they would be', async ({ page }) => {
-  server = await startAppServer({ without: ['callieApi', 'callieAdmin'], mailbox: connectedMailbox() });
+/**
+ * One bridge since 1.0.13, so there is one thing to be without.
+ *
+ * Until 1.0.13 each view had a channel of its own and a page could be missing any one
+ * of them; now the registry is all of them, and a window built without it says so
+ * everywhere rather than drawing an empty Today or a zero.
+ */
+test('a page built without the operation registry says so wherever an answer would be', async ({ page }) => {
+  server = await startAppServer({ without: ['callieApi'], mailbox: connectedMailbox() });
   await page.goto(server.url());
 
   await expect(page.getByTestId('heading')).toHaveText('Monday, 21 September');
@@ -640,6 +649,6 @@ test('a page built without the Today and administration bridges says so where th
   await expect(page.getByTestId('today-card')).toHaveCount(0);
   await expect(page.getByTestId('figures-line')).toHaveText('Unavailable in this build');
   await expect(page.getByTestId('status-calling')).toHaveText('Calling number: unavailable in this build');
-  await expect(page.getByTestId('status-mailbox')).toHaveText('Mailbox connected · sales@example.test');
+  await expect(page.getByTestId('status-mailbox')).toHaveText('Mailbox: unavailable in this build');
   await expect(page.getByTestId('needs-empty')).toHaveText('Unavailable in this build');
 });

@@ -70,15 +70,15 @@ test('Administration is read-only while a Save is on the wire, and a Save withou
 
   const save = page.getByTestId('save-business_time_zone');
   await page.getByTestId('field-business_time_zone-timeZone').selectOption('America/Denver');
-  const release = server.hold('admin.saveSetting');
+  const release = server.hold('settings.saveSetting');
   await save.click();
-  await expect.poll(() => called('admin.saveSetting').length).toBe(1);
+  await expect.poll(() => called('settings.saveSetting').length).toBe(1);
   await expect(page.getByTestId('column')).toHaveAttribute('aria-busy', 'true');
   await pressAgain(page, save);
 
   release();
   await expect(page.getByTestId('column')).not.toHaveAttribute('aria-busy', 'true');
-  expect(called('admin.saveSetting')).toEqual([{ settingKey: 'business_time_zone', value: { timeZone: 'America/Denver' }, changeNote: '' }]);
+  expect(called('settings.saveSetting')).toEqual([{ settingKey: 'business_time_zone', value: { timeZone: 'America/Denver' }, changeNote: '' }]);
 });
 
 test('a Mac that has signed in before is one button: no workspace, no name', async ({ page }) => {

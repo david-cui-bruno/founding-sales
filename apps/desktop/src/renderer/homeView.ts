@@ -8,7 +8,7 @@ import type { BannerView, CardView, TodayScreenView } from './todayView.ts';
 import { buildMailboxView } from './viewModel.ts';
 
 /**
- * Home, as a pure function of what the four bridges said (lane g65; specification 8.2,
+ * Home, as a pure function of what the registry answered (lane g65; specification 8.2,
  * 13.4, 14.2).
  *
  * Home is the main window once a person is signed in: the Today lanes in one column, a
@@ -91,8 +91,16 @@ export interface FiguresRead {
 export interface HomeInput {
   /** Signed in: `screen` is `today` and `device` is set. */
   readonly desktop: DesktopState;
-  /** Which bridges the preload installed on this page. */
-  readonly bridges: { readonly today: boolean; readonly mailbox: boolean; readonly admin: boolean };
+  /**
+   * Whether the operation registry is installed on this page (1.0.13).
+   *
+   * One flag, because there is one way in: `callieApi`. Until 1.0.13 this was three —
+   * Today, the mailbox and the administration bridge were three named channels the
+   * preload could install separately — and the three could never actually differ, so the
+   * page had three sentences for one state. A page without the preload is a real build
+   * (the Playwright harness runs one on purpose), which is why the state is kept at all.
+   */
+  readonly hasOperations: boolean;
   /** Null until `callieToday` has answered. */
   readonly today: TodayState | null;
   /** The lanes view model `buildTodayView` made from `today`. */
@@ -157,7 +165,7 @@ export interface HomeView {
   readonly summary: string | null;
   /** Quiet lines at the top of the column: offline, stale, and the last notice. */
   readonly notices: readonly BannerView[];
-  /** Null when `callieToday` is absent: the lanes then say `UNAVAILABLE`. */
+  /** Null when the registry is absent: the lanes then say `UNAVAILABLE`. */
   readonly lanes: { readonly sections: readonly LaneSection[]; readonly emptyLine: string | null } | null;
   readonly status: readonly StatusRow[];
   readonly needs: readonly NeedsRow[];
@@ -323,7 +331,7 @@ function missingNumber(numbers: readonly CallingNumberView[]): 'none' | 'unattes
 
 function mailboxStatus(input: HomeInput): StatusRow {
   const row = (tone: Tone, text: string): StatusRow => ({ key: 'mailbox', tone, text });
-  if (!input.bridges.mailbox) return row('none', `Mailbox: ${UNAVAILABLE.toLowerCase()}`);
+  if (!input.hasOperations) return row('none', `Mailbox: ${UNAVAILABLE.toLowerCase()}`);
   const status = input.mailbox?.status;
   if (status === undefined) return row('none', `Mailbox: ${CHECKING.toLowerCase()}`);
   if (status === null) return row('none', 'Mailbox status unknown');
@@ -335,8 +343,8 @@ function mailboxStatus(input: HomeInput): StatusRow {
 function adminRows(input: HomeInput): readonly StatusRow[] {
   const admin = input.admin;
   const isAdmin = input.desktop.device?.role === 'admin';
-  if (!input.bridges.admin || admin === null) {
-    const text = input.bridges.admin ? CHECKING.toLowerCase() : UNAVAILABLE.toLowerCase();
+  if (!input.hasOperations || admin === null) {
+    const text = input.hasOperations ? CHECKING.toLowerCase() : UNAVAILABLE.toLowerCase();
     return [
       { key: 'calling', tone: 'none', text: `Calling number: ${text}` },
       { key: 'sending', tone: 'none', text: `Sending: ${text}` },
@@ -346,16 +354,15 @@ function adminRows(input: HomeInput): readonly StatusRow[] {
 
   const numbers = admin.callingNumbers;
   const number = numbers === null ? null : inUse(numbers);
-  // A saved number that is not attested is not "no number" (lane g69): the person has
-  // one, and the thing missing is their statement about it.
+  // Adding a number attests it since wave 2 (S4.3), so there is one thing that can be
+  // missing and one sentence for it. A number an older release left unattested is one
+  // Callie still cannot call from, and the remedy is the same: add it.
   const calling: StatusRow =
     numbers === null
       ? { key: 'calling', tone: 'none', text: 'Calling number not read' }
       : number !== null
         ? { key: 'calling', tone: 'ok', text: `Calling from ${maskedNumber(number.e164)}` }
-        : missingNumber(numbers) === 'unattested'
-          ? { key: 'calling', tone: 'warn', text: 'Calling number needs attestation' }
-          : { key: 'calling', tone: 'warn', text: 'No calling number' };
+        : { key: 'calling', tone: 'warn', text: 'No calling number' };
 
   // 16.2's two switches, ANDed by the server. Read out, never recombined.
   const sending: StatusRow =
@@ -444,7 +451,7 @@ export function needsRows(input: HomeInput): readonly NeedsRow[] {
   const isAdmin = input.desktop.device?.role === 'admin';
 
   const status = input.mailbox?.status ?? null;
-  if (input.bridges.mailbox && status !== null && !status.connected) {
+  if (input.hasOperations && status !== null && !status.connected) {
     const view = buildMailboxView(input.mailbox, { waiting: input.mailboxWaiting });
     rows.push({
       key: 'connect_gmail',
@@ -458,7 +465,7 @@ export function needsRows(input: HomeInput): readonly NeedsRow[] {
     });
   }
 
-  const admin = input.bridges.admin ? input.admin : null;
+  const admin = input.hasOperations ? input.admin : null;
   if (admin !== null) {
     if (admin.callingNumbers !== null && inUse(admin.callingNumbers) === null) {
       rows.push(callingNumberNeed(missingNumber(admin.callingNumbers)));
@@ -485,31 +492,31 @@ export function needsRows(input: HomeInput): readonly NeedsRow[] {
   return rows;
 }
 
-/** The calling-number row, worded for what is missing. Administration opens at the section. */
+/**
+ * The calling-number row: Today has no Call button without it (lane g60).
+ *
+ * One row since 1.0.13, because there is one remedy. Adding a number attests it (wave 2,
+ * S4.3), so "not attested yet" and "retired" are both "a number Callie cannot call from",
+ * and the way out of either is to add the number — which is what the section offers.
+ */
 function callingNumberNeed(missing: 'none' | 'unattested' | 'retired'): NeedsRow {
   const action: NeedsAction = { kind: 'open', route: { name: 'settings', tab: 'administration', section: 'calling-number' }, label: 'Open' };
-  if (missing === 'unattested') {
-    return {
-      key: 'calling_number',
-      label: 'Attest your calling number',
-      detail: 'Your number is saved. Open Your calling number and attest it.',
-      action,
-    };
-  }
-  if (missing === 'retired') {
-    return {
-      key: 'calling_number',
-      label: 'Re-attest your calling number',
-      detail: 'Your number was retired. Open Your calling number and attest it again.',
-      action,
-    };
-  }
-  return { key: 'calling_number', label: 'Add your calling number', detail: null, action };
+  return {
+    key: 'calling_number',
+    label: 'Add your calling number',
+    detail:
+      missing === 'none'
+        ? null
+        : missing === 'retired'
+          ? 'The number you had was stopped. Add it again to call from it.'
+          : 'The number you have was never confirmed, so Callie cannot call from it. Add it again.',
+    action,
+  };
 }
 
 function needsLine(input: HomeInput, rows: readonly NeedsRow[]): string | null {
   if (rows.length > 0) return null;
-  if (!input.bridges.mailbox || !input.bridges.admin) return UNAVAILABLE;
+  if (!input.hasOperations) return UNAVAILABLE;
   if (input.mailbox === null || input.admin === null) return CHECKING;
   return NOTHING_NEEDS_YOU;
 }
@@ -606,12 +613,12 @@ function noticesOf(input: HomeInput, desktopBanners: readonly BannerView[]): rea
 export function buildHomeView(input: HomeInput, desktopBanners: readonly BannerView[]): HomeView {
   const snapshotDate = input.today?.snapshotDate ?? input.desktop.today?.snapshotDate ?? null;
   const zone = input.today?.businessTimeZone ?? input.desktop.today?.businessTimeZone ?? null;
-  const sendingOff = input.bridges.admin && input.admin?.settings?.effectiveSendingEnabled === false;
+  const sendingOff = input.hasOperations && input.admin?.settings?.effectiveSendingEnabled === false;
 
-  const today = input.bridges.today ? input.today : null;
-  const todayView = input.bridges.today ? input.todayView : null;
+  const today = input.hasOperations ? input.today : null;
+  const todayView = input.hasOperations ? input.todayView : null;
   const lanes =
-    !input.bridges.today
+    !input.hasOperations
       ? null
       : {
           sections: todayView === null ? [] : laneSections(todayView.cards),
@@ -636,6 +643,6 @@ export function buildHomeView(input: HomeInput, desktopBanners: readonly BannerV
     status: statusRows(input),
     needs,
     needsLine: needsLine(input, needs),
-    figures: figuresView({ admin: input.bridges.admin, figures: input.figures }),
+    figures: figuresView({ admin: input.hasOperations, figures: input.figures }),
   };
 }

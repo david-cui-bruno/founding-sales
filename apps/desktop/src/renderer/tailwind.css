@@ -8,25 +8,16 @@
  * stays `style-src 'self'` with one static file, and Tailwind's compilation needs no
  * download after `npm ci` — it is a dependency like esbuild.
  *
- * **Preflight is in `base`, under `legacy`.** Tailwind's reset is a global one and the
- * views that are still hand-rolled DOM (Firms, Sequences, the three Settings tabs) were
- * drawn against the element styles in `legacy.css` — so the order of the layers is what
- * keeps both true. Preflight gives a React button no border and no background for the
- * utilities to fight; `legacy.css`, one layer above it, gives a hand-rolled button the
- * border it has always had. Neither reaches the other, because `legacy.css` is
- * `@scope ([data-legacy])` and applies only inside a `LegacyView` host.
- *
- * **`legacy.css` sits in its own layer, below the utilities.** Unlayered CSS outranks
- * every layer, so importing it plainly would let `button { … }` beat `class="rounded-md"`
- * on a React button. In the `legacy` layer it still beats preflight and is still beaten
- * by any utility a converted view asks for, which is the order this release needs.
+ * **Preflight is the only reset.** 1.0.12 carried `legacy.css` in a layer of its own,
+ * scoped to `[data-legacy]`, because the views that were still hand-rolled DOM had been
+ * drawn against its element rules. 1.0.13 converted the last of them, so the file, the
+ * scope, the attribute and the layer are gone: there is one reset and the utilities.
  */
 
-@layer theme, base, legacy, components, utilities;
+@layer theme, base, components, utilities;
 
 @import 'tailwindcss/theme.css' layer(theme);
 @import 'tailwindcss/preflight.css' layer(base);
-@import './legacy.css' layer(legacy);
 @import 'tailwindcss/utilities.css' layer(utilities);
 @import 'tw-animate-css';
 

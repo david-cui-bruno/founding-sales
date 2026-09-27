@@ -40,11 +40,22 @@ export function settingsSnapshot(overrides: Record<string, unknown> = {}): NonNu
         changedByUserId: ADMIN_ID,
         changeNote: 'the office moved',
       },
+      // `GET /settings?include=postal_address` (migration 0020, lane W3-F): the route
+      // answers the default row when nobody has set one, as it does for every key.
+      {
+        settingKey: 'postal_address',
+        value: { address: null },
+        version: 0,
+        changedAt: null,
+        changedByUserId: null,
+        changeNote: null,
+      },
     ],
+    // Still sent by the route; 1.0.13 draws no "Elsewhere" section for it (D6).
     elsewhere: [
+      { topic: 'State postures', path: '/postures', ownedBy: 'G4 policy' },
       { topic: 'Research limits', path: '/research/config', ownedBy: 'G10 research' },
       { topic: 'Sending caps and the ramp', path: '/outbound/cap', ownedBy: 'G7-2 sending' },
-      { topic: 'State postures', path: '/postures', ownedBy: 'G4 policy' },
     ],
     holidayCalendar: { version: '2026-federal', dates: ['2026-12-25'] },
     deploymentSendingEnabled: false,
@@ -249,22 +260,22 @@ export function adminAnswer(
   if (method === 'openHistory') {
     state = { ...state, notice: null, history: settingHistoryAnswer() };
   }
-  // Lane g84. Texas is refused as overlapping, the way the server refuses a state
-  // that already has a posture in force; any other state is recorded and listed.
-  if (method === 'recordPosture' && state.postures !== undefined && state.postures !== null) {
-    const asked = argument as { state: string; effectiveFromDate: string };
-    if (asked.state === 'TX') {
-      state = { ...state, notice: 'posture_overlapping' };
+  // Lane g84; wave 2, S4.2. Several states with one confirmation. Texas is refused,
+  // the way the server refuses a body it will not take, so a spec can see the form
+  // come back as it was sent; every other state is added and listed.
+  if (method === 'allowStates' && state.postures !== undefined && state.postures !== null) {
+    const asked = argument as { states: readonly string[] };
+    if (asked.states.includes('TX')) {
+      state = { ...state, notice: 'invalid_input' };
     } else {
-      const added = recordedPosture({
-        id: '55555555-5555-4555-8555-555555555555',
-        state: asked.state,
-        effectiveFrom: `${asked.effectiveFromDate}T05:00:00.000Z`,
-      });
+      const held = new Set((state.postures.records ?? []).filter(row => row.revokedAt === null).map(row => row.state));
+      const added = asked.states
+        .filter(one => !held.has(one))
+        .map((one, index) => recordedPosture({ id: `5555555${String(index)}-5555-4555-8555-555555555555`, state: one }));
       state = {
         ...state,
-        notice: 'posture_recorded',
-        postures: { ...state.postures, records: [...(state.postures.records ?? []), added] },
+        notice: added.length === 0 ? 'posture_already_allowed' : 'posture_recorded',
+        postures: { ...state.postures, records: [...(state.postures.records ?? []), ...added] },
       };
     }
   }

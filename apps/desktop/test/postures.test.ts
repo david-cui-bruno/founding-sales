@@ -1,17 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import type { PostureReferenceResponse, SettingsSnapshot, StatePostureView } from '@fss/contracts';
 import { createAuthedClient } from '../src/main/authedClient.ts';
-import { createAdminBridge, recordPostureBody } from '../src/main/settingsBridge.ts';
-import { businessZoneOf, postureFormIssues, postureSection } from '../src/renderer/postureView.ts';
+import { createAdminBridge } from '../src/main/settingsBridge.ts';
+import { allowStatesIssues, businessZoneOf, postureSection } from '../src/renderer/postureView.ts';
 import { adminViewOf } from '../src/renderer/settingsView.ts';
-import type { AdminState, RecordPostureInput } from '../src/renderer/settingsContract.ts';
+import type { AdminState, AllowStatesInput } from '../src/renderer/settingsContract.ts';
 
 /**
- * The postures form (lane g84, audit item G04): its body, its checks, its view and the
- * bridge that sends it. No Electron and no DOM; `e2e/postures.spec.ts` presses the form.
+ * The "OK to call" list (lane g84, audit item G04; wave 2, S4.2 and D5): its checks, its
+ * view and the bridge that sends it. No Electron and no DOM; `e2e/postures.spec.ts`
+ * presses the section.
  *
- * The body is the half that can be wrong silently: a date sent as UTC midnight rather
- * than the business zone's would put a posture in force five or six hours early or late.
+ * Since wave 2 there is no date and no review to get wrong: several states, one
+ * confirmation, and the server records the statements and the citations from the release.
  */
 
 const REFERENCE: PostureReferenceResponse = {
@@ -48,11 +49,9 @@ const posture = (overrides: Partial<StatePostureView> = {}): StatePostureView =>
   ...overrides,
 });
 
-const input = (overrides: Partial<RecordPostureInput> = {}): RecordPostureInput => ({
-  state: 'ma',
-  effectiveFromDate: '2026-10-01',
-  reviewDate: '',
-  confirmedStatements: ['federal_rules_apply', 'state_rules_checked'],
+const input = (overrides: Partial<AllowStatesInput> = {}): AllowStatesInput => ({
+  states: ['MA'],
+  confirmed: true,
   note: '  Read the registration page.  ',
   ...overrides,
 });
@@ -114,97 +113,54 @@ function scriptedApi(answer: (path: string) => HttpAnswer | undefined) {
 
 const session = (role: 'admin' | 'salesperson' = 'admin') => ({ online: true, mayMutate: true, device: { role } });
 
-describe('the posture body', () => {
-  it('sends each date as midnight in the business zone, the state upper-cased and the note trimmed', () => {
-    expect(recordPostureBody(input(), 'America/Chicago')).toEqual({
-      state: 'MA',
-      effectiveFrom: '2026-10-01T05:00:00.000Z',
-      confirmedStatements: ['federal_rules_apply', 'state_rules_checked'],
-      note: 'Read the registration page.',
-    });
-    // A review date is sent when given; in January Chicago is six hours behind UTC.
-    expect(recordPostureBody(input({ reviewDate: '2027-01-15', note: '' }), 'America/Chicago')).toEqual({
-      state: 'MA',
-      effectiveFrom: '2026-10-01T05:00:00.000Z',
-      reviewAt: '2027-01-15T06:00:00.000Z',
-      confirmedStatements: ['federal_rules_apply', 'state_rules_checked'],
-    });
+describe('the checks before the list is sent', () => {
+  it('passes a chosen, confirmed list', () => {
+    expect(allowStatesIssues({ states: ['MA', 'RI'], confirmed: true, note: '' })).toEqual([]);
   });
 
-  it('is null when a date is not one', () => {
-    expect(recordPostureBody(input({ effectiveFromDate: '2026-02-30' }), 'America/New_York')).toBeNull();
-    expect(recordPostureBody(input({ reviewDate: 'soon' }), 'America/New_York')).toBeNull();
-  });
-});
-
-describe('the posture checks', () => {
-  const context = { statementCount: 2, records: [posture()], zone: 'America/New_York' };
-
-  it('passes a complete form', () => {
-    expect(postureFormIssues(input(), context)).toEqual([]);
-  });
-
-  it('names every field at fault', () => {
-    const issues = postureFormIssues(
-      input({ state: '', effectiveFromDate: '', reviewDate: 'x', confirmedStatements: ['federal_rules_apply'], note: 'n'.repeat(1001) }),
-      context,
-    );
-    expect(issues.map(issue => issue.field)).toEqual(['state', 'effectiveFrom', 'reviewDate', 'statements', 'note']);
-    expect(issues.find(issue => issue.field === 'statements')?.text).toBe(
-      'Tick every statement. A partial confirmation is not a posture.',
+  it('names every field at fault, as the server would refuse it', () => {
+    const issues = allowStatesIssues({ states: [], confirmed: false, note: 'n'.repeat(1001) });
+    expect(issues.map(issue => issue.field)).toEqual(['states', 'confirmed', 'note']);
+    expect(issues.find(issue => issue.field === 'confirmed')?.text).toBe(
+      'Confirm that you have read the rules quoted for these states.',
     );
   });
 
-  it('refuses a review date on or before the day it takes effect', () => {
-    expect(postureFormIssues(input({ reviewDate: '2026-10-01' }), context).map(issue => issue.field)).toEqual(['reviewDate']);
-  });
-
-  it('says a state with an unrevoked posture must be revoked first, as the server would', () => {
-    expect(postureFormIssues(input({ state: 'ri' }), context)).toEqual([
-      { field: 'state', text: 'RI already has a posture in force. Revoke it first, or start this one after it ends.' },
-    ]);
-    // A revoked posture, or one that ends before the new one starts, is no obstacle.
-    const revoked = { ...context, records: [posture({ revokedAt: '2026-09-20T00:00:00.000Z' })] };
-    expect(postureFormIssues(input({ state: 'RI' }), revoked)).toEqual([]);
-    const ended = { ...context, records: [posture({ effectiveTo: '2026-10-01T04:00:00.000Z' })] };
-    expect(postureFormIssues(input({ state: 'RI' }), ended)).toEqual([]);
+  it('refuses more states than the command takes', () => {
+    const many = Array.from({ length: 61 }, (_value, index) => `S${String(index)}`);
+    expect(allowStatesIssues({ states: many, confirmed: true, note: '' }).map(issue => issue.field)).toEqual(['states']);
   });
 });
 
 describe('the postures section', () => {
   const now = new Date('2026-09-25T15:00:00.000Z');
 
-  it('lists each posture with its status, and offers the quoted states first', () => {
+  it('lists the states on the list, and offers the quoted ones first among the rest', () => {
     const state = adminState({
       postures: {
         reference: REFERENCE,
         readError: null,
         records: [
           posture(),
-          posture({ id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2', state: 'AL', reviewAt: '2026-09-20T05:00:00.000Z' }),
           posture({ id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb3', state: 'AL', revokedAt: '2026-08-01T00:00:00.000Z' }),
         ],
       },
     });
     const section = postureSection(state, 'America/New_York', now);
-    expect(section?.rows.map(row => [row.state, row.tag.text, row.canRevoke])).toEqual([
-      ['AL', 'Review overdue', true],
-      ['AL', 'Revoked', false],
-      ['RI', 'In force', true],
-    ]);
-    expect(section?.rows[2]?.line).toBe('Rhode Island (RI) · revision 1 · from 2026-09-01 · review by 2027-09-01');
-    expect(section?.summary).toContain('In force: RI.');
-    expect(section?.stateOptions.map(option => option.value)).toEqual(['RI', 'AL']);
+    // A revoked posture is not on the list, and its state is offered again.
+    expect(section?.rows.map(row => [row.state, row.canRevoke])).toEqual([['RI', true]]);
+    expect(section?.rows[0]?.line).toBe('Rhode Island (RI) — since 2026-09-01');
+    expect(section?.summary).toContain('on this list: RI.');
+    expect(section?.stateOptions.map(option => option.value)).toEqual(['AL']);
     expect(section?.rules['RI']?.summary).toBe('Rhode Island summary.');
     expect(section?.rules['AL']).toBeNull();
     expect(section?.editable).toBe(true);
-    expect(JSON.parse(section?.json ?? '[]')).toHaveLength(3);
   });
 
   it('is read-only to a salesperson, and says so', () => {
     const section = postureSection(adminState({ role: 'salesperson' }), 'America/New_York', now);
     expect(section?.editable).toBe(false);
-    expect(section?.notEditableBecause).toBe('Only an admin can record or revoke a posture.');
+    expect(section?.notEditableBecause).toBe('Only an admin can change this list.');
   });
 
   it('says when the postures could not be read, and offers nothing to record', () => {
@@ -213,18 +169,12 @@ describe('the postures section', () => {
       'America/New_York',
       now,
     );
-    expect(section?.unread).toMatch(/^Callie could not read the postures\./u);
+    expect(section?.unread).toMatch(/^Callie could not read which states you call\./u);
     expect(section?.editable).toBe(false);
   });
 
   it('is absent before the bridge has read anything', () => {
     expect(postureSection(adminState({ postures: null }), 'America/New_York', now)).toBeNull();
-  });
-
-  it('points the settings list at the form rather than at the path', () => {
-    const snapshot = { ...settingsBody, settings: [] };
-    const view = adminViewOf(adminState({ settings: snapshot }), now);
-    expect(view.elsewhere.find(entry => entry.path === '/postures')?.editedHere).toBe('Calling postures');
   });
 
   it("takes the business zone from the settings, New York before they are read", () => {
@@ -233,8 +183,8 @@ describe('the postures section', () => {
   });
 });
 
-describe('the administration bridge and postures', () => {
-  it('reads the reference once, records in the business zone and reads the list again', async () => {
+describe('the administration bridge and the "OK to call" list', () => {
+  it('reads the reference once, sends the list with one confirmation and reads it again', async () => {
     const lists = [
       { status: 200, body: { postures: [] } },
       { status: 200, body: { postures: [posture({ state: 'MA', effectiveFrom: '2026-10-01T05:00:00.000Z' })] } },
@@ -244,8 +194,15 @@ describe('the administration bridge and postures', () => {
       if (path === '/pipeline/stages') return { status: 200, body: { stages: [] } };
       if (path === '/postures/reference') return { status: 200, body: REFERENCE };
       if (path === '/postures') return lists.shift();
-      if (path === '/postures/record') {
-        return { status: 200, body: { status: 'accepted', replayed: false, result: posture({ state: 'MA' }) } };
+      if (path === '/postures/allow') {
+        return {
+          status: 200,
+          body: {
+            status: 'accepted',
+            replayed: false,
+            result: { postures: [posture({ state: 'MA' })], added: ['MA'], alreadyAllowed: [] },
+          },
+        };
       }
       return undefined;
     });
@@ -254,43 +211,55 @@ describe('the administration bridge and postures', () => {
     expect(before.postures?.records).toEqual([]);
     expect(before.postures?.reference?.statements).toHaveLength(2);
 
-    const after = await bridge.recordPosture(input());
+    const after = await bridge.allowStates(input());
     expect(after.notice).toBe('posture_recorded');
     expect(after.postures?.records?.map(row => row.state)).toEqual(['MA']);
-    expect(calls.find(call => call.path === '/postures/record')?.body).toMatchObject({
-      state: 'MA',
-      effectiveFrom: '2026-10-01T05:00:00.000Z',
-      confirmedStatements: ['federal_rules_apply', 'state_rules_checked'],
+    expect(calls.find(call => call.path === '/postures/allow')?.body).toMatchObject({
+      states: ['MA'],
+      confirmed: true,
       note: 'Read the registration page.',
       clientVersion: '1.0.5',
     });
     expect(calls.filter(call => call.path === '/postures/reference')).toHaveLength(1);
     expect(calls.filter(call => call.path === '/postures')).toHaveLength(2);
-    expect(adminViewOf(after).notice).toBe('Posture recorded.');
+    expect(adminViewOf(after).notice).toBe('Added. Callie can call firms in those states now.');
   });
 
-  it("keeps the server's refusal as the notice, in words", async () => {
+  it('says so when every state named was already on the list', async () => {
     const { api } = scriptedApi(path => {
       if (path === '/settings') return { status: 200, body: settingsBody };
       if (path === '/pipeline/stages') return { status: 200, body: { stages: [] } };
       if (path === '/postures/reference') return { status: 200, body: REFERENCE };
       if (path === '/postures') return { status: 200, body: { postures: [posture()] } };
-      if (path === '/postures/record') return { status: 409, body: { status: 'refused', replayed: false, reason: 'posture_overlapping' } };
+      if (path === '/postures/allow') {
+        return {
+          status: 200,
+          body: { status: 'accepted', replayed: false, result: { postures: [posture()], added: [], alreadyAllowed: ['RI'] } },
+        };
+      }
       return undefined;
     });
     const bridge = createAdminBridge({ api, session: { state: async () => await Promise.resolve(session()) } });
     await bridge.state();
-    const refused = await bridge.recordPosture(input({ state: 'RI' }));
-    expect(refused.notice).toBe('posture_overlapping');
-    expect(adminViewOf(refused).notice).toContain('already has a posture in force');
+    const again = await bridge.allowStates(input({ states: ['RI'] }));
+    expect(again.notice).toBe('posture_already_allowed');
+    expect(adminViewOf(again).notice).toBe('Those states were already on the list.');
   });
 
-  it('sends nothing for a date it cannot read', async () => {
-    const { api, calls } = scriptedApi(path => (path === '/settings' ? { status: 200, body: settingsBody } : undefined));
+  it("keeps the server's refusal as the notice", async () => {
+    const { api } = scriptedApi(path => {
+      if (path === '/settings') return { status: 200, body: settingsBody };
+      if (path === '/pipeline/stages') return { status: 200, body: { stages: [] } };
+      if (path === '/postures/reference') return { status: 200, body: REFERENCE };
+      if (path === '/postures') return { status: 200, body: { postures: [posture()] } };
+      if (path === '/postures/allow') return { status: 409, body: { status: 'refused', replayed: false, reason: 'invalid_input' } };
+      return undefined;
+    });
     const bridge = createAdminBridge({ api, session: { state: async () => await Promise.resolve(session()) } });
-    const refused = await bridge.recordPosture(input({ effectiveFromDate: '2026-13-01' }));
-    expect(refused.notice).toBe('posture_date_invalid');
-    expect(calls.some(call => call.path === '/postures/record')).toBe(false);
+    await bridge.state();
+    const refused = await bridge.allowStates(input({ states: ['RI'] }));
+    expect(refused.notice).toBe('invalid_input');
+    expect(adminViewOf(refused).notice).toContain('Choose at least one state');
   });
 
   it('revokes by id and reads the list again', async () => {

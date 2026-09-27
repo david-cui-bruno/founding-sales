@@ -1,6 +1,6 @@
 import {
   alertAcknowledgedResponseSchema,
-  callbackInstant,
+  allowCallingStatesResultSchema,
   callingIdentityChangeResultSchema,
   callingIdentityListSchema,
   dashboardResponseSchema,
@@ -14,18 +14,17 @@ import {
   statePostureListResponseSchema,
   statePostureViewSchema,
   type CallingIdentityDto,
-  type SettingKey,
 } from '@fss/contracts';
-import { businessZoneOf } from '../renderer/postureView.ts';
 import type {
+  ActiveSettingKey,
   AddCallingNumberInput,
   AdminScreen,
   AdminState,
+  AllowStatesInput,
   CallingNumberView,
   PipelineStageRowView,
   PosturesState,
   RecordHolidayCalendarInput,
-  RecordPostureInput,
   RecordSendingAuthenticationInput,
   SaveSettingInput,
   SetSendingCapInput,
@@ -48,29 +47,6 @@ import type { AuthedClient } from './authedClient.ts';
  * that has to have exactly one.
  */
 
-export const ADMIN_IPC_CHANNELS = {
-  state: 'callie:admin:state',
-  show: 'callie:admin:show',
-  saveSetting: 'callie:admin:save-setting',
-  openHistory: 'callie:admin:open-history',
-  loadDashboard: 'callie:admin:load-dashboard',
-  createStage: 'callie:admin:create-stage',
-  renameStage: 'callie:admin:rename-stage',
-  reorderStages: 'callie:admin:reorder-stages',
-  retireStage: 'callie:admin:retire-stage',
-  acknowledgeAlert: 'callie:admin:acknowledge-alert',
-  setSendingCap: 'callie:admin:set-sending-cap',
-  recordSendingAuthentication: 'callie:admin:record-sending-authentication',
-  recordHolidayCalendar: 'callie:admin:record-holiday-calendar',
-  addCallingNumber: 'callie:admin:add-calling-number',
-  attestCallingNumber: 'callie:admin:attest-calling-number',
-  retireCallingNumber: 'callie:admin:retire-calling-number',
-  // Lane g84: the postures form.
-  recordPosture: 'callie:admin:record-posture',
-  revokePosture: 'callie:admin:revoke-posture',
-} as const;
-export type AdminIpcChannel = (typeof ADMIN_IPC_CHANNELS)[keyof typeof ADMIN_IPC_CHANNELS];
-
 /**
  * The calling-number paths (lane g60), named once so the release suite can compare them
  * with the API's own `CALLING_IDENTITY_PATHS` rather than with a second copy.
@@ -78,41 +54,26 @@ export type AdminIpcChannel = (typeof ADMIN_IPC_CHANNELS)[keyof typeof ADMIN_IPC
 export const CALLING_NUMBER_API_PATHS = {
   list: '/calling-identities',
   register: '/calling-identities/register',
-  attest: '/calling-identities/attest',
   disable: '/calling-identities/disable',
 } as const;
 
-/** The postures paths (lane g84), named once for the release suite to compare with `POSTURE_PATHS`. */
+/** The postures paths, named once for the release suite to compare with `POSTURE_PATHS`. */
 export const POSTURE_API_PATHS = {
   list: '/postures',
   reference: '/postures/reference',
-  record: '/postures/record',
+  allow: '/postures/allow',
   revoke: '/postures/revoke',
 } as const;
 
 /**
- * The posture form as `POST /postures/record` takes it, or null when a date is not one.
+ * The settings snapshot, with the postal address asked for by name.
  *
- * A date is midnight of that day in the business zone, through the domain's own clock
- * (`callbackInstant` from `@fss/contracts`), so a posture "from 25 September" is in force
- * from the first minute of the 25th where the workspace keeps its days. An empty review
- * date is left out and the server sets it a year on (10.1). The statements go as ticked:
- * whether they are all of them is the server's refusal to make.
+ * `GET /settings` leaves `postal_address` out unless a caller names it, because the
+ * installed 1.0.11 parses the snapshot with its own build of a strict schema and an
+ * unknown key would throw away all of its sections (`apps/api/src/routes/settings.ts`).
+ * This build knows the key, so it asks for it.
  */
-export function recordPostureBody(input: RecordPostureInput, zone: string): Readonly<Record<string, unknown>> | null {
-  const effectiveFrom = callbackInstant(input.effectiveFromDate, '00:00', zone);
-  if (effectiveFrom === null) return null;
-  const review = input.reviewDate.trim();
-  const reviewAt = review === '' ? undefined : callbackInstant(review, '00:00', zone);
-  if (reviewAt === null) return null;
-  return {
-    state: input.state.trim().toUpperCase(),
-    effectiveFrom,
-    ...(reviewAt === undefined ? {} : { reviewAt }),
-    confirmedStatements: [...input.confirmedStatements],
-    ...(input.note.trim() === '' ? {} : { note: input.note.trim() }),
-  };
-}
+export const SETTINGS_READ_PATH = '/settings?include=postal_address';
 
 /*
  * Every answer this window reads is parsed with `@fss/contracts`' schema for its route
@@ -170,20 +131,16 @@ export interface AdminBridgeHost {
   state(): Promise<AdminState>;
   show(input: { readonly screen: AdminScreen }): Promise<AdminState>;
   saveSetting(input: SaveSettingInput): Promise<AdminState>;
-  openHistory(input: { readonly settingKey: SettingKey }): Promise<AdminState>;
+  openHistory(input: { readonly settingKey: ActiveSettingKey }): Promise<AdminState>;
   loadDashboard(input: { readonly from: string; readonly to: string }): Promise<AdminState>;
-  createStage(input: { readonly key: string; readonly displayName: string }): Promise<AdminState>;
-  renameStage(input: { readonly stageKey: string; readonly displayName: string }): Promise<AdminState>;
-  reorderStages(input: { readonly stageKeys: readonly string[] }): Promise<AdminState>;
   retireStage(input: { readonly stageKey: string }): Promise<AdminState>;
   acknowledgeAlert(input: { readonly alertId: string }): Promise<AdminState>;
   setSendingCap(input: SetSendingCapInput): Promise<AdminState>;
   recordSendingAuthentication(input: RecordSendingAuthenticationInput): Promise<AdminState>;
   recordHolidayCalendar(input: RecordHolidayCalendarInput): Promise<AdminState>;
   addCallingNumber(input: AddCallingNumberInput): Promise<AdminState>;
-  attestCallingNumber(input: { readonly identityId: string }): Promise<AdminState>;
   retireCallingNumber(input: { readonly identityId: string }): Promise<AdminState>;
-  recordPosture(input: RecordPostureInput): Promise<AdminState>;
+  allowStates(input: AllowStatesInput): Promise<AdminState>;
   revokePosture(input: { readonly postureId: string }): Promise<AdminState>;
 }
 
@@ -201,7 +158,7 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
   let settings: AdminState['settings'] = null;
   let dashboard: AdminState['dashboard'] = null;
   let diagnostics: AdminState['diagnostics'] = null;
-  let stages: readonly PipelineStageRowView[] = [];
+  let stages: PipelineStageRowView[] = [];
   let history: AdminState['history'] = null;
   let sendingAdmin: AdminState['sendingAdmin'] = null;
   let sendingReadError: AdminState['sendingReadError'] = null;
@@ -343,7 +300,7 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
    */
   const loadCallingNumbers = async (): Promise<void> => {
     const answer = await deps.api.read(CALLING_NUMBER_API_PATHS.list, value => callingIdentityListSchema.parse(value));
-    callingNumbers = answer.ok ? answer.value.identities.map(viewOfNumber) : null;
+    callingNumbers = answer.ok ? [...answer.value.identities].map(viewOfNumber) : null;
   };
 
   /**
@@ -361,13 +318,13 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
     const listed = await deps.api.read(POSTURE_API_PATHS.list, value => statePostureListResponseSchema.parse(value));
     postures = {
       reference: reference.ok ? reference.value : null,
-      records: listed.ok ? listed.value.postures : null,
+      records: listed.ok ? [...listed.value.postures] : null,
       readError: !reference.ok ? reference.reason : !listed.ok ? listed.reason : null,
     };
   };
 
   const loadSettings = async (): Promise<void> => {
-    const answer = await deps.api.read('/settings', value => settingsSnapshotSchema.parse(value));
+    const answer = await deps.api.read(SETTINGS_READ_PATH, value => settingsSnapshotSchema.parse(value));
     if (!answer.ok) {
       notice = answer.reason;
     } else {
@@ -483,33 +440,6 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
       return await snapshot();
     },
 
-    async createStage(input) {
-      const outcome = await deps.api.command(
-        '/pipeline/stages/create',
-        { key: input.key, displayName: input.displayName },
-        value => value,
-      );
-      return await afterCommand(outcome, loadSettings);
-    },
-
-    async renameStage(input) {
-      const outcome = await deps.api.command(
-        '/pipeline/stages/rename',
-        { stageKey: input.stageKey, displayName: input.displayName },
-        value => value,
-      );
-      return await afterCommand(outcome, loadSettings);
-    },
-
-    async reorderStages(input) {
-      const outcome = await deps.api.command(
-        '/pipeline/stages/reorder',
-        { stageKeys: [...input.stageKeys] },
-        value => value,
-      );
-      return await afterCommand(outcome, loadSettings);
-    },
-
     async retireStage(input) {
       const outcome = await deps.api.command(
         '/pipeline/stages/retire',
@@ -586,39 +516,13 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
     },
 
     async addCallingNumber(input) {
-      // Two commands, because the server keeps them apart: a registration is a claim
-      // and the attestation is the person's statement about it, each with its own
-      // receipt. The number goes as typed — normalizing it is the server's, and a
-      // client that "fixed" a number would be a second implementation of 9.1's rule.
-      const registered = await deps.api.command(
+      // One command since wave 2 (S4.3): the register attests the number it adds, so it
+      // is verified, enabled and usable for calls at once and there is nothing left for
+      // the person to tick. The number goes as typed — normalizing it is the server's,
+      // and a client that "fixed" a number would be a second implementation of 9.1's rule.
+      const outcome = await deps.api.command(
         CALLING_NUMBER_API_PATHS.register,
         { e164: input.e164, ...(input.label.trim() === '' ? {} : { label: input.label }) },
-        value => callingIdentityChangeResultSchema.parse(value),
-      );
-      if (!registered.ok || !input.attested) return await afterCommand(registered, loadCallingNumbers);
-      const attested = await deps.api.command(
-        CALLING_NUMBER_API_PATHS.attest,
-        { identityId: registered.value.identity.id, attested: true },
-        value => callingIdentityChangeResultSchema.parse(value),
-      );
-      if (!attested.ok) {
-        // The registration committed and the attestation did not: the refusal is the
-        // notice, and the list is re-read so the unattested number is on screen with
-        // its own Attest button rather than looking as if nothing happened.
-        notice = attested.reason;
-        await loadCallingNumbers();
-        return await snapshot();
-      }
-      return await afterCommand(attested, loadCallingNumbers);
-    },
-
-    async attestCallingNumber(input) {
-      // 9.1's verification, in version one: the person saying this is the number they
-      // place calls from. `attested: true` is the statement; the server records who made
-      // it and when, and decides nothing else from the body.
-      const outcome = await deps.api.command(
-        CALLING_NUMBER_API_PATHS.attest,
-        { identityId: input.identityId, attested: true },
         value => callingIdentityChangeResultSchema.parse(value),
       );
       return await afterCommand(outcome, loadCallingNumbers);
@@ -633,18 +537,22 @@ export function createAdminBridge(deps: AdminBridgeDeps): AdminBridgeHost {
       return await afterCommand(outcome, loadCallingNumbers);
     },
 
-    async recordPosture(input) {
+    async allowStates(input) {
       // Invariant 7: the software records the founder's decision and the sources quoted
-      // for it; the server copies the sources from the release, never from this body.
-      const body = recordPostureBody(input, businessZoneOf(settings));
-      if (body === null) {
-        notice = 'posture_date_invalid';
-        return await snapshot();
-      }
-      const outcome = await deps.api.command(POSTURE_API_PATHS.record, body, value => statePostureViewSchema.parse(value));
+      // for it; the server copies the statements and the citations from the release,
+      // never from this body. One confirmation covers every state named (wave 2, S4.2).
+      const outcome = await deps.api.command(
+        POSTURE_API_PATHS.allow,
+        {
+          states: [...input.states],
+          confirmed: true,
+          ...(input.note.trim() === '' ? {} : { note: input.note.trim() }),
+        },
+        value => allowCallingStatesResultSchema.parse(value),
+      );
       const answered = await afterCommand(outcome, loadPostures);
       if (!outcome.ok) return answered;
-      notice = 'posture_recorded';
+      notice = outcome.value.added.length === 0 ? 'posture_already_allowed' : 'posture_recorded';
       return await snapshot();
     },
 

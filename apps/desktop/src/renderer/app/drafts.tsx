@@ -40,8 +40,15 @@ export function DraftsProvider({ children }: { readonly children: ReactNode }): 
   return <DraftContext.Provider value={store}>{children}</DraftContext.Provider>;
 }
 
-/** One field's text, and the setter that keeps it. `''` until somebody types. */
-export function useDraft(key: string): readonly [string, (value: string) => void] {
+/**
+ * One field's text, and the setter that keeps it.
+ *
+ * `fallback` is what the field shows before anybody has typed in it — the value a
+ * refused form came back with, usually — and it is only a fallback: a field somebody
+ * emptied on purpose stays empty, which a `value || fallback` would undo on every
+ * keystroke.
+ */
+export function useDraft(key: string, fallback = ''): readonly [string, (value: string) => void] {
   const store = useContext(DraftContext);
   const set = useCallback(
     (value: string): void => {
@@ -49,8 +56,32 @@ export function useDraft(key: string): readonly [string, (value: string) => void
     },
     [store, key],
   );
-  return [store?.values[key] ?? '', set];
+  return [store?.values[key] ?? fallback, set];
 }
+
+/**
+ * Every draft under a prefix, and the setter, for a form with more than one field.
+ *
+ * `values` is the raw record: a key that is not in it has never been typed in, which is
+ * different from a field somebody emptied, so a form can fall back to what a refusal came
+ * back with without undoing a deliberate clearing.
+ */
+export function useDrafts(): {
+  readonly values: Readonly<Record<string, string>>;
+  set(key: string, value: string): void;
+} {
+  const store = useContext(DraftContext);
+  const set = useCallback(
+    (key: string, value: string): void => {
+      store?.set(key, value);
+    },
+    [store],
+  );
+  const values = store?.values ?? EMPTY;
+  return useMemo(() => ({ values, set }), [values, set]);
+}
+
+const EMPTY: Readonly<Record<string, string>> = Object.freeze({});
 
 /** Whether anything is typed under a prefix: a read Today makes by itself waits for it. */
 export function useHasDrafts(prefix: string): boolean {

@@ -141,14 +141,17 @@ describe('the other two reads a window has in flight', () => {
     const queries = client();
     const drawn: (string | null)[] = [];
     const gate: { release: (state: AdminState) => void } = { release: () => undefined };
-    globalThis.callieAdmin = {
-      state: async () => await Promise.resolve(adminState()),
-      loadDashboard: async () => await Promise.resolve(adminState()),
-      show: async () =>
-        await new Promise<AdminState>(resolve => {
-          gate.release = resolve;
-        }),
-    } as unknown as NonNullable<typeof globalThis.callieAdmin>;
+    globalThis.callieApi = {
+      read: async (operation: string) => {
+        if (operation === 'settings.show') {
+          return await new Promise<AdminState>(resolve => {
+            gate.release = resolve;
+          });
+        }
+        return await Promise.resolve(adminState());
+      },
+      command: async () => await Promise.resolve(adminState()),
+    } as unknown as NonNullable<typeof globalThis.callieApi>;
 
     function Sidebar({ generation }: { readonly generation: number }): React.JSX.Element {
       const home = useHomeAdmin(IDENTITY, generation, guard.guard);

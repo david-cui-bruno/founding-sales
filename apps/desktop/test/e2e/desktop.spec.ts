@@ -1,5 +1,6 @@
 import { expect, test, type Page } from 'playwright/test';
 import { startAppServer, type AppServer, type AppServerOptions } from './support/appServer.ts';
+import { todayState } from './support/homeFixtures.ts';
 import {
   EXAMPLE_WORKSPACE,
   connectedMailbox,
@@ -16,16 +17,18 @@ import {
  * stale lines with no actionable controls, and the upgrade screen with nothing to
  * press.
  *
- * Signed in, the window is the shell on Today. These pages are built without
- * `callieToday` and `callieAdmin`, so Home's lanes and figures say they are unavailable
- * here; the device panel is "This Mac" at the foot of the sidebar, a `<details>` a spec
- * opens before it presses anything in it. `home.spec.ts` drives Home with every bridge.
+ * Signed in, the window is the shell on Today. The device panel is "This Mac" at the
+ * foot of the sidebar, a `<details>` a spec opens before it presses anything in it.
+ * `home.spec.ts` is what drives Home itself; these only need the shell around it.
+ *
+ * Until 1.0.13 these pages were built without Today's and Administration's channels, to
+ * keep Home's own reads out of the way. There is one bridge now — a page without it has
+ * no mailbox either — so the registry is installed and Home simply answers.
  */
 
-/** The session and the Mailbox row, and nothing of Home's own reads. */
+/** The session and the Mailbox row. */
 function session(overrides: AppServerOptions = {}): AppServerOptions {
   return {
-    without: ['callieApi', 'callieAdmin'],
     mailbox: notConnectedMailbox(),
     connectAnswer: connectedMailbox(),
     ...overrides,
@@ -59,7 +62,6 @@ test('signs in through the form and then shows this Mac', async ({ page }) => {
   // Home, headed by the business date of the list the session holds.
   await expect(page.getByTestId('heading')).toHaveText('Monday, 21 September');
   await expect(page.getByTestId('device-panel')).toContainText("David's MacBook");
-  await expect(page.getByTestId('today-unavailable')).toHaveText('Unavailable in this build');
   expect(methods()).toContain('callie.signIn');
 });
 
@@ -89,7 +91,12 @@ test('an outdated Mac sees only the upgrade instruction', async ({ page }) => {
 
 test('an outage is said at the top of Home, marked stale, and in the sidebar', async ({ page }) => {
   server = await startAppServer(
-    session({ desktop: signedInState({ online: false, stale: true, mayMutate: false, asOf: '2026-09-21T09:05:00.000Z' }) }),
+    session({
+      desktop: signedInState({ online: false, stale: true, mayMutate: false, asOf: '2026-09-21T09:05:00.000Z' }),
+      // The sidebar's system line prefers the list's own connection to the session's,
+      // because the list is the thing the person is looking at.
+      today: todayState({ online: false, stale: true, mayMutate: false }),
+    }),
   );
   await page.goto(server.url());
 

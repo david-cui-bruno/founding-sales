@@ -223,7 +223,6 @@ export interface DesktopBridge {
    */
   signIn(input: { readonly workspaceId?: string | undefined; readonly deviceLabel?: string | undefined }): Promise<DesktopState>;
   signOut(): Promise<DesktopState>;
-  refreshToday(): Promise<DesktopState>;
   /**
    * The Window menu and deep links: called with one of the seven navigation targets
    * whenever the main process asks the window to show that view. The preload checks the

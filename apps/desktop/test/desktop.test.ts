@@ -1,18 +1,10 @@
 import { readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import {
-  CACHE_FILE,
-  DEVICE_FILE,
-  DEVICE_SECRET_ACCOUNT,
-  REFRESH_CREDENTIAL_ACCOUNT,
-  WORKSPACE_FILE,
-  createDeviceStore,
-  createOfflineCache,
-  createMemoryVault,
-  createSessionManager,
-  keychainCommand,
-} from '../src/main/index.ts';
+import { DEVICE_FILE, DEVICE_SECRET_ACCOUNT, REFRESH_CREDENTIAL_ACCOUNT, WORKSPACE_FILE, createDeviceStore } from '../src/main/deviceStore.ts';
+import { createMemoryVault, keychainCommand } from '../src/main/keychain.ts';
+import { CACHE_FILE, createOfflineCache } from '../src/main/offlineCache.ts';
+import { createSessionManager } from '../src/main/sessionManager.ts';
 import { buildScreenView } from '../src/renderer/viewModel.ts';
 import { createAuthedClient } from '../src/main/authedClient.ts';
 import { createAdminBridge } from '../src/main/settingsBridge.ts';
@@ -834,7 +826,6 @@ describe('one window: the routes the menu and deep links may name (wave 1)', () 
       'callie:state',
       'callie:sign-in',
       'callie:sign-out',
-      'callie:refresh-today',
       'callie:navigate',
       // 1.0.12: main to page, and it opens nothing either — it says the session the
       // page was drawing for is over.

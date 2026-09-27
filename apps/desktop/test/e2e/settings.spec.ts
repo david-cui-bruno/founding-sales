@@ -42,11 +42,47 @@ test('an admin sees every slice, its provenance, and an editor for each', async 
   // 16.2's two switches, read out rather than recombined.
   await expect(page.getByTestId('sending')).toContainText('release process has not enabled');
 
-  // The configuration this store does not own is a link, not a second copy. The
-  // sending caps are G7-2's and the holiday calendar is G8's.
-  await expect(page.getByTestId('elsewhere')).toContainText('/research/config');
-  await expect(page.getByTestId('elsewhere')).toContainText('/outbound/cap');
+  // 1.0.13 draws no "Elsewhere" section (D6). The route still sends the list, and it
+  // was a table of API paths and lane names on a page a founder reads — spec-speak,
+  // and about settings this page already shows in their own sections.
+  await expect(page.getByTestId('elsewhere')).toHaveCount(0);
+  await expect(page.getByText('/research/config')).toHaveCount(0);
   await expect(page.getByTestId('setting-sending_limits')).toHaveCount(0);
+});
+
+/**
+ * Wave 3b: the workspace's postal address, the one setting 12.6's footer needs and the
+ * page had no field for. Emptied, it is saved as null and the footer is the sign-off
+ * and the stop line alone; sending carries on either way.
+ */
+test('an admin sets and clears the postal address, and the page says what an empty one means', async ({ page }) => {
+  await openAdmin(page, adminState());
+
+  await expect(page.getByTestId('setting-postal_address')).toContainText(
+    'With no address the footer is the sign-off and the stop line; sending continues.',
+  );
+  await page.getByTestId('field-postal_address-address').fill('1 Example Street, Providence RI 02903');
+  await page.getByTestId('save-postal_address').click();
+  await expect
+    .poll(() => server.calls.find(entry => entry.method === 'saveSetting')?.argument)
+    .toEqual({
+      settingKey: 'postal_address',
+      value: { address: '1 Example Street, Providence RI 02903' },
+      changeNote: '',
+    });
+
+  // The first Save has answered and the page has drawn it: the column is not read-only.
+  await expect(page.getByTestId('column')).not.toHaveAttribute('aria-busy', 'true');
+  await page.getByTestId('field-postal_address-address').fill('');
+  await page.getByTestId('save-postal_address').click();
+  await expect
+    .poll(() => server.calls.filter(entry => entry.method === 'saveSetting').length)
+    .toBe(2);
+  expect(server.calls.filter(entry => entry.method === 'saveSetting').at(-1)?.argument).toEqual({
+    settingKey: 'postal_address',
+    value: { address: null },
+    changeNote: '',
+  });
 });
 
 test("an admin edits G7-2's checklist and cap, and the deleted guard is not shown", async ({ page }) => {
@@ -185,7 +221,7 @@ test('the dashboard says a figure is unavailable rather than showing it as zero'
 test('the Dashboard route starts on the Dashboard screen, and its tab and route follow each other', async ({ page }) => {
   await openAdmin(page, adminState(), '#dashboard');
 
-  await expect(page.getByTestId('tab-dashboard')).toHaveClass(/tab-current/u);
+  await expect(page.getByTestId('tab-dashboard')).toHaveAttribute('aria-current', 'page');
   await expect(page.getByTestId('panel-calls')).toContainText('voicemail_left: 3');
   await expect(page.getByTestId('nav-settings')).toHaveAttribute('aria-current', 'page');
   expect(server.calls.find(call => call.method === 'show')).toEqual({ method: 'show', argument: { screen: 'dashboard' } });
@@ -310,7 +346,7 @@ test('a refused save is shown as its code and the page is not edited optimistica
   // The control is inert, so a person cannot reach this; the bridge can, and the
   // page has to render the refusal rather than the value that was attempted.
   await page.evaluate(async () => {
-    await globalThis.callieAdmin?.saveSetting({
+    await globalThis.callieApi?.command('settings.saveSetting', {
       settingKey: 'business_time_zone',
       value: { timeZone: 'Pacific/Auckland' },
       changeNote: 'trying it on',
@@ -369,7 +405,6 @@ test('a setting is changed with a typed control, and its JSON and provenance are
     .poll(() => server.calls.filter(entry => entry.method === 'saveSetting').at(-1)?.argument)
     .toEqual({ settingKey: 'business_time_zone', value: { timeZone: 'America/Los_Angeles' }, changeNote: '' });
 
-  // Where the other settings live, and which lane owns them, is support detail.
-  await expect(page.getByTestId('elsewhere-details')).not.toHaveAttribute('open', '');
-  await expect(page.getByText('/research/config')).toBeHidden();
+  // And nothing of the API's vocabulary on the page: no paths, no lane names (D6).
+  await expect(page.getByText('/research/config')).toHaveCount(0);
 });

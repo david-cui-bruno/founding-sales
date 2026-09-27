@@ -3,18 +3,11 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ClientVersionRange, SessionGrant, SessionRenewal } from '@fss/contracts';
-import {
-  createApiClient,
-  createDeviceStore,
-  createMemoryVault,
-  createOfflineCache,
-  createSessionManager,
-  type ApiClient,
-  type HttpAnswer,
-  type HttpSend,
-  type SecretVault,
-  type SessionManager,
-} from '../../src/main/index.ts';
+import { createApiClient, type ApiClient, type HttpAnswer, type HttpSend } from '../../src/main/apiClient.ts';
+import { createDeviceStore } from '../../src/main/deviceStore.ts';
+import { createMemoryVault, type SecretVault } from '../../src/main/keychain.ts';
+import { createOfflineCache } from '../../src/main/offlineCache.ts';
+import { createSessionManager, type SessionManager } from '../../src/main/sessionManager.ts';
 import type { CachedToday } from '../../src/shared/contract.ts';
 
 /**

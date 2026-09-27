@@ -112,7 +112,7 @@ describe('the Replies view', () => {
 
     expect((await screen.findByTestId('banner-warning')).textContent).toBe('Callie cannot reach the server.');
     expect(screen.getByTestId('reply-empty').textContent).toBe(
-      'Callie cannot reach the server, and replies are never kept on this Mac.',
+      'Callie cannot reach the server. Replies are never kept on this Mac.',
     );
     expect(screen.queryByTestId('card-body')).toBeNull();
     expect(document.body.textContent).not.toContain(BODY);

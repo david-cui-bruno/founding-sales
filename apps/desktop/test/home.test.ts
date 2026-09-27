@@ -159,6 +159,7 @@ function admin(overrides: Partial<AdminState> = {}): AdminState {
     sendingAdmin: { domain: passingDomain, ramps: [] },
     sendingReadError: null,
     callingNumbers: [number()],
+    postures: null,
     ...overrides,
   };
 }
@@ -192,7 +193,7 @@ function input(overrides: Partial<HomeInput> = {}): HomeInput {
   const state = overrides.today === undefined ? today() : overrides.today;
   return {
     desktop: desktop(),
-    bridges: { today: true, mailbox: true, admin: true },
+    hasOperations: true,
     today: state,
     todayView: state === null ? null : buildTodayView(state),
     mailbox: connected,
@@ -326,20 +327,22 @@ describe('the sidebar’s status', () => {
     expect(status(input({ admin: null }), 'calling')).toMatchObject({ tone: 'none', text: 'Calling number: checking…' });
   });
 
-  // Until lane g69 this row read "No calling number" for a saved, unattested number,
-  // which is what an unticked Add leaves: the person had a number, and Home said they
-  // did not. The row now names what is missing — the attestation — in amber.
-  it('says a saved but unattested number needs attestation rather than that there is no number (lane g69)', () => {
+  /**
+   * Wave 2, S4.3: registering a number attests it, so there is no unattested number to
+   * prompt about any more. A number left unverified by an older version of Callie is a
+   * number Today cannot call from, which is what this row says — in the same words as
+   * having none, because the thing to do about it is the same.
+   */
+  it('says there is no calling number when the only one was never attested', () => {
     const saved = number({ usedForCalls: false, verificationStatus: 'unverified', enabled: false, verifiedAt: null, verificationMethod: null });
     expect(status(input({ admin: admin({ callingNumbers: [saved] }) }), 'calling')).toEqual({
       key: 'calling',
       tone: 'warn',
-      text: 'Calling number needs attestation',
+      text: 'No calling number',
     });
-    // Beside a retired one, the saved one is still the one to attest.
     expect(
       status(input({ admin: admin({ callingNumbers: [number({ id: '55555555-5555-4555-8555-000000000002', usedForCalls: false, enabled: false, disabledAt: '2026-09-24T13:00:00.000Z' }), saved] }) }), 'calling'),
-    ).toMatchObject({ text: 'Calling number needs attestation' });
+    ).toMatchObject({ text: 'No calling number' });
   });
 
   it('reads sending from the server’s effective flag and never recombines it', () => {
@@ -394,7 +397,7 @@ describe('Needs you', () => {
     // Unread is not "not connected": a blind second grant is exactly what the row avoids.
     expect(needs(input({ mailbox: null }))).toEqual([]);
     expect(needs(input({ mailbox: { ...notConnected, status: null } }))).toEqual([]);
-    expect(needs(input({ mailbox: notConnected, bridges: { today: true, mailbox: false, admin: true } }))).toEqual([]);
+    expect(needs(input({ mailbox: notConnected, hasOperations: false }))).toEqual([]);
   });
 
   it('follows the Mailbox row: disabled offline, waiting while the browser has the person, the refusal as its detail', () => {
@@ -419,33 +422,35 @@ describe('Needs you', () => {
     expect(needs(input({ admin: admin({ callingNumbers: null }) }))).toEqual([]);
   });
 
-  it('asks a person with a saved, unattested number to attest it, not to add another (lane g69)', () => {
-    // What an unticked Add leaves: registered, unverified, disabled, not retired.
-    const saved = number({ usedForCalls: false, verificationStatus: 'unverified', enabled: false, verifiedAt: null, verificationMethod: null });
-    expect(needsRows(input({ admin: admin({ callingNumbers: [saved] }) }))).toEqual([
-      {
-        key: 'calling_number',
-        label: 'Attest your calling number',
-        detail: 'Your number is saved. Open Your calling number and attest it.',
-        // Administration opens at Your calling number, where the saved row has its own Attest.
-        action: { kind: 'open', route: { name: 'settings', tab: 'administration', section: 'calling-number' }, label: 'Open' },
-      },
-    ]);
-    // A saved number beside a retired one: attest the saved one.
-    const retired = number({ id: '55555555-5555-4555-8555-000000000002', usedForCalls: false, enabled: false, disabledAt: '2026-09-24T13:00:00.000Z' });
-    expect(needsRows(input({ admin: admin({ callingNumbers: [retired, saved] }) }))[0]?.label).toBe('Attest your calling number');
-  });
+  /**
+   * One row, one label, and a detail that says which of the three it is (wave 2, S4.3;
+   * D5). Attesting is not a thing a person does any more, so "Attest your calling
+   * number" and "Re-attest your calling number" are gone: in every case the act is to
+   * add the number, and the row says so once.
+   */
+  it('asks for the number once, whether there is none, an unattested one or a retired one', () => {
+    const rowFor = (numbers: AdminState['callingNumbers']) =>
+      needsRows(input({ admin: admin({ callingNumbers: numbers }) }))[0];
 
-  it('asks a person whose every number is retired to re-attest one (lane g69)', () => {
+    expect(rowFor([])).toEqual({
+      key: 'calling_number',
+      label: 'Add your calling number',
+      detail: null,
+      action: { kind: 'open', route: { name: 'settings', tab: 'administration', section: 'calling-number' }, label: 'Open' },
+    });
+
+    // What an older version of Callie left: registered, unverified, disabled, not retired.
+    const saved = number({ usedForCalls: false, verificationStatus: 'unverified', enabled: false, verifiedAt: null, verificationMethod: null });
+    expect(rowFor([saved])).toMatchObject({
+      label: 'Add your calling number',
+      detail: 'The number you have was never confirmed, so Callie cannot call from it. Add it again.',
+    });
+
     const retired = number({ usedForCalls: false, enabled: false, disabledAt: '2026-09-25T13:00:00.000Z' });
-    expect(needsRows(input({ admin: admin({ callingNumbers: [retired] }) }))).toEqual([
-      {
-        key: 'calling_number',
-        label: 'Re-attest your calling number',
-        detail: 'Your number was retired. Open Your calling number and attest it again.',
-        action: { kind: 'open', route: { name: 'settings', tab: 'administration', section: 'calling-number' }, label: 'Open' },
-      },
-    ]);
+    expect(rowFor([retired])).toMatchObject({
+      label: 'Add your calling number',
+      detail: 'The number you had was stopped. Add it again to call from it.',
+    });
   });
 
   it('asks an admin to record the domain checklist when it is missing or does not pass', () => {
@@ -566,10 +571,10 @@ describe('the last 7 days', () => {
   });
 });
 
-describe('a page built without a bridge', () => {
-  it('says Unavailable in this build wherever that bridge would have answered', () => {
+describe('a page built without the operation registry', () => {
+  it('says Unavailable in this build wherever an answer would have been', () => {
     const view = buildHomeView(
-      input({ bridges: { today: false, mailbox: false, admin: false }, today: null, mailbox: null, admin: null, figures: { requested: null, answered: false, dashboard: null } }),
+      input({ hasOperations: false, today: null, mailbox: null, admin: null, figures: { requested: null, answered: false, dashboard: null } }),
       [],
     );
     expect(view.lanes).toBeNull();
@@ -588,11 +593,14 @@ describe('a page built without a bridge', () => {
     ]);
   });
 
-  it('keeps what the present bridges know when only one is missing', () => {
-    const view = buildHomeView(input({ bridges: { today: true, mailbox: true, admin: false }, mailbox: notConnected }), []);
+  it('says what it has when the registry answered but a slice was not read', () => {
+    // One bridge since 1.0.13, so "the admin bridge is missing" is no longer a state a
+    // page can be in; a slice the registry has not answered for still is.
+    const view = buildHomeView(input({ mailbox: notConnected, admin: null, figures: { requested: null, answered: false, dashboard: null } }), []);
     expect(view.needs.map(row => row.key)).toEqual(['connect_gmail']);
     expect(view.lanes?.sections).toHaveLength(4);
-    expect(view.figures.line).toBe(UNAVAILABLE);
+    // Nothing asked for yet, so four em-dashes and no line: the cells already say it.
+    expect(view.figures.line).toBeNull();
   });
 });
 

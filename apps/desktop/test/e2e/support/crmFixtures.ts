@@ -206,23 +206,6 @@ export function firmSequences(overrides: Partial<NonNullable<CrmState['sequences
   };
 }
 
-/** The Firm page after "Confirm this number": the candidate is usable, one version later. */
-function confirmedFirmPage(page: NonNullable<CrmState['firm']>): NonNullable<CrmState['firm']> {
-  if (page.visibility !== 'assigned_or_admin' || page.read.visibility !== 'assigned_or_admin') return page;
-  return {
-    ...page,
-    read: {
-      ...page.read,
-      firm: {
-        ...page.read.firm,
-        phoneRoutes: page.read.firm.phoneRoutes.map(route =>
-          route.eligibility === 'candidate' ? { ...route, eligibility: 'usable' as const, version: route.version + 1 } : route,
-        ),
-      },
-    },
-  };
-}
-
 /**
  * Lane g90: a Firm page whose three addresses stand at each point of their validation —
  * still being checked, deliverable and usable, and one mail cannot reach.
@@ -257,6 +240,9 @@ export function crmState(overrides: Partial<CrmState> = {}): CrmState {
     firm: assigneeFirmPage(),
     pipeline: null,
     merge: null,
+    addFirm: null,
+    import: null,
+    sequences: null,
     ...overrides,
   };
 }
@@ -284,12 +270,13 @@ export function crmAnswer(state: CrmState, method: string, argument: unknown, _c
   if (method === 'openImport') {
     return { ...state, screen: 'import', notice: null, import: { fileName: null, preview: null, fileRefusal: null, results: null } };
   }
+  // 1.0.13: one press. The open panel, the read and the preview are the main process's,
+  // so the page asks for a file and is answered with the preview of the one chosen.
+  if (method === 'chooseImportFile') return { ...state, screen: 'import', notice: null, import: importPreviewView() };
   if (method === 'previewImport') return { ...state, screen: 'import', notice: null, import: importPreviewView() };
   if (method === 'commitImport') return { ...state, notice: 'imported_with_refusals', import: importResultsView() };
-  // Lane g88: Confirm this number, Add to pipeline, Enrol.
-  if (method === 'confirmRoute' && state.firm !== null) {
-    return { ...state, firm: confirmedFirmPage(state.firm), notice: 'route_confirmed' };
-  }
+  // Lane g88: Add to pipeline and Enrol. "Confirm this number" went with wave 2's
+  // S4.4 — a number is callable the moment it is entered — so there is no answer for it.
   if (method === 'openOpportunity') return { ...state, notice: 'opportunity_opened' };
   // Lane g90: Check again queues a check; the address is still being checked.
   if (method === 'checkRoute') return { ...state, notice: 'route_check_queued' };

@@ -1,17 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { SENDING_STOP_LINE } from '@fss/contracts';
+import { OFFLINE_BANNER } from '../src/renderer/readError.ts';
 import { createAuthedClient } from '../src/main/authedClient.ts';
 import { createSequenceBridge } from '../src/main/sequenceBridge.ts';
 import type { SequenceState, SequenceStep, TemplateVersion } from '../src/renderer/sequenceContract.ts';
 import {
   EDITOR_CHANNELS,
   EMPTY_SEQUENCE_STATE,
-  REMOVED_STEP_LABELS,
   SEQUENCE_UNREAD,
-  draftChanged,
   draftStepsOf,
   publishRefusalFor,
-  resumeReviewPanel,
   sequenceScreen,
   stepsForWire,
 } from '../src/renderer/sequenceView.ts';
@@ -85,19 +83,29 @@ describe('what the editor will and will not let a person publish (11.1)', () => 
     expect(publishRefusalFor(good, [template()], { isAdmin: true, mayMutate: false })).toBe('upgrade_required');
   });
 
-  it('never offers an edit on a published version, because the trigger refuses one', () => {
-    const state: SequenceState = {
+  /**
+   * Wave 2, S3: a published version is edited in place and the edit reaches the
+   * enrollments already running in it. "Edit as a new draft" is gone, so the control a
+   * published version offers is Edit, not Supersede — and a retired one offers neither.
+   */
+  it('edits a published version in place, and offers nothing on a retired one', () => {
+    const state = (patch: Partial<SequenceState['versions'][number]>): SequenceState => ({
       ...EMPTY_SEQUENCE_STATE,
       online: true,
       mayMutate: true,
       isAdmin: true,
-      versions: [{ ...draftVersion([emailStep(template().id)]), state: 'published', publishedAt: '2026-09-01T12:00:00.000Z' }],
+      versions: [{ ...draftVersion([emailStep(template().id)]), ...patch }],
       templates: [template()],
-    };
-    const screen = sequenceScreen(state);
-    expect(screen.versions[0]?.editable).toBe(false);
-    expect(screen.versions[0]?.canPublish).toBe(false);
-    expect(screen.versions[0]?.canRetire).toBe(true);
+    });
+    const live = sequenceScreen(state({ state: 'published', publishedAt: '2026-09-01T12:00:00.000Z' }));
+    expect(live.versions[0]?.editable).toBe(true);
+    expect(live.versions[0]?.canPublish).toBe(false);
+    expect(live.versions[0]?.canRetire).toBe(true);
+
+    const retired = sequenceScreen(state({ state: 'retired', publishedAt: '2026-09-01T12:00:00.000Z' }));
+    expect(retired.versions[0]?.editable).toBe(false);
+    expect(retired.versions[0]?.canPublish).toBe(false);
+    expect(retired.versions[0]?.canRetire).toBe(false);
   });
 });
 
@@ -145,23 +153,49 @@ describe('the template panel shows the digest and names what is wrong (11.1, 12.
   });
 });
 
-describe('the hold review screen (4.3, G 31)', () => {
-  it('shows only enrollments awaiting review, with the union in days', () => {
-    const screen = sequenceScreen({
+/**
+ * Who is in flight (11.2; wave 2, S4.1).
+ *
+ * There is no hold review any more — an enrollment held a long time resumes on its own
+ * — so the panel counts rather than asks. It counts per version of the sequence on
+ * screen, and it names nobody: an enrollment's own fields are ids, and a raw UUID on
+ * screen is a bug report a person cannot file.
+ */
+describe('the enrolled panel', () => {
+  const version = sequenceVersionAnswer([emailStepAnswer(SEQUENCE_IDS.template)], { state: 'published' });
+  const withEnrollments = (enrollments: readonly ReturnType<typeof enrollmentAnswer>[]) =>
+    sequenceScreen({
       ...EMPTY_SEQUENCE_STATE,
       online: true,
       mayMutate: true,
-      heldEnrollments: [
-        enrollmentAnswer({ state: 'review_required', reviewUnionMilliseconds: 9 * 86_400_000 }),
-        enrollmentAnswer({
-          id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
-          contactId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
-        }),
-      ],
+      sequences: [sequenceSummaryAnswer()],
+      selectedSequenceId: SEQUENCE_IDS.sequence,
+      versions: [version],
+      enrollments: [...enrollments],
     });
-    expect(screen.holdReview).toHaveLength(1);
-    expect(screen.holdReview[0]?.heldForDays).toBe(9);
-    expect(screen.holdReview[0]?.explanation).toContain('fresh eligibility check');
+
+  it('counts the states of this sequence’s enrollments, per version', () => {
+    const screen = withEnrollments([
+      enrollmentAnswer(),
+      enrollmentAnswer({ id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', state: 'completed' }),
+      enrollmentAnswer({ id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', state: 'stopped' }),
+    ]);
+    expect(screen.enrollments?.summary).toBe('One person is working through this sequence.');
+    expect(screen.enrollments?.rows).toEqual([
+      { sequenceVersionId: SEQUENCE_IDS.version, line: 'Version 2 — 1 running, 1 finished, 1 stopped' },
+    ]);
+  });
+
+  it('leaves out an enrollment in another sequence’s version', () => {
+    const screen = withEnrollments([
+      enrollmentAnswer({ sequenceVersionId: '77777777-7777-4777-8777-777777777777' }),
+    ]);
+    expect(screen.enrollments?.summary).toBe('Nobody is working through this sequence right now.');
+    expect(screen.enrollments?.rows).toEqual([]);
+  });
+
+  it('is absent while no sequence is open', () => {
+    expect(sequenceScreen({ ...EMPTY_SEQUENCE_STATE, online: true }).enrollments).toBeNull();
   });
 });
 
@@ -179,7 +213,7 @@ describe('the bridge while offline (4.2)', () => {
     const state = await host.state();
     expect(state.online).toBe(false);
     expect(state.sequences).toEqual([]);
-    expect(sequenceScreen(state).banner).toContain('Offline');
+    expect(sequenceScreen(state).banner).toBe(OFFLINE_BANNER);
   });
 
   it('asks the server even when the session last found it away, so a returned connection is seen (wave 1)', async () => {
@@ -246,7 +280,8 @@ describe('the bridge reads what the routes answer (lane g78)', () => {
       [1, 'email', SEQUENCE_IDS.version],
       [2, 'call_task', SEQUENCE_IDS.version],
     ]);
-    expect(state.heldEnrollments.map(entry => [entry.id, entry.opportunityId, entry.firmTimeZone])).toEqual([
+    expect(state.enrollments.map(entry => [entry.id, entry.opportunityId, entry.firmTimeZone])).toEqual([
+      [SEQUENCE_IDS.enrollment, SEQUENCE_IDS.opportunity, 'America/New_York'],
       ['bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', SEQUENCE_IDS.opportunity, 'America/New_York'],
     ]);
 
@@ -256,7 +291,7 @@ describe('the bridge reads what the routes answer (lane g78)', () => {
       'Template email',
       'Call task (move on if nobody answers)',
     ]);
-    expect(screen.holdReview).toHaveLength(1);
+    expect(screen.enrollments?.summary).toBe('2 people are working through this sequence.');
   });
 
   it('says which read failed and why, instead of drawing an empty list (D06)', async () => {
@@ -277,8 +312,7 @@ describe('the bridge reads what the routes answer (lane g78)', () => {
       templates: 'service_unavailable',
       enrollments: 'offline',
     });
-    // No enrollments, so no server clock: nothing is measured against this Mac instead.
-    expect(state.asOf).toBeNull();
+    expect(state.enrollments).toEqual([]);
 
     const screen = sequenceScreen(state);
     expect(screen.unread).toEqual([
@@ -317,8 +351,17 @@ describe('the bridge reads what the routes answer (lane g78)', () => {
   });
 });
 
+/**
+ * A LinkedIn step stored before 25 September 2026 (lane A2; wave 2, D6).
+ *
+ * Migration 0019 took the stored steps with the channel, and the API's own test says no
+ * step goes out as `removed`. The wire contract keeps the variant for desktop 1.0.11, so
+ * the type still admits one; the greyed row, its label, the publish refusal and the
+ * "saving leaves this step out" hint went with 1.0.13, because nothing can produce one.
+ * What is left is that such an answer is still read rather than refused, and that the
+ * editor neither offers the channel nor sends it back.
+ */
 describe('a LinkedIn step stored before 25 September 2026 (lane A2)', () => {
-  const LABEL = 'LinkedIn step (channel removed 25 Sep 2026)';
   const bridgeOver = (answers: Readonly<Record<string, { status: number; body: unknown }>>) =>
     createSequenceBridge({
       api: createAuthedClient({
@@ -336,7 +379,7 @@ describe('a LinkedIn step stored before 25 September 2026 (lane A2)', () => {
     publishedAt: '2026-09-01T12:00:00.000Z',
   });
 
-  it('reads the versions answer instead of refusing it, and draws the step as one greyed row with no control', async () => {
+  it('reads the versions answer instead of refusing it', async () => {
     const state = await bridgeOver({
       '/sequences': { status: 200, body: { sequences: [sequenceSummaryAnswer()] } },
       '/sequences/versions': { status: 200, body: { versions: [published] } },
@@ -346,65 +389,17 @@ describe('a LinkedIn step stored before 25 September 2026 (lane A2)', () => {
     // Before lane A2 the whole answer failed to parse and the window said it could not read it.
     expect(state.readErrors.versions).toBeNull();
     expect(state.versions[0]?.steps.map(step => step.channel)).toEqual(['call_task', 'removed']);
-
     const [panel] = sequenceScreen(state).versions;
-    expect(REMOVED_STEP_LABELS.linkedin).toBe(LABEL);
-    expect(panel?.steps[1]).toMatchObject({ ordinal: 2, channel: 'removed', detail: LABEL, problem: null, removed: true });
-    expect(panel?.steps[0]?.removed).toBe(false);
-    expect(panel?.editable).toBe(false);
+    expect(panel?.steps[1]?.detail).toBe('A step this version of Callie does not run');
   });
 
-  it('keeps draft authoring closed: the editor neither holds, offers nor sends a LinkedIn step', () => {
+  it('keeps authoring closed: the editor neither holds, offers nor sends a LinkedIn step', () => {
     const draft = draftVersion([callStepAnswer(1), removedLinkedInStepAnswer(2)]);
     expect(EDITOR_CHANNELS).toEqual(['call_task', 'email']);
     const held = draftStepsOf(draft);
     expect(held.map(step => step.channel)).toEqual(['call_task']);
     expect(stepsForWire(held).map(step => step['channel'])).toEqual(['call_task']);
-    // Saving is how the stored step leaves the draft, so the draft always reads as changed.
-    expect(draftChanged(draft, held)).toBe(true);
-    expect(publishRefusalFor(draft, [], { isAdmin: true, mayMutate: true })).toBe('step_channel_removed');
-  });
-
-  it('reviews a held LinkedIn execution as held for channel_removed, greyed and unmoved', () => {
-    const state: SequenceState = {
-      ...EMPTY_SEQUENCE_STATE,
-      online: true,
-      mayMutate: true,
-      resumeReview: {
-        asOf: '2026-09-25T13:00:00.000Z',
-        preview: {
-          enrollmentId: SEQUENCE_IDS.enrollment,
-          kind: 'resume',
-          unionMilliseconds: 0,
-          shiftMilliseconds: 0,
-          openHoldIds: [],
-          firmTimeZone: 'America/New_York',
-          holds: [],
-          steps: [
-            {
-              stepExecutionId: SEQUENCE_IDS.stepExecution,
-              ordinal: 2,
-              channel: 'removed',
-              removedChannel: 'linkedin',
-              state: 'held',
-              heldReason: 'channel_removed',
-              originalDueAt: '2026-09-17T13:00:00.000Z',
-              dueAt: '2026-09-17T13:00:00.000Z',
-              proposedDueAt: '2026-09-17T13:00:00.000Z',
-            },
-          ],
-        },
-      },
-    };
-    const panel = resumeReviewPanel(state.resumeReview!, state);
-    expect(panel.steps).toEqual([
-      {
-        label: `Step 2 · ${LABEL} (held: channel removed; resuming leaves it held)`,
-        from: 'Thu, Sep 17, 9:00 AM',
-        to: 'Thu, Sep 17, 9:00 AM',
-        moved: false,
-        removed: true,
-      },
-    ]);
+    // And no refusal of its own: the publish rules are the server's six, and this is not one.
+    expect(publishRefusalFor(draft, [], { isAdmin: true, mayMutate: true })).toBeNull();
   });
 });

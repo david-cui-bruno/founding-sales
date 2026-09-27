@@ -1,0 +1,121 @@
+import { useEffect, useRef, type JSX } from 'react';
+import type { Generation } from '../app/generation.ts';
+import { routeShown, SETTINGS_TABS, type Route, type SettingsTab } from '../routes.ts';
+import { adminViewOf } from '../settingsView.ts';
+import { Alert } from '../ui/alert.tsx';
+import { Page, ViewHeader } from '../ui/layout.tsx';
+import { cn } from '../lib/utils.ts';
+import { Administration } from './Administration.tsx';
+import { Panels } from './Panels.tsx';
+import { RecoveryControls } from './RecoveryControls.tsx';
+import { tabForScreen, useAdmin } from './useAdmin.ts';
+
+/**
+ * Settings: Administration, the Dashboard and Diagnostics in one view (1.0.12; in React
+ * since 1.0.13).
+ *
+ * Three tabs of one bridge. Pressing a tab switches the screen in place and the route
+ * follows through `routeShown`, so nothing is mounted again and a half-typed setting
+ * survives a look at the figures; the sidebar's Settings row and ⌘, mount it afresh at
+ * Administration, which is what asking for it again means.
+ *
+ * Needs you's Open lands on the section it named — the calling number, the sending
+ * domain, the alerts — once, on the first answer.
+ */
+
+const TAB_LABELS: Readonly<Record<SettingsTab, string>> = Object.freeze({
+  administration: 'Administration',
+  dashboard: 'Dashboard',
+  diagnostics: 'Diagnostics',
+});
+
+export function SettingsView({
+  route,
+  identity,
+  generation,
+  guard,
+}: {
+  readonly route: Route;
+  readonly identity: string | null;
+  readonly generation: number;
+  readonly guard: Generation;
+}): JSX.Element {
+  const tab = route.name === 'settings' ? route.tab : 'administration';
+  const section = route.name === 'settings' ? (route.section ?? null) : null;
+  const admin = useAdmin(tab, identity, generation, guard);
+  const state = admin.state;
+
+  /*
+   * Once, when the section Needs you asked for is on screen.
+   *
+   * Not "on the first answer": the reads are cached in memory, so a second visit
+   * renders the tab it was left on before the answer for the tab asked for arrives,
+   * and a scroll then would be a scroll to nothing. Waiting for the element is also
+   * what makes it at most one scroll — after it, the ref is set.
+   */
+  const scrolled = useRef(false);
+  useEffect(() => {
+    if (state === null || section === null || scrolled.current) return;
+    const target = document.querySelector(`[data-testid="${section}"]`);
+    if (target === null) return;
+    scrolled.current = true;
+    target.scrollIntoView({ block: 'start' });
+  }, [state, section]);
+
+  const view = state === null ? null : adminViewOf(state);
+
+  return (
+    <Page data-testid="settings-view" aria-busy={admin.pending > 0}>
+      <ViewHeader title="Settings" />
+      <nav data-testid="tabs" className="mt-3 flex items-center gap-1 border-b border-border">
+        {SETTINGS_TABS.map(name => (
+          <button
+            key={name}
+            type="button"
+            data-testid={`tab-${name === 'administration' ? 'settings' : name}`}
+            {...(name === tab ? { 'aria-current': 'page' as const } : {})}
+            onClick={() => {
+              routeShown({ name: 'settings', tab: name });
+            }}
+            className={cn(
+              '-mb-px border-b-2 px-2 py-1.5 text-sm transition-colors',
+              name === tab
+                ? 'border-foreground font-medium text-foreground'
+                : 'border-transparent text-muted-foreground hover:text-foreground',
+            )}
+          >
+            {TAB_LABELS[name]}
+          </button>
+        ))}
+      </nav>
+
+      {view === null ? null : (
+        <>
+          <div data-testid="banners" className="mt-3 flex flex-col gap-2 empty:hidden">
+            {view.banner === null ? null : (
+              <Alert tone="warning" data-testid="banner-offline">
+                {view.banner}
+              </Alert>
+            )}
+            {view.notice === null ? null : (
+              <Alert tone="info" data-testid="notice">
+                {view.notice}
+              </Alert>
+            )}
+          </div>
+
+          {tabForScreen(view.screen) === 'administration' ? (
+            <Administration view={view} actions={admin.actions} />
+          ) : tabForScreen(view.screen) === 'dashboard' ? (
+            <Panels view={view} />
+          ) : (
+            <>
+              <Panels view={view} onAcknowledge={admin.actions.acknowledgeAlert} />
+              <RecoveryControls />
+            </>
+          )}
+        </>
+      )}
+    </Page>
+  );
+}

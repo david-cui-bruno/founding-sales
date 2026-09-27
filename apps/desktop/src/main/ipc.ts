@@ -9,7 +9,6 @@ export const IPC_CHANNELS = {
   state: 'callie:state',
   signIn: 'callie:sign-in',
   signOut: 'callie:sign-out',
-  refreshToday: 'callie:refresh-today',
   /**
    * Main to page (wave 1): go to one of the six routes. The Window menu's ⌘1–⌘6 and a
    * deep link send it; it carries a route name and nothing else.
