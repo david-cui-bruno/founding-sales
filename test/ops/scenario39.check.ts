@@ -144,6 +144,29 @@ const STATE_BUCKET = 'callie-sourcing-tfstate-326255650484';
 const LOCK_TABLE = 'callie-sourcing-tflock';
 const STATE_KEY = 'fss/greenfield/rehearsal/fss-rh-nothing/terraform.tfstate';
 
+/**
+ * Where `.github/workflows/greenfield-release.yml` calls the teardown and the guard from:
+ * both steps carry `working-directory: infra/roots/rehearsal` and run
+ * `../../scripts/rehearsal.sh`. Every other step calls the script from the repository
+ * root, so neither directory may be the one the script's paths are relative to. On run
+ * 36303319307 the root was `infra/roots/rehearsal` relative to the caller, `backend.hcl`
+ * was looked for at `infra/roots/rehearsal/infra/roots/rehearsal/backend.hcl`, and the
+ * teardown and the guard both ended with "the state bucket and lock table could not be
+ * read", after a destroy that had already taken all 119 resources.
+ */
+const ROOT_DIRECTORY = repositoryPath('infra/roots/rehearsal');
+
+/**
+ * Every `terraform` call now names the root with `-chdir=<root>` rather than inheriting a
+ * directory, so a stub strips it before reading the subcommand as `$1`, and `$chdir` is
+ * what the script resolved the root to.
+ */
+const CHDIR = ['chdir=', 'case "${1:-}" in', '  -chdir=*) chdir="${1#-chdir=}"; shift ;;', 'esac'].join('\n');
+
+/** A terraform stub that answers only when it was told the rehearsal root. */
+const inTheRoot = (body: string): string =>
+  [`[ -n "$chdir" ] && [ "$chdir" -ef '${ROOT_DIRECTORY}' ] || { echo "terraform was told '$chdir', not the rehearsal root" >&2; exit 9; }`, body].join('\n');
+
 /** `<code>` in the shape the CLI reports it. */
 const notFound = (code: string): string => `echo "An error occurred (${code}) when calling it" >&2; exit 254`;
 
@@ -232,13 +255,21 @@ echo "unexpected: $*" >&2; exit 9`;
     readonly terraform: string;
     /** Answers placed before NOTHING_LEFT, so one of the guard's five readings differs. */
     readonly leftovers?: string;
-    /** The create step writes this file beside the root; a teardown from a fresh checkout has none. */
+    /** The create step writes this file in the root; a teardown from a fresh checkout has none. */
     readonly tfvars?: boolean;
     readonly identity?: string;
+    /**
+     * Call it as the workflow does: from `infra/roots/rehearsal`, told neither the root
+     * nor the state location, so it has to resolve both from its own location.
+     */
+    readonly fromTheRootDirectory?: boolean;
   }): Run & { readonly reports: string; readonly calls: readonly string[] } {
     const stubs = mkdtempSync(join(tmpdir(), 'fss-teardown-'));
     const reports = mkdtempSync(join(tmpdir(), 'fss-teardown-reports-'));
     const record = join(stubs, 'calls');
+    const located = options.fromTheRootDirectory === true
+      ? {}
+      : { FSS_REHEARSAL_ROOT: stubs, FSS_REHEARSAL_STATE_BUCKET: STATE_BUCKET, FSS_REHEARSAL_LOCK_TABLE: LOCK_TABLE };
     if (options.tfvars ?? true) {
       writeFileSync(join(stubs, 'run.auto.tfvars.json'), JSON.stringify({ name_prefix: 'fss-rh-nothing', assume_deployment_role: false }));
     }
@@ -253,13 +284,12 @@ echo "unexpected: $*" >&2; exit 9`;
           'aws',
           `echo "aws $*" >> '${record}'\n${options.leftovers ?? ''}\n${NOTHING_LEFT}\n${options.aws}`,
         ),
-        TERRAFORM: stubCommand(stubs, 'terraform', `echo "terraform $*" >> '${record}'\n${options.terraform}`),
+        TERRAFORM: stubCommand(stubs, 'terraform', `${CHDIR}\necho "terraform $*" >> '${record}'\n${options.terraform}`),
         FSS_REHEARSAL_SETTLING_READS: '1',
         FSS_REHEARSAL_SETTLING_SECONDS: '0',
-        FSS_REHEARSAL_STATE_BUCKET: STATE_BUCKET,
-        FSS_REHEARSAL_LOCK_TABLE: LOCK_TABLE,
+        ...located,
       },
-      stubs,
+      options.fromTheRootDirectory === true ? ROOT_DIRECTORY : stubs,
     );
     return { ...result, reports, calls: existsSync(record) ? readFileSync(record, 'utf8').split('\n').filter(line => line !== '') : [] };
   }
@@ -360,6 +390,25 @@ echo "unexpected: $*" >&2; exit 9`;
     expect(somebody.calls, 'nothing is asked or deleted as somebody else').toEqual([]);
   });
 
+  it('tears a run down from infra/roots/rehearsal, where the workflow calls it, and still reads both lock records', () => {
+    // Run 36303319307, 27 September 2026: every stage passed and `terraform destroy` took
+    // all 119 resources, and the teardown then ended `FAIL: the state bucket and lock table
+    // could not be read from infra/roots/rehearsal/backend.hcl`. The step carries
+    // `working-directory: infra/roots/rehearsal`, so a root relative to the caller pointed
+    // two directories deeper than the root it named. Nothing is passed in here: the bucket
+    // and the table are the ones in the tracked `infra/roots/rehearsal/backend.hcl`.
+    const { code, output, reports, calls } = teardown({
+      aws: NOTHING_EXISTS,
+      terraform: inTheRoot(NEVER_INITIALISED),
+      fromTheRootDirectory: true,
+    });
+    expect(code, output).toBe(0);
+    expect(output).not.toContain('the state bucket and lock table could not be read');
+    expect(calls.join('\n')).toContain(`aws s3api head-object --bucket ${STATE_BUCKET} --key ${STATE_KEY}.tflock`);
+    expect(calls.join('\n')).toContain(`aws dynamodb get-item --table-name ${LOCK_TABLE}`);
+    expect(readFileSync(join(reports, 'teardown.txt'), 'utf8')).toContain('nothing_left=true');
+  });
+
   it('fails, and writes no report, when the destroy left something behind', () => {
     // A destroy that left something standing is a failed teardown, not a passing one with
     // a failing guard after it (review of PR 292b).
@@ -383,10 +432,15 @@ describe('Appendix G 39: rehearsal.sh guard, after the teardown: an empty state,
     readonly aws?: string;
     readonly identity?: string;
     readonly reads?: string;
+    /** Call it as the workflow does, from `infra/roots/rehearsal` and told nothing. */
+    readonly fromTheRootDirectory?: boolean;
   }): Run & { readonly report: string | null; readonly calls: readonly string[] } {
     const stubs = mkdtempSync(join(tmpdir(), 'fss-guard-'));
     const reports = mkdtempSync(join(tmpdir(), 'fss-guard-reports-'));
     const record = join(stubs, 'calls');
+    const located = options.fromTheRootDirectory === true
+      ? {}
+      : { FSS_REHEARSAL_ROOT: stubs, FSS_REHEARSAL_STATE_BUCKET: STATE_BUCKET, FSS_REHEARSAL_LOCK_TABLE: LOCK_TABLE };
     const result = run(
       SCRIPT,
       ['guard', 'fss-rh-nothing'],
@@ -398,13 +452,12 @@ describe('Appendix G 39: rehearsal.sh guard, after the teardown: an empty state,
           'aws',
           `echo "aws $*" >> '${record}'\n${options.leftovers ?? ''}\n${NOTHING_LEFT}\n${options.aws ?? 'echo "unexpected: $*" >&2; exit 9'}`,
         ),
-        TERRAFORM: stubCommand(stubs, 'terraform', options.terraform),
+        TERRAFORM: stubCommand(stubs, 'terraform', `${CHDIR}\n${options.terraform}`),
         FSS_REHEARSAL_SETTLING_READS: options.reads ?? '1',
         FSS_REHEARSAL_SETTLING_SECONDS: '0',
-        FSS_REHEARSAL_STATE_BUCKET: STATE_BUCKET,
-        FSS_REHEARSAL_LOCK_TABLE: LOCK_TABLE,
+        ...located,
       },
-      stubs,
+      options.fromTheRootDirectory === true ? ROOT_DIRECTORY : stubs,
     );
     const report = join(reports, 'prefix-guard.txt');
     return {
@@ -432,6 +485,19 @@ describe('Appendix G 39: rehearsal.sh guard, after the teardown: an empty state,
     expect(now.calls.join('\n')).toContain(`--key ${STATE_KEY}.tflock`);
     expect(now.calls.join('\n'), 'one page, in the shape the API returns it').toContain('cloudfront list-distributions --no-paginate');
     expect(now.calls.join('\n')).toContain(`--log-group-name-prefix /fss/fss-rh-nothing`);
+  });
+
+  it('reads the state bucket and lock table from the root’s own backend.hcl when called from infra/roots/rehearsal', () => {
+    // The guard step of run 36303319307 failed the same way the teardown before it did,
+    // for the same reason: `working-directory: infra/roots/rehearsal`, and a root resolved
+    // against the caller's directory rather than against the script's own. It is given no
+    // bucket and no table here, so the two it reads are the tracked backend.hcl's.
+    const now = guard({ terraform: inTheRoot('exit 0'), fromTheRootDirectory: true });
+    expect(now.code, now.output).toBe(0);
+    expect(now.output).not.toContain('the state bucket and lock table could not be read');
+    expect(now.calls.join('\n')).toContain(`aws s3api head-object --bucket ${STATE_BUCKET} --key ${STATE_KEY}.tflock`);
+    expect(now.calls.join('\n')).toContain(`aws dynamodb get-item --table-name ${LOCK_TABLE}`);
+    expect(now.report).toBe('prefix=fss-rh-nothing production_untouched=true state_empty=true nothing_left=true state_read=true');
   });
 
   it('fails on an orphan of each class the state never recorded, naming it', () => {
