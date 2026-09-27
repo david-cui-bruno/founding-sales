@@ -1,0 +1,210 @@
+name: Greenfield Google root
+
+# `infra/roots/production-google`, planned and applied by CI and by nobody else (lane
+# G-WIF; David, 27 September 2026: no human Google login again). Until now this root was
+# planned from a Mac holding application-default credentials that lapse about every 17
+# hours; the bootstrap that created the identities below was the last time one was used.
+#
+# **Two dispatches, with a person between them.** `stage=plan` writes the plan, records
+# its sha256 and this run's commit as the first two lines of plan.txt, and uploads exactly
+# plan.txt and google.tfplan as the artifact `google-plan`. A person reads plan.txt.
+# `stage=apply` names that run, downloads its artifact, and applies THAT saved plan only
+# if the run is a plan of this workflow at this same commit, the file still hashes to the
+# digest plan.txt records, and the plan destroys or replaces no `module.pubsub` resource.
+# Terraform itself refuses a saved plan whose state serial has moved since.
+#
+# **Two identities, and neither is a key.** `fss-prod-ci-google` in AWS holds the S3
+# backend's one state object (`infra/roots/production/ci_google.tf`);
+# `fss-prod-google-ci` in Google Cloud is reached by workload identity federation from
+# this repository's `production-deploy` subject alone
+# (`infra/roots/production-google/ci_identity.tf`). `google-github-actions/auth` writes a
+# temporary external-account credential file holding a short-lived bearer token: not a
+# key, but a credential — `.gitignore` refuses `gha-creds-*.json`, the artifact names two
+# paths and never a directory, and nothing here echoes a token.
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "plan writes the artifact a person reads; apply applies that run's saved plan"
+        type: choice
+        options: [plan, apply]
+        default: plan
+        required: true
+      plan_run_id:
+        description: "apply only: the run id of the stage=plan dispatch that was read"
+        type: string
+        required: false
+
+permissions:
+  contents: read
+concurrency:
+  group: greenfield-google
+  cancel-in-progress: false
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  google-root:
+    name: Plan or apply the Gmail push root
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production-deploy
+    permissions:
+      contents: read
+      # gh run download, in the apply stage: the plan run's artifact is this workflow's own
+      # review boundary, and a cross-run artifact read needs this scope.
+      actions: read
+      id-token: write
+    env:
+      STAGE: ${{ inputs.stage }}
+      PLAN_RUN_ID: ${{ inputs.plan_run_id }}
+      ROLE_ARN: ${{ secrets.FSS_PRODUCTION_CI_GOOGLE_ROLE_ARN }}
+      GH_TOKEN: ${{ github.token }}
+      # Public identifiers, written out because a workflow cannot read this root's state:
+      # the Google root's two outputs and the state key backend.hcl is initialised with.
+      GOOGLE_CI_SERVICE_ACCOUNT: fss-prod-google-ci@callie-fss.iam.gserviceaccount.com
+      STATE_KMS_KEY_ARN: arn:aws:kms:us-east-1:326255650484:key/a321a083-4058-4130-b060-b950e4aa1404
+    steps:
+      # The commit, before any credential and with none of its own.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Refuse any ambient cloud credential, any ref but main, and an apply with no plan
+        run: |
+          set -euo pipefail
+          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_PROFILE AWS_ROLE_ARN \
+            AWS_WEB_IDENTITY_TOKEN_FILE GOOGLE_APPLICATION_CREDENTIALS GOOGLE_CREDENTIALS \
+            GOOGLE_OAUTH_ACCESS_TOKEN GOOGLE_GHA_CREDS_PATH CLOUDSDK_AUTH_ACCESS_TOKEN \
+            CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE; do
+            [ -z "${!name:-}" ] || { echo "::error::$name is set before this job federated. Nothing was planned or applied."; exit 1; }
+          done
+          [ "${GITHUB_REF:-}" = refs/heads/main ] \
+            || { echo "::error::dispatched from ${GITHUB_REF:-an unknown ref}: this root is planned and applied from main alone."; exit 1; }
+          [ "$STAGE" = plan ] || [ "$STAGE" = apply ] \
+            || { echo "::error::stage '$STAGE' is neither plan nor apply"; exit 1; }
+          [ "$STAGE" != apply ] || [[ "$PLAN_RUN_ID" =~ ^[1-9][0-9]{0,19}$ ]] \
+            || { echo "::error::stage=apply needs plan_run_id: the run id of the stage=plan dispatch a person has read."; exit 1; }
+
+      - name: Assume the narrow AWS state role
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
+        with:
+          role-to-assume: ${{ secrets.FSS_PRODUCTION_CI_GOOGLE_ROLE_ARN }}
+          aws-region: us-east-1
+          role-session-name: fss-prod-ci-google-${{ github.run_id }}
+          role-duration-seconds: 3600
+
+      - name: The session is exactly this run's session of the state role, in the one account
+        run: |
+          set -euo pipefail
+          [[ "$ROLE_ARN" =~ ^arn:aws:iam::326255650484:role/fss-prod-ci-google$ ]] \
+            || { echo "::error::FSS_PRODUCTION_CI_GOOGLE_ROLE_ARN is not arn:aws:iam::326255650484:role/fss-prod-ci-google"; exit 1; }
+          identity="$(aws sts get-caller-identity --query Arn --output text)"
+          [ "$identity" = "arn:aws:sts::326255650484:assumed-role/fss-prod-ci-google/fss-prod-ci-google-${GITHUB_RUN_ID}" ] \
+            || { echo "::error::the session is $identity, not this run's session of the state role"; exit 1; }
+
+      # The GitHub OIDC token is exchanged at the pool provider for a short-lived token of
+      # the CI service account. No key, no secret, and the file is removed at job end.
+      - name: Federate into Google Cloud as the CI service account
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093
+        with:
+          workload_identity_provider: projects/405930057974/locations/global/workloadIdentityPools/github/providers/github
+          service_account: fss-prod-google-ci@callie-fss.iam.gserviceaccount.com
+          create_credentials_file: true
+          export_environment_variables: true
+          # An access token, so the impersonation this whole design rests on is exercised
+          # here rather than inside the first Terraform API call.
+          token_format: access_token
+          cleanup_credentials: true
+
+      - name: The active Google account is the CI service account and no other
+        run: |
+          set -euo pipefail
+          account="$(gcloud auth list --filter=status:ACTIVE --format='value(account)')"
+          [ "$account" = "$GOOGLE_CI_SERVICE_ACCOUNT" ] \
+            || { echo "::error::the active Google account is '$account', not $GOOGLE_CI_SERVICE_ACCOUNT"; exit 1; }
+
+      # hashicorp/setup-terraform v3, the pin greenfield-infra.yml uses.
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd
+        with:
+          terraform_version: 1.15.8
+          terraform_wrapper: false
+
+      - name: Plan the Google root, and record the plan's digest and commit
+        if: inputs.stage == 'plan'
+        working-directory: infra/roots/production-google
+        run: |
+          set -euo pipefail
+          terraform init -input=false -no-color -lockfile=readonly \
+            -backend-config=backend.hcl -backend-config="kms_key_id=$STATE_KMS_KEY_ARN"
+          set +e
+          terraform plan -input=false -detailed-exitcode -no-color -out=google.tfplan | tee plan-body.txt
+          code=${PIPESTATUS[0]}
+          set -e
+          # 0 no changes, 2 changes; 1 is a failed plan and nothing is uploaded.
+          [ "$code" = 0 ] || [ "$code" = 2 ] \
+            || { echo "::error::terraform plan failed (exit $code). Nothing was applied."; exit 1; }
+          digest="$(sha256sum google.tfplan | cut -d' ' -f1)"
+          { printf 'plan-sha256 %s\ncommit %s\n' "$digest" "$GITHUB_SHA"; cat plan-body.txt; } > plan.txt
+          rm -f plan-body.txt
+          line="$(grep -E '^(Plan: |No changes\.)' plan.txt | tail -1 || true)"
+          echo "::notice title=infra/roots/production-google at ${GITHUB_SHA:0:8}::${line:-the plan printed no Plan line}"
+          { printf '### %s\n\n' "${line:-No Plan line}"
+            printf 'Plan `%s` at `%s`. Read the `google-plan` artifact, then dispatch `stage=apply` with `plan_run_id=%s`.\n' \
+              "$digest" "$GITHUB_SHA" "$GITHUB_RUN_ID"; } >> "$GITHUB_STEP_SUMMARY"
+
+      # actions/upload-artifact v4, the pin the images and release workflows use. Two
+      # explicit paths, never a directory: the credential file sits in the workspace root.
+      - name: Upload exactly the plan and its text
+        if: inputs.stage == 'plan'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: google-plan
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            infra/roots/production-google/plan.txt
+            infra/roots/production-google/google.tfplan
+
+      - name: The plan being applied is that run's, at this commit, and takes no push object away
+        if: inputs.stage == 'apply'
+        run: |
+          set -euo pipefail
+          fields="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PLAN_RUN_ID" \
+            --jq '[.path, .head_sha] | map(if . == null or . == "" then "-" else tostring end) | @tsv')"
+          IFS=$'\t' read -r path head_sha <<<"$fields"
+          [ "${path%%@*}" = .github/workflows/greenfield-google.yml ] \
+            || { echo "::error::run $PLAN_RUN_ID is a run of $path, not of this workflow"; exit 1; }
+          [ "$head_sha" = "$GITHUB_SHA" ] \
+            || { echo "::error::run $PLAN_RUN_ID planned $head_sha; this dispatch is at $GITHUB_SHA. Plan again and read that one."; exit 1; }
+          work="$RUNNER_TEMP/google-plan"
+          gh run download "$PLAN_RUN_ID" --name google-plan --dir "$work"
+          recorded="$(sed -n '1s/^plan-sha256 //p' "$work/plan.txt")"
+          planned="$(sed -n '2s/^commit //p' "$work/plan.txt")"
+          actual="$(sha256sum "$work/google.tfplan" | cut -d' ' -f1)"
+          [ "$planned" = "$GITHUB_SHA" ] \
+            || { echo "::error::plan.txt records commit '$planned', not $GITHUB_SHA"; exit 1; }
+          [ -n "$recorded" ] && [ "$recorded" = "$actual" ] \
+            || { echo "::error::google.tfplan hashes to $actual and plan.txt records '$recorded': the artifact is not the plan that was read."; exit 1; }
+          # The four Gmail push objects are not recreatable on demand: the publisher grant
+          # needed an organisation-policy exception, and a deleted topic stops the watch
+          # until the next renewal names a new one (release.md 8.0n). CI never takes one
+          # away; a plan that would is read and applied by a person.
+          if grep -nE '^[[:space:]]*# module\.pubsub\.[^[:space:]]+ (will be destroyed|must be replaced|will be replaced|is tainted)' "$work/plan.txt"; then
+            echo "::error::this plan destroys or replaces a Gmail push object. Refused: apply it by hand after reading it."
+            exit 1
+          fi
+          cp "$work/google.tfplan" "$GITHUB_WORKSPACE/infra/roots/production-google/google.tfplan"
+          echo "applying the plan of run $PLAN_RUN_ID: sha256 $recorded at $planned"
+
+      - name: Apply that exact saved plan
+        if: inputs.stage == 'apply'
+        working-directory: infra/roots/production-google
+        run: |
+          set -euo pipefail
+          terraform init -input=false -no-color -lockfile=readonly \
+            -backend-config=backend.hcl -backend-config="kms_key_id=$STATE_KMS_KEY_ARN"
+          terraform apply -input=false -no-color google.tfplan
+          echo "::notice::applied run $PLAN_RUN_ID's plan of infra/roots/production-google at ${GITHUB_SHA:0:8}"
