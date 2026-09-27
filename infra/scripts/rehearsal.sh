@@ -29,6 +29,21 @@ REHEARSAL_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=infra/scripts/lib.sh
 source "$REHEARSAL_SCRIPTS/lib.sh"
 
+# The rehearsal root, absolute, from this script's own location rather than from wherever
+# it was called. The workflow runs `teardown` and `guard` with
+# `working-directory: infra/roots/rehearsal` and every other subcommand from the
+# repository root, and a relative `infra/roots/rehearsal` is only right in one of the two:
+# on run 36303319307 both steps looked for
+# `infra/roots/rehearsal/infra/roots/rehearsal/backend.hcl` and ended "the state bucket and
+# lock table could not be read", after a destroy that had taken all 119 resources. So
+# nothing here is relative to the caller's directory: the root is resolved here, every
+# `terraform` call is given it with `-chdir`, and `run.auto.tfvars.json` is looked for in
+# it. FSS_REHEARSAL_ROOT overrides it, absolute or relative to the current directory.
+rehearsal_root() {
+  local root=${FSS_REHEARSAL_ROOT:-$REHEARSAL_SCRIPTS/../roots/rehearsal}
+  (cd "$root" 2>/dev/null && pwd) || printf '%s\n' "$root"
+}
+
 rehearsal_fail() {
   echo "FAIL: $*" >&2
   exit 1
@@ -118,14 +133,17 @@ rehearsal_require_deployment_session() {
   rehearsal_log "the session is an assumed-role session of $role, so ${REHEARSAL_NO_ASSUME_VAR} is safe"
 }
 
-# `terraform state list` in the working directory: prints the addresses and returns 0, or
-# returns 3 for a root that was never initialised (the create step never ran), which is
-# what a run that created nothing looks like. Any other failure exits 1.
-#   state="$(rehearsal_state_list)"; status=$?   (under set +e)
+# `terraform state list` in the rehearsal root, named with -chdir rather than taken from the
+# caller's directory: prints the addresses and returns 0, or returns 3 for a root that was
+# never initialised (the create step never ran), which is what a run that created nothing
+# looks like. Any other failure exits 1. Read in whatever directory the caller happened to
+# be in, an initialised run answers "never initialised", and that is the one answer which
+# passes the guard without reading anything.
+#   state="$(rehearsal_state_list "$root")"; status=$?   (under set +e)
 rehearsal_state_list() {
-  local state status
+  local root=$1 state status
   set +e
-  state="$(command "${TERRAFORM:-terraform}" state list 2>&1)"
+  state="$(command "${TERRAFORM:-terraform}" -chdir="$root" state list 2>&1)"
   status=$?
   set -e
   if [ "$status" -eq 0 ]; then
@@ -134,7 +152,7 @@ rehearsal_state_list() {
   fi
   case "$state" in
     *"Backend initialization required"* | *"Initialization required"* | *"No state file was found"* | *"Missing backend configuration"*)
-      rehearsal_log "the rehearsal root was never initialised, so this run created nothing:" >&2
+      rehearsal_log "the rehearsal root $root was never initialised, so this run created nothing:" >&2
       printf '%s\n' "$state" | head -3 | sed 's/^/  /' >&2
       return 3
       ;;
@@ -183,7 +201,7 @@ rehearsal_run_task() {
   [ -n "${FSS_RELEASE_WORKER_DIGEST:-}" ] \
     || rehearsal_fail "FSS_RELEASE_WORKER_DIGEST is not set. The wrapper compares the registered task definition's image against the digest this release is about, and it will not launch without one."
 
-  root="${FSS_REHEARSAL_ROOT:-infra/roots/rehearsal}"
+  root="$(rehearsal_root)"
   cluster="$(release_output "$root" cluster_arn)"
   network="$(release_output "$root" task_network_configuration json)"
   log_group="$(release_output "$root" worker_log_group_name)"
@@ -265,7 +283,7 @@ rehearsal_ranges() {
   RANGES_PREVIOUS="{$previous_min,$previous_max}"
   rehearsal_log "api {$api_min,$api_max} worker {$worker_min,$worker_max} previous {$previous_min,$previous_max} schema $current"
 
-  root="${FSS_REHEARSAL_ROOT:-infra/roots/rehearsal}"
+  root="$(rehearsal_root)"
   RANGES_CLUSTER="$(release_output "$root" cluster_arn)"
   RANGES_NETWORK="$(release_output "$root" task_network_configuration json)"
   RANGES_SECRET="$(release_output "$root" app_runtime_database_secret_arn)"
@@ -408,7 +426,8 @@ ranges_stale() {
 # destroyed with skip_final_snapshot and its automated backups (infra/roots/rehearsal).
 # ---------------------------------------------------------------------------
 rehearsal_teardown() {
-  local prefix=${1:-} aws bucket running task_arn versions markers batch destroyed state status
+  local prefix=${1:-} aws bucket running task_arn versions markers batch destroyed state status root
+  root="$(rehearsal_root)"
   rehearsal_require_prefix "$prefix" || exit 1
   rehearsal_require_deployment_session "${FSS_REHEARSAL_DEPLOYMENT_ROLE:-fss-rh-deploy}"
   bucket="${FSS_REHEARSAL_JOURNAL_BUCKET:-${prefix}-suppression-journal-${REHEARSAL_SESSION_ACCOUNT}}"
@@ -445,7 +464,7 @@ rehearsal_teardown() {
 
   rehearsal_log "3/4 destroying the rehearsal root"
   set +e
-  state="$(rehearsal_state_list)"
+  state="$(rehearsal_state_list "$root")"
   status=$?
   set -e
   if [ "$status" -eq 3 ]; then
@@ -458,9 +477,9 @@ rehearsal_teardown() {
   else
     # destroy needs every variable apply did, and this shell has none of the create step's
     # values: they are in run.auto.tfvars.json (identifiers only; infra/.gitignore).
-    [ -f run.auto.tfvars.json ] \
-      || rehearsal_fail "run.auto.tfvars.json is absent beside the rehearsal root, so terraform destroy has no values for the variables the root requires; recreate it as docs/greenfield/release.md section 3 step 13 describes and rerun this teardown"
-    rehearsal_terraform destroy -auto-approve -input=false "$REHEARSAL_NO_ASSUME_VAR" -var="name_prefix=${prefix}"
+    [ -f "$root/run.auto.tfvars.json" ] \
+      || rehearsal_fail "run.auto.tfvars.json is absent from $root, so terraform destroy has no values for the variables the root requires; recreate it as docs/greenfield/release.md section 3 step 13 describes and rerun this teardown"
+    rehearsal_terraform -chdir="$root" destroy -auto-approve -input=false "$REHEARSAL_NO_ASSUME_VAR" -var="name_prefix=${prefix}"
     destroyed=true
   fi
 
@@ -530,8 +549,9 @@ rehearsal_teardown() {
 # named. The key is the one the workflow initialises per run.
 rehearsal_state_location() {
   local prefix=$1 root backend
-  root="${FSS_REHEARSAL_ROOT:-infra/roots/rehearsal}"
+  root="$(rehearsal_root)"
   backend="$root/backend.hcl"
+  REHEARSAL_STATE_BACKEND="$backend"
   REHEARSAL_STATE_BUCKET="${FSS_REHEARSAL_STATE_BUCKET:-}"
   REHEARSAL_LOCK_TABLE="${FSS_REHEARSAL_LOCK_TABLE:-}"
   if [ -r "$backend" ]; then
@@ -1018,7 +1038,7 @@ rehearsal_lock_leftovers() {
   local prefix=$1 output status
   rehearsal_state_location "$prefix"
   [ -n "$REHEARSAL_STATE_BUCKET" ] && [ -n "$REHEARSAL_LOCK_TABLE" ] \
-    || rehearsal_fail "the state bucket and lock table could not be read from ${FSS_REHEARSAL_ROOT:-infra/roots/rehearsal}/backend.hcl, so the run's locks cannot be checked"
+    || rehearsal_fail "the state bucket and lock table could not be read from $REHEARSAL_STATE_BACKEND, so the run's locks cannot be checked"
   set +e
   output="$(rehearsal_aws s3api head-object --bucket "$REHEARSAL_STATE_BUCKET" --key "$REHEARSAL_STATE_KEY.tflock" 2>&1)"
   status=$?
@@ -1101,12 +1121,13 @@ rehearsal_require_nothing_left() {
 # production (lib.sh refuses at the call), the session, and the role's policy.
 # ---------------------------------------------------------------------------
 rehearsal_guard() {
-  local prefix=${1:-} state state_read=true offending status
+  local prefix=${1:-} state state_read=true offending status root
+  root="$(rehearsal_root)"
   rehearsal_require_prefix "$prefix" || exit 1
   rehearsal_log "asserting the run left nothing in its state or in the cloud, and touched nothing production's"
 
   set +e
-  state="$(rehearsal_state_list)"
+  state="$(rehearsal_state_list "$root")"
   status=$?
   set -e
   case "$status" in
