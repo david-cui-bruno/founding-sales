@@ -1,7 +1,9 @@
 import { ipcMain } from 'electron';
+import { DIAL_IPC_CHANNELS } from '../shared/operations.ts';
 import { CRM_IPC_CHANNELS, createCrmBridge, type CrmBridgeDeps, type CrmBridgeHost } from './crmBridge.ts';
-import { TODAY_IPC_CHANNELS, createTodayBridge, type TodayBridgeDeps, type TodayBridgeHost } from './todayBridge.ts';
-import { REPLY_IPC_CHANNELS, createReplyBridge, type ReplyBridgeDeps, type ReplyBridgeHost } from './replyBridge.ts';
+import { registerOperations } from './operationHost.ts';
+import { createTodayBridge, type TodayBridgeDeps, type TodayBridgeHost } from './todayBridge.ts';
+import { createReplyBridge, type ReplyBridgeDeps, type ReplyBridgeHost } from './replyBridge.ts';
 import {
   SEQUENCE_IPC_CHANNELS,
   createSequenceBridge,
@@ -35,112 +37,38 @@ export function resetWindowRegistrations(): void {
   registered.clear();
 }
 
-export function registerTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
-  const host = createTodayBridge(deps);
-  handleOnce(TODAY_IPC_CHANNELS.state, async () => await host.state());
-  // Only `quiet: true` is taken from the renderer; anything else is the plain Refresh.
-  handleOnce(TODAY_IPC_CHANNELS.refresh, async argument =>
-    await host.refresh({ quiet: (argument as { quiet?: unknown } | null)?.quiet === true }),
-  );
-  handleOnce(TODAY_IPC_CHANNELS.expand, async argument => {
-    // The renderer's word is never taken for a shape: a malformed request is the
-    // current state back, not an argument passed on to the API.
-    const firmId = (argument as { firmId?: unknown } | null)?.firmId;
-    return typeof firmId === 'string' ? await host.expand({ firmId }) : await host.state();
-  });
-  handleOnce(TODAY_IPC_CHANNELS.collapse, async () => await host.collapse());
-  handleOnce(TODAY_IPC_CHANNELS.snooze, async argument => {
-    const input = argument as { itemId?: unknown; reason?: unknown; returnAt?: unknown } | null;
-    if (typeof input?.itemId !== 'string' || typeof input.reason !== 'string' || typeof input.returnAt !== 'string') {
-      return await host.state();
-    }
-    return await host.snooze({ itemId: input.itemId, reason: input.reason, returnAt: input.returnAt });
-  });
-  handleOnce(TODAY_IPC_CHANNELS.dial, async argument => {
-    const input = argument as { firmId?: unknown; routeId?: unknown; routeVersion?: unknown; contactId?: unknown } | null;
-    if (typeof input?.firmId !== 'string' || typeof input.routeId !== 'string' || typeof input.routeVersion !== 'number') {
-      return await host.state();
-    }
-    return await host.dial({
+/**
+ * Today, Replies and the two Diagnostics recovery controls, behind the operation
+ * registry (D4).
+ *
+ * Nine hand-written channels for Today and six for Replies became two — `api.read` and
+ * `api.command` — and the per-channel argument checking that stood here became the
+ * registry's input schemas. The transformations did not move: `createTodayBridge` and
+ * `createReplyBridge` are still where the stale expansion, the refusal eviction and the
+ * wall-clock callback live, and `operationHost.ts` says which operation reaches which.
+ *
+ * Dialling keeps a channel of its own: it opens a URI on the operating system rather than
+ * answering with one, and `api.command(op, input)` is not where that belongs.
+ */
+export function registerOperationBridges(deps: {
+  readonly today: TodayBridgeDeps;
+  readonly replies: ReplyBridgeDeps;
+}): { readonly today: TodayBridgeHost; readonly replies: ReplyBridgeHost } {
+  const today = createTodayBridge(deps.today);
+  const replies = createReplyBridge(deps.replies);
+  registerOperations({ api: deps.today.api, today, replies }, handleOnce);
+  handleOnce(DIAL_IPC_CHANNELS.call, async argument => {
+    // The renderer's word is never taken for a shape: a malformed request is the current
+    // state back, not an argument passed on to the API.
+    const input = argument as { firmId?: unknown; routeId?: unknown; contactId?: unknown } | null;
+    if (typeof input?.firmId !== 'string' || typeof input.routeId !== 'string') return await today.state();
+    return await today.dial({
       firmId: input.firmId,
       contactId: typeof input.contactId === 'string' ? input.contactId : null,
       routeId: input.routeId,
-      routeVersion: input.routeVersion,
     });
   });
-  handleOnce(TODAY_IPC_CHANNELS.recordOutcome, async argument => {
-    const input = argument as Record<string, unknown> | null;
-    if (input === null || typeof input['firmId'] !== 'string' || typeof input['outcome'] !== 'string') {
-      return await host.state();
-    }
-    return await host.recordOutcome(input as unknown as Parameters<TodayBridgeHost['recordOutcome']>[0]);
-  });
-  // Lane g79: set a time on "Callback — needs a time", and Resume a paused send.
-  handleOnce(TODAY_IPC_CHANNELS.scheduleCallback, async argument => {
-    const input = argument as { callLogId?: unknown; localDate?: unknown; localTime?: unknown } | null;
-    if (typeof input?.callLogId !== 'string' || typeof input.localDate !== 'string' || typeof input.localTime !== 'string') {
-      return await host.state();
-    }
-    return await host.scheduleCallback({ callLogId: input.callLogId, localDate: input.localDate, localTime: input.localTime });
-  });
-  handleOnce(TODAY_IPC_CHANNELS.releasePause, async argument => {
-    const holdId = (argument as { holdId?: unknown } | null)?.holdId;
-    return typeof holdId === 'string' ? await host.releasePause({ holdId }) : await host.state();
-  });
-  return host;
-}
-
-/**
- * The reply cards (8.3, 12.4).
- *
- * Five channels, and the argument checking is the same as everywhere else in this
- * file: the renderer's word is never taken for a shape, and a malformed request is
- * the current state back rather than an argument passed on to the API.
- *
- * `confirm` is the consequential one, so it is checked field by field rather than
- * cast. A confirmation with no disposition is not a confirmation, and a callback the
- * renderer sent as something other than the three strings the contract names would be
- * an instant somebody has to guess at — which is the one thing 12.4 will not have.
- */
-export function registerReplyBridge(deps: ReplyBridgeDeps): ReplyBridgeHost {
-  const host = createReplyBridge(deps);
-  handleOnce(REPLY_IPC_CHANNELS.state, async () => await host.state());
-  handleOnce(REPLY_IPC_CHANNELS.refresh, async () => await host.refresh());
-  handleOnce(REPLY_IPC_CHANNELS.open, async argument => {
-    const messageId = (argument as { messageId?: unknown } | null)?.messageId;
-    return typeof messageId === 'string' ? await host.open({ messageId }) : await host.state();
-  });
-  handleOnce(REPLY_IPC_CHANNELS.collapse, async () => await host.collapse());
-  handleOnce(REPLY_IPC_CHANNELS.confirm, async argument => {
-    const input = argument as Record<string, unknown> | null;
-    if (input === null || typeof input['messageId'] !== 'string' || typeof input['disposition'] !== 'string') {
-      return await host.state();
-    }
-    const raw = input['callback'] as Record<string, unknown> | null | undefined;
-    const callback =
-      raw === null || raw === undefined
-        ? null
-        : typeof raw['localDate'] === 'string' &&
-            typeof raw['localTime'] === 'string' &&
-            typeof raw['sourceTimeZone'] === 'string'
-          ? { localDate: raw['localDate'], localTime: raw['localTime'], sourceTimeZone: raw['sourceTimeZone'] }
-          : undefined;
-    if (callback === undefined) return await host.state();
-    return await host.confirm({
-      messageId: input['messageId'],
-      disposition: input['disposition'] as Parameters<ReplyBridgeHost['confirm']>[0]['disposition'],
-      callback,
-      firmWideOptOut: input['firmWideOptOut'] === true,
-      note: typeof input['note'] === 'string' ? input['note'] : '',
-    });
-  });
-  // Lane g88: two ids, and the bridge checks the opportunity is one of the open card's.
-  handleOnce(REPLY_IPC_CHANNELS.resolve, async argument => {
-    const input = argument as { messageId?: unknown; opportunityId?: unknown } | null;
-    if (typeof input?.messageId !== 'string' || typeof input.opportunityId !== 'string') return await host.state();
-    return await host.resolve({ messageId: input.messageId, opportunityId: input.opportunityId });
-  });
-  return host;
+  return { today, replies };
 }
 
 export function registerCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {

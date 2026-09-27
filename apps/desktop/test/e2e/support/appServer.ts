@@ -3,10 +3,12 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
+import { BUNDLE_STYLESHEET, BUNDLE_STYLESHEET_SOURCE, BUNDLE_WINDOWS } from '../../../src/main/bundleScheme.ts';
+import { compileStylesheet } from '../../../scripts/styles.ts';
 import type { DesktopState, MailboxState } from '../../../src/shared/contract.ts';
 import type { UpdateStatus } from '../../../src/shared/updateContract.ts';
 import type { CrmState } from '../../../src/renderer/firmWorkspaceContract.ts';
-import type { ReplyState } from '../../../src/renderer/replyContract.ts';
+
 import type { SequenceState } from '../../../src/renderer/sequenceContract.ts';
 import type { AdminState } from '../../../src/renderer/settingsContract.ts';
 import type { TodayState } from '../../../src/renderer/todayContract.ts';
@@ -14,15 +16,16 @@ import { EMPTY_SEQUENCE_STATE } from '../../../src/renderer/sequenceView.ts';
 import { adminAnswer, adminState } from './adminFixtures.ts';
 import { crmAnswer, crmState } from './crmFixtures.ts';
 import { connectedMailbox, desktopState, readyAdmin, todayAnswer, todayState } from './homeFixtures.ts';
-import { replyAnswer, replyState } from './replyFixtures.ts';
+import { replyAnswer, replyState, replyWire, type ReplyLane } from './replyFixtures.ts';
 import { signedInState, signedOutState } from './sessionFixtures.ts';
 
 /**
  * The one test server every window spec runs against (wave 1).
  *
- * There is one window, so there is one harness: the shipped `index.html`, `styles.css`
- * and `renderer.ts` — which holds the shell and every view — transpiled with esbuild and
- * served unmodified. Only the eight bridges the preload script installs are replaced,
+ * There is one window, so there is one harness: the shipped `index.html`, the React root
+ * `main.tsx` — which holds the shell and every view — and the stylesheet Tailwind compiles
+ * from `tailwind.css`, both produced exactly as `scripts/bundle.ts` produces them and
+ * served unmodified under the names the page asks for (`renderer.js`, `styles.css`). Only the eight bridges the preload script installs are replaced,
  * each by a small generated object that posts back here, where a scripted fake answers
  * it. A spec goes to a view by loading `url('#firms')`, by pressing the sidebar, or by
  * `navigateByMenu(page, 'firms')`, which is what the Window menu's `callie:navigate` does.
@@ -50,6 +53,31 @@ export interface Call {
   readonly argument: unknown;
 }
 
+/** What `POST /outbound/status` knows about one send, as Diagnostics shows it. */
+export interface DiagnosticsFence {
+  readonly id: string;
+  readonly state: string;
+  readonly recipientAddress: string;
+  readonly dispatchStartedAt: string | null;
+  readonly sentAt: string | null;
+  readonly heldReason: string | null;
+  readonly adminResolution: 'delivered' | 'skipped' | null;
+  readonly reconcileAttempts: number;
+}
+
+/** One row of `GET /admin/jobs/dead`. */
+export interface DiagnosticsDeadJob {
+  readonly id: string;
+  readonly kind: string;
+  readonly idempotencyKey: string;
+  readonly attempts: number;
+  readonly maxAttempts: number;
+  readonly requeuedCount: number;
+  readonly errorCode: string | null;
+  readonly errorDetail: string | null;
+  readonly deadAt: string;
+}
+
 /** A bridge, as a spec sees it: its calls (method names without the bridge's prefix) and its state. */
 export interface BridgeHandle<S> {
   readonly calls: readonly Call[];
@@ -57,7 +85,7 @@ export interface BridgeHandle<S> {
   setState(state: S): void;
 }
 
-type Optional = 'callieMailbox' | 'callieToday' | 'callieAdmin' | 'callieCrm' | 'callieReplies' | 'callieSequences';
+type Optional = 'callieMailbox' | 'callieApi' | 'callieAdmin' | 'callieCrm' | 'callieSequences';
 
 export interface AppServerOptions {
   readonly desktop?: DesktopState;
@@ -71,13 +99,19 @@ export interface AppServerOptions {
   /** `loadDashboard` answers with no figures for the window asked, as a refused read does. */
   readonly figuresFail?: boolean;
   readonly crm?: CrmState;
-  readonly replies?: ReplyState;
+  readonly replies?: ReplyLane;
   /** What each `sequences.state` answers, one per call; the last repeats. */
   readonly sequences?: readonly SequenceState[];
   /** The state a sequences method moves the window to, by method name. */
   readonly sequencesScripted?: Readonly<Partial<Record<string, SequenceState>>>;
   /** Install `callieUpdate`, answering this. Absent: the page has no update bridge. */
   readonly update?: UpdateStatus;
+  /**
+   * Settings › Diagnostics. The fence one send is in, and the jobs that gave up: the two
+   * recovery forms are the only thing that asks for either.
+   */
+  readonly sendStatus?: DiagnosticsFence | null;
+  readonly deadJobs?: readonly DiagnosticsDeadJob[];
   /** What `callie.signIn` answers. Absent: signed in. */
   readonly signInAnswer?: DesktopState;
   /** What Update now finds: a version a blocked build installs at once. Absent: nothing. */
@@ -97,7 +131,7 @@ export interface AppServer {
   readonly today: BridgeHandle<TodayState>;
   readonly admin: BridgeHandle<AdminState>;
   readonly crm: BridgeHandle<CrmState>;
-  readonly replies: BridgeHandle<ReplyState>;
+  readonly replies: BridgeHandle<ReplyLane>;
   readonly sequences: BridgeHandle<SequenceState>;
   readonly update: BridgeHandle<UpdateStatus>;
   /**
@@ -111,10 +145,6 @@ export interface AppServer {
 const METHODS: Readonly<Record<string, { readonly global: string; readonly methods: readonly string[] }>> = {
   callie: { global: 'callie', methods: ['state', 'signIn', 'signOut', 'refreshToday'] },
   mailbox: { global: 'callieMailbox', methods: ['state', 'refresh', 'connect'] },
-  today: {
-    global: 'callieToday',
-    methods: ['state', 'refresh', 'expand', 'collapse', 'snooze', 'dial', 'recordOutcome', 'scheduleCallback', 'releasePause'],
-  },
   crm: {
     global: 'callieCrm',
     methods: [
@@ -135,7 +165,6 @@ const METHODS: Readonly<Record<string, { readonly global: string; readonly metho
       'checkRoute',
     ],
   },
-  replies: { global: 'callieReplies', methods: ['state', 'refresh', 'open', 'collapse', 'confirm', 'resolve'] },
   sequences: {
     global: 'callieSequences',
     methods: [
@@ -182,12 +211,29 @@ const METHODS: Readonly<Record<string, { readonly global: string; readonly metho
 
 /** `onNavigate` and `onChange` keep the page's listener where a spec can call it, as the main process's messages do. */
 const LISTENERS: Readonly<Record<string, string>> = {
-  callie: `onNavigate(listener) { (globalThis.__navigateListeners ??= []).push(listener); },`,
+  callie: `onNavigate(listener) { (globalThis.__navigateListeners ??= []).push(listener); },
+  onSessionChange(listener) { (globalThis.__sessionListeners ??= []).push(listener); },`,
   update: `onChange(listener) { (globalThis.__updateListeners ??= []).push(listener); },`,
 };
 
+/**
+ * D4's registry, faked. `callieApi.read(op, input)` and `callieApi.command(op, input)`
+ * post to `/bridge/<op>`, and the operations are named `today.expand`, `replies.confirm`
+ * and so on — the same `bridge.method` the other fakes use — so a spec asks for
+ * `called('today.expand')` whether the view reached it through a bridge of its own or
+ * through the registry. Dialling keeps its own method, as it does in the preload.
+ */
+const OPERATION_API = `globalThis.callieApi = {
+  async read(operation, input) { return await ask(operation, input ?? null); },
+  async command(operation, input) { return await ask(operation, input ?? null); },
+};
+globalThis.callieDial = {
+  async call(input) { return await ask('today.dial', input ?? null); },
+};`;
+
 function bridgeScript(installed: readonly string[]): string {
   const objects = installed.map(name => {
+    if (name === 'api') return OPERATION_API;
     const entry = METHODS[name];
     if (entry === undefined) throw new Error(`no such bridge ${name}`);
     const methods = entry.methods.map(method => `  async ${method}(input) { return await ask('${name}.${method}', input); },`);
@@ -205,19 +251,34 @@ async function ask(method, argument) {
 }
 
 let transpiled: Promise<string> | null = null;
+let compiledStyles: Promise<string> | null = null;
 
-/** The one renderer bundle, built once per spec run. */
+/** The one renderer bundle, built once per spec run, from the window's declared source. */
 async function transpile(): Promise<string> {
   if (packagedBundle !== undefined) return await readFile(`${pageDirectory}renderer.js`, 'utf8');
+  const entry = BUNDLE_WINDOWS[0]?.source ?? 'main.tsx';
   transpiled ??= build({
-    entryPoints: [`${rendererDirectory}renderer.ts`],
+    entryPoints: [`${rendererDirectory}${entry}`],
     bundle: true,
     format: 'esm',
     target: 'es2022',
     write: false,
     platform: 'browser',
+    jsx: 'automatic',
+    define: { 'process.env.NODE_ENV': '"production"' },
   }).then(bundle => bundle.outputFiles[0]?.text ?? '');
   return await transpiled;
+}
+
+/**
+ * The one stylesheet, compiled once per spec run by the same function the packaging build
+ * uses. A packaged run reads the bytes out of the extracted bundle instead, which is what
+ * makes `FSS_E2E_RENDERER_BUNDLE` a check of the artifact rather than of the source.
+ */
+async function stylesheet(): Promise<string> {
+  if (packagedBundle !== undefined) return await readFile(`${pageDirectory}${BUNDLE_STYLESHEET}`, 'utf8');
+  compiledStyles ??= compileStylesheet(`${rendererDirectory}${BUNDLE_STYLESHEET_SOURCE}`);
+  return await compiledStyles;
 }
 
 async function readBody(request: IncomingMessage): Promise<unknown> {
@@ -234,8 +295,8 @@ async function readBody(request: IncomingMessage): Promise<unknown> {
 export async function startAppServer(options: AppServerOptions = {}): Promise<AppServer> {
   const script = await transpile();
   const without = new Set<string>(options.without ?? []);
-  const installed = ['callie', 'mailbox', 'today', 'crm', 'replies', 'sequences', 'admin', ...(options.update === undefined ? [] : ['update'])].filter(
-    name => !without.has(METHODS[name]?.global ?? ''),
+  const installed = ['callie', 'mailbox', 'api', 'crm', 'sequences', 'admin', ...(options.update === undefined ? [] : ['update'])].filter(
+    name => !without.has(name === 'api' ? 'callieApi' : (METHODS[name]?.global ?? '')),
   );
   const html = (await readFile(`${pageDirectory}index.html`, 'utf8'))
     .replace('<script type="module"', '<script src="./bridge.js"></script>\n    <script type="module"')
@@ -245,7 +306,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     // document only; the file on disk stays strict. `replaceAll`: the phrase is in the
     // page's comment as well as in the policy.
     .replaceAll("connect-src 'none'", "connect-src 'self'");
-  const styles = await readFile(`${pageDirectory}styles.css`, 'utf8');
+  const styles = await stylesheet();
 
   const calls: Call[] = [];
   const held = new Map<string, Promise<void>>();
@@ -261,6 +322,8 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
   let sequencesServed = 0;
   let sequences = sequenceAnswers[0] ?? EMPTY_SEQUENCE_STATE;
   let update: UpdateStatus = options.update ?? { kind: 'none' };
+  let deadJobs: readonly DiagnosticsDeadJob[] = options.deadJobs ?? [];
+  let fence: DiagnosticsFence | null = options.sendStatus ?? null;
 
   const of = (bridge: string): Call[] =>
     calls
@@ -304,7 +367,25 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     }
     if (bridge === 'replies') {
       replies = replyAnswer(replies, name, argument, mine);
-      return replies;
+      // The window is handed summaries and the open card, never the lane's bodies —
+      // the same reduction `replySummaryOf` makes in the main process.
+      return replyWire(replies);
+    }
+    if (bridge === 'diagnostics') {
+      if (name === 'sendStatus') return { fence };
+      if (name === 'resolveSend') {
+        const input = argument as { readonly outboundMessageId: string; readonly resolution: 'delivered' | 'skipped' };
+        fence = fence === null ? null : { ...fence, adminResolution: input.resolution };
+        return { outboundMessageId: input.outboundMessageId, resolution: input.resolution };
+      }
+      if (name === 'deadJobs') return { deadJobs };
+      if (name === 'requeueJob') {
+        const { jobId } = argument as { readonly jobId: string };
+        const job = deadJobs.find(one => one.id === jobId);
+        if (job === undefined) throw new Error('no such job');
+        deadJobs = deadJobs.filter(one => one.id !== jobId);
+        return { requeued: true, jobId, kind: job.kind };
+      }
     }
     if (bridge === 'sequences') {
       if (name === 'state') {

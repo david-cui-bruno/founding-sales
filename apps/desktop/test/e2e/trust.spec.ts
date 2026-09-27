@@ -137,3 +137,24 @@ test('a sign-in that could not reach the server says so once and keeps what was 
   await expect(page.getByTestId('workspace-id')).toHaveValue(EXAMPLE_WORKSPACE);
   await expect(page.getByTestId('device-label')).toHaveValue('Studio Mac');
 });
+
+test('signing out empties the request cache: the next person’s Today is read again', async ({ page }) => {
+  // The Query cache is memory-only and is cleared on sign-out, on another workspace, on
+  // a changed role and on revocation (`App.tsx`). Every read has `staleTime: Infinity`,
+  // so if the cache survived a sign-out the same Mac signing back in would draw the list
+  // it already had — the one thing 12.4 will not have.
+  server = await startAppServer({ today: todayState() });
+  await page.goto(server.url());
+  await expect(page.getByTestId('today-card').first()).toBeVisible();
+  await expect.poll(() => called('today.refresh').length).toBe(1);
+
+  await page.getByTestId('this-mac-summary').click();
+  await page.getByTestId('sign-out').click();
+  await expect(page.getByTestId('heading')).toHaveText('Sign in with Google');
+
+  await page.getByTestId('workspace-id').fill(EXAMPLE_WORKSPACE);
+  await page.getByTestId('device-label').fill("David's MacBook");
+  await page.getByTestId('sign-in').click();
+  await expect(page.getByTestId('today-card').first()).toBeVisible();
+  await expect.poll(() => called('today.refresh').length).toBe(2);
+});

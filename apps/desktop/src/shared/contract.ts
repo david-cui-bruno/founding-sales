@@ -155,19 +155,65 @@ export const desktopStateSchema = z.strictObject({
 export type DesktopState = z.infer<typeof desktopStateSchema>;
 
 /**
- * The views the Window menu's ⌘1–⌘6 and a deep link may ask the one window for (wave 1),
- * as a closed set, in the sidebar's order. A firm's own route is the page's alone.
+ * The views the sidebar shows, as a closed set, in the sidebar's order (1.0.12).
+ *
+ * Four selling views with ⌘1–⌘4, and Settings at the bottom with ⌘,. Administration and
+ * the Dashboard were rows of their own until 1.0.12; they are tabs of Settings now, and
+ * `admin` and `dashboard` are no longer route names. A firm's own route is the page's
+ * alone and is not in this list.
  */
-export const ROUTE_NAMES = ['today', 'replies', 'firms', 'sequences', 'admin', 'dashboard'] as const;
+export const ROUTE_NAMES = ['today', 'replies', 'firms', 'sequences', 'settings'] as const;
 export type RouteName = (typeof ROUTE_NAMES)[number];
 
+/** Settings is one view with three tabs, and the tab is part of the route. */
+export const SETTINGS_TABS = ['administration', 'dashboard', 'diagnostics'] as const;
+export type SettingsTab = (typeof SETTINGS_TABS)[number];
+
 /**
- * One of the six names, or null. Compared with each literal rather than looked up as a
+ * Everything the main process may ask the window to show: the four views, and Settings
+ * open at one of its three tabs. A closed set of exact strings, because a deep link is
+ * something any web page can ask macOS to open — nothing from a URL becomes an argument,
+ * a path or a query, and a target outside this list is dropped before the page hears it.
+ */
+export const NAVIGATION_TARGETS = [
+  'today',
+  'replies',
+  'firms',
+  'sequences',
+  ...SETTINGS_TABS.map(tab => `settings/${tab}` as const),
+] as const;
+export type NavigationTarget = (typeof NAVIGATION_TARGETS)[number];
+
+/**
+ * One of the five names, or null. Compared with each literal rather than looked up as a
  * key, so `constructor` and `__proto__` are refused like any other string.
  */
 export function routeNameOf(value: unknown): RouteName | null {
   return ROUTE_NAMES.find(name => name === value) ?? null;
 }
+
+/** One of the seven navigation targets, or null. Compared the same way, for the same reason. */
+export function navigationTargetOf(value: unknown): NavigationTarget | null {
+  return NAVIGATION_TARGETS.find(target => target === value) ?? null;
+}
+
+/**
+ * A session transition, as the main process saw it (1.0.12).
+ *
+ * `generation` counts them. Every read a view has in flight was made under one, and an
+ * answer that arrives under an older one is dropped rather than drawn: without that, a
+ * `/today` read started as one person can land after another has signed in.
+ *
+ * `identity` is the workspace, the device and the role — public metadata, the same three
+ * the sidebar already shows. No token and no refresh credential crosses this boundary.
+ */
+export const sessionChangeSchema = z.strictObject({
+  generation: z.number().int().min(0),
+  identity: z.string().max(200).nullable(),
+  /** A stable code: `signed_out`, `signed_in`, `role_changed`, or the refusal that wiped. */
+  reason: z.string().max(80),
+});
+export type SessionChange = z.infer<typeof sessionChangeSchema>;
 
 export interface DesktopBridge {
   state(): Promise<DesktopState>;
@@ -179,11 +225,18 @@ export interface DesktopBridge {
   signOut(): Promise<DesktopState>;
   refreshToday(): Promise<DesktopState>;
   /**
-   * The Window menu and deep links (wave 1): called with one of the six route names
-   * whenever the main process asks the window to show that view. The preload checks
-   * the name against `ROUTE_NAMES` before it gets here.
+   * The Window menu and deep links: called with one of the seven navigation targets
+   * whenever the main process asks the window to show that view. The preload checks the
+   * value against `NAVIGATION_TARGETS` before it gets here.
    */
-  onNavigate(listener: (route: RouteName) => void): void;
+  onNavigate(listener: (target: NavigationTarget) => void): void;
+  /**
+   * Sign-out, another workspace, a changed role, a revoked device: the page clears its
+   * request cache and everything anybody had typed, at once. The main process sends it
+   * because the main process is where it is known — the renderer used to find out by
+   * noticing that a state it read looked different, which is one read too late.
+   */
+  onSessionChange(listener: (change: SessionChange) => void): void;
 }
 
 // ---------------------------------------------------------------------------

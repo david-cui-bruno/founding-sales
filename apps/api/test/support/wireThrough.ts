@@ -58,7 +58,7 @@ export function desktopClient(fixture: AuthFixture, token: string, calls: string
   return createAuthedClient({
     baseUrl: 'https://api.example.test/',
     clientVersion: CURRENT_CLIENT_VERSION,
-    accessToken: async () => await Promise.resolve(token),
+    accessToken: async () => await Promise.resolve({ token, generation: 0 }),
     send: throughTheRoute(fixture, calls),
   });
 }

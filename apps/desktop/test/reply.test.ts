@@ -1,7 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { replyCardSchema, replyStateSchema, type ReplyCard, type ReplyState } from '../src/renderer/replyContract.ts';
-import { buildReplyCardView, buildReplyView, candidateLabel, replyNotice } from '../src/renderer/replyView.ts';
-import { REPLY_IPC_CHANNELS, createReplyBridge } from '../src/main/replyBridge.ts';
+import { replyCardSchema, replyStateSchema, replySummaryOf, type ReplyCard, type ReplyState } from '../src/renderer/replyContract.ts';
+import {
+  CONFIRM_LABELS,
+  FOLLOW_UP_WITHOUT_DATE,
+  buildReplyCardView,
+  buildReplyView,
+  candidateLabel,
+  confirmLabel,
+  followUpConsequence,
+  replyNotice,
+} from '../src/renderer/replyView.ts';
+import { createReplyBridge } from '../src/main/replyBridge.ts';
+import { OPERATION_NAMES } from '../src/shared/operations.ts';
 import { createAuthedClient } from '../src/main/authedClient.ts';
 import type { HttpAnswer } from '../src/main/apiClient.ts';
 import { classifierSettingsAnswer, confirmReplyResultAnswer, replyConfirmationAnswer } from './support/replyAnswers.ts';
@@ -84,7 +94,7 @@ function state(overrides: Partial<ReplyState> = {}): ReplyState {
   return replyStateSchema.parse({
     businessDate: '2026-09-21',
     businessTimeZone: 'America/New_York',
-    cards: [card()],
+    cards: [replySummaryOf(card())],
     open: card(),
     online: true,
     mayMutate: true,
@@ -95,7 +105,10 @@ function state(overrides: Partial<ReplyState> = {}): ReplyState {
 }
 
 describe('the reply card view model', () => {
-  it('shows the suggestion and selects nothing: a confirmation is a person’s click', () => {
+  it('shows the suggestion, marks it as one, and names the effect on the button (⚠ D5.1)', () => {
+    // The view model still takes `chosen` as a parameter and computes nothing from the
+    // card: the *view* fills it in with the guess when a card opens (D5.1), which is why
+    // `chosen: null` is still a card with nothing selected and a dead button.
     const view = buildReplyCardView(state(), card(), null);
     expect(view.suggestion?.dispositionLabel).toBe('Interested');
     expect(view.suggestion?.source).toBe('model');
@@ -109,7 +122,28 @@ describe('the reply card view model', () => {
 
     const chosen = buildReplyCardView(state(), card(), 'interested');
     expect(chosen.confirmEnabled).toBe(true);
-    expect(chosen.confirmLabel).toBe('Confirm: Interested');
+    // The words of the command that is about to run, not the label of the choice: with
+    // the guess already selected, "Confirm: Interested" would be a button that asks for
+    // agreement with a classification rather than for an effect.
+    expect(chosen.confirmLabel).toBe('Stop automated sending and take this firm over');
+    expect(buildReplyCardView(state(), card(), 'opt_out').confirmLabel).toBe(
+      'Stop automated sending and record a do-not-contact',
+    );
+    // A follow-up with nothing typed in the date does not book anything — the domain
+    // creates a callback only if one was supplied — so the button does not say it will.
+    expect(buildReplyCardView(state(), card(), 'follow_up_later').confirmLabel).toBe(
+      'Stop automated sending and note a follow-up — no date yet',
+    );
+    expect(confirmLabel('follow_up_later', false)).toBe('Stop automated sending and note a follow-up — no date yet');
+    expect(confirmLabel('follow_up_later', true)).toBe('Stop automated sending and book the callback');
+    expect(confirmLabel(null, true)).toBe('Choose what this reply means');
+    // Every disposition names an effect, and none of them says anything about the
+    // guess having been reviewed.
+    for (const label of Object.values(CONFIRM_LABELS)) {
+      expect(label).toContain('Stop automated sending');
+      expect(label.toLowerCase()).not.toContain('review');
+      expect(label.toLowerCase()).not.toContain('confirm');
+    }
   });
 
   it('never treats confidence as permission', () => {
@@ -230,6 +264,26 @@ describe('the reply card view model', () => {
     expect(view.emptyMessage).toBe('Callie cannot reach the server, and replies are never kept on this Mac.');
   });
 
+  it('says the same thing above the button as on it, on both kinds of follow-up card', () => {
+    const plain = buildReplyCardView(state(), card(), 'follow_up_later');
+    const plainText = plain.choices.find(choice => choice.disposition === 'follow_up_later')?.consequence ?? '';
+    // No day was read, so both presses are real and the sentence names both — the
+    // button says the same (`FOLLOW_UP_WITHOUT_DATE` until a day is typed).
+    expect(plainText).toContain('leave them empty');
+    expect(plain.confirmLabel).toBe(FOLLOW_UP_WITHOUT_DATE);
+
+    const later = card({ callbackProposal: { localDateTime: '2026-09-28T09:00', timeZone: null } });
+    const proposed = buildReplyCardView(state({ open: later }), later, 'follow_up_later');
+    const proposedText = proposed.choices.find(choice => choice.disposition === 'follow_up_later')?.consequence ?? '';
+    // A day was read, the server refuses the empty form (`callback_required`) and the
+    // button refuses the press, so the sentence may not offer it either.
+    expect(proposedText).not.toContain('leave them empty');
+    expect(proposedText).toContain('this answer needs one');
+    expect(proposed.callbackRequired).toBe(true);
+    expect(followUpConsequence(false)).toBe(plainText);
+    expect(followUpConsequence(true)).toBe(proposedText);
+  });
+
   it('prefills the model’s reading of a time and still calls the field required', () => {
     const later = card({ callbackProposal: { localDateTime: '2026-09-28T09:00', timeZone: null } });
     const idle = buildReplyCardView(state({ open: later }), later, null);
@@ -250,7 +304,15 @@ describe('the reply card view model', () => {
   });
 
   it('summarises the lane without inventing an answer for anything', () => {
-    const view = buildReplyView(state({ cards: [card(), card({ messageId: OTHER_MESSAGE_ID, proposedDisposition: null, proposedBy: 'none', confidence: null })] }), null);
+    const view = buildReplyView(
+      state({
+        cards: [
+          replySummaryOf(card()),
+          replySummaryOf(card({ messageId: OTHER_MESSAGE_ID, proposedDisposition: null, proposedBy: 'none', confidence: null })),
+        ],
+      }),
+      null,
+    );
     expect(view.summaries.map(summary => summary.line)).toEqual([
       'Northwind Test Holdings — Dana Example — Callie suggests: Interested',
       'Northwind Test Holdings — Dana Example — Needs an answer',
@@ -268,7 +330,7 @@ function scriptedApi(answers: Readonly<Record<string, HttpAnswer>>): {
   const api = createAuthedClient({
     baseUrl: 'https://api.example.test/',
     clientVersion: '1.4.0',
-    accessToken: async () => await Promise.resolve('token-value'),
+    accessToken: async () => await Promise.resolve({ token: 'token-value', generation: 0 }),
     send: async (url, init) => {
       const path = new URL(url).pathname;
       calls.push({
@@ -301,6 +363,276 @@ const confirmed: HttpAnswer = {
   status: 200,
   body: { status: 'accepted', replayed: false, result: confirmReplyResultAnswer() },
 };
+
+describe('the reply bridge keeps no body it is not showing (1.0.12)', () => {
+  /*
+   * `GET /replies` answers whole cards, bodies and all. Until 1.0.12 this process kept
+   * that list for as long as the app was open: closing a card cleared the open one and
+   * left the rest, and `state` handed them back after a sign-out. What follows is the
+   * rule that replaced it — the lane is lines, one body exists at a time, and every way
+   * out of the view takes it with it.
+   */
+  const two = [card(), card({ messageId: OTHER_MESSAGE_ID, body: { text: 'Please stop.', truncated: false } })];
+
+  const bridgeWith = (answers: Readonly<Record<string, HttpAnswer>>) => {
+    const { api, calls } = scriptedApi(answers);
+    return { bridge: createReplyBridge({ api, session: session() }), calls };
+  };
+
+  it('holds the lane as lines: no body, no excerpt, no quotation', async () => {
+    const { bridge } = bridgeWith({ '/replies': lane(two), '/replies/settings': settings });
+    const after = await bridge.refresh();
+
+    expect(after.cards).toHaveLength(2);
+    // Not "the body is empty": the shape has nowhere to put one.
+    for (const summary of after.cards) {
+      expect(Object.keys(summary).sort()).toEqual([
+        'confirmedDisposition',
+        'contactName',
+        'firmId',
+        'firmName',
+        'from',
+        'messageId',
+        'nextAction',
+        'proposedDisposition',
+        'receivedAt',
+      ]);
+    }
+    expect(JSON.stringify(after.cards)).not.toContain('Please stop.');
+    expect(JSON.stringify(after.cards)).not.toContain('Tuesday works.');
+  });
+
+  it('holds one body, and only while its card is open', async () => {
+    const { bridge } = bridgeWith({
+      '/replies': lane(two),
+      '/replies/settings': settings,
+      '/replies/card': { status: 200, body: card() },
+    });
+    await bridge.refresh();
+    expect((await bridge.state()).open).toBeNull();
+
+    const opened = await bridge.open({ messageId: MESSAGE_ID });
+    expect(opened.open?.body?.text).toBe('Tuesday works. Send an invite.');
+
+    const closed = await bridge.collapse();
+    expect(closed.open).toBeNull();
+    expect(JSON.stringify(await bridge.state())).not.toContain('Tuesday works.');
+  });
+
+  it('drops the open card when a live read fails, rather than showing a body nothing confirmed', async () => {
+    const { bridge } = bridgeWith({
+      '/replies': lane(two),
+      '/replies/settings': settings,
+      '/replies/card': { status: 200, body: card() },
+    });
+    await bridge.refresh();
+    await bridge.open({ messageId: MESSAGE_ID });
+
+    const { api } = scriptedApi({ '/replies': { status: 503, body: { error: 'unavailable' } } });
+    const offline = createReplyBridge({ api, session: session() });
+    // The same bridge cannot be re-scripted, so this is the case on its own: a lane
+    // read that failed leaves nothing on screen and nothing in memory.
+    const after = await offline.refresh();
+    expect(after.cards).toEqual([]);
+    expect(after.open).toBeNull();
+  });
+
+  it('forgets everything on unmount, sign-out, another workspace, a changed role or a revocation', async () => {
+    const { bridge } = bridgeWith({
+      '/replies': lane(two),
+      '/replies/settings': settings,
+      '/replies/card': { status: 200, body: card() },
+    });
+    await bridge.refresh();
+    await bridge.open({ messageId: MESSAGE_ID });
+
+    const forgotten = await bridge.forget();
+    expect(forgotten.cards).toEqual([]);
+    expect(forgotten.open).toBeNull();
+    expect(forgotten.businessDate).toBeNull();
+    expect(forgotten.classifier).toBeNull();
+    expect(JSON.stringify(await bridge.state())).not.toContain('Tuesday works.');
+  });
+
+  it('drops a read that lands after the clear, instead of filling the lane in again', async () => {
+    // The race the fix is about: the view is left, or the person is signed out, while
+    // `/replies` is on the wire. The answer arrives to a bridge that has been cleared.
+    const gate: { release: () => void } = { release: () => undefined };
+    const held = new Promise<void>(resolve => {
+      gate.release = resolve;
+    });
+    const onTheWire: { reached: () => void } = { reached: () => undefined };
+    const sent = new Promise<void>(resolve => {
+      onTheWire.reached = resolve;
+    });
+    const api = createAuthedClient({
+      baseUrl: 'https://api.example.test/',
+      clientVersion: '1.4.0',
+      accessToken: async () => await Promise.resolve({ token: 'token-value', generation: 0 }),
+      send: async url => {
+        const path = new URL(url).pathname;
+        if (path === '/replies') {
+          onTheWire.reached();
+          await held;
+          return { status: 200, body: { businessDate: '2026-09-21', cards: two } };
+        }
+        return { status: 200, body: classifierSettingsAnswer() };
+      },
+    });
+    const bridge = createReplyBridge({ api, session: session() });
+
+    const reading = bridge.refresh();
+    await sent;
+    const cleared = await bridge.forget();
+    expect(cleared.cards).toEqual([]);
+    gate.release();
+    await reading;
+
+    const after = await bridge.state();
+    expect(after.cards).toEqual([]);
+    expect(after.open).toBeNull();
+    expect(JSON.stringify(after)).not.toContain('Please stop.');
+  });
+
+  it('drops what a command would have drawn when the clear happened while it was on the wire', async () => {
+    /*
+     * The race a read-only guard misses. A confirmation and an ambiguity resolution both
+     * re-read the lane and the card after the server answers; those reads start *after*
+     * the clear, so they would be started under the new number and store what they
+     * brought back — a body and a lane, back in a process the view has left.
+     */
+    const gate: { release: () => void } = { release: () => undefined };
+    const held = new Promise<void>(resolve => {
+      gate.release = resolve;
+    });
+    // The command is not "in flight" until the request has actually been made: clearing
+    // before that would prove nothing about the race this test is for.
+    const onTheWire: { reached: () => void } = { reached: () => undefined };
+    const sent = new Promise<void>(resolve => {
+      onTheWire.reached = resolve;
+    });
+    const api = createAuthedClient({
+      baseUrl: 'https://api.example.test/',
+      clientVersion: '1.4.0',
+      accessToken: async () => await Promise.resolve({ token: 'token-value', generation: 0 }),
+      send: async url => {
+        const path = new URL(url).pathname;
+        if (path === '/messages/resolve-ambiguity') {
+          onTheWire.reached();
+          await held;
+          return { status: 200, body: { status: 'accepted', replayed: false, result: null } };
+        }
+        if (path === '/replies/card') return { status: 200, body: card() };
+        if (path === '/replies') return { status: 200, body: { businessDate: '2026-09-21', cards: two } };
+        return { status: 200, body: classifierSettingsAnswer() };
+      },
+    });
+    const bridge = createReplyBridge({ api, session: session() });
+    await bridge.refresh();
+    await bridge.open({ messageId: MESSAGE_ID });
+
+    const resolving = bridge.resolve({ messageId: MESSAGE_ID, opportunityId: OPPORTUNITY_ID });
+    await sent;
+    await bridge.forget();
+    gate.release();
+    const answered = await resolving;
+
+    // The command stands — the server recorded it — and nothing it would have drawn
+    // is put back.
+    expect(answered.open).toBeNull();
+    expect(answered.cards).toEqual([]);
+    const after = await bridge.state();
+    expect(after.open).toBeNull();
+    expect(after.cards).toEqual([]);
+    expect(JSON.stringify(after)).not.toContain('Tuesday works.');
+    expect(JSON.stringify(after)).not.toContain('Please stop.');
+  });
+
+  it('drops what a confirmation would have drawn across the same clear', async () => {
+    const gate: { release: () => void } = { release: () => undefined };
+    const held = new Promise<void>(resolve => {
+      gate.release = resolve;
+    });
+    const onTheWire: { reached: () => void } = { reached: () => undefined };
+    const sent = new Promise<void>(resolve => {
+      onTheWire.reached = resolve;
+    });
+    const api = createAuthedClient({
+      baseUrl: 'https://api.example.test/',
+      clientVersion: '1.4.0',
+      accessToken: async () => await Promise.resolve({ token: 'token-value', generation: 0 }),
+      send: async url => {
+        const path = new URL(url).pathname;
+        if (path === '/replies/confirm') {
+          onTheWire.reached();
+          await held;
+          return { status: 200, body: { status: 'accepted', replayed: false, result: confirmReplyResultAnswer() } };
+        }
+        if (path === '/replies/card') return { status: 200, body: card() };
+        if (path === '/replies') return { status: 200, body: { businessDate: '2026-09-21', cards: two } };
+        return { status: 200, body: classifierSettingsAnswer() };
+      },
+    });
+    const bridge = createReplyBridge({ api, session: session() });
+    await bridge.refresh();
+    await bridge.open({ messageId: MESSAGE_ID });
+
+    const confirming = bridge.confirm({
+      messageId: MESSAGE_ID,
+      disposition: 'interested',
+      callback: null,
+      firmWideOptOut: false,
+      note: '',
+    });
+    await sent;
+    await bridge.forget();
+    gate.release();
+    await confirming;
+
+    const after = await bridge.state();
+    expect(after.cards).toEqual([]);
+    expect(after.open).toBeNull();
+    expect(after.notice).toBeNull();
+    expect(JSON.stringify(after)).not.toContain('Please stop.');
+  });
+
+  it('drops a card that lands after the clear', async () => {
+    const gate: { release: () => void } = { release: () => undefined };
+    const held = new Promise<void>(resolve => {
+      gate.release = resolve;
+    });
+    const onTheWire: { reached: () => void } = { reached: () => undefined };
+    const sent = new Promise<void>(resolve => {
+      onTheWire.reached = resolve;
+    });
+    const api = createAuthedClient({
+      baseUrl: 'https://api.example.test/',
+      clientVersion: '1.4.0',
+      accessToken: async () => await Promise.resolve({ token: 'token-value', generation: 0 }),
+      send: async url => {
+        const path = new URL(url).pathname;
+        if (path === '/replies/card') {
+          onTheWire.reached();
+          await held;
+          return { status: 200, body: card() };
+        }
+        if (path === '/replies') return { status: 200, body: { businessDate: '2026-09-21', cards: two } };
+        return { status: 200, body: classifierSettingsAnswer() };
+      },
+    });
+    const bridge = createReplyBridge({ api, session: session() });
+    await bridge.refresh();
+
+    const opening = bridge.open({ messageId: MESSAGE_ID });
+    await sent;
+    await bridge.forget();
+    gate.release();
+    await opening;
+
+    expect((await bridge.state()).open).toBeNull();
+    expect(JSON.stringify(await bridge.state())).not.toContain('Tuesday works.');
+  });
+});
 
 describe('the reply bridge', () => {
   it('reads the lane, the card and the configuration, and hands the window no token', async () => {
@@ -407,14 +739,23 @@ describe('the reply bridge', () => {
     expect(replyNotice('suggests_lost')).toContain('Callie will not do it for you');
     // The bridge's whole surface, and none of it closes anything. `resolve` (lane g88) is
     // G7's ambiguity resolution, which picks a conversation and answers nothing.
-    expect(Object.keys(bridge).sort()).toEqual(['collapse', 'confirm', 'open', 'refresh', 'resolve', 'state']);
-    expect(Object.values(REPLY_IPC_CHANNELS).sort()).toEqual([
-      'callie:replies:collapse',
-      'callie:replies:confirm',
-      'callie:replies:open',
-      'callie:replies:refresh',
-      'callie:replies:resolve',
-      'callie:replies:state',
+    expect(Object.keys(bridge).sort()).toEqual([
+      'collapse',
+      'confirm',
+      'forget',
+      'open',
+      'refresh',
+      'resolve',
+      'state',
+    ]);
+    expect(OPERATION_NAMES.filter(name => name.startsWith('replies.')).sort()).toEqual([
+      'replies.collapse',
+      'replies.confirm',
+      'replies.forget',
+      'replies.open',
+      'replies.refresh',
+      'replies.resolve',
+      'replies.state',
     ]);
   });
 

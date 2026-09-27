@@ -176,6 +176,7 @@ export function todayState(overrides: Partial<TodayState> = {}): TodayState {
     mayMutate: true,
     role: 'admin',
     notice: null,
+    dialAdvice: [],
     handoffNotice:
       'Once a call is handed to the phone app, Callie cannot recall it. A suppression recorded after that point applies to the next call, not this one.',
     ...overrides,
@@ -231,12 +232,29 @@ export function readyAdmin(overrides: Partial<AdminState> = {}): AdminState {
 export { dashboard, diagnostics, sendingPosture };
 
 /** `callieToday`, scripted: the outcomes G6's Today window specs used. What each proves is in the spec. */
+/** `POST /dial/check` saying yes for the expanded card's one usable number. */
+export const CALLABLE_ADVICE: TodayState['dialAdvice'][number] = {
+  routeId: ROUTE_ID,
+  callable: true,
+  reasons: [],
+  e164: '+14015550187',
+  firmLocalTime: '09:05',
+};
+
 export function todayAnswer(state: TodayState, method: string, argument: unknown, _calls: readonly Call[]): TodayState {
   if (method === 'expand') {
     const firmId = (argument as { firmId?: string } | null)?.firmId;
-    return { ...state, expanded: firmId === FIRM_ID ? expandedFirm() : null, notice: null };
+    const opened = firmId === FIRM_ID;
+    // The real bridge reads `POST /dial/check` for each usable number as it opens the
+    // card, and the card says callable or why not from that answer alone.
+    return {
+      ...state,
+      expanded: opened ? expandedFirm() : null,
+      dialAdvice: opened ? [CALLABLE_ADVICE] : [],
+      notice: null,
+    };
   }
-  if (method === 'collapse') return { ...state, expanded: null, notice: null };
+  if (method === 'collapse') return { ...state, expanded: null, dialAdvice: [], notice: null };
   if (method === 'snooze') {
     const itemId = (argument as { itemId?: string } | null)?.itemId;
     // 8.2: the *server* decides which of the two a task gets, from its own `automated`

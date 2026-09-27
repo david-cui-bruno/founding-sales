@@ -6,9 +6,11 @@ import {
 } from '@fss/contracts';
 import {
   replyStateSchema,
+  replySummaryOf,
   type ConfirmReplyRequest,
   type ReplyCard,
   type ReplyState,
+  type ReplySummary,
   type ResolveReplyRequest,
 } from '../renderer/replyContract.ts';
 import type { AuthedClient } from './authedClient.ts';
@@ -46,16 +48,14 @@ import type { ApiOutcome } from './apiClient.ts';
  * about it.
  */
 
-export const REPLY_IPC_CHANNELS = {
-  state: 'callie:replies:state',
-  refresh: 'callie:replies:refresh',
-  open: 'callie:replies:open',
-  collapse: 'callie:replies:collapse',
-  confirm: 'callie:replies:confirm',
-  // Lane g88 (audit G07): which conversation an ambiguous reply belongs to.
-  resolve: 'callie:replies:resolve',
-} as const;
-export type ReplyIpcChannel = (typeof REPLY_IPC_CHANNELS)[keyof typeof REPLY_IPC_CHANNELS];
+/*
+ * There are no channels of this view's own since 1.0.12: the six that stood here are six
+ * operations of `shared/operations.ts`, answered on `callie:op:read` and
+ * `callie:op:command`. The authority boundary is unchanged and is now stated in one
+ * place — there is no operation that closes an opportunity, records a suppression,
+ * releases a hold or resumes automation, and a renderer cannot name one that is not in
+ * the list.
+ */
 
 /*
  * `/replies`, `/replies/card`, `/replies/settings` and `/replies/confirm` are parsed with
@@ -83,14 +83,30 @@ export interface ReplyBridgeHost {
   collapse(): Promise<ReplyState>;
   confirm(input: ConfirmReplyRequest): Promise<ReplyState>;
   resolve(input: ResolveReplyRequest): Promise<ReplyState>;
+  /**
+   * Drop everything: the lane, the open card and the body in it (1.0.12).
+   *
+   * Called when the view unmounts and when the session changes — a sign-out, another
+   * workspace, a changed role, a revoked device. A read already on the wire when this
+   * happens does not store what it brings back: it was made for somebody who is no
+   * longer the person at this Mac.
+   */
+  forget(): Promise<ReplyState>;
 }
 
 export function createReplyBridge(deps: ReplyBridgeDeps): ReplyBridgeHost {
-  let cards: readonly ReplyCard[] = [];
+  let cards: readonly ReplySummary[] = [];
   let businessDate: string | null = null;
   let open: ReplyCard | null = null;
   let classifier: ReplyState['classifier'] = null;
   let notice: string | null = null;
+  /*
+   * Bumped by `forget`. Every load takes a copy before it awaits and compares after:
+   * an answer from before the clear is dropped rather than stored, which is the
+   * difference between "the lane is empty" and "the lane is empty until the read that
+   * was already in flight fills it in again".
+   */
+  let generation = 0;
 
   const snapshot = async (): Promise<ReplyState> => {
     const session = await deps.session.state();
@@ -106,6 +122,17 @@ export function createReplyBridge(deps: ReplyBridgeDeps): ReplyBridgeHost {
     });
   };
 
+  /**
+   * Whether the view this work was started for is still the view (1.0.12).
+   *
+   * `forget` moves the number. A **command** has to ask this as well as a read: a
+   * confirmation and an ambiguity resolution both re-read the lane and the card after
+   * the server answers, and those reads, started after the clear, would be started
+   * under the new number and store what they brought back — putting a body and a lane
+   * back into a process the view has already left.
+   */
+  const stale = (mine: number): boolean => mine !== generation;
+
   const note = (outcome: ApiOutcome<unknown>, accepted: string | null): boolean => {
     if (outcome.ok) {
       notice = accepted;
@@ -116,19 +143,26 @@ export function createReplyBridge(deps: ReplyBridgeDeps): ReplyBridgeHost {
   };
 
   const loadLane = async (): Promise<void> => {
+    const mine = generation;
     const lane = await deps.api.read('/replies', value => replyListResponseSchema.parse(value), {});
+    if (mine !== generation) return;
     if (!lane.ok) {
       // 4.2: nothing here is cached, so an outage is an empty lane and a notice —
-      // never a stale card somebody might answer.
+      // never a stale card somebody might answer. The open card goes with it: a body
+      // is held only while a live read says it is still there to read.
       cards = [];
       businessDate = null;
+      open = null;
       note(lane, null);
       return;
     }
-    cards = lane.value.cards;
+    // The bodies are dropped here, where the answer is parsed. Nothing downstream has
+    // to remember to: `cards` is a shape that cannot hold one.
+    cards = lane.value.cards.map(replySummaryOf);
     businessDate = lane.value.businessDate;
     notice = null;
     const settings = await deps.api.read('/replies/settings', value => classifierSettingsResponseSchema.parse(value), {});
+    if (mine !== generation) return;
     // The three the window shows. The caps and who changed them last stay on the server.
     classifier = settings.ok
       ? { enabled: settings.value.enabled, modelName: settings.value.modelName, effort: settings.value.effort }
@@ -136,7 +170,11 @@ export function createReplyBridge(deps: ReplyBridgeDeps): ReplyBridgeHost {
   };
 
   const loadCard = async (messageId: string): Promise<void> => {
+    const mine = generation;
     const card = await deps.api.read('/replies/card', value => replyCardDtoSchema.parse(value), { messageId });
+    // A card that arrives after a clear is not kept: the person it was read for has
+    // signed out, changed workspace, or left the view.
+    if (mine !== generation) return;
     if (!card.ok) {
       open = null;
       note(card, null);
@@ -150,7 +188,9 @@ export function createReplyBridge(deps: ReplyBridgeDeps): ReplyBridgeHost {
     state: snapshot,
 
     async refresh() {
+      const mine = generation;
       await loadLane();
+      if (stale(mine)) return await snapshot();
       if (open !== null) await loadCard(open.messageId);
       return await snapshot();
     },
@@ -166,7 +206,18 @@ export function createReplyBridge(deps: ReplyBridgeDeps): ReplyBridgeHost {
       return await snapshot();
     },
 
+    async forget() {
+      generation += 1;
+      cards = [];
+      businessDate = null;
+      open = null;
+      classifier = null;
+      notice = null;
+      return await snapshot();
+    },
+
     async confirm(input) {
+      const mine = generation;
       const session = await deps.session.state();
       const zone = session.today?.businessTimeZone ?? null;
       let callback: Record<string, unknown> | undefined;
@@ -195,6 +246,10 @@ export function createReplyBridge(deps: ReplyBridgeDeps): ReplyBridgeHost {
         },
         value => confirmReplyResultSchema.parse(value),
       );
+      // The view was left, or the person signed out, while the confirmation was on the
+      // wire. The command itself stands — the server recorded it — but nothing it
+      // brought back is written here, and the lane is not read again to hold it.
+      if (stale(mine)) return await snapshot();
       // `suggestsLost` is a suggestion and stays one: the window says so and offers
       // no button that would act on it (9.1). Closing the opportunity is a separate,
       // deliberate command on the firm page.
@@ -206,6 +261,7 @@ export function createReplyBridge(deps: ReplyBridgeDeps): ReplyBridgeHost {
       // this one looks lost" is the whole point of having asked.
       const said = notice;
       await loadLane();
+      if (stale(mine)) return await snapshot();
       notice = said;
       open = null;
       return await snapshot();
@@ -226,6 +282,7 @@ export function createReplyBridge(deps: ReplyBridgeDeps): ReplyBridgeHost {
      * the resolution unlocked.
      */
     async resolve(input) {
+      const mine = generation;
       const card = open;
       if (card === null || card.messageId !== input.messageId) {
         notice = 'message_unknown';
@@ -240,11 +297,17 @@ export function createReplyBridge(deps: ReplyBridgeDeps): ReplyBridgeHost {
         { messageId: input.messageId, selectedOpportunityId: input.opportunityId, human: false },
         () => null,
       );
+      // As in `confirm`: the resolution stands, and nothing it would have drawn is put
+      // back into a bridge the view has left. This is the one that would have restored
+      // a body, because it reads the card again.
+      if (stale(mine)) return await snapshot();
       note(answer, 'resolved');
       // The re-read must not swallow what the command said, as in `confirm`.
       const said = notice;
       await loadLane();
+      if (stale(mine)) return await snapshot();
       await loadCard(input.messageId);
+      if (stale(mine)) return await snapshot();
       notice = said;
       return await snapshot();
     },

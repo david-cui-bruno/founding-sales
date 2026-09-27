@@ -32,6 +32,11 @@ import { CALL_OUTCOMES, callbackInstant, type CallOutcome } from '@fss/contracts
  * always and the firm "only when the request covers all Callie contact", so the
  * draft says which, and the warning sentence changes with it. The old build's single
  * checkbox could only ever suppress the firm.
+ *
+ * **There is no ticket on the command since 1.0.12.** `POST /dial/authorize` and
+ * `POST /dial/consume` are no longer called: the Mac reads `POST /dial/check`, opens the
+ * URI the advice carried and logs the call afterwards, and `POST /calls/log` never
+ * needed a ticket or a calling identity to record history.
  */
 
 export const OUTCOME_LABELS: Readonly<Record<CallOutcome, string>> = Object.freeze({
@@ -159,8 +164,6 @@ export interface LogCallCommand {
   readonly firmId: string;
   readonly contactId?: string;
   readonly routeId?: string;
-  readonly ticketId?: string;
-  readonly callingIdentityId?: string;
   /** The Today task the call was for (lane g79). */
   readonly itemId?: string;
   readonly outcome: CallOutcome;
@@ -182,10 +185,6 @@ export interface LogCallCommandInput {
   readonly firmId: string;
   readonly contactId?: string | undefined;
   readonly routeId?: string | undefined;
-  /** The ticket the call was placed with, when there was one. History is recorded either way. */
-  readonly ticketId?: string | undefined;
-  /** The calling identity the ticket was issued for. */
-  readonly callingIdentityId?: string | undefined;
   readonly itemId?: string | undefined;
   /** An entered past time. Leave it out for a call that has just ended. */
   readonly occurredAt?: string | undefined;
@@ -217,8 +216,6 @@ export function logCallCommand(
       firmId: input.firmId,
       ...(input.contactId === undefined ? {} : { contactId: input.contactId }),
       ...(input.routeId === undefined ? {} : { routeId: input.routeId }),
-      ...(input.ticketId === undefined ? {} : { ticketId: input.ticketId }),
-      ...(input.callingIdentityId === undefined ? {} : { callingIdentityId: input.callingIdentityId }),
       ...(input.itemId === undefined ? {} : { itemId: input.itemId }),
       outcome,
       ...(input.occurredAt === undefined ? {} : { occurredAt: input.occurredAt }),

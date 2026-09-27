@@ -17,7 +17,14 @@ import { buildScreenView } from '../src/renderer/viewModel.ts';
 import { createAuthedClient } from '../src/main/authedClient.ts';
 import { createAdminBridge } from '../src/main/settingsBridge.ts';
 import { outboundStatusAnswer } from './support/outboundStatus.ts';
-import { ROUTE_NAMES, desktopStateSchema, routeNameOf } from '../src/shared/contract.ts';
+import {
+  NAVIGATION_TARGETS,
+  ROUTE_NAMES,
+  desktopStateSchema,
+  navigationTargetOf,
+  routeNameOf,
+  type SessionChange,
+} from '../src/shared/contract.ts';
 import { IPC_CHANNELS } from '../src/main/ipc.ts';
 import { DEEP_LINKS, deepLinkRoute, windowMenuTemplate } from '../src/main/windowMenu.ts';
 import { routeOf, routeText, sidebarRowOf } from '../src/renderer/routes.ts';
@@ -113,6 +120,232 @@ describe('sign-in through the system browser', () => {
   });
 });
 
+describe('session transitions the window is told about (1.0.12)', () => {
+  /*
+   * Until 1.0.12 the renderer found out that the person had changed by noticing that a
+   * state it happened to read looked different, which is one read too late: everything
+   * it was holding — the request cache, the reply lane, what somebody had typed — was
+   * still the last person's until something asked. These are the four transitions, as
+   * the main process sees them.
+   */
+  const changes = (mac: Awaited<ReturnType<typeof started>>): { readonly seen: SessionChange[] } => {
+    const seen: SessionChange[] = [];
+    mac.manager.onSessionChange(change => seen.push(change));
+    return { seen };
+  };
+
+  it('says nothing at startup: being signed in already is not a transition', async () => {
+    const mac = await started();
+    const { seen } = changes(mac);
+    await mac.manager.state();
+    expect(seen).toEqual([]);
+    expect(mac.manager.sessionGeneration()).toBe(0);
+  });
+
+  it('announces a sign-in and the sign-out after it, with the identity each leaves behind', async () => {
+    const mac = await started();
+    const { seen } = changes(mac);
+    await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: "David's MacBook" });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.reason).toBe('signed_in');
+    expect(seen[0]?.identity).toContain(mac.workspaceId);
+    expect(seen[0]?.identity).toContain('salesperson');
+
+    await mac.manager.signOut();
+    expect(seen).toHaveLength(2);
+    expect(seen[1]).toMatchObject({ reason: 'signed_out', identity: null, generation: 2 });
+    // Another workspace is this pair: the window is emptied twice, and the second
+    // sign-in announces the new one.
+  });
+
+  it('announces a role a renewal came back with, without a sign-out', async () => {
+    const mac = await started();
+    await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
+    const { seen } = changes(mac);
+
+    mac.script.role('admin');
+    // Past the renewal margin: the next token this Mac needs is a renewed one.
+    mac.advance(3_600_000);
+    await mac.manager.accessToken();
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.reason).toBe('role_changed');
+    expect(seen[0]?.identity).toContain('admin');
+  });
+
+  it('announces a revocation a bridge call was refused with, and wipes', async () => {
+    const mac = await started();
+    await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
+    const { seen } = changes(mac);
+
+    // What `authedClient` reports when one of the six bridges is answered 401, with
+    // the session the call was made under.
+    await mac.manager.noteAuthRefusal('device_revoked', mac.manager.sessionGeneration());
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ reason: 'device_revoked', identity: null });
+    const state = await mac.manager.state();
+    expect(state.device).toBeNull();
+    expect(state.notice).toBe('device_revoked');
+    expect(mac.vault.entries.has(DEVICE_SECRET_ACCOUNT)).toBe(false);
+  });
+
+  it('ignores a revocation answered to a session that has already ended', async () => {
+    /*
+     * The race: a bridge call is made, the person signs out and signs in again, and
+     * only then does the server answer the first call `device_revoked`. Applied to
+     * whichever session is current, that wipes a perfectly good new one on the strength
+     * of the old one's answer — a sign-in that ends by itself a second later.
+     */
+    const mac = await started();
+    await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
+    const madeUnder = mac.manager.sessionGeneration();
+
+    await mac.manager.signOut();
+    await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
+    const { seen } = changes(mac);
+
+    await mac.manager.noteAuthRefusal('device_revoked', madeUnder);
+
+    expect(seen).toEqual([]);
+    const state = await mac.manager.state();
+    expect(state.device).not.toBeNull();
+    expect(state.notice).not.toBe('device_revoked');
+    expect(mac.vault.entries.has(DEVICE_SECRET_ACCOUNT)).toBe(true);
+
+    // The same refusal, for the session that actually asked, still wipes.
+    await mac.manager.noteAuthRefusal('device_revoked', mac.manager.sessionGeneration());
+    expect((await mac.manager.state()).device).toBeNull();
+  });
+
+  it('wipes for a token the renewal issued, even though acquiring it moved the session', async () => {
+    /*
+     * The case the generation check could have swallowed. Asking for a token renews the
+     * session; the renewal came back with a different role, which is a transition, so
+     * the number moves *during* acquisition. The token in the request's header belongs
+     * to the session after that, and a `device_revoked` for it is this session's
+     * business — reading the number before the token would have called it somebody
+     * else's and ignored it.
+     */
+    const mac = await started();
+    await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
+    const before = mac.manager.sessionGeneration();
+
+    mac.script.role('admin');
+    mac.advance(3_600_000);
+    const access = await mac.manager.accessToken();
+    expect(access).not.toBeNull();
+    expect(access?.generation).toBe(before + 1);
+
+    await mac.manager.noteAuthRefusal('device_revoked', access?.generation ?? -1);
+    expect((await mac.manager.state()).device).toBeNull();
+  });
+
+  it('drops the wipe when somebody signs in while it is in flight', async () => {
+    // The wipe is asynchronous — the cache, then the device file and both secrets — and
+    // the check is repeated after each await, so a session that began in the middle of
+    // it keeps its credentials.
+    const mac = await started({ holdCacheWipe: true });
+    await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
+    const madeUnder = mac.manager.sessionGeneration();
+
+    const wiping = mac.manager.noteAuthRefusal('device_revoked', madeUnder);
+    // The wipe is waiting on the cache. Somebody signs out and in again behind it.
+    await Promise.resolve();
+    await mac.manager.signOut();
+    await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
+    mac.releaseCacheWipe();
+    await wiping;
+
+    // `store.forget()` is never reached: this Mac is still registered.
+    expect((await mac.manager.state()).device).not.toBeNull();
+    expect(mac.vault.entries.has(DEVICE_SECRET_ACCOUNT)).toBe(true);
+  });
+
+  it('is not a wipe for a refusal that is not one: a 403 on one call is that call’s business', async () => {
+    const mac = await started();
+    await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
+    const { seen } = changes(mac);
+
+    await mac.manager.noteAuthRefusal('not_assigned', mac.manager.sessionGeneration());
+
+    expect(seen).toEqual([]);
+    expect((await mac.manager.state()).device).not.toBeNull();
+  });
+});
+
+describe('the authenticated client reports what it was refused with (1.0.12)', () => {
+  interface Refusal {
+    reason: string;
+    status: number;
+    generation: number;
+  }
+
+  const clientWith = (
+    status: number,
+    body: unknown,
+    refusals: Refusal[],
+    access: () => Promise<{ token: string; generation: number }> = async () =>
+      await Promise.resolve({ token: 'token-value', generation: 0 }),
+  ) =>
+    createAuthedClient({
+      baseUrl: 'https://api.example.test/',
+      clientVersion: '1.4.0',
+      accessToken: access,
+      send: async () => await Promise.resolve({ status, body }),
+      onAuthRefusal: (reason, refusedStatus, sessionGeneration) =>
+        refusals.push({ reason, status: refusedStatus, generation: sessionGeneration }),
+    });
+
+  it('tells the session manager about a 401 and a 403, by reason', async () => {
+    const refusals: Refusal[] = [];
+    await clientWith(401, { error: 'device_revoked' }, refusals).read('/today', value => value, {});
+    await clientWith(403, { reason: 'not_assigned' }, refusals).read('/today', value => value, {});
+    expect(refusals).toEqual([
+      { reason: 'device_revoked', status: 401, generation: 0 },
+      { reason: 'not_assigned', status: 403, generation: 0 },
+    ]);
+  });
+
+  it('reports the session the call was made under, not the one it was answered under', async () => {
+    const refusals: Refusal[] = [];
+    let generation = 4;
+    const client = clientWith(401, { error: 'device_revoked' }, refusals, async () =>
+      await Promise.resolve({ token: 'token-value', generation }),
+    );
+    const reading = client.read('/today', value => value, {});
+    // Somebody signs out and in again while the call is on the wire.
+    generation = 6;
+    await reading;
+    expect(refusals).toEqual([{ reason: 'device_revoked', status: 401, generation: 4 }]);
+  });
+
+  it('reports the session the token came from, when fetching it moved the session', async () => {
+    /*
+     * The renewal case. Asking for a token can renew the session, and a renewal that
+     * came back with a different role *is* a transition: the token in this request's
+     * header belongs to the session after it, not before. Reading the number before the
+     * token would report the old one, and a revocation for the new token would then be
+     * ignored — which is the reproduction the review gave: started=1, current=2.
+     */
+    const refusals: Refusal[] = [];
+    let generation = 1;
+    const client = clientWith(401, { error: 'device_revoked' }, refusals, async () => {
+      await Promise.resolve();
+      generation = 2; // the renewal came back with another role, mid-acquisition
+      return { token: 'the-renewed-token', generation };
+    });
+    await client.read('/today', value => value, {});
+    expect(refusals).toEqual([{ reason: 'device_revoked', status: 401, generation: 2 }]);
+  });
+
+  it('says nothing about a refusal that is not about authentication', async () => {
+    const refusals: Refusal[] = [];
+    await clientWith(409, { error: 'already_confirmed' }, refusals).read('/replies/card', value => value, {});
+    expect(refusals).toEqual([]);
+  });
+});
+
 describe('the remembered workspace (wave 1)', () => {
   it('signs in again after Sign out without asking for the workspace or the name', async () => {
     const mac = await started();
@@ -172,7 +405,7 @@ describe('online follows every call (wave 1)', () => {
     const client = createAuthedClient({
       baseUrl: 'https://api.fss.test',
       clientVersion: CLIENT_VERSION,
-      accessToken: async () => await Promise.resolve('token'),
+      accessToken: async () => await Promise.resolve({ token: 'token', generation: 0 }),
       send: async () => {
         if (!reachable) throw new Error('the server did not answer');
         // A refusal is an answer: the server was reached.
@@ -198,7 +431,7 @@ describe('online follows every call (wave 1)', () => {
     const client = createAuthedClient({
       baseUrl: 'https://api.fss.test',
       clientVersion: CLIENT_VERSION,
-      accessToken: async () => await Promise.resolve('token'),
+      accessToken: async () => await Promise.resolve({ token: 'token', generation: 0 }),
       send: async () => {
         if (mode === 'down') throw new Error('unreachable');
         const status = mode === 'ok' ? 200 : mode === 'refused' ? 409 : 500;
@@ -498,9 +731,20 @@ describe('the state that crosses the bridge', () => {
 });
 
 describe('one window: the routes the menu and deep links may name (wave 1)', () => {
-  it('names exactly six views, and nothing for any other value', () => {
-    expect(ROUTE_NAMES).toEqual(['today', 'replies', 'firms', 'sequences', 'admin', 'dashboard']);
+  it('names exactly five views and seven targets, and nothing for any other value', () => {
+    expect(ROUTE_NAMES).toEqual(['today', 'replies', 'firms', 'sequences', 'settings']);
+    expect(NAVIGATION_TARGETS).toEqual([
+      'today',
+      'replies',
+      'firms',
+      'sequences',
+      'settings/administration',
+      'settings/dashboard',
+      'settings/diagnostics',
+    ]);
     for (const name of ROUTE_NAMES) expect(routeNameOf(name)).toBe(name);
+    for (const target of NAVIGATION_TARGETS) expect(navigationTargetOf(target)).toBe(target);
+    for (const retired of ['admin', 'dashboard', 'settings/nothing']) expect(navigationTargetOf(retired)).toBeNull();
     // The preload drops anything else before the page hears of it.
     for (const malformed of [
       null,
@@ -524,26 +768,54 @@ describe('one window: the routes the menu and deep links may name (wave 1)', () 
     }
   });
 
-  it('reads a route from text, a firm by its id and Administration by its section, and nothing else', () => {
+  it('reads a route from text, a firm by its id and Settings by its tab, and nothing else', () => {
     const firmId = '11111111-1111-4111-8111-111111111111';
     expect(routeOf('today')).toEqual({ name: 'today' });
-    expect(routeOf('admin')).toEqual({ name: 'admin' });
-    expect(routeOf('admin/calling-number')).toEqual({ name: 'admin', section: 'calling-number' });
+    expect(routeOf('settings')).toEqual({ name: 'settings', tab: 'administration' });
+    expect(routeOf('settings/diagnostics')).toEqual({ name: 'settings', tab: 'diagnostics' });
     expect(routeOf(`firm/${firmId}`)).toEqual({ name: 'firm', firmId });
-    for (const text of ['', 'firm', 'firm/', 'firm/not-an-id', `firm/${firmId}/x`, 'admin/elsewhere', 'today/x', 'Today']) {
+    for (const text of ['', 'firm', 'firm/', 'firm/not-an-id', `firm/${firmId}/x`, 'settings/elsewhere', 'today/x', 'Today']) {
       expect(routeOf(text), text).toBeNull();
     }
-    for (const route of [{ name: 'firms' }, { name: 'firm', firmId }, { name: 'admin', section: 'alerts' }] as const) {
+    for (const route of [{ name: 'firms' }, { name: 'firm', firmId }, { name: 'settings', tab: 'diagnostics' }] as const) {
       expect(routeOf(routeText(route))).toEqual(route);
     }
     expect(sidebarRowOf({ name: 'firm', firmId })).toBe('firms');
+    expect(sidebarRowOf({ name: 'settings', tab: 'dashboard' })).toBe('settings');
   });
 
-  it('answers a deep link for each of the six views, and ignores every other link', () => {
-    expect(DEEP_LINKS).toEqual(ROUTE_NAMES.map(name => `callie://${name}`));
+  it('maps 1.0.11 route names onto the Settings tab that holds what they opened', () => {
+    // Links made before 1.0.12 exist on the owner's Mac, and the two keys people learned
+    // are the two tabs beside Administration. Each opens the tab, and a section asks it
+    // to scroll — which is what Needs you's Open has always meant.
+    expect(routeOf('admin')).toEqual({ name: 'settings', tab: 'administration' });
+    expect(routeOf('dashboard')).toEqual({ name: 'settings', tab: 'dashboard' });
+    expect(routeOf('admin/calling-number')).toEqual({
+      name: 'settings',
+      tab: 'administration',
+      section: 'calling-number',
+    });
+    expect(routeOf('admin/alerts')).toEqual({ name: 'settings', tab: 'diagnostics', section: 'alerts' });
+    expect(routeOf('admin/elsewhere')).toBeNull();
+    // The section is not part of the route's text: `settings/administration` is one
+    // place, whether or not somebody arrived at it pointed at a section.
+    expect(routeText({ name: 'settings', tab: 'administration', section: 'calling-number' })).toBe('settings/administration');
+  });
+
+  it('answers a deep link for each view and for the two retired names, and ignores every other link', () => {
+    expect(DEEP_LINKS).toEqual([
+      ...NAVIGATION_TARGETS.map(target => `callie://${target}`),
+      'callie://admin',
+      'callie://dashboard',
+      'callie://settings',
+    ]);
     expect(deepLinkRoute('callie://today')).toBe('today');
     expect(deepLinkRoute('callie://firms/')).toBe('firms');
-    expect(deepLinkRoute('callie://dashboard')).toBe('dashboard');
+    expect(deepLinkRoute('callie://settings/diagnostics')).toBe('settings/diagnostics');
+    // 1.0.11's two links, each onto the tab that holds what it used to open.
+    expect(deepLinkRoute('callie://admin')).toBe('settings/administration');
+    expect(deepLinkRoute('callie://dashboard')).toBe('settings/dashboard');
+    expect(deepLinkRoute('callie://settings')).toBe('settings/administration');
     for (const url of [
       'callie://firm/11111111-1111-4111-8111-111111111111',
       'callie://today?x=1',
@@ -564,12 +836,15 @@ describe('one window: the routes the menu and deep links may name (wave 1)', () 
       'callie:sign-out',
       'callie:refresh-today',
       'callie:navigate',
+      // 1.0.12: main to page, and it opens nothing either — it says the session the
+      // page was drawing for is over.
+      'callie:session-changed',
     ]);
   });
 });
 
 describe('the Window menu (wave 1)', () => {
-  it('shows each view in the one window, ⌘1 to ⌘6 in the sidebar’s order', () => {
+  it('shows each view in the one window: ⌘1 to ⌘4, then Settings with ⌘, and its two tabs', () => {
     const shown: string[] = [];
     const menu = windowMenuTemplate(route => {
       shown.push(route);
@@ -582,11 +857,20 @@ describe('the Window menu (wave 1)', () => {
       'Replies CmdOrCtrl+2',
       'Firms CmdOrCtrl+3',
       'Sequences CmdOrCtrl+4',
-      'Administration CmdOrCtrl+5',
-      'Dashboard CmdOrCtrl+6',
+      'Settings CmdOrCtrl+,',
+      'Dashboard CmdOrCtrl+5',
+      'Diagnostics CmdOrCtrl+6',
     ]);
     for (const item of views) if ('click' in item) item.click();
-    expect(shown).toEqual(['today', 'replies', 'firms', 'sequences', 'admin', 'dashboard']);
+    expect(shown).toEqual([
+      'today',
+      'replies',
+      'firms',
+      'sequences',
+      'settings/administration',
+      'settings/dashboard',
+      'settings/diagnostics',
+    ]);
   });
 
   it('is one Window menu, built whole rather than appended to Electron’s default', () => {

@@ -38,9 +38,9 @@ export const CHECKING = 'Checking…';
 export const FIGURES_LABEL = 'Last 7 days';
 export const FIGURES_UNREAD = 'Callie could not read the last 7 days.';
 /** The window the figures cover, ending now. Seven days of milliseconds, not a calendar week. */
-export const FIGURES_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const FIGURES_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
-export const LANE_SECTION_LABELS: Readonly<Record<TodayLane, string>> = Object.freeze({
+const LANE_SECTION_LABELS: Readonly<Record<TodayLane, string>> = Object.freeze({
   reply: 'Replies',
   callback: 'Callbacks',
   due_work: 'Due today',
@@ -59,15 +59,21 @@ export interface NavRow {
   readonly keys: string;
 }
 
-/** Selling first, then the two a person opens when not selling, in key order. */
+/**
+ * The selling views, in key order. Administration and the Dashboard were rows five and
+ * six until 1.0.12; they are tabs of Settings now, which sits at the foot of the sidebar
+ * under `SETTINGS_ROW` rather than in this list, because it is not something a person
+ * opens while working the day's list.
+ */
 export const NAV_ROWS: readonly NavRow[] = Object.freeze([
   { label: 'Today', route: 'today', keys: '⌘1' },
   { label: 'Replies', route: 'replies', keys: '⌘2' },
   { label: 'Firms', route: 'firms', keys: '⌘3' },
   { label: 'Sequences', route: 'sequences', keys: '⌘4' },
-  { label: 'Administration', route: 'admin', keys: '⌘5' },
-  { label: 'Dashboard', route: 'dashboard', keys: '⌘6' },
 ]);
+
+/** The bottom-left entry. One row, with the gear the shell draws beside it. */
+export const SETTINGS_ROW: NavRow = Object.freeze({ label: 'Settings', route: 'settings', keys: '⌘,' });
 
 // ---------------------------------------------------------------------------
 // Inputs and outputs
@@ -102,7 +108,7 @@ export interface HomeInput {
   readonly update?: UpdateStatus | null;
 }
 
-export type Tone = 'ok' | 'warn' | 'stop' | 'none';
+type Tone = 'ok' | 'warn' | 'stop' | 'none';
 
 export interface StatusRow {
   readonly key: 'mailbox' | 'calling' | 'sending' | 'domain' | 'system' | 'update';
@@ -112,7 +118,7 @@ export interface StatusRow {
   readonly action?: 'restart_to_update';
 }
 
-export type NeedsAction =
+type NeedsAction =
   | { readonly kind: 'connect_mailbox'; readonly label: string; readonly enabled: boolean }
   | { readonly kind: 'open'; readonly route: Route; readonly label: string };
 
@@ -124,14 +130,14 @@ export interface NeedsRow {
   readonly action: NeedsAction;
 }
 
-export interface FigureCell {
+interface FigureCell {
   readonly key: 'replies' | 'calls' | 'holds' | 'emails';
   readonly label: string;
   readonly value: string;
   readonly note: string | null;
 }
 
-export interface FiguresView {
+interface FiguresView {
   readonly label: string;
   readonly cells: readonly FigureCell[];
   /** One grey line when the figures could not be read, or null. */
@@ -463,7 +469,7 @@ export function needsRows(input: HomeInput): readonly NeedsRow[] {
         key: 'domain_checklist',
         label: 'Record the domain checklist',
         detail: null,
-        action: { kind: 'open', route: { name: 'admin', section: 'sending-admin' }, label: 'Open' },
+        action: { kind: 'open', route: { name: 'settings', tab: 'administration', section: 'sending-admin' }, label: 'Open' },
       });
     }
     const open = (admin.diagnostics?.alerts ?? []).filter(alert => alert.acknowledgedAt === null).length;
@@ -472,7 +478,7 @@ export function needsRows(input: HomeInput): readonly NeedsRow[] {
         key: 'alerts',
         label: `${counted(open, 'alert', 'alerts')} to acknowledge`,
         detail: null,
-        action: { kind: 'open', route: { name: 'admin', section: 'alerts' }, label: 'Open' },
+        action: { kind: 'open', route: { name: 'settings', tab: 'diagnostics', section: 'alerts' }, label: 'Open' },
       });
     }
   }
@@ -481,7 +487,7 @@ export function needsRows(input: HomeInput): readonly NeedsRow[] {
 
 /** The calling-number row, worded for what is missing. Administration opens at the section. */
 function callingNumberNeed(missing: 'none' | 'unattested' | 'retired'): NeedsRow {
-  const action: NeedsAction = { kind: 'open', route: { name: 'admin', section: 'calling-number' }, label: 'Open' };
+  const action: NeedsAction = { kind: 'open', route: { name: 'settings', tab: 'administration', section: 'calling-number' }, label: 'Open' };
   if (missing === 'unattested') {
     return {
       key: 'calling_number',

@@ -57,23 +57,41 @@ export const BUNDLE_PRIVILEGES = Object.freeze({
 export interface BundleWindow {
   /** The HTML file, in `src/renderer` and at the root of the bundled renderer. */
   readonly page: string;
-  /** The entry point: `src/renderer/{entry}.ts`, bundled to `{entry}.js`. */
+  /** The served script's name: the bundle emits `{entry}.js` and the page links it. */
   readonly entry: string;
+  /**
+   * The file esbuild starts from, in `src/renderer`. Separate from `entry` since 1.0.12:
+   * the React root is `main.tsx` and the name it is served under is still `renderer.js`,
+   * so the page, the scheme map and the verifier did not have to change with it.
+   */
+  readonly source: string;
   /** The lane that owns it, so a stale entry names somebody. */
   readonly ownedBy: string;
 }
 
 /**
  * The one window (wave 1). Its script, `renderer.js`, holds the shell and every view —
- * Today, Replies, Firms, Sequences, Administration and the Dashboard — which were four
- * more pages and four more scripts until the sidebar stopped opening windows.
+ * Today, Replies, Firms, Sequences and Settings — which were four more pages and four
+ * more scripts until the sidebar stopped opening windows.
  */
 export const BUNDLE_WINDOWS: readonly BundleWindow[] = Object.freeze([
-  { page: 'index.html', entry: 'renderer', ownedBy: 'the one window (wave 1)' },
+  { page: 'index.html', entry: 'renderer', source: 'main.tsx', ownedBy: 'the one window (wave 1)' },
 ]);
 
-/** Copied once and shared by every page. Not a window, so not in the list above. */
-export const BUNDLE_SHARED_FILES: readonly string[] = Object.freeze(['styles.css']);
+/**
+ * The one stylesheet every page links, and the file it is compiled from (1.0.12).
+ *
+ * It is generated rather than copied: `scripts/bundle.ts` runs `tailwind.css` through
+ * PostCSS with `@tailwindcss/postcss` and writes the result here. The name is unchanged,
+ * so `index.html`, the closed map below and `verifyPackage.ts` all still say `styles.css`
+ * — and because the name is in this one declaration, a build that emitted it somewhere
+ * else would be a 404 the verifier reports rather than an unstyled window on a Mac.
+ */
+export const BUNDLE_STYLESHEET = 'styles.css';
+export const BUNDLE_STYLESHEET_SOURCE = 'tailwind.css';
+
+/** Served once and shared by every page. Not a window, so not in the list above. */
+export const BUNDLE_SHARED_FILES: readonly string[] = Object.freeze([BUNDLE_STYLESHEET]);
 
 const CONTENT_TYPES: Readonly<Record<string, string>> = Object.freeze({
   html: 'text/html; charset=utf-8',

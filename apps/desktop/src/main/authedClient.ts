@@ -21,14 +21,40 @@ export interface AuthedClientOptions {
   readonly baseUrl: string;
   readonly clientVersion: string;
   readonly send: HttpSend;
-  /** The live access token, renewed by the session manager. Null when signed out. */
-  readonly accessToken: () => Promise<string | null>;
+  /**
+   * The live access token **and the session it belongs to**, together (1.0.12).
+   *
+   * One call, because the two have to be read from the same snapshot: fetching a token
+   * can renew the session, and a renewal that comes back with a different role is
+   * itself a transition. Reading the generation before the token gives the number of
+   * the session *before* that renewal, and a refusal for the new token would then be
+   * attributed to a session that no longer exists — and ignored. Reading it afterwards
+   * has the opposite hazard, since another caller's transition can land in between.
+   *
+   * Null when signed out, as before.
+   */
+  readonly accessToken: () => Promise<AccessSession | null>;
   /**
    * What each call found about the connection (wave 1): true when the server answered
    * anything — a refusal is an answer — and false only when it could not be reached.
    * The session manager keeps it as `online`, so the next answer clears the banner.
    */
   readonly onConnection?: (reachable: boolean) => void;
+  /**
+   * A call the server refused as unauthenticated (1.0.12): its reason, its status, and
+   * **the session it was made under**.
+   *
+   * The sign-in and renewal paths have always told the session manager what they were
+   * refused with; the six bridges' own calls did not, so a device revoked while the
+   * window was open went on answering from a session the server had already ended.
+   * Only 401 and 403 are reported: a 409 from a command is the command's business.
+   *
+   * The generation is what stops the opposite mistake. A call made before a sign-out
+   * can be answered `device_revoked` long after somebody has signed in again, and a
+   * refusal applied to whichever session happens to be current would wipe the new one
+   * on the strength of the old one's answer.
+   */
+  readonly onAuthRefusal?: (reason: string, status: number, sessionGeneration: number) => void;
 }
 
 export interface AuthedClient {
@@ -41,6 +67,12 @@ export interface AuthedClient {
     parse: (value: unknown) => T,
     options?: { readonly commandId?: string },
   ): Promise<ApiOutcome<T>>;
+}
+
+/** A token and the session generation it was issued under; always read together. */
+export interface AccessSession {
+  readonly token: string;
+  readonly generation: number;
 }
 
 const refusalOf = (body: unknown, status: number): string => {
@@ -58,9 +90,12 @@ export function createAuthedClient(options: AuthedClientOptions): AuthedClient {
     method: 'GET' | 'POST',
     body: Readonly<Record<string, unknown>> | undefined,
   ): Promise<ApiOutcome<unknown>> => {
-    const token = await options.accessToken();
-    if (token === null) return { ok: false, reason: 'not_signed_in', offline: false };
-    const headers: Record<string, string> = { accept: 'application/json', authorization: `Bearer ${token}` };
+    // The token and the session it belongs to, from one snapshot. Everything this call
+    // reports about being refused is reported about *that* session.
+    const access = await options.accessToken();
+    if (access === null) return { ok: false, reason: 'not_signed_in', offline: false };
+    const startedUnder = access.generation;
+    const headers: Record<string, string> = { accept: 'application/json', authorization: `Bearer ${access.token}` };
     if (body !== undefined) headers['content-type'] = 'application/json';
     try {
       const answer = await options.send(new URL(path, options.baseUrl).toString(), {
@@ -69,6 +104,9 @@ export function createAuthedClient(options: AuthedClientOptions): AuthedClient {
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
       options.onConnection?.(true);
+      if (answer.status === 401 || answer.status === 403) {
+        options.onAuthRefusal?.(refusalOf(answer.body, answer.status), answer.status, startedUnder);
+      }
       if (answer.status < 200 || answer.status >= 300) {
         // The body travels with the code (lane g78, D05). A refused merge's conflicts
         // are the screen a person resolves; reducing the answer to its reason here is

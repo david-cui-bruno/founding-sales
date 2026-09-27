@@ -77,7 +77,7 @@ test('a focus a minute after the last read reads the list again, quietly, and ke
   await page.clock.runFor(5 * 60_000);
   await expect(page.getByTestId('today-updated-text')).toHaveText('Updated 5 min ago');
   await focusWindow(page);
-  await expect.poll(() => called('today.refresh')).toEqual([null, { quiet: true }]);
+  await expect.poll(() => called('today.refresh')).toEqual([{}, { quiet: true }]);
   await expect(page.getByTestId('today-updated-text')).toHaveText('Updated just now');
   // Only the read time changed, so the lanes on screen are the ones drawn before.
   await expect(page.getByTestId('today-card').first()).toHaveAttribute('data-mark', 'kept');
@@ -114,7 +114,7 @@ test('the business day’s rollover reads the list with nobody there, and looks 
   await expect(page.getByTestId('heading')).toHaveText('Monday, 21 September');
 
   await page.clock.runFor(90_000);
-  await expect.poll(() => called('today.refresh')).toEqual([null, { quiet: true }]);
+  await expect.poll(() => called('today.refresh')).toEqual([{}, { quiet: true }]);
   await expect(page.getByTestId('heading')).toHaveText('Tuesday, 22 September');
 
   await page.clock.runFor(10 * 60_000);

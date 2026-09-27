@@ -1,6 +1,7 @@
 import { expect, test, type Page } from 'playwright/test';
 import {
   AUTOMATED_ITEM_ID,
+  CALLABLE_ADVICE,
   FIRM_ID,
   MANUAL_ITEM_ID,
   ROUTE_ID,
@@ -89,31 +90,36 @@ test('Home opens on the business date, a line of counts, and the four lanes in t
   ]);
 });
 
-test('the sidebar names every view with its key, and shows the one pressed in place', async ({ page }) => {
+test('the sidebar names the four selling views with their keys, and Settings at the foot', async ({ page }) => {
   server = await startAppServer();
   await page.goto(server.url());
 
   const nav = page.getByTestId('nav');
-  await expect(nav.getByRole('button')).toHaveText([
-    'Today⌘1',
-    'Replies⌘2',
-    'Firms⌘3',
-    'Sequences⌘4',
-    'Administration⌘5',
-    'Dashboard⌘6',
-  ]);
+  await expect(nav.getByRole('button')).toHaveText(['Today⌘1', 'Replies⌘2', 'Firms⌘3', 'Sequences⌘4']);
+  // Administration and the Dashboard were rows five and six until 1.0.12; they are tabs
+  // of Settings now, and Settings is not in the day's list of views.
+  await expect(page.getByTestId('nav-admin')).toHaveCount(0);
+  await expect(page.getByTestId('nav-dashboard')).toHaveCount(0);
+  await expect(page.getByTestId('nav-settings')).toHaveText('Settings⌘,');
   await expect(page.getByTestId('nav-today')).toHaveAttribute('aria-current', 'page');
 
   // The column changes and the sidebar stays: no second window, no reload.
-  await page.getByTestId('nav-dashboard').click();
-  await expect(page.getByTestId('heading')).toHaveText('Administration');
-  await expect(page.getByTestId('tab-dashboard')).toHaveClass(/tab-current/u);
-  await expect(page.getByTestId('nav-dashboard')).toHaveAttribute('aria-current', 'page');
+  await page.getByTestId('nav-settings').click();
+  await expect(page.getByTestId('heading')).toHaveText('Settings');
+  await expect(page.getByTestId('tab-settings')).toHaveClass(/tab-current/u);
+  await expect(page.getByTestId('nav-settings')).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByTestId('column')).toHaveAttribute('data-route', 'settings/administration');
+
+  // Its own tabs move the route without mounting the view again.
+  await page.getByTestId('tab-dashboard').click();
+  await expect(page.getByTestId('column')).toHaveAttribute('data-route', 'settings/dashboard');
+  await expect(page.getByTestId('nav-settings')).toHaveAttribute('aria-current', 'page');
+
   await page.getByTestId('nav-replies').click();
   await expect(page.getByTestId('heading')).toHaveText('Replies');
   await expect(page.getByTestId('nav-replies')).toHaveAttribute('aria-current', 'page');
   await expect(page.getByTestId('nav-today')).not.toHaveAttribute('aria-current', 'page');
-  expect(called('admin.show')).toEqual([{ screen: 'dashboard' }]);
+  expect(called('admin.show')).toEqual([{ screen: 'settings' }, { screen: 'dashboard' }]);
 });
 
 test('the sidebar says what state the system is in, in dots and words', async ({ page }) => {
@@ -162,10 +168,10 @@ test('Needs you lists only what the bridges say is missing, and each row does it
   ]);
   await expect(page.getByTestId('status-mailbox')).toHaveText('Mailbox connected · sales@example.test');
 
-  // Open goes to Administration in the same window, at the section the row is about.
+  // Open goes to Settings in the same window, at the section the row is about.
   await rows.filter({ hasText: 'Add your calling number' }).getByTestId('needs-open').click();
   await expect(page.getByTestId('calling-number')).toBeInViewport();
-  await expect(page.getByTestId('nav-admin')).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByTestId('nav-settings')).toHaveAttribute('aria-current', 'page');
   expect(called('admin.show')).toEqual([{ screen: 'settings' }]);
 });
 
@@ -363,8 +369,54 @@ test('what a person is typing survives the window regaining focus', async ({ pag
   await expect(page.getByTestId('snooze-reason').nth(1)).toHaveValue('Waiting on their board');
 });
 
-test('only a usable number is offered, with the limitation notice beside it', async ({ page }) => {
+test('what a person is typing survives leaving Today and coming back', async ({ page }) => {
+  // The acceptance list from 1.0.11. A field whose value lived in the component that
+  // draws it would lose it the moment the column showed Replies, so the drafts live
+  // above the route (`app/drafts.tsx`) and the fields read them by key.
   server = await startAppServer({ today: todayState({ expanded: expandedFirm() }) });
+  await page.goto(server.url());
+  await settled(page);
+
+  await page.getByTestId('snooze-reason').nth(1).fill('Waiting on their board');
+  await page.getByTestId('nav-replies').click();
+  await expect(page.getByTestId('column')).toHaveAttribute('data-route', 'replies');
+  await page.getByTestId('nav-today').click();
+  await expect(page.getByTestId('column')).toHaveAttribute('data-route', 'today');
+
+  await expect(page.getByTestId('snooze-reason').nth(1)).toHaveValue('Waiting on their board');
+});
+
+test('a read Home makes by itself keeps the focus and the caret where they were', async ({ page }) => {
+  // "Focus is never lost on re-render", from the same list. Text coming back is not
+  // enough: a field that is redrawn takes the cursor with it, and a person typing
+  // mid-sentence when the sidebar refreshes loses their place.
+  server = await startAppServer({ today: todayState({ expanded: expandedFirm() }) });
+  await page.goto(server.url());
+  await settled(page);
+
+  const reason = page.getByTestId('snooze-reason').nth(1);
+  await reason.fill('Waiting on their board');
+  // The caret in the middle of the word, not at the end of the line.
+  await reason.evaluate(field => {
+    (field as HTMLInputElement).setSelectionRange(12, 12);
+  });
+
+  const reads = called('admin.state').length;
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect.poll(() => called('admin.state').length).toBeGreaterThan(reads);
+
+  const after = await reason.evaluate(field => ({
+    focused: document.activeElement === field,
+    caret: (field as HTMLInputElement).selectionStart,
+    value: (field as HTMLInputElement).value,
+  }));
+  expect(after).toEqual({ focused: true, caret: 12, value: 'Waiting on their board' });
+});
+
+test('only a usable number is offered, callable because the server just said so', async ({ page }) => {
+  server = await startAppServer({
+    today: todayState({ expanded: expandedFirm(), dialAdvice: [CALLABLE_ADVICE] }),
+  });
   await page.goto(server.url());
   await settled(page);
 
@@ -372,20 +424,46 @@ test('only a usable number is offered, with the limitation notice beside it', as
   await expect(page.getByTestId('dial')).toHaveCount(1);
   await expect(page.getByTestId('dial')).toHaveText('Call +14015550187');
   await expect(page.getByTestId('dial-limitation')).toContainText('cannot recall it');
+  await expect(page.getByTestId('dial-reason')).toHaveCount(0);
 
   await page.getByTestId('dial').click();
   await expect(page.getByTestId('banner-info')).toContainText('Handed to the phone app.');
-  expect(called('today.dial')).toEqual([
-    // 9.2: the version the card displays is the version the server checks.
-    { firmId: FIRM_ID, contactId: null, routeId: ROUTE_ID, routeVersion: 3 },
-  ]);
+  // No version, no ticket, no calling identity: the press is the press, and the server's
+  // advice — re-read in the main process — decides whether anything opens.
+  expect(called('today.dial')).toEqual([{ firmId: FIRM_ID, contactId: null, routeId: ROUTE_ID }]);
 });
 
-test('a firm with no verified number of the caller’s offers no Call button, and says where to add one', async ({ page }) => {
+test('a number the server will not advise says every reason, and cannot be pressed', async ({ page }) => {
+  server = await startAppServer({
+    today: todayState({
+      expanded: expandedFirm(),
+      dialAdvice: [
+        {
+          routeId: ROUTE_ID,
+          callable: false,
+          reasons: ['outside_calling_window', 'posture_missing'],
+          e164: '+14015550187',
+          firmLocalTime: '21:40',
+        },
+      ],
+    }),
+  });
+  await page.goto(server.url());
+  await settled(page);
+
+  await expect(page.getByTestId('dial')).toBeDisabled();
+  // Every reason that applies, not only the first.
+  await expect(page.getByTestId('dial-reason')).toHaveText([
+    'It is outside this firm’s calling hours.',
+    'This firm’s state is not on your “OK to call” list.',
+  ]);
+  expect(called('today.dial')).toEqual([]);
+});
+
+test('a firm with no verified number of the caller’s still says where to add one', async ({ page }) => {
   server = await startAppServer({ today: todayState({ expanded: expandedFirm({ callingIdentityId: null }) }) });
   await page.goto(server.url());
-  await expect(page.getByTestId('dial')).toHaveCount(0);
-  await expect(page.getByTestId('banner-info')).toContainText('Add it in Administration (⌘5)');
+  await expect(page.getByTestId('banner-info')).toContainText('Add it in Settings (⌘,)');
 });
 
 test('an outcome will not record until it has everything it needs', async ({ page }) => {
@@ -554,7 +632,7 @@ test('an empty list says what to do next in one grey line', async ({ page }) => 
 });
 
 test('a page built without the Today and administration bridges says so where they would be', async ({ page }) => {
-  server = await startAppServer({ without: ['callieToday', 'callieAdmin'], mailbox: connectedMailbox() });
+  server = await startAppServer({ without: ['callieApi', 'callieAdmin'], mailbox: connectedMailbox() });
   await page.goto(server.url());
 
   await expect(page.getByTestId('heading')).toHaveText('Monday, 21 September');

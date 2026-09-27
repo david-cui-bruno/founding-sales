@@ -5,8 +5,8 @@ import { uuid } from '@fss/contracts';
 import { createApiClient, fetchSend } from './apiClient.ts';
 import { createAuthedClient } from './authedClient.ts';
 import { createDialHandoff } from './dialHandoff.ts';
-import { createDialApi, createTelLaunchDriver } from './telHandoff.ts';
-import { registerCrmBridge, registerReplyBridge, registerSequenceBridge, registerTodayBridge } from './todayWindow.ts';
+import { createTelLaunchDriver, isBrowserLink } from './telHandoff.ts';
+import { registerCrmBridge, registerOperationBridges, registerSequenceBridge } from './todayWindow.ts';
 import { windowMenuTemplate } from './windowMenu.ts';
 import { registerAdminBridge } from './settingsWindow.ts';
 import { createDeviceStore } from './deviceStore.ts';
@@ -14,7 +14,7 @@ import { createKeychainVault } from './keychain.ts';
 import { createOfflineCache } from './offlineCache.ts';
 import { createSessionManager, type SessionManager } from './sessionManager.ts';
 import { IPC_CHANNELS } from './ipc.ts';
-import type { RouteName } from '../shared/contract.ts';
+import type { NavigationTarget, SessionChange } from '../shared/contract.ts';
 import {
   MAILBOX_IPC_CHANNELS,
   createMailboxBridge,
@@ -117,7 +117,7 @@ export function registerMailboxBridge(deps: MailboxBridgeDeps): MailboxBridgeHos
 /** The one window, whether its page has loaded, and a route asked for before it had. */
 let mainWindow: BrowserWindow | null = null;
 let windowLoaded = false;
-let pendingRoute: RouteName | null = null;
+let pendingRoute: NavigationTarget | null = null;
 
 /**
  * Bring the window forward on `route`: the Window menu's ⌘1–⌘6 and every deep link.
@@ -126,7 +126,7 @@ let pendingRoute: RouteName | null = null;
  * before `ready`), and until wave 1 it was dropped. It is kept here now and sent once
  * the page has loaded and is listening; a later one replaces an earlier one.
  */
-export function showRoute(route: RouteName): void {
+export function showRoute(route: NavigationTarget): void {
   const window = mainWindow;
   if (window === null || window.isDestroyed() || !windowLoaded) {
     pendingRoute = route;
@@ -135,6 +135,13 @@ export function showRoute(route: RouteName): void {
   if (window.isMinimized()) window.restore();
   window.focus();
   window.webContents.send(IPC_CHANNELS.navigate, route);
+}
+
+/** Tell the page a session transition happened. Dropped if there is no page yet. */
+export function sendSessionChange(change: SessionChange): void {
+  const window = mainWindow;
+  if (window === null || window.isDestroyed() || !windowLoaded) return;
+  window.webContents.send(IPC_CHANNELS.sessionChanged, change);
 }
 
 export async function openWindow(configuration: DesktopConfiguration): Promise<BrowserWindow> {
@@ -154,10 +161,14 @@ export async function openWindow(configuration: DesktopConfiguration): Promise<B
       webviewTag: false,
     },
   });
-  // Any link the renderer tries to open goes to the system browser, never to a
-  // second Electron window where a person cannot see where they are.
+  // A link the renderer asks to open goes to the system browser, never to a second
+  // Electron window where a person cannot see where they are — and **only if it is a
+  // web link**. Until 1.0.12 this handler passed any URL to `shell.openExternal`, so a
+  // renderer that opened `tel:+1…` placed a call without `/dial/check` having said the
+  // number may be called, and without the handoff recording what was dialled. Dialling
+  // has one door (`dialHandoff.ts`), and this is not it.
   window.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url);
+    if (isBrowserLink(url)) void shell.openExternal(url);
     return { action: 'deny' };
   });
   mainWindow = window;
@@ -190,21 +201,45 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
     onConnection: reachable => {
       manager.noteConnection(reachable);
     },
+    // A bridge call refused as unauthenticated. A revocation wipes here exactly as one
+    // on the renewal path does — for the session that made the call, and no other — and
+    // the window hears about it through `onSessionChange`.
+    onAuthRefusal: (reason, _status, sessionGeneration) => {
+      void manager.noteAuthRefusal(reason, sessionGeneration);
+    },
   });
   const session = { state: async () => await manager.state(), refreshToday: async () => await manager.refreshToday() };
 
-  registerTodayBridge({
-    api,
-    // G4's handoff logic, bound to macOS through `telHandoff.ts`: the launch-services
-    // probe for the setup proof and `shell.openExternal` for the open, with every
-    // scheme but `tel:` unreachable from that module. There is no Swift helper (2).
-    handoff: createDialHandoff({ driver: createTelLaunchDriver(), api: createDialApi(api) }),
-    session,
+  // Today, Replies and the Diagnostics recovery controls, behind D4's operation registry
+  // — two channels and a closed list — with dialling on its own named channel. The reply
+  // state is never cached, so it needs nothing from the offline cache but the token, the
+  // online flag and the version gate.
+  const bridges = registerOperationBridges({
+    today: {
+      api,
+      // The handoff logic, bound to macOS through `telHandoff.ts`: the launch-services
+      // probe for the setup proof and `shell.openExternal` for the open, with every
+      // scheme but `tel:` unreachable from that module. There is no Swift helper (2).
+      handoff: createDialHandoff({ driver: createTelLaunchDriver() }),
+      session,
+    },
+    replies: { api, session },
   });
-  // 8.3's reply cards. The same `AuthedClient` and the same session manager: the
-  // reply state is never cached, so it needs nothing from the offline cache but the
-  // token, the online flag and the version gate.
-  registerReplyBridge({ api, session });
+
+  /*
+   * A session transition empties the window (1.0.12).
+   *
+   * The main process is where it is known — a sign-out, another workspace, a role the
+   * renewal came back with, a revoked device seen as an authenticated refusal — and
+   * until now the renderer found out by noticing that a state it happened to read
+   * looked different. Two things happen the moment it is known: the reply bridge drops
+   * the lane and the one body it holds, and the window is told so it can empty its
+   * request cache and everything anybody had typed.
+   */
+  manager.onSessionChange(change => {
+    void bridges.replies.forget();
+    sendSessionChange(change);
+  });
   registerCrmBridge({ api, session, clientVersion: configuration.clientVersion });
   // G8's editor.
   registerSequenceBridge({ api, session });

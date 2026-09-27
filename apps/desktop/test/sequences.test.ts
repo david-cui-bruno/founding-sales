@@ -210,7 +210,7 @@ describe('the bridge reads what the routes answer (lane g78)', () => {
       api: createAuthedClient({
         baseUrl: 'https://api.example.test/',
         clientVersion: '1.0.5',
-        accessToken: async () => await Promise.resolve('token'),
+        accessToken: async () => await Promise.resolve({ token: 'token', generation: 0 }),
         send: async url => {
           const answer = answers[new URL(url).pathname];
           if (answer === 'offline') throw new Error('no route to host');
@@ -324,7 +324,7 @@ describe('a LinkedIn step stored before 25 September 2026 (lane A2)', () => {
       api: createAuthedClient({
         baseUrl: 'https://api.example.test/',
         clientVersion: '1.0.5',
-        accessToken: async () => await Promise.resolve('token'),
+        accessToken: async () => await Promise.resolve({ token: 'token', generation: 0 }),
         send: async url => await Promise.resolve(answers[new URL(url).pathname] ?? { status: 404, body: { error: 'not_found' } }),
       }),
       session: {

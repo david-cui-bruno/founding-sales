@@ -1,23 +1,29 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { IPC_CHANNELS } from '../main/ipc.ts';
 import { CRM_IPC_CHANNELS } from '../main/crmBridge.ts';
-import { TODAY_IPC_CHANNELS } from '../main/todayBridge.ts';
 import { SEQUENCE_IPC_CHANNELS } from '../main/sequenceBridge.ts';
-import { REPLY_IPC_CHANNELS } from '../main/replyBridge.ts';
 import { ADMIN_IPC_CHANNELS } from '../main/settingsBridge.ts';
 import { MAILBOX_IPC_CHANNELS } from '../main/mailboxBridge.ts';
 import {
+  DIAL_IPC_CHANNELS,
+  OPERATIONS,
+  OPERATION_IPC_CHANNELS,
+  type DialBridge,
+  type OperationApi,
+  type OperationName,
+} from '../shared/operations.ts';
+import {
   desktopStateSchema,
   mailboxStateSchema,
-  routeNameOf,
+  navigationTargetOf,
+  sessionChangeSchema,
   type DesktopBridge,
   type DesktopState,
   type MailboxBridge,
   type MailboxState,
 } from '../shared/contract.ts';
 import type { CrmBridge, CrmState } from '../renderer/firmWorkspaceContract.ts';
-import { todayStateSchema, type TodayBridge, type TodayState } from '../renderer/todayContract.ts';
-import { replyStateSchema, type ReplyBridge, type ReplyState } from '../renderer/replyContract.ts';
+import { todayStateSchema, type TodayState } from '../renderer/todayContract.ts';
 import {
   sequenceStateSchema,
   type SequenceBridge,
@@ -29,10 +35,14 @@ import { UPDATE_IPC_CHANNELS, updateStatusSchema, type UpdateBridge, type Update
 /**
  * The bridges, and the whole of what a renderer can reach (specification 14.2).
  *
- * There is one window (wave 1), and its views call all eight: the shell reads `callie`
- * for the session, `callieMailbox` for the Mailbox row, `callieToday` for the lanes and
- * `callieAdmin` for the sidebar's status; Replies, Firms, Sequences and Administration
- * read their own. Every channel below is answered by a main-process handler that exists.
+ * There is one window (wave 1). The shell reads `callie` for the session,
+ * `callieMailbox` for the Mailbox row and `callieAdmin` for the sidebar's status; Today
+ * and Replies go through `callieApi`, D4's operation registry — two functions and a
+ * closed list of operations, in place of the fifteen hand-written methods those two
+ * views had between them; dialling has `callieDial`, because it opens a URI on the
+ * operating system rather than answering with one; and Firms, Sequences and the Settings
+ * tabs keep their own bridges until U2 converts them. Every channel below is answered by
+ * a main-process handler that exists.
  *
  * Parsing on this side as well as on the main side is not paranoia about our own
  * code: it is what makes the renderer's type a guarantee rather than a hope, and it
@@ -59,14 +69,35 @@ const invokeMailbox = async (channel: string): Promise<MailboxState> => {
   return mailboxStateSchema.parse(answer);
 };
 
-const invokeToday = async (channel: string, argument?: unknown): Promise<TodayState> => {
-  const answer: unknown = await ipcRenderer.invoke(channel, argument);
-  return todayStateSchema.parse(answer);
+/**
+ * One operation, both ways (D4). The input is checked against the operation's own schema
+ * before it leaves the page and the answer against its output schema before it reaches
+ * it — the main process does the same on its side, which is what makes the renderer's
+ * type a guarantee rather than a hope.
+ */
+const invokeOperation = async (channel: string, operation: OperationName, input: unknown): Promise<unknown> => {
+  const declared = OPERATIONS[operation];
+  const answer: unknown = await ipcRenderer.invoke(channel, {
+    operation,
+    input: declared.input.parse(input ?? {}),
+  });
+  return declared.output.parse(answer);
 };
 
-const invokeReplies = async (channel: string, argument?: unknown): Promise<ReplyState> => {
-  const answer: unknown = await ipcRenderer.invoke(channel, argument);
-  return replyStateSchema.parse(answer);
+const api = {
+  read: async (operation: OperationName, input: unknown) =>
+    await invokeOperation(OPERATION_IPC_CHANNELS.read, operation, input),
+  command: async (operation: OperationName, input: unknown) =>
+    await invokeOperation(OPERATION_IPC_CHANNELS.command, operation, input),
+} as unknown as OperationApi;
+
+/**
+ * Dialling. One method, and it takes a firm, a number and a contact — never a URI: the
+ * main process re-reads `POST /dial/check` at the press and opens the URI that read
+ * answered with, so a renderer that cannot name a `tel:` string cannot ask for one.
+ */
+const dial: DialBridge = {
+  call: async input => todayStateSchema.parse(await ipcRenderer.invoke(DIAL_IPC_CHANNELS.call, input)) as TodayState,
 };
 
 const invokeCrm = async (channel: string, argument?: unknown): Promise<CrmState> =>
@@ -91,12 +122,20 @@ const bridge: DesktopBridge = {
   signIn: async input => await invokeDesktop(IPC_CHANNELS.signIn, input),
   signOut: async () => await invokeDesktop(IPC_CHANNELS.signOut),
   refreshToday: async () => await invokeDesktop(IPC_CHANNELS.refreshToday),
-  // Wave 1: the menu's ⌘1–⌘6 and deep links. A name outside the six is dropped here,
-  // so the page is only ever told one of them.
+  // The menu's ⌘1–⌘4, ⌘, and the deep links. A target outside the closed set is dropped
+  // here, so the page is only ever told one of them.
   onNavigate: listener => {
     ipcRenderer.on(IPC_CHANNELS.navigate, (_event, name: unknown) => {
-      const route = routeNameOf(name);
-      if (route !== null) listener(route);
+      const target = navigationTargetOf(name);
+      if (target !== null) listener(target);
+    });
+  },
+  // A transition the main process saw (1.0.12). Parsed here like everything else that
+  // crosses this boundary: a message that is not one of these is not delivered at all.
+  onSessionChange: listener => {
+    ipcRenderer.on(IPC_CHANNELS.sessionChanged, (_event, raw: unknown) => {
+      const parsed = sessionChangeSchema.safeParse(raw);
+      if (parsed.success) listener(parsed.data);
     });
   },
 };
@@ -110,35 +149,6 @@ const mailbox: MailboxBridge = {
   state: async () => await invokeMailbox(MAILBOX_IPC_CHANNELS.state),
   refresh: async () => await invokeMailbox(MAILBOX_IPC_CHANNELS.refresh),
   connect: async () => await invokeMailbox(MAILBOX_IPC_CHANNELS.connect),
-};
-
-const today: TodayBridge = {
-  state: async () => await invokeToday(TODAY_IPC_CHANNELS.state),
-  refresh: async input => await invokeToday(TODAY_IPC_CHANNELS.refresh, input),
-  expand: async input => await invokeToday(TODAY_IPC_CHANNELS.expand, input),
-  collapse: async () => await invokeToday(TODAY_IPC_CHANNELS.collapse),
-  snooze: async input => await invokeToday(TODAY_IPC_CHANNELS.snooze, input),
-  dial: async input => await invokeToday(TODAY_IPC_CHANNELS.dial, input),
-  recordOutcome: async input => await invokeToday(TODAY_IPC_CHANNELS.recordOutcome, input),
-  scheduleCallback: async input => await invokeToday(TODAY_IPC_CHANNELS.scheduleCallback, input),
-  releasePause: async input => await invokeToday(TODAY_IPC_CHANNELS.releasePause, input),
-};
-
-/**
- * Six methods, and none of them closes an opportunity, records a suppression or resumes
- * automation. The sixth (lane g88) is G7's ambiguity resolution, whose one consequence is
- * 12.3's release of the other candidates' ambiguity holds. 12.4 gives those to the deterministic layer
- * or to a person on another surface, and a renderer that cannot name them cannot ask
- * for them however the page is edited later.
- */
-const replies: ReplyBridge = {
-  state: async () => await invokeReplies(REPLY_IPC_CHANNELS.state),
-  refresh: async () => await invokeReplies(REPLY_IPC_CHANNELS.refresh),
-  open: async input => await invokeReplies(REPLY_IPC_CHANNELS.open, input),
-  collapse: async () => await invokeReplies(REPLY_IPC_CHANNELS.collapse),
-  confirm: async input => await invokeReplies(REPLY_IPC_CHANNELS.confirm, input),
-  // Lane g88: which conversation an ambiguous reply belongs to.
-  resolve: async input => await invokeReplies(REPLY_IPC_CHANNELS.resolve, input),
 };
 
 const crm: CrmBridge = {
@@ -225,9 +235,9 @@ const update: UpdateBridge = {
 
 contextBridge.exposeInMainWorld('callie', bridge);
 contextBridge.exposeInMainWorld('callieMailbox', mailbox);
-contextBridge.exposeInMainWorld('callieToday', today);
+contextBridge.exposeInMainWorld('callieApi', api);
+contextBridge.exposeInMainWorld('callieDial', dial);
 contextBridge.exposeInMainWorld('callieCrm', crm);
-contextBridge.exposeInMainWorld('callieReplies', replies);
 contextBridge.exposeInMainWorld('callieSequences', sequences);
 contextBridge.exposeInMainWorld('callieAdmin', admin);
 contextBridge.exposeInMainWorld('callieUpdate', update);

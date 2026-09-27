@@ -82,13 +82,13 @@ describe('a route asked for before the window exists (a cold deep link)', () => 
 
     const opened = openWindow(configuration);
     // The window exists and is still loading: the page is not listening yet.
-    showRoute('dashboard');
+    showRoute('settings/dashboard');
     expect(electron.sent).toEqual([]);
     electron.finishLoad();
     await opened;
 
     // The last link wins, and it is sent exactly once, to the one window.
-    expect(electron.sent).toEqual([[IPC_CHANNELS.navigate, 'dashboard']]);
+    expect(electron.sent).toEqual([[IPC_CHANNELS.navigate, 'settings/dashboard']]);
     expect(electron.windows).toBe(1);
   });
 

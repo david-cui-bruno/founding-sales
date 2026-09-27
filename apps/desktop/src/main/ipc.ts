@@ -15,6 +15,13 @@ export const IPC_CHANNELS = {
    * deep link send it; it carries a route name and nothing else.
    */
   navigate: 'callie:navigate',
+  /**
+   * Main to page (1.0.12): the person, the workspace or the role changed, or this Mac's
+   * registration ended. It carries a generation and the new identity — never a token —
+   * and the page empties everything it was holding the moment it arrives, rather than
+   * when it next happens to read the session.
+   */
+  sessionChanged: 'callie:session-changed',
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];

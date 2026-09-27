@@ -4,6 +4,7 @@ import js from '@eslint/js';
 import tsPlugin from '@typescript-eslint/eslint-plugin';
 import tsParser from '@typescript-eslint/parser';
 import globals from 'globals';
+import reactHooks from 'eslint-plugin-react-hooks';
 
 export default [
   {
@@ -11,10 +12,10 @@ export default [
     ignores: ['**/node_modules/**', '**/dist/**', '**/.*/', 'out/**', 'coverage/**', 'test-results/**', 'playwright-report/**', 'artifacts/**'],
   },
   {
-    files: ['**/*.{ts,mts,cts}'],
+    files: ['**/*.{ts,mts,cts,tsx}'],
     languageOptions: {
       parser: tsParser,
-      parserOptions: { ecmaVersion: 'latest', sourceType: 'module' },
+      parserOptions: { ecmaVersion: 'latest', sourceType: 'module', ecmaFeatures: { jsx: true } },
       globals: { ...globals.node },
     },
   },
@@ -29,7 +30,7 @@ export default [
   js.configs.recommended,
   ...tsPlugin.configs['flat/recommended'],
   {
-    files: ['**/*.{ts,mts,cts}'],
+    files: ['**/*.{ts,mts,cts,tsx}'],
     rules: {
       // Strict TypeScript; `any` is never the conservative option.
       '@typescript-eslint/no-explicit-any': 'error',
@@ -40,8 +41,19 @@ export default [
     },
   },
   {
+    // The renderer's React (1.0.12). The two rules that catch the mistakes a hook-based
+    // view actually makes: a hook called conditionally, and an effect that reads state it
+    // did not list. Nothing about formatting or about how a component should be written.
+    files: ['apps/desktop/src/renderer/**/*.tsx', 'apps/desktop/src/renderer/**/*.ts'],
+    plugins: { 'react-hooks': reactHooks },
+    rules: {
+      'react-hooks/rules-of-hooks': 'error',
+      'react-hooks/exhaustive-deps': 'error',
+    },
+  },
+  {
     // Test files deliberately construct wrong shapes behind @ts-expect-error.
-    files: ['**/test/**/*.ts'],
+    files: ['**/test/**/*.{ts,tsx}'],
     rules: {
       '@typescript-eslint/ban-ts-comment': ['error', { 'ts-expect-error': false, 'ts-ignore': true, 'ts-nocheck': true }],
       'no-console': 'off',

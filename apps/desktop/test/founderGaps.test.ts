@@ -52,7 +52,7 @@ function scriptedApi(answers: Record<string, HttpAnswer | ((body: Record<string,
   const api = createAuthedClient({
     baseUrl: 'https://api.example.test/',
     clientVersion: '1.0.6',
-    accessToken: async () => await Promise.resolve('token-value'),
+    accessToken: async () => await Promise.resolve({ token: 'token-value', generation: 0 }),
     send: async (url, init) => {
       const path = new URL(url).pathname;
       const body = init.body === undefined ? null : (JSON.parse(init.body) as Record<string, unknown>);
@@ -174,6 +174,10 @@ describe('the template form (audit G03)', () => {
   it('names every issue of a refused approval in words', () => {
     expect(sequenceNotice('template_unapproved:template_footer_missing,template_body_multiple_urls')).toBe(
       'Not approved. The email does not end with the sign-off and the stop line. The email has more than one link.',
+    );
+    // The server's newest rule (wave 3b): a sign-off that repeats the stop line.
+    expect(sequenceNotice('template_unapproved:template_sign_off_repeats_stop_line')).toBe(
+      'Not approved. The sign-off repeats the stop line; the footer adds that line itself.',
     );
     expect(sequenceNotice('draft_saved')).toBe('Draft saved.');
     expect(sequenceNotice('Message copied.')).toBe('Message copied.');

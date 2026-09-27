@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  e164,
   instant,
   uuid,
   todayCardDtoSchema,
@@ -12,8 +13,8 @@ import {
 } from '@fss/contracts';
 
 /**
- * What the Today window is given, and the nine things it may ask for
- * (specification 8.2, 14.2).
+ * What the Today view is given, and the shapes of the operations it may ask for
+ * (specification 8.2, 14.2). The operations themselves are `shared/operations.ts`'s.
  *
  * A second contract beside G2's `shared/contract.ts` rather than an extension of it,
  * and the reason is a retention rule rather than a style. `DesktopState.today` is the
@@ -58,6 +59,30 @@ export type TodayRoute = TodayRouteDto;
  */
 export type TodayFirm = TodayFirmResponse;
 
+/**
+ * `POST /dial/check`'s answer for one of the card's numbers (wave 2, S4.5).
+ *
+ * The card says callable yes or no and, when no, every reason that applies — not the
+ * first, so "outside the calling window, and the state is not on your list" is one
+ * sentence rather than two presses. The URI stays in the main process: this is
+ * everything the window is told, and there is no field on it a renderer could turn into
+ * something to open.
+ */
+const dialAdviceViewSchema = z.strictObject({
+  routeId: uuid,
+  callable: z.boolean(),
+  /**
+   * Stable codes, never sentences composed here: `todayView.ts` is the one place each
+   * becomes English. The wire values are checked against `@fss/contracts`' closed enum in
+   * the main process, which is where a code the server gained should fail.
+   */
+  reasons: z.array(z.string().max(64)),
+  e164: e164.nullable(),
+  /** The firm's own clock at the moment of the advice, `HH:MM`, when the zone is known. */
+  firmLocalTime: z.string().max(5).nullable(),
+});
+export type DialAdviceView = z.infer<typeof dialAdviceViewSchema>;
+
 export const todayStateSchema = z.strictObject({
   /** Null before the first read, and after a sign-out. */
   snapshotDate: z.iso.date().nullable(),
@@ -79,6 +104,8 @@ export const todayStateSchema = z.strictObject({
   notice: z.string().max(80).nullable(),
   /** 9.2's last clause, so the window never has to compose it. */
   handoffNotice: z.string(),
+  /** One entry per usable number on the expanded card; empty when no card is open. */
+  dialAdvice: z.array(dialAdviceViewSchema),
   /**
    * The call the last Call button handed to the phone app, so the outcome form can say
    * which number it is recording (lane g79, C16). The ticket and the calling identity
@@ -119,7 +146,6 @@ export interface DialRequest {
   readonly firmId: string;
   readonly contactId: string | null;
   readonly routeId: string;
-  readonly routeVersion: number;
 }
 
 export interface OutcomeRequest {
@@ -150,20 +176,3 @@ export interface RefreshRequest {
   readonly quiet?: boolean;
 }
 
-export interface TodayBridge {
-  state(): Promise<TodayState>;
-  refresh(input?: RefreshRequest): Promise<TodayState>;
-  expand(input: { readonly firmId: string }): Promise<TodayState>;
-  collapse(): Promise<TodayState>;
-  snooze(input: SnoozeRequest): Promise<TodayState>;
-  /** Authorize, consume and open `tel:` in one call. The renderer never sees a ticket. */
-  dial(input: DialRequest): Promise<TodayState>;
-  recordOutcome(input: OutcomeRequest): Promise<TodayState>;
-  scheduleCallback(input: ScheduleCallbackRequest): Promise<TodayState>;
-  releasePause(input: ReleasePauseRequest): Promise<TodayState>;
-}
-
-declare global {
-  /** The bridge the preload script installs, exactly as G2's `callie` is installed. */
-  var callieToday: TodayBridge | undefined;
-}

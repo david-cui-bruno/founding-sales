@@ -4,6 +4,7 @@ import {
   type ReplyCard,
   type ReplyDisposition,
   type ReplyState,
+  type ReplySummary,
 } from './replyContract.ts';
 
 /**
@@ -17,10 +18,18 @@ import {
  *
  * Four rules live here.
  *
- * **The suggestion is never the answer, and never a default.** `chosen` is a
- * parameter, `confirmEnabled` is false until it is non-null, and nothing in this file
- * computes it from the card. A person's click is the only thing that fills it in. See
- * `docs/decisions/g7b-the-suggestion-is-not-a-default.md`.
+ * **⚠ The suggestion is the starting answer, and it is labelled as one (D5.1).** The
+ * owner decided on 26 September 2026 that the card should open with Callie's guess
+ * already chosen, knowingly reversing G7b's "the suggestion is not a default"
+ * (`docs/archive/decisions/g7b-the-suggestion-is-not-a-default.md`). `chosen` is still a
+ * parameter and nothing in this file computes it from the card: the view supplies the
+ * guess when a card opens, so what is selected is always a value some code chose on the
+ * person's behalf and the page says whose guess it is, right beside it.
+ *
+ * The guards that came with the decision are the view's, in `replies/RepliesView.tsx`:
+ * Confirm is a `type="button"` with no form around it, so no keystroke anywhere on the
+ * card can confirm; the button names what confirming will actually do; and nothing
+ * anywhere says an uncorrected confirmation means the guess was read.
  *
  * **Confidence is a number on the screen and nothing else.** It appears in one label
  * and in no condition. A threshold here would be exactly the thing 12.4 refuses: a
@@ -41,7 +50,7 @@ export interface BannerView {
   readonly text: string;
 }
 
-export const DISPOSITION_LABELS: Readonly<Record<ReplyDisposition, string>> = Object.freeze({
+const DISPOSITION_LABELS: Readonly<Record<ReplyDisposition, string>> = Object.freeze({
   interested: 'Interested',
   referral_or_wrong_person: 'Wrong person, or referred me on',
   follow_up_later: 'Asked me to follow up later',
@@ -57,12 +66,14 @@ export const DISPOSITION_LABELS: Readonly<Record<ReplyDisposition, string>> = Ob
  * `confirmReplyDisposition` grows or loses a consequence, the sentence a person reads
  * before pressing the button is one edit away and one test away.
  */
-export const DISPOSITION_CONSEQUENCES: Readonly<Record<ReplyDisposition, string>> = Object.freeze({
+const DISPOSITION_CONSEQUENCES: Readonly<Record<ReplyDisposition, string>> = Object.freeze({
   interested:
     'Callie stops automated sending for this firm and hands it to you. It does not move the deal forward on its own.',
   referral_or_wrong_person:
     'Callie stops automated sending for this firm and hands it to you. Add the right contact on the firm page.',
-  follow_up_later: 'Callie stops automated sending and books the callback you enter below.',
+  // The card where Callie read no day in the reply; `followUpConsequence` is the other.
+  follow_up_later:
+    'Callie stops automated sending. Enter a day and a time below and it books that callback; leave them empty and it is a follow-up with no date on it.',
   not_interested:
     'Callie stops automated sending and suggests marking the deal Lost. It does not close anything — that is your call on the firm page.',
   opt_out:
@@ -70,7 +81,68 @@ export const DISPOSITION_CONSEQUENCES: Readonly<Record<ReplyDisposition, string>
   other: 'Callie stops automated sending for this firm and hands it to you.',
 });
 
-export const CLASS_LABELS: Readonly<Record<string, string>> = Object.freeze({
+/**
+ * What the Confirm button says, and it says the effect rather than the label of the
+ * choice: "Confirm: Asked not to be contacted" is agreement with a classification, and
+ * "Stop automation and record a do-not-contact" is the thing that is about to happen.
+ * D5.1 asks for the second, because the guess arrives already selected.
+ */
+export const CONFIRM_LABELS: Readonly<Record<ReplyDisposition, string>> = Object.freeze({
+  interested: 'Stop automated sending and take this firm over',
+  referral_or_wrong_person: 'Stop automated sending and take this firm over',
+  follow_up_later: 'Stop automated sending and book the callback',
+  not_interested: 'Stop automated sending and record: not interested',
+  opt_out: 'Stop automated sending and record a do-not-contact',
+  other: 'Stop automated sending and take this firm over',
+});
+
+/** What Confirm says with no date entered for a follow-up: what will actually happen. */
+export const FOLLOW_UP_WITHOUT_DATE = 'Stop automated sending and note a follow-up — no date yet';
+
+/**
+ * …except on a card where Callie read a day in the reply.
+ *
+ * `confirmReplyDisposition` refuses a `follow_up_later` with no callback when the model
+ * proposed one (`callback_required`, `confirmations.ts`): the proposal is on the card, a
+ * person clearing the field has not said what to put in its place, and the server will
+ * not take silence for an answer. So the button does not offer the press — it says what
+ * is missing, and stays dead until the day is there.
+ */
+export const CALLBACK_REQUIRED_LABEL = 'Enter the day before confirming this';
+export const CALLBACK_REQUIRED_HINT =
+  'Callie read a day in this reply, so this answer needs one. Type the day, or choose a different answer.';
+
+/**
+ * What confirming a follow-up will do, on this card.
+ *
+ * The sentence above the button and the button itself have to describe the same press.
+ * On a card where the model proposed a day, `confirmReplyDisposition` refuses an empty
+ * callback (`callback_required`) and the button says so (`CALLBACK_REQUIRED_LABEL`) — so
+ * the consequence may not go on offering "leave them empty", which is the one branch
+ * that cannot happen there. Everywhere else both branches are real, and it names both.
+ */
+export function followUpConsequence(callbackProposed: boolean): string {
+  return callbackProposed
+    ? 'Callie stops automated sending and books the callback you enter below. Callie read a day in this reply, so this answer needs one.'
+    : DISPOSITION_CONSEQUENCES.follow_up_later;
+}
+
+/**
+ * What the button says, and it says exactly what pressing it will do (1.0.12).
+ *
+ * `callbackBooked` is whether a day has actually been typed. The domain books a callback
+ * **only if one was supplied** (`confirmations.ts`), so "book the callback" on an empty
+ * form was a button promising something that would not happen — the one thing D5.1's
+ * guard about naming the effect exists to prevent. With a date it books; without one it
+ * stops automation and leaves a follow-up with no date, and the button says so.
+ */
+export function confirmLabel(chosen: ReplyDisposition | null, callbackBooked: boolean): string {
+  if (chosen === null) return 'Choose what this reply means';
+  if (chosen === 'follow_up_later' && !callbackBooked) return FOLLOW_UP_WITHOUT_DATE;
+  return CONFIRM_LABELS[chosen];
+}
+
+const CLASS_LABELS: Readonly<Record<string, string>> = Object.freeze({
   human_reply: 'A person wrote this',
   automated: 'Automatic response',
   bounce: 'Delivery failure',
@@ -108,7 +180,7 @@ export function replyNotice(code: string): string {
   return NOTICES[code] ?? code;
 }
 
-export interface DispositionChoiceView {
+interface DispositionChoiceView {
   readonly disposition: ReplyDisposition;
   readonly label: string;
   readonly consequence: string;
@@ -117,7 +189,7 @@ export interface DispositionChoiceView {
   readonly selected: boolean;
 }
 
-export interface SuggestionView {
+interface SuggestionView {
   /** "Interested", or null when only a rule spoke. */
   readonly dispositionLabel: string | null;
   /** Which layer proposed it: a person correcting a rule is not correcting a model. */
@@ -152,6 +224,7 @@ export interface ReplyCardView {
   readonly callbackRequired: boolean;
   readonly firmWideOptOutOffered: boolean;
   readonly confirmEnabled: boolean;
+  /** What pressing Confirm will do, in the words of the command that does it. */
   readonly confirmLabel: string;
   readonly nextAction: ReplyCard['nextAction'];
   /** Present only while an ambiguity is unresolved; resolving it is G7's command. */
@@ -161,17 +234,17 @@ export interface ReplyCardView {
   readonly banners: readonly BannerView[];
 }
 
-export interface ReplyScreenView {
+interface ReplyScreenView {
   readonly heading: string;
   readonly banners: readonly BannerView[];
-  readonly summaries: readonly { readonly card: ReplyCard; readonly line: string; readonly open: boolean }[];
+  readonly summaries: readonly { readonly card: ReplySummary; readonly line: string; readonly open: boolean }[];
   readonly card: ReplyCardView | null;
   readonly emptyMessage: string | null;
   /** What the workspace is paying for, for the person reading a suggestion. */
   readonly classifierLine: string | null;
 }
 
-export const REPLY_HEADING = 'Replies';
+const REPLY_HEADING = 'Replies';
 const EMPTY_LIST = 'No replies to read.';
 const EMPTY_OFFLINE = 'Callie cannot reach the server, and replies are never kept on this Mac.';
 
@@ -264,7 +337,10 @@ export function buildReplyCardView(
     ? REPLY_DISPOSITIONS.map(disposition => ({
         disposition,
         label: DISPOSITION_LABELS[disposition],
-        consequence: DISPOSITION_CONSEQUENCES[disposition],
+        consequence:
+          disposition === 'follow_up_later'
+            ? followUpConsequence(card.callbackProposal !== null)
+            : DISPOSITION_CONSEQUENCES[disposition],
         suggested: card.proposedDisposition === disposition,
         selected: chosen === disposition,
       }))
@@ -301,9 +377,13 @@ export function buildReplyCardView(
     // person agreeing to something that then did not happen.
     callbackRequired: callbackOffered && card.callbackProposal !== null,
     firmWideOptOutOffered: chosen === 'opt_out',
-    // Everything above may be true and this stays false until somebody chooses.
+    // A card whose model had no guess still opens with nothing chosen, and then this
+    // stays false until somebody chooses.
     confirmEnabled: mayAct && answerable && chosen !== null,
-    confirmLabel: chosen === null ? 'Choose what this reply means' : `Confirm: ${DISPOSITION_LABELS[chosen]}`,
+    // Without the date somebody has typed — which is the form's, not this state's — a
+    // follow-up reads as the dateless one it would be. `RepliesView` calls
+    // `confirmLabel` again with the field's value and shows that.
+    confirmLabel: confirmLabel(chosen, false),
     nextAction: card.nextAction,
     ambiguity: card.nextAction === 'resolve_ambiguity' ? card.impact.candidates : [],
     // A member who may not read the message is not asked which conversation it is.
@@ -317,15 +397,16 @@ export function candidateLabel(candidate: ReplyCandidate): string {
   return candidate.firmName.trim() === '' ? 'A firm Callie could not name' : candidate.firmName;
 }
 
-function summaryLine(card: ReplyCard): string {
+/** One line per card. Built from the summary, which has no body in it to leak. */
+function summaryLine(card: ReplySummary): string {
   const who = card.contactName ?? card.from ?? 'Unknown sender';
   const what =
     card.nextAction === 'resolve_ambiguity'
       ? 'Which conversation?'
       : card.nextAction === 'review_bounce'
         ? 'Delivery failure'
-        : card.confirmation !== null
-          ? DISPOSITION_LABELS[card.confirmation.disposition]
+        : card.confirmedDisposition !== null
+          ? DISPOSITION_LABELS[card.confirmedDisposition]
           : card.proposedDisposition === null
             ? 'Needs an answer'
             : `Callie suggests: ${DISPOSITION_LABELS[card.proposedDisposition]}`;

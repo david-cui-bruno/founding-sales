@@ -1,4 +1,4 @@
-import type { ReplyCard, ReplyState } from '../../../src/renderer/replyContract.ts';
+import { replySummaryOf, type ReplyCard, type ReplyState } from '../../../src/renderer/replyContract.ts';
 import type { Call } from './appServer.ts';
 
 /**
@@ -66,7 +66,21 @@ export function replyCard(overrides: Partial<ReplyCard> = {}): ReplyCard {
   };
 }
 
-export function replyState(overrides: Partial<ReplyState> = {}): ReplyState {
+/**
+ * The lane as the *fake server* holds it: whole cards, because that is what `/replies`
+ * answers. The bridge's own state cannot hold one — `replyWire` is where the bodies are
+ * dropped, exactly as `replySummaryOf` drops them in the main process (1.0.12).
+ */
+export interface ReplyLane extends Omit<ReplyState, 'cards'> {
+  readonly cards: readonly ReplyCard[];
+}
+
+/** What the window is handed: the open card's body, and one line per card besides. */
+export function replyWire(lane: ReplyLane): ReplyState {
+  return { ...lane, cards: lane.cards.map(replySummaryOf) };
+}
+
+export function replyState(overrides: Partial<ReplyLane> = {}): ReplyLane {
   return {
     businessDate: '2026-09-21',
     businessTimeZone: 'America/New_York',
@@ -81,7 +95,7 @@ export function replyState(overrides: Partial<ReplyState> = {}): ReplyState {
 }
 
 /** `callieReplies`, scripted. What each outcome proves is in the spec that uses it. */
-export function replyAnswer(state: ReplyState, method: string, argument: unknown, _calls: readonly Call[]): ReplyState {
+export function replyAnswer(state: ReplyLane, method: string, argument: unknown, _calls: readonly Call[]): ReplyLane {
   if (method === 'open') {
     const messageId = (argument as { messageId?: string } | null)?.messageId;
     return { ...state, open: state.cards.find(card => card.messageId === messageId) ?? null, notice: null };

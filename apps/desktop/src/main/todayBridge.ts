@@ -1,7 +1,7 @@
-import { randomUUID } from 'node:crypto';
 import {
   TODAY_CARD_VERSION,
   callbackInstant,
+  dialCheckResponseSchema,
   loggedCallResultSchema,
   todayFirmResponseSchema,
   todayPauseReleaseResultSchema,
@@ -10,6 +10,7 @@ import {
 } from '@fss/contracts';
 import {
   todayStateSchema,
+  type DialAdviceView,
   type DialRequest,
   type OutcomeRequest,
   type RefreshRequest,
@@ -21,18 +22,18 @@ import {
   type TodayState,
 } from '../renderer/todayContract.ts';
 import type { AuthedClient } from './authedClient.ts';
-import { HANDOFF_LIMITATION_NOTICE, type DialHandoff, type HandoffTicket } from './dialHandoff.ts';
+import { HANDOFF_LIMITATION_NOTICE, type DialHandoff } from './dialHandoff.ts';
 import type { ApiOutcome } from './apiClient.ts';
 
 /**
  * The Today window's half of the bridge, in the main process (specification 8.2,
  * 9.2, 14.2).
  *
- * The window sees a `TodayState` and nothing else: no ticket, no access token, no
+ * The window sees a `TodayState` and nothing else: no `tel:` URI, no access token, no
  * command id. That is 14.2's "Electron owns presentation ... it contains no
  * authoritative sequence, suppression, policy, eligibility, or send logic" made
  * structural — the renderer cannot dial without the main process, and the main process
- * cannot dial without a server-issued ticket it consumes immediately before the open.
+ * will not open anything the server has not just advised it to open.
  *
  * Two decisions are worth naming.
  *
@@ -49,10 +50,11 @@ import type { ApiOutcome } from './apiClient.ts';
  *
  * Lane g79 added three more (audit items C04, C15, C16, C17):
  *
- * **A call is recorded against its task and its ticket.** A successful Call keeps the
- * ticket id and calling identity the server issued, here and nowhere else; the next
- * outcome recorded for the same firm names them, the route and the Today task, so the
- * server can apply the outcome to the step or callback behind the task.
+ * **A call is recorded against its task and its number.** A successful Call keeps the
+ * number it was placed to, here and nowhere else; the next outcome recorded for the same
+ * firm names it, the contact and the Today task, so the server can apply the outcome to
+ * the step or callback behind the task. There is no ticket to name since 1.0.12:
+ * `POST /dial/check` advises and `POST /calls/log` records, and neither needs one.
  *
  * **"Just now" is the server's clock.** The outcome carries no `occurredAt`: a Mac a
  * few seconds fast used to fail the database's `recorded_at >= occurred_at`.
@@ -62,18 +64,12 @@ import type { ApiOutcome } from './apiClient.ts';
  * named — and "Callback — needs a time" on the card is where the time is set.
  */
 
-export const TODAY_IPC_CHANNELS = {
-  state: 'callie:today:state',
-  refresh: 'callie:today:refresh',
-  expand: 'callie:today:expand',
-  collapse: 'callie:today:collapse',
-  snooze: 'callie:today:snooze',
-  dial: 'callie:today:dial',
-  recordOutcome: 'callie:today:outcome',
-  scheduleCallback: 'callie:today:schedule-callback',
-  releasePause: 'callie:today:release-pause',
-} as const;
-export type TodayIpcChannel = (typeof TODAY_IPC_CHANNELS)[keyof typeof TODAY_IPC_CHANNELS];
+/*
+ * There are no channels of this view's own since 1.0.12: the nine that stood here are
+ * nine operations of `shared/operations.ts`, answered on `callie:op:read` and
+ * `callie:op:command`, and dialling is `callie:dial:call`. What is left in this file is
+ * the transformations those operations name.
+ */
 
 /*
  * `/today/firm` and the snooze result are parsed with `@fss/contracts`' schemas (lane
@@ -112,13 +108,12 @@ export interface TodayBridgeHost {
   releasePause(input: ReleasePauseRequest): Promise<TodayState>;
 }
 
-/** The last handed-off call: what the window may see, and the ticket it may not. */
+/** The last handed-off call, so the outcome recorded next can name the number. */
 interface LastCall {
   readonly firmId: string;
   readonly routeId: string;
   readonly contactId: string | null;
   readonly e164: string;
-  readonly ticket: HandoffTicket | null;
 }
 
 /**
@@ -158,6 +153,14 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
   let expanded: TodayFirm | null = null;
   let notice: string | null = null;
   let lastCall: LastCall | null = null;
+  /** `POST /dial/check`'s answer for each of the expanded card's usable numbers. */
+  let dialAdvice: readonly DialAdviceView[] = [];
+  /**
+   * The URI each advised number would open, by route. It never crosses the bridge: a
+   * renderer that cannot name a `tel:` string cannot ask for one to be opened, however
+   * the page is edited later.
+   */
+  const telUris = new Map<string, string | null>();
   /**
    * The last expansion read for each firm, in memory only (wave 1). Until then a card
    * opened while the Mac was offline read the network, failed, and closed: the list was
@@ -210,6 +213,7 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
       role: session.device?.role ?? null,
       notice,
       handoffNotice: HANDOFF_LIMITATION_NOTICE,
+      dialAdvice,
       lastCall:
         lastCall === null
           ? null
@@ -243,6 +247,7 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
       cardVersion: TODAY_CARD_VERSION,
     });
     if (!page.ok) {
+      dialAdvice = [];
       note(page, null);
       // A read that did not get an answer — the network, or a server that failed —
       // keeps what this Mac last read for the firm, or the list's own card, with the
@@ -261,6 +266,43 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
     expanded = page.value;
     remember(page.value);
     notice = null;
+    dialAdvice = await adviseRoutes(page.value);
+  };
+
+  /**
+   * "Can I call this number now?", for each of the card's usable numbers (wave 2, S4.5).
+   *
+   * A read per number rather than one for the firm, because the advice's reasons and its
+   * URI are about a number: a firm may have one line inside its calling window and
+   * another suppressed, and a card that said "callable" for the firm would be offering a
+   * button the server then refuses. The reads run together — the expansion has one or two
+   * numbers, not a page of them — and a read that fails leaves that number without advice
+   * rather than claiming it is callable.
+   *
+   * The URI stays in this process. The window is told callable yes or no and why; the
+   * string that reaches macOS is re-read at the moment of the press and never crosses the
+   * bridge at all.
+   */
+  const adviseRoutes = async (page: TodayFirm): Promise<readonly DialAdviceView[]> => {
+    const usable = page.routes.filter(route => route.eligibility === 'usable');
+    const answers: (DialAdviceView | null)[] = await Promise.all(
+      usable.map(async route => await adviseRoute(page.firmId, route.routeId)),
+    );
+    return answers.filter((answer): answer is DialAdviceView => answer !== null);
+  };
+
+  const adviseRoute = async (firmId: string, routeId: string): Promise<DialAdviceView | null> => {
+    const answer = await deps.api.read('/dial/check', value => dialCheckResponseSchema.parse(value), { firmId, routeId });
+    if (!answer.ok) return null;
+    const advice = answer.value.advice;
+    telUris.set(routeId, advice.telUri);
+    return {
+      routeId,
+      callable: advice.callable,
+      reasons: advice.reasons,
+      e164: advice.e164,
+      firmLocalTime: advice.firmLocalTime,
+    };
   };
 
   /**
@@ -301,6 +343,8 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
     async collapse() {
       expanded = null;
       notice = null;
+      dialAdvice = [];
+      telUris.clear();
       return await snapshot();
     },
 
@@ -333,32 +377,34 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
       return await snapshot();
     },
 
+    /**
+     * Call this number (9.2; wave 2's S4.5 shape).
+     *
+     * The advice on the card may be a minute old, so it is read again here — the calling
+     * window closes at a wall-clock time and a suppression can be recorded while a card
+     * is open — and the URI that reaches macOS is the one that read answered with, not
+     * the one on screen. A number the server will not advise now is a refusal with its
+     * own reason and nothing opened.
+     */
     async dial(input) {
-      // 9.1: the identity must be "active and owned by the acting salesperson", so it
-      // is the one the server reported with this card. A window with none has no Call
-      // button, and a request that arrived without one is refused here rather than
-      // spending a ticket finding out.
-      const callingIdentityId = expanded?.callingIdentityId ?? null;
-      if (callingIdentityId === null) {
-        notice = 'identity_not_verified';
-        return await snapshot();
-      }
       const setup = await deps.handoff.checkSetup();
       if (!setup.ready) {
         notice = setup.reason;
         return await snapshot();
       }
-      // Two command ids: the authorization and the consumption are two commands with
-      // two receipts (5.3), and reusing one would make the consumption a replay.
-      const outcome = await deps.handoff.dial({
-        commandId: randomUUID(),
-        consumeCommandId: randomUUID(),
-        firmId: input.firmId,
-        ...(input.contactId === null ? {} : { contactId: input.contactId }),
-        routeId: input.routeId,
-        routeVersion: input.routeVersion,
-        callingIdentityId,
-      });
+      const fresh = await adviseRoute(input.firmId, input.routeId);
+      if (fresh === null) {
+        notice = 'dial_advice_unavailable';
+        return await snapshot();
+      }
+      // The card is told what the fresh read found, whether or not the call goes ahead.
+      dialAdvice = dialAdvice.map(entry => (entry.routeId === fresh.routeId ? fresh : entry));
+      const telUri = telUris.get(input.routeId) ?? null;
+      if (!fresh.callable || telUri === null) {
+        notice = fresh.reasons[0] ?? 'not_callable';
+        return await snapshot();
+      }
+      const outcome = await deps.handoff.open({ telUri, e164: fresh.e164 ?? '' });
       notice =
         outcome.status === 'opened'
           ? 'dial_opened'
@@ -367,14 +413,13 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
             : outcome.reason;
       if (outcome.status === 'opened' || outcome.status === 'opened_unknown') {
         // The call may have been placed either way, so the outcome form is told which
-        // number, and the ticket that authorized it waits here for the outcome (C16).
+        // number it is recording (C16).
         const route = expanded?.routes.find(entry => entry.routeId === input.routeId);
         lastCall = {
           firmId: input.firmId,
           routeId: input.routeId,
-          contactId: outcome.ticket?.contactId ?? input.contactId,
-          e164: route?.e164 ?? '',
-          ticket: outcome.ticket ?? null,
+          contactId: route?.contactId ?? input.contactId,
+          e164: fresh.e164 ?? route?.e164 ?? '',
         };
       }
       return await snapshot();
@@ -415,7 +460,6 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
           firmId: input.firmId,
           ...(contactId === null ? {} : { contactId }),
           ...(routeId === null ? {} : { routeId }),
-          ...(call?.ticket == null ? {} : { ticketId: call.ticket.ticketId, callingIdentityId: call.ticket.callingIdentityId }),
           ...(input.itemId === null ? {} : { itemId: input.itemId }),
           outcome: input.outcome,
           // No `occurredAt`: "just now" is the server's clock (C15).

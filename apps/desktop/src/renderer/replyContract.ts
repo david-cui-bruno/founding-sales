@@ -1,13 +1,14 @@
 import { z } from 'zod';
 import {
   CLASSIFIER_EFFORTS,
+  REPLY_DISPOSITIONS,
+  REPLY_NEXT_ACTIONS,
+  instant,
   replyCardDtoSchema,
+  uuid,
   type ReplyCandidateDto,
   type ReplyCardDto,
-  type ReplyConfirmationDto,
   type ReplyDisposition,
-  type ReplyHoldDto,
-  type ReplySignalDto,
 } from '@fss/contracts';
 
 /**
@@ -48,18 +49,58 @@ export {
   type ReplyDisposition,
   type ReplyNextAction,
 } from '@fss/contracts';
-export type ReplyHold = ReplyHoldDto;
-export type ReplySignal = ReplySignalDto;
 export type ReplyCandidate = ReplyCandidateDto;
-export type ReplyConfirmation = ReplyConfirmationDto;
 /** One reply card, exactly as `/replies/card` returned it. */
 export type ReplyCard = ReplyCardDto;
+
+/**
+ * One row of the lane, and **it cannot hold a message body** (1.0.12).
+ *
+ * `GET /replies` answers full cards, bodies and all, and until 1.0.12 the main process
+ * kept that whole list in memory for as long as the app was open: closing a card cleared
+ * the open one and left the rest, and `replies.state` could hand them back after a
+ * sign-out. What the list on screen actually shows is one line per card — the firm, who
+ * wrote, and what Callie makes of it — so that is all this shape can carry, and the body
+ * is dropped where the answer is parsed rather than where it is drawn.
+ *
+ * A body exists in exactly one place after this: `open`, the card somebody is reading.
+ */
+export const replySummarySchema = z.strictObject({
+  messageId: uuid,
+  receivedAt: instant,
+  firmId: uuid,
+  firmName: z.string().min(1).max(300),
+  /** The sender as the list names them; never the message. */
+  from: z.string().max(320).nullable(),
+  contactName: z.string().max(200).nullable(),
+  nextAction: z.enum(REPLY_NEXT_ACTIONS),
+  proposedDisposition: z.enum(REPLY_DISPOSITIONS).nullable(),
+  /** What was confirmed, if it was; the note and the consequences stay on the server. */
+  confirmedDisposition: z.enum(REPLY_DISPOSITIONS).nullable(),
+});
+export type ReplySummary = z.infer<typeof replySummarySchema>;
+
+/** One wire card, reduced to the line the lane shows. The only place this is done. */
+export function replySummaryOf(card: ReplyCardDto): ReplySummary {
+  return {
+    messageId: card.messageId,
+    receivedAt: card.receivedAt,
+    firmId: card.firmId,
+    firmName: card.firmName,
+    from: card.from,
+    contactName: card.contactName,
+    nextAction: card.nextAction,
+    proposedDisposition: card.proposedDisposition,
+    confirmedDisposition: card.confirmation?.disposition ?? null,
+  };
+}
 
 export const replyStateSchema = z.strictObject({
   /** Null before the first read, and after a sign-out. */
   businessDate: z.iso.date().nullable(),
   businessTimeZone: z.string().max(64).nullable(),
-  cards: z.array(replyCardDtoSchema),
+  /** The lane, as lines. No body reaches the window except the open card's. */
+  cards: z.array(replySummarySchema),
   /** The card the person opened, or null. */
   open: replyCardDtoSchema.nullable(),
   /** Whether the cloud answered the last time we asked. */
@@ -112,23 +153,3 @@ export interface ResolveReplyRequest {
   readonly opportunityId: string;
 }
 
-export interface ReplyBridge {
-  state(): Promise<ReplyState>;
-  refresh(): Promise<ReplyState>;
-  open(input: { readonly messageId: string }): Promise<ReplyState>;
-  /** Put the open card away. Named for the card and not for the opportunity: 12.4
-   * gives closing an opportunity to a person on the Firm page, and this window has
-   * no way to ask for it. */
-  collapse(): Promise<ReplyState>;
-  confirm(input: ConfirmReplyRequest): Promise<ReplyState>;
-  /**
-   * Lane g88: say which conversation an ambiguous reply belongs to. G7's resolution, and
-   * nothing more: it does not answer the reply, set the firm to manual or resume anything.
-   */
-  resolve(input: ResolveReplyRequest): Promise<ReplyState>;
-}
-
-declare global {
-  /** The bridge the preload script installs, exactly as G2's `callie` is installed. */
-  var callieReplies: ReplyBridge | undefined;
-}

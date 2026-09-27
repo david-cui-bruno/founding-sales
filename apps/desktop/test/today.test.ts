@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { NO_CALLING_NUMBER, countsLabel, buildTodayView, noticeSentence } from '../src/renderer/todayView.ts';
 import { todayStateSchema, type TodayFirm, type TodayState } from '../src/renderer/todayContract.ts';
-import { createTodayBridge, localToInstant, TODAY_IPC_CHANNELS } from '../src/main/todayBridge.ts';
+import { createTodayBridge, localToInstant } from '../src/main/todayBridge.ts';
+import { DIAL_IPC_CHANNELS, OPERATION_NAMES } from '../src/shared/operations.ts';
+import type { DialHandoff } from '../src/main/dialHandoff.ts';
 import { CRM_IPC_CHANNELS, createCrmBridge, pipelineViewOf } from '../src/main/crmBridge.ts';
 import { createAuthedClient } from '../src/main/authedClient.ts';
 import type { ApiOutcome, HttpAnswer } from '../src/main/apiClient.ts';
@@ -97,6 +99,7 @@ function state(overrides: Partial<TodayState> = {}): TodayState {
     asOf: '2026-09-21T13:00:00.000Z',
     mayMutate: true,
     role: 'salesperson',
+    dialAdvice: [],
     notice: null,
     handoffNotice: 'Once a call is handed to the phone app, Callie cannot recall it.',
     ...overrides,
@@ -125,7 +128,7 @@ describe('the Today view model', () => {
     const view = buildTodayView(state({ mayMutate: false, expanded: firmPage() }));
     expect(view.actionsEnabled).toBe(false);
     expect(view.tasks.every(task => !task.enabled)).toBe(true);
-    expect(view.dialableRoutes).toEqual([]);
+    expect(view.dialRoutes.every(entry => !entry.enabled)).toBe(true);
   });
 
   it('says the offline reason in one fixed sentence', () => {
@@ -183,19 +186,31 @@ describe('the Today view model', () => {
     expect(view.outcomeItemId).toBe(second.itemId);
   });
 
-  it('offers only a usable route, and none at all without a verified identity', () => {
-    expect(buildTodayView(state({ expanded: firmPage() })).dialableRoutes.map(route => route.routeId)).toEqual([
-      ROUTE_ID,
+  it('shows only a usable route, and disables one the server has not advised', () => {
+    // A candidate or retired number is shown on the Firm page and is not offered here.
+    const card = buildTodayView(state({ expanded: firmPage() }));
+    expect(card.dialRoutes.map(entry => entry.route.routeId)).toEqual([ROUTE_ID]);
+    // No advice yet — the read failed, or the card came from the cache — so the button
+    // is not offered and the card says why rather than pretending it is callable.
+    expect(card.dialRoutes[0]?.enabled).toBe(false);
+    expect(card.dialRoutes[0]?.reasons).toEqual([
+      'Callie could not check whether this number may be called. Try again.',
     ]);
-    expect(
-      buildTodayView(state({ expanded: firmPage({ callingIdentityId: null }) })).dialableRoutes,
-    ).toEqual([]);
+
+    const advised = buildTodayView(
+      state({
+        expanded: firmPage(),
+        dialAdvice: [{ routeId: ROUTE_ID, callable: true, reasons: [], e164: '+14015550187', firmLocalTime: '10:05' }],
+      }),
+    );
+    expect(advised.dialRoutes[0]?.enabled).toBe(true);
+    expect(advised.dialRoutes[0]?.reasons).toEqual([]);
   });
 
   it('says where to add a calling number when a card has a number to dial and nothing to dial it from (lane g60)', () => {
     const missing = buildTodayView(state({ expanded: firmPage({ callingIdentityId: null }) }));
     expect(missing.banners).toContainEqual({ tone: 'info', text: NO_CALLING_NUMBER });
-    expect(NO_CALLING_NUMBER).toContain('Administration (⌘5)');
+    expect(NO_CALLING_NUMBER).toContain('Settings (⌘,)');
     // Not when the card has a number to call from, nor when there is nothing to dial.
     expect(buildTodayView(state({ expanded: firmPage() })).banners.map(banner => banner.text)).not.toContain(
       NO_CALLING_NUMBER,
@@ -249,7 +264,7 @@ function scriptedApi(answers: Readonly<Record<string, HttpAnswer>>): {
   const api = createAuthedClient({
     baseUrl: 'https://api.example.test/',
     clientVersion: '1.4.0',
-    accessToken: async () => await Promise.resolve('token-value'),
+    accessToken: async () => await Promise.resolve({ token: 'token-value', generation: 0 }),
     send: async (url, init) => {
       const path = new URL(url).pathname;
       calls.push({ path, body: init.body === undefined ? null : JSON.parse(init.body) });
@@ -279,11 +294,41 @@ describe('the Today bridge', () => {
     body: { status: 'accepted', replayed: false, result },
   });
 
+  /** `POST /dial/check` saying yes for this fixture's usable number. */
+  const advice = (overrides: Record<string, unknown> = {}): HttpAnswer => ({
+    status: 200,
+    body: {
+      advice: {
+        firmId: FIRM_ID,
+        callable: true,
+        reasons: [],
+        routeId: ROUTE_ID,
+        e164: '+14015550187',
+        telUri: 'tel:+14015550187',
+        firmTimeZone: 'America/New_York',
+        firmLocalTime: '10:05',
+        at: '2026-09-21T14:05:00.000Z',
+        ...overrides,
+      },
+    },
+  });
+
+  /** A handoff that opens whatever it is handed, for the tests that are not about it. */
+  const opening = (opened: string[] = []): DialHandoff => ({
+    checkSetup: async () => await Promise.resolve({ ready: true }),
+    open: async input => {
+      opened.push(input.telUri);
+      return await Promise.resolve({ status: 'opened', e164: input.e164 });
+    },
+  });
+
+  const unavailable = (): DialHandoff => ({
+    checkSetup: async () => await Promise.resolve({ ready: false, reason: 'no_tel_handler' }),
+    open: async () => await Promise.resolve({ status: 'refused', reason: 'no_tel_handler' }),
+  });
+
   describe('an expansion while the server is away (wave 1)', () => {
-    const handoff = {
-      checkSetup: async () => await Promise.resolve({ ready: true as const }),
-      dial: async () => await Promise.resolve({ status: 'opened' as const, e164: '+14015550187' }),
-    };
+    const handoff = opening();
     /** `/today/firm` answering, down, or refusing, as the test says. */
     function switchable(): { readonly api: ReturnType<typeof createAuthedClient>; mode: 'up' | 'down' | 'not_found' | 'failing' } {
       const world = {
@@ -291,7 +336,7 @@ describe('the Today bridge', () => {
         api: createAuthedClient({
           baseUrl: 'https://api.example.test/',
           clientVersion: '1.4.0',
-          accessToken: async () => await Promise.resolve('token-value'),
+          accessToken: async () => await Promise.resolve({ token: 'token-value', generation: 0 }),
           send: async () => {
             if (world.mode === 'down') throw new Error('the server did not answer');
             if (world.mode === 'not_found') return await Promise.resolve({ status: 404, body: { error: 'not_found' } });
@@ -335,7 +380,7 @@ describe('the Today bridge', () => {
       });
       const answer = await bridge.expand({ firmId: OTHER_FIRM_ID });
       expect(answer.expanded).toMatchObject({ firmId: OTHER_FIRM_ID, firmName: 'Larkspur Test Foundry', tasks: [], routes: [], callingIdentityId: null });
-      expect(buildTodayView(answer).dialableRoutes).toEqual([]);
+      expect(buildTodayView(answer).dialRoutes).toEqual([]);
     });
 
     it('closes the card and forgets it when the server says the firm is not found', async () => {
@@ -373,11 +418,11 @@ describe('the Today bridge', () => {
     });
   });
 
-  it('never puts a token, a ticket or a command id in the state it returns', async () => {
-    const { api } = scriptedApi({ '/today/firm': { status: 200, body: firmPage() } });
+  it('never puts a token, a URI or a command id in the state it returns', async () => {
+    const { api } = scriptedApi({ '/today/firm': { status: 200, body: firmPage() }, '/dial/check': advice() });
     const bridge = createTodayBridge({
       api,
-      handoff: { checkSetup: async () => await Promise.resolve({ ready: true }), dial: async () => await Promise.resolve({ status: 'opened', e164: '+14015550187' }) },
+      handoff: opening(),
       session: { state: async () => await Promise.resolve(sessionState()), refreshToday: async () => await Promise.resolve(null) },
     });
     const answer = await bridge.expand({ firmId: FIRM_ID });
@@ -394,7 +439,7 @@ describe('the Today bridge', () => {
     });
     const bridge = createTodayBridge({
       api,
-      handoff: { checkSetup: async () => await Promise.resolve({ ready: false, reason: 'no_tel_handler' }), dial: async () => await Promise.resolve({ status: 'refused', reason: 'no_tel_handler' }) },
+      handoff: unavailable(),
       session: { state: async () => await Promise.resolve(sessionState()), refreshToday: async () => await Promise.resolve(null) },
     });
     const answer = await bridge.snooze({ itemId: ITEM_ID, reason: 'Waiting on their board', returnAt: '2026-09-24T09:00' });
@@ -411,7 +456,7 @@ describe('the Today bridge', () => {
     });
     const bridge = createTodayBridge({
       api,
-      handoff: { checkSetup: async () => await Promise.resolve({ ready: true }), dial: async () => await Promise.resolve({ status: 'opened', e164: '+14015550187' }) },
+      handoff: opening(),
       session: { state: async () => await Promise.resolve(sessionState()), refreshToday: async () => await Promise.resolve(null) },
     });
     // The window sent a snooze. The item was automated, so the server held it (8.2).
@@ -426,7 +471,7 @@ describe('the Today bridge', () => {
     let reads = 0;
     const bridge = createTodayBridge({
       api,
-      handoff: { checkSetup: async () => await Promise.resolve({ ready: true }), dial: async () => await Promise.resolve({ status: 'opened', e164: '+14015550187' }) },
+      handoff: opening(),
       session: {
         state: async () => await Promise.resolve(sessionState()),
         refreshToday: async () => {
@@ -450,73 +495,97 @@ describe('the Today bridge', () => {
     expect(pressed.notice).toBeNull();
   });
 
-  it('refuses to dial before the card has told it whose number to call from', async () => {
-    const { api } = scriptedApi({});
-    let dialled = 0;
+  it('refuses to dial when this Mac has no phone app, and opens nothing', async () => {
+    const { api, calls } = scriptedApi({ '/today/firm': { status: 200, body: firmPage() }, '/dial/check': advice() });
     const bridge = createTodayBridge({
       api,
-      handoff: {
-        checkSetup: async () => await Promise.resolve({ ready: true }),
-        dial: async () => {
-          dialled += 1;
-          return await Promise.resolve({ status: 'opened', e164: '+14015550187' });
-        },
-      },
-      session: { state: async () => await Promise.resolve(sessionState()), refreshToday: async () => await Promise.resolve(null) },
-    });
-    const answer = await bridge.dial({ firmId: FIRM_ID, contactId: null, routeId: ROUTE_ID, routeVersion: 3 });
-    expect(answer.notice).toBe('identity_not_verified');
-    expect(dialled).toBe(0);
-  });
-
-  it('sends the displayed route version, and two command ids for the two commands', async () => {
-    const { api } = scriptedApi({ '/today/firm': { status: 200, body: firmPage() } });
-    const seen: { commandId: string; consumeCommandId: string; routeVersion: number; callingIdentityId: string }[] = [];
-    const bridge = createTodayBridge({
-      api,
-      handoff: {
-        checkSetup: async () => await Promise.resolve({ ready: true }),
-        dial: async input => {
-          seen.push({
-            commandId: input.commandId,
-            consumeCommandId: input.consumeCommandId,
-            routeVersion: input.routeVersion,
-            callingIdentityId: input.callingIdentityId,
-          });
-          return await Promise.resolve({ status: 'opened', e164: '+14015550187' });
-        },
-      },
+      handoff: unavailable(),
       session: { state: async () => await Promise.resolve(sessionState()), refreshToday: async () => await Promise.resolve(null) },
     });
     await bridge.expand({ firmId: FIRM_ID });
-    const answer = await bridge.dial({ firmId: FIRM_ID, contactId: null, routeId: ROUTE_ID, routeVersion: 3 });
+    const answer = await bridge.dial({ firmId: FIRM_ID, contactId: null, routeId: ROUTE_ID });
+    expect(answer.notice).toBe('no_tel_handler');
+    // The setup proof comes first, so a Mac with no phone app never asks the server.
+    expect(calls.filter(call => call.path === '/dial/check')).toHaveLength(1);
+  });
+
+  it('reads the advice again at the press, and refuses with the server’s own reasons', async () => {
+    const opened: string[] = [];
+    const { api, calls } = scriptedApi({ '/today/firm': { status: 200, body: firmPage() }, '/dial/check': advice() });
+    const bridge = createTodayBridge({
+      api,
+      handoff: opening(opened),
+      session: { state: async () => await Promise.resolve(sessionState()), refreshToday: async () => await Promise.resolve(null) },
+    });
+    const card = await bridge.expand({ firmId: FIRM_ID });
+    // The card says callable, with the firm's own clock beside the number.
+    expect(card.dialAdvice).toEqual([
+      { routeId: ROUTE_ID, callable: true, reasons: [], e164: '+14015550187', firmLocalTime: '10:05' },
+    ]);
+    expect(buildTodayView(card).dialRoutes.map(entry => entry.enabled)).toEqual([true]);
+
+    // The calling window closed while the card was open.
+    calls.length = 0;
+    const refusing = scriptedApi({
+      '/today/firm': { status: 200, body: firmPage() },
+      '/dial/check': advice({ callable: false, reasons: ['outside_calling_window', 'posture_missing'], telUri: null }),
+    });
+    const second = createTodayBridge({
+      api: refusing.api,
+      handoff: opening(opened),
+      session: { state: async () => await Promise.resolve(sessionState()), refreshToday: async () => await Promise.resolve(null) },
+    });
+    await second.expand({ firmId: FIRM_ID });
+    const answer = await second.dial({ firmId: FIRM_ID, contactId: null, routeId: ROUTE_ID });
+    expect(answer.notice).toBe('outside_calling_window');
+    expect(answer.dialAdvice[0]?.reasons).toEqual(['outside_calling_window', 'posture_missing']);
+    // Every reason is on the card, not only the first.
+    expect(buildTodayView(answer).dialRoutes[0]?.reasons).toEqual([
+      'It is outside this firm’s calling hours.',
+      'This firm’s state is not on your “OK to call” list.',
+    ]);
+    expect(opened).toEqual([]);
+    expect(answer.lastCall ?? null).toBeNull();
+  });
+
+  it('opens the URI the advice carried, and never lets the window see it', async () => {
+    const opened: string[] = [];
+    const { api, calls } = scriptedApi({ '/today/firm': { status: 200, body: firmPage() }, '/dial/check': advice() });
+    const bridge = createTodayBridge({
+      api,
+      handoff: opening(opened),
+      session: { state: async () => await Promise.resolve(sessionState()), refreshToday: async () => await Promise.resolve(null) },
+    });
+    await bridge.expand({ firmId: FIRM_ID });
+    const answer = await bridge.dial({ firmId: FIRM_ID, contactId: null, routeId: ROUTE_ID });
+
     expect(answer.notice).toBe('dial_opened');
-    expect(seen[0]?.routeVersion).toBe(3);
-    expect(seen[0]?.callingIdentityId).toBe(IDENTITY_ID);
-    // 5.3: two commands, two receipts. One id would make the second a replay.
-    expect(seen[0]?.commandId).not.toBe(seen[0]?.consumeCommandId);
+    expect(opened).toEqual(['tel:+14015550187']);
+    // The advice is read once for the card and again at the press: the window closes at
+    // a wall-clock time and a suppression can be recorded while a card is open.
+    expect(calls.filter(call => call.path === '/dial/check')).toHaveLength(2);
+    expect(calls.filter(call => call.path === '/dial/authorize')).toHaveLength(0);
+    expect(calls.filter(call => call.path === '/dial/consume')).toHaveLength(0);
+    // The window is told which number, never the URI.
+    expect(answer.lastCall).toEqual({ firmId: FIRM_ID, routeId: ROUTE_ID, contactId: null, e164: '+14015550187' });
+    expect(JSON.stringify(answer)).not.toContain('tel:');
   });
 
   it('asks for the second card version, which carries each task’s step, callback and pause (lane g79)', async () => {
     const { api, calls } = scriptedApi({ '/today/firm': { status: 200, body: firmPage() } });
     const bridge = createTodayBridge({
       api,
-      handoff: { checkSetup: async () => await Promise.resolve({ ready: true }), dial: async () => await Promise.resolve({ status: 'opened', e164: '+14015550187' }) },
+      handoff: opening(),
       session: { state: async () => await Promise.resolve(sessionState()), refreshToday: async () => await Promise.resolve(null) },
     });
     await bridge.expand({ firmId: FIRM_ID });
     expect(calls.find(call => call.path === '/today/firm')?.body).toEqual({ firmId: FIRM_ID, cardVersion: 2 });
   });
 
-  it('records the outcome against its task and the ticket the call used, on the server’s clock (C04, C15, C16)', async () => {
-    const ticket = {
-      ticketId: '99999999-9999-4999-8999-999999999999',
-      callingIdentityId: IDENTITY_ID,
-      routeId: ROUTE_ID,
-      contactId: '88888888-8888-4888-8888-888888888888',
-    };
+  it('records the outcome against its task and the number the call used, on the server’s clock (C04, C15)', async () => {
     const { api, calls } = scriptedApi({
       '/today/firm': { status: 200, body: firmPage() },
+      '/dial/check': advice(),
       '/calls/log': accepted({
         callLogId: 'abababab-abab-4bab-8bab-abababababab',
         outcome: 'voicemail_left',
@@ -536,17 +605,12 @@ describe('the Today bridge', () => {
     });
     const bridge = createTodayBridge({
       api,
-      handoff: {
-        checkSetup: async () => await Promise.resolve({ ready: true }),
-        dial: async () => await Promise.resolve({ status: 'opened' as const, e164: '+14015550187', ticket }),
-      },
+      handoff: opening(),
       session: { state: async () => await Promise.resolve(sessionState()), refreshToday: async () => await Promise.resolve(null) },
     });
     await bridge.expand({ firmId: FIRM_ID });
-    const dialled = await bridge.dial({ firmId: FIRM_ID, contactId: null, routeId: ROUTE_ID, routeVersion: 3 });
-    // The window is told which number, never the ticket.
-    expect(dialled.lastCall).toEqual({ firmId: FIRM_ID, routeId: ROUTE_ID, contactId: ticket.contactId, e164: '+14015550187' });
-    expect(JSON.stringify(dialled)).not.toContain(ticket.ticketId);
+    const dialled = await bridge.dial({ firmId: FIRM_ID, contactId: null, routeId: ROUTE_ID });
+    expect(dialled.lastCall).toEqual({ firmId: FIRM_ID, routeId: ROUTE_ID, contactId: null, e164: '+14015550187' });
 
     const answer = await bridge.recordOutcome({
       firmId: FIRM_ID,
@@ -560,19 +624,15 @@ describe('the Today bridge', () => {
     });
     expect(answer.notice).toBe('outcome_recorded');
     const sent = calls.find(call => call.path === '/calls/log')?.body as Record<string, unknown>;
-    expect(sent).toMatchObject({
-      firmId: FIRM_ID,
-      itemId: ITEM_ID,
-      routeId: ROUTE_ID,
-      contactId: ticket.contactId,
-      ticketId: ticket.ticketId,
-      callingIdentityId: IDENTITY_ID,
-      outcome: 'voicemail_left',
-    });
+    expect(sent).toMatchObject({ firmId: FIRM_ID, itemId: ITEM_ID, routeId: ROUTE_ID, outcome: 'voicemail_left' });
+    // No ticket and no calling identity: `POST /dial/authorize` and `POST /dial/consume`
+    // are not called any more, and logging a call never needed either of them.
+    expect(sent).not.toHaveProperty('ticketId');
+    expect(sent).not.toHaveProperty('callingIdentityId');
     // "Just now" is the server's clock: the Mac sends none of its own.
     expect(sent).not.toHaveProperty('occurredAt');
     expect(sent).not.toHaveProperty('retryBehaviour');
-    // The ticket was used once; the next outcome is history unless another call is made.
+    // The call is recorded once; the next outcome is history unless another is made.
     expect(answer.lastCall).toBeNull();
   });
 
@@ -597,7 +657,7 @@ describe('the Today bridge', () => {
     });
     const bridge = createTodayBridge({
       api,
-      handoff: { checkSetup: async () => await Promise.resolve({ ready: true }), dial: async () => await Promise.resolve({ status: 'opened', e164: '+14015550187' }) },
+      handoff: opening(),
       session: { state: async () => await Promise.resolve(sessionState()), refreshToday: async () => await Promise.resolve(null) },
     });
     const answer = await bridge.recordOutcome({
@@ -619,7 +679,7 @@ describe('the Today bridge', () => {
     const { api, calls } = scriptedApi({ '/calls/log': accepted(null) });
     const bridge = createTodayBridge({
       api,
-      handoff: { checkSetup: async () => await Promise.resolve({ ready: true }), dial: async () => await Promise.resolve({ status: 'opened', e164: '+14015550187' }) },
+      handoff: opening(),
       session: { state: async () => await Promise.resolve(sessionState()), refreshToday: async () => await Promise.resolve(null) },
     });
     await bridge.recordOutcome({
@@ -652,7 +712,7 @@ describe('the Today bridge', () => {
     });
     const bridge = createTodayBridge({
       api,
-      handoff: { checkSetup: async () => await Promise.resolve({ ready: true }), dial: async () => await Promise.resolve({ status: 'opened', e164: '+14015550187' }) },
+      handoff: opening(),
       session: { state: async () => await Promise.resolve(sessionState()), refreshToday: async () => await Promise.resolve(null) },
     });
     const scheduled = await bridge.scheduleCallback({
@@ -687,7 +747,7 @@ describe('the Today bridge', () => {
     });
     const bridge = createTodayBridge({
       api,
-      handoff: { checkSetup: async () => await Promise.resolve({ ready: true }), dial: async () => await Promise.resolve({ status: 'opened', e164: '+14015550187' }) },
+      handoff: opening(),
       session: { state: async () => await Promise.resolve(sessionState()), refreshToday: async () => await Promise.resolve(null) },
     });
     const answer = await bridge.snooze({ itemId: ITEM_ID, reason: 'Their office is closed', returnAt: '' });
@@ -700,7 +760,7 @@ describe('the Today bridge', () => {
     const api = createAuthedClient({
       baseUrl: 'https://api.example.test/',
       clientVersion: '1.4.0',
-      accessToken: async () => await Promise.resolve('token-value'),
+      accessToken: async () => await Promise.resolve({ token: 'token-value', generation: 0 }),
       send: async () => {
         await Promise.resolve();
         throw new Error('no network');
@@ -708,7 +768,7 @@ describe('the Today bridge', () => {
     });
     const bridge = createTodayBridge({
       api,
-      handoff: { checkSetup: async () => await Promise.resolve({ ready: false, reason: 'no_tel_handler' }), dial: async () => await Promise.resolve({ status: 'refused', reason: 'no_tel_handler' }) },
+      handoff: unavailable(),
       session: { state: async () => await Promise.resolve(sessionState({ online: false, stale: true })), refreshToday: async () => await Promise.resolve(null) },
     });
     const answer = await bridge.expand({ firmId: FIRM_ID });
@@ -718,18 +778,21 @@ describe('the Today bridge', () => {
     expect(answer.cards).toHaveLength(2);
   });
 
-  it('names one channel per method, and nothing else', () => {
-    expect(Object.values(TODAY_IPC_CHANNELS)).toEqual([
-      'callie:today:state',
-      'callie:today:refresh',
-      'callie:today:expand',
-      'callie:today:collapse',
-      'callie:today:snooze',
-      'callie:today:dial',
-      'callie:today:outcome',
-      'callie:today:schedule-callback',
-      'callie:today:release-pause',
+  it('names one operation per method, and nothing else', () => {
+    // Since 1.0.12 the view has no channels of its own: the nine methods are nine
+    // operations of the registry, and dialling is the one named channel beside it.
+    expect(OPERATION_NAMES.filter(name => name.startsWith('today.'))).toEqual([
+      'today.state',
+      'today.refresh',
+      'today.expand',
+      'today.collapse',
+      'today.snooze',
+      'today.recordOutcome',
+      'today.scheduleCallback',
+      'today.releasePause',
     ]);
+    expect(OPERATION_NAMES).not.toContain('today.dial');
+    expect(DIAL_IPC_CHANNELS.call).toBe('callie:dial:call');
   });
 });
 
@@ -928,7 +991,7 @@ describe('a refused merge reaches the conflict screen (lane g78, D05)', () => {
     const api = createAuthedClient({
       baseUrl: 'https://api.example.test/',
       clientVersion: '1.4.0',
-      accessToken: async () => await Promise.resolve('token'),
+      accessToken: async () => await Promise.resolve({ token: 'token', generation: 0 }),
       send: async () => await Promise.resolve({ status: 409, body }),
     });
     const outcome = await api.command('/merges/firms', {}, value => value);

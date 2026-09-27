@@ -46,6 +46,14 @@ test('a populated version draws both its steps, the template and the held enroll
   await expect(page.getByTestId('hold-row')).toHaveCount(1);
   await expect(page.getByTestId('hold-explanation')).toContainText('about 9 days');
   await expect(page.getByTestId('sequence-unread-line')).toHaveCount(0);
+
+  // 1.0.12: the hand-rolled pages are styled inside `@scope ([data-legacy])` and
+  // Tailwind's preflight, a layer below, takes every list marker away. A sequence's
+  // steps are a numbered list and have to stay one — this is the rendered proof, beside
+  // the compiled-stylesheet test in `test/packaging/stylesheet.test.ts`.
+  const steps = page.getByTestId('version-steps');
+  await expect(steps).toHaveCSS('list-style-type', 'decimal');
+  await expect(page.getByTestId('legacy-view')).toHaveCount(1);
 });
 
 test('a read that failed is one grey line with Retry, not an empty list, and Retry reads again', async ({ page }) => {
