@@ -5,11 +5,16 @@ import type { GmailClient } from '@fss/domain/mail/gmailClient.ts';
  *
  * The restore runbook (`docs/greenfield/runbooks/restore.md`) runs that command against
  * production's real mailboxes, with `FSS_DEPENDENCIES=live`, while both services are
- * stopped. What it needs from Gmail is a token refresh, the Sent-folder listing, the
- * `rfc822msgid:` search and message metadata. Everything else a `GmailClient` can do is
- * refused here — a send, a watch or its stop, a code exchange, a revocation, a body read
- * — so the command cannot write to a mailbox whatever the code below it calls, and a
- * refusal is an error that stops the command rather than a silent no-op.
+ * stopped. It reads: a token refresh, the Sent-folder listing, the `rfc822msgid:`
+ * search, message metadata, and — since lane W3-F — the **body** of a message whose
+ * fence the restored copy still holds as pre-dispatch, so the bytes recorded as sent are
+ * the bytes Gmail has (`readSentMessageBytes`; review of PR 296). `getBody` is forwarded
+ * for that and for nothing else.
+ *
+ * Every call that could *write* to a mailbox is refused here — a send, a watch or its
+ * stop, a code exchange, a revocation — so the command cannot change a mailbox whatever
+ * the code below it calls, and a refusal is an error that stops the command rather than
+ * a silent no-op.
  */
 
 export class GmailCallRefused extends Error {

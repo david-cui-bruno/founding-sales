@@ -242,13 +242,15 @@ export async function recoverSentFolderMessage(
     if (fence.state !== 'prepared' && fence.state !== 'held') {
       return { outcome: 'present', outboundMessageId: fence.id, state: fence.state };
     }
-    // What left, when it can be read. The subject comes from the metadata the scan
-    // already has; the body needs Gmail, and only for this one case.
-    const actualBody = input.readSentBytes === undefined ? null : await input.readSentBytes(message);
-    const verifiedBytes =
-      actualBody === null
-        ? undefined
-        : { body: actualBody.body, ...(message.subject === null ? {} : { subject: message.subject }) };
+    // What left, when it can be proven. **Both** halves or neither: the scan admits a
+    // message with no Subject header, and recording a body Gmail returned beside a
+    // subject the restored row happened to hold would be a verified claim about bytes
+    // nobody checked (review of PR 296, second round). The subject comes from the
+    // metadata the scan already has; the body needs Gmail, and only for this one case.
+    const sentSubject = message.subject?.trim() ?? '';
+    const actualBody =
+      input.readSentBytes === undefined || sentSubject.length === 0 ? null : await input.readSentBytes(message);
+    const verifiedBytes = actualBody === null ? undefined : { subject: sentSubject, body: actualBody.body };
     const marked = await markPreDispatchFenceSent(context, {
       outboundMessageId: fence.id,
       providerMessageId: message.providerMessageId,

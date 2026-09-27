@@ -202,6 +202,26 @@ describe('the Gmail HTTP client', () => {
     expect(body?.truncated).toBe(true);
     expect(body?.text).toBe(long.slice(0, 40));
     expect(body?.text).not.toContain('html');
+    // Which message this is, and whether the text is the plain part or a flattening of
+    // the HTML one: what a caller proving the bytes of one message needs (lane W3-F).
+    expect(body?.messageId).toBe('m-2');
+    expect(body?.plainText).toBe(true);
+  });
+
+  it('refuses a body read that answers about another message, and says the text is not plain', async () => {
+    answer('/gmail/v1/users/me/messages/m-3', 200, {
+      id: 'm-other',
+      payload: { mimeType: 'text/plain', body: { data: Buffer.from('not this one', 'utf8').toString('base64url') } },
+    });
+    await expect(client.getBody(access, 'm-3')).rejects.toMatchObject({ code: 'malformed_response' });
+
+    answer('/gmail/v1/users/me/messages/m-4', 200, {
+      id: 'm-4',
+      payload: { mimeType: 'text/html', body: { data: Buffer.from('<p>only html</p>', 'utf8').toString('base64url') } },
+    });
+    const flattened = await client.getBody(access, 'm-4');
+    expect(flattened).toMatchObject({ messageId: 'm-4', plainText: false });
+    expect(flattened?.text).toBe('only html');
   });
 
   it('turns a 404 from history.list into an expired cursor, not a failure', async () => {

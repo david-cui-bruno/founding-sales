@@ -30,10 +30,15 @@
 --
 -- Nothing to backfill: a workspace with no `postal_address` row has none, and the
 -- default (`DEFAULT_SETTING_VALUES`) is `{"address": null}` — no address, which
--- composes today's footer, the sign-off and the stop line. Sending does not stop
--- and no approval is invalidated: the footer is composed at send from system text,
--- so the words an approver approved are unchanged
--- (`packages/domain/src/rules/templates.ts`, `packages/domain/outbound/footer.ts`).
+-- composes today's footer, the sign-off and the stop line. Sending does not stop and no
+-- stored approval is invalidated: the template rows are not rewritten, and what a send
+-- carries differs from the approved body in the footer block — system text — and in
+-- nothing else. It is not true that every approved body still sends unchanged: a body
+-- whose trailing block the workspace's own records cannot account for is **held** for a
+-- person rather than composed, so some already-approved bodies may wait instead of
+-- sending. `fss admin schema-preflight 0020` names every one of them before the release
+-- (`packages/domain/src/rules/templates.ts`, `packages/domain/outbound/footer.ts`,
+-- `docs/greenfield/settings.md`).
 --
 -- `fss admin schema-preflight 0020` counts what this release will meet — the
 -- settings rows by key, the unsent fences whose footer will be recomposed, the

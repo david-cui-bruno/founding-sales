@@ -680,7 +680,7 @@ export async function markPreDispatchFenceSent(
      * Absent, nothing is overwritten and the ledger says the sent bytes are unverified,
      * which is the honest record and the human step's cue (review of PR 296, P1).
      */
-    readonly verifiedBytes?: { readonly subject?: string | undefined; readonly body: string } | undefined;
+    readonly verifiedBytes?: { readonly subject: string; readonly body: string } | undefined;
   },
 ): Promise<SendResult<OutboundFenceRow>> {
   const actor = input.actor ?? describeActor(context);
@@ -694,9 +694,11 @@ export async function markPreDispatchFenceSent(
     // Safe for the reason the edge exists at all: `held` never entered dispatching.
     await releaseFence(context, { outboundMessageId: input.outboundMessageId, actor });
   }
-  const verifiedSubject = input.verifiedBytes?.subject?.trim();
-  const subject = verifiedSubject === undefined || verifiedSubject.length === 0 ? null : verifiedSubject;
-  const body = input.verifiedBytes?.body ?? null;
+  // Both columns or neither: a verified record is a subject and a body that were read
+  // together from the same message (review of PR 296, second round).
+  const verified = input.verifiedBytes;
+  const subject = verified === undefined ? null : verified.subject;
+  const body = verified === undefined ? null : verified.body;
   const claimed = await context.db.query<{ attempt_token: string }>(
     `UPDATE outbound_messages
         SET state = 'dispatching', attempt_token = gen_random_uuid(),
@@ -713,7 +715,7 @@ export async function markPreDispatchFenceSent(
       input.sentAt,
       subject,
       body,
-      body === null ? null : renderedHash(subject ?? current?.subject ?? '', body),
+      body === null || subject === null ? null : renderedHash(subject, body),
     ],
   );
   const token = claimed.rows[0]?.attempt_token;

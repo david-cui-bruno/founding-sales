@@ -92,7 +92,8 @@ describe('sends whose fence a point-in-time restore lost (lane g73)', () => {
     readonly header: string;
     readonly to: string;
     readonly at: string;
-    readonly subject?: string;
+    /** `null` sends no Subject header at all, which Gmail may do and the scan accepts. */
+    readonly subject?: string | null;
     /** What Gmail holds. Read only when a pre-dispatch fence's bytes have to be proven. */
     readonly body?: string;
   }): GmailFixtureMessage {
@@ -104,7 +105,7 @@ describe('sends whose fence a point-in-time restore lost (lane g73)', () => {
       headers: {
         'Message-ID': input.header,
         To: input.to,
-        Subject: input.subject ?? 'A short note about your properties',
+        ...(input.subject === null ? {} : { Subject: input.subject ?? 'A short note about your properties' }),
       },
       ...(input.body === undefined ? {} : { body: input.body }),
       historyId: '1000',
@@ -406,6 +407,85 @@ describe('sends whose fence a point-in-time restore lost (lane g73)', () => {
       [workspaceId(), fenceId],
     );
     expect(events.rows[0]?.detail['sentBytes']).toBe('verified');
+  });
+
+  it('will not call a body verified without the subject it was sent with', async () => {
+    // The scan accepts a message with no Subject header, and the restored row has a
+    // subject of its own. Recording that subject beside bytes Gmail returned would be a
+    // verified claim about a pair nobody read together (review of PR 296, second round).
+    const fenceId = await world.prepare(world.alpha);
+    const prepared = await readFence(context(), fenceId);
+    const at = '2026-09-24T19:00:00.000Z';
+    const gmail = clientWithSent([
+      sentMessage({
+        header: prepared?.providerMessageIdHeader ?? '',
+        to: world.alpha.recipientAddress,
+        at,
+        subject: null,
+        body: 'What actually left, with a different footer.',
+      }),
+    ]);
+    const scan = await scanSentFolder(context(), scanDeps(gmail), { mailboxId: world.alpha.mailboxId, ...around(at) });
+    const message = scan.messages[0];
+    expect(message?.subject).toBeNull();
+    if (message === undefined) return;
+    let bodyReads = 0;
+    const recovery = await recoverSentFolderMessage(context(), {
+      mailbox: mailbox(),
+      message,
+      actor: 'test-restore',
+      readSentBytes: async sent => {
+        bodyReads += 1;
+        return await readSentMessageBytes(context(), scanDeps(gmail), {
+          mailboxId: world.alpha.mailboxId,
+          providerMessageId: sent.providerMessageId,
+        });
+      },
+    });
+    expect(recovery).toMatchObject({ outcome: 'pre_dispatch_marked_sent', sentBytesVerified: false });
+    // Not even read: without a subject there is nothing a body could complete.
+    expect(bodyReads).toBe(0);
+    const fence = await readFence(context(), fenceId);
+    expect(fence).toMatchObject({ state: 'sent', body: prepared?.body, subject: prepared?.subject });
+  });
+
+  it('will not call a body verified when the answer is about another message, or is flattened HTML', async () => {
+    const at = '2026-09-24T19:30:00.000Z';
+    for (const [name, body] of [
+      ['another id', { text: 'Bytes of some other message.', truncated: false, messageId: 'another-message', plainText: true }],
+      ['flattened HTML', { text: 'Bytes rendered from HTML.', truncated: false, messageId: '', plainText: false }],
+    ] as const) {
+      const fenceId = await world.prepare(world.alpha);
+      const prepared = await readFence(context(), fenceId);
+      const header = prepared?.providerMessageIdHeader ?? '';
+      const fixture = clientWithSent([sentMessage({ header, to: world.alpha.recipientAddress, at })]);
+      // The id in the answer is the one the case is about; for the HTML case it is the
+      // right id and the wrong kind of body.
+      const gmail = {
+        ...fixture,
+        getBody: async (_access: never, messageId: string) =>
+          await Promise.resolve({ ...body, messageId: body.messageId === '' ? messageId : body.messageId }),
+      } as unknown as typeof fixture;
+      const scan = await scanSentFolder(context(), scanDeps(fixture), {
+        mailboxId: world.alpha.mailboxId,
+        ...around(at),
+      });
+      const message = scan.messages.find(candidate => candidate.rfcMessageId === header);
+      expect(message, name).toBeDefined();
+      if (message === undefined) continue;
+      const recovery = await recoverSentFolderMessage(context(), {
+        mailbox: mailbox(),
+        message,
+        actor: 'test-restore',
+        readSentBytes: async sent =>
+          await readSentMessageBytes(context(), scanDeps(gmail), {
+            mailboxId: world.alpha.mailboxId,
+            providerMessageId: sent.providerMessageId,
+          }),
+      });
+      expect(recovery, name).toMatchObject({ outcome: 'pre_dispatch_marked_sent', sentBytesVerified: false });
+      expect(await readFence(context(), fenceId), name).toMatchObject({ state: 'sent', body: prepared?.body });
+    }
   });
 
   it('leaves the bytes alone and says so when Gmail will not give them up', async () => {

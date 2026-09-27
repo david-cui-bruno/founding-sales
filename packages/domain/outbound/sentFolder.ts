@@ -211,12 +211,21 @@ async function unlessMalformed<T>(pending: Promise<T>): Promise<T | typeof MALFO
 }
 
 /**
- * The bytes Gmail actually holds for one message, or null when they cannot be read.
+ * The bytes Gmail actually holds for one message, or null when they cannot be *proven*.
  *
- * Null covers every way this can fail to *prove* anything — a grant that is gone, a
- * message Gmail no longer returns, a body the fetch truncated — and each means the same
- * thing to the caller: these bytes are unverified, record them as such rather than
- * claiming a fence's stored body is what the prospect received.
+ * Null covers every way this can fail to prove anything, and each means the same to the
+ * caller — these bytes are unverified, so record them as such rather than claiming a
+ * fence's stored body is what the prospect received:
+ *
+ *   * the grant is gone, or Gmail no longer returns the message;
+ *   * the answer is about **another message**: the response's own id is compared with
+ *     the one asked for, here as well as in the HTTP client, because a body read that
+ *     could be of some other message proves nothing about this one;
+ *   * the text is not from a `text/plain` part: `readBodyText` flattens HTML when there
+ *     is none, and a flattening is not the bytes that left;
+ *   * the fetch truncated it, or it is empty.
+ *
+ * (Review of PR 296, second round.)
  */
 export async function readSentMessageBytes(
   context: RepositoryContext,
@@ -227,7 +236,9 @@ export async function readSentMessageBytes(
   if (!access.ok) return null;
   try {
     const body = await deps.gmail.getBody(access.access, input.providerMessageId);
-    if (body === null || body.truncated || body.text.trim().length === 0) return null;
+    if (body === null || body.truncated || !body.plainText) return null;
+    if (body.messageId !== input.providerMessageId) return null;
+    if (body.text.trim().length === 0) return null;
     return { body: body.text };
   } catch (error) {
     if (error instanceof GmailClientError) return null;
