@@ -262,7 +262,7 @@ async function decisionInstant(context: RepositoryContext): Promise<Date> {
  */
 export function holdReasonForRefusal(
   reason: string,
-): 'daily_cap' | 'outside_email_window' | 'coverage_incomplete' | 'mailbox_disconnected' | 'route_invalid' | 'firm_suppressed' | 'handle_suppressed' | 'template_unapproved' | 'provider_refusal' | null {
+): 'daily_cap' | 'outside_email_window' | 'coverage_incomplete' | 'mailbox_disconnected' | 'route_invalid' | 'firm_suppressed' | 'handle_suppressed' | 'template_unapproved' | 'provider_refusal' | 'scoped_pause' | null {
   switch (reason) {
     case 'daily_cap':
       return 'daily_cap';
@@ -281,7 +281,16 @@ export function holdReasonForRefusal(
       return 'handle_suppressed';
     case 'template_unapproved':
     case 'template_mismatch':
+    // Lane W3-F: a body that cannot be composed into one with a single final stop line
+    // is a body nobody may send. The fix is the template's text, so the step waits under
+    // the reason an author can act on.
+    case 'footer_not_composed':
       return 'template_unapproved';
+    // The workspace has not configured the address the switch demands. Nothing about
+    // this firm is wrong; the system cannot send at all until an admin configures it,
+    // which is what `scoped_pause` says (4.2).
+    case 'postal_address_required':
+      return 'scoped_pause';
     case 'rate_limited':
     case 'provider_refusal':
     case 'recipient_rejected':

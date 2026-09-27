@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { sendBodyIssue } from '../src/rules/templates.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import {
   PLACEMENT_RULE_VERSION,
@@ -247,7 +248,12 @@ export interface PreparedFence {
  *   * `template_mismatch` — the caller's content hash disagrees with the stored one,
  *     which means the two sides are looking at different text and nobody should
  *     guess which;
- *   * `mailbox_unknown` / `mailbox_inactive` — the owner has no connected mailbox.
+ *   * `mailbox_unknown` / `mailbox_inactive` — the owner has no connected mailbox;
+ *   * `footer_not_composed` — the body does not end with exactly one stop line, or is
+ *     longer than the column allows (lane W3-F). The footer is composed *before* this
+ *     call (`packages/domain/outbound/footer.ts`, `sequences/executions.ts`), and this is
+ *     the guard that makes that unconditional: whatever the caller did, a fence never
+ *     freezes a footerless body, a doubled stop line, or bytes the insert would throw on.
  *
  * A hold is a different thing and comes later, from `gate.ts`.
  */
@@ -257,6 +263,12 @@ export async function prepareOutboundMessage(
 ): Promise<SendResult<PreparedFence>> {
   const existing = await readFenceByStepExecution(context, request.stepExecutionId);
   if (existing !== null) return acceptSend({ outboundMessageId: existing.id, created: false });
+
+  // Before anything is read or written: the bytes. 12.6's stop line is the last thing a
+  // prospect reads, and the fence is where "what will be sent" stops being editable, so
+  // the check belongs here and not only in the caller that composed them.
+  const bodyIssue = sendBodyIssue(request.body);
+  if (bodyIssue !== null) return refuseSend('footer_not_composed', bodyIssue);
 
   const template = await context.db.query<{ content_hash: string; approved_at: Date | null }>(
     'SELECT content_hash, approved_at FROM template_versions WHERE workspace_id = $1 AND id = $2',
@@ -1102,6 +1114,62 @@ export async function releaseFence(
     actor: input.actor ?? describeActor(context),
   });
   return acceptSend(toFence(row));
+}
+
+/**
+ * Re-freeze the bytes of a fence nothing has been attempted with (lane W3-F).
+ *
+ * Migration 0010's trigger makes the envelope immutable *once a token exists*, and says
+ * why: "`prepared` and `held` may still be re-rendered — a template correction before
+ * anything left is exactly what should be allowed". This is that edit, narrowed to one
+ * use: giving a fence prepared before migration 0020 the footer the send now composes,
+ * under the claim lock, so the fence still freezes the exact bytes that will be sent.
+ *
+ * The body and its `rendered_hash` move together, because the hash is the proof of what
+ * the prospect received; a rewrite that left the old hash would be worse than no rewrite.
+ * The ledger keeps a row for it — the state does not change, which is the point — so an
+ * incident can see that these bytes were reconciled and when.
+ *
+ * `WHERE attempt_token IS NULL` is not belt and braces: it is the same condition the
+ * trigger enforces, asked in SQL so a claimed fence is a refusal rather than an
+ * exception.
+ */
+export async function rewritePreparedBody(
+  context: RepositoryContext,
+  input: {
+    readonly outboundMessageId: string;
+    readonly body: string;
+    readonly reason: string;
+    readonly actor?: string | undefined;
+  },
+): Promise<SendResult<OutboundFenceRow>> {
+  const issue = sendBodyIssue(input.body);
+  if (issue !== null) return refuseSend('footer_not_composed', issue);
+  const current = await readFence(context, input.outboundMessageId);
+  if (current === null) return refuseSend('fence_unknown');
+  const { rows } = await context.db.query<FenceDbRow>(
+    `UPDATE outbound_messages
+        SET body = $3, rendered_hash = $4, updated_at = now()
+      WHERE workspace_id = $1 AND id = $2 AND attempt_token IS NULL AND state IN ('prepared', 'held')
+      RETURNING ${FENCE_COLUMNS}`,
+    [
+      context.scope.workspaceId,
+      input.outboundMessageId,
+      input.body,
+      renderedHash(current.subject, input.body),
+    ],
+  );
+  const row = rows[0];
+  if (row === undefined) return refuseSend('fence_not_ready', current.state);
+  const fence = toFence(row);
+  await appendEvent(context, {
+    outboundMessageId: fence.id,
+    fromState: fence.state,
+    toState: fence.state,
+    actor: input.actor ?? describeActor(context),
+    detail: { reason: input.reason },
+  });
+  return acceptSend(fence);
 }
 
 /**

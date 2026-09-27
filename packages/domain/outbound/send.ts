@@ -14,6 +14,7 @@ import {
   releaseFence,
   type OutboundFenceRow,
 } from './fence.ts';
+import { reconcileFenceFooter } from './footer.ts';
 import { decideSend, holdReasonForRefusal, type SendGateDeps, type SendPlan } from './gate.ts';
 import { countAutomatedSend, recordDaySignal } from './ramp.ts';
 import { RECONCILE_WINDOW_HOURS, type SendRefusalCode } from './types.ts';
@@ -37,11 +38,15 @@ import { RECONCILE_WINDOW_HOURS, type SendRefusalCode } from './types.ts';
  *        b. lock the fence and its enrollment `FOR UPDATE`;
  *        c. run the gate again — the complete eligibility, proven coverage, the
  *           holiday-aware window and the cap on *today's* business date;
- *        d. reserve the day's capacity: the conditional increment of the counter for
+ *        d. reconcile the footer (`footer.ts`): a fence prepared before migration 0020
+ *           carries the footer its template had, so its body is recomposed from the
+ *           workspace's sign-off and `postal_address` and rewritten under this lock —
+ *           or held for repair. A fence already carrying those bytes is not written to;
+ *        e. reserve the day's capacity: the conditional increment of the counter for
  *           the business date of the claim;
- *        e. claim: the atomic `prepared → dispatching` that mints the token and
+ *        f. claim: the atomic `prepared → dispatching` that mints the token and
  *           records that same business date on the fence;
- *      and commit. A refusal in (c) or (d) holds the fence in the same transaction.
+ *      and commit. A refusal in (c), (d) or (e) holds the fence in the same transaction.
  *   5. Call Gmail. Exactly once, ever, for this fence.
  *   6. Record the outcome.
  *
@@ -347,6 +352,28 @@ async function recheckAndClaim(
       // mailbox's fence with it would send from the wrong account.
       await context.db.query('ROLLBACK');
       return { kind: 'not_ready', refusal: 'fence_not_ready', detail: 'mailbox_changed' };
+    }
+
+    // The footer, before the claim and under the same lock. The bytes a fence dispatches
+    // are the bytes it stores, so a fence whose footer is stale — prepared before
+    // migration 0020, or before the address was configured, changed or cleared — is
+    // rewritten here or not sent at all. A fence already composed is a read and no write.
+    const footer = await reconcileFenceFooter(context, fence, {
+      ...(deps.actor === undefined ? {} : { actor: deps.actor }),
+    });
+    if (!footer.reconciled) {
+      const held = await holdFence(context, {
+        outboundMessageId: fence.id,
+        reason: footer.reason,
+        ...(deps.actor === undefined ? {} : { actor: deps.actor }),
+      });
+      await context.db.query('COMMIT');
+      return {
+        kind: 'held',
+        fence: held.ok ? held.value : fence,
+        reason: footer.reason,
+        ...(footer.detail === undefined ? {} : { detail: footer.detail }),
+      };
     }
 
     // The reservation: a conditional UPDATE rather than a read-then-write, so two
