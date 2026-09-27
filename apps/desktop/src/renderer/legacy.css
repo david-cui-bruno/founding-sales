@@ -156,6 +156,12 @@ kbd {
   background: var(--ok-tag);
 }
 
+/* The stop tone: a refused import row, and a Settings row that says something is off. */
+.tag-stop {
+  color: var(--stop);
+  background: var(--stop-tag);
+}
+
 /*
  * A notice is a line of grey text with a dot, not a coloured box: offline, stale, a
  * refusal, "Snoozed.". The dot's colour is the only thing the tone changes.
@@ -327,6 +333,20 @@ ul,
 ol {
   margin: 8px 0;
   padding-left: 20px;
+}
+
+/*
+ * Tailwind's preflight (`tailwind.css`) takes every list marker away, and it is below
+ * this layer, so these two put back the ones the hand-rolled views were drawn with: a
+ * sequence's steps and a stage history are numbered, and a plain `ul` has its discs.
+ * The lists that are rows with dividers say `list-style: none` for themselves below.
+ */
+ol {
+  list-style: decimal;
+}
+
+ul {
+  list-style: disc;
 }
 
 /* Lists of things are rows with dividers, never boxes. */

@@ -386,6 +386,33 @@ test('what a person is typing survives leaving Today and coming back', async ({ 
   await expect(page.getByTestId('snooze-reason').nth(1)).toHaveValue('Waiting on their board');
 });
 
+test('a read Home makes by itself keeps the focus and the caret where they were', async ({ page }) => {
+  // "Focus is never lost on re-render", from the same list. Text coming back is not
+  // enough: a field that is redrawn takes the cursor with it, and a person typing
+  // mid-sentence when the sidebar refreshes loses their place.
+  server = await startAppServer({ today: todayState({ expanded: expandedFirm() }) });
+  await page.goto(server.url());
+  await settled(page);
+
+  const reason = page.getByTestId('snooze-reason').nth(1);
+  await reason.fill('Waiting on their board');
+  // The caret in the middle of the word, not at the end of the line.
+  await reason.evaluate(field => {
+    (field as HTMLInputElement).setSelectionRange(12, 12);
+  });
+
+  const reads = called('admin.state').length;
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect.poll(() => called('admin.state').length).toBeGreaterThan(reads);
+
+  const after = await reason.evaluate(field => ({
+    focused: document.activeElement === field,
+    caret: (field as HTMLInputElement).selectionStart,
+    value: (field as HTMLInputElement).value,
+  }));
+  expect(after).toEqual({ focused: true, caret: 12, value: 'Waiting on their board' });
+});
+
 test('only a usable number is offered, callable because the server just said so', async ({ page }) => {
   server = await startAppServer({
     today: todayState({ expanded: expandedFirm(), dialAdvice: [CALLABLE_ADVICE] }),

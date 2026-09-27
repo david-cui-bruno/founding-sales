@@ -18,7 +18,7 @@ const JOB_ID = '44444444-4444-4444-8444-444444444444';
 
 const fence = (overrides: Record<string, unknown> = {}) => ({
   id: SEND_ID,
-  state: 'dispatching',
+  state: 'unknown_terminal',
   recipientAddress: 'ap@northwind.example',
   dispatchStartedAt: '2026-09-27T13:02:00.000Z',
   sentAt: null,
@@ -81,7 +81,7 @@ describe('Settings › Diagnostics, the recoveries', () => {
     await userEvent.click(screen.getByTestId('recovery-send-lookup'));
 
     await screen.findByTestId('recovery-send-fence');
-    expect(screen.getByTestId('recovery-send-state').textContent).toContain('never came back');
+    expect(screen.getByTestId('recovery-send-state').textContent).toContain('never learned');
     expect(calls[0]).toEqual(['diagnostics.sendStatus', { outboundMessageId: SEND_ID }]);
 
     // The button says what it is about to do, and changes when the choice does.
@@ -115,11 +115,44 @@ describe('Settings › Diagnostics, the recoveries', () => {
   });
 
   it('will not offer a decision on a send that already has one', async () => {
-    install({ 'diagnostics.sendStatus': async () => ({ fence: fence({ state: 'sent', sentAt: '2026-09-27T13:03:00.000Z' }) }) });
+    install({
+      'diagnostics.sendStatus': async () => ({
+        fence: fence({ state: 'unknown_terminal', adminResolution: 'delivered' }),
+      }),
+    });
     render(<RecoveryControls />);
     await userEvent.type(screen.getByTestId('recovery-send-id'), `${SEND_ID}{Enter}`);
     await screen.findByTestId('recovery-send-fence');
     expect(screen.getByTestId<HTMLButtonElement>('recovery-send-confirm').disabled).toBe(true);
+    expect(screen.getByTestId('recovery-send-settled').textContent).toContain('already recorded as delivered');
+  });
+
+  it('will not offer a decision on a send that is still being reconciled', async () => {
+    // The server refuses `/outbound/resolve` for anything but `unknown_terminal`
+    // (`fence_not_ready`), so the form does not invite the press that would fail.
+    install({ 'diagnostics.sendStatus': async () => ({ fence: fence({ state: 'dispatching' }) }) });
+    render(<RecoveryControls />);
+    await userEvent.type(screen.getByTestId('recovery-send-id'), `${SEND_ID}{Enter}`);
+    await screen.findByTestId('recovery-send-fence');
+    expect(screen.getByTestId('recovery-send-state').textContent).toContain('still reconciling');
+    expect(screen.getByTestId<HTMLButtonElement>('recovery-send-confirm').disabled).toBe(true);
+    expect(screen.getByTestId('recovery-send-settled').textContent).toContain('never learned');
+  });
+
+  it('takes the preview away when the id is edited, so nothing resolves a send nobody looked at', async () => {
+    const resolveSend = vi.fn(async () => ({ outboundMessageId: SEND_ID, resolution: 'delivered' as const }));
+    install({ 'diagnostics.sendStatus': async () => ({ fence: fence() }), 'diagnostics.resolveSend': resolveSend });
+    render(<RecoveryControls />);
+
+    await userEvent.type(screen.getByTestId('recovery-send-id'), `${SEND_ID}{Enter}`);
+    await screen.findByTestId('recovery-send-fence');
+
+    await userEvent.type(screen.getByTestId('recovery-send-id'), '9');
+    await waitFor(() => {
+      expect(screen.queryByTestId('recovery-send-fence')).toBeNull();
+    });
+    expect(screen.queryByTestId('recovery-send-confirm')).toBeNull();
+    expect(resolveSend).not.toHaveBeenCalled();
   });
 
   it('shows a refusal where the answer would have been', async () => {

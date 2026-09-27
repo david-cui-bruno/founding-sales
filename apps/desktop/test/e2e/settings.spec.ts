@@ -221,7 +221,9 @@ test('Diagnostics resolves an unknown send only after it has been looked up', as
     admin: adminState(),
     sendStatus: {
       id: SEND_ID,
-      state: 'dispatching',
+      // The one state 12.5 puts a question to a person about; the server refuses
+      // `/outbound/resolve` for any other with `fence_not_ready`.
+      state: 'unknown_terminal',
       recipientAddress: 'ap@northwind.example',
       dispatchStartedAt: '2026-09-27T13:02:00.000Z',
       sentAt: null,
@@ -236,6 +238,7 @@ test('Diagnostics resolves an unknown send only after it has been looked up', as
   // Nothing to decide before a look-up: the send's state is what the decision is made on.
   await expect(page.getByTestId('recovery-send-id')).toBeVisible();
   await expect(page.getByTestId('recovery-send-confirm')).toHaveCount(0);
+  expect(app.called('diagnostics.sendStatus')).toEqual([]);
 
   // Enter in the field is the read, and only the read.
   await page.getByTestId('recovery-send-id').fill(SEND_ID);
@@ -251,6 +254,12 @@ test('Diagnostics resolves an unknown send only after it has been looked up', as
 
   await expect(page.getByTestId('recovery-send-answer')).toContainText('never sent');
   expect(app.called('diagnostics.resolveSend')).toEqual([{ outboundMessageId: SEND_ID, resolution: 'skipped' }]);
+
+  // Editing the id takes the preview with it: the state on screen belongs to the send
+  // that was looked up, and nothing resolves a send nobody has just read the state of.
+  await page.getByTestId('recovery-send-id').fill(`${SEND_ID.slice(0, -1)}9`);
+  await expect(page.getByTestId('recovery-send-fence')).toHaveCount(0);
+  await expect(page.getByTestId('recovery-send-confirm')).toHaveCount(0);
 });
 
 test('Diagnostics requeues a dead job only with a reason', async ({ page }) => {

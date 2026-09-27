@@ -97,6 +97,7 @@ describe('the operation registry', () => {
       'replies.state',
       'replies.refresh',
       'replies.open',
+      'replies.forget',
       'replies.collapse',
       'replies.confirm',
       'replies.resolve',

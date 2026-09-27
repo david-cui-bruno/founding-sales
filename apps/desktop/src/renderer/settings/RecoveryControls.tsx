@@ -1,4 +1,4 @@
-import { useCallback, useState, type JSX } from 'react';
+import { useCallback, useEffect, useState, type JSX } from 'react';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import type { DeadJob, OperationOutput } from '../../shared/operations.ts';
@@ -64,13 +64,27 @@ type SendLookup = z.infer<typeof sendLookupSchema>;
 
 type Fence = NonNullable<OperationOutput<'diagnostics.sendStatus'>['fence']>;
 
+/**
+ * The six states a send can be in (`packages/contracts/src/outbound.ts`), as sentences.
+ *
+ * Only `unknown_terminal` can be resolved: the server refuses `/outbound/resolve` for
+ * anything else with `fence_not_ready` (`apps/api/test/outbound.test.ts`), and a form
+ * that invited the decision anyway would be a form whose button fails. `dispatching` is
+ * a send still being reconciled and is **not** one of these: it becomes
+ * `unknown_terminal` when the observation window expires, and the answer then is a
+ * person's rather than a guess.
+ */
 const FENCE_STATES: Readonly<Record<string, string>> = Object.freeze({
-  queued: 'Queued, not dispatched yet.',
-  dispatching: 'Dispatch started and never came back — this is the one you resolve.',
+  prepared: 'Prepared, not dispatched yet. Nothing to resolve.',
+  held: 'Held. Nothing to resolve until sending is released.',
+  dispatching: 'Dispatch started; Callie is still reconciling it. Nothing to resolve yet.',
+  reconciling: 'Being reconciled against the mailbox. Nothing to resolve yet.',
   sent: 'Sent. Nothing to resolve.',
-  failed: 'Failed. Nothing to resolve.',
-  skipped: 'Skipped. Nothing to resolve.',
+  unknown_terminal: 'Dispatch started and the outcome was never learned — this is the one you resolve.',
 });
+
+/** The one state 12.5 puts a question to a person about. */
+const RESOLVABLE = 'unknown_terminal';
 
 function FenceSummary({ fence }: { readonly fence: Fence }): JSX.Element {
   return (
@@ -105,6 +119,21 @@ function ResolveSend(): JSX.Element {
     resolver: zodResolver(sendLookupSchema),
     defaultValues: { outboundMessageId: '' },
   });
+
+  /*
+   * The state on screen belongs to the id that was looked up, and to no other. Editing
+   * the field after a preview used to leave the old id as the command's target, so the
+   * screen described one send and the button resolved another. Changing a character
+   * takes the preview away; looking it up again brings one back.
+   */
+  const typed = form.watch('outboundMessageId');
+  useEffect(() => {
+    if (looked !== null && typed.trim() !== looked) {
+      setFence(null);
+      setLooked(null);
+      setAnswer(null);
+    }
+  }, [typed, looked]);
 
   const look = useCallback(
     async ({ outboundMessageId }: SendLookup): Promise<void> => {
@@ -156,7 +185,8 @@ function ResolveSend(): JSX.Element {
       });
   }, [form, looked, resolution]);
 
-  const settled = fence !== null && (fence.state === 'sent' || fence.state === 'failed' || fence.state === 'skipped');
+  // Already decided, or never in doubt: either way there is nothing for a person to say.
+  const resolvable = fence !== null && fence.state === RESOLVABLE && fence.adminResolution === null;
 
   return (
     <section data-testid="recovery-send" className="flex flex-col gap-3 border-t border-border pt-4">
@@ -214,13 +244,17 @@ function ResolveSend(): JSX.Element {
                 <option value="skipped">It never went out</option>
               </Select>
             </div>
-            <Button data-testid="recovery-send-confirm" disabled={busy || settled} onClick={resolve}>
+            <Button data-testid="recovery-send-confirm" disabled={busy || !resolvable} onClick={resolve}>
               {RESOLUTION_EFFECTS[resolution]}
             </Button>
           </div>
-          {settled ? (
-            <p className="text-xs text-muted-foreground">This send already has an outcome, so there is nothing to decide.</p>
-          ) : null}
+          {resolvable ? null : (
+            <p data-testid="recovery-send-settled" className="text-xs text-muted-foreground">
+              {fence.adminResolution === null
+                ? 'Only a send whose outcome was never learned can be resolved here.'
+                : `This send was already recorded as ${fence.adminResolution}.`}
+            </p>
+          )}
         </>
       ) : null}
 
