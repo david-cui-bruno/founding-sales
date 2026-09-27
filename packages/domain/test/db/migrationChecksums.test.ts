@@ -11,6 +11,13 @@ import { loadMigrations } from '../../db/migrationRunner.ts';
  * migration task. Stale text inside an applied migration stays stale forever. That is the
  * cost of the checksum, and it is the right cost.
  *
+ * **0020 is pinned before it is applied**, and that is not the same claim as the rest.
+ * The other nineteen say "this is what production recorded"; 0020 says "these are the
+ * bytes the release will record", written as the last commit of lane W3-F once the file
+ * was final. From here it is as immutable as the others: an edit to it after this line
+ * exists is an edit to undo, and if it is edited before the release the number here moves
+ * with it in the same commit.
+ *
  * These are the bytes production recorded (main `63d22573`, 27 September 2026). **A
  * failure here is not a value to update: it is an edit to undo.** A new migration file is
  * the only way forward.
@@ -21,10 +28,10 @@ import { loadMigrations } from '../../db/migrationRunner.ts';
  * under its own name, so a deleted or renamed migration fails rather than passing
  * silently.
  *
- * **A gap under the last applied version.** Every migration at or below 0019 must be
- * pinned here, so a file inserted below the waterline cannot slip in unpinned. Versions
- * above it are free: a migration not yet applied anywhere is still being written, and
- * gains its line here when it is applied.
+ * **A gap under the last applied version.** Every migration at or below the last pinned
+ * one must be pinned here, so a file inserted below the waterline cannot slip in
+ * unpinned. Versions above it are free: a migration still being written has no line here
+ * until its bytes are final.
  */
 const APPLIED: readonly (readonly [number, string, string])[] = [
   [1, '0001_foundation.sql', '9f89e7288cc913edcc3e3734e592c9479387b1ee31942b1b774332696aa1e89c'],
@@ -46,6 +53,7 @@ const APPLIED: readonly (readonly [number, string, string])[] = [
   [17, '0017_release_records.sql', '0ce96851d49ad44834590ee92b7a2e96da7a948324cfe618faf48e11f765e96a'],
   [18, '0018_remove_linkedin.sql', '0904427b7212e658136e217a82b123dafd7f82e000e8f58eb40a0f357cdcb5a9'],
   [19, '0019_wave2_cleanup.sql', '541f3c1916c792eaccf388740db819184279b3ebc3257b86a788cf0edf737c16'],
+  [20, '0020_postal_address.sql', '530ee65378e8430673181a497c255ed7e3d889ced353419769a8a0c235599e7a'],
 ];
 
 const EDITED = (fileName: string): string =>
