@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
 import { openHold, releaseHold } from '@fss/domain/policy/holds.ts';
+import { resumeEnrollment } from '@fss/domain/sequences/resume.ts';
 import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from '../support/authFixture.ts';
 import { issueSessionFor } from '../support/sessionFixture.ts';
 import { createCrmBridge } from '../../../desktop/src/main/crmBridge.ts';
@@ -77,19 +78,19 @@ describe('8.0au: a founder authors, enrols, confirms a number and reviews a resu
     expect(state.versions.map(version => [version.version, version.state, version.steps.length])).toEqual([[1, 'draft', 0]]);
     const draftId = state.versions[0]?.id ?? '';
 
-    state = await bridge.createTemplate({
-      templateId: null,
+    // One press since wave 2 (S3): the version is written and approved together, so
+    // there is never a version on the workspace that cannot be used.
+    state = await bridge.saveTemplate({
+      templateVersionId: null,
       name: 'First touch',
       subject: 'A question for {firm_name}',
       body: 'Hello {contact_first_name},\n\nA short note about {firm_name}.',
       signOff: 'David\nCallie',
     });
-    expect(state.notice).toBe('template_created');
+    expect(state.notice).toBe('template_saved');
     const template = state.templates[0];
-    expect(template?.approvedAt).toBeNull();
+    expect(template?.approvedAt).not.toBeNull();
     expect(template?.requiredVariables).toEqual(['firm_name', 'contact_first_name']);
-    state = await bridge.approveTemplate({ templateVersionId: template?.id ?? '' });
-    expect(state.notice).toBe('template_approved');
 
     const plan = suggestedPlan(state.templates);
     expect(plan.map(step => [step.channel, step.templateVersionId])).toEqual([
@@ -97,8 +98,8 @@ describe('8.0au: a founder authors, enrols, confirms a number and reviews a resu
       ['email', template?.id],
       ['call_task', null],
     ]);
-    state = await bridge.saveDraft({ sequenceVersionId: draftId, steps: plan });
-    expect(state.notice).toBe('draft_saved');
+    state = await bridge.saveSteps({ sequenceVersionId: draftId, steps: plan });
+    expect(state.notice).toBe('steps_saved');
     // Saved, and still a draft: nothing publishes itself.
     expect(state.versions.map(version => [version.state, version.steps.map(step => [step.ordinal, step.channel])])).toEqual([
       ['draft', [[1, 'call_task'], [2, 'email'], [3, 'call_task']]],
@@ -132,9 +133,8 @@ describe('8.0au: a founder authors, enrols, confirms a number and reviews a resu
     const number = page.read.firm.phoneRoutes[0];
     expect([number?.eligibility, number?.version]).toEqual(['usable', 1]);
 
-    // The installed desktop's Confirm still answers, and moves nothing.
-    state = await bridge.confirmRoute({ routeId: number?.id ?? '', routeVersion: 1 });
-    expect(state.notice).toBe('route_confirmed');
+    // Nothing on this Mac confirms a number any more: `/contacts/routes/confirm` has no
+    // caller, and the row the route wrote on entry is already the callable one.
     const { rows: routes } = await fixture.db.query<{ eligibility: string; version: number; technical_validation: string }>(
       'SELECT eligibility, version, technical_validation FROM phone_routes WHERE workspace_id = $1 AND id = $2',
       [fixture.alpha.workspaceId, number?.id],
@@ -175,15 +175,37 @@ describe('8.0au: a founder authors, enrols, confirms a number and reviews a resu
     expect(rows[0]?.title).toBeNull();
   });
 
-  it('shows the dates a resume gives the steps after a long hold, and resumes only when confirmed', async () => {
-    // Ten days in, a nine-day pause of the firm, released; an older release's automatic
-    // reconsideration left the enrollment in review. Since wave 2 (S4.1) the scheduler
-    // resumes such a row on its own; the installed desktop's review still works on it.
+  /**
+   * A long hold resumes by itself, and the steps get the dates it owes them (wave 2, S4.1).
+   *
+   * The Mac's "Review and resume" is gone with the seven-day review: nothing here calls
+   * `/enrollments/resume/preview` or `/enrollments/resume`. What replaced the press is
+   * the scheduler's own reconsideration, so this drives that — and asks the database for
+   * the step's new date rather than asking the view for a sentence.
+   *
+   * **The vacuous pass this refuses.** A resume that moved nothing would still leave the
+   * enrollment `active` and still read "1 running" on the panel. So the dates are read
+   * before and after, and every unexecuted step must have moved by the whole of the
+   * nine-day pause — the same assertion the review-and-confirm version of this check made
+   * about the dates it proposed.
+   */
+  it('gives every step the date the nine-day pause owes it, and asks neither resume route', async () => {
     await fixture.db.query(`UPDATE sequence_enrollments SET started_at = now() - interval '10 days' WHERE id = $1`, [enrollmentId]);
     const admin = repositoryContext(
       workspaceScope(fixture.alpha.workspaceId, { kind: 'user', userId: fixture.alpha.admin.userId, role: 'admin' }),
       fixture.db,
     );
+    const dueDates = async (): Promise<string[]> => {
+      const { rows } = await fixture.db.query<{ due_at: Date }>(
+        `SELECT due_at FROM step_executions
+          WHERE enrollment_id = $1 AND state IN ('pending', 'held') ORDER BY ordinal`,
+        [enrollmentId],
+      );
+      return rows.map(row => row.due_at.toISOString());
+    };
+    const before = await dueDates();
+    expect(before).not.toHaveLength(0);
+
     const hold = await openHold(admin, {
       scopeKind: 'firm',
       scopeKey: firmId,
@@ -193,37 +215,28 @@ describe('8.0au: a founder authors, enrols, confirms a number and reviews a resu
     });
     await fixture.db.query(`UPDATE active_holds SET started_at = now() - interval '9 days' WHERE id = $1`, [hold]);
     await releaseHold(admin, hold);
-    await fixture.db.query(
-      `UPDATE sequence_enrollments SET state = 'review_required', review_union_milliseconds = $2 WHERE id = $1`,
-      [enrollmentId, 9 * 86_400_000],
-    );
+
+    // What the scheduler does on its next pass, with nobody pressing anything.
+    const resumed = await resumeEnrollment(admin, { enrollmentId });
+    expect(resumed.ok).toBe(true);
+    const outcome = resumed.ok ? resumed.value : null;
+    expect(outcome?.kind).toBe('resume');
+    expect(outcome?.executionsShifted).toBe(before.length);
+    const shift = outcome?.shiftMilliseconds ?? 0;
+    // The nine days the firm was paused, and not a default of nothing.
+    expect(shift / 86_400_000).toBeGreaterThan(8.9);
+    expect(shift / 86_400_000).toBeLessThan(9.1);
+
+    // Exactly where the union puts them: every step, to the millisecond.
+    const after = await dueDates();
+    expect(after).toEqual(before.map(due => new Date(Date.parse(due) + shift).toISOString()));
 
     const bridge = sequences();
-    let state = await bridge.state();
-    expect(state.heldEnrollments.map(entry => entry.id)).toEqual([enrollmentId]);
-
-    // Pressing Resume without a review opens the review, and resumes nothing.
-    state = await bridge.resumeEnrollment({ enrollmentId });
-    expect(state.resumeReview?.preview.enrollmentId).toBe(enrollmentId);
-    expect(state.heldEnrollments.map(entry => entry.id)).toEqual([enrollmentId]);
-    const review = state.resumeReview?.preview;
-    expect(review?.kind).toBe('resume');
-    const proposed = review?.steps.map(step => step.proposedDueAt) ?? [];
-    expect(proposed).toHaveLength(1);
-    const moved = Date.parse(proposed[0] ?? '') - Date.parse(review?.steps[0]?.dueAt ?? '');
-    expect(moved / 86_400_000).toBeGreaterThan(8.9);
-    const panel = sequenceScreen(state).resumeReview;
-    expect(panel?.canConfirm).toBe(true);
-    expect(panel?.steps[0]?.moved).toBe(true);
-
-    state = await bridge.resumeEnrollment({ enrollmentId });
-    expect(state.notice).toBe('resumed');
-    expect(state.resumeReview).toBeNull();
-    expect(state.heldEnrollments).toEqual([]);
-    const { rows } = await fixture.db.query<{ due_at: Date }>(
-      `SELECT due_at FROM step_executions WHERE enrollment_id = $1 AND state IN ('pending', 'held') ORDER BY ordinal`,
-      [enrollmentId],
-    );
-    expect(rows.map(row => row.due_at.toISOString())).toEqual(proposed);
+    const state = await bridge.state();
+    expect(state.enrollments.map(entry => [entry.id, entry.state])).toEqual([[enrollmentId, 'active']]);
+    expect(state.readErrors.enrollments).toBeNull();
+    const panel = sequenceScreen(state).enrollments;
+    expect(panel?.summary).toBe('One person is working through this sequence.');
+    expect(panel?.rows.map(row => row.line)).toEqual(['Version 1 — 1 running']);
   });
 });

@@ -108,6 +108,8 @@ function Suggestion({ card }: { readonly card: ReplyCardView }): JSX.Element {
  */
 function Candidates({ card, replies }: { readonly card: ReplyCardView; readonly replies: Replies }): JSX.Element | null {
   const [picked, setPicked] = useState<string | null>(null);
+  // This card's own call, not any call anywhere in the window (P1-4).
+  const busy = replies.busy(card.messageId);
   if (card.ambiguity.length === 0) return null;
   return (
     <div data-testid="candidate-form" className="mt-3 flex flex-col gap-2">
@@ -119,7 +121,7 @@ function Candidates({ card, replies }: { readonly card: ReplyCardView; readonly 
             name="candidate"
             data-testid="candidate-choice"
             value={candidate.opportunityId}
-            disabled={!card.resolveEnabled}
+            disabled={!card.resolveEnabled || busy}
             checked={picked === candidate.opportunityId}
             onChange={() => {
               setPicked(candidate.opportunityId);
@@ -134,7 +136,8 @@ function Candidates({ card, replies }: { readonly card: ReplyCardView; readonly 
           variant="outline"
           size="sm"
           data-testid="candidate-submit"
-          disabled={!card.resolveEnabled || picked === null}
+          disabled={!card.resolveEnabled || picked === null || busy}
+          {...(busy ? { 'aria-busy': true } : {})}
           onClick={() => {
             if (picked === null) return;
             replies.resolve({ messageId: card.messageId, opportunityId: picked });
@@ -272,7 +275,8 @@ function Answer({
         */}
         <Button
           data-testid="confirm"
-          disabled={!card.confirmEnabled || needsDay}
+          disabled={!card.confirmEnabled || needsDay || replies.busy(card.messageId)}
+          {...(replies.busy(card.messageId) ? { 'aria-busy': true } : {})}
           onClick={() => {
             if (chosen === null) return;
             replies.confirm({
@@ -400,6 +404,8 @@ export function RepliesView({ replies }: { readonly replies: Replies }): JSX.Ele
               variant="outline"
               size="sm"
               data-testid="reply-open"
+              disabled={replies.busy(summary.card.messageId)}
+              {...(replies.busy(summary.card.messageId) ? { 'aria-busy': true } : {})}
               onClick={() => {
                 if (summary.open) replies.close();
                 else replies.open(summary.card.messageId);

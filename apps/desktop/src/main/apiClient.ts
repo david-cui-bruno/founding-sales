@@ -1,12 +1,15 @@
 import {
   clientVersionNoticeSchema,
+  deviceListSchema,
+  deviceSessionSchema,
   sessionGrantSchema,
-  sessionRenewalSchema,
   todayListResponseSchema,
   type ClientVersionNotice,
+  type DeviceList,
+  type DeviceSession,
   type SessionGrant,
-  type SessionRenewal,
 } from '@fss/contracts';
+import { z } from 'zod';
 import { cachedTodaySchema, signInHandoffSchema, type CachedToday, type SignInHandoff } from '../shared/contract.ts';
 
 /**
@@ -53,10 +56,34 @@ export interface ApiClient {
     readonly deviceLabel: string;
   }): Promise<ApiOutcome<SignInHandoff>>;
   claimSignIn(handoffSecret: string): Promise<ApiOutcome<SessionGrant>>;
-  renewSession(refreshCredential: string): Promise<ApiOutcome<SessionRenewal>>;
+  /**
+   * A session from the device secret (wave 3b, audit item S7).
+   *
+   * The one way this Mac gets an access token after the claim. The secret does not
+   * rotate and opening twice is not reuse, so there is nothing to serialise against
+   * losing and nothing to spend: a Mac restored from a backup opens exactly as one
+   * that never stopped. `POST /auth/session/renew` has no caller on this Mac.
+   */
+  openSession(input: {
+    readonly workspaceId: string;
+    readonly deviceId: string;
+    readonly deviceSecret: string;
+  }): Promise<ApiOutcome<DeviceSession>>;
   signOut(accessToken: string): Promise<ApiOutcome<null>>;
+  /** The workspace's Macs (wave 3b, A4). */
+  devices(accessToken: string): Promise<ApiOutcome<DeviceList>>;
+  /** Sign one of them out. Revoking the caller's own device is this Mac signing out. */
+  revokeDevice(accessToken: string, deviceId: string): Promise<ApiOutcome<RevokedDevice>>;
   today(accessToken: string): Promise<ApiOutcome<CachedToday>>;
 }
+
+/** `POST /devices/revoke`'s answer. */
+export const revokedDeviceSchema = z.strictObject({
+  revoked: z.boolean(),
+  deviceId: z.string(),
+  thisDevice: z.boolean(),
+});
+export type RevokedDevice = z.infer<typeof revokedDeviceSchema>;
 
 const refusalOf = (answer: HttpAnswer): string => {
   const body = answer.body;
@@ -125,18 +152,31 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
         value => sessionGrantSchema.parse(value),
       );
     },
-    async renewSession(refreshCredential) {
+    async openSession(input) {
       return parsed(
-        await call('/auth/session/renew', {
+        await call('/auth/session/open', {
           method: 'POST',
-          body: { refreshCredential, clientVersion: options.clientVersion },
+          body: {
+            workspaceId: input.workspaceId,
+            deviceId: input.deviceId,
+            deviceSecret: input.deviceSecret,
+            clientVersion: options.clientVersion,
+          },
         }),
-        value => sessionRenewalSchema.parse(value),
+        value => deviceSessionSchema.parse(value),
       );
     },
     async signOut(accessToken) {
       const outcome = await call('/auth/sign-out', { method: 'POST', body: {}, accessToken });
       return outcome.ok ? { ok: true, value: null } : outcome;
+    },
+    async devices(accessToken) {
+      return parsed(await call('/devices', { method: 'GET', accessToken }), value => deviceListSchema.parse(value));
+    },
+    async revokeDevice(accessToken, deviceId) {
+      return parsed(await call('/devices/revoke', { method: 'POST', body: { deviceId }, accessToken }), value =>
+        revokedDeviceSchema.parse(value),
+      );
     },
     async today(accessToken) {
       // The wire contract first, which drops a key the API added and this build does not

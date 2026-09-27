@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { DesktopState, MailboxState } from '../../shared/contract.ts';
 import type { UpdateStatus } from '../../shared/updateContract.ts';
-import { desktopBridge, mailboxBridge, updateBridge } from './bridges.ts';
+import { desktopBridge, operations, updateBridge } from './bridges.ts';
 import { useSessionGeneration, type Generation } from './generation.ts';
 
 /**
@@ -46,6 +46,10 @@ export interface Session {
   readonly guard: Generation;
   signIn(input: { readonly workspaceId?: string | undefined; readonly deviceLabel?: string | undefined }): Promise<void>;
   signOut(): Promise<void>;
+  /** The workspace's other Macs, read when "This Mac" is opened (wave 3b). */
+  listDevices(): Promise<void>;
+  /** Sign one of them out. This Mac's own id is this Mac signing out. */
+  revokeDevice(deviceId: string): Promise<void>;
   /** Read the session again — after a command, so the banners follow what it found. */
   reread(): Promise<void>;
   connectMailbox(): Promise<void>;
@@ -77,29 +81,29 @@ export function useSession(): Session {
   }, [guard]);
 
   const loadMailbox = useCallback(async (): Promise<void> => {
-    const bridge = mailboxBridge();
-    if (bridge === undefined || identityRef.current === null) return;
+    const api = operations();
+    if (api === undefined || identityRef.current === null) return;
     // The address of a mailbox that was somebody else's is exactly the kind of answer
     // that used to arrive a moment after the window had been emptied.
     const keep = guard.keep(setMailbox);
-    keep(await bridge.state());
+    keep(await api.read('mailbox.state', {}));
   }, [guard]);
 
   const refreshMailbox = useCallback(async (): Promise<void> => {
-    const bridge = mailboxBridge();
-    if (bridge === undefined || identityRef.current === null) return;
+    const api = operations();
+    if (api === undefined || identityRef.current === null) return;
     setMailboxWaiting(false);
     const keep = guard.keep(setMailbox);
-    keep(await bridge.refresh());
+    keep(await api.read('mailbox.refresh', {}));
   }, [guard]);
 
   const connectMailbox = useCallback(async (): Promise<void> => {
-    const bridge = mailboxBridge();
-    if (bridge === undefined) return;
+    const api = operations();
+    if (api === undefined) return;
     setMailboxWaiting(true);
     const keep = guard.keep(setMailbox);
     try {
-      keep(await bridge.connect());
+      keep(await api.command('mailbox.connect', {}));
     } finally {
       setMailboxWaiting(false);
     }
@@ -129,6 +133,14 @@ export function useSession(): Session {
     setMailbox(null);
     setMailboxWaiting(false);
     setDesktop(await desktopBridge().signOut());
+  }, []);
+
+  const listDevices = useCallback(async (): Promise<void> => {
+    setDesktop(await desktopBridge().listDevices());
+  }, []);
+
+  const revokeDevice = useCallback(async (deviceId: string): Promise<void> => {
+    setDesktop(await desktopBridge().revokeDevice({ deviceId }));
   }, []);
 
   const restartToUpdate = useCallback((): void => {
@@ -199,6 +211,8 @@ export function useSession(): Session {
       guard,
       signIn,
       signOut,
+      listDevices,
+      revokeDevice,
       reread,
       connectMailbox,
       refreshMailbox,
@@ -216,6 +230,8 @@ export function useSession(): Session {
       guard,
       signIn,
       signOut,
+      listDevices,
+      revokeDevice,
       reread,
       connectMailbox,
       refreshMailbox,

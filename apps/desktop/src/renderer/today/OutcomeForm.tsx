@@ -21,7 +21,7 @@ import { Label } from '../ui/label.tsx';
 import { Select } from '../ui/select.tsx';
 import { Textarea } from '../ui/textarea.tsx';
 import { orDash } from './text.ts';
-import type { TodayActions } from './useToday.ts';
+import { todayForm, type TodayActions } from './useToday.ts';
 
 /**
  * What happened on the call (9.1).
@@ -76,6 +76,8 @@ export function OutcomeForm({
   // another, and what they picked wins.
   const itemId = chosenTask === '' ? (view.outcomeItemId ?? '') : chosenTask === 'none' ? '' : chosenTask;
   const stopper = outcomeProblem(draft);
+  // This card's outcome form waits for its own command and for nothing else (P1-4).
+  const busy = actions.busy(todayForm.outcome(expanded.firmId));
   const suppression = outcomeSuppresses(draft);
   const wantsCallback = draft.outcome === 'callback_requested';
 
@@ -125,7 +127,7 @@ export function OutcomeForm({
           Which task
           <Select
             data-testid="outcome-task"
-            disabled={!enabled}
+            disabled={!enabled || busy}
             value={itemId}
             onChange={event => {
               setChosenTask(event.target.value === '' ? 'none' : event.target.value);
@@ -144,7 +146,7 @@ export function OutcomeForm({
           What happened
           <Select
             data-testid="outcome-select"
-            disabled={!enabled}
+            disabled={!enabled || busy}
             value={outcome}
             onChange={event => {
               setOutcome(event.target.value);
@@ -167,7 +169,7 @@ export function OutcomeForm({
         <Input
           data-testid="callback-date"
           type="date"
-          disabled={!enabled}
+          disabled={!enabled || busy}
           value={callbackDate}
           onChange={event => {
             setCallbackDate(event.target.value);
@@ -177,7 +179,7 @@ export function OutcomeForm({
         <Input
           data-testid="callback-time"
           type="time"
-          disabled={!enabled}
+          disabled={!enabled || busy}
           value={callbackTime}
           onChange={event => {
             setCallbackTime(event.target.value);
@@ -198,7 +200,7 @@ export function OutcomeForm({
           <input
             type="checkbox"
             data-testid="do-not-call-covers-all"
-            disabled={!enabled}
+            disabled={!enabled || busy}
             checked={coversAll === 'yes'}
             onChange={event => {
               setCoversAll(event.target.checked ? 'yes' : '');
@@ -212,7 +214,7 @@ export function OutcomeForm({
       <Textarea
         data-testid="outcome-note"
         placeholder="Note"
-        disabled={!enabled}
+        disabled={!enabled || busy}
         value={note}
         onChange={event => {
           setNote(event.target.value);
@@ -227,7 +229,12 @@ export function OutcomeForm({
       </p>
 
       <div>
-        <Button type="submit" data-testid="outcome-submit" disabled={!enabled || stopper !== null}>
+        <Button
+          type="submit"
+          data-testid="outcome-submit"
+          disabled={!enabled || stopper !== null || busy}
+          {...(busy ? { 'aria-busy': true } : {})}
+        >
           Record
         </Button>
       </div>

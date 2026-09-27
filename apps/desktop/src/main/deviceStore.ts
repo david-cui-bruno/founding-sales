@@ -16,9 +16,12 @@ import type { SecretVault } from './keychain.ts';
  * The split is the whole point. The identifiers — workspace, user, device, label,
  * API address — are ordinary JSON in the app's own directory; they are not secret and
  * pretending otherwise would only make them harder to look at when something is
- * wrong. The device secret and the refresh credential go to the macOS Keychain and
- * nowhere else, and `forget()` removes both, so signing out of a Mac is one call
- * rather than a list someone has to work through.
+ * wrong. The device secret goes to the macOS Keychain and nowhere else.
+ *
+ * One secret since wave 3b (audit item S7): the rotating refresh credential has no
+ * caller, because `POST /auth/session/open` takes the device secret and the secret does
+ * not rotate. It is not written any more, and `forget()` still removes the account, so
+ * an item 1.0.12 left behind goes with the registration rather than outliving it.
  *
  * One more file, and deliberately not `device.json`: `workspace.json` holds the workspace
  * id and the name of the last sign-in (wave 1). `forget()` leaves it, so the next sign-in
@@ -37,18 +40,24 @@ export interface DeviceStoreOptions {
 
 export interface DeviceStore {
   load(): Promise<StoredDevice | null>;
-  save(device: StoredDevice, secrets: { readonly deviceSecret: string; readonly refreshCredential: string }): Promise<void>;
+  save(device: StoredDevice, secrets: { readonly deviceSecret: string }): Promise<void>;
   /**
    * Rewrite the public half alone — the identifiers and the role — leaving both secrets
    * where they are. A renewal uses it to record the role the server now gives this
    * membership (lane g69); nothing secret is passed and nothing secret is written.
    */
   saveDevice(device: StoredDevice): Promise<void>;
-  /** The live refresh credential, or null when this Mac holds none. */
-  refreshCredential(): Promise<string | null>;
-  saveRefreshCredential(credential: string): Promise<void>;
+  /** The long-lived credential this Mac opens a session with, or null when it has none. */
   deviceSecret(): Promise<string | null>;
-  /** Removes `device.json` and both secrets. The remembered workspace stays. */
+  /**
+   * Remove 1.0.12's rotating credential, if this Mac still has one.
+   *
+   * Nothing has read it since wave 3b, and a secret nothing reads is a secret nobody
+   * notices is still there. It goes at the first startup of this build that finds a
+   * registration, rather than waiting for a sign-out that may never come.
+   */
+  forgetRefreshCredential(): Promise<void>;
+  /** Removes `device.json` and both Keychain accounts. The remembered workspace stays. */
   forget(): Promise<void>;
   /** The last sign-in's workspace and name, or null when this Mac has none. */
   rememberedWorkspace(): Promise<RememberedWorkspace | null>;
@@ -83,11 +92,10 @@ export function createDeviceStore(options: DeviceStoreOptions): DeviceStore {
 
     async save(device, secrets) {
       const parsed = storedDeviceSchema.parse(device);
-      // Both secrets are checked against their contract shapes before they are stored,
-      // so a malformed grant cannot leave a half-registered Mac behind.
+      // The secret is checked against its contract shape before it is stored, so a
+      // malformed grant cannot leave a half-registered Mac behind.
       deviceSecretSchema.parse(secrets.deviceSecret);
       await options.vault.write(DEVICE_SECRET_ACCOUNT, secrets.deviceSecret);
-      await options.vault.write(REFRESH_CREDENTIAL_ACCOUNT, secrets.refreshCredential);
       await writeAtomically(parsed);
     },
 
@@ -95,16 +103,12 @@ export function createDeviceStore(options: DeviceStoreOptions): DeviceStore {
       await writeAtomically(storedDeviceSchema.parse(device));
     },
 
-    async refreshCredential() {
-      return await options.vault.read(REFRESH_CREDENTIAL_ACCOUNT);
-    },
-
-    async saveRefreshCredential(credential) {
-      await options.vault.write(REFRESH_CREDENTIAL_ACCOUNT, credential);
-    },
-
     async deviceSecret() {
       return await options.vault.read(DEVICE_SECRET_ACCOUNT);
+    },
+
+    async forgetRefreshCredential() {
+      await options.vault.remove(REFRESH_CREDENTIAL_ACCOUNT);
     },
 
     async forget() {

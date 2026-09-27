@@ -31,8 +31,15 @@ const api = (): NonNullable<typeof globalThis.callieApi> | undefined => globalTh
 
 export interface Replies {
   readonly state: ReplyState | null;
-  /** How many calls are in flight; the column is read-only while a command is. */
+  /** How many calls are in flight; the list is `aria-busy` while any is. */
   readonly pending: number;
+  /**
+   * Whether *this* card's own call is on the wire (1.0.13, P1-4).
+   *
+   * Until the review a call held the whole column read-only, so confirming one reply
+   * froze every other card, Refresh and the sidebar. The name is the message's id.
+   */
+  busy(form: string): boolean;
   readonly chosen: ReplyDisposition | null;
   choose(disposition: ReplyDisposition): void;
   refresh(): void;
@@ -45,15 +52,29 @@ export interface Replies {
 export function useReplies(): Replies {
   const [state, setState] = useState<ReplyState | null>(null);
   const [pending, setPending] = useState(0);
+  /** One count per card on the wire, so a card waits for its own call only. */
+  const [inFlight, setInFlight] = useState<ReadonlyMap<string, number>>(() => new Map());
   /** What a person picked, and on which card. Null until they pick on this one. */
   const [picked, setPicked] = useState<{ readonly messageId: string; readonly disposition: ReplyDisposition } | null>(null);
   /** Bumped on unmount, so an answer to a read this view no longer wants draws nothing. */
   const generation = useRef(0);
 
-  const apply = useCallback((next: Promise<ReplyState> | undefined): void => {
+  const hold = useCallback((form: string | null, by: 1 | -1): void => {
+    if (form === null) return;
+    setInFlight(current => {
+      const next = new Map(current);
+      const count = (next.get(form) ?? 0) + by;
+      if (count <= 0) next.delete(form);
+      else next.set(form, count);
+      return next;
+    });
+  }, []);
+
+  const apply = useCallback((next: Promise<ReplyState> | undefined, form: string | null = null): void => {
     if (next === undefined) return;
     const mine = generation.current;
     setPending(count => count + 1);
+    hold(form, 1);
     void next
       .then(
         value => {
@@ -65,8 +86,9 @@ export function useReplies(): Replies {
       )
       .finally(() => {
         setPending(count => count - 1);
+        hold(form, -1);
       });
-  }, []);
+  }, [hold]);
 
   useEffect(() => {
     apply(api()?.read('replies.state', {}));
@@ -111,7 +133,7 @@ export function useReplies(): Replies {
 
   const openCard = useCallback(
     (messageId: string): void => {
-      apply(api()?.read('replies.open', { messageId }));
+      apply(api()?.read('replies.open', { messageId }), messageId);
     },
     [apply],
   );
@@ -122,17 +144,19 @@ export function useReplies(): Replies {
 
   const confirm = useCallback(
     (input: OperationInput<'replies.confirm'>): void => {
-      apply(api()?.command('replies.confirm', input));
+      apply(api()?.command('replies.confirm', input), input.messageId);
     },
     [apply],
   );
 
   const resolve = useCallback(
     (input: OperationInput<'replies.resolve'>): void => {
-      apply(api()?.command('replies.resolve', input));
+      apply(api()?.command('replies.resolve', input), input.messageId);
     },
     [apply],
   );
 
-  return { state, pending, chosen, choose, refresh, open: openCard, close, confirm, resolve };
+  const busy = useCallback((form: string): boolean => (inFlight.get(form) ?? 0) > 0, [inFlight]);
+
+  return { state, pending, busy, chosen, choose, refresh, open: openCard, close, confirm, resolve };
 }

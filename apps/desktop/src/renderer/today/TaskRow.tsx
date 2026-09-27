@@ -8,7 +8,7 @@ import { Badge } from '../ui/badge.tsx';
 import { Button } from '../ui/button.tsx';
 import { Input } from '../ui/input.tsx';
 import { orDash } from './text.ts';
-import type { TodayActions } from './useToday.ts';
+import { todayForm, type TodayActions } from './useToday.ts';
 
 /**
  * One task under an expanded card, and the one control it offers.
@@ -36,6 +36,8 @@ function Snooze({ entry, actions }: { readonly entry: TaskView; readonly actions
   const [reason, setReason] = useDraft(`today:snooze:${itemId}:reason`);
   const [returnAt, setReturnAt] = useDraft(`today:snooze:${itemId}:return`);
   const ready = reason.trim().length > 0 && (!asksReturn || returnAt.length > 0);
+  // This task's own snooze, not any command anywhere (P1-4).
+  const busy = actions.busy(todayForm.task(itemId));
 
   return (
     <form
@@ -53,7 +55,7 @@ function Snooze({ entry, actions }: { readonly entry: TaskView; readonly actions
         type="text"
         required
         placeholder="Why"
-        disabled={!entry.enabled}
+        disabled={!entry.enabled || busy}
         value={reason}
         onChange={event => {
           setReason(event.target.value);
@@ -65,14 +67,21 @@ function Snooze({ entry, actions }: { readonly entry: TaskView; readonly actions
         type="datetime-local"
         required={asksReturn}
         hidden={!asksReturn}
-        disabled={!entry.enabled}
+        disabled={!entry.enabled || busy}
         value={returnAt}
         onChange={event => {
           setReturnAt(event.target.value);
         }}
         className="h-7 w-44 text-xs"
       />
-      <Button type="submit" variant="outline" size="sm" data-testid="snooze-submit" disabled={!entry.enabled || !ready}>
+      <Button
+        type="submit"
+        variant="outline"
+        size="sm"
+        data-testid="snooze-submit"
+        disabled={!entry.enabled || !ready || busy}
+        {...(busy ? { 'aria-busy': true } : {})}
+      >
         {entry.delayLabel}
       </Button>
     </form>
@@ -93,6 +102,7 @@ function Schedule({
 }): JSX.Element {
   const [date, setDate] = useDraft(`today:schedule:${callLogId}:date`);
   const [time, setTime] = useDraft(`today:schedule:${callLogId}:time`);
+  const busy = actions.busy(todayForm.callback(callLogId));
   const instant = state.businessTimeZone === null || date === '' ? null : callbackInstant(date, time, state.businessTimeZone);
 
   return (
@@ -107,7 +117,7 @@ function Schedule({
       <Input
         data-testid="schedule-date"
         type="date"
-        disabled={!enabled}
+        disabled={!enabled || busy}
         value={date}
         onChange={event => {
           setDate(event.target.value);
@@ -117,14 +127,21 @@ function Schedule({
       <Input
         data-testid="schedule-time"
         type="time"
-        disabled={!enabled}
+        disabled={!enabled || busy}
         value={time}
         onChange={event => {
           setTime(event.target.value);
         }}
         className="h-7 w-24 text-xs"
       />
-      <Button type="submit" variant="outline" size="sm" data-testid="schedule-submit" disabled={!enabled || instant === null}>
+      <Button
+        type="submit"
+        variant="outline"
+        size="sm"
+        data-testid="schedule-submit"
+        disabled={!enabled || instant === null || busy}
+        {...(busy ? { 'aria-busy': true } : {})}
+      >
         Set time
       </Button>
       <p data-testid="schedule-resolved" className="w-full text-xs text-muted-foreground empty:hidden">
@@ -170,7 +187,8 @@ export function TaskRow({
           variant="outline"
           size="sm"
           data-testid="pause-release"
-          disabled={!actionsEnabled}
+          disabled={!actionsEnabled || actions.busy(todayForm.hold(holdId))}
+          {...(actions.busy(todayForm.hold(holdId)) ? { 'aria-busy': true } : {})}
           onClick={() => {
             actions.releasePause({ holdId });
           }}

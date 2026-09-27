@@ -4,13 +4,16 @@ import { compileStylesheet } from '../../scripts/styles.ts';
 import { BUNDLE_STYLESHEET_SOURCE } from '../../src/main/bundleScheme.ts';
 
 /**
- * The one stylesheet, as the packaging build compiles it (1.0.12).
+ * The one stylesheet, as the packaging build compiles it (1.0.12; 1.0.13).
  *
- * The window's CSS is two halves that must not reach each other: Tailwind, for the
- * React views, and `legacy.css`, for the page modules that are still hand-rolled DOM.
- * The arrangement that keeps them apart is a layer order and a scope, and both are
- * properties of the compiled file rather than of the source — a `@scope` that some
- * transform dropped, or a preflight that landed in the wrong layer, would look exactly
+ * 1.0.12 compiled two halves that had to be kept apart — Tailwind for the React views,
+ * and `legacy.css`, in a layer of its own scoped to `[data-legacy]`, for the views that
+ * were still hand-rolled DOM. 1.0.13 converted the last of them, so the file, the
+ * scope, the attribute and the layer are gone and there is one reset.
+ *
+ * What is asserted here is still a property of the *compiled* file rather than of the
+ * source, because that is the difference this suite exists for: a `@layer` some
+ * transform reordered, or a preflight that landed outside `base`, would look exactly
  * like the source being right.
  */
 
@@ -19,34 +22,27 @@ const stylesheet = await compileStylesheet(
 );
 
 describe('the compiled stylesheet', () => {
-  it('declares the layer order the two halves depend on', () => {
-    expect(stylesheet).toContain('@layer theme, base, legacy, components, utilities;');
+  it('declares the layer order, with no layer for the views 1.0.13 deleted', () => {
+    expect(stylesheet).toContain('@layer theme, base, components, utilities;');
+    expect(stylesheet).not.toContain('legacy');
   });
 
-  it('keeps the hand-rolled views’ rules inside their scope, and nowhere else', () => {
-    expect(stylesheet).toContain('@scope ([data-legacy])');
-    // The rule that used to reach a React button: inside the scope, and only there.
-    const scope = stylesheet.slice(stylesheet.indexOf('@scope ([data-legacy])'));
-    expect(scope).toMatch(/\bbutton\s*\{[^}]*border:\s*1px solid var\(--line-strong\)/u);
+  it('carries no scope and nothing addressed to the attribute the shell no longer sets', () => {
+    expect(stylesheet).not.toContain('@scope');
+    expect(stylesheet).not.toContain('[data-legacy]');
   });
 
-  it('ships preflight in the base layer, under the legacy rules', () => {
+  it('ships preflight in the base layer, so it is the only reset', () => {
     expect(stylesheet).toContain('@layer base');
     // Preflight's universal reset is what takes the user agent's button and list
-    // styles off the React views.
+    // styles off the views.
     expect(stylesheet).toMatch(/\*,\s*::after,\s*::before/u);
   });
 
-  it('puts the list markers preflight removes back for the hand-rolled lists', () => {
-    // A sequence's steps and a stage history are numbered lists; the rows-with-dividers
-    // lists say `list-style: none` for themselves.
-    const scope = stylesheet.slice(stylesheet.indexOf('@scope ([data-legacy])'));
-    expect(scope).toMatch(/\bol\s*\{\s*list-style:\s*decimal;?\s*\}/u);
-    expect(scope).toMatch(/\bul\s*\{\s*list-style:\s*disc;?\s*\}/u);
-  });
-
-  it('keeps the stop tone the import screen and Settings still ask for', () => {
-    expect(stylesheet).toMatch(/\.tag-stop\s*\{[^}]*var\(--stop\)/u);
+  it('keeps the window’s own four base rules under the utilities', () => {
+    const base = stylesheet.slice(stylesheet.indexOf('@layer base'));
+    expect(base).toMatch(/html,\s*body\s*\{\s*height:\s*100%;?\s*\}/u);
+    expect(base).toMatch(/\*:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--ring\)/u);
   });
 
   it('hides an element with `hidden`, whatever display class it also has', () => {

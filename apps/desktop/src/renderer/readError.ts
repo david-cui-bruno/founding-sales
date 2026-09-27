@@ -1,4 +1,16 @@
 /**
+ * The one sentence every view says when the server did not answer (1.0.13).
+ *
+ * There were seven of these — five identical and two nearly so — one per view model,
+ * which is how a product ends up telling somebody three different things about one
+ * cable. The banner adds the half that is only true of a view that has something on
+ * screen; the sign-in screen and the notice maps say the first sentence alone.
+ */
+export const OFFLINE_SENTENCE = 'Callie cannot reach the server.';
+
+export const OFFLINE_BANNER = `${OFFLINE_SENTENCE} What is here is as it was last read, and changes will fail until it reconnects.`;
+
+/**
  * The sentence a window says after "Callie could not read …" (lanes g69 and g78).
  *
  * One mapping for every window that shows a failed read as a grey line with Retry —

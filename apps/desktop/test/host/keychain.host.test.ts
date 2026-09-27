@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createKeychainVault, keychainCommand, spawnRunner } from '../../src/main/index.ts';
+import { createKeychainVault, keychainCommand, spawnRunner } from '../../src/main/keychain.ts';
 import { HOST_TESTS_ENABLED } from './support/hostGate.ts';
 
 /**

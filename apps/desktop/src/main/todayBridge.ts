@@ -97,6 +97,8 @@ export interface TodayBridgeDeps {
 }
 
 export interface TodayBridgeHost {
+  /** Drop the snapshot on an identity transition (1.0.13, P0-A). */
+  forget(): Promise<TodayState>;
   state(): Promise<TodayState>;
   refresh(input?: RefreshRequest): Promise<TodayState>;
   expand(input: { readonly firmId: string }): Promise<TodayState>;
@@ -319,6 +321,22 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
   };
 
   return {
+    /**
+     * Forget everything this bridge is holding (1.0.13, P0-A).
+     *
+     * Called on every identity transition, from `registerWindows`. Nothing here is the
+     * next person's to read, and a snapshot kept across a sign-out is the last person's
+     * work shown to somebody else.
+     */
+    async forget() {
+      expanded = null;
+      notice = null;
+      lastCall = null;
+      dialAdvice = [];
+      expansionsOwner = null;
+      return await snapshot();
+    },
+
     state: snapshot,
 
     async refresh(input = {}) {

@@ -6,6 +6,7 @@ import {
   type ReplyState,
   type ReplySummary,
 } from './replyContract.ts';
+import { OFFLINE_SENTENCE } from './readError.ts';
 
 /**
  * What the reply card shows, as a pure function of the state the main process sent
@@ -151,7 +152,7 @@ const CLASS_LABELS: Readonly<Record<string, string>> = Object.freeze({
 });
 
 const NOTICES: Readonly<Record<string, string>> = Object.freeze({
-  offline: 'Callie cannot reach the server.',
+  offline: OFFLINE_SENTENCE,
   not_signed_in: 'Sign in on the main window before reading replies.',
   client_upgrade_required: 'This version of Callie is out of date. Install the current build to continue.',
   confirmed: 'Recorded.',
@@ -246,7 +247,7 @@ interface ReplyScreenView {
 
 const REPLY_HEADING = 'Replies';
 const EMPTY_LIST = 'No replies to read.';
-const EMPTY_OFFLINE = 'Callie cannot reach the server, and replies are never kept on this Mac.';
+const EMPTY_OFFLINE = `${OFFLINE_SENTENCE} Replies are never kept on this Mac.`;
 
 function confidenceLabel(confidence: number | null): string | null {
   if (confidence === null) return null;

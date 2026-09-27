@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createAuthedClient } from '../src/main/authedClient.ts';
-import { ADMIN_IPC_CHANNELS, DEFAULT_CHANGE_NOTE, createAdminBridge } from '../src/main/settingsBridge.ts';
+import { DEFAULT_CHANGE_NOTE, createAdminBridge } from '../src/main/settingsBridge.ts';
 import { adminViewOf } from '../src/renderer/settingsView.ts';
 import type { AdminState, CallingNumberView } from '../src/renderer/settingsContract.ts';
 import { outboundRampAnswer, outboundStatusAnswer } from './support/outboundStatus.ts';
@@ -101,6 +101,7 @@ const emptyState = (overrides: Partial<AdminState> = {}): AdminState => ({
   sendingAdmin: null,
   sendingReadError: null,
   callingNumbers: null,
+  postures: null,
   ...overrides,
 });
 
@@ -313,39 +314,16 @@ describe('the administration bridge', () => {
     const { api, calls } = scriptedApi({
       '/settings': { status: 200, body: settingsBody() },
       '/pipeline/stages': { status: 200, body: stagesBody },
-      '/pipeline/stages/create': { status: 200, body: { status: 'accepted', replayed: false, result: {} } },
+      '/pipeline/stages/retire': { status: 200, body: { status: 'accepted', replayed: false, result: {} } },
     });
     const bridge = createAdminBridge({ api, session: { state: async () => await Promise.resolve(session()) } });
     await bridge.state();
-    await bridge.createStage({ key: 'demo', displayName: 'Demo' });
+    await bridge.retireStage({ stageKey: 'new' });
     expect(calls.filter(call => call.path === '/settings')).toHaveLength(2);
-    const created = calls.find(call => call.path === '/pipeline/stages/create')?.body as Record<string, unknown>;
+    const sent = calls.find(call => call.path === '/pipeline/stages/retire')?.body as Record<string, unknown>;
     // 5.3's envelope is added by the client, so no caller can forget it.
-    expect(typeof created['commandId']).toBe('string');
-    expect(created['clientVersion']).toBe('1.4.0');
-  });
-
-  it('names one channel per method, and nothing else', () => {
-    expect(Object.values(ADMIN_IPC_CHANNELS)).toEqual([
-      'callie:admin:state',
-      'callie:admin:show',
-      'callie:admin:save-setting',
-      'callie:admin:open-history',
-      'callie:admin:load-dashboard',
-      'callie:admin:create-stage',
-      'callie:admin:rename-stage',
-      'callie:admin:reorder-stages',
-      'callie:admin:retire-stage',
-      'callie:admin:acknowledge-alert',
-      'callie:admin:set-sending-cap',
-      'callie:admin:record-sending-authentication',
-      'callie:admin:record-holiday-calendar',
-      'callie:admin:add-calling-number',
-      'callie:admin:attest-calling-number',
-      'callie:admin:retire-calling-number',
-      'callie:admin:record-posture',
-      'callie:admin:revoke-posture',
-    ]);
+    expect(typeof sent['commandId']).toBe('string');
+    expect(sent['clientVersion']).toBe('1.4.0');
   });
 
   it('reads the sending status once the server stops sending the deleted guard (wave 1)', async () => {
@@ -655,8 +633,15 @@ describe('the administration bridge', () => {
     expect(state.notice).toBe('authentication_incomplete');
   });
 
-  it('adds a calling number and attests it in one press, as two commands in that order (lane g60)', async () => {
-    const identity = callingIdentity({ id: IDENTITY_ID });
+  /**
+   * Wave 2, S4.3: registering a number attests it.
+   *
+   * There is one command and one press. The attestation prompt, the tick-box and the
+   * separate `/calling-identities/attest` call went with it: a number a person typed
+   * into their own calling-number field *is* the number they call from, and asking them
+   * to say so a second time was a prompt with no decision behind it.
+   */
+  it('adds a calling number in one command, which the server attests (wave 2, S4.3)', async () => {
     const attested = callingIdentity({
       id: IDENTITY_ID,
       verificationStatus: 'verified',
@@ -683,11 +668,7 @@ describe('the administration bridge', () => {
           '/pipeline/stages': { status: 200, body: stagesBody },
           '/calling-identities/register': {
             status: 200,
-            body: { status: 'accepted', replayed: false, result: { outcome: 'created', identity } },
-          },
-          '/calling-identities/attest': {
-            status: 200,
-            body: { status: 'accepted', replayed: false, result: { outcome: 'verified', identity: attested } },
+            body: { status: 'accepted', replayed: false, result: { outcome: 'created', identity: attested } },
           },
         };
         if (path === '/calling-identities') return await Promise.resolve(listed.shift() ?? { status: 500, body: {} });
@@ -702,30 +683,23 @@ describe('the administration bridge', () => {
     expect(before.callingNumbers).toEqual([]);
     expect(adminViewOf(before).callingNumber.summary).toContain('Today has no Call button');
 
-    const after = await bridge.addCallingNumber({ e164: '+1 401 555 0150', label: 'Mobile', attested: true });
+    const after = await bridge.addCallingNumber({ e164: '+1 401 555 0150', label: 'Mobile' });
     const sequence = calls.map(call => call.path).filter(path => path.startsWith('/calling-identities'));
-    expect(sequence).toEqual([
-      '/calling-identities',
-      '/calling-identities/register',
-      '/calling-identities/attest',
-      '/calling-identities',
-    ]);
+    expect(sequence).toEqual(['/calling-identities', '/calling-identities/register', '/calling-identities']);
+    // The deprecated route has no caller left on this Mac.
+    expect(calls.map(call => call.path)).not.toContain('/calling-identities/attest');
     // The number goes as typed: normalizing it is the server's rule, not the client's.
     expect(calls.find(call => call.path === '/calling-identities/register')?.body).toMatchObject({
       e164: '+1 401 555 0150',
       label: 'Mobile',
       clientVersion: '1.0.2',
     });
-    expect(calls.find(call => call.path === '/calling-identities/attest')?.body).toMatchObject({
-      identityId: IDENTITY_ID,
-      attested: true,
-    });
     expect(after.notice).toBeNull();
     expect(after.callingNumbers?.map(number => [number.id, number.usedForCalls])).toEqual([[IDENTITY_ID, true]]);
     expect(adminViewOf(after).callingNumber.summary).toBe('Today calls from +14015550150 (Mobile).');
   });
 
-  it('adds a number without attesting it when the statement is not ticked, and keeps a refusal as the notice', async () => {
+  it('keeps a refused registration as the notice, and sends no empty label', async () => {
     const { api, calls } = scriptedApi({
       '/settings': { status: 200, body: settingsBody() },
       '/pipeline/stages': { status: 200, body: stagesBody },
@@ -734,45 +708,17 @@ describe('the administration bridge', () => {
     });
     const bridge = createAdminBridge({ api, session: { state: async () => await Promise.resolve(session()) } });
     await bridge.state();
-    const refused = await bridge.addCallingNumber({ e164: '401-555-0150', label: '', attested: true });
+    const refused = await bridge.addCallingNumber({ e164: '401-555-0150', label: '' });
     expect(refused.notice).toBe('number_invalid');
-    // Refused at the registration, so nothing was attested, and no empty label was sent.
-    expect(calls.map(call => call.path)).not.toContain('/calling-identities/attest');
     expect(calls.find(call => call.path === '/calling-identities/register')?.body).not.toHaveProperty('label');
     expect(adminViewOf(refused).notice).toContain('+ and your country code');
   });
 
-  it('shows the registered number when its attestation is refused, with the refusal as the notice', async () => {
-    const { api, calls } = scriptedApi({
-      '/settings': { status: 200, body: settingsBody() },
-      '/pipeline/stages': { status: 200, body: stagesBody },
-      '/calling-identities': { status: 200, body: { identities: [callingIdentity()] } },
-      '/calling-identities/register': {
-        status: 200,
-        body: { status: 'accepted', replayed: false, result: { outcome: 'created', identity: callingIdentity() } },
-      },
-      '/calling-identities/attest': { status: 409, body: { status: 'refused', replayed: false, reason: 'owner_not_member' } },
-    });
-    const bridge = createAdminBridge({ api, session: { state: async () => await Promise.resolve(session()) } });
-    await bridge.state();
-    const before = calls.filter(call => call.path === '/calling-identities').length;
-    const state = await bridge.addCallingNumber({ e164: '+14015550150', label: '', attested: true });
-    expect(state.notice).toBe('owner_not_member');
-    expect(calls.filter(call => call.path === '/calling-identities').length).toBe(before + 1);
-    expect(adminViewOf(state).callingNumber.numbers.map(number => [number.status, number.canAttest])).toEqual([
-      ['unverified', true],
-    ]);
-  });
-
-  it('attests and retires a number through their own commands', async () => {
+  it('retires a number through its own command, which carries no attestation', async () => {
     const { api, calls } = scriptedApi({
       '/settings': { status: 200, body: settingsBody() },
       '/pipeline/stages': { status: 200, body: stagesBody },
       '/calling-identities': { status: 200, body: { identities: [callingIdentity({ id: IDENTITY_ID })] } },
-      '/calling-identities/attest': {
-        status: 200,
-        body: { status: 'accepted', replayed: false, result: { outcome: 'verified', identity: callingIdentity({ id: IDENTITY_ID }) } },
-      },
       '/calling-identities/disable': {
         status: 200,
         body: { status: 'accepted', replayed: false, result: { outcome: 'disabled', identity: callingIdentity({ id: IDENTITY_ID }) } },
@@ -780,12 +726,7 @@ describe('the administration bridge', () => {
     });
     const bridge = createAdminBridge({ api, session: { state: async () => await Promise.resolve(session()) } });
     await bridge.state();
-    await bridge.attestCallingNumber({ identityId: IDENTITY_ID });
     await bridge.retireCallingNumber({ identityId: IDENTITY_ID });
-    expect(calls.find(call => call.path === '/calling-identities/attest')?.body).toMatchObject({
-      identityId: IDENTITY_ID,
-      attested: true,
-    });
     expect(calls.find(call => call.path === '/calling-identities/disable')?.body).toMatchObject({ identityId: IDENTITY_ID });
     expect(calls.find(call => call.path === '/calling-identities/disable')?.body).not.toHaveProperty('attested');
   });
@@ -1106,7 +1047,7 @@ describe('Your calling number (lane g60)', () => {
     // Adding blind could register a second number beside one the page cannot see.
     expect(unread.canAdd).toBe(false);
     expect(adminViewOf(emptyState({ callingNumbers: [numberView()] })).callingNumber.summary).toContain(
-      'None of your numbers is attested',
+      'None of your numbers is in use',
     );
   });
 
@@ -1143,18 +1084,19 @@ describe('Your calling number (lane g60)', () => {
       }),
     ).callingNumber;
     expect(section.summary).toBe('Today calls from +14015550150 (Mobile).');
-    expect(section.numbers.map(number => [number.status, number.canAttest, number.canRetire])).toEqual([
-      ['in_use', false, true],
-      ['verified', false, true],
-      ['unverified', true, true],
-      ['retired', true, false],
+    expect(section.numbers.map(number => [number.status, number.canRetire])).toEqual([
+      ['in_use', true],
+      ['verified', true],
+      ['unverified', true],
+      ['retired', false],
     ]);
     expect(section.numbers[0]?.line).toBe(
       '+14015550150 (Mobile): you attested it on 2026-09-25. Today calls from this number.',
     );
     expect(section.numbers[1]?.line).toContain('an admin attested it for you on 2026-09-24');
-    expect(section.numbers[3]?.line).toContain('retired on 2026-09-20');
-    expect(section.statement).toBe('This is the number I place my calls from.');
+    expect(section.numbers[3]?.line).toContain('stopped on 2026-09-20');
+    // Nothing to tick: the register attests (wave 2, S4.3), so the section has no statement.
+    expect(section.hint).toContain('+ and your country code');
   });
 
   it('turns a calling-number refusal into a sentence and leaves every other code as it was', () => {

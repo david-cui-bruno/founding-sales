@@ -1,26 +1,20 @@
-import { join } from 'node:path';
-import { app, BrowserWindow, ipcMain, Menu, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
 import { z } from 'zod';
 import { uuid } from '@fss/contracts';
 import { createApiClient, fetchSend } from './apiClient.ts';
 import { createAuthedClient } from './authedClient.ts';
 import { createDialHandoff } from './dialHandoff.ts';
 import { createTelLaunchDriver, isBrowserLink } from './telHandoff.ts';
-import { registerCrmBridge, registerOperationBridges, registerSequenceBridge } from './todayWindow.ts';
+import { resetBridges } from './identityReset.ts';
+import { createImportHandoff, IMPORT_FILE_FILTERS } from './importHandoff.ts';
+import { registerWindowBridges } from './todayWindow.ts';
 import { windowMenuTemplate } from './windowMenu.ts';
-import { registerAdminBridge } from './settingsWindow.ts';
 import { createDeviceStore } from './deviceStore.ts';
 import { createKeychainVault } from './keychain.ts';
 import { createOfflineCache } from './offlineCache.ts';
 import { createSessionManager, type SessionManager } from './sessionManager.ts';
 import { IPC_CHANNELS } from './ipc.ts';
 import type { NavigationTarget, SessionChange } from '../shared/contract.ts';
-import {
-  MAILBOX_IPC_CHANNELS,
-  createMailboxBridge,
-  type MailboxBridgeDeps,
-  type MailboxBridgeHost,
-} from './mailboxBridge.ts';
 
 /**
  * The Electron main process.
@@ -64,6 +58,9 @@ const signInInputSchema = z.strictObject({
   deviceLabel: z.string().trim().min(1).max(120).optional(),
 });
 
+/** One Mac to sign out (wave 3b). A uuid and nothing else. */
+const revokeDeviceInputSchema = z.strictObject({ deviceId: uuid });
+
 export function buildSessionManager(configuration: DesktopConfiguration): SessionManager {
   const vault = createKeychainVault({ service: configuration.keychainService });
   return createSessionManager({
@@ -96,22 +93,14 @@ export function registerBridge(manager: SessionManager): void {
     return await manager.signIn(parsed.data);
   });
   ipcMain.handle(IPC_CHANNELS.signOut, async () => await manager.signOut());
-  ipcMain.handle(IPC_CHANNELS.refreshToday, async () => await manager.refreshToday());
-}
-
-/**
- * The Mailbox row on this window's "This Mac" card (release.md 8.0x).
- *
- * Its three channels take no argument, so there is nothing of the renderer's to
- * validate: whatever it sent is ignored rather than passed on. The consent URL is
- * opened by `shell.openExternal` inside the bridge and never returned across it.
- */
-export function registerMailboxBridge(deps: MailboxBridgeDeps): MailboxBridgeHost {
-  const host = createMailboxBridge(deps);
-  ipcMain.handle(MAILBOX_IPC_CHANNELS.state, async () => await host.state());
-  ipcMain.handle(MAILBOX_IPC_CHANNELS.refresh, async () => await host.refresh());
-  ipcMain.handle(MAILBOX_IPC_CHANNELS.connect, async () => await host.connect());
-  return host;
+  ipcMain.handle(IPC_CHANNELS.devices, async () => await manager.listDevices());
+  ipcMain.handle(IPC_CHANNELS.revokeDevice, async (_event, raw: unknown) => {
+    // The renderer's word is never taken for a shape, here least of all: the argument
+    // names a device to end.
+    const parsed = revokeDeviceInputSchema.safeParse(raw);
+    if (!parsed.success) return await manager.state();
+    return await manager.revokeDevice(parsed.data);
+  });
 }
 
 /** The one window, whether its page has loaded, and a route asked for before it had. */
@@ -185,12 +174,11 @@ export async function openWindow(configuration: DesktopConfiguration): Promise<B
 }
 
 /**
- * Register the Today, reply, CRM, sequence, administration and mailbox bridges, and put
- * the six views on the Window menu.
+ * Build the six bridges behind the one window, and put the views on the Window menu.
  *
- * Every view is in the one window, and every bridge answers it: `firmWorkspace.ts` reads
- * `globalThis.callieCrm`, the preload script installs it, and these handlers answer it.
- * Only the window plumbing changed in wave 1; the bridges and their channels did not.
+ * Every view reaches the main process through the operation registry — `api.read(op)` and
+ * `api.command(op)` — with dialling and choosing a CSV beside it on their own channels.
+ * Nothing here opens a window: there is one, and the menu shows a view in it.
  */
 export function registerWindows(configuration: DesktopConfiguration, manager: SessionManager): void {
   const api = createAuthedClient({
@@ -209,12 +197,19 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
     },
   });
   const session = { state: async () => await manager.state(), refreshToday: async () => await manager.refreshToday() };
+  const openExternally = async (url: string): Promise<void> => {
+    await shell.openExternal(url);
+  };
+  const importHandoff = createImportHandoff({
+    openDialog: async () =>
+      await dialog.showOpenDialog({
+        title: 'Choose a CSV to import',
+        properties: ['openFile'],
+        filters: [...IMPORT_FILE_FILTERS],
+      }),
+  });
 
-  // Today, Replies and the Diagnostics recovery controls, behind D4's operation registry
-  // — two channels and a closed list — with dialling on its own named channel. The reply
-  // state is never cached, so it needs nothing from the offline cache but the token, the
-  // online flag and the version gate.
-  const bridges = registerOperationBridges({
+  const bridges = registerWindowBridges({
     today: {
       api,
       // The handoff logic, bound to macOS through `telHandoff.ts`: the launch-services
@@ -223,36 +218,36 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
       handoff: createDialHandoff({ driver: createTelLaunchDriver() }),
       session,
     },
+    // The reply state is never cached, so it needs nothing from the offline cache but the
+    // token, the online flag and the version gate.
     replies: { api, session },
+    crm: { api, session, clientVersion: configuration.clientVersion },
+    sequences: { api, session },
+    settings: { api, session },
+    // The consent screen goes to the system browser exactly as sign-in opens it (5.1).
+    mailbox: { api, session, openExternally },
+    chooseImportFile: importHandoff.choose,
+    sessionGeneration: () => manager.sessionGeneration(),
   });
 
   /*
-   * A session transition empties the window (1.0.12).
+   * A session transition empties this Mac (1.0.12; every bridge since 1.0.13's review).
    *
-   * The main process is where it is known — a sign-out, another workspace, a role the
-   * renewal came back with, a revoked device seen as an authenticated refusal — and
-   * until now the renderer found out by noticing that a state it happened to read
-   * looked different. Two things happen the moment it is known: the reply bridge drops
-   * the lane and the one body it holds, and the window is told so it can empty its
-   * request cache and everything anybody had typed.
+   * The main process is where it is known — a sign-out confirmed or still owed to the
+   * server, another workspace, a role the server now gives this membership, a revoked
+   * device seen as an authenticated refusal — and the renderer used to find out by
+   * noticing that a state it happened to read looked different.
+   *
+   * Three things happen the moment it is known. The session manager has already wiped
+   * the encrypted Today cache and the list in memory. **Every** bridge drops its
+   * snapshot here — until the review only Replies did, so the CRM bridge would answer
+   * the next person's first read with the last one's firm page, and Settings with the
+   * last one's numbers and figures. And the window is told, so it empties its request
+   * cache and everything anybody had typed.
    */
   manager.onSessionChange(change => {
-    void bridges.replies.forget();
+    void resetBridges([bridges.today, bridges.replies, bridges.crm, bridges.sequences, bridges.settings, bridges.mailbox]);
     sendSessionChange(change);
-  });
-  registerCrmBridge({ api, session, clientVersion: configuration.clientVersion });
-  // G8's editor.
-  registerSequenceBridge({ api, session });
-  // Lane G9: Settings, the dashboard and Diagnostics, in one window of three screens.
-  registerAdminBridge({ api, session });
-  // The Mailbox row on G2's own window: the same token and the same version gate, and
-  // the consent screen in the system browser exactly as sign-in opens it (5.1).
-  registerMailboxBridge({
-    api,
-    session,
-    openExternally: async url => {
-      await shell.openExternal(url);
-    },
   });
 
   Menu.setApplicationMenu(
@@ -277,16 +272,4 @@ export async function start(configuration: DesktopConfiguration): Promise<Sessio
     app.quit();
   });
   return manager;
-}
-
-export function defaultConfiguration(apiBaseUrl: string, clientVersion: string): DesktopConfiguration {
-  const directory = join(app.getPath('userData'), 'callie');
-  return {
-    apiBaseUrl,
-    clientVersion,
-    keychainService: 'com.callie.fss.desktop',
-    userDataDirectory: directory,
-    rendererEntry: join(import.meta.dirname, '..', 'renderer', 'index.html'),
-    preloadEntry: join(import.meta.dirname, '..', 'preload', 'preload.js'),
-  };
 }

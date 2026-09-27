@@ -23,7 +23,6 @@ import type {
   AddFirmDraft,
   AddFirmView,
   CheckRouteRequest,
-  ConfirmRouteRequest,
   ContactEdit,
   CrmScreen,
   CrmState,
@@ -61,34 +60,18 @@ import type { AuthedClient } from './authedClient.ts';
  * it opened, so a board loaded before the endpoint answered still offers the control
  * for a firm the person has looked at.
  *
+ * Since 1.0.13 nothing here is a channel of its own: every method below is an operation
+ * of the registry (`src/shared/operations.ts`), so the argument checking that used to be
+ * written out per channel is the operation's input schema, and the answer is parsed on
+ * both sides of the bridge. "Confirm this number" is gone with it: a phone number is
+ * usable on entry since wave 2 (S4.4), so there is nothing left to confirm.
+ *
  * Lane g84 (audit item G02) added the two ways a firm gets in from the Mac: **Add firm**,
  * one command (`POST /crm/firms/add`) for the firm, its first contact and that contact's
  * address and number; and **Import**, the admin's CSV preview and commit. The file's text
  * stays here, in the main process, between the preview and the commit, with one command
  * id per row; the window is given what the server said about the file, never the file.
  */
-
-export const CRM_IPC_CHANNELS = {
-  state: 'callie:crm:state',
-  openFirm: 'callie:crm:open-firm',
-  openPipeline: 'callie:crm:open-pipeline',
-  saveContact: 'callie:crm:save-contact',
-  changeStage: 'callie:crm:change-stage',
-  resolveMerge: 'callie:crm:resolve-merge',
-  // Lane g84: Add firm and Import.
-  openAddFirm: 'callie:crm:open-add-firm',
-  addFirm: 'callie:crm:add-firm',
-  openImport: 'callie:crm:open-import',
-  previewImport: 'callie:crm:preview-import',
-  commitImport: 'callie:crm:commit-import',
-  // Lane g88: the Firm page's pipeline start, enrolment and number confirmation.
-  openOpportunity: 'callie:crm:open-opportunity',
-  enroll: 'callie:crm:enroll',
-  confirmRoute: 'callie:crm:confirm-route',
-  // Lane g90: "Check again" on an address still being checked.
-  checkRoute: 'callie:crm:check-route',
-} as const;
-export type CrmIpcChannel = (typeof CRM_IPC_CHANNELS)[keyof typeof CRM_IPC_CHANNELS];
 
 /*
  * The stage list, the firm list, G9's board and a refused merge are parsed with
@@ -114,6 +97,8 @@ export interface CrmBridgeDeps {
 }
 
 export interface CrmBridgeHost {
+  /** Drop the snapshot on an identity transition (1.0.13, P0-A). */
+  forget(): Promise<CrmState>;
   state(): Promise<CrmState>;
   openFirm(input: { readonly firmId: string }): Promise<CrmState>;
   openPipeline(): Promise<CrmState>;
@@ -127,7 +112,6 @@ export interface CrmBridgeHost {
   commitImport(): Promise<CrmState>;
   openOpportunity(): Promise<CrmState>;
   enroll(input: EnrollRequest): Promise<CrmState>;
-  confirmRoute(input: ConfirmRouteRequest): Promise<CrmState>;
   checkRoute(input: CheckRouteRequest): Promise<CrmState>;
 }
 
@@ -392,6 +376,32 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
   };
 
   return {
+    /**
+     * Forget everything this bridge is holding (1.0.13, P0-A).
+     *
+     * Called on every identity transition, from `registerWindows`. Nothing here is the
+     * next person's to read, and a snapshot kept across a sign-out is the last person's
+     * work shown to somebody else.
+     */
+    async forget() {
+      screen = 'pipeline';
+      firm = null;
+      pipeline = null;
+      merge = null;
+      notice = null;
+      addFirmView = null;
+      importView = null;
+      importCsv = null;
+      importCommandIds = new Map();
+      sequences = null;
+      // The firms the last person opened, and the opportunity each one carried. It is
+      // merged into the next board read (`opportunityIdByFirmId` above), so leaving it
+      // here would offer the next person a stage change on a firm from a workspace they
+      // may not be in — with an opportunity id that is not theirs to name.
+      for (const firmId of Object.keys(opportunityIdByFirmId)) delete opportunityIdByFirmId[firmId];
+      return await snapshot();
+    },
+
     async state() {
       if (pipeline === null && firm === null) await loadPipeline();
       return await snapshot();
@@ -563,18 +573,6 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
       return await snapshot();
     },
 
-    /** "Confirm this number" (lane g88): the phone route at the version the page showed. */
-    async confirmRoute(input) {
-      const answer = await deps.api.command(
-        '/contacts/routes/confirm',
-        { routeKind: 'phone', routeId: input.routeId, routeVersion: input.routeVersion },
-        () => null,
-      );
-      notice = answer.ok ? 'route_confirmed' : answer.reason;
-      if (firm !== null) await loadFirm(firm.read.firm.id);
-      return await snapshot();
-    },
-
     /**
      * "Check again" (lane g90): one more check of an address at the version the page
      * showed. The route's own refusals are said about an address, not a number.
@@ -646,7 +644,7 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
 }
 
 /** Turn a refused merge body into the conflicts screen, when it carries them. */
-export function conflictsOf(body: unknown): readonly MergeConflict[] {
+export function conflictsOf(body: unknown): MergeConflict[] {
   const parsed = mergeRefusalSchema.safeParse(body);
-  return parsed.success ? (parsed.data.conflicts ?? []) : [];
+  return parsed.success ? [...(parsed.data.conflicts ?? [])] : [];
 }

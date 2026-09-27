@@ -52,6 +52,7 @@ export function desktopState(overrides: Partial<DesktopState> = {}): DesktopStat
       cards: todayState().cards.map(card => ({ ...card })),
     },
     rememberedWorkspace: { workspaceId: WORKSPACE_ID, deviceLabel: "David's MacBook" },
+    devices: null,
     ...overrides,
   };
 }

@@ -6,12 +6,17 @@ import {
   registerOperations,
 } from '../src/main/operationHost.ts';
 import type { AuthedClient } from '../src/main/authedClient.ts';
+import type { CrmBridgeHost } from '../src/main/crmBridge.ts';
+import type { MailboxBridgeHost } from '../src/main/mailboxBridge.ts';
 import type { ReplyBridgeHost } from '../src/main/replyBridge.ts';
+import type { SequenceBridgeHost } from '../src/main/sequenceBridge.ts';
+import type { AdminBridgeHost } from '../src/main/settingsBridge.ts';
 import type { TodayBridgeHost } from '../src/main/todayBridge.ts';
 import type { ReplyState } from '../src/renderer/replyContract.ts';
 import type { TodayState } from '../src/renderer/todayContract.ts';
 import {
   DIAL_IPC_CHANNELS,
+  IMPORT_IPC_CHANNELS,
   OPERATIONS,
   OPERATION_IPC_CHANNELS,
   OPERATION_NAMES,
@@ -75,17 +80,38 @@ const hosts = () => {
     })),
     command: vi.fn(async () => ({ ok: true as const, value: {} })),
   };
+  // The four views the registry gained in 1.0.13. Their own suites hold what each host
+  // does; here they only have to exist, so that "one handler per operation" is a fact
+  // about the whole list rather than about Today and Replies.
+  const stub = <T>(methods: readonly string[], answer: () => T): T =>
+    Object.fromEntries(methods.map(name => [name, vi.fn(async () => await Promise.resolve(answer()))])) as T;
   return {
     api: api as unknown as AuthedClient,
     today: today as unknown as TodayBridgeHost,
     replies: replies as unknown as ReplyBridgeHost,
+    crm: stub<CrmBridgeHost>(
+      ['state', 'openFirm', 'openPipeline', 'openAddFirm', 'openImport', 'addFirm', 'previewImport', 'commitImport', 'saveContact', 'changeStage', 'resolveMerge', 'openOpportunity', 'enroll', 'checkRoute'],
+      () => ({}) as never,
+    ),
+    sequences: stub<SequenceBridgeHost>(
+      ['state', 'openSequence', 'createSequence', 'saveSteps', 'saveTemplate', 'publish', 'retire'],
+      () => ({}) as never,
+    ),
+    settings: stub<AdminBridgeHost>(
+      ['state', 'show', 'saveSetting', 'openHistory', 'loadDashboard', 'retireStage', 'acknowledgeAlert', 'setSendingCap', 'recordSendingAuthentication', 'recordHolidayCalendar', 'addCallingNumber', 'retireCallingNumber', 'allowStates', 'revokePosture'],
+      () => ({}) as never,
+    ),
+    mailbox: stub<MailboxBridgeHost>(['state', 'refresh', 'connect'], () => ({}) as never),
     spies: { today, replies, api },
   };
 };
 
 describe('the operation registry', () => {
-  it('is a closed list of operations, with two channels and the dial handoff beside them', () => {
-    expect(OPERATION_NAMES).toEqual([
+  it('is a closed list covering every view, with two channels and the two handoffs beside them', () => {
+    // Every view is here since 1.0.13; the names are the vocabulary a renderer may use.
+    const families = [...new Set(OPERATION_NAMES.map(name => name.slice(0, name.indexOf('.'))))];
+    expect(families).toEqual(['today', 'replies', 'diagnostics', 'crm', 'sequences', 'settings', 'mailbox']);
+    expect(OPERATION_NAMES.filter(name => name.startsWith('today.'))).toEqual([
       'today.state',
       'today.refresh',
       'today.expand',
@@ -94,6 +120,8 @@ describe('the operation registry', () => {
       'today.recordOutcome',
       'today.scheduleCallback',
       'today.releasePause',
+    ]);
+    expect(OPERATION_NAMES.filter(name => name.startsWith('replies.'))).toEqual([
       'replies.state',
       'replies.refresh',
       'replies.open',
@@ -101,23 +129,60 @@ describe('the operation registry', () => {
       'replies.collapse',
       'replies.confirm',
       'replies.resolve',
-      'diagnostics.sendStatus',
-      'diagnostics.resolveSend',
-      'diagnostics.deadJobs',
-      'diagnostics.requeueJob',
     ]);
     expect(Object.values(OPERATION_IPC_CHANNELS)).toEqual(['callie:op:read', 'callie:op:command']);
     expect(Object.values(DIAL_IPC_CHANNELS)).toEqual(['callie:dial:call']);
+    expect(Object.values(IMPORT_IPC_CHANNELS)).toEqual(['callie:import:choose']);
   });
 
-  it('names no operation that closes an opportunity, sends, or dials', () => {
-    const paths = OPERATION_NAMES.map(name => OPERATIONS[name].http?.path ?? null);
+  it('names no operation that dials, and every operation says what the main process does for it', () => {
+    const paths = OPERATION_NAMES.flatMap(name => OPERATIONS[name].calls.map(call => call.path));
+    // Dialling is a channel of its own and never an operation: these two are the pair
+    // that authorises and spends a call, and no operation may reach them.
     expect(paths).not.toContain('/dial/authorize');
     expect(paths).not.toContain('/dial/consume');
-    expect(paths.filter(path => path !== null && /opportunit|send|suppress/u.test(path))).toEqual([]);
-    // Every operation says what the main process does for it, so a handler that stopped
-    // doing it is a name with nothing behind it.
+    expect(operationOf('today.dial')).toBeNull();
+    /*
+     * `/dial/check` is a different thing and is declared (1.0.13, P1-5). Opening a card
+     * asks it once per usable number for the advice the card shows — "it is 9:10 there",
+     * "this number is not callable and why" — and it moves nothing. Leaving it out of
+     * `calls` made the deprecated-route check below a check of an incomplete list.
+     */
+    expect(OPERATIONS['today.expand'].calls.map(call => call.path)).toContain('/dial/check');
     for (const name of OPERATION_NAMES) expect(OPERATIONS[name].transform.length).toBeGreaterThan(3);
+  });
+
+  /**
+   * The list W3-C deletes from the server.
+   *
+   * `calls` is every path the main process may reach for an operation, so this is the
+   * whole of what 1.0.13 can ask for — the dial itself (`/dial/authorize`,
+   * `/dial/consume`, `/calls/log`) and the import handoff (`/import/preview`) aside,
+   * which are named channels and whose paths are in their own modules. A route that
+   * reappeared here would be a failing test rather than a caller nobody noticed.
+   *
+   * The list is only as good as `calls` is complete, which is why
+   * `registryTraffic.test.ts` drives every operation against a recording client with
+   * answers the bridges accept, and fails on a request that is not declared here.
+   */
+  it('calls none of the routes wave 2 deprecated', () => {
+    const paths = new Set(OPERATION_NAMES.flatMap(name => OPERATIONS[name].calls.map(call => call.path)));
+    for (const retired of [
+      '/dial/authorize',
+      '/dial/consume',
+      '/calling-identities/attest',
+      '/contacts/routes/confirm',
+      '/postures/record',
+      '/templates/approve',
+      '/enrollments/resume',
+      '/enrollments/resume/preview',
+    ]) {
+      expect([...paths]).not.toContain(retired);
+    }
+    // The one deprecated route that still has a caller, and why: it is the only way a
+    // sequence gets its first version, so W3-C keeps it until something else makes one.
+    expect([...paths]).toContain('/sequences/versions/draft');
+    expect(OPERATIONS['sequences.createSequence'].transform).toContain('first empty version');
   });
 
   it('refuses a name that is not one of them, including a prototype key', () => {

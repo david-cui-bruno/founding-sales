@@ -81,6 +81,9 @@ function state(overrides: Partial<CrmState> = {}): CrmState {
     firm: identityPage(true),
     pipeline: null,
     merge: null,
+    addFirm: null,
+    import: null,
+    sequences: null,
     ...overrides,
   };
 }

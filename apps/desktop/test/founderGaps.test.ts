@@ -14,7 +14,6 @@ import {
   moveStep,
   newStep,
   removeStep,
-  resumeReviewPanel,
   sequenceNotice,
   sequenceScreen,
   stepsForWire,
@@ -136,19 +135,25 @@ describe('the step editor (audit G03)', () => {
     expect(draftChanged(version, [...steps, call(4)])).toBe(true);
   });
 
-  it('offers "Edit as a new draft" on a published version only when no draft is open', () => {
+  /**
+   * Wave 2, S3: a published version is edited in place, and the edit reaches the
+   * enrollments running in it. "Edit as a new draft" is gone — a second version was
+   * never what a person editing a live sequence meant — so a published version is
+   * editable and a retired one is not, whatever else is open.
+   */
+  it('edits a published version in place, however many versions there are', () => {
     const published = sequenceVersionAnswer([emailStepAnswer(TEMPLATE)], { state: 'published', publishedAt: '2026-09-20T12:00:00.000Z' });
     const base: SequenceState = { ...EMPTY_SEQUENCE_STATE, online: true, mayMutate: true, isAdmin: true, templates: [templateVersionAnswer()] };
-    expect(sequenceScreen({ ...base, versions: [published] }).versions[0]?.canStartDraft).toBe(true);
+    expect(sequenceScreen({ ...base, versions: [published] }).versions[0]?.editable).toBe(true);
     const draft = sequenceVersionAnswer([], { id: SEQUENCE_IDS.firm, version: 2 });
-    expect(sequenceScreen({ ...base, versions: [draft, published] }).versions.find(panel => panel.state === 'published')?.canStartDraft).toBe(false);
+    expect(sequenceScreen({ ...base, versions: [draft, published] }).versions.find(panel => panel.state === 'published')?.editable).toBe(true);
     expect(sequenceScreen({ ...base, versions: [published] }).versions[0]?.stopSentence).toContain('Stops by itself');
   });
 });
 
 // ------------------------------------------------------------------ the templates
 describe('the template form (audit G03)', () => {
-  const draft = { templateId: null, name: 'First touch', subject: 'A question for {firm_name}', body: 'Hello {contact_first_name},\n\nA note.', signOff: 'David\nCallie' };
+  const draft = { templateVersionId: null, name: 'First touch', subject: 'A question for {firm_name}', body: 'Hello {contact_first_name},\n\nA note.', signOff: 'David\nCallie' };
 
   it('ends the email with the sign-off and the stop line, and gives the person back only what they typed', () => {
     const body = composeTemplateBody(draft.body, draft.signOff);
@@ -179,7 +184,7 @@ describe('the template form (audit G03)', () => {
     expect(sequenceNotice('template_unapproved:template_sign_off_repeats_stop_line')).toBe(
       'Not approved. The sign-off repeats the stop line; the footer adds that line itself.',
     );
-    expect(sequenceNotice('draft_saved')).toBe('Draft saved.');
+    expect(sequenceNotice('steps_saved')).toBe('Saved.');
     expect(sequenceNotice('Message copied.')).toBe('Message copied.');
   });
 });
@@ -208,32 +213,42 @@ describe('the sequence bridge authors through the commands (audit G03)', () => {
     expect(state.notice).toBe('sequence_created');
   });
 
-  it('saves a draft as numbered wire steps, and refuses a malformed one without a command', async () => {
+  it('saves the steps as numbered wire steps, and refuses a malformed one without a command', async () => {
     const { api, calls } = scriptedApi({ ...reads, '/sequences/versions/steps': accepted({ steps: 2 }) });
     const bridge = sequenceBridge(api);
-    const saved = await bridge.saveDraft({ sequenceVersionId: SEQUENCE_IDS.version, steps: [call(0), email(2)] });
-    expect(saved.notice).toBe('draft_saved');
+    const saved = await bridge.saveSteps({ sequenceVersionId: SEQUENCE_IDS.version, steps: [call(0), email(2)] });
+    expect(saved.notice).toBe('steps_saved');
     expect(calls.find(entry => entry.path === '/sequences/versions/steps')?.body).toMatchObject({
       sequenceVersionId: SEQUENCE_IDS.version,
       steps: stepsForWire([call(0), email(2)]),
     });
 
     calls.length = 0;
-    const refused = await bridge.saveDraft({ sequenceVersionId: SEQUENCE_IDS.version, steps: [{ channel: 'fax' }] });
+    const refused = await bridge.saveSteps({
+      sequenceVersionId: SEQUENCE_IDS.version,
+      steps: [{ channel: 'fax' } as unknown as DraftStep],
+    });
     expect(refused.notice).toBe('invalid_input');
     expect(calls.map(entry => entry.path)).not.toContain('/sequences/versions/steps');
   });
 
-  it('writes a template with its footer and the variables it names', async () => {
-    const { api, calls } = scriptedApi({ ...reads, '/templates/create': accepted(templateVersionAnswer({ approvedAt: null })) });
-    const state = await sequenceBridge(api).createTemplate({
-      templateId: null,
+  /**
+   * Wave 2, S3 and D5: one press writes the version and approves it.
+   *
+   * `approve: true` goes with the text, and the command refuses the whole of it with
+   * every issue when the text does not pass — so a version is never written that
+   * cannot be approved, and `/templates/approve` has no caller.
+   */
+  it('writes a template with its footer, its variables and its approval in one command', async () => {
+    const { api, calls } = scriptedApi({ ...reads, '/templates/create': accepted(templateVersionAnswer()) });
+    const state = await sequenceBridge(api).saveTemplate({
+      templateVersionId: null,
       name: ' First touch ',
       subject: 'A question for {firm_name}',
       body: 'Hello {contact_first_name},',
       signOff: 'David',
     });
-    expect(state.notice).toBe('template_created');
+    expect(state.notice).toBe('template_saved');
     const body = calls.find(entry => entry.path === '/templates/create')?.body;
     expect(body).toMatchObject({
       name: 'First touch',
@@ -241,106 +256,92 @@ describe('the sequence bridge authors through the commands (audit G03)', () => {
       body: `Hello {contact_first_name},\n\nDavid\n${SENDING_STOP_LINE}`,
       footerSignOff: 'David',
       requiredVariables: ['firm_name', 'contact_first_name'],
+      approve: true,
     });
-    expect(body).not.toHaveProperty('templateId');
+    expect(body).not.toHaveProperty('templateVersionId');
+    expect(calls.map(entry => entry.path)).not.toContain('/templates/approve');
     // A server before lane W1-C answers the version alone: no warnings.
     expect(state.warnings).toEqual([]);
   });
 
-  it('shows the copy warnings a create or an approval answered, until the next act (wave 1)', async () => {
+  it('edits an existing version in place, naming it rather than superseding it', async () => {
+    const { api, calls } = scriptedApi({ ...reads, '/templates/update': accepted(templateVersionAnswer()) });
+    const state = await sequenceBridge(api).saveTemplate({
+      templateVersionId: TEMPLATE,
+      name: 'First touch',
+      subject: 'A question',
+      body: 'Hello,',
+      signOff: 'David',
+    });
+    expect(state.notice).toBe('template_saved');
+    expect(calls.find(entry => entry.path === '/templates/update')?.body).toMatchObject({
+      templateVersionId: TEMPLATE,
+      approve: true,
+    });
+    expect(calls.map(entry => entry.path)).not.toContain('/templates/create');
+  });
+
+  it('shows the copy warnings a save answered, until the next act (wave 1)', async () => {
     const { api } = scriptedApi({
       ...reads,
-      '/templates/create': accepted({ ...templateVersionAnswer({ approvedAt: null }), warnings: ['template_body_too_long', 'template_new_advice'] }),
-      '/templates/approve': accepted({ ...templateVersionAnswer(), warnings: ['template_subject_url'] }),
+      '/templates/create': accepted({ ...templateVersionAnswer(), warnings: ['template_body_too_long', 'template_new_advice'] }),
       '/sequences/versions/publish': accepted({}),
     });
     const bridge = sequenceBridge(api);
-    const created = await bridge.createTemplate({ templateId: null, name: 'Long', subject: 'Hi', body: 'word '.repeat(90), signOff: 'David' });
-    expect(created.notice).toBe('template_created');
-    expect(created.warnings).toEqual(['template_body_too_long', 'template_new_advice']);
-    expect(sequenceScreen(created).warnings).toEqual(['The email is longer than 89 words, sign-off included.', 'template_new_advice']);
+    const saved = await bridge.saveTemplate({ templateVersionId: null, name: 'Long', subject: 'Hi', body: 'word '.repeat(90), signOff: 'David' });
+    expect(saved.notice).toBe('template_saved');
+    expect(saved.warnings).toEqual(['template_body_too_long', 'template_new_advice']);
+    expect(sequenceScreen(saved).warnings).toEqual(['The email is longer than 89 words, sign-off included.', 'template_new_advice']);
     // A read keeps them on screen; the next act clears them.
     expect((await bridge.state()).warnings).toHaveLength(2);
-    const approved = await bridge.approveTemplate({ templateVersionId: TEMPLATE });
-    expect(approved.warnings).toEqual(['template_subject_url']);
     expect((await bridge.publish({ sequenceVersionId: SEQUENCE_IDS.version })).warnings).toEqual([]);
   });
 
-  it('reads a refused approval’s issues from its body, past the transport’s 80-character code', async () => {
+  it('reads a refused save’s issues from its body, past the transport’s 80-character code', async () => {
     const reason = 'template_unapproved:template_body_multiple_urls,template_pricing_or_guarantee_language,template_body_markup';
-    const { api } = scriptedApi({ ...reads, '/templates/approve': { status: 409, body: { status: 'refused', reason } } });
-    const state = await sequenceBridge(api).approveTemplate({ templateVersionId: TEMPLATE });
+    const { api } = scriptedApi({ ...reads, '/templates/create': { status: 409, body: { status: 'refused', reason } } });
+    const state = await sequenceBridge(api).saveTemplate({
+      templateVersionId: null,
+      name: 'First touch',
+      subject: 'A question',
+      body: 'Hello,',
+      signOff: 'David',
+    });
     expect(state.notice).toBe(reason);
   });
 });
 
-// ------------------------------------------------------------------ the resume review
-describe('"Review and resume" shows the review first (audit G06)', () => {
-  const preview = {
-    asOf: '2026-09-25T13:00:00.000Z',
-    preview: {
-      enrollmentId: SEQUENCE_IDS.enrollment,
-      kind: 'review_required' as const,
-      unionMilliseconds: 9 * 86_400_000,
-      shiftMilliseconds: 9 * 86_400_000,
-      openHoldIds: [],
-      firmTimeZone: 'America/New_York',
-      holds: [{ reasonCode: 'scoped_pause' as const, startedAt: '2026-09-10T13:00:00.000Z', releasedAt: '2026-09-19T13:00:00.000Z' }],
-      steps: [
-        {
-          stepExecutionId: SEQUENCE_IDS.stepExecution,
-          ordinal: 2,
-          channel: 'email' as const,
-          state: 'held' as const,
-          originalDueAt: '2026-09-17T13:00:00.000Z',
-          dueAt: '2026-09-17T13:00:00.000Z',
-          proposedDueAt: '2026-09-26T13:00:00.000Z',
-        },
-      ],
-    },
-  };
+// ------------------------------------------------------------ the long hold, wave 2
+/**
+ * "Review and resume" is gone (wave 2, S4.1; audit G06 closed).
+ *
+ * An enrollment held a long time resumes by itself, the server never sends
+ * `review_required`, and neither `/enrollments/resume/preview` nor `/enrollments/resume`
+ * has a caller on this Mac. `/enrollments` is still read, for the count of who is in
+ * flight, and that read asks for nothing to be confirmed.
+ */
+describe('a long hold resumes by itself (wave 2, S4.1)', () => {
   const reads = {
-    '/sequences': { status: 200, body: { sequences: [] } },
+    '/sequences': { status: 200, body: { sequences: [sequenceSummaryAnswer()] } },
+    '/sequences/versions': { status: 200, body: { versions: [sequenceVersionAnswer([])] } },
     '/templates': { status: 200, body: { templates: [] } },
     '/enrollments': {
       status: 200,
-      body: { asOf: '2026-09-25T13:00:00.000Z', enrollments: [enrollmentAnswer({ state: 'review_required', reviewUnionMilliseconds: 9 * 86_400_000 })] },
+      body: { asOf: '2026-09-25T13:00:00.000Z', enrollments: [enrollmentAnswer()] },
     },
-    '/enrollments/resume/preview': { status: 200, body: preview },
   } satisfies Record<string, HttpAnswer>;
 
-  it('opens the review instead of resuming, and resumes only the reviewed enrollment when confirmed', async () => {
-    const { api, calls } = scriptedApi({ ...reads, '/enrollments/resume': accepted({ kind: 'resume', shiftMilliseconds: 1, unionMilliseconds: 1, openHoldIds: [], executionsShifted: 1 }) });
-    const bridge = sequenceBridge(api);
-    const reviewing = await bridge.resumeEnrollment({ enrollmentId: SEQUENCE_IDS.enrollment });
+  it('reads who is in flight and asks neither resume route', async () => {
+    const { api, calls } = scriptedApi(reads);
+    const state = await sequenceBridge(api).state();
+    expect(state.enrollments.map(entry => entry.state)).toEqual(['active']);
     expect(calls.map(entry => entry.path)).not.toContain('/enrollments/resume');
-    expect(reviewing.resumeReview?.preview.enrollmentId).toBe(SEQUENCE_IDS.enrollment);
-
-    const panel = sequenceScreen(reviewing).resumeReview;
-    expect(panel?.steps).toEqual([
-      { label: 'Step 2 · Email (held)', from: 'Thu, Sep 17, 9:00 AM', to: 'Sat, Sep 26, 9:00 AM', moved: true, removed: false },
+    expect(calls.map(entry => entry.path)).not.toContain('/enrollments/resume/preview');
+    const screen = sequenceScreen(state);
+    expect(screen.enrollments?.summary).toBe('One person is working through this sequence.');
+    expect(screen.enrollments?.rows).toEqual([
+      { sequenceVersionId: SEQUENCE_IDS.version, line: 'Version 2 — 1 running' },
     ]);
-    expect(panel?.summary).toContain('9 days later');
-    expect(panel?.holdLines).toEqual(['scoped pause: Thu, Sep 10, 9:00 AM to Sat, Sep 19, 9:00 AM']);
-    expect(panel?.canConfirm).toBe(true);
-    expect(sequenceScreen(reviewing).holdReview[0]?.reviewing).toBe(true);
-
-    const resumed = await bridge.resumeEnrollment({ enrollmentId: SEQUENCE_IDS.enrollment });
-    expect(calls.filter(entry => entry.path === '/enrollments/resume').map(entry => entry.body?.['enrollmentId'])).toEqual([SEQUENCE_IDS.enrollment]);
-    expect(resumed.notice).toBe('resumed');
-    expect(resumed.resumeReview).toBeNull();
-  });
-
-  it('offers no confirmation while something still holds the enrollment', () => {
-    const state: SequenceState = {
-      ...EMPTY_SEQUENCE_STATE,
-      online: true,
-      mayMutate: true,
-      resumeReview: { ...preview, preview: { ...preview.preview, kind: 'still_held', shiftMilliseconds: 0, openHoldIds: [SEQUENCE_IDS.firm] } },
-    };
-    const panel = resumeReviewPanel(state.resumeReview!, state);
-    expect(panel.canConfirm).toBe(false);
-    expect(panel.summary).toContain('still holding');
   });
 });
 
@@ -446,17 +447,25 @@ describe('the Firm page enrols, confirms a number, and clears a title (audit G03
     expect(opened.sequences).toEqual({ published: [], enrollments: [], readError: 'service_unavailable' });
   });
 
-  it('confirms a phone number at the version on screen', async () => {
-    const { api, calls } = scriptedApi({ ...reads('open'), '/contacts/routes/confirm': accepted({ id: ROUTE }) });
+  /**
+   * Wave 2, S4.4: a phone number is callable the moment it is entered.
+   *
+   * "Confirm this number" and `/contacts/routes/confirm` went with the prompt — the
+   * person who typed the number has already said it reaches them — so the only route
+   * check left is "Check again" on an *address*, which is a different route.
+   */
+  it('checks an address again at the version on screen, and confirms no number', async () => {
+    const { api, calls } = scriptedApi({ ...reads('open'), '/contacts/routes/check': accepted({ id: ROUTE }) });
     const bridge = crm(api);
     await bridge.openFirm({ firmId: FIRM });
-    const answer = await bridge.confirmRoute({ routeId: ROUTE, routeVersion: 1 });
-    expect(answer.notice).toBe('route_confirmed');
-    expect(calls.find(entry => entry.path === '/contacts/routes/confirm')?.body).toMatchObject({
-      routeKind: 'phone',
+    const answer = await bridge.checkRoute({ routeId: ROUTE, routeVersion: 1 });
+    expect(answer.notice).toBe('route_check_queued');
+    expect(calls.find(entry => entry.path === '/contacts/routes/check')?.body).toMatchObject({
+      routeKind: 'email',
       routeId: ROUTE,
       routeVersion: 1,
     });
+    expect(calls.map(entry => entry.path)).not.toContain('/contacts/routes/confirm');
   });
 
   it('sends the patch the route reads, with an explicit null for a cleared title (C20)', async () => {

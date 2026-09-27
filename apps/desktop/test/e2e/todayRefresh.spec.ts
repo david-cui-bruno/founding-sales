@@ -38,11 +38,11 @@ async function markFirstCard(page: Page): Promise<void> {
 }
 
 async function focusWindow(page: Page): Promise<void> {
-  const reads = called('admin.state').length;
+  const reads = called('settings.state').length;
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   // The focus handler reads the sidebar every time; once that has been asked for, the
   // handler has run and any read of the list it was going to make has been asked for too.
-  await expect.poll(() => called('admin.state').length).toBeGreaterThan(reads);
+  await expect.poll(() => called('settings.state').length).toBeGreaterThan(reads);
 }
 
 test('the list says how old it is, and the minutes move without redrawing anything', async ({ page }) => {

@@ -7,7 +7,11 @@ import {
   type OperationName,
 } from '../shared/operations.ts';
 import type { AuthedClient } from './authedClient.ts';
+import type { CrmBridgeHost } from './crmBridge.ts';
+import type { MailboxBridgeHost } from './mailboxBridge.ts';
 import type { ReplyBridgeHost } from './replyBridge.ts';
+import type { SequenceBridgeHost } from './sequenceBridge.ts';
+import type { AdminBridgeHost } from './settingsBridge.ts';
 import type { TodayBridgeHost } from './todayBridge.ts';
 
 /**
@@ -36,6 +40,10 @@ export interface OperationHostDeps {
   readonly api: AuthedClient;
   readonly today: TodayBridgeHost;
   readonly replies: ReplyBridgeHost;
+  readonly crm: CrmBridgeHost;
+  readonly sequences: SequenceBridgeHost;
+  readonly settings: AdminBridgeHost;
+  readonly mailbox: MailboxBridgeHost;
 }
 
 type Handler = (input: never) => Promise<unknown>;
@@ -49,6 +57,10 @@ type Handler = (input: never) => Promise<unknown>;
 const FALLBACK: Readonly<Record<string, OperationName>> = Object.freeze({
   today: 'today.state',
   replies: 'replies.state',
+  crm: 'crm.state',
+  sequences: 'sequences.state',
+  settings: 'settings.state',
+  mailbox: 'mailbox.state',
 });
 
 export function operationHandlers(deps: OperationHostDeps): Readonly<Record<OperationName, Handler>> {
@@ -73,6 +85,59 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     'replies.forget': async () => await deps.replies.forget(),
     'replies.confirm': async (input: Parameters<ReplyBridgeHost['confirm']>[0]) => await deps.replies.confirm(input),
     'replies.resolve': async (input: Parameters<ReplyBridgeHost['resolve']>[0]) => await deps.replies.resolve(input),
+
+    'crm.state': async () => await deps.crm.state(),
+    'crm.openFirm': async (input: { readonly firmId: string }) => await deps.crm.openFirm(input),
+    'crm.openPipeline': async () => await deps.crm.openPipeline(),
+    'crm.openAddFirm': async () => await deps.crm.openAddFirm(),
+    'crm.openImport': async () => await deps.crm.openImport(),
+    'crm.addFirm': async (input: Parameters<CrmBridgeHost['addFirm']>[0]) => await deps.crm.addFirm(input),
+    'crm.commitImport': async () => await deps.crm.commitImport(),
+    'crm.saveContact': async (input: Parameters<CrmBridgeHost['saveContact']>[0]) => await deps.crm.saveContact(input),
+    'crm.changeStage': async (input: Parameters<CrmBridgeHost['changeStage']>[0]) => await deps.crm.changeStage(input),
+    'crm.resolveMerge': async (input: Parameters<CrmBridgeHost['resolveMerge']>[0]) => await deps.crm.resolveMerge(input),
+    'crm.openOpportunity': async () => await deps.crm.openOpportunity(),
+    'crm.enroll': async (input: Parameters<CrmBridgeHost['enroll']>[0]) => await deps.crm.enroll(input),
+    'crm.checkRoute': async (input: Parameters<CrmBridgeHost['checkRoute']>[0]) => await deps.crm.checkRoute(input),
+
+    'sequences.state': async () => await deps.sequences.state(),
+    'sequences.openSequence': async (input: { readonly sequenceId: string }) => await deps.sequences.openSequence(input),
+    'sequences.createSequence': async (input: { readonly name: string }) => await deps.sequences.createSequence(input),
+    'sequences.saveSteps': async (input: Parameters<SequenceBridgeHost['saveSteps']>[0]) =>
+      await deps.sequences.saveSteps(input),
+    'sequences.saveTemplate': async (input: Parameters<SequenceBridgeHost['saveTemplate']>[0]) =>
+      await deps.sequences.saveTemplate(input),
+    'sequences.publish': async (input: { readonly sequenceVersionId: string }) => await deps.sequences.publish(input),
+    'sequences.retire': async (input: { readonly sequenceVersionId: string }) => await deps.sequences.retire(input),
+
+    'settings.state': async () => await deps.settings.state(),
+    'settings.show': async (input: Parameters<AdminBridgeHost['show']>[0]) => await deps.settings.show(input),
+    'settings.saveSetting': async (input: Parameters<AdminBridgeHost['saveSetting']>[0]) =>
+      await deps.settings.saveSetting(input),
+    'settings.openHistory': async (input: Parameters<AdminBridgeHost['openHistory']>[0]) =>
+      await deps.settings.openHistory(input),
+    'settings.loadDashboard': async (input: Parameters<AdminBridgeHost['loadDashboard']>[0]) =>
+      await deps.settings.loadDashboard(input),
+    'settings.retireStage': async (input: { readonly stageKey: string }) => await deps.settings.retireStage(input),
+    'settings.acknowledgeAlert': async (input: { readonly alertId: string }) =>
+      await deps.settings.acknowledgeAlert(input),
+    'settings.setSendingCap': async (input: Parameters<AdminBridgeHost['setSendingCap']>[0]) =>
+      await deps.settings.setSendingCap(input),
+    'settings.recordSendingAuthentication': async (input: Parameters<AdminBridgeHost['recordSendingAuthentication']>[0]) =>
+      await deps.settings.recordSendingAuthentication(input),
+    'settings.recordHolidayCalendar': async (input: Parameters<AdminBridgeHost['recordHolidayCalendar']>[0]) =>
+      await deps.settings.recordHolidayCalendar(input),
+    'settings.addCallingNumber': async (input: Parameters<AdminBridgeHost['addCallingNumber']>[0]) =>
+      await deps.settings.addCallingNumber(input),
+    'settings.retireCallingNumber': async (input: { readonly identityId: string }) =>
+      await deps.settings.retireCallingNumber(input),
+    'settings.allowStates': async (input: Parameters<AdminBridgeHost['allowStates']>[0]) =>
+      await deps.settings.allowStates(input),
+    'settings.revokePosture': async (input: { readonly postureId: string }) => await deps.settings.revokePosture(input),
+
+    'mailbox.state': async () => await deps.mailbox.state(),
+    'mailbox.refresh': async () => await deps.mailbox.refresh(),
+    'mailbox.connect': async () => await deps.mailbox.connect(),
 
     // Settings › Diagnostics. Straight through the authenticated client: there is no
     // state to keep and nothing to transform, and the recovery forms read the answer.

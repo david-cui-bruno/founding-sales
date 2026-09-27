@@ -1,7 +1,6 @@
 import { z } from 'zod';
 import {
   enrollmentsResponseSchema,
-  resumePreviewResponseSchema,
   sequenceVersionsResponseSchema,
   sequencesResponseSchema,
   templateVersionsResponseSchema,
@@ -10,7 +9,6 @@ import {
 import {
   draftStepSchema,
   type DraftStep,
-  type ResumeReview,
   type SequenceState,
   type TemplateDraft,
 } from '../renderer/sequenceContract.ts';
@@ -24,41 +22,32 @@ import {
 import type { AuthedClient } from './authedClient.ts';
 
 /**
- * The sequence editor's half of the bridge, in the main process (specification 11.1,
+ * The Sequences view's half of the bridge, in the main process (specification 11.1,
  * 4.3, 14.2).
  *
  * The window sees a `SequenceState` and nothing else: no access token, no command id.
- * `asOf` carries database time into the state, so every deadline the window shows is
- * the server's. Nothing in this file imports `electron`, and the whole bridge is
- * testable without a window.
+ * Nothing in this file imports `electron`, and the whole bridge is testable without a
+ * window. Since 1.0.13 nothing here is a channel of its own either: every method is an
+ * operation of the registry (`src/shared/operations.ts`), so the argument checking that
+ * was written out per channel is the operation's input schema.
  *
- * The LinkedIn handoff — its clipboard copy, profile open, undo and recorded result —
- * went with LinkedIn on 25 September 2026.
- */
-
-export const SEQUENCE_IPC_CHANNELS = {
-  state: 'callie:sequences:state',
-  openSequence: 'callie:sequences:open',
-  createSequence: 'callie:sequences:create',
-  // Lane g88: a draft of a published sequence, a new template version, the resume review.
-  createDraft: 'callie:sequences:create-draft',
-  saveDraft: 'callie:sequences:draft',
-  createTemplate: 'callie:sequences:create-template',
-  reviewEnrollment: 'callie:sequences:review',
-  closeReview: 'callie:sequences:review-close',
-  publish: 'callie:sequences:publish',
-  retire: 'callie:sequences:retire',
-  approveTemplate: 'callie:sequences:approve-template',
-  enroll: 'callie:sequences:enroll',
-  resumeEnrollment: 'callie:sequences:resume',
-} as const;
-export type SequenceIpcChannel = (typeof SEQUENCE_IPC_CHANNELS)[keyof typeof SEQUENCE_IPC_CHANNELS];
-
-/*
- * Every answer is parsed with `@fss/contracts`' schema for its route (lane g78), the one
- * the route's own test holds the real answer to. The window's projection — which
- * enrollments are held — is made below, from a parse that already agrees with the
- * server.
+ * Three things went with wave 2 and are named here so nobody looks for them.
+ *
+ * **"Edit as a new draft" is gone.** `saveSteps` edits a published version in place and
+ * the edit reaches its live enrollments (S3), which is what a person editing a sequence
+ * means; a new version does not. `/sequences/versions/draft` is called in exactly one
+ * place — the first, empty version of a sequence that has just been created, which is
+ * the only way a sequence gets a version at all.
+ *
+ * **Approval is not a separate press.** `/templates/create` and `/templates/update` take
+ * `approve: true` and refuse the whole command with every issue when the text does not
+ * pass, so a version is never written that cannot be approved, and `/templates/approve`
+ * has no caller.
+ *
+ * **The long-hold review is gone.** An enrollment held that long resumes on its own
+ * (S4.1), `review_required` is never sent, and `/enrollments/resume/preview` and
+ * `/enrollments/resume` have no caller here. `/enrollments` itself is still read: the
+ * view lists who is in flight, with nothing to confirm about any of them.
  */
 
 export interface SequenceBridgeDeps {
@@ -73,35 +62,26 @@ export interface SequenceBridgeDeps {
 }
 
 export interface SequenceBridgeHost {
+  /** Drop the snapshot on an identity transition (1.0.13, P0-A). */
+  forget(): Promise<SequenceState>;
   state(): Promise<SequenceState>;
   openSequence(input: { readonly sequenceId: string }): Promise<SequenceState>;
   createSequence(input: { readonly name: string }): Promise<SequenceState>;
-  createDraft(input: { readonly sequenceId: string }): Promise<SequenceState>;
-  saveDraft(input: { readonly sequenceVersionId: string; readonly steps: unknown }): Promise<SequenceState>;
-  createTemplate(input: TemplateDraft): Promise<SequenceState>;
-  reviewEnrollment(input: { readonly enrollmentId: string }): Promise<SequenceState>;
-  closeReview(): Promise<SequenceState>;
+  saveSteps(input: { readonly sequenceVersionId: string; readonly steps: readonly DraftStep[] }): Promise<SequenceState>;
+  saveTemplate(input: TemplateDraft): Promise<SequenceState>;
   publish(input: { readonly sequenceVersionId: string }): Promise<SequenceState>;
   retire(input: { readonly sequenceVersionId: string }): Promise<SequenceState>;
-  approveTemplate(input: { readonly templateVersionId: string }): Promise<SequenceState>;
-  enroll(input: {
-    readonly sequenceVersionId: string;
-    readonly opportunityId: string;
-    readonly firmId: string;
-    readonly contactId: string;
-  }): Promise<SequenceState>;
-  resumeEnrollment(input: { readonly enrollmentId: string }): Promise<SequenceState>;
 }
 
 /** What `/sequences/create` and `/sequences/versions/draft` answer, as far as the bridge reads them. */
 const createdSequenceSchema = z.object({ id: uuid });
 const createdDraftSchema = z.object({ sequenceVersionId: uuid });
-/** A refused approval's body: `template_unapproved:` and every issue (`apps/api/src/routes/templates.ts`). */
+/** A refused save-and-approve: `template_unapproved:` and every issue it named. */
 const refusalReasonSchema = z.object({ reason: z.string().min(1) });
 /**
- * The copy warnings in a template create's or approval's accepted result (wave 1). The
- * result is `templateCommandResultSchema` on a server with lane W1-C; an older server
- * sends the version alone, so `warnings` is optional here and read on its own.
+ * The copy warnings in a template save's accepted result: codes that advise and never
+ * refuse. Read off whatever shape the answer has, so a server that stops sending them is
+ * an empty list rather than a parse failure.
  */
 const warningCodes = z.array(z.string().min(1).max(80)).max(20);
 const templateWarningsSchema = z.unknown().transform(value => {
@@ -117,10 +97,8 @@ const NOTICE_LIMIT = 400;
 export function createSequenceBridge(deps: SequenceBridgeDeps): SequenceBridgeHost {
   let selectedSequenceId: string | null = null;
   let notice: string | null = null;
-  /** The last template create's or approval's copy warnings (wave 1); cleared by every other act. */
+  /** The last template save's copy warnings; cleared by every other act. */
   let warnings: readonly string[] = [];
-  /** The resume review on screen (lane g88), or null. Only its enrollment may be resumed. */
-  let resumeReview: ResumeReview | null = null;
 
   /**
    * Read everything the window shows, in one pass.
@@ -128,23 +106,20 @@ export function createSequenceBridge(deps: SequenceBridgeDeps): SequenceBridgeHo
    * A refusal on any one read leaves that part empty rather than throwing: 4.2's
    * rule is that the client shows what it has and fails mutations closed, and a
    * window that went blank because one list was unavailable would be worse than one
-   * that shows three of four.
+   * that shows two of three.
    *
-   * Empty is not the same as unavailable, though (lane g78, D06). Until g78 a failed
-   * read became an empty list and nothing else, so every version and enrollment
-   * list the Mac could not parse looked exactly like a workspace with none. Each
-   * slice now carries its read's refusal code in `readErrors`, and the window says
-   * it could not read that part, with Retry, instead of drawing an empty list.
+   * Empty is not the same as unavailable, though (lane g78, D06). Each slice carries its
+   * read's refusal code in `readErrors`, and the window says it could not read that part,
+   * with Retry, instead of drawing an empty list.
    */
   const compose = async (): Promise<SequenceState> => {
     const session = await deps.session.state();
     const isAdmin = session.device?.role === 'admin';
-    // Always asked, even when the session last found the server away (wave 1). Until
-    // then an offline session skipped the reads, so nothing here could find out the
-    // connection was back and the view stayed empty until Home refreshed.
+    // Always asked, even when the session last found the server away (wave 1): otherwise
+    // nothing here could find out the connection was back.
     const sequences = await deps.api.read('/sequences', value => sequencesResponseSchema.parse(value));
     if (!sequences.ok && sequences.offline) {
-      return { ...EMPTY_SEQUENCE_STATE, isAdmin, mayMutate: session.mayMutate, notice, resumeReview: null, warnings: [...warnings] };
+      return { ...EMPTY_SEQUENCE_STATE, isAdmin, mayMutate: session.mayMutate, notice, warnings: [...warnings] };
     }
     const list = sequences.ok ? sequences.value.sequences : [];
     const chosen = selectedSequenceId ?? list[0]?.id ?? null;
@@ -162,41 +137,20 @@ export function createSequenceBridge(deps: SequenceBridgeDeps): SequenceBridgeHo
       online: true,
       mayMutate: session.mayMutate,
       isAdmin,
-      // Database time, from the API. Never this Mac's clock.
-      asOf: enrollments.ok ? enrollments.value.asOf : null,
-      sequences: list,
+      sequences: [...list],
       selectedSequenceId: chosen,
-      versions: versions !== null && versions.ok ? versions.value.versions : [],
-      templates: templates.ok ? templates.value.templates : [],
-      heldEnrollments: enrollments.ok
-        ? enrollments.value.enrollments.filter(entry => entry.state === 'review_required')
-        : [],
+      versions: versions !== null && versions.ok ? [...versions.value.versions] : [],
+      templates: templates.ok ? [...templates.value.templates] : [],
+      enrollments: enrollments.ok ? [...enrollments.value.enrollments] : [],
       readErrors: {
         sequences: sequences.ok ? null : sequences.reason,
         versions: versions === null || versions.ok ? null : versions.reason,
         templates: templates.ok ? null : templates.reason,
         enrollments: enrollments.ok ? null : enrollments.reason,
       },
-      resumeReview,
       notice,
       warnings: [...warnings],
     };
-  };
-
-  /** Read the review for one enrollment into the window, or say why it could not be read. */
-  const loadReview = async (enrollmentId: string): Promise<void> => {
-    const answer = await deps.api.read(
-      '/enrollments/resume/preview',
-      value => resumePreviewResponseSchema.parse(value),
-      { enrollmentId },
-    );
-    if (answer.ok) {
-      resumeReview = { asOf: answer.value.asOf, preview: answer.value.preview };
-      notice = null;
-      return;
-    }
-    resumeReview = null;
-    notice = answer.reason;
   };
 
   const run = async (
@@ -210,6 +164,20 @@ export function createSequenceBridge(deps: SequenceBridgeDeps): SequenceBridgeHo
   };
 
   const host: SequenceBridgeHost = {
+    /**
+     * Forget everything this bridge is holding (1.0.13, P0-A).
+     *
+     * Called on every identity transition, from `registerWindows`. Nothing here is the
+     * next person's to read, and a snapshot kept across a sign-out is the last person's
+     * work shown to somebody else.
+     */
+    async forget() {
+      selectedSequenceId = null;
+      notice = null;
+      warnings = [];
+      return await compose();
+    },
+
     state: compose,
 
     openSequence: async input => {
@@ -219,11 +187,12 @@ export function createSequenceBridge(deps: SequenceBridgeDeps): SequenceBridgeHo
     },
 
     /**
-     * Lane g88 (audit G03): a new sequence and its first draft, then the sequence opened.
+     * A new sequence and its first, empty version, then the sequence opened.
      *
      * Two commands and two receipts, because they are two things the server records: a
-     * named plan, and a version of it. A draft is what the step editor edits, so a
-     * sequence with none would open to a page with nothing to type into.
+     * named plan, and a version of it. `/sequences/versions/draft` is the only route that
+     * makes a version, so this is its one remaining caller — a sequence with no version
+     * would open to a page with nothing to type into.
      */
     createSequence: async input => {
       const created = await deps.api.command('/sequences/create', { name: input.name }, value =>
@@ -234,135 +203,82 @@ export function createSequenceBridge(deps: SequenceBridgeDeps): SequenceBridgeHo
         return await compose();
       }
       selectedSequenceId = created.value.id;
-      const draft = await deps.api.command(
+      const version = await deps.api.command(
         '/sequences/versions/draft',
         { sequenceId: created.value.id, steps: [] },
         value => createdDraftSchema.parse(value),
       );
-      notice = draft.ok ? 'sequence_created' : draft.reason;
-      return await compose();
-    },
-
-    // "Editing a published sequence creates a new draft" (11.1): with no steps given,
-    // the server copies the newest published version's.
-    createDraft: async input => {
-      const answer = await deps.api.command('/sequences/versions/draft', { sequenceId: input.sequenceId }, value =>
-        createdDraftSchema.parse(value),
-      );
-      notice = answer.ok ? 'draft_created' : answer.reason;
+      notice = version.ok ? 'sequence_created' : version.reason;
       return await compose();
     },
 
     /**
-     * Replace a draft's steps. The renderer's steps are parsed here — the window's word is
-     * never taken for a shape — and numbered by their place, so the ordinals are 1..n
-     * however the person reordered them.
+     * Replace a version's steps. The renderer's steps are parsed here — the window's word
+     * is never taken for a shape — and numbered by their place, so the ordinals are 1..n
+     * however the person reordered them. A published version is edited in place, and the
+     * server holds that edit to what publication checks.
      */
-    saveDraft: async input => {
+    saveSteps: async input => {
       const steps = draftStepsSchema.safeParse(input.steps);
       if (!steps.success) {
         notice = 'invalid_input';
         return await compose();
       }
-      const answer = await deps.api.command(
+      return await run(
         '/sequences/versions/steps',
         { sequenceVersionId: input.sequenceVersionId, steps: stepsForWire(steps.data as readonly DraftStep[]) },
-        value => value,
+        'steps_saved',
       );
-      notice = answer.ok ? 'draft_saved' : answer.reason;
-      return await compose();
     },
 
     /**
-     * An unapproved template version (lane g88). The footer 12.6 requires is appended
-     * here, and the variables the version declares are the ones its text names, so the
-     * approval's "unknown variable" can only mean a name Callie cannot fill — which the
-     * form has already refused to send.
+     * Save a template version and approve it in the same command (wave 2, S3; D5).
+     *
+     * The footer 12.6 requires is appended here, and the variables the version declares
+     * are the ones its text names, so "unknown variable" can only mean a name Callie
+     * cannot fill — which the form has already refused to send. A refusal carries every
+     * issue after its code; the transport keeps a code only up to 80 characters, so the
+     * reason is read from the refusal's own body, where the whole list is.
      */
-    createTemplate: async input => {
+    saveTemplate: async input => {
       if (templateFormIssues(input).length > 0) {
         notice = 'invalid_input';
         warnings = [];
         return await compose();
       }
       const body = composeTemplateBody(input.body, input.signOff);
-      const answer = await deps.api.command(
-        '/templates/create',
-        {
-          ...(input.templateId === null ? {} : { templateId: input.templateId }),
-          name: input.name.trim(),
-          subject: input.subject.trim(),
-          body,
-          footerSignOff: input.signOff.trim(),
-          requiredVariables: templateVariablesIn(input.subject, body).known,
-        },
-        value => templateWarningsSchema.parse(value),
-      );
-      notice = answer.ok ? 'template_created' : answer.reason;
-      warnings = answer.ok ? answer.value.warnings : [];
-      return await compose();
-    },
-
-    publish: async input => await run('/sequences/versions/publish', input, 'published'),
-    retire: async input => await run('/sequences/versions/retire', input, 'retired'),
-
-    /**
-     * The approval. A refusal carries every issue after its code; the transport keeps a
-     * code only up to 80 characters, so the reason is read from the refusal's own body,
-     * where the whole list is.
-     */
-    approveTemplate: async input => {
-      const answer = await deps.api.command('/templates/approve', input, value => templateWarningsSchema.parse(value));
+      const text = {
+        name: input.name.trim(),
+        subject: input.subject.trim(),
+        body,
+        footerSignOff: input.signOff.trim(),
+        requiredVariables: templateVariablesIn(input.subject, body).known,
+        approve: true,
+      };
+      const answer =
+        input.templateVersionId === null
+          ? await deps.api.command('/templates/create', text, value => templateWarningsSchema.parse(value))
+          : await deps.api.command(
+              '/templates/update',
+              { templateVersionId: input.templateVersionId, ...text },
+              value => templateWarningsSchema.parse(value),
+            );
       warnings = answer.ok ? answer.value.warnings : [];
       if (answer.ok) {
-        notice = 'template_approved';
+        notice = 'template_saved';
       } else {
         const refusal = answer.offline ? null : refusalReasonSchema.safeParse(answer.refusal);
         notice = (refusal?.success === true ? refusal.data.reason : answer.reason).slice(0, NOTICE_LIMIT);
       }
       return await compose();
     },
-    enroll: async input => await run('/enrollments/enroll', input),
 
-    reviewEnrollment: async input => {
-      await loadReview(input.enrollmentId);
-      return await compose();
-    },
-
-    closeReview: async () => {
-      resumeReview = null;
-      notice = null;
-      return await compose();
-    },
-
-    /**
-     * The confirmation (4.3; lane g88, audit G06). It resumes only the enrollment whose
-     * review is on screen: asked for any other, it opens that one's review and resumes
-     * nothing, so the review is always seen before the resume and the resume is always
-     * the last thing pressed. The server decides again under its lock; the dates it
-     * applies are the ones the review showed unless a hold opened in between, and then
-     * the answer says so.
-     */
-    resumeEnrollment: async input => {
-      if (resumeReview?.preview.enrollmentId !== input.enrollmentId) {
-        await loadReview(input.enrollmentId);
-        return await compose();
-      }
-      const answer = await deps.api.command('/enrollments/resume', input, value =>
-        z.object({ kind: z.enum(['still_held', 'review_required', 'resume']) }).parse(value),
-      );
-      if (!answer.ok) {
-        notice = answer.reason;
-        return await compose();
-      }
-      resumeReview = null;
-      notice = answer.value.kind === 'resume' ? 'resumed' : 'resume_still_held';
-      return await compose();
-    },
+    publish: async input => await run('/sequences/versions/publish', input, 'published'),
+    retire: async input => await run('/sequences/versions/retire', input, 'retired'),
   };
 
-  // Every act but a read, a template create and an approval clears the last warnings:
-  // they are about that template's text, and belong on screen only until the next act.
+  // Every act but a read and a template save clears the last warnings: they are about
+  // that template's text, and belong on screen only until the next act.
   const cleared = <A extends unknown[]>(act: (...args: A) => Promise<SequenceState>) =>
     async (...args: A): Promise<SequenceState> => {
       warnings = [];
@@ -372,13 +288,8 @@ export function createSequenceBridge(deps: SequenceBridgeDeps): SequenceBridgeHo
     ...host,
     openSequence: cleared(host.openSequence),
     createSequence: cleared(host.createSequence),
-    createDraft: cleared(host.createDraft),
-    saveDraft: cleared(host.saveDraft),
+    saveSteps: cleared(host.saveSteps),
     publish: cleared(host.publish),
     retire: cleared(host.retire),
-    enroll: cleared(host.enroll),
-    reviewEnrollment: cleared(host.reviewEnrollment),
-    closeReview: cleared(host.closeReview),
-    resumeEnrollment: cleared(host.resumeEnrollment),
   };
 }

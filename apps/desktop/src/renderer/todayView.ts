@@ -1,5 +1,6 @@
 import { callbackInstant, localParts } from '@fss/contracts';
 import type { DialAdviceView, TodayCard, TodayRoute, TodayState, TodayTask } from './todayContract.ts';
+import { OFFLINE_SENTENCE } from './readError.ts';
 
 /**
  * What the Today window shows, as a pure function of the state the main process sent
@@ -108,7 +109,7 @@ interface DialRouteView {
 }
 
 const NOTICES: Readonly<Record<string, string>> = Object.freeze({
-  offline: 'Callie cannot reach the server.',
+  offline: OFFLINE_SENTENCE,
   not_signed_in: 'Sign in on the main window before working today’s list.',
   client_upgrade_required: 'This version of Callie is out of date. Install the current build to continue.',
   snoozed: 'Snoozed.',

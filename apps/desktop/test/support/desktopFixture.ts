@@ -2,19 +2,12 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { ClientVersionRange, SessionGrant, SessionRenewal } from '@fss/contracts';
-import {
-  createApiClient,
-  createDeviceStore,
-  createMemoryVault,
-  createOfflineCache,
-  createSessionManager,
-  type ApiClient,
-  type HttpAnswer,
-  type HttpSend,
-  type SecretVault,
-  type SessionManager,
-} from '../../src/main/index.ts';
+import type { ClientVersionRange, DeviceList, DeviceSession, SessionGrant } from '@fss/contracts';
+import { createApiClient, type ApiClient, type HttpAnswer, type HttpSend } from '../../src/main/apiClient.ts';
+import { createDeviceStore } from '../../src/main/deviceStore.ts';
+import { createMemoryVault, type SecretVault } from '../../src/main/keychain.ts';
+import { createOfflineCache } from '../../src/main/offlineCache.ts';
+import { createSessionManager, type SessionManager } from '../../src/main/sessionManager.ts';
 import type { CachedToday } from '../../src/shared/contract.ts';
 
 /**
@@ -36,16 +29,29 @@ export interface ApiScript {
   refuse(path: string, reason: string): void;
   /** Make every call throw, as an unreachable server does. */
   offline(value: boolean): void;
+  /** Stop the next call to this path inside the server, until `release`. */
+  hold(path: string): void;
+  /** Let one held call finish. */
+  release(path: string): void;
+  /** Whether a call to this path is waiting inside the server now. */
+  holding(path: string): boolean;
   /** How many times each path was called. */
   readonly calls: Map<string, number>;
+  /** Every call in the order it was made: what came before what. */
+  readonly order: string[];
   /** Hand out a session grant for a claim. */
   grantFor(workspaceId: string): SessionGrant;
   today(value: CachedToday): void;
   /** Claims answer `handoff_unknown` until this is set. */
   browserFinished(value: boolean): void;
-  latestCredential(): string | null;
+  /** The device secret the last grant handed out: what an open must present. */
+  grantedSecret(): string | null;
+  /** Whether the server still has this device. A sign-out sets it false. */
+  deviceActive(): boolean;
+  /** The other Macs `GET /devices` lists beside this one. */
+  otherDevices(value: DeviceList): void;
   /**
-   * The membership's role as the server holds it now. Every later claim and renewal
+   * The membership's role as the server holds it now. Every later claim and open
    * answers with it; `salesperson` until a test says otherwise (lane g69: an admin
    * promoting a salesperson is the case the renewal used to lose).
    */
@@ -61,6 +67,10 @@ export interface DesktopFixture {
   readonly openedUrls: string[];
   /** Let a held cache wipe finish. Null until one is waiting. */
   releaseCacheWipe(): void;
+  /** Whether a held cache wipe is waiting now. */
+  wipeHeld(): boolean;
+  /** How many times the encrypted cache has been wiped. */
+  cacheWipes(): number;
   readonly workspaceId: string;
   advance(ms: number): void;
   stop(): Promise<void>;
@@ -100,6 +110,13 @@ export async function createDesktopFixture(
      * needs the wipe to stop where it can reach it.
      */
     readonly holdCacheWipe?: boolean;
+    /**
+     * The sign-out retry's clock (A2, P1-1). A pending sign-out tries again on an
+     * interval; a test that wants to drive that tick needs the interval in its hand
+     * rather than a real 60-second wait.
+     */
+    readonly setInterval?: (run: () => void, ms: number) => ReturnType<typeof setInterval>;
+    readonly clearInterval?: (handle: ReturnType<typeof setInterval>) => void;
   } = {},
 ): Promise<DesktopFixture> {
   const directory = await mkdtemp(join(tmpdir(), 'fss-desktop-'));
@@ -112,33 +129,59 @@ export async function createDesktopFixture(
   let current = Date.parse('2026-09-21T09:00:00.000Z');
   let offline = false;
   let browserFinished = false;
-  let generation = 1;
-  let latest: string | null = null;
+  /*
+   * The rotating credential the grant still carries, for desktop 1.0.12 (wave 3b).
+   * Nothing on this Mac stores it and nothing presents it: one generation, never
+   * advanced, because there is no route left that would advance it.
+   */
+  const generation = 1;
+  let granted: string | null = null;
+  let deviceActive = true;
+  let others: DeviceList = [];
   let role: 'admin' | 'salesperson' = 'salesperson';
   let todayValue: CachedToday = sampleToday(workspaceId);
   const refusals = new Map<string, string[]>();
   const calls = new Map<string, number>();
+  const order: string[] = [];
+  /*
+   * Calls a test wants to catch in flight (P0-B). A sign-out retry can be on the wire
+   * for as long as the server takes, and the races worth testing all happen in that
+   * window; `hold` says "stop the next call to this path inside the server", and
+   * `release` lets it finish.
+   */
+  const holds = new Map<string, number>();
+  const waiting = new Map<string, (() => void)[]>();
   const openedUrls: string[] = [];
 
   const grantFor = (forWorkspace: string): SessionGrant => {
-    latest = credential(forWorkspace, deviceId, generation);
+    granted = secret();
+    deviceActive = true;
     return {
       workspaceId: forWorkspace,
       userId,
       role,
       deviceId,
-      deviceSecret: secret(),
+      deviceSecret: granted,
       accessToken: token(forWorkspace),
       accessTokenExpiresAt: new Date(current + 3_600_000).toISOString(),
-      refreshCredential: latest,
+      refreshCredential: credential(forWorkspace, deviceId, generation),
       reauthenticateAfter: new Date(current + 30 * 24 * 3_600_000).toISOString(),
       supportedClientVersions: supported,
     };
   };
 
-  const send: HttpSend = async (url, _init) => {
+  const send: HttpSend = async (url, init) => {
     const path = new URL(url).pathname;
+    const body: Record<string, unknown> = init.body === undefined ? {} : (JSON.parse(init.body) as Record<string, unknown>);
     calls.set(path, (calls.get(path) ?? 0) + 1);
+    order.push(path);
+    const heldCount = holds.get(path) ?? 0;
+    if (heldCount > 0) {
+      holds.set(path, heldCount - 1);
+      await new Promise<void>(resolve => {
+        waiting.set(path, [...(waiting.get(path) ?? []), resolve]);
+      });
+    }
     if (offline) throw new Error('the server did not answer');
 
     const queued = refusals.get(path)?.shift();
@@ -165,24 +208,54 @@ export async function createDesktopFixture(
       case '/auth/sign-in/claim':
         if (!browserFinished) return await Promise.resolve({ status: 401, body: { error: 'handoff_unknown' } });
         return await Promise.resolve(answer(grantFor(workspaceId)));
-      case '/auth/session/renew': {
-        generation += 1;
-        latest = credential(workspaceId, deviceId, generation);
-        const renewal: SessionRenewal = {
+      /*
+       * Wave 3b, S7. The secret does not rotate, so opening twice is not reuse and the
+       * answer carries no credential; a device the server has signed out answers
+       * `device_revoked` rather than `credential_unknown`, which is what tells a Mac
+       * restored from a backup to sign in with Google again.
+       */
+      case '/auth/session/open': {
+        if (!deviceActive) return await Promise.resolve({ status: 401, body: { error: 'device_revoked' } });
+        if (granted === null || body['deviceSecret'] !== granted) {
+          return await Promise.resolve({ status: 401, body: { error: 'credential_unknown' } });
+        }
+        const opened: DeviceSession = {
           workspaceId,
           userId,
           role,
           deviceId,
           accessToken: token(workspaceId),
           accessTokenExpiresAt: new Date(current + 3_600_000).toISOString(),
-          refreshCredential: latest,
           reauthenticateAfter: new Date(current + 30 * 24 * 3_600_000).toISOString(),
           supportedClientVersions: supported,
         };
-        return await Promise.resolve(answer(renewal));
+        return await Promise.resolve(answer(opened));
       }
       case '/auth/sign-out':
+        deviceActive = false;
         return await Promise.resolve(answer({ signedOut: true }));
+      case '/devices':
+        return await Promise.resolve(
+          answer([
+            {
+              deviceId,
+              deviceLabel: 'This Mac',
+              status: deviceActive ? ('active' as const) : ('revoked' as const),
+              registeredAt: new Date(current - 86_400_000).toISOString(),
+              lastSeenAt: new Date(current).toISOString(),
+              clientVersion,
+              thisDevice: true,
+            },
+            ...others,
+          ]),
+        );
+      case '/devices/revoke': {
+        const asked = body['deviceId'];
+        const mine = asked === deviceId;
+        if (mine) deviceActive = false;
+        else others = others.map(entry => (entry.deviceId === asked ? { ...entry, status: 'revoked' as const } : entry));
+        return await Promise.resolve(answer({ revoked: true, deviceId: String(asked), thisDevice: mine }));
+      }
       case '/today':
         return await Promise.resolve(answer(todayValue));
       default:
@@ -197,9 +270,12 @@ export async function createDesktopFixture(
   // The *first* wipe only: everything after it runs normally, so a sign-out driven
   // while the held one is waiting does not wait behind it.
   let holdNextWipe = options.holdCacheWipe === true;
+  /* How many times this Mac was emptied. A transition that wipes nothing is P0-A. */
+  let wipes = 0;
   const cache = {
     ...realCache,
     wipe: async () => {
+      wipes += 1;
       if (holdNextWipe) {
         holdNextWipe = false;
         await new Promise<void>(resolve => {
@@ -224,6 +300,8 @@ export async function createDesktopFixture(
     sleep: async () => {
       await Promise.resolve();
     },
+    ...(options.setInterval === undefined ? {} : { setInterval: options.setInterval }),
+    ...(options.clearInterval === undefined ? {} : { clearInterval: options.clearInterval }),
   });
 
   return {
@@ -231,6 +309,8 @@ export async function createDesktopFixture(
       releaseWipe?.();
       releaseWipe = null;
     },
+    wipeHeld: () => releaseWipe !== null,
+    cacheWipes: () => wipes,
     directory,
     vault,
     api,
@@ -242,6 +322,7 @@ export async function createDesktopFixture(
     },
     script: {
       calls,
+      order,
       refuse: (path, reason) => {
         const queue = refusals.get(path) ?? [];
         queue.push(reason);
@@ -250,6 +331,16 @@ export async function createDesktopFixture(
       offline: value => {
         offline = value;
       },
+      hold: path => {
+        holds.set(path, (holds.get(path) ?? 0) + 1);
+      },
+      release: path => {
+        const queue = waiting.get(path) ?? [];
+        const next = queue.shift();
+        waiting.set(path, queue);
+        next?.();
+      },
+      holding: path => (waiting.get(path) ?? []).length > 0,
       grantFor,
       today: value => {
         todayValue = value;
@@ -257,7 +348,11 @@ export async function createDesktopFixture(
       browserFinished: value => {
         browserFinished = value;
       },
-      latestCredential: () => latest,
+      grantedSecret: () => granted,
+      deviceActive: () => deviceActive,
+      otherDevices: value => {
+        others = value;
+      },
       role: value => {
         role = value;
       },

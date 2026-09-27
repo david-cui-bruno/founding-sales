@@ -34,22 +34,44 @@ const dialBridge = (): NonNullable<typeof globalThis.callieDial> | undefined => 
  */
 export interface TodayActions {
   expand(firmId: string): void;
-  collapse(): void;
+  collapse(firmId: string): void;
   snooze(input: OperationInput<'today.snooze'>): void;
   recordOutcome(input: OperationInput<'today.recordOutcome'>): void;
   scheduleCallback(input: OperationInput<'today.scheduleCallback'>): void;
   releasePause(input: OperationInput<'today.releasePause'>): void;
   /** Its own channel: it opens a URI on the operating system rather than answering one. */
   dial(input: { readonly firmId: string; readonly contactId: string | null; readonly routeId: string }): void;
+  /**
+   * Whether *this* control's own command is on the wire (1.0.13, P1-4).
+   *
+   * Until the review a command held the whole column read-only, so snoozing one task
+   * froze every other card, the Refresh button and the sidebar. A person waits for the
+   * thing they pressed and for nothing else; the names are `todayForm`'s.
+   */
+  busy(form: string): boolean;
 }
+
+/**
+ * What counts as one form here. A form is the smallest thing somebody presses: a card's
+ * Open, one task's snooze, one callback's time, one hold's Resume, one number's Call.
+ */
+export const todayForm = {
+  card: (firmId: string): string => `card:${firmId}`,
+  task: (itemId: string): string => `task:${itemId}`,
+  outcome: (firmId: string): string => `outcome:${firmId}`,
+  callback: (callLogId: string): string => `callback:${callLogId}`,
+  hold: (holdId: string): string => `hold:${holdId}`,
+  dial: (routeId: string): string => `dial:${routeId}`,
+} as const;
 
 export interface Today {
   readonly state: TodayState | null;
   /** How many calls to the bridge are in flight; the lanes are `aria-busy` while any are. */
   readonly pending: number;
   /**
-   * How many of those are commands. The column is read-only while any is on the wire, so
-   * a second press of Snooze, Record or Call sends nothing; a read never does that.
+   * How many of those are commands. Kept as a number for the tests and the lanes'
+   * `aria-busy`; what makes a control read-only is `actions.busy(form)`, which waits
+   * for that form's own command and for no other (P1-4).
    */
   readonly commands: number;
   /** Whether a read has answered since sign-in; until then no failure is claimed. */
@@ -58,7 +80,7 @@ export interface Today {
   readonly now: number;
   /** Refresh, or Retry: a fresh look, which clears the notice on screen. */
   refresh(): void;
-  /** A card's commands. Each holds the column read-only until it answers. */
+  /** A card's commands. Each holds its own control read-only until it answers. */
   readonly actions: TodayActions | null;
   /** A read Today makes by itself, if one is due. */
   autoRefresh(trigger: 'focus' | 'tick', now?: number): void;
@@ -78,6 +100,8 @@ export function useToday(identity: string | null, generation: number, guard: Gen
   const enabled = identity !== null && api() !== undefined;
   const [pending, setPending] = useState(0);
   const [commands, setCommands] = useState(0);
+  /** One count per form on the wire, so a control waits for its own command only. */
+  const [inFlight, setInFlight] = useState<ReadonlyMap<string, number>>(() => new Map());
   const [refreshAnswered, setRefreshAnswered] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const lastRefreshAt = useRef<number | null>(null);
@@ -95,10 +119,22 @@ export function useToday(identity: string | null, generation: number, guard: Gen
   });
   const state = query.data ?? null;
 
+  const hold = useCallback((form: string | null, by: 1 | -1): void => {
+    if (form === null) return;
+    setInFlight(current => {
+      const next = new Map(current);
+      const count = (next.get(form) ?? 0) + by;
+      if (count <= 0) next.delete(form);
+      else next.set(form, count);
+      return next;
+    });
+  }, []);
+
   const keep = useCallback(
-    (next: Promise<TodayState>, read: boolean): void => {
+    (next: Promise<TodayState>, read: boolean, form: string | null = null): void => {
       setPending(count => count + 1);
       if (!read) setCommands(count => count + 1);
+      hold(form, 1);
       const started = guard.now();
       void next
         .then(
@@ -117,43 +153,47 @@ export function useToday(identity: string | null, generation: number, guard: Gen
         .finally(() => {
           setPending(count => count - 1);
           if (!read) setCommands(count => count - 1);
+          hold(form, -1);
         });
     },
-    [client, guard, identity],
+    [client, guard, hold, identity],
   );
 
   const actions = useMemo<TodayActions | null>(() => {
     const value = api();
     if (value === undefined) return null;
-    const command = (next: Promise<TodayState>): void => {
-      keep(next, false);
+    const command = (next: Promise<TodayState>, form: string): void => {
+      keep(next, false, form);
     };
     return {
       expand: firmId => {
-        command(value.read('today.expand', { firmId }));
+        command(value.read('today.expand', { firmId }), todayForm.card(firmId));
       },
-      collapse: () => {
-        command(value.read('today.collapse', {}));
+      collapse: firmId => {
+        command(value.read('today.collapse', {}), todayForm.card(firmId));
       },
       snooze: input => {
-        command(value.command('today.snooze', input));
+        command(value.command('today.snooze', input), todayForm.task(input.itemId));
       },
       recordOutcome: input => {
-        command(value.command('today.recordOutcome', input));
+        // The one form under the expanded card, so its own id is the firm's: `itemId`
+        // is optional there — an outcome can be recorded with no task chosen.
+        command(value.command('today.recordOutcome', input), todayForm.outcome(input.firmId));
       },
       scheduleCallback: input => {
-        command(value.command('today.scheduleCallback', input));
+        command(value.command('today.scheduleCallback', input), todayForm.callback(input.callLogId));
       },
       releasePause: input => {
-        command(value.command('today.releasePause', input));
+        command(value.command('today.releasePause', input), todayForm.hold(input.holdId));
       },
       dial: input => {
         const bridge = dialBridge();
         if (bridge === undefined) return;
-        command(bridge.call(input));
+        command(bridge.call(input), todayForm.dial(input.routeId));
       },
+      busy: form => (inFlight.get(form) ?? 0) > 0,
     };
-  }, [keep]);
+  }, [inFlight, keep]);
 
   const read = useCallback(
     (quiet: boolean): void => {

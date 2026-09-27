@@ -52,7 +52,9 @@ test('every sidebar row shows its view in the column, beside the same sidebar, i
     await page.getByTestId(`nav-${row}`).click();
     await expect(page.getByTestId('heading')).toHaveText(heading);
     await expect(page.getByTestId(`nav-${row}`)).toHaveAttribute('aria-current', 'page');
-    await expect(page.locator('[aria-current="page"]')).toHaveCount(1);
+    // One row in the sidebar. Settings also marks the tab of itself that is open,
+    // which is inside the column rather than beside it.
+    await expect(page.getByTestId('sidebar').locator('[aria-current="page"]')).toHaveCount(1);
     // One view at a time: the column never holds two.
     await expect(page.getByTestId('heading')).toHaveCount(1);
     await expect(page.getByTestId('sidebar')).toBeVisible();
@@ -69,9 +71,9 @@ test('the Window menu shows each view in the one window, and a Settings tab is n
   await markDocument(page);
 
   await navigateByMenu(page, 'settings/administration');
-  await expect(page.getByTestId('tab-settings')).toHaveClass(/tab-current/u);
+  await expect(page.getByTestId('tab-settings')).toHaveAttribute('aria-current', 'page');
   await navigateByMenu(page, 'settings/dashboard');
-  await expect(page.getByTestId('tab-dashboard')).toHaveClass(/tab-current/u);
+  await expect(page.getByTestId('tab-dashboard')).toHaveAttribute('aria-current', 'page');
   await expect(page.getByTestId('nav-settings')).toHaveAttribute('aria-current', 'page');
   await expect(page.getByTestId('column')).toHaveAttribute('data-route', 'settings/dashboard');
   await navigateByMenu(page, 'firms');
@@ -83,12 +85,12 @@ test('the Window menu shows each view in the one window, and a Settings tab is n
   // 1.0.11's name still opens the tab it used to: links made before this release exist.
   await navigateByMenu(page, 'admin');
   await expect(page.getByTestId('heading')).toHaveText('Settings');
-  await expect(page.getByTestId('tab-settings')).toHaveClass(/tab-current/u);
+  await expect(page.getByTestId('tab-settings')).toHaveAttribute('aria-current', 'page');
   await navigateByMenu(page, 'today');
   await expect(page.getByTestId('heading')).toHaveText('Monday, 21 September');
 
   expect(await stillTheSameDocument(page)).toBe(true);
-  expect(server.called('admin.show')).toEqual([{ screen: 'settings' }, { screen: 'dashboard' }, { screen: 'settings' }]);
+  expect(server.called('settings.show')).toEqual([{ screen: 'settings' }, { screen: 'dashboard' }, { screen: 'settings' }]);
 });
 
 test('a Today card opens its firm through the CRM bridge, and the firm page leads back to the board', async ({ page }) => {
@@ -99,7 +101,7 @@ test('a Today card opens its firm through the CRM bridge, and the firm page lead
   await page.getByTestId('today-card').first().getByTestId('card-open-firm').click();
   // The handoff: the bridge is told which firm, because it holds the open firm.
   await expect.poll(() => server.called('crm.openFirm')).toEqual([{ firmId: REPLY_FIRM_ID }]);
-  await expect(page.getByTestId('heading')).toHaveText('Firm');
+  await expect(page.getByTestId('heading')).toHaveText('Northwind Test Holdings');
   await expect(page.getByTestId('nav-firms')).toHaveAttribute('aria-current', 'page');
   await expect(page.getByTestId('column')).toHaveAttribute('data-route', `firm/${REPLY_FIRM_ID}`);
 
@@ -116,14 +118,14 @@ test('a reply card opens the firm it is about', async ({ page }) => {
 
   await page.getByTestId('reply-open-firm').click();
   await expect.poll(() => server.called('crm.openFirm')).toEqual([{ firmId: REPLY_CARD_FIRM_ID }]);
-  await expect(page.getByTestId('heading')).toHaveText('Firm');
+  await expect(page.getByTestId('heading')).toHaveText('Northwind Test Holdings');
   await expect(page.getByTestId('nav-firms')).toHaveAttribute('aria-current', 'page');
 });
 
 test('Firms from a firm page is the board: the sidebar never lands on the firm the bridge last held', async ({ page }) => {
   server = await startAppServer({ crm: crmState() });
   await page.goto(server.url(`#firm/${FIRM_ID}`));
-  await expect(page.getByTestId('heading')).toHaveText('Firm');
+  await expect(page.getByTestId('heading')).toHaveText('Northwind Test Holdings');
 
   await page.getByTestId('nav-firms').click();
   await expect(page.getByTestId('heading')).toHaveText('Pipeline');
@@ -219,7 +221,7 @@ test('a deep link that arrives before sign-in is where the window opens once sig
 
   await page.getByTestId('workspace-id').fill(EXAMPLE_WORKSPACE);
   await page.getByTestId('sign-in').click();
-  await expect(page.getByTestId('tab-dashboard')).toHaveClass(/tab-current/u);
+  await expect(page.getByTestId('tab-dashboard')).toHaveAttribute('aria-current', 'page');
   await expect(page.getByTestId('nav-settings')).toHaveAttribute('aria-current', 'page');
 });
 
@@ -237,10 +239,14 @@ test('the route is in the address, so the View menu’s Reload comes back to the
 
 test('leaving Replies while a read is in flight does not leave the next view inert', async ({ page }) => {
   /*
-   * The column belongs to the shell, and Replies makes it read-only while a call is on
-   * the wire so a second press of Confirm sends nothing. Until 1.0.12 nothing released
-   * that hold when the view was left: navigating during the call left `inert` on the
-   * column, and every view drawn after it could be read and not touched.
+   * A read left on the wire when the view is left.
+   *
+   * Until 1.0.12 Replies made the whole column `inert` while a call was on the wire and
+   * nothing released that hold when the view was left: navigating during the call left
+   * `inert` on the column, and every view drawn after it could be read and not touched.
+   * Since the review of 1.0.13 the hold is the card's own (P1-4) and goes when the card
+   * does, which is the same guarantee with nothing to release — so what is asserted here
+   * is the outcome rather than the mechanism.
    */
   server = await startAppServer({ replies: replyState() });
   await page.goto(server.url('#replies'));
@@ -248,7 +254,10 @@ test('leaving Replies while a read is in flight does not leave the next view ine
 
   const release = server.hold('replies.open');
   await page.getByTestId('reply-open').nth(0).click();
-  await expect(page.getByTestId('column')).toHaveAttribute('aria-busy', 'true');
+  await expect(page.getByTestId('reply-open').nth(0)).toHaveAttribute('aria-busy', 'true');
+  // The read holds that card's own button; Refresh and the sidebar are not waiting for it.
+  await expect(page.getByTestId('refresh')).toBeEnabled();
+  await expect(page.getByTestId('nav-today')).toBeEnabled();
 
   // Away while it is still holding, and the answer lands in a window that has left.
   await page.getByTestId('nav-today').click();
@@ -274,7 +283,9 @@ test('leaving Replies while a command is in flight strands nothing and brings no
 
   const release = server.hold('replies.confirm');
   await page.getByTestId('confirm').click();
-  await expect(page.getByTestId('column')).toHaveAttribute('aria-busy', 'true');
+  await expect(page.getByTestId('confirm')).toHaveAttribute('aria-busy', 'true');
+  // This card waits for its own confirmation; the sidebar is not part of the form.
+  await expect(page.getByTestId('nav-today')).toBeEnabled();
 
   await page.getByTestId('nav-today').click();
   release();
@@ -291,8 +302,8 @@ test('leaving Replies while a command is in flight strands nothing and brings no
 test('a confirmation held across a session change brings no reply back', async ({ page }) => {
   // The same command race as the navigation one, at the other transition: the person
   // signs out, or this Mac is revoked, while a confirmation is on the wire. The view
-  // goes with the session, the hold on the column goes with it, and nothing the
-  // command would have re-read is drawn.
+  // goes with the session, the card's hold goes with it, and nothing the command would
+  // have re-read is drawn.
   server = await startAppServer({ replies: replyState() });
   await page.goto(server.url('#replies'));
   await page.getByTestId('reply-open').nth(0).click();
@@ -300,7 +311,7 @@ test('a confirmation held across a session change brings no reply back', async (
 
   const release = server.hold('replies.confirm');
   await page.getByTestId('confirm').click();
-  await expect(page.getByTestId('column')).toHaveAttribute('aria-busy', 'true');
+  await expect(page.getByTestId('confirm')).toHaveAttribute('aria-busy', 'true');
 
   await page.evaluate(() => {
     const listeners = (globalThis as { __sessionListeners?: ((change: unknown) => void)[] }).__sessionListeners ?? [];
@@ -329,7 +340,7 @@ test('a session change empties the window: the cache and everything typed go at 
 
   // The sidebar's reads are keyed on the person alone, so the only thing that makes
   // them happen again is the cache having been emptied.
-  const adminBefore = server.called('admin.state').length;
+  const adminBefore = server.called('settings.state').length;
   const readsBefore = server.called('today.state').length + server.called('today.refresh').length;
   await page.evaluate(() => {
     const listeners = (globalThis as { __sessionListeners?: ((change: unknown) => void)[] }).__sessionListeners ?? [];
@@ -338,7 +349,7 @@ test('a session change empties the window: the cache and everything typed go at 
 
   // The list and the sidebar are read again rather than served from the cache the last
   // person filled…
-  await expect.poll(() => server.called('admin.state').length).toBeGreaterThan(adminBefore);
+  await expect.poll(() => server.called('settings.state').length).toBeGreaterThan(adminBefore);
   await expect
     .poll(() => server.called('today.state').length + server.called('today.refresh').length)
     .toBeGreaterThan(readsBefore);

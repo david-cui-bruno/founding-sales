@@ -4,7 +4,7 @@ import { todayStateSchema, type TodayFirm, type TodayState } from '../src/render
 import { createTodayBridge, localToInstant } from '../src/main/todayBridge.ts';
 import { DIAL_IPC_CHANNELS, OPERATION_NAMES } from '../src/shared/operations.ts';
 import type { DialHandoff } from '../src/main/dialHandoff.ts';
-import { CRM_IPC_CHANNELS, createCrmBridge, pipelineViewOf } from '../src/main/crmBridge.ts';
+import { createCrmBridge, pipelineViewOf } from '../src/main/crmBridge.ts';
 import { createAuthedClient } from '../src/main/authedClient.ts';
 import type { ApiOutcome, HttpAnswer } from '../src/main/apiClient.ts';
 import { heldAnswer, snoozedAnswer } from './support/todayAnswers.ts';
@@ -845,8 +845,9 @@ describe('the CRM bridge G3b was waiting for', () => {
     expect(answer.screen).toBe('pipeline');
     expect(answer.role).toBe('salesperson');
     expect(calls.map(call => call.path)).toEqual(['/pipeline/board']);
-    expect(Object.values(CRM_IPC_CHANNELS)).toHaveLength(15);
-    expect(new Set(Object.values(CRM_IPC_CHANNELS)).size).toBe(15);
+    // Fifteen named channels until 1.0.13; the CRM bridge is thirteen operations of the
+    // registry now, and `operations.test.ts` holds the list.
+    expect(OPERATION_NAMES.filter(name => name.startsWith('crm.'))).toHaveLength(13);
   });
 
   it('offers a stage change only for the firms the board read named', async () => {

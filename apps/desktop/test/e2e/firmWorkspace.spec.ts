@@ -45,8 +45,8 @@ async function openCrm(page: Page, state: CrmState): Promise<void> {
 test('the assignee sees routes with their eligibility, contacts, history and holds', async ({ page }) => {
   await openCrm(page, crmState());
 
-  await expect(page.getByTestId('heading')).toHaveText('Firm');
-  await expect(page.getByTestId('firm-identity')).toContainText('Northwind Test Holdings');
+  // The firm's name is the view's heading since 1.0.13, not a row of its own.
+  await expect(page.getByTestId('heading')).toHaveText('Northwind Test Holdings');
   await expect(page.getByTestId('firm-identity')).toContainText('9 Sample Street');
 
   // A route that is not usable is shown and marked, not hidden: "no number" and
@@ -62,8 +62,10 @@ test('the assignee sees routes with their eligibility, contacts, history and hol
 
   await expect(page.getByTestId('firm-hold')).toHaveCount(1);
   await expect(page.getByTestId('hold-reason')).toHaveText('reassignment');
-  await expect(page.getByTestId('hold-blocks')).toHaveText('email_send, call_task');
-  await expect(page.getByTestId('hold-recovery')).toHaveText('resume_after_review');
+  // The server's codes as words: an underscore on screen is a bug report a person
+  // cannot file, and a sentence per code would be a second list to keep correct (D6).
+  await expect(page.getByTestId('hold-blocks')).toHaveText('email send, call task');
+  await expect(page.getByTestId('hold-recovery')).toHaveText('resume after review');
 
   await expect(page.getByTestId('firm-redacted')).toHaveCount(0);
 });
@@ -71,7 +73,7 @@ test('the assignee sees routes with their eligibility, contacts, history and hol
 test('a colleague sees identity, a sentence saying why, and nothing else', async ({ page }) => {
   await openCrm(page, crmState({ firm: colleagueFirmPage() }));
 
-  await expect(page.getByTestId('firm-identity')).toContainText('Northwind Test Holdings');
+  await expect(page.getByTestId('heading')).toHaveText('Northwind Test Holdings');
   await expect(page.getByTestId('firm-redacted')).toContainText('assigned to somebody else');
 
   // Not empty sections: no sections. The address, the people and the holds were
@@ -98,7 +100,7 @@ test('a firm name that looks like markup is shown as text', async ({ page }) => 
     }),
   );
 
-  await expect(page.getByTestId('firm-identity')).toContainText('<img src=x onerror=alert(1)>');
+  await expect(page.getByTestId('heading')).toHaveText('<img src=x onerror=alert(1)>');
   await expect(page.locator('img')).toHaveCount(0);
 });
 
@@ -132,9 +134,11 @@ test('an outage is a banner over the firm, and nothing is disabled for it (wave 
   await openCrm(page, crmState({ online: false }));
 
   await expect(page.getByTestId('banner-warning')).toContainText('cannot reach the server');
-  await expect(page.getByTestId('banner-warning')).toContainText('Changes will fail until it reconnects.');
-  await expect(page.getByTestId('firm-identity')).toContainText('Northwind Test Holdings');
+  await expect(page.getByTestId('banner-warning')).toContainText('changes will fail until it reconnects.');
+  await expect(page.getByTestId('heading')).toHaveText('Northwind Test Holdings');
   await expect(page.getByTestId('contact-name').nth(0)).toBeEnabled();
+  // Save waits for an edit, not for the connection: type, and it is offered offline.
+  await page.getByTestId('contact-name').nth(0).fill('Dana Edited');
   await expect(page.getByTestId('contact-save').nth(0)).toBeEnabled();
 });
 
@@ -196,7 +200,7 @@ test('a firm with no open opportunity offers no stage control at all', async ({ 
 test('opening a firm from the board asks for that firm', async ({ page }) => {
   await openCrm(page, crmState({ screen: 'pipeline', pipeline: pipelineView(), firm: null }));
   await page.getByTestId('pipeline-open-firm').first().click();
-  await expect(page.getByTestId('heading')).toHaveText('Firm');
+  await expect(page.getByTestId('heading')).toHaveText('Northwind Test Holdings');
   expect(server.calls.find(entry => entry.method === 'openFirm')?.argument).toEqual({ firmId: FIRM_ID });
 });
 
@@ -246,23 +250,23 @@ test('a salesperson sees the conflicts and cannot commit the merge', async ({ pa
 });
 
 // ------------------------------------------------------------ lane g88: the Firm page
-test('a candidate number is confirmed at the version on screen, and an address has no such button', async ({ page }) => {
+/**
+ * Wave 2, S4.4: a phone number is callable the moment it is entered.
+ *
+ * "Confirm this number" and its route are gone. The person who typed the number has
+ * already said it reaches them, and a second press that only ever had one answer was a
+ * step between a founder and their call. Every number Callie can dial reads "Callable";
+ * one it cannot parse still says so, because that is a fact about the number.
+ */
+test('a number is callable as soon as it is there, with nothing to confirm', async ({ page }) => {
   await openCrm(page, crmState({ sequences: firmSequences() }));
 
-  // One candidate number: one button, beside it, and the sentence saying what it does.
-  await expect(page.getByTestId('route-confirm')).toHaveCount(1);
-  await expect(page.getByTestId('routes-hint-phone')).toContainText('confirm it reaches this firm');
-  await expect(page.getByTestId('firm-routes-email').getByTestId('route-confirm')).toHaveCount(0);
-
-  await page.getByTestId('route-confirm').click();
-  await expect(page.getByTestId('banner-info')).toHaveText('Number confirmed. It can be called now.');
-  expect(server.calls.find(entry => entry.method === 'confirmRoute')?.argument).toEqual({
-    routeId: '99999999-9999-4999-8999-999999999999',
-    routeVersion: 1,
-  });
-  await expect(page.getByTestId('route-eligibility').nth(1)).toHaveText('usable');
-  await expect(page.getByTestId('route-version').nth(1)).toHaveText('v2');
   await expect(page.getByTestId('route-confirm')).toHaveCount(0);
+  const phones = page.getByTestId('firm-routes-phone');
+  await expect(phones.getByTestId('firm-route')).toHaveCount(2);
+  await expect(phones.getByTestId('route-eligibility').nth(1)).toHaveText('candidate');
+  // Both of them, whatever the server's eligibility says, because both can be dialled.
+  await expect(phones.getByText('Callable')).toHaveCount(2);
 });
 
 // ------------------------------------------------------------ lane g90: an address's validation

@@ -1,8 +1,7 @@
 import { DEFAULT_SETTING_VALUES, describeClientVersionMaximum } from '@fss/contracts';
 import { TIME_ZONE_CHOICES } from './captureView.ts';
-import { POSTURE_NOTICES, POSTURES_HEADING, businessZoneOf, postureSection, type PosturesSectionView } from './postureView.ts';
-import { readErrorSentence } from './readError.ts';
-import { SETTINGS_ELSEWHERE_FALLBACK } from './settingsElsewhere.ts';
+import { POSTURE_NOTICES, businessZoneOf, postureSection, type PosturesSectionView } from './postureView.ts';
+import { OFFLINE_BANNER, readErrorSentence } from './readError.ts';
 import type { AdminState, CallingNumberView } from './settingsContract.ts';
 
 /**
@@ -38,20 +37,6 @@ export interface SettingRowView {
   readonly editable: boolean;
   readonly notEditableBecause: string | null;
 }
-
-export interface ElsewhereRowView {
-  readonly topic: string;
-  readonly path: string;
-  readonly ownedBy: string;
-  /**
-   * The section of this page that edits it now, or null (lane g84). A topic with a form
-   * here is named as that section rather than as an endpoint a person cannot press.
-   */
-  readonly editedHere: string | null;
-}
-
-/** The endpoints this page has a form for, and the section the form is in (lane g84). */
-const EDITED_HERE: Readonly<Record<string, string>> = Object.freeze({ '/postures': POSTURES_HEADING });
 
 export interface PanelView {
   readonly title: string;
@@ -103,6 +88,11 @@ export const sendingReadSentence = readErrorSentence;
  * from anybody else's. Inert only offline or below the minimum version. Nothing here
  * decides which number is in use — `usedForCalls` is the server's answer — and nothing
  * checks the number's shape: `number_invalid` comes back as a notice.
+ *
+ * Adding a number attests it (wave 2, S4.3): it is verified, enabled and usable for
+ * calls the moment it is added, so there is no statement to tick and no Attest button.
+ * A number an older release left unattested is shown, and the way to use it is to add
+ * it again.
  */
 export interface CallingNumberSectionView {
   /** One sentence: which number Today calls from, or why there is no Call button. */
@@ -111,28 +101,18 @@ export interface CallingNumberSectionView {
     readonly id: string;
     readonly status: 'in_use' | 'verified' | 'unverified' | 'retired';
     readonly line: string;
-    readonly canAttest: boolean;
     readonly canRetire: boolean;
   }[];
   readonly canAdd: boolean;
   readonly notEditableBecause: string | null;
-  /** The statement an attestation makes, shown beside the box a person ticks. */
-  readonly statement: string;
   /** How to type the number. */
   readonly hint: string;
 }
 
 /**
- * The attestation, in the words the person agrees to. Version one has no telephony
- * provider to prove the number with, so this sentence *is* the verification, recorded
- * with who ticked it and when (`docs/decisions/g60-calling-identities-are-attested-in-version-one.md`).
- */
-export const CALLING_NUMBER_STATEMENT = 'This is the number I place my calls from.';
-
-/**
  * The calling-number refusals as sentences (lane g60). Every other notice on this page
- * is shown as its code, as before; these are the ones a salesperson meets while typing
- * their own number, and a code is no help there.
+ * is shown as its code, as before; these are the ones a person meets while typing their
+ * own number, and a code is no help there.
  */
 const CALLING_NUMBER_NOTICES: Readonly<Record<string, string>> = Object.freeze({
   number_invalid: 'Callie cannot call from that. Type the number with the + and your country code.',
@@ -140,6 +120,7 @@ const CALLING_NUMBER_NOTICES: Readonly<Record<string, string>> = Object.freeze({
   number_registered_to_another: 'That number is already somebody else’s calling number in this workspace.',
   owner_not_member: 'That person is not an active member of this workspace.',
   identity_unknown: 'Callie has no such number of yours. Reopen the page and try again.',
+  calling_number_added: 'Number added. Today calls from it now.',
 });
 
 export const CALLING_NUMBER_HINT =
@@ -176,7 +157,6 @@ export interface AdminView {
   readonly notice: string | null;
   readonly banner: string | null;
   readonly settings: readonly SettingRowView[];
-  readonly elsewhere: readonly ElsewhereRowView[];
   readonly sending: { readonly line: string; readonly editable: boolean } | null;
   /** G7-2's section. Null for anybody who is not an admin. */
   readonly sendingAdmin: SendingAdminSectionView | null;
@@ -214,6 +194,7 @@ export interface AdminView {
 const LABELS: Readonly<Record<string, string>> = Object.freeze({
   business_time_zone: 'Workspace business zone',
   sending_enabled: 'Production sending',
+  postal_address: 'Postal address',
 });
 
 /**
@@ -318,13 +299,6 @@ export function adminViewOf(state: AdminState, now: Date = new Date()): AdminVie
     notEditableBecause: reason,
   }));
 
-  const elsewhere = (state.settings?.elsewhere ?? SETTINGS_ELSEWHERE_FALLBACK).map(entry => ({
-    topic: entry.topic,
-    path: entry.path,
-    ownedBy: entry.ownedBy,
-    editedHere: EDITED_HERE[entry.path] ?? null,
-  }));
-
   // 16.2's two switches, read out rather than recombined.
   const sending =
     state.settings === null
@@ -355,7 +329,6 @@ export function adminViewOf(state: AdminState, now: Date = new Date()): AdminVie
       state.notice === null ? null : (CALLING_NUMBER_NOTICES[state.notice] ?? POSTURE_NOTICES[state.notice] ?? state.notice),
     banner: state.online ? null : OFFLINE_BANNER,
     settings,
-    elsewhere,
     sending,
     sendingAdmin: sendingAdminSection(state, reason),
     sendingUnread:
@@ -417,7 +390,7 @@ function callingNumberSection(state: AdminState): CallingNumberSectionView {
         ? `Today calls from ${numberText(inUse)}.`
         : listed.length === 0
           ? 'You have no calling number yet, so Today has no Call button. Add the number you place your calls from.'
-          : 'None of your numbers is attested, so Today has no Call button. Attest the number you place your calls from.';
+          : 'None of your numbers is in use, so Today has no Call button. Add the number you place your calls from.';
 
   const numbers = (listed ?? []).map(number => {
     const status: CallingNumberSectionView['numbers'][number]['status'] = number.usedForCalls
@@ -431,15 +404,14 @@ function callingNumberSection(state: AdminState): CallingNumberSectionView {
       status === 'in_use'
         ? `${numberText(number)}: ${attestedBy(number)}. Today calls from this number.`
         : status === 'verified'
-          ? `${numberText(number)}: ${attestedBy(number)}. Not in use: you attested another number more recently.`
+          ? `${numberText(number)}: ${attestedBy(number)}. Not in use: you added another number more recently.`
           : status === 'retired'
-            ? `${numberText(number)}: retired on ${(number.disabledAt ?? '').slice(0, 10)}. Attest it again to use it.`
-            : `${numberText(number)}: not attested yet, so Today cannot call from it.`;
+            ? `${numberText(number)}: stopped on ${(number.disabledAt ?? '').slice(0, 10)}. Add it again to use it.`
+            : `${numberText(number)}: added by an older version of Callie and never confirmed, so Today cannot call from it. Add it again.`;
     return {
       id: number.id,
       status,
       line,
-      canAttest: editable && (status === 'unverified' || status === 'retired'),
       canRetire: editable && status !== 'retired',
     };
   });
@@ -449,7 +421,6 @@ function callingNumberSection(state: AdminState): CallingNumberSectionView {
     numbers,
     canAdd: editable && listed !== null,
     notEditableBecause: reason,
-    statement: CALLING_NUMBER_STATEMENT,
     hint: CALLING_NUMBER_HINT,
   };
 }
@@ -658,7 +629,7 @@ function diagnosticsPanels(state: AdminState): readonly PanelView[] {
 // ---------------------------------------------------------------------------
 
 /** The page's one word about the connection (wave 1): a banner, and nothing disabled. */
-export const OFFLINE_BANNER = 'Callie cannot reach the server. This page is as it was last read, and changes will fail until it reconnects.';
+export { OFFLINE_BANNER } from './readError.ts';
 
 /** Why a control is inert, as the sentence the page shows. The view keeps the code. */
 const INERT_SENTENCES: Readonly<Record<string, string>> = Object.freeze({
@@ -683,7 +654,16 @@ export type SettingField =
     };
 
 /** The slices this build draws as forms, in order. */
-export const ROUTINE_SETTINGS: readonly string[] = Object.freeze(['business_time_zone', 'sending_enabled']);
+export const ROUTINE_SETTINGS: readonly string[] = Object.freeze(['business_time_zone', 'sending_enabled', 'postal_address']);
+
+/**
+ * The sentence under the postal address (David, 27 September 2026).
+ *
+ * There is no address until somebody sets one, and that is not an error: an automated
+ * email's footer is the sign-off and the stop line, and it goes out either way. Saying so
+ * where the field is stops the field reading like a thing that has to be filled in.
+ */
+export const POSTAL_ADDRESS_HINT = 'With no address the footer is the sign-off and the stop line; sending continues.';
 
 /** The zones the business-zone control offers: the same US zones Add firm offers. */
 export const BUSINESS_ZONE_CHOICES = TIME_ZONE_CHOICES.filter(choice => choice.value !== '');
@@ -714,8 +694,22 @@ export function settingFields(settingKey: string, value: unknown): readonly Sett
       },
     ];
   }
+  if (settingKey === 'postal_address') {
+    return [
+      {
+        kind: 'text',
+        key: 'address',
+        label: 'Postal address',
+        value: text(current['address'], ''),
+        hint: POSTAL_ADDRESS_HINT,
+      },
+    ];
+  }
   return null;
 }
+
+/** The bound `postalAddressSettingSchema` puts on the address. */
+export const POSTAL_ADDRESS_MAX_LENGTH = 200;
 
 /**
  * The value a slice's controls describe, or the field that cannot be read. Nothing is
@@ -735,6 +729,12 @@ export function settingValueFrom(
     const reference = read('releaseGateReference');
     return { ok: true, value: { enabled: values['enabled'] === true, releaseGateReference: reference === '' ? null : reference } };
   }
+  // An emptied field is `null`, not an empty string: "no address" is a value the domain
+  // has a rule for, and `''` is not one the command accepts.
+  if (settingKey === 'postal_address') {
+    const address = read('address');
+    return { ok: true, value: { address: address === '' ? null : address } };
+  }
   return { ok: false, field: settingKey };
 }
 
@@ -746,6 +746,10 @@ export function settingSummary(settingKey: string, value: unknown): string {
     return BUSINESS_ZONE_CHOICES.find(choice => choice.value === zone)?.label ?? zone;
   }
   if (settingKey === 'sending_enabled') return current['enabled'] === true ? 'On' : 'Off';
+  if (settingKey === 'postal_address') {
+    const address = text(current['address'], '');
+    return address === '' ? 'None' : address;
+  }
   return '';
 }
 

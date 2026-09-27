@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  attestCallingIdentityCommandSchema,
   compareVersions,
   mayMutate,
   publishedClientVersions,
@@ -27,15 +26,17 @@ import { adminViewOf } from '../../../desktop/src/renderer/settingsView.ts';
  * ## The vacuous-pass traps, named
  *
  * **A check that the words exist.** Asserting that the settings bridge mentions
- * `/calling-identities/register` would pass against a control that registers the number
- * and never attests it — which, from David's side, is still no Call button. Closed by
- * driving the bridge against a scripted API and asserting the sequence: the read, the
- * registration, the attestation, the read that shows the number in use.
+ * `/calling-identities/register` would pass against a control that registered the
+ * number and left it unusable — which, from David's side, is still no Call button.
+ * Closed by driving the bridge against a scripted API and asserting the sequence and
+ * what the page says afterwards: the read, the registration, the read that shows the
+ * number in use.
  *
- * **An attestation nobody made.** The attestation is the whole of version one's
- * verification, so a control that sent it without the person ticking the statement
- * would be the page verifying the number on their behalf. Closed by driving the
- * unticked press and asserting that no attestation was sent.
+ * **An attestation prompt nobody needed.** Until wave 2 the page asked the person to
+ * tick a statement saying the number they had just typed into their own calling-number
+ * field was theirs, and an unticked press left a number Today could not call from. The
+ * register attests since S4.3, so there is one command; this check asserts that
+ * `/calling-identities/attest` has no caller left rather than that it is sent.
  *
  * **A control nobody can reach.** The bridge can be perfect and the window still have no
  * way to it if the preload stops exposing it or the main process stops answering its
@@ -104,12 +105,6 @@ function settingsWindow(role: 'admin' | 'salesperson' = 'admin') {
             body: { status: 'accepted', replayed: false, result: { outcome: 'created', identity: identity() } },
           });
         }
-        if (path === CALLING_NUMBER_API_PATHS.attest) {
-          return await Promise.resolve({
-            status: 200,
-            body: { status: 'accepted', replayed: false, result: { outcome: 'verified', identity: attested } },
-          });
-        }
         return await Promise.resolve({ status: 404, body: { error: 'not_found' } });
       },
     }),
@@ -119,34 +114,32 @@ function settingsWindow(role: 'admin' | 'salesperson' = 'admin') {
 }
 
 describe('9.1: a salesperson gives Callie the number they call from (lane g60)', () => {
-  it('registers and attests the number from the Settings screen, and the page then names it as the one Today calls from', async () => {
+  it('registers the number from the Settings screen in one command, and the page then names it as the one Today calls from', async () => {
     const { bridge, calls } = settingsWindow('salesperson');
     const before = await bridge.state();
     // Where David was: no number, and a page that says why there is no Call button.
     expect(adminViewOf(before).callingNumber.summary).toContain('Today has no Call button');
     expect(adminViewOf(before).callingNumber.canAdd).toBe(true);
 
-    const after = await bridge.addCallingNumber({ e164: '+1 401 555 0150', label: '', attested: true });
+    const after = await bridge.addCallingNumber({ e164: '+1 401 555 0150', label: '' });
 
     const numbers = calls.filter(call => call.path.startsWith('/calling-identities'));
     expect(numbers.map(call => `${call.method} ${call.path}`)).toEqual([
       'GET /calling-identities',
       'POST /calling-identities/register',
-      'POST /calling-identities/attest',
       'GET /calling-identities',
     ]);
     expect(registerCallingIdentityCommandSchema.safeParse(numbers[1]?.body).success).toBe(true);
-    expect(attestCallingIdentityCommandSchema.safeParse(numbers[2]?.body).success).toBe(true);
-    expect(numbers[2]?.body).toMatchObject({ identityId: IDENTITY_ID, attested: true });
     expect(adminViewOf(after).callingNumber.summary).toBe('Today calls from +14015550150.');
   });
 
-  it('never attests a number the person did not attest', async () => {
+  it('has no caller for the attestation route the register replaced (wave 2, S4.3)', async () => {
     const { bridge, calls } = settingsWindow();
     await bridge.state();
-    await bridge.addCallingNumber({ e164: '+14015550150', label: '', attested: false });
+    await bridge.addCallingNumber({ e164: '+14015550150', label: '' });
     expect(calls.map(call => call.path)).toContain(CALLING_NUMBER_API_PATHS.register);
-    expect(calls.map(call => call.path)).not.toContain(CALLING_NUMBER_API_PATHS.attest);
+    expect(calls.map(call => call.path)).not.toContain('/calling-identities/attest');
+    expect(Object.values(CALLING_NUMBER_API_PATHS)).not.toContain('/calling-identities/attest');
   });
 
   it('calls only paths the API mounts', () => {

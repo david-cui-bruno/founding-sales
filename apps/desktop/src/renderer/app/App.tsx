@@ -1,10 +1,11 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { useCallback, useEffect, useRef, useState, type JSX, type ReactNode } from 'react';
-import * as firmWorkspace from '../firmWorkspace.ts';
+import { useCallback, useEffect, useRef, useState, type JSX } from 'react';
 import type { DesktopState } from '../../shared/contract.ts';
+import { FirmsRoute } from '../firms/FirmsRoute.tsx';
 import { buildHomeView } from '../homeView.ts';
 import { RepliesRoute } from '../replies/RepliesRoute.tsx';
-import * as sequenceEditor from '../sequenceEditor.ts';
+import { SequencesRoute } from '../sequences/SequencesRoute.tsx';
+import { SettingsView } from '../settings/SettingsView.tsx';
 import { buildTodayView } from '../todayView.ts';
 import { TodayColumn } from '../today/TodayColumn.tsx';
 import { useToday } from '../today/useToday.ts';
@@ -13,12 +14,10 @@ import { routeText, type Route } from '../routes.ts';
 import { buildScreenView } from '../viewModel.ts';
 import { Alert } from '../ui/alert.tsx';
 import { DraftsProvider, useHasDrafts } from './drafts.tsx';
-import { LegacyView } from './LegacyView.tsx';
-import { SettingsView } from './SettingsView.tsx';
 import { Sidebar } from './Sidebar.tsx';
 import { SignedOutScreen, type SignInDraft } from './SignedOutScreen.tsx';
 import { ThisMac } from './ThisMac.tsx';
-import { adminBridge, mailboxBridge, updateBridge } from './bridges.ts';
+import { operations, updateBridge } from './bridges.ts';
 import { useHomeAdmin } from './useHomeAdmin.ts';
 import { useRoute } from './useRoute.ts';
 import { useSession, type Session } from './useSession.ts';
@@ -32,8 +31,8 @@ import { useSession, type Session } from './useSession.ts';
  * one view in the column on the right. The route says which view; the sidebar sets it,
  * and so do the Window menu and a deep link through `callie:navigate`.
  *
- * Today and Replies are React. Firms, Sequences and the three Settings tabs are still
- * `mount`/`unmount` modules and run inside `LegacyView` until U2 converts them.
+ * Every view is React since 1.0.13, and every one of them reaches the main process
+ * through the same closed list of operations.
  *
  * Everything held for the person signed in — the Query cache and every draft — hangs
  * under `identity`, so a sign-out, another workspace or a changed role drops all of it
@@ -70,7 +69,7 @@ function Column({
   const [thisMacOpen, setThisMacOpen] = useState(false);
   // A page built without the preload has no operations at all; the views say so where a
   // control would have been rather than throwing.
-  const hasOperations = globalThis.callieApi !== undefined;
+  const hasOperations = operations() !== undefined;
   const typed = useHasDrafts('today:');
   const isTyping = useCallback((): boolean => {
     const lanes = document.querySelector('[data-region="today"]');
@@ -85,11 +84,7 @@ function Column({
   const view = buildHomeView(
     {
       desktop,
-      bridges: {
-        today: hasOperations,
-        mailbox: mailboxBridge() !== undefined,
-        admin: adminBridge() !== undefined,
-      },
+      hasOperations,
       today: today.state,
       todayView,
       mailbox: session.mailbox,
@@ -117,16 +112,6 @@ function Column({
     if (column !== null) column.scrollTop = 0;
   }, [key]);
 
-  const inFlight = today.commands;
-  useEffect(() => {
-    // The column is read-only while one of Today's commands is on the wire, through the
-    // same `holdInert` the hand-rolled views use — so an update being installed and a
-    // command in flight each hold it under their own reason and neither releases the
-    // other.
-    const column = columnRef.current;
-    if (column !== null) holdInert(column, 'today-command', inFlight > 0);
-  }, [inFlight]);
-
   return (
     <>
       <Sidebar
@@ -142,12 +127,19 @@ function Column({
               desktop={desktop}
               mailbox={session.mailbox}
               mailboxWaiting={session.mailboxWaiting}
-              hasMailboxBridge={mailboxBridge() !== undefined}
+              hasMailboxBridge={hasOperations}
               onConnect={() => {
                 void session.connectMailbox();
               }}
               onSignOut={() => {
                 void session.signOut();
+              }}
+              opened={thisMacOpen}
+              onListDevices={() => {
+                void session.listDevices();
+              }}
+              onRevokeDevice={deviceId => {
+                void session.revokeDevice(deviceId);
               }}
             />
           )
@@ -177,31 +169,29 @@ function Column({
             }}
           />
         ) : route.name === 'settings' ? (
-          <SettingsView key={key} mountKey={key} route={route} />
+          <SettingsView
+            key={key}
+            route={route}
+            identity={session.identity}
+            generation={session.generation}
+            guard={session.guard}
+          />
         ) : route.name === 'replies' ? (
           <RepliesRoute key={key} column={columnRef} />
         ) : route.name === 'sequences' ? (
-          <Page>
-            <LegacyView key={key} mountKey={key} view={sequenceEditor} route={route} />
-          </Page>
+          <SequencesRoute key={key} identity={session.identity} generation={session.generation} guard={session.guard} />
         ) : (
-          <Page>
-            <LegacyView key={key} mountKey={key} view={firmWorkspace} route={route} />
-          </Page>
+          <FirmsRoute
+            key={key}
+            route={route}
+            identity={session.identity}
+            generation={session.generation}
+            guard={session.guard}
+          />
         )}
       </main>
     </>
   );
-}
-
-/**
- * The column every route is drawn in: one 860px measure, the same padding, whoever draws
- * it. Today, Replies and Settings each carry it themselves; the two views that are still
- * page modules are given it here, because the shell owns the column and they own what is
- * in it.
- */
-function Page({ children }: { readonly children: ReactNode }): JSX.Element {
-  return <div className="mx-auto flex w-full max-w-[860px] flex-col px-12 pt-10 pb-20">{children}</div>;
 }
 
 /** `#app` as the shell: the sidebar at a fixed width and the column taking the rest. */

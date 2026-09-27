@@ -9,7 +9,15 @@ export const IPC_CHANNELS = {
   state: 'callie:state',
   signIn: 'callie:sign-in',
   signOut: 'callie:sign-out',
-  refreshToday: 'callie:refresh-today',
+  /**
+   * The workspace's other Macs, and signing one of them out (wave 3b, S7).
+   *
+   * The session's channels rather than operations of the registry, because revoking the
+   * device this Mac is presenting *is* this Mac signing out, and the session manager is
+   * the only thing allowed to end a registration.
+   */
+  devices: 'callie:devices',
+  revokeDevice: 'callie:device-revoke',
   /**
    * Main to page (wave 1): go to one of the six routes. The Window menu's ⌘1–⌘6 and a
    * deep link send it; it carries a route name and nothing else.

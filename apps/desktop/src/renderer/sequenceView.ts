@@ -1,9 +1,7 @@
-import { SENDING_STOP_LINE, TEMPLATE_VARIABLE_NAMES, type RemovedStepChannel } from '@fss/contracts';
-import { readErrorSentence } from './readError.ts';
+import { SENDING_STOP_LINE, TEMPLATE_VARIABLE_NAMES } from '@fss/contracts';
+import { OFFLINE_BANNER, OFFLINE_SENTENCE, readErrorSentence } from './readError.ts';
 import type {
   DraftStep,
-  Enrollment,
-  ResumeReview,
   SequenceReadSlice,
   SequenceState,
   SequenceStep,
@@ -31,16 +29,17 @@ import type {
  * approval to bytes. The window that let somebody type into an approved body would be
  * a window whose save always failed, because the trigger refuses it.
  *
- * The LinkedIn task card and its undo deadline went with LinkedIn on 25 September 2026.
- * A LinkedIn step stored before then arrives as channel `removed` (lane A2) and is shown
- * as one greyed row with no control: nothing may edit, publish or enrol with it.
+ * LinkedIn went on 25 September 2026, and migration 0019 took its stored steps with it:
+ * "no step goes out as channel `removed`" (`apps/api/src/routes/sequences.ts`). The wire
+ * contract keeps the variant for desktop 1.0.11, so the type still admits one and the
+ * two places below name it in a line; the greyed row, its label, the publish refusal and
+ * the "saving leaves this step out" hint went in 1.0.13, because nothing can produce one.
  */
 
 export type PublishRefusal =
   | 'version_has_no_steps'
   | 'ordinals_not_contiguous'
   | 'email_step_needs_approved_template'
-  | 'step_channel_removed'
   | 'not_a_draft'
   | 'admin_only'
   | 'upgrade_required';
@@ -52,8 +51,6 @@ export interface StepRow {
   readonly detail: string;
   /** Set when an email step names a template that cannot be published on. */
   readonly problem: string | null;
-  /** A stored step of a removed channel (lane A2): drawn greyed, with no control. */
-  readonly removed: boolean;
 }
 
 export interface VersionPanel {
@@ -69,8 +66,6 @@ export interface VersionPanel {
   readonly stopConditions: readonly SequenceVersion['stopConditions'][number][];
   /** The stop conditions in one sentence (lane g88); the codes go behind a disclosure. */
   readonly stopSentence: string;
-  /** A published version with no draft beside it may be copied into one (lane g88). */
-  readonly canStartDraft: boolean;
 }
 
 export interface TemplatePanel {
@@ -87,16 +82,6 @@ export interface TemplatePanel {
   /** The footer block the body must end with, and whether it does (12.6). */
   readonly footerPresent: boolean;
   readonly unsubscribeMentioned: boolean;
-}
-
-export interface HoldReviewRow {
-  readonly enrollmentId: string;
-  readonly heldForDays: number;
-  /** Whether "Review and resume" may be pressed: it opens the review, never resumes. */
-  readonly canResume: boolean;
-  readonly explanation: string;
-  /** True while this row's review is the one open. */
-  readonly reviewing: boolean;
 }
 
 /**
@@ -118,8 +103,21 @@ export const SEQUENCE_UNREAD: Readonly<Record<SequenceReadSlice, string>> = Obje
   sequences: 'Callie could not read the sequences.',
   versions: 'Callie could not read this sequence’s versions.',
   templates: 'Callie could not read the templates.',
-  enrollments: 'Callie could not read the enrollments.',
+  enrollments: 'Callie could not read who is enrolled.',
 });
+
+/**
+ * Who is working through the sequence on screen (11.2; wave 2, S4.1).
+ *
+ * One row per version that anybody is in, because an enrollment's own fields are ids —
+ * a contact id is not a name, and a raw UUID on screen is a bug report a person cannot
+ * file (D6). A count per version is what the person asking "is this sequence running?"
+ * wants, and it never names anybody.
+ */
+export interface EnrollmentPanel {
+  readonly summary: string;
+  readonly rows: readonly { readonly sequenceVersionId: string; readonly line: string }[];
+}
 
 export interface SequenceScreen {
   readonly banner: string | null;
@@ -128,9 +126,8 @@ export interface SequenceScreen {
   readonly sequences: readonly { readonly id: string; readonly name: string; readonly selected: boolean }[];
   readonly versions: readonly VersionPanel[];
   readonly templates: readonly TemplatePanel[];
-  readonly holdReview: readonly HoldReviewRow[];
-  /** The open resume review (lane g88), or null. */
-  readonly resumeReview: ResumeReviewPanel | null;
+  /** Who is in flight in the chosen sequence; null before anything was read. */
+  readonly enrollments: EnrollmentPanel | null;
   /** Whether the "New sequence" and "New template" forms may be used. */
   readonly canAuthor: boolean;
   readonly notice: string | null;
@@ -138,24 +135,15 @@ export interface SequenceScreen {
   readonly warnings: readonly string[];
 }
 
-const DAY_MILLISECONDS = 86_400_000;
-
 function delayLabel(step: Pick<SequenceStep, 'delay'>): string {
   return step.delay.unit === 'elapsed'
     ? `${String(step.delay.hours)} h after enrollment`
     : `${String(step.delay.days)} business days after enrollment`;
 }
 
-/**
- * What a stored step of a removed channel is called (lane A2). The whole row: it has no
- * channel, template or call behaviour a person could act on.
- */
-export const REMOVED_STEP_LABELS: Readonly<Record<RemovedStepChannel, string>> = Object.freeze({
-  linkedin: 'LinkedIn step (channel removed 25 Sep 2026)',
-});
-
 function stepDetail(step: SequenceStep): string {
-  if (step.channel === 'removed') return REMOVED_STEP_LABELS[step.removedChannel];
+  // The wire type still admits it; migration 0019 means nothing sends it.
+  if (step.channel === 'removed') return 'A step this version of Callie does not run';
   if (step.channel === 'email') return 'Template email';
   return step.onNoAnswer === 'retry_call' ? 'Call task (try again on no answer)' : 'Call task (move on if nobody answers)';
 }
@@ -175,8 +163,6 @@ export function publishRefusalFor(
   if (version.steps.length === 0) return 'version_has_no_steps';
   const ordinals = [...version.steps].map(step => step.ordinal).sort((left, right) => left - right);
   if (!ordinals.every((ordinal, index) => ordinal === index + 1)) return 'ordinals_not_contiguous';
-  // The server refuses a version with a step it cannot run (`publishVersion`).
-  if (version.steps.some(step => step.channel === 'removed')) return 'step_channel_removed';
   for (const step of version.steps) {
     if (step.templateVersionId === null) continue;
     const template = templates.find(candidate => candidate.id === step.templateVersionId);
@@ -190,7 +176,7 @@ export function publishRefusalFor(
 function versionPanel(
   version: SequenceVersion,
   templates: readonly TemplateVersion[],
-  options: { readonly isAdmin: boolean; readonly mayMutate: boolean; readonly hasDraft: boolean },
+  options: { readonly isAdmin: boolean; readonly mayMutate: boolean },
 ): VersionPanel {
   const refusal = publishRefusalFor(version, templates, options);
   const steps = [...version.steps]
@@ -216,7 +202,6 @@ function versionPanel(
         delayLabel: delayLabel(step),
         detail: stepDetail(step),
         problem,
-        removed: step.channel === 'removed',
       };
     });
 
@@ -226,17 +211,15 @@ function versionPanel(
     state: version.state,
     heading: `Version ${String(version.version)} — ${version.state}`,
     steps,
-    // 11.1: a published version and its steps are immutable by trigger. A window
-    // that offered an edit would be offering a save that cannot succeed.
-    editable: version.state === 'draft' && options.isAdmin && options.mayMutate,
+    // Edited in place since wave 2 (S3): `saveSteps` changes a published version's steps
+    // and the edit reaches its live enrollments, so "Edit as a new draft" is gone and a
+    // published version is simply editable. A retired one is not.
+    editable: version.state !== 'retired' && options.isAdmin && options.mayMutate,
     canPublish: refusal === null,
     publishRefusal: refusal,
     canRetire: version.state === 'published' && options.isAdmin && options.mayMutate,
     stopConditions: version.stopConditions,
     stopSentence: STOP_SENTENCE,
-    // At most one draft per sequence (`sequence_versions_one_draft`): with one open, the
-    // way to change the plan is to edit that draft.
-    canStartDraft: version.state === 'published' && options.isAdmin && options.mayMutate && !options.hasDraft,
   };
 }
 
@@ -274,14 +257,32 @@ function templatePanel(
   };
 }
 
-function holdReviewRow(enrollment: Enrollment, state: SequenceState): HoldReviewRow {
-  const days = Math.round((enrollment.reviewUnionMilliseconds ?? 0) / DAY_MILLISECONDS);
+/** The counts the enrollment panel shows, per version of the chosen sequence. */
+function enrollmentPanel(state: SequenceState): EnrollmentPanel | null {
+  if (state.selectedSequenceId === null) return null;
+  const numberOf = new Map(state.versions.map(version => [version.id, version.version]));
+  const mine = state.enrollments.filter(entry => numberOf.has(entry.sequenceVersionId));
+  const running = mine.filter(entry => entry.state === 'active' || entry.state === 'review_required').length;
+  const rows = [...new Set(mine.map(entry => entry.sequenceVersionId))]
+    .sort((left, right) => (numberOf.get(right) ?? 0) - (numberOf.get(left) ?? 0))
+    .map(sequenceVersionId => {
+      const own = mine.filter(entry => entry.sequenceVersionId === sequenceVersionId);
+      const parts = [
+        [own.filter(entry => entry.state === 'active' || entry.state === 'review_required').length, 'running'],
+        [own.filter(entry => entry.state === 'completed').length, 'finished'],
+        [own.filter(entry => entry.state === 'stopped').length, 'stopped'],
+      ] as const;
+      const said = parts.filter(([count]) => count > 0).map(([count, word]) => `${String(count)} ${word}`);
+      return { sequenceVersionId, line: `Version ${String(numberOf.get(sequenceVersionId) ?? 0)} — ${said.join(', ')}` };
+    });
   return {
-    enrollmentId: enrollment.id,
-    heldForDays: days,
-    canResume: state.mayMutate,
-    explanation: `Held for about ${String(days)} days in total. Review the remaining steps before resuming; every resume performs a fresh eligibility check.`,
-    reviewing: state.resumeReview?.preview.enrollmentId === enrollment.id,
+    summary:
+      running === 0
+        ? 'Nobody is working through this sequence right now.'
+        : running === 1
+          ? 'One person is working through this sequence.'
+          : `${String(running)} people are working through this sequence.`,
+    rows,
   };
 }
 
@@ -291,12 +292,9 @@ export function sequenceScreen(state: SequenceState): SequenceScreen {
     isAdmin: state.isAdmin,
     // Offline is the banner, not a disabled control (wave 1).
     mayMutate: state.mayMutate,
-    hasDraft: state.versions.some(version => version.state === 'draft'),
   };
   return {
-    banner: state.online
-      ? null
-      : 'Offline. Callie cannot reach the server, so sequences cannot be read, and changes will fail until it reconnects.',
+    banner: state.online ? null : OFFLINE_BANNER,
     unread: (['sequences', 'versions', 'templates', 'enrollments'] as const).flatMap(slice => {
       const code = state.readErrors[slice];
       return code === null ? [] : [{ slice, line: `${SEQUENCE_UNREAD[slice]} ${readErrorSentence(code)}` }];
@@ -310,10 +308,7 @@ export function sequenceScreen(state: SequenceState): SequenceScreen {
       .sort((left, right) => right.version - left.version)
       .map(version => versionPanel(version, state.templates, options)),
     templates: state.templates.map(template => templatePanel(template, options)),
-    holdReview: state.heldEnrollments
-      .filter(enrollment => enrollment.state === 'review_required')
-      .map(enrollment => holdReviewRow(enrollment, state)),
-    resumeReview: state.resumeReview === null ? null : resumeReviewPanel(state.resumeReview, state),
+    enrollments: enrollmentPanel(state),
     canAuthor: state.isAdmin && state.mayMutate,
     notice: state.notice === null ? null : sequenceNotice(state.notice),
     warnings: state.warnings.map(templateWarningSentence),
@@ -325,14 +320,12 @@ export const EMPTY_SEQUENCE_STATE: SequenceState = Object.freeze({
   online: false,
   mayMutate: false,
   isAdmin: false,
-  asOf: null,
   sequences: [],
   selectedSequenceId: null,
   versions: [],
   templates: [],
-  heldEnrollments: [],
+  enrollments: [],
   readErrors: { sequences: null, versions: null, templates: null, enrollments: null },
-  resumeReview: null,
   notice: null,
   warnings: [],
 });
@@ -363,10 +356,7 @@ export const NO_ANSWER_LABELS: Readonly<Record<'advance' | 'retry_call', string>
   retry_call: 'Try the call again',
 });
 
-/**
- * A version's steps as the editor holds them, in their order. A step of a removed channel
- * is not one (lane A2): the editor cannot author it, so a saved draft leaves it out.
- */
+/** A version's steps as the editor holds them, in their order. */
 export function draftStepsOf(version: SequenceVersion): DraftStep[] {
   return [...version.steps]
     .sort((left, right) => left.ordinal - right.ordinal)
@@ -491,12 +481,8 @@ export function stepsForWire(steps: readonly DraftStep[]): readonly Readonly<Rec
   }));
 }
 
-/**
- * Whether the editor holds something other than what the draft has saved. A saved draft
- * with a removed step always differs (lane A2): saving is how that step leaves it.
- */
+/** Whether the editor holds something other than what the version has saved. */
 export function draftChanged(version: SequenceVersion, steps: readonly DraftStep[]): boolean {
-  if (version.steps.some(step => step.channel === 'removed')) return true;
   return JSON.stringify(draftStepsOf(version)) !== JSON.stringify(steps);
 }
 
@@ -618,39 +604,31 @@ export const TEMPLATE_ISSUE_SENTENCES: Readonly<Record<string, string>> = Object
 // ---------------------------------------------------------------------------
 
 const SEQUENCE_NOTICES: Readonly<Record<string, string>> = Object.freeze({
-  sequence_created: 'Sequence created, with an empty draft to fill in.',
-  draft_created: 'A new draft, copied from the published version.',
-  draft_saved: 'Draft saved.',
-  template_created: 'Template saved. Approve it before a sequence can be published with it.',
-  template_approved: 'Template approved.',
+  sequence_created: 'Sequence created, with an empty version to fill in.',
+  steps_saved: 'Saved.',
+  template_saved: 'Template saved and approved.',
   published: 'Published. It can be used for new enrolments now.',
   retired: 'Retired. Nobody new can be enrolled in this version.',
-  resumed: 'Resumed. The remaining steps have the dates you reviewed.',
-  resume_still_held: 'Something is still holding this enrollment, so nothing moved.',
   admin_only: 'Only an administrator can change sequences and templates.',
   invalid_input: 'Callie could not save that. Check the steps and try again.',
   sequence_unknown: 'That sequence is no longer here.',
   version_unknown: 'That version is no longer here.',
-  version_not_draft: 'Only a draft can be changed. Start a new draft from the published version.',
   version_not_published: 'Only a published version can be used or retired.',
-  version_retired: 'That version is retired.',
+  version_retired: 'That version is retired. Start a new one instead.',
   version_has_no_steps: 'Add at least one step before publishing.',
+  step_in_use: 'A step that has already run cannot change its channel or be removed. Add a step instead.',
   template_unknown: 'An email step names a template that is no longer here.',
   template_retired: 'An email step names a retired template.',
   template_unapproved: 'An email step names a template that is not approved yet.',
-  template_already_approved: 'That template is already approved.',
-  enrollment_unknown: 'That enrollment is no longer here.',
-  enrollment_not_live: 'That enrollment has ended.',
-  not_assigned: 'That enrollment belongs to somebody else.',
-  offline: 'Callie cannot reach the server.',
+  offline: OFFLINE_SENTENCE,
   malformed_body: 'Callie could not send that. Check the fields and try again.',
 });
 
 /**
- * One notice as a sentence. A refused approval arrives as `template_unapproved:` and the
- * issues (`apps/api/src/routes/templates.ts`), and every issue is named, because an author
- * fixing one rule at a time is a worse day than one fixing four at once. A code with no
- * sentence is shown as it is.
+ * One notice as a sentence. A refused save-and-approve arrives as `template_unapproved:`
+ * and the issues (`apps/api/src/routes/templates.ts`), and every issue is named, because
+ * an author fixing one rule at a time is a worse day than one fixing four at once. A code
+ * with no sentence is shown as it is.
  */
 export function sequenceNotice(code: string): string {
   if (code.startsWith('template_unapproved:')) {
@@ -662,105 +640,6 @@ export function sequenceNotice(code: string): string {
     return `Not approved. ${issues.join(' ')}`.trim();
   }
   return SEQUENCE_NOTICES[code] ?? code;
-}
-
-// ---------------------------------------------------------------------------
-// Lane g88: the resume review (audit G06)
-// ---------------------------------------------------------------------------
-
-export interface ResumeReviewStepRow {
-  readonly label: string;
-  readonly from: string;
-  readonly to: string;
-  readonly moved: boolean;
-  /** A held step of a removed channel (lane A2): drawn greyed, and a resume leaves it held. */
-  readonly removed: boolean;
-}
-
-export interface ResumeReviewPanel {
-  readonly enrollmentId: string;
-  readonly heading: string;
-  readonly summary: string;
-  readonly holdLines: readonly string[];
-  readonly steps: readonly ResumeReviewStepRow[];
-  /** "Resume with these dates" — the final action, and the only one that resumes. */
-  readonly canConfirm: boolean;
-  readonly confirmLabel: string;
-  readonly zoneLine: string;
-}
-
-/** An instant as the firm's own wall clock: "Thu, Sep 24, 9:00 AM". */
-export function firmClock(instant: string, zone: string): string {
-  const at = new Date(instant);
-  if (!Number.isFinite(at.getTime())) return instant;
-  try {
-    return new Intl.DateTimeFormat('en-US', {
-      timeZone: zone,
-      weekday: 'short',
-      month: 'short',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-    }).format(at);
-  } catch {
-    return instant;
-  }
-}
-
-/** Why the review shows a removed step held (lane A2). */
-const REMOVED_HELD_REASONS: Readonly<Record<'channel_removed', string>> = Object.freeze({
-  channel_removed: 'channel removed; resuming leaves it held',
-});
-
-function daysText(milliseconds: number): string {
-  const days = milliseconds / DAY_MILLISECONDS;
-  if (days >= 1) {
-    const rounded = Math.round(days * 10) / 10;
-    return `${String(rounded)} ${rounded === 1 ? 'day' : 'days'}`;
-  }
-  const hours = Math.round(milliseconds / 3_600_000);
-  return `${String(hours)} ${hours === 1 ? 'hour' : 'hours'}`;
-}
-
-/**
- * The review, as the window draws it: what held the enrollment, then every remaining step
- * with the date it has now and the date a confirmation gives it, in the firm's zone — the
- * zone every due instant of the enrollment was resolved in. Nothing here computes a date:
- * `proposedDueAt` is the server's, from the function the confirmation runs.
- */
-export function resumeReviewPanel(review: ResumeReview, state: SequenceState): ResumeReviewPanel {
-  const preview = review.preview;
-  const zone = preview.firmTimeZone;
-  const stillHeld = preview.kind === 'still_held';
-  const summary = stillHeld
-    ? 'Something is still holding this enrollment, so resuming now would move nothing. It carries on by itself when the hold clears.'
-    : preview.shiftMilliseconds > 0
-      ? `Held for ${daysText(preview.unionMilliseconds)} in all. Resuming moves every remaining step ${daysText(preview.shiftMilliseconds)} later, to the dates below, and checks each step again before it runs.`
-      : 'Nothing held this enrollment long enough to move its steps. Resuming keeps the dates below and checks each step again before it runs.';
-  return {
-    enrollmentId: preview.enrollmentId,
-    heading: 'Review before resuming',
-    summary,
-    holdLines: preview.holds.map(
-      hold =>
-        `${hold.reasonCode.replaceAll('_', ' ')}: ${firmClock(hold.startedAt, zone)} to ${
-          hold.releasedAt === null ? 'still open' : firmClock(hold.releasedAt, zone)
-        }`,
-    ),
-    steps: preview.steps.map(step => ({
-      label:
-        step.channel === 'removed'
-          ? `Step ${String(step.ordinal)} · ${REMOVED_STEP_LABELS[step.removedChannel]} (held: ${REMOVED_HELD_REASONS[step.heldReason]})`
-          : `Step ${String(step.ordinal)} · ${CHANNEL_LABELS[step.channel]}${step.state === 'held' ? ' (held)' : ''}`,
-      from: firmClock(step.dueAt, zone),
-      to: firmClock(step.proposedDueAt, zone),
-      moved: step.proposedDueAt !== step.dueAt,
-      removed: step.channel === 'removed',
-    })),
-    canConfirm: !stillHeld && state.mayMutate,
-    confirmLabel: 'Resume with these dates',
-    zoneLine: `Times are the firm’s (${zone}). An email still waits for its sending window.`,
-  };
 }
 
 export { delayLabel };

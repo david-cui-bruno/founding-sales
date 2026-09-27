@@ -332,7 +332,7 @@ test('is readable and unpressable when Callie cannot reach the server', async ({
 
   await expect(page.getByTestId('banner-warning')).toHaveText('Callie cannot reach the server.');
   await expect(page.getByTestId('reply-empty')).toHaveText(
-    'Callie cannot reach the server, and replies are never kept on this Mac.',
+    'Callie cannot reach the server. Replies are never kept on this Mac.',
   );
   await expect(page.getByTestId('reply-summary')).toHaveCount(0);
 });

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from 'playwright/test';
-import { SEQUENCE_IDS, enrollmentAnswer } from '../support/sequenceAnswers.ts';
+import { SEQUENCE_IDS } from '../support/sequenceAnswers.ts';
 import {
   emptyDraftState,
   populatedSequenceState,
@@ -36,24 +36,24 @@ async function openSequences(
   await page.goto(app.url('#sequences'));
 }
 
-test('a populated version draws both its steps, the template and the held enrollment', async ({ page }) => {
+test('a populated version draws its steps, its template and who is enrolled', async ({ page }) => {
   await openSequences(page, [populatedSequenceState()]);
 
   await expect(page.getByTestId('version-heading')).toHaveText('Version 1 — published');
   await expect(page.getByTestId('step')).toHaveCount(2);
-  await expect(page.getByTestId('step-detail')).toHaveText(['Template email', 'Call task (move on if nobody answers)']);
+  // The version is published, so it is edited in place (wave 2, S3): the rows are the
+  // editor's, and the channel of each is the control rather than a sentence.
+  await expect(page.getByTestId('step-channel-select').first()).toHaveValue('email');
+  await expect(page.getByTestId('step-channel-select').nth(1)).toHaveValue('call_task');
   await expect(page.getByTestId('template-label')).toHaveText('First touch v1');
-  await expect(page.getByTestId('hold-row')).toHaveCount(1);
-  await expect(page.getByTestId('hold-explanation')).toContainText('about 9 days');
+  await expect(page.getByTestId('enrollment-summary')).toHaveText('One person is working through this sequence.');
+  await expect(page.getByTestId('enrollment-line')).toHaveText('Version 1 — 1 running');
   await expect(page.getByTestId('sequence-unread-line')).toHaveCount(0);
 
-  // 1.0.12: the hand-rolled pages are styled inside `@scope ([data-legacy])` and
-  // Tailwind's preflight, a layer below, takes every list marker away. A sequence's
-  // steps are a numbered list and have to stay one — this is the rendered proof, beside
-  // the compiled-stylesheet test in `test/packaging/stylesheet.test.ts`.
-  const steps = page.getByTestId('version-steps');
-  await expect(steps).toHaveCSS('list-style-type', 'decimal');
-  await expect(page.getByTestId('legacy-view')).toHaveCount(1);
+  // 1.0.13: the last hand-rolled page is gone, and with it `legacy.css`, the layer it
+  // needed and the attribute that scoped it.
+  await expect(page.getByTestId('legacy-view')).toHaveCount(0);
+  await expect(page.locator('[data-legacy]')).toHaveCount(0);
 });
 
 test('a read that failed is one grey line with Retry, not an empty list, and Retry reads again', async ({ page }) => {
@@ -67,9 +67,7 @@ test('a read that failed is one grey line with Retry, not an empty list, and Ret
   await expect(page.getByTestId('sequence-unread-templates')).toContainText(
     'Callie could not read the templates. The server answered service_unavailable.',
   );
-  await expect(page.getByTestId('sequence-unread-enrollments')).toContainText(
-    'Callie could not read the enrollments. The server did not answer (offline).',
-  );
+  await expect(page.getByTestId('sequence-unread-enrollments')).toHaveCount(0);
   await expect(page.getByTestId('sequence-unread-sequences')).toHaveCount(0);
   await expect(page.getByTestId('version')).toHaveCount(0);
 
@@ -94,11 +92,13 @@ test('a founder fills the suggested plan, changes a delay, saves numbered steps,
 
   await page.getByTestId('step-delay-amount').nth(2).fill('5');
   await page.getByTestId('step-delay-amount').nth(2).dispatchEvent('change');
+  // Publish is the server's own six refusals and nothing else (wave 2): the version
+  // being a draft with no saved steps is `version_has_no_steps`, said in words.
   await expect(page.getByTestId('version-publish')).toBeDisabled();
-  await expect(page.getByTestId('publish-unsaved')).toHaveText('Save the draft before publishing it.');
+  await expect(page.getByTestId('publish-refusal')).toHaveText('Add at least one step before publishing.');
 
   await page.getByTestId('draft-save').click();
-  const saved = server.calls.find(entry => entry.method === 'saveDraft');
+  const saved = server.calls.find(entry => entry.method === 'saveSteps');
   expect(saved?.argument).toEqual({
     sequenceVersionId: SEQUENCE_IDS.version,
     steps: [
@@ -126,7 +126,12 @@ test('a new sequence is named and created in one press', async ({ page }) => {
   await expect.poll(() => server.calls.find(entry => entry.method === 'createSequence')?.argument).toEqual({ name: 'Spring outreach' });
 });
 
-test('the template form refuses a variable Callie cannot fill, then saves a template with its sign-off', async ({ page }) => {
+/**
+ * Writing a template is one press (wave 2, S3; D5): the button says "Save and approve",
+ * and `approve: true` goes with the text, so a version is never written that cannot be
+ * approved and there is no second control to find.
+ */
+test('the template form refuses a variable Callie cannot fill, then saves and approves in one press', async ({ page }) => {
   await openSequences(page, [emptyDraftState()]);
 
   // The digest is there, behind Details, not on the face of the template.
@@ -138,14 +143,17 @@ test('the template form refuses a variable Callie cannot fill, then saves a temp
   await page.getByTestId('template-form-subject').fill('Following up, {firm_name}');
   await page.getByTestId('template-form-body').fill('Hi {first},\n\nA short follow-up.');
   await page.getByTestId('template-form-signOff').fill('David');
-  await page.getByTestId('template-save').click();
+  // The refusal is under the field as it is typed, and the one button is disabled:
+  // nothing to press, so nothing to send.
   await expect(page.getByTestId('template-issue-body')).toContainText('Callie cannot fill {first}');
-  expect(server.calls.some(entry => entry.method === 'createTemplate')).toBe(false);
+  await expect(page.getByTestId('template-save')).toBeDisabled();
+  expect(server.calls.some(entry => entry.method === 'saveTemplate')).toBe(false);
 
   await page.getByTestId('template-form-body').fill('Hi {contact_first_name},\n\nA short follow-up.');
+  await expect(page.getByTestId('template-save')).toHaveText('Save and approve');
   await page.getByTestId('template-save').click();
-  await expect.poll(() => server.calls.find(entry => entry.method === 'createTemplate')?.argument).toEqual({
-    templateId: null,
+  await expect.poll(() => server.calls.find(entry => entry.method === 'saveTemplate')?.argument).toEqual({
+    templateVersionId: null,
     name: 'Second touch',
     subject: 'Following up, {firm_name}',
     body: 'Hi {contact_first_name},\n\nA short follow-up.',
@@ -153,9 +161,20 @@ test('the template form refuses a variable Callie cannot fill, then saves a temp
   });
 });
 
+test('an existing template is edited in place, named by its version rather than superseded', async ({ page }) => {
+  await openSequences(page, [emptyDraftState()]);
+
+  await page.getByTestId('template-edit').click();
+  await page.getByTestId('template-form-subject').fill('A new subject');
+  await page.getByTestId('template-save').click();
+  await expect
+    .poll(() => (server.calls.find(entry => entry.method === 'saveTemplate')?.argument as { templateVersionId?: string } | undefined)?.templateVersionId)
+    .toBe(SEQUENCE_IDS.template);
+});
+
 test('a long email is a warning under the form, not a refusal, and the server’s warnings show after the save (wave 1)', async ({ page }) => {
   await openSequences(page, [emptyDraftState()], {
-    createTemplate: emptyDraftState({ notice: 'template_created', warnings: ['template_body_too_long', 'template_body_multiple_urls'] }),
+    saveTemplate: emptyDraftState({ notice: 'template_saved', warnings: ['template_body_too_long', 'template_body_multiple_urls'] }),
   });
 
   await page.getByTestId('template-new').click();
@@ -165,7 +184,7 @@ test('a long email is a warning under the form, not a refusal, and the server’
   await page.getByTestId('template-form-signOff').fill('David');
   await expect(page.getByTestId('template-form-warning')).toContainText('words with its sign-off');
   await page.getByTestId('template-save').click();
-  await expect.poll(() => server.calls.filter(entry => entry.method === 'createTemplate')).toHaveLength(1);
+  await expect.poll(() => server.calls.filter(entry => entry.method === 'saveTemplate')).toHaveLength(1);
 
   await expect(page.getByTestId('template-warning')).toHaveText([
     'The email is longer than 89 words, sign-off included.',
@@ -173,48 +192,3 @@ test('a long email is a warning under the form, not a refusal, and the server’
   ]);
 });
 
-test('Review and resume shows the dates first, and only the confirmation resumes', async ({ page }) => {
-  const held = populatedSequenceState();
-  const reviewing = populatedSequenceState({
-    resumeReview: {
-      asOf: '2026-09-21T13:00:00.000Z',
-      preview: {
-        enrollmentId: SEQUENCE_IDS.enrollment,
-        kind: 'review_required',
-        unionMilliseconds: 9 * 86_400_000,
-        shiftMilliseconds: 9 * 86_400_000,
-        openHoldIds: [],
-        firmTimeZone: 'America/New_York',
-        holds: [{ reasonCode: 'scoped_pause', startedAt: '2026-09-10T13:00:00.000Z', releasedAt: '2026-09-19T13:00:00.000Z' }],
-        steps: [
-          {
-            stepExecutionId: SEQUENCE_IDS.stepExecution,
-            ordinal: 2,
-            channel: 'email',
-            state: 'held',
-            originalDueAt: '2026-09-17T13:00:00.000Z',
-            dueAt: '2026-09-17T13:00:00.000Z',
-            proposedDueAt: '2026-09-26T13:00:00.000Z',
-          },
-        ],
-      },
-    },
-  });
-  await openSequences(page, [held], {
-    reviewEnrollment: reviewing,
-    resumeEnrollment: populatedSequenceState({ heldEnrollments: [], notice: 'resumed' }),
-  });
-
-  await page.getByTestId('hold-resume').click();
-  await expect(page.getByTestId('resume-review')).toBeVisible();
-  expect(server.calls.filter(entry => entry.method === 'resumeEnrollment')).toHaveLength(0);
-  await expect(page.getByTestId('resume-summary')).toContainText('9 days later');
-  await expect(page.getByTestId('resume-step-label')).toHaveText('Step 2 · Email (held)');
-  await expect(page.getByTestId('resume-step-dates')).toHaveText('Thu, Sep 17, 9:00 AM → Sat, Sep 26, 9:00 AM');
-
-  await page.getByTestId('resume-confirm').click();
-  await expect(page.getByTestId('sequence-notice')).toHaveText('Resumed. The remaining steps have the dates you reviewed.');
-  expect(server.calls.filter(entry => entry.method === 'resumeEnrollment').map(entry => entry.argument)).toEqual([
-    { enrollmentId: enrollmentAnswer().id },
-  ]);
-});

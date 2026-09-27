@@ -74,7 +74,7 @@ test('Add firm sends exactly what was typed, and lands on the new firm', async (
   await page.getByTestId('add-firm-contactPhone').fill('401 555 0121');
   await page.getByTestId('add-firm-submit').click();
 
-  await expect(page.getByTestId('heading')).toHaveText('Firm');
+  await expect(page.getByTestId('heading')).toHaveText('Northwind Test Holdings');
   await expect(page.getByTestId('banner-info')).toContainText('Firm added.');
   expect(server.calls.find(call => call.method === 'addFirm')?.argument).toEqual({
     name: 'Aspen Test Wealth',
@@ -148,20 +148,41 @@ test('a firm that is already here can be opened from the refusal', async ({ page
   expect(server.calls.at(-1)).toEqual({ method: 'openFirm', argument: { firmId: FIRM_ID } });
 });
 
-test('Import previews a chosen file row by row, and commits only on the button', async ({ page }) => {
+/**
+ * Import, 1.0.13: one button, and the file never crosses the bridge.
+ *
+ * Until 1.0.13 the page held a file input and a paste box, read the CSV in the window
+ * and sent its text over IPC — somebody's whole prospect list through the renderer.
+ * `callie:import:choose` opens macOS's own panel in the main process, which reads the
+ * file and posts the preview; the page presses a button and is given the answer. A page
+ * that cannot name a path cannot ask for one, and a page that never holds the CSV
+ * cannot leak it.
+ */
+test('Import previews the file the open panel returned, and commits only on the button', async ({ page }) => {
   await openCrm(page, crmState({ screen: 'pipeline', role: 'admin', firm: null, pipeline: pipelineView() }));
   await page.getByTestId('open-import').click();
   await expect(page.getByTestId('heading')).toHaveText('Import firms');
 
-  const csv = 'firm_name,website,contact_name,contact_email\nAspen Test Wealth,aspen.example.test,Kim Placeholder,kim@aspen.example.test\n';
-  await page.getByTestId('import-file').setInputFiles({ name: 'prospects.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) });
+  // No file input and no paste box: nothing in this window can hold the list.
+  await expect(page.getByTestId('import-file')).toHaveCount(0);
+  await expect(page.getByTestId('import-paste')).toHaveCount(0);
+  await expect(page.locator('input[type="file"]')).toHaveCount(0);
+
+  await expect(page.getByTestId('import-choose')).toHaveText('Choose a CSV file…');
+  await page.getByTestId('import-choose').click();
   await expect(page.getByTestId('import-summary')).toContainText('4 rows · 1 new firm · 1 contact added to a firm · 1 already here · 1 to fix');
-  expect(server.calls.find(call => call.method === 'previewImport')?.argument).toEqual({ csv, fileName: 'prospects.csv' });
+  // One call, and it carries nothing: the panel, the read and the preview are the
+  // main process's, so there is no CSV and no path in the argument.
+  expect(server.calls.filter(call => call.method === 'chooseImportFile')).toEqual([
+    { method: 'chooseImportFile', argument: null },
+  ]);
+  expect(server.calls.filter(call => call.method === 'previewImport')).toHaveLength(0);
   expect(server.calls.filter(call => call.method === 'commitImport')).toHaveLength(0);
+  await expect(page.getByTestId('import-choose')).toHaveText('Choose another file…');
 
   await expect(page.getByTestId('import-row')).toHaveCount(4);
   await expect(page.getByTestId('import-row-outcome')).toHaveText(['New firm', 'Adds a contact', 'Already here', 'Fix']);
-  await expect(page.getByTestId('import-row-match').first()).toHaveText('To the firm on row 2');
+  await expect(page.getByTestId('import-row-match').first()).toContainText('To the firm on row 2');
   await expect(page.getByTestId('import-issue')).toHaveText([
     'Email: Already on an earlier row of this file.',
     'Phone: Not a number Callie can dial. Use ten digits, or + and the country code.',
@@ -172,9 +193,11 @@ test('Import previews a chosen file row by row, and commits only on the button',
   await expect(page.getByTestId('import-refused-row')).toHaveText('Row 3 · Email: Already here.');
   await expect(page.getByTestId('banner-warning')).toContainText('Imported, except the rows listed below.');
   expect(server.calls.filter(call => call.method === 'commitImport')).toHaveLength(1);
+  // The fixture the stub answers with is the four-row preview.
+  expect(importPreviewView().preview?.rows).toHaveLength(4);
 });
 
-test('a file refused whole says which column', async ({ page }) => {
+test('a file refused whole says which column, and the button is still there', async ({ page }) => {
   await openCrm(
     page,
     crmState({
@@ -185,23 +208,5 @@ test('a file refused whole says which column', async ({ page }) => {
     }),
   );
   await expect(page.getByTestId('import-file-refused')).toHaveText('The column “Notes” is not one Callie imports. Remove it or rename it.');
-  await expect(page.getByTestId('import-file')).toBeVisible();
-});
-
-test('pasted text previews through the same call', async ({ page }) => {
-  await openCrm(
-    page,
-    crmState({ screen: 'import', role: 'admin', firm: null, import: { fileName: null, preview: null, results: null, fileRefusal: null } }),
-  );
-  await page.getByTestId('import-preview').click();
-  await expect(page.getByTestId('import-paste')).toHaveAttribute('aria-invalid', 'true');
-  await page.getByTestId('import-paste').fill('firm_name\nAspen Test Wealth');
-  await page.getByTestId('import-preview').click();
-  await expect(page.getByTestId('import-summary')).toBeVisible();
-  expect(server.calls.find(call => call.method === 'previewImport')?.argument).toEqual({
-    csv: 'firm_name\nAspen Test Wealth',
-    fileName: 'Pasted text',
-  });
-  // The fixture the server answers with is the four-row preview.
-  expect(importPreviewView().preview?.rows).toHaveLength(4);
+  await expect(page.getByTestId('import-choose')).toBeVisible();
 });
