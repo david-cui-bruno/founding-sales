@@ -328,6 +328,33 @@ export async function revokeDevice(
   );
 }
 
+/**
+ * Has this device ever signed out? (wave 3b, review P1.)
+ *
+ * Asked of every session the device has held, not only its newest, and that is the
+ * whole point. Under the pre-S7a server `endSession` ended the session and revoked the
+ * credential in two statements with no transaction around them, so a renewal that
+ * slipped between them left a *newer* `active` session behind and the device still
+ * `active` — a device that signed out whose newest session says nothing of the kind.
+ * Equal `issued_at` values make "newest" indeterminate in the same way. Either way the
+ * saved device secret of a Mac that signed out would open a session, which is the one
+ * thing this change must never allow.
+ *
+ * It cannot touch a working 1.0.12 Mac. Under the old server a sign-out was that
+ * device's end — the next sign-in registers a new device — so a live device has no
+ * `signed_out` session at all; under this one a sign-out revokes the device outright,
+ * and a revoked device never reaches this question.
+ */
+async function signedOutBefore(deps: AuthDeps, workspaceId: string, deviceId: string): Promise<boolean> {
+  const { rows } = await deps.db.query(
+    `SELECT 1 FROM sessions
+      WHERE workspace_id = $1 AND device_id = $2 AND end_reason = 'signed_out'
+      LIMIT 1`,
+    [workspaceId, deviceId],
+  );
+  return rows[0] !== undefined;
+}
+
 export async function renewSession(deps: AuthDeps, input: RenewInput): Promise<RenewOutcome> {
   if (clientCompatibility(deps.config.supportedClientVersions, input.clientVersion).kind !== 'supported') {
     return { renewed: false, refusal: 'client_upgrade_required' };
@@ -411,6 +438,20 @@ export async function renewSession(deps: AuthDeps, input: RenewInput): Promise<R
     // Revoked while the device itself is still registered: a sign-out. The Mac signs
     // in with Google again rather than renewing a credential it gave up.
     if (credential.state !== 'active') return { renewed: false, refusal: 'credential_unknown' };
+
+    // An active device with a live credential and a `signed_out` session somewhere in
+    // its past is the state the old two-statement sign-out could leave behind. It is
+    // repaired here rather than rotated onwards, so the Mac cannot keep renewing a
+    // registration the person ended, and so `openSession` and this path agree about
+    // what the row means.
+    if (await signedOutBefore(deps, parsed.workspaceId, parsed.deviceId)) {
+      await revokeDevice(deps, {
+        workspaceId: parsed.workspaceId,
+        deviceId: parsed.deviceId,
+        reason: 'signed_out',
+      });
+      return { renewed: false, refusal: 'device_revoked' };
+    }
 
     // The 30-day boundary lives on the sessions this device has held. The newest one
     // carries it, whether or not it is still active. It is checked before the
@@ -544,8 +585,9 @@ export async function openSession(deps: AuthDeps, input: OpenSessionInput): Prom
     if (device.status !== 'active') return { opened: false, refusal: 'device_revoked' };
     if (device.membership_status !== 'active') return { opened: false, refusal: 'membership_inactive' };
 
-    const newest = await deps.db.query<{ reauthenticate_after: Date; end_reason: string | null }>(
-      `SELECT reauthenticate_after, end_reason FROM sessions
+    // The boundary, from the newest session, exactly as `renewSession` reads it.
+    const newest = await deps.db.query<{ reauthenticate_after: Date }>(
+      `SELECT reauthenticate_after FROM sessions
         WHERE workspace_id = $1 AND device_id = $2
         ORDER BY issued_at DESC LIMIT 1`,
       [input.workspaceId, input.deviceId],
@@ -558,8 +600,10 @@ export async function openSession(deps: AuthDeps, input: OpenSessionInput): Prom
     // A sign-out made before this release left the device `active`, because ending the
     // session was all a sign-out did then. The secret in that Mac's Keychain — or in a
     // backup of it — must not reopen the session the person ended, so the row is made
-    // truthful now and the answer is the one a revoked device gets.
-    if (latest.end_reason === 'signed_out') {
+    // truthful now and the answer is the one a revoked device gets. The question is
+    // asked of every session the device has held rather than of `latest`: see
+    // `signedOutBefore` for the two states in which the newest one says nothing.
+    if (await signedOutBefore(deps, input.workspaceId, input.deviceId)) {
       await revokeDevice(deps, {
         workspaceId: input.workspaceId,
         deviceId: input.deviceId,

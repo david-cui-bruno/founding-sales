@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { deviceListSchema, deviceSessionSchema, type SessionGrant } from '@fss/contracts';
-import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
+import type { QueryResultRowLike, SessionQueryable } from '@fss/domain/db/queryable.ts';
 import type { AuthDeps } from '../../src/auth/config.ts';
 import { authenticate, openSession, renewSession } from '../../src/auth/sessions.ts';
 import { claimSignIn, handleCallback, startSignIn } from '../../src/auth/signIn.ts';
@@ -117,6 +117,61 @@ const routeOptions = (): Parameters<typeof route>[2] => ({
   sendingEnabled: false,
   auth: fixture.deps,
 });
+
+/**
+ * A session that keeps the SQL it was asked, in order.
+ *
+ * The concurrency case needs more than "both finished": it needs each connection's
+ * own statement order, so that "the device row first" is asserted rather than
+ * inferred from the fact that nothing went wrong.
+ */
+function recording(session: SessionQueryable): { readonly db: SessionQueryable; readonly statements: string[] } {
+  const statements: string[] = [];
+  const db: SessionQueryable = {
+    async query<Row extends QueryResultRowLike = QueryResultRowLike>(text: string, values?: readonly unknown[]) {
+      statements.push(text);
+      return await session.query<Row>(text, values);
+    },
+  };
+  return { db, statements };
+}
+
+/** The first `FOR UPDATE` on `devices` itself, or -1. */
+function deviceLockAt(statements: readonly string[]): number {
+  return statements.findIndex(
+    text => /FOR UPDATE/u.test(text) && /\bdevices\b/u.test(text) && !/device_refresh_credentials/u.test(text),
+  );
+}
+
+/** The first statement that touches a credential row at all, or Infinity. */
+function credentialTouchAt(statements: readonly string[]): number {
+  const index = statements.findIndex(text => /device_refresh_credentials/u.test(text));
+  return index === -1 ? Number.POSITIVE_INFINITY : index;
+}
+
+/**
+ * The state the pre-S7a sign-out could leave behind (review P1).
+ *
+ * `endSession` used to end the session and revoke the credential in two statements
+ * with no transaction around them. A renewal that arrived between them left a *newer*
+ * `active` session and the device still `active`, so the device's newest session says
+ * `end_reason = null` and nothing about the sign-out at all. Built by hand here,
+ * because the server being tested no longer has a way to produce it.
+ */
+async function legacySignOutRace(grant: SessionGrant): Promise<void> {
+  await fixture.db.query(
+    `UPDATE sessions SET status = 'ended', ended_at = now(), end_reason = 'signed_out'
+      WHERE workspace_id = $1 AND device_id = $2 AND status = 'active'`,
+    [grant.workspaceId, grant.deviceId],
+  );
+  await fixture.db.query(
+    `INSERT INTO sessions (workspace_id, user_id, device_id, access_token_hash, client_version,
+                           issued_at, expires_at, reauthenticate_after)
+     VALUES ($1, $2, $3, encode(sha256(convert_to(random()::text, 'UTF8')), 'hex'), $4,
+             now(), now() + interval '1 hour', $5)`,
+    [grant.workspaceId, grant.userId, grant.deviceId, CURRENT_CLIENT_VERSION, grant.reauthenticateAfter],
+  );
+}
 
 async function deviceStatusOf(deviceId: string): Promise<string | undefined> {
   const { rows } = await fixture.db.query<{ status: string }>('SELECT status FROM devices WHERE id = $1', [deviceId]);
@@ -292,6 +347,53 @@ describe('opening a session with the device secret', () => {
     });
   });
 
+  it('revokes a legacy sign-out whose newest session is a later active one', async () => {
+    // The race the review found. The device is `active`, its newest session is `active`
+    // with no end reason, and the only trace of the sign-out is an older row — so a
+    // check that read `latest.end_reason` would open a session for a Mac that signed
+    // out. The question is asked of every session the device has held.
+    const grant = await signIn(fixture.alpha, fixture.alpha.salesperson, { deviceLabel: 'Raced Mac' });
+    await legacySignOutRace(grant);
+    // ...and the sign-out's second statement, which ran after the renewal: no live
+    // credential is left, so nothing but the device secret could be presented.
+    await fixture.db.query(
+      "UPDATE device_refresh_credentials SET state = 'revoked' WHERE device_id = $1 AND state = 'active'",
+      [grant.deviceId],
+    );
+    expect(await deviceStatusOf(grant.deviceId)).toBe('active');
+
+    expect(await openSession(fixture.deps, openInput(grant))).toEqual({
+      opened: false,
+      refusal: 'device_revoked',
+    });
+    expect(await deviceStatusOf(grant.deviceId)).toBe('revoked');
+    expect((await sessionEndings(grant.deviceId)).filter(row => row.status === 'active')).toEqual([]);
+  });
+
+  it('refuses to rotate for a legacy sign-out that still holds a live credential', async () => {
+    // The other half of the race: the sign-out's second statement never ran, so the
+    // generation is still `active` and 1.0.12 would renew on it for ever. Renewal
+    // repairs the row instead of rotating it onwards, so the two paths agree.
+    const grant = await signIn(fixture.beta, fixture.beta.admin, { deviceLabel: 'Raced Beta Mac' });
+    await legacySignOutRace(grant);
+    expect(await credentialStates(grant.deviceId)).toEqual(['active']);
+
+    expect(
+      await renewSession(fixture.deps, {
+        refreshCredential: grant.refreshCredential,
+        clientVersion: CURRENT_CLIENT_VERSION,
+      }),
+    ).toEqual({ renewed: false, refusal: 'device_revoked' });
+
+    expect(await deviceStatusOf(grant.deviceId)).toBe('revoked');
+    // Nothing rotated: one row, taken away rather than spent, and no second generation.
+    expect(await credentialStates(grant.deviceId)).toEqual(['revoked']);
+    expect(await openSession(fixture.deps, openInput(grant))).toEqual({
+      opened: false,
+      refusal: 'device_revoked',
+    });
+  });
+
   it('refuses an outdated client before it touches a row, and a malformed body with 400', async () => {
     const grant = await signIn(fixture.alpha, fixture.alpha.salesperson, { deviceLabel: 'Outdated Mac' });
 
@@ -349,10 +451,10 @@ describe('an open and a renewal arriving together', () => {
 
     // Two more backends, so the two calls are genuinely concurrent transactions rather
     // than two awaits on one connection.
-    const openerDb: SessionQueryable = await fixture.database.appRuntimeSession();
-    const renewerDb: SessionQueryable = await fixture.database.appRuntimeSession();
-    const opener: AuthDeps = { ...fixture.deps, db: openerDb };
-    const renewer: AuthDeps = { ...fixture.deps, db: renewerDb };
+    const openerDb = recording(await fixture.database.appRuntimeSession());
+    const renewerDb = recording(await fixture.database.appRuntimeSession());
+    const opener: AuthDeps = { ...fixture.deps, db: openerDb.db };
+    const renewer: AuthDeps = { ...fixture.deps, db: renewerDb.db };
 
     const holder = (await fixture.db.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0]?.pid;
     expect(holder).toBeTypeOf('number');
@@ -405,6 +507,21 @@ describe('an open and a renewal arriving together', () => {
     expect(
       waiting.every(row => row.blockers.some(pid => pid === holder || waitingPids.includes(pid))),
     ).toBe(true);
+
+    // And the order each connection actually asked in: the device row is locked before
+    // either path reads or writes a credential row. "Both eventually finished" would
+    // have passed even if one had read a credential first and queued afterwards; this
+    // is the assertion that the lock order is the lock order.
+    for (const [name, recorded] of [['open', openerDb], ['renew', renewerDb]] as const) {
+      const lock = deviceLockAt(recorded.statements);
+      expect(lock, name).toBeGreaterThanOrEqual(0);
+      expect(lock, name).toBeLessThan(credentialTouchAt(recorded.statements));
+    }
+    // The renewal is the one that could have read a credential first, so say plainly
+    // that it did touch one — an assertion over a path that never got there proves
+    // nothing about the order.
+    expect(credentialTouchAt(renewerDb.statements)).toBeLessThan(Number.POSITIVE_INFINITY);
+    expect(credentialTouchAt(openerDb.statements)).toBeLessThan(Number.POSITIVE_INFINITY);
     expect([openResult.status, renewResult.status]).toEqual(['fulfilled', 'fulfilled']);
     if (openResult.status !== 'fulfilled' || renewResult.status !== 'fulfilled') return;
 
