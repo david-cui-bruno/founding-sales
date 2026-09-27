@@ -8,9 +8,20 @@
     "erasableSyntaxOnly": true,
     // The renderer runs in a browser, so the DOM types are in scope alongside Node's.
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    // React 19's automatic runtime (1.0.12): no component imports React, and the page's
+    // CSP has no global for one. esbuild is told the same thing in `scripts/bundle.ts`.
+    "jsx": "react-jsx",
     "paths": {
       "@fss/contracts": ["../../packages/contracts/src/index.ts"]
     }
   },
-  "include": ["src/**/*.ts", "scripts/**/*.ts", "test/**/*.ts", "vitest.config.ts", "playwright.config.ts"]
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "scripts/**/*.ts",
+    "test/**/*.ts",
+    "test/**/*.tsx",
+    "vitest.config.ts",
+    "playwright.config.ts"
+  ]
 }

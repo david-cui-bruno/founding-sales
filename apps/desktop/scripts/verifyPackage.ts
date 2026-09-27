@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type * as AsarModule from '@electron/asar';
-import { answerBundleRequest, BUNDLE_ORIGIN, BUNDLE_WINDOWS } from '../src/main/bundleScheme.ts';
+import { answerBundleRequest, BUNDLE_ORIGIN, BUNDLE_STYLESHEET, BUNDLE_WINDOWS } from '../src/main/bundleScheme.ts';
 import { APP_BUNDLE_ID, APP_URL_SCHEME } from './bundle.ts';
 import { ALLOWED_USAGE_DESCRIPTIONS, usageDescriptionKeys } from './package.ts';
 import { compareEntitlements, parseEntitlementsPlist, type EntitlementComparison } from './entitlements.ts';
@@ -64,10 +64,21 @@ export interface BundleWindowServing {
   readonly entry: string;
   readonly pageStatus: number;
   readonly scriptStatus: number;
+  readonly stylesheetStatus: number;
   /** Every `<script src>` the packaged page carries, and what the scheme answers. */
   readonly pageScripts: readonly { readonly src: string; readonly status: number }[];
+  /**
+   * Every `<link rel="stylesheet" href>` the packaged page carries, and what the scheme
+   * answers (1.0.12). The check used to be about scripts alone, which was true while the
+   * stylesheet was a file copied beside them; since Tailwind is compiled into
+   * `styles.css`, a build that wrote it under another name — or did not write it — would
+   * ship a window with no styling at all and nothing would have said so.
+   */
+  readonly pageStylesheets: readonly { readonly href: string; readonly status: number }[];
   /** The page's script tags include the entry its window declares. */
   readonly declaredEntryLoaded: boolean;
+  /** The page's stylesheet links include the one name `BUNDLE_STYLESHEET` declares. */
+  readonly declaredStylesheetLoaded: boolean;
 }
 
 export interface BundleServingReport {
@@ -294,7 +305,9 @@ export async function checkBundleServing(bundle: PackagedRenderer): Promise<Bund
   for (const window of BUNDLE_WINDOWS) {
     const pageStatus = await statusOf(window.page);
     const scriptStatus = await statusOf(`${window.entry}.js`);
+    const stylesheetStatus = await statusOf(BUNDLE_STYLESHEET);
     const pageScripts: { readonly src: string; readonly status: number }[] = [];
+    const pageStylesheets: { readonly href: string; readonly status: number }[] = [];
     if (pageStatus === 200) {
       const html = new TextDecoder().decode(await bundle.read(window.page));
       for (const match of html.matchAll(/<script[^>]*\ssrc="([^"]+)"/gu)) {
@@ -304,14 +317,21 @@ export async function checkBundleServing(bundle: PackagedRenderer): Promise<Bund
         // the same reason Chromium would refuse it under `script-src 'self'`.
         pageScripts.push({ src, status: await statusOf(src.replace(/^\.\//u, '')) });
       }
+      for (const match of html.matchAll(/<link[^>]*\srel="stylesheet"[^>]*\shref="([^"]+)"/gu)) {
+        const href = match[1] ?? '';
+        pageStylesheets.push({ href, status: await statusOf(href.replace(/^\.\//u, '')) });
+      }
     }
     windows.push({
       page: window.page,
       entry: window.entry,
       pageStatus,
       scriptStatus,
+      stylesheetStatus,
       pageScripts,
+      pageStylesheets,
       declaredEntryLoaded: pageScripts.some(script => script.src === `./${window.entry}.js`),
+      declaredStylesheetLoaded: pageStylesheets.some(link => link.href === `./${BUNDLE_STYLESHEET}`),
     });
   }
 
@@ -323,14 +343,21 @@ export async function checkBundleServing(bundle: PackagedRenderer): Promise<Bund
   return { windows, unserved, ok: windows.every(windowServed) && unserved.length === 0 };
 }
 
-/** One window is served when its page loads, its script loads, and the page loads it. */
+/**
+ * One window is served when its page loads, its script and its stylesheet load, and the
+ * page links both of them.
+ */
 export function windowServed(window: BundleWindowServing): boolean {
   return (
     window.pageStatus === 200 &&
     window.scriptStatus === 200 &&
+    window.stylesheetStatus === 200 &&
     window.declaredEntryLoaded &&
+    window.declaredStylesheetLoaded &&
     window.pageScripts.length > 0 &&
-    window.pageScripts.every(script => script.status === 200)
+    window.pageScripts.every(script => script.status === 200) &&
+    window.pageStylesheets.length > 0 &&
+    window.pageStylesheets.every(link => link.status === 200)
   );
 }
 

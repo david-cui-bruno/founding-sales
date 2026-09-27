@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BUNDLE_SHARED_FILES, BUNDLE_WINDOWS } from '../../src/main/bundleScheme.ts';
+import { BUNDLE_SHARED_FILES, BUNDLE_STYLESHEET, BUNDLE_WINDOWS } from '../../src/main/bundleScheme.ts';
 import { checkBundleServing, type PackagedRenderer } from '../../scripts/verifyPackage.ts';
 
 /**
@@ -26,7 +26,10 @@ import { checkBundleServing, type PackagedRenderer } from '../../scripts/verifyP
 function completeBundle(): Map<string, string> {
   const files = new Map<string, string>();
   for (const window of BUNDLE_WINDOWS) {
-    files.set(window.page, `<!doctype html><script type="module" src="./${window.entry}.js"></script>`);
+    files.set(
+      window.page,
+      `<!doctype html><link rel="stylesheet" href="./${BUNDLE_STYLESHEET}" /><script type="module" src="./${window.entry}.js"></script>`,
+    );
     files.set(`${window.entry}.js`, `// ${window.entry}`);
   }
   for (const shared of BUNDLE_SHARED_FILES) files.set(shared, '/* shared */');
@@ -53,9 +56,15 @@ describe('the packaged bundle serves every declared window', () => {
     for (const window of report.windows) {
       expect(window.pageStatus, window.page).toBe(200);
       expect(window.scriptStatus, window.entry).toBe(200);
+      expect(window.stylesheetStatus, BUNDLE_STYLESHEET).toBe(200);
       expect(window.declaredEntryLoaded, window.page).toBe(true);
+      expect(window.declaredStylesheetLoaded, window.page).toBe(true);
       expect(
         window.pageScripts.map(script => script.status),
+        window.page,
+      ).toEqual([200]);
+      expect(
+        window.pageStylesheets.map(link => link.status),
         window.page,
       ).toEqual([200]);
     }
@@ -95,7 +104,10 @@ describe('the packaged bundle serves every declared window', () => {
     const files = completeBundle();
     const [first] = BUNDLE_WINDOWS;
     if (first === undefined) throw new Error('no windows are declared');
-    files.set(first.page, '<!doctype html><script type="module" src="./notAWindow.js"></script>');
+    files.set(
+      first.page,
+      `<!doctype html><link rel="stylesheet" href="./${BUNDLE_STYLESHEET}" /><script type="module" src="./notAWindow.js"></script>`,
+    );
 
     const report = await checkBundleServing(rendererOf(files));
 
@@ -115,6 +127,55 @@ describe('the packaged bundle serves every declared window', () => {
 
     expect(report.ok).toBe(false);
     expect(report.windows.find(window => window.page === first.page)?.pageScripts).toEqual([]);
+  });
+
+  /**
+   * 1.0.12: the stylesheet is compiled rather than copied, so "the build wrote it under
+   * the name the page links" is a statement about the artifact, exactly as the script
+   * already was. Both halves are checked: the file missing, and the link missing.
+   */
+  it('refuses a bundle whose compiled stylesheet is missing', async () => {
+    const files = completeBundle();
+    files.delete(BUNDLE_STYLESHEET);
+
+    const report = await checkBundleServing(rendererOf(files));
+
+    expect(report.ok).toBe(false);
+    const window = report.windows[0];
+    expect(window?.pageStatus).toBe(200);
+    expect(window?.stylesheetStatus).toBe(404);
+    expect(window?.pageStylesheets.map(link => link.status)).toEqual([404]);
+  });
+
+  it('refuses a page that links no stylesheet at all', async () => {
+    const files = completeBundle();
+    const [first] = BUNDLE_WINDOWS;
+    if (first === undefined) throw new Error('no windows are declared');
+    files.set(first.page, `<!doctype html><script type="module" src="./${first.entry}.js"></script>`);
+
+    const report = await checkBundleServing(rendererOf(files));
+
+    expect(report.ok).toBe(false);
+    const window = report.windows.find(candidate => candidate.page === first.page);
+    expect(window?.declaredStylesheetLoaded).toBe(false);
+    expect(window?.pageStylesheets).toEqual([]);
+  });
+
+  it('refuses a page whose stylesheet link names a file the map will not serve', async () => {
+    const files = completeBundle();
+    const [first] = BUNDLE_WINDOWS;
+    if (first === undefined) throw new Error('no windows are declared');
+    files.set(
+      first.page,
+      `<!doctype html><link rel="stylesheet" href="./notAStylesheet.css" /><script type="module" src="./${first.entry}.js"></script>`,
+    );
+
+    const report = await checkBundleServing(rendererOf(files));
+
+    expect(report.ok).toBe(false);
+    const window = report.windows.find(candidate => candidate.page === first.page);
+    expect(window?.declaredStylesheetLoaded).toBe(false);
+    expect(window?.pageStylesheets).toEqual([{ href: './notAStylesheet.css', status: 404 }]);
   });
 
   /**

@@ -1,0 +1,122 @@
+/*
+ * The one stylesheet the window links (`index.html`), compiled from here.
+ *
+ * `scripts/bundle.ts` runs this file through PostCSS with `@tailwindcss/postcss` and
+ * writes the result as `styles.css`, the name `bundleScheme.ts` serves and the page
+ * asks for. The Playwright harness compiles the same file the same way, so a spec and
+ * a packaged build read the same bytes. No stylesheet is fetched at run time: the CSP
+ * stays `style-src 'self'` with one static file, and Tailwind's compilation needs no
+ * download after `npm ci` — it is a dependency like esbuild.
+ *
+ * **No preflight in 1.0.12.** Tailwind's reset is a global one, and the views that are
+ * still hand-rolled DOM (Firms, Sequences, the three Settings tabs) were drawn against
+ * the element styles in `legacy.css`. So the theme and the utilities are imported and
+ * the reset is not; `legacy.css` keeps those views exactly as they were. U2 converts the
+ * rest and may take preflight then.
+ *
+ * **`legacy.css` sits in its own layer, below the utilities.** Unlayered CSS outranks
+ * every layer, so importing it plainly would let `button { … }` beat `class="rounded-md"`
+ * on a React button. In the `legacy` layer it still beats the theme and is still beaten
+ * by any utility a converted view asks for, which is the order this release needs.
+ */
+
+@layer theme, base, legacy, components, utilities;
+
+@import 'tailwindcss/theme.css' layer(theme);
+@import './legacy.css' layer(legacy);
+@import 'tailwindcss/utilities.css' layer(utilities);
+@import 'tw-animate-css';
+
+/* The sources Tailwind scans for class names. Explicit, because the automatic scan
+   starts from this file's directory and would also walk `node_modules`-sized trees
+   once the renderer grows a sibling. */
+@source './**/*.{ts,tsx}';
+
+/*
+ * shadcn/ui new-york, base colour zinc, as `npx shadcn init` writes it — the light
+ * palette only. The owner's Mac runs light; a dark block here would be a second set of
+ * colours nothing tests.
+ */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-ok: var(--status-ok);
+  --color-warn: var(--status-warn);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --font-sans: var(--font-system);
+}
+
+:root {
+  /* The system font, as the rest of the Mac draws text. */
+  --font-system: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --radius: 0.5rem;
+
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.141 0.005 285.823);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.141 0.005 285.823);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.141 0.005 285.823);
+  --primary: oklch(0.21 0.006 285.885);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.967 0.001 286.375);
+  --secondary-foreground: oklch(0.21 0.006 285.885);
+  --muted: oklch(0.967 0.001 286.375);
+  --muted-foreground: oklch(0.552 0.016 285.938);
+  --accent: oklch(0.967 0.001 286.375);
+  --accent-foreground: oklch(0.21 0.006 285.885);
+  --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(0.985 0 0);
+  --border: oklch(0.92 0.004 286.32);
+  --input: oklch(0.92 0.004 286.32);
+  --ring: oklch(0.705 0.015 286.067);
+
+  /*
+   * The one accent, and it is only ever status: a green dot for "this is working" and
+   * an amber one for "this needs you". Nothing decorative is coloured.
+   */
+  --status-ok: oklch(0.63 0.13 155);
+  --status-warn: oklch(0.72 0.15 75);
+}
+
+@layer base {
+  /*
+   * Not a reset: four rules, so the window is the right colour and the right font and
+   * the shell can own the whole height. Everything else is a utility on an element.
+   */
+  html,
+  body {
+    height: 100%;
+  }
+
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-system);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  *:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+}

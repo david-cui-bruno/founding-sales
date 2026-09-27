@@ -3,6 +3,8 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
+import { BUNDLE_STYLESHEET, BUNDLE_STYLESHEET_SOURCE, BUNDLE_WINDOWS } from '../../../src/main/bundleScheme.ts';
+import { compileStylesheet } from '../../../scripts/styles.ts';
 import type { DesktopState, MailboxState } from '../../../src/shared/contract.ts';
 import type { UpdateStatus } from '../../../src/shared/updateContract.ts';
 import type { CrmState } from '../../../src/renderer/firmWorkspaceContract.ts';
@@ -20,9 +22,10 @@ import { signedInState, signedOutState } from './sessionFixtures.ts';
 /**
  * The one test server every window spec runs against (wave 1).
  *
- * There is one window, so there is one harness: the shipped `index.html`, `styles.css`
- * and `renderer.ts` — which holds the shell and every view — transpiled with esbuild and
- * served unmodified. Only the eight bridges the preload script installs are replaced,
+ * There is one window, so there is one harness: the shipped `index.html`, the React root
+ * `main.tsx` — which holds the shell and every view — and the stylesheet Tailwind compiles
+ * from `tailwind.css`, both produced exactly as `scripts/bundle.ts` produces them and
+ * served unmodified under the names the page asks for (`renderer.js`, `styles.css`). Only the eight bridges the preload script installs are replaced,
  * each by a small generated object that posts back here, where a scripted fake answers
  * it. A spec goes to a view by loading `url('#firms')`, by pressing the sidebar, or by
  * `navigateByMenu(page, 'firms')`, which is what the Window menu's `callie:navigate` does.
@@ -205,19 +208,34 @@ async function ask(method, argument) {
 }
 
 let transpiled: Promise<string> | null = null;
+let compiledStyles: Promise<string> | null = null;
 
-/** The one renderer bundle, built once per spec run. */
+/** The one renderer bundle, built once per spec run, from the window's declared source. */
 async function transpile(): Promise<string> {
   if (packagedBundle !== undefined) return await readFile(`${pageDirectory}renderer.js`, 'utf8');
+  const entry = BUNDLE_WINDOWS[0]?.source ?? 'main.tsx';
   transpiled ??= build({
-    entryPoints: [`${rendererDirectory}renderer.ts`],
+    entryPoints: [`${rendererDirectory}${entry}`],
     bundle: true,
     format: 'esm',
     target: 'es2022',
     write: false,
     platform: 'browser',
+    jsx: 'automatic',
+    define: { 'process.env.NODE_ENV': '"production"' },
   }).then(bundle => bundle.outputFiles[0]?.text ?? '');
   return await transpiled;
+}
+
+/**
+ * The one stylesheet, compiled once per spec run by the same function the packaging build
+ * uses. A packaged run reads the bytes out of the extracted bundle instead, which is what
+ * makes `FSS_E2E_RENDERER_BUNDLE` a check of the artifact rather than of the source.
+ */
+async function stylesheet(): Promise<string> {
+  if (packagedBundle !== undefined) return await readFile(`${pageDirectory}${BUNDLE_STYLESHEET}`, 'utf8');
+  compiledStyles ??= compileStylesheet(`${rendererDirectory}${BUNDLE_STYLESHEET_SOURCE}`);
+  return await compiledStyles;
 }
 
 async function readBody(request: IncomingMessage): Promise<unknown> {
@@ -245,7 +263,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     // document only; the file on disk stays strict. `replaceAll`: the phrase is in the
     // page's comment as well as in the policy.
     .replaceAll("connect-src 'none'", "connect-src 'self'");
-  const styles = await readFile(`${pageDirectory}styles.css`, 'utf8');
+  const styles = await stylesheet();
 
   const calls: Call[] = [];
   const held = new Map<string, Promise<void>>();

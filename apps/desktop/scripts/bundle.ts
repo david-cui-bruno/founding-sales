@@ -1,7 +1,8 @@
 import { copyFile, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { build } from 'esbuild';
-import { BUNDLE_SHARED_FILES, BUNDLE_WINDOWS } from '../src/main/bundleScheme.ts';
+import { BUNDLE_STYLESHEET, BUNDLE_STYLESHEET_SOURCE, BUNDLE_WINDOWS } from '../src/main/bundleScheme.ts';
+import { compileStylesheet } from './styles.ts';
 import { RELEASE_STAMP_FILE, type ReleaseStamp } from './releaseStamp.ts';
 
 /**
@@ -80,25 +81,38 @@ export async function bundleApp(input: BundleInput): Promise<void> {
 
   // The page and its one script, read from `BUNDLE_WINDOWS` — one entry since wave 1,
   // when the sidebar's views moved into the one window. The page loads one script and
-  // nothing else, and its CSP is `script-src 'self'` with no inline script. The list is
-  // the one the scheme map in `src/main/bundleScheme.ts` also reads, so the build and
-  // the map cannot disagree (`docs/decisions/g9-bundle-scheme-map.md`).
+  // one stylesheet and nothing else, and its CSP is `script-src 'self'; style-src 'self'`
+  // with no inline script and no inline style. The list is the one the scheme map in
+  // `src/main/bundleScheme.ts` also reads, so the build and the map cannot disagree
+  // (`docs/decisions/g9-bundle-scheme-map.md`).
   for (const window of BUNDLE_WINDOWS) {
     await build({
-      entryPoints: [source('renderer', `${window.entry}.ts`)],
+      entryPoints: [source('renderer', window.source)],
       outfile: target('renderer', `${window.entry}.js`),
       bundle: true,
       platform: 'browser',
       target: 'es2023',
       format: 'esm',
+      // React 19's automatic runtime: no `import React` in any component, and no
+      // `React` global for a page whose CSP forbids one anyway.
+      jsx: 'automatic',
+      // `development` would pull in `react/jsx-dev-runtime` and its source locations.
+      // Every build this script makes is a build somebody may ship.
+      define: { 'process.env.NODE_ENV': '"production"' },
       sourcemap: false,
       logLevel: 'silent',
     });
   }
 
-  for (const file of [...BUNDLE_WINDOWS.map(window => window.page), ...BUNDLE_SHARED_FILES]) {
-    await copyFile(source('renderer', file), target('renderer', file));
-  }
+  await copyFile(source('renderer', 'index.html'), target('renderer', 'index.html'));
+
+  // Tailwind, compiled to the one name the page links. A dependency doing arithmetic on
+  // files that are already on disk: `npm ci` is still the only step of this build that
+  // touches the network (the workflow fetches Electron after it, as it always has).
+  await writeFile(
+    target('renderer', BUNDLE_STYLESHEET),
+    await compileStylesheet(source('renderer', BUNDLE_STYLESHEET_SOURCE)),
+  );
 
   await writeFile(
     target('package.json'),
