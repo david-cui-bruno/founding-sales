@@ -21,7 +21,7 @@ import { Label } from '../ui/label.tsx';
 import { Select } from '../ui/select.tsx';
 import { Textarea } from '../ui/textarea.tsx';
 import { orDash } from './text.ts';
-import type { TaskActions } from './TaskRow.tsx';
+import type { TodayActions } from './useToday.ts';
 
 /**
  * What happened on the call (9.1).
@@ -45,7 +45,7 @@ export function OutcomeForm({
   readonly state: TodayState;
   readonly view: TodayScreenView;
   readonly enabled: boolean;
-  readonly actions: TaskActions;
+  readonly actions: TodayActions;
 }): JSX.Element | null {
   const expanded = state.expanded;
   const firmId = expanded?.firmId ?? '';
@@ -95,8 +95,7 @@ export function OutcomeForm({
         });
         if ('problem' in built) return;
         const task = callable.find(entry => entry.task.itemId === itemId)?.task ?? null;
-        actions.apply(
-          actions.bridge.recordOutcome({
+        actions.recordOutcome({
             firmId: expanded.firmId,
             contactId: lastCall?.contactId ?? task?.contactId ?? null,
             routeId: lastCall?.routeId ?? null,
@@ -112,9 +111,8 @@ export function OutcomeForm({
                     dueAt: built.command.callback?.dueAt ?? '',
                     sourceTimeZone: draft.callbackTimeZone,
                   },
-            doNotCallCoversAllContact: built.command.doNotCallCoversAllContact ?? false,
-          }),
-        );
+          doNotCallCoversAllContact: built.command.doNotCallCoversAllContact ?? false,
+        });
         clear(prefix);
       }}
     >

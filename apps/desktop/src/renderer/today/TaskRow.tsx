@@ -2,12 +2,13 @@ import { callbackInstant } from '@fss/contracts';
 import type { JSX } from 'react';
 import { useDraft } from '../app/drafts.tsx';
 import { dueLabel } from '../homeView.ts';
-import type { TodayBridge, TodayState } from '../todayContract.ts';
+import type { TodayState } from '../todayContract.ts';
 import type { TaskView } from '../todayView.ts';
 import { Badge } from '../ui/badge.tsx';
 import { Button } from '../ui/button.tsx';
 import { Input } from '../ui/input.tsx';
 import { orDash } from './text.ts';
+import type { TodayActions } from './useToday.ts';
 
 /**
  * One task under an expanded card, and the one control it offers.
@@ -21,18 +22,13 @@ import { orDash } from './text.ts';
  * a half-written reason, and a quiet refresh that redraws the lanes cannot take it.
  */
 
-export interface TaskActions {
-  readonly bridge: TodayBridge;
-  apply(next: Promise<TodayState>): void;
-}
-
 /** What a callback's day and time resolve to, in the firm's own clock. */
 function callbackLine(instant: string | null, state: TodayState): string {
   if (instant === null) return '';
   return `Callie will put the callback at ${dueLabel(instant, state.businessTimeZone, state.snapshotDate)}.`;
 }
 
-function Snooze({ entry, actions }: { readonly entry: TaskView; readonly actions: TaskActions }): JSX.Element {
+function Snooze({ entry, actions }: { readonly entry: TaskView; readonly actions: TodayActions }): JSX.Element {
   const itemId = entry.task.itemId;
   // An automated send is paused until Resume, so it asks why and not until when
   // (8.2; lane g79, C22). A manual task's snooze needs both.
@@ -49,7 +45,7 @@ function Snooze({ entry, actions }: { readonly entry: TaskView; readonly actions
         event.preventDefault();
         // `datetime-local` has no zone. The main process resolves it against the
         // workspace's business zone, which is the only zone this page is told about.
-        actions.apply(actions.bridge.snooze({ itemId, reason: reason.trim(), returnAt: asksReturn ? returnAt : '' }));
+        actions.snooze({ itemId, reason: reason.trim(), returnAt: asksReturn ? returnAt : '' });
       }}
     >
       <Input
@@ -93,7 +89,7 @@ function Schedule({
   readonly callLogId: string;
   readonly state: TodayState;
   readonly enabled: boolean;
-  readonly actions: TaskActions;
+  readonly actions: TodayActions;
 }): JSX.Element {
   const [date, setDate] = useDraft(`today:schedule:${callLogId}:date`);
   const [time, setTime] = useDraft(`today:schedule:${callLogId}:time`);
@@ -105,7 +101,7 @@ function Schedule({
       className="flex flex-wrap items-center gap-1.5"
       onSubmit={event => {
         event.preventDefault();
-        actions.apply(actions.bridge.scheduleCallback({ callLogId, localDate: date, localTime: time }));
+        actions.scheduleCallback({ callLogId, localDate: date, localTime: time });
       }}
     >
       <Input
@@ -147,7 +143,7 @@ export function TaskRow({
   readonly entry: TaskView;
   readonly state: TodayState;
   readonly actionsEnabled: boolean;
-  readonly actions: TaskActions;
+  readonly actions: TodayActions;
 }): JSX.Element {
   const holdId = entry.task.pauseHoldId;
   const callLogId = entry.task.callLogId;
@@ -176,7 +172,7 @@ export function TaskRow({
           data-testid="pause-release"
           disabled={!actionsEnabled}
           onClick={() => {
-            actions.apply(actions.bridge.releasePause({ holdId }));
+            actions.releasePause({ holdId });
           }}
         >
           Resume

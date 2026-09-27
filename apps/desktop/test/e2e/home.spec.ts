@@ -588,7 +588,7 @@ test('an empty list says what to do next in one grey line', async ({ page }) => 
 });
 
 test('a page built without the Today and administration bridges says so where they would be', async ({ page }) => {
-  server = await startAppServer({ without: ['callieToday', 'callieAdmin'], mailbox: connectedMailbox() });
+  server = await startAppServer({ without: ['callieApi', 'callieAdmin'], mailbox: connectedMailbox() });
   await page.goto(server.url());
 
   await expect(page.getByTestId('heading')).toHaveText('Monday, 21 September');

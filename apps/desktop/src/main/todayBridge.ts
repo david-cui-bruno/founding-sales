@@ -64,18 +64,12 @@ import type { ApiOutcome } from './apiClient.ts';
  * named — and "Callback — needs a time" on the card is where the time is set.
  */
 
-export const TODAY_IPC_CHANNELS = {
-  state: 'callie:today:state',
-  refresh: 'callie:today:refresh',
-  expand: 'callie:today:expand',
-  collapse: 'callie:today:collapse',
-  snooze: 'callie:today:snooze',
-  dial: 'callie:today:dial',
-  recordOutcome: 'callie:today:outcome',
-  scheduleCallback: 'callie:today:schedule-callback',
-  releasePause: 'callie:today:release-pause',
-} as const;
-export type TodayIpcChannel = (typeof TODAY_IPC_CHANNELS)[keyof typeof TODAY_IPC_CHANNELS];
+/*
+ * There are no channels of this view's own since 1.0.12: the nine that stood here are
+ * nine operations of `shared/operations.ts`, answered on `callie:op:read` and
+ * `callie:op:command`, and dialling is `callie:dial:call`. What is left in this file is
+ * the transformations those operations name.
+ */
 
 /*
  * `/today/firm` and the snooze result are parsed with `@fss/contracts`' schemas (lane

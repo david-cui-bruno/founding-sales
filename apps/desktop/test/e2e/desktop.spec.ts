@@ -25,7 +25,7 @@ import {
 /** The session and the Mailbox row, and nothing of Home's own reads. */
 function session(overrides: AppServerOptions = {}): AppServerOptions {
   return {
-    without: ['callieToday', 'callieAdmin'],
+    without: ['callieApi', 'callieAdmin'],
     mailbox: notConnectedMailbox(),
     connectAnswer: connectedMailbox(),
     ...overrides,

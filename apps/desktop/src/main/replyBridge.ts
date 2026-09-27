@@ -46,16 +46,14 @@ import type { ApiOutcome } from './apiClient.ts';
  * about it.
  */
 
-export const REPLY_IPC_CHANNELS = {
-  state: 'callie:replies:state',
-  refresh: 'callie:replies:refresh',
-  open: 'callie:replies:open',
-  collapse: 'callie:replies:collapse',
-  confirm: 'callie:replies:confirm',
-  // Lane g88 (audit G07): which conversation an ambiguous reply belongs to.
-  resolve: 'callie:replies:resolve',
-} as const;
-export type ReplyIpcChannel = (typeof REPLY_IPC_CHANNELS)[keyof typeof REPLY_IPC_CHANNELS];
+/*
+ * There are no channels of this view's own since 1.0.12: the six that stood here are six
+ * operations of `shared/operations.ts`, answered on `callie:op:read` and
+ * `callie:op:command`. The authority boundary is unchanged and is now stated in one
+ * place — there is no operation that closes an opportunity, records a suppression,
+ * releases a hold or resumes automation, and a renderer cannot name one that is not in
+ * the list.
+ */
 
 /*
  * `/replies`, `/replies/card`, `/replies/settings` and `/replies/confirm` are parsed with

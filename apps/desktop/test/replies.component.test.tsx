@@ -3,7 +3,8 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RepliesRoute } from '../src/renderer/replies/RepliesRoute.tsx';
-import type { ReplyBridge, ReplyState } from '../src/renderer/replyContract.ts';
+import type { OperationApi, OperationName } from '../src/shared/operations.ts';
+import type { ReplyState } from '../src/renderer/replyContract.ts';
 import { MESSAGE_ID, replyCard, replyState } from './e2e/support/replyFixtures.ts';
 import { replyConfirmationAnswer } from './support/replyAnswers.ts';
 
@@ -27,23 +28,21 @@ const BODY = 'Tuesday works. Send an invite.';
 const state = (overrides: Partial<ReplyState> = {}): ReplyState =>
   replyState({ open: replyCard(), ...overrides });
 
-function install(bridge: Partial<ReplyBridge>, answer: ReplyState = state()): ReplyBridge {
-  const fake: ReplyBridge = {
-    state: async () => await Promise.resolve(answer),
-    refresh: async () => await Promise.resolve(answer),
-    open: async () => await Promise.resolve(answer),
-    collapse: async () => await Promise.resolve(answer),
-    confirm: async () => await Promise.resolve(answer),
-    resolve: async () => await Promise.resolve(answer),
-    ...bridge,
-  };
-  globalThis.callieReplies = fake;
-  return fake;
+type Scripted = Readonly<Partial<Record<OperationName, (input: unknown) => Promise<ReplyState>>>>;
+
+/** D4's two functions, scripted: the operation is the whole vocabulary. */
+function install(scripted: Scripted, answer: ReplyState = state()): void {
+  const answerOne = async (operation: OperationName, input: unknown): Promise<unknown> =>
+    await (scripted[operation]?.(input) ?? Promise.resolve(answer));
+  globalThis.callieApi = {
+    read: answerOne,
+    command: answerOne,
+  } as unknown as OperationApi;
 }
 
 afterEach(() => {
   cleanup();
-  globalThis.callieReplies = undefined;
+  globalThis.callieApi = undefined;
 });
 
 const column = { current: null };
@@ -67,8 +66,8 @@ describe('the Replies view', () => {
   });
 
   it('confirms on the button and on nothing else', async () => {
-    const confirm = vi.fn<ReplyBridge['confirm']>(async () => await Promise.resolve(state({ open: null, notice: 'confirmed' })));
-    install({ confirm });
+    const confirm = vi.fn(async (_input: unknown) => await Promise.resolve(state({ open: null, notice: 'confirmed' })));
+    install({ 'replies.confirm': confirm });
     render(<RepliesRoute column={column} />);
     await screen.findByTestId('reply-card');
 
@@ -90,10 +89,12 @@ describe('the Replies view', () => {
     const slow = new Promise<ReplyState>(resolve => {
       settle = resolve;
     });
-    install({ refresh: async () => await slow });
+    install({ 'replies.refresh': async () => await slow });
     const view = render(<RepliesRoute column={column} />);
     expect((await screen.findByTestId('card-body')).textContent).toBe(BODY);
 
+    // A read in flight when the person leaves the view.
+    await userEvent.click(screen.getByTestId('refresh'));
     view.unmount();
     expect(document.body.textContent).not.toContain(BODY);
     // The answer to a read this view no longer wants: nothing is drawn, and nothing

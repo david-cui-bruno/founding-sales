@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { NO_CALLING_NUMBER, countsLabel, buildTodayView, noticeSentence } from '../src/renderer/todayView.ts';
 import { todayStateSchema, type TodayFirm, type TodayState } from '../src/renderer/todayContract.ts';
-import { createTodayBridge, localToInstant, TODAY_IPC_CHANNELS } from '../src/main/todayBridge.ts';
+import { createTodayBridge, localToInstant } from '../src/main/todayBridge.ts';
+import { DIAL_IPC_CHANNELS, OPERATION_NAMES } from '../src/shared/operations.ts';
 import type { DialHandoff } from '../src/main/dialHandoff.ts';
 import { CRM_IPC_CHANNELS, createCrmBridge, pipelineViewOf } from '../src/main/crmBridge.ts';
 import { createAuthedClient } from '../src/main/authedClient.ts';
@@ -777,18 +778,21 @@ describe('the Today bridge', () => {
     expect(answer.cards).toHaveLength(2);
   });
 
-  it('names one channel per method, and nothing else', () => {
-    expect(Object.values(TODAY_IPC_CHANNELS)).toEqual([
-      'callie:today:state',
-      'callie:today:refresh',
-      'callie:today:expand',
-      'callie:today:collapse',
-      'callie:today:snooze',
-      'callie:today:dial',
-      'callie:today:outcome',
-      'callie:today:schedule-callback',
-      'callie:today:release-pause',
+  it('names one operation per method, and nothing else', () => {
+    // Since 1.0.12 the view has no channels of its own: the nine methods are nine
+    // operations of the registry, and dialling is the one named channel beside it.
+    expect(OPERATION_NAMES.filter(name => name.startsWith('today.'))).toEqual([
+      'today.state',
+      'today.refresh',
+      'today.expand',
+      'today.collapse',
+      'today.snooze',
+      'today.recordOutcome',
+      'today.scheduleCallback',
+      'today.releasePause',
     ]);
+    expect(OPERATION_NAMES).not.toContain('today.dial');
+    expect(DIAL_IPC_CHANNELS.call).toBe('callie:dial:call');
   });
 });
 

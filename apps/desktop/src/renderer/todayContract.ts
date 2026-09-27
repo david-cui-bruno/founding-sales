@@ -13,8 +13,8 @@ import {
 } from '@fss/contracts';
 
 /**
- * What the Today window is given, and the nine things it may ask for
- * (specification 8.2, 14.2).
+ * What the Today view is given, and the shapes of the operations it may ask for
+ * (specification 8.2, 14.2). The operations themselves are `shared/operations.ts`'s.
  *
  * A second contract beside G2's `shared/contract.ts` rather than an extension of it,
  * and the reason is a retention rule rather than a style. `DesktopState.today` is the
@@ -176,24 +176,3 @@ export interface RefreshRequest {
   readonly quiet?: boolean;
 }
 
-export interface TodayBridge {
-  state(): Promise<TodayState>;
-  refresh(input?: RefreshRequest): Promise<TodayState>;
-  expand(input: { readonly firmId: string }): Promise<TodayState>;
-  collapse(): Promise<TodayState>;
-  snooze(input: SnoozeRequest): Promise<TodayState>;
-  /**
-   * Re-read the advice for this number and open `tel:` when it is still callable. The
-   * renderer never sees the URI, and the button sends no version, no ticket and no
-   * calling identity: the server decides, and this is the press.
-   */
-  dial(input: DialRequest): Promise<TodayState>;
-  recordOutcome(input: OutcomeRequest): Promise<TodayState>;
-  scheduleCallback(input: ScheduleCallbackRequest): Promise<TodayState>;
-  releasePause(input: ReleasePauseRequest): Promise<TodayState>;
-}
-
-declare global {
-  /** The bridge the preload script installs, exactly as G2's `callie` is installed. */
-  var callieToday: TodayBridge | undefined;
-}

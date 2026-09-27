@@ -112,23 +112,3 @@ export interface ResolveReplyRequest {
   readonly opportunityId: string;
 }
 
-export interface ReplyBridge {
-  state(): Promise<ReplyState>;
-  refresh(): Promise<ReplyState>;
-  open(input: { readonly messageId: string }): Promise<ReplyState>;
-  /** Put the open card away. Named for the card and not for the opportunity: 12.4
-   * gives closing an opportunity to a person on the Firm page, and this window has
-   * no way to ask for it. */
-  collapse(): Promise<ReplyState>;
-  confirm(input: ConfirmReplyRequest): Promise<ReplyState>;
-  /**
-   * Lane g88: say which conversation an ambiguous reply belongs to. G7's resolution, and
-   * nothing more: it does not answer the reply, set the firm to manual or resume anything.
-   */
-  resolve(input: ResolveReplyRequest): Promise<ReplyState>;
-}
-
-declare global {
-  /** The bridge the preload script installs, exactly as G2's `callie` is installed. */
-  var callieReplies: ReplyBridge | undefined;
-}

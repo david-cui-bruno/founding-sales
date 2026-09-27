@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { OperationInput } from '../../shared/operations.ts';
 import type { TodayState } from '../todayContract.ts';
 import { TODAY_TICK_MS, refreshDue } from '../todayView.ts';
 
@@ -27,7 +28,23 @@ export function clearToday(client: QueryClient): void {
   void client.removeQueries({ queryKey: [TODAY_KEY] });
 }
 
-const bridge = (): NonNullable<typeof globalThis.callieToday> | undefined => globalThis.callieToday;
+const api = (): NonNullable<typeof globalThis.callieApi> | undefined => globalThis.callieApi;
+const dialBridge = (): NonNullable<typeof globalThis.callieDial> | undefined => globalThis.callieDial;
+
+/**
+ * The commands a card offers, each one operation of the registry. The components call
+ * these; nothing in the view holds a channel name or a path.
+ */
+export interface TodayActions {
+  expand(firmId: string): void;
+  collapse(): void;
+  snooze(input: OperationInput<'today.snooze'>): void;
+  recordOutcome(input: OperationInput<'today.recordOutcome'>): void;
+  scheduleCallback(input: OperationInput<'today.scheduleCallback'>): void;
+  releasePause(input: OperationInput<'today.releasePause'>): void;
+  /** Its own channel: it opens a URI on the operating system rather than answering one. */
+  dial(input: { readonly firmId: string; readonly contactId: string | null; readonly routeId: string }): void;
+}
 
 export interface Today {
   readonly state: TodayState | null;
@@ -44,15 +61,15 @@ export interface Today {
   readonly now: number;
   /** Refresh, or Retry: a fresh look, which clears the notice on screen. */
   refresh(): void;
-  /** A card's command — snooze, dial, record, resume, expand — and the state it answers. */
-  apply(next: Promise<TodayState>): void;
+  /** A card's commands. Each holds the column read-only until it answers. */
+  readonly actions: TodayActions | null;
   /** A read Today makes by itself, if one is due. */
   autoRefresh(trigger: 'focus' | 'tick', now?: number): void;
 }
 
 export function useToday(identity: string | null, isTyping: () => boolean): Today {
   const client = useQueryClient();
-  const enabled = identity !== null && bridge() !== undefined;
+  const enabled = identity !== null && api() !== undefined;
   const [pending, setPending] = useState(0);
   const [commands, setCommands] = useState(0);
   const [refreshAnswered, setRefreshAnswered] = useState(false);
@@ -64,7 +81,7 @@ export function useToday(identity: string | null, isTyping: () => boolean): Toda
   const query = useQuery({
     queryKey: [TODAY_KEY, identity],
     // The cached list first, so the morning's list is on screen without a press.
-    queryFn: async () => (await bridge()?.state()) ?? null,
+    queryFn: async () => (await api()?.read('today.state', {})) ?? null,
     enabled,
     staleTime: Number.POSITIVE_INFINITY,
     refetchOnWindowFocus: false,
@@ -96,19 +113,45 @@ export function useToday(identity: string | null, isTyping: () => boolean): Toda
     [client, identity],
   );
 
-  const apply = useCallback(
-    (next: Promise<TodayState>): void => {
+  const actions = useMemo<TodayActions | null>(() => {
+    const value = api();
+    if (value === undefined) return null;
+    const command = (next: Promise<TodayState>): void => {
       keep(next, false);
-    },
-    [keep],
-  );
+    };
+    return {
+      expand: firmId => {
+        command(value.read('today.expand', { firmId }));
+      },
+      collapse: () => {
+        command(value.read('today.collapse', {}));
+      },
+      snooze: input => {
+        command(value.command('today.snooze', input));
+      },
+      recordOutcome: input => {
+        command(value.command('today.recordOutcome', input));
+      },
+      scheduleCallback: input => {
+        command(value.command('today.scheduleCallback', input));
+      },
+      releasePause: input => {
+        command(value.command('today.releasePause', input));
+      },
+      dial: input => {
+        const bridge = dialBridge();
+        if (bridge === undefined) return;
+        command(bridge.call(input));
+      },
+    };
+  }, [keep]);
 
   const read = useCallback(
     (quiet: boolean): void => {
-      const value = bridge();
+      const value = api();
       if (value === undefined) return;
       lastRefreshAt.current = Date.now();
-      keep(quiet ? value.refresh({ quiet: true }) : value.refresh(), true);
+      keep(value.read('today.refresh', quiet ? { quiet: true } : {}), true);
     },
     [keep],
   );
@@ -119,13 +162,13 @@ export function useToday(identity: string | null, isTyping: () => boolean): Toda
 
   const autoRefresh = useCallback(
     (trigger: 'focus' | 'tick', at: number = Date.now()): void => {
-      const value = bridge();
+      const value = api();
       if (value === undefined || state === null || pending > 0) return;
       const zone = state.businessTimeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
       if (!refreshDue({ trigger, now: at, lastAttempt: lastRefreshAt.current, zone })) return;
       if (typing.current()) return;
       lastRefreshAt.current = at;
-      keep(value.refresh({ quiet: true }), true);
+      keep(value.read('today.refresh', { quiet: true }), true);
     },
     [state, pending, keep],
   );
@@ -165,5 +208,5 @@ export function useToday(identity: string | null, isTyping: () => boolean): Toda
     };
   }, []);
 
-  return { state, pending, commands, refreshAnswered, now, refresh, apply, autoRefresh };
+  return { state, pending, commands, refreshAnswered, now, refresh, actions, autoRefresh };
 }

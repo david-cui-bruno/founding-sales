@@ -5,7 +5,8 @@ import type { TodayState } from '../todayContract.ts';
 import type { CardView, TodayScreenView } from '../todayView.ts';
 import { Button } from '../ui/button.tsx';
 import { OutcomeForm } from './OutcomeForm.tsx';
-import { TaskRow, type TaskActions } from './TaskRow.tsx';
+import { TaskRow } from './TaskRow.tsx';
+import type { TodayActions } from './useToday.ts';
 
 /**
  * The Today lanes (specification 8.2, 8.3, 9.1, 14.2).
@@ -34,7 +35,7 @@ function DialPanel({
 }: {
   readonly state: TodayState;
   readonly view: TodayScreenView;
-  readonly actions: TaskActions;
+  readonly actions: TodayActions;
 }): JSX.Element {
   const firmId = state.expanded?.firmId ?? '';
   return (
@@ -45,9 +46,7 @@ function DialPanel({
             data-testid="dial"
             disabled={!entry.enabled}
             onClick={() => {
-              actions.apply(
-                actions.bridge.dial({ firmId, contactId: entry.route.contactId, routeId: entry.route.routeId }),
-              );
+              actions.dial({ firmId, contactId: entry.route.contactId, routeId: entry.route.routeId });
             }}
           >
             Call {entry.route.e164}
@@ -80,7 +79,7 @@ function ExpandedFirm({
 }: {
   readonly state: TodayState;
   readonly view: TodayScreenView;
-  readonly actions: TaskActions;
+  readonly actions: TodayActions;
 }): JSX.Element | null {
   const expanded = state.expanded;
   if (expanded === null) return null;
@@ -110,7 +109,7 @@ function Card({
   readonly entry: CardView;
   readonly state: TodayState;
   readonly view: TodayScreenView;
-  readonly actions: TaskActions;
+  readonly actions: TodayActions;
 }): JSX.Element {
   return (
     <li data-testid="today-card" className="group/row border-b border-border last:border-b-0">
@@ -146,7 +145,8 @@ function Card({
             size="sm"
             data-testid="card-expand"
             onClick={() => {
-              actions.apply(entry.expanded ? actions.bridge.collapse() : actions.bridge.expand({ firmId: entry.card.firmId }));
+              if (entry.expanded) actions.collapse();
+            else actions.expand(entry.card.firmId);
             }}
           >
             {entry.expanded ? 'Close' : 'Open'}
@@ -167,7 +167,7 @@ export function Lanes({
   readonly state: TodayState;
   readonly view: TodayScreenView;
   readonly content: LanesContent;
-  readonly actions: TaskActions;
+  readonly actions: TodayActions;
 }): JSX.Element {
   const expandedShown = content.sections.some(section => section.cards.some(card => card.expanded));
   return (

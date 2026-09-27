@@ -60,7 +60,7 @@ export interface BridgeHandle<S> {
   setState(state: S): void;
 }
 
-type Optional = 'callieMailbox' | 'callieToday' | 'callieAdmin' | 'callieCrm' | 'callieReplies' | 'callieSequences';
+type Optional = 'callieMailbox' | 'callieApi' | 'callieAdmin' | 'callieCrm' | 'callieSequences';
 
 export interface AppServerOptions {
   readonly desktop?: DesktopState;
@@ -114,10 +114,6 @@ export interface AppServer {
 const METHODS: Readonly<Record<string, { readonly global: string; readonly methods: readonly string[] }>> = {
   callie: { global: 'callie', methods: ['state', 'signIn', 'signOut', 'refreshToday'] },
   mailbox: { global: 'callieMailbox', methods: ['state', 'refresh', 'connect'] },
-  today: {
-    global: 'callieToday',
-    methods: ['state', 'refresh', 'expand', 'collapse', 'snooze', 'dial', 'recordOutcome', 'scheduleCallback', 'releasePause'],
-  },
   crm: {
     global: 'callieCrm',
     methods: [
@@ -138,7 +134,6 @@ const METHODS: Readonly<Record<string, { readonly global: string; readonly metho
       'checkRoute',
     ],
   },
-  replies: { global: 'callieReplies', methods: ['state', 'refresh', 'open', 'collapse', 'confirm', 'resolve'] },
   sequences: {
     global: 'callieSequences',
     methods: [
@@ -189,8 +184,24 @@ const LISTENERS: Readonly<Record<string, string>> = {
   update: `onChange(listener) { (globalThis.__updateListeners ??= []).push(listener); },`,
 };
 
+/**
+ * D4's registry, faked. `callieApi.read(op, input)` and `callieApi.command(op, input)`
+ * post to `/bridge/<op>`, and the operations are named `today.expand`, `replies.confirm`
+ * and so on — the same `bridge.method` the other fakes use — so a spec asks for
+ * `called('today.expand')` whether the view reached it through a bridge of its own or
+ * through the registry. Dialling keeps its own method, as it does in the preload.
+ */
+const OPERATION_API = `globalThis.callieApi = {
+  async read(operation, input) { return await ask(operation, input ?? null); },
+  async command(operation, input) { return await ask(operation, input ?? null); },
+};
+globalThis.callieDial = {
+  async call(input) { return await ask('today.dial', input ?? null); },
+};`;
+
 function bridgeScript(installed: readonly string[]): string {
   const objects = installed.map(name => {
+    if (name === 'api') return OPERATION_API;
     const entry = METHODS[name];
     if (entry === undefined) throw new Error(`no such bridge ${name}`);
     const methods = entry.methods.map(method => `  async ${method}(input) { return await ask('${name}.${method}', input); },`);
@@ -252,8 +263,8 @@ async function readBody(request: IncomingMessage): Promise<unknown> {
 export async function startAppServer(options: AppServerOptions = {}): Promise<AppServer> {
   const script = await transpile();
   const without = new Set<string>(options.without ?? []);
-  const installed = ['callie', 'mailbox', 'today', 'crm', 'replies', 'sequences', 'admin', ...(options.update === undefined ? [] : ['update'])].filter(
-    name => !without.has(METHODS[name]?.global ?? ''),
+  const installed = ['callie', 'mailbox', 'api', 'crm', 'sequences', 'admin', ...(options.update === undefined ? [] : ['update'])].filter(
+    name => !without.has(name === 'api' ? 'callieApi' : (METHODS[name]?.global ?? '')),
   );
   const html = (await readFile(`${pageDirectory}index.html`, 'utf8'))
     .replace('<script type="module"', '<script src="./bridge.js"></script>\n    <script type="module"')

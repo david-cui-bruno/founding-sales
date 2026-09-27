@@ -6,7 +6,7 @@ import { refreshFailed, updatedLine, type TodayScreenView } from '../todayView.t
 import { Alert } from '../ui/alert.tsx';
 import { Button } from '../ui/button.tsx';
 import { Lanes } from './Lanes.tsx';
-import type { TaskActions } from './TaskRow.tsx';
+import type { TodayActions } from './useToday.ts';
 
 /**
  * Today, the view the window opens on (lane g65; specification 8.2, 13.4, 14.2).
@@ -102,7 +102,7 @@ export function TodayColumn({
   readonly refreshAnswered: boolean;
   readonly now: number;
   readonly hasTodayBridge: boolean;
-  readonly actions: TaskActions | null;
+  readonly actions: TodayActions | null;
   onRefresh(): void;
   onConnectMailbox(): void;
 }): JSX.Element {

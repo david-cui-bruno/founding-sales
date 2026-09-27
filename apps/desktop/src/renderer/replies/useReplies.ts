@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ConfirmReplyRequest, ReplyBridge, ReplyDisposition, ReplyState } from '../replyContract.ts';
+import type { OperationInput } from '../../shared/operations.ts';
+import type { ReplyDisposition, ReplyState } from '../replyContract.ts';
 
 /**
  * The reply lane's reads, deliberately **not** through Query (specification 8.3, 12.4).
@@ -26,7 +27,7 @@ import type { ConfirmReplyRequest, ReplyBridge, ReplyDisposition, ReplyState } f
  * decision came with.
  */
 
-const bridge = (): ReplyBridge | undefined => globalThis.callieReplies;
+const api = (): NonNullable<typeof globalThis.callieApi> | undefined => globalThis.callieApi;
 
 export interface Replies {
   readonly state: ReplyState | null;
@@ -37,8 +38,8 @@ export interface Replies {
   refresh(): void;
   open(messageId: string): void;
   close(): void;
-  confirm(input: ConfirmReplyRequest): void;
-  resolve(input: { readonly messageId: string; readonly opportunityId: string }): void;
+  confirm(input: OperationInput<'replies.confirm'>): void;
+  resolve(input: OperationInput<'replies.resolve'>): void;
 }
 
 export function useReplies(): Replies {
@@ -68,7 +69,7 @@ export function useReplies(): Replies {
   }, []);
 
   useEffect(() => {
-    apply(bridge()?.state());
+    apply(api()?.read('replies.state', {}));
     return () => {
       generation.current += 1;
       // Nothing a reply card carried outlives the view: not the body, not the sender's
@@ -102,30 +103,30 @@ export function useReplies(): Replies {
   );
 
   const refresh = useCallback((): void => {
-    apply(bridge()?.refresh());
+    apply(api()?.read('replies.refresh', {}));
   }, [apply]);
 
   const openCard = useCallback(
     (messageId: string): void => {
-      apply(bridge()?.open({ messageId }));
+      apply(api()?.read('replies.open', { messageId }));
     },
     [apply],
   );
 
   const close = useCallback((): void => {
-    apply(bridge()?.collapse());
+    apply(api()?.read('replies.collapse', {}));
   }, [apply]);
 
   const confirm = useCallback(
-    (input: ConfirmReplyRequest): void => {
-      apply(bridge()?.confirm(input));
+    (input: OperationInput<'replies.confirm'>): void => {
+      apply(api()?.command('replies.confirm', input));
     },
     [apply],
   );
 
   const resolve = useCallback(
-    (input: { readonly messageId: string; readonly opportunityId: string }): void => {
-      apply(bridge()?.resolve(input));
+    (input: OperationInput<'replies.resolve'>): void => {
+      apply(api()?.command('replies.resolve', input));
     },
     [apply],
   );

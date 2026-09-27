@@ -6,7 +6,7 @@ import { createApiClient, fetchSend } from './apiClient.ts';
 import { createAuthedClient } from './authedClient.ts';
 import { createDialHandoff } from './dialHandoff.ts';
 import { createTelLaunchDriver } from './telHandoff.ts';
-import { registerCrmBridge, registerReplyBridge, registerSequenceBridge, registerTodayBridge } from './todayWindow.ts';
+import { registerCrmBridge, registerOperationBridges, registerSequenceBridge } from './todayWindow.ts';
 import { windowMenuTemplate } from './windowMenu.ts';
 import { registerAdminBridge } from './settingsWindow.ts';
 import { createDeviceStore } from './deviceStore.ts';
@@ -193,18 +193,21 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
   });
   const session = { state: async () => await manager.state(), refreshToday: async () => await manager.refreshToday() };
 
-  registerTodayBridge({
-    api,
-    // The handoff logic, bound to macOS through `telHandoff.ts`: the launch-services
-    // probe for the setup proof and `shell.openExternal` for the open, with every
-    // scheme but `tel:` unreachable from that module. There is no Swift helper (2).
-    handoff: createDialHandoff({ driver: createTelLaunchDriver() }),
-    session,
+  // Today, Replies and the Diagnostics recovery controls, behind D4's operation registry
+  // — two channels and a closed list — with dialling on its own named channel. The reply
+  // state is never cached, so it needs nothing from the offline cache but the token, the
+  // online flag and the version gate.
+  registerOperationBridges({
+    today: {
+      api,
+      // The handoff logic, bound to macOS through `telHandoff.ts`: the launch-services
+      // probe for the setup proof and `shell.openExternal` for the open, with every
+      // scheme but `tel:` unreachable from that module. There is no Swift helper (2).
+      handoff: createDialHandoff({ driver: createTelLaunchDriver() }),
+      session,
+    },
+    replies: { api, session },
   });
-  // 8.3's reply cards. The same `AuthedClient` and the same session manager: the
-  // reply state is never cached, so it needs nothing from the offline cache but the
-  // token, the online flag and the version gate.
-  registerReplyBridge({ api, session });
   registerCrmBridge({ api, session, clientVersion: configuration.clientVersion });
   // G8's editor.
   registerSequenceBridge({ api, session });

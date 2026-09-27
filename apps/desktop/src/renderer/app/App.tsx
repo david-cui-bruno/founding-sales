@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react';
+import { useCallback, useEffect, useRef, useState, type JSX } from 'react';
 import * as firmWorkspace from '../firmWorkspace.ts';
 import type { DesktopState } from '../../shared/contract.ts';
 import { buildHomeView } from '../homeView.ts';
@@ -40,8 +40,6 @@ import { useSession, type Session } from './useSession.ts';
  * without a list of things somebody has to remember to clear.
  */
 
-const todayBridge = (): NonNullable<typeof globalThis.callieToday> | undefined => globalThis.callieToday;
-
 /** The key the column's view is mounted under. The same route again is a fresh view. */
 function viewKeyOf(route: Route, epoch: number): string {
   // Today is the exception: its lanes may hold a half-typed snooze reason, and ⌘1 or
@@ -70,6 +68,9 @@ function Column({
 }): JSX.Element {
   const home = useHomeAdmin(session.identity);
   const [thisMacOpen, setThisMacOpen] = useState(false);
+  // A page built without the preload has no operations at all; the views say so where a
+  // control would have been rather than throwing.
+  const hasOperations = globalThis.callieApi !== undefined;
   const typed = useHasDrafts('today:');
   const isTyping = useCallback((): boolean => {
     const lanes = document.querySelector('[data-region="today"]');
@@ -85,7 +86,7 @@ function Column({
     {
       desktop,
       bridges: {
-        today: todayBridge() !== undefined,
+        today: hasOperations,
         mailbox: mailboxBridge() !== undefined,
         admin: adminBridge() !== undefined,
       },
@@ -99,12 +100,6 @@ function Column({
     },
     // The session's own lines — offline, stale, a refusal — above Today's.
     buildScreenView(desktop).banners,
-  );
-
-  const bridge = todayBridge();
-  const actions = useMemo(
-    () => (bridge === undefined ? null : { bridge, apply: today.apply }),
-    [bridge, today.apply],
   );
 
   const refreshAll = useCallback((): void => {
@@ -174,8 +169,8 @@ function Column({
             pending={today.pending}
             refreshAnswered={today.refreshAnswered}
             now={today.now}
-            hasTodayBridge={bridge !== undefined}
-            actions={actions}
+            hasTodayBridge={hasOperations}
+            actions={today.actions}
             onRefresh={refreshAll}
             onConnectMailbox={() => {
               void session.connectMailbox();

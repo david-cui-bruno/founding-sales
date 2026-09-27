@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { replyCardSchema, replyStateSchema, type ReplyCard, type ReplyState } from '../src/renderer/replyContract.ts';
 import { CONFIRM_LABELS, buildReplyCardView, buildReplyView, candidateLabel, replyNotice } from '../src/renderer/replyView.ts';
-import { REPLY_IPC_CHANNELS, createReplyBridge } from '../src/main/replyBridge.ts';
+import { createReplyBridge } from '../src/main/replyBridge.ts';
+import { OPERATION_NAMES } from '../src/shared/operations.ts';
 import { createAuthedClient } from '../src/main/authedClient.ts';
 import type { HttpAnswer } from '../src/main/apiClient.ts';
 import { classifierSettingsAnswer, confirmReplyResultAnswer, replyConfirmationAnswer } from './support/replyAnswers.ts';
@@ -427,13 +428,13 @@ describe('the reply bridge', () => {
     // The bridge's whole surface, and none of it closes anything. `resolve` (lane g88) is
     // G7's ambiguity resolution, which picks a conversation and answers nothing.
     expect(Object.keys(bridge).sort()).toEqual(['collapse', 'confirm', 'open', 'refresh', 'resolve', 'state']);
-    expect(Object.values(REPLY_IPC_CHANNELS).sort()).toEqual([
-      'callie:replies:collapse',
-      'callie:replies:confirm',
-      'callie:replies:open',
-      'callie:replies:refresh',
-      'callie:replies:resolve',
-      'callie:replies:state',
+    expect(OPERATION_NAMES.filter(name => name.startsWith('replies.')).sort()).toEqual([
+      'replies.collapse',
+      'replies.confirm',
+      'replies.open',
+      'replies.refresh',
+      'replies.resolve',
+      'replies.state',
     ]);
   });
 
