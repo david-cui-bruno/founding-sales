@@ -12,10 +12,13 @@ import { instant, membershipRoleSchema, uuid } from './foundationRows.ts';
  * codes"; `AUTH_REFUSAL_CODES` is that set for identity, and the API never invents a
  * string outside it. A caller may switch on the code; the message is for a person.
  *
- * **A secret appears in exactly one direction, once.** `sessionGrantSchema` is the
- * only shape that carries an access token, a refresh credential or a device secret,
- * it is only ever a response, and nothing that describes a stored row (`deviceView`,
- * `sessionView`) has a field that could hold one.
+ * **A secret is carried by the two shapes that name one, and nowhere else.**
+ * `sessionGrantSchema` is the only response that carries an access token, a refresh
+ * credential or a device secret, and `deviceSessionRequestSchema` is the only request
+ * that carries one: from wave 3b the Mac presents its long-lived device secret to open
+ * a session, exactly as it presents the rotating refresh credential to renew one, and
+ * both travel in the JSON body over TLS. Nothing that describes a stored row — the
+ * device list below — has a field that could hold either.
  */
 
 // ---------------------------------------------------------------------------
@@ -155,6 +158,62 @@ export const sessionRenewRequestSchema = z.strictObject({
 /** A renewal returns no device secret: the Mac already has one and it does not rotate. */
 export const sessionRenewalSchema = sessionGrantSchema.omit({ deviceSecret: true });
 export type SessionRenewal = z.infer<typeof sessionRenewalSchema>;
+
+// ---------------------------------------------------------------------------
+// Opening a session from the device secret (wave 3b, audit item S7)
+//
+// The device secret is minted once at claim, kept by the Mac in the macOS Keychain
+// and server-side only as a sha256 digest. Until wave 3b nothing ever asked for it
+// again, so a renewal that was lost — a Mac restored from a backup, a credential
+// overwritten by a second window — forced a full Google sign-in. `POST
+// /auth/session/open` asks for it, which makes it this Mac's long-lived credential.
+//
+// It is accepted BESIDE the rotating credential for one desktop release: 1.0.12 is
+// installed and renews, and wave 3's C lane retires `sessionRenewRequestSchema` once
+// the token build is confirmed installed.
+// ---------------------------------------------------------------------------
+
+export const deviceSessionRequestSchema = z.strictObject({
+  workspaceId: uuid,
+  deviceId: uuid,
+  deviceSecret: deviceSecretSchema,
+  clientVersion: semanticVersionSchema,
+});
+export type DeviceSessionRequest = z.infer<typeof deviceSessionRequestSchema>;
+
+/**
+ * What an open answers: a renewal without the rotating credential. There is nothing
+ * to hand back — the Mac already holds the only credential this path uses, and it
+ * does not rotate.
+ */
+export const deviceSessionSchema = sessionRenewalSchema.omit({ refreshCredential: true });
+export type DeviceSession = z.infer<typeof deviceSessionSchema>;
+
+// ---------------------------------------------------------------------------
+// The device list and revocation (`GET /devices`, `POST /devices/revoke`)
+//
+// A row shape, so no field here could hold a secret: the digest never leaves the
+// database and the label, the status and the instants are all a person needs to
+// recognise a Mac and take it away.
+// ---------------------------------------------------------------------------
+
+export const deviceListEntrySchema = z.strictObject({
+  deviceId: uuid,
+  deviceLabel: deviceLabelSchema,
+  status: z.enum(['active', 'revoked']),
+  registeredAt: instant,
+  lastSeenAt: instant.nullable(),
+  clientVersion: semanticVersionSchema.nullable(),
+  /** The device the caller is presenting. Revoking it is a sign-out. */
+  thisDevice: z.boolean(),
+});
+export type DeviceListEntry = z.infer<typeof deviceListEntrySchema>;
+
+export const deviceListSchema = z.array(deviceListEntrySchema);
+export type DeviceList = z.infer<typeof deviceListSchema>;
+
+export const revokeDeviceRequestSchema = z.strictObject({ deviceId: uuid });
+export type RevokeDeviceRequest = z.infer<typeof revokeDeviceRequestSchema>;
 
 // ---------------------------------------------------------------------------
 // The client-version notice
