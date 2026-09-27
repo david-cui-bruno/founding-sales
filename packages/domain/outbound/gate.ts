@@ -279,11 +279,11 @@ export function holdReasonForRefusal(
       return 'firm_suppressed';
     case 'handle_suppressed':
       return 'handle_suppressed';
+    // `footer_not_composed` joins these two (lane W3-F): a body that cannot be given a
+    // single final stop line is a body nobody may send, and the fix is the template's
+    // text, so the step waits under the reason an author can act on.
     case 'template_unapproved':
     case 'template_mismatch':
-    // Lane W3-F: a body that cannot be composed into one with a single final stop line
-    // is a body nobody may send. The fix is the template's text, so the step waits under
-    // the reason an author can act on.
     case 'footer_not_composed':
       return 'template_unapproved';
     // The workspace has not configured the address the switch demands. Nothing about
