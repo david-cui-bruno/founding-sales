@@ -121,6 +121,10 @@ aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION" \
 
 `BUCKET` is `fss-prod-updates-326255650484`; the distribution is the one whose domain name `terraform output -raw updates_distribution_domain_name` prints.
 
+## Sign-in and devices
+
+**Two credentials are accepted at once, for one desktop release.** A Mac may renew with the rotating refresh credential (`POST /auth/session/renew`, which desktop 1.0.12 uses) or open a session with the long-lived device secret it has held in its Keychain since it was claimed (`POST /auth/session/open`, wave 3b). Opening does not rotate anything, so a renewal lost to a restore or an overwrite no longer costs a full Google sign-in — **but only once the token desktop build is installed**: 1.0.12 never calls open, so until it is replaced a lost renewal still means a full Google sign-in. Presenting a generation spent before an open is not reuse and revokes nothing. **Sign-out now revokes the device**: the `devices` row goes `revoked`, every active session it held ends `signed_out`, and the next sign-in registers a new device — a secret the Mac has forgotten must be dead at the server too, and a device carrying a `signed_out` session from before this release is revoked the first time it tries to open or to renew. `GET /devices` lists this workspace's Macs and `POST /devices/revoke {"deviceId"}` takes one away, audited as `auth.device_revoked`; any active member may call both, and revoking one's own Mac is a sign-out. Lane W3-C retires the rotating credential once the build that opens is confirmed installed on David's Mac — not before, or the installed build has nothing to renew with.
+
 ## Sending
 
 Two halves, and both must hold. The deployment half is `FSS_SENDING_ENABLED=true`, from the committed `sending_enabled = true` in `infra/roots/production/main.tf`: changing it is a pull request, a read plan and an apply. The owner's half is an attestation written as an authenticated admin, naming a stored release record.

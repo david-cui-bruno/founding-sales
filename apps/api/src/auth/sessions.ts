@@ -1,9 +1,16 @@
 import { withTransaction, type QueryResultRowLike } from '@fss/domain/db/queryable.ts';
-import { clientCompatibility, publishedClientVersions, type AuthRefusalCode, type SessionRenewal } from '@fss/contracts';
+import {
+  clientCompatibility,
+  publishedClientVersions,
+  type AuthRefusalCode,
+  type DeviceSession,
+  type SessionRenewal,
+} from '@fss/contracts';
 import type { AuthDeps } from './config.ts';
 import { recordAuditEvent } from './audit.ts';
 import {
   bearerOf,
+  digestsEqual,
   formatAccessToken,
   formatRefreshCredential,
   parseAccessToken,
@@ -12,12 +19,23 @@ import {
 } from './tokens.ts';
 
 /**
- * Devices, sessions and the rotating device-bound credential (specification 5.3,
- * Appendix G 24).
+ * Devices, sessions, and the two credentials a Mac may present (specification 5.3,
+ * Appendix G 24; wave 3b, audit item S7).
  *
  * "Sessions last about one hour and renew using a device-bound credential that
  * rotates on every use. Reuse revokes the device. ... Full Google sign-in recurs
  * every 30 days or after revocation."
+ *
+ * Two credentials, for one desktop release. `renewSession` is the rotating one, which
+ * desktop 1.0.12 holds and which is unchanged on the wire. `openSession` is the
+ * long-lived device secret the Mac has held in its Keychain since it was claimed and
+ * which nothing ever asked for again: a renewal lost to a restore or an overwrite used
+ * to cost a full Google sign-in, and it no longer does. Lane W3-C removes the rotating
+ * one once the build that opens is confirmed installed.
+ *
+ * **Both take the device row first.** `SELECT ... FOR UPDATE` on `devices` is the first
+ * statement of either transaction, so an open and a renewal that arrive together
+ * serialise in one order and cannot deadlock over the credential rows.
  *
  * Three facts are the database's rather than this file's:
  *
@@ -64,12 +82,16 @@ export async function registerDevice(deps: AuthDeps, input: RegisterDeviceInput)
   return { deviceId, deviceSecret };
 }
 
-export interface IssuedSession {
+/** A session opened from the device secret: there is no rotating credential to hand back. */
+export interface OpenedSession {
   readonly sessionId: string;
   readonly accessToken: string;
   readonly accessTokenExpiresAt: string;
-  readonly refreshCredential: string;
   readonly reauthenticateAfter: string;
+}
+
+export interface IssuedSession extends OpenedSession {
+  readonly refreshCredential: string;
 }
 
 export interface IssueSessionInput {
@@ -81,15 +103,30 @@ export interface IssueSessionInput {
   readonly reauthenticateAfter: Date;
   /** The generation of the credential issued with this session. Defaults to 1. */
   readonly generation?: number;
+  /**
+   * Whether to mint the rotating refresh credential alongside the session. Default
+   * true; `openSession` passes false, because the Mac's credential on that path is the
+   * device secret it already holds. It is a skip rather than a second row: the partial
+   * unique index admits one live credential per device, and a row nobody will ever
+   * present is a thing to explain rather than a thing to have.
+   */
+  readonly withRefreshCredential?: boolean;
 }
 
-export async function issueSession(deps: AuthDeps, input: IssueSessionInput): Promise<IssuedSession> {
+export async function issueSession(
+  deps: AuthDeps,
+  input: IssueSessionInput & { readonly withRefreshCredential?: true },
+): Promise<IssuedSession>;
+export async function issueSession(
+  deps: AuthDeps,
+  input: IssueSessionInput & { readonly withRefreshCredential: false },
+): Promise<OpenedSession>;
+export async function issueSession(deps: AuthDeps, input: IssueSessionInput): Promise<OpenedSession> {
   const now = deps.now();
   const generation = input.generation ?? 1;
+  const withRefreshCredential = input.withRefreshCredential ?? true;
   const accessSecret = deps.randomSecret();
-  const refreshSecret = deps.randomSecret();
   const accessToken = formatAccessToken(input.workspaceId, accessSecret);
-  const refreshCredential = formatRefreshCredential(input.workspaceId, input.deviceId, generation, refreshSecret);
 
   // A session never outlives the 30-day boundary: near it, the hour is clipped rather
   // than allowed to carry authority past the point a full sign-in is due.
@@ -115,6 +152,21 @@ export async function issueSession(deps: AuthDeps, input: IssueSessionInput): Pr
   const sessionId = inserted.rows[0]?.id;
   if (sessionId === undefined) throw new Error('session insert returned no row');
 
+  const opened: OpenedSession = {
+    sessionId,
+    accessToken,
+    accessTokenExpiresAt: expiresAt.toISOString(),
+    reauthenticateAfter: input.reauthenticateAfter.toISOString(),
+  };
+  if (!withRefreshCredential) return opened;
+
+  const refreshCredential = formatRefreshCredential(
+    input.workspaceId,
+    input.deviceId,
+    generation,
+    deps.randomSecret(),
+  );
+
   // A refresh credential never outlives the boundary a full sign-in is due at: past
   // it the credential could not renew anything anyway, and a live-looking row that
   // cannot be used is a thing to explain rather than a thing to have.
@@ -137,13 +189,8 @@ export async function issueSession(deps: AuthDeps, input: IssueSessionInput): Pr
     ],
   );
 
-  return {
-    sessionId,
-    accessToken,
-    accessTokenExpiresAt: expiresAt.toISOString(),
-    refreshCredential,
-    reauthenticateAfter: input.reauthenticateAfter.toISOString(),
-  };
+  const issued: IssuedSession = { ...opened, refreshCredential };
+  return issued;
 }
 
 // ---------------------------------------------------------------------------
@@ -281,6 +328,33 @@ export async function revokeDevice(
   );
 }
 
+/**
+ * Has this device ever signed out? (wave 3b, review P1.)
+ *
+ * Asked of every session the device has held, not only its newest, and that is the
+ * whole point. Under the pre-S7a server `endSession` ended the session and revoked the
+ * credential in two statements with no transaction around them, so a renewal that
+ * slipped between them left a *newer* `active` session behind and the device still
+ * `active` — a device that signed out whose newest session says nothing of the kind.
+ * Equal `issued_at` values make "newest" indeterminate in the same way. Either way the
+ * saved device secret of a Mac that signed out would open a session, which is the one
+ * thing this change must never allow.
+ *
+ * It cannot touch a working 1.0.12 Mac. Under the old server a sign-out was that
+ * device's end — the next sign-in registers a new device — so a live device has no
+ * `signed_out` session at all; under this one a sign-out revokes the device outright,
+ * and a revoked device never reaches this question.
+ */
+async function signedOutBefore(deps: AuthDeps, workspaceId: string, deviceId: string): Promise<boolean> {
+  const { rows } = await deps.db.query(
+    `SELECT 1 FROM sessions
+      WHERE workspace_id = $1 AND device_id = $2 AND end_reason = 'signed_out'
+      LIMIT 1`,
+    [workspaceId, deviceId],
+  );
+  return rows[0] !== undefined;
+}
+
 export async function renewSession(deps: AuthDeps, input: RenewInput): Promise<RenewOutcome> {
   if (clientCompatibility(deps.config.supportedClientVersions, input.clientVersion).kind !== 'supported') {
     return { renewed: false, refusal: 'client_upgrade_required' };
@@ -290,6 +364,17 @@ export async function renewSession(deps: AuthDeps, input: RenewInput): Promise<R
   const now = deps.now();
 
   return await withTransaction(deps.db, async () => {
+    // The device row first, before any credential row is read (wave 3b). `openSession`
+    // takes the same lock as its own first statement, so the two paths a Mac may use
+    // at the same moment queue in one order over one row instead of meeting in the
+    // middle over `device_refresh_credentials`. The ids come from the parsed
+    // credential and are not trusted for anything else; a device that does not exist
+    // locks nothing and the SELECT below answers `credential_unknown` as before.
+    await deps.db.query('SELECT 1 FROM devices WHERE workspace_id = $1 AND id = $2 FOR UPDATE', [
+      parsed.workspaceId,
+      parsed.deviceId,
+    ]);
+
     const { rows } = await deps.db.query<CredentialRow>(
       `SELECT c.generation, c.secret_hash, c.state, c.expires_at,
               d.status AS device_status, d.user_id,
@@ -310,8 +395,24 @@ export async function renewSession(deps: AuthDeps, input: RenewInput): Promise<R
     }
 
     if (credential.state === 'rotated') {
-      // Reuse. Whoever holds the spent generation, the device is compromised: revoke it,
-      // end its sessions, and require a full Google sign-in (5.3, Appendix G 24).
+      // Reuse — but only while this device is still on the rotating path, which is what
+      // a live generation means. Once the device has moved to the device secret (an
+      // open revokes whatever generation was live) or has signed out, there is no chain
+      // left to be ahead of: the old generations are history, not evidence, and a
+      // credential restored from a backup answers `credential_unknown` rather than
+      // revoking a Mac that is working perfectly well on its token. The `rotated` rows
+      // are left exactly as they are — `use_consistent` forbids moving them anywhere
+      // else — they simply stop proving anything.
+      const live = await deps.db.query(
+        `SELECT 1 FROM device_refresh_credentials
+          WHERE workspace_id = $1 AND device_id = $2 AND state = 'active'
+          LIMIT 1`,
+        [parsed.workspaceId, parsed.deviceId],
+      );
+      if (live.rows[0] === undefined) return { renewed: false, refusal: 'credential_unknown' };
+
+      // Whoever holds the spent generation, the device is compromised: revoke it, end
+      // its sessions, and require a full Google sign-in (5.3, Appendix G 24).
       //
       // Only `rotated` is reuse. A `revoked` credential was taken away deliberately —
       // by an admin, a sign-out or a membership ending — and calling that an attack
@@ -337,6 +438,20 @@ export async function renewSession(deps: AuthDeps, input: RenewInput): Promise<R
     // Revoked while the device itself is still registered: a sign-out. The Mac signs
     // in with Google again rather than renewing a credential it gave up.
     if (credential.state !== 'active') return { renewed: false, refusal: 'credential_unknown' };
+
+    // An active device with a live credential and a `signed_out` session somewhere in
+    // its past is the state the old two-statement sign-out could leave behind. It is
+    // repaired here rather than rotated onwards, so the Mac cannot keep renewing a
+    // registration the person ended, and so `openSession` and this path agree about
+    // what the row means.
+    if (await signedOutBefore(deps, parsed.workspaceId, parsed.deviceId)) {
+      await revokeDevice(deps, {
+        workspaceId: parsed.workspaceId,
+        deviceId: parsed.deviceId,
+        reason: 'signed_out',
+      });
+      return { renewed: false, refusal: 'device_revoked' };
+    }
 
     // The 30-day boundary lives on the sessions this device has held. The newest one
     // carries it, whether or not it is still active. It is checked before the
@@ -400,17 +515,168 @@ export async function renewSession(deps: AuthDeps, input: RenewInput): Promise<R
   });
 }
 
-/** Sign out: end this session and spend the device's live credential. The device stays. */
+// ---------------------------------------------------------------------------
+// Opening a session from the device secret (wave 3b, audit item S7)
+// ---------------------------------------------------------------------------
+
+export type OpenOutcome =
+  | { readonly opened: true; readonly grant: DeviceSession }
+  | { readonly opened: false; readonly refusal: AuthRefusalCode };
+
+export interface OpenSessionInput {
+  readonly workspaceId: string;
+  readonly deviceId: string;
+  /** The 256-bit secret minted at claim. Compared as a digest and never stored again. */
+  readonly deviceSecret: string;
+  readonly clientVersion: string;
+}
+
+interface DeviceRow extends QueryResultRowLike {
+  readonly secret_hash: string;
+  readonly status: 'active' | 'revoked';
+  readonly user_id: string;
+  readonly membership_status: 'active' | 'inactive';
+  readonly role: 'admin' | 'salesperson';
+}
+
+/**
+ * A session from the device secret this Mac has held since it was claimed.
+ *
+ * No rotation, so no reuse and no way to lose the credential by using it: opening twice
+ * in a row works, and the earlier session is ended `renewed` like any other supersession.
+ * There is deliberately no rate limit and no lockout — the secret is 256 random bits,
+ * so guessing is not the threat, and a lockout keyed on a device id would let anyone
+ * who knows one lock the owner out of their own Mac.
+ *
+ * The checks are in this order for a reason:
+ *
+ *   * the client version first, before any query, so an outdated Mac learns to upgrade
+ *     without this API touching a row on its behalf;
+ *   * an unknown device and a wrong secret get the same answer, `credential_unknown`,
+ *     from a constant-time comparison. Which of the two it was is exactly what an
+ *     attacker with a device id would like to be told;
+ *   * revocation, then membership, as everywhere else in this file;
+ *   * and then the device's newest session, which carries both the 30-day boundary and
+ *     the reason the last session ended.
+ */
+export async function openSession(deps: AuthDeps, input: OpenSessionInput): Promise<OpenOutcome> {
+  if (clientCompatibility(deps.config.supportedClientVersions, input.clientVersion).kind !== 'supported') {
+    return { opened: false, refusal: 'client_upgrade_required' };
+  }
+  const now = deps.now();
+
+  return await withTransaction(deps.db, async () => {
+    // The device row first, and only the device row: `renewSession` takes the same lock
+    // as its own first statement, so an open and a renewal arriving together serialise
+    // over one row in one order rather than deadlocking over two.
+    const { rows } = await deps.db.query<DeviceRow>(
+      `SELECT d.secret_hash, d.status, d.user_id,
+              m.status AS membership_status, m.role
+         FROM devices d
+         JOIN workspace_memberships m ON m.workspace_id = d.workspace_id AND m.user_id = d.user_id
+        WHERE d.workspace_id = $1 AND d.id = $2
+        FOR UPDATE OF d`,
+      [input.workspaceId, input.deviceId],
+    );
+    const device = rows[0];
+    if (device === undefined || !digestsEqual(sha256Hex(input.deviceSecret), device.secret_hash)) {
+      return { opened: false, refusal: 'credential_unknown' };
+    }
+    if (device.status !== 'active') return { opened: false, refusal: 'device_revoked' };
+    if (device.membership_status !== 'active') return { opened: false, refusal: 'membership_inactive' };
+
+    // The boundary, from the newest session, exactly as `renewSession` reads it.
+    const newest = await deps.db.query<{ reauthenticate_after: Date }>(
+      `SELECT reauthenticate_after FROM sessions
+        WHERE workspace_id = $1 AND device_id = $2
+        ORDER BY issued_at DESC LIMIT 1`,
+      [input.workspaceId, input.deviceId],
+    );
+    const latest = newest.rows[0];
+    // A registered device with no session at all is a row `claimSignIn` could not have
+    // written. Nothing can be said about a boundary that does not exist, so: unknown.
+    if (latest === undefined) return { opened: false, refusal: 'credential_unknown' };
+
+    // A sign-out made before this release left the device `active`, because ending the
+    // session was all a sign-out did then. The secret in that Mac's Keychain — or in a
+    // backup of it — must not reopen the session the person ended, so the row is made
+    // truthful now and the answer is the one a revoked device gets. The question is
+    // asked of every session the device has held rather than of `latest`: see
+    // `signedOutBefore` for the two states in which the newest one says nothing.
+    if (await signedOutBefore(deps, input.workspaceId, input.deviceId)) {
+      await revokeDevice(deps, {
+        workspaceId: input.workspaceId,
+        deviceId: input.deviceId,
+        reason: 'signed_out',
+      });
+      return { opened: false, refusal: 'device_revoked' };
+    }
+
+    const reauthenticateAfter = latest.reauthenticate_after;
+    if (reauthenticateAfter.getTime() <= now.getTime()) {
+      return { opened: false, refusal: 'reauthentication_required' };
+    }
+
+    await deps.db.query(
+      `UPDATE sessions SET status = 'ended', ended_at = $3, end_reason = 'renewed'
+        WHERE workspace_id = $1 AND device_id = $2 AND status = 'active'`,
+      [input.workspaceId, input.deviceId, now.toISOString()],
+    );
+    // This Mac has moved to the device secret. Whatever generation was still live is
+    // taken away rather than left to be presented later; the spent `rotated` rows are
+    // untouched, because `use_consistent` forbids moving them and because they are
+    // already no longer evidence of anything (`renewSession`).
+    await deps.db.query(
+      `UPDATE device_refresh_credentials SET state = 'revoked'
+        WHERE workspace_id = $1 AND device_id = $2 AND state = 'active'`,
+      [input.workspaceId, input.deviceId],
+    );
+    await deps.db.query(
+      `UPDATE devices SET last_seen_at = $3, client_version = $4
+        WHERE workspace_id = $1 AND id = $2`,
+      [input.workspaceId, input.deviceId, now.toISOString(), input.clientVersion],
+    );
+
+    const session = await issueSession(deps, {
+      workspaceId: input.workspaceId,
+      userId: device.user_id,
+      deviceId: input.deviceId,
+      clientVersion: input.clientVersion,
+      reauthenticateAfter,
+      withRefreshCredential: false,
+    });
+
+    return {
+      opened: true,
+      grant: {
+        workspaceId: input.workspaceId,
+        userId: device.user_id,
+        role: device.role,
+        deviceId: input.deviceId,
+        accessToken: session.accessToken,
+        accessTokenExpiresAt: session.accessTokenExpiresAt,
+        reauthenticateAfter: session.reauthenticateAfter,
+        supportedClientVersions: publishedClientVersions(deps.config.supportedClientVersions),
+      },
+    };
+  });
+}
+
+/**
+ * Sign out: revoke the device (wave 3b).
+ *
+ * It used to end the session and spend the credential and leave the `devices` row
+ * `active`, which was true of a Mac that had given up a credential it could not get
+ * back. It is not true of a Mac that holds a device secret: the secret is still in its
+ * Keychain until the app deletes it, it is still in every Time Machine backup, and
+ * "the person signed out" has to mean the secret is dead at the server too. So the row
+ * says what happened — `revoked`, with `signed_out` on every session it held — and the
+ * next sign-in registers a new device exactly as it always did.
+ */
 export async function endSession(deps: AuthDeps, principal: AuthenticatedPrincipal): Promise<void> {
-  const now = deps.now().toISOString();
-  await deps.db.query(
-    `UPDATE sessions SET status = 'ended', ended_at = $3, end_reason = 'signed_out'
-      WHERE workspace_id = $1 AND id = $2 AND status = 'active'`,
-    [principal.workspaceId, principal.sessionId, now],
-  );
-  await deps.db.query(
-    `UPDATE device_refresh_credentials SET state = 'revoked'
-      WHERE workspace_id = $1 AND device_id = $2 AND state = 'active'`,
-    [principal.workspaceId, principal.deviceId],
-  );
+  await revokeDevice(deps, {
+    workspaceId: principal.workspaceId,
+    deviceId: principal.deviceId,
+    reason: 'signed_out',
+  });
 }

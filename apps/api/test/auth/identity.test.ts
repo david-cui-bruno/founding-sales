@@ -478,7 +478,11 @@ describe('the routes', () => {
     expect(result.body).toMatchObject({ error: 'client_upgrade_required' });
   });
 
-  it('ends the session on sign-out and leaves the device registered', async () => {
+  it('revokes the device on sign-out, and says so rather than only ending the session', async () => {
+    // Until wave 3b a sign-out ended the session and left the row `active`, which was
+    // true of a Mac that had given up a credential it could not get back. It is not
+    // true of a Mac holding a device secret that can open a new session, so the row
+    // says what happened and the token in the person's Keychain is dead at the server.
     const grant = await signIn(fixture.alpha, fixture.alpha.salesperson);
     const signedOut = await route('POST', '/auth/sign-out', options(), {
       headers: { authorization: `Bearer ${grant.accessToken}` },
@@ -486,12 +490,17 @@ describe('the routes', () => {
     expect(signedOut.status).toBe(200);
     expect(await authenticate(fixture.deps, `Bearer ${grant.accessToken}`)).toEqual({
       authenticated: false,
-      refusal: 'session_ended',
+      refusal: 'device_revoked',
     });
-    const { rows } = await fixture.db.query<{ status: string }>('SELECT status FROM devices WHERE id = $1', [
-      grant.deviceId,
-    ]);
-    expect(rows[0]?.status).toBe('active');
+    const { rows } = await fixture.db.query<{ status: string; end_reason: string | null }>(
+      `SELECT d.status, s.end_reason
+         FROM devices d
+         JOIN sessions s ON s.workspace_id = d.workspace_id AND s.device_id = d.id
+        WHERE d.id = $1`,
+      [grant.deviceId],
+    );
+    expect(rows[0]?.status).toBe('revoked');
+    expect(rows[0]?.end_reason).toBe('signed_out');
   });
 
   it("puts lane G5's job and alert routes behind an admin session", async () => {
