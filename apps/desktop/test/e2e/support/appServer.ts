@@ -53,6 +53,31 @@ export interface Call {
   readonly argument: unknown;
 }
 
+/** What `POST /outbound/status` knows about one send, as Diagnostics shows it. */
+export interface DiagnosticsFence {
+  readonly id: string;
+  readonly state: string;
+  readonly recipientAddress: string;
+  readonly dispatchStartedAt: string | null;
+  readonly sentAt: string | null;
+  readonly heldReason: string | null;
+  readonly adminResolution: 'delivered' | 'skipped' | null;
+  readonly reconcileAttempts: number;
+}
+
+/** One row of `GET /admin/jobs/dead`. */
+export interface DiagnosticsDeadJob {
+  readonly id: string;
+  readonly kind: string;
+  readonly idempotencyKey: string;
+  readonly attempts: number;
+  readonly maxAttempts: number;
+  readonly requeuedCount: number;
+  readonly errorCode: string | null;
+  readonly errorDetail: string | null;
+  readonly deadAt: string;
+}
+
 /** A bridge, as a spec sees it: its calls (method names without the bridge's prefix) and its state. */
 export interface BridgeHandle<S> {
   readonly calls: readonly Call[];
@@ -81,6 +106,12 @@ export interface AppServerOptions {
   readonly sequencesScripted?: Readonly<Partial<Record<string, SequenceState>>>;
   /** Install `callieUpdate`, answering this. Absent: the page has no update bridge. */
   readonly update?: UpdateStatus;
+  /**
+   * Settings › Diagnostics. The fence one send is in, and the jobs that gave up: the two
+   * recovery forms are the only thing that asks for either.
+   */
+  readonly sendStatus?: DiagnosticsFence | null;
+  readonly deadJobs?: readonly DiagnosticsDeadJob[];
   /** What `callie.signIn` answers. Absent: signed in. */
   readonly signInAnswer?: DesktopState;
   /** What Update now finds: a version a blocked build installs at once. Absent: nothing. */
@@ -290,6 +321,8 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
   let sequencesServed = 0;
   let sequences = sequenceAnswers[0] ?? EMPTY_SEQUENCE_STATE;
   let update: UpdateStatus = options.update ?? { kind: 'none' };
+  let deadJobs: readonly DiagnosticsDeadJob[] = options.deadJobs ?? [];
+  let fence: DiagnosticsFence | null = options.sendStatus ?? null;
 
   const of = (bridge: string): Call[] =>
     calls
@@ -334,6 +367,22 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     if (bridge === 'replies') {
       replies = replyAnswer(replies, name, argument, mine);
       return replies;
+    }
+    if (bridge === 'diagnostics') {
+      if (name === 'sendStatus') return { fence };
+      if (name === 'resolveSend') {
+        const input = argument as { readonly outboundMessageId: string; readonly resolution: 'delivered' | 'skipped' };
+        fence = fence === null ? null : { ...fence, adminResolution: input.resolution };
+        return { outboundMessageId: input.outboundMessageId, resolution: input.resolution };
+      }
+      if (name === 'deadJobs') return { deadJobs };
+      if (name === 'requeueJob') {
+        const { jobId } = argument as { readonly jobId: string };
+        const job = deadJobs.find(one => one.id === jobId);
+        if (job === undefined) throw new Error('no such job');
+        deadJobs = deadJobs.filter(one => one.id !== jobId);
+        return { requeued: true, jobId, kind: job.kind };
+      }
     }
     if (bridge === 'sequences') {
       if (name === 'state') {

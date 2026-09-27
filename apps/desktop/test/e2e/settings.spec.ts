@@ -212,6 +212,89 @@ test('Diagnostics names the restore mismatch and puts the runbook beside the ale
   await expect(page.getByTestId(`acknowledge-${ALERT_ID}`)).toHaveCount(0);
 });
 
+// ------------------------------------------------- 1.0.12: the two recoveries (12.5, 13.4)
+const SEND_ID = '33333333-3333-4333-8333-333333333333';
+const JOB_ID = '44444444-4444-4444-8444-444444444444';
+
+test('Diagnostics resolves an unknown send only after it has been looked up', async ({ page }) => {
+  app = await startAppServer({
+    admin: adminState(),
+    sendStatus: {
+      id: SEND_ID,
+      state: 'dispatching',
+      recipientAddress: 'ap@northwind.example',
+      dispatchStartedAt: '2026-09-27T13:02:00.000Z',
+      sentAt: null,
+      heldReason: 'dispatch_unresolved',
+      adminResolution: null,
+      reconcileAttempts: 3,
+    },
+  });
+  server = app.admin;
+  await page.goto(app.url('#settings/diagnostics'));
+
+  // Nothing to decide before a look-up: the send's state is what the decision is made on.
+  await expect(page.getByTestId('recovery-send-id')).toBeVisible();
+  await expect(page.getByTestId('recovery-send-confirm')).toHaveCount(0);
+
+  // Enter in the field is the read, and only the read.
+  await page.getByTestId('recovery-send-id').fill(SEND_ID);
+  await page.getByTestId('recovery-send-id').press('Enter');
+  await expect(page.getByTestId('recovery-send-fence')).toContainText('ap@northwind.example');
+  expect(app.called('diagnostics.resolveSend')).toEqual([]);
+
+  // The button names the effect, and the effect follows the choice.
+  await expect(page.getByTestId('recovery-send-confirm')).toHaveText('Record it as delivered');
+  await page.getByTestId('recovery-send-resolution').selectOption('skipped');
+  await expect(page.getByTestId('recovery-send-confirm')).toHaveText('Record it as never sent');
+  await page.getByTestId('recovery-send-confirm').click();
+
+  await expect(page.getByTestId('recovery-send-answer')).toContainText('never sent');
+  expect(app.called('diagnostics.resolveSend')).toEqual([{ outboundMessageId: SEND_ID, resolution: 'skipped' }]);
+});
+
+test('Diagnostics requeues a dead job only with a reason', async ({ page }) => {
+  app = await startAppServer({
+    admin: adminState(),
+    deadJobs: [
+      {
+        id: JOB_ID,
+        kind: 'send_email',
+        idempotencyKey: 'seq:step:7',
+        attempts: 5,
+        maxAttempts: 5,
+        requeuedCount: 0,
+        errorCode: 'gmail_unavailable',
+        errorDetail: null,
+        deadAt: '2026-09-27T11:00:00.000Z',
+      },
+    ],
+  });
+  server = app.admin;
+  await page.goto(app.url('#settings/diagnostics'));
+
+  await page.getByTestId('recovery-jobs-load').click();
+  await expect(page.getByTestId('recovery-jobs-list')).toContainText('send_email');
+
+  // A reason is required here, not only in the audit record, and nothing is sent without one.
+  await page.getByTestId('recovery-job-confirm').click();
+  await expect(page.getByTestId('recovery-job-invalid')).toContainText('Say why');
+  expect(app.called('diagnostics.requeueJob')).toEqual([]);
+
+  // Enter in the reason is a newline, not a requeue.
+  await page.getByTestId('recovery-job-reason').fill('Gmail was down; the mailbox is reconnected.');
+  await page.getByTestId('recovery-job-reason').press('Enter');
+  expect(app.called('diagnostics.requeueJob')).toEqual([]);
+
+  await page.getByTestId('recovery-job-confirm').click();
+  // The plain body this route answers, read through its own parser.
+  await expect(page.getByTestId('recovery-job-answer')).toContainText('send_email');
+  expect(app.called('diagnostics.requeueJob')).toEqual([
+    { jobId: JOB_ID, reason: 'Gmail was down; the mailbox is reconnected.' },
+  ]);
+  await expect(page.getByTestId(`recovery-job-${JOB_ID}`)).toHaveCount(0);
+});
+
 test('a refused save is shown as its code and the page is not edited optimistically', async ({ page }) => {
   await openAdmin(page, adminState({ role: 'salesperson' }));
 
