@@ -20,6 +20,7 @@ import { Textarea } from '../ui/textarea.tsx';
 export function PosturesSection({
   section,
   adding,
+  revoking,
   onAllow,
   onRevoke,
   onRetry,
@@ -27,6 +28,8 @@ export function PosturesSection({
   readonly section: PosturesSectionView;
   /** This section's own Add is on the wire. Nothing else on the page waits for it. */
   readonly adding: boolean;
+  /** Whether this row's own Take off the list is on the wire (P1-4). */
+  revoking(postureId: string): boolean;
   onAllow(input: AllowStatesInput): void;
   onRevoke(postureId: string): void;
   onRetry(): void;
@@ -81,6 +84,8 @@ export function PosturesSection({
                     size="sm"
                     variant="outline"
                     data-testid={`posture-revoke-${row.id}`}
+                    disabled={revoking(row.id)}
+                    {...(revoking(row.id) ? { 'aria-busy': true } : {})}
                     onClick={() => {
                       onRevoke(row.id);
                     }}

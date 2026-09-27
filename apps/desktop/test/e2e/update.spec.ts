@@ -1,7 +1,7 @@
 import { expect, test, type Locator, type Page } from 'playwright/test';
 import { startAppServer, type AppServer } from './support/appServer.ts';
-import { desktopState } from './support/homeFixtures.ts';
-import { notConnectedMailbox } from './support/sessionFixtures.ts';
+import { desktopState, todayState } from './support/homeFixtures.ts';
+import { notConnectedMailbox, signedInState } from './support/sessionFixtures.ts';
 
 /**
  * Lane g83: the update line in Home's sidebar, as a person sees and presses it.
@@ -196,4 +196,38 @@ test('Update now that finds the update leaves the upgrade screen read-only while
   await page.getByTestId('update-now').click();
   await expect(page.getByTestId('update-notice')).toHaveText('Updating Callie to 1.0.6…');
   expect(await appInert(page)).toBe(true);
+});
+
+test('a refusal by version during a background read puts the upgrade screen up by itself', async ({ page }) => {
+  /*
+   * P1-2. The API can raise its minimum while the app is open: the next renewal —
+   * nobody pressed anything — is refused with `client_upgrade_required`, and the main
+   * process closes mutations and names the upgrade screen. Until the review it set that
+   * flag without telling the window, so the window stayed on Today, with controls that
+   * could be pressed and every press refused.
+   */
+  server = await startAppServer({ desktop: signedInState(), today: todayState() });
+  await page.goto(server.url());
+  await expect(page.getByTestId('heading')).toHaveText('Monday, 21 September');
+
+  // What the main process does when the refusal lands: the state it would now answer
+  // with, and the announcement it makes because `refusedForVersion` changed.
+  server.desktop.setState(
+    desktopState({
+      screen: 'upgrade_required',
+      mayMutate: false,
+      notice: 'client_upgrade_required',
+      supportedClientVersions: { minimum: '1.5.0', maximum: '1.6.0' },
+    }),
+  );
+  await page.evaluate(() => {
+    const listeners = (globalThis as { __sessionListeners?: ((change: unknown) => void)[] }).__sessionListeners ?? [];
+    for (const listener of listeners) listener({ generation: 1, identity: null, reason: 'client_upgrade_required' });
+  });
+
+  await expect(page.getByTestId('heading')).toHaveText('Update Callie');
+  await expect(page.getByTestId('upgrade-only')).toBeVisible();
+  // Nothing of the page that was up is left to press.
+  await expect(page.getByTestId('card-expand')).toHaveCount(0);
+  await expect(page.getByTestId('refresh')).toHaveCount(0);
 });

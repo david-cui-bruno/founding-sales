@@ -283,9 +283,25 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
     }
   };
 
+  /**
+   * Whether this build is refused by the API, and the window told when that changes
+   * (1.0.13, P1-2).
+   *
+   * The screen the state names depends on this flag, and a refusal can arrive from a
+   * background renewal that nobody pressed. Setting the flag without announcing left
+   * the window on Today until something else happened to make it read the state again.
+   */
+  const setRefusedForVersion = (value: boolean): void => {
+    if (refusedForVersion === value) return;
+    refusedForVersion = value;
+    // Forced: the identity has not changed — the same person on the same Mac — so only
+    // a forced announcement reaches the window.
+    announce(value ? 'client_upgrade_required' : 'client_version_supported', true);
+  };
+
   const noteRefusal = async (reason: string): Promise<void> => {
     notice = reason;
-    if (reason === 'client_upgrade_required') refusedForVersion = true;
+    if (reason === 'client_upgrade_required') setRefusedForVersion(true);
     if (REVOCATIONS.has(reason)) await forget(reason);
   };
 
@@ -322,7 +338,7 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
    */
   let signingOut: Promise<boolean> | null = null;
 
-  const finishSignOut = async (): Promise<boolean> => {
+  const finishSignOut = async (withToken?: string): Promise<boolean> => {
     if (signingOut !== null) return await signingOut;
     if (device === null || device.signOutPending !== true) return true;
     const owner = device.deviceId;
@@ -332,6 +348,24 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
       generation === mine && device !== null && device.deviceId === owner && device.signOutPending === true;
 
     signingOut = (async (): Promise<boolean> => {
+      /*
+       * The token already in hand, when there is one (P0-C). It comes through the lock
+       * like every other attempt: the call can be on the wire for as long as the server
+       * takes, and in that time somebody may sign in — so the ownership guard has to
+       * hold for this path too, and `signIn` has to be able to wait for it.
+       */
+      if (withToken !== undefined) {
+        const told = await options.api.signOut(withToken);
+        if (!stillMine()) return true;
+        if (told.ok || (!told.offline && ENDS_THE_REGISTRATION.has(told.reason))) {
+          await forget('signed_out');
+          return true;
+        }
+        online = !told.offline;
+        notice = 'sign_out_pending';
+        return false;
+      }
+
       const secret = await readDeviceSecret();
       if (secret.kind === 'unreadable') {
         notice = 'keychain_unreadable';
@@ -375,6 +409,21 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
   };
 
   /**
+   * One attempt, and the clock left in the right state (P0-B).
+   *
+   * Every caller of `finishSignOut` wants the same thing afterwards: stop the clock if
+   * the server has been told, and make sure it is running if it has not. Doing that at
+   * each call site is how `signIn` came to stop the retries and never start them again
+   * when its own attempt failed.
+   */
+  const attemptSignOut = async (withToken?: string): Promise<boolean> => {
+    const done = await finishSignOut(withToken);
+    if (done) stopSignOutRetries();
+    else startSignOutRetries();
+    return done;
+  };
+
+  /**
    * Try again, on a clock, while a sign-out is owed to the server (P1-1).
    *
    * `noteConnection` was the whole of the reconnect trigger until the review, and its
@@ -391,9 +440,7 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
         stopSignOutRetries();
         return;
       }
-      void finishSignOut().then(done => {
-        if (done) stopSignOutRetries();
-      });
+      void attemptSignOut();
     }, signOutRetryMs);
   };
 
@@ -451,9 +498,21 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
       } else if (secret.kind === 'unreadable') {
         notice = 'keychain_unreadable';
       } else {
-        // P2-2: 1.0.12's rotating credential has no caller and no reason to sit in the
-        // Keychain until the next sign-out. It goes at the first startup that finds it.
-        await options.store.forgetRefreshCredential();
+        /*
+         * P2-2: 1.0.12's rotating credential has no caller and no reason to sit in the
+         * Keychain until the next sign-out. It goes at the first startup that finds it.
+         *
+         * Best effort, always (P1). This runs inside the one `ensureLoaded`, after
+         * `loaded` is already true, so a rejection here would reject the first `state()`
+         * the window ever asks for and no later call would retry it: the Mac would sit
+         * on a blank window because a *dead* item could not be deleted. A Keychain that
+         * refuses the delete is told about, and the next launch tries again.
+         */
+        const removed = await options.store
+          .forgetRefreshCredential()
+          .then(() => true)
+          .catch(() => false);
+        if (!removed) notice = 'keychain_unreadable';
       }
     }
     // Records who this Mac is without announcing it: starting up is not a transition.
@@ -462,9 +521,7 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
     // the caller: the window is already the sign-in form, and this only decides whether
     // the line under it goes away.
     if (device !== null && device.signOutPending === true) {
-      void finishSignOut().then(done => {
-        if (!done) startSignOutRetries();
-      });
+      void attemptSignOut();
     }
   };
 
@@ -503,7 +560,7 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
         return outcome;
       }
       online = true;
-      refusedForVersion = false;
+      setRefusedForVersion(false);
       supported = outcome.value.supportedClientVersions;
       const opened: StoredSession = {
         accessToken: outcome.value.accessToken,
@@ -600,9 +657,7 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
        * fastest path when something *does* reach the server.
        */
       if (returned && device !== null && device.signOutPending === true) {
-        void finishSignOut().then(done => {
-          if (done) stopSignOutRetries();
-        });
+        void attemptSignOut();
       }
     },
 
@@ -667,15 +722,32 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
     async signIn(input) {
       await ensureLoaded();
       /*
-       * A sign-out still on the wire finishes before a sign-in starts (P0-B).
+       * The sign-out this Mac owes the server finishes before a sign-in starts (P0-B).
        *
-       * Without this the two interleave: the sign-in writes the new registration and
-       * the new Keychain secret, and the retry — which began on the old one — reaches
-       * its `forget()` afterwards and deletes them. `finishSignOut` also refuses to
-       * forget a registration that is no longer the one it started on, so this is the
-       * second of two locks rather than the only one; a person pressing Sign in should
-       * not have to race anything.
+       * Two things went wrong without it. The smaller one is a race: the sign-in writes
+       * the new registration and the new Keychain secret, and a retry that began on the
+       * old one reaches its `forget()` afterwards and deletes them. `finishSignOut`
+       * refuses that now, so that is closed twice.
+       *
+       * The larger one is quieter and permanent. There is one `device-secret` item on
+       * this Mac, and a sign-in overwrites it. The old device is still active at the
+       * server; the only credential that could have revoked it has just been replaced;
+       * nothing on this Mac can end that device again, and nobody looking at the
+       * workspace can tell it is not in use. So the sign-out has to land first — and
+       * a sign-in needs the network in any case, which is exactly when the retry works.
+       *
+       * If it cannot land, the sign-in does not start and the line says why.
        */
+      if (device !== null && device.signOutPending === true) {
+        const done = await attemptSignOut();
+        if (!done) {
+          // `keychain_unreadable` is the one `finishSignOut` sets itself: it is a
+          // different sentence and a different remedy from "the server has not been
+          // told yet", so it is left where it is.
+          if (notice !== 'keychain_unreadable') notice = 'sign_out_pending';
+          return snapshot();
+        }
+      }
       if (signingOut !== null) await signingOut.catch(() => false);
       stopSignOutRetries();
       notice = null;
@@ -732,7 +804,7 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
             reauthenticateAfter: grant.reauthenticateAfter,
           };
           supported = grant.supportedClientVersions;
-          refusedForVersion = false;
+          setRefusedForVersion(false);
           notice = null;
           await remember({ workspaceId: grant.workspaceId, deviceLabel });
           // Somebody else may have been here a moment ago; the window empties what it
@@ -771,16 +843,19 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
       await ensureLoaded();
       if (device === null) return snapshot();
       if (device.signOutPending === true) {
-        await finishSignOut();
-        startSignOutRetries();
+        await attemptSignOut();
         return snapshot();
       }
 
       // The token in hand is the one the sign-out needs (P0-C). Opening a second
       // session to end the first is a round trip for nothing, and a round trip that
-      // can fail; only the retry path, which holds no token, has to open first.
+      // can fail; only the retry path, which holds no token, has to open first. It is
+      // handed to `finishSignOut` rather than used here, so that it takes the same lock
+      // and the same ownership guard as every other attempt (P0).
       const held =
-        session !== null && Date.parse(session.accessTokenExpiresAt) > options.now().getTime() ? session : null;
+        session !== null && Date.parse(session.accessTokenExpiresAt) > options.now().getTime()
+          ? session.accessToken
+          : undefined;
 
       const pending: StoredDevice = { ...device, signOutPending: true };
       device = pending;
@@ -792,20 +867,7 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
       notice = 'signed_out';
       announce('signed_out');
 
-      if (held !== null) {
-        const told = await options.api.signOut(held.accessToken);
-        if (told.ok || (!told.offline && ENDS_THE_REGISTRATION.has(told.reason))) {
-          await forget('signed_out');
-          return snapshot();
-        }
-        online = !told.offline;
-        notice = 'sign_out_pending';
-        startSignOutRetries();
-        return snapshot();
-      }
-
-      const done = await finishSignOut();
-      if (!done) startSignOutRetries();
+      await attemptSignOut(held);
       return snapshot();
     },
 
@@ -849,10 +911,20 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
     },
 
     async refreshToday() {
+      /*
+       * The session this read belongs to (P0-A).
+       *
+       * `/today` can be on the wire when somebody signs out. The wipe empties the cache
+       * and the list in memory; this answer, landing afterwards, would put the last
+       * person's firms straight back on to the disk under the next person's session.
+       * The number is taken before anything is asked and checked before anything is
+       * kept: an answer from a session that has ended is dropped, not stored.
+       */
+      const mine = generation;
       // Show the unexpired cache, marked stale. An expired one shows nothing: an old
       // list presented as current is worse than no list (specification 5.3, 4.2).
       const fallBackToCache = async (): Promise<DesktopState> => {
-        if (device === null) return snapshot();
+        if (device === null || generation !== mine) return snapshot();
         const cached = await options.cache.read();
         if (cached.state === 'fresh') {
           today = cached.today;
@@ -878,10 +950,14 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
         return await fallBackToCache();
       }
       online = true;
+      if (generation !== mine) return snapshot();
       today = outcome.value;
       asOf = options.now().toISOString();
       stale = false;
       await options.cache.write(outcome.value);
+      // The wipe can also land while the write is in flight. One more look, and what it
+      // wrote goes the way the wipe would have taken it.
+      if (generation !== mine) await dropHeldData();
       return snapshot();
     },
 

@@ -138,6 +138,61 @@ test('two rows can be saving at once, and each waits only for its own Save', asy
   ]);
 });
 
+test('a command outside the setting rows holds its own button too: the holiday calendar', async ({ page }) => {
+  /*
+   * The setting rows were the two controls the first fix reached. Every other command
+   * on Administration took a form key that no control read, so its button stayed
+   * pressable while its own command was on the wire — "Replace calendar" among them,
+   * and pressing it twice would have sent the calendar twice.
+   */
+  server = await startAppServer({ admin: adminState() });
+  await page.goto(server.url('#admin'));
+
+  const save = page.getByTestId('holidays-save');
+  await page.getByTestId('holiday-version').fill('2027-federal');
+  const release = server.hold('settings.recordHolidayCalendar');
+  await save.click();
+  await expect.poll(() => called('settings.recordHolidayCalendar').length).toBe(1);
+
+  await expect(save).toHaveAttribute('aria-busy', 'true');
+  await expect(save).toBeDisabled();
+  await expect(page.getByTestId('holiday-version')).toBeDisabled();
+  // Its own form only: a setting row on the same page is still there to be used.
+  await expect(page.getByTestId('save-business_time_zone')).toBeEnabled();
+  await pressAgain(page, save);
+
+  release();
+  await expect(save).not.toHaveAttribute('aria-busy', 'true');
+  expect(called('settings.recordHolidayCalendar')).toHaveLength(1);
+});
+
+test('an answer that lands late does not put an older view back on the screen', async ({ page }) => {
+  /*
+   * P2. Every one of these bridges answers with the whole view, so the last answer
+   * written *is* the view. Now that two commands may be in flight at once (P1-4), a
+   * slow one can land after a quick one and put the older state back — here, a Save
+   * held on the wire landing after the history was opened would take the history off
+   * the screen again, a moment after the person asked for it.
+   */
+  server = await startAppServer({ admin: adminState() });
+  await page.goto(server.url('#admin'));
+
+  const release = server.hold('settings.saveSetting');
+  await page.getByTestId('field-business_time_zone-timeZone').selectOption('America/Denver');
+  await page.getByTestId('save-business_time_zone').click();
+  await expect.poll(() => called('settings.saveSetting').length).toBe(1);
+
+  // Asked for after the Save, answered before it: this is the newer view.
+  await page.getByTestId('history-business_time_zone').click();
+  const history = page.getByTestId('setting-business_time_zone').getByTestId('setting-history');
+  await expect(history).toBeVisible();
+
+  release();
+  await expect(page.getByTestId('save-business_time_zone')).not.toHaveAttribute('aria-busy', 'true');
+  // Still there: the older answer was dropped rather than drawn.
+  await expect(history).toBeVisible();
+});
+
 test('a Mac that has signed in before is one button: no workspace, no name', async ({ page }) => {
   server = await startAppServer({
     desktop: signedOutState({ rememberedWorkspace: { workspaceId: EXAMPLE_WORKSPACE, deviceLabel: "David's MacBook" } }),

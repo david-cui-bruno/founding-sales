@@ -174,6 +174,7 @@ export function FirmsRoute({
           <PipelineBoard
             pipeline={state.pipeline}
             actionsEnabled={view.actionsEnabled}
+            changing={opportunityId => crm.busy(`stage:${opportunityId}`)}
             onChangeStage={crm.actions.changeStage}
             onOpenFirm={crm.actions.openFirm}
           />

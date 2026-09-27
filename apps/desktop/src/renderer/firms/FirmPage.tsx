@@ -98,10 +98,13 @@ function PhoneRoutes({ routes }: { readonly routes: readonly RouteDto[] }): JSX.
 function EmailRoutes({
   routes,
   actionsEnabled,
+  busy,
   onCheckRoute,
 }: {
   readonly routes: readonly RouteDto[];
   readonly actionsEnabled: boolean;
+  /** Whether this route's own Check again is on the wire (P1-4). */
+  busy(form: string): boolean;
   onCheckRoute(request: CheckRouteRequest): void;
 }): JSX.Element {
   return (
@@ -128,7 +131,8 @@ function EmailRoutes({
                       size="sm"
                       variant="outline"
                       data-testid="route-check"
-                      disabled={!actionsEnabled}
+                      disabled={!actionsEnabled || busy(`route:${route.id}`)}
+                      {...(busy(`route:${route.id}`) ? { 'aria-busy': true } : {})}
                       onClick={() => {
                         onCheckRoute({ routeId: route.id, routeVersion: route.version });
                       }}
@@ -250,6 +254,7 @@ const ENROLLMENT_STATE_LABELS: Readonly<Record<string, string>> = Object.freeze(
 });
 
 function Sequences({
+  busy,
   page,
   contacts,
   view,
@@ -261,6 +266,8 @@ function Sequences({
   readonly contacts: readonly ContactDto[];
   readonly view: FirmSequencesView;
   readonly actionsEnabled: boolean;
+  /** Whether this form's own command is on the wire (P1-4). */
+  busy(form: string): boolean;
   onOpenOpportunity(): void;
   onEnroll(request: EnrollRequest): void;
 }): JSX.Element {
@@ -284,7 +291,13 @@ function Sequences({
           <p data-testid="enroll-needs-pipeline" className="text-sm text-muted-foreground">
             Put the firm in the pipeline before enrolling anybody here.
           </p>
-          <Button size="sm" data-testid="open-opportunity" disabled={!actionsEnabled} onClick={onOpenOpportunity}>
+          <Button
+            size="sm"
+            data-testid="open-opportunity"
+            disabled={!actionsEnabled || busy('opportunity')}
+            {...(busy('opportunity') ? { 'aria-busy': true } : {})}
+            onClick={onOpenOpportunity}
+          >
             Add to pipeline
           </Button>
         </div>
@@ -343,7 +356,8 @@ function Sequences({
         <Button
           size="sm"
           data-testid="enroll-submit"
-          disabled={!actionsEnabled}
+          disabled={!actionsEnabled || busy('enroll')}
+          {...(busy('enroll') ? { 'aria-busy': true } : {})}
           onClick={() => {
             onEnroll({ sequenceVersionId, contactId });
           }}
@@ -486,7 +500,7 @@ export function FirmPage({
       ) : (
         <>
           <PhoneRoutes routes={detail.phoneRoutes} />
-          <EmailRoutes routes={detail.emailRoutes} actionsEnabled={actionsEnabled} onCheckRoute={onCheckRoute} />
+          <EmailRoutes routes={detail.emailRoutes} actionsEnabled={actionsEnabled} busy={busy} onCheckRoute={onCheckRoute} />
           <Section data-testid="contacts-panel" title="Contacts" count={detail.contacts.length}>
             {detail.contacts.length === 0 ? (
               <p data-testid="contacts-empty" className="py-2 text-sm text-muted-foreground">
@@ -512,6 +526,7 @@ export function FirmPage({
               contacts={detail.contacts}
               view={sequences}
               actionsEnabled={actionsEnabled}
+              busy={busy}
               onOpenOpportunity={onOpenOpportunity}
               onEnroll={onEnroll}
             />

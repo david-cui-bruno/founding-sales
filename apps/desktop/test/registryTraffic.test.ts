@@ -8,6 +8,7 @@ import { createAdminBridge } from '../src/main/settingsBridge.ts';
 import { createTodayBridge } from '../src/main/todayBridge.ts';
 import { createDialHandoff } from '../src/main/dialHandoff.ts';
 import { OPERATIONS, OPERATION_NAMES, type OperationName } from '../src/shared/operations.ts';
+import { BRIDGE_ANSWERS } from './support/bridgeAnswers.ts';
 
 /**
  * Every request a bridge makes is declared in the registry (1.0.13, P1-5).
@@ -44,9 +45,21 @@ function requestsOf(): { readonly seen: string[]; readonly api: ReturnType<typeo
     send: async (url, init) => {
       const at = new URL(url);
       seen.push(`${init.method} ${at.pathname}${at.search}`);
-      // Accepted, and empty: every bridge's parse refuses it, which is what keeps this
-      // a record of requests rather than a second copy of each bridge's own suite.
-      return await Promise.resolve({ status: 200, body: { status: 'accepted', replayed: false, result: {} } });
+      /*
+       * A body the bridge accepts wherever `support/bridgeAnswers.ts` has one, and an
+       * empty accepted envelope otherwise.
+       *
+       * The answers matter (P1-5). A bridge that only makes its *second* call on a
+       * well-shaped first answer would otherwise never make it here, and the registry
+       * would be compared with the traffic of a refused app rather than a working one:
+       * that is how `today.expand`'s `/dial/check` and `replies.refresh`'s
+       * `/replies/settings` stayed undeclared through the first review.
+       */
+      const body = BRIDGE_ANSWERS[at.pathname];
+      return await Promise.resolve({
+        status: 200,
+        body: body ?? { status: 'accepted', replayed: false, result: {} },
+      });
     },
   });
   return { seen, api };
@@ -180,6 +193,31 @@ describe('the registry records the traffic the bridges actually make', () => {
       for (const request of new Set(seen)) if (!declared.has(request)) undeclared.push(`${name}: ${request}`);
     }
     expect(undeclared).toEqual([]);
+  });
+
+  it('really drives the conditional second calls, so the check above is not vacuous', async () => {
+    /*
+     * Each of these is a call a bridge makes only when the first answer was good. They
+     * are the ones the first review's version of this file could not see, and a fixture
+     * that stopped being accepted would make it blind to them again — silently, because
+     * "every request was declared" is trivially true of an app that made one request and
+     * gave up. So the branches are named, and the traffic has to contain them.
+     */
+    const branches: readonly [OperationName, string][] = [
+      ['today.expand', 'POST /dial/check'],
+      ['replies.refresh', 'POST /replies/settings'],
+      ['crm.openFirm', 'GET /sequences'],
+      ['settings.show', 'GET /postures'],
+    ];
+    for (const [name, request] of branches) {
+      const [family = '', method = ''] = name.split('.');
+      const { seen, api } = requestsOf();
+      const host = hostsFor(api)[family];
+      const call = host?.[method];
+      if (call === undefined) throw new Error(`no host method for ${name}`);
+      await call(INPUTS[name] ?? {});
+      expect(seen, `${name} never reached ${request}`).toContain(request);
+    }
   });
 
   it('names the settings read with the query it actually sends', () => {

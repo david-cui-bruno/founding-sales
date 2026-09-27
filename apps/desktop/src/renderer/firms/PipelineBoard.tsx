@@ -37,11 +37,13 @@ function StageChangeControl({
   firmId,
   pipeline,
   actionsEnabled,
+  changing,
   onChangeStage,
 }: {
   readonly firmId: string;
   readonly pipeline: PipelineView;
   readonly actionsEnabled: boolean;
+  changing(opportunityId: string): boolean;
   onChangeStage(change: StageChange): void;
 }): JSX.Element {
   const [toStageKey, setToStageKey] = useState('');
@@ -62,6 +64,8 @@ function StageChangeControl({
     pipeline.columns.find(column => column.stage.key === stageKey)?.stage.terminalKind ?? null;
   const losing = terminalKindOf(toStageKey) === 'lost';
   const submittable = stageChangeSubmittable({ toStageKey, terminalKindOf, reason, actionsEnabled });
+  // This column's own change, not any change on the board (P1-4).
+  const busy = changing(opportunityId);
 
   return (
     <span data-testid="stage-change" className="flex items-center gap-1">
@@ -70,7 +74,7 @@ function StageChangeControl({
           data-testid="stage-reason"
           placeholder="Why was it lost?"
           autoComplete="off"
-          disabled={!actionsEnabled}
+          disabled={!actionsEnabled || busy}
           value={reason}
           onChange={event => {
             setReason(event.target.value);
@@ -103,7 +107,8 @@ function StageChangeControl({
         size="sm"
         variant="outline"
         data-testid="stage-submit"
-        disabled={!submittable}
+        disabled={!submittable || busy}
+        {...(busy ? { 'aria-busy': true } : {})}
         onClick={() => {
           onChangeStage({ opportunityId, toStageKey, reason: reason.trim() === '' ? null : reason.trim() });
         }}
@@ -117,11 +122,14 @@ function StageChangeControl({
 export function PipelineBoard({
   pipeline,
   actionsEnabled,
+  changing,
   onChangeStage,
   onOpenFirm,
 }: {
   readonly pipeline: PipelineView;
   readonly actionsEnabled: boolean;
+  /** Whether this opportunity's own stage change is on the wire (P1-4). */
+  changing(opportunityId: string): boolean;
   onChangeStage(change: StageChange): void;
   onOpenFirm(firmId: string): void;
 }): JSX.Element {
@@ -178,6 +186,7 @@ export function PipelineBoard({
                         firmId={firm.id}
                         pipeline={pipeline}
                         actionsEnabled={actionsEnabled}
+                        changing={changing}
                         onChangeStage={onChangeStage}
                       />
                     </RowActions>

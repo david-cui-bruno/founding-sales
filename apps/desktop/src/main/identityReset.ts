@@ -49,9 +49,25 @@ export function guardIdentity<H extends Forgettable>(host: H, generation: () => 
             const mine = generation();
             const answer = await method.apply(host, args);
             if (mine === generation()) return answer;
-            // Somebody else is signed in now, or nobody is. Whatever this stored goes
-            // with the rest of the last person's state, and the caller gets nothing.
-            return await host.forget();
+            /*
+             * Somebody else is signed in now, or nobody is. Whatever this stored goes
+             * with the rest of the last person's state, and the caller gets nothing.
+             *
+             * **Why it clears rather than stepping aside.** By the time this line runs
+             * the host has *already* stored the late answer: the write is inside
+             * `method`, which has returned. Leaving it because a newer session has since
+             * filled the bridge would leave the last person's firm page sitting beside
+             * the new person's — a bridge holds a snapshot per view, and a newer read
+             * only replaces the views it touches. Clearing costs the new session one
+             * re-read; not clearing is the leak this file exists to stop.
+             *
+             * `forget()` is itself asynchronous, so the generation is taken again before
+             * it and checked after (P2): another transition during the clear means
+             * something may have landed behind it, and it is cleared once more.
+             */
+            const at = generation();
+            const empty = await host.forget();
+            return at === generation() ? empty : await host.forget();
           };
   }
   return wrapped as H;

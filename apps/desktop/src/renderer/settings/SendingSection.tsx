@@ -24,11 +24,17 @@ const CHECKS = ['spfPass', 'dkimPass', 'dmarcPass', 'postmasterReviewed', 'autom
 
 export function SendingSection({
   view,
+  recording,
+  capping,
   onRecord,
   onCap,
   onRetry,
 }: {
   readonly view: AdminView;
+  /** Whether this section's own checklist save is on the wire (P1-4). */
+  readonly recording: boolean;
+  /** Whether a cap of this section's is on the wire. */
+  readonly capping: boolean;
   onRecord(input: RecordSendingAuthenticationInput): void;
   onCap(input: SetSendingCapInput): void;
   onRetry(): void;
@@ -75,7 +81,8 @@ export function SendingSection({
             <Button
               size="sm"
               data-testid="sending-record"
-              disabled={!section.editable}
+              disabled={!section.editable || recording}
+              {...(recording ? { 'aria-busy': true } : {})}
               onClick={() => {
                 onRecord({
                   domain,
@@ -121,7 +128,8 @@ export function SendingSection({
                     size="sm"
                     variant="outline"
                     data-testid={`${key}-${ramp.mailboxId}`}
-                    disabled={!ramp.editable}
+                    disabled={!ramp.editable || capping}
+                    {...(capping ? { 'aria-busy': true } : {})}
                     onClick={() => {
                       const amount = Number.parseInt(caps[ramp.mailboxId] ?? '', 10);
                       if (!Number.isInteger(amount)) return;

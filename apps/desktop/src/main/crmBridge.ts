@@ -394,6 +394,11 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
       importCsv = null;
       importCommandIds = new Map();
       sequences = null;
+      // The firms the last person opened, and the opportunity each one carried. It is
+      // merged into the next board read (`opportunityIdByFirmId` above), so leaving it
+      // here would offer the next person a stage change on a firm from a workspace they
+      // may not be in — with an opportunity id that is not theirs to name.
+      for (const firmId of Object.keys(opportunityIdByFirmId)) delete opportunityIdByFirmId[firmId];
       return await snapshot();
     },
 

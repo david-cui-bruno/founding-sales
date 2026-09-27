@@ -110,7 +110,11 @@ export function SettingsView({
             <Panels view={view} />
           ) : (
             <>
-              <Panels view={view} onAcknowledge={admin.actions.acknowledgeAlert} />
+              <Panels
+                view={view}
+                onAcknowledge={admin.actions.acknowledgeAlert}
+                acknowledging={alertId => admin.busy(`alert:${alertId}`)}
+              />
               <RecoveryControls />
             </>
           )}

@@ -106,7 +106,9 @@ export function useCrm(
         command(`contact:${edit.contactId}`, api => api.command('crm.saveContact', edit));
       },
       changeStage: change => {
-        command('stage', api => api.command('crm.changeStage', change));
+        // Per opportunity, not per board: changing one firm's stage must not disable
+        // the control on every other column (P1-4).
+        command(`stage:${change.opportunityId}`, api => api.command('crm.changeStage', change));
       },
       resolveMerge: resolution => {
         command('merge', api => api.command('crm.resolveMerge', resolution));

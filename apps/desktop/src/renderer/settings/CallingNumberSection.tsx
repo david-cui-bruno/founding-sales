@@ -18,12 +18,15 @@ import { Field, Row, RowActions, RowMain, Rows, Section } from '../ui/layout.tsx
 export function CallingNumberSection({
   section,
   adding,
+  retiring,
   onAdd,
   onRetire,
 }: {
   readonly section: CallingNumberSectionView;
   /** This section's own Add is on the wire. Nothing else on the page waits for it. */
   readonly adding: boolean;
+  /** Whether this row's own Stop using this number is on the wire (P1-4). */
+  retiring(identityId: string): boolean;
   onAdd(input: { readonly e164: string; readonly label: string }): void;
   onRetire(identityId: string): void;
 }): JSX.Element {
@@ -47,6 +50,8 @@ export function CallingNumberSection({
                     size="sm"
                     variant="outline"
                     data-testid={`calling-number-retire-${number.id}`}
+                    disabled={retiring(number.id)}
+                    {...(retiring(number.id) ? { 'aria-busy': true } : {})}
                     onClick={() => {
                       onRetire(number.id);
                     }}

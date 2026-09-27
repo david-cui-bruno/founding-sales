@@ -8,6 +8,7 @@ import { createAdminBridge } from '../src/main/settingsBridge.ts';
 import { createTodayBridge } from '../src/main/todayBridge.ts';
 import { createDialHandoff } from '../src/main/dialHandoff.ts';
 import { guardIdentity, resetBridges, type Forgettable } from '../src/main/identityReset.ts';
+import { BRIDGE_ANSWERS, FIXTURE_IDS } from './support/bridgeAnswers.ts';
 
 /**
  * Nothing one person put on this Mac is answered to the next one (1.0.13, P0-A).
@@ -22,7 +23,11 @@ import { guardIdentity, resetBridges, type Forgettable } from '../src/main/ident
  * when the announcement came. This drives both against all six real bridges.
  */
 
-const UUID = '11111111-1111-4111-8111-111111111111';
+const UUID = FIXTURE_IDS.firm;
+const OPPORTUNITY_ID = FIXTURE_IDS.opportunity;
+const SEQUENCE_ID = FIXTURE_IDS.sequence;
+
+
 
 const session = {
   state: async () =>
@@ -54,15 +59,28 @@ const session = {
 function bridgesUnder(generation: { value: number }): {
   readonly named: ReadonlyMap<string, Forgettable & Record<string, unknown>>;
   readonly answered: string[];
+  /**
+   * Stop answering. Some bridges read on demand — `settings.state()` asks again when it
+   * is holding nothing — so "empty after the reset" is only a real claim when the
+   * server can give them nothing: what is left is what was kept in this process.
+   */
+  serveNothing(): void;
 } {
   const answered: string[] = [];
+  let serving = true;
   const api = createAuthedClient({
     baseUrl: 'https://api.example.test/',
     clientVersion: '1.0.13',
     accessToken: async () => await Promise.resolve({ token: 'token-value', generation: 0 }),
     send: async url => {
-      answered.push(new URL(url).pathname);
-      return await Promise.resolve({ status: 200, body: { status: 'accepted', replayed: false, result: {} } });
+      const path = new URL(url).pathname;
+      answered.push(path);
+      const body = serving ? BRIDGE_ANSWERS[path] : undefined;
+      // Anything this file has not written an answer for is a refusal, so a bridge that
+      // needed it fails its own "before" assertion rather than looking empty by accident.
+      return await Promise.resolve(
+        body === undefined ? { status: 404, body: { error: 'not_found' } } : { status: 200, body },
+      );
     },
   });
   const guard = <H extends Forgettable>(host: H): H => guardIdentity(host, () => generation.value);
@@ -97,18 +115,54 @@ function bridgesUnder(generation: { value: number }): {
       ) as unknown as Forgettable & Record<string, unknown>,
     ],
   ]);
-  return { named, answered };
+  return { named, answered, serveNothing: () => { serving = false; } };
 }
 
-/** One read per bridge, the one a view makes when it opens. */
-const FIRST_READ: Readonly<Record<string, readonly [string, unknown]>> = Object.freeze({
-  today: ['expand', { firmId: UUID }],
-  replies: ['open', { messageId: UUID }],
-  crm: ['openFirm', { firmId: UUID }],
-  sequences: ['openSequence', { sequenceId: UUID }],
-  settings: ['show', { screen: 'settings' }],
-  mailbox: ['state', undefined],
+/**
+ * One read per bridge, the one a view makes when it opens, and the field of the state
+ * it must fill. The field is what makes this check a check: a bridge that answered its
+ * read with nothing would be "empty" after the reset without the reset doing anything.
+ */
+const FIRST_READ: Readonly<
+  Record<string, { readonly method: string; readonly input: unknown; readonly holds: (state: unknown) => boolean }>
+> = Object.freeze({
+  today: { method: 'expand', input: { firmId: UUID }, holds: field('expanded') },
+  replies: { method: 'refresh', input: {}, holds: field('cards') },
+  crm: { method: 'openFirm', input: { firmId: UUID }, holds: field('firm') },
+  /*
+   * The list of sequences is read fresh on every `state()`, and a state with no choice
+   * on it falls back to the first of the list. So what this bridge *holds* is which
+   * sequence the last person had open — the fixture offers two and the test opens the
+   * second, which is why the fallback is visible as "not holding".
+   */
+  sequences: {
+    method: 'openSequence',
+    input: { sequenceId: SEQUENCE_ID },
+    holds: state => (state as { selectedSequenceId?: unknown } | null)?.selectedSequenceId === SEQUENCE_ID,
+  },
+  settings: { method: 'show', input: { screen: 'settings' }, holds: field('settings') },
+  mailbox: { method: 'state', input: undefined, holds: field('status') },
 });
+
+/** Whether a state's named field is holding something. */
+function field(name: string): (state: unknown) => boolean {
+  return state => {
+    const value = (state as Record<string, unknown> | null)?.[name];
+    if (value === null || value === undefined) return false;
+    return Array.isArray(value) ? value.length > 0 : true;
+  };
+}
+
+/** Read every bridge until it is holding a snapshot of this person's work. */
+async function populated(named: ReadonlyMap<string, Forgettable & Record<string, unknown>>): Promise<void> {
+  for (const [name, read] of Object.entries(FIRST_READ)) {
+    const bridge = named.get(name);
+    if (bridge === undefined) throw new Error(`no bridge named ${name}`);
+    const call = bridge[read.method] as (argument?: unknown) => Promise<unknown>;
+    const state = await call.call(bridge, read.input);
+    expect(read.holds(state), `${name}.${read.method} filled nothing`).toBe(true);
+  }
+}
 
 describe('every bridge forgets when the person changes (P0-A)', () => {
   it('has a forget on all six, and resetBridges calls every one in order', async () => {
@@ -130,20 +184,94 @@ describe('every bridge forgets when the person changes (P0-A)', () => {
     expect(order).toEqual(['today', 'replies', 'crm', 'sequences', 'settings', 'mailbox']);
   });
 
+  it('empties a bridge that is really holding something, and every one of them', async () => {
+    const generation = { value: 1 };
+    const { named, serveNothing } = bridgesUnder(generation);
+    await populated(named);
+
+    // The transition: what `registerWindows` does at the announcement.
+    generation.value = 2;
+    await resetBridges([...named.values()]);
+    serveNothing();
+
+    for (const [name, read] of Object.entries(FIRST_READ)) {
+      const bridge = named.get(name);
+      if (bridge === undefined) throw new Error(`no bridge named ${name}`);
+      const state = (await (bridge['state'] as () => Promise<unknown>).call(bridge)) as Record<string, unknown>;
+      expect(read.holds(state), `${name} is still holding the last person's work`).toBe(false);
+    }
+  });
+
   it('answers the empty state when a read outlives the session it began under', async () => {
-    for (const [name, [method, input]] of Object.entries(FIRST_READ)) {
+    for (const [name, read] of Object.entries(FIRST_READ)) {
       const generation = { value: 1 };
       const { named } = bridgesUnder(generation);
       const bridge = named.get(name);
       if (bridge === undefined) throw new Error(`no bridge named ${name}`);
-      const call = bridge[method] as (argument?: unknown) => Promise<unknown>;
+      const call = bridge[read.method] as (argument?: unknown) => Promise<unknown>;
 
-      const started = call.call(bridge, input);
+      const started = call.call(bridge, read.input);
       // Somebody signed out while that read was on the wire.
       generation.value = 2;
       const late = await started;
 
-      expect(late, `${name}.${method} answered from the last session`).toEqual(await bridge.forget());
+      // Not merely "equal to forget()": the field that read fills is empty, so the late
+      // answer carries nothing of the person who asked for it.
+      expect(read.holds(late), `${name}.${read.method} answered from the last session`).toBe(false);
+      expect(late, `${name}.${read.method} is not the empty state`).toEqual(await bridge.forget());
+    }
+  });
+
+  it('forgets which firm carried which opportunity, so the next board offers nothing of the last', async () => {
+    /*
+     * The CRM bridge remembers the opportunity of every firm page it opened, and merges
+     * that into the next board read — the board the *server* sends carries an id only
+     * for a firm this caller may change. Left across a transition, the map offered the
+     * next person a stage change on the last person's firm, naming an opportunity id
+     * that is not theirs.
+     */
+    const generation = { value: 1 };
+    const { named } = bridgesUnder(generation);
+    const crm = named.get('crm');
+    if (crm === undefined) throw new Error('no crm bridge');
+    const opened = (await (crm['openFirm'] as (input: unknown) => Promise<unknown>).call(crm, { firmId: UUID })) as {
+      readonly firm: unknown;
+    };
+    expect(opened.firm).not.toBeNull();
+    const before = (await (crm['openPipeline'] as () => Promise<unknown>).call(crm)) as {
+      readonly pipeline: { readonly opportunityIdByFirmId: Record<string, string> } | null;
+    };
+    // The firm page told this window, and the board took it: that is the behaviour the
+    // reset has to undo, and asserting it here is what stops this passing vacuously.
+    expect(before.pipeline?.opportunityIdByFirmId[UUID]).toBe(OPPORTUNITY_ID);
+
+    generation.value = 2;
+    await resetBridges([crm]);
+
+    const after = (await (crm['openPipeline'] as () => Promise<unknown>).call(crm)) as {
+      readonly pipeline: { readonly opportunityIdByFirmId: Record<string, string> } | null;
+    };
+    expect(after.pipeline?.opportunityIdByFirmId).toEqual({});
+  });
+
+  it('does not repopulate a bridge when the stale read lands after the reset', async () => {
+    for (const [name, read] of Object.entries(FIRST_READ)) {
+      const generation = { value: 1 };
+      const { named, serveNothing } = bridgesUnder(generation);
+      const bridge = named.get(name);
+      if (bridge === undefined) throw new Error(`no bridge named ${name}`);
+      const call = bridge[read.method] as (argument?: unknown) => Promise<unknown>;
+
+      // In flight when the person leaves, and the reset runs before it lands.
+      const started = call.call(bridge, read.input);
+      generation.value = 2;
+      await resetBridges([bridge]);
+      await started;
+      serveNothing();
+
+      // What the next person's first look at this view finds.
+      const state = await (bridge['state'] as () => Promise<unknown>).call(bridge);
+      expect(read.holds(state), `${name} was refilled by a read from the last session`).toBe(false);
     }
   });
 

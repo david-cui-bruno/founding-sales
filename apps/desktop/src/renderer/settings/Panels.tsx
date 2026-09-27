@@ -13,9 +13,12 @@ import { Row, RowActions, RowMain, Rows, Section } from '../ui/layout.tsx';
 export function Panels({
   view,
   onAcknowledge,
+  acknowledging,
 }: {
   readonly view: AdminView;
   onAcknowledge?(alertId: string): void;
+  /** Whether this row's own Acknowledge is on the wire (P1-4). */
+  acknowledging?(alertId: string): boolean;
 }): JSX.Element {
   return (
     <>
@@ -58,6 +61,8 @@ export function Panels({
                         size="sm"
                         variant="outline"
                         data-testid={`acknowledge-${alert.alertId}`}
+                        disabled={acknowledging?.(alert.alertId) === true}
+                        {...(acknowledging?.(alert.alertId) === true ? { 'aria-busy': true } : {})}
                         onClick={() => {
                           onAcknowledge(alert.alertId);
                         }}

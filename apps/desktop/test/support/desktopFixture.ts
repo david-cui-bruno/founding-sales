@@ -37,6 +37,8 @@ export interface ApiScript {
   holding(path: string): boolean;
   /** How many times each path was called. */
   readonly calls: Map<string, number>;
+  /** Every call in the order it was made: what came before what. */
+  readonly order: string[];
   /** Hand out a session grant for a claim. */
   grantFor(workspaceId: string): SessionGrant;
   today(value: CachedToday): void;
@@ -140,6 +142,7 @@ export async function createDesktopFixture(
   let todayValue: CachedToday = sampleToday(workspaceId);
   const refusals = new Map<string, string[]>();
   const calls = new Map<string, number>();
+  const order: string[] = [];
   /*
    * Calls a test wants to catch in flight (P0-B). A sign-out retry can be on the wire
    * for as long as the server takes, and the races worth testing all happen in that
@@ -171,6 +174,7 @@ export async function createDesktopFixture(
     const path = new URL(url).pathname;
     const body: Record<string, unknown> = init.body === undefined ? {} : (JSON.parse(init.body) as Record<string, unknown>);
     calls.set(path, (calls.get(path) ?? 0) + 1);
+    order.push(path);
     const heldCount = holds.get(path) ?? 0;
     if (heldCount > 0) {
       holds.set(path, heldCount - 1);
@@ -318,6 +322,7 @@ export async function createDesktopFixture(
     },
     script: {
       calls,
+      order,
       refuse: (path, reason) => {
         const queue = refusals.get(path) ?? [];
         queue.push(reason);

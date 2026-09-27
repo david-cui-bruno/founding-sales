@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import type { OperationApi } from '../../shared/operations.ts';
 import { operations } from './bridges.ts';
 import type { Generation } from './generation.ts';
@@ -115,16 +115,35 @@ export function useViewState<T>(options: {
     });
   }, []);
 
+  /*
+   * The order answers are *kept* in, which is not the order they arrive in (1.0.13, P2).
+   *
+   * Every one of these bridges answers with the whole view, so the last answer written
+   * is the view. Once two forms may be saving at once (P1-4) a slow first save can land
+   * after a quick second one and put the older state back on the screen — the second
+   * row's new value visibly reverting a moment after it was accepted. Each call takes
+   * the next number on the way out; an answer is kept only if no higher number has been
+   * kept already. The numbers are per mounted view, which is what a Query key is.
+   */
+  const issued = useRef(0);
+  const applied = useRef(0);
+
   const keep = useCallback(
     (next: Promise<T>, form: string | null): void => {
       setPending(count => count + 1);
       hold(form, 1);
       const started = guard.now();
+      issued.current += 1;
+      const ordinal = issued.current;
       void next
         .then(
           value => {
             // The answer to a question asked by somebody who has since left this Mac.
             if (!guard.fresh(started)) return;
+            // An answer older than one already on screen. The newer call read the same
+            // state from the same process, so nothing is lost by dropping this.
+            if (ordinal < applied.current) return;
+            applied.current = ordinal;
             client.setQueryData([key, identity, started, reason], value);
           },
           (error: unknown) => {

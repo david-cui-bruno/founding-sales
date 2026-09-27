@@ -137,9 +137,18 @@ describe('the operation registry', () => {
 
   it('names no operation that dials, and every operation says what the main process does for it', () => {
     const paths = OPERATION_NAMES.flatMap(name => OPERATIONS[name].calls.map(call => call.path));
+    // Dialling is a channel of its own and never an operation: these two are the pair
+    // that authorises and spends a call, and no operation may reach them.
     expect(paths).not.toContain('/dial/authorize');
     expect(paths).not.toContain('/dial/consume');
-    expect(paths).not.toContain('/dial/check');
+    expect(operationOf('today.dial')).toBeNull();
+    /*
+     * `/dial/check` is a different thing and is declared (1.0.13, P1-5). Opening a card
+     * asks it once per usable number for the advice the card shows — "it is 9:10 there",
+     * "this number is not callable and why" — and it moves nothing. Leaving it out of
+     * `calls` made the deprecated-route check below a check of an incomplete list.
+     */
+    expect(OPERATIONS['today.expand'].calls.map(call => call.path)).toContain('/dial/check');
     for (const name of OPERATION_NAMES) expect(OPERATIONS[name].transform.length).toBeGreaterThan(3);
   });
 
@@ -147,10 +156,14 @@ describe('the operation registry', () => {
    * The list W3-C deletes from the server.
    *
    * `calls` is every path the main process may reach for an operation, so this is the
-   * whole of what 1.0.13 can ask for — the dial handoff (`/dial/check`, `/calls/log`)
-   * and the import handoff (`/import/preview`) aside, which are named channels and
-   * whose paths are in their own modules. A route that reappeared here would be a
-   * failing test rather than a caller nobody noticed.
+   * whole of what 1.0.13 can ask for — the dial itself (`/dial/authorize`,
+   * `/dial/consume`, `/calls/log`) and the import handoff (`/import/preview`) aside,
+   * which are named channels and whose paths are in their own modules. A route that
+   * reappeared here would be a failing test rather than a caller nobody noticed.
+   *
+   * The list is only as good as `calls` is complete, which is why
+   * `registryTraffic.test.ts` drives every operation against a recording client with
+   * answers the bridges accept, and fails on a request that is not declared here.
    */
   it('calls none of the routes wave 2 deprecated', () => {
     const paths = new Set(OPERATION_NAMES.flatMap(name => OPERATIONS[name].calls.map(call => call.path)));

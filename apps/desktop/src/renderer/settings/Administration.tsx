@@ -31,7 +31,16 @@ import type { AdminActions } from './useAdmin.ts';
  * person did not expect. The dates are one per line, which is the shape a person pastes
  * from a payroll calendar.
  */
-function Holidays({ view, actions }: { readonly view: AdminView; readonly actions: AdminActions }): JSX.Element | null {
+function Holidays({
+  view,
+  actions,
+  saving,
+}: {
+  readonly view: AdminView;
+  readonly actions: AdminActions;
+  /** Whether this form's own Replace calendar is on the wire (P1-4). */
+  readonly saving: boolean;
+}): JSX.Element | null {
   const holidays = view.holidays;
   const [version, setVersion] = useState('');
   const [dates, setDates] = useState<string | null>(null);
@@ -50,7 +59,7 @@ function Holidays({ view, actions }: { readonly view: AdminView; readonly action
             type="text"
             autoComplete="off"
             placeholder="2027-federal"
-            disabled={!holidays.editable}
+            disabled={!holidays.editable || saving}
             value={version}
             onChange={event => {
               setVersion(event.target.value);
@@ -63,7 +72,7 @@ function Holidays({ view, actions }: { readonly view: AdminView; readonly action
             id="holiday-dates"
             data-testid="holiday-dates"
             rows={6}
-            disabled={!holidays.editable}
+            disabled={!holidays.editable || saving}
             value={text}
             onChange={event => {
               setDates(event.target.value);
@@ -74,7 +83,8 @@ function Holidays({ view, actions }: { readonly view: AdminView; readonly action
           <Button
             size="sm"
             data-testid="holidays-save"
-            disabled={!holidays.editable}
+            disabled={!holidays.editable || saving}
+            {...(saving ? { 'aria-busy': true } : {})}
             onClick={() => {
               actions.recordHolidayCalendar({
                 version,
@@ -111,6 +121,7 @@ export function Administration({
       <CallingNumberSection
         section={view.callingNumber}
         adding={busy('calling-number')}
+        retiring={identityId => busy(`calling-number:${identityId}`)}
         onAdd={actions.addCallingNumber}
         onRetire={actions.retireCallingNumber}
       />
@@ -118,6 +129,7 @@ export function Administration({
         <PosturesSection
           section={view.postures}
           adding={busy('postures')}
+          revoking={postureId => busy(`posture:${postureId}`)}
           onAllow={actions.allowStates}
           onRevoke={actions.revokePosture}
           onRetry={() => {
@@ -160,6 +172,8 @@ export function Administration({
                     size="sm"
                     variant="outline"
                     data-testid={`retire-${stage.key}`}
+                    disabled={busy(`stage:${stage.key}`)}
+                    {...(busy(`stage:${stage.key}`) ? { 'aria-busy': true } : {})}
                     onClick={() => {
                       actions.retireStage(stage.key);
                     }}
@@ -173,9 +187,11 @@ export function Administration({
         </Rows>
       </Section>
 
-      <Holidays view={view} actions={actions} />
+      <Holidays view={view} actions={actions} saving={busy('holidays')} />
       <SendingSection
         view={view}
+        recording={busy('sending-domain')}
+        capping={busy('sending-cap')}
         onRecord={actions.recordSendingAuthentication}
         onCap={actions.setSendingCap}
         onRetry={() => {
