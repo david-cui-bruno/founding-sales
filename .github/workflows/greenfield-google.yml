@@ -8,10 +8,11 @@ name: Greenfield Google root
 # **Two dispatches, with a person between them.** `stage=plan` writes the plan, records
 # its sha256 and this run's commit as the first two lines of plan.txt, and uploads exactly
 # plan.txt and google.tfplan as the artifact `google-plan`. A person reads plan.txt.
-# `stage=apply` names that run, downloads its artifact, and applies THAT saved plan only
-# if the run is a plan of this workflow at this same commit, the file still hashes to the
-# digest plan.txt records, and the plan destroys or replaces no `module.pubsub` resource.
-# Terraform itself refuses a saved plan whose state serial has moved since.
+# `stage=apply` names that run AND the digest the reader saw, downloads its artifact, and
+# applies THAT saved plan only if the run is the FIRST attempt of a plan of this workflow
+# at this same commit, the file still hashes to the digest plan.txt records, that digest
+# is the one the dispatch names, and the plan destroys or replaces no `module.pubsub`
+# resource. Terraform itself refuses a saved plan whose state serial has moved since.
 #
 # **Two identities, and neither is a key.** `fss-prod-ci-google` in AWS holds the S3
 # backend's one state object (`infra/roots/production/ci_google.tf`);
@@ -33,6 +34,10 @@ on:
         required: true
       plan_run_id:
         description: "apply only: the run id of the stage=plan dispatch that was read"
+        type: string
+        required: false
+      plan_sha256:
+        description: "apply only: the plan-sha256 digest on the first line of that run's plan.txt"
         type: string
         required: false
 
@@ -60,6 +65,7 @@ jobs:
     env:
       STAGE: ${{ inputs.stage }}
       PLAN_RUN_ID: ${{ inputs.plan_run_id }}
+      PLAN_SHA256: ${{ inputs.plan_sha256 }}
       ROLE_ARN: ${{ secrets.FSS_PRODUCTION_CI_GOOGLE_ROLE_ARN }}
       GH_TOKEN: ${{ github.token }}
       # Public identifiers, written out because a workflow cannot read this root's state:
@@ -87,6 +93,8 @@ jobs:
             || { echo "::error::stage '$STAGE' is neither plan nor apply"; exit 1; }
           [ "$STAGE" != apply ] || [[ "$PLAN_RUN_ID" =~ ^[1-9][0-9]{0,19}$ ]] \
             || { echo "::error::stage=apply needs plan_run_id: the run id of the stage=plan dispatch a person has read."; exit 1; }
+          [ "$STAGE" != apply ] || [[ "$PLAN_SHA256" =~ ^[0-9a-f]{64}$ ]] \
+            || { echo "::error::stage=apply needs plan_sha256: the digest on the first line of that run's plan.txt."; exit 1; }
 
       - name: Assume the narrow AWS state role
         uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
@@ -119,6 +127,15 @@ jobs:
           token_format: access_token
           cleanup_credentials: true
 
+      # google-github-actions/setup-gcloud v3.0.1. It installs the CLI if the image lacks
+      # it and, crucially, registers the temporary credential the auth step exported:
+      # `gcloud auth list` reads the stored-account list, which an exported external
+      # account file is not in, so without this step the assertion below finds no active
+      # account at all on a fresh runner and stops both stages before Terraform.
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db
+        with:
+          project_id: callie-fss
+
       - name: The active Google account is the CI service account and no other
         run: |
           set -euo pipefail
@@ -145,15 +162,15 @@ jobs:
           set -e
           # 0 no changes, 2 changes; 1 is a failed plan and nothing is uploaded.
           [ "$code" = 0 ] || [ "$code" = 2 ] \
-            || { echo "::error::terraform plan failed (exit $code). Nothing was applied."; exit 1; }
+            || { rm -f plan-body.txt; echo "::error::terraform plan failed (exit $code). Nothing was applied."; exit 1; }
           digest="$(sha256sum google.tfplan | cut -d' ' -f1)"
           { printf 'plan-sha256 %s\ncommit %s\n' "$digest" "$GITHUB_SHA"; cat plan-body.txt; } > plan.txt
           rm -f plan-body.txt
           line="$(grep -E '^(Plan: |No changes\.)' plan.txt | tail -1 || true)"
           echo "::notice title=infra/roots/production-google at ${GITHUB_SHA:0:8}::${line:-the plan printed no Plan line}"
           { printf '### %s\n\n' "${line:-No Plan line}"
-            printf 'Plan `%s` at `%s`. Read the `google-plan` artifact, then dispatch `stage=apply` with `plan_run_id=%s`.\n' \
-              "$digest" "$GITHUB_SHA" "$GITHUB_RUN_ID"; } >> "$GITHUB_STEP_SUMMARY"
+            printf 'Read the `google-plan` artifact, then dispatch `-f stage=apply -f plan_run_id=%s -f plan_sha256=%s` at `%s`.\n' \
+              "$GITHUB_RUN_ID" "$digest" "$GITHUB_SHA"; } >> "$GITHUB_STEP_SUMMARY"
 
       # actions/upload-artifact v4, the pin the images and release workflows use. Two
       # explicit paths, never a directory: the credential file sits in the workspace root.
@@ -173,12 +190,17 @@ jobs:
         run: |
           set -euo pipefail
           fields="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PLAN_RUN_ID" \
-            --jq '[.path, .head_sha] | map(if . == null or . == "" then "-" else tostring end) | @tsv')"
-          IFS=$'\t' read -r path head_sha <<<"$fields"
+            --jq '[.path, .head_sha, .run_attempt] | map(if . == null or . == "" then "-" else tostring end) | @tsv')"
+          IFS=$'\t' read -r path head_sha attempt <<<"$fields"
           [ "${path%%@*}" = .github/workflows/greenfield-google.yml ] \
             || { echo "::error::run $PLAN_RUN_ID is a run of $path, not of this workflow"; exit 1; }
           [ "$head_sha" = "$GITHUB_SHA" ] \
             || { echo "::error::run $PLAN_RUN_ID planned $head_sha; this dispatch is at $GITHUB_SHA. Plan again and read that one."; exit 1; }
+          # A re-run puts a second google-plan under the same run id, and the download may
+          # take either attempt's: the plan a person read would not be the plan applied. A
+          # retried plan is a fresh dispatch, not an attempt.
+          [ "$attempt" = 1 ] \
+            || { echo "::error::run $PLAN_RUN_ID is attempt $attempt: dispatch stage=plan again and read that run."; exit 1; }
           work="$RUNNER_TEMP/google-plan"
           gh run download "$PLAN_RUN_ID" --name google-plan --dir "$work"
           recorded="$(sed -n '1s/^plan-sha256 //p' "$work/plan.txt")"
@@ -188,6 +210,10 @@ jobs:
             || { echo "::error::plan.txt records commit '$planned', not $GITHUB_SHA"; exit 1; }
           [ -n "$recorded" ] && [ "$recorded" = "$actual" ] \
             || { echo "::error::google.tfplan hashes to $actual and plan.txt records '$recorded': the artifact is not the plan that was read."; exit 1; }
+          # The digest the reviewer saw, named on the dispatch: the artifact's own header
+          # cannot vouch for itself, so both it and the file are held to what was read.
+          [ "$recorded" = "$PLAN_SHA256" ] && [ "$actual" = "$PLAN_SHA256" ] \
+            || { echo "::error::this dispatch names plan_sha256 $PLAN_SHA256; the artifact is '$recorded'. Apply the plan that was read."; exit 1; }
           # The four Gmail push objects are not recreatable on demand: the publisher grant
           # needed an organisation-policy exception, and a deleted topic stops the watch
           # until the next renewal names a new one (release.md 8.0n). CI never takes one

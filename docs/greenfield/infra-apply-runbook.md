@@ -143,12 +143,28 @@ The DNS A/ALIAS record for the API hostname is created **after** the first apply
 gh workflow run greenfield-google.yml --ref main -f stage=plan
 # read that run's `google-plan` artifact: plan.txt's first two lines are the plan's
 # sha256 and the commit it was made at, and the rest is the plan
-gh workflow run greenfield-google.yml --ref main -f stage=apply -f plan_run_id=<that run id>
+gh workflow run greenfield-google.yml --ref main -f stage=apply \
+  -f plan_run_id=<that run id> -f plan_sha256=<the plan-sha256 on plan.txt's first line>
 ```
 
-The apply stage refuses a plan run of another workflow, a plan made at another commit, an artifact whose `google.tfplan` no longer hashes to what `plan.txt` records, and any destroy or replacement of a `module.pubsub` object; Terraform itself refuses a saved plan whose state serial has moved.
+The apply stage refuses a plan run of another workflow, a plan made at another commit, a run that is not its own first attempt (a re-run puts a second `google-plan` under the same id and the download may take either), an artifact whose `google.tfplan` no longer hashes to what `plan.txt` records or to the `plan_sha256` this dispatch names, and any destroy or replacement of a `module.pubsub` object; Terraform itself refuses a saved plan whose state serial has moved. Naming the digest is what makes the review a review: the artifact's own header cannot vouch for itself.
 
 The credentials below are for **one** apply — the bootstrap that creates the three APIs, the pool, the provider, the CI service account and its bindings — and afterwards only for a human repair of that identity plumbing. CI is refused it by construction: `fss-prod-google-ci` holds `roles/pubsub.admin` and four read roles at the project and `roles/iam.serviceAccountUser` on the push service account, and nothing that writes a service account, a workload identity pool, a role, an API enablement or the project's IAM policy. A key file is refused in both paths.
+
+#### The bootstrap, in order
+
+The release rule (g97) puts the rehearsal **before** the production plan for a change to the infrastructure, which is the opposite of 3.0's everyday order; this one time, follow this list rather than 3.0.
+
+1. **Merge** the lane.
+2. **Rehearse** at the merge commit: `greenfield-release.yml mode=schema stage=full`, with the digests production is running. It cannot exercise Google (no Google provider in the rehearsal root, decision g12j) and it cannot exercise either production-only CI role; what it proves is that the shared modules still build, deploy and tear down.
+3. **Plan `infra/roots/production`** with the admin profile. It must be exactly two additions and nothing else: `aws_iam_role.ci_google` and `aws_iam_role_policy.ci_google`. Anything else in that plan is a stop.
+4. **Apply** it.
+5. **Set the repository secret** `FSS_PRODUCTION_CI_GOOGLE_ROLE_ARN` to `arn:aws:iam::326255650484:role/fss-prod-ci-google` — a public identifier, and the last thing anyone types by hand here.
+6. **Plan `infra/roots/production-google`** with the live application-default credential. It must add only the three `google_project_service` instances, the pool, the provider, the CI service account and its bindings, and change **none** of the four `module.pubsub` objects. If API propagation bites, apply the three services first with `-target`.
+7. **Apply** it. That is the last human Google login for this root.
+8. **Dispatch `stage=plan`** from CI. "No changes" is what proves the federation, the backend credential and the read set in one answer; retry once after two minutes before reading a refusal as a missing role, because IAM propagates. A genuinely missing read is one fix round while the credential window from step 7 is still open.
+
+From then on this root is planned and applied only by the workflow.
 
 Terraform configures **every** provider a configuration requires before it evaluates anything, whether or not a resource uses it. Without a credential a plan of the Google root stops with
 

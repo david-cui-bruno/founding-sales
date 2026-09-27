@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -12,14 +13,15 @@ import { readRepositoryFile } from './support/repository.ts';
  * the S3 backend, and `fss-prod-google-ci` in Google Cloud through workload identity
  * federation from this repository's `production-deploy` subject.
  *
- * The workflow is read for its shape and **driven** for its three decisions, the way
+ * The workflow is read for its shape and **driven** for its four decisions, the way
  * `ciDeploy.check.ts` drives `greenfield-deploy.yml`'s protected-path guard: the
- * pre-credential guard, the two identity assertions (against stub `aws` and `gcloud`), and
- * the apply gate (against a stub `gh` and a prepared artifact). The Terraform the workflow
- * acts as lives in `infra/roots/production-google/tests/ci_identity.tftest.hcl` and
- * `infra/roots/production/tests/ci_google_role.tftest.hcl`; what only a real dispatch can
- * prove — that the exchange is accepted and that the granted read set is enough — is the
- * first `stage=plan` after the bootstrap.
+ * pre-credential guard, the two identity assertions (against stub `aws` and `gcloud`), the
+ * plan stage (against a stub `terraform`, for each of the three exit codes it can get),
+ * and the apply gate (against a stub `gh` and a prepared artifact). The Terraform the
+ * workflow acts as lives in `infra/roots/production-google/tests/ci_identity.tftest.hcl`
+ * and `infra/roots/production/tests/ci_google_role.tftest.hcl`; what only a real dispatch
+ * can prove — that the exchange is accepted and that the granted read set is enough — is
+ * the first `stage=plan` after the bootstrap.
  */
 
 const WORKFLOW = '.github/workflows/greenfield-google.yml';
@@ -74,30 +76,28 @@ function runBody(step: string): string {
 
 const STEPS = steps(workflow);
 
-function body(fragment: string): string {
-  const step = STEPS.find(candidate => candidate.name.includes(fragment));
-  if (!step) throw new Error(`no step whose name contains ${fragment}`);
-  return runBody(step.text);
+function at(fragment: string): number {
+  const index = STEPS.findIndex(candidate => candidate.name.includes(fragment));
+  if (index < 0) throw new Error(`no step whose name contains ${fragment}`);
+  return index;
 }
 
-function stepText(fragment: string): string {
-  const step = STEPS.find(candidate => candidate.name.includes(fragment));
-  if (!step) throw new Error(`no step whose name contains ${fragment}`);
-  return step.text;
-}
+const stepText = (fragment: string): string => STEPS[at(fragment)]?.text ?? '';
+const body = (fragment: string): string => runBody(stepText(fragment));
 
-type Run = { readonly code: number; readonly output: string; readonly workspace: string };
+type Run = { readonly code: number; readonly output: string; readonly cwd: string; readonly summary: string };
 
 /** Run one step's shell with every ambient credential blank, as the runner has it. */
-function shell(script: string, env: Readonly<Record<string, string>> = {}, bin?: string): Run {
+function shell(script: string, env: Readonly<Record<string, string>> = {}, bin?: string, cwd?: string): Run {
   const temp = mkdtempSync(join(tmpdir(), 'fss-google-'));
   const workspace = join(temp, 'workspace');
   mkdirSync(join(workspace, 'infra/roots/production-google'), { recursive: true });
   const summary = join(temp, 'summary');
   writeFileSync(summary, '');
+  const where = cwd ?? workspace;
   const result = spawnSync('bash', ['-c', script], {
     encoding: 'utf8',
-    cwd: workspace,
+    cwd: where,
     env: {
       ...process.env,
       ...Object.fromEntries(AMBIENT.map(name => [name, ''])),
@@ -111,13 +111,14 @@ function shell(script: string, env: Readonly<Record<string, string>> = {}, bin?:
       RUNNER_TEMP: temp,
       STAGE: 'plan',
       PLAN_RUN_ID: '',
+      PLAN_SHA256: '',
       ROLE_ARN,
       GOOGLE_CI_SERVICE_ACCOUNT: SERVICE_ACCOUNT,
       STATE_KMS_KEY_ARN,
       ...env,
     },
   });
-  return { code: result.status ?? 1, output: `${result.stdout}${result.stderr}`, workspace };
+  return { code: result.status ?? 1, output: `${result.stdout}${result.stderr}`, cwd: where, summary };
 }
 
 function stub(name: string, script: string): string {
@@ -126,6 +127,8 @@ function stub(name: string, script: string): string {
   chmodSync(join(bin, name), 0o755);
   return bin;
 }
+
+const sha256 = (text: string): string => createHash('sha256').update(text).digest('hex');
 
 describe('greenfield-google.yml is dispatch-only, in the production-deploy environment, and pinned', () => {
   it('is 240 lines or fewer, has one job, and can be started only by a dispatch from this repository', () => {
@@ -141,6 +144,9 @@ describe('greenfield-google.yml is dispatch-only, in the production-deploy envir
     }
     expect(triggers).toContain('options: [plan, apply]');
     expect(triggers).toContain('default: plan');
+    // The apply names the run AND the digest the reviewer read on it.
+    expect(triggers).toContain('plan_run_id:');
+    expect(triggers).toContain('plan_sha256:');
   });
 
   it('runs in production-deploy, holds three permissions, and serialises on one concurrency group', () => {
@@ -165,6 +171,7 @@ describe('greenfield-google.yml is dispatch-only, in the production-deploy envir
       'actions/checkout@11d5960a326750d5838078e36cf38b85af677262',
       'aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502',
       'google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093',
+      'google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db',
       'hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd',
       'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
     ]);
@@ -172,7 +179,7 @@ describe('greenfield-google.yml is dispatch-only, in the production-deploy envir
     // The checkout is the first step and carries no token into the job.
     expect(STEPS[0]?.name).toBe('actions/checkout@11d5960a326750d5838078e36cf38b85af677262');
     expect(STEPS[0]?.text).toContain('persist-credentials: false');
-    expect(STEPS.indexOf(STEPS.find(step => step.name.includes('Refuse any ambient')) ?? STEPS[0]!)).toBe(1);
+    expect(at('Refuse any ambient')).toBe(1);
     expect([...new Set([...workflow.matchAll(/secrets\.([A-Z_]+)/gu)].map(match => match[1]))]).toEqual([
       'FSS_PRODUCTION_CI_GOOGLE_ROLE_ARN',
     ]);
@@ -182,7 +189,7 @@ describe('greenfield-google.yml is dispatch-only, in the production-deploy envir
     }
   });
 
-  it('federates with a short-lived token it cleans up, and never uploads a directory', () => {
+  it('federates with a short-lived token it cleans up, registers it, and never uploads a directory', () => {
     const auth = stepText('Federate into Google Cloud');
     expect(auth).toContain(`workload_identity_provider: ${PROVIDER}`);
     expect(auth).toContain(`service_account: ${SERVICE_ACCOUNT}`);
@@ -192,6 +199,12 @@ describe('greenfield-google.yml is dispatch-only, in the production-deploy envir
     expect(auth).toContain('token_format: access_token');
     expect(auth).toContain('cleanup_credentials: true');
     expect(readRepositoryFile('.gitignore')).toContain('gha-creds-*.json');
+    // setup-gcloud sits between the auth and the assertion: the exported credential file
+    // is not in gcloud's stored-account list until this step registers it, so without it
+    // `gcloud auth list` answers nothing at all on a fresh runner.
+    expect(at('setup-gcloud')).toBe(at('Federate into Google Cloud') + 1);
+    expect(at('The active Google account')).toBe(at('setup-gcloud') + 1);
+    expect(stepText('setup-gcloud')).toContain('project_id: callie-fss');
     // Exactly two paths. A directory would sweep the credential file into the artifact.
     const upload = stepText('Upload exactly the plan');
     expect(upload).toContain('name: google-plan');
@@ -204,7 +217,7 @@ describe('greenfield-google.yml is dispatch-only, in the production-deploy envir
 
   it('initialises the backend read-only against the committed lock and the state key, in both stages', () => {
     expect(workflow).toContain(`      STATE_KMS_KEY_ARN: ${STATE_KMS_KEY_ARN}`);
-    for (const stage of ["Plan the Google root", 'Apply that exact saved plan']) {
+    for (const stage of ['Plan the Google root', 'Apply that exact saved plan']) {
       const text = stepText(stage);
       expect(text, stage).toContain('working-directory: infra/roots/production-google');
       expect(text, stage).toContain('-lockfile=readonly');
@@ -221,8 +234,9 @@ describe('greenfield-google.yml is dispatch-only, in the production-deploy envir
   });
 });
 
-describe('the guard refuses an ambient credential, another ref, and an apply with no plan', () => {
+describe('the guard refuses an ambient credential, another ref, and an apply with no reviewed plan', () => {
   const guard = body('Refuse any ambient');
+  const DIGEST = 'b'.repeat(64);
 
   it('passes a plan dispatch from main with nothing set', () => {
     const run = shell(guard);
@@ -252,13 +266,18 @@ describe('the guard refuses an ambient credential, another ref, and an apply wit
     }
   });
 
-  it('refuses an apply that names no plan run, and admits one that names a plausible id', () => {
+  it('refuses an apply that names no plan run or no digest, and admits one that names both', () => {
     for (const id of ['', 'latest', '0', '42; rm -rf /']) {
-      const run = shell(guard, { STAGE: 'apply', PLAN_RUN_ID: id });
+      const run = shell(guard, { STAGE: 'apply', PLAN_RUN_ID: id, PLAN_SHA256: DIGEST });
       expect(run.code, id).not.toBe(0);
       expect(run.output, id).toContain('stage=apply needs plan_run_id');
     }
-    expect(shell(guard, { STAGE: 'apply', PLAN_RUN_ID }).code).toBe(0);
+    for (const digest of ['', 'the one on plan.txt', 'B'.repeat(64), 'b'.repeat(63)]) {
+      const run = shell(guard, { STAGE: 'apply', PLAN_RUN_ID, PLAN_SHA256: digest });
+      expect(run.code, digest).not.toBe(0);
+      expect(run.output, digest).toContain('stage=apply needs plan_sha256');
+    }
+    expect(shell(guard, { STAGE: 'apply', PLAN_RUN_ID, PLAN_SHA256: DIGEST }).code).toBe(0);
   });
 });
 
@@ -297,18 +316,92 @@ describe('both identities are asserted rather than assumed', () => {
     }
   });
 
+  /**
+   * `gcloud auth list` reads the stored-account list. `google-github-actions/auth` writes
+   * an external-account file and exports it; it does not store an account. So this stub is
+   * the runner itself: silent until `setup-gcloud` has run, the service account after. The
+   * assertion must therefore fail on a job that skipped the setup step, which is the bug
+   * this models — a stub that always answered the service account would hide it.
+   */
+  const runner = (setupRan: boolean): string =>
+    stub('gcloud', `[ "\${FSS_SETUP_GCLOUD_RAN:-}" = yes ] || exit 0\necho '${setupRan ? SERVICE_ACCOUNT : ''}'`);
+
+  it('finds no active account at all until setup-gcloud has registered the credential', () => {
+    const before = shell(google, { FSS_SETUP_GCLOUD_RAN: 'no' }, runner(true));
+    expect(before.code, 'a job with auth but no setup-gcloud must not pass this assertion').not.toBe(0);
+    expect(before.output).toContain(`the active Google account is '', not ${SERVICE_ACCOUNT}`);
+    const after = shell(google, { FSS_SETUP_GCLOUD_RAN: 'yes' }, runner(true));
+    expect(after.code, after.output).toBe(0);
+  });
+
   it('requires the active Google account to be the CI service account', () => {
-    expect(shell(google, {}, stub('gcloud', `echo '${SERVICE_ACCOUNT}'`)).code).toBe(0);
     for (const account of ['fss-prod-gmail-push@callie-fss.iam.gserviceaccount.com', 'callie@usecallie.com', '']) {
-      const run = shell(google, {}, stub('gcloud', `echo '${account}'`));
+      const run = shell(google, { FSS_SETUP_GCLOUD_RAN: 'yes' }, stub('gcloud', `echo '${account}'`));
       expect(run.code, account).not.toBe(0);
       expect(run.output, account).toContain(`not ${SERVICE_ACCOUNT}`);
     }
   });
 });
 
+describe('the plan stage writes the two files a person reads, or fails writing neither', () => {
+  const plan = body('Plan the Google root');
+  const PLAN_BYTES = 'the saved plan, opaque bytes\n';
+
+  /** A terraform whose plan prints `text` and exits `code`; it saves a file only if it planned. */
+  function terraform(code: number, text: string): string {
+    return stub(
+      'terraform',
+      [
+        'set -eu',
+        'if [ "$1" = init ]; then echo "Terraform has been successfully initialized!"; exit 0; fi',
+        'if [ "$1" = plan ]; then',
+        // %b, so bash's printf turns the JSON string's escapes back into the bytes.
+        `  printf '%b' ${JSON.stringify(text)}`,
+        ...(code === 1 ? ['  echo "Error: something the plan could not do" >&2'] : [`  printf '%b' ${JSON.stringify(PLAN_BYTES)} > google.tfplan`]),
+        `  exit ${code}`,
+        'fi',
+        'exit 9',
+      ].join('\n'),
+    );
+  }
+
+  const dir = (): string => mkdtempSync(join(tmpdir(), 'fss-google-plan-'));
+
+  it.each([
+    [0, 'No changes. Your infrastructure matches the configuration.'],
+    [2, 'Plan: 13 to add, 0 to change, 0 to destroy.'],
+  ])('continues on terraform plan exit %i and records the digest and commit above the plan', (code, line) => {
+    const text = `Terraform used the selected providers.\n\n  # google_service_account.ci will be created\n\n${line}\n`;
+    const where = dir();
+    const run = shell(plan, {}, terraform(code, text), where);
+    expect(run.code, run.output).toBe(0);
+    // Exactly the two paths the artifact names: plan-body.txt is not left behind.
+    expect(readdirSync(where).sort()).toEqual(['google.tfplan', 'plan.txt']);
+    const [first, second, ...rest] = readFileSync(join(where, 'plan.txt'), 'utf8').split('\n');
+    expect(first).toMatch(/^plan-sha256 [0-9a-f]{64}$/u);
+    expect(first).toBe(`plan-sha256 ${sha256(PLAN_BYTES)}`);
+    expect(second).toBe(`commit ${SHA}`);
+    expect(rest.join('\n')).toBe(text);
+    // The line a person is told to read, in the log and in the summary.
+    expect(run.output).toContain(`::notice title=infra/roots/production-google at ${SHA.slice(0, 8)}::${line}`);
+    const summary = readFileSync(run.summary, 'utf8');
+    expect(summary).toContain(`### ${line}`);
+    expect(summary).toContain(`-f stage=apply -f plan_run_id=${RUN_ID} -f plan_sha256=${sha256(PLAN_BYTES)}`);
+  });
+
+  it('fails on terraform plan exit 1 and leaves no artifact to apply', () => {
+    const where = dir();
+    const run = shell(plan, {}, terraform(1, 'Terraform used the selected providers.\n'), where);
+    expect(run.code).not.toBe(0);
+    expect(run.output).toContain('terraform plan failed (exit 1). Nothing was applied.');
+    expect(readdirSync(where)).toEqual([]);
+  });
+});
+
 describe('the apply stage applies the plan a person read, at this commit, and no other', () => {
   const gate = body('takes no push object away');
+  const PLAN_BYTES = 'the saved plan, opaque bytes\n';
+  const DIGEST = sha256(PLAN_BYTES);
   const PLAN_BODY = [
     'Terraform used the selected providers to generate the following execution plan.',
     '',
@@ -318,21 +411,31 @@ describe('the apply stage applies the plan a person read, at this commit, and no
     '',
   ].join('\n');
 
+  type Options = {
+    plan?: string;
+    head?: string;
+    commit?: string;
+    path?: string;
+    attempt?: number;
+    tamper?: boolean;
+    digest?: string;
+  };
+
   /** A plan run's artifact and the `gh` that serves it. */
-  function artifact(options: { plan?: string; head?: string; commit?: string; path?: string; tamper?: boolean } = {}): string {
+  function artifact(options: Options = {}): string {
     const bin = mkdtempSync(join(tmpdir(), 'fss-google-gh-'));
     const store = join(bin, 'artifact');
     mkdirSync(store, { recursive: true });
-    writeFileSync(join(store, 'google.tfplan'), 'the saved plan, opaque bytes\n');
-    const digest = spawnSync('sha256sum', [join(store, 'google.tfplan')], { encoding: 'utf8' }).stdout.split(' ')[0] ?? '';
-    writeFileSync(
-      join(store, 'plan.txt'),
-      `plan-sha256 ${digest}\ncommit ${options.commit ?? SHA}\n${options.plan ?? PLAN_BODY}`,
-    );
+    writeFileSync(join(store, 'google.tfplan'), PLAN_BYTES);
+    writeFileSync(join(store, 'plan.txt'), `plan-sha256 ${DIGEST}\ncommit ${options.commit ?? SHA}\n${options.plan ?? PLAN_BODY}`);
     if (options.tamper === true) writeFileSync(join(store, 'google.tfplan'), 'a different saved plan\n');
     writeFileSync(
       join(bin, 'run.json'),
-      JSON.stringify({ path: options.path ?? '.github/workflows/greenfield-google.yml', head_sha: options.head ?? SHA }),
+      JSON.stringify({
+        path: options.path ?? '.github/workflows/greenfield-google.yml',
+        head_sha: options.head ?? SHA,
+        run_attempt: options.attempt ?? 1,
+      }),
     );
     writeFileSync(
       join(bin, 'gh'),
@@ -352,15 +455,14 @@ describe('the apply stage applies the plan a person read, at this commit, and no
     return bin;
   }
 
-  const apply = (options: Parameters<typeof artifact>[0] = {}): Run => shell(gate, { STAGE: 'apply', PLAN_RUN_ID }, artifact(options));
+  const apply = (options: Options = {}): Run =>
+    shell(gate, { STAGE: 'apply', PLAN_RUN_ID, PLAN_SHA256: options.digest ?? DIGEST }, artifact(options));
 
-  it('accepts the plan run of this workflow at this commit, and stages that exact file', () => {
+  it('accepts the first attempt of this workflow’s plan run at this commit, and stages that exact file', () => {
     const run = apply();
     expect(run.code, run.output).toBe(0);
     expect(run.output).toContain(`applying the plan of run ${PLAN_RUN_ID}`);
-    expect(spawnSync('cat', [join(run.workspace, 'infra/roots/production-google/google.tfplan')], { encoding: 'utf8' }).stdout).toBe(
-      'the saved plan, opaque bytes\n',
-    );
+    expect(readFileSync(join(run.cwd, 'infra/roots/production-google/google.tfplan'), 'utf8')).toBe(PLAN_BYTES);
   });
 
   it('refuses a run of another workflow, another commit, or a plan.txt recording another commit', () => {
@@ -375,10 +477,26 @@ describe('the apply stage applies the plan a person read, at this commit, and no
     expect(mislabelled.output).toContain('records commit');
   });
 
+  it('refuses a re-run: a second attempt holds a second google-plan under the same id', () => {
+    for (const attempt of [2, 3]) {
+      const run = apply({ attempt });
+      expect(run.code, `attempt ${attempt}`).not.toBe(0);
+      expect(run.output).toContain(`is attempt ${attempt}: dispatch stage=plan again`);
+    }
+  });
+
   it('refuses an artifact whose saved plan is not the file the digest was taken of', () => {
     const tampered = apply({ tamper: true });
     expect(tampered.code).not.toBe(0);
     expect(tampered.output).toContain('the artifact is not the plan that was read');
+  });
+
+  it('refuses a plan whose digest is not the one this dispatch names, including none at all', () => {
+    for (const digest of ['f'.repeat(64), '']) {
+      const run = apply({ digest });
+      expect(run.code, digest).not.toBe(0);
+      expect(run.output, digest).toContain('Apply the plan that was read');
+    }
   });
 
   it('refuses any destroy or replacement of a Gmail push object, and only of those', () => {
@@ -399,8 +517,8 @@ describe('the apply stage applies the plan a person read, at this commit, and no
     });
     expect(ours.code, ours.output).toBe(0);
     // A mention of module.pubsub that is neither a destroy nor a replacement passes.
-    const created = apply({ plan: '  # module.pubsub.google_pubsub_topic.gmail will be updated in-place\n\nPlan: 0 to add, 1 to change, 0 to destroy.\n' });
-    expect(created.code, created.output).toBe(0);
+    const updated = apply({ plan: '  # module.pubsub.google_pubsub_topic.gmail will be updated in-place\n\nPlan: 0 to add, 1 to change, 0 to destroy.\n' });
+    expect(updated.code, updated.output).toBe(0);
   });
 });
 

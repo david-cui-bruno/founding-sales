@@ -11,17 +11,18 @@
 # condition as a map rather than key by key refuses a `StringLike` beside it, which is how
 # a wildcard subject gets in, and refuses a second subject.
 #
-# **One state object.** Every resource the policy names is checked against a list of four
-# strings — the Google root's state object, its lock file, the bucket, the lock table and
-# the state key — so a statement that reached the production root's own state, a rehearsal
-# key or a second bucket is red here. The distinct actions are compared with an exact
-# list, so an ECS, ECR, Secrets Manager or IAM action added beside them is red too, and
-# the statement count is asserted because a test over no statements passes every
-# `alltrue`.
+# **One state object, statement by statement.** The whole `Statement` list is compared to
+# a literal, in order: each Sid's `Action` list, its `Resource` list and its `Condition`
+# compared whole, the way the trust above is. A union of actions across statements would
+# be a vacuous pass — moving `s3:DeleteObject` off the lock file and onto the state object
+# itself leaves the union unchanged — and so would a set of resources: this comparison
+# refuses both, and every reordering, added key and dropped condition with them.
 #
 # **The bucket is the one broad resource, and it is conditioned.** `s3:ListBucket` takes a
-# bucket and not a key, so the bucket ARN appears once; the statement that carries it
-# holds it to this root's key with `s3:prefix`. There is no `Resource: "*"` at all.
+# bucket and not a key, so the bucket ARN appears once, in the statement that holds it to
+# this root's key with `s3:prefix`. There is no `Resource: "*"` at all, and the raw
+# document is searched for the production root's own state key, a rehearsal key, another
+# service and anything that deletes the bucket, the table or the key.
 
 mock_provider "aws" {
   override_during = apply
@@ -138,43 +139,50 @@ run "the_policy_is_the_backend_set_for_one_state_object_and_nothing_else" {
   }
 
   assert {
-    condition = sort(distinct(flatten([for statement in jsondecode(aws_iam_role_policy.ci_google.policy).Statement : statement.Action]))) == tolist([
-      "dynamodb:DeleteItem",
-      "dynamodb:DescribeTable",
-      "dynamodb:GetItem",
-      "dynamodb:PutItem",
-      "kms:Decrypt",
-      "kms:Encrypt",
-      "kms:GenerateDataKey*",
-      "s3:DeleteObject",
-      "s3:GetObject*",
-      "s3:ListBucket",
-      "s3:PutObject",
-    ])
-    error_message = "Exactly what Terraform's S3 backend does with one state object: read and write it, take, read and release its lock file and its two lock rows, describe the table, and use the state key. No ECS, no ECR, no Secrets Manager, no IAM, and nothing that deletes a bucket, a table or a key."
-  }
-
-  assert {
-    condition = alltrue(flatten([
-      for statement in jsondecode(aws_iam_role_policy.ci_google.policy).Statement : [
-        for resource in statement.Resource : contains([
-          "arn:aws:s3:::callie-sourcing-tfstate-326255650484/fss/greenfield/production-google/terraform.tfstate",
-          "arn:aws:s3:::callie-sourcing-tfstate-326255650484/fss/greenfield/production-google/terraform.tfstate.tflock",
-          "arn:aws:s3:::callie-sourcing-tfstate-326255650484",
-          "arn:aws:dynamodb:us-east-1:326255650484:table/callie-sourcing-tflock",
-          "arn:aws:kms:us-east-1:326255650484:key/a321a083-4058-4130-b060-b950e4aa1404",
-        ], resource)
-      ]
-    ]))
-    error_message = "Every resource named is the Google root's own state object, its lock file, the bucket the list needs, the lock table or the production state key. Never the production root's state, never a rehearsal key, never a second bucket."
-  }
-
-  assert {
-    condition = (
-      !can(regex("fss/greenfield/production/|fss/greenfield/rehearsal|ecs:|ecr:|secretsmanager:|iam:|:role/|DeleteBucket|DeleteTable|ScheduleKeyDeletion", aws_iam_role_policy.ci_google.policy))
-      && !strcontains(aws_iam_role_policy.ci_google.policy, "\"*\"")
-    )
-    error_message = "The policy names no other state key, no other service, no role and nothing that deletes the bucket, the table or the key, and there is no Resource * anywhere in it."
+    condition = jsondecode(aws_iam_role_policy.ci_google.policy).Statement == [
+      {
+        Sid      = "ReadAndWriteTheGoogleRootsStateObject"
+        Effect   = "Allow"
+        Action   = ["s3:GetObject*", "s3:PutObject"]
+        Resource = ["arn:aws:s3:::callie-sourcing-tfstate-326255650484/fss/greenfield/production-google/terraform.tfstate"]
+      },
+      {
+        Sid      = "TakeAndReleaseTheGoogleRootsStateLockFile"
+        Effect   = "Allow"
+        Action   = ["s3:GetObject*", "s3:PutObject", "s3:DeleteObject"]
+        Resource = ["arn:aws:s3:::callie-sourcing-tfstate-326255650484/fss/greenfield/production-google/terraform.tfstate.tflock"]
+      },
+      {
+        Sid       = "ListOnlyTheGoogleRootsStateKey"
+        Effect    = "Allow"
+        Action    = ["s3:ListBucket"]
+        Resource  = ["arn:aws:s3:::callie-sourcing-tfstate-326255650484"]
+        Condition = { StringLike = { "s3:prefix" = "fss/greenfield/production-google/terraform.tfstate" } }
+      },
+      {
+        Sid      = "TakeAndReleaseTheGoogleRootsDynamoLockRows"
+        Effect   = "Allow"
+        Action   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem"]
+        Resource = ["arn:aws:dynamodb:us-east-1:326255650484:table/callie-sourcing-tflock"]
+        Condition = { "ForAllValues:StringLike" = { "dynamodb:LeadingKeys" = [
+          "callie-sourcing-tfstate-326255650484/fss/greenfield/production-google/terraform.tfstate",
+          "callie-sourcing-tfstate-326255650484/fss/greenfield/production-google/terraform.tfstate-md5",
+        ] } }
+      },
+      {
+        Sid      = "DescribeTheLockTable"
+        Effect   = "Allow"
+        Action   = ["dynamodb:DescribeTable"]
+        Resource = ["arn:aws:dynamodb:us-east-1:326255650484:table/callie-sourcing-tflock"]
+      },
+      {
+        Sid      = "UseTerraformStateKmsKey"
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt", "kms:Encrypt", "kms:GenerateDataKey*"]
+        Resource = ["arn:aws:kms:us-east-1:326255650484:key/a321a083-4058-4130-b060-b950e4aa1404"]
+      },
+    ]
+    error_message = "Every statement is compared whole and in order: which actions, on which resource, under which condition. Reading and writing the state object; reading, writing and deleting its lock file, and that file alone; listing the bucket only under this key's prefix; the two lock rows and the table describe; and the state key. An action moved from one statement to another, a resource added beside a named one, a dropped condition or a new statement is red here, which a union of actions or a set of resources would let through."
   }
 
   assert {
