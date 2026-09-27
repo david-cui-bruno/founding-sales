@@ -21,8 +21,19 @@ export interface AuthedClientOptions {
   readonly baseUrl: string;
   readonly clientVersion: string;
   readonly send: HttpSend;
-  /** The live access token, renewed by the session manager. Null when signed out. */
-  readonly accessToken: () => Promise<string | null>;
+  /**
+   * The live access token **and the session it belongs to**, together (1.0.12).
+   *
+   * One call, because the two have to be read from the same snapshot: fetching a token
+   * can renew the session, and a renewal that comes back with a different role is
+   * itself a transition. Reading the generation before the token gives the number of
+   * the session *before* that renewal, and a refusal for the new token would then be
+   * attributed to a session that no longer exists — and ignored. Reading it afterwards
+   * has the opposite hazard, since another caller's transition can land in between.
+   *
+   * Null when signed out, as before.
+   */
+  readonly accessToken: () => Promise<AccessSession | null>;
   /**
    * What each call found about the connection (wave 1): true when the server answered
    * anything — a refusal is an answer — and false only when it could not be reached.
@@ -44,8 +55,6 @@ export interface AuthedClientOptions {
    * on the strength of the old one's answer.
    */
   readonly onAuthRefusal?: (reason: string, status: number, sessionGeneration: number) => void;
-  /** The session this client's calls are being made under; read as each call starts. */
-  readonly sessionGeneration?: () => number;
 }
 
 export interface AuthedClient {
@@ -58,6 +67,12 @@ export interface AuthedClient {
     parse: (value: unknown) => T,
     options?: { readonly commandId?: string },
   ): Promise<ApiOutcome<T>>;
+}
+
+/** A token and the session generation it was issued under; always read together. */
+export interface AccessSession {
+  readonly token: string;
+  readonly generation: number;
 }
 
 const refusalOf = (body: unknown, status: number): string => {
@@ -75,12 +90,12 @@ export function createAuthedClient(options: AuthedClientOptions): AuthedClient {
     method: 'GET' | 'POST',
     body: Readonly<Record<string, unknown>> | undefined,
   ): Promise<ApiOutcome<unknown>> => {
-    // Read before the token: fetching one can renew the session, and a renewal that
-    // came back with a different role is itself a transition.
-    const startedUnder = options.sessionGeneration?.() ?? 0;
-    const token = await options.accessToken();
-    if (token === null) return { ok: false, reason: 'not_signed_in', offline: false };
-    const headers: Record<string, string> = { accept: 'application/json', authorization: `Bearer ${token}` };
+    // The token and the session it belongs to, from one snapshot. Everything this call
+    // reports about being refused is reported about *that* session.
+    const access = await options.accessToken();
+    if (access === null) return { ok: false, reason: 'not_signed_in', offline: false };
+    const startedUnder = access.generation;
+    const headers: Record<string, string> = { accept: 'application/json', authorization: `Bearer ${access.token}` };
     if (body !== undefined) headers['content-type'] = 'application/json';
     try {
       const answer = await options.send(new URL(path, options.baseUrl).toString(), {

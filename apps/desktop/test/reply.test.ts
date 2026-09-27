@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { replyCardSchema, replyStateSchema, replySummaryOf, type ReplyCard, type ReplyState } from '../src/renderer/replyContract.ts';
 import {
   CONFIRM_LABELS,
+  FOLLOW_UP_WITHOUT_DATE,
   buildReplyCardView,
   buildReplyView,
   candidateLabel,
   confirmLabel,
+  followUpConsequence,
   replyNotice,
 } from '../src/renderer/replyView.ts';
 import { createReplyBridge } from '../src/main/replyBridge.ts';
@@ -262,6 +264,26 @@ describe('the reply card view model', () => {
     expect(view.emptyMessage).toBe('Callie cannot reach the server, and replies are never kept on this Mac.');
   });
 
+  it('says the same thing above the button as on it, on both kinds of follow-up card', () => {
+    const plain = buildReplyCardView(state(), card(), 'follow_up_later');
+    const plainText = plain.choices.find(choice => choice.disposition === 'follow_up_later')?.consequence ?? '';
+    // No day was read, so both presses are real and the sentence names both — the
+    // button says the same (`FOLLOW_UP_WITHOUT_DATE` until a day is typed).
+    expect(plainText).toContain('leave them empty');
+    expect(plain.confirmLabel).toBe(FOLLOW_UP_WITHOUT_DATE);
+
+    const later = card({ callbackProposal: { localDateTime: '2026-09-28T09:00', timeZone: null } });
+    const proposed = buildReplyCardView(state({ open: later }), later, 'follow_up_later');
+    const proposedText = proposed.choices.find(choice => choice.disposition === 'follow_up_later')?.consequence ?? '';
+    // A day was read, the server refuses the empty form (`callback_required`) and the
+    // button refuses the press, so the sentence may not offer it either.
+    expect(proposedText).not.toContain('leave them empty');
+    expect(proposedText).toContain('this answer needs one');
+    expect(proposed.callbackRequired).toBe(true);
+    expect(followUpConsequence(false)).toBe(plainText);
+    expect(followUpConsequence(true)).toBe(proposedText);
+  });
+
   it('prefills the model’s reading of a time and still calls the field required', () => {
     const later = card({ callbackProposal: { localDateTime: '2026-09-28T09:00', timeZone: null } });
     const idle = buildReplyCardView(state({ open: later }), later, null);
@@ -308,7 +330,7 @@ function scriptedApi(answers: Readonly<Record<string, HttpAnswer>>): {
   const api = createAuthedClient({
     baseUrl: 'https://api.example.test/',
     clientVersion: '1.4.0',
-    accessToken: async () => await Promise.resolve('token-value'),
+    accessToken: async () => await Promise.resolve({ token: 'token-value', generation: 0 }),
     send: async (url, init) => {
       const path = new URL(url).pathname;
       calls.push({
@@ -439,13 +461,18 @@ describe('the reply bridge keeps no body it is not showing (1.0.12)', () => {
     const held = new Promise<void>(resolve => {
       gate.release = resolve;
     });
+    const onTheWire: { reached: () => void } = { reached: () => undefined };
+    const sent = new Promise<void>(resolve => {
+      onTheWire.reached = resolve;
+    });
     const api = createAuthedClient({
       baseUrl: 'https://api.example.test/',
       clientVersion: '1.4.0',
-      accessToken: async () => await Promise.resolve('token-value'),
+      accessToken: async () => await Promise.resolve({ token: 'token-value', generation: 0 }),
       send: async url => {
         const path = new URL(url).pathname;
         if (path === '/replies') {
+          onTheWire.reached();
           await held;
           return { status: 200, body: { businessDate: '2026-09-21', cards: two } };
         }
@@ -455,6 +482,7 @@ describe('the reply bridge keeps no body it is not showing (1.0.12)', () => {
     const bridge = createReplyBridge({ api, session: session() });
 
     const reading = bridge.refresh();
+    await sent;
     const cleared = await bridge.forget();
     expect(cleared.cards).toEqual([]);
     gate.release();
@@ -477,13 +505,20 @@ describe('the reply bridge keeps no body it is not showing (1.0.12)', () => {
     const held = new Promise<void>(resolve => {
       gate.release = resolve;
     });
+    // The command is not "in flight" until the request has actually been made: clearing
+    // before that would prove nothing about the race this test is for.
+    const onTheWire: { reached: () => void } = { reached: () => undefined };
+    const sent = new Promise<void>(resolve => {
+      onTheWire.reached = resolve;
+    });
     const api = createAuthedClient({
       baseUrl: 'https://api.example.test/',
       clientVersion: '1.4.0',
-      accessToken: async () => await Promise.resolve('token-value'),
+      accessToken: async () => await Promise.resolve({ token: 'token-value', generation: 0 }),
       send: async url => {
         const path = new URL(url).pathname;
         if (path === '/messages/resolve-ambiguity') {
+          onTheWire.reached();
           await held;
           return { status: 200, body: { status: 'accepted', replayed: false, result: null } };
         }
@@ -497,6 +532,7 @@ describe('the reply bridge keeps no body it is not showing (1.0.12)', () => {
     await bridge.open({ messageId: MESSAGE_ID });
 
     const resolving = bridge.resolve({ messageId: MESSAGE_ID, opportunityId: OPPORTUNITY_ID });
+    await sent;
     await bridge.forget();
     gate.release();
     const answered = await resolving;
@@ -517,13 +553,18 @@ describe('the reply bridge keeps no body it is not showing (1.0.12)', () => {
     const held = new Promise<void>(resolve => {
       gate.release = resolve;
     });
+    const onTheWire: { reached: () => void } = { reached: () => undefined };
+    const sent = new Promise<void>(resolve => {
+      onTheWire.reached = resolve;
+    });
     const api = createAuthedClient({
       baseUrl: 'https://api.example.test/',
       clientVersion: '1.4.0',
-      accessToken: async () => await Promise.resolve('token-value'),
+      accessToken: async () => await Promise.resolve({ token: 'token-value', generation: 0 }),
       send: async url => {
         const path = new URL(url).pathname;
         if (path === '/replies/confirm') {
+          onTheWire.reached();
           await held;
           return { status: 200, body: { status: 'accepted', replayed: false, result: confirmReplyResultAnswer() } };
         }
@@ -543,6 +584,7 @@ describe('the reply bridge keeps no body it is not showing (1.0.12)', () => {
       firmWideOptOut: false,
       note: '',
     });
+    await sent;
     await bridge.forget();
     gate.release();
     await confirming;
@@ -559,13 +601,18 @@ describe('the reply bridge keeps no body it is not showing (1.0.12)', () => {
     const held = new Promise<void>(resolve => {
       gate.release = resolve;
     });
+    const onTheWire: { reached: () => void } = { reached: () => undefined };
+    const sent = new Promise<void>(resolve => {
+      onTheWire.reached = resolve;
+    });
     const api = createAuthedClient({
       baseUrl: 'https://api.example.test/',
       clientVersion: '1.4.0',
-      accessToken: async () => await Promise.resolve('token-value'),
+      accessToken: async () => await Promise.resolve({ token: 'token-value', generation: 0 }),
       send: async url => {
         const path = new URL(url).pathname;
         if (path === '/replies/card') {
+          onTheWire.reached();
           await held;
           return { status: 200, body: card() };
         }
@@ -577,6 +624,7 @@ describe('the reply bridge keeps no body it is not showing (1.0.12)', () => {
     await bridge.refresh();
 
     const opening = bridge.open({ messageId: MESSAGE_ID });
+    await sent;
     await bridge.forget();
     gate.release();
     await opening;

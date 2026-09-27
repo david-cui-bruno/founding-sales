@@ -102,7 +102,7 @@ function scriptedApi(answer: (path: string) => HttpAnswer | undefined) {
   const api = createAuthedClient({
     baseUrl: 'https://api.example.test/',
     clientVersion: '1.0.5',
-    accessToken: async () => await Promise.resolve('token-value'),
+    accessToken: async () => await Promise.resolve({ token: 'token-value', generation: 0 }),
     send: async (url, init) => {
       const path = new URL(url).pathname;
       calls.push({ path, body: init.body === undefined ? null : JSON.parse(init.body) });

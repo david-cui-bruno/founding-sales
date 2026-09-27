@@ -9,6 +9,9 @@ import type { OperationApi, OperationName } from '../src/shared/operations.ts';
 import type { TodayState } from '../src/renderer/todayContract.ts';
 import { todayState } from './e2e/support/homeFixtures.ts';
 import { adminState } from './e2e/support/adminFixtures.ts';
+import { connectedMailbox, signedInState } from './e2e/support/sessionFixtures.ts';
+import { useSession } from '../src/renderer/app/useSession.ts';
+import type { MailboxState } from '../src/shared/contract.ts';
 import { useHomeAdmin } from '../src/renderer/app/useHomeAdmin.ts';
 import type { AdminState } from '../src/renderer/settingsContract.ts';
 
@@ -189,19 +192,63 @@ describe('the other two reads a window has in flight', () => {
     expect(cached).not.toContain('the last person’s status');
   });
 
-  it('drops the mailbox row read across the same change', () => {
-    // The same rule, taken from the file that owns it rather than re-implemented: a
-    // write built before the transition does nothing after it.
-    const source = createGeneration();
-    const written: string[] = [];
-    const keep = source.guard.keep<string>(value => written.push(value));
+  it('drops the mailbox row when the session changed while that read was in flight', async () => {
+    /*
+     * `useSession` itself, not the rule it uses: the Mailbox row is read when the
+     * window signs in and again whenever it regains focus, and an address belonging to
+     * somebody who has since left this Mac must not appear on it.
+     */
+    const change: { fire: (generation: number) => void } = { fire: () => undefined };
+    const gate: { release: (state: MailboxState) => void } = { release: () => undefined };
+    globalThis.callie = {
+      state: async () => await Promise.resolve(signedInState()),
+      signIn: async () => await Promise.resolve(signedInState()),
+      signOut: async () => await Promise.resolve(signedInState()),
+      refreshToday: async () => await Promise.resolve(signedInState()),
+      onNavigate: () => undefined,
+      onSessionChange: (listener: (value: { generation: number; identity: string | null; reason: string }) => void) => {
+        change.fire = generation => listener({ generation, identity: null, reason: 'device_revoked' });
+      },
+    } as unknown as NonNullable<typeof globalThis.callie>;
+    globalThis.callieMailbox = {
+      state: async () =>
+        await new Promise<MailboxState>(resolve => {
+          gate.release = resolve;
+        }),
+      refresh: async () => await Promise.resolve(connectedMailbox()),
+      connect: async () => await Promise.resolve(connectedMailbox()),
+    } as unknown as NonNullable<typeof globalThis.callieMailbox>;
 
-    keep('the address this person connected');
-    expect(written).toEqual(['the address this person connected']);
+    const seen: (string | null)[] = [];
+    function Row(): React.JSX.Element {
+      const session = useSession();
+      const address = session.mailbox?.status?.mailbox?.emailAddress ?? null;
+      seen.push(address);
+      return <span data-testid="mailbox">{address ?? 'none'}</span>;
+    }
+    render(<Row />);
 
-    const late = source.guard.keep<string>(value => written.push(value));
-    source.note(1);
-    late('the address of somebody who has left');
-    expect(written).toEqual(['the address this person connected']);
+    // The row is being read…
+    await waitFor(() => {
+      expect(seen.length).toBeGreaterThan(1);
+    });
+    // …the session ends while it is on the wire…
+    change.fire(1);
+    // …and only then does the address of the person who has left arrive.
+    gate.release(
+      connectedMailbox({
+        status: {
+          connected: true,
+          mailbox: { emailAddress: 'gone@example.test', status: 'connected', syncState: 'ready' },
+        },
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('mailbox').textContent).toBe('none');
+    });
+    expect(seen).not.toContain('gone@example.test');
+    globalThis.callie = undefined;
+    globalThis.callieMailbox = undefined;
   });
 });

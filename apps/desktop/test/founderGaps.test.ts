@@ -52,7 +52,7 @@ function scriptedApi(answers: Record<string, HttpAnswer | ((body: Record<string,
   const api = createAuthedClient({
     baseUrl: 'https://api.example.test/',
     clientVersion: '1.0.6',
-    accessToken: async () => await Promise.resolve('token-value'),
+    accessToken: async () => await Promise.resolve({ token: 'token-value', generation: 0 }),
     send: async (url, init) => {
       const path = new URL(url).pathname;
       const body = init.body === undefined ? null : (JSON.parse(init.body) as Record<string, unknown>);

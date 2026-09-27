@@ -201,7 +201,6 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
     onConnection: reachable => {
       manager.noteConnection(reachable);
     },
-    sessionGeneration: () => manager.sessionGeneration(),
     // A bridge call refused as unauthenticated. A revocation wipes here exactly as one
     // on the renewal path does — for the session that made the call, and no other — and
     // the window hears about it through `onSessionChange`.

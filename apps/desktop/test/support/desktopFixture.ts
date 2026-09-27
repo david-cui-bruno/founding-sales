@@ -59,6 +59,8 @@ export interface DesktopFixture {
   readonly script: ApiScript;
   readonly manager: SessionManager;
   readonly openedUrls: string[];
+  /** Let a held cache wipe finish. Null until one is waiting. */
+  releaseCacheWipe(): void;
   readonly workspaceId: string;
   advance(ms: number): void;
   stop(): Promise<void>;
@@ -89,7 +91,16 @@ export function sampleToday(workspaceId: string): CachedToday {
 }
 
 export async function createDesktopFixture(
-  options: { readonly clientVersion?: string; readonly supported?: ClientVersionRange } = {},
+  options: {
+    readonly clientVersion?: string;
+    readonly supported?: ClientVersionRange;
+    /**
+     * Hold the cache wipe open (1.0.12). A revocation wipes asynchronously, and a
+     * sign-in can land while it is in flight; a test that wants to drive that moment
+     * needs the wipe to stop where it can reach it.
+     */
+    readonly holdCacheWipe?: boolean;
+  } = {},
 ): Promise<DesktopFixture> {
   const directory = await mkdtemp(join(tmpdir(), 'fss-desktop-'));
   const vault = createMemoryVault();
@@ -181,7 +192,23 @@ export async function createDesktopFixture(
 
   const clientVersion = options.clientVersion ?? CLIENT_VERSION;
   const api = createApiClient({ baseUrl: 'https://api.fss.test', clientVersion, send });
-  const cache = createOfflineCache({ directory, vault, now: () => new Date(current) });
+  const realCache = createOfflineCache({ directory, vault, now: () => new Date(current) });
+  let releaseWipe: (() => void) | null = null;
+  // The *first* wipe only: everything after it runs normally, so a sign-out driven
+  // while the held one is waiting does not wait behind it.
+  let holdNextWipe = options.holdCacheWipe === true;
+  const cache = {
+    ...realCache,
+    wipe: async () => {
+      if (holdNextWipe) {
+        holdNextWipe = false;
+        await new Promise<void>(resolve => {
+          releaseWipe = resolve;
+        });
+      }
+      await realCache.wipe();
+    },
+  };
   const manager = createSessionManager({
     api,
     store: createDeviceStore({ directory, vault }),
@@ -200,6 +227,10 @@ export async function createDesktopFixture(
   });
 
   return {
+    releaseCacheWipe: () => {
+      releaseWipe?.();
+      releaseWipe = null;
+    },
     directory,
     vault,
     api,

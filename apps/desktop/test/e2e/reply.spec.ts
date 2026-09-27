@@ -123,6 +123,9 @@ test('⚠ D5.1: the guess is selected, Enter and Space confirm nothing, and the 
 
   // ⚠ D5.1 again: the button says what pressing it will do, and a follow-up with no
   // date does not book a callback — the domain creates one only if a date is supplied.
+  // The sentence above the button describes the same two presses: on this card, where
+  // Callie read no day, an empty form really is a follow-up with no date.
+  await expect(page.getByTestId('consequence')).toContainText('leave them empty');
   await expect(page.getByTestId('callback-date')).toHaveValue('');
   await expect(page.getByTestId('confirm')).toHaveText('Stop automated sending and note a follow-up — no date yet');
   await page.getByTestId('callback-date').fill('2026-09-28');
@@ -193,6 +196,10 @@ test('asks for the callback the model only proposed, prefilled and still the per
   await expect(page.getByTestId('callback')).toBeVisible();
   await expect(page.getByTestId('callback-date')).toHaveValue('2026-09-28');
   await expect(page.getByTestId('callback-time')).toHaveValue('09:00');
+  // The sentence above the button says what the button will say: a day is required
+  // here, so it may not go on offering the empty form as the second way to press it.
+  await expect(page.getByTestId('consequence')).toContainText('this answer needs one');
+  await expect(page.getByTestId('consequence')).not.toContainText('leave them empty');
 
   /*
    * Clearing the day the model read is not "later, with no date": the server refuses

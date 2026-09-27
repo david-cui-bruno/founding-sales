@@ -264,7 +264,7 @@ function scriptedApi(answers: Readonly<Record<string, HttpAnswer>>): {
   const api = createAuthedClient({
     baseUrl: 'https://api.example.test/',
     clientVersion: '1.4.0',
-    accessToken: async () => await Promise.resolve('token-value'),
+    accessToken: async () => await Promise.resolve({ token: 'token-value', generation: 0 }),
     send: async (url, init) => {
       const path = new URL(url).pathname;
       calls.push({ path, body: init.body === undefined ? null : JSON.parse(init.body) });
@@ -336,7 +336,7 @@ describe('the Today bridge', () => {
         api: createAuthedClient({
           baseUrl: 'https://api.example.test/',
           clientVersion: '1.4.0',
-          accessToken: async () => await Promise.resolve('token-value'),
+          accessToken: async () => await Promise.resolve({ token: 'token-value', generation: 0 }),
           send: async () => {
             if (world.mode === 'down') throw new Error('the server did not answer');
             if (world.mode === 'not_found') return await Promise.resolve({ status: 404, body: { error: 'not_found' } });
@@ -760,7 +760,7 @@ describe('the Today bridge', () => {
     const api = createAuthedClient({
       baseUrl: 'https://api.example.test/',
       clientVersion: '1.4.0',
-      accessToken: async () => await Promise.resolve('token-value'),
+      accessToken: async () => await Promise.resolve({ token: 'token-value', generation: 0 }),
       send: async () => {
         await Promise.resolve();
         throw new Error('no network');
@@ -991,7 +991,7 @@ describe('a refused merge reaches the conflict screen (lane g78, D05)', () => {
     const api = createAuthedClient({
       baseUrl: 'https://api.example.test/',
       clientVersion: '1.4.0',
-      accessToken: async () => await Promise.resolve('token'),
+      accessToken: async () => await Promise.resolve({ token: 'token', generation: 0 }),
       send: async () => await Promise.resolve({ status: 409, body }),
     });
     const outcome = await api.command('/merges/firms', {}, value => value);

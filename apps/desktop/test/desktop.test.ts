@@ -218,6 +218,50 @@ describe('session transitions the window is told about (1.0.12)', () => {
     expect((await mac.manager.state()).device).toBeNull();
   });
 
+  it('wipes for a token the renewal issued, even though acquiring it moved the session', async () => {
+    /*
+     * The case the generation check could have swallowed. Asking for a token renews the
+     * session; the renewal came back with a different role, which is a transition, so
+     * the number moves *during* acquisition. The token in the request's header belongs
+     * to the session after that, and a `device_revoked` for it is this session's
+     * business — reading the number before the token would have called it somebody
+     * else's and ignored it.
+     */
+    const mac = await started();
+    await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
+    const before = mac.manager.sessionGeneration();
+
+    mac.script.role('admin');
+    mac.advance(3_600_000);
+    const access = await mac.manager.accessToken();
+    expect(access).not.toBeNull();
+    expect(access?.generation).toBe(before + 1);
+
+    await mac.manager.noteAuthRefusal('device_revoked', access?.generation ?? -1);
+    expect((await mac.manager.state()).device).toBeNull();
+  });
+
+  it('drops the wipe when somebody signs in while it is in flight', async () => {
+    // The wipe is asynchronous — the cache, then the device file and both secrets — and
+    // the check is repeated after each await, so a session that began in the middle of
+    // it keeps its credentials.
+    const mac = await started({ holdCacheWipe: true });
+    await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
+    const madeUnder = mac.manager.sessionGeneration();
+
+    const wiping = mac.manager.noteAuthRefusal('device_revoked', madeUnder);
+    // The wipe is waiting on the cache. Somebody signs out and in again behind it.
+    await Promise.resolve();
+    await mac.manager.signOut();
+    await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
+    mac.releaseCacheWipe();
+    await wiping;
+
+    // `store.forget()` is never reached: this Mac is still registered.
+    expect((await mac.manager.state()).device).not.toBeNull();
+    expect(mac.vault.entries.has(DEVICE_SECRET_ACCOUNT)).toBe(true);
+  });
+
   it('is not a wipe for a refusal that is not one: a 403 on one call is that call’s business', async () => {
     const mac = await started();
     await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
@@ -237,13 +281,18 @@ describe('the authenticated client reports what it was refused with (1.0.12)', (
     generation: number;
   }
 
-  const clientWith = (status: number, body: unknown, refusals: Refusal[], generation = () => 0) =>
+  const clientWith = (
+    status: number,
+    body: unknown,
+    refusals: Refusal[],
+    access: () => Promise<{ token: string; generation: number }> = async () =>
+      await Promise.resolve({ token: 'token-value', generation: 0 }),
+  ) =>
     createAuthedClient({
       baseUrl: 'https://api.example.test/',
       clientVersion: '1.4.0',
-      accessToken: async () => await Promise.resolve('token-value'),
+      accessToken: access,
       send: async () => await Promise.resolve({ status, body }),
-      sessionGeneration: generation,
       onAuthRefusal: (reason, refusedStatus, sessionGeneration) =>
         refusals.push({ reason, status: refusedStatus, generation: sessionGeneration }),
     });
@@ -261,12 +310,33 @@ describe('the authenticated client reports what it was refused with (1.0.12)', (
   it('reports the session the call was made under, not the one it was answered under', async () => {
     const refusals: Refusal[] = [];
     let generation = 4;
-    const client = clientWith(401, { error: 'device_revoked' }, refusals, () => generation);
+    const client = clientWith(401, { error: 'device_revoked' }, refusals, async () =>
+      await Promise.resolve({ token: 'token-value', generation }),
+    );
     const reading = client.read('/today', value => value, {});
     // Somebody signs out and in again while the call is on the wire.
     generation = 6;
     await reading;
     expect(refusals).toEqual([{ reason: 'device_revoked', status: 401, generation: 4 }]);
+  });
+
+  it('reports the session the token came from, when fetching it moved the session', async () => {
+    /*
+     * The renewal case. Asking for a token can renew the session, and a renewal that
+     * came back with a different role *is* a transition: the token in this request's
+     * header belongs to the session after it, not before. Reading the number before the
+     * token would report the old one, and a revocation for the new token would then be
+     * ignored — which is the reproduction the review gave: started=1, current=2.
+     */
+    const refusals: Refusal[] = [];
+    let generation = 1;
+    const client = clientWith(401, { error: 'device_revoked' }, refusals, async () => {
+      await Promise.resolve();
+      generation = 2; // the renewal came back with another role, mid-acquisition
+      return { token: 'the-renewed-token', generation };
+    });
+    await client.read('/today', value => value, {});
+    expect(refusals).toEqual([{ reason: 'device_revoked', status: 401, generation: 2 }]);
   });
 
   it('says nothing about a refusal that is not about authentication', async () => {
@@ -335,7 +405,7 @@ describe('online follows every call (wave 1)', () => {
     const client = createAuthedClient({
       baseUrl: 'https://api.fss.test',
       clientVersion: CLIENT_VERSION,
-      accessToken: async () => await Promise.resolve('token'),
+      accessToken: async () => await Promise.resolve({ token: 'token', generation: 0 }),
       send: async () => {
         if (!reachable) throw new Error('the server did not answer');
         // A refusal is an answer: the server was reached.
@@ -361,7 +431,7 @@ describe('online follows every call (wave 1)', () => {
     const client = createAuthedClient({
       baseUrl: 'https://api.fss.test',
       clientVersion: CLIENT_VERSION,
-      accessToken: async () => await Promise.resolve('token'),
+      accessToken: async () => await Promise.resolve({ token: 'token', generation: 0 }),
       send: async () => {
         if (mode === 'down') throw new Error('unreachable');
         const status = mode === 'ok' ? 200 : mode === 'refused' ? 409 : 500;

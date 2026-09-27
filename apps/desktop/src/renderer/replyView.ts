@@ -71,6 +71,7 @@ const DISPOSITION_CONSEQUENCES: Readonly<Record<ReplyDisposition, string>> = Obj
     'Callie stops automated sending for this firm and hands it to you. It does not move the deal forward on its own.',
   referral_or_wrong_person:
     'Callie stops automated sending for this firm and hands it to you. Add the right contact on the firm page.',
+  // The card where Callie read no day in the reply; `followUpConsequence` is the other.
   follow_up_later:
     'Callie stops automated sending. Enter a day and a time below and it books that callback; leave them empty and it is a follow-up with no date on it.',
   not_interested:
@@ -110,6 +111,21 @@ export const FOLLOW_UP_WITHOUT_DATE = 'Stop automated sending and note a follow-
 export const CALLBACK_REQUIRED_LABEL = 'Enter the day before confirming this';
 export const CALLBACK_REQUIRED_HINT =
   'Callie read a day in this reply, so this answer needs one. Type the day, or choose a different answer.';
+
+/**
+ * What confirming a follow-up will do, on this card.
+ *
+ * The sentence above the button and the button itself have to describe the same press.
+ * On a card where the model proposed a day, `confirmReplyDisposition` refuses an empty
+ * callback (`callback_required`) and the button says so (`CALLBACK_REQUIRED_LABEL`) — so
+ * the consequence may not go on offering "leave them empty", which is the one branch
+ * that cannot happen there. Everywhere else both branches are real, and it names both.
+ */
+export function followUpConsequence(callbackProposed: boolean): string {
+  return callbackProposed
+    ? 'Callie stops automated sending and books the callback you enter below. Callie read a day in this reply, so this answer needs one.'
+    : DISPOSITION_CONSEQUENCES.follow_up_later;
+}
 
 /**
  * What the button says, and it says exactly what pressing it will do (1.0.12).
@@ -321,7 +337,10 @@ export function buildReplyCardView(
     ? REPLY_DISPOSITIONS.map(disposition => ({
         disposition,
         label: DISPOSITION_LABELS[disposition],
-        consequence: DISPOSITION_CONSEQUENCES[disposition],
+        consequence:
+          disposition === 'follow_up_later'
+            ? followUpConsequence(card.callbackProposal !== null)
+            : DISPOSITION_CONSEQUENCES[disposition],
         suggested: card.proposedDisposition === disposition,
         selected: chosen === disposition,
       }))

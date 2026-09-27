@@ -9,6 +9,7 @@ import {
   type StoredSession,
 } from '../shared/contract.ts';
 import type { ApiClient, ApiOutcome } from './apiClient.ts';
+import type { AccessSession } from './authedClient.ts';
 import type { DeviceStore } from './deviceStore.ts';
 import type { OfflineCache } from './offlineCache.ts';
 
@@ -78,7 +79,7 @@ export interface SessionManager {
    * It is deliberately not on the renderer's bridge. A token that crossed the
    * preload boundary would be a token in a page's memory.
    */
-  accessToken(): Promise<string | null>;
+  accessToken(): Promise<AccessSession | null>;
   /** How many renewals actually reached the API. The serialisation test reads this. */
   renewalCount(): number;
   /**
@@ -304,12 +305,31 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
       // Only the refusals that mean the registration is over. Everything else a bridge
       // is refused with is the bridge's own notice to show, not a reason to wipe.
       if (!REVOCATIONS.has(reason)) return;
-      // And only for the session that asked. A call made before a sign-out can be
-      // answered `device_revoked` after somebody has signed in again; wiping then would
-      // end a perfectly good session on the strength of the old one's answer.
+      /*
+       * And only for the session that asked. A call made before a sign-out can be
+       * answered `device_revoked` after somebody has signed in again; wiping then would
+       * end a perfectly good session on the strength of the old one's answer.
+       *
+       * The check is repeated after **every** await, not only at the start: loading the
+       * device file and wiping the cache are asynchronous, and a sign-in can land while
+       * either is in flight. The one that matters most is the last — `store.forget()`
+       * deletes `device.json` and both secrets — and it is not reached at all once the
+       * number has moved.
+       */
       if (sessionGeneration !== generation) return;
       await ensureLoaded();
-      await noteRefusal(reason);
+      if (sessionGeneration !== generation) return;
+      notice = reason;
+      await options.cache.wipe();
+      if (sessionGeneration !== generation) return;
+      await options.store.forget();
+      if (sessionGeneration !== generation) return;
+      device = null;
+      session = null;
+      today = null;
+      asOf = null;
+      stale = false;
+      announce(reason);
     },
 
     sessionGeneration: () => generation,
@@ -320,7 +340,10 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
 
     async accessToken() {
       const live = await liveSession();
-      return live === null ? null : live.accessToken;
+      // The generation is read here, with the token, and not by the caller afterwards:
+      // `liveSession` may have renewed, and a renewal that changed the role has already
+      // moved the number by the time this line runs. The pair is what the caller needs.
+      return live === null ? null : { token: live.accessToken, generation };
     },
 
     async state() {

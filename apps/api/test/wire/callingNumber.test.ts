@@ -91,7 +91,7 @@ function settingsWindow(role: 'admin' | 'salesperson' = 'admin') {
     api: createAuthedClient({
       baseUrl: 'https://api.example.test/',
       clientVersion: FIRST_VERSION_WITH_THE_CONTROL,
-      accessToken: async () => await Promise.resolve('token-value'),
+      accessToken: async () => await Promise.resolve({ token: 'token-value', generation: 0 }),
       send: async (url, init) => {
         const path = new URL(url).pathname;
         calls.push({ method: init.method, path, body: init.body === undefined ? null : JSON.parse(init.body) });

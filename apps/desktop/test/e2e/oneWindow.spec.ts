@@ -288,6 +288,33 @@ test('leaving Replies while a command is in flight strands nothing and brings no
   await expect(page.getByTestId('refresh')).toBeEnabled();
 });
 
+test('a confirmation held across a session change brings no reply back', async ({ page }) => {
+  // The same command race as the navigation one, at the other transition: the person
+  // signs out, or this Mac is revoked, while a confirmation is on the wire. The view
+  // goes with the session, the hold on the column goes with it, and nothing the
+  // command would have re-read is drawn.
+  server = await startAppServer({ replies: replyState() });
+  await page.goto(server.url('#replies'));
+  await page.getByTestId('reply-open').nth(0).click();
+  await expect(page.getByTestId('reply-card')).toBeVisible();
+
+  const release = server.hold('replies.confirm');
+  await page.getByTestId('confirm').click();
+  await expect(page.getByTestId('column')).toHaveAttribute('aria-busy', 'true');
+
+  await page.evaluate(() => {
+    const listeners = (globalThis as { __sessionListeners?: ((change: unknown) => void)[] }).__sessionListeners ?? [];
+    for (const listener of listeners) listener({ generation: 1, identity: null, reason: 'device_revoked' });
+  });
+  release();
+
+  // Whatever the window shows next, it is not the card that was open, and the column
+  // it shows it in can be used.
+  await expect(page.getByTestId('reply-card')).toHaveCount(0);
+  await expect(page.getByTestId('column')).not.toHaveAttribute('aria-busy', 'true');
+  expect(await page.getByTestId('column').evaluate(element => (element as HTMLElement).inert)).toBe(false);
+});
+
 test('a session change empties the window: the cache and everything typed go at once', async ({ page }) => {
   /*
    * The main process says the person, the workspace or the role changed — or that this

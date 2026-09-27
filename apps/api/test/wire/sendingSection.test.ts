@@ -99,7 +99,7 @@ describe('8.0ae: the sending section parses the API’s own answer (lane g69)', 
       api: createAuthedClient({
         baseUrl: 'https://api.example.test/',
         clientVersion: FIRST_VERSION_WITH_THE_FIX,
-        accessToken: async () => await Promise.resolve(token),
+        accessToken: async () => await Promise.resolve({ token, generation: 0 }),
         send: through(calls),
       }),
       session: { state: async () => await Promise.resolve({ online: true, mayMutate: true, device: { role: 'admin' as const } }) },
