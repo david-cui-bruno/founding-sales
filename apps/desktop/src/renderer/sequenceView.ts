@@ -607,6 +607,7 @@ export const TEMPLATE_ISSUE_SENTENCES: Readonly<Record<string, string>> = Object
   template_body_too_long: 'The email is longer than 89 words, sign-off included.',
   template_body_multiple_urls: 'The email has more than one link.',
   template_footer_missing: 'The email does not end with the sign-off and the stop line.',
+  template_sign_off_repeats_stop_line: 'The sign-off repeats the stop line; the footer adds that line itself.',
   template_required_sentence_missing: 'A sentence this workspace requires is missing.',
   template_pricing_or_guarantee_language: 'The email mentions prices, percentages or guarantees.',
   template_unknown_variable: 'The email names a variable Callie cannot fill.',

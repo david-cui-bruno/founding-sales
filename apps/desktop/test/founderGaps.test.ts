@@ -175,6 +175,10 @@ describe('the template form (audit G03)', () => {
     expect(sequenceNotice('template_unapproved:template_footer_missing,template_body_multiple_urls')).toBe(
       'Not approved. The email does not end with the sign-off and the stop line. The email has more than one link.',
     );
+    // The server's newest rule (wave 3b): a sign-off that repeats the stop line.
+    expect(sequenceNotice('template_unapproved:template_sign_off_repeats_stop_line')).toBe(
+      'Not approved. The sign-off repeats the stop line; the footer adds that line itself.',
+    );
     expect(sequenceNotice('draft_saved')).toBe('Draft saved.');
     expect(sequenceNotice('Message copied.')).toBe('Message copied.');
   });
