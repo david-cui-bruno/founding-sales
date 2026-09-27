@@ -369,6 +369,23 @@ test('what a person is typing survives the window regaining focus', async ({ pag
   await expect(page.getByTestId('snooze-reason').nth(1)).toHaveValue('Waiting on their board');
 });
 
+test('what a person is typing survives leaving Today and coming back', async ({ page }) => {
+  // The acceptance list from 1.0.11. A field whose value lived in the component that
+  // draws it would lose it the moment the column showed Replies, so the drafts live
+  // above the route (`app/drafts.tsx`) and the fields read them by key.
+  server = await startAppServer({ today: todayState({ expanded: expandedFirm() }) });
+  await page.goto(server.url());
+  await settled(page);
+
+  await page.getByTestId('snooze-reason').nth(1).fill('Waiting on their board');
+  await page.getByTestId('nav-replies').click();
+  await expect(page.getByTestId('column')).toHaveAttribute('data-route', 'replies');
+  await page.getByTestId('nav-today').click();
+  await expect(page.getByTestId('column')).toHaveAttribute('data-route', 'today');
+
+  await expect(page.getByTestId('snooze-reason').nth(1)).toHaveValue('Waiting on their board');
+});
+
 test('only a usable number is offered, callable because the server just said so', async ({ page }) => {
   server = await startAppServer({
     today: todayState({ expanded: expandedFirm(), dialAdvice: [CALLABLE_ADVICE] }),
