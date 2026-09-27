@@ -26,8 +26,9 @@ import { repositoryPath } from './support/repository.ts';
  * carries ten fields beyond the schema version, `refuses` and the blocking counts, and the
  * coordinator's release helper greps four of them. A full 0019-shaped report must produce
  * the line lane W2-M's script wrote, field for field and in its order; 0020 must produce
- * its own fourteen (lane W3-F); a migration with no extras must get the generic line and
- * none of either.
+ * its own seventeen (lane W3-F), with the rows it will hold for repair reported apart
+ * from the ones that stop the release; a migration with no extras must get the generic
+ * line and none of either.
  */
 
 const SCRIPT = repositoryPath('infra/scripts/preflight.sh');
@@ -308,7 +309,7 @@ describe('preflight.sh counts on the operations task, with the release’s worke
     );
   });
 
-  it('writes 0020’s own fourteen fields, which no other migration gets', () => {
+  it('writes 0020’s own seventeen fields, which no other migration gets', () => {
     // A report of the shape 0020 answers with (lane W3-F): what the release recomposes
     // and dedupes, and the ids of anything that would not fit once composed.
     const counts = {
@@ -317,14 +318,15 @@ describe('preflight.sh counts on the operations task, with the release’s worke
         { settingKey: 'business_time_zone', versions: 3, current: 1 },
         { settingKey: 'sending_enabled', versions: 2, current: 1 },
       ],
-      fences: { prepared: 7, held: 2, alreadyComposed: 4, recomposed: 5, withoutTemplateVersion: 1 },
-      templates: { versions: 9, approved: 6, legacyFooterBlock: 5, footerless: 3, stopLineElsewhere: 1 },
+      fences: { prepared: 7, held: 2, alreadyComposed: 4, recomposed: 5, withoutTemplateVersion: 1, heldForRepair: 2 },
+      templates: { versions: 9, approved: 6, legacyFooterBlock: 5, footerless: 3, ambiguousFooter: 1 },
       postalAddress: { configured: false },
       oversize: {
         fenceIds: ['fence-a'],
         templateVersionIds: ['template-a', 'template-b'],
         withMaxAddress: { fenceIds: ['fence-b', 'fence-c'], templateVersionIds: ['template-c'] },
       },
+      repair: { fenceIds: ['fence-d', 'fence-e'], templateVersionIds: ['template-d'] },
     };
     const stub = world({ counts, refuses: true });
     const run = preflight(stub, ['infra/roots/rehearsal', PREFIX, '0020', '--worker-digest', RELEASE], {}, '0020');
@@ -337,9 +339,11 @@ describe('preflight.sh counts on the operations task, with the release’s worke
         'blocking_oversizeFences=1 blocking_oversizeTemplates=2',
         'settings_rows_by_key=business_time_zone:3,sending_enabled:2 settings_current_rows=2',
         'fences_prepared=7 fences_held=2 fences_to_recompose=5 fences_already_composed=4',
-        'fences_without_template_version=1 templates_legacy_footer_deduped=5 templates_footerless=3',
-        'templates_stop_line_elsewhere=1 postal_address_configured=false',
+        'fences_without_template_version=1 fences_held_for_repair=2',
+        'templates_legacy_footer_deduped=5 templates_footerless=3 templates_ambiguous_footer=1',
+        'postal_address_configured=false',
         'oversize_fences=fence-a oversize_templates=template-a,template-b oversize_with_max_address=3',
+        'repair_fences=fence-d,fence-e repair_templates=template-d',
       ].join(' '),
     );
     expect(run.report).not.toContain('research_seed_rows');

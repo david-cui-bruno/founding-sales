@@ -20,19 +20,24 @@ import { parseFssCommand } from '../src/tools/fss/commands.ts';
  *
  * ## The vacuous-pass traps, named
  *
- * **A count over an empty database.** The fixture stores a settings row, two unsent
- * fences (one already composed, one not), a legacy template, a footerless one, and one
- * long enough to refuse; every number below is non-zero because something is there.
+ * **A count over an empty database.** The fixture stores a settings row, three unsent
+ * fences (one already composed, one to recompose, one ambiguous), a legacy template, a
+ * footerless one, an ambiguous one and one long enough to refuse; every number below is
+ * non-zero because something is there.
  *
- * **A refusal that never fires.** The oversize template makes `refuses` true and names
- * the id; removing it makes the same command answer false, so the refusal is the row.
+ * **A refusal that never fires, and one that fires too widely.** The oversize template
+ * makes `refuses` true and names the id; shortening it makes the same command answer
+ * false *while the ambiguous rows are still there*, which is the P2 of the review of
+ * PR 296: only a body over 4,000 characters stops a release.
  */
 
 let database: TestDatabase;
 let workspaceId = '';
 let userId = '';
 let oversizeTemplateId = '';
+let ambiguousTemplateId = '';
 let staleFenceId = '';
+let repairFenceId = '';
 
 const SIGN_OFF = 'Sam Example';
 const LEGACY = `Hello.\n\n${SIGN_OFF}\n${SENDING_STOP_LINE}`;
@@ -100,12 +105,14 @@ beforeAll(async () => {
 
   const legacyTemplate = await template('Legacy shape', LEGACY);
   await template('Footerless shape', 'Hello, with no footer at all.');
-  // Exactly 4,000 characters stored — the longest the table admits — and longer than
-  // that once the footer is composed, which is the one thing 0020 refuses on.
-  oversizeTemplateId = await template(
-    'Too long once composed',
-    `${'x'.repeat(4000 - 1 - SENDING_STOP_LINE.length)}\n${SENDING_STOP_LINE}`,
-  );
+  // A stop line this workspace's records cannot account for: nothing is removed from it
+  // and a step using it holds, but the release is not stopped by it.
+  ambiguousTemplateId = await template('Ambiguous footer', `Hello.\n\nHi ${SIGN_OFF}\n${SENDING_STOP_LINE}`);
+  // Exactly 4,000 characters stored — the longest the table admits — and footerless, so
+  // composing it appends a block it has no room for. That is the one thing 0020 refuses
+  // on, and with no address configured it is the only way to reach it: replacing a
+  // recognised block with the same block costs nothing.
+  oversizeTemplateId = await template('Too long once composed', 'x'.repeat(4000));
 
   // Two unsent fences: one carrying exactly what the new code composes, one carrying a
   // footer from before the address existed.
@@ -130,8 +137,10 @@ beforeAll(async () => {
        RETURNING id`,
       [workspaceId, mailboxId, firmId, body, legacyTemplate, state],
     );
-  staleFenceId = await fence(`Hello.\n\nAn older footer\n${SENDING_STOP_LINE}`, 'prepared');
+  // One line short of the composed shape: the claim will rewrite it.
+  staleFenceId = await fence(`Hello.\n${SIGN_OFF}\n${SENDING_STOP_LINE}`, 'prepared');
   await fence(LEGACY, 'held');
+  repairFenceId = await fence(`Hello.\n\nHi ${SIGN_OFF}\n${SENDING_STOP_LINE}`, 'prepared');
 });
 
 afterAll(async () => {
@@ -157,10 +166,11 @@ describe('fss and migration 0020', () => {
       counts: {
         blocking: { oversizeFences: 0, oversizeTemplates: 1 },
         settings: [{ settingKey: 'business_time_zone', versions: 1, current: 1 }],
-        fences: { prepared: 1, held: 1, alreadyComposed: 1, recomposed: 1, withoutTemplateVersion: 0 },
-        templates: { versions: 3, approved: 3, legacyFooterBlock: 1, footerless: 1, stopLineElsewhere: 0 },
+        fences: { prepared: 2, held: 1, alreadyComposed: 1, recomposed: 1, withoutTemplateVersion: 0, heldForRepair: 1 },
+        templates: { versions: 4, approved: 4, legacyFooterBlock: 1, footerless: 1, ambiguousFooter: 1 },
         postalAddress: { configured: false },
         oversize: { fenceIds: [], templateVersionIds: [oversizeTemplateId] },
+        repair: { fenceIds: [repairFenceId], templateVersionIds: [ambiguousTemplateId] },
       },
     });
     // The fence whose footer is stale is the one that would be recomposed; the read
@@ -169,13 +179,21 @@ describe('fss and migration 0020', () => {
       'SELECT body FROM outbound_messages WHERE workspace_id = $1 AND id = $2',
       [workspaceId, staleFenceId],
     );
-    expect(rows[0]?.body).toBe(`Hello.\n\nAn older footer\n${SENDING_STOP_LINE}`);
+    expect(rows[0]?.body).toBe(`Hello.\n${SIGN_OFF}\n${SENDING_STOP_LINE}`);
   });
 
-  it('stops refusing once the long body is shortened, and answers only on schema 19', async () => {
+  it('stops refusing once the long body is shortened, though the ambiguous rows remain', async () => {
     await database.session.query('UPDATE template_versions SET body = $2 WHERE id = $1', [oversizeTemplateId, LEGACY]);
     const after = JSON.parse((await run(['admin', 'schema-preflight', '0020'])).stdout) as Record<string, unknown>;
     expect(after['refuses']).toBe(false);
+    // Only a body over 4,000 characters stops a release. The ambiguous fence and the
+    // ambiguous template are still counted, still named, and still not blockers.
+    expect(after['counts']).toMatchObject({
+      blocking: { oversizeFences: 0, oversizeTemplates: 0 },
+      fences: { heldForRepair: 1 },
+      templates: { ambiguousFooter: 1 },
+      repair: { fenceIds: [repairFenceId], templateVersionIds: [ambiguousTemplateId] },
+    });
 
     const { code } = await run(['migrate']);
     expect(code).toBe(0);

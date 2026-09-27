@@ -24,11 +24,16 @@ import { fssFenceIdOfSentMessage } from './types.ts';
  * `@fss/domain/restore`'s decision, because it reads sequence state this package does
  * not import.
  *
- * ## Why metadata and never a body
+ * ## Why metadata, and the one place a body is read
  *
  * The marker, the recipient, the subject and Gmail's own instant are all a tombstone
- * needs, and all four are headers or envelope fields. `getBody` stays behind 12.3's
- * rule — a body only after a plausible match — and a restore does not need one.
+ * needs, and all four are headers or envelope fields, so the scan itself never reads a
+ * body. `readSentMessageBytes` does, for one case and after the plainest possible match:
+ * a fence the restored database still holds as `prepared` is about to be recorded `sent`,
+ * and since lane W3-F the footer is composed at the claim — so the bytes the restored row
+ * carries may not be the bytes that left. 12.3's rule is "a body only after a plausible
+ * match", and a Message-ID this mailbox wrote is the most plausible match there is
+ * (review of PR 296, P1).
  */
 
 /** The headers the scan reads. The Message-ID is the marker; the rest fill the tombstone. */
@@ -201,6 +206,31 @@ async function unlessMalformed<T>(pending: Promise<T>): Promise<T | typeof MALFO
     return await pending;
   } catch (error) {
     if (error instanceof GmailClientError && error.code === 'malformed_response') return MALFORMED;
+    throw error;
+  }
+}
+
+/**
+ * The bytes Gmail actually holds for one message, or null when they cannot be read.
+ *
+ * Null covers every way this can fail to *prove* anything — a grant that is gone, a
+ * message Gmail no longer returns, a body the fetch truncated — and each means the same
+ * thing to the caller: these bytes are unverified, record them as such rather than
+ * claiming a fence's stored body is what the prospect received.
+ */
+export async function readSentMessageBytes(
+  context: RepositoryContext,
+  deps: SentFolderScanDeps,
+  input: { readonly mailboxId: string; readonly providerMessageId: string },
+): Promise<{ readonly body: string } | null> {
+  const access = await accessForMailbox(context, deps, input.mailboxId);
+  if (!access.ok) return null;
+  try {
+    const body = await deps.gmail.getBody(access.access, input.providerMessageId);
+    if (body === null || body.truncated || body.text.trim().length === 0) return null;
+    return { body: body.text };
+  } catch (error) {
+    if (error instanceof GmailClientError) return null;
     throw error;
   }
 }

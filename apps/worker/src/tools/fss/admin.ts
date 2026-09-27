@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { withTransaction, type SessionQueryable } from '@fss/domain/db/queryable.ts';
 import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
 import { reconcileOutboundMessage } from '@fss/domain/outbound/reconcile.ts';
-import { scanSentFolder } from '@fss/domain/outbound/sentFolder.ts';
+import { readSentMessageBytes, scanSentFolder } from '@fss/domain/outbound/sentFolder.ts';
 import { openHold, releaseHold } from '@fss/domain/policy/holds.ts';
 import { ALL_BLOCKED_ACTION_KINDS } from '@fss/domain/policy/types.ts';
 import { putReleaseRecord, readReleaseRecord, type StoredReleaseRecord } from '@fss/domain/release/records.ts';
@@ -773,6 +773,7 @@ function missingFenceLine(workspaceId: string, mailboxId: string, message: strin
         outboundMessageId: recovery.outboundMessageId,
         stepExecutionId: recovery.stepExecutionId,
         stepCompleted: recovery.stepCompleted,
+        sentBytesVerified: recovery.sentBytesVerified,
       };
     case 'tombstoned':
       return {
@@ -899,11 +900,30 @@ export async function mailboxReconcileSentCommand(invocation: AdminInvocation): 
           mailbox: { id: mailbox.id, ownerUserId: mailbox.ownerUserId },
           message,
           actor: deps.actor,
+          // Only a fence this copy still holds as pre-dispatch reaches this reader, and
+          // only then: the bytes it records must be the bytes Gmail has, because the
+          // footer is composed at the claim and the restored body can predate it.
+          readSentBytes: async sent =>
+            await readSentMessageBytes(context, deps, {
+              mailboxId: mailbox.id,
+              providerMessageId: sent.providerMessageId,
+            }),
         }),
       );
       outcomes[recovery.outcome] += 1;
       const line = missingFenceLine(workspaceId, mailbox.id, redactedMessageId(message.rfcMessageId), recovery);
       missingFences.push(line);
+      if (recovery.outcome === 'pre_dispatch_marked_sent' && !recovery.sentBytesVerified) {
+        // Recorded `sent` — never twice — but what it said is not proven. The runbook's
+        // human step reads this list before the services start.
+        unresolved.push({
+          kind: 'sent_bytes_unverified',
+          workspaceId,
+          mailboxId: mailbox.id,
+          outboundMessageId: recovery.outboundMessageId,
+          message: redactedMessageId(message.rfcMessageId),
+        });
+      }
       if (recovery.outcome === 'unattached') {
         if (holdUnattached) {
           const { firmIds, enrollmentIds, reason } = recovery;

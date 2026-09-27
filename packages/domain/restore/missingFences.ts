@@ -30,7 +30,11 @@ import { businessDateOf } from '../today/snapshots.ts';
  *     which `fss admin mailbox reconcile-sent` runs first; nothing to do.
  *   * `pre_dispatch_marked_sent` — the copy has the fence, but still `prepared` or
  *     `held`: the restore point fell between preparation and dispatch. It is recorded as
- *     sent from Gmail's evidence, or the dispatch path would send it a second time.
+ *     sent from Gmail's evidence, or the dispatch path would send it a second time. The
+ *     bytes it records are the ones Gmail holds when `readSentBytes` can read them —
+ *     since lane W3-F the footer is composed at the claim, so a restored body can
+ *     predate the rewrite that left — and when they cannot be read the fence is still
+ *     marked sent and the recovery reports `sentBytesVerified: false` for the human step.
  *   * `tombstoned` — no fence, and the send is attributable to exactly one step: the
  *     message's recipient is a route of exactly one live enrollment's contact, that
  *     enrollment belongs to the mailbox's owner, and its next unfinished step is an email
@@ -96,6 +100,15 @@ export type SentMessageRecovery =
       readonly outboundMessageId: string;
       readonly stepExecutionId: string | null;
       readonly stepCompleted: boolean;
+      /**
+       * Whether the bytes now recorded on the fence are the bytes Gmail holds.
+       *
+       * False when they could not be read — no reader supplied, the grant gone, the body
+       * truncated. The fence is still marked `sent`, because the alternative is sending
+       * it a second time; what is unresolved is *what it said*, and the restore report
+       * lists it for the human step (review of PR 296, P1).
+       */
+      readonly sentBytesVerified: boolean;
     }
   | {
       readonly outcome: 'tombstoned';
@@ -118,6 +131,17 @@ export interface RecoverSentMessageInput {
   readonly message: SentFolderMessage;
   /** Who the ledger says did it. Never a credential. */
   readonly actor?: string | undefined;
+  /**
+   * Reads the bytes Gmail actually holds for this message
+   * (`readSentMessageBytes` in `packages/domain/outbound/sentFolder.ts`).
+   *
+   * Called for one case only: a fence the restored database still holds as `prepared` or
+   * `held`, which is about to be recorded `sent`. Since the footer is composed at the
+   * claim, the restored row's body may predate the rewrite that actually went out, so
+   * the recovery reads what left and records that. Absent or null, the fence is still
+   * marked sent — never twice — and the recovery says its bytes are unverified.
+   */
+  readonly readSentBytes?: ((message: SentFolderMessage) => Promise<{ readonly body: string } | null>) | undefined;
 }
 
 interface LiveEnrollment {
@@ -218,12 +242,20 @@ export async function recoverSentFolderMessage(
     if (fence.state !== 'prepared' && fence.state !== 'held') {
       return { outcome: 'present', outboundMessageId: fence.id, state: fence.state };
     }
+    // What left, when it can be read. The subject comes from the metadata the scan
+    // already has; the body needs Gmail, and only for this one case.
+    const actualBody = input.readSentBytes === undefined ? null : await input.readSentBytes(message);
+    const verifiedBytes =
+      actualBody === null
+        ? undefined
+        : { body: actualBody.body, ...(message.subject === null ? {} : { subject: message.subject }) };
     const marked = await markPreDispatchFenceSent(context, {
       outboundMessageId: fence.id,
       providerMessageId: message.providerMessageId,
       providerThreadId: message.providerThreadId,
       sentAt: message.sentAt,
       ...(input.actor === undefined ? {} : { actor: input.actor }),
+      ...(verifiedBytes === undefined ? {} : { verifiedBytes }),
     });
     if (!marked.ok) {
       // Something moved it between the read and the claim — a live dispatch, which then
@@ -243,6 +275,7 @@ export async function recoverSentFolderMessage(
       outboundMessageId: fence.id,
       stepExecutionId: fence.stepExecutionId,
       stepCompleted,
+      sentBytesVerified: verifiedBytes !== undefined,
     };
   }
 

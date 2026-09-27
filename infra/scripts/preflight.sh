@@ -40,9 +40,11 @@
 # anywhere. A migration whose report carries more than that is named in PREFLIGHT_EXTRAS
 # below, which is how 0019's ten further fields survived this script replacing the one
 # lane W2-M wrote for it: the line it writes is what that one wrote, to the field. 0020
-# (lane W3-F) has fourteen of its own: the settings rows by key, the unsent fences to
-# recompose, the templates whose legacy footer block is deduped, and the ids of any body
-# that would not fit once the footer is composed — the only thing 0020 refuses on.
+# (lane W3-F) has seventeen of its own: the settings rows by key, the unsent fences to
+# recompose, the templates whose legacy footer block is deduped, the ids of anything that
+# will be held for repair rather than sent — which is *not* a blocker — and the ids of any
+# body that would not fit once the footer is composed, which is the only thing 0020
+# refuses on.
 #
 # Exit status: 0 when the migration would apply; 3 when it would refuse; 1 when anything
 # failed — the launch, the answer, or the deregistration of the preflight's own revision,
@@ -253,6 +255,7 @@ def extras_0020():
     templates = counts.get("templates") or {}
     oversize = counts.get("oversize") or {}
     with_address = oversize.get("withMaxAddress") or {}
+    repair = counts.get("repair") or {}
 
     def names(values):
         return ",".join(values) if values else "none"
@@ -266,14 +269,17 @@ def extras_0020():
         ("fences_to_recompose", fences.get("recomposed", "unknown")),
         ("fences_already_composed", fences.get("alreadyComposed", "unknown")),
         ("fences_without_template_version", fences.get("withoutTemplateVersion", "unknown")),
+        ("fences_held_for_repair", fences.get("heldForRepair", "unknown")),
         ("templates_legacy_footer_deduped", templates.get("legacyFooterBlock", "unknown")),
         ("templates_footerless", templates.get("footerless", "unknown")),
-        ("templates_stop_line_elsewhere", templates.get("stopLineElsewhere", "unknown")),
+        ("templates_ambiguous_footer", templates.get("ambiguousFooter", "unknown")),
         ("postal_address_configured", str((counts.get("postalAddress") or {}).get("configured", "unknown")).lower()),
         ("oversize_fences", names(oversize.get("fenceIds"))),
         ("oversize_templates", names(oversize.get("templateVersionIds"))),
         ("oversize_with_max_address",
          len(with_address.get("fenceIds") or []) + len(with_address.get("templateVersionIds") or [])),
+        ("repair_fences", names(repair.get("fenceIds"))),
+        ("repair_templates", names(repair.get("templateVersionIds"))),
     ]
 
 

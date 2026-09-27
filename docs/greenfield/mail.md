@@ -134,17 +134,24 @@ the enrollment the switch stops records `direct_send` rather than `human_reply`
 
 ### 6. There is no unsubscribe link, anywhere
 
-A reply-to-stop footer only. `template_versions` enforces it:
+A reply-to-stop footer only. One CHECK is left on `template_versions`, and it is the
+one about the link:
 
 ```sql
 CONSTRAINT template_versions_no_unsubscribe_link
-  CHECK (body !~* 'unsubscribe' AND subject !~* 'unsubscribe'),
-CONSTRAINT template_versions_approved_has_stop_line
-  CHECK (position('Reply "stop"' IN body) > 0)
+  CHECK (body !~* 'unsubscribe' AND subject !~* 'unsubscribe')
 ```
 
-and an approved version is immutable by trigger. G8 extends this table with nullable
-columns; it does not create it.
+The other two guards this section used to name are gone, and their absence is the
+point of the rules that replaced them. Migration 0019 dropped
+`template_versions_approved_has_stop_line` and the approved-version immutability
+trigger, because wave 2 (S3) made an approved version editable in place. So the stop
+line is no longer a column CHECK: it is enforced where the bytes are decided — the
+approval rule (`templateTextIssues`) and, since migration 0020, the composition at
+send and the fence's own guard, which refuses to store a body that does not end with
+exactly one stop line. `outbound_messages_no_unsubscribe_link` still restates the link
+rule on the bytes that actually leave. G8 extends this table with nullable columns; it
+does not create it.
 
 The whole footer is two lines — the workspace sign-off, then
 
@@ -158,9 +165,10 @@ configured one: the `postal_address` setting
 `composeSendBody` in `packages/domain/src/rules/templates.ts`, called before the fence
 stores a body and its hash — so the bytes the fence freezes are the bytes Gmail receives.
 An approval may carry the legacy block inside the body or none at all; composition
-recognises and replaces the legacy one, and the fence refuses any body that does not end
-with exactly one stop line. With no address configured the block is the two lines above,
-byte for byte, and sending continues.
+replaces a block it can rebuild from recorded configuration, holds a body whose trailing
+stop line it cannot account for, and checks its own output — so the fence never stores a
+body without exactly one final stop line, and never one with two. With no address
+configured the block is the two lines above, byte for byte, and sending continues.
 
 ## The matching order
 

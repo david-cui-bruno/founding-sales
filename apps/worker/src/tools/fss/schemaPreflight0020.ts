@@ -29,9 +29,14 @@ import type { AdminInvocation, AdminOutcome } from './admin.ts';
  *     the footerless ones it will simply append to;
  *   * every body that would be **longer than 4,000 characters** once composed. That is
  *     the only thing it refuses on, because it is the only thing the release cannot do:
- *     `outbound_messages_body_bounded` would refuse the row, and a send that cannot be
- *     composed is a held step rather than an email. `refuses` is true, the ids are named,
- *     and `infra/scripts/preflight.sh` exits 3 before the release stops anything.
+ *     `outbound_messages_body_bounded` would refuse the row. `refuses` is true, the ids
+ *     are named, and `infra/scripts/preflight.sh` exits 3 before the release stops
+ *     anything;
+ *   * every body that will be **held for repair** rather than sent — an ambiguous footer
+ *     (a stop line this workspace's records cannot account for) or a footer that would
+ *     compose to two stop lines. These are reported in fields of their own and do **not**
+ *     refuse (review of PR 296, P2): the release is safe with them, the sends wait, and a
+ *     person fixes the text. Nothing is ever sent with the wrong words because of one.
  *
  * Composition is measured with **no address**, because that is what the release meets:
  * schema 19's CHECK makes a `postal_address` row impossible, so on the day of the release
@@ -48,7 +53,7 @@ export const SCHEMA_PREFLIGHT_0020_MIGRATION = 20;
 
 /** Ids are uuids, and a report is a log line: no body, no address, no prospect text. */
 export interface Preflight0020Blocking {
-  /** Unsent fences whose composed body would pass `SENT_BODY_MAX_LENGTH`. */
+  /** Unsent fences whose composed body would pass `SENT_BODY_MAX_LENGTH`. Nothing else blocks. */
   readonly oversizeFences: number;
   /** Template versions whose composed body would pass it before a single variable grows. */
   readonly oversizeTemplates: number;
@@ -68,6 +73,8 @@ export interface Preflight0020Counts {
     readonly recomposed: number;
     /** Fences with no readable template version, kept only if their bytes already stand. */
     readonly withoutTemplateVersion: number;
+    /** Bodies the claim will hold for repair rather than send. Not a blocker. */
+    readonly heldForRepair: number;
   };
   /** What the composition will do to the stored template versions. */
   readonly templates: {
@@ -77,8 +84,12 @@ export interface Preflight0020Counts {
     readonly legacyFooterBlock: number;
     /** No stop line at all: the footer is simply appended. */
     readonly footerless: number;
-    /** A stop line the composition does not recognise as a block; these hold at send. */
-    readonly stopLineElsewhere: number;
+    /**
+     * A stop line the composition cannot account for from this workspace's records — an
+     * address no setting version holds, a sign-off edited since, prose after the block.
+     * Nothing is removed from these; a step using one holds, and a person fixes the text.
+     */
+    readonly ambiguousFooter: number;
   };
   /** Necessarily false on schema 19: the CHECK this migration widens forbids the row. */
   readonly postalAddress: { readonly configured: boolean };
@@ -91,6 +102,11 @@ export interface Preflight0020Counts {
       readonly fenceIds: readonly string[];
       readonly templateVersionIds: readonly string[];
     };
+  };
+  /** Named too, and not a blocker: what will wait for a person rather than go out wrong. */
+  readonly repair: {
+    readonly fenceIds: readonly string[];
+    readonly templateVersionIds: readonly string[];
   };
 }
 
@@ -158,6 +174,8 @@ export async function readSchemaPreflight0020(session: SessionQueryable): Promis
 
     const oversizeFenceIds: string[] = [];
     const oversizeTemplateIds: string[] = [];
+    const repairFenceIds: string[] = [];
+    const repairTemplateIds: string[] = [];
     const nearlyOversizeFenceIds: string[] = [];
     const nearlyOversizeTemplateIds: string[] = [];
     let prepared = 0;
@@ -171,16 +189,28 @@ export async function readSchemaPreflight0020(session: SessionQueryable): Promis
       else prepared += 1;
       if (row.footer_sign_off === null) {
         withoutTemplateVersion += 1;
-        if (sendBodyIssue(row.body) !== null) oversizeFenceIds.push(row.id);
+        // No sign-off to compose with: the stored bytes stand or the fence waits.
+        if (sendBodyIssue(row.body) !== null) repairFenceIds.push(row.id);
         continue;
       }
-      const decision = composeSendBody(row.body, { signOff: row.footer_sign_off, postalAddress: null });
+      // The same call the claim will make, with the same provenance: on schema 19 no
+      // `postal_address` row can exist, so there is none in force and none recorded.
+      const decision = composeSendBody(row.body, {
+        signOff: row.footer_sign_off,
+        postalAddress: null,
+        recordedAddresses: [],
+      });
       if (!decision.composed) {
-        oversizeFenceIds.push(row.id);
+        // Only the length is a blocker. Everything else waits for a person.
+        if (decision.reason === 'composed_body_too_long') oversizeFenceIds.push(row.id);
+        else repairFenceIds.push(row.id);
         continue;
       }
       if (decision.changed) recomposed += 1;
       else alreadyComposed += 1;
+      // The claim checks the bytes it lets through unchanged, so a stored body that is
+      // already unsendable is a repair case even when composition had nothing to do.
+      if (!decision.changed && sendBodyIssue(row.body) !== null) repairFenceIds.push(row.id);
       if (decision.body.length + MAX_ADDRESS_FOOTER_GROWTH > SENT_BODY_MAX_LENGTH) {
         nearlyOversizeFenceIds.push(row.id);
       }
@@ -189,16 +219,16 @@ export async function readSchemaPreflight0020(session: SessionQueryable): Promis
     let approved = 0;
     let legacyFooterBlock = 0;
     let footerless = 0;
-    let stopLineElsewhere = 0;
     for (const row of templates.rows) {
       if (row.approved_at !== null && row.approved_at !== undefined) approved += 1;
       const decision = composeSendBody(row.body, {
         signOff: row.footer_sign_off ?? '',
         postalAddress: null,
+        recordedAddresses: [],
       });
       if (!decision.composed) {
         if (decision.reason === 'composed_body_too_long') oversizeTemplateIds.push(row.id);
-        else stopLineElsewhere += 1;
+        else repairTemplateIds.push(row.id);
         continue;
       }
       if (decision.deduped) legacyFooterBlock += 1;
@@ -224,13 +254,20 @@ export async function readSchemaPreflight0020(session: SessionQueryable): Promis
           versions: Number(row.versions),
           current: Number(row.current),
         })),
-        fences: { prepared, held, alreadyComposed, recomposed, withoutTemplateVersion },
+        fences: {
+          prepared,
+          held,
+          alreadyComposed,
+          recomposed,
+          withoutTemplateVersion,
+          heldForRepair: repairFenceIds.length,
+        },
         templates: {
           versions: templates.rows.length,
           approved,
           legacyFooterBlock,
           footerless,
-          stopLineElsewhere,
+          ambiguousFooter: repairTemplateIds.length,
         },
         // The CHECK 0020 widens is the proof: no `postal_address` row can exist yet.
         postalAddress: { configured: false },
@@ -242,6 +279,7 @@ export async function readSchemaPreflight0020(session: SessionQueryable): Promis
             templateVersionIds: nearlyOversizeTemplateIds,
           },
         },
+        repair: { fenceIds: repairFenceIds, templateVersionIds: repairTemplateIds },
       },
     };
   } finally {

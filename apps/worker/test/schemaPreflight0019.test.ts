@@ -155,13 +155,17 @@ describe('fss and migration 0019', () => {
     const preflight = JSON.parse((await run(['admin', 'schema-preflight', '0019'])).stdout) as Record<string, unknown>;
     expect(preflight['refuses']).toBe(false);
 
-    // `migrate` applies everything unapplied, so a later migration rides along; 0019 is
-    // the one this file is about and it is the first of them.
+    // `migrate` applies everything unapplied, so 0020 rides along behind 0019. The list
+    // is asserted exactly, in order: a migration that appeared or vanished between them
+    // is this assertion's business as much as 0019 is.
     const { code, stdout } = await run(['migrate']);
     expect(code).toBe(0);
     const report = JSON.parse(stdout) as Record<string, unknown>;
     expect(report).toMatchObject({ schemaVersionBefore: 18, schemaVersionAfter: CURRENT_SCHEMA_VERSION });
-    expect(report['applied']).toContainEqual({ version: 19, name: 'wave2_cleanup' });
+    expect(report['applied']).toEqual([
+      { version: 19, name: 'wave2_cleanup' },
+      { version: 20, name: 'postal_address' },
+    ]);
 
     const after = await run(['admin', 'schema-preflight', '0019']);
     expect(after.code).toBe(20);

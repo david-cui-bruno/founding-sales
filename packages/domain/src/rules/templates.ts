@@ -56,11 +56,6 @@ export const TEMPLATE_MAX_URLS = 1;
  */
 export const SENT_BODY_MAX_LENGTH = 4000;
 
-/** How many lines of address `composeSendBody` will recognise inside a legacy footer block. */
-const FOOTER_ADDRESS_MAX_LINES = 4;
-
-/** The longest address the settings key admits (`postalAddressSettingSchema`). */
-const FOOTER_ADDRESS_MAX_LENGTH = 200;
 
 /**
  * Pricing and guarantee wording, which an approval warns about. Ordinary words that
@@ -92,6 +87,18 @@ export function footerBlock(configuration: FooterConfiguration): string {
 export interface SendFooterConfiguration extends FooterConfiguration {
   /** The `postal_address` setting in force, or null when none is configured. */
   readonly postalAddress?: string | null | undefined;
+  /**
+   * Every address this workspace has ever recorded — the `postal_address` setting's
+   * superseded versions (`readRecordedPostalAddresses`).
+   *
+   * This is **provenance, not a guess** (review of PR 296). The composition replaces a
+   * footer block only when it can rebuild that block from something the database
+   * recorded: the sign-off the template version carries, and an address this workspace
+   * actually configured. A body ending in a stop line the composition cannot account for
+   * is held for review rather than edited, because the alternative is a line-counting
+   * heuristic that would delete `Please call Tuesday.` from an approved body.
+   */
+  readonly recordedAddresses?: readonly string[] | undefined;
 }
 
 /** The block a send appends: the sign-off, the address when there is one, then the stop line. */
@@ -123,10 +130,22 @@ export const APPROVAL_FOOTER_POLICY: SendFooterPolicy = Object.freeze({ postalAd
 export const COMPOSE_SEND_BODY_REFUSALS = [
   /** The switch is on and the workspace has configured no address. */
   'postal_address_required',
-  /** The stop line appears outside the footer block; appending another would duplicate it. */
-  'stop_line_inside_body',
+  /**
+   * The body carries the stop line and does not end with a block this workspace's own
+   * records can account for: an address that was never configured here, a sign-off that
+   * has since been edited, a stop line in the middle of the text. Nothing is removed and
+   * nothing is appended — the body is held for a person to look at.
+   */
+  'footer_ambiguous',
   /** The composed body is longer than the fence's column allows. */
   'composed_body_too_long',
+  /**
+   * The composed bytes are not sendable, which can only mean the footer itself is wrong
+   * — a sign-off that contains the stop sentence produces two. The guard is on this
+   * function's own output, so no caller can be handed a body with two stop lines or
+   * none (review of PR 296, P0).
+   */
+  'composed_body_not_sendable',
 ] as const;
 export type ComposeSendBodyRefusal = (typeof COMPOSE_SEND_BODY_REFUSALS)[number];
 
@@ -142,38 +161,44 @@ export type ComposeSendBodyDecision =
   | { readonly composed: false; readonly reason: ComposeSendBodyRefusal; readonly detail?: string | undefined };
 
 /**
- * Where a recognised footer block starts inside `body`, or null.
+ * Every footer block this workspace's records can account for, longest first.
  *
- * The block is, at the very end of the body and in this order: the sign-off **on a line
- * of its own**, then at most `FOOTER_ADDRESS_MAX_LINES` non-blank lines of address (so a
- * block written with an address that has since changed is still recognised), then the
- * stop line. Nothing else is a block.
- *
- * The line boundary is the whole of the `Hi David` fix (review of PR 264): with the
- * sign-off `David`, the body `Hi David` before the stop line does not end with a
- * *recognised* block, so nothing of it is removed. Matching is done once and removes
- * exactly what it matched; no second pass ever strips the sign-off again.
+ * Each candidate is a string rebuilt from something stored: the sign-off on the template
+ * version, and either no address (the block main's approval rule required, since
+ * migration 0015) or an address the `postal_address` setting recorded. Nothing here is
+ * inferred from the shape of the body — that is the whole difference between replacing a
+ * footer and deleting a sentence somebody wrote.
  */
-function footerBlockStart(body: string, configuration: SendFooterConfiguration): number | null {
+function candidateFooterBlocks(configuration: SendFooterConfiguration): readonly string[] {
   const stopLine = configuration.stopLine ?? SENDING_STOP_LINE;
   const signOff = configuration.signOff.trim();
+  const addresses = [configuration.postalAddress ?? '', ...(configuration.recordedAddresses ?? [])]
+    .map(address => address.trim())
+    .filter(address => address.length > 0);
+  const blocks = new Set<string>([`${signOff}\n${stopLine}`]);
+  for (const address of addresses) blocks.add(`${signOff}\n${address}\n${stopLine}`);
+  // Longest first: when an address block and the bare block both end the body, the
+  // address block is the one that was actually written there.
+  return [...blocks].sort((left, right) => right.length - left.length);
+}
+
+/**
+ * Where a recognised footer block starts inside `body`, or null.
+ *
+ * The block must be one of `candidateFooterBlocks`, at the very end of the body, and it
+ * must start a line. The line boundary is the `Hi David` fix (review of PR 264): with the
+ * sign-off `David`, the body `Hi David` before the stop line ends with the characters of
+ * a block and is not one, so nothing of it is removed — and, since the review of PR 296,
+ * nothing of it is *sent* either: a body like that is ambiguous and held.
+ */
+function footerBlockStart(body: string, configuration: SendFooterConfiguration): number | null {
+  const signOff = configuration.signOff.trim();
+  if (signOff.length === 0) return null;
   const stripped = body.replace(/\s+$/u, '');
-  if (signOff.length === 0 || !stripped.endsWith(stopLine)) return null;
-  const head = stripped.slice(0, stripped.length - stopLine.length).replace(/\s+$/u, '');
-  const endsWithSignOffLine = (text: string): number | null => {
-    if (!text.endsWith(signOff)) return null;
-    const start = text.length - signOff.length;
-    return start === 0 || text[start - 1] === '\n' ? start : null;
-  };
-  const direct = endsWithSignOffLine(head);
-  if (direct !== null) return direct;
-  const lines = head.split('\n');
-  for (let take = 1; take <= FOOTER_ADDRESS_MAX_LINES && take < lines.length; take += 1) {
-    const middle = lines.slice(lines.length - take).join('\n');
-    if (middle.trim().length === 0 || middle.length > FOOTER_ADDRESS_MAX_LENGTH) return null;
-    const rest = lines.slice(0, lines.length - take).join('\n').replace(/\s+$/u, '');
-    const start = endsWithSignOffLine(rest);
-    if (start !== null) return start;
+  for (const block of candidateFooterBlocks(configuration)) {
+    if (!stripped.endsWith(block)) continue;
+    const start = stripped.length - block.length;
+    if (start === 0 || stripped[start - 1] === '\n') return start;
   }
   return null;
 }
@@ -186,9 +211,12 @@ function footerBlockStart(body: string, configuration: SendFooterConfiguration):
  * idempotent: composing a composed body returns the same bytes and `changed: false`, which
  * is what makes reconciling an already-current fence a no-op.
  *
- * Three refusals, and each is a handled hold at the caller rather than a mangled send:
- * the switch with no address, a stop line the body carries outside its footer, and a
- * composed body past `SENT_BODY_MAX_LENGTH`.
+ * Three things can stop it, and each is a handled hold at the caller rather than a
+ * mangled send: the switch with no address; a body whose stop line this workspace's
+ * records cannot account for (`footer_ambiguous` — nothing is removed, a person looks at
+ * it); and a composed body the fence's column would refuse. Its own output is checked
+ * before it is returned, so a caller can never be handed a body with two stop lines or
+ * none, whatever the footer configuration says.
  */
 export function composeSendBody(
   body: string,
@@ -202,28 +230,22 @@ export function composeSendBody(
   }
 
   const blockStart = footerBlockStart(body, configuration);
-  let cut: number;
-  let deduped: boolean;
-  if (blockStart !== null) {
-    cut = blockStart;
-    deduped = true;
-  } else {
-    const stripped = body.replace(/\s+$/u, '');
-    // The body ends with the stop line but not with a block this function recognises.
-    // Only the stop line — FSS's own sentence, never an author's — is removed, so the
-    // text before it survives whatever shape it is in.
-    cut = stripped.endsWith(stopLine) ? stripped.length - stopLine.length : stripped.length;
-    deduped = false;
+  const stripped = body.replace(/\s+$/u, '');
+  // No recognised block, but the stop line is in there somewhere: the body is ambiguous
+  // and this function does not guess which words are the footer.
+  if (blockStart === null && stripped.includes(stopLine)) {
+    return { composed: false, reason: 'footer_ambiguous' };
   }
-  const head = body.slice(0, cut);
-  if (head.includes(stopLine)) return { composed: false, reason: 'stop_line_inside_body' };
-
+  const head = body.slice(0, blockStart ?? stripped.length);
   const footer = sendFooterBlock(configuration);
   const composedBody = head.trim().length === 0 ? footer : `${head.replace(/\s+$/u, '')}\n\n${footer}`;
-  if (composedBody.length > SENT_BODY_MAX_LENGTH) {
+
+  const issue = sendBodyIssue(composedBody, stopLine);
+  if (issue === 'body_too_long') {
     return { composed: false, reason: 'composed_body_too_long', detail: String(composedBody.length) };
   }
-  return { composed: true, body: composedBody, changed: composedBody !== body, deduped };
+  if (issue !== null) return { composed: false, reason: 'composed_body_not_sendable', detail: issue };
+  return { composed: true, body: composedBody, changed: composedBody !== body, deduped: blockStart !== null };
 }
 
 /**
@@ -310,14 +332,27 @@ export function templateTextIssues(text: TemplateText, rules: TemplateRules): st
   // the block" but "the body can be given exactly one final block": **both shapes are
   // approvable**, the legacy one with the block already inside the body — which desktop
   // 1.0.11 requires before it will enable Approve — and the footerless one, which the
-  // desktop after it writes. A body that carries the stop line anywhere else is still
-  // refused, because composing it would duplicate the line.
+  // desktop after it writes. A body that carries the stop line anywhere else is refused,
+  // and so is one whose trailing block this workspace's records cannot account for:
+  // composing either would mean guessing which words are the footer (review of PR 296).
   //
-  // Composed under `APPROVAL_FOOTER_POLICY` and with no address: an approval may not turn
-  // on whether the workspace has configured one, nor on the switch's position, and the
-  // address's own length is checked again at send, where it is a handled hold.
-  const composed = composeSendBody(body, { ...rules.footer, postalAddress: null }, APPROVAL_FOOTER_POLICY);
-  if (!composed.composed) {
+  // A sign-off that contains the stop sentence is refused before any of that: it would
+  // compose a footer with two stop lines, and every body approved under it would be
+  // unsendable.
+  const stopLine = rules.footer.stopLine ?? SENDING_STOP_LINE;
+  const signOffRepeatsStopLine = rules.footer.signOff.includes(stopLine);
+  if (signOffRepeatsStopLine) issues.push('template_sign_off_repeats_stop_line');
+
+  // Composed under `APPROVAL_FOOTER_POLICY`, with no address and none recorded: an
+  // approval may not turn on whether the workspace has configured one, nor on the
+  // switch's position, nor on an address it might configure later. The address's own
+  // length is checked again at send, where it is a handled hold.
+  const composed = composeSendBody(
+    body,
+    { ...rules.footer, postalAddress: null, recordedAddresses: [] },
+    APPROVAL_FOOTER_POLICY,
+  );
+  if (!composed.composed && !signOffRepeatsStopLine) {
     const issue =
       composed.reason === 'composed_body_too_long' ? 'template_body_too_long_in_characters' : 'template_footer_missing';
     if (!issues.includes(issue)) issues.push(issue);

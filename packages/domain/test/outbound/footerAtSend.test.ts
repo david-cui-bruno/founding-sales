@@ -11,7 +11,17 @@ import {
   createOutboundWorld,
   type OutboundWorld,
 } from './support/outboundWorld.ts';
-import { prepareFor, seedFirm, type SeededFirm } from './support/dispatchFixtures.ts';
+import {
+  backendPid,
+  openExtraSession,
+  pausingAtTokenRefresh,
+  prepareFor,
+  seedFirm,
+  tracked,
+  waitUntilBlocked,
+  type SeededFirm,
+} from './support/dispatchFixtures.ts';
+import { settingLockName } from '../../settings/store.ts';
 
 /**
  * The footer is composed at send, and the fence freezes what will be sent (lane W3-F;
@@ -238,7 +248,7 @@ describe('a fence prepared before the address is reconciled under the claim lock
     expect(sent.at(-1)?.body.split(SENDING_STOP_LINE)).toHaveLength(2);
   });
 
-  it('keeps every word of a body whose greeting ends with the sign-off (the `Hi David` bug)', async () => {
+  it('holds a body whose greeting ends with the sign-off rather than editing it (the `Hi David` bug)', async () => {
     await setPostalAddress(ADDRESS);
     const firm = await seedFirm(world, world.alpha, 'hi-david');
     const body = `Hello.\n\nHi Signed off\n${SENDING_STOP_LINE}`;
@@ -246,12 +256,138 @@ describe('a fence prepared before the address is reconciled under the claim lock
     await world.clearHolds(workspaceId());
 
     const { report, sent } = await dispatch(fenceId);
-    expect(report.outcome, why(report)).toBe('sent');
-    expect(sent.at(-1)?.body).toBe(
-      `Hello.\n\nHi Signed off\n\n${sendFooterBlock({ signOff: SIGN_OFF, postalAddress: ADDRESS })}`,
+    expect(report.outcome, why(report)).toBe('held');
+    expect(report.refusal).toBe('footer_not_composed');
+    expect(report.detail).toBe('footer_ambiguous');
+    expect(sent).toHaveLength(0);
+    // Not one character of it was touched: a person decides what the footer is.
+    const held = await readFence(context(), fenceId);
+    expect(held?.body).toBe(body);
+    expect(held?.state).toBe('held');
+  });
+
+  it('holds a schema-19 fence that already carries two stop lines, even though nothing needs composing', async () => {
+    // The P0 of the review of PR 296. The template contract allowed a sign-off that is
+    // itself the stop sentence, so a fence prepared before 0020 can hold a body ending in
+    // two of them; composition returns the same bytes, so only a check on the *unchanged*
+    // branch can catch it.
+    await setPostalAddress(null);
+    const firm = await seedFirm(world, world.alpha, 'two-stop-lines');
+    const doubled = `Hello.\n\n${SENDING_STOP_LINE}\n${SENDING_STOP_LINE}`;
+    const fenceId = await prepareFor(world, world.alpha, firm);
+    // Straight into the column, as the previous release would have left it: the new
+    // preparation guard refuses these, which is why this one is written behind it.
+    await world.database.session.query('UPDATE outbound_messages SET body = $3 WHERE workspace_id = $1 AND id = $2', [
+      workspaceId(),
+      fenceId,
+      doubled,
+    ]);
+    await world.database.session.query(
+      `UPDATE template_versions SET footer_sign_off = $3 WHERE workspace_id = $1 AND id = $2`,
+      [workspaceId(), world.alpha.templateVersionId, SENDING_STOP_LINE],
     );
-    expect(sent.at(-1)?.body).toContain('Hi Signed off');
-    expect(sent.at(-1)?.body.split(SENDING_STOP_LINE)).toHaveLength(2);
+    await world.clearHolds(workspaceId());
+
+    const { report, sent } = await dispatch(fenceId);
+    expect(report.outcome, why(report)).toBe('held');
+    expect(sent).toHaveLength(0);
+    expect((await readFence(context(), fenceId))?.body).toBe(doubled);
+
+    await world.database.session.query(
+      `UPDATE template_versions SET footer_sign_off = $3 WHERE workspace_id = $1 AND id = $2`,
+      [workspaceId(), world.alpha.templateVersionId, SIGN_OFF],
+    );
+  });
+});
+
+describe('the claim is the footer’s decision instant', () => {
+  it('composes with an address saved after the precheck, because the read is inside the claim', async () => {
+    await setPostalAddress(null);
+    const firm = await seedFirm(world, world.alpha, 'decision-instant');
+    const fenceId = await prepareFor(world, world.alpha, firm);
+    await world.clearHolds(workspaceId());
+
+    // The pause is the real one: between the precheck and the claiming transaction, where
+    // the access token is refreshed (Appendix G 3). An admin saves the address there.
+    const extra = await openExtraSession(world);
+    try {
+      const gmail = world.clientWith(world.alpha, {});
+      const paused = pausingAtTokenRefresh(gmail, async () => {
+        await extra.session.query(
+          `UPDATE workspace_settings SET superseded_at = greatest(now(), changed_at), superseded_by_version = version + 1
+            WHERE workspace_id = $1 AND setting_key = 'postal_address' AND superseded_at IS NULL`,
+          [workspaceId()],
+        );
+        await extra.session.query(
+          `INSERT INTO workspace_settings (workspace_id, setting_key, version, value, change_note, changed_by_user_id)
+           VALUES ($1, 'postal_address', (SELECT coalesce(max(version), 0) + 1 FROM workspace_settings
+                                           WHERE workspace_id = $1 AND setting_key = 'postal_address'),
+                   $2::jsonb, 'saved mid-dispatch', $3)`,
+          [workspaceId(), JSON.stringify({ address: ADDRESS }), world.alpha.workspace.admin.userId],
+        );
+      });
+      const report = await dispatchOutboundMessage(
+        context(),
+        world.sendDeps(world.alpha, { gmail: paused.client }),
+        { outboundMessageId: fenceId },
+      );
+      expect(paused.refreshes()).toBe(1);
+      expect(report.outcome, why(report)).toBe('sent');
+      // The precheck read a workspace with no address; the claim read one with it, and
+      // the claim is what decides.
+      expect(gmail.sends.at(-1)?.body).toContain(ADDRESS);
+    } finally {
+      await extra.close();
+    }
+  });
+
+  it('waits for an address save that is still open, and then composes with what it committed', async () => {
+    await setPostalAddress(null);
+    const firm = await seedFirm(world, world.alpha, 'serialised');
+    const fenceId = await prepareFor(world, world.alpha, firm);
+    await world.clearHolds(workspaceId());
+
+    const extra = await openExtraSession(world);
+    const observer = await openExtraSession(world);
+    const NEXT = '3 Example Way\nProvidence, RI 02903';
+    try {
+      // An admin's save, mid-transaction: the slice's advisory lock is held EXCLUSIVE,
+      // exactly as `updateSetting` holds it, and the row is written but not committed.
+      await extra.session.query('BEGIN');
+      await extra.session.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
+        settingLockName(workspaceId(), 'postal_address'),
+      ]);
+      await extra.session.query(
+        `UPDATE workspace_settings SET superseded_at = greatest(now(), changed_at), superseded_by_version = version + 1
+          WHERE workspace_id = $1 AND setting_key = 'postal_address' AND superseded_at IS NULL`,
+        [workspaceId()],
+      );
+      await extra.session.query(
+        `INSERT INTO workspace_settings (workspace_id, setting_key, version, value, change_note, changed_by_user_id)
+         VALUES ($1, 'postal_address', (SELECT coalesce(max(version), 0) + 1 FROM workspace_settings
+                                         WHERE workspace_id = $1 AND setting_key = 'postal_address'),
+                 $2::jsonb, 'still saving', $3)`,
+        [workspaceId(), JSON.stringify({ address: NEXT }), world.alpha.workspace.admin.userId],
+      );
+
+      const gmail = world.clientWith(world.alpha, {});
+      const dispatching = tracked(
+        dispatchOutboundMessage(context(), world.sendDeps(world.alpha, { gmail }), { outboundMessageId: fenceId }),
+      );
+      // The claim cannot read the slice while the save holds it: it queues on the
+      // advisory lock rather than composing a footer the workspace is replacing.
+      await waitUntilBlocked(observer.session, await backendPid(world.database.session), 'advisory');
+      expect(dispatching.settled()).toBe(false);
+
+      await extra.session.query('COMMIT');
+      const report = await dispatching.promise;
+      expect(report.outcome, why(report)).toBe('sent');
+      expect(gmail.sends.at(-1)?.body).toContain(NEXT);
+    } finally {
+      await extra.session.query('ROLLBACK').catch(() => undefined);
+      await extra.close();
+      await observer.close();
+    }
   });
 });
 

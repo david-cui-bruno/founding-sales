@@ -1001,9 +1001,12 @@ describe('the Gmail client the reconciliation acts through', () => {
     expect(await client.getSentMetadata(access, 'id', ['Message-ID'])).toBe('getSentMetadata');
     expect(await client.searchSentByMessageId(access, '<a@example.test>')).toBe('searchSentByMessageId');
     expect(await client.listSentMessageIds(access, {} as never)).toBe('listSentMessageIds');
+    // Since lane W3-F: the body of a message whose pre-dispatch fence is about to be
+    // recorded sent, so the bytes recorded are the bytes Gmail has. A read like the rest.
+    expect(await client.getBody(access, 'id')).toBe('getBody');
   });
 
-  it('rejects every call that could write to a mailbox, or read a body, and never reaches the client', async () => {
+  it('rejects every call that could write to a mailbox, and never reaches the client', async () => {
     calls.length = 0;
     const client = readOnlyGmail(underlying);
     const access = {} as never;
@@ -1015,7 +1018,6 @@ describe('the Gmail client the reconciliation acts through', () => {
       ['stopWatch', () => client.stopWatch(access)],
       ['revokeRefreshToken', () => client.revokeRefreshToken(oauth, 'token')],
       ['exchangeAuthorizationCode', () => client.exchangeAuthorizationCode(oauth, { code: 'c', codeVerifier: 'v' })],
-      ['getBody', () => client.getBody(access, 'id')],
     ] as const) {
       await expect(call(), name).rejects.toMatchObject({ name: 'GmailCallRefused', method: name });
     }

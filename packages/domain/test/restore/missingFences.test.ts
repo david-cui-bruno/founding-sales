@@ -17,9 +17,10 @@ import {
   readFence,
   readFenceEvents,
   readOutboundOutcome,
+  renderedHash,
 } from '../../outbound/fence.ts';
 import { dispatchOutboundMessage, type OutboundSendDeps } from '../../outbound/send.ts';
-import { scanSentFolder } from '../../outbound/sentFolder.ts';
+import { readSentMessageBytes, scanSentFolder } from '../../outbound/sentFolder.ts';
 import { deterministicMessageId, fssFenceIdOfSentMessage } from '../../outbound/types.ts';
 import {
   RESTORE_SENT_SCAN_SKEW_SECONDS,
@@ -87,7 +88,14 @@ describe('sends whose fence a point-in-time restore lost (lane g73)', () => {
   const fssHeader = (fenceId: string = randomUUID()): string => deterministicMessageId(fenceId, SENDING_DOMAIN);
 
   /** A message in the Sent folder, as a listing and a metadata read return it. */
-  function sentMessage(input: { readonly header: string; readonly to: string; readonly at: string; readonly subject?: string }): GmailFixtureMessage {
+  function sentMessage(input: {
+    readonly header: string;
+    readonly to: string;
+    readonly at: string;
+    readonly subject?: string;
+    /** What Gmail holds. Read only when a pre-dispatch fence's bytes have to be proven. */
+    readonly body?: string;
+  }): GmailFixtureMessage {
     return {
       id: recordedSentMessageId(input.header),
       threadId: recordedSentThreadId(input.header),
@@ -98,6 +106,7 @@ describe('sends whose fence a point-in-time restore lost (lane g73)', () => {
         To: input.to,
         Subject: input.subject ?? 'A short note about your properties',
       },
+      ...(input.body === undefined ? {} : { body: input.body }),
       historyId: '1000',
     };
   }
@@ -328,6 +337,9 @@ describe('sends whose fence a point-in-time restore lost (lane g73)', () => {
         outboundMessageId: fenceId,
         stepExecutionId: prepared?.stepExecutionId ?? null,
         stepCompleted: true,
+        // No reader was supplied, so what the message said is not proven: the fence is
+        // recorded sent — never twice — and the case goes to the human step.
+        sentBytesVerified: false,
       },
     ]);
     const fence = await readFence(context(), fenceId);
@@ -338,6 +350,7 @@ describe('sends whose fence a point-in-time restore lost (lane g73)', () => {
     );
     expect(events.rows.map(row => row.to_state)).toEqual(['prepared', 'dispatching', 'sent']);
     expect(events.rows[2]?.detail['reconciled_from']).toBe(SENT_FOLDER_PRE_DISPATCH_PROVENANCE);
+    expect(events.rows[2]?.detail['sentBytes']).toBe('unverified');
 
     const sender = clientWithSent([]);
     const again = await dispatchOutboundMessage(context(), world.sendDeps(world.alpha, { gmail: sender }), {
@@ -345,6 +358,83 @@ describe('sends whose fence a point-in-time restore lost (lane g73)', () => {
     });
     expect(again.outcome).toBe('already_terminal');
     expect(sender.sends).toHaveLength(0);
+  });
+
+  it('records the bytes Gmail holds, not the ones the restored row had (review of PR 296)', async () => {
+    // Since lane W3-F the footer is composed at the claim, so a fence restored from
+    // before an address change can hold a body that is *not* what left. Recording the
+    // stored body as "sent" would put words in a message nobody sent.
+    const fenceId = await world.prepare(world.alpha);
+    const prepared = await readFence(context(), fenceId);
+    const whatLeft = `${prepared?.body ?? ''}`.replace(
+      'Reply "stop" and I will not email you again.',
+      '1 Example Way, Suite 2\nReply "stop" and I will not email you again.',
+    );
+    expect(whatLeft).not.toBe(prepared?.body);
+    const at = '2026-09-24T18:00:00.000Z';
+    const gmail = clientWithSent([
+      sentMessage({
+        header: prepared?.providerMessageIdHeader ?? '',
+        to: world.alpha.recipientAddress,
+        at,
+        body: whatLeft,
+      }),
+    ]);
+    const scan = await scanSentFolder(context(), scanDeps(gmail), { mailboxId: world.alpha.mailboxId, ...around(at) });
+    const message = scan.messages[0];
+    expect(message).toBeDefined();
+    if (message === undefined) return;
+    const recovery = await recoverSentFolderMessage(context(), {
+      mailbox: mailbox(),
+      message,
+      actor: 'test-restore',
+      readSentBytes: async sent =>
+        await readSentMessageBytes(context(), scanDeps(gmail), {
+          mailboxId: world.alpha.mailboxId,
+          providerMessageId: sent.providerMessageId,
+        }),
+    });
+    expect(recovery).toMatchObject({ outcome: 'pre_dispatch_marked_sent', sentBytesVerified: true });
+
+    const fence = await readFence(context(), fenceId);
+    expect(fence?.state).toBe('sent');
+    expect(fence?.body).toBe(whatLeft);
+    expect(fence?.renderedHash).toBe(renderedHash(fence?.subject ?? '', whatLeft));
+    const events = await world.database.session.query<{ detail: Record<string, unknown> }>(
+      `SELECT detail FROM outbound_message_events
+        WHERE workspace_id = $1 AND outbound_message_id = $2 AND to_state = 'sent'`,
+      [workspaceId(), fenceId],
+    );
+    expect(events.rows[0]?.detail['sentBytes']).toBe('verified');
+  });
+
+  it('leaves the bytes alone and says so when Gmail will not give them up', async () => {
+    const fenceId = await world.prepare(world.alpha);
+    const prepared = await readFence(context(), fenceId);
+    const at = '2026-09-24T18:30:00.000Z';
+    const gmail = clientWithSent([
+      // No body in the fixture: `getBody` answers null, which is every way this can fail.
+      sentMessage({ header: prepared?.providerMessageIdHeader ?? '', to: world.alpha.recipientAddress, at }),
+    ]);
+    const scan = await scanSentFolder(context(), scanDeps(gmail), { mailboxId: world.alpha.mailboxId, ...around(at) });
+    const message = scan.messages[0];
+    expect(message).toBeDefined();
+    if (message === undefined) return;
+    const recovery = await recoverSentFolderMessage(context(), {
+      mailbox: mailbox(),
+      message,
+      actor: 'test-restore',
+      readSentBytes: async sent =>
+        await readSentMessageBytes(context(), scanDeps(gmail), {
+          mailboxId: world.alpha.mailboxId,
+          providerMessageId: sent.providerMessageId,
+        }),
+    });
+    // Still sent — the point of the pass is that it is never sent twice — and still
+    // honest about what it said.
+    expect(recovery).toMatchObject({ outcome: 'pre_dispatch_marked_sent', sentBytesVerified: false });
+    const fence = await readFence(context(), fenceId);
+    expect(fence).toMatchObject({ state: 'sent', body: prepared?.body });
   });
 
   it('records a held fence the Sent folder proves already left as sent, and releases the hold it opened', async () => {

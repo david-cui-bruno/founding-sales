@@ -85,7 +85,9 @@ migration 0015 dropped `footer_postal_address` and migration 0020 made the addre
 settings key instead, composed at send (`docs/greenfield/settings.md`). So an approval
 may keep the legacy block inside the body — desktop 1.0.11 requires it — or leave it out,
 and either way `composeSendBody` gives the rendered body exactly one final stop line
-before the fence stores it.
+before the fence stores it — or, when it cannot say which words are the footer, refuses
+and the step holds. It never guesses: the block it removes is one it can rebuild from the
+sign-off the version stores and an address the settings history holds.
 
 ### 2. Enrollment and its first execution are one statement
 

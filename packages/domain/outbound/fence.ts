@@ -668,22 +668,53 @@ export async function markPreDispatchFenceSent(
     readonly providerThreadId: string;
     readonly sentAt: string;
     readonly actor?: string | undefined;
+    /**
+     * The bytes Gmail actually holds for this message, when they could be read
+     * (`readSentMessageBytes`).
+     *
+     * Since lane W3-F the footer is composed at the claim, so a fence restored from
+     * before an address change can carry a body that is *not* what left: the rewrite
+     * happened after the restore point. Supplied, these bytes and their hash are written
+     * with the same statement that claims the fence — lawful because the envelope only
+     * freezes once a token exists — and the row then records what the prospect received.
+     * Absent, nothing is overwritten and the ledger says the sent bytes are unverified,
+     * which is the honest record and the human step's cue (review of PR 296, P1).
+     */
+    readonly verifiedBytes?: { readonly subject?: string | undefined; readonly body: string } | undefined;
   },
 ): Promise<SendResult<OutboundFenceRow>> {
   const actor = input.actor ?? describeActor(context);
-  const detail = { reconciled_from: SENT_FOLDER_PRE_DISPATCH_PROVENANCE, providerMessageId: input.providerMessageId };
+  const detail = {
+    reconciled_from: SENT_FOLDER_PRE_DISPATCH_PROVENANCE,
+    providerMessageId: input.providerMessageId,
+    sentBytes: input.verifiedBytes === undefined ? 'unverified' : 'verified',
+  };
   const current = await readFence(context, input.outboundMessageId);
   if (current?.state === 'held') {
     // Safe for the reason the edge exists at all: `held` never entered dispatching.
     await releaseFence(context, { outboundMessageId: input.outboundMessageId, actor });
   }
+  const verifiedSubject = input.verifiedBytes?.subject?.trim();
+  const subject = verifiedSubject === undefined || verifiedSubject.length === 0 ? null : verifiedSubject;
+  const body = input.verifiedBytes?.body ?? null;
   const claimed = await context.db.query<{ attempt_token: string }>(
     `UPDATE outbound_messages
         SET state = 'dispatching', attempt_token = gen_random_uuid(),
-            dispatch_started_at = $3::timestamptz, updated_at = now()
+            dispatch_started_at = $3::timestamptz,
+            subject = coalesce($4::text, subject),
+            body = coalesce($5::text, body),
+            rendered_hash = coalesce($6::text, rendered_hash),
+            updated_at = now()
       WHERE workspace_id = $1 AND id = $2 AND state = 'prepared'
       RETURNING attempt_token`,
-    [context.scope.workspaceId, input.outboundMessageId, input.sentAt],
+    [
+      context.scope.workspaceId,
+      input.outboundMessageId,
+      input.sentAt,
+      subject,
+      body,
+      body === null ? null : renderedHash(subject ?? current?.subject ?? '', body),
+    ],
   );
   const token = claimed.rows[0]?.attempt_token;
   if (token === undefined) return refuseSend('fence_not_ready');
