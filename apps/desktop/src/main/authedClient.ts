@@ -30,14 +30,22 @@ export interface AuthedClientOptions {
    */
   readonly onConnection?: (reachable: boolean) => void;
   /**
-   * A call the server refused as unauthenticated (1.0.12): its status and its reason.
+   * A call the server refused as unauthenticated (1.0.12): its reason, its status, and
+   * **the session it was made under**.
    *
    * The sign-in and renewal paths have always told the session manager what they were
    * refused with; the six bridges' own calls did not, so a device revoked while the
    * window was open went on answering from a session the server had already ended.
    * Only 401 and 403 are reported: a 409 from a command is the command's business.
+   *
+   * The generation is what stops the opposite mistake. A call made before a sign-out
+   * can be answered `device_revoked` long after somebody has signed in again, and a
+   * refusal applied to whichever session happens to be current would wipe the new one
+   * on the strength of the old one's answer.
    */
-  readonly onAuthRefusal?: (reason: string, status: number) => void;
+  readonly onAuthRefusal?: (reason: string, status: number, sessionGeneration: number) => void;
+  /** The session this client's calls are being made under; read as each call starts. */
+  readonly sessionGeneration?: () => number;
 }
 
 export interface AuthedClient {
@@ -67,6 +75,9 @@ export function createAuthedClient(options: AuthedClientOptions): AuthedClient {
     method: 'GET' | 'POST',
     body: Readonly<Record<string, unknown>> | undefined,
   ): Promise<ApiOutcome<unknown>> => {
+    // Read before the token: fetching one can renew the session, and a renewal that
+    // came back with a different role is itself a transition.
+    const startedUnder = options.sessionGeneration?.() ?? 0;
     const token = await options.accessToken();
     if (token === null) return { ok: false, reason: 'not_signed_in', offline: false };
     const headers: Record<string, string> = { accept: 'application/json', authorization: `Bearer ${token}` };
@@ -79,7 +90,7 @@ export function createAuthedClient(options: AuthedClientOptions): AuthedClient {
       });
       options.onConnection?.(true);
       if (answer.status === 401 || answer.status === 403) {
-        options.onAuthRefusal?.(refusalOf(answer.body, answer.status), answer.status);
+        options.onAuthRefusal?.(refusalOf(answer.body, answer.status), answer.status, startedUnder);
       }
       if (answer.status < 200 || answer.status >= 300) {
         // The body travels with the code (lane g78, D05). A refused merge's conflicts

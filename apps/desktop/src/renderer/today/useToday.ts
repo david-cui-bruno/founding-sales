@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { OperationInput } from '../../shared/operations.ts';
 import type { TodayState } from '../todayContract.ts';
+import type { Generation } from '../app/generation.ts';
 import { TODAY_TICK_MS, refreshDue } from '../todayView.ts';
 
 /**
@@ -72,7 +73,7 @@ export interface Today {
  * the `keep` below and its key is not the key anything is watching. Without that, a
  * `/today` read started as one person could repopulate the cache `App` had just emptied.
  */
-export function useToday(identity: string | null, generation: number, isTyping: () => boolean): Today {
+export function useToday(identity: string | null, generation: number, guard: Generation, isTyping: () => boolean): Today {
   const client = useQueryClient();
   const enabled = identity !== null && api() !== undefined;
   const [pending, setPending] = useState(0);
@@ -82,9 +83,6 @@ export function useToday(identity: string | null, generation: number, isTyping: 
   const lastRefreshAt = useRef<number | null>(null);
   const typing = useRef(isTyping);
   typing.current = isTyping;
-
-  const session = useRef(generation);
-  session.current = generation;
 
   const query = useQuery({
     queryKey: [TODAY_KEY, identity, generation],
@@ -101,13 +99,13 @@ export function useToday(identity: string | null, generation: number, isTyping: 
     (next: Promise<TodayState>, read: boolean): void => {
       setPending(count => count + 1);
       if (!read) setCommands(count => count + 1);
-      const mine = session.current;
+      const started = guard.now();
       void next
         .then(
           value => {
             // The answer to a question asked by somebody who has since left this Mac.
-            if (mine !== session.current) return;
-            client.setQueryData([TODAY_KEY, identity, mine], value);
+            if (!guard.fresh(started)) return;
+            client.setQueryData([TODAY_KEY, identity, started], value);
             if (read) setRefreshAnswered(true);
           },
           // A bridge that rejects — an IPC fault, never a refusal, which arrives as a
@@ -121,7 +119,7 @@ export function useToday(identity: string | null, generation: number, isTyping: 
           if (!read) setCommands(count => count - 1);
         });
     },
-    [client, identity],
+    [client, guard, identity],
   );
 
   const actions = useMemo<TodayActions | null>(() => {

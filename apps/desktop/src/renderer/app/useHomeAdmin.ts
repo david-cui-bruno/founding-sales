@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo } from 'react';
 import { figuresWindow, type FiguresRead } from '../homeView.ts';
 import type { AdminState } from '../settingsContract.ts';
 import { adminBridge } from './bridges.ts';
+import type { Generation } from './generation.ts';
 
 /**
  * The sidebar's status rows and the last seven days.
@@ -12,9 +13,10 @@ import { adminBridge } from './bridges.ts';
  * coming back to the window costs nothing. Refresh re-reads: `show({ screen: 'settings' })`
  * asks the API again for the settings, the sending status and the calling numbers.
  *
- * Both are Query keys under the person signed in, so a sign-out, another workspace or a
- * changed role drops them with everything else rather than showing the next person the
- * last one's figures.
+ * Both are Query keys under the person signed in **and the session generation**, so a
+ * sign-out, another workspace or a changed role drops them with everything else rather
+ * than showing the next person the last one's figures — and a read already on the wire
+ * when that happens is dropped instead of written (`generation.ts`).
  */
 
 export interface HomeAdmin {
@@ -27,12 +29,12 @@ export interface HomeAdmin {
 const ADMIN_KEY = 'admin';
 const FIGURES_KEY = 'figures';
 
-export function useHomeAdmin(identity: string | null): HomeAdmin {
+export function useHomeAdmin(identity: string | null, generation: number, guard: Generation): HomeAdmin {
   const client = useQueryClient();
   const enabled = identity !== null && adminBridge() !== undefined;
 
   const admin = useQuery({
-    queryKey: [ADMIN_KEY, identity],
+    queryKey: [ADMIN_KEY, identity, generation],
     queryFn: async () => (await adminBridge()?.state()) ?? null,
     enabled,
     staleTime: Number.POSITIVE_INFINITY,
@@ -43,7 +45,7 @@ export function useHomeAdmin(identity: string | null): HomeAdmin {
   const requested = useMemo(() => figuresWindow(new Date()), [identity]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const dashboard = useQuery({
-    queryKey: [FIGURES_KEY, identity, requested.from, requested.to],
+    queryKey: [FIGURES_KEY, identity, generation, requested.from, requested.to],
     queryFn: async () => (await adminBridge()?.loadDashboard(requested)) ?? null,
     enabled,
     staleTime: Number.POSITIVE_INFINITY,
@@ -73,11 +75,15 @@ export function useHomeAdmin(identity: string | null): HomeAdmin {
     // wave 1 it re-read the list and the figures and left the status as the first answer
     // of the day. What is on screen stays there until the answer arrives, so nothing
     // flickers back to "Checking…".
+    // The one write in this file, and it carries the number it was asked under: a
+    // Refresh that answers after the person changed does not put the last one's status
+    // back into a cache the shell has just emptied.
+    const started = guard.now();
     void bridge.show({ screen: 'settings' }).then(state => {
-      client.setQueryData([ADMIN_KEY, identity], state);
+      if (guard.fresh(started)) client.setQueryData([ADMIN_KEY, identity, started], state);
     });
     void refetchFigures();
-  }, [client, identity, refetchFigures]);
+  }, [client, guard, identity, refetchFigures]);
 
   const figures: FiguresRead = {
     requested: enabled ? requested : null,

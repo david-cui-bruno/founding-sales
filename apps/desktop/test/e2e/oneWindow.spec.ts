@@ -263,6 +263,31 @@ test('leaving Replies while a read is in flight does not leave the next view ine
   await expect.poll(() => server.called('today.refresh').length).toBeGreaterThan(0);
 });
 
+test('leaving Replies while a command is in flight strands nothing and brings nothing back', async ({ page }) => {
+  // The same race with a command rather than a read. A confirmation re-reads the lane
+  // when the server answers it, so this is the one that could have put a lane back into
+  // a process the view had left — and the hold it took has to be released either way.
+  server = await startAppServer({ replies: replyState() });
+  await page.goto(server.url('#replies'));
+  await page.getByTestId('reply-open').nth(0).click();
+  await expect(page.getByTestId('reply-card')).toBeVisible();
+
+  const release = server.hold('replies.confirm');
+  await page.getByTestId('confirm').click();
+  await expect(page.getByTestId('column')).toHaveAttribute('aria-busy', 'true');
+
+  await page.getByTestId('nav-today').click();
+  release();
+  await expect.poll(() => server.called('replies.forget').length).toBe(1);
+
+  await expect(page.getByTestId('column')).toHaveAttribute('data-route', 'today');
+  await expect(page.getByTestId('column')).not.toHaveAttribute('aria-busy', 'true');
+  expect(await page.getByTestId('column').evaluate(element => (element as HTMLElement).inert)).toBe(false);
+  // Nothing of the reply is on the page the person is looking at.
+  await expect(page.getByTestId('reply-card')).toHaveCount(0);
+  await expect(page.getByTestId('refresh')).toBeEnabled();
+});
+
 test('a session change empties the window: the cache and everything typed go at once', async ({ page }) => {
   /*
    * The main process says the person, the workspace or the role changed — or that this

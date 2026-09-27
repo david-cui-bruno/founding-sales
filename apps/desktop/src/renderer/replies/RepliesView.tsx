@@ -1,7 +1,14 @@
 import { useState, type JSX } from 'react';
 import { navigate } from '../routes.ts';
 import type { ReplyState } from '../replyContract.ts';
-import { buildReplyView, candidateLabel, confirmLabel, type ReplyCardView } from '../replyView.ts';
+import {
+  CALLBACK_REQUIRED_HINT,
+  CALLBACK_REQUIRED_LABEL,
+  buildReplyView,
+  candidateLabel,
+  confirmLabel,
+  type ReplyCardView,
+} from '../replyView.ts';
 import { Alert } from '../ui/alert.tsx';
 import { Button } from '../ui/button.tsx';
 import { Input } from '../ui/input.tsx';
@@ -158,6 +165,17 @@ function Answer({
   const [note, setNote] = useState('');
   if (card.choices.length === 0) return null;
 
+  /*
+   * What is actually about to happen, in one place (1.0.12).
+   *
+   * `booked` is whether a day has been typed — the callback is only created if one was
+   * supplied. `needsDay` is the card where Callie read a day and the field is now
+   * empty: the server refuses that confirmation with `callback_required`, so Confirm
+   * does not offer it. The button never promises something the server will refuse.
+   */
+  const booked = card.callbackOffered && callbackDate !== '';
+  const needsDay = card.callbackRequired && !booked;
+
   const chosen = replies.chosen;
   const consequence = card.choices.find(choice => choice.selected)?.consequence ?? '';
 
@@ -214,6 +232,11 @@ function Answer({
           }}
           className="w-28"
         />
+        {needsDay ? (
+          <p data-testid="callback-required" className="w-full text-xs leading-relaxed text-muted-foreground">
+            {CALLBACK_REQUIRED_HINT}
+          </p>
+        ) : null}
       </fieldset>
 
       <label data-testid="firm-wide-label" hidden={!card.firmWideOptOutOffered} className="flex items-center gap-2 text-sm">
@@ -249,7 +272,7 @@ function Answer({
         */}
         <Button
           data-testid="confirm"
-          disabled={!card.confirmEnabled}
+          disabled={!card.confirmEnabled || needsDay}
           onClick={() => {
             if (chosen === null) return;
             replies.confirm({
@@ -258,17 +281,16 @@ function Answer({
               // A `date` and a `time` carry no zone; the main process resolves them
               // against the workspace's business zone, which is the only zone this view
               // is told about.
-              callback:
-                card.callbackOffered && callbackDate !== ''
-                  ? { localDate: callbackDate, localTime: callbackTime, sourceTimeZone: state.businessTimeZone ?? '' }
-                  : null,
+              callback: booked
+                ? { localDate: callbackDate, localTime: callbackTime, sourceTimeZone: state.businessTimeZone ?? '' }
+                : null,
               firmWideOptOut: card.firmWideOptOutOffered && firmWide,
               note: note.trim(),
             });
             setNote('');
           }}
         >
-          {confirmLabel(chosen, card.callbackOffered && callbackDate !== '')}
+          {needsDay ? CALLBACK_REQUIRED_LABEL : confirmLabel(chosen, booked)}
         </Button>
       </div>
     </div>

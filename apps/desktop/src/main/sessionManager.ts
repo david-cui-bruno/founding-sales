@@ -93,7 +93,7 @@ export interface SessionManager {
    * session the server had already ended. A refusal in `REVOCATIONS` wipes here exactly
    * as it does there, and the window is told.
    */
-  noteAuthRefusal(reason: string): Promise<void>;
+  noteAuthRefusal(reason: string, sessionGeneration: number): Promise<void>;
   /** The number of session transitions so far. A read made under an older one is stale. */
   sessionGeneration(): number;
   /** Told on every transition: sign-out, another workspace, a changed role, a wipe. */
@@ -300,10 +300,14 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
       online = reachable;
     },
 
-    async noteAuthRefusal(reason) {
+    async noteAuthRefusal(reason, sessionGeneration) {
       // Only the refusals that mean the registration is over. Everything else a bridge
       // is refused with is the bridge's own notice to show, not a reason to wipe.
       if (!REVOCATIONS.has(reason)) return;
+      // And only for the session that asked. A call made before a sign-out can be
+      // answered `device_revoked` after somebody has signed in again; wiping then would
+      // end a perfectly good session on the strength of the old one's answer.
+      if (sessionGeneration !== generation) return;
       await ensureLoaded();
       await noteRefusal(reason);
     },

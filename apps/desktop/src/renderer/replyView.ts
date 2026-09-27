@@ -99,6 +99,19 @@ export const CONFIRM_LABELS: Readonly<Record<ReplyDisposition, string>> = Object
 export const FOLLOW_UP_WITHOUT_DATE = 'Stop automated sending and note a follow-up — no date yet';
 
 /**
+ * …except on a card where Callie read a day in the reply.
+ *
+ * `confirmReplyDisposition` refuses a `follow_up_later` with no callback when the model
+ * proposed one (`callback_required`, `confirmations.ts`): the proposal is on the card, a
+ * person clearing the field has not said what to put in its place, and the server will
+ * not take silence for an answer. So the button does not offer the press — it says what
+ * is missing, and stays dead until the day is there.
+ */
+export const CALLBACK_REQUIRED_LABEL = 'Enter the day before confirming this';
+export const CALLBACK_REQUIRED_HINT =
+  'Callie read a day in this reply, so this answer needs one. Type the day, or choose a different answer.';
+
+/**
  * What the button says, and it says exactly what pressing it will do (1.0.12).
  *
  * `callbackBooked` is whether a day has actually been typed. The domain books a callback

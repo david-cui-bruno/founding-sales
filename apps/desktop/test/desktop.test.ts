@@ -178,8 +178,9 @@ describe('session transitions the window is told about (1.0.12)', () => {
     await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
     const { seen } = changes(mac);
 
-    // What `authedClient` reports when one of the six bridges is answered 401.
-    await mac.manager.noteAuthRefusal('device_revoked');
+    // What `authedClient` reports when one of the six bridges is answered 401, with
+    // the session the call was made under.
+    await mac.manager.noteAuthRefusal('device_revoked', mac.manager.sessionGeneration());
 
     expect(seen).toHaveLength(1);
     expect(seen[0]).toMatchObject({ reason: 'device_revoked', identity: null });
@@ -189,12 +190,40 @@ describe('session transitions the window is told about (1.0.12)', () => {
     expect(mac.vault.entries.has(DEVICE_SECRET_ACCOUNT)).toBe(false);
   });
 
+  it('ignores a revocation answered to a session that has already ended', async () => {
+    /*
+     * The race: a bridge call is made, the person signs out and signs in again, and
+     * only then does the server answer the first call `device_revoked`. Applied to
+     * whichever session is current, that wipes a perfectly good new one on the strength
+     * of the old one's answer — a sign-in that ends by itself a second later.
+     */
+    const mac = await started();
+    await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
+    const madeUnder = mac.manager.sessionGeneration();
+
+    await mac.manager.signOut();
+    await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
+    const { seen } = changes(mac);
+
+    await mac.manager.noteAuthRefusal('device_revoked', madeUnder);
+
+    expect(seen).toEqual([]);
+    const state = await mac.manager.state();
+    expect(state.device).not.toBeNull();
+    expect(state.notice).not.toBe('device_revoked');
+    expect(mac.vault.entries.has(DEVICE_SECRET_ACCOUNT)).toBe(true);
+
+    // The same refusal, for the session that actually asked, still wipes.
+    await mac.manager.noteAuthRefusal('device_revoked', mac.manager.sessionGeneration());
+    expect((await mac.manager.state()).device).toBeNull();
+  });
+
   it('is not a wipe for a refusal that is not one: a 403 on one call is that call’s business', async () => {
     const mac = await started();
     await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
     const { seen } = changes(mac);
 
-    await mac.manager.noteAuthRefusal('not_assigned');
+    await mac.manager.noteAuthRefusal('not_assigned', mac.manager.sessionGeneration());
 
     expect(seen).toEqual([]);
     expect((await mac.manager.state()).device).not.toBeNull();
@@ -202,27 +231,46 @@ describe('session transitions the window is told about (1.0.12)', () => {
 });
 
 describe('the authenticated client reports what it was refused with (1.0.12)', () => {
-  const clientWith = (status: number, body: unknown, refusals: { reason: string; status: number }[]) =>
+  interface Refusal {
+    reason: string;
+    status: number;
+    generation: number;
+  }
+
+  const clientWith = (status: number, body: unknown, refusals: Refusal[], generation = () => 0) =>
     createAuthedClient({
       baseUrl: 'https://api.example.test/',
       clientVersion: '1.4.0',
       accessToken: async () => await Promise.resolve('token-value'),
       send: async () => await Promise.resolve({ status, body }),
-      onAuthRefusal: (reason, refusedStatus) => refusals.push({ reason, status: refusedStatus }),
+      sessionGeneration: generation,
+      onAuthRefusal: (reason, refusedStatus, sessionGeneration) =>
+        refusals.push({ reason, status: refusedStatus, generation: sessionGeneration }),
     });
 
   it('tells the session manager about a 401 and a 403, by reason', async () => {
-    const refusals: { reason: string; status: number }[] = [];
+    const refusals: Refusal[] = [];
     await clientWith(401, { error: 'device_revoked' }, refusals).read('/today', value => value, {});
     await clientWith(403, { reason: 'not_assigned' }, refusals).read('/today', value => value, {});
     expect(refusals).toEqual([
-      { reason: 'device_revoked', status: 401 },
-      { reason: 'not_assigned', status: 403 },
+      { reason: 'device_revoked', status: 401, generation: 0 },
+      { reason: 'not_assigned', status: 403, generation: 0 },
     ]);
   });
 
+  it('reports the session the call was made under, not the one it was answered under', async () => {
+    const refusals: Refusal[] = [];
+    let generation = 4;
+    const client = clientWith(401, { error: 'device_revoked' }, refusals, () => generation);
+    const reading = client.read('/today', value => value, {});
+    // Somebody signs out and in again while the call is on the wire.
+    generation = 6;
+    await reading;
+    expect(refusals).toEqual([{ reason: 'device_revoked', status: 401, generation: 4 }]);
+  });
+
   it('says nothing about a refusal that is not about authentication', async () => {
-    const refusals: { reason: string; status: number }[] = [];
+    const refusals: Refusal[] = [];
     await clientWith(409, { error: 'already_confirmed' }, refusals).read('/replies/card', value => value, {});
     expect(refusals).toEqual([]);
   });

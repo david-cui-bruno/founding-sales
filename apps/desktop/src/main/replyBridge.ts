@@ -122,6 +122,17 @@ export function createReplyBridge(deps: ReplyBridgeDeps): ReplyBridgeHost {
     });
   };
 
+  /**
+   * Whether the view this work was started for is still the view (1.0.12).
+   *
+   * `forget` moves the number. A **command** has to ask this as well as a read: a
+   * confirmation and an ambiguity resolution both re-read the lane and the card after
+   * the server answers, and those reads, started after the clear, would be started
+   * under the new number and store what they brought back — putting a body and a lane
+   * back into a process the view has already left.
+   */
+  const stale = (mine: number): boolean => mine !== generation;
+
   const note = (outcome: ApiOutcome<unknown>, accepted: string | null): boolean => {
     if (outcome.ok) {
       notice = accepted;
@@ -177,7 +188,9 @@ export function createReplyBridge(deps: ReplyBridgeDeps): ReplyBridgeHost {
     state: snapshot,
 
     async refresh() {
+      const mine = generation;
       await loadLane();
+      if (stale(mine)) return await snapshot();
       if (open !== null) await loadCard(open.messageId);
       return await snapshot();
     },
@@ -204,6 +217,7 @@ export function createReplyBridge(deps: ReplyBridgeDeps): ReplyBridgeHost {
     },
 
     async confirm(input) {
+      const mine = generation;
       const session = await deps.session.state();
       const zone = session.today?.businessTimeZone ?? null;
       let callback: Record<string, unknown> | undefined;
@@ -232,6 +246,10 @@ export function createReplyBridge(deps: ReplyBridgeDeps): ReplyBridgeHost {
         },
         value => confirmReplyResultSchema.parse(value),
       );
+      // The view was left, or the person signed out, while the confirmation was on the
+      // wire. The command itself stands — the server recorded it — but nothing it
+      // brought back is written here, and the lane is not read again to hold it.
+      if (stale(mine)) return await snapshot();
       // `suggestsLost` is a suggestion and stays one: the window says so and offers
       // no button that would act on it (9.1). Closing the opportunity is a separate,
       // deliberate command on the firm page.
@@ -243,6 +261,7 @@ export function createReplyBridge(deps: ReplyBridgeDeps): ReplyBridgeHost {
       // this one looks lost" is the whole point of having asked.
       const said = notice;
       await loadLane();
+      if (stale(mine)) return await snapshot();
       notice = said;
       open = null;
       return await snapshot();
@@ -263,6 +282,7 @@ export function createReplyBridge(deps: ReplyBridgeDeps): ReplyBridgeHost {
      * the resolution unlocked.
      */
     async resolve(input) {
+      const mine = generation;
       const card = open;
       if (card === null || card.messageId !== input.messageId) {
         notice = 'message_unknown';
@@ -277,11 +297,17 @@ export function createReplyBridge(deps: ReplyBridgeDeps): ReplyBridgeHost {
         { messageId: input.messageId, selectedOpportunityId: input.opportunityId, human: false },
         () => null,
       );
+      // As in `confirm`: the resolution stands, and nothing it would have drawn is put
+      // back into a bridge the view has left. This is the one that would have restored
+      // a body, because it reads the card again.
+      if (stale(mine)) return await snapshot();
       note(answer, 'resolved');
       // The re-read must not swallow what the command said, as in `confirm`.
       const said = notice;
       await loadLane();
+      if (stale(mine)) return await snapshot();
       await loadCard(input.messageId);
+      if (stale(mine)) return await snapshot();
       notice = said;
       return await snapshot();
     },

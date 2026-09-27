@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { DesktopState, MailboxState } from '../../shared/contract.ts';
 import type { UpdateStatus } from '../../shared/updateContract.ts';
 import { desktopBridge, mailboxBridge, updateBridge } from './bridges.ts';
+import { useSessionGeneration, type Generation } from './generation.ts';
 
 /**
  * The session, the Mailbox row and the update line: the three things the shell owns
@@ -37,6 +38,12 @@ export interface Session {
    * window when it happens rather than when something next happens to be read.
    */
   readonly generation: number;
+  /**
+   * The guard every view writes what it read through. One per window: Today, the
+   * sidebar's reads, the mailbox row and this file all drop an answer that belongs to
+   * a session that has since ended.
+   */
+  readonly guard: Generation;
   signIn(input: { readonly workspaceId?: string | undefined; readonly deviceLabel?: string | undefined }): Promise<void>;
   signOut(): Promise<void>;
   /** Read the session again — after a command, so the banners follow what it found. */
@@ -58,38 +65,45 @@ export function useSession(): Session {
   const [mailbox, setMailbox] = useState<MailboxState | null>(null);
   const [mailboxWaiting, setMailboxWaiting] = useState(false);
   const [update, setUpdate] = useState<UpdateStatus | null>(null);
-  const [generation, setGeneration] = useState(0);
+  const { generation, guard, note } = useSessionGeneration();
   const identity = identityOf(desktop);
   const identityRef = useRef(identity);
   identityRef.current = identity;
 
   const reread = useCallback(async (): Promise<void> => {
-    setDesktop(await desktopBridge().state());
-  }, []);
+    // The state of a session that has since ended is not this window's to draw.
+    const keep = guard.keep(setDesktop);
+    keep(await desktopBridge().state());
+  }, [guard]);
 
   const loadMailbox = useCallback(async (): Promise<void> => {
     const bridge = mailboxBridge();
     if (bridge === undefined || identityRef.current === null) return;
-    setMailbox(await bridge.state());
-  }, []);
+    // The address of a mailbox that was somebody else's is exactly the kind of answer
+    // that used to arrive a moment after the window had been emptied.
+    const keep = guard.keep(setMailbox);
+    keep(await bridge.state());
+  }, [guard]);
 
   const refreshMailbox = useCallback(async (): Promise<void> => {
     const bridge = mailboxBridge();
     if (bridge === undefined || identityRef.current === null) return;
     setMailboxWaiting(false);
-    setMailbox(await bridge.refresh());
-  }, []);
+    const keep = guard.keep(setMailbox);
+    keep(await bridge.refresh());
+  }, [guard]);
 
   const connectMailbox = useCallback(async (): Promise<void> => {
     const bridge = mailboxBridge();
     if (bridge === undefined) return;
     setMailboxWaiting(true);
+    const keep = guard.keep(setMailbox);
     try {
-      setMailbox(await bridge.connect());
+      keep(await bridge.connect());
     } finally {
       setMailboxWaiting(false);
     }
-  }, []);
+  }, [guard]);
 
   const loadUpdate = useCallback(async (): Promise<void> => {
     const bridge = updateBridge();
@@ -137,7 +151,7 @@ export function useSession(): Session {
     // window empties itself now — `App` clears the request cache and the drafts on this
     // number changing — and reads the session again so the screen follows.
     desktopBridge().onSessionChange(change => {
-      setGeneration(change.generation);
+      note(change.generation);
       setMailbox(null);
       setMailboxWaiting(false);
       void reread();
@@ -149,7 +163,7 @@ export function useSession(): Session {
       await reread();
       await loadUpdate();
     })();
-  }, [loadUpdate, reread]);
+  }, [loadUpdate, note, reread]);
 
   // Signed in: read the Mailbox row. Signed out: the row is not this person's any more.
   useEffect(() => {
@@ -182,6 +196,7 @@ export function useSession(): Session {
       update,
       identity,
       generation,
+      guard,
       signIn,
       signOut,
       reread,
@@ -198,6 +213,7 @@ export function useSession(): Session {
       update,
       identity,
       generation,
+      guard,
       signIn,
       signOut,
       reread,

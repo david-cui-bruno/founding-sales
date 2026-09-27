@@ -194,7 +194,24 @@ test('asks for the callback the model only proposed, prefilled and still the per
   await expect(page.getByTestId('callback-date')).toHaveValue('2026-09-28');
   await expect(page.getByTestId('callback-time')).toHaveValue('09:00');
 
+  /*
+   * Clearing the day the model read is not "later, with no date": the server refuses
+   * that confirmation with `callback_required`, because the proposal was on the card
+   * and nothing was put in its place. So the button does not offer the press — it says
+   * what is missing and stays dead, rather than promising something that will fail.
+   */
+  await page.getByTestId('callback-date').fill('');
+  await expect(page.getByTestId('confirm')).toHaveText('Enter the day before confirming this');
+  await expect(page.getByTestId('confirm')).toBeDisabled();
+  await expect(page.getByTestId('callback-required')).toContainText('needs one');
+  // Pressed anyway — `element.click()` reaches a disabled button where a person's
+  // mouse would not — and nothing is sent.
+  await page.getByTestId('confirm').dispatchEvent('click');
+  expect(server.calls.filter(call => call.method === 'confirm')).toHaveLength(0);
+
   await page.getByTestId('callback-date').fill('2026-09-29');
+  await expect(page.getByTestId('confirm')).toBeEnabled();
+  await expect(page.getByTestId('callback-required')).toHaveCount(0);
   await page.getByTestId('confirm').click();
   expect(server.calls.find(call => call.method === 'confirm')?.argument).toEqual({
     messageId: MESSAGE_ID,

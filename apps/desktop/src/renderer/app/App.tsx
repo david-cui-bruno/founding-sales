@@ -66,7 +66,7 @@ function Column({
   readonly desktop: DesktopState;
   onNavigate(next: Route): void;
 }): JSX.Element {
-  const home = useHomeAdmin(session.identity);
+  const home = useHomeAdmin(session.identity, session.generation, session.guard);
   const [thisMacOpen, setThisMacOpen] = useState(false);
   // A page built without the preload has no operations at all; the views say so where a
   // control would have been rather than throwing.
@@ -79,7 +79,7 @@ function Column({
       lanes instanceof HTMLElement && active instanceof HTMLElement && lanes.contains(active) && active.matches('input, textarea, select');
     return focused || typed;
   }, [typed]);
-  const today = useToday(session.identity, session.generation, isTyping);
+  const today = useToday(session.identity, session.generation, session.guard, isTyping);
 
   const todayView = today.state === null ? null : buildTodayView(today.state);
   const view = buildHomeView(

@@ -466,6 +466,94 @@ describe('the reply bridge keeps no body it is not showing (1.0.12)', () => {
     expect(JSON.stringify(after)).not.toContain('Please stop.');
   });
 
+  it('drops what a command would have drawn when the clear happened while it was on the wire', async () => {
+    /*
+     * The race a read-only guard misses. A confirmation and an ambiguity resolution both
+     * re-read the lane and the card after the server answers; those reads start *after*
+     * the clear, so they would be started under the new number and store what they
+     * brought back — a body and a lane, back in a process the view has left.
+     */
+    const gate: { release: () => void } = { release: () => undefined };
+    const held = new Promise<void>(resolve => {
+      gate.release = resolve;
+    });
+    const api = createAuthedClient({
+      baseUrl: 'https://api.example.test/',
+      clientVersion: '1.4.0',
+      accessToken: async () => await Promise.resolve('token-value'),
+      send: async url => {
+        const path = new URL(url).pathname;
+        if (path === '/messages/resolve-ambiguity') {
+          await held;
+          return { status: 200, body: { status: 'accepted', replayed: false, result: null } };
+        }
+        if (path === '/replies/card') return { status: 200, body: card() };
+        if (path === '/replies') return { status: 200, body: { businessDate: '2026-09-21', cards: two } };
+        return { status: 200, body: classifierSettingsAnswer() };
+      },
+    });
+    const bridge = createReplyBridge({ api, session: session() });
+    await bridge.refresh();
+    await bridge.open({ messageId: MESSAGE_ID });
+
+    const resolving = bridge.resolve({ messageId: MESSAGE_ID, opportunityId: OPPORTUNITY_ID });
+    await bridge.forget();
+    gate.release();
+    const answered = await resolving;
+
+    // The command stands — the server recorded it — and nothing it would have drawn
+    // is put back.
+    expect(answered.open).toBeNull();
+    expect(answered.cards).toEqual([]);
+    const after = await bridge.state();
+    expect(after.open).toBeNull();
+    expect(after.cards).toEqual([]);
+    expect(JSON.stringify(after)).not.toContain('Tuesday works.');
+    expect(JSON.stringify(after)).not.toContain('Please stop.');
+  });
+
+  it('drops what a confirmation would have drawn across the same clear', async () => {
+    const gate: { release: () => void } = { release: () => undefined };
+    const held = new Promise<void>(resolve => {
+      gate.release = resolve;
+    });
+    const api = createAuthedClient({
+      baseUrl: 'https://api.example.test/',
+      clientVersion: '1.4.0',
+      accessToken: async () => await Promise.resolve('token-value'),
+      send: async url => {
+        const path = new URL(url).pathname;
+        if (path === '/replies/confirm') {
+          await held;
+          return { status: 200, body: { status: 'accepted', replayed: false, result: confirmReplyResultAnswer() } };
+        }
+        if (path === '/replies/card') return { status: 200, body: card() };
+        if (path === '/replies') return { status: 200, body: { businessDate: '2026-09-21', cards: two } };
+        return { status: 200, body: classifierSettingsAnswer() };
+      },
+    });
+    const bridge = createReplyBridge({ api, session: session() });
+    await bridge.refresh();
+    await bridge.open({ messageId: MESSAGE_ID });
+
+    const confirming = bridge.confirm({
+      messageId: MESSAGE_ID,
+      disposition: 'interested',
+      callback: null,
+      firmWideOptOut: false,
+      note: '',
+    });
+    await bridge.forget();
+    gate.release();
+    await confirming;
+
+    const after = await bridge.state();
+    expect(after.cards).toEqual([]);
+    expect(after.open).toBeNull();
+    expect(after.notice).toBeNull();
+    expect(JSON.stringify(after)).not.toContain('Please stop.');
+  });
+
   it('drops a card that lands after the clear', async () => {
     const gate: { release: () => void } = { release: () => undefined };
     const held = new Promise<void>(resolve => {
