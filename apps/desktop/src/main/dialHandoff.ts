@@ -1,40 +1,34 @@
-import { e164 } from '@fss/contracts';
-import type { ConsumedTicketDto, DialRefusalCode, DialTicketDto } from '@fss/contracts';
+import { e164 as e164Schema } from '@fss/contracts';
 
 /**
- * The `tel:` handoff (specification 9.2, 14.2).
+ * The `tel:` handoff (specification 9.2, 14.2; wave 2's S4.5 shape since desktop 1.0.12).
  *
- * "Electron opens `tel:` only with an unexpired, unconsumed ticket. A ticket is
- * consumed immediately before local handoff. Failure to open the local application
- * permits requesting a new authorization but never reusing the ticket. Opening the
- * URL does not complete a step; only a recorded outcome does. A suppression
- * arriving after handoff cannot recall a call already offered to Phone.app, and the
- * product states this limitation."
+ * Until 1.0.11 a call was a two-command dance: `POST /dial/authorize` minted a
+ * sixty-second ticket, `POST /dial/consume` spent it, and the URI came back on the
+ * consumption. Wave 2 replaced it with advice — `POST /dial/check` answers "callable, and
+ * here is the URI", writes nothing and mints nothing — and the call is logged afterwards
+ * with `POST /calls/log`, which never needed a ticket. So the two commands are gone and
+ * this module is what is left of the handoff: the proof that a phone app exists, and the
+ * one place a URI is checked before it is opened.
  *
- * Ported from `src/main/communications/phoneHandoffLauncher.ts`, keeping the three
- * things the old launcher got right and dropping everything it decided for itself.
+ * What the ticket flow got right and this keeps:
  *
- * **Kept: the exact-match number check.** `phone.match(...)?.[0] !== phone` rather
+ * **The exact-match number check.** The comparison is against the whole string rather
  * than `test()`, because JavaScript's `$` also matches before a trailing newline, so
- * `+14015550123\n` passes `test()` and would have been interpolated into a URI. The
- * same check is written here with the shared `e164` schema and a length comparison
- * that a newline cannot slip past.
+ * `+14015550123\n` passes `test()` and would have been interpolated into a URI.
  *
- * **Kept: the preflight cannot be re-armed.** The old launcher incremented a counter
- * on every dispatch so a slow inspection resolving afterwards could not re-arm a
- * consumed attempt. Same counter, same reason.
+ * **The preflight cannot be re-armed.** A counter is bumped on every dispatch, so a slow
+ * inspection resolving afterwards cannot re-arm an attempt that has already gone.
  *
- * **Kept: the open is invoked synchronously and a throw afterwards is `unknown`.**
- * Once `openTelUri` has been called, bytes may already have reached the window
- * server. The old code called that `handoff_uncertain`; here it is `opened_unknown`,
- * and either way the ticket is spent and the caller may only request a new one.
+ * **The open is invoked synchronously and a throw afterwards is `unknown`.** Once
+ * `openTelUri` has been called, bytes may already have reached the window server. That is
+ * `opened_unknown`, and the card says "Callie could not confirm the phone app opened.
+ * Record what happened either way" rather than pretending to know.
  *
- * **Dropped: every decision.** The old launcher consulted its own exclusion list and
- * decided whether a number could be dialed. Section 14.2 is explicit that the client
- * "contains no authoritative sequence, suppression, policy, eligibility, or send
- * logic", so this module checks that it holds a live server-issued ticket and
- * nothing else. The number it dials is the one the server put on the ticket, not one
- * the renderer passed in.
+ * **Every decision is the server's.** 14.2: the client "contains no authoritative
+ * sequence, suppression, policy, eligibility, or send logic". This module never asks
+ * whether a number may be called; it is handed the advice's own URI and checks that the
+ * string it was handed is a `tel:` URI for the number the advice named.
  */
 
 /** What the main process needs from the operating system. No Electron import here. */
@@ -46,66 +40,31 @@ export interface PhoneLaunchDriver {
   inspectVerifiedHandler(): Promise<'verified' | 'unavailable'>;
   /**
    * Whether the handler verified a moment ago is still the current one, answered
-   * synchronously. The old launcher required this and it is why: between the
-   * inspection and the open, another application may have claimed the scheme.
+   * synchronously: between the inspection and the open, another application may have
+   * claimed the scheme.
    */
   isVerifiedHandlerCurrent(): boolean;
   openTelUri(uri: string): Promise<void>;
-}
-
-/** What the main process needs from the API. Both are commands; both carry a command id. */
-export interface DialApi {
-  authorize(input: {
-    readonly commandId: string;
-    readonly firmId: string;
-    readonly contactId?: string | undefined;
-    readonly routeId: string;
-    readonly routeVersion: number;
-    readonly callingIdentityId: string;
-  }): Promise<{ readonly ok: true; readonly ticket: DialTicketDto } | { readonly ok: false; readonly reason: string }>;
-  consume(input: {
-    readonly commandId: string;
-    readonly ticketId: string;
-  }): Promise<{ readonly ok: true; readonly consumed: ConsumedTicketDto } | { readonly ok: false; readonly reason: string }>;
 }
 
 export type SetupProof =
   | { readonly ready: true }
   | { readonly ready: false; readonly reason: 'no_tel_handler' | 'handler_changed' };
 
-/**
- * What the call was authorized with, carried out of the handoff so the outcome that
- * records the call can name it (lane g79, audit item C16). The ticket id and the
- * calling identity are the server's own values from the ticket it issued and this
- * process consumed; the renderer never sees them.
- */
-export interface HandoffTicket {
-  readonly ticketId: string;
-  readonly callingIdentityId: string;
-  readonly routeId: string;
-  readonly contactId: string | null;
-}
-
 export type HandoffOutcome =
-  | { readonly status: 'opened'; readonly e164: string; readonly ticket?: HandoffTicket | undefined }
-  /** The open was invoked and may have reached the OS. The ticket is spent either way. */
-  | { readonly status: 'opened_unknown'; readonly ticket?: HandoffTicket | undefined }
-  | { readonly status: 'refused'; readonly reason: DialRefusalCode | 'no_tel_handler' | 'handler_changed' | 'invalid_target' }
-  | { readonly status: 'not_authorized'; readonly reason: string };
+  | { readonly status: 'opened'; readonly e164: string }
+  /** The open was invoked and may have reached the OS. Record the call either way. */
+  | { readonly status: 'opened_unknown' }
+  | { readonly status: 'refused'; readonly reason: 'no_tel_handler' | 'handler_changed' | 'invalid_target' };
 
 export interface DialHandoff {
   /** Ask the OS whether a `tel:` handler exists. Arms exactly one handoff. */
   checkSetup(): Promise<SetupProof>;
-  /** Authorize, consume, then open. Never reuses a ticket and never retries an open. */
-  dial(input: {
-    readonly commandId: string;
-    readonly consumeCommandId: string;
-    readonly firmId: string;
-    readonly contactId?: string | undefined;
-    readonly routeId: string;
-    readonly routeVersion: number;
-    readonly callingIdentityId: string;
-  }): Promise<HandoffOutcome>;
+  /**
+   * Open the URI `POST /dial/check` answered with. The caller has just re-read the advice;
+   * this checks the string is a `tel:` URI for the number the advice named and opens it.
+   */
+  open(input: { readonly telUri: string; readonly e164: string }): Promise<HandoffOutcome>;
 }
 
 /**
@@ -116,7 +75,7 @@ export interface DialHandoff {
 export const HANDOFF_LIMITATION_NOTICE =
   'Once a call is handed to the phone app, Callie cannot recall it. A suppression recorded after that point applies to the next call, not this one.';
 
-export function createDialHandoff(deps: { readonly driver: PhoneLaunchDriver; readonly api: DialApi }): DialHandoff {
+export function createDialHandoff(deps: { readonly driver: PhoneLaunchDriver }): DialHandoff {
   let armed = false;
   let inspections = 0;
 
@@ -137,18 +96,15 @@ export function createDialHandoff(deps: { readonly driver: PhoneLaunchDriver; re
       }
     },
 
-    async dial(input): Promise<HandoffOutcome> {
+    async open(input): Promise<HandoffOutcome> {
       const hadPreflight = armed;
       armed = false;
-      // A pending inspection resolving after this point cannot re-arm a consumed or
-      // failed attempt.
+      // A pending inspection resolving after this point cannot re-arm an attempt that
+      // has already been made.
       ++inspections;
 
       if (!hadPreflight) return { status: 'refused', reason: 'no_tel_handler' };
 
-      // The setup proof, and only then the ticket: a ticket lives sixty seconds, and
-      // spending twenty of them asking the OS a question is how a ticket expires
-      // between being minted and being used.
       let stillCurrent: boolean;
       try {
         stillCurrent = deps.driver.isVerifiedHandlerCurrent();
@@ -157,47 +113,22 @@ export function createDialHandoff(deps: { readonly driver: PhoneLaunchDriver; re
       }
       if (!stillCurrent) return { status: 'refused', reason: 'handler_changed' };
 
-      const authorized = await deps.api.authorize({
-        commandId: input.commandId,
-        firmId: input.firmId,
-        ...(input.contactId === undefined ? {} : { contactId: input.contactId }),
-        routeId: input.routeId,
-        routeVersion: input.routeVersion,
-        callingIdentityId: input.callingIdentityId,
-      });
-      if (!authorized.ok) return { status: 'not_authorized', reason: authorized.reason };
-
-      // "A ticket is consumed immediately before local handoff." Immediately: there
-      // is nothing between this and the open but the number check.
-      const consumed = await deps.api.consume({
-        commandId: input.consumeCommandId,
-        ticketId: authorized.ticket.ticketId,
-      });
-      if (!consumed.ok) return { status: 'not_authorized', reason: consumed.reason };
-
-      const number = consumed.consumed.e164;
       // The server built the URI and the number; this is the last check before the
-      // string leaves the process, and it matches the whole input so a trailing
-      // newline cannot ride along.
-      if (!e164.safeParse(number).success || consumed.consumed.telUri !== `tel:${number}`) {
+      // string leaves the process, and it matches the whole input so a trailing newline
+      // cannot ride along.
+      if (!e164Schema.safeParse(input.e164).success || input.telUri !== `tel:${input.e164}`) {
         return { status: 'refused', reason: 'invalid_target' };
       }
 
-      const ticket: HandoffTicket = {
-        ticketId: authorized.ticket.ticketId,
-        callingIdentityId: authorized.ticket.callingIdentityId,
-        routeId: authorized.ticket.routeId,
-        contactId: authorized.ticket.contactId,
-      };
       try {
-        const pending = deps.driver.openTelUri(consumed.consumed.telUri);
+        const pending = deps.driver.openTelUri(input.telUri);
         return await pending.then(
-          (): HandoffOutcome => ({ status: 'opened', e164: number, ticket }),
-          (): HandoffOutcome => ({ status: 'opened_unknown', ticket }),
+          (): HandoffOutcome => ({ status: 'opened', e164: input.e164 }),
+          (): HandoffOutcome => ({ status: 'opened_unknown' }),
         );
       } catch {
         // A synchronous throw may still have happened after the handoff began.
-        return { status: 'opened_unknown', ticket };
+        return { status: 'opened_unknown' };
       }
     },
   };
@@ -207,6 +138,6 @@ export function createDialHandoff(deps: { readonly driver: PhoneLaunchDriver; re
 export function unavailableDialHandoff(): DialHandoff {
   return {
     checkSetup: async () => await Promise.resolve({ ready: false, reason: 'no_tel_handler' }),
-    dial: async () => await Promise.resolve({ status: 'refused', reason: 'no_tel_handler' }),
+    open: async () => await Promise.resolve({ status: 'refused', reason: 'no_tel_handler' }),
   };
 }

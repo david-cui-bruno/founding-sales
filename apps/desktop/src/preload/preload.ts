@@ -9,7 +9,7 @@ import { MAILBOX_IPC_CHANNELS } from '../main/mailboxBridge.ts';
 import {
   desktopStateSchema,
   mailboxStateSchema,
-  routeNameOf,
+  navigationTargetOf,
   type DesktopBridge,
   type DesktopState,
   type MailboxBridge,
@@ -91,12 +91,12 @@ const bridge: DesktopBridge = {
   signIn: async input => await invokeDesktop(IPC_CHANNELS.signIn, input),
   signOut: async () => await invokeDesktop(IPC_CHANNELS.signOut),
   refreshToday: async () => await invokeDesktop(IPC_CHANNELS.refreshToday),
-  // Wave 1: the menu's ⌘1–⌘6 and deep links. A name outside the six is dropped here,
-  // so the page is only ever told one of them.
+  // The menu's ⌘1–⌘4, ⌘, and the deep links. A target outside the closed set is dropped
+  // here, so the page is only ever told one of them.
   onNavigate: listener => {
     ipcRenderer.on(IPC_CHANNELS.navigate, (_event, name: unknown) => {
-      const route = routeNameOf(name);
-      if (route !== null) listener(route);
+      const target = navigationTargetOf(name);
+      if (target !== null) listener(target);
     });
   },
 };

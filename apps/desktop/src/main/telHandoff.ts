@@ -1,17 +1,14 @@
-import { consumedTicketDtoSchema, dialTicketDtoSchema } from '@fss/contracts';
-import type { AuthedClient } from './authedClient.ts';
-import type { DialApi, PhoneLaunchDriver } from './dialHandoff.ts';
+import type { PhoneLaunchDriver } from './dialHandoff.ts';
 import { probeSchemeHandlers, type SchemeHandlers } from './launchServices.ts';
 
 /**
  * The one place a `tel:` URI reaches macOS (specification 9.2, 14.2, 17).
  *
- * G4 wrote the handoff *logic* — the setup proof, the ticket, the consumption, the
- * "a failed open is `unknown`" rule — against two ports and deliberately imported no
- * Electron: `PhoneLaunchDriver` for the operating system and `DialApi` for the server.
- * This file is those two ports, and nothing else. It holds no decision about whether a
- * call may be placed; `authorizeDial` on the server made that, and the number dialed is
- * the one the server put on the ticket.
+ * `dialHandoff.ts` holds the handoff *logic* — the setup proof, the URI check, the
+ * "a failed open is `unknown`" rule — against one port, `PhoneLaunchDriver`, and
+ * deliberately imports no Electron. This file is that port, and nothing else. It holds
+ * no decision about whether a call may be placed; `POST /dial/check` on the server made
+ * that, and the number dialed is the one the server's advice named.
  *
  * There is no Swift helper: section 2's decision table says "Thin Electron application;
  * the main process opens `tel:` URLs; no native Swift helper", and David confirmed it.
@@ -112,46 +109,6 @@ export function createTelLaunchDriver(deps: TelLaunchDriverDeps = {}): PhoneLaun
     openTelUri: async (uri: string): Promise<void> => {
       if (!isTelUri(uri)) throw new NotATelUriError();
       await openExternal(uri);
-    },
-  };
-}
-
-/**
- * The server half: the two commands of 9.2, through the window's authenticated client.
- *
- * Both are commands with their own receipts (5.3), so `AuthedClient.command` mints an
- * id for each and the caller passes the two it was given — `dialHandoff` already keeps
- * them apart, because one id for both would make the consumption a replay.
- *
- * A refusal arrives as its stable code and is returned as one. Nothing here interprets
- * it: `already_consumed`, `route_version_stale` and `firm_suppressed` are sentences the
- * renderer's notice table owns.
- */
-export function createDialApi(api: AuthedClient): DialApi {
-  return {
-    authorize: async input => {
-      const answer = await api.command(
-        '/dial/authorize',
-        {
-          firmId: input.firmId,
-          ...(input.contactId === undefined ? {} : { contactId: input.contactId }),
-          routeId: input.routeId,
-          routeVersion: input.routeVersion,
-          callingIdentityId: input.callingIdentityId,
-        },
-        value => dialTicketDtoSchema.parse(value),
-        { commandId: input.commandId },
-      );
-      return answer.ok ? { ok: true, ticket: answer.value } : { ok: false, reason: answer.reason };
-    },
-    consume: async input => {
-      const answer = await api.command(
-        '/dial/consume',
-        { ticketId: input.ticketId },
-        value => consumedTicketDtoSchema.parse(value),
-        { commandId: input.commandId },
-      );
-      return answer.ok ? { ok: true, consumed: answer.value } : { ok: false, reason: answer.reason };
     },
   };
 }

@@ -6,6 +6,7 @@ import {
   FIGURES_UNREAD,
   HOME_EMPTY,
   NAV_ROWS,
+  SETTINGS_ROW,
   NOTHING_NEEDS_YOU,
   UNAVAILABLE,
   buildHomeView,
@@ -73,6 +74,7 @@ function today(overrides: Partial<TodayState> = {}): TodayState {
     mayMutate: true,
     role: 'admin',
     notice: null,
+    dialAdvice: [],
     handoffNotice: 'Once a call is handed to the phone app, Callie cannot recall it.',
     ...overrides,
   };
@@ -286,16 +288,17 @@ describe('the lanes and the line of counts', () => {
     ]);
   });
 
-  it('lists every view with the key the menu gives it, in key order, Administration before the Dashboard', () => {
+  it('lists the four selling views with the key the menu gives each, and Settings on its own', () => {
     expect(NAV_ROWS.map(row => `${row.label} ${row.keys}`)).toEqual([
       'Today ⌘1',
       'Replies ⌘2',
       'Firms ⌘3',
       'Sequences ⌘4',
-      'Administration ⌘5',
-      'Dashboard ⌘6',
     ]);
-    expect(NAV_ROWS.map(row => row.route)).toEqual(['today', 'replies', 'firms', 'sequences', 'admin', 'dashboard']);
+    expect(NAV_ROWS.map(row => row.route)).toEqual(['today', 'replies', 'firms', 'sequences']);
+    // Administration and the Dashboard were rows five and six until 1.0.12. Settings is
+    // not in the list: it sits at the foot of the sidebar, away from the day's work.
+    expect(SETTINGS_ROW).toEqual({ label: 'Settings', route: 'settings', keys: '⌘,' });
   });
 });
 
@@ -406,7 +409,7 @@ describe('Needs you', () => {
 
   it('asks for a calling number when none is the one Today calls from, and opens Administration at it', () => {
     expect(needsRows(input({ admin: admin({ callingNumbers: [] }) }))).toEqual([
-      { key: 'calling_number', label: 'Add your calling number', detail: null, action: { kind: 'open', route: { name: 'admin', section: 'calling-number' }, label: 'Open' } },
+      { key: 'calling_number', label: 'Add your calling number', detail: null, action: { kind: 'open', route: { name: 'settings', tab: 'administration', section: 'calling-number' }, label: 'Open' } },
     ]);
     expect(needs(input({ admin: admin({ callingNumbers: [number({ usedForCalls: false, enabled: false, disabledAt: '2026-09-25T13:00:00.000Z' })] }) }))).toEqual([
       'calling_number',
@@ -425,7 +428,7 @@ describe('Needs you', () => {
         label: 'Attest your calling number',
         detail: 'Your number is saved. Open Your calling number and attest it.',
         // Administration opens at Your calling number, where the saved row has its own Attest.
-        action: { kind: 'open', route: { name: 'admin', section: 'calling-number' }, label: 'Open' },
+        action: { kind: 'open', route: { name: 'settings', tab: 'administration', section: 'calling-number' }, label: 'Open' },
       },
     ]);
     // A saved number beside a retired one: attest the saved one.
@@ -440,7 +443,7 @@ describe('Needs you', () => {
         key: 'calling_number',
         label: 'Re-attest your calling number',
         detail: 'Your number was retired. Open Your calling number and attest it again.',
-        action: { kind: 'open', route: { name: 'admin', section: 'calling-number' }, label: 'Open' },
+        action: { kind: 'open', route: { name: 'settings', tab: 'administration', section: 'calling-number' }, label: 'Open' },
       },
     ]);
   });
@@ -452,7 +455,7 @@ describe('Needs you', () => {
     expect(needs(input({ admin: admin({ sendingAdmin: null }) }))).toEqual([]);
     expect(needsRows(input({ admin: admin({ sendingAdmin: failing }) }))[0]?.action).toEqual({
       kind: 'open',
-      route: { name: 'admin', section: 'sending-admin' },
+      route: { name: 'settings', tab: 'administration', section: 'sending-admin' },
       label: 'Open',
     });
   });
@@ -482,7 +485,7 @@ describe('Needs you', () => {
     const holding = (list: readonly ReturnType<typeof alert>[]) =>
       input({ admin: admin({ diagnostics: { alerts: list } as unknown as AdminState['diagnostics'] }) });
     expect(needsRows(holding([alert('66666666-6666-4666-8666-000000000001', null), alert('66666666-6666-4666-8666-000000000002', null), alert('66666666-6666-4666-8666-000000000003', '2026-09-25T11:00:00.000Z')]))).toEqual([
-      { key: 'alerts', label: '2 alerts to acknowledge', detail: null, action: { kind: 'open', route: { name: 'admin', section: 'alerts' }, label: 'Open' } },
+      { key: 'alerts', label: '2 alerts to acknowledge', detail: null, action: { kind: 'open', route: { name: 'settings', tab: 'diagnostics', section: 'alerts' }, label: 'Open' } },
     ]);
     expect(needsRows(holding([alert('66666666-6666-4666-8666-000000000001', null)]))[0]?.label).toBe('1 alert to acknowledge');
     expect(needs(holding([alert('66666666-6666-4666-8666-000000000003', '2026-09-25T11:00:00.000Z')]))).toEqual([]);

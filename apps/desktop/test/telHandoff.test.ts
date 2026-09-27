@@ -1,22 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { createDialHandoff } from '../src/main/dialHandoff.ts';
 import type { SchemeHandlers } from '../src/main/launchServices.ts';
-import {
-  HANDLER_PROOF_MILLISECONDS,
-  createDialApi,
-  createTelLaunchDriver,
-  isTelUri,
-  NotATelUriError,
-} from '../src/main/telHandoff.ts';
-import { createAuthedClient } from '../src/main/authedClient.ts';
-import type { HttpAnswer } from '../src/main/apiClient.ts';
+import { HANDLER_PROOF_MILLISECONDS, createTelLaunchDriver, isTelUri, NotATelUriError } from '../src/main/telHandoff.ts';
 
 /**
  * The `tel:` opener (specification 9.2, 14.2, 17).
  *
- * G4 proved the handoff *logic* — the ticket, the consumption, the "a failed open is
- * unknown" rule — against two ports. This is the macOS binding of those ports, and
- * three things about it are worth a test of their own:
+ * `dialHandoff.ts` proves the handoff *logic* — the setup proof, the URI check, the
+ * "a failed open is unknown" rule — against one port. This is the macOS binding of that
+ * port, and three things about it are worth a test of their own:
  *
  *   * `shell.openExternal` is unreachable for anything that is not a `tel:` URI with an
  *     E.164 number, so the driver cannot become a general "open this URL as the user"
@@ -33,10 +25,6 @@ const AVAILABLE: SchemeHandlers = { kind: 'available', bundleIds: ['com.apple.mo
 const NUMBER = '+14015550187';
 const TEL = `tel:${NUMBER}`;
 
-const FIRM_ID = '11111111-1111-4111-8111-111111111111';
-const ROUTE_ID = '44444444-4444-4444-8444-444444444444';
-const IDENTITY_ID = '55555555-5555-4555-8555-555555555555';
-const TICKET_ID = '99999999-9999-4999-8999-999999999999';
 
 describe('what counts as a tel: URI', () => {
   it('accepts an E.164 tel URI and nothing else', () => {
@@ -135,71 +123,25 @@ describe('the setup proof', () => {
   });
 });
 
-/** The two dial commands, scripted. */
-function scriptedDialApi(answers: Readonly<Record<string, HttpAnswer>>): {
-  readonly api: ReturnType<typeof createDialApi>;
-  readonly calls: { path: string; body: Record<string, unknown> }[];
-} {
-  const calls: { path: string; body: Record<string, unknown> }[] = [];
-  const client = createAuthedClient({
-    baseUrl: 'https://api.example.test/',
-    clientVersion: '1.4.0',
-    accessToken: async () => await Promise.resolve('token-value'),
-    send: async (url, init) => {
-      const path = new URL(url).pathname;
-      calls.push({ path, body: JSON.parse(init.body ?? '{}') as Record<string, unknown> });
-      return await Promise.resolve(answers[path] ?? { status: 404, body: { error: 'not_found' } });
-    },
-  });
-  return { api: createDialApi(client), calls };
-}
-
-const accepted = (result: unknown): HttpAnswer => ({
-  status: 200,
-  body: { status: 'accepted', replayed: false, result },
-});
-
 describe('the handoff, end to end through the real logic', () => {
-  const ticket = {
-    ticketId: TICKET_ID,
-    e164: NUMBER,
-    firmId: FIRM_ID,
-    contactId: null,
-    routeId: ROUTE_ID,
-    routeVersion: 3,
-    callingIdentityId: IDENTITY_ID,
-    issuedAt: '2026-09-21T13:00:00.000Z',
-    expiresAt: '2026-09-21T13:00:45.000Z',
-    firmLocalTime: '09:00',
-    firmTimeZone: 'America/New_York',
-  };
-
-  it('refuses without a setup proof and never asks the server for a ticket', async () => {
-    const { api, calls } = scriptedDialApi({});
+  it('refuses without a setup proof, and opens nothing', async () => {
+    const opened: string[] = [];
     const handoff = createDialHandoff({
-      driver: createTelLaunchDriver({ probe: () => ({ kind: 'absent' }), openExternal: async () => await Promise.resolve() }),
-      api,
+      driver: createTelLaunchDriver({
+        probe: () => ({ kind: 'absent' }),
+        openExternal: async uri => {
+          opened.push(uri);
+          await Promise.resolve();
+        },
+      }),
     });
     expect(await handoff.checkSetup()).toEqual({ ready: false, reason: 'no_tel_handler' });
-    const outcome = await handoff.dial({
-      commandId: 'cmd-authorize',
-      consumeCommandId: 'cmd-consume',
-      firmId: FIRM_ID,
-      routeId: ROUTE_ID,
-      routeVersion: 3,
-      callingIdentityId: IDENTITY_ID,
-    });
-    expect(outcome).toEqual({ status: 'refused', reason: 'no_tel_handler' });
-    // A ticket lives sixty seconds; none was spent finding out the Mac has no phone.
-    expect(calls).toEqual([]);
+    expect(await handoff.open({ telUri: TEL, e164: NUMBER })).toEqual({ status: 'refused', reason: 'no_tel_handler' });
+    expect(opened).toEqual([]);
   });
 
-  it('authorizes, consumes and opens, with two command ids and the displayed version', async () => {
+  it('opens the advised URI through the real driver, once per proof', async () => {
     const opened: string[] = [];
-    const { api, calls } = scriptedDialApi({
-      '/dial/authorize': accepted(ticket),
-      '/dial/consume': accepted({ ticketId: TICKET_ID, e164: NUMBER, telUri: TEL, consumedAt: '2026-09-21T13:00:05.000Z' }),
-    });
     const handoff = createDialHandoff({
       driver: createTelLaunchDriver({
         probe: () => AVAILABLE,
@@ -208,56 +150,14 @@ describe('the handoff, end to end through the real logic', () => {
           await Promise.resolve();
         },
       }),
-      api,
     });
     expect(await handoff.checkSetup()).toEqual({ ready: true });
-    const outcome = await handoff.dial({
-      commandId: 'cmd-authorize',
-      consumeCommandId: 'cmd-consume',
-      firmId: FIRM_ID,
-      routeId: ROUTE_ID,
-      routeVersion: 3,
-      callingIdentityId: IDENTITY_ID,
-    });
-    // Lane g79 (C16): the handoff carries out what authorized the call, for the outcome.
-    expect(outcome).toEqual({
-      status: 'opened',
-      e164: NUMBER,
-      ticket: { ticketId: TICKET_ID, callingIdentityId: IDENTITY_ID, routeId: ROUTE_ID, contactId: null },
-    });
+    expect(await handoff.open({ telUri: TEL, e164: NUMBER })).toEqual({ status: 'opened', e164: NUMBER });
+    expect(await handoff.open({ telUri: TEL, e164: NUMBER })).toEqual({ status: 'refused', reason: 'no_tel_handler' });
     expect(opened).toEqual([TEL]);
-    expect(calls.map(call => call.path)).toEqual(['/dial/authorize', '/dial/consume']);
-    expect(calls[0]?.body['commandId']).toBe('cmd-authorize');
-    expect(calls[0]?.body['routeVersion']).toBe(3);
-    expect(calls[1]?.body['commandId']).toBe('cmd-consume');
-  });
-
-  it('passes a server refusal back as its own code', async () => {
-    const { api } = scriptedDialApi({
-      '/dial/authorize': { status: 409, body: { status: 'refused', replayed: false, reason: 'route_version_stale' } },
-    });
-    const handoff = createDialHandoff({
-      driver: createTelLaunchDriver({ probe: () => AVAILABLE, openExternal: async () => await Promise.resolve() }),
-      api,
-    });
-    await handoff.checkSetup();
-    expect(
-      await handoff.dial({
-        commandId: 'cmd-authorize',
-        consumeCommandId: 'cmd-consume',
-        firmId: FIRM_ID,
-        routeId: ROUTE_ID,
-        routeVersion: 1,
-        callingIdentityId: IDENTITY_ID,
-      }),
-    ).toEqual({ status: 'not_authorized', reason: 'route_version_stale' });
   });
 
   it('is `opened_unknown` when the open throws, because bytes may already have left', async () => {
-    const { api } = scriptedDialApi({
-      '/dial/authorize': accepted(ticket),
-      '/dial/consume': accepted({ ticketId: TICKET_ID, e164: NUMBER, telUri: TEL, consumedAt: '2026-09-21T13:00:05.000Z' }),
-    });
     const handoff = createDialHandoff({
       driver: createTelLaunchDriver({
         probe: () => AVAILABLE,
@@ -266,21 +166,28 @@ describe('the handoff, end to end through the real logic', () => {
           throw new Error('the window server said no');
         },
       }),
-      api,
     });
     await handoff.checkSetup();
-    expect(
-      await handoff.dial({
-        commandId: 'cmd-authorize',
-        consumeCommandId: 'cmd-consume',
-        firmId: FIRM_ID,
-        routeId: ROUTE_ID,
-        routeVersion: 3,
-        callingIdentityId: IDENTITY_ID,
-      }),
-    ).toEqual({
-      status: 'opened_unknown',
-      ticket: { ticketId: TICKET_ID, callingIdentityId: IDENTITY_ID, routeId: ROUTE_ID, contactId: null },
+    expect(await handoff.open({ telUri: TEL, e164: NUMBER })).toEqual({ status: 'opened_unknown' });
+  });
+
+  /**
+   * The driver is the last gate, and it is a different gate from the handoff's: the
+   * handoff checks the URI matches the number the advice named, and the driver checks
+   * the string is a `tel:` URI at all. Either alone would be enough to stop this; both
+   * exist because `shell.openExternal` is one argument away from being the most useful
+   * thing in this process.
+   */
+  it('never reaches `openExternal` with anything but a tel: URI', async () => {
+    const opened: string[] = [];
+    const driver = createTelLaunchDriver({
+      probe: () => AVAILABLE,
+      openExternal: async uri => {
+        opened.push(uri);
+        await Promise.resolve();
+      },
     });
+    await expect(driver.openTelUri('https://example.test/')).rejects.toBeInstanceOf(NotATelUriError);
+    expect(opened).toEqual([]);
   });
 });

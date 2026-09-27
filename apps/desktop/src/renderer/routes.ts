@@ -1,52 +1,89 @@
 /**
- * Where the one window is (wave 1, lane W1-D).
+ * Where the one window is (wave 1, lane W1-D; Settings since 1.0.12).
  *
  * Until wave 1 every sidebar row opened its own `BrowserWindow`. There is one window now,
  * with the sidebar always on its left, and the column on its right shows one view at a
- * time. A route names that view: the sidebar sets it, the Window menu's ⌘1–⌘6 and a
- * deep link set it through `callie:navigate`, and a Today or reply card sets it to the
+ * time. A route names that view: the sidebar sets it, the Window menu's ⌘1–⌘4 and ⌘, and
+ * a deep link set it through `callie:navigate`, and a Today or reply card sets it to the
  * firm it is about.
  *
- * The six names the menu and the deep links may use are a closed set. `firm/<id>` is the
- * one route with an argument, and only the page sets it — never the main process.
+ * Administration and the Dashboard were two of the six routes until 1.0.12; they are now
+ * two of Settings' three tabs, and `settings/<tab>` is the route. The old names are still
+ * understood — `admin`, `admin/<section>` and `dashboard` are links that exist on the
+ * owner's Mac and menu items people have learned — and each maps onto the tab that holds
+ * what it used to open.
+ *
+ * `firm/<id>` is the one route with an argument, and only the page sets it — never the
+ * main process.
  */
 
-import { routeNameOf, type RouteName } from '../shared/contract.ts';
+import { SETTINGS_TABS, routeNameOf, type RouteName, type SettingsTab } from '../shared/contract.ts';
 
-export { ROUTE_NAMES, routeNameOf, type RouteName } from '../shared/contract.ts';
+export { NAVIGATION_TARGETS, ROUTE_NAMES, SETTINGS_TABS, navigationTargetOf, routeNameOf } from '../shared/contract.ts';
+export type { NavigationTarget, RouteName, SettingsTab } from '../shared/contract.ts';
 
-/** Where Administration scrolls to when Needs you opened it. */
+/** Where Settings scrolls to when Needs you opened it. */
 export const ADMIN_SECTIONS = ['calling-number', 'sending-admin', 'alerts'] as const;
 export type AdminSection = (typeof ADMIN_SECTIONS)[number];
 
 export type Route =
-  | { readonly name: 'today' | 'replies' | 'firms' | 'sequences' | 'dashboard' }
+  | { readonly name: 'today' | 'replies' | 'firms' | 'sequences' }
   | { readonly name: 'firm'; readonly firmId: string }
-  | { readonly name: 'admin'; readonly section?: AdminSection };
+  | {
+      readonly name: 'settings';
+      readonly tab: SettingsTab;
+      /**
+       * Where inside the tab to scroll, when Needs you sent the person there. Not part
+       * of the route's text: `settings/administration` is one place, whether or not
+       * somebody arrived at it pointed at the calling-number section.
+       */
+      readonly section?: AdminSection;
+    };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
-/** `today`, `firm/<uuid>`, `admin/calling-number`…, or null for anything else. */
+/** The tab that holds what an old `admin/<section>` link used to open. */
+export function tabForSection(section: AdminSection): SettingsTab {
+  return section === 'alerts' ? 'diagnostics' : 'administration';
+}
+
+const settingsTabOf = (value: string | undefined): SettingsTab | null =>
+  SETTINGS_TABS.find(tab => tab === value) ?? null;
+
+const sectionOf = (value: string | undefined): AdminSection | null =>
+  ADMIN_SECTIONS.find(section => section === value) ?? null;
+
+/** `today`, `firm/<uuid>`, `settings/diagnostics`, an old `admin/alerts`, or null. */
 export function routeOf(text: string): Route | null {
   const [head, tail, ...rest] = text.split('/');
   if (rest.length > 0) return null;
   if (head === 'firm') return tail !== undefined && UUID.test(tail) ? { name: 'firm', firmId: tail } : null;
-  if (head === 'admin' && tail !== undefined) {
-    const section = ADMIN_SECTIONS.find(entry => entry === tail);
-    return section === undefined ? null : { name: 'admin', section };
+  if (head === 'settings') {
+    if (tail === undefined) return { name: 'settings', tab: 'administration' };
+    const tab = settingsTabOf(tail);
+    return tab === null ? null : { name: 'settings', tab };
   }
+  // The routes 1.0.11 used. `admin/<section>` opens the tab that section lives on and
+  // asks it to scroll there, which is what Needs you's Open always meant.
+  if (head === 'admin') {
+    if (tail === undefined) return { name: 'settings', tab: 'administration' };
+    const section = sectionOf(tail);
+    return section === null ? null : { name: 'settings', tab: tabForSection(section), section };
+  }
+  if (head === 'dashboard' && tail === undefined) return { name: 'settings', tab: 'dashboard' };
   if (tail !== undefined) return null;
   const name = routeNameOf(head);
-  return name === null ? null : name === 'admin' ? { name: 'admin' } : { name };
+  if (name === null) return null;
+  return name === 'settings' ? { name: 'settings', tab: 'administration' } : { name };
 }
 
 export function routeText(route: Route): string {
   if (route.name === 'firm') return `firm/${route.firmId}`;
-  if (route.name === 'admin' && route.section !== undefined) return `admin/${route.section}`;
+  if (route.name === 'settings') return `settings/${route.tab}`;
   return route.name;
 }
 
-/** The sidebar row a route lights up: a firm is under Firms. */
+/** The sidebar row a route lights up: a firm is under Firms, every tab under Settings. */
 export function sidebarRowOf(route: Route): RouteName {
   return route.name === 'firm' ? 'firms' : route.name;
 }
@@ -56,10 +93,10 @@ export function sidebarRowOf(route: Route): RouteName {
 // ---------------------------------------------------------------------------
 
 /**
- * `renderer.ts` installs these once. A view calls `navigate` to go somewhere else (a
+ * The React shell installs these once. A view calls `navigate` to go somewhere else (a
  * Today card to its firm), and `routeShown` when its own answer moved it — the CRM
- * bridge opened a firm from the board — so the route and the sidebar stay true without
- * the view being mounted again.
+ * bridge opened a firm from the board, the legacy Settings module switched its own tab —
+ * so the route and the sidebar stay true without the view being mounted again.
  */
 let navigateTo: (route: Route) => void = () => undefined;
 let noteShown: (route: Route) => void = () => undefined;
@@ -77,7 +114,7 @@ export function routeShown(route: Route): void {
   noteShown(route);
 }
 
-/** What every view module exports. `mount` draws into `container`; `unmount` stops drawing. */
+/** What every hand-rolled view module exports. `mount` draws into `container`; `unmount` stops drawing. */
 export interface View {
   mount(container: HTMLElement, route: Route): void;
   unmount(): void;

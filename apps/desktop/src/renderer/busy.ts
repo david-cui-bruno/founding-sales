@@ -6,6 +6,11 @@
  * was on the wire — and the launch update being put in place. Both set `inert` on the
  * same element, so each holds it under its own reason and the element is inert while
  * any reason holds it; one finishing never releases the other.
+ *
+ * The rule is about the *column*, not about whichever node a view happens to draw into.
+ * Since 1.0.12 a hand-rolled view is mounted inside a container the React shell gives it,
+ * so `busyFor` climbs to the column it is in; a view mounted on its own — a unit test —
+ * holds the element it was given, as before.
  */
 
 const reasons = new WeakMap<HTMLElement, Set<string>>();
@@ -29,7 +34,14 @@ export interface Busy {
 
 let views = 0;
 
-/** One view's in-flight commands, holding `target()` read-only while any is pending. */
+/** The column a view is drawn in, or the view's own element when it is not in one. */
+function columnOf(element: HTMLElement | null): HTMLElement | null {
+  if (element === null) return null;
+  const column = element.closest('[data-region="column"]');
+  return column instanceof HTMLElement ? column : element;
+}
+
+/** One view's in-flight commands, holding its column read-only while any is pending. */
 export function busyFor(target: () => HTMLElement | null): Busy {
   views += 1;
   const reason = `command-${String(views)}`;
@@ -47,7 +59,7 @@ export function busyFor(target: () => HTMLElement | null): Busy {
     async run(next) {
       const mine = epoch;
       pending += 1;
-      held = held ?? target();
+      held = held ?? columnOf(target());
       settle();
       try {
         return await next;

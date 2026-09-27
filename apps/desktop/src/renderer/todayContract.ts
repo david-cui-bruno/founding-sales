@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  e164,
   instant,
   uuid,
   todayCardDtoSchema,
@@ -58,6 +59,30 @@ export type TodayRoute = TodayRouteDto;
  */
 export type TodayFirm = TodayFirmResponse;
 
+/**
+ * `POST /dial/check`'s answer for one of the card's numbers (wave 2, S4.5).
+ *
+ * The card says callable yes or no and, when no, every reason that applies — not the
+ * first, so "outside the calling window, and the state is not on your list" is one
+ * sentence rather than two presses. The URI stays in the main process: this is
+ * everything the window is told, and there is no field on it a renderer could turn into
+ * something to open.
+ */
+export const dialAdviceViewSchema = z.strictObject({
+  routeId: uuid,
+  callable: z.boolean(),
+  /**
+   * Stable codes, never sentences composed here: `todayView.ts` is the one place each
+   * becomes English. The wire values are checked against `@fss/contracts`' closed enum in
+   * the main process, which is where a code the server gained should fail.
+   */
+  reasons: z.array(z.string().max(64)),
+  e164: e164.nullable(),
+  /** The firm's own clock at the moment of the advice, `HH:MM`, when the zone is known. */
+  firmLocalTime: z.string().max(5).nullable(),
+});
+export type DialAdviceView = z.infer<typeof dialAdviceViewSchema>;
+
 export const todayStateSchema = z.strictObject({
   /** Null before the first read, and after a sign-out. */
   snapshotDate: z.iso.date().nullable(),
@@ -79,6 +104,8 @@ export const todayStateSchema = z.strictObject({
   notice: z.string().max(80).nullable(),
   /** 9.2's last clause, so the window never has to compose it. */
   handoffNotice: z.string(),
+  /** One entry per usable number on the expanded card; empty when no card is open. */
+  dialAdvice: z.array(dialAdviceViewSchema),
   /**
    * The call the last Call button handed to the phone app, so the outcome form can say
    * which number it is recording (lane g79, C16). The ticket and the calling identity
@@ -119,7 +146,6 @@ export interface DialRequest {
   readonly firmId: string;
   readonly contactId: string | null;
   readonly routeId: string;
-  readonly routeVersion: number;
 }
 
 export interface OutcomeRequest {
@@ -156,7 +182,11 @@ export interface TodayBridge {
   expand(input: { readonly firmId: string }): Promise<TodayState>;
   collapse(): Promise<TodayState>;
   snooze(input: SnoozeRequest): Promise<TodayState>;
-  /** Authorize, consume and open `tel:` in one call. The renderer never sees a ticket. */
+  /**
+   * Re-read the advice for this number and open `tel:` when it is still callable. The
+   * renderer never sees the URI, and the button sends no version, no ticket and no
+   * calling identity: the server decides, and this is the press.
+   */
   dial(input: DialRequest): Promise<TodayState>;
   recordOutcome(input: OutcomeRequest): Promise<TodayState>;
   scheduleCallback(input: ScheduleCallbackRequest): Promise<TodayState>;

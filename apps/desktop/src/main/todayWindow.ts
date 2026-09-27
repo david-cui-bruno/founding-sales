@@ -57,15 +57,14 @@ export function registerTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
     return await host.snooze({ itemId: input.itemId, reason: input.reason, returnAt: input.returnAt });
   });
   handleOnce(TODAY_IPC_CHANNELS.dial, async argument => {
-    const input = argument as { firmId?: unknown; routeId?: unknown; routeVersion?: unknown; contactId?: unknown } | null;
-    if (typeof input?.firmId !== 'string' || typeof input.routeId !== 'string' || typeof input.routeVersion !== 'number') {
+    const input = argument as { firmId?: unknown; routeId?: unknown; contactId?: unknown } | null;
+    if (typeof input?.firmId !== 'string' || typeof input.routeId !== 'string') {
       return await host.state();
     }
     return await host.dial({
       firmId: input.firmId,
       contactId: typeof input.contactId === 'string' ? input.contactId : null,
       routeId: input.routeId,
-      routeVersion: input.routeVersion,
     });
   });
   handleOnce(TODAY_IPC_CHANNELS.recordOutcome, async argument => {

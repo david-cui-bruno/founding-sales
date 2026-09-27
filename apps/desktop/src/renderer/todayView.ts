@@ -1,5 +1,5 @@
 import { callbackInstant, localParts } from '@fss/contracts';
-import type { TodayCard, TodayRoute, TodayState, TodayTask } from './todayContract.ts';
+import type { DialAdviceView, TodayCard, TodayRoute, TodayState, TodayTask } from './todayContract.ts';
 
 /**
  * What the Today window shows, as a pure function of the state the main process sent
@@ -50,13 +50,62 @@ export const TASK_LABELS: Readonly<Record<TodayTask['kind'], string>> = Object.f
 });
 
 /**
- * What a card with numbers and no calling identity says (lane g60). 9.1 requires the
- * number a call leaves on to be the salesperson's own and attested, and until that
- * exists the card has no Call button — so the card says where to add it rather than
- * leaving a person to wonder why the button is missing.
+ * What a card with numbers and no calling identity says (lane g60), now that dialling no
+ * longer needs one: a line under the numbers rather than a reason the button is missing.
+ * The person's own number is what a call should leave on, and Settings is where it goes.
  */
 export const NO_CALLING_NUMBER =
-  'Callie has no attested number of yours to call from. Add it in Administration (⌘5), under Your calling number.';
+  'Callie has no attested number of yours to call from. Add it in Settings (⌘,), under Your calling number.';
+
+/**
+ * Why the server will not advise a call, in the words a person can act on.
+ *
+ * The one place a `POST /dial/check` reason becomes English, for the reason the notice
+ * table above exists: the window composes nothing of its own, so the words are versioned
+ * with the release and one code never says two things. A code this build does not know is
+ * shown as itself rather than swallowed.
+ */
+const DIAL_REASONS: Readonly<Record<string, string>> = Object.freeze({
+  firm_suppressed: 'This firm asked not to be contacted.',
+  handle_suppressed: 'This number is suppressed.',
+  manual_suppression_review: 'A suppression on this firm is waiting to be reviewed.',
+  route_missing: 'That number is not this firm’s any more.',
+  route_candidate: 'This number has not been confirmed yet.',
+  route_invalid: 'This number is not a working number.',
+  route_retired: 'This number was retired.',
+  outside_calling_window: 'It is outside this firm’s calling hours.',
+  posture_missing: 'This firm’s state is not on your “OK to call” list.',
+  posture_overlapping: 'This firm’s state has two postures in force; fix it in Settings.',
+  posture_overdue: 'This firm’s state posture needs reviewing.',
+  scoped_pause: 'Calling is paused for this firm.',
+  restore_in_progress: 'A restore is under way; calling waits for it.',
+  reassignment: 'This firm is being reassigned.',
+  uncertain_reply: 'A reply here has not been answered yet.',
+  ambiguous_match: 'A reply here belongs to more than one conversation.',
+  opportunity_manual: 'This firm is yours to work by hand.',
+  long_hold_review: 'This firm has been on hold long enough to need a review.',
+  provider_refusal: 'The provider refused this call.',
+  firm_unknown: 'Callie cannot find this firm.',
+  not_assigned: 'This firm is somebody else’s.',
+  zone_unresolved: 'Callie does not know this firm’s time zone, so it cannot check the calling window.',
+  dial_advice_unavailable: 'Callie could not check whether this number may be called. Try again.',
+  not_callable: 'The server will not place this call now.',
+});
+
+/** The one place a dial reason becomes English. Unknown codes are shown as-is. */
+export function dialReasonSentence(code: string): string {
+  return DIAL_REASONS[code] ?? code;
+}
+
+/** One number on the expanded card: what it is, and whether the server will advise it. */
+export interface DialRouteView {
+  readonly route: TodayRoute;
+  readonly advice: DialAdviceView | null;
+  /** True when the server said callable and the window may send a command at all. */
+  readonly enabled: boolean;
+  /** Every reason the call was refused, as sentences. Empty when it is callable. */
+  readonly reasons: readonly string[];
+}
 
 const NOTICES: Readonly<Record<string, string>> = Object.freeze({
   offline: 'Callie cannot reach the server.',
@@ -140,8 +189,12 @@ export interface TodayScreenView {
    * contact just called, else the first callable task, else none (lane g79).
    */
   readonly outcomeItemId: string | null;
-  /** Routes that may be dialed right now, in the versions the server just sent. */
-  readonly dialableRoutes: readonly TodayRoute[];
+  /**
+   * The card's usable numbers with `POST /dial/check`'s advice beside each. Every one is
+   * shown — a number the server will not advise now says why rather than disappearing,
+   * because "there is no Call button" and "you may not call at 7pm" are different facts.
+   */
+  readonly dialRoutes: readonly DialRouteView[];
   /**
    * Whether anything that would mutate cloud state may be offered at all: signed in on
    * a supported version. Offline and stale are banners, not this (wave 1).
@@ -184,8 +237,10 @@ export function buildTodayView(state: TodayState): TodayScreenView {
     });
   }
   if (state.notice !== null) banners.push({ tone: 'info', text: noticeSentence(state.notice) });
-  // A card with a number to dial and nothing to dial it from. Said once, and not again
-  // when the notice already says it.
+  // A card with a number to dial and no number of the person's own to place it from.
+  // Since 1.0.12 that does not stop the call — `POST /dial/check` decides, and it has no
+  // opinion about the caller's own line — so it is a line to act on rather than an
+  // explanation of a missing button.
   if (
     state.expanded !== null &&
     state.expanded.callingIdentityId === null &&
@@ -227,19 +282,32 @@ export function buildTodayView(state: TodayState): TodayScreenView {
       : undefined;
   const outcomeItemId = (calledContact ?? callable[0])?.task.itemId ?? null;
 
+  // 9.1: a route that is not `usable` is shown on the Firm page and is not dialable from
+  // here at all. Of those that are, the server's advice says which may be called now.
+  const dialRoutes: DialRouteView[] = (state.expanded?.routes ?? [])
+    .filter(route => route.eligibility === 'usable')
+    .map(route => {
+      const advice = state.dialAdvice.find(entry => entry.routeId === route.routeId) ?? null;
+      return {
+        route,
+        advice,
+        enabled: actionsEnabled && (advice?.callable ?? false),
+        reasons:
+          advice === null
+            ? [dialReasonSentence('dial_advice_unavailable')]
+            : advice.callable
+              ? []
+              : advice.reasons.map(dialReasonSentence),
+      };
+    });
+
   return {
     heading: TODAY_HEADING,
     banners,
     cards,
     tasks,
     outcomeItemId,
-    // 9.1: a route that is not `usable` is shown on the Firm page and is not dialable
-    // from here. The server refuses it anyway; offering it would only be a button
-    // whose whole purpose is to be refused.
-    dialableRoutes:
-      actionsEnabled && state.expanded?.callingIdentityId !== null
-        ? (state.expanded?.routes ?? []).filter(route => route.eligibility === 'usable')
-        : [],
+    dialRoutes,
     actionsEnabled,
     showingCachedList: state.stale && state.cards.length > 0,
     emptyMessage: state.cards.length > 0 ? null : state.online ? EMPTY_LIST : EMPTY_OFFLINE,

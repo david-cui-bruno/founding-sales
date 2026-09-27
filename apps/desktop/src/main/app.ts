@@ -5,7 +5,7 @@ import { uuid } from '@fss/contracts';
 import { createApiClient, fetchSend } from './apiClient.ts';
 import { createAuthedClient } from './authedClient.ts';
 import { createDialHandoff } from './dialHandoff.ts';
-import { createDialApi, createTelLaunchDriver } from './telHandoff.ts';
+import { createTelLaunchDriver } from './telHandoff.ts';
 import { registerCrmBridge, registerReplyBridge, registerSequenceBridge, registerTodayBridge } from './todayWindow.ts';
 import { windowMenuTemplate } from './windowMenu.ts';
 import { registerAdminBridge } from './settingsWindow.ts';
@@ -14,7 +14,7 @@ import { createKeychainVault } from './keychain.ts';
 import { createOfflineCache } from './offlineCache.ts';
 import { createSessionManager, type SessionManager } from './sessionManager.ts';
 import { IPC_CHANNELS } from './ipc.ts';
-import type { RouteName } from '../shared/contract.ts';
+import type { NavigationTarget } from '../shared/contract.ts';
 import {
   MAILBOX_IPC_CHANNELS,
   createMailboxBridge,
@@ -117,7 +117,7 @@ export function registerMailboxBridge(deps: MailboxBridgeDeps): MailboxBridgeHos
 /** The one window, whether its page has loaded, and a route asked for before it had. */
 let mainWindow: BrowserWindow | null = null;
 let windowLoaded = false;
-let pendingRoute: RouteName | null = null;
+let pendingRoute: NavigationTarget | null = null;
 
 /**
  * Bring the window forward on `route`: the Window menu's ⌘1–⌘6 and every deep link.
@@ -126,7 +126,7 @@ let pendingRoute: RouteName | null = null;
  * before `ready`), and until wave 1 it was dropped. It is kept here now and sent once
  * the page has loaded and is listening; a later one replaces an earlier one.
  */
-export function showRoute(route: RouteName): void {
+export function showRoute(route: NavigationTarget): void {
   const window = mainWindow;
   if (window === null || window.isDestroyed() || !windowLoaded) {
     pendingRoute = route;
@@ -195,10 +195,10 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
 
   registerTodayBridge({
     api,
-    // G4's handoff logic, bound to macOS through `telHandoff.ts`: the launch-services
+    // The handoff logic, bound to macOS through `telHandoff.ts`: the launch-services
     // probe for the setup proof and `shell.openExternal` for the open, with every
     // scheme but `tel:` unreachable from that module. There is no Swift helper (2).
-    handoff: createDialHandoff({ driver: createTelLaunchDriver(), api: createDialApi(api) }),
+    handoff: createDialHandoff({ driver: createTelLaunchDriver() }),
     session,
   });
   // 8.3's reply cards. The same `AuthedClient` and the same session manager: the

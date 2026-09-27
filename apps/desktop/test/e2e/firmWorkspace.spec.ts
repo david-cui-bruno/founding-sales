@@ -182,6 +182,7 @@ test('a Lost change asks for a reason and will not go without one', async ({ pag
 
 test('a retired stage is never offered as a destination', async ({ page }) => {
   await openCrm(page, crmState({ screen: 'pipeline', pipeline: pipelineView(), firm: null }));
+  await expect(page.getByTestId('stage-select').first()).toBeVisible();
   const options = await page.getByTestId('stage-select').first().locator('option').allTextContents();
   expect(options).toEqual(['Move to…', 'New', 'Contacting', 'Engaged', 'Won', 'Lost']);
 });

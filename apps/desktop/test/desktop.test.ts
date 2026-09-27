@@ -17,7 +17,7 @@ import { buildScreenView } from '../src/renderer/viewModel.ts';
 import { createAuthedClient } from '../src/main/authedClient.ts';
 import { createAdminBridge } from '../src/main/settingsBridge.ts';
 import { outboundStatusAnswer } from './support/outboundStatus.ts';
-import { ROUTE_NAMES, desktopStateSchema, routeNameOf } from '../src/shared/contract.ts';
+import { NAVIGATION_TARGETS, ROUTE_NAMES, desktopStateSchema, navigationTargetOf, routeNameOf } from '../src/shared/contract.ts';
 import { IPC_CHANNELS } from '../src/main/ipc.ts';
 import { DEEP_LINKS, deepLinkRoute, windowMenuTemplate } from '../src/main/windowMenu.ts';
 import { routeOf, routeText, sidebarRowOf } from '../src/renderer/routes.ts';
@@ -498,9 +498,20 @@ describe('the state that crosses the bridge', () => {
 });
 
 describe('one window: the routes the menu and deep links may name (wave 1)', () => {
-  it('names exactly six views, and nothing for any other value', () => {
-    expect(ROUTE_NAMES).toEqual(['today', 'replies', 'firms', 'sequences', 'admin', 'dashboard']);
+  it('names exactly five views and seven targets, and nothing for any other value', () => {
+    expect(ROUTE_NAMES).toEqual(['today', 'replies', 'firms', 'sequences', 'settings']);
+    expect(NAVIGATION_TARGETS).toEqual([
+      'today',
+      'replies',
+      'firms',
+      'sequences',
+      'settings/administration',
+      'settings/dashboard',
+      'settings/diagnostics',
+    ]);
     for (const name of ROUTE_NAMES) expect(routeNameOf(name)).toBe(name);
+    for (const target of NAVIGATION_TARGETS) expect(navigationTargetOf(target)).toBe(target);
+    for (const retired of ['admin', 'dashboard', 'settings/nothing']) expect(navigationTargetOf(retired)).toBeNull();
     // The preload drops anything else before the page hears of it.
     for (const malformed of [
       null,
@@ -524,26 +535,54 @@ describe('one window: the routes the menu and deep links may name (wave 1)', () 
     }
   });
 
-  it('reads a route from text, a firm by its id and Administration by its section, and nothing else', () => {
+  it('reads a route from text, a firm by its id and Settings by its tab, and nothing else', () => {
     const firmId = '11111111-1111-4111-8111-111111111111';
     expect(routeOf('today')).toEqual({ name: 'today' });
-    expect(routeOf('admin')).toEqual({ name: 'admin' });
-    expect(routeOf('admin/calling-number')).toEqual({ name: 'admin', section: 'calling-number' });
+    expect(routeOf('settings')).toEqual({ name: 'settings', tab: 'administration' });
+    expect(routeOf('settings/diagnostics')).toEqual({ name: 'settings', tab: 'diagnostics' });
     expect(routeOf(`firm/${firmId}`)).toEqual({ name: 'firm', firmId });
-    for (const text of ['', 'firm', 'firm/', 'firm/not-an-id', `firm/${firmId}/x`, 'admin/elsewhere', 'today/x', 'Today']) {
+    for (const text of ['', 'firm', 'firm/', 'firm/not-an-id', `firm/${firmId}/x`, 'settings/elsewhere', 'today/x', 'Today']) {
       expect(routeOf(text), text).toBeNull();
     }
-    for (const route of [{ name: 'firms' }, { name: 'firm', firmId }, { name: 'admin', section: 'alerts' }] as const) {
+    for (const route of [{ name: 'firms' }, { name: 'firm', firmId }, { name: 'settings', tab: 'diagnostics' }] as const) {
       expect(routeOf(routeText(route))).toEqual(route);
     }
     expect(sidebarRowOf({ name: 'firm', firmId })).toBe('firms');
+    expect(sidebarRowOf({ name: 'settings', tab: 'dashboard' })).toBe('settings');
   });
 
-  it('answers a deep link for each of the six views, and ignores every other link', () => {
-    expect(DEEP_LINKS).toEqual(ROUTE_NAMES.map(name => `callie://${name}`));
+  it('maps 1.0.11 route names onto the Settings tab that holds what they opened', () => {
+    // Links made before 1.0.12 exist on the owner's Mac, and the two keys people learned
+    // are the two tabs beside Administration. Each opens the tab, and a section asks it
+    // to scroll — which is what Needs you's Open has always meant.
+    expect(routeOf('admin')).toEqual({ name: 'settings', tab: 'administration' });
+    expect(routeOf('dashboard')).toEqual({ name: 'settings', tab: 'dashboard' });
+    expect(routeOf('admin/calling-number')).toEqual({
+      name: 'settings',
+      tab: 'administration',
+      section: 'calling-number',
+    });
+    expect(routeOf('admin/alerts')).toEqual({ name: 'settings', tab: 'diagnostics', section: 'alerts' });
+    expect(routeOf('admin/elsewhere')).toBeNull();
+    // The section is not part of the route's text: `settings/administration` is one
+    // place, whether or not somebody arrived at it pointed at a section.
+    expect(routeText({ name: 'settings', tab: 'administration', section: 'calling-number' })).toBe('settings/administration');
+  });
+
+  it('answers a deep link for each view and for the two retired names, and ignores every other link', () => {
+    expect(DEEP_LINKS).toEqual([
+      ...NAVIGATION_TARGETS.map(target => `callie://${target}`),
+      'callie://admin',
+      'callie://dashboard',
+      'callie://settings',
+    ]);
     expect(deepLinkRoute('callie://today')).toBe('today');
     expect(deepLinkRoute('callie://firms/')).toBe('firms');
-    expect(deepLinkRoute('callie://dashboard')).toBe('dashboard');
+    expect(deepLinkRoute('callie://settings/diagnostics')).toBe('settings/diagnostics');
+    // 1.0.11's two links, each onto the tab that holds what it used to open.
+    expect(deepLinkRoute('callie://admin')).toBe('settings/administration');
+    expect(deepLinkRoute('callie://dashboard')).toBe('settings/dashboard');
+    expect(deepLinkRoute('callie://settings')).toBe('settings/administration');
     for (const url of [
       'callie://firm/11111111-1111-4111-8111-111111111111',
       'callie://today?x=1',
@@ -569,7 +608,7 @@ describe('one window: the routes the menu and deep links may name (wave 1)', () 
 });
 
 describe('the Window menu (wave 1)', () => {
-  it('shows each view in the one window, ⌘1 to ⌘6 in the sidebar’s order', () => {
+  it('shows each view in the one window: ⌘1 to ⌘4, then Settings with ⌘, and its two tabs', () => {
     const shown: string[] = [];
     const menu = windowMenuTemplate(route => {
       shown.push(route);
@@ -582,11 +621,20 @@ describe('the Window menu (wave 1)', () => {
       'Replies CmdOrCtrl+2',
       'Firms CmdOrCtrl+3',
       'Sequences CmdOrCtrl+4',
-      'Administration CmdOrCtrl+5',
-      'Dashboard CmdOrCtrl+6',
+      'Settings CmdOrCtrl+,',
+      'Dashboard CmdOrCtrl+5',
+      'Diagnostics CmdOrCtrl+6',
     ]);
     for (const item of views) if ('click' in item) item.click();
-    expect(shown).toEqual(['today', 'replies', 'firms', 'sequences', 'admin', 'dashboard']);
+    expect(shown).toEqual([
+      'today',
+      'replies',
+      'firms',
+      'sequences',
+      'settings/administration',
+      'settings/dashboard',
+      'settings/diagnostics',
+    ]);
   });
 
   it('is one Window menu, built whole rather than appended to Electron’s default', () => {

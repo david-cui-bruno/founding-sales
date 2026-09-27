@@ -1,4 +1,4 @@
-import { ROUTE_NAMES, routeNameOf, type RouteName } from '../shared/contract.ts';
+import { NAVIGATION_TARGETS, navigationTargetOf, type NavigationTarget } from '../shared/contract.ts';
 
 /**
  * The Window menu and the deep links, as values (lane g65; wave 1's one window).
@@ -11,17 +11,28 @@ import { ROUTE_NAMES, routeNameOf, type RouteName } from '../shared/contract.ts'
  *
  * There is one window. Every item here brings it forward and shows one view in it;
  * nothing opens a second window.
+ *
+ * 1.0.12 moved Administration and the Dashboard into Settings. The menu is the sidebar:
+ * the four selling views with ⌘1–⌘4, then Settings with ⌘,, which opens the tab that
+ * used to be Administration. The two keys that opened those views are the two tabs
+ * beside it, so nobody loses the shortcut they had.
  */
 
 /** The menu's words and keys, in the sidebar's order. */
-export const MENU_ROUTES: readonly { readonly route: RouteName; readonly label: string; readonly accelerator: string }[] =
+export const MENU_ROUTES: readonly { readonly target: NavigationTarget; readonly label: string; readonly accelerator: string }[] =
   Object.freeze([
-    { route: 'today', label: 'Today', accelerator: 'CmdOrCtrl+1' },
-    { route: 'replies', label: 'Replies', accelerator: 'CmdOrCtrl+2' },
-    { route: 'firms', label: 'Firms', accelerator: 'CmdOrCtrl+3' },
-    { route: 'sequences', label: 'Sequences', accelerator: 'CmdOrCtrl+4' },
-    { route: 'admin', label: 'Administration', accelerator: 'CmdOrCtrl+5' },
-    { route: 'dashboard', label: 'Dashboard', accelerator: 'CmdOrCtrl+6' },
+    { target: 'today', label: 'Today', accelerator: 'CmdOrCtrl+1' },
+    { target: 'replies', label: 'Replies', accelerator: 'CmdOrCtrl+2' },
+    { target: 'firms', label: 'Firms', accelerator: 'CmdOrCtrl+3' },
+    { target: 'sequences', label: 'Sequences', accelerator: 'CmdOrCtrl+4' },
+  ]);
+
+/** Settings and its three tabs, below a separator. ⌘, is where a Mac keeps this. */
+export const MENU_SETTINGS: readonly { readonly target: NavigationTarget; readonly label: string; readonly accelerator: string }[] =
+  Object.freeze([
+    { target: 'settings/administration', label: 'Settings', accelerator: 'CmdOrCtrl+,' },
+    { target: 'settings/dashboard', label: 'Dashboard', accelerator: 'CmdOrCtrl+5' },
+    { target: 'settings/diagnostics', label: 'Diagnostics', accelerator: 'CmdOrCtrl+6' },
   ]);
 
 export type MenuItem =
@@ -31,13 +42,20 @@ export type MenuItem =
 
 /**
  * The whole application menu: the app, Edit (so ⌘C and ⌘V work in every field), View,
- * and one Window menu with the six views and the usual window controls. Built here
- * rather than appended to Electron's default menu, which already has a Window menu and
- * so showed two.
+ * and one Window menu with the views and the usual window controls. Built here rather
+ * than appended to Electron's default menu, which already has a Window menu and so
+ * showed two.
  */
 export function windowMenuTemplate(
-  show: (route: RouteName) => void,
+  show: (target: NavigationTarget) => void,
 ): readonly ({ readonly role: 'appMenu' | 'editMenu' | 'viewMenu' } | { readonly label: string; readonly submenu: readonly MenuItem[] })[] {
+  const item = (entry: (typeof MENU_ROUTES)[number]): MenuItem => ({
+    label: entry.label,
+    accelerator: entry.accelerator,
+    click: () => {
+      show(entry.target);
+    },
+  });
   return [
     { role: 'appMenu' },
     { role: 'editMenu' },
@@ -45,13 +63,9 @@ export function windowMenuTemplate(
     {
       label: 'Window',
       submenu: [
-        ...MENU_ROUTES.map(entry => ({
-          label: entry.label,
-          accelerator: entry.accelerator,
-          click: () => {
-            show(entry.route);
-          },
-        })),
+        ...MENU_ROUTES.map(item),
+        { type: 'separator' },
+        ...MENU_SETTINGS.map(item),
         { type: 'separator' },
         { role: 'minimize' },
         { role: 'zoom' },
@@ -62,17 +76,31 @@ export function windowMenuTemplate(
 }
 
 /**
- * The deep links this bundle answers to: `callie://` and one of the six route names,
- * as a closed set. Nothing from the URL becomes an argument, a path or a query — a link
- * either is one of these exact strings or it is ignored. That is what makes the scheme
- * safe to register at all: a `callie://` URL is something any web page can ask macOS to
- * open, so it must never be able to say anything but which view to show.
+ * The deep links this bundle answers to: `callie://` and one exact string, as a closed
+ * set. Nothing from the URL becomes an argument, a path or a query — a link either is
+ * one of these exact strings or it is ignored. That is what makes the scheme safe to
+ * register at all: a `callie://` URL is something any web page can ask macOS to open,
+ * so it must never be able to say anything but which view to show.
+ *
+ * `callie://admin` and `callie://dashboard` are 1.0.11's names, kept because links made
+ * before this release still exist on the owner's Mac; each opens the Settings tab that
+ * holds what it used to open.
  */
-export const DEEP_LINKS: readonly string[] = Object.freeze(ROUTE_NAMES.map(name => `callie://${name}`));
+const RETIRED_LINKS: Readonly<Record<string, NavigationTarget>> = Object.freeze({
+  admin: 'settings/administration',
+  dashboard: 'settings/dashboard',
+  settings: 'settings/administration',
+});
 
-/** The route a deep link names, or null. `callie://firms/` is `callie://firms`. */
-export function deepLinkRoute(url: string): RouteName | null {
+export const DEEP_LINKS: readonly string[] = Object.freeze([
+  ...NAVIGATION_TARGETS.map(target => `callie://${target}`),
+  ...Object.keys(RETIRED_LINKS).map(name => `callie://${name}`),
+]);
+
+/** The target a deep link names, or null. `callie://firms/` is `callie://firms`. */
+export function deepLinkRoute(url: string): NavigationTarget | null {
   const exact = url.endsWith('/') ? url.slice(0, -1) : url;
   if (!DEEP_LINKS.includes(exact)) return null;
-  return routeNameOf(exact.slice('callie://'.length));
+  const name = exact.slice('callie://'.length);
+  return navigationTargetOf(name) ?? RETIRED_LINKS[name] ?? null;
 }

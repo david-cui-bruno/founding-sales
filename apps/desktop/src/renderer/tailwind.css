@@ -57,6 +57,7 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar-bg);
   --color-ok: var(--status-ok);
   --color-warn: var(--status-warn);
   --radius-sm: calc(var(--radius) - 4px);
@@ -94,8 +95,19 @@
    * The one accent, and it is only ever status: a green dot for "this is working" and
    * an amber one for "this needs you". Nothing decorative is coloured.
    */
+  --sidebar-bg: oklch(0.976 0.001 286.4);
   --status-ok: oklch(0.63 0.13 155);
   --status-warn: oklch(0.72 0.15 75);
+}
+
+/*
+ * The one rule from Tailwind's preflight this window needs, unlayered so it beats every
+ * utility: an element with `hidden` is hidden, whatever `display` class it also carries.
+ * Without it `class="flex" hidden` is a visible element, because a class selector beats
+ * the user agent's `[hidden] { display: none }`.
+ */
+[hidden] {
+  display: none;
 }
 
 @layer base {

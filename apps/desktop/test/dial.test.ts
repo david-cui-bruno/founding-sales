@@ -3,7 +3,6 @@ import {
   HANDOFF_LIMITATION_NOTICE,
   createDialHandoff,
   unavailableDialHandoff,
-  type DialApi,
   type PhoneLaunchDriver,
 } from '../src/main/dialHandoff.ts';
 import {
@@ -22,47 +21,16 @@ import { localInstant } from '../../../packages/domain/src/rules/localClock.ts';
 /**
  * The Mac's half of 9.2 and 9.1.
  *
- * Nothing here decides anything. What is tested is that the client cannot open a
- * `tel:` URI without a live server-issued ticket, cannot reuse one, and cannot
- * record a callback the salesperson did not confirm.
+ * Nothing here decides anything. What is tested is that the client cannot open a `tel:`
+ * URI without a setup proof and a URI the server's own advice just produced, cannot open
+ * a second one on one proof, and cannot record a callback the salesperson did not
+ * confirm.
  */
 
-const TICKET = {
-  ticketId: '11111111-1111-4111-8111-111111111111',
-  e164: '+14015550123',
-  firmId: '22222222-2222-4222-8222-222222222222',
-  contactId: null,
-  routeId: '33333333-3333-4333-8333-333333333333',
-  routeVersion: 1,
-  callingIdentityId: '44444444-4444-4444-8444-444444444444',
-  issuedAt: '2026-09-16T14:00:00.000Z',
-  expiresAt: '2026-09-16T14:01:00.000Z',
-  firmLocalTime: '10:00',
-  firmTimeZone: 'America/New_York',
-} as const;
-
-const CONSUMED = {
-  ticketId: TICKET.ticketId,
-  e164: TICKET.e164,
-  consumedAt: '2026-09-16T14:00:05.000Z',
-  telUri: 'tel:+14015550123',
-} as const;
-
-function workingApi(overrides: Partial<DialApi> = {}): { api: DialApi; calls: { authorize: number; consume: number } } {
-  const calls = { authorize: 0, consume: 0 };
-  const api: DialApi = {
-    authorize: async () => {
-      calls.authorize += 1;
-      return await Promise.resolve({ ok: true as const, ticket: TICKET });
-    },
-    consume: async () => {
-      calls.consume += 1;
-      return await Promise.resolve({ ok: true as const, consumed: CONSUMED });
-    },
-    ...overrides,
-  };
-  return { api, calls };
-}
+const E164 = '+14015550123';
+const TEL = `tel:${E164}`;
+const FIRM_ID = '22222222-2222-4222-8222-222222222222';
+const ROUTE_ID = '33333333-3333-4333-8333-333333333333';
 
 function workingDriver(overrides: Partial<PhoneLaunchDriver> = {}): { driver: PhoneLaunchDriver; opened: string[] } {
   const opened: string[] = [];
@@ -78,79 +46,52 @@ function workingDriver(overrides: Partial<PhoneLaunchDriver> = {}): { driver: Ph
   return { driver, opened };
 }
 
-const HANDOFF_TICKET = {
-  ticketId: TICKET.ticketId,
-  callingIdentityId: TICKET.callingIdentityId,
-  routeId: TICKET.routeId,
-  contactId: null,
-} as const;
-
-const dialInput = {
-  commandId: 'cmd-authorize',
-  consumeCommandId: 'cmd-consume',
-  firmId: TICKET.firmId,
-  routeId: TICKET.routeId,
-  routeVersion: 1,
-  callingIdentityId: TICKET.callingIdentityId,
-};
+const advised = { telUri: TEL, e164: E164 };
 
 describe('the tel: handoff', () => {
-  it('opens only after a setup proof, and consumes the ticket first', async () => {
+  it('opens the URI the advice carried, and only after a setup proof', async () => {
     const { driver, opened } = workingDriver();
-    const { api, calls } = workingApi();
-    const handoff = createDialHandoff({ driver, api });
+    const handoff = createDialHandoff({ driver });
 
     expect(await handoff.checkSetup()).toEqual({ ready: true });
-    const outcome = await handoff.dial(dialInput);
-
-    // Lane g79 (C16): what authorized the call comes out of the handoff with it.
-    expect(outcome).toEqual({ status: 'opened', e164: '+14015550123', ticket: HANDOFF_TICKET });
-    expect(opened).toEqual(['tel:+14015550123']);
-    expect(calls).toEqual({ authorize: 1, consume: 1 });
+    expect(await handoff.open(advised)).toEqual({ status: 'opened', e164: E164 });
+    expect(opened).toEqual([TEL]);
   });
 
-  it('refuses to dial without a setup proof, and never asks the server for a ticket', async () => {
+  it('refuses to open without a setup proof', async () => {
     const { driver, opened } = workingDriver();
-    const { api, calls } = workingApi();
-    const handoff = createDialHandoff({ driver, api });
+    const handoff = createDialHandoff({ driver });
 
-    expect(await handoff.dial(dialInput)).toEqual({ status: 'refused', reason: 'no_tel_handler' });
+    expect(await handoff.open(advised)).toEqual({ status: 'refused', reason: 'no_tel_handler' });
     expect(opened).toEqual([]);
-    // A ticket lives sixty seconds. Minting one and then discovering there is no
-    // phone app would have spent it for nothing.
-    expect(calls).toEqual({ authorize: 0, consume: 0 });
   });
 
   it('refuses when no tel: handler is registered', async () => {
     const { driver } = workingDriver({ inspectVerifiedHandler: async () => await Promise.resolve('unavailable' as const) });
-    const { api } = workingApi();
-    const handoff = createDialHandoff({ driver, api });
+    const handoff = createDialHandoff({ driver });
     expect(await handoff.checkSetup()).toEqual({ ready: false, reason: 'no_tel_handler' });
-    expect(await handoff.dial(dialInput)).toEqual({ status: 'refused', reason: 'no_tel_handler' });
+    expect(await handoff.open(advised)).toEqual({ status: 'refused', reason: 'no_tel_handler' });
   });
 
-  it('refuses when the handler changed between the proof and the dial', async () => {
+  it('refuses when the handler changed between the proof and the open', async () => {
     const { driver, opened } = workingDriver({ isVerifiedHandlerCurrent: () => false });
-    const { api, calls } = workingApi();
-    const handoff = createDialHandoff({ driver, api });
+    const handoff = createDialHandoff({ driver });
     expect(await handoff.checkSetup()).toEqual({ ready: true });
-    expect(await handoff.dial(dialInput)).toEqual({ status: 'refused', reason: 'handler_changed' });
+    expect(await handoff.open(advised)).toEqual({ status: 'refused', reason: 'handler_changed' });
     expect(opened).toEqual([]);
-    expect(calls.authorize).toBe(0);
   });
 
-  it('arms exactly one handoff: a second dial needs a second proof', async () => {
+  it('arms exactly one handoff: a second open needs a second proof', async () => {
     const { driver, opened } = workingDriver();
-    const { api } = workingApi();
-    const handoff = createDialHandoff({ driver, api });
+    const handoff = createDialHandoff({ driver });
 
     await handoff.checkSetup();
-    expect((await handoff.dial(dialInput)).status).toBe('opened');
-    expect(await handoff.dial(dialInput)).toEqual({ status: 'refused', reason: 'no_tel_handler' });
+    expect((await handoff.open(advised)).status).toBe('opened');
+    expect(await handoff.open(advised)).toEqual({ status: 'refused', reason: 'no_tel_handler' });
     expect(opened).toHaveLength(1);
   });
 
-  it('cannot be re-armed by an inspection that resolves after the dial', async () => {
+  it('cannot be re-armed by an inspection that resolves after the open', async () => {
     let release = (): void => undefined;
     const slow = new Promise<void>(resolve => {
       release = resolve;
@@ -161,85 +102,56 @@ describe('the tel: handoff', () => {
         return 'verified' as const;
       },
     });
-    const { api } = workingApi();
-    const handoff = createDialHandoff({ driver, api });
+    const handoff = createDialHandoff({ driver });
 
     const pending = handoff.checkSetup();
-    // The dial happens while the inspection is still in flight: unarmed, refused.
-    expect(await handoff.dial(dialInput)).toEqual({ status: 'refused', reason: 'no_tel_handler' });
+    // The open happens while the inspection is still in flight: unarmed, refused.
+    expect(await handoff.open(advised)).toEqual({ status: 'refused', reason: 'no_tel_handler' });
     release();
     // And the late answer does not arm the attempt that already failed.
     expect(await pending).toEqual({ ready: false, reason: 'handler_changed' });
-    expect(await handoff.dial(dialInput)).toEqual({ status: 'refused', reason: 'no_tel_handler' });
+    expect(await handoff.open(advised)).toEqual({ status: 'refused', reason: 'no_tel_handler' });
     expect(opened).toEqual([]);
   });
 
-  it('reports the server refusal rather than inventing one', async () => {
-    const { driver, opened } = workingDriver();
-    const { api } = workingApi({
-      authorize: async () => await Promise.resolve({ ok: false as const, reason: 'firm_suppressed' }),
-    });
-    const handoff = createDialHandoff({ driver, api });
-    await handoff.checkSetup();
-    expect(await handoff.dial(dialInput)).toEqual({ status: 'not_authorized', reason: 'firm_suppressed' });
-    expect(opened).toEqual([]);
-  });
-
-  it('never opens on a consumption that was refused', async () => {
-    const { driver, opened } = workingDriver();
-    const { api } = workingApi({
-      consume: async () => await Promise.resolve({ ok: false as const, reason: 'already_consumed' }),
-    });
-    const handoff = createDialHandoff({ driver, api });
-    await handoff.checkSetup();
-    expect(await handoff.dial(dialInput)).toEqual({ status: 'not_authorized', reason: 'already_consumed' });
-    expect(opened).toEqual([]);
-  });
-
-  it('refuses a number the server sent in a shape a URI must not carry', async () => {
+  it('refuses a number in a shape a URI must not carry', async () => {
     const { driver, opened } = workingDriver();
     // A trailing newline: `/^\+[1-9][0-9]{7,14}$/.test()` accepts this in JavaScript,
-    // which is the bug the old launcher's exact-match check existed to stop.
-    const { api } = workingApi({
-      consume: async () =>
-        await Promise.resolve({
-          ok: true as const,
-          consumed: { ...CONSUMED, e164: '+14015550123\n', telUri: 'tel:+14015550123\n' },
-        }),
-    });
-    const handoff = createDialHandoff({ driver, api });
+    // which is the bug the exact-match check exists to stop.
+    const handoff = createDialHandoff({ driver });
     await handoff.checkSetup();
-    expect(await handoff.dial(dialInput)).toEqual({ status: 'refused', reason: 'invalid_target' });
+    expect(await handoff.open({ e164: `${E164}\n`, telUri: `${TEL}\n` })).toEqual({
+      status: 'refused',
+      reason: 'invalid_target',
+    });
     expect(opened).toEqual([]);
   });
 
-  it('refuses a URI that does not match the number on the ticket', async () => {
+  it('refuses a URI that does not match the number the advice named', async () => {
     const { driver, opened } = workingDriver();
-    const { api } = workingApi({
-      consume: async () =>
-        await Promise.resolve({ ok: true as const, consumed: { ...CONSUMED, telUri: 'tel:+14015550199' } }),
-    });
-    const handoff = createDialHandoff({ driver, api });
+    const handoff = createDialHandoff({ driver });
     await handoff.checkSetup();
-    expect(await handoff.dial(dialInput)).toEqual({ status: 'refused', reason: 'invalid_target' });
+    expect(await handoff.open({ e164: E164, telUri: 'tel:+14015550199' })).toEqual({
+      status: 'refused',
+      reason: 'invalid_target',
+    });
     expect(opened).toEqual([]);
   });
 
   it('calls a failed open unknown, because bytes may already have left', async () => {
     const rejecting = workingDriver({ openTelUri: async () => await Promise.reject(new Error('no handler')) });
-    const { api } = workingApi();
-    const handoff = createDialHandoff({ driver: rejecting.driver, api });
+    const handoff = createDialHandoff({ driver: rejecting.driver });
     await handoff.checkSetup();
-    expect(await handoff.dial(dialInput)).toEqual({ status: 'opened_unknown', ticket: HANDOFF_TICKET });
+    expect(await handoff.open(advised)).toEqual({ status: 'opened_unknown' });
 
     const throwing = workingDriver({
       openTelUri: () => {
         throw new Error('window server gone');
       },
     });
-    const second = createDialHandoff({ driver: throwing.driver, api: workingApi().api });
+    const second = createDialHandoff({ driver: throwing.driver });
     await second.checkSetup();
-    expect(await second.dial(dialInput)).toEqual({ status: 'opened_unknown', ticket: HANDOFF_TICKET });
+    expect(await second.open(advised)).toEqual({ status: 'opened_unknown' });
   });
 
   it('states the limitation 9.2 asks the product to state', () => {
@@ -249,7 +161,7 @@ describe('the tel: handoff', () => {
   it('has a build that opens nothing', async () => {
     const handoff = unavailableDialHandoff();
     expect(await handoff.checkSetup()).toEqual({ ready: false, reason: 'no_tel_handler' });
-    expect(await handoff.dial(dialInput)).toEqual({ status: 'refused', reason: 'no_tel_handler' });
+    expect(await handoff.open(advised)).toEqual({ status: 'refused', reason: 'no_tel_handler' });
   });
 });
 
@@ -269,7 +181,7 @@ describe('the outcome form', () => {
     const noDay = draftWith({ outcome: 'callback_requested' });
     expect(outcomeProblem(noDay)).toBeNull();
     expect(callbackNeedsTime(noDay)).toBe(true);
-    const built = logCallCommand({ commandId: 'cmd-0', clientVersion: '1.4.0', firmId: TICKET.firmId, draft: noDay });
+    const built = logCallCommand({ commandId: 'cmd-0', clientVersion: '1.4.0', firmId: FIRM_ID, draft: noDay });
     if (!('command' in built)) throw new Error('expected a command');
     // No callback travels, and no `occurredAt`: the server records it now (C15).
     expect(built.command.callback).toBeUndefined();
@@ -335,7 +247,7 @@ describe('the outcome form', () => {
     const built = logCallCommand({
       commandId: 'cmd-1',
       clientVersion: '1.4.0',
-      firmId: TICKET.firmId,
+      firmId: FIRM_ID,
       itemId: '55555555-5555-4555-8555-555555555555',
       draft,
     });
@@ -360,7 +272,7 @@ describe('the outcome form', () => {
     const built = logCallCommand({
       commandId: 'cmd-2',
       clientVersion: '1.4.0',
-      firmId: TICKET.firmId,
+      firmId: FIRM_ID,
       occurredAt: '2026-09-16T14:05:00.000Z',
       draft: firm,
     });
@@ -372,9 +284,8 @@ describe('the outcome form', () => {
     const built = logCallCommand({
       commandId: 'cmd-3',
       clientVersion: '1.4.0',
-      firmId: TICKET.firmId,
-      routeId: TICKET.routeId,
-      ticketId: TICKET.ticketId,
+      firmId: FIRM_ID,
+      routeId: ROUTE_ID,
       occurredAt: '2026-09-16T14:05:00.000Z',
       draft: draftWith({
         outcome: 'voicemail_left',
@@ -387,7 +298,7 @@ describe('the outcome form', () => {
     if (!('command' in built)) throw new Error('expected a command');
     expect(built.command.callback).toBeUndefined();
     expect(built.command.doNotCallCoversAllContact).toBeUndefined();
-    expect(built.command.ticketId).toBe(TICKET.ticketId);
+    expect(built.command.routeId).toBe(ROUTE_ID);
     expect(built.command.note).toBe('left a message');
   });
 
@@ -395,7 +306,7 @@ describe('the outcome form', () => {
     const built = logCallCommand({
       commandId: 'cmd-4',
       clientVersion: '1.4.0',
-      firmId: TICKET.firmId,
+      firmId: FIRM_ID,
       occurredAt: '2026-09-16T14:05:00.000Z',
       draft: emptyOutcomeDraft(),
     });

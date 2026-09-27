@@ -1,0 +1,188 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { DesktopState, MailboxState } from '../../shared/contract.ts';
+import type { UpdateStatus } from '../../shared/updateContract.ts';
+import { desktopBridge, mailboxBridge, updateBridge } from './bridges.ts';
+
+/**
+ * The session, the Mailbox row and the update line: the three things the shell owns
+ * whatever view is in the column.
+ *
+ * The state is the main process's, never a copy this file keeps current by itself. Every
+ * call answers the whole `DesktopState`, so `online`, `stale`, `asOf` and `mayMutate`
+ * follow every read and every command without anything here deciding them — which is
+ * what makes "any HTTP response means online, only a network failure means offline" a
+ * property of the session manager rather than a rule repeated in the renderer.
+ */
+
+export interface Session {
+  readonly desktop: DesktopState | null;
+  /** True from the press on Sign in until the main process answers it. */
+  readonly signingIn: boolean;
+  readonly mailbox: MailboxState | null;
+  /** True from the press on Connect Gmail until the main process answers it. */
+  readonly mailboxWaiting: boolean;
+  readonly update: UpdateStatus | null;
+  /**
+   * Who is signed in, as one string. Everything held for a person is keyed on it, so a
+   * sign-out, another workspace or a changed role drops it all without a list of things
+   * to remember to clear. Null when nobody is signed in.
+   */
+  readonly identity: string | null;
+  signIn(input: { readonly workspaceId?: string | undefined; readonly deviceLabel?: string | undefined }): Promise<void>;
+  signOut(): Promise<void>;
+  /** Read the session again — after a command, so the banners follow what it found. */
+  reread(): Promise<void>;
+  connectMailbox(): Promise<void>;
+  refreshMailbox(): Promise<void>;
+  restartToUpdate(): void;
+  checkForUpdate(): Promise<UpdateStatus | null>;
+}
+
+const identityOf = (state: DesktopState | null): string | null =>
+  state === null || state.device === null || state.screen !== 'today'
+    ? null
+    : `${state.device.workspaceId}/${state.device.deviceId}/${state.device.role}`;
+
+export function useSession(): Session {
+  const [desktop, setDesktop] = useState<DesktopState | null>(null);
+  const [signingIn, setSigningIn] = useState(false);
+  const [mailbox, setMailbox] = useState<MailboxState | null>(null);
+  const [mailboxWaiting, setMailboxWaiting] = useState(false);
+  const [update, setUpdate] = useState<UpdateStatus | null>(null);
+  const identity = identityOf(desktop);
+  const identityRef = useRef(identity);
+  identityRef.current = identity;
+
+  const reread = useCallback(async (): Promise<void> => {
+    setDesktop(await desktopBridge().state());
+  }, []);
+
+  const loadMailbox = useCallback(async (): Promise<void> => {
+    const bridge = mailboxBridge();
+    if (bridge === undefined || identityRef.current === null) return;
+    setMailbox(await bridge.state());
+  }, []);
+
+  const refreshMailbox = useCallback(async (): Promise<void> => {
+    const bridge = mailboxBridge();
+    if (bridge === undefined || identityRef.current === null) return;
+    setMailboxWaiting(false);
+    setMailbox(await bridge.refresh());
+  }, []);
+
+  const connectMailbox = useCallback(async (): Promise<void> => {
+    const bridge = mailboxBridge();
+    if (bridge === undefined) return;
+    setMailboxWaiting(true);
+    try {
+      setMailbox(await bridge.connect());
+    } finally {
+      setMailboxWaiting(false);
+    }
+  }, []);
+
+  const loadUpdate = useCallback(async (): Promise<void> => {
+    const bridge = updateBridge();
+    if (bridge === undefined) return;
+    setUpdate(await bridge.state());
+  }, []);
+
+  const signIn = useCallback(
+    async (input: { readonly workspaceId?: string | undefined; readonly deviceLabel?: string | undefined }): Promise<void> => {
+      setSigningIn(true);
+      try {
+        setDesktop(await desktopBridge().signIn(input));
+      } finally {
+        setSigningIn(false);
+      }
+    },
+    [],
+  );
+
+  const signOut = useCallback(async (): Promise<void> => {
+    // The next person to sign in on this Mac must not see this one's mailbox, list,
+    // numbers or figures. The Query cache goes with the identity, in `App`.
+    setMailbox(null);
+    setMailboxWaiting(false);
+    setDesktop(await desktopBridge().signOut());
+  }, []);
+
+  const restartToUpdate = useCallback((): void => {
+    const bridge = updateBridge();
+    if (bridge === undefined) return;
+    void bridge.restart().then(setUpdate);
+  }, []);
+
+  const checkForUpdate = useCallback(async (): Promise<UpdateStatus | null> => {
+    const bridge = updateBridge();
+    if (bridge === undefined) return null;
+    const next = await bridge.checkNow();
+    setUpdate(next);
+    return next;
+  }, []);
+
+  useEffect(() => {
+    updateBridge()?.onChange(() => {
+      void loadUpdate();
+    });
+    void (async () => {
+      await reread();
+      await loadUpdate();
+    })();
+  }, [loadUpdate, reread]);
+
+  // Signed in: read the Mailbox row. Signed out: the row is not this person's any more.
+  useEffect(() => {
+    if (identity === null) {
+      setMailbox(null);
+      return;
+    }
+    void loadMailbox();
+  }, [identity, loadMailbox]);
+
+  useEffect(() => {
+    // Coming back from the browser is when a grant has just landed, and when an update
+    // may have been staged. Read both again.
+    const onFocus = (): void => {
+      void loadMailbox();
+      void loadUpdate();
+    };
+    window.addEventListener('focus', onFocus);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [loadMailbox, loadUpdate]);
+
+  return useMemo(
+    () => ({
+      desktop,
+      signingIn,
+      mailbox,
+      mailboxWaiting,
+      update,
+      identity,
+      signIn,
+      signOut,
+      reread,
+      connectMailbox,
+      refreshMailbox,
+      restartToUpdate,
+      checkForUpdate,
+    }),
+    [
+      desktop,
+      signingIn,
+      mailbox,
+      mailboxWaiting,
+      update,
+      identity,
+      signIn,
+      signOut,
+      reread,
+      connectMailbox,
+      refreshMailbox,
+      restartToUpdate,
+      checkForUpdate,
+    ],
+  );
+}

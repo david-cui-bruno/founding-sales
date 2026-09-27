@@ -33,13 +33,13 @@ async function stillTheSameDocument(page: Page): Promise<boolean> {
   return await page.evaluate(() => (globalThis as unknown as { __loadedOnce?: boolean }).__loadedOnce === true);
 }
 
-const HEADINGS: readonly (readonly [string, string])[] = [
-  ['replies', 'Replies'],
-  ['firms', 'Pipeline'],
-  ['sequences', 'Sequences'],
-  ['admin', 'Administration'],
-  ['dashboard', 'Administration'],
-  ['today', 'Monday, 21 September'],
+/** Each sidebar row, the heading its view draws, and the route the column reports. */
+const HEADINGS: readonly (readonly [string, string, string])[] = [
+  ['replies', 'Replies', 'replies'],
+  ['firms', 'Pipeline', 'firms'],
+  ['sequences', 'Sequences', 'sequences'],
+  ['settings', 'Settings', 'settings/administration'],
+  ['today', 'Monday, 21 September', 'today'],
 ];
 
 test('every sidebar row shows its view in the column, beside the same sidebar, in the same document', async ({ page }) => {
@@ -48,10 +48,10 @@ test('every sidebar row shows its view in the column, beside the same sidebar, i
   await expect(page.getByTestId('heading')).toHaveText('Monday, 21 September');
   await markDocument(page);
 
-  for (const [route, heading] of HEADINGS) {
-    await page.getByTestId(`nav-${route}`).click();
+  for (const [row, heading, route] of HEADINGS) {
+    await page.getByTestId(`nav-${row}`).click();
     await expect(page.getByTestId('heading')).toHaveText(heading);
-    await expect(page.getByTestId(`nav-${route}`)).toHaveAttribute('aria-current', 'page');
+    await expect(page.getByTestId(`nav-${row}`)).toHaveAttribute('aria-current', 'page');
     await expect(page.locator('[aria-current="page"]')).toHaveCount(1);
     // One view at a time: the column never holds two.
     await expect(page.getByTestId('heading')).toHaveCount(1);
@@ -59,30 +59,36 @@ test('every sidebar row shows its view in the column, beside the same sidebar, i
     await expect(page.getByTestId('column')).toHaveAttribute('data-route', route);
   }
   expect(await stillTheSameDocument(page)).toBe(true);
-  await expect(page.getByTestId('tab-dashboard')).toHaveCount(0);
+  await expect(page.getByTestId('tabs')).toHaveCount(0);
 });
 
-test('the Window menu’s ⌘1–⌘6 show each view in the one window, and ⌘6 is never a reload', async ({ page }) => {
+test('the Window menu shows each view in the one window, and a Settings tab is never a reload', async ({ page }) => {
   server = await startAppServer();
   await page.goto(server.url());
   await expect(page.getByTestId('heading')).toHaveText('Monday, 21 September');
   await markDocument(page);
 
-  await navigateByMenu(page, 'admin');
+  await navigateByMenu(page, 'settings/administration');
   await expect(page.getByTestId('tab-settings')).toHaveClass(/tab-current/u);
-  await navigateByMenu(page, 'dashboard');
+  await navigateByMenu(page, 'settings/dashboard');
   await expect(page.getByTestId('tab-dashboard')).toHaveClass(/tab-current/u);
-  await expect(page.getByTestId('nav-dashboard')).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByTestId('nav-settings')).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByTestId('column')).toHaveAttribute('data-route', 'settings/dashboard');
   await navigateByMenu(page, 'firms');
   await expect(page.getByTestId('heading')).toHaveText('Pipeline');
-  // A name outside the six is ignored, as the preload ignores it.
+  // A target outside the closed set is ignored — the preload drops it first, and the
+  // page refuses it again.
   await navigateByMenu(page, 'settings.html');
   await expect(page.getByTestId('heading')).toHaveText('Pipeline');
+  // 1.0.11's name still opens the tab it used to: links made before this release exist.
+  await navigateByMenu(page, 'admin');
+  await expect(page.getByTestId('heading')).toHaveText('Settings');
+  await expect(page.getByTestId('tab-settings')).toHaveClass(/tab-current/u);
   await navigateByMenu(page, 'today');
   await expect(page.getByTestId('heading')).toHaveText('Monday, 21 September');
 
   expect(await stillTheSameDocument(page)).toBe(true);
-  expect(server.called('admin.show')).toEqual([{ screen: 'settings' }, { screen: 'dashboard' }]);
+  expect(server.called('admin.show')).toEqual([{ screen: 'settings' }, { screen: 'dashboard' }, { screen: 'settings' }]);
 });
 
 test('a Today card opens its firm through the CRM bridge, and the firm page leads back to the board', async ({ page }) => {
@@ -167,7 +173,7 @@ test('many route changes in a row end on the last one, drawn once', async ({ pag
   await expect(page.getByTestId('heading')).toHaveText('Monday, 21 September');
 
   for (let round = 0; round < 3; round += 1) {
-    for (const route of ['firms', 'replies', 'sequences', 'admin', 'dashboard', 'today', 'replies']) {
+    for (const route of ['firms', 'replies', 'sequences', 'settings', 'today', 'replies']) {
       await page.getByTestId(`nav-${route}`).click();
     }
   }
@@ -208,13 +214,13 @@ test('a deep link that arrives before sign-in is where the window opens once sig
   server = await startAppServer({ desktop: signedOutState() });
   await page.goto(server.url());
   await expect(page.getByTestId('heading')).toHaveText('Sign in with Google');
-  await navigateByMenu(page, 'dashboard');
+  await navigateByMenu(page, 'settings/dashboard');
   await expect(page.getByTestId('heading')).toHaveText('Sign in with Google');
 
   await page.getByTestId('workspace-id').fill(EXAMPLE_WORKSPACE);
   await page.getByTestId('sign-in').click();
   await expect(page.getByTestId('tab-dashboard')).toHaveClass(/tab-current/u);
-  await expect(page.getByTestId('nav-dashboard')).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByTestId('nav-settings')).toHaveAttribute('aria-current', 'page');
 });
 
 test('the route is in the address, so the View menu’s Reload comes back to the same view', async ({ page }) => {

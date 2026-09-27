@@ -29,7 +29,7 @@ async function openAdmin(page: Page, state: AdminState, hash = '#admin'): Promis
 test('an admin sees every slice, its provenance, and an editor for each', async ({ page }) => {
   await openAdmin(page, adminState());
 
-  await expect(page.getByTestId('heading')).toHaveText('Administration');
+  await expect(page.getByTestId('heading')).toHaveText('Settings');
   await expect(page.getByTestId('setting-sending_enabled')).toContainText('Default, never configured');
   // Wave 1: the alarm thresholds and the supported versions are gone from the page.
   await expect(page.getByTestId('setting-alert_thresholds')).toHaveCount(0);
@@ -187,12 +187,12 @@ test('the Dashboard route starts on the Dashboard screen, and its tab and route 
 
   await expect(page.getByTestId('tab-dashboard')).toHaveClass(/tab-current/u);
   await expect(page.getByTestId('panel-calls')).toContainText('voicemail_left: 3');
-  await expect(page.getByTestId('nav-dashboard')).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByTestId('nav-settings')).toHaveAttribute('aria-current', 'page');
   expect(server.calls.find(call => call.method === 'show')).toEqual({ method: 'show', argument: { screen: 'dashboard' } });
 
   // The Settings tab is Administration's route; the sidebar says so without a reload.
   await page.getByTestId('tab-settings').click();
-  await expect(page.getByTestId('nav-admin')).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByTestId('nav-settings')).toHaveAttribute('aria-current', 'page');
   await expect(page.getByTestId('setting-business_time_zone')).toBeVisible();
 });
 

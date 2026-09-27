@@ -13,7 +13,7 @@ import {
   type SettingField,
   type SettingRowView,
 } from './settingsView.ts';
-import { routeShown, type AdminSection, type Route } from './routes.ts';
+import { routeShown, type AdminSection, type Route, type SettingsTab } from './routes.ts';
 import type { AdminBridge, AdminScreen, AdminState, RecordPostureInput } from './settingsContract.ts';
 
 /**
@@ -68,15 +68,30 @@ function apply(next: Promise<AdminState>): void {
   })();
 }
 
+/**
+ * The screen this module draws for a route, and the route it reports back (1.0.12).
+ *
+ * The shell's routes are `settings/<tab>`; this module has always called its three
+ * screens `settings`, `dashboard` and `diagnostics` and chosen between them itself. The
+ * two names are translated here, in one pair of functions, so the shell never has to
+ * know the old words and this module never has to learn the new ones.
+ */
+export function screenForTab(tab: SettingsTab): AdminScreen {
+  return tab === 'administration' ? 'settings' : tab;
+}
+
+export function tabForScreen(screen: AdminScreen): SettingsTab {
+  return screen === 'settings' ? 'administration' : screen;
+}
+
 export function mount(target: HTMLElement, route: Route): void {
   busy.reset();
   generation += 1;
   container = target;
   lastState = null;
-  const section = route.name === 'admin' ? (route.section ?? null) : null;
-  scrollTo = section;
-  const screen: AdminScreen = route.name === 'dashboard' ? 'dashboard' : section === 'alerts' ? 'diagnostics' : 'settings';
-  apply(bridge().show({ screen }));
+  scrollTo = route.name === 'settings' ? (route.section ?? null) : null;
+  const tab: SettingsTab = route.name === 'settings' ? route.tab : 'administration';
+  apply(bridge().show({ screen: screenForTab(tab) }));
 }
 
 export function unmount(): void {
@@ -101,14 +116,16 @@ export function render(state: AdminState | null): void {
   const root = container;
   if (root === null || current === null) return;
   const view = adminViewOf(current);
-  routeShown(view.screen === 'dashboard' ? { name: 'dashboard' } : { name: 'admin' });
+  // The tabs below switch the screen without going through the shell, so the route
+  // follows the screen rather than the other way round.
+  routeShown({ name: 'settings', tab: tabForScreen(view.screen) });
 
   root.replaceChildren();
-  root.append(element('h1', { text: 'Administration', testId: 'heading' }));
+  root.append(element('h1', { text: 'Settings', testId: 'heading' }));
 
   const tabs = element('nav', { className: 'tabs', testId: 'tabs' });
   tabs.append(
-    tab('Settings', 'settings', view.screen),
+    tab('Administration', 'settings', view.screen),
     tab('Dashboard', 'dashboard', view.screen),
     tab('Diagnostics', 'diagnostics', view.screen),
   );
