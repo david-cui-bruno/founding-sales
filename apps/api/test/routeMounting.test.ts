@@ -71,6 +71,8 @@ describe('what the API mounts', () => {
       '/crm/firm-page',
       '/crm/firms/add',
       '/dashboard',
+      '/devices',
+      '/devices/revoke',
       '/diagnostics',
       '/dial/authorize',
       '/dial/check',
@@ -297,6 +299,7 @@ describe('what the API mounts', () => {
     expect(names).toEqual([
       'health',
       'auth',
+      'devices',
       'firms',
       'contacts',
       'opportunities',
