@@ -32,3 +32,17 @@ output "gmail_push_audience" {
   description = "Audience the subscription mints its token for. infra/roots/production derives the same string from its own api_hostname."
   value       = module.pubsub.push_audience
 }
+
+# The two public identifiers `.github/workflows/greenfield-google.yml` names as literals
+# (lane G-WIF). They are outputs so a bootstrap can read back exactly what it created;
+# the workflow carries them written out, because a workflow cannot read this state.
+
+output "ci_service_account_email" {
+  description = "The service account greenfield-google.yml impersonates. Equal to the workflow's service_account input."
+  value       = google_service_account.ci.email
+}
+
+output "workload_identity_provider" {
+  description = "Full provider resource name greenfield-google.yml exchanges its GitHub OIDC token at. Equal to the workflow's workload_identity_provider input."
+  value       = "projects/${local.gcp_project_number}/locations/global/workloadIdentityPools/${google_iam_workload_identity_pool.github.workload_identity_pool_id}/providers/${google_iam_workload_identity_pool_provider.github.workload_identity_pool_provider_id}"
+}

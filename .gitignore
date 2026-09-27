@@ -13,3 +13,5 @@ native/apple-bridge/.build/
 native/safe-log-fs/build/
 build/generated/
 .vite/
+# The temporary external-account credential google-github-actions/auth writes (G-WIF).
+gha-creds-*.json
