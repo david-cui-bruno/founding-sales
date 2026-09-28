@@ -1,6 +1,7 @@
 import { localNoopSuppressionJournal } from '../../src/journal/index.ts';
+import { CONTAINER_CLIENT_VERSIONS } from '../../src/bootstrap/main.ts';
 import { dispatch, type ApiOptions } from '../../src/server.ts';
-import { CURRENT_CLIENT_VERSION, type AuthFixture } from './authFixture.ts';
+import type { AuthFixture } from './authFixture.ts';
 import type { HttpAnswer, HttpSend } from '../../../desktop/src/main/apiClient.ts';
 import { createAuthedClient, type AuthedClient } from '../../../desktop/src/main/authedClient.ts';
 
@@ -12,17 +13,33 @@ import { createAuthedClient, type AuthedClient } from '../../../desktop/src/main
  * real session, and `createAuthedClient` with the parser the bridge names. The one
  * substitution is the socket, and what crosses it is JSON, exactly as a socket would
  * carry it, so an instant arrives as a string.
+ *
+ * **The version is the shipped one on both sides** (review of PR 305, P2-4). These checks
+ * are about what the installed Mac and the deployed container say to each other, so the
+ * client announces `DESKTOP_VERSION_UNDER_TEST` and the route is given
+ * `CONTAINER_CLIENT_VERSIONS` — the container's own policy, minimum 1.0.14 — rather than
+ * the identity fixture's `1.2.0`-to-`1.4.x` one. A check that needs a version outside
+ * that policy builds its own options and says why: `clientVersionCeiling.test.ts` is the
+ * one that does, because the ceiling is what it is about.
  */
 
 /** The desktop build every window check reads as: the installed one, 1.0.14. */
 export const DESKTOP_VERSION_UNDER_TEST = '1.0.14';
 
+/**
+ * The route, under the container's policy rather than the fixture's.
+ *
+ * The auth deps carry their own copy of the policy — `runCommand`, `claimSignIn` and
+ * `openSession` read `deps.config.supportedClientVersions`, not `ApiOptions` — so both
+ * have to be replaced or a command would be judged against a policy the container does
+ * not ship.
+ */
 export function routeOptions(fixture: AuthFixture): ApiOptions {
   return {
     session: fixture.db,
-    supportedClientVersions: fixture.deps.config.supportedClientVersions,
+    supportedClientVersions: CONTAINER_CLIENT_VERSIONS,
     sendingEnabled: false,
-    auth: fixture.deps,
+    auth: { ...fixture.deps, config: { ...fixture.deps.config, supportedClientVersions: CONTAINER_CLIENT_VERSIONS } },
     upgradeUrl: 'https://callie.example/downloads/mac',
     suppressionJournal: localNoopSuppressionJournal(),
   };
@@ -49,15 +66,13 @@ export function throughTheRoute(fixture: AuthFixture, calls: string[] = []): Htt
 }
 
 /**
- * The desktop's authenticated client for one session, over the real route. The version
- * it announces is the fixture's current client: the fixture's policy is its own
- * (`1.2.0` to the `1.4.x` line), and the container's policy is checked separately by
- * each check's last test.
+ * The desktop's authenticated client for one session, over the real route. The version it
+ * announces is the installed build, judged by the container's own policy.
  */
 export function desktopClient(fixture: AuthFixture, token: string, calls: string[] = []): AuthedClient {
   return createAuthedClient({
     baseUrl: 'https://api.example.test/',
-    clientVersion: CURRENT_CLIENT_VERSION,
+    clientVersion: DESKTOP_VERSION_UNDER_TEST,
     accessToken: async () => await Promise.resolve({ token, generation: 0 }),
     send: throughTheRoute(fixture, calls),
   });

@@ -10,7 +10,7 @@ import {
   wireDrift,
 } from '@fss/contracts';
 import { CONTAINER_CLIENT_VERSIONS } from '../../src/bootstrap/main.ts';
-import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from '../support/authFixture.ts';
+import { createAuthFixture, type AuthFixture } from '../support/authFixture.ts';
 import { issueSessionFor } from '../support/sessionFixture.ts';
 import { seedContact, seedFirm } from '../support/crmSeed.ts';
 import { createSequenceBridge } from '../../../desktop/src/main/sequenceBridge.ts';
@@ -69,7 +69,7 @@ describe('8.0aj: the sequence editor reads a populated version and its enrollmen
 
   const command = (extra: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> => ({
     commandId: randomUUID(),
-    clientVersion: CURRENT_CLIENT_VERSION,
+    clientVersion: DESKTOP_VERSION_UNDER_TEST,
     ...extra,
   });
   const result = (answer: { body: unknown }): Record<string, unknown> =>

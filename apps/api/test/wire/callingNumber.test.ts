@@ -10,6 +10,7 @@ import { createAuthedClient } from '../../../desktop/src/main/authedClient.ts';
 import type { HttpAnswer } from '../../../desktop/src/main/apiClient.ts';
 import { CALLING_NUMBER_API_PATHS, createAdminBridge } from '../../../desktop/src/main/settingsBridge.ts';
 import { adminViewOf } from '../../../desktop/src/renderer/settingsView.ts';
+import { DESKTOP_VERSION_UNDER_TEST } from '../support/wireThrough.ts';
 
 /**
  * A salesperson can give Callie the number they call from (9.1; lane g60).
@@ -54,6 +55,11 @@ import { adminViewOf } from '../../../desktop/src/renderer/settingsView.ts';
  */
 
 const IDENTITY_ID = '66666666-6666-4666-8666-666666666666';
+/**
+ * When the calling-number control first shipped. The build under test is
+ * `DESKTOP_VERSION_UNDER_TEST` (1.0.14, the installed one); this records the line the
+ * minimum has to be at or above, which is what the last check in this file asserts.
+ */
 const FIRST_VERSION_WITH_THE_CONTROL = '1.0.2';
 
 const identity = (overrides: Record<string, unknown> = {}) => ({
@@ -90,7 +96,7 @@ function settingsWindow(role: 'admin' | 'salesperson' = 'admin') {
   const bridge = createAdminBridge({
     api: createAuthedClient({
       baseUrl: 'https://api.example.test/',
-      clientVersion: FIRST_VERSION_WITH_THE_CONTROL,
+      clientVersion: DESKTOP_VERSION_UNDER_TEST,
       accessToken: async () => await Promise.resolve({ token: 'token-value', generation: 0 }),
       send: async (url, init) => {
         const path = new URL(url).pathname;

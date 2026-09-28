@@ -31,8 +31,8 @@ export const CRM_REFUSAL_CODES = [
   'contact_merged',
   'route_unknown',
   'route_retired',
-  // `/contacts/routes/confirm` on a number that changed since it was shown,
-  // or on one whose validation failed.
+  // A route that changed since the page was drawn, or one whose validation failed:
+  // `/contacts/routes/check` and `/contacts/routes/retire` answer both.
   'route_version_stale',
   'route_invalid',
   'evidence_unknown',
@@ -209,23 +209,6 @@ export const verifyRouteCommandSchema = z.strictObject({
   routeId: uuid,
   technicalValidation: technicalValidationSchema,
   associationConfidence: z.number().min(0).max(1).optional(),
-});
-
-/**
- * A person confirms a phone number reaches the firm. Phone only: the literal
- * is the whole of that rule on the wire, and `docs/decisions/g88-founder-authoring-and-review.md`
- * says why an email address is not confirmed by hand. `routeVersion` is the version the
- * person was looking at; a route that has moved since is refused `route_version_stale`.
- *
- * @deprecated (remove after desktop 1.0.12) — a phone number is usable on entry since
- * wave 2 (S4.4), and a dial accepts one an older release stored as a candidate. Still
- * accepted for desktops up to 1.0.11, which offer "Confirm this number" for such a row.
- */
-export const confirmRouteCommandSchema = z.strictObject({
-  ...commandEnvelope,
-  routeKind: z.literal('phone'),
-  routeId: uuid,
-  routeVersion: z.number().int().min(1),
 });
 
 /**

@@ -9,11 +9,10 @@ dimensions and are summed over every workspace (lane g72; `collectSequenceMetric
 `packages/domain/sequences/metrics.ts`,
 `docs/archive/decisions/g72-enrollment-gauges.md`).
 
-- **`ActiveEnrollments`**: live enrollments, meaning `active` or `review_required`.
-  Completed and stopped enrollments are not counted.
+- **`ActiveEnrollments`**: live enrollments, meaning `active` — the only live state since
+  migration 0021. Completed and stopped enrollments are not counted.
 - **`HeldEnrollments`**: live enrollments whose next work is blocked now by a hold
   nobody chose. That means one of:
-  - the enrollment is in long-hold review;
   - its step was held by the worker with a counted reason;
   - an open hold with a counted reason covers its workspace, firm, opportunity, owner
     or the enrollment itself, for the next step's channel or for `enrollment_advance`.
@@ -46,8 +45,12 @@ reply on it is enough.
 
 1. `GET /dashboard`: the hold panel, with open holds by reason code and the age of the
    oldest, and held step executions by reason.
-2. `GET /diagnostics`: the restore generation (a mismatch means Appendix E is in force),
-   every mailbox's status and coverage state, and open critical alerts.
+2. `GET /diagnostics`: every mailbox's status and coverage state, `schema.appliedVersion`
+   and whether the running images accept it, and open critical alerts. Its `restore`
+   object is a compatibility field with neutral values and says nothing: the
+   system-generation pin went with lane W3-S8 and the table with migration 0021. A
+   restore in progress shows as the `restore_in_progress` hold below and in
+   `runbooks/restore.md`, not as a generation mismatch.
 3. `GET /pauses?open=true`. A pause does **not** cause this alarm. If one is open, the
    alarm is about a different reason underneath it.
 
@@ -65,8 +68,13 @@ ones, most likely first:
   rate limit or a suspended account.
 - `send_unknown_terminal`: sends nobody can account for. Failed jobs are
   `dead_job_unresolved`'s.
-- `long_hold_review`: holds whose union passed seven days. These never resume without
-  the salesperson's review, by design.
+- `long_hold_review`: a step the worker held because the union of its holds passed seven
+  days. It resumes on its own — since wave 2 (S4.1) the scheduler wakes it once no open
+  hold blocks it, shifts the work by the union and runs the fresh eligibility check — so a
+  step still carrying this reason means something else is still open, or eligibility
+  refused it again. Read the other reasons rather than resuming this one by hand. Nothing
+  writes the enrollment state `review_required` any more; migration 0021 removed it, and
+  the API refuses to apply that migration while any row still holds it.
 - `uncertain_reply` / `ambiguous_match` / `manual_suppression_review`: prospect-driven
   reviews. These trip the alarm only when every live enrollment has one, which usually
   means very few enrollments.
@@ -80,11 +88,14 @@ ones, most likely first:
   clears only its own hold and always runs a fresh eligibility check.
 - When the last applicable hold clears, unexecuted work shifts by the **union** of the
   blocking intervals, so overlapping holds are not double-counted.
-- If the union is longer than seven calendar days, the enrollment stays held for
-  salesperson review and an explicit resume. That is not a fault to fix.
-- `HeldEnrollments` drops on the first metric pass after the hold is released or the
-  review resumed. A step the worker held for a person to clear keeps its held state until
-  it is resumed.
+- A union longer than seven calendar days is not special any more (wave 2, S4.1): the
+  work shifts once by the union and resumes after the fresh eligibility check, however
+  long the hold ran. There is nothing for a person to confirm, and no route that would
+  confirm it.
+- `HeldEnrollments` drops on the first metric pass after the hold is released. A step the
+  worker held for a reason only a person can clear — a missing route, an unapproved
+  template, an owner with no connected mailbox — keeps its held state until that is
+  fixed and its `not_before` comes round again.
 
 ## Escalation
 
@@ -98,8 +109,9 @@ or held steps carries a counted reason.
   will reopen a deleted hold.
 - Do not pause automation to "quiet" the alarm. A pause is not counted, but it does not
   hide a counted hold either, and it adds a second hold to clear.
-- Do not release a long-hold review without the review. The salesperson has to see the
-  rendered future steps first.
+- Do not clear a `long_hold_review` step by hand. It is the scheduler's to resume, and
+  it is still held because something else is open or eligibility refused it; forcing it
+  skips the fresh eligibility check that suppression, coverage and the windows live in.
 - Do not resume by switching opportunities to automated. Automation never reverses
   manual mode; an opportunity is manual because a person replied.
 - Do not enable sending to clear it. Sending switched off is not what this alarm reads.

@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { mayMutate } from '@fss/contracts';
 import { POSTURE_STATEMENTS } from '@fss/domain/src/rules/statePosture.ts';
 import { CONTAINER_CLIENT_VERSIONS } from '../../src/bootstrap/main.ts';
-import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from '../support/authFixture.ts';
+import { createAuthFixture, type AuthFixture } from '../support/authFixture.ts';
 import { issueSessionFor } from '../support/sessionFixture.ts';
 import { createCrmBridge } from '../../../desktop/src/main/crmBridge.ts';
 import { createAdminBridge } from '../../../desktop/src/main/settingsBridge.ts';
@@ -46,7 +46,7 @@ describe('8.0aq: Add firm, Import and the postures form reach the real routes', 
     state: async () => await Promise.resolve({ online: true, mayMutate: true, device: { role } }),
   });
   const crmBridge = (token: string, role: 'admin' | 'salesperson') =>
-    createCrmBridge({ api: desktopClient(fixture, token), clientVersion: CURRENT_CLIENT_VERSION, session: session(role) });
+    createCrmBridge({ api: desktopClient(fixture, token), clientVersion: DESKTOP_VERSION_UNDER_TEST, session: session(role) });
 
   const routesOf = async (firmId: string) =>
     (

@@ -6,6 +6,7 @@ import { createAuthedClient } from '../../../desktop/src/main/authedClient.ts';
 import type { HttpAnswer } from '../../../desktop/src/main/apiClient.ts';
 import { MAILBOX_API_PATHS, createMailboxBridge } from '../../../desktop/src/main/mailboxBridge.ts';
 import { CONNECT_GMAIL_LABEL, buildMailboxView } from '../../../desktop/src/renderer/viewModel.ts';
+import { DESKTOP_VERSION_UNDER_TEST } from '../support/wireThrough.ts';
 
 /**
  * The Mac can connect the mailbox (release.md 8.0x).
@@ -49,6 +50,11 @@ const ADDRESS = 'sales@example.test';
 const CONSENT = 'https://accounts.google.test/o/oauth2/v2/auth?state=signed-state';
 
 /** The first desktop version that carries the Mailbox row. */
+/**
+ * When the Mailbox row first shipped. The build under test is
+ * `DESKTOP_VERSION_UNDER_TEST` (1.0.14, the installed one); this records the line the
+ * minimum has to be at or above, which is what the last check in this file asserts.
+ */
 const FIRST_VERSION_WITH_THE_ROW = '1.0.1';
 
 describe('8.0x: the Mac client connects the mailbox', () => {
@@ -80,7 +86,7 @@ describe('8.0x: the Mac client connects the mailbox', () => {
     const bridge = createMailboxBridge({
       api: createAuthedClient({
         baseUrl: 'https://api.example.test/',
-        clientVersion: FIRST_VERSION_WITH_THE_ROW,
+        clientVersion: DESKTOP_VERSION_UNDER_TEST,
         accessToken: async () => await Promise.resolve({ token: 'token-value', generation: 0 }),
         send: async (url, init) => {
           const path = new URL(url).pathname;

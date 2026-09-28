@@ -28,12 +28,19 @@ import { issueSessionFor } from './support/sessionFixture.ts';
  *
  * `POST /postures/record` — one state with its statements ticked one by one — went with
  * the 1.0.14 minimum (lane W3-C2). `/postures/allow` is what the form sends, and it is
- * what these tests record through. The overlap case that used to live here went with
- * `record`: `allowCallingStates` answers `alreadyAllowed` for a state already in force
- * rather than reaching the exclusion constraint, so there is no route that can produce
- * `posture_overlapping` any more. The savepoint the route still takes is what keeps a
- * concurrent allow that does reach 23P01 answerable rather than a 500
- * (`packages/domain/test/policy` proves the domain half).
+ * what these tests record through.
+ *
+ * **The vacuous-pass trap for the overlap.** `posture_overlapping` is still reachable
+ * from the route, and by only one shape: a state whose posture is recorded to *begin in
+ * the future*. `allowCallingStates` asks `applicablePosture` about *now*, finds none in
+ * force, and inserts a row effective now with no end, which overlaps the future one and
+ * is refused by `state_postures_no_overlap` — SQLSTATE 23P01, inside the command's
+ * transaction. Without the route's savepoint that error has already aborted the
+ * transaction, so the receipt insert after it fails and the API answers 500 where the
+ * domain answered `posture_overlapping`. A state already in force is a different case
+ * and answers `alreadyAllowed`; the test below drives the overlap itself, and asserts
+ * both halves the savepoint buys: the state added before the refusal is taken back, and
+ * the receipt is written.
  */
 describe('the postures form’s reads and commands', () => {
   let fixture: AuthFixture;
@@ -114,6 +121,55 @@ describe('the postures form’s reads and commands', () => {
     expect(allowCallingStatesResultSchema.parse(again.body['result']).alreadyAllowed).toEqual(['RI']);
     const listed = statePostureListResponseSchema.parse((await call('GET', '/postures', adminToken)).body);
     expect(listed.postures.filter(posture => posture.state === 'RI')).toHaveLength(1);
+  });
+
+  it('refuses an overlapping allow as posture_overlapping, with a receipt and nothing added, not a 500', async () => {
+    // A posture recorded to begin next year, which `POST /postures/record` used to be
+    // able to write and no route can now. It is a row the database holds either way,
+    // and it is the only state from which an allow overlaps.
+    await fixture.db.query(
+      `INSERT INTO state_postures
+         (workspace_id, state, revision, effective_from, review_at, rules_revision,
+          confirmed_statements, sources, confirmed_by_user_id)
+       VALUES ($1, 'VT', 1, now() + interval '365 days', now() + interval '731 days', 1,
+               ARRAY['business_to_business'], '[]'::jsonb, $2)`,
+      [fixture.alpha.workspaceId, fixture.alpha.admin.userId],
+    );
+
+    // WY first, so the refusal happens after a row has already been inserted: what the
+    // savepoint takes back is asserted rather than assumed.
+    const commandId = randomUUID();
+    const refused = await call('POST', '/postures/allow', adminToken, {
+      commandId,
+      clientVersion: CURRENT_CLIENT_VERSION,
+      states: ['WY', 'VT'],
+      confirmed: true,
+    });
+    expect(refused.status, JSON.stringify(refused.body)).toBe(409);
+    expect(refused.body).toMatchObject({ status: 'refused', reason: 'posture_overlapping' });
+
+    // Nothing was added: the savepoint rolled WY back, and VT still has only the one
+    // future row this test wrote.
+    const rows = await fixture.db.query<{ state: string; count: string }>(
+      `SELECT state, count(*)::text AS count FROM state_postures
+        WHERE workspace_id = $1 AND state IN ('WY', 'VT') GROUP BY state ORDER BY state`,
+      [fixture.alpha.workspaceId],
+    );
+    expect(rows.rows).toEqual([{ state: 'VT', count: '1' }]);
+
+    // And the receipt committed, which is the half the savepoint exists for: without it
+    // the aborted transaction could not write this row and the answer was a 500.
+    const receipt = await fixture.db.query<{ command_kind: string; result_status: string; result: unknown }>(
+      'SELECT command_kind, result_status, result FROM command_receipts WHERE workspace_id = $1 AND command_id = $2',
+      [fixture.alpha.workspaceId, commandId],
+    );
+    expect(receipt.rows).toHaveLength(1);
+    expect(receipt.rows[0]).toMatchObject({ command_kind: 'allow_calling_states', result_status: 'refused' });
+    expect(JSON.stringify(receipt.rows[0]?.result)).toContain('posture_overlapping');
+
+    // The list is unchanged by a refused command, and WY is still not on it.
+    const listed = statePostureListResponseSchema.parse((await call('GET', '/postures', adminToken)).body);
+    expect(listed.postures.map(posture => posture.state)).not.toContain('WY');
   });
 
   it('revokes a posture and answers with the same row shape, so a new one may then be recorded', async () => {

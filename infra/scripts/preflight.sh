@@ -34,8 +34,11 @@
 # ## What it prints
 #
 # The tool's JSON answer in full, and one summary line in the reports directory as
-# `schema-preflight-<migration>.txt`: the schema version, `refuses`, and each count under
-# `counts.blocking`. `refuses=true` means the migration would refuse: do not release it;
+# `schema-preflight-<migration>.txt`: the migration the answer is about, whether it
+# applied to the database that was read, the schema version, `refuses`, and each count
+# under `counts.blocking`. The first three are checked before `refuses` is read at all: an
+# answer about another migration, or about a schema that migration does not count, fails
+# rather than passing as "nothing to refuse on". `refuses=true` means the migration would refuse: do not release it;
 # take the blocking counts to the owner, and amend the migration before it is applied
 # anywhere. A migration whose report carries more than that is named in PREFLIGHT_EXTRAS
 # below. 0020 (lane W3-F) has seventeen of its own: the settings rows by key, the unsent
@@ -214,6 +217,30 @@ release_run_task \
 release_captured_report "$CAPTURE" "$REPORT_JSON" || exit 1
 cat "$REPORT_JSON"
 
+# The answer must be about the migration that was asked for, and about the schema that
+# migration counts — the one before it, because a preflight before that is not this
+# release's and after it the migration has already run. Without this a stale captured
+# report, or a tool answering about its neighbour, reads as `refuses=false` and the
+# release proceeds on a count of nothing (review of PR 305, P2-1).
+FSS_REPORT="$REPORT_JSON" FSS_MIGRATION="$MIGRATION" python3 - <<'GUARD' || exit 1
+# preflight-about: the answer names the migration asked for, the schema it counts, and
+# that it applied.
+import json, os, sys
+report = json.load(open(os.environ["FSS_REPORT"], encoding="utf-8"))
+asked = int(os.environ["FSS_MIGRATION"])
+wrong = []
+if report.get("applicable") is not True:
+    wrong.append("applicable=%s (wanted true)" % json.dumps(report.get("applicable")))
+if report.get("migration") != asked:
+    wrong.append("migration=%s (wanted %d)" % (json.dumps(report.get("migration")), asked))
+if report.get("schemaVersion") != asked - 1:
+    wrong.append("schema=%s (wanted %d)" % (json.dumps(report.get("schemaVersion")), asked - 1))
+if wrong:
+    print("FAIL: the preflight's answer is not about migration %04d on a schema-%d database: %s"
+          % (asked, asked - 1, "; ".join(wrong)), file=sys.stderr)
+    sys.exit(1)
+GUARD
+
 SUMMARY="$(FSS_REPORT="$REPORT_JSON" FSS_MIGRATION="$MIGRATION" python3 - <<'PY'
 # preflight-summary: the two fields and the blocking counts every migration reports, then
 # whatever PREFLIGHT_EXTRAS names for this one.
@@ -288,7 +315,12 @@ def extras_0021():
 
 
 PREFLIGHT_EXTRAS = {"0020": extras_0020, "0021": extras_0021}
-fields = [("schema", report.get("schemaVersion", "unknown")), ("refuses", str(report.get("refuses", "unknown")).lower())]
+fields = [
+    ("migration", report.get("migration", "unknown")),
+    ("applicable", str(report.get("applicable", "unknown")).lower()),
+    ("schema", report.get("schemaVersion", "unknown")),
+    ("refuses", str(report.get("refuses", "unknown")).lower()),
+]
 fields += [("blocking_" + key, value) for key, value in sorted(blocking.items())]
 fields += PREFLIGHT_EXTRAS.get(os.environ["FSS_MIGRATION"], list)()
 print(" ".join("%s=%s" % (key, value) for key, value in fields))
