@@ -49,7 +49,7 @@ const count = async (sql: string, values: readonly unknown[]): Promise<number> =
   return Number(rows[0]?.count ?? '0');
 };
 
-/** A session, a device credential and an envelope-encrypted refresh token for a member. */
+/** A session and an envelope-encrypted refresh token for a member. */
 async function seedGrants(workspaceId: string, userId: string, deviceId: string): Promise<void> {
   // A 64-character lowercase hex digest, derived from the device so two members
   // never collide on `sessions_token_unique`.
@@ -58,11 +58,6 @@ async function seedGrants(workspaceId: string, userId: string, deviceId: string)
     `INSERT INTO sessions (workspace_id, user_id, device_id, access_token_hash, expires_at, reauthenticate_after)
      VALUES ($1, $2, $3, $4, now() + INTERVAL '1 hour', now() + INTERVAL '30 days')`,
     [workspaceId, userId, deviceId, hash],
-  );
-  await database.session.query(
-    `INSERT INTO device_refresh_credentials (workspace_id, device_id, generation, secret_hash, expires_at)
-     VALUES ($1, $2, 1, $3, now() + INTERVAL '30 days')`,
-    [workspaceId, deviceId, hash],
   );
 }
 
@@ -187,14 +182,6 @@ describe('departure leaves business history and removes private material', () =>
         seeded.alpha.workspaceId,
         seeded.alpha.salesperson.userId,
       ]),
-    ).toBe(0);
-    expect(
-      await count(
-        `SELECT count(*) AS count FROM device_refresh_credentials c
-           JOIN devices d ON d.workspace_id = c.workspace_id AND d.id = c.device_id
-          WHERE c.workspace_id = $1 AND d.user_id = $2 AND c.state = 'active'`,
-        [seeded.alpha.workspaceId, seeded.alpha.salesperson.userId],
-      ),
     ).toBe(0);
     expect(
       await count("SELECT count(*) AS count FROM mailboxes WHERE workspace_id = $1 AND owner_user_id = $2 AND status = 'connected'", [

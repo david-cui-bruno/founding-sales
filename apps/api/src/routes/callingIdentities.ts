@@ -1,5 +1,4 @@
 import {
-  attestCallingIdentityCommandSchema,
   disableCallingIdentityCommandSchema,
   registerCallingIdentityCommandSchema,
 } from '@fss/contracts';
@@ -7,7 +6,6 @@ import {
   disableCallingIdentity,
   listOwnCallingIdentities,
   registerCallingIdentity,
-  verifyCallingIdentity,
   type CallingIdentityRow,
 } from '@fss/domain/dial/identities.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
@@ -23,7 +21,6 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  */
 export const CALLING_IDENTITY_PATHS: readonly string[] = [
   '/calling-identities',
-  '/calling-identities/attest',
   '/calling-identities/disable',
   '/calling-identities/register',
 ];
@@ -32,7 +29,7 @@ export const CALLING_IDENTITY_PATHS: readonly string[] = [
  * A salesperson's own calling number (specification 9.1).
  *
  * 9.2's second step refuses every dial whose calling identity is not the actor's own and
- * active, and until this module nothing could make one. Four
+ * active, and until this module nothing could make one. Three
  * endpoints, in the dial family and on its shared helper, so every mutation carries
  * the 5.3 envelope and its receipt commits with the row:
  *
@@ -43,9 +40,6 @@ export const CALLING_IDENTITY_PATHS: readonly string[] = [
  *   * `POST /calling-identities/register` — any active member, for themselves; an
  *     admin, for any active member. Since wave 2 (S4.3) the number is attested as it is
  *     added, and usable for calls at once.
- *   * `POST /calling-identities/attest` — deprecated (remove after desktop 1.0.12), kept
- *     for desktops up to 1.0.11: attests a number an older release left unverified, and
- *     answers `existing` for any other. The body must carry `attested: true`.
  *   * `POST /calling-identities/disable` — retire a number. The row stays.
  *
  * No route decides who may do what: the domain command does, from the scope, in the
@@ -89,18 +83,6 @@ export async function routeCallingIdentities(
             ...(body.label === undefined ? {} : { label: body.label }),
             ...(body.ownerUserId === undefined ? {} : { ownerUserId: body.ownerUserId }),
           });
-          return outcome.ok
-            ? { ok: true, value: { outcome: outcome.value.outcome, identity: dtoOf(outcome.value.identity) } }
-            : outcome;
-        },
-      );
-    case '/calling-identities/attest':
-      return await runPolicyCommand(
-        deps,
-        attestCallingIdentityCommandSchema,
-        'attest_calling_identity',
-        async (repository, body) => {
-          const outcome = await verifyCallingIdentity(repository, { identityId: body.identityId });
           return outcome.ok
             ? { ok: true, value: { outcome: outcome.value.outcome, identity: dtoOf(outcome.value.identity) } }
             : outcome;

@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import type { SessionGrant } from '@fss/contracts';
 import { runCommand } from '../../src/auth/commands.ts';
-import { authenticate, renewSession } from '../../src/auth/sessions.ts';
+import { authenticate, openSession } from '../../src/auth/sessions.ts';
 import { claimSignIn, handleCallback, startSignIn } from '../../src/auth/signIn.ts';
 import {
   CURRENT_CLIENT_VERSION,
@@ -11,7 +12,6 @@ import {
   stateOf,
   type AuthFixture,
 } from '../support/authFixture.ts';
-import { mintedGrant, type MintedGrant } from '../support/sessionFixture.ts';
 
 /**
  * Appendix G scenarios 23, 24 and 40, against a real PostgreSQL 16 and a local
@@ -43,7 +43,7 @@ afterAll(async () => {
 async function signIn(
   member: { readonly userId: string; readonly googleSub: string; readonly email: string },
   options: { readonly workspaceId?: string; readonly clientVersion?: string } = {},
-): Promise<MintedGrant> {
+): Promise<SessionGrant> {
   const workspaceId = options.workspaceId ?? fixture.alpha.workspaceId;
   const started = await startSignIn(fixture.deps, {
     workspaceId,
@@ -70,7 +70,7 @@ async function signIn(
     clientVersion: options.clientVersion ?? CURRENT_CLIENT_VERSION,
   });
   if (!claimed.claimed) throw new Error(`claim refused: ${claimed.refusal}`);
-  return mintedGrant(claimed.grant);
+  return claimed.grant;
 }
 
 describe('Appendix G 23: OIDC state, nonce, code and token-audience replay are refused', () => {
@@ -219,34 +219,14 @@ describe('Appendix G 23: OIDC state, nonce, code and token-audience replay are r
 });
 
 describe('Appendix G 24: a stolen device and a revoked membership', () => {
-  it('revokes the device when an already-rotated refresh credential is presented again', async () => {
-    const grant = await signIn(fixture.beta.salesperson, { workspaceId: fixture.beta.workspaceId });
-
-    const renewed = await renewSession(fixture.deps, {
-      refreshCredential: grant.refreshCredential,
-      clientVersion: CURRENT_CLIENT_VERSION,
-    });
-    expect(renewed.renewed).toBe(true);
-
-    // The thief presents the credential the legitimate Mac already spent.
-    const reuse = await renewSession(fixture.deps, {
-      refreshCredential: grant.refreshCredential,
-      clientVersion: CURRENT_CLIENT_VERSION,
-    });
-    expect(reuse).toEqual({ renewed: false, refusal: 'credential_reuse' });
-
-    // Reuse revokes the device, so the credential the rotation handed out is dead too,
-    // and every session the device held is over.
-    if (renewed.renewed) {
-      const afterRevocation = await authenticate(fixture.deps, `Bearer ${renewed.grant.accessToken}`);
-      expect(afterRevocation).toEqual({ authenticated: false, refusal: 'device_revoked' });
-    }
-    const { rows } = await fixture.db.query<{ status: string }>('SELECT status FROM devices WHERE id = $1', [
-      grant.deviceId,
-    ]);
-    expect(rows[0]?.status).toBe('revoked');
-  });
-
+  /**
+   * There is no reuse case any more. Appendix G 24's "reuse revokes the device" was
+   * about the rotating refresh credential, which migration 0021 removed: the device
+   * secret does not rotate, so presenting it twice is two honest opens and not evidence
+   * of a second holder. What is left of G 24 is revocation, which is what the tests
+   * below are about — and a sign-out now revokes the device outright, so a secret
+   * restored from a backup opens nothing (`deviceSession.test.ts`).
+   */
   it('refuses every command from a device an admin revoked, and the session with it', async () => {
     const grant = await signIn(fixture.alpha.salesperson);
     expect((await authenticate(fixture.deps, `Bearer ${grant.accessToken}`)).authenticated).toBe(true);
@@ -285,20 +265,22 @@ describe('Appendix G 24: a stolen device and a revoked membership', () => {
       refusal: 'session_expired',
     });
 
-    const renewed = await renewSession(fixture.deps, {
-      refreshCredential: grant.refreshCredential,
+    const opened = await openSession(fixture.deps, {
+      workspaceId: grant.workspaceId,
+      deviceId: grant.deviceId,
+      deviceSecret: grant.deviceSecret,
       clientVersion: CURRENT_CLIENT_VERSION,
     });
-    expect(renewed.renewed).toBe(true);
+    expect(opened.opened).toBe(true);
 
     fixture.advance(30 * 24 * 3_600_000);
-    if (renewed.renewed) {
-      const stale = await renewSession(fixture.deps, {
-        refreshCredential: renewed.grant.refreshCredential,
-        clientVersion: CURRENT_CLIENT_VERSION,
-      });
-      expect(stale).toEqual({ renewed: false, refusal: 'reauthentication_required' });
-    }
+    const stale = await openSession(fixture.deps, {
+      workspaceId: grant.workspaceId,
+      deviceId: grant.deviceId,
+      deviceSecret: grant.deviceSecret,
+      clientVersion: CURRENT_CLIENT_VERSION,
+    });
+    expect(stale).toEqual({ opened: false, refusal: 'reauthentication_required' });
   });
 });
 

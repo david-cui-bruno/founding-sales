@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dialCheckResponseSchema, loggedCallResultSchema, wireDrift } from '@fss/contracts';
-import { POSTURE_STATEMENT_KEYS } from '@fss/domain/src/rules/statePosture.ts';
 import {
   journalObjectBody,
   recordingSuppressionJournal,
@@ -27,9 +26,12 @@ import { seedContact, seedFirm } from './support/crmSeed.ts';
  * The rules have their own tests against a real PostgreSQL in `@fss/domain`; what is
  * proved here is the wiring, and three pieces of it are this lane's alone:
  *
- *   * a dial authorization replay answers `already_consumed` rather than an accepted
- *     command with an empty body, which is what the receipt on its own would give
- *     (5.3, 9.2);
+ *   * `POST /dial/check` answers the whole advisory decision, including the identity
+ *     and the posture, and writes nothing (9.2). The ticket pair it replaced,
+ *     `/dial/authorize` and `/dial/consume`, went with the 1.0.14 minimum (lane
+ *     W3-C2) and with it the replay rule that had its own test here; the constraints
+ *     behind it — `command_receipts_dial_result_not_actionable` and
+ *     `dial_tickets_one_per_command` — are untouched and are `@fss/domain`'s;
  *   * the journal is written before the command acknowledges, and a journal failure
  *     fails the command with the id left free (10.2);
  *   * the note on a call log is dropped for a member who is not the assignee
@@ -45,8 +47,6 @@ describe('policy, suppression and dialing routes', () => {
   let firmId: string;
   let contactId: string;
   let routeId: string;
-  let routeVersion: number;
-  let callingIdentityId: string;
 
   const options = () => ({
     session: fixture.db,
@@ -151,31 +151,14 @@ describe('policy, suppression and dialing routes', () => {
     );
     expect(route.status).toBe(200);
     routeId = String(resultOf(route)['id']);
-    routeVersion = Number(resultOf(route)['version'] ?? 1);
 
-    // The assignee's own number, through the product path a person takes (lane g60):
-    // register it, then attest that it is the number they call from.
+    // The assignee's own number, through the product path a person takes (lane g60,
+    // wave 2 S4.3): registering it attests it, and it is usable for calls at once.
     const registered = await post('/calling-identities/register', assigneeToken, command({ e164: '+14015550100' }));
     expect(registered.status).toBe(200);
-    callingIdentityId = String((resultOf(registered)['identity'] as Record<string, unknown>)['id']);
-    const attested = await post(
-      '/calling-identities/attest',
-      assigneeToken,
-      command({ identityId: callingIdentityId, attested: true }),
-    );
-    expect(attested.status).toBe(200);
 
-    const posture = await post(
-      '/postures/record',
-      adminToken,
-      command({
-        state: 'RI',
-        effectiveFrom: '2026-01-01T00:00:00.000Z',
-        reviewAt: '2099-01-01T00:00:00.000Z',
-        confirmedStatements: [...POSTURE_STATEMENT_KEYS],
-      }),
-    );
-    expect(posture.status).toBe(200);
+    const posture = await post('/postures/allow', adminToken, command({ states: ['RI'], confirmed: true }));
+    expect(posture.status, JSON.stringify(posture.body)).toBe(200);
   });
 
   afterAll(async () => {
@@ -183,17 +166,14 @@ describe('policy, suppression and dialing routes', () => {
   });
 
   it('refuses every path in this lane without a session', async () => {
-    for (const path of [
-      '/dial/authorize',
-      '/dial/check',
-      '/dial/consume',
-      '/suppressions/record',
-      '/postures/record',
-      '/pauses/open',
-      '/calls/log',
-      '/callbacks/complete',
-    ]) {
-      expect((await post(path, null, command())).status).toBe(401);
+    for (const path of ['/dial/check', '/suppressions/record', '/postures/allow', '/pauses/open', '/calls/log', '/callbacks/complete']) {
+      expect((await post(path, null, command())).status, path).toBe(401);
+    }
+    // And the retired ticket pair is nobody's path: `not_found` before any module sees
+    // it, with no session and with one.
+    for (const path of ['/dial/authorize', '/dial/consume', '/postures/record']) {
+      expect((await post(path, null, command())).status, path).toBe(404);
+      expect((await post(path, assigneeToken, command())).status, path).toBe(404);
     }
   });
 
@@ -228,75 +208,14 @@ describe('policy, suppression and dialing routes', () => {
     expect((await post('/dial/check', assigneeToken, { firmId: 'not-a-uuid' })).status).toBe(400);
   });
 
-  it('answers a dial authorization replay with already_consumed, never a second allow', async () => {
-    const commandId = randomUUID();
-    const body = {
-      commandId,
-      clientVersion: CURRENT_CLIENT_VERSION,
-      firmId,
-      contactId,
-      routeId,
-      routeVersion,
-      callingIdentityId,
-    };
-    const first = await post('/dial/authorize', assigneeToken, body);
-    // Whatever the clock says about the calling window, the replay rule holds; the
-    // window itself is tested in `@fss/domain` where the instant is a parameter.
-    if (first.status === 200) {
-      const ticket = resultOf(first);
-      expect(String(ticket['e164'])).toBe('+14015550187');
-
-      const consumed = await post('/dial/consume', assigneeToken, command({ ticketId: ticket['ticketId'] }));
-      expect(consumed.status).toBe(200);
-      expect(resultOf(consumed)['telUri']).toBe('tel:+14015550187');
-
-      const again = await post('/dial/consume', assigneeToken, command({ ticketId: ticket['ticketId'] }));
-      expect(again.status).toBe(409);
-      expect(again.body['reason']).toBe('already_consumed');
-    } else {
-      expect(first.status).toBe(409);
-      expect(first.body['reason']).toBe('outside_calling_window');
-    }
-
-    // The receipt stores no result for `authorize_dial` (migration 0001), and the
-    // route turns that empty replay into the refusal 9.2 names.
-    const replay = await post('/dial/authorize', assigneeToken, body);
-    expect(replay.status).toBe(409);
-    expect(replay.body['reason']).toBe('already_consumed');
-    expect(replay.body['result']).toBeUndefined();
-  });
-
-  it('refuses a calling identity that is not the actor own', async () => {
-    const other = await fixture.db.query<{ id: string }>(
-      `INSERT INTO calling_identities (workspace_id, owner_user_id, e164, verification_status, enabled,
-                                       verified_at, verified_by_user_id, verification_method)
-       VALUES ($1, $2, '+14015550101', 'verified', true, now(), $2, 'owner_attestation') RETURNING id`,
-      [fixture.alpha.workspaceId, fixture.alpha.admin.userId],
-    );
-    const answer = await post(
-      '/dial/authorize',
-      assigneeToken,
-      command({ firmId, contactId, routeId, routeVersion, callingIdentityId: other.rows[0]?.id }),
-    );
-    expect(answer.status).toBe(409);
-    expect(answer.body['reason']).toBe('identity_not_owned');
-  });
-
-  it('refuses the reserved shared line, which has no owner', async () => {
-    const shared = await fixture.db.query<{ id: string }>(
-      `INSERT INTO calling_identities (workspace_id, owner_user_id, e164, verification_status, enabled,
-                                       verified_at, verified_by_user_id, verification_method)
-       VALUES ($1, NULL, '+14015550102', 'verified', false, now(), $2, 'admin_attestation') RETURNING id`,
-      [fixture.alpha.workspaceId, fixture.alpha.admin.userId],
-    );
-    const answer = await post(
-      '/dial/authorize',
-      assigneeToken,
-      command({ firmId, contactId, routeId, routeVersion, callingIdentityId: shared.rows[0]?.id }),
-    );
-    expect(answer.status).toBe(409);
-    expect(answer.body['reason']).toBe('identity_shared_line_disabled');
-  });
+  /**
+   * The two identity refusals `/dial/authorize` carried — `identity_not_owned` and
+   * `identity_shared_line_disabled` — are not reachable from the API any more: the only
+   * dial path is `POST /dial/check`, whose body names a firm and a route and never a
+   * calling identity, so the decision reads the actor's own. The refusals themselves are
+   * `@fss/domain`'s (`test/policy/callingIdentities.test.ts`), where the identity is a
+   * parameter.
+   */
 
   /**
    * A firm of its own with one usable number, so a do-not-call (which also switches the
@@ -637,17 +556,7 @@ describe('policy, suppression and dialing routes', () => {
 
   it('keeps posture and pause administration to admins', async () => {
     expect(
-      (
-        await post(
-          '/postures/record',
-          assigneeToken,
-          command({
-            state: 'MA',
-            effectiveFrom: '2026-01-01T00:00:00.000Z',
-            confirmedStatements: [...POSTURE_STATEMENT_KEYS],
-          }),
-        )
-      ).body['reason'],
+      (await post('/postures/allow', assigneeToken, command({ states: ['MA'], confirmed: true }))).body['reason'],
     ).toBe('admin_only');
     expect((await post('/pauses/open', assigneeToken, command({ scopeKind: 'workspace' }))).body['reason']).toBe(
       'admin_only',

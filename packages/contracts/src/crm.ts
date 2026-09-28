@@ -31,8 +31,11 @@ export const CRM_REFUSAL_CODES = [
   'contact_merged',
   'route_unknown',
   'route_retired',
-  // `/contacts/routes/confirm` on a number that changed since it was shown,
-  // or on one whose validation failed.
+  // `/contacts/routes/check` alone answers these two, and it is the only command that
+  // takes a `routeVersion`: a route that moved since the page was drawn is
+  // `route_version_stale`, and one whose validation has already failed is `route_invalid`
+  // (a definite answer is not re-asked). `/contacts/routes/retire` takes no version and
+  // returns neither.
   'route_version_stale',
   'route_invalid',
   'evidence_unknown',
@@ -212,28 +215,14 @@ export const verifyRouteCommandSchema = z.strictObject({
 });
 
 /**
- * A person confirms a phone number reaches the firm. Phone only: the literal
- * is the whole of that rule on the wire, and `docs/decisions/g88-founder-authoring-and-review.md`
- * says why an email address is not confirmed by hand. `routeVersion` is the version the
- * person was looking at; a route that has moved since is refused `route_version_stale`.
- *
- * @deprecated (remove after desktop 1.0.12) — a phone number is usable on entry since
- * wave 2 (S4.4), and a dial accepts one an older release stored as a candidate. Still
- * accepted for desktops up to 1.0.11, which offer "Confirm this number" for such a row.
- */
-export const confirmRouteCommandSchema = z.strictObject({
-  ...commandEnvelope,
-  routeKind: z.literal('phone'),
-  routeId: uuid,
-  routeVersion: z.number().int().min(1),
-});
-
-/**
  * "Check again" on an address nobody has checked yet: one more `route.validate`
- * job for the email route at the version the person was looking at. Email only — a number
- * is confirmed by a person, not checked by the worker — and it changes nothing about the
- * route itself; the worker's answer does. A route that has moved since is refused
- * `route_version_stale`, one that failed is `route_invalid`.
+ * job for the email route at the version the person was looking at. Email only, because
+ * only an address has a technical validation the worker can run — a phone number is
+ * `usable` on entry since wave 2 (S4.4) and needs nothing asked of it — and it changes
+ * nothing about the route itself; the worker's answer does. A route that has moved since
+ * is refused `route_version_stale`, one whose validation already failed `route_invalid`.
+ * This is the one route command that takes a `routeVersion`, and the only one that
+ * answers either code.
  */
 export const checkRouteCommandSchema = z.strictObject({
   ...commandEnvelope,

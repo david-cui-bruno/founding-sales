@@ -119,7 +119,7 @@ export interface EnrollmentRow {
   readonly endReason: EnrollmentEndReason | null;
   readonly firmTimeZone: string;
   readonly holidayCalendarVersion: string;
-  readonly reviewUnionMilliseconds: number | null;
+  readonly reviewUnionMilliseconds: null;
 }
 
 export interface StepExecutionRow {

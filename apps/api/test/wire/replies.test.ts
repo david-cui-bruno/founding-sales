@@ -9,7 +9,7 @@ import {
   wireDrift,
 } from '@fss/contracts';
 import { CONTAINER_CLIENT_VERSIONS } from '../../src/bootstrap/main.ts';
-import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from '../support/authFixture.ts';
+import { createAuthFixture, type AuthFixture } from '../support/authFixture.ts';
 import { issueSessionFor } from '../support/sessionFixture.ts';
 import { createReplyBridge } from '../../../desktop/src/main/replyBridge.ts';
 import { buildReplyView } from '../../../desktop/src/renderer/replyView.ts';
@@ -51,7 +51,7 @@ describe('8.0aj: the reply window reads the classifier at max', () => {
 
   const command = (extra: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> => ({
     commandId: randomUUID(),
-    clientVersion: CURRENT_CLIENT_VERSION,
+    clientVersion: DESKTOP_VERSION_UNDER_TEST,
     ...extra,
   });
 

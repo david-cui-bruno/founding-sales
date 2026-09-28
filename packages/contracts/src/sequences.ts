@@ -1,6 +1,5 @@
 import { z } from 'zod';
 import { ianaTimeZone, instant, sha256Hex, uuid } from './foundationRows.ts';
-import { holdReasonCodeSchema } from './reasonCodes.ts';
 
 /**
  * The wire contract of the sequence editor's reads: sequences, versions and their
@@ -31,9 +30,6 @@ export type StepChannel = (typeof STEP_CHANNELS)[number];
 export const REMOVED_STEP_CHANNELS = ['linkedin'] as const;
 export type RemovedStepChannel = (typeof REMOVED_STEP_CHANNELS)[number];
 
-/** Why a removed step is held, on the resume review. Not a `hold_reason_codes` row. */
-const REMOVED_STEP_HELD_REASON = 'channel_removed' as const;
-
 const SEQUENCE_VERSION_STATES = ['draft', 'published', 'retired'] as const;
 export type SequenceVersionState = (typeof SEQUENCE_VERSION_STATES)[number];
 
@@ -49,11 +45,12 @@ export type SequenceStopCondition = (typeof SEQUENCE_STOP_CONDITIONS)[number];
 export const STEP_NO_ANSWER_ACTIONS = ['advance', 'retry_call'] as const;
 
 /**
- * `review_required` is only ever read now: an older release wrote it for a hold longer
- * than seven days, and the scheduler resumes such an enrollment once its holds clear
- * (wave 2, S4.1). @deprecated value `review_required` (remove after migration 0019).
+ * An enrollment is live (`active`) or over. `review_required` was the fourth state
+ * until migration 0021: an older release wrote it for a hold longer than seven days,
+ * wave 2 (S4.1) made the scheduler resume such an enrollment on its own, and 0021
+ * narrows `sequence_enrollments_state_known` to these three.
  */
-const ENROLLMENT_STATES = ['active', 'review_required', 'completed', 'stopped'] as const;
+const ENROLLMENT_STATES = ['active', 'completed', 'stopped'] as const;
 export type EnrollmentState = (typeof ENROLLMENT_STATES)[number];
 
 export const ENROLLMENT_END_REASONS = [
@@ -215,7 +212,12 @@ export const enrollmentDtoSchema = z.object({
   firmTimeZone: ianaTimeZone,
   /** `sequence_enrollments_calendar_version_shape`, migration 0012. */
   holidayCalendarVersion: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,39}$/u),
-  reviewUnionMilliseconds: z.number().int().min(0).nullable(),
+  /**
+   * Always `null` since migration 0021, which made the column null-only along with the
+   * `review_required` state it belonged to. The field stays because desktop 1.0.14
+   * parses the enrollment row strictly and would throw on its absence.
+   */
+  reviewUnionMilliseconds: z.null(),
 });
 export type EnrollmentDto = z.infer<typeof enrollmentDtoSchema>;
 
@@ -236,72 +238,12 @@ export const templateVersionsResponseSchema = z.object({ templates: z.array(temp
 export const enrollmentsResponseSchema = z.object({ asOf: instant, enrollments: z.array(enrollmentDtoSchema) });
 
 // ---------------------------------------------------------------------------
-// The resume review (audit G06)
+// Step executions
+//
+// The resume review (audit G06) and its two shapes went with the 1.0.14 minimum (lane
+// W3-C2): a long hold resumes on its own since wave 2 (S4.1), so there is nothing for a
+// person to confirm and `/enrollments/resume/preview` had no caller.
 // ---------------------------------------------------------------------------
 
-const STEP_EXECUTION_STATES = ['pending', 'held', 'dispatched', 'completed', 'cancelled'] as const;
-export type StepExecutionState = (typeof STEP_EXECUTION_STATES)[number];
+export type StepExecutionState = 'pending' | 'held' | 'dispatched' | 'completed' | 'cancelled';
 
-/**
- * `decideResume`'s answers (`packages/domain/src/rules/holds.ts`), `still_held` and
- * `resume`, and `review_required`, which went with the seven-day review (wave 2, S4.1)
- * and is never sent. @deprecated value `review_required` (remove after desktop 1.0.12).
- */
-export const RESUME_DECISION_KINDS = ['still_held', 'review_required', 'resume'] as const;
-
-/** One unexecuted step: where it is due now, and where a confirmed resume puts it. */
-const currentResumePreviewStepSchema = z.object({
-  stepExecutionId: uuid,
-  ordinal: z.number().int().min(1),
-  channel: z.enum(STEP_CHANNELS),
-  state: z.enum(STEP_EXECUTION_STATES),
-  originalDueAt: instant,
-  dueAt: instant,
-  proposedDueAt: instant,
-});
-
-/**
- * An unexecuted step of a removed channel (lane A2). Always held, for `channel_removed`:
- * a resume leaves it held and unmoved (`proposedDueAt` is `dueAt`), and the worker holds
- * one that is still pending before it does anything else with it.
- */
-const removedResumePreviewStepSchema = z.object({
-  stepExecutionId: uuid,
-  ordinal: z.number().int().min(1),
-  channel: z.literal('removed'),
-  removedChannel: z.enum(REMOVED_STEP_CHANNELS),
-  state: z.literal('held'),
-  heldReason: z.literal(REMOVED_STEP_HELD_REASON),
-  originalDueAt: instant,
-  dueAt: instant,
-  proposedDueAt: instant,
-});
-
-export const resumePreviewStepSchema = z.discriminatedUnion('channel', [
-  currentResumePreviewStepSchema,
-  removedResumePreviewStepSchema,
-]);
-
-export const resumePreviewSchema = z.object({
-  enrollmentId: uuid,
-  kind: z.enum(RESUME_DECISION_KINDS),
-  unionMilliseconds: z.number().int().min(0),
-  shiftMilliseconds: z.number().int().min(0),
-  openHoldIds: z.array(uuid),
-  firmTimeZone: ianaTimeZone,
-  holds: z.array(
-    z.object({
-      reasonCode: holdReasonCodeSchema,
-      startedAt: instant,
-      releasedAt: instant.nullable(),
-    }),
-  ),
-  steps: z.array(resumePreviewStepSchema),
-});
-export type ResumePreviewDto = z.infer<typeof resumePreviewSchema>;
-
-/**
- * `POST /enrollments/resume/preview`: what "Review and resume" shows, with the database
- * time it was computed at. A read; the confirmation is `/enrollments/resume`.
- */
-export const resumePreviewResponseSchema = z.object({ asOf: instant, preview: resumePreviewSchema });

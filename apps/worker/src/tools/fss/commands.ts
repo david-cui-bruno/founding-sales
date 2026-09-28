@@ -68,10 +68,12 @@ export const COMMAND_DEPENDENCIES: Readonly<Record<string, DependencyMode>> = Ob
   // never reads the deployment, so it cannot reach Gmail, KMS or S3.
   'release-record put': 'database',
   'release-record show': 'database',
-  // Lane W2-M. Counts, in a READ ONLY transaction, and nothing else.
-  'schema-preflight 0019': 'database',
-  // Lane W3-F, the same shape for migration 0020.
+  // Lane W3-F. Counts, in a READ ONLY transaction, and nothing else. (Lane W2-M's
+  // `schema-preflight 0019` went with the schema it counted: it only ever applied to a
+  // schema-18 database, and production is past it.)
   'schema-preflight 0020': 'database',
+  // Lane W3-C2, the same shape for migration 0021.
+  'schema-preflight 0021': 'database',
   'suppression-journal replay': 'journal',
   'mailbox reconcile-sent': 'gmail-read',
 });
@@ -201,16 +203,6 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     summary: 'the stored release record for one reference, and the digests it binds sending to. Reads only',
   },
   {
-    // Lane W2-M. What `infra/scripts/preflight.sh <root> <prefix> 0019` runs on the operations
-    // task before the schema-19 release stops anything: migration 0019's counts, read
-    // only, and whether it would refuse (FS019).
-    path: ['admin', 'schema-preflight', '0019'],
-    valueFlags: [...REPORTABLE],
-    booleanFlags: [],
-    requiredFlags: [],
-    summary: 'what migration 0019 destroys, archives, relaxes or refuses on, counted read-only on schema 18',
-  },
-  {
     // Lane W3-F. What `infra/scripts/preflight.sh <root> <prefix> 0020` runs before the
     // postal-address release stops anything: the settings rows by key, the unsent fences
     // whose footer will be recomposed, the templates whose legacy block will be deduped,
@@ -220,6 +212,17 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     booleanFlags: [],
     requiredFlags: [],
     summary: 'what migration 0020 recomposes, dedupes or refuses on, counted read-only on schema 19',
+  },
+  {
+    // Lane W3-C2. What `infra/scripts/preflight.sh <root> <prefix> 0021` runs before the
+    // compatibility-cleanup release stops anything: the enrollments still in
+    // `review_required`, which are the only thing 0021 refuses on (FS021), and the
+    // credential and generation rows it will destroy without asking.
+    path: ['admin', 'schema-preflight', '0021'],
+    valueFlags: [...REPORTABLE],
+    booleanFlags: [],
+    requiredFlags: [],
+    summary: 'what migration 0021 destroys or refuses on, counted read-only on schema 20',
   },
 ]);
 

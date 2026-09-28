@@ -984,18 +984,6 @@ export const SEQUENCE_CONSTRAINT_CASES: readonly SequenceCase[] = [
     },
   },
   {
-    constraint: 'sequence_enrollments_review_union_positive',
-    run: async f => {
-      const chain = await makeChain(f);
-      const other = await makeContact(f, chain.firmId, 'Robin Example');
-      return await insertEnrollment(f, chain, {
-        contactId: other,
-        state: 'review_required',
-        reviewUnion: -1,
-      });
-    },
-  },
-  {
     constraint: 'sequence_enrollments_updated_not_before_created',
     run: async f => {
       const chain = await makeChain(f);

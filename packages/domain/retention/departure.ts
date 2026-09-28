@@ -69,7 +69,6 @@ export interface DeparturePreview {
   readonly role: 'admin' | 'salesperson';
   readonly activeDevices: number;
   readonly activeSessions: number;
-  readonly activeRefreshCredentials: number;
   readonly connectedMailboxes: number;
   /** Rows of envelope-encrypted refresh-token material this departure would delete. */
   readonly refreshTokenRows: number;
@@ -85,7 +84,6 @@ export interface DepartureOutcome {
   readonly membershipRevoked: boolean;
   readonly devicesRevoked: number;
   readonly sessionsEnded: number;
-  readonly refreshCredentialsRevoked: number;
   readonly mailboxesDisconnected: number;
   readonly watchesCancelled: number;
   readonly refreshTokenMaterialDeleted: boolean;
@@ -154,13 +152,6 @@ export async function previewDeparture(
       "SELECT count(*) AS count FROM sessions WHERE workspace_id = $1 AND user_id = $2 AND status = 'active'",
       [workspace, input.userId],
     ),
-    activeRefreshCredentials: await countOf(
-      context,
-      `SELECT count(*) AS count FROM device_refresh_credentials c
-         JOIN devices d ON d.workspace_id = c.workspace_id AND d.id = c.device_id
-        WHERE c.workspace_id = $1 AND d.user_id = $2 AND c.state = 'active'`,
-      [workspace, input.userId],
-    ),
     connectedMailboxes: await countOf(
       context,
       "SELECT count(*) AS count FROM mailboxes WHERE workspace_id = $1 AND owner_user_id = $2 AND status = 'connected'",
@@ -179,8 +170,8 @@ export async function previewDeparture(
       [workspace, input.userId],
     ),
     // Live, which 0012 states as `ended_at IS NULL` and expresses in the state:
-    // `active` and `review_required` are the two that have not ended. A `completed`
-    // or `stopped` enrollment needs no reassignment, because nothing will act on it.
+    // `active` is the only state that has not ended. A `completed` or `stopped`
+    // enrollment needs no reassignment, because nothing will act on it.
     assignedEnrollments: await countOf(
       context,
       `SELECT count(*) AS count FROM sequence_enrollments
@@ -240,7 +231,6 @@ export async function commitDeparture(
       membershipRevoked: recorded.membershipRevoked ?? true,
       devicesRevoked: recorded.devicesRevoked ?? 0,
       sessionsEnded: recorded.sessionsEnded ?? 0,
-      refreshCredentialsRevoked: recorded.refreshCredentialsRevoked ?? 0,
       mailboxesDisconnected: recorded.mailboxesDisconnected ?? 0,
       watchesCancelled: recorded.watchesCancelled ?? 0,
       refreshTokenMaterialDeleted: recorded.refreshTokenMaterialDeleted ?? false,
@@ -264,13 +254,6 @@ export async function commitDeparture(
   const sessions = await context.db.query(
     `UPDATE sessions SET status = 'ended', ended_at = now(), end_reason = 'membership_revoked'
       WHERE workspace_id = $1 AND user_id = $2 AND status = 'active'`,
-    [workspace, input.userId],
-  );
-  const credentials = await context.db.query(
-    `UPDATE device_refresh_credentials c SET state = 'revoked'
-       FROM devices d
-      WHERE d.workspace_id = c.workspace_id AND d.id = c.device_id
-        AND c.workspace_id = $1 AND d.user_id = $2 AND c.state = 'active'`,
     [workspace, input.userId],
   );
 
@@ -345,7 +328,6 @@ export async function commitDeparture(
     membershipRevoked: (membershipUpdate.rowCount ?? 0) > 0,
     devicesRevoked: devices.rowCount ?? 0,
     sessionsEnded: sessions.rowCount ?? 0,
-    refreshCredentialsRevoked: credentials.rowCount ?? 0,
     mailboxesDisconnected: mailboxes.rowCount ?? 0,
     watchesCancelled: watches.rowCount ?? 0,
     refreshTokenMaterialDeleted: (tokens.rowCount ?? 0) > 0,

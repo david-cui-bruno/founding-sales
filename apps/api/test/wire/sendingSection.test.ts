@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { compareVersions, mayMutate, outboundStatusResponseSchema, publishedClientVersions, wireDrift } from '@fss/contracts';
+import { compareVersions, mayMutate, outboundStatusResponseSchema, wireDrift } from '@fss/contracts';
 import { CONTAINER_CLIENT_VERSIONS } from '../../src/bootstrap/main.ts';
 import { localNoopSuppressionJournal } from '../../src/journal/index.ts';
 import { dispatch, type ApiOptions } from '../../src/server.ts';
@@ -10,6 +10,7 @@ import { createAuthedClient } from '../../../desktop/src/main/authedClient.ts';
 import { createAdminBridge } from '../../../desktop/src/main/settingsBridge.ts';
 import { adminViewOf } from '../../../desktop/src/renderer/settingsView.ts';
 import { outboundRampAnswer, outboundStatusAnswer } from '../../../desktop/test/support/outboundStatus.ts';
+import { DESKTOP_VERSION_UNDER_TEST } from '../support/wireThrough.ts';
 
 /**
  * Administration's "Sending domain and caps" reads what the API sends (release.md 8.0ae;
@@ -44,6 +45,11 @@ import { outboundRampAnswer, outboundStatusAnswer } from '../../../desktop/test/
  * API's published maximum is refused every sign-in, renewal and command.
  */
 
+/**
+ * When the sending section first shipped. The build under test is
+ * `DESKTOP_VERSION_UNDER_TEST` (1.0.14, the installed one); this records the line the
+ * minimum has to be at or above, which is what the last check in this file asserts.
+ */
 const FIRST_VERSION_WITH_THE_FIX = '1.0.4';
 const DOMAIN = 'sending.example.test';
 
@@ -66,11 +72,13 @@ describe('8.0ae: the sending section parses the API’s own answer (lane g69)', 
   let adminToken: string;
   let noDomainToken: string;
   let mailboxId: string;
+  // The container's own policy on both sides, like `wireThrough.routeOptions`: these
+  // checks are about what the installed Mac and the deployed container say to each other.
   const options = (): ApiOptions => ({
     session: fixture.db,
-    supportedClientVersions: fixture.deps.config.supportedClientVersions,
+    supportedClientVersions: CONTAINER_CLIENT_VERSIONS,
     sendingEnabled: false,
-    auth: fixture.deps,
+    auth: { ...fixture.deps, config: { ...fixture.deps.config, supportedClientVersions: CONTAINER_CLIENT_VERSIONS } },
     upgradeUrl: 'https://callie.example/downloads/mac',
     suppressionJournal: localNoopSuppressionJournal(),
   });
@@ -98,7 +106,7 @@ describe('8.0ae: the sending section parses the API’s own answer (lane g69)', 
     createAdminBridge({
       api: createAuthedClient({
         baseUrl: 'https://api.example.test/',
-        clientVersion: FIRST_VERSION_WITH_THE_FIX,
+        clientVersion: DESKTOP_VERSION_UNDER_TEST,
         accessToken: async () => await Promise.resolve({ token, generation: 0 }),
         send: through(calls),
       }),
@@ -173,9 +181,12 @@ describe('8.0ae: the sending section parses the API’s own answer (lane g69)', 
   });
 
   it('is a build the deployed API accepts', () => {
-    expect(compareVersions(publishedClientVersions(CONTAINER_CLIENT_VERSIONS).maximum, FIRST_VERSION_WITH_THE_FIX)).toBeGreaterThanOrEqual(0);
-    expect(mayMutate(CONTAINER_CLIENT_VERSIONS, FIRST_VERSION_WITH_THE_FIX)).toBe(true);
+    // From the 0021 release the minimum is 1.0.14, so the question is not whether the
+    // build that first carried the sending section is admitted — it is not — but that the
+    // minimum admitted build is at or above it and may mutate.
+    expect(compareVersions(CONTAINER_CLIENT_VERSIONS.minimum, FIRST_VERSION_WITH_THE_FIX)).toBeGreaterThanOrEqual(0);
+    expect(mayMutate(CONTAINER_CLIENT_VERSIONS, CONTAINER_CLIENT_VERSIONS.minimum)).toBe(true);
     // The installed builds keep working until they take the update.
-    expect(CONTAINER_CLIENT_VERSIONS.minimum).toBe('1.0.0');
+    expect(CONTAINER_CLIENT_VERSIONS.minimum).toBe('1.0.14');
   });
 });

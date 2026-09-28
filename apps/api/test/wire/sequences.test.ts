@@ -10,7 +10,7 @@ import {
   wireDrift,
 } from '@fss/contracts';
 import { CONTAINER_CLIENT_VERSIONS } from '../../src/bootstrap/main.ts';
-import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from '../support/authFixture.ts';
+import { createAuthFixture, type AuthFixture } from '../support/authFixture.ts';
 import { issueSessionFor } from '../support/sessionFixture.ts';
 import { seedContact, seedFirm } from '../support/crmSeed.ts';
 import { createSequenceBridge } from '../../../desktop/src/main/sequenceBridge.ts';
@@ -47,14 +47,13 @@ import { DESKTOP_VERSION_UNDER_TEST, desktopClient, routeAnswer, shapeOf } from 
  *
  * **An empty list parses.** `{ versions: [] }` passes any version schema, so the version
  * here has two steps, one of each kind the editor renders, and the enrollment list has
- * a live enrollment and one waiting for review.
+ * two enrollments on two contacts.
  *
  * **A parse that fails into an empty list.** That is D06: the check asserts no slice is
  * unread, so a read that failed cannot pass as a read that found nothing.
  */
 
 const SIGN_OFF = 'Sam Example\nCallie';
-const NINE_DAYS = 9 * 86_400_000;
 
 describe('8.0aj: the sequence editor reads a populated version and its enrollments', () => {
   let fixture: AuthFixture;
@@ -65,12 +64,12 @@ describe('8.0aj: the sequence editor reads a populated version and its enrollmen
   let templateVersionId = '';
   let sequenceId = '';
   let sequenceVersionId = '';
-  let heldEnrollmentId = '';
+  let secondEnrollmentId = '';
   let liveEnrollmentId = '';
 
   const command = (extra: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> => ({
     commandId: randomUUID(),
-    clientVersion: CURRENT_CLIENT_VERSION,
+    clientVersion: DESKTOP_VERSION_UNDER_TEST,
     ...extra,
   });
   const result = (answer: { body: unknown }): Record<string, unknown> =>
@@ -117,10 +116,13 @@ describe('8.0aj: the sequence editor reads a populated version and its enrollmen
         body: `Hello {contact_first_name},\n\nA note about {firm_name}.\n\n${SIGN_OFF}\n${SENDING_STOP_LINE}`,
         footerSignOff: SIGN_OFF,
         requiredVariables: ['firm_name', 'contact_first_name'],
+        // Saved and approved in one command: `/templates/approve` went with the 1.0.14
+        // minimum (lane W3-C2).
+        approve: true,
       }),
     );
+    expect(template.status).toBe(200);
     templateVersionId = String(result(template)['id']);
-    expect((await post('/templates/approve', adminToken, command({ templateVersionId }))).status).toBe(200);
 
     // The version the editor draws: an email step and a call step, published.
     const sequence = await post('/sequences/create', adminToken, command({ name: 'Founding outreach' }));
@@ -139,7 +141,8 @@ describe('8.0aj: the sequence editor reads a populated version and its enrollmen
     sequenceVersionId = String(result(draft)['sequenceVersionId']);
     expect((await post('/sequences/versions/publish', adminToken, command({ sequenceVersionId }))).status).toBe(200);
 
-    // Two enrollments: one live, one past the long-hold review threshold (4.3).
+    // Two enrollments, on two contacts: an empty list would parse, and one row would
+    // not prove the panel counts.
     const live = await post(
       '/enrollments/enroll',
       salespersonToken,
@@ -147,18 +150,13 @@ describe('8.0aj: the sequence editor reads a populated version and its enrollmen
     );
     expect(live.status).toBe(200);
     liveEnrollmentId = String(result(live)['enrollmentId']);
-    const held = await post(
+    const second = await post(
       '/enrollments/enroll',
       salespersonToken,
       command({ sequenceVersionId, opportunityId, firmId, contactId: await contact('Robin Example') }),
     );
-    expect(held.status).toBe(200);
-    heldEnrollmentId = String(result(held)['enrollmentId']);
-    await fixture.db.query(
-      `UPDATE sequence_enrollments SET state = 'review_required', review_union_milliseconds = $3
-        WHERE workspace_id = $1 AND id = $2`,
-      [fixture.alpha.workspaceId, heldEnrollmentId, NINE_DAYS],
-    );
+    expect(second.status).toBe(200);
+    secondEnrollmentId = String(result(second)['enrollmentId']);
   });
 
   afterAll(async () => {
@@ -176,8 +174,8 @@ describe('8.0aj: the sequence editor reads a populated version and its enrollmen
     expect(state.versions[0]?.steps.map(step => step.sequenceVersionId)).toEqual([sequenceVersionId, sequenceVersionId]);
     // Since wave 2 (S4.1) a long hold resumes by itself and there is no review to
     // offer, so the slice is every enrollment of this sequence rather than the held ones.
-    expect([...state.enrollments.map(entry => entry.id)].sort()).toEqual([heldEnrollmentId, liveEnrollmentId].sort());
-    expect(state.enrollments.find(entry => entry.id === heldEnrollmentId)).toMatchObject({
+    expect([...state.enrollments.map(entry => entry.id)].sort()).toEqual([secondEnrollmentId, liveEnrollmentId].sort());
+    expect(state.enrollments.find(entry => entry.id === secondEnrollmentId)).toMatchObject({
       opportunityId,
       firmTimeZone: 'America/New_York',
     });
@@ -224,9 +222,9 @@ describe('8.0aj: the sequence editor reads a populated version and its enrollmen
     expect(wireDrift(enrollmentsResponseSchema, enrollments.body)).toEqual([]);
     const rows = (enrollments.body as { enrollments: { id: string; state: string }[] }).enrollments;
     const liveRow = rows.find(row => row.state === 'active');
-    const heldRow = rows.find(row => row.id === heldEnrollmentId);
+    const secondRow = rows.find(row => row.id === secondEnrollmentId);
     expect(shapeOf(liveRow)).toEqual(shapeOf(enrollmentAnswer()));
-    expect(shapeOf(heldRow)).toEqual(shapeOf(enrollmentAnswer({ state: 'review_required', reviewUnionMilliseconds: NINE_DAYS })));
+    expect(shapeOf(secondRow)).toEqual(shapeOf(enrollmentAnswer()));
 
     // The two fields the defects were about, said outright.
     expect(Object.keys((version as { steps: object[] }).steps[0] ?? {})).toContain('sequenceVersionId');
@@ -235,6 +233,6 @@ describe('8.0aj: the sequence editor reads a populated version and its enrollmen
 
   it('is a build the deployed API accepts', () => {
     expect(mayMutate(CONTAINER_CLIENT_VERSIONS, DESKTOP_VERSION_UNDER_TEST)).toBe(true);
-    expect(CONTAINER_CLIENT_VERSIONS.minimum).toBe('1.0.0');
+    expect(CONTAINER_CLIENT_VERSIONS.minimum).toBe('1.0.14');
   });
 });

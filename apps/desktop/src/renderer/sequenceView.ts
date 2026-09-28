@@ -262,13 +262,13 @@ function enrollmentPanel(state: SequenceState): EnrollmentPanel | null {
   if (state.selectedSequenceId === null) return null;
   const numberOf = new Map(state.versions.map(version => [version.id, version.version]));
   const mine = state.enrollments.filter(entry => numberOf.has(entry.sequenceVersionId));
-  const running = mine.filter(entry => entry.state === 'active' || entry.state === 'review_required').length;
+  const running = mine.filter(entry => entry.state === 'active').length;
   const rows = [...new Set(mine.map(entry => entry.sequenceVersionId))]
     .sort((left, right) => (numberOf.get(right) ?? 0) - (numberOf.get(left) ?? 0))
     .map(sequenceVersionId => {
       const own = mine.filter(entry => entry.sequenceVersionId === sequenceVersionId);
       const parts = [
-        [own.filter(entry => entry.state === 'active' || entry.state === 'review_required').length, 'running'],
+        [own.filter(entry => entry.state === 'active').length, 'running'],
         [own.filter(entry => entry.state === 'completed').length, 'finished'],
         [own.filter(entry => entry.state === 'stopped').length, 'stopped'],
       ] as const;

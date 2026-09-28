@@ -274,7 +274,7 @@ async function measure(
       context,
       `SELECT count(*) AS count FROM sequence_enrollments
         WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}
-          AND state IN ('active', 'review_required')`,
+          AND state = 'active'`,
       byContact,
     ),
     step_executions: await countOf(
@@ -598,10 +598,9 @@ export async function commitDeletion(
 
   // The stops, after the removals and before the redactions. `step_executions`
   // first: an execution is the child, and a `pending` one under a `stopped`
-  // enrollment is a row the scheduler still claims. Both updates clear the column
-  // their new state forbids — `hold_reason_code` for a cancelled execution,
-  // `review_union_milliseconds` for a stopped enrollment — because 0012 writes each
-  // of those as an equivalence rather than as a nullable field.
+  // enrollment is a row the scheduler still claims. The execution update clears the
+  // column its new state forbids — `hold_reason_code` for a cancelled execution —
+  // because 0012 writes that as an equivalence rather than as a nullable field.
   const stopped: Record<string, number> = {};
   const executions = await context.db.query(
     `UPDATE step_executions
@@ -614,10 +613,9 @@ export async function commitDeletion(
   stopped['step_executions'] = executions.rowCount ?? 0;
   const enrollments = await context.db.query(
     `UPDATE sequence_enrollments
-        SET state = 'stopped', ended_at = now(), end_reason = 'admin_stop',
-            review_union_milliseconds = NULL, updated_at = now()
+        SET state = 'stopped', ended_at = now(), end_reason = 'admin_stop', updated_at = now()
       WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}
-        AND state IN ('active', 'review_required')`,
+        AND state = 'active'`,
     byContact,
   );
   stopped['sequence_enrollments'] = enrollments.rowCount ?? 0;

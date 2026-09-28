@@ -166,10 +166,10 @@ export type TodaySnoozeResult = z.infer<typeof todaySnoozeResultSchema>;
  * on a paused automated task (C22). `resume` is what the enrollment did
  * next under 4.3: resumed with its shift, or still held by another hold;
  * `not_applicable` for a firm-scoped pause. `review_required` went with the seven-day
- * review (wave 2, S4.1) and is never sent: @deprecated value (remove after desktop 1.0.12).
+ * review (wave 2, S4.1) and with migration 0021.
  */
 export const todayPauseReleaseResultSchema = z.object({
   holdId: uuid,
   releasedAt: instant,
-  resume: z.enum(['resume', 'still_held', 'review_required', 'not_applicable']),
+  resume: z.enum(['resume', 'still_held', 'not_applicable']),
 });

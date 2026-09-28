@@ -51,11 +51,11 @@ describe('migration 0020 on a database at schema 19', () => {
     });
 
     const { applyMigrations } = await import('../../db/migrationRunner.ts');
+    // Every unapplied migration, so 0021 runs too; 0020 is the one this file is about.
     const applied = await applyMigrations(database.session);
-    expect(applied.map(entry => entry.version)).toEqual([20]);
-    expect(applied[0]?.name).toBe('postal_address');
-    expect(await readAppliedSchemaVersion(database.session)).toBe(20);
-    expect(REQUIRED_SCHEMA).toBe(20);
+    expect(applied.map(entry => entry.version)).toContain(20);
+    expect(applied.find(entry => entry.version === 20)?.name).toBe('postal_address');
+    expect(await readAppliedSchemaVersion(database.session)).toBe(REQUIRED_SCHEMA);
 
     await insertSetting('postal_address', address);
     const { rows } = await database.session.query<{ value: unknown }>(
@@ -110,7 +110,7 @@ describe('migration 0020 on a fresh database', () => {
   });
 
   it('admits the three active keys and nothing else', async () => {
-    expect(await readAppliedSchemaVersion(database.session)).toBe(20);
+    expect(await readAppliedSchemaVersion(database.session)).toBe(REQUIRED_SCHEMA);
     const seeded = await seedTwoWorkspaces(database.session);
     const insert = async (key: string, value: unknown): Promise<unknown> =>
       await database.session.query(

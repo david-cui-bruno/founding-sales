@@ -7,17 +7,17 @@ import { loadMigrations } from '../../db/migrationRunner.ts';
  * file's checksum differs: expand-migrate-contract has no down migration to fall back on
  * (`docs/greenfield/migrations.md`). Production has 0001 to 0019 recorded, so an edit to
  * any of those files — a comment, a `HINT` string, the name of a script cited inside one
- * — stops the next migration run: the 0020 release, or any hand release that launches the
- * migration task. Stale text inside an applied migration stays stale forever. That is the
- * cost of the checksum, and it is the right cost.
+ * — stops the next migration run: the 0020 and 0021 releases, or any hand release that
+ * launches the migration task. Stale text inside an applied migration stays stale
+ * forever. That is the cost of the checksum, and it is the right cost.
  *
- * **0020 is pinned before it is applied**, and that is not the same claim as the rest.
- * The other nineteen say "this is what production recorded"; 0020 says "these are the
- * bytes the release will record", written as the last commit of lane W3-F once the file
- * was final. It moved once, in the second round of the review of PR 296, to correct a
- * sentence in its own comment — and the pin moved with it in that same last commit,
- * which is the only way it may ever move before the release. After it is applied, an
- * edit is an edit to undo.
+ * **0020 and 0021 are pinned before they are applied**, and that is not the same claim
+ * as the rest. The other nineteen say "this is what production recorded"; these two say
+ * "these are the bytes the release will record", each written as the last commit of its
+ * lane once the file was final (W3-F for 0020, W3-C2 for 0021). 0020's pin moved once,
+ * in the second round of the review of PR 296, to correct a sentence in its own comment —
+ * and the pin moved with it in that same last commit, which is the only way either may
+ * ever move before its release. After it is applied, an edit is an edit to undo.
  *
  * These are the bytes production recorded (main `63d22573`, 27 September 2026). **A
  * failure here is not a value to update: it is an edit to undo.** A new migration file is
@@ -55,6 +55,7 @@ const APPLIED: readonly (readonly [number, string, string])[] = [
   [18, '0018_remove_linkedin.sql', '0904427b7212e658136e217a82b123dafd7f82e000e8f58eb40a0f357cdcb5a9'],
   [19, '0019_wave2_cleanup.sql', '541f3c1916c792eaccf388740db819184279b3ebc3257b86a788cf0edf737c16'],
   [20, '0020_postal_address.sql', 'ce741ddaec6051fb58c78ed03b927a1c970a7db236db325e2a06563cc395eb4c'],
+  [21, '0021_compat_cleanup.sql', 'b782e33de64302ec7265678118a7e85432535bd435cbc6c5ec56830d6e974d93'],
 ];
 
 const EDITED = (fileName: string): string =>

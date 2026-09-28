@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { callingIdentityChangeResultSchema, callingIdentityDtoSchema, callingIdentityListSchema, wireDrift } from '@fss/contracts';
-import { POSTURE_STATEMENT_KEYS } from '@fss/domain/src/rules/statePosture.ts';
 import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
 import { buildTodaySnapshot } from '@fss/domain/today/build.ts';
 import { businessDateOf, upsertTodayItem } from '@fss/domain/today/snapshots.ts';
@@ -26,12 +25,14 @@ import { seedContact, seedFirm } from './support/crmSeed.ts';
  *   * who may do what is answered by the domain from the session, and every refusal is
  *     a 409 with a code from `CALLING_IDENTITY_REFUSAL_CODES` — never a hold, never a
  *     403 that would say a colleague's number exists;
- *   * the attestation is a receipted command, so a retried press returns the first
- *     answer rather than attesting twice (5.3);
+ *   * a registration is a receipted command, so a retried press returns the first
+ *     answer rather than registering twice (5.3);
  *   * **the whole path works end to end**: a salesperson with no number has a Today
- *     card with no calling identity; after registering and attesting through these
- *     routes the same card carries it, and `/dial/authorize` accepts it at 9.2's
- *     second step. That is production's gap on 24 September 2026, closed.
+ *     card with no calling identity; after registering through these routes the same
+ *     card carries it, and `POST /dial/check` says the dial is allowed. That is
+ *     production's gap on 24 September 2026, closed. (`/calling-identities/attest` and
+ *     the dial ticket pair went with the 1.0.14 minimum, lane W3-C2: a number somebody
+ *     typed is attested as it is added, and the Mac opens `tel:` itself.)
  *
  * No real number appears; the numbers are in the NANP 555-01XX fictional block.
  */
@@ -44,7 +45,6 @@ describe('the calling-number routes', () => {
   let firmId: string;
   let contactId: string;
   let routeId: string;
-  let routeVersion: number;
 
   const options = () => ({
     session: fixture.db,
@@ -140,18 +140,8 @@ describe('the calling-number routes', () => {
     );
     expect(route.status).toBe(200);
     routeId = String(resultOf(route)['id']);
-    routeVersion = Number(resultOf(route)['version'] ?? 1);
-    const posture = await post(
-      '/postures/record',
-      adminToken,
-      command({
-        state: 'RI',
-        effectiveFrom: '2026-01-01T00:00:00.000Z',
-        reviewAt: '2099-01-01T00:00:00.000Z',
-        confirmedStatements: [...POSTURE_STATEMENT_KEYS],
-      }),
-    );
-    expect(posture.status).toBe(200);
+    const posture = await post('/postures/allow', adminToken, command({ states: ['RI'], confirmed: true }));
+    expect(posture.status, JSON.stringify(posture.body)).toBe(200);
 
     // Today's card for that firm, so the expansion has something to carry.
     const clock = await fixture.db.query<{ now: Date }>('SELECT now() AS now');
@@ -176,7 +166,7 @@ describe('the calling-number routes', () => {
 
   it('refuses every path without a session', async () => {
     expect((await send('GET', '/calling-identities', null)).status).toBe(401);
-    for (const path of ['/calling-identities/register', '/calling-identities/attest', '/calling-identities/disable']) {
+    for (const path of ['/calling-identities/register', '/calling-identities/disable']) {
       expect((await post(path, null, command())).status, path).toBe(401);
     }
   });
@@ -185,14 +175,8 @@ describe('the calling-number routes', () => {
     expect((await send('POST', '/calling-identities', salespersonToken, {})).status).toBe(405);
     expect((await send('GET', '/calling-identities/register', salespersonToken)).status).toBe(405);
     expect((await post('/calling-identities/register', salespersonToken, command({}))).status).toBe(400);
-    // The attestation is a statement: without `attested: true` it is not one.
-    expect(
-      (await post('/calling-identities/attest', salespersonToken, command({ identityId: randomUUID() }))).status,
-    ).toBe(400);
-    expect(
-      (await post('/calling-identities/attest', salespersonToken, command({ identityId: randomUUID(), attested: false })))
-        .status,
-    ).toBe(400);
+    // The retired attestation is nobody's path now, not a wrong body.
+    expect((await post('/calling-identities/attest', salespersonToken, command({ identityId: randomUUID() }))).status).toBe(404);
   });
 
   it('takes a salesperson from no Call button to an authorized dial with one registration (wave 2, S4.3)', async () => {
@@ -200,11 +184,8 @@ describe('the calling-number routes', () => {
     expect((await send('GET', '/calling-identities', salespersonToken)).body).toEqual({ identities: [] });
     expect(await expandedIdentity()).toBeNull();
 
-    const registered = await post(
-      '/calling-identities/register',
-      salespersonToken,
-      command({ e164: '+1 (401) 555-0150', label: 'Mobile' }),
-    );
+    const registration = command({ e164: '+1 (401) 555-0150', label: 'Mobile' });
+    const registered = await post('/calling-identities/register', salespersonToken, registration);
     expect(registered.status, JSON.stringify(registered.body)).toBe(200);
     expect(resultOf(registered)['outcome']).toBe('created');
     // The Mac reads a calling-number change with `@fss/contracts`' schema since lane g78.
@@ -222,37 +203,20 @@ describe('the calling-number routes', () => {
       usedForCalls: true,
     });
 
-    // The card carries the number at once, and 9.2 gets past its second step.
+    // The card carries the number at once, and the advisory read gets past 9.2's
+    // second step rather than refusing for a missing identity.
     expect(await expandedIdentity()).toBe(identity.id);
-    const dial = await post(
-      '/dial/authorize',
-      salespersonToken,
-      command({ firmId, contactId, routeId, routeVersion, callingIdentityId: identity.id }),
+    const advice = await post('/dial/check', salespersonToken, { firmId, routeId });
+    expect(advice.status, JSON.stringify(advice.body)).toBe(200);
+    const reasons = ((advice.body['advice'] as { reasons?: readonly { code?: string }[] }).reasons ?? []).map(
+      entry => entry.code,
     );
-    if (dial.status === 200) {
-      expect(resultOf(dial)['callingIdentityId']).toBe(identity.id);
-    } else {
-      // Whatever the clock says about the calling window; the window itself is tested in
-      // `@fss/domain` where the instant is a parameter. Never an identity refusal.
-      expect(dial.status).toBe(409);
-      expect(dial.body['reason']).toBe('outside_calling_window');
-    }
+    expect(reasons).not.toContain('calling_identity_missing');
 
-    // Desktop 1.0.11 still presses Attest: the deprecated route answers `existing`, and a
-    // retried press is the same command, so nothing is attested twice.
-    const attestCommand = command({ identityId: identity.id, attested: true });
-    const attested = await post('/calling-identities/attest', salespersonToken, attestCommand);
-    expect(attested.status, JSON.stringify(attested.body)).toBe(200);
-    expect(wireDrift(callingIdentityChangeResultSchema, resultOf(attested))).toEqual([]);
-    expect(resultOf(attested)['outcome']).toBe('existing');
-    const replay = await post('/calling-identities/attest', salespersonToken, attestCommand);
+    // A retried registration is the same command: the receipt answers it.
+    const replay = await post('/calling-identities/register', salespersonToken, registration);
     expect(replay.status).toBe(200);
     expect(replay.body['replayed']).toBe(true);
-    const audits = await fixture.db.query<{ count: string }>(
-      "SELECT count(*)::text AS count FROM audit_events WHERE action = 'calling_identity.attested' AND subject_id = $1",
-      [identity.id],
-    );
-    expect(audits.rows[0]?.count).toBe('0');
 
     const listed = callingIdentityListSchema.parse((await send('GET', '/calling-identities', salespersonToken)).body);
     expect(listed.identities.map(entry => [entry.id, entry.usedForCalls])).toEqual([[identity.id, true]]);
@@ -278,24 +242,17 @@ describe('the calling-number routes', () => {
     // The salesperson's own number is unknown to a colleague: not "not yours".
     const own = callingIdentityListSchema.parse((await send('GET', '/calling-identities', salespersonToken)).body);
     const id = own.identities[0]?.id ?? '';
-    for (const path of ['/calling-identities/attest', '/calling-identities/disable']) {
-      const answer = await post(path, strangerToken, command({ identityId: id, attested: true }));
-      // `disable` takes no `attested`, and a strict body refuses the extra key.
-      if (path.endsWith('disable')) {
-        expect(answer.status).toBe(400);
-        const plain = await post(path, strangerToken, command({ identityId: id }));
-        expect(plain.status).toBe(409);
-        expect(plain.body['reason']).toBe('identity_unknown');
-      } else {
-        expect(answer.status).toBe(409);
-        expect(answer.body['reason']).toBe('identity_unknown');
-      }
-    }
+    // `disable` takes no `attested`, and a strict body refuses the extra key.
+    const extra = await post('/calling-identities/disable', strangerToken, command({ identityId: id, attested: true }));
+    expect(extra.status).toBe(400);
+    const plain = await post('/calling-identities/disable', strangerToken, command({ identityId: id }));
+    expect(plain.status).toBe(409);
+    expect(plain.body['reason']).toBe('identity_unknown');
     // And a colleague's list never contains it.
     expect((await send('GET', '/calling-identities', strangerToken)).body).toEqual({ identities: [] });
   });
 
-  it('lets an admin register and attest a member’s number, recorded as the admin’s statement', async () => {
+  it('lets an admin register a member’s number, recorded as the admin’s statement', async () => {
     const strangerId = (
       await fixture.db.query<{ user_id: string }>(
         `SELECT m.user_id FROM workspace_memberships m JOIN users u ON u.id = m.user_id
@@ -309,13 +266,7 @@ describe('the calling-number routes', () => {
       command({ e164: '+14015550152', ownerUserId: strangerId }),
     );
     expect(registered.status).toBe(200);
-    const attested = await post(
-      '/calling-identities/attest',
-      adminToken,
-      command({ identityId: identityOf(registered).id, attested: true }),
-    );
-    expect(attested.status).toBe(200);
-    expect(identityOf(attested)).toMatchObject({
+    expect(identityOf(registered)).toMatchObject({
       ownerUserId: strangerId,
       verifiedByUserId: fixture.alpha.admin.userId,
       verificationMethod: 'admin_attestation',

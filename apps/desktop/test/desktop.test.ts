@@ -98,8 +98,8 @@ describe('sign-in through the system browser', () => {
     expect(state.device?.deviceLabel).toBe("David's MacBook");
 
     // The one secret is in the vault and nowhere else. The file on disk holds
-    // identifiers only, and a grep over it finds nothing. The rotating credential the
-    // grant still carries for desktop 1.0.12 is not stored at all since wave 3b.
+    // identifiers only, and a grep over it finds nothing. There is no second
+    // credential to store: the rotating one went with migration 0021.
     expect(mac.vault.entries.has(DEVICE_SECRET_ACCOUNT)).toBe(true);
     expect(mac.vault.entries.has(REFRESH_CREDENTIAL_ACCOUNT)).toBe(false);
     const onDisk = await readFile(join(mac.directory, DEVICE_FILE), 'utf8');
@@ -107,37 +107,20 @@ describe('sign-in through the system browser', () => {
     expect(JSON.stringify(state)).not.toContain(mac.vault.entries.get(DEVICE_SECRET_ACCOUNT) ?? 'x');
   });
 
-  it('signs in on a grant that carries no rotating credential at all', async () => {
-    // Lane W3-C2 stops minting it (migration 0021). This build must already accept
-    // the grant the server will send then, or the claim's strict parse refuses it.
+  it('signs in on a grant with no rotating credential, and keeps that account empty', async () => {
+    // Migration 0021 (lane W3-C2) stopped minting one, and `sessionGrantSchema` has no
+    // field for it, so the claim's strict parse would refuse a grant that carried one.
     const mac = await started();
-    mac.script.mintsRefreshCredential(false);
 
     const state = await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
 
     expect(state.screen).toBe('today');
     expect(state.device?.deviceLabel).toBe('A Mac');
-    expect(mac.script.grantedRefreshCredential()).toBeNull();
+    expect(Object.keys(state)).not.toContain('refreshCredential');
     expect(mac.vault.entries.has(DEVICE_SECRET_ACCOUNT)).toBe(true);
+    // The Keychain account the rotating credential used to live in stays empty, so a
+    // Mac restored from a backup that still has one is not read from.
     expect(mac.vault.entries.has(REFRESH_CREDENTIAL_ACCOUNT)).toBe(false);
-  });
-
-  it('signs in on a grant that still carries one, and writes it nowhere', async () => {
-    // Today's server, before C2. The field parses and is then dropped: the Keychain
-    // gets the device secret and nothing else, and no file holds the credential.
-    const mac = await started();
-
-    const state = await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
-
-    const carried = mac.script.grantedRefreshCredential();
-    expect(carried).not.toBeNull();
-    expect(state.screen).toBe('today');
-    expect(mac.vault.entries.has(DEVICE_SECRET_ACCOUNT)).toBe(true);
-    expect(mac.vault.entries.has(REFRESH_CREDENTIAL_ACCOUNT)).toBe(false);
-    expect([...mac.vault.entries.values()]).not.toContain(carried);
-    const onDisk = await readFile(join(mac.directory, DEVICE_FILE), 'utf8');
-    expect(onDisk).not.toContain(carried ?? 'x');
-    expect(JSON.stringify(state)).not.toContain(carried ?? 'x');
   });
 
   it('waits for the browser and gives up rather than hanging', async () => {

@@ -356,13 +356,12 @@ describe('scenario 31, since wave 2 (S4.1): a hold longer than seven days resume
     return due;
   }
 
-  /** What an older release wrote for a hold past seven days: the enrollment and its held step. */
-  async function asAnOlderReleaseLeftIt(enrollmentId: string): Promise<string> {
-    await database.session.query(
-      `UPDATE sequence_enrollments SET state = 'review_required', review_union_milliseconds = $3
-        WHERE workspace_id = $1 AND id = $2`,
-      [seeded.alpha.workspaceId, enrollmentId, 9 * DAY],
-    );
+  /**
+   * The step as a long hold leaves it: held for `long_hold_review`, overdue. (The
+   * enrollment state an older release also wrote, `review_required`, went with
+   * migration 0021; the step is what the scheduler reads either way.)
+   */
+  async function heldForLongReview(enrollmentId: string): Promise<string> {
     const { rows } = await database.session.query<{ id: string }>(
       `UPDATE step_executions
           SET state = 'held', hold_reason_code = 'long_hold_review', not_before = now() - interval '1 hour'
@@ -398,10 +397,10 @@ describe('scenario 31, since wave 2 (S4.1): a hold longer than seven days resume
     expect(again.ok && again.value.executionsShifted).toBe(0);
   });
 
-  it('takes an enrollment an older release left in review_required through the scheduler: woken, shifted once, active', async () => {
+  it('takes a step held for the long review through the scheduler: woken, shifted once, active', async () => {
     const enrollmentId = await enrollAlpha();
     const due = await nineDayPause(enrollmentId, { release: true });
-    const stepExecutionId = await asAnOlderReleaseLeftIt(enrollmentId);
+    const stepExecutionId = await heldForLongReview(enrollmentId);
 
     const now = await databaseNow(worker());
     const wakes = await listStepWakes(database.session, { now });
@@ -428,10 +427,10 @@ describe('scenario 31, since wave 2 (S4.1): a hold longer than seven days resume
     expect((await dueAtOf(stepExecutionId)) - Date.parse(due)).toBeGreaterThanOrEqual(8.9 * DAY);
   });
 
-  it('never resumes through a hold that is still open: the review_required row stays held, and is not woken', async () => {
+  it('never resumes through a hold that is still open: the step stays held, and is not woken', async () => {
     const enrollmentId = await enrollAlpha();
     await nineDayPause(enrollmentId, { release: false });
-    const stepExecutionId = await asAnOlderReleaseLeftIt(enrollmentId);
+    const stepExecutionId = await heldForLongReview(enrollmentId);
 
     const now = await databaseNow(worker());
     const wakes = await listStepWakes(database.session, { now });
@@ -444,13 +443,13 @@ describe('scenario 31, since wave 2 (S4.1): a hold longer than seven days resume
       sendHandoff: recordingSendHandoff(),
     });
     expect(outcome).toEqual({ kind: 'held', stepExecutionId, reasonCode: 'uncertain_reply' });
-    expect((await readEnrollment(worker(), { enrollmentId }))?.state).toBe('review_required');
+    expect((await readEnrollment(worker(), { enrollmentId }))?.state).toBe('active');
   });
 
   it('never resumes through what eligibility refuses once the holds are gone: the step is held for it', async () => {
     const enrollmentId = await enrollAlpha();
     await nineDayPause(enrollmentId, { release: true });
-    const stepExecutionId = await asAnOlderReleaseLeftIt(enrollmentId);
+    const stepExecutionId = await heldForLongReview(enrollmentId);
 
     const outcome = await runDueStepExecution(worker(), {
       stepExecutionId,

@@ -396,7 +396,6 @@ export async function claimSignIn(deps: AuthDeps, input: ClaimInput): Promise<Cl
         deviceSecret: device.deviceSecret,
         accessToken: session.accessToken,
         accessTokenExpiresAt: session.accessTokenExpiresAt,
-        refreshCredential: session.refreshCredential,
         reauthenticateAfter: session.reauthenticateAfter,
         supportedClientVersions,
       },

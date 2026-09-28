@@ -1,14 +1,13 @@
 import {
   addRouteCommandSchema,
   checkRouteCommandSchema,
-  confirmRouteCommandSchema,
   retireRouteCommandSchema,
   updateContactCommandSchema,
   verifyRouteCommandSchema,
 } from '@fss/contracts';
 import { listContacts, updateContact } from '@fss/domain/crm/contacts.ts';
 import { requestEmailRouteValidation } from '@fss/domain/crm/routeValidation.ts';
-import { addEmailRoute, addPhoneRoute, confirmPhoneRoute, retireRoute, verifyRoute } from '@fss/domain/crm/routes.ts';
+import { addEmailRoute, addPhoneRoute, retireRoute, verifyRoute } from '@fss/domain/crm/routes.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { contextForPrincipal, requirePrincipal, runRouteCommand } from './routeSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
@@ -91,13 +90,6 @@ export async function routeContacts(request: ApiRequest, options: RoutingOptions
           technicalValidation: body.technicalValidation,
           associationConfidence: body.associationConfidence,
         }),
-      );
-    case '/contacts/routes/confirm':
-      // A person confirms a phone number reaches the firm. The command records
-      // who and when (its receipt and its audit event); the route policy decides what
-      // the confirmation makes the route, and the version moves with it.
-      return await runRouteCommand(deps, confirmRouteCommandSchema, 'route.confirmed', async (repository, body) =>
-        await confirmPhoneRoute(repository, { routeId: body.routeId, routeVersion: body.routeVersion }),
       );
     case '/contacts/routes/check':
       // "Check again" on an address still being checked. It queues one more

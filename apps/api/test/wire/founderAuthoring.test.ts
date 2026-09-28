@@ -2,13 +2,13 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
 import { openHold, releaseHold } from '@fss/domain/policy/holds.ts';
 import { resumeEnrollment } from '@fss/domain/sequences/resume.ts';
-import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from '../support/authFixture.ts';
+import { createAuthFixture, type AuthFixture } from '../support/authFixture.ts';
 import { issueSessionFor } from '../support/sessionFixture.ts';
 import { createCrmBridge } from '../../../desktop/src/main/crmBridge.ts';
 import { createSequenceBridge } from '../../../desktop/src/main/sequenceBridge.ts';
 import { buildFirmWorkspaceView } from '../../../desktop/src/renderer/firmWorkspaceView.ts';
 import { sequenceScreen, suggestedPlan } from '../../../desktop/src/renderer/sequenceView.ts';
-import { desktopClient } from '../support/wireThrough.ts';
+import { DESKTOP_VERSION_UNDER_TEST, desktopClient } from '../support/wireThrough.ts';
 
 /**
  * A founder authors a sequence, starts a firm on it, and reviews a long hold before
@@ -59,7 +59,7 @@ describe('8.0au: a founder authors, enrols, confirms a number and reviews a resu
       api: desktopClient(fixture, adminToken),
       session: session(),
     });
-  const crm = () => createCrmBridge({ api: desktopClient(fixture, adminToken), clientVersion: CURRENT_CLIENT_VERSION, session: session() });
+  const crm = () => createCrmBridge({ api: desktopClient(fixture, adminToken), clientVersion: DESKTOP_VERSION_UNDER_TEST, session: session() });
 
   beforeAll(async () => {
     fixture = await createAuthFixture();

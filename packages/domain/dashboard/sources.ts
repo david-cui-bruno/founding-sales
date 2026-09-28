@@ -68,7 +68,8 @@ export interface EnrollmentFacts {
   readonly started: number;
   /** Live now, not inside the window: a state is a fact about this instant. */
   readonly active: number;
-  readonly reviewRequired: number;
+  /** Always 0: migration 0021 removed the `review_required` state. Kept for 1.0.14. */
+  readonly reviewRequired: 0;
   /** Ended inside the window, by `end_reason`. */
   readonly ended: readonly KeyedCount[];
   /** Step executions completed inside the window, by channel. */

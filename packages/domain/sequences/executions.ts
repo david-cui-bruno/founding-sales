@@ -83,8 +83,7 @@ export { rescheduleExecution, type RescheduleInput } from './shifts.ts';
  *   rechecks everything under the send gate and claims atomically or not at all;
  * * a held step is resumed first (`resumeEnrollment`): 4.3's shift by the union of the
  *   holds that just cleared, and then the fresh eligibility check in the same
- *   transaction (audit C05). So is any step of an enrollment an older release left in
- *   `review_required`: a long hold resumes on its own since wave 2 (S4.1).
+ *   transaction (audit C05). A long hold resumes on its own since wave 2 (S4.1).
  *
  * Two more answers follow from that: `completed`, when the fence says the step is
  * done, and a `handed_to_send` for a fence that already existed.
@@ -191,8 +190,8 @@ export async function runDueStepExecution(
   input: RunDueStepInput,
 ): Promise<StepRunOutcome> {
   // The enrollment is locked before the step, the order the resume command takes too
-  // (`lockStepWithEnrollment`): the scheduler resumes `review_required` enrollments
-  // since wave 2, and two orders on one enrollment could deadlock.
+  // (`lockStepWithEnrollment`): the scheduler resumes a held enrollment itself since
+  // wave 2, and two orders on one enrollment could deadlock.
   let loaded: StepExecutionRow | null = null;
   let enrollment: EnrollmentRow | null = null;
   if (input.stepExecutionId !== undefined) {
@@ -236,10 +235,9 @@ export async function runDueStepExecution(
     );
     execution = { ...execution, state: 'pending' };
   }
-  // An enrollment an older release sent to `review_required` resumes through the same
-  // path as a held step (wave 2, S4.1): its holds are asked again, and the work shifts
-  // once by the union and runs, or stays held by what is still open.
-  if (execution.state === 'held' || enrollment.state === 'review_required') {
+  // A held step resumes through 4.3's path (wave 2, S4.1): its holds are asked again,
+  // and the work shifts once by the union and runs, or stays held by what is still open.
+  if (execution.state === 'held') {
     const resumed = await resumeHeldStep(context, execution, input.now);
     if (resumed.kind === 'stopped') return resumed.outcome;
     execution = resumed.execution;

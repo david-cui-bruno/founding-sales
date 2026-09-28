@@ -23,7 +23,7 @@ import { seedSequences, type SeededSequences } from './support/sequenceFixtures.
  *
  * * nothing enrolled is 0 and 0, published, so the alarm is OK and never fires;
  * * each hold kind that counts, at each scope a hold attaches at (enrollment, firm,
- *   opportunity, owner, workspace), plus long-hold review and a step the worker held
+ *   opportunity, owner, workspace), plus a step the worker held
  *   with no hold row at all;
  * * each that does not: an administrator's pause, a Today delay, the send hand-off's
  *   hold when sending is switched off, and the four holds that clear with the clock;
@@ -283,17 +283,6 @@ describe('the holds that count', () => {
       held: 1,
     },
     {
-      name: 'long-hold review, which is the enrollment’s own state',
-      apply: async target => {
-        await database.session.query(
-          `UPDATE sequence_enrollments SET state = 'review_required', review_union_milliseconds = $3
-            WHERE workspace_id = $1 AND id = $2`,
-          [seeded.alpha.workspaceId, target.enrollmentId, 8 * 24 * 60 * 60 * 1000],
-        );
-      },
-      held: 1,
-    },
-    {
       name: 'a step the worker held with no hold row behind it (a missing route)',
       apply: async target => {
         await holdStep(target, 'route_missing');
@@ -488,16 +477,6 @@ describe('enrollments that are over', () => {
       reasonCode: 'restore_in_progress',
       blockedActionKinds: ['email_send', 'call_task', 'dial_authorization', 'enrollment_advance', 'research'],
     });
-    expect(await counts()).toEqual({ active: 1, held: 1 });
-  });
-
-  it('counts a long-hold review as active, because it is live and only a person ends it', async () => {
-    const target = await enrolledProspect('alpha');
-    await database.session.query(
-      `UPDATE sequence_enrollments SET state = 'review_required', review_union_milliseconds = 1
-        WHERE workspace_id = $1 AND id = $2`,
-      [seeded.alpha.workspaceId, target.enrollmentId],
-    );
     expect(await counts()).toEqual({ active: 1, held: 1 });
   });
 });

@@ -15,8 +15,9 @@ import { isRecoverableHoldReason } from '@fss/contracts';
  * the union is never larger than the sum, never smaller than the longest single hold,
  * and independent of the order the holds are given in.
  *
- * A union longer than seven days used to leave the enrollment `review_required` until a
- * person resumed it by hand (wave 2, S4.1). It no longer does: when the last hold
+ * A union longer than seven days used to leave the enrollment in a `review_required`
+ * state until a person resumed it by hand (wave 2, S4.1; the state went with migration
+ * 0021). It no longer does: when the last hold
  * clears, however long it ran, the work shifts once by the union and resumes after the
  * fresh eligibility check, which is where suppression, coverage, reply and window
  * safety live. How long it was held is shown on the Today card instead.

@@ -12,19 +12,21 @@ import { instant, membershipRoleSchema, uuid } from './foundationRows.ts';
  * codes"; `AUTH_REFUSAL_CODES` is that set for identity, and the API never invents a
  * string outside it. A caller may switch on the code; the message is for a person.
  *
- * **Five shapes carry a secret, and each carries a named one in a named direction.**
- * Responses: `sessionGrantSchema` (the claim) carries the access token, the rotating
- * refresh credential and the device secret, and is the only shape that ever carries
- * the device secret outwards — once, at registration; `sessionRenewalSchema` (a
- * renewal) carries the access token and the next refresh credential, never the device
- * secret; `deviceSessionSchema` (an open) carries the access token and nothing else,
- * because the credential it was opened with does not rotate. Requests:
- * `sessionRenewRequestSchema` carries the rotating refresh credential, and
- * `deviceSessionRequestSchema` carries the device secret — from wave 3b the Mac
- * presents the secret it has kept in its Keychain since the claim, in the JSON body
- * over TLS, exactly as it presents the refresh credential to renew. Everything that
- * describes a stored row — `deviceListSchema` below — has no field that could hold any
- * of them, and no shape in this file carries a secret in both directions.
+ * **Three shapes carry a secret, and each carries a named one in a named direction.**
+ * Responses: `sessionGrantSchema` (the claim) carries the access token and the device
+ * secret, and is the only shape that ever carries the device secret outwards — once, at
+ * registration; `deviceSessionSchema` (an open) carries the access token and nothing
+ * else, because the credential it was opened with does not rotate. The request
+ * `deviceSessionRequestSchema` carries the device secret — the Mac presents the secret
+ * it has kept in its Keychain since the claim, in the JSON body over TLS.
+ *
+ * There was a rotating refresh credential until migration 0021 (lane W3-C2), with a
+ * renewal request and a renewal response of its own. Nothing has renewed with it since
+ * desktop 1.0.12, the minimum is 1.0.14, and `device_refresh_credentials` is dropped;
+ * so `deviceSessionSchema` is the base shape now rather than a renewal with a field
+ * omitted. The wire field names are unchanged. Everything that describes a stored row —
+ * `deviceListSchema` below — has no field that could hold a secret, and no shape in
+ * this file carries one in both directions.
  */
 
 // ---------------------------------------------------------------------------
@@ -66,9 +68,12 @@ export const AUTH_REFUSAL_CODES = [
   'reauthentication_required',
   'membership_inactive',
   'device_revoked',
+  // An unknown device, a wrong device secret, or a device with no session at all:
+  // `openSession` answers all three with this one code on purpose. `credential_expired`
+  // and `credential_reuse` went with the rotating credential (lane W3-C2); the
+  // `sessions` end-reason CHECK still admits the historical `credential_reuse` value,
+  // because rows may hold it.
   'credential_unknown',
-  'credential_expired',
-  'credential_reuse',
   // Commands
   'command_payload_mismatch',
   'command_device_mismatch',
@@ -84,7 +89,7 @@ export type AuthRefusalCode = (typeof AUTH_REFUSAL_CODES)[number];
 // ---------------------------------------------------------------------------
 // Token shapes
 //
-// Both credentials name their workspace in the first field, so the server's lookup
+// The access token names its workspace in the first field, so the server's lookup
 // begins with `workspace_id` even though the caller is not yet authenticated
 // (specification 6; docs/decisions/g2-session-token-shape.md).
 // ---------------------------------------------------------------------------
@@ -93,18 +98,10 @@ const SECRET = '[A-Za-z0-9_-]{43}';
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
 
 export const ACCESS_TOKEN_PREFIX = 'fssa1';
-export const REFRESH_CREDENTIAL_PREFIX = 'fssr1';
 
 export const accessTokenSchema = z
   .string()
   .regex(new RegExp(`^${ACCESS_TOKEN_PREFIX}\\.${UUID}\\.${SECRET}$`), 'an FSS access token');
-
-export const refreshCredentialSchema = z
-  .string()
-  .regex(
-    new RegExp(`^${REFRESH_CREDENTIAL_PREFIX}\\.${UUID}\\.${UUID}\\.[1-9][0-9]{0,15}\\.${SECRET}$`),
-    'an FSS device refresh credential',
-  );
 
 /** The one-time secret the desktop app generates to collect the grant its browser earned. */
 const handoffSecretSchema = z.string().regex(new RegExp(`^${SECRET}$`), 'a sign-in handoff secret');
@@ -149,38 +146,11 @@ export const sessionGrantSchema = z.strictObject({
   deviceSecret: deviceSecretSchema,
   accessToken: accessTokenSchema,
   accessTokenExpiresAt: instant,
-  /**
-   * Optional from desktop 1.0.14 (lane W3-C1). Nothing on the Mac has read it since
-   * wave 3b — `POST /auth/session/open` takes the device secret, which does not
-   * rotate — but the strict parse still required it, so the server could not stop
-   * minting it. The server keeps sending it until lane W3-C2 (migration 0021) drops
-   * the rotating credential; this build accepts a grant with it or without it and
-   * stores it in neither case.
-   */
-  refreshCredential: refreshCredentialSchema.optional(),
   /** The 30-day boundary. After it, only a full Google sign-in works. */
   reauthenticateAfter: instant,
   supportedClientVersions: clientVersionRangeSchema,
 });
 export type SessionGrant = z.infer<typeof sessionGrantSchema>;
-
-export const sessionRenewRequestSchema = z.strictObject({
-  refreshCredential: refreshCredentialSchema,
-  clientVersion: semanticVersionSchema,
-});
-
-/**
- * A renewal returns no device secret: the Mac already has one and it does not rotate.
- *
- * `refreshCredential` is restated as required here on purpose: the claim's copy became
- * optional for desktop 1.0.14 (lane W3-C1), and renew must not loosen with it — the
- * server still serves `POST /auth/session/renew`, and always returns the next
- * credential, until lane W3-C2 retires the path.
- */
-export const sessionRenewalSchema = sessionGrantSchema
-  .omit({ deviceSecret: true })
-  .extend({ refreshCredential: refreshCredentialSchema });
-export type SessionRenewal = z.infer<typeof sessionRenewalSchema>;
 
 // ---------------------------------------------------------------------------
 // Opening a session from the device secret (wave 3b, audit item S7)
@@ -189,11 +159,7 @@ export type SessionRenewal = z.infer<typeof sessionRenewalSchema>;
 // and server-side only as a sha256 digest. Until wave 3b nothing ever asked for it
 // again, so a renewal that was lost — a Mac restored from a backup, a credential
 // overwritten by a second window — forced a full Google sign-in. `POST
-// /auth/session/open` asks for it, which makes it this Mac's long-lived credential.
-//
-// It is accepted BESIDE the rotating credential for one desktop release: 1.0.12 is
-// installed and renews, and wave 3's C lane retires `sessionRenewRequestSchema` once
-// the token build is confirmed installed.
+// /auth/session/open` asks for it, which makes it this Mac's one long-lived credential.
 // ---------------------------------------------------------------------------
 
 export const deviceSessionRequestSchema = z.strictObject({
@@ -205,11 +171,11 @@ export const deviceSessionRequestSchema = z.strictObject({
 export type DeviceSessionRequest = z.infer<typeof deviceSessionRequestSchema>;
 
 /**
- * What an open answers: a renewal without the rotating credential. There is nothing
- * to hand back — the Mac already holds the only credential this path uses, and it
- * does not rotate.
+ * What an open answers: the grant without the device secret. There is nothing to hand
+ * back — the Mac already holds the only credential this path uses, and it does not
+ * rotate.
  */
-export const deviceSessionSchema = sessionRenewalSchema.omit({ refreshCredential: true });
+export const deviceSessionSchema = sessionGrantSchema.omit({ deviceSecret: true });
 export type DeviceSession = z.infer<typeof deviceSessionSchema>;
 
 // ---------------------------------------------------------------------------

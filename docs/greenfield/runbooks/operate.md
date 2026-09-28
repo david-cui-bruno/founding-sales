@@ -7,7 +7,7 @@ The one page for running production. `docs/greenfield/release.md` holds the inva
 One workspace and one salesperson. Two processes run in AWS us-east-1, account `326255650484`, under the name prefix `fss-prod`: an API (`fss-prod-api`, two Fargate tasks) and a worker (`fss-prod-worker`, one), in the cluster `fss-prod-cluster`, behind a load balancer at `https://api.usecallie.com`. Their database is one Multi-AZ RDS PostgreSQL 16 instance, private — `publicly_accessible = false`, no NAT gateway, no bastion — so anything that must reach it runs as a one-off ECS task inside the VPC. The Mac app is an Electron build published to the CloudFront updates distribution, which every Mac reads at `releases/darwin-arm64/latest.json`. Sending is on.
 
 - **Four task definitions**, all from `infra/modules/cluster`: `fss-prod-api` and `fss-prod-worker`, which the services run and which carry `track_latest = true`, so Terraform reads CI's newest ACTIVE revision as its own; and the one-off `fss-prod-migration` and `fss-prod-operations`, which carry the worker image of the last apply.
-- **The schema is 19**, and every declared range is a strict `{N,N}` (`packages/domain/db/schemaRange.ts`), so no build straddles a schema change and a schema release is an outage on purpose. Migrations are forward-only and immutable once applied: the runner checksums each file's bytes.
+- **The applied schema is what the last migration recorded**, and every declared range is a strict `{N,N}` (`packages/domain/db/schemaRange.ts`), so no build straddles a schema change and a schema release is an outage on purpose. Read the number rather than trusting this page: `deploy.sh current fss-prod` prints the ranges each running service accepts, and `GET /diagnostics` prints `schema.appliedVersion`. Production recorded 0001 to 0019; 0020 (the postal address) and then 0021 (the compatibility cleanup) are the next two releases, each from the schema before it. Migrations are forward-only and immutable once applied: the runner checksums each file's bytes.
 - **Four Terraform roots** under `infra/roots/`: `production`, `production-google` (the Gmail push objects and the CI identity; planned and applied only by `greenfield-google.yml`, below), `rehearsal`, `rehearsal-registry`. Production and rehearsal have distinct state keys, roles and namespaces, and `infra/scripts/lib.sh` refuses at the call any rehearsal command naming `fss-prod`.
 - **Ten scripts and no others** in `infra/scripts/`: `deploy.sh`, `images.sh`, `lib.sh`, `offline-gate.sh`, `policy.sh`, `preflight.sh`, `record.sh`, `rehearsal.sh`, `rollback.sh`, `stop.sh`. Each one's header is its usage.
 - Metrics go to `FSS/fss-prod`, never the bare `FSS`. Plan from main only, at the commit being released. `infra/scripts/deploy.sh current fss-prod` is the first command of any manual release: it prints `api_image=`, `worker_image=`, `api_schema_range=`, `worker_schema_range=` — the four a plan is made from — and then the two services' database hosts.
@@ -20,13 +20,22 @@ Check that the run is green, that its summary names both new revisions, and that
 
 **The `manual` answer.** The workflow reads every commit between production's own commit and the images commit, and answers `manual` — a green run, a notice, nothing touched — when one of them changed `infra/**` (`infra/scripts/` included), a migration, `packages/domain/db/schemaRange.ts`, `migrationRunner.ts`, `queryable.ts`, `scripts/productionSmoke.mjs`, `.github/**`, or a path its list does not know. It also answers `manual` when a running image carries no commit tag, and it keeps answering `manual` until production runs images built after the change.
 
-The hand path is steps 3 to 5 of the next section without the stop and without `--schema-change`: the record, the plan, `images.sh promote`, the apply, `deploy.sh release`, the smoke. Release the protected change that way, then the first app merge after it the same way; from the merge after that, CI takes over again.
+The hand path is steps 1, 4, 5 and 6 of the next section without the rehearsal, the preflight, the stop or `--schema-change`: pin the digests, the record, the plan, `images.sh promote`, the apply, `deploy.sh release`, the smoke. Release the protected change that way, then the first app merge after it the same way; from the merge after that, CI takes over again.
 
 ## A schema or infrastructure release
 
-Rehearse, then stop, apply, deploy, smoke — with the admin profile, from a checkout of main at the release commit.
+Pin, rehearse, preflight, stop, apply, deploy, smoke — with the admin profile, from a checkout of main at the release commit. **Every variable below is bound before it is used**, which is what step 1 is for: `$worker_digest` does not exist until `images.sh pin` has written it, so nothing earlier than step 1 may name it.
 
-**1. Read-only first.** `infra/scripts/policy.sh check fss-prod-deploy fss-prod`, and for a migration `infra/scripts/preflight.sh infra/roots/production fss-prod <migration> --worker-digest "$worker_digest"`, which counts inside a rolled-back READ ONLY transaction while both services still run and exits 3 when the migration would refuse.
+**1. Pin the digests, and check the role read-only.** `images.sh pin` resolves the release commit's published images and writes the five names every later step uses; `policy.sh check` proves the deploy role can do what the release needs and writes nothing.
+
+```bash
+export GITHUB_REPOSITORY=david-cui-bruno/founding-sales
+export RELEASE_COMMIT="$(git rev-parse HEAD)"
+mkdir -p /tmp/fss-ci
+infra/scripts/images.sh pin "$RELEASE_COMMIT" /tmp/fss-ci/image-pin.json > /tmp/fss-ci/pin.env
+. /tmp/fss-ci/pin.env   # api_digest worker_digest images_run_id images_commit gate_run_id
+infra/scripts/policy.sh check fss-prod-deploy fss-prod
+```
 
 **2. The rehearsal**, dispatch only, in its own `fss-rh-<suffix>` namespace:
 
@@ -38,12 +47,19 @@ gh workflow run greenfield-release.yml --ref main -f mode=schema -f stage=full \
 
 `stage` is `plan`, `create`, `deploy`, `full` or `teardown`; each of the first four runs everything before it, and one is worth running only once the one before it passed. About 45 minutes at `full`. An app-only or desktop-only release needs no rehearsal.
 
-**3. The record, before the plan.** The worker admits a send only while a stored record names its own digest, so a put after the rollout leaves every worker task that starts during it without one.
+**3. The preflight, on production, while both services are still running.** A migration's own counts, inside a rolled-back READ ONLY transaction, on a one-off task of the operations definition with **this release's** worker image. It exits 3 when the migration would refuse, so the chain stops here rather than with both services at zero. It runs *after* the rehearsal and *before* the stop, and only a migration has one.
 
 ```bash
-export GITHUB_REPOSITORY=david-cui-bruno/founding-sales
-infra/scripts/images.sh pin "$(git rev-parse HEAD)" /tmp/fss-ci/image-pin.json > /tmp/fss-ci/pin.env
-. /tmp/fss-ci/pin.env   # api_digest worker_digest images_run_id images_commit gate_run_id
+infra/scripts/preflight.sh infra/roots/production fss-prod 0021 --worker-digest "$worker_digest"
+```
+
+The report lands in the reports directory as `schema-preflight-0021.txt` and on stdout in full. For 0021 it must say `migration=21 schema=20 applicable=true refuses=false`: the preflight of 0021 counts a **schema-20** database — before it the release is not this one, after it 0021 has already run — and `refuses=true` means the migration would raise `FS021`. Do not release it then: take the blocking counts (`review_required_enrollments`, with the ids) to the owner and amend the migration before it is applied anywhere. The counts under `destroyed` are reported, not blocking.
+
+**0021 has one check the database cannot make.** It is only safe because no desktop older than 1.0.14 is in use, and no row says which build is installed. The report says so (`installed_client_check=by_hand:…`, which lists what each registered Mac last told the server — evidence, not proof). **Confirm 1.0.14 on David's Mac by hand before the stop.**
+
+**4. The record, before the plan.** The worker admits a send only while a stored record names its own digest, so a put after the rollout leaves every worker task that starts during it without one.
+
+```bash
 infra/scripts/record.sh from-ci "$gate_run_id" "$images_commit" "$api_digest" "$worker_digest" \
   --images-run "$images_run_id" --out /tmp/fss-ci/release-record.json
 infra/scripts/record.sh put infra/roots/production fss-prod \
@@ -51,25 +67,31 @@ infra/scripts/record.sh put infra/roots/production fss-prod \
   --release-record /tmp/fss-ci/release-record.json
 ```
 
-**4. Plan, promote, stop, apply, deploy.** An infrastructure change that moves no image plans from what production runs, and nothing else:
+**5. Plan, promote, stop, apply, deploy.** An infrastructure change that moves no image plans from what production runs, and nothing else:
 
 ```bash
 (cd infra/roots/production && terraform plan -out=production.tfplan \
    $(../../scripts/deploy.sh current fss-prod --var-flags))
 ```
 
-A schema release plans with its own four values instead — the release's two digests, against the `fss-prod-api` and `fss-prod-worker` references `terraform output repository_urls` prints, and the two ranges read from the source rather than typed:
+A schema release plans with its own four values instead — the release's two digests, against the `fss-prod-api` and `fss-prod-worker` references `terraform output repository_urls` prints, and the two ranges **read from the source rather than typed**, because a typed number is how a release ends up declaring the schema it is leaving:
 
 ```bash
-node --experimental-transform-types --disable-warning=ExperimentalWarning --input-type=module -e "
-  const m = await import('./packages/domain/db/schemaRange.ts');
-  console.log('api', m.API_SCHEMA_RANGE, 'worker', m.WORKER_SCHEMA_RANGE);
-"
+read -r api_range worker_range <<<"$(node --experimental-transform-types --disable-warning=ExperimentalWarning --input-type=module -e '
+  const m = await import("./packages/domain/db/schemaRange.ts");
+  const r = n => `{min=${n.minimum},max=${n.maximum}}`;
+  console.log(r(m.API_SCHEMA_RANGE), r(m.WORKER_SCHEMA_RANGE));
+')"
+echo "$api_range $worker_range"   # the 0021 release: {min=21,max=21} {min=21,max=21}
 (cd infra/roots/production && terraform plan -out=production.tfplan \
    -var="api_image=<fss-prod-api repository>@$api_digest" \
    -var="worker_image=<fss-prod-worker repository>@$worker_digest" \
-   -var='api_schema_range={min=19,max=19}' -var='worker_schema_range={min=19,max=19}')
+   -var="api_schema_range=$api_range" -var="worker_schema_range=$worker_range")
 ```
+
+Both `-var=` values stay quoted, and `read` is what binds them: an unquoted `{min=21,max=21}` is brace-expanded by the shell into two words and the plan is given `min=21` as a range.
+
+The two ranges must be the schema the release is **going to**, never the one it is leaving: for 0021 that is `{min=21,max=21}` over a database still at 20. The previous release's images declare `{20,20}` and refuse schema 21 at startup, which is why nothing of theirs may be running while the migration is applied.
 
 Read the plan. It must show no change to an ECR repository, and for a schema release exactly the four task definitions replaced and the two services re-pointed. Then:
 
@@ -83,9 +105,9 @@ infra/scripts/deploy.sh release infra/roots/production fss-prod --schema-change 
   --release-record /tmp/fss-ci/release-record.json
 ```
 
-`--compare` is the last check that no CI deploy landed since the plan; a schema release passes `--allow-digest-change` because its images are new on purpose, and an infrastructure release does not. The stop takes the API to zero first, then the worker, each waited on and read back at zero; the apply cannot restart them (`ignore_changes = [desired_count]`); `--schema-change` refuses unless both are still at zero, then migrates, ensures the database users, verifies, starts the worker and then the API, and reads the record back, which must answer `existing`. An infrastructure change that moves no migration takes neither the stop nor the flag. Read both commands first with `FSS_REHEARSAL_DRY_RUN=1`, which prints every call and makes none.
+`--compare` is the last check that no CI deploy landed since the plan; a schema release passes `--allow-digest-change` because its images are new on purpose, and an infrastructure release does not. The stop takes the API to zero first, then the worker, each waited on and read back at zero; the apply cannot restart them (`ignore_changes = [desired_count]`); `--schema-change` refuses unless both are still at zero, then migrates — this is the moment 0021 is applied, with nothing of the old images running — ensures the database users, verifies, starts the worker and then the API, and reads the record back, which must answer `existing`. An infrastructure change that moves no migration takes neither the stop nor the flag. Read both commands first with `FSS_REHEARSAL_DRY_RUN=1`, which prints every call and makes none.
 
-**5. Smoke.**
+**6. Smoke.**
 
 ```bash
 AGE=$(aws cloudwatch get-metric-statistics --namespace FSS/fss-prod \
@@ -123,7 +145,7 @@ aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION" \
 
 ## Sign-in and devices
 
-**Two credentials are accepted at once, for one desktop release.** A Mac may renew with the rotating refresh credential (`POST /auth/session/renew`, which desktop 1.0.12 uses) or open a session with the long-lived device secret it has held in its Keychain since it was claimed (`POST /auth/session/open`, wave 3b). Opening does not rotate anything, so a renewal lost to a restore or an overwrite no longer costs a full Google sign-in — **but only once the token desktop build is installed**: 1.0.12 never calls open, so until it is replaced a lost renewal still means a full Google sign-in. Presenting a generation spent before an open is not reuse and revokes nothing. **Sign-out now revokes the device**: the `devices` row goes `revoked`, every active session it held ends `signed_out`, and the next sign-in registers a new device — a secret the Mac has forgotten must be dead at the server too, and a device carrying a `signed_out` session from before this release is revoked the first time it tries to open or to renew. `GET /devices` lists this workspace's Macs and `POST /devices/revoke {"deviceId"}` takes one away, audited as `auth.device_revoked`; any active member may call both, and revoking one's own Mac is a sign-out. Lane W3-C retires the rotating credential once the build that opens is confirmed installed on David's Mac — not before, or the installed build has nothing to renew with.
+**One credential.** A Mac opens a session with the long-lived device secret it has held in its Keychain since it was claimed (`POST /auth/session/open`, wave 3b). Opening does not rotate anything, so a session lost to a restore or an overwrite does not cost a full Google sign-in. The rotating refresh credential and `POST /auth/session/renew` went with migration 0021: that path is not served, `device_refresh_credentials` is dropped, and `credential_reuse` and `credential_expired` are no longer refusal codes a Mac can be told (`credential_unknown` covers an unknown device, a wrong secret and a device with no session — deliberately one answer). **The client minimum is 1.0.14** from that release: an older build reads routes and fields this server no longer has. It is refused every sign-in, every session it tries to open and every *receipted* command — the ones that carry a `clientVersion` in their body — and may read the upgrade instruction at `GET /auth/client-version`, which needs no session at all. Two mutations are not gated on the version, because neither carries one: while an old Mac still holds a live access token it can `POST /auth/sign-out` and `POST /devices/revoke`. That is deliberate — a Mac that cannot be used must still be able to give up its session and be taken away — and it is bounded by the access session's hour and the 30-day boundary, after which it cannot open another. **Sign-out revokes the device**: the `devices` row goes `revoked`, every active session it held ends `signed_out`, and the next sign-in registers a new device — a secret the Mac has forgotten must be dead at the server too, and a device carrying a `signed_out` session from before wave 3b is revoked the first time it tries to open. `GET /devices` lists this workspace's Macs and `POST /devices/revoke {"deviceId"}` takes one away, audited as `auth.device_revoked`; any active member may call both, and revoking one's own Mac is a sign-out.
 
 ## The Google root
 

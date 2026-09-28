@@ -122,7 +122,6 @@ describe('the sequence, template and enrollment routes', () => {
       '/sequences/create',
       '/sequences/versions/publish',
       '/templates/create',
-      '/templates/approve',
       '/enrollments/enroll',
     ]) {
       expect((await post(path, null, command())).status, path).toBe(401);
@@ -130,7 +129,10 @@ describe('the sequence, template and enrollment routes', () => {
   });
 
   it('refuses an approval whose body breaks a rule, and says which rules', async () => {
-    const created = await post(
+    // Save and approve in one command: `/templates/approve` went with the 1.0.14
+    // minimum (lane W3-C2), so a refused approval is a refused save and nothing is
+    // written.
+    const approved = await post(
       '/templates/create',
       adminToken,
       command({
@@ -141,12 +143,9 @@ describe('the sequence, template and enrollment routes', () => {
         body: `${SENDING_STOP_LINE}\n\nAnd a postscript after it.`,
         footerSignOff: SIGN_OFF,
         requiredVariables: [],
+        approve: true,
       }),
     );
-    expect(created.status).toBe(200);
-    const badId = String(resultOf(created)['id']);
-
-    const approved = await post('/templates/approve', adminToken, command({ templateVersionId: badId }));
     expect(approved.status).toBe(409);
     expect(String(approved.body['reason'] ?? '')).toContain('template_unapproved');
     expect(String(approved.body['reason'] ?? '')).toContain('template_footer_missing');
@@ -188,18 +187,11 @@ describe('the sequence, template and enrollment routes', () => {
     expect(refused.status).toBe(409);
     expect(refused.body['reason']).toBe('admin_only');
 
-    const created = await post('/templates/create', adminToken, command(payload));
+    const created = await post('/templates/create', adminToken, command({ ...payload, approve: true }));
     expect(created.status).toBe(200);
     templateVersionId = String(resultOf(created)['id']);
-
-    const approved = await post(
-      '/templates/approve',
-      adminToken,
-      command({ templateVersionId }),
-    );
-    expect(approved.status).toBe(200);
-    expect(resultOf(approved)['approvedAt']).not.toBeNull();
-    expect(resultOf(approved)['warnings']).toEqual([]);
+    expect(resultOf(created)['approvedAt']).not.toBeNull();
+    expect(resultOf(created)['warnings']).toEqual([]);
   });
 
   it('approves a template past the copy limits and answers its warnings', async () => {
@@ -212,17 +204,16 @@ describe('the sequence, template and enrollment routes', () => {
         body: `${'Word '.repeat(90)}See https://one.example.test and https://two.example.test.\n\n${SIGN_OFF}\n${SENDING_STOP_LINE}`,
         footerSignOff: SIGN_OFF,
         requiredVariables: [],
+        approve: true,
       }),
     );
     expect(created.status).toBe(200);
     const expected = ['template_body_multiple_urls', 'template_body_too_long', 'template_pricing_or_guarantee_language'];
-    expect(templateCommandResultSchema.parse(resultOf(created)).warnings.sort()).toEqual(expected);
-
-    const approved = await post('/templates/approve', adminToken, command({ templateVersionId: String(resultOf(created)['id']) }));
-    expect(approved.status).toBe(200);
-    const result = templateCommandResultSchema.parse(resultOf(approved));
-    expect(result.approvedAt).not.toBeNull();
+    const result = templateCommandResultSchema.parse(resultOf(created));
+    // The copy rules never refuse: every accepted answer carries them as warnings, and
+    // the approval went through with all three of them.
     expect(result.warnings.sort()).toEqual(expected);
+    expect(result.approvedAt).not.toBeNull();
   });
 
   it('publishes a sequence version and refuses a salesperson who tries', async () => {

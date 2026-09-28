@@ -20,25 +20,23 @@ import { CLOCK_CLEARING_HOLDS } from './executions.ts';
  * never fires on an empty system.
  *
  * **Active** is every live enrollment: `ended_at IS NULL`, which the database ties to
- * the states `active` and `review_required` (`sequence_enrollments_live_has_no_end`).
- * Completed and stopped enrollments are over and are not counted. The denominator and
+ * the state `active` (`sequence_enrollments_live_has_no_end`, narrowed by migration
+ * 0021). Completed and stopped enrollments are over and are not counted. The denominator and
  * the numerator are the same population, so the fraction cannot exceed one.
  *
  * **Held** is every live enrollment whose next work is blocked, right now, by a hold
  * nobody chose. An enrollment is held when any of these is true:
  *
- *   1. it is `review_required` — the long-hold review an older release wrote, which the
- *      scheduler now resumes on its own once the holds clear (wave 2, S4.1);
- *   2. one of its step executions is `held` with a counted reason — what the worker
+ *   1. one of its step executions is `held` with a counted reason — what the worker
  *      concluded the last time it tried the step, including the reasons that have no
  *      `active_holds` row at all (a missing route, an unapproved template, an owner
  *      with no connected mailbox);
- *   3. an open `active_holds` row with a counted reason applies to it — scoped to the
+ *   2. an open `active_holds` row with a counted reason applies to it — scoped to the
  *      workspace, its firm, its opportunity, its owner or itself, which are the scopes
  *      `holdSource` and `holdsAffectingEnrollment` apply — and blocks the action kind
  *      of its unfinished step or `enrollment_advance`, which blocks every channel.
  *
- * The third is why this reads holds and not only step states. A step is held only
+ * The second is why this reads holds and not only step states. A step is held only
  * when it comes due and the worker tries it, and a cadence spends most of its life
  * waiting for a step days away, so a gauge over step states alone would call a
  * workspace under a restore hold "mostly running" until each step's day arrived.
@@ -81,7 +79,7 @@ export const EXPECTED_HOLD_REASONS: readonly HoldReasonCode[] = Object.freeze(
 );
 
 export interface EnrollmentCounts {
-  /** Live enrollments: `active` and `review_required`, over every workspace. */
+  /** Live enrollments: `active`, over every workspace. */
   readonly active: number;
   /** Live enrollments whose next work is blocked by a counted hold. */
   readonly held: number;
@@ -101,8 +99,7 @@ export async function countEnrollments(db: Queryable): Promise<EnrollmentCounts>
     `SELECT count(*)::text AS active,
             count(*) FILTER (WHERE live.held)::text AS held
        FROM (
-         SELECT n.state = 'review_required'
-                OR EXISTS (
+         SELECT EXISTS (
                      SELECT 1
                        FROM step_executions e
                       WHERE e.workspace_id = n.workspace_id

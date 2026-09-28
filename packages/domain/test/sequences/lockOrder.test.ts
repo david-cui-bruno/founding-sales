@@ -17,8 +17,8 @@ import { seedSequences, type SeededSequences } from './support/sequenceFixtures.
 /**
  * One lock order for an enrollment and its steps (wave 2 batch review, P1).
  *
- * The scheduler resumes a `review_required` enrollment since wave 2 (S4.1), and the
- * desktop's resume command still resumes one by hand. The command locks the
+ * The scheduler resumes a held enrollment itself since wave 2 (S4.1), and the Today
+ * pause's Resume resumes one on request. The command locks the
  * enrollment and then its unfinished steps; the scheduler locked the step and then the
  * enrollment. Two orders on one enrollment can deadlock, so every path now takes the
  * enrollment first (`lockStepWithEnrollment`).
@@ -77,10 +77,10 @@ async function clearEnrollments(): Promise<void> {
 }
 
 /**
- * An enrollment as an older release left it: a nine-day firm pause, now released, the
- * enrollment `review_required` and its step held for `long_hold_review`.
+ * An enrollment out of a long hold: a nine-day firm pause, now released, its step still
+ * held for `long_hold_review` and overdue.
  */
-async function reviewRequiredEnrollment(): Promise<{ enrollmentId: string; stepExecutionId: string }> {
+async function heldEnrollment(): Promise<{ enrollmentId: string; stepExecutionId: string }> {
   const enrolled = await enrollContact(salesperson(database.session), {
     sequenceVersionId: sequences.alpha.publishedVersionId,
     opportunityId: crm.alpha.opportunityId,
@@ -111,11 +111,6 @@ async function reviewRequiredEnrollment(): Promise<{ enrollmentId: string; stepE
   await database.session.query("UPDATE active_holds SET started_at = now() - interval '9 days' WHERE id = $1", [hold]);
   await releaseHold(admin(), hold);
 
-  await database.session.query(
-    `UPDATE sequence_enrollments SET state = 'review_required', review_union_milliseconds = $3
-      WHERE workspace_id = $1 AND id = $2`,
-    [workspaceId, enrollmentId, 9 * DAY],
-  );
   const { rows } = await database.session.query<{ id: string }>(
     `UPDATE step_executions
         SET state = 'held', hold_reason_code = 'long_hold_review', not_before = now() - interval '1 hour'
@@ -177,7 +172,7 @@ afterEach(async () => {
 
 describe('the scheduler and the resume command take one lock order', () => {
   it('the scheduler waits for the enrollment and holds no step while it waits', async () => {
-    const { enrollmentId, stepExecutionId } = await reviewRequiredEnrollment();
+    const { enrollmentId, stepExecutionId } = await heldEnrollment();
     const now = await databaseNow(admin());
 
     // The resume command's first lock: the enrollment.
@@ -211,7 +206,7 @@ describe('the scheduler and the resume command take one lock order', () => {
   it('runs the scheduler and the resume command at once on one enrollment, and neither fails', async () => {
     for (let round = 0; round < 6; round += 1) {
       await clearEnrollments();
-      const { enrollmentId, stepExecutionId } = await reviewRequiredEnrollment();
+      const { enrollmentId, stepExecutionId } = await heldEnrollment();
       const now = await databaseNow(admin());
 
       const [ran, resumed] = await Promise.allSettled([

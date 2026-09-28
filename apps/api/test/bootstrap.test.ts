@@ -186,12 +186,10 @@ describe('the API bootstrap', () => {
     }
   });
 
-  it('is ready on a database inside the range, whatever its system_generations rows say', async () => {
-    // The generation pin is gone (lane W3-S8): a restored copy is made ready by the
-    // restore runbook, not refused by a generation comparison.
-    await database.session.query(
-      "INSERT INTO system_generations (generation, reason, established_at, notes) VALUES (9, 'initial', now(), 'W3-S8: never read')",
-    );
+  it('is ready on a database inside the range, and says nothing about a generation', async () => {
+    // The generation pin is gone (lane W3-S8) and so is the table it read (migration
+    // 0021): a restored copy is made ready by the restore runbook, not refused by a
+    // generation comparison.
     const report = await buildReadinessReport({ session: database.session });
     expect(report).toMatchObject({ ready: true, reason: null });
     expect(report).not.toHaveProperty('generation');

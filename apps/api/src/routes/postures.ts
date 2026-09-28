@@ -1,6 +1,5 @@
 import {
   allowCallingStatesCommandSchema,
-  recordStatePostureCommandSchema,
   revokeStatePostureCommandSchema,
   setCallingWindowCommandSchema,
 } from '@fss/contracts';
@@ -14,12 +13,7 @@ import {
   type PostureCitation,
 } from '@fss/domain/src/rules/statePosture.ts';
 import { currentCallingWindow, setCallingWindow } from '@fss/domain/policy/callingWindows.ts';
-import {
-  allowCallingStates,
-  listStatePostures,
-  recordStatePosture,
-  revokeStatePosture,
-} from '@fss/domain/policy/postures.ts';
+import { allowCallingStates, listStatePostures, revokeStatePosture } from '@fss/domain/policy/postures.ts';
 import type { RepositoryContext } from '@fss/domain/db/workspaceScope.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { policyRouteDeps, runPolicyCommand } from './dialSupport.ts';
@@ -38,7 +32,6 @@ export const POSTURE_PATHS: readonly string[] = [
   '/postures',
   '/postures/allow',
   '/postures/calling-window',
-  '/postures/record',
   '/postures/reference',
   '/postures/revoke',
 ];
@@ -110,8 +103,10 @@ export function postureReference(): Readonly<Record<string, unknown>> {
  *
  * The reads are open to any authenticated member. A salesperson who sees the
  * refusal `posture_missing` on a card should be able to see which states are listed.
- * A posture has no yearly expiry since wave 2 (S4.2); `/postures/allow` lists several
- * states at once, and `/postures/record` stays for desktops up to 1.0.11.
+ * A posture has no yearly expiry since wave 2 (S4.2), and `/postures/allow` lists
+ * several states at once. `/postures/record` — one state with its statements ticked one
+ * by one — went with the 1.0.14 minimum (lane W3-C2): no screen has made one since
+ * 1.0.12, and `/postures/allow` is what the form sends.
  */
 export async function routePostures(request: ApiRequest, options: RoutingOptions): Promise<RouteResult | null> {
   if (!request.path.startsWith('/postures')) return null;
@@ -148,24 +143,6 @@ export async function routePostures(request: ApiRequest, options: RoutingOptions
           await inSavepoint(repository, async () =>
             await allowCallingStates(repository, {
               states: body.states,
-              ...(body.note === undefined ? {} : { note: body.note }),
-            }),
-          ),
-      );
-    // Deprecated (remove after desktop 1.0.12): one state, statements ticked one by one.
-    case '/postures/record':
-      return await runPolicyCommand(
-        deps,
-        recordStatePostureCommandSchema,
-        'record_state_posture',
-        async (repository, body) =>
-          await inSavepoint(repository, async () =>
-            await recordStatePosture(repository, {
-              state: body.state,
-              effectiveFrom: body.effectiveFrom,
-              ...(body.effectiveTo === undefined ? {} : { effectiveTo: body.effectiveTo }),
-              ...(body.reviewAt === undefined ? {} : { reviewAt: body.reviewAt }),
-              confirmedStatements: body.confirmedStatements,
               ...(body.note === undefined ? {} : { note: body.note }),
             }),
           ),

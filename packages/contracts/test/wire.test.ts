@@ -11,7 +11,6 @@ import {
   mayMutate,
   publishedClientVersions,
   REMOVED_STEP_CHANNELS,
-  resumePreviewStepSchema,
   sequenceStepDtoSchema,
   sequenceVersionsResponseSchema,
   STEP_CHANNELS,
@@ -185,24 +184,5 @@ describe('a stored step of a removed channel is readable and not authorable (lan
     expect(sequenceStepDtoSchema.safeParse({ ...current, channel: 'linkedin' }).success).toBe(false);
     expect([...STEP_CHANNELS]).toEqual(['email', 'call_task']);
     expect([...REMOVED_STEP_CHANNELS]).toEqual(['linkedin']);
-  });
-
-  it('reviews a removed step as held for channel_removed, and only so', () => {
-    const step = {
-      stepExecutionId: '55555555-5555-4555-8555-555555555555',
-      ordinal: 2,
-      channel: 'removed',
-      removedChannel: 'linkedin',
-      state: 'held',
-      heldReason: 'channel_removed',
-      originalDueAt: '2026-09-20T13:00:00.000Z',
-      dueAt: '2026-09-20T13:00:00.000Z',
-      proposedDueAt: '2026-09-20T13:00:00.000Z',
-    };
-    expect(wireDrift(resumePreviewStepSchema, step)).toEqual([]);
-    expect(resumePreviewStepSchema.safeParse({ ...step, state: 'pending' }).success).toBe(false);
-    const { heldReason: _dropped, ...withoutReason } = step;
-    expect(resumePreviewStepSchema.safeParse(withoutReason).success).toBe(false);
-    expect(resumePreviewStepSchema.safeParse({ ...step, channel: 'linkedin_task' }).success).toBe(false);
   });
 });

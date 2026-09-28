@@ -4,10 +4,9 @@ import {
   publishedClientVersions,
   signInClaimRequestSchema,
   signInStartRequestSchema,
-  sessionRenewRequestSchema,
   type ClientVersionNotice,
 } from '@fss/contracts';
-import { authenticate, endSession, openSession, renewSession } from '../auth/sessions.ts';
+import { authenticate, endSession, openSession } from '../auth/sessions.ts';
 import { claimSignIn, handleCallback } from '../auth/signIn.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
@@ -18,9 +17,12 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  * Three of these are reachable without a session, and each one is reachable without
  * a session for a reason: the Mac has no session yet when it starts sign-in, Google's
  * browser redirect carries no session at all, and the client-version notice is what
- * an outdated client is allowed to read (Appendix G 40). `/auth/session/open` and
- * `/auth/session/renew` are the two more: each carries the Mac's own credential in its
- * body, which is what a session would have been.
+ * an outdated client is allowed to read (Appendix G 40). `/auth/session/open` is the
+ * fourth: it carries the Mac's own device secret in its body, which is what a session
+ * would have been.
+ *
+ * `/auth/session/renew` is gone (lane W3-C2). There is one credential now — the device
+ * secret, which does not rotate — and no installed build has renewed since 1.0.12.
  *
  * Every refusal leaves as a stable code from `AUTH_REFUSAL_CODES` with a fixed
  * sentence. Nothing here ever echoes back a state, a nonce, a code, a token or an
@@ -93,13 +95,7 @@ export async function routeAuth(request: ApiRequest, options: RoutingOptions): P
 
   // An unknown path under /auth/ is not found, not "wrong method": the router says
   // there is no such endpoint before it says anything about how to call one.
-  const POST_PATHS = [
-    '/auth/sign-in/start',
-    '/auth/sign-in/claim',
-    '/auth/session/open',
-    '/auth/session/renew',
-    '/auth/sign-out',
-  ];
+  const POST_PATHS = ['/auth/sign-in/start', '/auth/sign-in/claim', '/auth/session/open', '/auth/sign-out'];
   if (!POST_PATHS.includes(request.path)) {
     return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };
   }
@@ -141,28 +137,13 @@ export async function routeAuth(request: ApiRequest, options: RoutingOptions): P
     return { status: 200, body: outcome.grant };
   }
 
-  // The device secret's path (wave 3b). Beside `/auth/session/renew`, not instead of
-  // it: desktop 1.0.12 is installed and renews, and W3-C removes the rotating one once
-  // the build that opens is confirmed installed. The refusal mapping is renew's,
-  // because the two answer the same set of codes to the same client.
+  // The device secret's path (wave 3b), and since the 0021 release the only way a Mac
+  // gets a new access token short of a full Google sign-in.
   if (request.path === '/auth/session/open') {
     const parsed = deviceSessionRequestSchema.safeParse(request.body);
     if (!parsed.success) return { status: 400, body: redactError('malformed_body') };
     const outcome = await openSession(auth, parsed.data);
     if (!outcome.opened) {
-      return {
-        status: outcome.refusal === 'client_upgrade_required' ? 426 : REFUSAL_HTTP_STATUS,
-        body: { error: outcome.refusal, upgrade: notice(options) },
-      };
-    }
-    return { status: 200, body: outcome.grant };
-  }
-
-  if (request.path === '/auth/session/renew') {
-    const parsed = sessionRenewRequestSchema.safeParse(request.body);
-    if (!parsed.success) return { status: 400, body: redactError('malformed_body') };
-    const outcome = await renewSession(auth, parsed.data);
-    if (!outcome.renewed) {
       return {
         status: outcome.refusal === 'client_upgrade_required' ? 426 : REFUSAL_HTTP_STATUS,
         body: { error: outcome.refusal, upgrade: notice(options) },

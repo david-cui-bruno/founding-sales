@@ -2,14 +2,14 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ROUTE_ELIGIBILITY_POLICY_VERSION } from '../../../../packages/domain/crm/routePolicy.ts';
 import { HandlerRegistry } from '@fss/domain/jobs/handlerRegistry.ts';
 import type { MailDomainResolver, MailExchangeRecord } from '@fss/domain/crm/routeValidation.ts';
-import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from '../support/authFixture.ts';
+import { createAuthFixture, type AuthFixture } from '../support/authFixture.ts';
 import { issueSessionFor } from '../support/sessionFixture.ts';
 import { createCrmBridge } from '../../../desktop/src/main/crmBridge.ts';
 import { EMAIL_VALIDATION_TEXT, emailValidationStateOf } from '../../../desktop/src/renderer/firmWorkspaceView.ts';
 import { runOnce } from '../../../worker/src/runner/jobRunner.ts';
 import { runSchedulerPass } from '../../../worker/src/scheduler/schedulerPass.ts';
 import { routeValidateJobHandler, routeValidationSource } from '../../../worker/src/handlers/routeValidate.ts';
-import { desktopClient } from '../support/wireThrough.ts';
+import { DESKTOP_VERSION_UNDER_TEST, desktopClient } from '../support/wireThrough.ts';
 
 /**
  * An address imported or added from the Mac ends `usable` once its domain checks out
@@ -76,7 +76,7 @@ describe('8.0aw: an imported address is checked and ends usable (lane g90)', () 
   };
 
   const session = { state: async () => await Promise.resolve({ online: true, mayMutate: true, device: { role: 'admin' as const } }) };
-  const crm = () => createCrmBridge({ api: desktopClient(fixture, adminToken), clientVersion: CURRENT_CLIENT_VERSION, session });
+  const crm = () => createCrmBridge({ api: desktopClient(fixture, adminToken), clientVersion: DESKTOP_VERSION_UNDER_TEST, session });
   const worker = async () =>
     await runOnce(fixture.db, {
       registry: new HandlerRegistry().register(routeValidateJobHandler({ resolver: tableResolver(dns) })),

@@ -230,13 +230,17 @@ clear non-actionable state" is a unit test rather than a screenshot.
   The bridge sends the edit as the route's `patch`, and an emptied title as an explicit
   `null`, because in a patch an absent field means "unchanged" (lane g88; before it,
   every contact save from the Mac was refused 400).
-* **Confirm this number** (lane g88) — a `candidate` phone number on an assigned page
-  has the button. `POST /contacts/routes/confirm { routeKind: 'phone', routeId,
-  routeVersion }` records the person as the validation: `technical_validation = 'passed'`,
-  confidence 1, and `decideRouteEligibility` still decides. The version bumps, and the
-  receipt plus the `route.phone.confirmed` audit event record who confirmed it and when.
-  A version older than the page is refused `route_version_stale`, a failed number
-  `route_invalid`. An email address is not confirmed by hand. Its validation is
+* **A phone number needs no confirmation.** Since wave 2 (S4.4) a number somebody typed
+  is `usable` the moment it is added (`POST /contacts/routes/add` answers
+  `eligibility: 'usable'`, version 1), and a dial accepts one an older release stored as
+  a `candidate`. So there is no **Confirm this number** button and no
+  `POST /contacts/routes/confirm`: lane g88 added both, wave 2 made them unnecessary, and
+  the 1.0.14 minimum (lane W3-C2) retired the route and its command schema. The refusal
+  codes `route_version_stale` and `route_invalid` stay in `CRM_REFUSAL_CODES` for
+  `POST /contacts/routes/check`, which is the only command that takes a `routeVersion`
+  and the only one that answers either: a route that moved since the page was drawn, or
+  one whose validation has already failed. `/contacts/routes/retire` takes no version and
+  returns neither. An email address was never confirmed by hand. Its validation is
   deliverability, which a person cannot supply; the worker checks it (lane g90), and
   each address says where that stands — **Checking…** with **Check again**
   (`POST /contacts/routes/check`), **Deliverable domain — usable**, or **Mail can’t

@@ -4,12 +4,11 @@ import { PROVISIONAL_GOOGLE_SUB_PREFIX, sessionGrantSchema, type SessionGrant } 
 import { decideSensitiveRead, recordSensitiveRead } from '../../src/auth/audit.ts';
 import { runCommand } from '../../src/auth/commands.ts';
 import { validateIdToken } from '../../src/auth/idToken.ts';
-import { authenticate, renewSession, type AuthenticatedPrincipal } from '../../src/auth/sessions.ts';
+import { authenticate, type AuthenticatedPrincipal } from '../../src/auth/sessions.ts';
 import { claimSignIn, handleCallback, startSignIn } from '../../src/auth/signIn.ts';
 import {
   canonicalJson,
   parseAccessToken,
-  parseRefreshCredential,
   payloadHashOf,
   sha256Hex,
 } from '../../src/auth/tokens.ts';
@@ -23,7 +22,6 @@ import {
   type AuthFixture,
   type SeededWorkspace,
 } from '../support/authFixture.ts';
-import { mintedGrant, type MintedGrant } from '../support/sessionFixture.ts';
 
 /**
  * The rest of specification 5: JWKS caching and rotation, the grant's shape, command
@@ -51,7 +49,7 @@ async function signIn(
   workspace: SeededWorkspace,
   member: { readonly googleSub: string; readonly email: string },
   options: { readonly deviceLabel?: string } = {},
-): Promise<MintedGrant> {
+): Promise<SessionGrant> {
   const started = await startSignIn(fixture.deps, {
     workspaceId: workspace.workspaceId,
     deviceLabel: options.deviceLabel ?? fixture.collidingDeviceLabel,
@@ -75,7 +73,7 @@ async function signIn(
     clientVersion: CURRENT_CLIENT_VERSION,
   });
   if (!claimed.claimed) throw new Error(`claim refused: ${claimed.refusal}`);
-  return mintedGrant(claimed.grant);
+  return claimed.grant;
 }
 
 async function principalOf(grant: SessionGrant): Promise<AuthenticatedPrincipal> {
@@ -90,18 +88,14 @@ describe('the sign-in grant', () => {
     expect(() => sessionGrantSchema.parse(grant)).not.toThrow();
     expect(grant.role).toBe('admin');
     expect(parseAccessToken(grant.accessToken)?.workspaceId).toBe(fixture.alpha.workspaceId);
-    expect(parseRefreshCredential(grant.refreshCredential)).toMatchObject({
-      workspaceId: fixture.alpha.workspaceId,
-      deviceId: grant.deviceId,
-      generation: 1,
-    });
+    // One credential, and the grant is the only shape that ever carries it outwards.
+    expect(Object.keys(grant)).not.toContain('refreshCredential');
   });
 
   it('stores only digests: no plaintext credential reaches any row', async () => {
     const grant = await signIn(fixture.alpha, fixture.alpha.salesperson);
     for (const [table, column] of [
       ['sessions', 'access_token_hash'],
-      ['device_refresh_credentials', 'secret_hash'],
       ['devices', 'secret_hash'],
     ] as const) {
       const { rows } = await fixture.db.query<{ value: string }>(
@@ -113,7 +107,7 @@ describe('the sign-in grant', () => {
     const dump = JSON.stringify(
       (await fixture.db.query('SELECT * FROM sessions WHERE workspace_id = $1', [grant.workspaceId])).rows,
     );
-    for (const secret of [grant.accessToken, grant.refreshCredential, grant.deviceSecret]) {
+    for (const secret of [grant.accessToken, grant.deviceSecret]) {
       expect(dump).not.toContain(secret);
     }
   });
@@ -380,17 +374,6 @@ describe('two workspaces with colliding identifiers', () => {
     expect(new Set(rows.map(row => row.workspace_id))).toEqual(
       new Set([inAlpha.workspaceId, inBeta.workspaceId]),
     );
-
-    // Beta's refresh credential cannot renew alpha's device: the credential names its
-    // own workspace, and the composite key means there is no row at the crossing.
-    const crossed = parseRefreshCredential(inBeta.refreshCredential);
-    expect(crossed).not.toBeNull();
-    if (crossed !== null) {
-      const forged = `fssr1.${inAlpha.workspaceId}.${crossed.deviceId}.${String(crossed.generation)}.${inBeta.refreshCredential.split('.')[4] ?? ''}`;
-      expect(await renewSession(fixture.deps, { refreshCredential: forged, clientVersion: CURRENT_CLIENT_VERSION })).toEqual(
-        { renewed: false, refusal: 'credential_unknown' },
-      );
-    }
   });
 });
 

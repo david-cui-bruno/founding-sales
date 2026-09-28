@@ -32,8 +32,7 @@ export interface GoogleOidcConfig {
 export interface SessionPolicy {
   /** "about one hour" (5.3). */
   readonly accessSessionSeconds: number;
-  readonly refreshCredentialSeconds: number;
-  /** "Full Google sign-in recurs every 30 days" (5.3). Never extended by a renewal. */
+  /** "Full Google sign-in recurs every 30 days" (5.3). Never extended by an open. */
   readonly fullSignInSeconds: number;
   /** How long a started sign-in may wait in the browser before it is dead. */
   readonly authorizationRequestSeconds: number;

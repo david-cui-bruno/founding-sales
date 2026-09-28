@@ -4,11 +4,11 @@
 #
 #   infra/scripts/preflight.sh <root> <prefix> <migration> --worker-digest D
 #
-#   infra/scripts/preflight.sh infra/roots/production fss-prod 0019 --worker-digest "$worker"   # the coordinator
+#   infra/scripts/preflight.sh infra/roots/production fss-prod 0021 --worker-digest "$worker"   # the coordinator
 #
 # ## Why it runs before stop.sh
 #
-# A contract migration can refuse: 0019 raises FS019 and leaves the schema as it was when
+# A contract migration can refuse: 0021 raises FS021 and leaves the schema as it was when
 # data it would drop is still stored. Finding that out at step 2 of `deploy.sh release
 # --schema-change` means finding it out with both services stopped. This asks the same
 # question while they are still running, and exits 3 when the migration would refuse, so
@@ -19,7 +19,7 @@
 # `fss admin schema-preflight <migration>` counts inside a READ ONLY transaction it rolls
 # back, on a one-off task of the operations definition, as the runtime identity, through
 # lib.sh's release_run_task and its guards; the answer is read back out of the log stream.
-# The command exists only for a migration the tool knows (`0019` and `0020` today); any
+# The command exists only for a migration the tool knows (`0020` and `0021` today); any
 # other answers `command_unknown` from the tool, and this fails.
 #
 # The command is new in the release it belongs to, and before the apply the operations
@@ -34,17 +34,21 @@
 # ## What it prints
 #
 # The tool's JSON answer in full, and one summary line in the reports directory as
-# `schema-preflight-<migration>.txt`: the schema version, `refuses`, and each count under
-# `counts.blocking`. `refuses=true` means the migration would refuse: do not release it;
+# `schema-preflight-<migration>.txt`: the migration the answer is about, whether it
+# applied to the database that was read, the schema version, `refuses`, and each count
+# under `counts.blocking`. The first three are checked before `refuses` is read at all: an
+# answer about another migration, or about a schema that migration does not count, fails
+# rather than passing as "nothing to refuse on". `refuses=true` means the migration would refuse: do not release it;
 # take the blocking counts to the owner, and amend the migration before it is applied
 # anywhere. A migration whose report carries more than that is named in PREFLIGHT_EXTRAS
-# below, which is how 0019's ten further fields survived this script replacing the one
-# lane W2-M wrote for it: the line it writes is what that one wrote, to the field. 0020
-# (lane W3-F) has seventeen of its own: the settings rows by key, the unsent fences to
-# recompose, the templates whose legacy footer block is deduped, the ids of anything that
-# will be held for repair rather than sent — which is *not* a blocker — and the ids of any
-# body that would not fit once the footer is composed, which is the only thing 0020
-# refuses on.
+# below. 0020 (lane W3-F) has seventeen of its own: the settings rows by key, the unsent
+# fences to recompose, the templates whose legacy footer block is deduped, the ids of
+# anything that will be held for repair rather than sent — which is *not* a blocker — and
+# the ids of any body that would not fit once the footer is composed, which is the only
+# thing 0020 refuses on. 0021 (lane W3-C2) has six: the ids of the enrollments still in
+# `review_required`, which are the only thing 0021 refuses on, the credential and
+# generation rows it will destroy without asking, and the one check the database cannot
+# make — which desktop build is installed, which the operator confirms by hand.
 #
 # Exit status: 0 when the migration would apply; 3 when it would refuse; 1 when anything
 # failed — the launch, the answer, or the deregistration of the preflight's own revision,
@@ -76,7 +80,7 @@ if rehearsal_dry_run; then
   exit 1
 fi
 if [[ ! "$MIGRATION" =~ ^[0-9]{4}$ ]]; then
-  echo "FAIL: '$MIGRATION' is not a migration number (four digits, as in packages/domain/db/migrations/0019_wave2_cleanup.sql)" >&2
+  echo "FAIL: '$MIGRATION' is not a migration number (four digits, as in packages/domain/db/migrations/0021_compat_cleanup.sql)" >&2
   exit 1
 fi
 if [[ ! "$WORKER_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
@@ -213,6 +217,30 @@ release_run_task \
 release_captured_report "$CAPTURE" "$REPORT_JSON" || exit 1
 cat "$REPORT_JSON"
 
+# The answer must be about the migration that was asked for, and about the schema that
+# migration counts — the one before it, because a preflight before that is not this
+# release's and after it the migration has already run. Without this a stale captured
+# report, or a tool answering about its neighbour, reads as `refuses=false` and the
+# release proceeds on a count of nothing (review of PR 305, P2-1).
+FSS_REPORT="$REPORT_JSON" FSS_MIGRATION="$MIGRATION" python3 - <<'GUARD' || exit 1
+# preflight-about: the answer names the migration asked for, the schema it counts, and
+# that it applied.
+import json, os, sys
+report = json.load(open(os.environ["FSS_REPORT"], encoding="utf-8"))
+asked = int(os.environ["FSS_MIGRATION"])
+wrong = []
+if report.get("applicable") is not True:
+    wrong.append("applicable=%s (wanted true)" % json.dumps(report.get("applicable")))
+if report.get("migration") != asked:
+    wrong.append("migration=%s (wanted %d)" % (json.dumps(report.get("migration")), asked))
+if report.get("schemaVersion") != asked - 1:
+    wrong.append("schema=%s (wanted %d)" % (json.dumps(report.get("schemaVersion")), asked - 1))
+if wrong:
+    print("FAIL: the preflight's answer is not about migration %04d on a schema-%d database: %s"
+          % (asked, asked - 1, "; ".join(wrong)), file=sys.stderr)
+    sys.exit(1)
+GUARD
+
 SUMMARY="$(FSS_REPORT="$REPORT_JSON" FSS_MIGRATION="$MIGRATION" python3 - <<'PY'
 # preflight-summary: the two fields and the blocking counts every migration reports, then
 # whatever PREFLIGHT_EXTRAS names for this one.
@@ -220,28 +248,6 @@ import json, os
 report = json.load(open(os.environ["FSS_REPORT"], encoding="utf-8"))
 counts = report.get("counts") or {}
 blocking = counts.get("blocking") or {}
-
-
-def extras_0019():
-    # Lane W2-M wrote these for 0019, and fss-0019-prepare.sh greps four of them out of
-    # the report. They are the vocabulary of 0019 alone, not of every migration.
-    destroyed = counts.get("destroyed") or {}
-    seed = destroyed.get("researchSeed") or {}
-    research_data = ("researchProviderLedger", "researchPages", "firmLocations", "researchFirmRuns", "researchSuggestions")
-    references = counts.get("reasonCodeReferences") or {}
-    relaxed = counts.get("relaxed") or {}
-    return [
-        ("research_seed_rows", sum(seed.values()) if seed else "unknown"),
-        ("research_data_rows", sum(blocking.get(key, 0) for key in research_data) if blocking else "unknown"),
-        ("record_merge_events_archived", counts.get("archivedMergeEvents", "unknown")),
-        ("direct_sent_days", destroyed.get("directSentDays", "unknown")),
-        ("guard_columns_changed", destroyed.get("guardColumnsChanged", "unknown")),
-        ("retired_setting_rows", destroyed.get("alertThresholdsRows", 0) + destroyed.get("clientVersionRangeRows", 0)),
-        ("domain_cap_references", references.get("domainCap", "unknown")),
-        ("dead_job_references", references.get("deadJob", "unknown")),
-        ("snoozes_with_placeholder_reason", relaxed.get("snoozesWithPlaceholderReason", "unknown")),
-        ("review_required_enrollments", counts.get("reviewRequiredEnrollments", "unknown")),
-    ]
 
 
 def extras_0020():
@@ -283,8 +289,38 @@ def extras_0020():
     ]
 
 
-PREFLIGHT_EXTRAS = {"0019": extras_0019, "0020": extras_0020}
-fields = [("schema", report.get("schemaVersion", "unknown")), ("refuses", str(report.get("refuses", "unknown")).lower())]
+def extras_0021():
+    # Lane W3-C2. 0021 refuses on one thing — an enrollment still in `review_required` —
+    # and destroys three sets of rows without asking, which are reported rather than
+    # blocking. The installed-build check is not a count: it is the question the database
+    # cannot answer, printed so that nobody assumes it was answered.
+    review = counts.get("reviewRequired") or {}
+    destroyed = counts.get("destroyed") or {}
+    installed = counts.get("installedClientCheck") or {}
+    seen = installed.get("clientVersionsSeen") or []
+
+    def names(values):
+        return ",".join(values) if values else "none"
+
+    return [
+        ("review_required_enrollments", names(review.get("enrollmentIds"))),
+        ("active_refresh_credentials", destroyed.get("activeRefreshCredentials", "unknown")),
+        ("refresh_credential_rows", destroyed.get("refreshCredentialRows", "unknown")),
+        ("devices_past_first_generation", destroyed.get("devicesPastFirstGeneration", "unknown")),
+        ("system_generation_rows", destroyed.get("systemGenerationRows", "unknown")),
+        ("installed_client_check",
+         "by_hand:" + (",".join("%s:%s" % (row.get("clientVersion") or "unknown", row.get("devices", "?"))
+                                for row in seen) or "no_active_devices")),
+    ]
+
+
+PREFLIGHT_EXTRAS = {"0020": extras_0020, "0021": extras_0021}
+fields = [
+    ("migration", report.get("migration", "unknown")),
+    ("applicable", str(report.get("applicable", "unknown")).lower()),
+    ("schema", report.get("schemaVersion", "unknown")),
+    ("refuses", str(report.get("refuses", "unknown")).lower()),
+]
 fields += [("blocking_" + key, value) for key, value in sorted(blocking.items())]
 fields += PREFLIGHT_EXTRAS.get(os.environ["FSS_MIGRATION"], list)()
 print(" ".join("%s=%s" % (key, value) for key, value in fields))

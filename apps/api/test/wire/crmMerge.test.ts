@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { mayMutate, mergeRefusalSchema, wireDrift } from '@fss/contracts';
 import { CONTAINER_CLIENT_VERSIONS } from '../../src/bootstrap/main.ts';
-import { createAuthFixture, CURRENT_CLIENT_VERSION, type AuthFixture } from '../support/authFixture.ts';
+import { createAuthFixture, type AuthFixture } from '../support/authFixture.ts';
 import { issueSessionFor } from '../support/sessionFixture.ts';
 import { seedFirm } from '../support/crmSeed.ts';
 import { conflictsOf, createCrmBridge } from '../../../desktop/src/main/crmBridge.ts';
@@ -43,7 +43,7 @@ describe('8.0aj: a refused merge opens the conflict screen', () => {
   const bridge = () =>
     createCrmBridge({
       api: desktopClient(fixture, adminToken),
-      clientVersion: CURRENT_CLIENT_VERSION,
+      clientVersion: DESKTOP_VERSION_UNDER_TEST,
       session: { state: async () => await Promise.resolve({ online: true, mayMutate: true, device: { role: 'admin' as const } }) },
     });
 

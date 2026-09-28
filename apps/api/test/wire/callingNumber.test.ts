@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   compareVersions,
   mayMutate,
-  publishedClientVersions,
   registerCallingIdentityCommandSchema,
 } from '@fss/contracts';
 import { CALLING_IDENTITY_PATHS } from '../../src/routes/callingIdentities.ts';
@@ -11,6 +10,7 @@ import { createAuthedClient } from '../../../desktop/src/main/authedClient.ts';
 import type { HttpAnswer } from '../../../desktop/src/main/apiClient.ts';
 import { CALLING_NUMBER_API_PATHS, createAdminBridge } from '../../../desktop/src/main/settingsBridge.ts';
 import { adminViewOf } from '../../../desktop/src/renderer/settingsView.ts';
+import { DESKTOP_VERSION_UNDER_TEST } from '../support/wireThrough.ts';
 
 /**
  * A salesperson can give Callie the number they call from (9.1; lane g60).
@@ -55,6 +55,11 @@ import { adminViewOf } from '../../../desktop/src/renderer/settingsView.ts';
  */
 
 const IDENTITY_ID = '66666666-6666-4666-8666-666666666666';
+/**
+ * When the calling-number control first shipped. The build under test is
+ * `DESKTOP_VERSION_UNDER_TEST` (1.0.14, the installed one); this records the line the
+ * minimum has to be at or above, which is what the last check in this file asserts.
+ */
 const FIRST_VERSION_WITH_THE_CONTROL = '1.0.2';
 
 const identity = (overrides: Record<string, unknown> = {}) => ({
@@ -91,7 +96,7 @@ function settingsWindow(role: 'admin' | 'salesperson' = 'admin') {
   const bridge = createAdminBridge({
     api: createAuthedClient({
       baseUrl: 'https://api.example.test/',
-      clientVersion: FIRST_VERSION_WITH_THE_CONTROL,
+      clientVersion: DESKTOP_VERSION_UNDER_TEST,
       accessToken: async () => await Promise.resolve({ token: 'token-value', generation: 0 }),
       send: async (url, init) => {
         const path = new URL(url).pathname;
@@ -147,10 +152,13 @@ describe('9.1: a salesperson gives Callie the number they call from (lane g60)',
   });
 
   it('is a build the deployed API accepts', () => {
-    expect(compareVersions(publishedClientVersions(CONTAINER_CLIENT_VERSIONS).maximum, FIRST_VERSION_WITH_THE_CONTROL)).toBeGreaterThanOrEqual(0);
-    expect(mayMutate(CONTAINER_CLIENT_VERSIONS, FIRST_VERSION_WITH_THE_CONTROL)).toBe(true);
+    // From the 0021 release the minimum is 1.0.14, so the question is not whether the
+    // build that first carried the calling-number control is admitted — it is not — but that the
+    // minimum admitted build is at or above it and may mutate.
+    expect(compareVersions(CONTAINER_CLIENT_VERSIONS.minimum, FIRST_VERSION_WITH_THE_CONTROL)).toBeGreaterThanOrEqual(0);
+    expect(mayMutate(CONTAINER_CLIENT_VERSIONS, CONTAINER_CLIENT_VERSIONS.minimum)).toBe(true);
     // The installed 1.0.1 keeps working until it takes the update.
-    expect(CONTAINER_CLIENT_VERSIONS.minimum).toBe('1.0.0');
+    expect(CONTAINER_CLIENT_VERSIONS.minimum).toBe('1.0.14');
   });
 
 });
