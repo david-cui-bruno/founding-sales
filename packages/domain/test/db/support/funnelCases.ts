@@ -145,8 +145,40 @@ export const FUNNEL_CONSTRAINT_CASES: readonly FunnelCase[] = [
     // half that would otherwise let a fact say "a person did this" and not say who.
     run: async f => await insert(f, { actorKind: 'admin', actorUserId: null }),
   },
+  // `funnel_facts_detail_is_object` is one constraint over two rules — the coded
+  // shape (`funnel_facts_detail_coded`) and the length bound — so it gets a case per
+  // way of breaking it. The database has to refuse each of these on its own, because
+  // `app_runtime` holds INSERT and `recordFunnelFact` is not the only way in.
   {
     constraint: 'funnel_facts_detail_is_object',
     run: async f => await insert(f, { detail: JSON.stringify(['not', 'an', 'object']) }),
+  },
+  {
+    constraint: 'funnel_facts_detail_is_object',
+    run: async f => await insert(f, { detail: JSON.stringify({ firm: { id: 'abc' } }) }),
+  },
+  {
+    constraint: 'funnel_facts_detail_is_object',
+    run: async f => await insert(f, { detail: JSON.stringify({ attempts: [1, 2] }) }),
+  },
+  {
+    constraint: 'funnel_facts_detail_is_object',
+    // A sentence. The whole reason the rule is in the database and not only in code.
+    run: async f => await insert(f, { detail: JSON.stringify({ note: 'call back Friday' }) }),
+  },
+  {
+    constraint: 'funnel_facts_detail_is_object',
+    run: async f => await insert(f, { detail: JSON.stringify({ code: 'a'.repeat(65) }) }),
+  },
+  {
+    constraint: 'funnel_facts_detail_is_object',
+    run: async f => await insert(f, { detail: JSON.stringify({ '1st': 'yes' }) }),
+  },
+  {
+    constraint: 'funnel_facts_detail_is_object',
+    run: async f =>
+      await insert(f, {
+        detail: JSON.stringify(Object.fromEntries(Array.from({ length: 33 }, (_, i) => [`k${String(i)}`, 1]))),
+      }),
   },
 ];

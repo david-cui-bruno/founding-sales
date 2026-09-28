@@ -206,6 +206,87 @@ describe('the funnel', () => {
       expect(rows[0]?.count).toBe('0');
     });
 
+    it('refuses a child with no firm, which the CHECK would refuse by aborting the transaction', async () => {
+      for (const child of [{ contactId: crm.alpha.contactId }, { opportunityId: crm.alpha.opportunityId }]) {
+        expect(
+          await recordFunnelFact(admin, {
+            kind: 'call.placed',
+            source: 'telephony',
+            dedupeKey: `orphan-${randomUUID()}`,
+            ...child,
+          }),
+          JSON.stringify(child),
+        ).toEqual({ recorded: false, reason: 'invalid_subject' });
+      }
+
+      // The point of refusing before the statement: the transaction is still usable.
+      await database.session.query('BEGIN');
+      expect(
+        await recordFunnelFact(admin, {
+          kind: 'call.placed',
+          source: 'telephony',
+          dedupeKey: `orphan-in-tx-${randomUUID()}`,
+          contactId: crm.alpha.contactId,
+        }),
+      ).toEqual({ recorded: false, reason: 'invalid_subject' });
+      const after = await recordFunnelFact(admin, {
+        kind: 'call.placed',
+        source: 'telephony',
+        dedupeKey: `after-orphan-${randomUUID()}`,
+        firmId: crm.alpha.firmId,
+      });
+      expect(after, 'the transaction survived the refusal').toMatchObject({ recorded: true });
+      await database.session.query('ROLLBACK');
+    });
+
+    it('refuses a detail that passes every value rule and is too large once serialized', async () => {
+      // Thirty-two keys of 64 characters with 64-character values: every value is a
+      // code, and `detail::text` would be far past the CHECK's 4 000.
+      const big = Object.fromEntries(
+        Array.from({ length: 32 }, (_, index) => [`k${String(index).padStart(2, '0')}${'x'.repeat(60)}`, 'v'.repeat(64)]),
+      );
+      await database.session.query('BEGIN');
+      expect(
+        await recordFunnelFact(admin, {
+          kind: 'offer.sent',
+          source: 'offers',
+          dedupeKey: `too-large-${randomUUID()}`,
+          detail: big,
+        }),
+      ).toEqual({ recorded: false, reason: 'invalid_detail' });
+      // No statement was issued, so the transaction is alive and the next one works.
+      const after = await recordFunnelFact(admin, {
+        kind: 'offer.sent',
+        source: 'offers',
+        dedupeKey: `after-too-large-${randomUUID()}`,
+        firmId: crm.alpha.firmId,
+      });
+      expect(after).toMatchObject({ recorded: true });
+      await database.session.query('ROLLBACK');
+    });
+
+    it('stores the validated copy, so an inherited toJSON cannot replace it with free text', async () => {
+      // `Object.entries` never sees a prototype's `toJSON`, but `JSON.stringify`
+      // would call it. The recorder serializes a plain copy built from the values it
+      // validated, so what is stored is what was checked.
+      const smuggler = Object.create({
+        toJSON: () => ({ note: 'Dana said to call back on Friday' }),
+      }) as Record<string, unknown>;
+      smuggler['assigned'] = true;
+      expect(JSON.stringify(smuggler)).toContain('Dana');
+
+      const key = `tojson-${randomUUID()}`;
+      expect(
+        await recordFunnelFact(admin, { kind: 'firm.researched', source: 'research', dedupeKey: key, detail: smuggler }),
+      ).toMatchObject({ recorded: true });
+
+      const { rows } = await database.session.query<{ detail: unknown }>(
+        'SELECT detail FROM funnel_facts WHERE workspace_id = $1 AND dedupe_key = $2',
+        [seeded.alpha.workspaceId, key],
+      );
+      expect(rows[0]?.detail).toEqual({ assigned: true });
+    });
+
     it('records a kind the v1 dictionary does not have, because the kind is open', async () => {
       const key = `open-kind-${randomUUID()}`;
       expect(isFunnelFactKind('widget.frobbed')).toBe(false);
@@ -303,6 +384,19 @@ describe('the funnel', () => {
 
       const past = await funnelFacts(admin, { from: '2026-10-01T00:00:00.000Z', to: '2026-10-02T00:00:00.000Z' }, WORKSPACE);
       expect(countFor(past.byKind, 'call.placed')).toBe(1);
+    });
+
+    it('is served by an index that leads with the window', async () => {
+      // The all-kind window read is the one `POST /dashboard` makes, so the window
+      // leads; `funnel_facts_by_kind` stays for the per-kind reads the later slices
+      // will make.
+      const { rows } = await database.session.query<{ indexname: string; indexdef: string }>(
+        "SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'funnel_facts' ORDER BY indexname",
+      );
+      const byName = new Map(rows.map(row => [row.indexname, row.indexdef]));
+      expect(byName.get('funnel_facts_by_window')).toContain('(workspace_id, occurred_at, kind)');
+      expect(byName.get('funnel_facts_by_kind')).toContain('(workspace_id, kind, occurred_at)');
+      expect(byName.get('funnel_facts_by_firm')).toContain('WHERE (firm_id IS NOT NULL)');
     });
 
     it('names kinds and never a firm', async () => {

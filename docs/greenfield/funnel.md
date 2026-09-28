@@ -22,12 +22,27 @@ be a name nothing could ever redact. Three rules keep that true:
 
 * `dedupe_key` matches `^[0-9a-zA-Z_:.-]{1,200}$`. Ids, colons, dots and dashes —
   enough for `<uuid>:<code>` and a provider's reference, and no space, so no name.
-* `detail` is bounded at 4 000 characters and checked to be an object by the
-  database, and `recordFunnelFact` narrows it further: a **flat** object, at most 32
-  keys, whose every value is a boolean, a finite number, null, or a string matching
-  `^[0-9a-zA-Z_:.-]{1,64}$` — an id or a code. No nesting, no arrays, no sentences.
-  `{ assigned: true, revision: 3, fit: 'yes' }` is a detail; `{ note: 'Dana said to
-  call back' }` is refused with `invalid_detail`.
+* `detail` is a **flat** object, at most 32 keys, whose every key matches
+  `^[a-zA-Z][0-9a-zA-Z_]{0,63}$` and every value is a boolean, a number, null, or a
+  string matching `^[0-9a-zA-Z_:.-]{1,64}$` — an id or a code. No nesting, no arrays,
+  no sentences, and `length(detail::text) <= 4000`. `{ assigned: true, revision: 3,
+  fit: 'yes' }` is a detail; `{ note: 'Dana said to call back' }` is not.
+
+  **The rule is enforced twice, and the database's copy is the load-bearing one.**
+  `funnel_facts_detail_coded(detail)`, an `IMMUTABLE STRICT` SQL function called from
+  the `funnel_facts_detail_is_object` CHECK, is what makes it true of a raw insert —
+  `app_runtime` holds INSERT on this table, and a rule that lived only in TypeScript
+  would be a rule a hand-written statement walks past. (A function inside a CHECK has
+  a precedent: `today_items_automated_is_due_work` calls `today_lane_of_kind`.)
+  `recordFunnelFact` checks the same rule *before* it inserts, and refuses
+  `invalid_detail`, so a bad detail never aborts the caller's transaction.
+
+  The recorder also serializes a **plain copy** built from the values it validated,
+  and bounds that string conservatively against the CHECK's 4 000 — PostgreSQL
+  renders `detail::text` with a space after each colon and comma, so the recorder
+  allows two characters per entry for it. Both matter: 32 long keys with long values
+  pass every per-value rule and serialize past the bound, and an object inheriting a
+  `toJSON` would otherwise store something no rule ever looked at.
 * Everything else is an id, a kind or a code.
 
 A fact is **not** the business record. The call is in `call_logs`, the message is in
@@ -64,8 +79,10 @@ expect rather than to lose the fact.
 ## One child id, never both
 
 A fact may name a contact **or** an opportunity, never both
-(`funnel_facts_one_child`), and `recordFunnelFact` refuses the pair with
-`invalid_subject` before the insert.
+(`funnel_facts_one_child`), and either one only alongside the firm it belongs to
+(`funnel_facts_firm_present_for_child`). `recordFunnelFact` refuses both shapes with
+`invalid_subject` before the insert, so neither reaches a CHECK that would take the
+caller's transaction down with it.
 
 This is a merge rule rather than a taste. `crm/merges.ts` moves contacts before
 opportunities, so a fact naming both would have its `firm_id` cascaded to the target

@@ -29,7 +29,11 @@ import {
  *
  * Two of those refusals are worth their own sentence.
  *
- * **`invalid_subject`: a contact and an opportunity together.** `crm/merges.ts`
+ * **`invalid_subject`: a contact and an opportunity together, or a child with no
+ * firm.** The second half is the plainer one: `funnel_facts_firm_present_for_child`
+ * would refuse it in the database and take the caller's transaction with it.
+ *
+ * The first half is the interesting one. `crm/merges.ts`
  * moves contacts before opportunities, so a fact naming both would have its
  * `firm_id` cascaded to the target by the contact triple while its opportunity
  * triple still pointed at the source firm, and the opportunity key would fail
@@ -78,31 +82,64 @@ export type FunnelFactOutcome =
 /** At most this many keys in `detail`. A fact is a count, not a document. */
 const MAX_DETAIL_KEYS = 32;
 
+/** `funnel_facts_detail_is_object`'s other half: `length(detail::text) <= 4000`. */
+const MAX_DETAIL_TEXT = 4000;
+
+type CodedValue = string | number | boolean | null;
+
 /**
- * A flat object of ids, codes, numbers, booleans and nulls, and nothing else.
+ * The validated `detail`, as a plain object and as the exact bytes to insert.
  *
- * `Object.entries` rather than a schema: the rule is small enough to read, and what
- * it refuses — an array, a nested object, a sentence — is exactly what a reader of
- * this file needs to see without following an import.
+ * Two things here are load-bearing and neither is obvious.
+ *
+ * **The copy, not the caller's object.** The values are validated one at a time and
+ * then put in a fresh object with `Object.fromEntries`, and it is *that* object
+ * which is serialized and inserted. A caller's object may inherit a `toJSON` from
+ * its prototype — `Object.entries` does not see it, but `JSON.stringify` would call
+ * it, and the string written would then be something no rule above ever looked at.
+ * The plain copy has `Object.prototype` and no `toJSON`, so what was validated is
+ * what is stored. (A `toJSON` as an *own* enumerable property is a function value
+ * and is refused outright by the type test below.)
+ *
+ * **The serialized size, not the key count.** The CHECK bounds
+ * `length(detail::text)`, which is what PostgreSQL renders, not what
+ * `JSON.stringify` produced: thirty-two 64-character keys with 64-character values
+ * pass every per-value rule and serialize past 4 000 characters. That would abort
+ * the caller's transaction on a constraint, which is exactly what this function
+ * exists to prevent — so the size is checked here too. PostgreSQL renders a space
+ * after each colon and each comma, so the bound is the conservative one: two
+ * characters per entry more than `JSON.stringify` wrote.
  */
-function detailIsFlatAndCoded(detail: Readonly<Record<string, unknown>>): boolean {
-  if (typeof detail !== 'object' || Array.isArray(detail)) return false;
+function codedDetail(
+  detail: Readonly<Record<string, unknown>>,
+): { readonly ok: true; readonly json: string } | { readonly ok: false } {
+  if (typeof detail !== 'object' || detail === null || Array.isArray(detail)) return { ok: false };
   const entries = Object.entries(detail);
-  if (entries.length > MAX_DETAIL_KEYS) return false;
+  if (entries.length > MAX_DETAIL_KEYS) return { ok: false };
+
+  const validated: [string, CodedValue][] = [];
   for (const [key, value] of entries) {
-    if (!FUNNEL_KEY_SHAPE.test(key)) return false;
-    if (value === null || typeof value === 'boolean') continue;
+    if (!FUNNEL_KEY_SHAPE.test(key)) return { ok: false };
+    if (value === null || typeof value === 'boolean') {
+      validated.push([key, value]);
+      continue;
+    }
     if (typeof value === 'number') {
-      if (!Number.isFinite(value)) return false;
+      if (!Number.isFinite(value)) return { ok: false };
+      validated.push([key, value]);
       continue;
     }
     if (typeof value === 'string') {
-      if (!FUNNEL_DETAIL_VALUE_SHAPE.test(value)) return false;
+      if (!FUNNEL_DETAIL_VALUE_SHAPE.test(value)) return { ok: false };
+      validated.push([key, value]);
       continue;
     }
-    return false;
+    return { ok: false };
   }
-  return true;
+
+  const json = JSON.stringify(Object.fromEntries(validated));
+  if (json.length + 2 * validated.length > MAX_DETAIL_TEXT) return { ok: false };
+  return { ok: true, json };
 }
 
 export async function recordFunnelFact(
@@ -121,8 +158,13 @@ export async function recordFunnelFact(
   if (input.contactId !== undefined && input.opportunityId !== undefined) {
     return { recorded: false, reason: 'invalid_subject' };
   }
-  const detail = input.detail ?? {};
-  if (!detailIsFlatAndCoded(detail)) {
+  // A child with no firm fails `funnel_facts_firm_present_for_child`, which would
+  // abort the caller's transaction. Same reason, so the same refusal.
+  if (input.firmId === undefined && (input.contactId !== undefined || input.opportunityId !== undefined)) {
+    return { recorded: false, reason: 'invalid_subject' };
+  }
+  const detail = codedDetail(input.detail ?? {});
+  if (!detail.ok) {
     return { recorded: false, reason: 'invalid_detail' };
   }
 
@@ -143,7 +185,7 @@ export async function recordFunnelFact(
       input.source,
       actorKind(context),
       actorUserId(context),
-      JSON.stringify(detail),
+      detail.json,
       input.occurredAt ?? null,
     ],
   );

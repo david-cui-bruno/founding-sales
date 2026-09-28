@@ -111,13 +111,34 @@ describe('append-only privileges', () => {
     await expect(runtime.query('TRUNCATE funnel_facts')).rejects.toMatchObject({ code: '42501' });
   });
 
-  it('holds the funnel’s column grant for the migration role too', async () => {
+  it('gives the migration role the same funnel matrix and no more', async () => {
+    // The same grant went to both roles, so the same matrix is asserted of both: a
+    // migration that could rewrite a fact would be a migration that could rewrite
+    // history, and `migration` is the role a release runs as.
     const migration = await database.appRuntimeSession();
     await migration.query('SET ROLE migration');
-    await expect(
-      migration.query("UPDATE funnel_facts SET kind = 'demo.completed'"),
-    ).rejects.toMatchObject({ code: '42501' });
+
+    await migration.query(
+      `INSERT INTO funnel_facts (workspace_id, kind, dedupe_key, source, actor_kind, detail)
+       VALUES ($1, 'demo.started', 'privilege-case-2', 'demo', 'system', '{"step": "one"}'::jsonb)`,
+      [seeded.alpha.workspaceId],
+    );
+    await migration.query("UPDATE funnel_facts SET detail = '{}'::jsonb WHERE dedupe_key = 'privilege-case-2'");
+    const { rows } = await migration.query<{ detail: unknown }>(
+      "SELECT detail FROM funnel_facts WHERE dedupe_key = 'privilege-case-2'",
+    );
+    expect(rows[0]?.detail).toEqual({});
+
+    for (const statement of [
+      "UPDATE funnel_facts SET kind = 'demo.completed' WHERE dedupe_key = 'privilege-case-2'",
+      "UPDATE funnel_facts SET firm_id = NULL WHERE dedupe_key = 'privilege-case-2'",
+      "UPDATE funnel_facts SET dedupe_key = 'rewritten' WHERE dedupe_key = 'privilege-case-2'",
+      "UPDATE funnel_facts SET occurred_at = now() WHERE dedupe_key = 'privilege-case-2'",
+    ]) {
+      await expect(migration.query(statement), statement).rejects.toMatchObject({ code: '42501' });
+    }
     await expect(migration.query('DELETE FROM funnel_facts')).rejects.toMatchObject({ code: '42501' });
+    await expect(migration.query('TRUNCATE funnel_facts')).rejects.toMatchObject({ code: '42501' });
   });
 
   it('refuses writes to the hold reason-code reference table as app_runtime', async () => {

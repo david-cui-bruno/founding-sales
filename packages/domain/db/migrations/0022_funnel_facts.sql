@@ -45,14 +45,54 @@
 -- built from the ids that identify the thing, never from a timestamp, so a replayed
 -- command or a re-run handler produces one fact.
 --
--- **Nothing here may carry free text.** The key's alphabet has no space in it and
--- `detail` is bounded and checked to be an object; `recordFunnelFact` narrows
--- `detail` further, to a flat object of ids, codes, numbers and booleans. That is
--- not tidiness: a firm-less fact has no firm for the deletion workflow to find it
--- by, so a fact that could hold a name would be a name with no deletion path.
+-- **Nothing here may carry free text.** The key's alphabet has no space in it
+-- (the shape `today_items_key_shape` uses), and `detail` is checked by
+-- `funnel_facts_detail_coded` below to be a flat object of ids, codes, numbers and
+-- flags. That is not tidiness: a firm-less fact has no firm for the deletion
+-- workflow to find it by, so a fact that could hold a name would be a name with no
+-- deletion path. `recordFunnelFact` checks the same rule before it inserts, so a
+-- refusal does not abort the caller's transaction; the CHECK is what makes the rule
+-- true of a raw insert as well.
 --
 -- UPDATE is granted on `detail` and nothing else; see the privileges at the foot.
 -- ---------------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------------
+-- The coded-detail rule, as an immutable function
+--
+-- `detail` being an object and being small is not the rule; the rule is that every
+-- value in it is an id, a code, a number or a flag. `recordFunnelFact` checks that
+-- before it inserts, so a refusal never aborts the caller's transaction — but
+-- `app_runtime` holds INSERT on this table, and a rule that lives only in TypeScript
+-- is a rule a raw insert walks past. A firm-less fact has no firm for the deletion
+-- workflow to find it by, so a sentence that got in here would be a sentence nothing
+-- could ever redact. That is why it is enforced twice, and why the database's copy
+-- is the one that is load-bearing.
+--
+-- A function inside a CHECK has a precedent in this schema: `today_items_automated_is_due_work`
+-- calls `today_lane_of_kind(kind)` (0008, line 181), declared the same way — `LANGUAGE
+-- sql IMMUTABLE STRICT`. IMMUTABLE is what makes it legal in a CHECK at all, and it
+-- is honestly immutable: it reads nothing but its argument.
+--
+-- `CASE` rather than a chain of `AND`s because PostgreSQL does not promise the order
+-- it evaluates `AND` in, and `jsonb_each` raises on a value that is not an object.
+-- `CASE` does promise it, so the type test really does guard the rest.
+-- ---------------------------------------------------------------------------
+CREATE FUNCTION funnel_facts_detail_coded(detail jsonb) RETURNS boolean
+LANGUAGE sql IMMUTABLE STRICT AS $$
+  SELECT CASE
+           WHEN jsonb_typeof(detail) <> 'object' THEN false
+           WHEN (SELECT count(*) FROM jsonb_object_keys(detail)) > 32 THEN false
+           ELSE NOT EXISTS (
+             SELECT 1
+               FROM jsonb_each(detail) AS entry(key, value)
+              WHERE entry.key !~ '^[a-zA-Z][0-9a-zA-Z_]{0,63}$'
+                 OR jsonb_typeof(entry.value) NOT IN ('boolean', 'number', 'null', 'string')
+                 OR (jsonb_typeof(entry.value) = 'string'
+                     AND (entry.value #>> '{}') !~ '^[0-9a-zA-Z_:.-]{1,64}$'))
+         END
+$$;
+
 CREATE TABLE funnel_facts (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   workspace_id uuid NOT NULL,
@@ -117,10 +157,11 @@ CREATE TABLE funnel_facts (
   CONSTRAINT funnel_facts_actor_kind_known CHECK (actor_kind IN ('user', 'admin', 'system', 'worker')),
   CONSTRAINT funnel_facts_user_actor_identified
     CHECK ((actor_kind IN ('user', 'admin')) = (actor_user_id IS NOT NULL)),
-  -- An object, and a small one. The bound is what stops `detail` becoming somewhere
-  -- a message body could be kept.
+  -- A flat object of ids, codes, numbers and flags, and a small one. The function
+  -- above is the shape; the length bound is the belt beside it. Between them there
+  -- is nowhere in this row a sentence can go.
   CONSTRAINT funnel_facts_detail_is_object
-    CHECK (jsonb_typeof(detail) = 'object' AND length(detail::text) <= 4000)
+    CHECK (funnel_facts_detail_coded(detail) AND length(detail::text) <= 4000)
 );
 
 -- The two reads the dashboard makes: everything in a window by kind, and one firm's
