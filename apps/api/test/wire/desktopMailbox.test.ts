@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { compareVersions, connectMailboxCommandSchema, mayMutate, publishedClientVersions } from '@fss/contracts';
+import { compareVersions, connectMailboxCommandSchema, mayMutate } from '@fss/contracts';
 import { GMAIL_PATHS } from '../../src/routes/gmail.ts';
 import { CONTAINER_CLIENT_VERSIONS } from '../../src/bootstrap/main.ts';
 import { createAuthedClient } from '../../../desktop/src/main/authedClient.ts';
@@ -143,7 +143,10 @@ describe('8.0x: the Mac client connects the mailbox', () => {
     // The container holds a policy — a minimum, a `1.x` ceiling and a
     // list of known-bad builds — and publishes the range derived from it. The build with
     // the row is inside the published range and not on the incompatible list.
-    expect(compareVersions(publishedClientVersions(CONTAINER_CLIENT_VERSIONS).maximum, FIRST_VERSION_WITH_THE_ROW)).toBeGreaterThanOrEqual(0);
-    expect(mayMutate(CONTAINER_CLIENT_VERSIONS, FIRST_VERSION_WITH_THE_ROW)).toBe(true);
+    // From the 0021 release the minimum is 1.0.14, so the question is not whether the
+    // build that first carried the Mailbox row is admitted — it is not — but that the
+    // minimum admitted build is at or above it and may mutate.
+    expect(compareVersions(CONTAINER_CLIENT_VERSIONS.minimum, FIRST_VERSION_WITH_THE_ROW)).toBeGreaterThanOrEqual(0);
+    expect(mayMutate(CONTAINER_CLIENT_VERSIONS, CONTAINER_CLIENT_VERSIONS.minimum)).toBe(true);
   });
 });

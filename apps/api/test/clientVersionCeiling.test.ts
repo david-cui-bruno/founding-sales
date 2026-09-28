@@ -162,24 +162,24 @@ describe('the compatibility ceiling, through the real routes', () => {
   });
 });
 
-describe('the policy this container ships (lane g78)', () => {
-  it('is 1.0.0 and up on the 1.x line, with nothing listed', () => {
-    expect(CONTAINER_CLIENT_VERSIONS).toEqual({ minimum: '1.0.0', ceiling: '1.x', incompatible: [] });
+describe('the policy this container ships (lane g78, minimum raised by W3-C2)', () => {
+  it('is 1.0.14 and up on the 1.x line, with nothing listed', () => {
+    expect(CONTAINER_CLIENT_VERSIONS).toEqual({ minimum: '1.0.14', ceiling: '1.x', incompatible: [] });
   });
 
-  it('publishes a range desktop 1.0.4 parses and reads as admitting itself, with no desktop change', () => {
+  it('publishes a range a 1.0.x Mac parses, and refuses every build below 1.0.14', () => {
     const published = publishedClientVersions(CONTAINER_CLIENT_VERSIONS);
-    expect(published).toEqual({ minimum: '1.0.0', maximum: '1.999.999' });
-    // `clientVersionRangeSchema` is the strict schema 1.0.0 to 1.0.4 were built with.
+    expect(published).toEqual({ minimum: '1.0.14', maximum: '1.999.999' });
+    // `clientVersionRangeSchema` is the strict schema every 1.0.x build was built with,
+    // so an outdated Mac can still parse the notice that tells it to upgrade.
     expect(clientVersionRangeSchema.safeParse(published).success).toBe(true);
-    for (const installed of ['1.0.0', '1.0.1', '1.0.2', '1.0.3', '1.0.4']) {
-      expect(mayMutate(published, installed), installed).toBe(true);
-      expect(mayMutate(CONTAINER_CLIENT_VERSIONS, installed), installed).toBe(true);
+    for (const retired of ['1.0.0', '1.0.1', '1.0.4', '1.0.5', '1.0.11', '1.0.13']) {
+      expect(mayMutate(CONTAINER_CLIENT_VERSIONS, retired), retired).toBe(false);
     }
   });
 
-  it('admits 1.0.5 and later 1.x builds without another API deployment, and not 2.0.0', () => {
-    for (const later of ['1.0.5', '1.0.6', '1.1.0', '1.12.3']) {
+  it('admits 1.0.14 and later 1.x builds without another API deployment, and not 2.0.0', () => {
+    for (const later of ['1.0.14', '1.0.15', '1.1.0', '1.12.3']) {
       expect(mayMutate(CONTAINER_CLIENT_VERSIONS, later), later).toBe(true);
     }
     expect(mayMutate(CONTAINER_CLIENT_VERSIONS, '2.0.0')).toBe(false);

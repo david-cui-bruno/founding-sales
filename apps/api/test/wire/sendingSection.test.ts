@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { compareVersions, mayMutate, outboundStatusResponseSchema, publishedClientVersions, wireDrift } from '@fss/contracts';
+import { compareVersions, mayMutate, outboundStatusResponseSchema, wireDrift } from '@fss/contracts';
 import { CONTAINER_CLIENT_VERSIONS } from '../../src/bootstrap/main.ts';
 import { localNoopSuppressionJournal } from '../../src/journal/index.ts';
 import { dispatch, type ApiOptions } from '../../src/server.ts';
@@ -173,9 +173,12 @@ describe('8.0ae: the sending section parses the API’s own answer (lane g69)', 
   });
 
   it('is a build the deployed API accepts', () => {
-    expect(compareVersions(publishedClientVersions(CONTAINER_CLIENT_VERSIONS).maximum, FIRST_VERSION_WITH_THE_FIX)).toBeGreaterThanOrEqual(0);
-    expect(mayMutate(CONTAINER_CLIENT_VERSIONS, FIRST_VERSION_WITH_THE_FIX)).toBe(true);
+    // From the 0021 release the minimum is 1.0.14, so the question is not whether the
+    // build that first carried the sending section is admitted — it is not — but that the
+    // minimum admitted build is at or above it and may mutate.
+    expect(compareVersions(CONTAINER_CLIENT_VERSIONS.minimum, FIRST_VERSION_WITH_THE_FIX)).toBeGreaterThanOrEqual(0);
+    expect(mayMutate(CONTAINER_CLIENT_VERSIONS, CONTAINER_CLIENT_VERSIONS.minimum)).toBe(true);
     // The installed builds keep working until they take the update.
-    expect(CONTAINER_CLIENT_VERSIONS.minimum).toBe('1.0.0');
+    expect(CONTAINER_CLIENT_VERSIONS.minimum).toBe('1.0.14');
   });
 });

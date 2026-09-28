@@ -235,6 +235,6 @@ describe('8.0aj: the sequence editor reads a populated version and its enrollmen
 
   it('is a build the deployed API accepts', () => {
     expect(mayMutate(CONTAINER_CLIENT_VERSIONS, DESKTOP_VERSION_UNDER_TEST)).toBe(true);
-    expect(CONTAINER_CLIENT_VERSIONS.minimum).toBe('1.0.0');
+    expect(CONTAINER_CLIENT_VERSIONS.minimum).toBe('1.0.14');
   });
 });

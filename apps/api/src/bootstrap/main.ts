@@ -43,8 +43,11 @@ import { createApiServer } from '../server.ts';
  * Every sign-in, renewal and command is checked against this policy, and a client
  * outside it may read the upgrade instruction and mutate nothing. It has three parts:
  *
- *   * `minimum` — below it, `upgrade_required`. Unchanged: raising it is how a release
- *     forces every Mac onto a newer build.
+ *   * `minimum` — below it, `upgrade_required`. `1.0.14` from the 0021 release (lane
+ *     W3-C2): that build opens its session from the device secret and reads none of the
+ *     routes and fields this release removed, so raising the minimum is what makes the
+ *     removal safe. Every older Mac is refused every mutation and may read only the
+ *     upgrade instruction.
  *   * `ceiling` — the highest release line this API serves. `1.x` admits every 1.*
  *     build from the minimum up, including ones built after this API was deployed. The
  *     promise behind it is that this API keeps every route, and every response field,
@@ -71,9 +74,14 @@ import { createApiServer } from '../server.ts';
  * API in production still publishes 1.0.4 as its maximum. From then on a 1.x desktop
  * publishes directly, and the API goes first only when a desktop needs a route or a
  * field the deployed API does not have yet.
+ *
+ * The minimum has moved once since, and this is that release. 1.0.14 is the installed
+ * build and the first one that needs nothing this release removed; the routes and
+ * fields an older Mac reads are gone, so admitting one would be admitting a client to
+ * a server that cannot answer it.
  */
 export const CONTAINER_CLIENT_VERSIONS: ClientVersionPolicy = clientVersionPolicySchema.parse({
-  minimum: '1.0.0',
+  minimum: '1.0.14',
   ceiling: '1.x',
   incompatible: [],
 });

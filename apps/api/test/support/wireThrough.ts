@@ -14,8 +14,8 @@ import { createAuthedClient, type AuthedClient } from '../../../desktop/src/main
  * carry it, so an instant arrives as a string.
  */
 
-/** The desktop build every window check reads as: the one lane g78 ships. */
-export const DESKTOP_VERSION_UNDER_TEST = '1.0.5';
+/** The desktop build every window check reads as: the installed one, 1.0.14. */
+export const DESKTOP_VERSION_UNDER_TEST = '1.0.14';
 
 export function routeOptions(fixture: AuthFixture): ApiOptions {
   return {
