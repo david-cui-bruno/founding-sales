@@ -382,6 +382,55 @@ describe('CRM commands', () => {
     });
   });
 
+  // --------------------------------------------------------------- funnel
+  describe('the top of the funnel', () => {
+    it('records exactly one firm.created fact, in the transaction that created the firm', async () => {
+      await inRolledBackTransaction(admin, async context => {
+        const created = await createFirm(context, {
+          name: 'Funnel Test Firm',
+          assignedUserId: seeded.alpha.salesperson.userId,
+        });
+        expect(created).toMatchObject({ ok: true });
+        if (!created.ok) return;
+
+        const { rows } = await context.db.query<{
+          kind: string;
+          source: string;
+          dedupe_key: string;
+          firm_id: string;
+          detail: unknown;
+        }>(
+          'SELECT kind, source, dedupe_key, firm_id, detail FROM funnel_facts WHERE workspace_id = $1 AND firm_id = $2',
+          [seeded.alpha.workspaceId, created.value.id],
+        );
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toEqual({
+          kind: 'firm.created',
+          source: 'crm',
+          // The key is the firm's own id, so a re-run handler writes one fact.
+          dedupe_key: created.value.id,
+          firm_id: created.value.id,
+          detail: { assigned: true },
+        });
+      });
+    });
+
+    it('leaves no fact behind when the transaction that created the firm rolls back', async () => {
+      let firmId = '';
+      await inRolledBackTransaction(admin, async context => {
+        const created = await createFirm(context, { name: 'Rolled Back Test Firm' });
+        expect(created).toMatchObject({ ok: true });
+        if (!created.ok) return;
+        firmId = created.value.id;
+      });
+      const { rows } = await session.query<{ count: string }>(
+        'SELECT count(*)::text AS count FROM funnel_facts WHERE workspace_id = $1 AND firm_id = $2',
+        [seeded.alpha.workspaceId, firmId],
+      );
+      expect(rows[0]?.count).toBe('0');
+    });
+  });
+
   // ----------------------------------------------------------------- zone
   describe('firm time zone', () => {
     it('records the resolved zone with its confidence, source and rule version', async () => {

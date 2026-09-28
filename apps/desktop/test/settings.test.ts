@@ -213,6 +213,7 @@ describe('the administration bridge', () => {
           sending: { available: false, owner: 'G7-2', reason: 'not in this build' },
           enrollments: { available: false, owner: 'G8', reason: 'not in this build' },
           classifier: { available: false, owner: 'G7b', reason: 'not in this build' },
+          funnel: { available: false, owner: 'J-facts', reason: 'not in this build' },
         },
       },
     });
@@ -244,6 +245,7 @@ describe('the administration bridge', () => {
         sending: { available: false, owner: 'G7-2', reason: 'not in this build' },
         enrollments: { available: false, owner: 'G8', reason: 'not in this build' },
         classifier: { available: false, owner: 'G7b', reason: 'not in this build' },
+        funnel: { available: false, owner: 'J-facts', reason: 'not in this build' },
       },
     });
     const week = { from: '2026-09-18T12:00:00.000Z', to: '2026-09-25T12:00:00.000Z' };
@@ -496,6 +498,7 @@ describe('the administration bridge', () => {
           sending: { available: false, owner: 'G7-2', reason: 'not in this build' },
           enrollments: { available: false, owner: 'G8', reason: 'not in this build' },
           classifier: { available: false, owner: 'G7b', reason: 'not in this build' },
+          funnel: { available: false, owner: 'J-facts', reason: 'not in this build' },
         },
       },
     });
@@ -889,6 +892,7 @@ describe('the administration view', () => {
           sending: { available: false, owner: 'G7-2', reason: 'the outbound fence is not in this build' },
           enrollments: { available: false, owner: 'G8', reason: 'sequences are not in this build' },
           classifier: { available: false, owner: 'G7b', reason: 'model records are not in this build' },
+          funnel: { available: false, owner: 'J-facts', reason: 'the funnel is not in this build' },
         } as never,
       }),
     );

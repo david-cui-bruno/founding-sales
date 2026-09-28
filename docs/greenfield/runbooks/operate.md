@@ -47,7 +47,7 @@ gh workflow run greenfield-release.yml --ref main -f mode=schema -f stage=full \
 
 `stage` is `plan`, `create`, `deploy`, `full` or `teardown`; each of the first four runs everything before it, and one is worth running only once the one before it passed. About 45 minutes at `full`. An app-only or desktop-only release needs no rehearsal.
 
-**3. The preflight, on production, while both services are still running.** A migration's own counts, inside a rolled-back READ ONLY transaction, on a one-off task of the operations definition with **this release's** worker image. It exits 3 when the migration would refuse, so the chain stops here rather than with both services at zero. It runs *after* the rehearsal and *before* the stop, and only a migration has one.
+**3. The preflight, on production, while both services are still running.** A migration's own counts, inside a rolled-back READ ONLY transaction, on a one-off task of the operations definition with **this release's** worker image. It exits 3 when the migration would refuse, so the chain stops here rather than with both services at zero. It runs *after* the rehearsal and *before* the stop, and only a migration that **can refuse** has one: a migration with no condition under which it raises has no `fss admin schema-preflight` command and the release skips this step. **0022 is one of those** — it adds a table and nothing else, so there is nothing for a preflight to count or to stop on. The 0021 text below is kept as history: it is what this step looks like when a migration can refuse.
 
 ```bash
 infra/scripts/preflight.sh infra/roots/production fss-prod 0021 --worker-digest "$worker_digest"

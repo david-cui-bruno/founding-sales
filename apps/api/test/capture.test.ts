@@ -190,6 +190,32 @@ describe('capturing firms through the API', () => {
     expect(receipts.rows[0]?.count).toBe('1');
   });
 
+  it('records one firm.created funnel fact, and a replay of the command records no second one', async () => {
+    // Lane J-facts. `commands.test.ts` in the domain package calls `createFirm`
+    // directly and has no replay machinery; the replay lives here, in `runCommand`,
+    // which is also where "one transaction with its receipt" is true.
+    const commandId = randomUUID();
+    const body = {
+      commandId,
+      clientVersion: CURRENT_CLIENT_VERSION,
+      firm: { name: 'Hazel Test Partners', timeZone: 'America/New_York' },
+    };
+    const first = await post('/crm/firms/add', salespersonToken, body);
+    expect(first.status).toBe(200);
+    const firmId = addFirmAcceptedSchema.parse(first.body).result.firmId;
+
+    const replay = await post('/crm/firms/add', salespersonToken, body);
+    expect(replay.status).toBe(200);
+    expect(addFirmAcceptedSchema.parse(replay.body).replayed).toBe(true);
+
+    const facts = await fixture.db.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM funnel_facts
+        WHERE workspace_id = $1 AND kind = 'firm.created' AND firm_id = $2`,
+      [fixture.alpha.workspaceId, firmId],
+    );
+    expect(facts.rows[0]?.count).toBe('1');
+  });
+
   it('refuses naming every field at fault, and a replay says the same', async () => {
     const body = {
       commandId: randomUUID(),

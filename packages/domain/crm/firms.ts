@@ -4,6 +4,7 @@ import { resolveFirmZone } from '../src/rules/statePosture.ts';
 import { decideAdminOnly, decideFirmMutation } from './authorization.ts';
 import { recordCrmAuditEvent } from './audit.ts';
 import { emitCrmDomainEvent } from './events.ts';
+import { recordFunnelFact } from '../funnel/facts.ts';
 import { FIRM_ZONE_SOURCES } from './zone.ts';
 import {
   accept,
@@ -140,6 +141,20 @@ export async function createFirm(
     subjectId: created.id,
     detail: { assigned: created.assigned_user_id !== null },
   });
+
+  // The top of the funnel, recorded in the transaction that created the firm
+  // (lane J-facts, `docs/greenfield/funnel.md`). The key is the firm's own id, so a
+  // replayed command — which produces no second firm — produces no second fact, and
+  // a second call with the same id is a no-op rather than a unique violation that
+  // would abort the caller's transaction.
+  await recordFunnelFact(context, {
+    kind: 'firm.created',
+    source: 'crm',
+    dedupeKey: created.id,
+    firmId: created.id,
+    detail: { assigned: created.assigned_user_id !== null },
+  });
+
   return accept(created);
 }
 

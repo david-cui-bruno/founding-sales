@@ -134,8 +134,10 @@ What a commit does:
   unexecuted `step_executions` — nothing is removed or blanked; what changes is that
   no worker will act on the plan again;
 * **redacts** `contacts` and, for a firm deletion, `firms` — the name becomes
-  `[deleted]` and the identifying fields become null — and the subject and body of
-  any unsent fence;
+  `[deleted]` and the identifying fields become null — the subject and body of
+  any unsent fence, and the `detail` of the firm's `funnel_facts`, whose counts and
+  ids stay: `DELETE` is revoked there and the ids point at rows this same deletion
+  redacted (`docs/greenfield/funnel.md`);
 * **retains** `opportunities`, `opportunity_stage_events`, `crm_domain_events`,
   `audit_events`, `suppression_events` and the executed step history 11.1 requires
   preserved. `record_merge_events` was dropped by migration 0019; every stored row was

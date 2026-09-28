@@ -67,6 +67,14 @@ beforeAll(async () => {
   retention = await seedRetention(database.session, seeded, crm, mail);
   await seedRoutes(seeded.alpha.workspaceId, crm.alpha.firmId, crm.alpha.contactId);
   await seedRoutes(seeded.beta.workspaceId, crm.beta.firmId, crm.beta.contactId);
+  // Two funnel facts on the firm about to be deleted (migration 0022), each with a
+  // `detail` the deletion has to clear.
+  await database.session.query(
+    `INSERT INTO funnel_facts (workspace_id, kind, firm_id, dedupe_key, source, actor_kind, detail)
+     VALUES ($1, 'firm.created', $2, 'deletion-fixture-1', 'crm', 'system', '{"assigned": true}'::jsonb),
+            ($1, 'call.placed', $2, 'deletion-fixture-2', 'telephony', 'system', '{"attempt": 1}'::jsonb)`,
+    [seeded.alpha.workspaceId, crm.alpha.firmId],
+  );
 });
 
 afterAll(async () => {
@@ -99,6 +107,9 @@ describe('the deletion preview', () => {
     // The append-only history is named as retained rather than left unmentioned: an
     // admin approving a deletion should be told what will still be there.
     expect(preview?.retains['opportunity_stage_events']).toBeGreaterThanOrEqual(0);
+    // The funnel is named under the redacted group: the counts stay, their `detail`
+    // does not (migration 0022, `docs/greenfield/funnel.md`).
+    expect(preview?.redacts['funnel_facts']).toBe(2);
     expect(preview?.tombstoneHandles.length).toBeGreaterThan(0);
 
     expect(
@@ -131,6 +142,11 @@ describe('the deletion commit', () => {
     const auditBefore = await count('SELECT count(*) AS count FROM audit_events WHERE workspace_id = $1', [
       seeded.alpha.workspaceId,
     ]);
+    const factsBefore = await count('SELECT count(*) AS count FROM funnel_facts WHERE workspace_id = $1 AND firm_id = $2', [
+      seeded.alpha.workspaceId,
+      crm.alpha.firmId,
+    ]);
+    expect(factsBefore).toBe(2);
 
     const preview = await previewDeletion(context, { targetKind: 'firm', firmId: crm.alpha.firmId });
     const outcome = await commitDeletion(context, {
@@ -193,6 +209,16 @@ describe('the deletion commit', () => {
         seeded.alpha.workspaceId,
       ]),
     ).toBe(stageEventsBefore);
+
+    // The funnel: the same number of facts, each with its `detail` cleared. A count
+    // is not personal data and DELETE is revoked, so the row stays and the object of
+    // flags beside it goes.
+    const facts = await database.session.query<{ detail: unknown }>(
+      'SELECT detail FROM funnel_facts WHERE workspace_id = $1 AND firm_id = $2',
+      [seeded.alpha.workspaceId, crm.alpha.firmId],
+    );
+    expect(facts.rows).toHaveLength(factsBefore);
+    for (const row of facts.rows) expect(row.detail).toEqual({});
 
     // The tombstone: minimal, normalized, effective, and journalled before the row.
     const tombstones = outcome.value?.tombstoneEventIds ?? [];

@@ -1,4 +1,5 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
+import type { FunnelFacts } from '../funnel/read.ts';
 
 /**
  * The parts of 13.4's dashboard whose tables other lanes own.
@@ -11,15 +12,17 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
  * 0010), enrollments and step executions (G8, 0012), and the model classification
  * records (G7b, 0011).
  *
- * All three are live. `liveDashboardSources()` (in `sendingSource.ts`) combines
- * `sendingFacts`, `enrollmentFacts` and `classifierFacts`, and it is what the API
- * supplies (`apps/api/src/routes/dashboard.ts`).
+ * All four are live. `liveDashboardSources()` (in `sendingSource.ts`) combines
+ * `sendingFacts`, `enrollmentFacts`, `classifierFacts` and `funnelFacts`, and it is
+ * what the API supplies (`apps/api/src/routes/dashboard.ts`). The fourth is lane
+ * J-facts' funnel (migration 0022): counts by kind over the window, and the firms
+ * in scope now that a rate is taken against.
  *
  * The interface keeps its declared-unavailable shape, because a figure nobody can
  * compute must say so — `{ available: false, owner, reason }` — rather than render as
  * zero. "No emails were skipped" and "nothing can tell you how many were skipped" are
  * very different sentences to show an operator. `unavailableDashboardSources()` is
- * that shape for all three at once: what `readDashboard` uses when a caller wires no
+ * that shape for all four at once: what `readDashboard` uses when a caller wires no
  * source, which today is the domain tests and nothing else.
  *
  * See `docs/decisions/g9-dashboard-sources.md`.
@@ -114,6 +117,19 @@ export interface ClassifierFacts {
   readonly correctedBySuggester: readonly KeyedCount[];
 }
 
+/**
+ * The funnel (lane J-facts, migration 0022), read from `funnel_facts`.
+ *
+ * Counts of things that happened in the window, by kind, and the denominator a rate
+ * needs. Unlike the other three, its shape is declared where it is computed —
+ * `packages/domain/funnel/read.ts` — and imported here. The worker reaches the funnel
+ * through `crm/firms.ts`, and the container images are allow-lists closed over their
+ * imports, so an edge in the other direction would put the dashboard in the worker
+ * image for a type. `FunnelFacts` is re-exported so a caller of this module has the
+ * same four shapes to hand.
+ */
+export type { FunnelFacts };
+
 export interface DashboardSources {
   sending(
     context: RepositoryContext,
@@ -130,6 +146,11 @@ export interface DashboardSources {
     window: DashboardWindow,
     audience: DashboardAudience,
   ): Promise<ClassifierFacts | Unavailable>;
+  funnel(
+    context: RepositoryContext,
+    window: DashboardWindow,
+    audience: DashboardAudience,
+  ): Promise<FunnelFacts | Unavailable>;
 }
 
 /**
@@ -143,5 +164,6 @@ export function unavailableDashboardSources(): DashboardSources {
     sending: async () => await Promise.resolve(absent('G7-2', 'no sending source was wired for this read')),
     enrollments: async () => await Promise.resolve(absent('G8', 'no enrollment source was wired for this read')),
     classifier: async () => await Promise.resolve(absent('G7b', 'no classifier source was wired for this read')),
+    funnel: async () => await Promise.resolve(absent('J-facts', 'no funnel source was wired for this read')),
   };
 }

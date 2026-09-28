@@ -345,6 +345,9 @@ export const dashboardResponseSchema = z.object({
   sending: z.union([unavailableSchema, z.object({ available: z.literal(true) }).loose()]),
   enrollments: z.union([unavailableSchema, z.object({ available: z.literal(true) }).loose()]),
   classifier: z.union([unavailableSchema, z.object({ available: z.literal(true) }).loose()]),
+  // Lane J-facts' funnel. `z.object` strips what it does not name, so adding a key
+  // here is not a wire break: a desktop built before this one never sees it.
+  funnel: z.union([unavailableSchema, z.object({ available: z.literal(true) }).loose()]),
 });
 export type DashboardResponse = z.infer<typeof dashboardResponseSchema>;
 

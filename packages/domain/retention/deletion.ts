@@ -16,9 +16,9 @@ import { accept, refuse, type RetentionResult } from './result.ts';
  *
  * ## Why deletion is remove *and* redact
  *
- * Four tables in this schema have `DELETE` revoked from both application roles —
- * `audit_events`, `suppression_events`, `opportunity_stage_events` and
- * `crm_domain_events` — and each of them carries foreign
+ * Five tables in this schema have `DELETE` revoked from both application roles —
+ * `audit_events`, `suppression_events`, `opportunity_stage_events`,
+ * `crm_domain_events` and `funnel_facts` — and each of them carries foreign
  * keys onto `firms`, `contacts` or `opportunities`. A deletion that removed the firm
  * row would have to remove that history first, and it is not allowed to, and it
  * should not be: section 10.3's first row keeps "firms, contacts, opportunities,
@@ -29,7 +29,9 @@ import { accept, refuse, type RetentionResult } from './result.ts';
  * personal and correspondence data* is removed: the handles, the messages and their
  * bodies, the call history, the callbacks, the evidence, the derived work items. The
  * rows the append-only history points at stay, with their identifying fields
- * cleared, so the history remains readable and nothing in it names a person.
+ * cleared, so the history remains readable and nothing in it names a person. A
+ * funnel fact is redacted the same way and for the same reason: the count stays and
+ * its `detail` is cleared.
  * See docs/decisions/g14-deletion-is-remove-and-redact.md.
  *
  * ## The tombstone has its own source
@@ -254,6 +256,17 @@ async function measure(
       context,
       `SELECT count(*) AS count FROM contacts
         WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('id', '$2')}`,
+      byContact,
+    ),
+    // The funnel (0022). A fact is a count, so the count stays: what a deletion
+    // clears is `detail`, the small object of flags a slice recorded beside it. The
+    // row cannot go — DELETE is revoked — and it should not: the ids in it point at
+    // rows this same deletion redacted rather than removed, so the history stays
+    // readable and nothing in it names anybody.
+    funnel_facts: await countOf(
+      context,
+      `SELECT count(*) AS count FROM funnel_facts
+        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
       byContact,
     ),
     firms: contact === null ? 1 : 0,
@@ -629,6 +642,14 @@ export async function commitDeletion(
     [...byContact, REDACTED_NAME],
   );
   redacted['outbound_messages'] = fences.rowCount ?? 0;
+
+  const facts = await context.db.query(
+    `UPDATE funnel_facts
+        SET detail = '{}'::jsonb
+      WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
+    byContact,
+  );
+  redacted['funnel_facts'] = facts.rowCount ?? 0;
 
   const contacts = await context.db.query(
     `UPDATE contacts

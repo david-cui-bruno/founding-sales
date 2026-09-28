@@ -313,7 +313,7 @@ export const RETENTION_TARGETS: readonly RetentionTarget[] = Object.freeze([
   retained(
     'business_records',
     [],
-    'Firms, contacts, opportunities, stages, notes and callbacks are kept until a documented admin deletion; no scheduled job removes them.',
+    'Firms, contacts, opportunities, stages, notes, callbacks and the funnel facts counted off them (0022) are kept until a documented admin deletion; no scheduled job removes them.',
   ),
   retained(
     'suppression_history',

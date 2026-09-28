@@ -206,6 +206,7 @@ describe('the dashboard', () => {
     });
     expect(theAdmins.enrollments).toMatchObject({ available: false, owner: 'G8' });
     expect(theAdmins.classifier).toMatchObject({ available: false, owner: 'G7b' });
+    expect(theAdmins.funnel).toMatchObject({ available: false, owner: 'J-facts' });
   });
 
   it('wires a real source when one exists, and passes it the audience', async () => {
@@ -250,12 +251,21 @@ describe('the dashboard', () => {
           correctionRate: 0.1,
           correctedBySuggester: [{ key: 'model', count: 1 }],
         }),
+      funnel: async () =>
+        await Promise.resolve({
+          available: true,
+          byKind: [{ key: 'firm.created', count: 3 }],
+          firmsByKind: [{ key: 'firm.created', count: 3 }],
+          uniqueFirms: 3,
+          firmsInScope: 4,
+        }),
     };
 
     const theirs = await readDashboard(assignee, { window: WINDOW, sources: fake });
     expect(theirs.sending).toMatchObject({ available: true, sent: 12, held: 2 });
     expect(theirs.enrollments).toMatchObject({ started: 5 });
     expect(theirs.classifier).toMatchObject({ correctionRate: 0.1 });
+    expect(theirs.funnel).toMatchObject({ available: true, uniqueFirms: 3, firmsInScope: 4 });
     // The source is told whose figures to compute, so a later real implementation
     // cannot accidentally answer workspace-wide for a salesperson.
     expect(seen).toEqual([
