@@ -260,24 +260,96 @@ export interface ProgressWrite {
 }
 
 /**
- * Record a chunked handler's cursor in `payload.progress`, fenced.
+ * The runner's own bookkeeping for a chunked job, kept beside the handler's cursor.
+ *
+ * It is a sibling of `payload.progress`, never inside it: the cursor's keys belong to
+ * the handler and the runner may not collide with them. Every value is database time,
+ * written by the statement rather than passed in, so a worker's clock cannot lengthen
+ * its own budget.
+ */
+export interface ChunkBookkeeping {
+  /** Chunks committed for this job, over every claim, ever. */
+  readonly chunks: number;
+  /** Epoch milliseconds of the first committed chunk. */
+  readonly firstChunkMs: number;
+  /** Epoch milliseconds of the most recent committed chunk. */
+  readonly lastChunkMs: number;
+}
+
+export interface ProgressOutcome {
+  readonly outcome: 'written' | 'lease_lost';
+  /** The bookkeeping as the statement left it; null when the write affected no row. */
+  readonly chunking: ChunkBookkeeping | null;
+  /** Database time at the write, in epoch milliseconds. Null on `lease_lost`. */
+  readonly nowMs: number | null;
+}
+
+/** Read the runner's chunk bookkeeping out of a claimed row's payload. */
+export function chunkBookkeepingOf(payload: Readonly<Record<string, unknown>>): ChunkBookkeeping | null {
+  const raw = payload['chunking'];
+  if (typeof raw !== 'object' || raw === null) return null;
+  const record = raw as Record<string, unknown>;
+  const chunks = Number(record['chunks']);
+  const firstChunkMs = Number(record['firstChunkMs']);
+  const lastChunkMs = Number(record['lastChunkMs']);
+  if (!Number.isFinite(chunks) || !Number.isFinite(firstChunkMs) || !Number.isFinite(lastChunkMs)) return null;
+  return { chunks, firstChunkMs, lastChunkMs };
+}
+
+/** Database time in epoch milliseconds. The only clock the chunk loop reads. */
+export async function databaseNowMs(db: Queryable): Promise<number> {
+  const { rows } = await db.query<{ now_ms: string }>(
+    "SELECT (extract(epoch FROM now()) * 1000)::bigint::text AS now_ms",
+  );
+  return Number(rows[0]?.now_ms);
+}
+
+/**
+ * Record a chunked handler's cursor in `payload.progress`, fenced, and advance the
+ * runner's bookkeeping in `payload.chunking`.
  *
  * This is the one write that makes chunking safe. The runner commits a bounded unit of
  * work and this statement together, so a crash after the commit resumes from the cursor
  * and never re-does the chunk; and because the predicate carries the claim's fencing
  * token, a worker whose lease was stolen while it was working affects zero rows and is
  * told so, rather than dragging a live worker's cursor backwards.
+ *
+ * The counter and the first-chunk instant are computed here, from `now()` and the row's
+ * own previous values, because they are the budget a runaway handler is held to and a
+ * handler must not be able to write its own budget.
  */
-export async function writeProgress(db: Queryable, write: ProgressWrite): Promise<'written' | 'lease_lost'> {
-  const { rowCount } = await db.query(
+export async function writeProgress(db: Queryable, write: ProgressWrite): Promise<ProgressOutcome> {
+  const { rows } = await db.query<{ chunks: string; first_chunk_ms: string; last_chunk_ms: string }>(
     `UPDATE jobs
-        SET payload = jsonb_set(coalesce(payload, '{}'::jsonb), '{progress}', $4::jsonb, true),
+        SET payload = jsonb_set(
+              jsonb_set(coalesce(payload, '{}'::jsonb), '{progress}', $4::jsonb, true),
+              '{chunking}',
+              jsonb_build_object(
+                'chunks', coalesce((payload -> 'chunking' ->> 'chunks')::bigint, 0) + 1,
+                'firstChunkMs', coalesce(
+                  (payload -> 'chunking' ->> 'firstChunkMs')::bigint,
+                  (extract(epoch FROM now()) * 1000)::bigint
+                ),
+                'lastChunkMs', (extract(epoch FROM now()) * 1000)::bigint
+              ),
+              true
+            ),
             updated_at = now()
       WHERE workspace_id = $1 AND id = $2 AND state = 'running'
-        AND fencing_token = $3::bigint`,
+        AND fencing_token = $3::bigint
+    RETURNING (payload -> 'chunking' ->> 'chunks') AS chunks,
+              (payload -> 'chunking' ->> 'firstChunkMs') AS first_chunk_ms,
+              (payload -> 'chunking' ->> 'lastChunkMs') AS last_chunk_ms`,
     [write.workspaceId, write.jobId, write.fencingToken, JSON.stringify(write.progress)],
   );
-  return (rowCount ?? 0) === 1 ? 'written' : 'lease_lost';
+  const row = rows[0];
+  if (row === undefined) return { outcome: 'lease_lost', chunking: null, nowMs: null };
+  const chunking: ChunkBookkeeping = {
+    chunks: Number(row.chunks),
+    firstChunkMs: Number(row.first_chunk_ms),
+    lastChunkMs: Number(row.last_chunk_ms),
+  };
+  return { outcome: 'written', chunking, nowMs: chunking.lastChunkMs };
 }
 
 /**

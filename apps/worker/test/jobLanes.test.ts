@@ -4,7 +4,7 @@ import { createTestDatabase, type TestDatabase } from '@fss/domain/db/testing/te
 import { HandlerRegistry, type JobHandler } from '@fss/domain/jobs/handlerRegistry.ts';
 import { enqueueJob } from '@fss/domain/jobs/jobStore.ts';
 import { runOnce } from '../src/runner/jobRunner.ts';
-import { slotClasses } from '../src/runner/slots.ts';
+import { slotClasses, slotLanes, URGENT_STREAK_LIMIT } from '../src/runner/slots.ts';
 
 /**
  * The lanes, end to end against a real queue.
@@ -65,16 +65,28 @@ describe('runner slots claim by lane', () => {
     await enqueueJob(database.session, { workspaceId, kind, idempotencyKey: key, payload: {}, maxAttempts: 4 });
   };
 
+  /** A worker of `concurrency` slots, each remembering its own streak, as the bootstrap builds it. */
+  const worker = (concurrency: number): { poll: () => Promise<void> } => {
+    const lanes = Array.from({ length: concurrency }, (_, index) => slotLanes(concurrency, index));
+    return {
+      poll: async () => {
+        for (const [index, slot] of lanes.entries()) {
+          const report = await runOnce(database.session, {
+            registry,
+            owner: `worker${String(concurrency)}:${String(index)}`,
+            limit: 1,
+            classes: slot.order(),
+          });
+          slot.record(report.claimedClass);
+        }
+      },
+    };
+  };
+
+  const threeSlots = worker(SLOTS);
   /** One poll of every slot of a three-slot worker, in slot order. */
   const round = async (): Promise<void> => {
-    for (let index = 0; index < SLOTS; index += 1) {
-      await runOnce(database.session, {
-        registry,
-        owner: `worker:${String(index)}`,
-        limit: 1,
-        classes: slotClasses(SLOTS, index),
-      });
-    }
+    await threeSlots.poll();
   };
 
   const count = async (prefix: string): Promise<number> => {
@@ -119,9 +131,10 @@ describe('runner slots claim by lane', () => {
     const latencyMilliseconds = Date.now() - startedAt;
 
     // One poll of the urgent slot. Not fifty; not seventeen. The bound is the slot's
-    // poll interval, which is the whole claim of the lane split.
+    // poll interval, which is the whole claim of the lane split. The wall clock is not
+    // the assertion — a loaded machine may take as long as it likes over one poll.
     expect(polls).toBe(1);
-    expect(latencyMilliseconds).toBeLessThan(2_000);
+    expect(latencyMilliseconds).toBeLessThan(60_000);
     // And the backlog is still a backlog: the urgent job overtook it, nobody drained it.
     const { rows } = await database.session.query<{ count: string }>(
       "SELECT count(*) AS count FROM jobs WHERE workspace_id = $1 AND kind = 'retention.batch' AND state <> 'done'",
@@ -141,7 +154,11 @@ describe('runner slots claim by lane', () => {
       }
       await round();
     }
-    expect((await count('bulk')) - bulkBefore).toBe(rounds);
+    // One per round from the bulk-only slot, and whatever the flexible slot adds when
+    // its urgent streak runs out: at least the rounds, never fewer.
+    const advanced = (await count('bulk')) - bulkBefore;
+    expect(advanced).toBeGreaterThanOrEqual(rounds);
+    expect(advanced).toBeLessThanOrEqual(rounds + Math.ceil(rounds / URGENT_STREAK_LIMIT));
 
     // The urgent lane really was saturated: more arrived each round than left.
     const { rows } = await database.session.query<{ count: string }>(
@@ -149,5 +166,112 @@ describe('runner slots claim by lane', () => {
       [workspaceId],
     );
     expect(Number(rows[0]?.count)).toBeGreaterThan(0);
+  });
+});
+
+describe('a flexible slot cannot starve bulk work', () => {
+  let database: TestDatabase;
+  let workspaceId: string;
+  const registry = new HandlerRegistry();
+
+  beforeAll(async () => {
+    database = await createTestDatabase();
+    const { rows } = await database.session.query<{ id: string }>(
+      "INSERT INTO workspaces (slug, display_name) VALUES ('beta', 'Beta') RETURNING id",
+    );
+    workspaceId = rows[0]?.id ?? '';
+    await createEffectTable(database.session);
+    registry.register(laneHandler('mail.sync', 'urgent')).register(laneHandler('retention.batch', 'bulk'));
+  });
+
+  afterAll(async () => {
+    await database.drop();
+  });
+
+  const countBulk = async (): Promise<number> => {
+    const { rows } = await database.session.query<{ count: string }>(
+      "SELECT count(*) AS count FROM lane_log WHERE workspace_id = $1 AND effect_key LIKE 'bulk:%'",
+      [workspaceId],
+    );
+    return Number(rows[0]?.count);
+  };
+
+  /**
+   * Urgent work that never runs out, and one bulk job waiting behind it. At one or two
+   * slots there is no bulk-only slot, so if "urgent first" were unbounded this would
+   * never finish.
+   */
+  const bulkIsClaimedUnderSustainedUrgentLoad = async (concurrency: number): Promise<number> => {
+    const lanes = Array.from({ length: concurrency }, (_, index) => slotLanes(concurrency, index));
+    await enqueueJob(database.session, {
+      workspaceId,
+      kind: 'retention.batch',
+      idempotencyKey: `bulk-behind-the-flood:${String(concurrency)}`,
+      payload: {},
+      maxAttempts: 4,
+    });
+    const before = await countBulk();
+    let polls = 0;
+    while ((await countBulk()) === before && polls < 20) {
+      for (let index = 0; index < concurrency * 2; index += 1) {
+        await enqueueJob(database.session, {
+          workspaceId,
+          kind: 'mail.sync',
+          idempotencyKey: `flood:${String(concurrency)}:${String(polls)}:${String(index)}`,
+          payload: {},
+          maxAttempts: 4,
+        });
+      }
+      for (const [index, slot] of lanes.entries()) {
+        const report = await runOnce(database.session, {
+          registry,
+          owner: `starve${String(concurrency)}:${String(index)}`,
+          limit: 1,
+          classes: slot.order(),
+        });
+        slot.record(report.claimedClass);
+      }
+      polls += 1;
+    }
+    return polls;
+  };
+
+  it('claims bulk work within the streak bound at concurrency 1', async () => {
+    const polls = await bulkIsClaimedUnderSustainedUrgentLoad(1);
+    expect(polls).toBeLessThanOrEqual(URGENT_STREAK_LIMIT + 1);
+  });
+
+  it('claims bulk work within the streak bound at concurrency 2', async () => {
+    const polls = await bulkIsClaimedUnderSustainedUrgentLoad(2);
+    expect(polls).toBeLessThanOrEqual(URGENT_STREAK_LIMIT + 1);
+  });
+
+  it('flips one poll in every streak, and only after the streak', () => {
+    const slot = slotLanes(1, 0);
+    for (let poll = 0; poll < URGENT_STREAK_LIMIT; poll += 1) {
+      expect(slot.order()).toEqual(['urgent', 'bulk']);
+      slot.record('urgent');
+    }
+    expect(slot.order()).toEqual(['bulk', 'urgent']);
+    // The flipped poll resets the streak whatever it claimed, so urgent is not
+    // interleaved away: the next poll is urgent-first again.
+    slot.record('urgent');
+    expect(slot.order()).toEqual(['urgent', 'bulk']);
+    // A poll that claimed bulk, or nothing, also resets it.
+    slot.record('bulk');
+    expect(slot.order()).toEqual(['urgent', 'bulk']);
+    slot.record(null);
+    expect(slot.order()).toEqual(['urgent', 'bulk']);
+  });
+
+  it('never flips a fixed slot', () => {
+    const urgentOnly = slotLanes(3, 0);
+    const bulkOnly = slotLanes(3, 1);
+    for (let poll = 0; poll < URGENT_STREAK_LIMIT + 2; poll += 1) {
+      expect(urgentOnly.order()).toEqual(['urgent']);
+      urgentOnly.record('urgent');
+      expect(bulkOnly.order()).toEqual(['bulk']);
+      bulkOnly.record('bulk');
+    }
   });
 });

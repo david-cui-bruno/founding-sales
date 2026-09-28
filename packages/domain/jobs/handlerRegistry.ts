@@ -64,6 +64,13 @@ export interface JobHandler {
   /** Attempts before the job is dead. Four by default: see docs/decisions/g5-retry-ladder.md. */
   readonly maxAttempts: number;
   readonly leaseSeconds: number;
+  /**
+   * True when this handler returns chunks. Declared, not inferred, so the one
+   * protection that cannot be chunked is refused at startup rather than at the first
+   * job: an `outbound_fence` effect is already out in the world when the chunk would
+   * commit, so "the cursor is where the work got to" is not a fact that path can state.
+   */
+  readonly chunked?: boolean | undefined;
   handle(input: JobHandlerInput): Promise<void | JobChunk>;
 }
 
@@ -74,7 +81,8 @@ export class HandlerRegistryError extends Error {
       | 'KIND_ALREADY_REGISTERED'
       | 'PROTECTION_MISMATCH'
       | 'ATTEMPTS_INVALID'
-      | 'CLASS_MISSING',
+      | 'CLASS_MISSING'
+      | 'CHUNKING_UNSUPPORTED',
     message: string,
   ) {
     super(message);
@@ -118,6 +126,12 @@ export class HandlerRegistry {
     }
     if (!Number.isInteger(handler.maxAttempts) || handler.maxAttempts < 1) {
       throw new HandlerRegistryError('ATTEMPTS_INVALID', 'a handler runs at least once before it is dead');
+    }
+    if (handler.chunked === true && handler.protection === 'outbound_fence') {
+      throw new HandlerRegistryError(
+        'CHUNKING_UNSUPPORTED',
+        `${handler.kind} is protected by the outbound fence, which cannot be chunked: the effect is irreversible, so a chunk and its cursor cannot commit together`,
+      );
     }
     // No lane, no slot: an unclassified kind would sit in the queue for ever while
     // every slot claimed around it. Refusing here refuses the process.

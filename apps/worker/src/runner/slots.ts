@@ -28,3 +28,53 @@ export function slotClasses(concurrency: number, index: number): readonly JobCla
   if (index === 1) return concurrency >= 3 ? ['bulk'] : flexible;
   return flexible;
 }
+
+/**
+ * How many polls in a row a flexible slot may claim urgent work before it looks at
+ * bulk first.
+ *
+ * Without this, "urgent first" is starvation wearing a better name: the scheduler
+ * materializes mail syncs, reconciles and Today builds on a fixed cadence, so at one
+ * or two slots — production until `worker_concurrency` lands, and every deployment
+ * that turns it down again — a flexible slot can find urgent work on every poll for
+ * ever and `sequence.action` never runs. Three is small enough that a reply still
+ * beats a sweep to the slot three times out of four, and large enough that the urgent
+ * lane is not interleaved away.
+ */
+export const URGENT_STREAK_LIMIT = 3;
+
+export interface SlotLanes {
+  /** The lanes for the next poll, in order. */
+  order(): readonly JobClass[];
+  /** What that poll claimed. `null` is a poll that claimed nothing. */
+  record(claimedClass: JobClass | null): void;
+}
+
+/**
+ * A slot's lane order, with the streak counter a flexible slot needs.
+ *
+ * A fixed slot (urgent-only, bulk-only) has nothing to remember. A flexible slot
+ * counts consecutive polls that claimed urgent and, once it reaches the limit, puts
+ * bulk first for one poll; the flipped poll still tries urgent afterwards, so when
+ * there is no bulk work waiting the flip costs one statement and nothing else — which
+ * is why the counter does not need to ask, first, whether bulk is runnable.
+ */
+export function slotLanes(concurrency: number, index: number): SlotLanes {
+  const lanes = slotClasses(concurrency, index);
+  if (lanes.length < 2) {
+    return { order: () => lanes, record: () => {} };
+  }
+  const urgentFirst: readonly JobClass[] = ['urgent', 'bulk'];
+  const bulkFirst: readonly JobClass[] = ['bulk', 'urgent'];
+  let urgentStreak = 0;
+  let flipped = false;
+  return {
+    order: () => {
+      flipped = urgentStreak >= URGENT_STREAK_LIMIT;
+      return flipped ? bulkFirst : urgentFirst;
+    },
+    record: claimedClass => {
+      urgentStreak = !flipped && claimedClass === 'urgent' ? urgentStreak + 1 : 0;
+    },
+  };
+}

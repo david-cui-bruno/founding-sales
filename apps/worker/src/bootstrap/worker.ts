@@ -7,7 +7,7 @@ import { collectSequenceMetrics } from '@fss/domain/sequences/metrics.ts';
 import { collectTodayMetrics } from '@fss/domain/today/metrics.ts';
 import { checkWorkerStartup, type WorkerStartupReport } from '../index.ts';
 import { runOnce } from '../runner/jobRunner.ts';
-import { slotClasses } from '../runner/slots.ts';
+import { slotClasses, slotLanes } from '../runner/slots.ts';
 import { runSchedulerPass, type DueWorkSource } from '../scheduler/schedulerPass.ts';
 import type { WorkerConfig } from './config.ts';
 import { createLiveness, type Liveness } from './liveness.ts';
@@ -179,7 +179,8 @@ export async function startWorker(options: WorkerProcessOptions): Promise<Worker
   const runnerLoops = sessions.runners.map((session, index) => {
     const owner = `${config.instanceKey}:${String(index)}`;
     const name = `runner-${String(index)}`;
-    const classes = slotClasses(config.concurrency, index);
+    // The slot's own lane order, and the streak it remembers between polls.
+    const lanes = slotLanes(config.concurrency, index);
     return startLoop({
       name,
       intervalMilliseconds: config.runnerIdleMilliseconds,
@@ -192,8 +193,9 @@ export async function startWorker(options: WorkerProcessOptions): Promise<Worker
           // claimed two jobs would run them one after the other while their leases run.
           limit: 1,
           instanceKey: config.instanceKey,
-          classes,
+          classes: lanes.order(),
         });
+        lanes.record(report.claimedClass);
         liveness.report(name, true);
         jobsCompleted += report.completed;
         jobsFailed += report.failed;

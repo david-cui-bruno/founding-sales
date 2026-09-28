@@ -306,8 +306,24 @@ export function recordingMetricSink(): MetricSink & { readonly published: Metric
 export async function collectJobMetrics(db: Queryable): Promise<MetricDatum[]> {
   const data: MetricDatum[] = [];
 
+  // A chunked job is measured from its *first* committed chunk, not from `run_at`.
+  // `requeueForNextChunk` resets `run_at` to now on every yield and puts the attempt
+  // back, so a handler that never returns `done` would otherwise be a job that is
+  // always a second old and never dead: invisible here and invisible to
+  // `DeadJobOldestAgeSeconds`. Measured from the first chunk, a sweep that has been
+  // going for hours reads as hours. (The last chunk would not do: it resets every
+  // time, which is precisely the runaway case.) The budget in the runner fails such a
+  // job in the end; this is what an operator sees before then.
   const oldest = await db.query<{ age_seconds: string | null }>(
-    `SELECT extract(epoch FROM now() - min(greatest(run_at, not_before)))::text AS age_seconds
+    `SELECT extract(epoch FROM now() - min(
+              least(
+                greatest(run_at, not_before),
+                coalesce(
+                  to_timestamp((payload -> 'chunking' ->> 'firstChunkMs')::bigint / 1000.0),
+                  greatest(run_at, not_before)
+                )
+              )
+            ))::text AS age_seconds
        FROM jobs
       WHERE state IN ('queued', 'retryable') AND run_at <= now() AND not_before <= now()`,
   );

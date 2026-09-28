@@ -118,12 +118,27 @@ its lanes:
 
 A flexible slot tries its lanes in order inside one pass, so an idle urgent lane costs
 one extra statement rather than a whole poll. The bulk-only slot appears at three,
-because at two a dedicated bulk slot would be half the worker. The lease a slot takes
-is the longest of the handlers of the kinds *that claim* names, not of everything
-registered, so a mail sync is no longer leased for as long as a retention sweep.
+because at two a dedicated bulk slot would be half the worker.
+
+**"Urgent first" is bounded.** The scheduler materializes mail syncs, reconciles and
+Today builds on a fixed cadence, so a flexible slot can find urgent work on every
+single poll, for ever — and at one or two slots there is no bulk-only slot behind it,
+so `sequence.action` would simply never run. `URGENT_STREAK_LIMIT` (three) is the
+answer: after three consecutive polls that claimed urgent work, a flexible slot puts
+bulk first for one poll. The flipped poll still tries urgent afterwards, so when there
+is no bulk work waiting the flip costs one statement and nothing else.
+
+**The lease got shorter for bulk work.** A slot's claim leases for the longest handler
+*of the kinds that claim names*, not of everything registered. A bulk claim therefore
+leases 60 s — the longest of `sequence.action`, `sequence.terminal_stop`,
+`route.validate` and `retention.batch` — where before it took the registry maximum of
+300 s, which is `mail.sync`'s. That is the intended change: a retention sweep was
+being leased for as long as a mail sync, and a crashed worker held it for five minutes
+before the reclaim. A bulk handler that genuinely needs longer raises its own
+`leaseSeconds`, renews with `renewLease`, or chunks.
 
 Production runs one slot until `worker_concurrency` raises it; at one the behaviour is
-what it always was plus the ordering.
+what it always was, plus the ordering and the streak bound.
 
 ## Chunked bulk work
 
@@ -139,6 +154,30 @@ of returning nothing. The runner then:
    (`requeueForNextChunk`), for a fresh lease to carry on under.
 
 `done: true` completes the job in the usual way.
+
+**`outbound_fence` handlers may not chunk.** The effect that protection exists for is
+already out in the world when the chunk would commit, so there is no transaction to
+commit the work and the cursor together and no honest claim that "the cursor is where
+the work got to"; a second claim would re-send. A handler declaring `chunked: true`
+with that protection is refused at registration (`CHUNKING_UNSUPPORTED`), and one that
+returns a chunk anyway fails the job with `chunking_unsupported`.
+
+**Every clock in the loop is the database's.** The lease deadline came from the
+database at claim time, so the remaining time is measured against `now()` read from
+the database — the statement that commits a chunk returns it in the same breath — and
+not against the host's clock, which may have drifted either way.
+
+**The budget.** A yield restores the attempt and resets `run_at`, so a handler that
+never returns `done` would be a job that is always a second old, never dead and never
+visible. Two limits close that: `CHUNK_COUNT_LIMIT` (500 chunks) and
+`CHUNK_SECONDS_LIMIT` (six hours), counted by the runner in `payload.chunking` beside
+the handler's cursor — never inside it — from the database's clock, so a handler
+cannot write its own budget. Exceeding either fails the job through the ordinary
+`failJob` with `chunk_budget_exhausted` and an `error_detail` naming which, so it
+retries, exhausts its attempts and becomes a dead job an operator sees. Before that,
+`OldestRunnableJobAgeSeconds` measures a chunked job from its **first** committed
+chunk rather than from `run_at`, so a sweep that has been going for hours reads as
+hours.
 
 Two properties are the point. **A crash costs one chunk**: everything earlier is
 committed with its cursor, so the next claim resumes at the chunk after the last

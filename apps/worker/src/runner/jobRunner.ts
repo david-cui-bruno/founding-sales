@@ -13,13 +13,17 @@ import {
 } from '@fss/domain/jobs/handlerRegistry.ts';
 import { recordHeartbeat } from '@fss/domain/jobs/heartbeats.ts';
 import {
+  chunkBookkeepingOf,
   claimJobs,
   completeJob,
+  databaseNowMs,
   failJob,
   reclaimExpiredLeases,
   requeueForNextChunk,
   writeProgress,
+  type ChunkBookkeeping,
   type ClaimedJob,
+  type ProgressOutcome,
 } from '@fss/domain/jobs/jobStore.ts';
 
 /**
@@ -70,8 +74,12 @@ export interface RunClaimedJobOptions {
   readonly job: ClaimedJob;
   readonly backoff?: BackoffPolicy | undefined;
   readonly random?: (() => number) | undefined;
-  /** Milliseconds since the epoch. Only the chunk loop reads it; a test steers it. */
-  readonly now?: (() => number) | undefined;
+  /** Database time in epoch milliseconds. Only the chunk loop reads it; a test steers it. */
+  readonly now?: (() => Promise<number>) | undefined;
+  /** Chunks before a chunked job is failed. `CHUNK_COUNT_LIMIT` unless a test lowers it. */
+  readonly chunkCountLimit?: number | undefined;
+  /** Seconds of chunking before a chunked job is failed. `CHUNK_SECONDS_LIMIT` by default. */
+  readonly chunkSecondsLimit?: number | undefined;
 }
 
 /** True while this worker still holds the exact lease it was handed. */
@@ -106,9 +114,38 @@ function failureDetail(error: unknown): string {
 /** How close to the lease deadline the runner stops starting another chunk. */
 const CHUNK_MARGIN_MILLISECONDS = 2_000;
 
+/**
+ * The budget a chunked job is held to, across every claim it ever gets.
+ *
+ * A yield is not a failed attempt and it resets `run_at`, so a handler that never
+ * returns `done` is invisible to `DeadJobOldestAgeSeconds` and to
+ * `OldestRunnableJobAgeSeconds` alike: it would chunk for ever, quietly, holding a
+ * runner slot. These two limits are what turns that into a dead job an operator sees.
+ * Five hundred chunks is far beyond any sweep written for this system, and six hours
+ * is longer than a night's retention run.
+ */
+export const CHUNK_COUNT_LIMIT = 500;
+export const CHUNK_SECONDS_LIMIT = 6 * 60 * 60;
+
+/** Which budget a chunked job has spent, or null while it is inside both. */
+function budgetOverrun(
+  chunking: ChunkBookkeeping,
+  nowMs: number,
+  limits: { readonly chunks: number; readonly seconds: number },
+): string | null {
+  if (chunking.chunks >= limits.chunks) {
+    return `a chunked job committed ${String(chunking.chunks)} chunks without finishing (limit ${String(limits.chunks)})`;
+  }
+  const elapsedSeconds = (nowMs - chunking.firstChunkMs) / 1000;
+  if (elapsedSeconds >= limits.seconds) {
+    return `a chunked job has been chunking for ${String(Math.round(elapsedSeconds))} seconds without finishing (limit ${String(limits.seconds)})`;
+  }
+  return null;
+}
+
 type AttemptResult =
-  | { readonly outcome: JobRunOutcome; readonly chunk?: undefined }
-  | { readonly outcome: 'chunk'; readonly chunk: JobChunk };
+  | { readonly outcome: JobRunOutcome; readonly chunk?: undefined; readonly progress?: undefined }
+  | { readonly outcome: 'chunk'; readonly chunk: JobChunk; readonly progress: ProgressOutcome };
 
 interface AttemptOptions {
   readonly handler: JobHandler;
@@ -120,7 +157,7 @@ interface AttemptOptions {
 async function runAttempt(session: SessionQueryable, options: AttemptOptions): Promise<AttemptResult> {
   const { handler, job, failure } = options;
   const input = { session, scope: scopeForJob(job), job };
-  const progressOf = (chunk: JobChunk): Promise<'written' | 'lease_lost'> =>
+  const progressOf = (chunk: JobChunk): Promise<ProgressOutcome> =>
     writeProgress(session, {
       jobId: job.id,
       workspaceId: job.workspaceId,
@@ -136,15 +173,25 @@ async function runAttempt(session: SessionQueryable, options: AttemptOptions): P
       return { outcome: await failJob(session, job, { code: failureCode(error), detail: failureDetail(error), ...failure }) };
     }
     if (isJobChunk(result) && !result.done) {
-      // No transaction to commit with: the effect is already out in the world, so the
-      // cursor write is its own statement and its own commit.
-      return (await progressOf(result)) === 'written' ? { outcome: 'chunk', chunk: result } : { outcome: 'lease_lost' };
+      // An irreversible effect cannot be re-entered. There is no transaction to commit
+      // the chunk and its cursor together, so "the cursor is where the work got to" is
+      // not a fact this path can state; a second claim would re-send. The registry
+      // refuses a handler that declares `chunked` with this protection, and this is the
+      // same refusal for one that returns a chunk without declaring it.
+      return {
+        outcome: await failJob(session, job, {
+          code: 'chunking_unsupported',
+          detail: `${job.kind} is protected by the outbound fence, which cannot be chunked`,
+          ...failure,
+        }),
+      };
     }
     return { outcome: await completeJob(session, job) };
   }
 
   let outcome: JobRunOutcome = 'lease_lost';
   let chunk: JobChunk | null = null;
+  let progress: ProgressOutcome | null = null;
   let thrown: unknown = null;
   try {
     await withTransaction(session, async () => {
@@ -155,8 +202,10 @@ async function runAttempt(session: SessionQueryable, options: AttemptOptions): P
       const result = await handler.handle(input);
       if (isJobChunk(result) && !result.done) {
         // The chunk and its cursor commit together, or neither does.
-        if ((await progressOf(result)) === 'lease_lost') throw new LeaseLost();
+        const written = await progressOf(result);
+        if (written.outcome === 'lease_lost') throw new LeaseLost();
         chunk = result;
+        progress = written;
         return;
       }
       outcome = await completeJob(session, job);
@@ -172,7 +221,7 @@ async function runAttempt(session: SessionQueryable, options: AttemptOptions): P
   if (thrown !== null) {
     return { outcome: await failJob(session, job, { code: failureCode(thrown), detail: failureDetail(thrown), ...failure }) };
   }
-  if (chunk !== null) return { outcome: 'chunk', chunk };
+  if (chunk !== null && progress !== null) return { outcome: 'chunk', chunk, progress };
   return { outcome };
 }
 
@@ -187,20 +236,48 @@ export async function runClaimedJob(session: SessionQueryable, options: RunClaim
   }
 
   const failure = { backoff: options.backoff ?? DEFAULT_BACKOFF, random: options.random };
-  const now = options.now ?? ((): number => Date.now());
+  // Database time throughout. The lease deadline came from the database at claim time,
+  // so comparing it with a host clock compares two clocks; a worker whose clock had
+  // drifted forward would give itself a shorter lease and one drifted back a longer.
+  const overrideNow = options.now;
+  const now = overrideNow ?? ((): Promise<number> => databaseNowMs(session));
+  const limits = { chunks: options.chunkCountLimit ?? CHUNK_COUNT_LIMIT, seconds: options.chunkSecondsLimit ?? CHUNK_SECONDS_LIMIT };
   const deadline = Date.parse(options.job.leaseExpiresAt);
   let job = options.job;
   // The worst chunk so far is the estimate for the next one: a chunk is a bounded unit
   // of work, so the bound the handler already demonstrated is the honest guess.
   let longestChunk = 0;
+  let clock: number | null = null;
 
   for (;;) {
-    const startedAt = now();
+    // The budget is checked before the work, from the row's own bookkeeping, so a job
+    // that arrived over its limit spends nothing more on it.
+    const carried = chunkBookkeepingOf(job.payload);
+    if (carried !== null) {
+      clock ??= await now();
+      const overrun = budgetOverrun(carried, clock, limits);
+      if (overrun !== null) {
+        return await failJob(session, job, { code: 'chunk_budget_exhausted', detail: overrun, ...failure });
+      }
+    }
+    const startedAt = clock ?? (await now());
     const attempt = await runAttempt(session, { handler, job, failure });
     if (attempt.outcome !== 'chunk') return attempt.outcome;
-    longestChunk = Math.max(longestChunk, now() - startedAt);
-    job = { ...job, payload: { ...job.payload, progress: attempt.chunk.progress } };
-    if (!Number.isFinite(deadline) || now() + longestChunk + CHUNK_MARGIN_MILLISECONDS >= deadline) {
+
+    const written = attempt.progress;
+    job = {
+      ...job,
+      payload: {
+        ...job.payload,
+        progress: attempt.chunk.progress,
+        ...(written.chunking === null ? {} : { chunking: written.chunking }),
+      },
+    };
+    // The statement that committed the chunk read the database clock in the same
+    // breath; that is the "before the next chunk" reading, and it costs no round trip.
+    clock = overrideNow === undefined && written.nowMs !== null ? written.nowMs : await now();
+    longestChunk = Math.max(longestChunk, clock - startedAt);
+    if (!Number.isFinite(deadline) || clock + longestChunk + CHUNK_MARGIN_MILLISECONDS >= deadline) {
       // Out of lease with work left: back to the queue, cursor kept, runnable now.
       return (await requeueForNextChunk(session, job)) === 'requeued' ? 'requeued' : 'lease_lost';
     }
