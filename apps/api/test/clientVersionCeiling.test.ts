@@ -6,7 +6,7 @@ import {
   clientVersionRangeSchema,
   mayMutate,
   publishedClientVersions,
-  sessionGrantSchema,
+  sessionRenewalSchema,
   signInStartResponseSchema,
   wireDrift,
   type ClientVersionPolicy,
@@ -158,7 +158,7 @@ describe('the compatibility ceiling, through the real routes', () => {
     const renewed = await call('POST', '/auth/session/renew', { refreshCredential, clientVersion: '1.4.0' });
     expect(renewed.status).toBe(200);
     expect(renewed.body['supportedClientVersions']).toEqual({ minimum: '1.2.0', maximum: '1.4.999' });
-    expect(sessionGrantSchema.omit({ deviceSecret: true }).safeParse(renewed.body).success).toBe(true);
+    expect(sessionRenewalSchema.safeParse(renewed.body).success).toBe(true);
   });
 });
 

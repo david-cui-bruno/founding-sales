@@ -16,6 +16,7 @@ import {
   type AuthFixture,
   type SeededWorkspace,
 } from '../support/authFixture.ts';
+import { mintedGrant, type MintedGrant } from '../support/sessionFixture.ts';
 
 /**
  * The device secret as this Mac's long-lived credential (wave 3b, audit item S7).
@@ -64,7 +65,7 @@ async function signIn(
   workspace: SeededWorkspace,
   member: { readonly googleSub: string; readonly email: string },
   options: { readonly deviceLabel?: string } = {},
-): Promise<SessionGrant> {
+): Promise<MintedGrant> {
   const started = await startSignIn(fixture.deps, {
     workspaceId: workspace.workspaceId,
     deviceLabel: options.deviceLabel ?? fixture.collidingDeviceLabel,
@@ -88,7 +89,7 @@ async function signIn(
     clientVersion: CURRENT_CLIENT_VERSION,
   });
   if (!claimed.claimed) throw new Error(`claim refused: ${claimed.refusal}`);
-  return claimed.grant;
+  return mintedGrant(claimed.grant);
 }
 
 /** What the Mac sends to `openSession`, from the grant it stored at claim. */

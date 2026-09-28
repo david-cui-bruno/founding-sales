@@ -10,6 +10,23 @@ import {
 } from './authFixture.ts';
 
 /**
+ * A grant as today's server mints it: with the rotating credential.
+ *
+ * `sessionGrantSchema.refreshCredential` is optional from desktop 1.0.14 (lane W3-C1)
+ * so an installed Mac can accept a grant without it. The server still mints one until
+ * lane W3-C2, and these tests renew with it, so the helpers narrow the field back to
+ * required and throw if it ever goes missing — which would be C2 landing, not a type.
+ */
+export type MintedGrant = SessionGrant & { readonly refreshCredential: string };
+
+export function mintedGrant(grant: SessionGrant): MintedGrant {
+  if (grant.refreshCredential === undefined) {
+    throw new Error('the claim minted no refresh credential; the server still mints one until lane W3-C2');
+  }
+  return { ...grant, refreshCredential: grant.refreshCredential };
+}
+
+/**
  * A real session grant, through the real sign-in.
  *
  * The CRM tests need a bearer token, and there is exactly one way to get one: the
@@ -22,7 +39,7 @@ export async function issueSessionFor(
   workspace: SeededWorkspace,
   member: { readonly googleSub: string; readonly email: string },
   options: { readonly deviceLabel?: string } = {},
-): Promise<SessionGrant> {
+): Promise<MintedGrant> {
   const started = await startSignIn(fixture.deps, {
     workspaceId: workspace.workspaceId,
     deviceLabel: options.deviceLabel ?? fixture.collidingDeviceLabel,
@@ -48,5 +65,5 @@ export async function issueSessionFor(
     clientVersion: CURRENT_CLIENT_VERSION,
   });
   if (!claimed.claimed) throw new Error(`claim refused: ${claimed.refusal}`);
-  return claimed.grant;
+  return mintedGrant(claimed.grant);
 }

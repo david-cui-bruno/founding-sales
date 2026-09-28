@@ -23,6 +23,7 @@ import {
   type AuthFixture,
   type SeededWorkspace,
 } from '../support/authFixture.ts';
+import { mintedGrant, type MintedGrant } from '../support/sessionFixture.ts';
 
 /**
  * The rest of specification 5: JWKS caching and rotation, the grant's shape, command
@@ -50,7 +51,7 @@ async function signIn(
   workspace: SeededWorkspace,
   member: { readonly googleSub: string; readonly email: string },
   options: { readonly deviceLabel?: string } = {},
-): Promise<SessionGrant> {
+): Promise<MintedGrant> {
   const started = await startSignIn(fixture.deps, {
     workspaceId: workspace.workspaceId,
     deviceLabel: options.deviceLabel ?? fixture.collidingDeviceLabel,
@@ -74,7 +75,7 @@ async function signIn(
     clientVersion: CURRENT_CLIENT_VERSION,
   });
   if (!claimed.claimed) throw new Error(`claim refused: ${claimed.refusal}`);
-  return claimed.grant;
+  return mintedGrant(claimed.grant);
 }
 
 async function principalOf(grant: SessionGrant): Promise<AuthenticatedPrincipal> {

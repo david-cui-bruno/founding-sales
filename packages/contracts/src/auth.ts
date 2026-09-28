@@ -149,7 +149,15 @@ export const sessionGrantSchema = z.strictObject({
   deviceSecret: deviceSecretSchema,
   accessToken: accessTokenSchema,
   accessTokenExpiresAt: instant,
-  refreshCredential: refreshCredentialSchema,
+  /**
+   * Optional from desktop 1.0.14 (lane W3-C1). Nothing on the Mac has read it since
+   * wave 3b — `POST /auth/session/open` takes the device secret, which does not
+   * rotate — but the strict parse still required it, so the server could not stop
+   * minting it. The server keeps sending it until lane W3-C2 (migration 0021) drops
+   * the rotating credential; this build accepts a grant with it or without it and
+   * stores it in neither case.
+   */
+  refreshCredential: refreshCredentialSchema.optional(),
   /** The 30-day boundary. After it, only a full Google sign-in works. */
   reauthenticateAfter: instant,
   supportedClientVersions: clientVersionRangeSchema,
@@ -161,8 +169,17 @@ export const sessionRenewRequestSchema = z.strictObject({
   clientVersion: semanticVersionSchema,
 });
 
-/** A renewal returns no device secret: the Mac already has one and it does not rotate. */
-export const sessionRenewalSchema = sessionGrantSchema.omit({ deviceSecret: true });
+/**
+ * A renewal returns no device secret: the Mac already has one and it does not rotate.
+ *
+ * `refreshCredential` is restated as required here on purpose: the claim's copy became
+ * optional for desktop 1.0.14 (lane W3-C1), and renew must not loosen with it — the
+ * server still serves `POST /auth/session/renew`, and always returns the next
+ * credential, until lane W3-C2 retires the path.
+ */
+export const sessionRenewalSchema = sessionGrantSchema
+  .omit({ deviceSecret: true })
+  .extend({ refreshCredential: refreshCredentialSchema });
 export type SessionRenewal = z.infer<typeof sessionRenewalSchema>;
 
 // ---------------------------------------------------------------------------
