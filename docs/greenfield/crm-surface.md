@@ -236,9 +236,11 @@ clear non-actionable state" is a unit test rather than a screenshot.
   a `candidate`. So there is no **Confirm this number** button and no
   `POST /contacts/routes/confirm`: lane g88 added both, wave 2 made them unnecessary, and
   the 1.0.14 minimum (lane W3-C2) retired the route and its command schema. The refusal
-  codes `route_version_stale` and `route_invalid` stay in `CRM_REFUSAL_CODES` —
-  `POST /contacts/routes/check` and `/retire` answer them for a route that moved since
-  the page was drawn. An email address was never confirmed by hand. Its validation is
+  codes `route_version_stale` and `route_invalid` stay in `CRM_REFUSAL_CODES` for
+  `POST /contacts/routes/check`, which is the only command that takes a `routeVersion`
+  and the only one that answers either: a route that moved since the page was drawn, or
+  one whose validation has already failed. `/contacts/routes/retire` takes no version and
+  returns neither. An email address was never confirmed by hand. Its validation is
   deliverability, which a person cannot supply; the worker checks it (lane g90), and
   each address says where that stands — **Checking…** with **Check again**
   (`POST /contacts/routes/check`), **Deliverable domain — usable**, or **Mail can’t

@@ -48,9 +48,13 @@ reply on it is enough.
 2. `GET /diagnostics`: every mailbox's status and coverage state, `schema.appliedVersion`
    and whether the running images accept it, and open critical alerts. Its `restore`
    object is a compatibility field with neutral values and says nothing: the
-   system-generation pin went with lane W3-S8 and the table with migration 0021. A
-   restore in progress shows as the `restore_in_progress` hold below and in
-   `runbooks/restore.md`, not as a generation mismatch.
+   system-generation pin went with lane W3-S8 and the table with migration 0021, so a
+   restore is never a generation mismatch. **A restore is not visible here at all**, and
+   usually not in the holds either: `runbooks/restore.md`'s protocol opens no blanket
+   hold. It opens `restore_in_progress` holds only on the one path that needs them —
+   step (d) rerun with `--hold-unattached`, for a send in the old instance's Sent folder
+   that no single step can be named for — so their absence says nothing about whether a
+   restore is under way. Ask the running log and `restore.md`.
 3. `GET /pauses?open=true`. A pause does **not** cause this alarm. If one is open, the
    alarm is about a different reason underneath it.
 
@@ -62,8 +66,25 @@ ones, most likely first:
 - `mailbox_disconnected` / `coverage_incomplete`: an owner-scoped mailbox-health hold
   blocks every automated step kind for that owner, and with one salesperson that is the
   whole workspace. See `mailbox_disconnected` and `mailbox_heartbeat_missed`.
-- `restore_in_progress`: a workspace hold from the restore protocol, which nothing opens
-  since lane W3-S8 replaced it with `restore.md`; one still open predates that.
+- `restore_in_progress`: **an unattached send from a restore** (`restore.md` step (d) with
+  `--hold-unattached`, `fss admin mailbox reconcile-sent`). The reconcile found an FSS send
+  in the old instance's Sent folder that the copy lost and that no single step execution
+  can be named for, and held what it could belong to instead of abandoning the restore:
+  one hold per firm the message names, or one on the workspace when its recipient was
+  unreadable, each blocking **every** action kind, keyed by the message's hash so a rerun
+  opens nothing twice. With one salesperson a workspace hold is the whole workspace, which
+  is exactly this alarm. These holds outlive the restore on purpose.
+  **Do not release one from here.** `restore.md`'s step (f) is the procedure, and it is a
+  human decision recorded as `basis: human_attestation`: read the Sent message at the
+  hold's `sentAt` to learn whom it went to and which step it was, end every enrollment of
+  that contact that could send the same step again (the opening `hold.restore_opened`
+  audit row lists the ones recorded, and there may be others), and decide what
+  re-enrollment is allowed — a new enrollment starts at the first step. Then
+  `fss admin holds release-restore --hold <id> --resolution checked-no-duplicate --note
+  <what you verified>`, from an ECS task, after which `audit_launch` must find
+  CloudTrail's RunTask naming the same caller. A hold with no matching passing
+  reconciliation, or one older than the restore, is a no-go for `restore.md` step (e) and
+  belongs to David, not to this runbook.
 - `provider_refusal` on every firm: Gmail is refusing sends, for example because of a
   rate limit or a suspended account.
 - `send_unknown_terminal`: sends nobody can account for. Failed jobs are
@@ -112,6 +133,9 @@ or held steps carries a counted reason.
 - Do not clear a `long_hold_review` step by hand. It is the scheduler's to resume, and
   it is still held because something else is open or eligibility refused it; forcing it
   skips the fresh eligibility check that suppression, coverage and the windows live in.
+- Do not release a `restore_in_progress` hold to clear this alarm. It stands for a send
+  that may already have gone to the prospect, and releasing it without `restore.md` step
+  (f)'s three checks is how the same step gets sent twice.
 - Do not resume by switching opportunities to automated. Automation never reverses
   manual mode; an opportunity is manual because a person replied.
 - Do not enable sending to clear it. Sending switched off is not what this alarm reads.
