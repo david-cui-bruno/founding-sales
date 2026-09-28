@@ -19,7 +19,6 @@ import { seedContact, seedFirm } from './support/crmSeed.ts';
  */
 describe('lane g88 through the API', () => {
   let fixture: AuthFixture;
-  let adminToken = '';
   let salespersonToken = '';
   let firmId = '';
   let contactId = '';
@@ -53,7 +52,6 @@ describe('lane g88 through the API', () => {
 
   beforeAll(async () => {
     fixture = await createAuthFixture();
-    adminToken = (await issueSessionFor(fixture, fixture.alpha, fixture.alpha.admin)).accessToken;
     salespersonToken = (await issueSessionFor(fixture, fixture.alpha, fixture.alpha.salesperson)).accessToken;
 
     firmId = await seedFirm(fixture, {

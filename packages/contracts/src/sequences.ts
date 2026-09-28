@@ -1,6 +1,5 @@
 import { z } from 'zod';
 import { ianaTimeZone, instant, sha256Hex, uuid } from './foundationRows.ts';
-import { holdReasonCodeSchema } from './reasonCodes.ts';
 
 /**
  * The wire contract of the sequence editor's reads: sequences, versions and their
@@ -30,9 +29,6 @@ export type StepChannel = (typeof STEP_CHANNELS)[number];
  */
 export const REMOVED_STEP_CHANNELS = ['linkedin'] as const;
 export type RemovedStepChannel = (typeof REMOVED_STEP_CHANNELS)[number];
-
-/** Why a removed step is held, on the resume review. Not a `hold_reason_codes` row. */
-const REMOVED_STEP_HELD_REASON = 'channel_removed' as const;
 
 const SEQUENCE_VERSION_STATES = ['draft', 'published', 'retired'] as const;
 export type SequenceVersionState = (typeof SEQUENCE_VERSION_STATES)[number];
@@ -249,6 +245,5 @@ export const enrollmentsResponseSchema = z.object({ asOf: instant, enrollments: 
 // person to confirm and `/enrollments/resume/preview` had no caller.
 // ---------------------------------------------------------------------------
 
-const STEP_EXECUTION_STATES = ['pending', 'held', 'dispatched', 'completed', 'cancelled'] as const;
-export type StepExecutionState = (typeof STEP_EXECUTION_STATES)[number];
+export type StepExecutionState = 'pending' | 'held' | 'dispatched' | 'completed' | 'cancelled';
 

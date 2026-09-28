@@ -10,7 +10,6 @@ import {
 import {
   POSTURE_RULES_REVISION,
   POSTURE_STATEMENTS,
-  POSTURE_STATEMENT_KEYS,
   STATE_POSTURE_RULES,
   US_STATE_CODES,
 } from '@fss/domain/src/rules/statePosture.ts';
@@ -27,11 +26,14 @@ import { issueSessionFor } from './support/sessionFixture.ts';
  * schema the desktop parses it with (`wireDrift` is empty), and the reference texts are
  * compared with `statePosture.ts` itself: the form shows the release's words, not a copy.
  *
- * **The vacuous-pass trap for the overlap.** A second posture for a state already in force
- * was refused by the database's exclusion constraint inside the command's transaction, and
- * the refusal left that transaction unable to write its receipt: the API answered 500 where
- * the domain answered `posture_overlapping`. The domain's own test never saw it, because it
- * does not run inside `runCommand`. This one records the overlap through the route.
+ * `POST /postures/record` — one state with its statements ticked one by one — went with
+ * the 1.0.14 minimum (lane W3-C2). `/postures/allow` is what the form sends, and it is
+ * what these tests record through. The overlap case that used to live here went with
+ * `record`: `allowCallingStates` answers `alreadyAllowed` for a state already in force
+ * rather than reaching the exclusion constraint, so there is no route that can produce
+ * `posture_overlapping` any more. The savepoint the route still takes is what keeps a
+ * concurrent allow that does reach 23P01 answerable rather than a 500
+ * (`packages/domain/test/policy` proves the domain half).
  */
 describe('the postures form’s reads and commands', () => {
   let fixture: AuthFixture;
@@ -60,14 +62,11 @@ describe('the postures form’s reads and commands', () => {
     return { status: result.status, body: JSON.parse(JSON.stringify(result.body)) as Record<string, unknown> };
   };
 
-  const record = async (token: string, state: string, effectiveFrom: string) =>
-    await call('POST', '/postures/record', token, {
+  const allow = async (token: string, body: Record<string, unknown>) =>
+    await call('POST', '/postures/allow', token, {
       commandId: randomUUID(),
       clientVersion: CURRENT_CLIENT_VERSION,
-      state,
-      effectiveFrom,
-      confirmedStatements: [...POSTURE_STATEMENT_KEYS],
-      note: 'Checked the registration page.',
+      ...body,
     });
 
   beforeAll(async () => {
@@ -95,22 +94,24 @@ describe('the postures form’s reads and commands', () => {
   });
 
   it('records a posture and lists it, exactly as the contract says', async () => {
-    const recorded = await record(adminToken, 'RI', '2026-09-01T04:00:00.000Z');
+    const recorded = await allow(adminToken, { states: ['RI'], confirmed: true });
     expect(recorded.status).toBe(200);
-    expect(wireDrift(statePostureViewSchema, recorded.body['result'])).toEqual([]);
+    const view = allowCallingStatesResultSchema.parse(recorded.body['result']).postures[0];
+    expect(wireDrift(statePostureViewSchema, view)).toEqual([]);
 
     const listed = await call('GET', '/postures', adminToken);
     expect(wireDrift(statePostureListResponseSchema, listed.body)).toEqual([]);
     const postures = statePostureListResponseSchema.parse(listed.body).postures;
     expect(postures.map(posture => [posture.state, posture.revision, posture.revokedAt])).toEqual([['RI', 1, null]]);
-    // The review date defaults to a year after the posture takes effect (10.1).
-    expect(postures[0]?.reviewAt).toBe('2027-09-01T04:00:00.000Z');
+    // The review date still defaults to a year out (10.1), and nothing acts on it: a
+    // posture has no yearly expiry since wave 2 (S4.2).
+    expect(postures[0]?.reviewAt).not.toBeNull();
   });
 
-  it('refuses an overlapping posture as posture_overlapping, with a receipt, not a 500', async () => {
-    const overlapping = await record(adminToken, 'RI', '2026-10-01T04:00:00.000Z');
-    expect(overlapping.status).toBe(409);
-    expect(overlapping.body).toMatchObject({ status: 'refused', reason: 'posture_overlapping' });
+  it('answers alreadyAllowed for a state already in force rather than overlapping it', async () => {
+    const again = await allow(adminToken, { states: ['RI'], confirmed: true });
+    expect(again.status).toBe(200);
+    expect(allowCallingStatesResultSchema.parse(again.body['result']).alreadyAllowed).toEqual(['RI']);
     const listed = statePostureListResponseSchema.parse((await call('GET', '/postures', adminToken)).body);
     expect(listed.postures.filter(posture => posture.state === 'RI')).toHaveLength(1);
   });
@@ -125,15 +126,13 @@ describe('the postures form’s reads and commands', () => {
     });
     expect(revoked.status).toBe(200);
     expect(wireDrift(statePostureViewSchema, revoked.body['result'])).toEqual([]);
-    const again = await record(adminToken, 'RI', '2026-10-01T04:00:00.000Z');
+    const again = await allow(adminToken, { states: ['RI'], confirmed: true });
     expect(again.status).toBe(200);
-    expect(statePostureViewSchema.parse(again.body['result']).revision).toBe(2);
+    const view = allowCallingStatesResultSchema.parse(again.body['result']).postures[0];
+    expect(view?.revision).toBe(2);
   });
 
   it('puts several states on the "OK to call" list with one confirmation, exactly as the contract says (wave 2)', async () => {
-    const allow = async (token: string, body: Record<string, unknown>) =>
-      await call('POST', '/postures/allow', token, { commandId: randomUUID(), clientVersion: CURRENT_CLIENT_VERSION, ...body });
-
     const answer = await allow(adminToken, { states: ['CT', 'nh'], confirmed: true });
     expect(answer.status).toBe(200);
     expect(wireDrift(allowCallingStatesResultSchema, answer.body['result'])).toEqual([]);
@@ -153,9 +152,4 @@ describe('the postures form’s reads and commands', () => {
     expect([refused.status, refused.body['reason']]).toEqual([409, 'admin_only']);
   });
 
-  it('keeps recording to admins', async () => {
-    const refused = await record(salespersonToken, 'MA', '2026-09-01T04:00:00.000Z');
-    expect(refused.status).toBe(409);
-    expect(refused.body['reason']).toBe('admin_only');
-  });
 });

@@ -21,8 +21,6 @@ export const SUPPORTED: ClientVersionRange = { minimum: '1.2.0', maximum: '1.4.0
 
 const secret = (): string => randomBytes(32).toString('base64url');
 const token = (workspaceId: string): string => `fssa1.${workspaceId}.${secret()}`;
-const credential = (workspaceId: string, deviceId: string, generation: number): string =>
-  `fssr1.${workspaceId}.${deviceId}.${String(generation)}.${secret()}`;
 
 export interface ApiScript {
   /** Refuse the next call to this path with this code. One use each. */
@@ -50,9 +48,7 @@ export interface ApiScript {
    * Whether the claim's answer carries a rotating refresh credential (lane W3-C1).
    * True — today's server. False is the server after lane W3-C2 stops minting it.
    */
-  mintsRefreshCredential(value: boolean): void;
   /** The rotating credential the last grant carried, or null when it carried none. */
-  grantedRefreshCredential(): string | null;
   /** Whether the server still has this device. A sign-out sets it false. */
   deviceActive(): boolean;
   /** The other Macs `GET /devices` lists beside this one. */
@@ -137,19 +133,11 @@ export async function createDesktopFixture(
   let offline = false;
   let browserFinished = false;
   /*
-   * The rotating credential the grant still carries, for desktop 1.0.12 (wave 3b).
-   * Nothing on this Mac stores it and nothing presents it: one generation, never
-   * advanced, because there is no route left that would advance it.
+   * The device secret the claim hands over. There is no second credential: the
+   * rotating one went with migration 0021 (lane W3-C2), and `sessionGrantSchema` has
+   * no field that could carry it.
    */
-  const generation = 1;
-  /*
-   * Whether the claim's answer carries that credential at all (lane W3-C1). It is
-   * optional on the wire from desktop 1.0.14 so that lane W3-C2 can stop minting it;
-   * a test sets this false to be the server after C2.
-   */
-  let mintsRefreshCredential = true;
   let granted: string | null = null;
-  let grantedCredential: string | null = null;
   let deviceActive = true;
   let others: DeviceList = [];
   let role: 'admin' | 'salesperson' = 'salesperson';
@@ -169,7 +157,6 @@ export async function createDesktopFixture(
 
   const grantFor = (forWorkspace: string): SessionGrant => {
     granted = secret();
-    grantedCredential = mintsRefreshCredential ? credential(forWorkspace, deviceId, generation) : null;
     deviceActive = true;
     return {
       workspaceId: forWorkspace,
@@ -179,7 +166,6 @@ export async function createDesktopFixture(
       deviceSecret: granted,
       accessToken: token(forWorkspace),
       accessTokenExpiresAt: new Date(current + 3_600_000).toISOString(),
-      ...(grantedCredential === null ? {} : { refreshCredential: grantedCredential }),
       reauthenticateAfter: new Date(current + 30 * 24 * 3_600_000).toISOString(),
       supportedClientVersions: supported,
     };
@@ -364,10 +350,6 @@ export async function createDesktopFixture(
         browserFinished = value;
       },
       grantedSecret: () => granted,
-      mintsRefreshCredential: value => {
-        mintsRefreshCredential = value;
-      },
-      grantedRefreshCredential: () => grantedCredential,
       deviceActive: () => deviceActive,
       otherDevices: value => {
         others = value;

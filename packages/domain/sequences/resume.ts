@@ -4,7 +4,6 @@ import {
   type HoldReasonCode,
   STEP_CHANNELS,
   type StepChannel,
-  type StepExecutionState,
 } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import {
@@ -15,7 +14,7 @@ import {
   type ResumeDecision,
 } from '../src/rules/holds.ts';
 import { CHANNEL_ACTION_KINDS, CHANNEL_PAUSE_KEYS } from './eligibility.ts';
-import { loadEnrollmentForUpdate, readEnrollment, unexecutedExecutions } from './rows.ts';
+import { loadEnrollmentForUpdate, unexecutedExecutions } from './rows.ts';
 import { rescheduleExecution } from './shifts.ts';
 import { acceptSequence, isStepChannel, refuseSequence, type EnrollmentRow, type SequenceResult } from './types.ts';
 import { holdAppliesSql } from './wake.ts';

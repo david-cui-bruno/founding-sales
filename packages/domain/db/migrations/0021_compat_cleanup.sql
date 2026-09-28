@@ -30,6 +30,8 @@
 --       `review_union_milliseconds` stays as a column and becomes null-only, because
 --       dropping a column desktop 1.0.14 still parses on the wire would be a wire
 --       change and this is not one — the API answers the field as a constant `null`.
+--       `sequence_enrollments_review_union_positive` goes with the value it bounded: a
+--       CHECK no row can reach is a thing to explain rather than a thing to have.
 --   (b) `device_refresh_credentials`, and `devices.credential_generation` with its
 --       CHECK. The rotating refresh credential is gone: nothing has renewed with it
 --       since desktop 1.0.12, `POST /auth/session/open` takes the device secret — which
@@ -108,7 +110,8 @@ ALTER TABLE sequence_enrollments
     CHECK ((state = 'active') = (ended_at IS NULL)),
   DROP CONSTRAINT sequence_enrollments_review_union_present,
   ADD CONSTRAINT sequence_enrollments_review_union_present
-    CHECK (review_union_milliseconds IS NULL);
+    CHECK (review_union_milliseconds IS NULL),
+  DROP CONSTRAINT sequence_enrollments_review_union_positive;
 
 -- ---------------------------------------------------------------------------
 -- (b) The rotating refresh credential

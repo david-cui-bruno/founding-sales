@@ -8,7 +8,11 @@ import { seedCrm } from './support/crmFixtures.ts';
 import { seedMail } from './support/mailFixtures.ts';
 import { seedOutbound } from './support/outboundFixtures.ts';
 
-/** Tables the foundation migration creates, scoped and unscoped alike. */
+/**
+ * Tables the foundation migration creates and later migrations keep, scoped and
+ * unscoped alike. (`system_generations` was one until migration 0021 dropped it with the
+ * generation pin lane W3-S8 had already stopped reading.)
+ */
 const FOUNDATION_TABLES = [
   'active_holds',
   'administrative_pauses',
@@ -24,7 +28,6 @@ const FOUNDATION_TABLES = [
   'jobs',
   'retention_policies',
   'suppression_events',
-  'system_generations',
   'users',
   'workspace_memberships',
   'workspaces',
@@ -74,12 +77,7 @@ describe('forward-only migrations on a fresh database', () => {
     expect(rows[0]?.business_time_zone).toBe('America/New_York');
   });
 
-  it('seeds one system generation and the closed hold reason-code set', async () => {
-    const generations = await database.session.query<{ generation: string; reason: string }>(
-      'SELECT generation, reason FROM system_generations ORDER BY generation',
-    );
-    expect(generations.rows).toEqual([{ generation: '1', reason: 'initial' }]);
-
+  it('seeds the closed hold reason-code set', async () => {
     const reasons = await database.session.query<{ count: string }>('SELECT count(*) AS count FROM hold_reason_codes');
     expect(Number(reasons.rows[0]?.count)).toBeGreaterThan(20);
   });

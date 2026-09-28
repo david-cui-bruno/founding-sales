@@ -150,7 +150,10 @@ afterAll(async () => {
 describe('fss and migration 0020', () => {
   it('parses the preflight, which runs on the runtime identity', () => {
     expect(parseFssCommand(['admin', 'schema-preflight', '0020', '--report', '/tmp/x.json'])).toMatchObject({ ok: true });
-    expect(parseFssCommand(['admin', 'schema-preflight', '0021'])).toMatchObject({ ok: false, reason: 'command_unknown' });
+    expect(parseFssCommand(['admin', 'schema-preflight', '0021', '--report', '/tmp/x.json'])).toMatchObject({ ok: true });
+    // A migration the tool does not know is `command_unknown` from the tool, which is
+    // what `infra/scripts/preflight.sh` fails on.
+    expect(parseFssCommand(['admin', 'schema-preflight', '0022'])).toMatchObject({ ok: false, reason: 'command_unknown' });
     expect(MIGRATION_IDENTITY_COMMANDS).not.toContain('admin schema-preflight 0020');
   });
 
@@ -197,7 +200,9 @@ describe('fss and migration 0020', () => {
 
     const { code } = await run(['migrate']);
     expect(code).toBe(0);
-    expect(CURRENT_SCHEMA_VERSION).toBe(20);
+    // `migrate` applies every unapplied migration, so the database is at this source
+    // tree's schema and 0020's preflight no longer applies.
+    expect(CURRENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(20);
     const applied = await run(['admin', 'schema-preflight', '0020']);
     expect(applied.code).toBe(20);
     expect(applied.stderr).toContain('schema_not_19');

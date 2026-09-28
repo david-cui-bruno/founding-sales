@@ -154,25 +154,24 @@ describe('the administration surface', () => {
     const answer = await call('GET', '/settings', salespersonToken);
     expect(answer.status).toBe(200);
     const settings = answer.body['settings'] as readonly { settingKey: string; version: number }[];
-    // Every key but the one the installed desktop cannot parse: see the test below.
-    expect(settings.map(entry => entry.settingKey)).toEqual(
-      [...SETTING_KEYS].filter(key => key !== 'postal_address'),
-    );
+    // Every key, `postal_address` included: the snapshot hid that one until the 1.0.14
+    // minimum (lane W3-C2), and 1.0.14 parses it.
+    expect(settings.map(entry => entry.settingKey)).toEqual([...SETTING_KEYS]);
     expect(settings.every(entry => entry.version === 0)).toBe(true);
     const elsewhere = answer.body['elsewhere'] as readonly { path: string }[];
     expect(elsewhere.map(entry => entry.path)).toContain('/postures/calling-window');
   });
 
   /**
-   * Compatibility with the desktop that is installed (lane W3-F).
+   * The postal address on every surface (lane W3-F, unhidden by lane W3-C2).
    *
    * `settingsSnapshotSchema` is strict and its `settingKey` is an enum, so an entry for a
    * key the installed build has never heard of does not degrade — it throws, and the
-   * settings page loses every section. So `postal_address` is in the key set, the update
-   * command and the history, and it is left out of the snapshot unless the caller asks
-   * for it by name.
+   * settings page loses every section. That is why the snapshot hid `postal_address`
+   * from a caller that did not name it in `?include=`, and why the filter and the
+   * parameter went with the 1.0.14 minimum: the installed build knows the key.
    */
-  it('keeps the postal address out of the snapshot unless the caller asks for it', async () => {
+  it('carries the postal address in the snapshot unasked, in the history and in the command', async () => {
     const saved = await call(
       'POST',
       '/settings/update',
@@ -183,17 +182,15 @@ describe('the administration surface', () => {
 
     const unasked = await call('GET', '/settings', adminToken);
     const keys = (unasked.body['settings'] as readonly { settingKey: string }[]).map(entry => entry.settingKey);
-    expect(keys).not.toContain('postal_address');
-
-    const asked = await call('GET', '/settings?include=postal_address', adminToken);
-    const entry = (asked.body['settings'] as readonly { settingKey: string; value: unknown; version: number }[]).find(
+    expect(keys).toContain('postal_address');
+    const entry = (unasked.body['settings'] as readonly { settingKey: string; value: unknown; version: number }[]).find(
       row => row.settingKey === 'postal_address',
     );
     expect(entry).toMatchObject({ value: { address: '1 Example Way' }, version: 1 });
 
-    // A key nobody hides is not admitted by the parameter, and neither is a typo.
-    const nonsense = await call('GET', '/settings?include=sending_enabled,not_a_key', adminToken);
-    expect((nonsense.body['settings'] as readonly { settingKey: string }[]).map(row => row.settingKey)).toEqual(keys);
+    // `?include=` is gone with the filter, and an unknown parameter changes nothing.
+    const ignored = await call('GET', '/settings?include=not_a_key', adminToken);
+    expect((ignored.body['settings'] as readonly { settingKey: string }[]).map(row => row.settingKey)).toEqual(keys);
 
     // The history answers about it whatever the snapshot does.
     const history = await call('POST', '/settings/history', adminToken, { settingKey: 'postal_address' });

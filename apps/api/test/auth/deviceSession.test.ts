@@ -417,10 +417,13 @@ describe('two opens arriving together', () => {
     ).toBe(true);
 
     // And the order each connection actually asked in: the device row is locked as the
-    // first statement of either transaction. "Both eventually finished" would have
-    // passed even if one had read another row first and queued afterwards.
+    // first statement of either transaction, after the `BEGIN` that opens it. "Both
+    // eventually finished" would have passed even if one had read another row first and
+    // queued afterwards.
     for (const [name, recorded] of [['first', firstDb], ['second', secondDb]] as const) {
-      expect(deviceLockAt(recorded.statements), name).toBe(0);
+      const lock = deviceLockAt(recorded.statements);
+      expect(lock, name).toBeGreaterThanOrEqual(0);
+      expect(recorded.statements.slice(0, lock), name).toEqual(['BEGIN']);
     }
     expect([firstResult.status, secondResult.status]).toEqual(['fulfilled', 'fulfilled']);
     if (firstResult.status !== 'fulfilled' || secondResult.status !== 'fulfilled') return;

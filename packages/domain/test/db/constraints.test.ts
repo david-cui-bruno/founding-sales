@@ -250,14 +250,6 @@ const cases: readonly Case[] = [
       ),
   },
   {
-    constraint: 'devices_credential_generation_positive',
-    run: async f =>
-      await f.session.query(
-        'INSERT INTO devices (workspace_id, user_id, device_label, secret_hash, credential_generation) VALUES ($1, $2, $3, $4, 0)',
-        [workspace(f), admin(f), 'Zero Mac', payloadHash('gen')],
-      ),
-  },
-  {
     constraint: 'devices_status_known',
     run: async f =>
       await f.session.query(
@@ -821,54 +813,6 @@ const cases: readonly Case[] = [
       await f.session.query(
         "INSERT INTO administrative_pauses (workspace_id, scope_kind, reason_code, hold_id, created_by_user_id, created_at, released_at, released_by_user_id) VALUES ($1, 'workspace', 'scoped_pause', $2, $3, TIMESTAMPTZ '2026-03-01 00:00:00+00', TIMESTAMPTZ '2026-02-01 00:00:00+00', $3)",
         [workspace(f), f.holdId, admin(f)],
-      ),
-  },
-
-  // -------------------------------------------------------- system_generations
-  {
-    constraint: 'system_generations_pkey',
-    run: async f =>
-      await f.session.query(
-        "INSERT INTO system_generations (generation, reason, established_at, established_by_user_id) VALUES (1, 'operator_advance', now(), $1)",
-        [admin(f)],
-      ),
-  },
-  {
-    constraint: 'system_generations_established_by_user_id_fkey',
-    run: async f =>
-      await f.session.query(
-        "INSERT INTO system_generations (generation, reason, established_at, established_by_user_id) VALUES (2, 'operator_advance', now(), '00000000-0000-4000-8000-000000000000')",
-      ),
-  },
-  {
-    constraint: 'system_generations_generation_positive',
-    run: async f =>
-      await f.session.query(
-        "INSERT INTO system_generations (generation, reason, established_at, established_by_user_id) VALUES (0, 'operator_advance', now(), $1)",
-        [admin(f)],
-      ),
-  },
-  {
-    constraint: 'system_generations_reason_known',
-    run: async f =>
-      await f.session.query(
-        "INSERT INTO system_generations (generation, reason, established_at, established_by_user_id) VALUES (3, 'felt_like_it', now(), $1)",
-        [admin(f)],
-      ),
-  },
-  {
-    constraint: 'system_generations_operator_advance_attributed',
-    run: async f =>
-      await f.session.query(
-        "INSERT INTO system_generations (generation, reason, established_at) VALUES (4, 'restore_completed', now())",
-      ),
-  },
-  {
-    constraint: 'system_generations_notes_bounded',
-    run: async f =>
-      await f.session.query(
-        "INSERT INTO system_generations (generation, reason, established_at, established_by_user_id, notes) VALUES (5, 'operator_advance', now(), $1, $2)",
-        [admin(f), 'n'.repeat(1001)],
       ),
   },
 

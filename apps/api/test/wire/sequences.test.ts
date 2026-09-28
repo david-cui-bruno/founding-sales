@@ -116,10 +116,13 @@ describe('8.0aj: the sequence editor reads a populated version and its enrollmen
         body: `Hello {contact_first_name},\n\nA note about {firm_name}.\n\n${SIGN_OFF}\n${SENDING_STOP_LINE}`,
         footerSignOff: SIGN_OFF,
         requiredVariables: ['firm_name', 'contact_first_name'],
+        // Saved and approved in one command: `/templates/approve` went with the 1.0.14
+        // minimum (lane W3-C2).
+        approve: true,
       }),
     );
+    expect(template.status).toBe(200);
     templateVersionId = String(result(template)['id']);
-    expect((await post('/templates/approve', adminToken, command({ templateVersionId }))).status).toBe(200);
 
     // The version the editor draws: an email step and a call step, published.
     const sequence = await post('/sequences/create', adminToken, command({ name: 'Founding outreach' }));
