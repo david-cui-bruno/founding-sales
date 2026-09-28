@@ -34,7 +34,12 @@ export type TodaySourceKind = (typeof TODAY_SOURCE_KINDS)[number];
  * `today_algorithm_version()` in migration 0008 is the same constant on the database
  * side, and `test/today/today.test.ts` compares them.
  */
-export const TODAY_ALGORITHM_VERSION = 'today.1';
+/**
+ * `today.2` since lane R (migration 0022): lane 4 puts a researched firm whose
+ * judgment says call it first ahead of the rest, each group still oldest first.
+ * The order is part of the algorithm, so the string moved with it.
+ */
+export const TODAY_ALGORITHM_VERSION = 'today.2';
 
 export const TODAY_REFUSAL_CODES = [
   'invalid_input',

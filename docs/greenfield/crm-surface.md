@@ -92,6 +92,16 @@ amount of response redaction reaches it.
 | `POST /import/commit` | admin | the file again plus one command id per row |
 | `POST /crm/firms/add` | any active member | one firm and optionally its first contact; one command (g84) |
 | `POST /export/firms` | any active member | typed redacted rows; one audit event |
+| `POST /research/firm` | assignee or admin | brief, facts, judgments, last five runs, links, spend (lane R) |
+| `POST /research/firm/run` | assignee or admin | one command; `ceiling_reached` when the clearance would refuse now |
+| `POST /research/firm/links/add` | assignee or admin | one command; https only, and it enqueues the run it triggers |
+| `POST /research/settings` | admin | `{}` reads and fields update; the read *is* the workspace's budget |
+
+The four research paths are their own module and are documented in
+`docs/greenfield/research.md`. They are beside `/crm/firm-page` rather than inside it
+on purpose: `crmSurface.ts`'s page contract is a `z.strictObject` behind `pageVersion`,
+so adding a key to it is a wire break, and the desktop's Research section reads its own
+route instead.
 
 Filters are shared by search and export: `owner` (a member, or unassigned),
 `stageKey`, `sequenceStatus`, `holdReasonCode`, `routeEligibility`, `activeSince` and

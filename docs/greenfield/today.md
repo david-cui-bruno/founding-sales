@@ -42,7 +42,7 @@ apps/desktop/src/main/crmBridge.ts            G3b's CRM views, wired
 apps/desktop/src/main/todayWindow.ts          the Today and CRM channels; the menu is windowMenu.ts
 ```
 
-## The five rules a reader should carry
+## The rules a reader should carry
 
 ### 1. The card is derived, and nothing writes it
 
@@ -63,6 +63,26 @@ When the last item is finished the card keeps the lane and instant it had and it
 > 0` — and stays in the table as the record of what that day's list contained. That is
 8.2's "Completing one item leaves the firm visible while another qualifying item
 remains", from the other end.
+
+### 1b. Lane 4 puts the call-first firms in front, and the brief rides on the card
+
+Lane 4 was ordered by the firm's creation instant alone. Since lane R it is
+**researched firms whose judgment says `call_first`, then the rest, each group oldest
+first** — a stable partition of the `new_firm` lane in `readTodayList`, applied after
+`listTodayCards` has already ordered every lane. The other three lanes pass through
+untouched: a reply is ordered by when it arrived, and no judgment about a firm should
+move one.
+
+Because the order is part of the algorithm, `TODAY_ALGORITHM_VERSION` is `today.2` and
+migration 0022 moved the database-side `today_algorithm_version()` with it. Appendix C
+makes the version part of the Today job's identity, so the change makes this morning's
+build a different job rather than a second attempt at yesterday's.
+
+The expanded card carries `brief` — the call brief of `docs/greenfield/research.md`, or
+null for a firm nobody has researched. It is **optional on the wire and omitted from
+card version 1**: `todayFirmResponseSchema` is a `z.object`, so an installed desktop
+that has never heard of the key strips it rather than refusing the card, and adding it
+is not a wire break.
 
 ### 2. A promotion commits with its source event, and the source lane never learns about Today
 

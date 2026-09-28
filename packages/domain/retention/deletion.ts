@@ -123,6 +123,14 @@ const contactPredicate = (column: string, parameter: string): string =>
   `(${parameter}::uuid IS NULL OR ${column} = ${parameter}::uuid)`;
 
 /**
+ * Lane R's tables carry a firm and no contact, so a contact-scoped deletion must not
+ * touch them: a quote from the firm's careers page is not one person's data, and
+ * deleting it because somebody asked for their own record removed would destroy the
+ * evidence behind a judgment nobody asked about. A firm-scoped deletion takes them all.
+ */
+const FIRM_SCOPED_ONLY = '$2::uuid IS NULL';
+
+/**
  * The same rule for G7b's confirmations, which carry a firm but no contact.
  *
  * A confirmation belongs to a message, and which contact a message is about is the
@@ -190,6 +198,33 @@ async function measure(
       context,
       `SELECT count(*) AS count FROM evidence_items
         WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
+      byContact,
+    ),
+    // Lane R's four. They carry no `contact_id`: a fact is about the firm, not about
+    // one person at it, so a contact-scoped deletion leaves them and a firm-scoped one
+    // takes them all. `FIRM_SCOPED_ONLY` is that rule, written once.
+    firm_judgments: await countOf(
+      context,
+      `SELECT count(*) AS count FROM firm_judgments
+        WHERE workspace_id = $1 AND firm_id = $3 AND ${FIRM_SCOPED_ONLY}`,
+      byContact,
+    ),
+    firm_facts: await countOf(
+      context,
+      `SELECT count(*) AS count FROM firm_facts
+        WHERE workspace_id = $1 AND firm_id = $3 AND ${FIRM_SCOPED_ONLY}`,
+      byContact,
+    ),
+    research_runs: await countOf(
+      context,
+      `SELECT count(*) AS count FROM research_runs
+        WHERE workspace_id = $1 AND firm_id = $3 AND ${FIRM_SCOPED_ONLY}`,
+      byContact,
+    ),
+    firm_links: await countOf(
+      context,
+      `SELECT count(*) AS count FROM firm_links
+        WHERE workspace_id = $1 AND firm_id = $3 AND ${FIRM_SCOPED_ONLY}`,
       byContact,
     ),
     call_logs: await countOf(
@@ -596,6 +631,29 @@ export async function commitDeletion(
         AND NOT EXISTS (
           SELECT 1 FROM outbound_messages o
            WHERE o.workspace_id = a.workspace_id AND o.recipient_route_id = a.id)`,
+    byContact,
+  );
+  // Lane R, in foreign-key order and before the evidence a fact points at: the
+  // judgment references the run, the facts reference the run *and* the evidence item,
+  // so both go before `research_runs` and before `evidence_items` below.
+  await remove(
+    'firm_judgments',
+    `DELETE FROM firm_judgments WHERE workspace_id = $1 AND firm_id = $3 AND ${FIRM_SCOPED_ONLY}`,
+    byContact,
+  );
+  await remove(
+    'firm_facts',
+    `DELETE FROM firm_facts WHERE workspace_id = $1 AND firm_id = $3 AND ${FIRM_SCOPED_ONLY}`,
+    byContact,
+  );
+  await remove(
+    'research_runs',
+    `DELETE FROM research_runs WHERE workspace_id = $1 AND firm_id = $3 AND ${FIRM_SCOPED_ONLY}`,
+    byContact,
+  );
+  await remove(
+    'firm_links',
+    `DELETE FROM firm_links WHERE workspace_id = $1 AND firm_id = $3 AND ${FIRM_SCOPED_ONLY}`,
     byContact,
   );
   await remove(

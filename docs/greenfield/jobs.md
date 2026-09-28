@@ -94,7 +94,18 @@ table:
   `mail.recover`, `mail.watch_renew`, `classify.reply`, `suppression.finalize`,
   `outbound.close_send_day`, `today.build`, `canary`.
 * **`bulk`** — it may take as long as it takes: `sequence.action`,
-  `sequence.terminal_stop`, `route.validate`, `retention.batch`.
+  `sequence.terminal_stop`, `route.validate`, `retention.batch`, `research.firm`,
+  `research.sweep`.
+
+Two of those are lane R's (`docs/greenfield/research.md`). `research.firm` is one run
+of one firm at one revision, protected by `research_runs_one_per_revision`: a second
+claim finds the insert refused and reports `already_recorded` having fetched nothing
+and asked no model. It is deliberately **not** chunked — a chunk boundary inside a run
+would commit some pages' evidence and not others under a clearance that was claimed
+once, so a resumed second half would either re-claim a unit of the day's budget or
+spend one it never claimed. `research.sweep` is one job per workspace per business
+date, keyed like the Today build's, and its whole effect is enqueueing
+`research.firm` jobs that are themselves unique per revision.
 
 The lanes exist because the claim orders by `run_at`. A slot that claims every kind
 takes the oldest runnable row whatever it is, so fifty retention batches queued at

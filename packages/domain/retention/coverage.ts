@@ -168,6 +168,16 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
   retention_runs: coverage(['retained'], 'The run ledger and the deletion tombstone; DELETE revoked.'),
   deletion_requests: coverage(['retained'], 'What was previewed and what was committed; DELETE revoked.'),
   departures: coverage(['retained'], 'What a departure revoked; DELETE revoked.'),
+
+  // ---------------------------------------------------------- research (0022)
+  research_settings: coverage(['operational'], 'The workspace’s research ceilings and model; no prospect data.'),
+  provider_ledger: coverage(['operational'], 'Calls, failures and cents per provider per business date; no prospect identity.'),
+  // The four below quote the firm’s own site or name a person at it, so they go with
+  // the firm exactly as `call_logs` does, rather than being swept on a horizon.
+  research_runs: coverage(['deletion_removes'], 'One run of one firm; removed with the firm it researched.'),
+  firm_facts: coverage(['deletion_removes'], 'Quotes from the firm’s own pages; removed with the firm.'),
+  firm_judgments: coverage(['deletion_removes'], 'The firm’s current judgment and the contact it points at; removed with the firm.'),
+  firm_links: coverage(['deletion_removes'], 'Pages a person added for this firm; removed with the firm.'),
 });
 
 /** Tables the coverage registry deliberately does not classify. */

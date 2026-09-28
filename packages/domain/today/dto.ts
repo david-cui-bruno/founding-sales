@@ -1,6 +1,7 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { currentCallingIdentityId } from '../dial/identities.ts';
 import { businessDateOf, listTodayCards, listTodayItems, workspaceBusinessTimeZone } from './snapshots.ts';
+import { readCallBrief, type CallBrief } from '../research/brief.ts';
 import { TODAY_PAUSE_SOURCE_EVENT_KIND, callLogIdOfItemKey, type TodayCounts, type TodayItemRow } from './types.ts';
 import type { TodayItemKind, TodayLane } from '@fss/contracts';
 
@@ -120,6 +121,12 @@ export interface TodayFirmDto<Task extends TodayTaskDto = TodayTaskDtoV2> {
    * (`currentCallingIdentityId`).
    */
   readonly callingIdentityId: string | null;
+  /**
+   * The call brief, or null when no research run has completed for this firm
+   * (lane R). Optional on the wire and omitted from card version 1, so an installed
+   * desktop that has never heard of it parses the card it always parsed.
+   */
+  readonly brief: CallBrief | null;
 }
 
 /**
@@ -127,9 +134,10 @@ export interface TodayFirmDto<Task extends TodayTaskDto = TodayTaskDtoV2> {
  * `TodayTaskDtoV2`. What `/today/firm` answers a client that did not ask for version 2,
  * so an older desktop keeps parsing the card it always parsed.
  */
-export function todayFirmVersion1(page: TodayFirmDto): TodayFirmDto<TodayTaskDto> {
+export function todayFirmVersion1(page: TodayFirmDto): Omit<TodayFirmDto<TodayTaskDto>, 'brief'> {
+  const { brief: _brief, ...rest } = page;
   return {
-    ...page,
+    ...rest,
     tasks: page.tasks.map(task => ({
       itemId: task.itemId,
       contactId: task.contactId,
@@ -246,6 +254,52 @@ function assigneeFilter(context: RepositoryContext): string | undefined {
   return actor.role === 'admin' ? undefined : actor.userId;
 }
 
+/**
+ * The firms whose current judgment says call this one first (lane R).
+ *
+ * One read of a partial index rather than a join in `listTodayCards`: the ordering
+ * rule is lane 4's alone, and putting it in the card query would make every lane's
+ * order depend on a table only one of them is about.
+ */
+async function callFirstFirmIds(context: RepositoryContext): Promise<ReadonlySet<string>> {
+  const { rows } = await context.db.query<{ firm_id: string }>(
+    'SELECT firm_id FROM firm_judgments WHERE workspace_id = $1 AND call_first',
+    [context.scope.workspaceId],
+  );
+  return new Set(rows.map(row => row.firm_id));
+}
+
+/**
+ * Lane 4's order: researched firms with `call_first` first, then the rest, each group
+ * oldest first.
+ *
+ * A **stable** partition of the `new_firm` lane only. `listTodayCards` has already
+ * ordered every lane by `lane_precedence, sort_at, name, firm_id`, and lane 4's
+ * `sort_at` is the firm's creation time, so within each of the two groups the
+ * existing order is already oldest first and this function does not re-sort it. The
+ * other three lanes pass through untouched: a reply or a callback is ordered by when
+ * it happened, and no judgment about a firm should move one.
+ *
+ * Because the order changed, `TODAY_ALGORITHM_VERSION` is `today.2` and migration
+ * 0022 moved `today_algorithm_version()` with it.
+ */
+function callFirstFirst<Card extends { readonly lane: string; readonly firmId: string }>(
+  cards: readonly Card[],
+  callFirst: ReadonlySet<string>,
+): readonly Card[] {
+  const first: Card[] = [];
+  const rest: Card[] = [];
+  const others: Card[] = [];
+  for (const card of cards) {
+    if (card.lane !== 'new_firm') others.push(card);
+    else if (callFirst.has(card.firmId)) first.push(card);
+    else rest.push(card);
+  }
+  // Lane 4 is the last lane by precedence, so the three groups concatenate in the
+  // order the reader sees them.
+  return [...others, ...first, ...rest];
+}
+
 export interface ReadTodayInput {
   /** Database time. The business date is derived from it in the workspace zone. */
   readonly now: string;
@@ -266,7 +320,7 @@ export async function readTodayList(
     workspaceId: context.scope.workspaceId,
     snapshotDate,
     businessTimeZone,
-    cards: cards.map(card => ({
+    cards: callFirstFirst(cards, await callFirstFirmIds(context)).map(card => ({
       firmId: card.firmId,
       firmName: card.firmName,
       lane: card.lane,
@@ -354,5 +408,6 @@ export async function readTodayFirm(
       eligibility: row.eligibility,
     })),
     callingIdentityId,
+    brief: await readCallBrief(context, input.firmId),
   };
 }

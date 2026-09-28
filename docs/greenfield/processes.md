@@ -60,6 +60,7 @@ that talked to anything outside PostgreSQL would be a bug.
 | `mail-recovery`, `mail-sync-reconcile`, `mail-watch-renewal`, `outbound-reconcile` | 12.3's coverage and Appendix B's fence |
 | `classify-reply` | One LLM classification per reply inside its window (12.4) |
 | `route-validation` | One `route.validate` retry per unchecked email address per round: hourly for its first day, then daily (7.4, lane g90) |
+| `research-sweep` | One `research.sweep` per workspace per business date, in a workspace with research enabled (lane R) |
 
 That table is the contract, not a description: `apps/worker/test/sourceRegistry.test.ts`
 reads it and fails when the registered list and the documented one differ in either

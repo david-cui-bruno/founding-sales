@@ -1,5 +1,6 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
+import { enqueueFirmResearch } from '../research/enqueue.ts';
 import { resolveFirmZone } from '../src/rules/statePosture.ts';
 import { decideAdminOnly, decideFirmMutation } from './authorization.ts';
 import { recordCrmAuditEvent } from './audit.ts';
@@ -155,6 +156,16 @@ export async function createFirm(
     detail: { assigned: created.assigned_user_id !== null },
   });
 
+  // Lane R. A new firm is looked at once, in the same transaction that created it, so
+  // an import of two hundred rows enqueues two hundred runs and the ceilings pace them
+  // across days — which is intended, and is why the sweep exists to finish the ones a
+  // day's budget did not reach.
+  //
+  // The refusal is deliberately ignored. Research being off, or the firm being under a
+  // suppression the import already knew about, is not a reason a firm cannot be
+  // created, and a `createFirm` that failed because of the research settings would be
+  // the tail wagging the dog.
+  await enqueueFirmResearch(context, { firmId: created.id, trigger: 'firm_created' });
   return accept(created);
 }
 

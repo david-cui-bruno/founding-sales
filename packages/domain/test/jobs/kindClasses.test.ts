@@ -50,6 +50,10 @@ describe('job kind classes', () => {
       'sequence.terminal_stop',
       'retention.batch',
       'route.validate',
+      // Lane R: a page fetch and a sweep. Nobody is watching the clock on either, and
+      // an import of two hundred firms is two hundred of the first.
+      'research.firm',
+      'research.sweep',
     ]);
   });
 
