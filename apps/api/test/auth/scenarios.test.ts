@@ -3,7 +3,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { runCommand } from '../../src/auth/commands.ts';
 import { authenticate, renewSession } from '../../src/auth/sessions.ts';
 import { claimSignIn, handleCallback, startSignIn } from '../../src/auth/signIn.ts';
-import type { SessionGrant } from '@fss/contracts';
 import {
   CURRENT_CLIENT_VERSION,
   OUTDATED_CLIENT_VERSION,
@@ -12,6 +11,7 @@ import {
   stateOf,
   type AuthFixture,
 } from '../support/authFixture.ts';
+import { mintedGrant, type MintedGrant } from '../support/sessionFixture.ts';
 
 /**
  * Appendix G scenarios 23, 24 and 40, against a real PostgreSQL 16 and a local
@@ -43,7 +43,7 @@ afterAll(async () => {
 async function signIn(
   member: { readonly userId: string; readonly googleSub: string; readonly email: string },
   options: { readonly workspaceId?: string; readonly clientVersion?: string } = {},
-): Promise<SessionGrant> {
+): Promise<MintedGrant> {
   const workspaceId = options.workspaceId ?? fixture.alpha.workspaceId;
   const started = await startSignIn(fixture.deps, {
     workspaceId,
@@ -70,7 +70,7 @@ async function signIn(
     clientVersion: options.clientVersion ?? CURRENT_CLIENT_VERSION,
   });
   if (!claimed.claimed) throw new Error(`claim refused: ${claimed.refusal}`);
-  return claimed.grant;
+  return mintedGrant(claimed.grant);
 }
 
 describe('Appendix G 23: OIDC state, nonce, code and token-audience replay are refused', () => {

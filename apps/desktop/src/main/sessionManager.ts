@@ -846,9 +846,11 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
             apiBaseUrl: new URL('/', started.value.authorizationUrl).toString(),
             registeredAt: options.now().toISOString(),
           };
-          // The grant still carries a rotating credential, for desktop 1.0.12. This
-          // build never stores it and never presents it: the device secret is what
-          // `POST /auth/session/open` takes, and it is the only one kept.
+          // The grant may still carry a rotating credential, and from lane W3-C2 it
+          // will not carry one at all; the contract makes it optional so both parse
+          // (lane W3-C1). Either way this build never stores it and never presents
+          // it: the device secret is what `POST /auth/session/open` takes, and it is
+          // the only one kept.
           await options.store.save(registered, { deviceSecret: grant.deviceSecret });
           /*
            * Anything still held belongs to somebody else.

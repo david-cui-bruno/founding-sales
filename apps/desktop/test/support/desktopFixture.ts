@@ -46,6 +46,13 @@ export interface ApiScript {
   browserFinished(value: boolean): void;
   /** The device secret the last grant handed out: what an open must present. */
   grantedSecret(): string | null;
+  /**
+   * Whether the claim's answer carries a rotating refresh credential (lane W3-C1).
+   * True — today's server. False is the server after lane W3-C2 stops minting it.
+   */
+  mintsRefreshCredential(value: boolean): void;
+  /** The rotating credential the last grant carried, or null when it carried none. */
+  grantedRefreshCredential(): string | null;
   /** Whether the server still has this device. A sign-out sets it false. */
   deviceActive(): boolean;
   /** The other Macs `GET /devices` lists beside this one. */
@@ -135,7 +142,14 @@ export async function createDesktopFixture(
    * advanced, because there is no route left that would advance it.
    */
   const generation = 1;
+  /*
+   * Whether the claim's answer carries that credential at all (lane W3-C1). It is
+   * optional on the wire from desktop 1.0.14 so that lane W3-C2 can stop minting it;
+   * a test sets this false to be the server after C2.
+   */
+  let mintsRefreshCredential = true;
   let granted: string | null = null;
+  let grantedCredential: string | null = null;
   let deviceActive = true;
   let others: DeviceList = [];
   let role: 'admin' | 'salesperson' = 'salesperson';
@@ -155,6 +169,7 @@ export async function createDesktopFixture(
 
   const grantFor = (forWorkspace: string): SessionGrant => {
     granted = secret();
+    grantedCredential = mintsRefreshCredential ? credential(forWorkspace, deviceId, generation) : null;
     deviceActive = true;
     return {
       workspaceId: forWorkspace,
@@ -164,7 +179,7 @@ export async function createDesktopFixture(
       deviceSecret: granted,
       accessToken: token(forWorkspace),
       accessTokenExpiresAt: new Date(current + 3_600_000).toISOString(),
-      refreshCredential: credential(forWorkspace, deviceId, generation),
+      ...(grantedCredential === null ? {} : { refreshCredential: grantedCredential }),
       reauthenticateAfter: new Date(current + 30 * 24 * 3_600_000).toISOString(),
       supportedClientVersions: supported,
     };
@@ -349,6 +364,10 @@ export async function createDesktopFixture(
         browserFinished = value;
       },
       grantedSecret: () => granted,
+      mintsRefreshCredential: value => {
+        mintsRefreshCredential = value;
+      },
+      grantedRefreshCredential: () => grantedCredential,
       deviceActive: () => deviceActive,
       otherDevices: value => {
         others = value;

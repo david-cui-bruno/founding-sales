@@ -107,6 +107,39 @@ describe('sign-in through the system browser', () => {
     expect(JSON.stringify(state)).not.toContain(mac.vault.entries.get(DEVICE_SECRET_ACCOUNT) ?? 'x');
   });
 
+  it('signs in on a grant that carries no rotating credential at all', async () => {
+    // Lane W3-C2 stops minting it (migration 0021). This build must already accept
+    // the grant the server will send then, or the claim's strict parse refuses it.
+    const mac = await started();
+    mac.script.mintsRefreshCredential(false);
+
+    const state = await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
+
+    expect(state.screen).toBe('today');
+    expect(state.device?.deviceLabel).toBe('A Mac');
+    expect(mac.script.grantedRefreshCredential()).toBeNull();
+    expect(mac.vault.entries.has(DEVICE_SECRET_ACCOUNT)).toBe(true);
+    expect(mac.vault.entries.has(REFRESH_CREDENTIAL_ACCOUNT)).toBe(false);
+  });
+
+  it('signs in on a grant that still carries one, and writes it nowhere', async () => {
+    // Today's server, before C2. The field parses and is then dropped: the Keychain
+    // gets the device secret and nothing else, and no file holds the credential.
+    const mac = await started();
+
+    const state = await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
+
+    const carried = mac.script.grantedRefreshCredential();
+    expect(carried).not.toBeNull();
+    expect(state.screen).toBe('today');
+    expect(mac.vault.entries.has(DEVICE_SECRET_ACCOUNT)).toBe(true);
+    expect(mac.vault.entries.has(REFRESH_CREDENTIAL_ACCOUNT)).toBe(false);
+    expect([...mac.vault.entries.values()]).not.toContain(carried);
+    const onDisk = await readFile(join(mac.directory, DEVICE_FILE), 'utf8');
+    expect(onDisk).not.toContain(carried ?? 'x');
+    expect(JSON.stringify(state)).not.toContain(carried ?? 'x');
+  });
+
   it('waits for the browser and gives up rather than hanging', async () => {
     const mac = await started();
     mac.script.browserFinished(false);
