@@ -95,7 +95,13 @@ module "stack" {
 
   # Two API tasks (the worker is one, in the cluster module).
   api_desired_count = 2
-  bootstrap         = var.bootstrap
+
+  # Three runner slots in that one worker task: one urgent-only, one bulk-only,
+  # one either. Stated here rather than left to the module's default, because the
+  # number is a production capacity decision and the connection budget it implies
+  # (five backends from the worker, up from three) is production's to carry.
+  worker_concurrency = 3
+  bootstrap          = var.bootstrap
 
   sending_enabled = local.sending_enabled
 

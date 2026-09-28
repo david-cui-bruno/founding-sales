@@ -72,7 +72,7 @@ locals {
     FSS_JOURNAL_ARN = var.journal_bucket_arn
   })
 
-  worker_environment = merge(local.common_environment, {
+  worker_environment = merge(local.common_environment, var.worker_environment, {
     FSS_ROLE       = "worker"
     FSS_SCHEMA_MIN = tostring(var.worker_schema_range.min)
     FSS_SCHEMA_MAX = tostring(var.worker_schema_range.max)

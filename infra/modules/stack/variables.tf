@@ -149,6 +149,32 @@ variable "api_desired_count" {
   default     = 2
 }
 
+variable "worker_concurrency" {
+  description = <<-EOT
+    Runner slots in the single worker task, as FSS_WORKER_CONCURRENCY.
+
+    Three is the smallest number that gives the runner its lanes: at three the
+    first slot claims urgent kinds only, the second bulk kinds only and the
+    third either, so a queue of sequence steps or retention batches can no
+    longer be the latency of a reply somebody is waiting on
+    (`docs/greenfield/jobs.md`, "Kind classes and slots"). At one, which is
+    what the image defaults to, the single slot claims both lanes and the
+    depth of one is still the wait of the other.
+
+    Connections: the worker opens one per slot plus the scheduler's and the
+    metric loop's, so three slots is five backends where one was three — two
+    more, on a db.t4g.small whose default max_connections is in the hundreds.
+    That is why the RDS parameters are not touched by this change.
+  EOT
+  type        = number
+  default     = 3
+
+  validation {
+    condition     = var.worker_concurrency >= 1 && floor(var.worker_concurrency) == var.worker_concurrency
+    error_message = "A worker runs at least one runner slot, and a slot is whole."
+  }
+}
+
 variable "bootstrap" {
   description = <<-EOT
     True on the first apply of a fresh environment: both services are created
