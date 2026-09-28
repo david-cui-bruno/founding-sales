@@ -113,6 +113,12 @@ variable "api_environment" {
   default     = {}
 }
 
+variable "worker_environment" {
+  description = "Non-secret environment variables for the worker task only. The operations task shares the worker's environment, by construction, and ignores what it does not read."
+  type        = map(string)
+  default     = {}
+}
+
 variable "secret_arns" {
   description = "Environment variable name to Secrets Manager ARN. Values are resolved by the execution role at task start; Terraform never sees them."
   type        = map(string)

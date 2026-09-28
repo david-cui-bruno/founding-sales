@@ -214,6 +214,21 @@ run "each_production_task_carries_only_the_secrets_its_process_reads" {
   }
 }
 
+# The runner's lanes need three slots to exist at all: at one or two there is no
+# bulk-only slot and bulk depth is still urgent latency. The number is production's,
+# and it belongs to the worker alone.
+run "the_worker_runs_three_runner_slots_and_the_api_is_told_nothing_about_them" {
+  command = plan
+
+  assert {
+    condition = (
+      module.stack.worker_environment["FSS_WORKER_CONCURRENCY"] == "3"
+      && !contains(keys(module.stack.api_environment), "FSS_WORKER_CONCURRENCY")
+    )
+    error_message = "Production runs three runner slots in its one worker task, and the API task is not handed the worker's concurrency."
+  }
+}
+
 # The three deployment flags both binaries refuse to start without, or refuse to
 # guess at. See docs/archive/decisions/g12c-the-deployment-flags-are-root-variables.md.
 run "the_deployment_flags_reach_both_containers" {

@@ -123,6 +123,26 @@ run "the_containers_get_their_ranges_arm64_and_no_secret_by_value" {
   }
 }
 
+# `api_environment` and `worker_environment` are each one task's alone. The
+# operations definition is built from the worker's, by construction, so what the
+# worker is told the operations tool is told too.
+run "a_worker_only_variable_reaches_the_worker_and_not_the_api" {
+  command = plan
+
+  variables {
+    worker_environment = { FSS_WORKER_CONCURRENCY = "3" }
+  }
+
+  assert {
+    condition = (
+      output.worker_environment["FSS_WORKER_CONCURRENCY"] == "3"
+      && !contains(keys(output.api_environment), "FSS_WORKER_CONCURRENCY")
+      && output.worker_environment["FSS_ROLE"] == "worker"
+    )
+    error_message = "A worker-only environment variable reaches the worker task and no other, and cannot displace FSS_ROLE."
+  }
+}
+
 run "the_bare_fss_namespace_is_refused" {
   command = plan
 

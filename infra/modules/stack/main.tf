@@ -272,6 +272,12 @@ module "cluster" {
     FSS_DESKTOP_UPGRADE_URL = var.desktop_upgrade_url
   }
 
+  # The worker's alone. The operations task definition is built from the worker's
+  # environment and ignores a variable it does not read.
+  worker_environment = {
+    FSS_WORKER_CONCURRENCY = tostring(var.worker_concurrency)
+  }
+
   environment = {
     FSS_ENVIRONMENT = var.environment
     # The deployment flags of 16.2. Each is refused, not defaulted, by the process
