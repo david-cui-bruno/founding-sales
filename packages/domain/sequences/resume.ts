@@ -29,10 +29,9 @@ import { holdAppliesSql } from './wake.ts';
  *
  * A union longer than seven days used to send the enrollment to `review_required`,
  * where only a person's explicit resume got it out (wave 2, S4.1). Now it resumes on
- * its own like any other: once, by the union, when the last applicable hold clears. An
- * enrollment an older release left in `review_required` is taken by the same path — the
- * scheduler wakes it (`wake.ts`) and `runDueStepExecution` resumes it — so no row waits
- * for a person who has nothing to decide. The safety that matters is not the length of
+ * its own like any other: once, by the union, when the last applicable hold clears.
+ * Migration 0021 removed the state, and its refusal counts the rows first, so no row
+ * waits for a person who has nothing to decide. The safety that matters is not the length of
  * the hold but what is still true when it ends, and that is the fresh eligibility check:
  * suppression and tombstones, coverage, uncertain replies, windows and caps.
  *
@@ -241,16 +240,14 @@ export interface ResumeOutcome {
  *
  * Two answers, straight from `decideResume`:
  *
- *   * `still_held` — something is open; nothing moves, and the enrollment keeps its
- *     state (an older release's `review_required` included) until the next release.
+ *   * `still_held` — something is open; nothing moves.
  *   * `resume` — every unexecuted step moves forward by the union, each move recorded
- *     as a shift, and the enrollment is `active` again, whatever state it was in.
+ *     as a shift, and the enrollment stays `active`.
  *
- * Three callers: `runDueStepExecution`, as the first thing it does with a held step the
- * scheduler woke because no open hold blocks it any more, or with any step of an
- * enrollment an older release left in `review_required` (audit C05, wave 2 S4.1); the
- * Today pause's Resume; and `POST /enrollments/resume`, which installed desktops call
- * after the review they show. Releasing a hold is every lane's own statement
+ * Two callers: `runDueStepExecution`, as the first thing it does with a held step the
+ * scheduler woke because no open hold blocks it any more (audit C05, wave 2 S4.1); and
+ * the Today pause's Resume. `POST /enrollments/resume` went with the 1.0.14 minimum —
+ * no installed build shows a review to confirm. Releasing a hold is every lane's own statement
  * (`releaseHoldsOfEvent`, `releasePause`, the mailbox proof); none of them has to know
  * that a sequence is waiting, because the wake notices the release on the next pass.
  *
@@ -301,8 +298,7 @@ export async function resumeEnrollment(
   }
 
   await context.db.query(
-    `UPDATE sequence_enrollments
-        SET state = 'active', review_union_milliseconds = NULL, updated_at = now()
+    `UPDATE sequence_enrollments SET updated_at = now()
       WHERE workspace_id = $1 AND id = $2 AND ended_at IS NULL`,
     [context.scope.workspaceId, enrollment.id],
   );
@@ -323,104 +319,5 @@ export async function resumeEnrollment(
     unionMilliseconds: composition.unionMilliseconds,
     openHoldIds: [],
     executionsShifted: shifted,
-  });
-}
-
-interface ResumePreviewStepDates {
-  readonly stepExecutionId: string;
-  readonly ordinal: number;
-  /** The instant the step was first planned for, which no shift ever moves (11.2). */
-  readonly originalDueAt: string;
-  readonly dueAt: string;
-  /** Where a confirmed resume moves it. Equal to `dueAt` when nothing would move. */
-  readonly proposedDueAt: string;
-}
-
-/**
- * One unexecuted step as the review shows it: where it is due now, and where a resume
- * puts it.
- */
-export type ResumePreviewStep = ResumePreviewStepDates & {
-  readonly channel: StepChannel;
-  readonly state: StepExecutionState;
-};
-
-/** A hold that delayed this enrollment's work in the window the resume would apply. */
-export interface ResumePreviewHold {
-  readonly reasonCode: HoldReasonCode;
-  readonly startedAt: string;
-  readonly releasedAt: string | null;
-}
-
-/**
- * What "Review and resume" shows before anything is pressed (4.3; audit G06).
- *
- * `kind` is `decideResume`'s answer. `still_held` means something is open and a resume
- * would move nothing; `resume` means a confirmation would shift every unexecuted step by
- * `shiftMilliseconds`, which `steps` has already applied. Installed desktops up to 1.0.11
- * show it for an enrollment an older release left in `review_required`.
- */
-export interface ResumePreview {
-  readonly enrollmentId: string;
-  readonly kind: ResumeDecision['kind'];
-  readonly unionMilliseconds: number;
-  readonly shiftMilliseconds: number;
-  readonly openHoldIds: readonly string[];
-  /** The zone every due instant of this enrollment is resolved in, frozen at enrolment. */
-  readonly firmTimeZone: string;
-  readonly holds: readonly ResumePreviewHold[];
-  readonly steps: readonly ResumePreviewStep[];
-}
-
-/**
- * The dates a resume would give the unexecuted steps (audit G06).
- *
- * A read, and nothing else: no lock and no state change. It computes what
- * `resumeEnrollment` would do at this instant with the same function that does it, and
- * applies the shift to each unexecuted step with the same `shiftDueInstant`. The
- * confirmation that follows runs the decision again under its lock, because a hold may
- * open in between and the resume, not the preview, is the thing that has to be right.
- *
- * A salesperson may preview only their own enrollment; an admin any. The dates are due
- * instants, not send times: an email still waits for its window and its cap.
- */
-export async function previewResume(
-  context: RepositoryContext,
-  input: { readonly enrollmentId: string },
-): Promise<SequenceResult<ResumePreview>> {
-  const enrollment = await readEnrollment(context, { enrollmentId: input.enrollmentId });
-  if (enrollment === null) return refuseSequence('enrollment_unknown');
-  const actor = context.scope.actor;
-  if (actor.kind === 'user' && actor.role !== 'admin' && enrollment.assignedUserId !== actor.userId) {
-    return refuseSequence('not_assigned');
-  }
-  if (enrollment.endedAt !== null) return refuseSequence('enrollment_not_live');
-
-  const { holds, composition, decision } = await resumeDecisionFor(context, enrollment);
-  const shift = decision.kind === 'still_held' ? 0 : decision.shiftMilliseconds;
-  const pending = await unexecutedExecutions(context, enrollment.id, { lock: false });
-
-  return acceptSequence({
-    enrollmentId: enrollment.id,
-    kind: decision.kind,
-    unionMilliseconds: composition.unionMilliseconds,
-    shiftMilliseconds: shift,
-    openHoldIds: decision.kind === 'still_held' ? decision.openHoldIds : [],
-    firmTimeZone: enrollment.firmTimeZone,
-    holds: holds.map(hold => ({ reasonCode: hold.reasonCode, startedAt: hold.startedAt, releasedAt: hold.releasedAt })),
-    steps: pending.map((execution): ResumePreviewStep => {
-      const dates = {
-        stepExecutionId: execution.id,
-        ordinal: execution.ordinal,
-        originalDueAt: execution.originalDueAt,
-        dueAt: execution.dueAt,
-      };
-      return {
-        ...dates,
-        channel: execution.channel,
-        state: execution.state,
-        proposedDueAt: shift > 0 ? shiftDueInstant(execution.dueAt, shift) : execution.dueAt,
-      };
-    }),
   });
 }

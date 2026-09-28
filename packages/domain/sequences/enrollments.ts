@@ -283,8 +283,7 @@ export async function stopEnrollments(
 
   const stopped = await context.db.query(
     `UPDATE sequence_enrollments
-        SET state = 'stopped', ended_at = now(), end_reason = $3,
-            review_union_milliseconds = NULL, updated_at = now()
+        SET state = 'stopped', ended_at = now(), end_reason = $3, updated_at = now()
       WHERE workspace_id = $1 AND id = ANY($2::uuid[]) AND ended_at IS NULL`,
     [context.scope.workspaceId, enrollmentIds, input.reason],
   );

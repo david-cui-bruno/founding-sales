@@ -16,8 +16,12 @@ import type {
  * does not — "active" and "held" are facts about this instant, and reporting how
  * many were active during a window would mean either a figure that double-counts or
  * a history table G8 did not build. So the two kinds are named differently in the
- * DTO rather than blended: `started` and `ended` are the window's, `active`,
- * `reviewRequired` and `heldSteps` are now's.
+ * DTO rather than blended: `started` and `ended` are the window's, `active` and
+ * `heldSteps` are now's.
+ *
+ * `reviewRequired` is a constant zero. Migration 0021 removed the enrollment state it
+ * counted; the field stays because desktop 1.0.14 parses the dashboard answer strictly
+ * and would throw on its absence.
  *
  * That distinction is the one an operator actually asks about. "Fourteen holds" is a
  * thing to go and clear; "fourteen holds at some point last month" is not.
@@ -43,7 +47,6 @@ type CountsRow = {
   readonly [column: string]: unknown;
   started: string;
   active: string;
-  review_required: string;
 };
 
 type KeyedRow = {
@@ -65,8 +68,7 @@ export async function enrollmentFacts(
      SELECT
        (SELECT count(*) FROM visible
          WHERE started_at >= $2::timestamptz AND started_at < $3::timestamptz)::text AS started,
-       (SELECT count(*) FROM visible WHERE state = 'active')::text AS active,
-       (SELECT count(*) FROM visible WHERE state = 'review_required')::text AS review_required`,
+       (SELECT count(*) FROM visible WHERE state = 'active')::text AS active`,
     scope,
   );
 
@@ -101,7 +103,7 @@ export async function enrollmentFacts(
     available: true,
     started: Number(row?.started ?? '0'),
     active: Number(row?.active ?? '0'),
-    reviewRequired: Number(row?.review_required ?? '0'),
+    reviewRequired: 0,
     ended: of('ended'),
     stepsCompleted: of('completed'),
     heldSteps: of('held'),

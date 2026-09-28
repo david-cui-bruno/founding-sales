@@ -267,12 +267,12 @@ describe('the bridge reads what the routes answer (lane g78)', () => {
       status: 200,
       body: {
         asOf: '2026-09-21T13:00:00.000Z',
-        enrollments: [enrollmentAnswer(), enrollmentAnswer({ id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', state: 'review_required', reviewUnionMilliseconds: 86_400_000 })],
+        enrollments: [enrollmentAnswer(), enrollmentAnswer({ id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' })],
       },
     },
   } as const;
 
-  it('shows a populated version and the held enrollment, which 1.0.4 refused to parse (D01, D02)', async () => {
+  it('shows a populated version and its two enrollments, which 1.0.4 refused to parse (D01, D02)', async () => {
     const state = await bridgeOver(populated).state();
     expect(state.readErrors).toEqual({ sequences: null, versions: null, templates: null, enrollments: null });
     expect(state.versions).toHaveLength(1);

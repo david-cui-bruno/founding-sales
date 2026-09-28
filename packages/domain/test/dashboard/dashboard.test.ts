@@ -224,7 +224,7 @@ describe('the dashboard', () => {
           available: true,
           started: 5,
           active: 4,
-          reviewRequired: 1,
+          reviewRequired: 0,
           ended: [{ key: 'completed', count: 1 }],
           stepsCompleted: [{ key: 'email', count: 6 }],
           heldSteps: [{ key: 'scoped_pause', count: 1 }],

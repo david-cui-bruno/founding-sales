@@ -63,7 +63,6 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
   suppression_events: coverage(['retained'], 'Indefinite, insert-only, and the tombstone a deletion leaves behind.'),
   active_holds: coverage(['retained'], 'The record of why automation was blocked; departure opens reassignment holds.'),
   administrative_pauses: coverage(['retained'], 'A pause and its reason history.'),
-  system_generations: coverage(['operational'], 'Appendix E’s restore generation.'),
   retention_policies: coverage(['operational'], 'The horizons themselves.'),
   jobs: coverage(['swept'], 'Payloads are redacted after the operational window; the dedupe key stays.'),
   daily_counters: coverage(['operational'], 'Counts by workspace, subject and business date; no prospect identity.'),
@@ -74,7 +73,6 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
 
   // -------------------------------------------------------------- identity
   sessions: coverage(['departure_revokes'], 'Ended by departure; the row records the session that existed.'),
-  device_refresh_credentials: coverage(['departure_revokes'], 'Revoked by departure; only digests are stored.'),
   oidc_authorization_requests: coverage(['operational'], 'Single-use digests of an in-flight sign-in.'),
 
   // ------------------------------------------------------------------- CRM

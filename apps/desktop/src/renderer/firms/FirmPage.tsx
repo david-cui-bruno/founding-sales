@@ -248,7 +248,6 @@ function ContactRow({
 
 const ENROLLMENT_STATE_LABELS: Readonly<Record<string, string>> = Object.freeze({
   active: 'running',
-  review_required: 'waiting for your review',
   completed: 'finished',
   stopped: 'stopped',
 });

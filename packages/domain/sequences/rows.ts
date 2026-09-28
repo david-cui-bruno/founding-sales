@@ -137,8 +137,7 @@ export async function listSequenceVersions(
 }
 
 const ENROLLMENT_COLUMNS = `id, sequence_version_id, opportunity_id, firm_id, contact_id, assigned_user_id,
-  state, started_at, ended_at, end_reason, firm_time_zone, holiday_calendar_version,
-  review_union_milliseconds`;
+  state, started_at, ended_at, end_reason, firm_time_zone, holiday_calendar_version`;
 
 interface EnrollmentDbRow {
   readonly id: string;
@@ -153,7 +152,6 @@ interface EnrollmentDbRow {
   readonly end_reason: string | null;
   readonly firm_time_zone: string;
   readonly holiday_calendar_version: string;
-  readonly review_union_milliseconds: string | number | null;
   readonly [column: string]: unknown;
 }
 
@@ -171,8 +169,10 @@ export function toEnrollment(row: EnrollmentDbRow): EnrollmentRow {
     endReason: known<EnrollmentEndReason>(ENROLLMENT_END_REASONS, row.end_reason),
     firmTimeZone: row.firm_time_zone,
     holidayCalendarVersion: row.holiday_calendar_version,
-    reviewUnionMilliseconds:
-      row.review_union_milliseconds === null ? null : Number(row.review_union_milliseconds),
+    // A constant, not a column. Migration 0021 made `review_union_milliseconds`
+    // null-only with the `review_required` state it belonged to; the field stays on the
+    // wire because desktop 1.0.14 parses the enrollment row strictly.
+    reviewUnionMilliseconds: null,
   };
 }
 
@@ -319,7 +319,7 @@ export async function readStepExecution(
  * The resume command locks the enrollment and then every unfinished step
  * (`resumeEnrollment`, `unexecutedExecutions`). The scheduler, the call log and a
  * completion used to lock the step first and the enrollment second, and the scheduler
- * now resumes `review_required` enrollments too, so the two orders could meet on one
+ * resumes a held enrollment itself, so the two orders could meet on one
  * enrollment and deadlock. The enrollment id is read unlocked first; it never changes
  * on an execution.
  */

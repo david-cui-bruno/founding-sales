@@ -215,7 +215,6 @@ export function enrollmentSource(): StepEligibilitySource {
       const enrollment = rows[0];
       if (enrollment === undefined) return { ok: false, reasonCode: 'scoped_pause', detail: 'enrollment_missing' };
       if (enrollment.ended_at !== null) return { ok: false, reasonCode: 'scoped_pause', detail: 'enrollment_ended' };
-      if (enrollment.state === 'review_required') return { ok: false, reasonCode: 'long_hold_review' };
       if (enrollment.state !== 'active') {
         return { ok: false, reasonCode: 'scoped_pause', detail: `enrollment_${enrollment.state}` };
       }
