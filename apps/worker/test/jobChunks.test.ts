@@ -9,6 +9,7 @@ import {
   databaseNowMs,
   enqueueJob,
   reclaimExpiredLeases,
+  killJob,
   requeueForNextChunk,
   writeProgress,
   type ClaimedJob,
@@ -166,19 +167,25 @@ describe('chunked bulk work', () => {
     // Nothing was lost: the cursor is still where the third chunk left it.
     expect((await jobRow(key)).progress).toEqual({ chunk: 3 });
 
-    const healthy = await runOnce(database.session, {
-      registry,
+    // A fresh worker takes it. While that claim is still running — nothing completed,
+    // nothing failed — the worker that vanished wakes up and tries to hand the job
+    // back. It affects no row, and the live claim is untouched.
+    const [live] = await claimJobs(database.session, {
       owner: 'worker-resumes',
+      kinds: ['retention.batch'],
       limit: 1,
-      backoff: IMMEDIATE,
+      leaseSeconds: 30,
     });
-    expect(healthy.completed).toBe(1);
+    expect(live).toBeDefined();
+    if (live === undefined) return;
+    expect(await requeueForNextChunk(database.session, abandoned)).toBe('lease_lost');
+    const duringTheLiveClaim = await jobRow(key);
+    expect(duringTheLiveClaim.state).toBe('running');
+    expect(duringTheLiveClaim.progress).toEqual({ chunk: 3 });
+
+    expect(await runClaimedJob(database.session, { registry, job: live, backoff: IMMEDIATE })).toBe('completed');
     // Five chunks, each exactly once: nothing was re-done and nothing was skipped.
     expect(await chunksOf(key)).toEqual([0, 1, 2, 3, 4]);
-    expect((await jobRow(key)).state).toBe('done');
-
-    // And the worker that vanished, waking up at last, hands nothing back.
-    expect(await requeueForNextChunk(database.session, abandoned)).toBe('lease_lost');
     expect((await jobRow(key)).state).toBe('done');
   });
 
@@ -367,7 +374,7 @@ describe('chunked bulk work', () => {
     expect(await chunksOf(key)).toEqual([0]);
   });
 
-  it('refuses to chunk an outbound-fence handler', async () => {
+  it('buries an outbound-fence handler that chunks, and never calls it again', async () => {
     // Declared: the process does not start.
     expect(() =>
       new HandlerRegistry().register({
@@ -380,7 +387,8 @@ describe('chunked bulk work', () => {
       }),
     ).toThrowError(expect.objectContaining({ name: 'HandlerRegistryError' }));
 
-    // Undeclared, and it returns a chunk anyway: the job fails, it does not loop.
+    // Undeclared, and it returns a chunk anyway. Retrying cannot fix it, and every
+    // attempt under this protection is a real send, so the job is buried at once.
     const key = 'fence:chunk-attempt';
     await enqueueJob(database.session, {
       workspaceId,
@@ -389,12 +397,16 @@ describe('chunked bulk work', () => {
       payload: {},
       maxAttempts: 4,
     });
+    let calls = 0;
     const sneaky = new HandlerRegistry().register({
       kind: 'sequence.action',
       protection: 'outbound_fence',
       maxAttempts: 4,
       leaseSeconds: 30,
-      handle: async () => await Promise.resolve({ progress: { chunk: 1 }, done: false }),
+      handle: async () => {
+        calls += 1;
+        return await Promise.resolve({ progress: { chunk: 1 }, done: false });
+      },
     });
     const [claim] = await claimJobs(database.session, {
       owner: 'worker-fence',
@@ -404,14 +416,31 @@ describe('chunked bulk work', () => {
     });
     expect(claim).toBeDefined();
     if (claim === undefined) return;
-    expect(await runClaimedJob(database.session, { registry: sneaky, job: claim, backoff: IMMEDIATE })).toBe(
-      'retryable',
-    );
-    const { rows } = await database.session.query<{ error_code: string }>(
-      `SELECT error_code FROM jobs WHERE workspace_id = $1 AND kind = 'sequence.action' AND idempotency_key = $2`,
+    expect(await runClaimedJob(database.session, { registry: sneaky, job: claim, backoff: IMMEDIATE })).toBe('dead');
+    expect(calls).toBe(1);
+
+    const buried = await database.session.query<{ state: string; error_code: string; attempt_count: number }>(
+      `SELECT state, error_code, attempt_count FROM jobs
+        WHERE workspace_id = $1 AND kind = 'sequence.action' AND idempotency_key = $2`,
       [workspaceId, key],
     );
-    expect(rows[0]?.error_code).toBe('chunking_unsupported');
+    expect(buried.rows[0]?.state).toBe('dead');
+    expect(buried.rows[0]?.error_code).toBe('chunking_unsupported');
+    // One attempt, not four: it did not go round the retry ladder on the way.
+    expect(buried.rows[0]?.attempt_count).toBe(1);
+
+    // And nothing claims it again: a dead job is out of the runnable set entirely.
+    const again = await runOnce(database.session, {
+      registry: sneaky,
+      owner: 'worker-fence-again',
+      limit: 5,
+      backoff: IMMEDIATE,
+    });
+    expect(again.claimed).toBe(0);
+    expect(calls).toBe(1);
+
+    // A stale claimant cannot bury a job it no longer holds.
+    expect(await killJob(database.session, claim, { code: 'chunking_unsupported' })).toBe('lease_lost');
   });
 
   it('produces one set of chunks under a real stolen lease', async () => {

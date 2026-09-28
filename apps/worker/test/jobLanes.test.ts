@@ -275,3 +275,100 @@ describe('a flexible slot cannot starve bulk work', () => {
     }
   });
 });
+
+describe('the lanes are real concurrency, not a turn each', () => {
+  let database: TestDatabase;
+  let workspaceId: string;
+
+  beforeAll(async () => {
+    database = await createTestDatabase();
+    const { rows } = await database.session.query<{ id: string }>(
+      "INSERT INTO workspaces (slug, display_name) VALUES ('gamma', 'Gamma') RETURNING id",
+    );
+    workspaceId = rows[0]?.id ?? '';
+    await createEffectTable(database.session);
+  });
+
+  afterAll(async () => {
+    await database.drop();
+  });
+
+  it('claims urgent work on one connection while the bulk slot is inside a handler on another', async () => {
+    // Two sessions, because two slots are two connections: a slot inside a handler is
+    // inside a transaction, and a test that polls the slots one after another on one
+    // connection proves nothing about the case the lanes exist for — the bulk slot
+    // *busy*, not merely next in line.
+    const bulkSession = await database.appRuntimeSession();
+    const urgentSession = database.session;
+
+    let released = (): void => {};
+    const blocked = new Promise<void>(resolve => {
+      released = resolve;
+    });
+    let entered = (): void => {};
+    const inTheHandler = new Promise<void>(resolve => {
+      entered = resolve;
+    });
+
+    const bulkRegistry = new HandlerRegistry().register({
+      kind: 'retention.batch',
+      protection: 'business_uniqueness',
+      maxAttempts: 4,
+      leaseSeconds: 60,
+      handle: async input => {
+        entered();
+        await blocked;
+        await input.session.query(
+          'INSERT INTO lane_log (workspace_id, effect_key) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+          [input.scope.workspaceId, `bulk:${input.job.idempotencyKey}`],
+        );
+      },
+    });
+    const urgentRegistry = new HandlerRegistry().register(laneHandler('mail.sync', 'urgent'));
+
+    await enqueueJob(database.session, {
+      workspaceId,
+      kind: 'retention.batch',
+      idempotencyKey: 'bulk:holds-the-slot',
+      payload: {},
+      maxAttempts: 4,
+    });
+
+    const bulkPass = runOnce(bulkSession, {
+      registry: bulkRegistry,
+      owner: 'gamma:1',
+      limit: 1,
+      classes: ['bulk'],
+    });
+    await inTheHandler;
+
+    // The bulk slot is inside its handler, inside its transaction, holding the row.
+    // The urgent job arrives now and must not wait for any of that.
+    await enqueueJob(database.session, {
+      workspaceId,
+      kind: 'mail.sync',
+      idempotencyKey: 'urgent:while-bulk-is-busy',
+      payload: {},
+      maxAttempts: 4,
+    });
+    const urgentPass = await runOnce(urgentSession, {
+      registry: urgentRegistry,
+      owner: 'gamma:0',
+      limit: 1,
+      classes: ['urgent'],
+    });
+    expect(urgentPass.claimedClass).toBe('urgent');
+    expect(urgentPass.completed).toBe(1);
+
+    // And the bulk job is still in flight, not done, while that happened.
+    const { rows: midflight } = await urgentSession.query<{ state: string }>(
+      "SELECT state FROM jobs WHERE workspace_id = $1 AND kind = 'retention.batch'",
+      [workspaceId],
+    );
+    expect(midflight[0]?.state).toBe('running');
+
+    released();
+    const bulkReport = await bulkPass;
+    expect(bulkReport.completed).toBe(1);
+  });
+});

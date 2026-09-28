@@ -347,4 +347,58 @@ describe('the job queue', () => {
     expect(rows[0]?.payload).toEqual({ eventId: 'event-1' });
     expect(rows[0]?.payload_archived_at).toBeNull();
   });
+  it('clears the runner chunk budget on an audited requeue, and keeps the cursor', async () => {
+    // A job buried for spending its chunk budget. Without clearing the bookkeeping the
+    // requeue would be a formality: the next claim checks the budget before the
+    // handler runs, finds it already spent, and buries the job again.
+    await enqueueJob(database.session, {
+      workspaceId: seeded.alpha.workspaceId,
+      kind: 'retention.batch',
+      idempotencyKey: 'retention:requeue-a-spent-budget',
+      payload: {},
+      maxAttempts: 4,
+    });
+    const { rows: enqueued } = await database.session.query<{ id: string }>(
+      "SELECT id FROM jobs WHERE workspace_id = $1 AND idempotency_key = 'retention:requeue-a-spent-budget'",
+      [seeded.alpha.workspaceId],
+    );
+    const jobId = enqueued[0]?.id ?? '';
+    await database.session.query(
+      `UPDATE jobs
+          SET state = 'dead',
+              dead_at = now(),
+              attempt_count = 4,
+              error_code = 'chunk_budget_exhausted',
+              payload = jsonb_build_object(
+                'progress', jsonb_build_object('chunk', 500),
+                'chunking', jsonb_build_object('chunks', 500, 'firstChunkMs', 1, 'lastChunkMs', 2)
+              )
+        WHERE workspace_id = $1 AND id = $2`,
+      [seeded.alpha.workspaceId, jobId],
+    );
+
+    expect(await requeueDeadJob(alpha, { jobId, reason: 'the handler was fixed' })).toEqual({
+      requeued: true,
+      jobId,
+      kind: 'retention.batch',
+    });
+
+    const { rows } = await database.session.query<{
+      state: string;
+      attempt_count: number;
+      progress: unknown;
+      chunking: unknown;
+    }>(
+      `SELECT state, attempt_count, payload -> 'progress' AS progress, payload -> 'chunking' AS chunking
+         FROM jobs WHERE workspace_id = $1 AND id = $2`,
+      [seeded.alpha.workspaceId, jobId],
+    );
+    expect(rows[0]?.state).toBe('queued');
+    expect(rows[0]?.attempt_count).toBe(0);
+    // The budget starts again, because the attempts do.
+    expect(rows[0]?.chunking).toBeNull();
+    // The cursor does not: a requeued sweep resumes, it does not begin again.
+    expect(rows[0]?.progress).toEqual({ chunk: 500 });
+  });
+
 });

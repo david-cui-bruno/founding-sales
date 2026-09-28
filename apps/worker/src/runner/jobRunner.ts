@@ -18,6 +18,7 @@ import {
   completeJob,
   databaseNowMs,
   failJob,
+  killJob,
   reclaimExpiredLeases,
   requeueForNextChunk,
   writeProgress,
@@ -178,13 +179,15 @@ async function runAttempt(session: SessionQueryable, options: AttemptOptions): P
       // not a fact this path can state; a second claim would re-send. The registry
       // refuses a handler that declares `chunked` with this protection, and this is the
       // same refusal for one that returns a chunk without declaring it.
-      return {
-        outcome: await failJob(session, job, {
-          code: 'chunking_unsupported',
-          detail: `${job.kind} is protected by the outbound fence, which cannot be chunked`,
-          ...failure,
-        }),
-      };
+      //
+      // Terminal, not retryable: the handler will return a chunk on the next attempt
+      // too, and every one of those attempts is a real send. The job goes straight to
+      // `dead`, where an operator sees it and an audited requeue is the way back.
+      const buried = await killJob(session, job, {
+        code: 'chunking_unsupported',
+        detail: `${job.kind} is protected by the outbound fence, which cannot be chunked`,
+      });
+      return { outcome: buried === 'dead' ? 'dead' : 'lease_lost' };
     }
     return { outcome: await completeJob(session, job) };
   }
@@ -273,9 +276,10 @@ export async function runClaimedJob(session: SessionQueryable, options: RunClaim
         ...(written.chunking === null ? {} : { chunking: written.chunking }),
       },
     };
-    // The statement that committed the chunk read the database clock in the same
-    // breath; that is the "before the next chunk" reading, and it costs no round trip.
-    clock = overrideNow === undefined && written.nowMs !== null ? written.nowMs : await now();
+    // A fresh reading, after the commit. The bookkeeping the write returned was taken
+    // inside the chunk's own transaction, and the deadline this decides is the next
+    // chunk's, so it has to be read now.
+    clock = await now();
     longestChunk = Math.max(longestChunk, clock - startedAt);
     if (!Number.isFinite(deadline) || clock + longestChunk + CHUNK_MARGIN_MILLISECONDS >= deadline) {
       // Out of lease with work left: back to the queue, cursor kept, runnable now.

@@ -280,8 +280,6 @@ export interface ProgressOutcome {
   readonly outcome: 'written' | 'lease_lost';
   /** The bookkeeping as the statement left it; null when the write affected no row. */
   readonly chunking: ChunkBookkeeping | null;
-  /** Database time at the write, in epoch milliseconds. Null on `lease_lost`. */
-  readonly nowMs: number | null;
 }
 
 /** Read the runner's chunk bookkeeping out of a claimed row's payload. */
@@ -296,10 +294,16 @@ export function chunkBookkeepingOf(payload: Readonly<Record<string, unknown>>): 
   return { chunks, firstChunkMs, lastChunkMs };
 }
 
-/** Database time in epoch milliseconds. The only clock the chunk loop reads. */
+/**
+ * Database time in epoch milliseconds. The only clock the chunk loop reads.
+ *
+ * `clock_timestamp()`, not `now()`: `now()` is the transaction's start time and does
+ * not move inside one, so a chunk that took a minute would report as having taken
+ * nothing and the lease would look untouched.
+ */
 export async function databaseNowMs(db: Queryable): Promise<number> {
   const { rows } = await db.query<{ now_ms: string }>(
-    "SELECT (extract(epoch FROM now()) * 1000)::bigint::text AS now_ms",
+    'SELECT (extract(epoch FROM clock_timestamp()) * 1000)::bigint::text AS now_ms',
   );
   return Number(rows[0]?.now_ms);
 }
@@ -314,9 +318,10 @@ export async function databaseNowMs(db: Queryable): Promise<number> {
  * token, a worker whose lease was stolen while it was working affects zero rows and is
  * told so, rather than dragging a live worker's cursor backwards.
  *
- * The counter and the first-chunk instant are computed here, from `now()` and the row's
- * own previous values, because they are the budget a runaway handler is held to and a
- * handler must not be able to write its own budget.
+ * The counter and the first-chunk instant are computed here, from `clock_timestamp()`
+ * and the row's own previous values, because they are the budget a runaway handler is
+ * held to and a handler must not be able to write its own budget. `now()` would be the
+ * transaction's start — that is, before the chunk — and this statement runs after it.
  */
 export async function writeProgress(db: Queryable, write: ProgressWrite): Promise<ProgressOutcome> {
   const { rows } = await db.query<{ chunks: string; first_chunk_ms: string; last_chunk_ms: string }>(
@@ -328,9 +333,9 @@ export async function writeProgress(db: Queryable, write: ProgressWrite): Promis
                 'chunks', coalesce((payload -> 'chunking' ->> 'chunks')::bigint, 0) + 1,
                 'firstChunkMs', coalesce(
                   (payload -> 'chunking' ->> 'firstChunkMs')::bigint,
-                  (extract(epoch FROM now()) * 1000)::bigint
+                  (extract(epoch FROM clock_timestamp()) * 1000)::bigint
                 ),
-                'lastChunkMs', (extract(epoch FROM now()) * 1000)::bigint
+                'lastChunkMs', (extract(epoch FROM clock_timestamp()) * 1000)::bigint
               ),
               true
             ),
@@ -343,13 +348,15 @@ export async function writeProgress(db: Queryable, write: ProgressWrite): Promis
     [write.workspaceId, write.jobId, write.fencingToken, JSON.stringify(write.progress)],
   );
   const row = rows[0];
-  if (row === undefined) return { outcome: 'lease_lost', chunking: null, nowMs: null };
-  const chunking: ChunkBookkeeping = {
-    chunks: Number(row.chunks),
-    firstChunkMs: Number(row.first_chunk_ms),
-    lastChunkMs: Number(row.last_chunk_ms),
+  if (row === undefined) return { outcome: 'lease_lost', chunking: null };
+  return {
+    outcome: 'written',
+    chunking: {
+      chunks: Number(row.chunks),
+      firstChunkMs: Number(row.first_chunk_ms),
+      lastChunkMs: Number(row.last_chunk_ms),
+    },
   };
-  return { outcome: 'written', chunking, nowMs: chunking.lastChunkMs };
 }
 
 /**
@@ -375,6 +382,33 @@ export async function requeueForNextChunk(db: Queryable, claim: ClaimedJob): Pro
     [claim.workspaceId, claim.id, claim.leaseOwner, claim.fencingToken],
   );
   return (rowCount ?? 0) === 1 ? 'requeued' : 'lease_lost';
+}
+
+/**
+ * Bury a job this worker still holds, without spending its attempts.
+ *
+ * For a failure that retrying cannot fix. `chunking_unsupported` is the one so far: a
+ * handler that returns a chunk under the outbound fence will return one on the next
+ * attempt too, and each of those attempts is a real send. Fenced like every other write
+ * a worker makes to its own row, so a worker whose lease was stolen buries nothing.
+ *
+ * An admin requeue is how such a job comes back, after the code that caused it changed.
+ */
+export async function killJob(db: Queryable, claim: ClaimedJob, failure: { readonly code: string; readonly detail?: string | undefined }): Promise<'dead' | 'lease_lost'> {
+  const { rowCount } = await db.query(
+    `UPDATE jobs
+        SET state = 'dead',
+            dead_at = now(),
+            lease_owner = NULL,
+            lease_expires_at = NULL,
+            error_code = $5,
+            error_detail = $6,
+            updated_at = now()
+      WHERE workspace_id = $1 AND id = $2 AND state = 'running'
+        AND lease_owner = $3 AND fencing_token = $4::bigint`,
+    [claim.workspaceId, claim.id, claim.leaseOwner, claim.fencingToken, failure.code, failure.detail ?? null],
+  );
+  return (rowCount ?? 0) === 1 ? 'dead' : 'lease_lost';
 }
 
 /** Extend a lease this worker still holds. A long handler renews rather than gambling. */
@@ -525,6 +559,11 @@ export async function requeueDeadJob(
         SET state = 'queued',
             dead_at = NULL,
             attempt_count = 0,
+            -- The runner's chunk budget starts again, because the attempts do. The
+            -- handler's cursor is deliberately kept: a requeued sweep resumes where it
+            -- got to, it does not begin again. Without this, a job buried for spending
+            -- its budget would spend it again before its handler ran once.
+            payload = payload - 'chunking',
             requeued_count = requeued_count + 1,
             run_at = now(),
             not_before = now(),

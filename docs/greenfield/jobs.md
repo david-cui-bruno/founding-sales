@@ -160,12 +160,16 @@ already out in the world when the chunk would commit, so there is no transaction
 commit the work and the cursor together and no honest claim that "the cursor is where
 the work got to"; a second claim would re-send. A handler declaring `chunked: true`
 with that protection is refused at registration (`CHUNKING_UNSUPPORTED`), and one that
-returns a chunk anyway fails the job with `chunking_unsupported`.
+returns a chunk anyway has its job **buried at once** — `killJob`, fenced by the
+claim's token, straight to `dead` with `chunking_unsupported` and one attempt spent.
+Not retried: the handler will return a chunk on the next attempt too, and every one of
+those attempts is a real send. The audited admin requeue is the way back.
 
-**Every clock in the loop is the database's.** The lease deadline came from the
-database at claim time, so the remaining time is measured against `now()` read from
-the database — the statement that commits a chunk returns it in the same breath — and
-not against the host's clock, which may have drifted either way.
+**Every clock in the loop is the database's, and it is `clock_timestamp()`.** The
+lease deadline came from the database at claim time, so the remaining time is measured
+against a database reading taken freshly after each chunk commits — not against the
+host's clock, which may have drifted either way, and not against `now()`, which is the
+*transaction's start* and therefore the time before the chunk rather than after it.
 
 **The budget.** A yield restores the attempt and resets `run_at`, so a handler that
 never returns `done` would be a job that is always a second old, never dead and never
@@ -176,8 +180,15 @@ cannot write its own budget. Exceeding either fails the job through the ordinary
 `failJob` with `chunk_budget_exhausted` and an `error_detail` naming which, so it
 retries, exhausts its attempts and becomes a dead job an operator sees. Before that,
 `OldestRunnableJobAgeSeconds` measures a chunked job from its **first** committed
-chunk rather than from `run_at`, so a sweep that has been going for hours reads as
-hours.
+chunk rather than from `run_at`, and across `running` as well as the runnable states —
+the busy loop re-claims a yielding job immediately, so read over the runnable states
+alone it would be missing data, and missing data is `notBreaching`. Measured this way
+a sweep that has been going for hours reads as hours.
+
+An audited admin requeue clears `payload.chunking` and keeps `payload.progress`: the
+budget starts again because the attempts do, and the sweep resumes where it got to
+rather than beginning again. Without that, a job buried for spending its budget would
+be buried again before its handler ran once.
 
 Two properties are the point. **A crash costs one chunk**: everything earlier is
 committed with its cursor, so the next claim resumes at the chunk after the last
