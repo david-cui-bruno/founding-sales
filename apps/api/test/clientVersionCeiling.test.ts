@@ -6,10 +6,11 @@ import {
   clientVersionRangeSchema,
   mayMutate,
   publishedClientVersions,
-  sessionRenewalSchema,
+  deviceSessionSchema,
   signInStartResponseSchema,
   wireDrift,
   type ClientVersionPolicy,
+  type SessionGrant,
 } from '@fss/contracts';
 import { CONTAINER_CLIENT_VERSIONS } from '../src/bootstrap/main.ts';
 import { localNoopSuppressionJournal } from '../src/journal/index.ts';
@@ -28,7 +29,7 @@ import { issueSessionFor } from './support/sessionFixture.ts';
  * the range derived from it. What has to be true, through the real dispatcher:
  *
  *   * a build on the line the API has never heard of is admitted — the point;
- *   * a build on the incompatible list is refused every sign-in, renewal and command,
+ *   * a build on the incompatible list is refused every sign-in, open and command,
  *     exactly as an outdated one is;
  *   * a build above the line is still refused;
  *   * what goes on the wire is `{ minimum, maximum }` and nothing else, because desktops
@@ -54,7 +55,7 @@ describe('the compatibility ceiling, through the real routes', () => {
   let fixture: AuthFixture;
   let deps: AuthDeps;
   let adminToken = '';
-  let refreshCredential = '';
+  let grant: SessionGrant;
 
   const options = (): ApiOptions => ({
     session: fixture.db,
@@ -85,9 +86,8 @@ describe('the compatibility ceiling, through the real routes', () => {
   beforeAll(async () => {
     fixture = await createAuthFixture();
     deps = { ...fixture.deps, config: { ...fixture.deps.config, supportedClientVersions: policy } };
-    const grant = await issueSessionFor(fixture, fixture.alpha, fixture.alpha.admin);
+    grant = await issueSessionFor(fixture, fixture.alpha, fixture.alpha.admin);
     adminToken = grant.accessToken;
-    refreshCredential = grant.refreshCredential;
   });
 
   afterAll(async () => {
@@ -123,7 +123,7 @@ describe('the compatibility ceiling, through the real routes', () => {
     expect(command.status).toBe(200);
   });
 
-  it('refuses a listed build every sign-in, renewal and command, as it refuses an outdated one', async () => {
+  it('refuses a listed build every sign-in, open and command, as it refuses an outdated one', async () => {
     const started = await call('POST', '/auth/sign-in/start', {
       workspaceId: fixture.alpha.workspaceId,
       deviceLabel: 'Listed Mac',
@@ -132,8 +132,13 @@ describe('the compatibility ceiling, through the real routes', () => {
     expect(started.status).toBe(426);
     expect(started.body['error']).toBe('client_upgrade_required');
 
-    const renewed = await call('POST', '/auth/session/renew', { refreshCredential, clientVersion: LISTED });
-    expect(renewed.status).toBe(426);
+    const opened = await call('POST', '/auth/session/open', {
+      workspaceId: grant.workspaceId,
+      deviceId: grant.deviceId,
+      deviceSecret: grant.deviceSecret,
+      clientVersion: LISTED,
+    });
+    expect(opened.status).toBe(426);
 
     const command = await call(
       'POST',
@@ -154,11 +159,16 @@ describe('the compatibility ceiling, through the real routes', () => {
     expect(started.status).toBe(426);
   });
 
-  it('puts the published range, not the policy, in the renewal grant', async () => {
-    const renewed = await call('POST', '/auth/session/renew', { refreshCredential, clientVersion: '1.4.0' });
-    expect(renewed.status).toBe(200);
-    expect(renewed.body['supportedClientVersions']).toEqual({ minimum: '1.2.0', maximum: '1.4.999' });
-    expect(sessionRenewalSchema.safeParse(renewed.body).success).toBe(true);
+  it('puts the published range, not the policy, in the grant an open answers with', async () => {
+    const opened = await call('POST', '/auth/session/open', {
+      workspaceId: grant.workspaceId,
+      deviceId: grant.deviceId,
+      deviceSecret: grant.deviceSecret,
+      clientVersion: '1.4.0',
+    });
+    expect(opened.status).toBe(200);
+    expect(opened.body['supportedClientVersions']).toEqual({ minimum: '1.2.0', maximum: '1.4.999' });
+    expect(deviceSessionSchema.safeParse(opened.body).success).toBe(true);
   });
 });
 

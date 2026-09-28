@@ -2,7 +2,6 @@ import { z } from 'zod';
 import { commandIdSchema, semanticVersionSchema, uuid } from '@fss/contracts';
 import { databaseNow } from '@fss/domain/policy/clock.ts';
 import { enrollContact, stopEnrollments } from '@fss/domain/sequences/enrollments.ts';
-import { previewResume, resumeEnrollment } from '@fss/domain/sequences/resume.ts';
 import { listEnrollments, listStepExecutions } from '@fss/domain/sequences/rows.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { policyRouteDeps, runPolicyCommand } from './dialSupport.ts';
@@ -16,14 +15,18 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  * went with LinkedIn on 25 September 2026, and the audited migration's three
  * (`/enrollments/migrate/propose`, `/approve`, `/apply`) with wave 2's edit in place
  * (S3), which reaches live enrollments without moving them to a new version.
+ *
+ * `/enrollments/resume` and `/enrollments/resume/preview` went with the 1.0.14 minimum
+ * (lane W3-C2). They existed for the seven-day review, which wave 2 (S4.1) replaced
+ * with a resume the scheduler performs on its own once the holds clear; no installed
+ * build has shown the review since 1.0.12, and migration 0021 removes the
+ * `review_required` state they were about.
  */
 export const ENROLLMENT_PATHS: readonly string[] = [
   '/enrollments',
   '/enrollments/enroll',
   '/enrollments/stop',
   '/enrollments/steps',
-  '/enrollments/resume',
-  '/enrollments/resume/preview',
 ];
 
 const command = { commandId: commandIdSchema, clientVersion: semanticVersionSchema };
@@ -42,9 +45,6 @@ const stopSchema = z.strictObject({
   firmId: uuid.optional(),
 });
 
-const enrollmentSchema = z.strictObject({ ...command, enrollmentId: uuid });
-
-
 const listSchema = z.strictObject({
   firmId: uuid.optional(),
   contactId: uuid.optional(),
@@ -52,8 +52,6 @@ const listSchema = z.strictObject({
 });
 
 const stepsSchema = z.strictObject({ enrollmentId: uuid });
-
-const previewSchema = z.strictObject({ enrollmentId: uuid });
 
 export async function routeEnrollments(
   request: ApiRequest,
@@ -105,25 +103,6 @@ export async function routeEnrollments(
     };
   }
 
-  if (request.path === '/enrollments/resume/preview') {
-    // "Review and resume" (4.3; audit G06): the future steps and the dates a
-    // confirmation would give them, computed by the function the confirmation runs. A
-    // read — nothing is locked or written — so the person can look and walk away.
-    const parsed = previewSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };
-    }
-    const scoped = contextForPrincipal(deps.auth, deps.principal);
-    if (!scoped.ok) return scoped.result;
-    const preview = await previewResume(scoped.context, { enrollmentId: parsed.data.enrollmentId });
-    if (!preview.ok) {
-      return preview.reason === 'enrollment_unknown'
-        ? { status: REFUSAL_STATUS.not_found, body: redactError('not_found') }
-        : { status: 409, body: { status: 'refused', reason: preview.reason } };
-    }
-    return { status: 200, body: { asOf: await databaseNow(scoped.context), preview: preview.value } };
-  }
-
   if (request.path === '/enrollments/enroll') {
     return await runPolicyCommand(deps, enrollSchema, 'enroll_contact', async (context, body) =>
       await enrollContact(context, {
@@ -148,14 +127,6 @@ export async function routeEnrollments(
       });
       return { ok: true, value: stopped };
     });
-  }
-
-  // Installed desktops up to 1.0.11 confirm a review here. Since wave 2 (S4.1) a long
-  // hold resumes on its own, so this is the same resume the scheduler runs, asked now.
-  if (request.path === '/enrollments/resume') {
-    return await runPolicyCommand(deps, enrollmentSchema, 'resume_enrollment', async (context, body) =>
-      await resumeEnrollment(context, { enrollmentId: body.enrollmentId }),
-    );
   }
 
   return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };

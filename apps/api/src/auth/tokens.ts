@@ -1,8 +1,8 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
-import { ACCESS_TOKEN_PREFIX, REFRESH_CREDENTIAL_PREFIX } from '@fss/contracts';
+import { ACCESS_TOKEN_PREFIX } from '@fss/contracts';
 
 /**
- * Digests, derivations and the two credential spellings.
+ * Digests, derivations and the access token's spelling.
  *
  * Nothing in this file keeps state and nothing in it logs. `sha256Hex` is the only
  * way a secret becomes a database value, and the CHECK constraints in migration 0003
@@ -43,24 +43,8 @@ export interface ParsedAccessToken {
   readonly secret: string;
 }
 
-export interface ParsedRefreshCredential {
-  readonly workspaceId: string;
-  readonly deviceId: string;
-  readonly generation: number;
-  readonly secret: string;
-}
-
 export function formatAccessToken(workspaceId: string, secret: string): string {
   return `${ACCESS_TOKEN_PREFIX}.${workspaceId}.${secret}`;
-}
-
-export function formatRefreshCredential(
-  workspaceId: string,
-  deviceId: string,
-  generation: number,
-  secret: string,
-): string {
-  return `${REFRESH_CREDENTIAL_PREFIX}.${workspaceId}.${deviceId}.${String(generation)}.${secret}`;
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -74,19 +58,6 @@ export function parseAccessToken(value: string): ParsedAccessToken | null {
   if (workspaceId === undefined || secret === undefined) return null;
   if (!UUID.test(workspaceId) || !SECRET.test(secret)) return null;
   return { workspaceId, secret };
-}
-
-/** Null on anything that is not this API's own refresh credential. Fails closed. */
-export function parseRefreshCredential(value: string): ParsedRefreshCredential | null {
-  const parts = value.split('.');
-  const [prefix, workspaceId, deviceId, generation, secret] = parts;
-  if (parts.length !== 5 || prefix !== REFRESH_CREDENTIAL_PREFIX) return null;
-  if (workspaceId === undefined || deviceId === undefined || generation === undefined || secret === undefined) {
-    return null;
-  }
-  if (!UUID.test(workspaceId) || !UUID.test(deviceId) || !SECRET.test(secret)) return null;
-  if (!/^[1-9][0-9]{0,15}$/.test(generation)) return null;
-  return { workspaceId, deviceId, generation: Number(generation), secret };
 }
 
 /** The bearer value of an `Authorization` header, or null. Case-insensitive scheme. */

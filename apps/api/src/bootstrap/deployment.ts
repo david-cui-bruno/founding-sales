@@ -100,13 +100,12 @@ export const GOOGLE_OIDC_DISCOVERY_URL = 'https://accounts.google.com/.well-know
 export const OIDC_CLOCK_SKEW_SECONDS = 60;
 
 /**
- * Specification 5.3 as numbers: sessions of about an hour, a device-bound credential
- * that rotates on every use, full Google sign-in every 30 days, and a sign-in that may
- * sit in the browser for ten minutes before it is dead.
+ * Specification 5.3 as numbers: sessions of about an hour, opened from the device-bound
+ * secret, full Google sign-in every 30 days, and a sign-in that may sit in the browser
+ * for ten minutes before it is dead.
  */
 export const DEPLOYED_SESSION_POLICY: SessionPolicy = Object.freeze({
   accessSessionSeconds: 3600,
-  refreshCredentialSeconds: 30 * 24 * 3600,
   fullSignInSeconds: 30 * 24 * 3600,
   authorizationRequestSeconds: 600,
 });

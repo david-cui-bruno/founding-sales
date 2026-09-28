@@ -140,10 +140,11 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     // The Add firm form: one row of an import, typed. Exact, like its neighbours.
     moduleOf('add-firm', { paths: ADD_FIRM_PATHS }, routeAddFirm, routing),
     // The policy, suppression and dialing surface. Exact paths throughout, for
-    // the reason above. `/dial/authorize` and `/dial/consume` are declared separately
-    // rather than as a `/dial` prefix because a mistyped dialing path must be
-    // `not_found` and not an unauthorized call: the registry is the only thing that
-    // can promise that, and only about the paths it was told.
+    // the reason above. `/dial/check` is declared by name rather than as a `/dial`
+    // prefix because a mistyped dialing path must be `not_found` and not an
+    // unauthorized call: the registry is the only thing that can promise that, and
+    // only about the paths it was told. The retired ticket pair is simply absent from
+    // the claim, so `/dial/authorize` is now `not_found` before any module sees it.
     moduleOf('postures', { paths: POSTURE_PATHS }, routePostures, routing),
     moduleOf('suppressions', { paths: SUPPRESSION_PATHS }, routeSuppressions, routing),
     moduleOf('dial', { paths: DIAL_PATHS }, routeDial, routing),

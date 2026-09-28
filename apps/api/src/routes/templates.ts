@@ -1,7 +1,6 @@
 import { z } from 'zod';
 import { commandIdSchema, semanticVersionSchema, uuid } from '@fss/contracts';
 import {
-  approveTemplateVersion,
   createTemplateVersion,
   listTemplateVersions,
   updateTemplateVersion,
@@ -19,10 +18,11 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  *     and the refusal rules re-run, and an approved version stays approved only if they
  *     pass. `approve: true` is "Save and approve": approved in the same command, or
  *     refused with every issue and nothing written.
- *   * `POST /templates/create` writes a new template, and takes `approve: true` too.
- *   * `POST /templates/approve` approves a version as it stands. @deprecated for desktop
- *     1.0.11, with `/templates/create`'s `templateId` (a new version of a template); both
- *     go once 1.0.12 is in use.
+ *   * `POST /templates/create` writes a new template, and takes `approve: true` too. It
+ *     no longer takes a `templateId`: a new *version* of an existing template was the
+ *     1.0.11 shape, and the 0021 release (lane W3-C2) retired it along with
+ *     `POST /templates/approve`, which approved a version as it stood. Editing in place
+ *     with `approve: true` is what replaced both.
  *
  * A refused approval carries *every* issue rather than the first, as
  * `template_unapproved:<issue>,<issue>`: an author fixing one rule at a time is a worse
@@ -31,12 +31,7 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  * a save also carries `issues`, the refusal rules the text does not pass
  * (`templateSaveResultSchema` in `@fss/contracts`).
  */
-export const TEMPLATE_PATHS: readonly string[] = [
-  '/templates',
-  '/templates/create',
-  '/templates/update',
-  '/templates/approve',
-];
+export const TEMPLATE_PATHS: readonly string[] = ['/templates', '/templates/create', '/templates/update'];
 
 const command = { commandId: commandIdSchema, clientVersion: semanticVersionSchema };
 
@@ -53,7 +48,7 @@ const text = {
   approve: z.boolean().optional(),
 };
 
-const createSchema = z.strictObject({ ...command, templateId: uuid.optional(), ...text });
+const createSchema = z.strictObject({ ...command, ...text });
 
 const updateSchema = z.strictObject({ ...command, templateVersionId: uuid, ...text });
 
@@ -65,8 +60,6 @@ function withIssues<T>(result: TemplateResult<T>): { readonly ok: true; readonly
     reason: result.issues === undefined ? result.reason : `${result.reason}:${result.issues.join(',')}`,
   };
 }
-
-const versionSchema = z.strictObject({ ...command, templateVersionId: uuid });
 
 const listSchema = z.strictObject({ templateId: uuid.optional() });
 
@@ -106,7 +99,6 @@ export async function routeTemplates(
     return await runPolicyCommand(deps, createSchema, 'create_template_version', async (context, body) =>
       withIssues(
         await createTemplateVersion(context, {
-          ...(body.templateId === undefined ? {} : { templateId: body.templateId }),
           name: body.name,
           subject: body.subject,
           body: body.body,
@@ -131,12 +123,6 @@ export async function routeTemplates(
           approve: body.approve,
         }),
       ),
-    );
-  }
-
-  if (request.path === '/templates/approve') {
-    return await runPolicyCommand(deps, versionSchema, 'approve_template_version', async (context, body) =>
-      withIssues(await approveTemplateVersion(context, { templateVersionId: body.templateVersionId })),
     );
   }
 

@@ -40,38 +40,15 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  * apply to it; it is a POST because it takes a body and because a family of
  * endpoints that is two thirds POST is one somebody gets wrong on the fourth.
  *
- * ## Why `GET /settings` hides one key
- *
- * `settingsSnapshotSchema` is a `strictObject` whose `settingKey` is an enum, and the
- * installed desktop parses every answer with *its own build* of that schema: an entry
- * for a key it has never heard of does not degrade, it throws, and the settings page
- * loses all ten of its sections. So `postal_address` (migration 0020, lane W3-F) is left
- * out of the snapshot unless the caller asks for it by name — `GET /settings?include=
- * postal_address` — which desktop 1.0.11 never does and its successor does. The update
- * command and the history read take the key from any caller; only the unasked-for
- * snapshot is narrowed. Delete `HIDDEN_FROM_UNASKED_SNAPSHOT`, and the parameter, when
- * the desktop that cannot parse it is no longer installed (lane W3-C).
+ * `GET /settings` carries every stored key, `postal_address` included. It hid that one
+ * from an unasked-for snapshot until the 1.0.14 minimum (lane W3-C2), because
+ * `settingsSnapshotSchema` is a `strictObject` whose `settingKey` is an enum and
+ * desktop 1.0.11 parsed every answer with its own build of it: an entry for a key it
+ * had never heard of threw rather than degrading, and the settings page lost all ten of
+ * its sections. 1.0.14 knows the key, so the filter and its `?include=` parameter are
+ * gone.
  */
 export const SETTINGS_PATHS: readonly string[] = ['/settings', '/settings/update', '/settings/history'];
-
-/**
- * Keys `GET /settings` omits unless the caller names them in `?include=`.
- *
- * Compatibility with the installed desktop and nothing else; see the note above.
- */
-const HIDDEN_FROM_UNASKED_SNAPSHOT: ReadonlySet<string> = new Set(['postal_address']);
-
-/** The hidden keys this request asked for, from `?include=a,b`. */
-function includedKeys(query: URLSearchParams): ReadonlySet<string> {
-  const asked = new Set<string>();
-  for (const value of query.getAll('include')) {
-    for (const key of value.split(',')) {
-      const trimmed = key.trim();
-      if (HIDDEN_FROM_UNASKED_SNAPSHOT.has(trimmed)) asked.add(trimmed);
-    }
-  }
-  return asked;
-}
 
 export async function routeSettings(request: ApiRequest, options: RoutingOptions): Promise<RouteResult | null> {
   if (!SETTINGS_PATHS.includes(request.path)) return null;
@@ -86,12 +63,8 @@ export async function routeSettings(request: ApiRequest, options: RoutingOptions
     const scoped = contextForPrincipal(deps.auth, deps.principal);
     if (!scoped.ok) return scoped.result;
 
-    const all = await readCurrentSettings(scoped.context);
-    const asked = includedKeys(request.query);
-    const settings = all.filter(
-      entry => !HIDDEN_FROM_UNASKED_SNAPSHOT.has(entry.settingKey) || asked.has(entry.settingKey),
-    );
-    const sendingSetting = all.find(entry => entry.settingKey === 'sending_enabled')?.value;
+    const settings = await readCurrentSettings(scoped.context);
+    const sendingSetting = settings.find(entry => entry.settingKey === 'sending_enabled')?.value;
     return {
       status: 200,
       body: {

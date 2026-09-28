@@ -96,7 +96,6 @@ export function authConfigFor(google: GoogleStub): AuthConfig {
     },
     sessions: {
       accessSessionSeconds: 3600,
-      refreshCredentialSeconds: 30 * 24 * 3600,
       fullSignInSeconds: 30 * 24 * 3600,
       authorizationRequestSeconds: 600,
     },
