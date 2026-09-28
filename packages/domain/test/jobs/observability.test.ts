@@ -403,6 +403,53 @@ describe('counters, heartbeats, the canary and alerts', () => {
     if (remaining !== undefined) await completeJob(database.session, remaining);
   });
 
+  it('reports a chunked job that is running, measured from its first chunk', async () => {
+    // The runner's busy loop claims again the instant a chunked job yields, so a
+    // handler that never finishes is `running` almost every time this loop samples.
+    // Read only over the runnable states, its age would be missing data, and missing
+    // data is notBreaching: the alarm would never fire for the one job it is for.
+    await enqueueJob(database.session, {
+      workspaceId: seeded.alpha.workspaceId,
+      kind: 'retention.batch',
+      idempotencyKey: 'retention:never-finishes',
+      payload: {},
+      maxAttempts: 4,
+    });
+    const [claim] = await claimJobs(database.session, {
+      owner: 'worker-chunking',
+      kinds: ['retention.batch'],
+      limit: 1,
+      leaseSeconds: 300,
+    });
+    expect(claim).toBeDefined();
+    if (claim === undefined) return;
+    await database.session.query(
+      `UPDATE jobs
+          SET payload = jsonb_build_object(
+                'progress', jsonb_build_object('chunk', 4_000),
+                'chunking', jsonb_build_object(
+                  'chunks', 4000,
+                  'firstChunkMs', (extract(epoch FROM now() - INTERVAL '4 hours') * 1000)::bigint,
+                  'lastChunkMs', (extract(epoch FROM now()) * 1000)::bigint
+                )
+              )
+        WHERE workspace_id = $1 AND id = $2`,
+      [claim.workspaceId, claim.id],
+    );
+    const { rows } = await database.session.query<{ state: string }>(
+      'SELECT state FROM jobs WHERE workspace_id = $1 AND id = $2',
+      [claim.workspaceId, claim.id],
+    );
+    expect(rows[0]?.state).toBe('running');
+
+    const byName = new Map((await collectJobMetrics(database.session)).map(datum => [datum.name, datum]));
+    const age = byName.get('OldestRunnableJobAgeSeconds');
+    expect(age, 'a running chunked job was not measured at all').toBeDefined();
+    expect(age?.value ?? 0).toBeGreaterThan(3 * 60 * 60);
+
+    await completeJob(database.session, claim);
+  });
+
   it('is a validating no-op without a publisher, and refuses a metric no alarm reads', async () => {
     const noop = createMetricSink({ namespace: 'FSS/Test' });
     await expect(noop.publish([{ name: 'CanaryCompletionAgeSeconds', value: 12, unit: 'Seconds' }])).resolves.toBeUndefined();

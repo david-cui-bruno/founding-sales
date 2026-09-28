@@ -8,7 +8,7 @@ any of that stops.
 
 ```
 packages/domain/jobs/     shared by both services
-  jobKinds.ts             Appendix C: the kinds, their keys, their protections
+  jobKinds.ts             Appendix C: the kinds, their keys, their protections, their lanes
   jobStore.ts             enqueue, claim, complete, fail, reclaim, archive, requeue
   backoff.ts              the retry ladder, pure
   handlerRegistry.ts      a handler declares its idempotency protection or is refused
@@ -20,7 +20,7 @@ packages/domain/jobs/     shared by both services
   metrics.ts              the metric names, and the adapter that is a no-op locally
 
 apps/worker/src/scheduler/  the one-minute pass and its due-work sources
-apps/worker/src/runner/     the claim loop and the per-protection execution
+apps/worker/src/runner/     the claim loop, the slot lanes, the per-protection execution
 apps/api/src/routes/admin/  the dead-job list, the requeue, the acknowledgement
 ```
 
@@ -84,6 +84,122 @@ differently for each:
 the lease, reclaims, lets a second worker finish, then lets the first wake up and try —
 and asserts one business effect. A lane that registers a new handler adds a probe and
 runs it. That is Appendix G scenario 2, and it is not optional.
+
+## Kind classes and slots
+
+Every kind runs in one of two lanes, and `JOB_KIND_CLASS` in `jobKinds.ts` is the
+table:
+
+* **`urgent`** — somebody or the clock is waiting: `mail.sync`, `mail.reconcile`,
+  `mail.recover`, `mail.watch_renew`, `classify.reply`, `suppression.finalize`,
+  `outbound.close_send_day`, `today.build`, `canary`.
+* **`bulk`** — it may take as long as it takes: `sequence.action`,
+  `sequence.terminal_stop`, `route.validate`, `retention.batch`.
+
+The lanes exist because the claim orders by `run_at`. A slot that claims every kind
+takes the oldest runnable row whatever it is, so fifty retention batches queued at
+09:00 are claimed before the reply that arrived at 09:01, and "Callie is slow" is
+really "Callie is behind a sweep".
+
+A handler whose kind has no lane is refused at registration by name
+(`CLASS_MISSING`), which refuses the process: a kind no lane claims is a job that is
+enqueued, indexed, runnable and invisible. The table's type is total over `JobKind`, so
+the compiler catches the omission first; the refusal catches it where the compiler is
+not.
+
+`slotClasses(concurrency, index)` in `apps/worker/src/runner/slots.ts` gives each slot
+its lanes:
+
+| Slots | Slot 0 | Slot 1 | Slot 2… |
+|---|---|---|---|
+| 1 | urgent, then bulk | | |
+| 2 | urgent | urgent, then bulk | |
+| 3 or more | urgent | bulk | urgent, then bulk |
+
+A flexible slot tries its lanes in order inside one pass, so an idle urgent lane costs
+one extra statement rather than a whole poll. The bulk-only slot appears at three,
+because at two a dedicated bulk slot would be half the worker.
+
+**"Urgent first" is bounded.** The scheduler materializes mail syncs, reconciles and
+Today builds on a fixed cadence, so a flexible slot can find urgent work on every
+single poll, for ever — and at one or two slots there is no bulk-only slot behind it,
+so `sequence.action` would simply never run. `URGENT_STREAK_LIMIT` (three) is the
+answer: after three consecutive polls that claimed urgent work, a flexible slot puts
+bulk first for one poll. The flipped poll still tries urgent afterwards, so when there
+is no bulk work waiting the flip costs one statement and nothing else.
+
+**The lease got shorter for bulk work.** A slot's claim leases for the longest handler
+*of the kinds that claim names*, not of everything registered. A bulk claim therefore
+leases 60 s — the longest of `sequence.action`, `sequence.terminal_stop`,
+`route.validate` and `retention.batch` — where before it took the registry maximum of
+300 s, which is `mail.sync`'s. That is the intended change: a retention sweep was
+being leased for as long as a mail sync, and a crashed worker held it for five minutes
+before the reclaim. A bulk handler that genuinely needs longer raises its own
+`leaseSeconds`, renews with `renewLease`, or chunks.
+
+Production runs one slot until `worker_concurrency` raises it; at one the behaviour is
+what it always was, plus the ordering and the streak bound.
+
+## Chunked bulk work
+
+A handler may return `{ progress, done: false }` after a bounded unit of work instead
+of returning nothing. The runner then:
+
+1. commits that unit together with a fenced write of `progress` into
+   `payload.progress` (`writeProgress` in `jobStore.ts`) — one transaction, so the work
+   and the cursor are never out of step;
+2. calls the handler again with the new cursor in `job.payload.progress`, while the
+   lease has room for another chunk as long as the worst one so far;
+3. otherwise hands the job back to the queue with `run_at = now()`, cursor kept
+   (`requeueForNextChunk`), for a fresh lease to carry on under.
+
+`done: true` completes the job in the usual way.
+
+**`outbound_fence` handlers may not chunk.** The effect that protection exists for is
+already out in the world when the chunk would commit, so there is no transaction to
+commit the work and the cursor together and no honest claim that "the cursor is where
+the work got to"; a second claim would re-send. A handler declaring `chunked: true`
+with that protection is refused at registration (`CHUNKING_UNSUPPORTED`), and one that
+returns a chunk anyway has its job **buried at once** — `killJob`, fenced by the
+claim's token, straight to `dead` with `chunking_unsupported` and one attempt spent.
+Not retried: the handler will return a chunk on the next attempt too, and every one of
+those attempts is a real send. The audited admin requeue is the way back.
+
+**Every clock in the loop is the database's, and it is `clock_timestamp()`.** The
+lease deadline came from the database at claim time, so the remaining time is measured
+against a database reading taken freshly after each chunk commits — not against the
+host's clock, which may have drifted either way, and not against `now()`, which is the
+*transaction's start* and therefore the time before the chunk rather than after it.
+
+**The budget.** A yield restores the attempt and resets `run_at`, so a handler that
+never returns `done` would be a job that is always a second old, never dead and never
+visible. Two limits close that: `CHUNK_COUNT_LIMIT` (500 chunks) and
+`CHUNK_SECONDS_LIMIT` (six hours), counted by the runner in `payload.chunking` beside
+the handler's cursor — never inside it — from the database's clock, so a handler
+cannot write its own budget. Exceeding either fails the job through the ordinary
+`failJob` with `chunk_budget_exhausted` and an `error_detail` naming which, so it
+retries, exhausts its attempts and becomes a dead job an operator sees. Before that,
+`OldestRunnableJobAgeSeconds` measures a chunked job from its **first** committed
+chunk rather than from `run_at`, and across `running` as well as the runnable states —
+the busy loop re-claims a yielding job immediately, so read over the runnable states
+alone it would be missing data, and missing data is `notBreaching`. Measured this way
+a sweep that has been going for hours reads as hours.
+
+An audited admin requeue clears `payload.chunking` and keeps `payload.progress`: the
+budget starts again because the attempts do, and the sweep resumes where it got to
+rather than beginning again. Without that, a job buried for spending its budget would
+be buried again before its handler ran once.
+
+Two properties are the point. **A crash costs one chunk**: everything earlier is
+committed with its cursor, so the next claim resumes at the chunk after the last
+committed one rather than at the beginning. **A stolen lease writes nothing**: the
+cursor write carries the claim's fencing token, so a worker that was paused past its
+lease affects zero rows, is told `lease_lost`, and cannot drag a live worker's cursor
+backwards. A yield is not a failed attempt — `requeueForNextChunk` puts the attempt
+back — because otherwise the fourth chunk of any long sweep would be its death.
+
+No handler chunks yet. The protocol and its tests (`apps/worker/test/jobChunks.test.ts`)
+are here so the first sweep that needs it does not have to invent it.
 
 ## The scheduler
 

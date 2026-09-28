@@ -7,6 +7,7 @@ import { collectSequenceMetrics } from '@fss/domain/sequences/metrics.ts';
 import { collectTodayMetrics } from '@fss/domain/today/metrics.ts';
 import { checkWorkerStartup, type WorkerStartupReport } from '../index.ts';
 import { runOnce } from '../runner/jobRunner.ts';
+import { slotClasses, slotLanes } from '../runner/slots.ts';
 import { runSchedulerPass, type DueWorkSource } from '../scheduler/schedulerPass.ts';
 import type { WorkerConfig } from './config.ts';
 import { createLiveness, type Liveness } from './liveness.ts';
@@ -20,9 +21,12 @@ import { drain, startLoop, type Loop } from './loop.ts';
  *
  * * **the scheduler timer** — one bounded pass a minute on a dedicated connection,
  *   under the advisory lock, inserting due work and no external action (13.1);
- * * **the runner slots** — one connection each, claiming and running jobs, concurrency
- *   one by default because nothing in version one needs more and a second slot is a
- *   second lease to reason about;
+ * * **the runner slots** — one connection each, claiming and running jobs, and each
+ *   claiming from the lanes `slotClasses` gives its index: with three or more slots one
+ *   is urgent-only and one is bulk-only, so neither lane's queue depth becomes the
+ *   other's latency, and the rest are flexible. With one slot — the default, and
+ *   production until the infrastructure raises it — that slot is flexible and looks at
+ *   urgent work first;
  * * **the metric publication** — the operational gauges once a minute through G5's
  *   sink, which is a validating no-op unless the process was given a real transport.
  *   It is deliberately *not* a liveness signal: see the metrics loop below.
@@ -175,6 +179,8 @@ export async function startWorker(options: WorkerProcessOptions): Promise<Worker
   const runnerLoops = sessions.runners.map((session, index) => {
     const owner = `${config.instanceKey}:${String(index)}`;
     const name = `runner-${String(index)}`;
+    // The slot's own lane order, and the streak it remembers between polls.
+    const lanes = slotLanes(config.concurrency, index);
     return startLoop({
       name,
       intervalMilliseconds: config.runnerIdleMilliseconds,
@@ -187,7 +193,9 @@ export async function startWorker(options: WorkerProcessOptions): Promise<Worker
           // claimed two jobs would run them one after the other while their leases run.
           limit: 1,
           instanceKey: config.instanceKey,
+          classes: lanes.order(),
         });
+        lanes.record(report.claimedClass);
         liveness.report(name, true);
         jobsCompleted += report.completed;
         jobsFailed += report.failed;
@@ -271,6 +279,7 @@ export async function startWorker(options: WorkerProcessOptions): Promise<Worker
   const loops: readonly Loop[] = [schedulerLoop, ...runnerLoops, metricsLoop];
   log.log('info', 'worker_started', {
     concurrency: config.concurrency,
+    runner_lanes: sessions.runners.map((_, index) => slotClasses(config.concurrency, index).join('+')).join(','),
     scheduler_interval_ms: config.schedulerIntervalMilliseconds,
     metrics_interval_ms: config.metricsIntervalMilliseconds,
     database_version: startup.databaseVersion,

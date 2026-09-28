@@ -251,6 +251,166 @@ export async function failJob(db: Queryable, claim: ClaimedJob, failure: JobFail
   return 'lease_lost';
 }
 
+export interface ProgressWrite {
+  readonly jobId: string;
+  readonly workspaceId: string;
+  /** The token this claim was handed. The whole point of the statement. */
+  readonly fencingToken: string;
+  readonly progress: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * The runner's own bookkeeping for a chunked job, kept beside the handler's cursor.
+ *
+ * It is a sibling of `payload.progress`, never inside it: the cursor's keys belong to
+ * the handler and the runner may not collide with them. Every value is database time,
+ * written by the statement rather than passed in, so a worker's clock cannot lengthen
+ * its own budget.
+ */
+export interface ChunkBookkeeping {
+  /** Chunks committed for this job, over every claim, ever. */
+  readonly chunks: number;
+  /** Epoch milliseconds of the first committed chunk. */
+  readonly firstChunkMs: number;
+  /** Epoch milliseconds of the most recent committed chunk. */
+  readonly lastChunkMs: number;
+}
+
+export interface ProgressOutcome {
+  readonly outcome: 'written' | 'lease_lost';
+  /** The bookkeeping as the statement left it; null when the write affected no row. */
+  readonly chunking: ChunkBookkeeping | null;
+}
+
+/** Read the runner's chunk bookkeeping out of a claimed row's payload. */
+export function chunkBookkeepingOf(payload: Readonly<Record<string, unknown>>): ChunkBookkeeping | null {
+  const raw = payload['chunking'];
+  if (typeof raw !== 'object' || raw === null) return null;
+  const record = raw as Record<string, unknown>;
+  const chunks = Number(record['chunks']);
+  const firstChunkMs = Number(record['firstChunkMs']);
+  const lastChunkMs = Number(record['lastChunkMs']);
+  if (!Number.isFinite(chunks) || !Number.isFinite(firstChunkMs) || !Number.isFinite(lastChunkMs)) return null;
+  return { chunks, firstChunkMs, lastChunkMs };
+}
+
+/**
+ * Database time in epoch milliseconds. The only clock the chunk loop reads.
+ *
+ * `clock_timestamp()`, not `now()`: `now()` is the transaction's start time and does
+ * not move inside one, so a chunk that took a minute would report as having taken
+ * nothing and the lease would look untouched.
+ */
+export async function databaseNowMs(db: Queryable): Promise<number> {
+  const { rows } = await db.query<{ now_ms: string }>(
+    'SELECT (extract(epoch FROM clock_timestamp()) * 1000)::bigint::text AS now_ms',
+  );
+  return Number(rows[0]?.now_ms);
+}
+
+/**
+ * Record a chunked handler's cursor in `payload.progress`, fenced, and advance the
+ * runner's bookkeeping in `payload.chunking`.
+ *
+ * This is the one write that makes chunking safe. The runner commits a bounded unit of
+ * work and this statement together, so a crash after the commit resumes from the cursor
+ * and never re-does the chunk; and because the predicate carries the claim's fencing
+ * token, a worker whose lease was stolen while it was working affects zero rows and is
+ * told so, rather than dragging a live worker's cursor backwards.
+ *
+ * The counter and the first-chunk instant are computed here, from `clock_timestamp()`
+ * and the row's own previous values, because they are the budget a runaway handler is
+ * held to and a handler must not be able to write its own budget. `now()` would be the
+ * transaction's start — that is, before the chunk — and this statement runs after it.
+ */
+export async function writeProgress(db: Queryable, write: ProgressWrite): Promise<ProgressOutcome> {
+  const { rows } = await db.query<{ chunks: string; first_chunk_ms: string; last_chunk_ms: string }>(
+    `UPDATE jobs
+        SET payload = jsonb_set(
+              jsonb_set(coalesce(payload, '{}'::jsonb), '{progress}', $4::jsonb, true),
+              '{chunking}',
+              jsonb_build_object(
+                'chunks', coalesce((payload -> 'chunking' ->> 'chunks')::bigint, 0) + 1,
+                'firstChunkMs', coalesce(
+                  (payload -> 'chunking' ->> 'firstChunkMs')::bigint,
+                  (extract(epoch FROM clock_timestamp()) * 1000)::bigint
+                ),
+                'lastChunkMs', (extract(epoch FROM clock_timestamp()) * 1000)::bigint
+              ),
+              true
+            ),
+            updated_at = now()
+      WHERE workspace_id = $1 AND id = $2 AND state = 'running'
+        AND fencing_token = $3::bigint
+    RETURNING (payload -> 'chunking' ->> 'chunks') AS chunks,
+              (payload -> 'chunking' ->> 'firstChunkMs') AS first_chunk_ms,
+              (payload -> 'chunking' ->> 'lastChunkMs') AS last_chunk_ms`,
+    [write.workspaceId, write.jobId, write.fencingToken, JSON.stringify(write.progress)],
+  );
+  const row = rows[0];
+  if (row === undefined) return { outcome: 'lease_lost', chunking: null };
+  return {
+    outcome: 'written',
+    chunking: {
+      chunks: Number(row.chunks),
+      firstChunkMs: Number(row.first_chunk_ms),
+      lastChunkMs: Number(row.last_chunk_ms),
+    },
+  };
+}
+
+/**
+ * Hand a chunked job back to the queue with its cursor, runnable now.
+ *
+ * A yield is not a failed attempt: the job made progress and is asking for a fresh
+ * lease to make more, so `attempt_count` comes back down. Without that, the fourth
+ * chunk of any long sweep would be its death. The retry ladder still governs failures,
+ * because a failure goes through `failJob`, which does not touch this path.
+ */
+export async function requeueForNextChunk(db: Queryable, claim: ClaimedJob): Promise<'requeued' | 'lease_lost'> {
+  const { rowCount } = await db.query(
+    `UPDATE jobs
+        SET state = 'queued',
+            run_at = now(),
+            not_before = now(),
+            attempt_count = greatest(attempt_count - 1, 0),
+            lease_owner = NULL,
+            lease_expires_at = NULL,
+            updated_at = now()
+      WHERE workspace_id = $1 AND id = $2 AND state = 'running'
+        AND lease_owner = $3 AND fencing_token = $4::bigint`,
+    [claim.workspaceId, claim.id, claim.leaseOwner, claim.fencingToken],
+  );
+  return (rowCount ?? 0) === 1 ? 'requeued' : 'lease_lost';
+}
+
+/**
+ * Bury a job this worker still holds, without spending its attempts.
+ *
+ * For a failure that retrying cannot fix. `chunking_unsupported` is the one so far: a
+ * handler that returns a chunk under the outbound fence will return one on the next
+ * attempt too, and each of those attempts is a real send. Fenced like every other write
+ * a worker makes to its own row, so a worker whose lease was stolen buries nothing.
+ *
+ * An admin requeue is how such a job comes back, after the code that caused it changed.
+ */
+export async function killJob(db: Queryable, claim: ClaimedJob, failure: { readonly code: string; readonly detail?: string | undefined }): Promise<'dead' | 'lease_lost'> {
+  const { rowCount } = await db.query(
+    `UPDATE jobs
+        SET state = 'dead',
+            dead_at = now(),
+            lease_owner = NULL,
+            lease_expires_at = NULL,
+            error_code = $5,
+            error_detail = $6,
+            updated_at = now()
+      WHERE workspace_id = $1 AND id = $2 AND state = 'running'
+        AND lease_owner = $3 AND fencing_token = $4::bigint`,
+    [claim.workspaceId, claim.id, claim.leaseOwner, claim.fencingToken, failure.code, failure.detail ?? null],
+  );
+  return (rowCount ?? 0) === 1 ? 'dead' : 'lease_lost';
+}
+
 /** Extend a lease this worker still holds. A long handler renews rather than gambling. */
 export async function renewLease(db: Queryable, claim: ClaimedJob, leaseSeconds: number): Promise<'renewed' | 'lease_lost'> {
   const { rowCount } = await db.query(
@@ -399,6 +559,11 @@ export async function requeueDeadJob(
         SET state = 'queued',
             dead_at = NULL,
             attempt_count = 0,
+            -- The runner's chunk budget starts again, because the attempts do. The
+            -- handler's cursor is deliberately kept: a requeued sweep resumes where it
+            -- got to, it does not begin again. Without this, a job buried for spending
+            -- its budget would spend it again before its handler ran once.
+            payload = payload - 'chunking',
             requeued_count = requeued_count + 1,
             run_at = now(),
             not_before = now(),

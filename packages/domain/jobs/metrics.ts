@@ -306,10 +306,29 @@ export function recordingMetricSink(): MetricSink & { readonly published: Metric
 export async function collectJobMetrics(db: Queryable): Promise<MetricDatum[]> {
   const data: MetricDatum[] = [];
 
+  // Two ages, and the older wins.
+  //
+  // The first is the ordinary one: the oldest runnable job, measured from when it
+  // became runnable. The second is a chunked job, measured from its *first* committed
+  // chunk — and read across `running` as well, which is the part that matters.
+  // `requeueForNextChunk` resets `run_at` to now and puts the attempt back, and the
+  // runner loop claims again immediately while it is busy, so a handler that never
+  // returns `done` is in `running` almost every time this loop samples: measured only
+  // over the runnable states it would be missing data, and missing data is
+  // notBreaching. Measured from the first chunk across both, a sweep that has been
+  // going for hours reads as hours. (The last chunk would not do: it resets every
+  // time, which is precisely the runaway case.) The budget in the runner buries such a
+  // job in the end; this is what an operator sees before then.
   const oldest = await db.query<{ age_seconds: string | null }>(
-    `SELECT extract(epoch FROM now() - min(greatest(run_at, not_before)))::text AS age_seconds
-       FROM jobs
-      WHERE state IN ('queued', 'retryable') AND run_at <= now() AND not_before <= now()`,
+    `SELECT extract(epoch FROM now() - least(
+              (SELECT min(greatest(run_at, not_before))
+                 FROM jobs
+                WHERE state IN ('queued', 'retryable') AND run_at <= now() AND not_before <= now()),
+              (SELECT min(to_timestamp((payload -> 'chunking' ->> 'firstChunkMs')::bigint / 1000.0))
+                 FROM jobs
+                WHERE state IN ('running', 'queued', 'retryable')
+                  AND payload -> 'chunking' ->> 'firstChunkMs' IS NOT NULL)
+            ))::text AS age_seconds`,
   );
   const oldestAge = oldest.rows[0]?.age_seconds;
   if (oldestAge !== null && oldestAge !== undefined) {
