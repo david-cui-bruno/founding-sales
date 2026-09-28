@@ -53,18 +53,12 @@ export const SETTING_KEYS = ['business_time_zone', 'sending_enabled', 'postal_ad
 export type ActiveSettingKey = (typeof SETTING_KEYS)[number];
 
 /**
- * @deprecated Retired 26 Sep 2026. `alert_thresholds` and `client_version_range`
- * changed nothing: the API takes its client range from the deployment and CloudWatch
- * takes its thresholds from Terraform. The server no longer answers, accepts or
- * reports a history for either. The wire vocabulary still names them only because the
- * Mac's settings rows and their tests do; remove this list once the desktop has
- * dropped them. Migration 0019 deleted their rows and took both keys out of the
- * table's CHECK.
+ * Every key the wire may name. `alert_thresholds` and `client_version_range` were
+ * retired on 26 September 2026 and their rows deleted by migration 0019; the enum kept
+ * naming them so that desktop 1.0.11's settings rows would parse, and they went with
+ * the 1.0.14 minimum (lane W3-C2).
  */
-const RETIRED_SETTING_KEYS = ['alert_thresholds', 'client_version_range'] as const;
-
-/** A key the wire may name: an active one, or (deprecated) a retired one. */
-export type SettingKey = ActiveSettingKey | (typeof RETIRED_SETTING_KEYS)[number];
+export type SettingKey = ActiveSettingKey;
 
 // ---------------------------------------------------------------------------
 // The slices
@@ -171,10 +165,9 @@ export const DEFAULT_SETTING_VALUES: Readonly<Record<ActiveSettingKey, unknown> 
 
 const commandEnvelope = { commandId: commandIdSchema, clientVersion: semanticVersionSchema };
 
-/** Every key a response may carry, the retired two included (deprecated). */
-const settingKeySchema = z.enum([...SETTING_KEYS, ...RETIRED_SETTING_KEYS]);
-/** The keys a command or a history request may name: the server refuses a retired one. */
-const activeSettingKeySchema = z.enum(SETTING_KEYS);
+/** Every key a response may carry, which is every key a command may name. */
+const settingKeySchema = z.enum(SETTING_KEYS);
+const activeSettingKeySchema = settingKeySchema;
 
 export const updateSettingCommandSchema = z.strictObject({
   ...commandEnvelope,

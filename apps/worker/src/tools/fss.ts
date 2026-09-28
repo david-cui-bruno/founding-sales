@@ -26,8 +26,8 @@ import {
 } from './fss/config.ts';
 import { loadS3JournalSource } from './fss/journalSource.ts';
 import { readSchemaVersionReport, runMigrate } from './fss/migrate.ts';
-import { schemaPreflight0019Command } from './fss/schemaPreflight0019.ts';
 import { schemaPreflight0020Command } from './fss/schemaPreflight0020.ts';
+import { schemaPreflight0021Command } from './fss/schemaPreflight0021.ts';
 import { runVerify } from './fss/verify.ts';
 import { bootstrapWorkspace } from './fss/bootstrapWorkspace.ts';
 import { RUNTIME_SECRET_VARIABLE, ensureRuntimeDatabaseUser } from './fss/databaseUsers.ts';
@@ -161,8 +161,8 @@ const ADMIN_COMMANDS: Readonly<Record<string, AdminRunner>> = Object.freeze({
   'release-record put': releaseRecordPutCommand,
   'restore-marker put': restoreMarkerPutCommand,
   'release-record show': releaseRecordShowCommand,
-  'schema-preflight 0019': schemaPreflight0019Command,
   'schema-preflight 0020': schemaPreflight0020Command,
+  'schema-preflight 0021': schemaPreflight0021Command,
 });
 
 async function report(path: string | undefined, value: unknown): Promise<void> {

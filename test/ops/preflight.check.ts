@@ -9,7 +9,8 @@ import { repositoryPath } from './support/repository.ts';
  * P7 (27 September 2026): `infra/scripts/preflight.sh <root> <prefix> <migration>` runs
  * `fss admin schema-preflight <migration>` on the operations task before a schema release
  * stops anything, and exits 3 when the migration would refuse. Lane W2-M wrote the first
- * of these, for 0019, and this replaced it.
+ * of these, for 0019; this replaced it, and 0019's own extras went with the schema it
+ * counted once production was past it.
  *
  * ## The vacuous-pass traps, named
  *
@@ -22,13 +23,12 @@ import { repositoryPath } from './support/repository.ts';
  * **A refusal that reads as a pass.** `refuses: true` is exit 3, and an answer that says
  * neither is a failure.
  *
- * **A summary line that lost a field when this script replaced 0019's.** 0019's report
- * carries ten fields beyond the schema version, `refuses` and the blocking counts, and the
- * coordinator's release helper greps four of them. A full 0019-shaped report must produce
- * the line lane W2-M's script wrote, field for field and in its order; 0020 must produce
- * its own seventeen (lane W3-F), with the rows it will hold for repair reported apart
- * from the ones that stop the release; a migration with no extras must get the generic
- * line and none of either.
+ * **A summary line that lost a field.** 0020 must produce its own seventeen (lane W3-F),
+ * with the rows it will hold for repair reported apart from the ones that stop the
+ * release; 0021 its own six (lane W3-C2), with the rows it destroys reported apart from
+ * the enrollment ids that stop the release, and the installed-build check said rather
+ * than left unsaid; a migration with no extras must get the generic line and none of
+ * either.
  */
 
 const SCRIPT = repositoryPath('infra/scripts/preflight.sh');
@@ -161,7 +161,7 @@ function world(options: { readonly running?: string; readonly refuses?: boolean 
   };
 }
 
-function preflight(stub: World, args: readonly string[] = ['infra/roots/rehearsal', PREFIX, '0019', '--worker-digest', RELEASE], extra: Readonly<Record<string, string>> = {}, migration = '0019'): {
+function preflight(stub: World, args: readonly string[] = ['infra/roots/rehearsal', PREFIX, '0022', '--worker-digest', RELEASE], extra: Readonly<Record<string, string>> = {}, migration = '0022'): {
   readonly code: number;
   readonly output: string;
   readonly report: string | null;
@@ -213,10 +213,10 @@ describe('preflight.sh counts on the operations task, with the release’s worke
     for (const field of ['taskDefinitionArn', 'revision', 'status', 'registeredAt']) delete expected[field];
     expect(state.registered).toEqual(expected);
     const launch = stub.calls().find(call => call[1] === 'run-task') ?? [];
-    expect(launch.join(' ')).toContain('"command": ["admin", "schema-preflight", "0019", "--report", "/tmp/fss-preflight.json"]');
-    // The whole line, with 0019's own fields, is the next test's; this is its generic half.
-    expect(run.report).toContain(`prefix=${PREFIX} environment=rehearsal worker_digest=${RELEASE} schema=18 refuses=false blocking_linkedinMarkers=0 blocking_researchPages=0`);
-    expect(run.output).toContain('0019 needs no decision');
+    expect(launch.join(' ')).toContain('"command": ["admin", "schema-preflight", "0022", "--report", "/tmp/fss-preflight.json"]');
+    // A migration with no extras of its own gets the generic line and nothing else.
+    expect(run.report).toBe(`prefix=${PREFIX} environment=rehearsal worker_digest=${RELEASE} schema=18 refuses=false blocking_linkedinMarkers=0 blocking_researchPages=0`);
+    expect(run.output).toContain('0022 needs no decision');
   });
 
   it('launches the registered definition as it is when it already runs the release’s image, and registers nothing', () => {
@@ -231,12 +231,12 @@ describe('preflight.sh counts on the operations task, with the release’s worke
     const refusing = world({ refuses: true });
     const run = preflight(refusing);
     expect(run.code, run.output).toBe(3);
-    expect(run.output).toContain('FAIL: 0019 would refuse; the release stops here, before anything is stopped.');
+    expect(run.output).toContain('FAIL: 0022 would refuse; the release stops here, before anything is stopped.');
     expect(run.report).toContain('refuses=true blocking_linkedinMarkers=2');
     expect(refusing.state().deregistered).toEqual([definitionArn(4)]);
     const silent = preflight(world({ refuses: 'missing' }));
     expect(silent.code).toBe(1);
-    expect(silent.output).toContain('does not say whether 0019 would refuse');
+    expect(silent.output).toContain('does not say whether 0022 would refuse');
   });
 
   it('fails a count that passed when ECS refuses to deregister its revision, which the next plan would read', () => {
@@ -249,9 +249,9 @@ describe('preflight.sh counts on the operations task, with the release’s worke
   it('refuses a migration that is not a number, a dry run and a missing digest before any call', () => {
     for (const [args, extra, expected] of [
       [['infra/roots/rehearsal', PREFIX, '19', '--worker-digest', RELEASE], {}, "'19' is not a migration number"],
-      [['infra/roots/rehearsal', PREFIX, '0019', '--worker-digest', RELEASE], { FSS_REHEARSAL_DRY_RUN: '1' }, 'preflight.sh has no dry run'],
-      [['infra/roots/rehearsal', PREFIX, '0019'], {}, 'usage: preflight.sh'],
-      [['infra/roots/production', PREFIX, '0019', '--worker-digest', RELEASE], {}, 'is not the rehearsal root'],
+      [['infra/roots/rehearsal', PREFIX, '0021', '--worker-digest', RELEASE], { FSS_REHEARSAL_DRY_RUN: '1' }, 'preflight.sh has no dry run'],
+      [['infra/roots/rehearsal', PREFIX, '0021'], {}, 'usage: preflight.sh'],
+      [['infra/roots/production', PREFIX, '0021', '--worker-digest', RELEASE], {}, 'is not the rehearsal root'],
     ] as const) {
       const stub = world();
       const run = preflight(stub, args, extra);
@@ -259,54 +259,6 @@ describe('preflight.sh counts on the operations task, with the release’s worke
       expect(run.output).toContain(expected);
       expect(stub.calls()).toEqual([]);
     }
-  });
-
-  it('writes 0019’s own ten fields, which no other migration gets', () => {
-    // A report of the shape 0019 answers with, every field of it populated.
-    const counts = {
-      blocking: { linkedinMarkers: 0, researchPages: 3, researchProviderLedger: 1, firmLocations: 2, researchFirmRuns: 4, researchSuggestions: 5 },
-      destroyed: {
-        researchSeed: { firms: 7, contacts: 11 },
-        directSentDays: 9,
-        guardColumnsChanged: 2,
-        alertThresholdsRows: 4,
-        clientVersionRangeRows: 1,
-      },
-      archivedMergeEvents: 6,
-      reasonCodeReferences: { domainCap: 8, deadJob: 0 },
-      relaxed: { snoozesWithPlaceholderReason: 12 },
-      reviewRequiredEnrollments: 13,
-    };
-    const stub = world({ counts });
-    const run = preflight(stub);
-    expect(run.code, run.output).toBe(0);
-    expect(run.report).toBe(
-      [
-        `prefix=${PREFIX} environment=rehearsal worker_digest=${RELEASE}`,
-        'schema=18 refuses=false',
-        'blocking_firmLocations=2 blocking_linkedinMarkers=0 blocking_researchFirmRuns=4',
-        'blocking_researchPages=3 blocking_researchProviderLedger=1 blocking_researchSuggestions=5',
-        // 7 + 11 seed rows; 1 + 3 + 2 + 4 + 5 research rows; 4 + 1 retired setting rows.
-        'research_seed_rows=18 research_data_rows=15 record_merge_events_archived=6',
-        'direct_sent_days=9 guard_columns_changed=2 retired_setting_rows=5',
-        'domain_cap_references=8 dead_job_references=0 snoozes_with_placeholder_reason=12',
-        'review_required_enrollments=13',
-      ].join(' '),
-    );
-    // The same report for a migration with no extras of its own: the generic line, and
-    // not one 0019 field.
-    const other = world({ counts });
-    const next = preflight(other, ['infra/roots/rehearsal', PREFIX, '0021', '--worker-digest', RELEASE], {}, '0021');
-    expect(next.code, next.output).toBe(0);
-    expect(next.report).toBe(
-      `prefix=${PREFIX} environment=rehearsal worker_digest=${RELEASE} schema=18 refuses=false ` +
-        'blocking_firmLocations=2 blocking_linkedinMarkers=0 blocking_researchFirmRuns=4 ' +
-        'blocking_researchPages=3 blocking_researchProviderLedger=1 blocking_researchSuggestions=5',
-    );
-    expect(next.report).not.toContain('research_seed_rows');
-    expect((other.calls().find(call => call[1] === 'run-task') ?? []).join(' ')).toContain(
-      '"command": ["admin", "schema-preflight", "0021", "--report", "/tmp/fss-preflight.json"]',
-    );
   });
 
   it('writes 0020’s own seventeen fields, which no other migration gets', () => {
@@ -346,6 +298,66 @@ describe('preflight.sh counts on the operations task, with the release’s worke
         'repair_fences=fence-d,fence-e repair_templates=template-d',
       ].join(' '),
     );
-    expect(run.report).not.toContain('research_seed_rows');
+    expect(run.report).not.toContain('review_required_enrollments');
+  });
+
+  it('writes 0021’s own six fields, which no other migration gets', () => {
+    // A report of the shape 0021 answers with (lane W3-C2): the enrollment ids that stop
+    // the release, the rows it destroys without asking, and the check the database cannot
+    // make. Nothing here refuses, so the counts below are the reported kind.
+    const counts = {
+      blocking: { reviewRequiredEnrollments: 0 },
+      reviewRequired: { enrollmentIds: [] },
+      destroyed: {
+        activeRefreshCredentials: 1,
+        refreshCredentialRows: 4,
+        devicesPastFirstGeneration: 1,
+        systemGenerationRows: 1,
+      },
+      installedClientCheck: {
+        automated: false,
+        confirm: 'confirm 1.0.14 by hand',
+        clientVersionsSeen: [
+          { clientVersion: '1.0.14', devices: 1 },
+          { clientVersion: null, devices: 2 },
+        ],
+      },
+    };
+    const stub = world({ counts });
+    const run = preflight(stub, ['infra/roots/rehearsal', PREFIX, '0021', '--worker-digest', RELEASE], {}, '0021');
+    expect(run.code, run.output).toBe(0);
+    expect(run.report).toBe(
+      [
+        `prefix=${PREFIX} environment=rehearsal worker_digest=${RELEASE}`,
+        'schema=18 refuses=false',
+        'blocking_reviewRequiredEnrollments=0',
+        'review_required_enrollments=none',
+        'active_refresh_credentials=1 refresh_credential_rows=4',
+        'devices_past_first_generation=1 system_generation_rows=1',
+        'installed_client_check=by_hand:1.0.14:1,unknown:2',
+      ].join(' '),
+    );
+    expect(run.report).not.toContain('settings_rows_by_key');
+  });
+
+  it('exits 3 and names the enrollments when 0021 would refuse', () => {
+    const counts = {
+      blocking: { reviewRequiredEnrollments: 2 },
+      reviewRequired: { enrollmentIds: ['enrollment-a', 'enrollment-b'] },
+      destroyed: {
+        activeRefreshCredentials: 0,
+        refreshCredentialRows: 0,
+        devicesPastFirstGeneration: 0,
+        systemGenerationRows: 1,
+      },
+      installedClientCheck: { automated: false, confirm: 'by hand', clientVersionsSeen: [] },
+    };
+    const stub = world({ counts, refuses: true });
+    const run = preflight(stub, ['infra/roots/rehearsal', PREFIX, '0021', '--worker-digest', RELEASE], {}, '0021');
+    expect(run.code, run.output).toBe(3);
+    expect(run.output).toContain('FAIL: 0021 would refuse; the release stops here, before anything is stopped.');
+    expect(run.report).toContain('blocking_reviewRequiredEnrollments=2 review_required_enrollments=enrollment-a,enrollment-b');
+    expect(run.report).toContain('installed_client_check=by_hand:no_active_devices');
+    expect(stub.state().deregistered).toEqual([definitionArn(4)]);
   });
 });
