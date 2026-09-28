@@ -251,6 +251,60 @@ export async function failJob(db: Queryable, claim: ClaimedJob, failure: JobFail
   return 'lease_lost';
 }
 
+export interface ProgressWrite {
+  readonly jobId: string;
+  readonly workspaceId: string;
+  /** The token this claim was handed. The whole point of the statement. */
+  readonly fencingToken: string;
+  readonly progress: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * Record a chunked handler's cursor in `payload.progress`, fenced.
+ *
+ * This is the one write that makes chunking safe. The runner commits a bounded unit of
+ * work and this statement together, so a crash after the commit resumes from the cursor
+ * and never re-does the chunk; and because the predicate carries the claim's fencing
+ * token, a worker whose lease was stolen while it was working affects zero rows and is
+ * told so, rather than dragging a live worker's cursor backwards.
+ */
+export async function writeProgress(db: Queryable, write: ProgressWrite): Promise<'written' | 'lease_lost'> {
+  const { rowCount } = await db.query(
+    `UPDATE jobs
+        SET payload = jsonb_set(coalesce(payload, '{}'::jsonb), '{progress}', $4::jsonb, true),
+            updated_at = now()
+      WHERE workspace_id = $1 AND id = $2 AND state = 'running'
+        AND fencing_token = $3::bigint`,
+    [write.workspaceId, write.jobId, write.fencingToken, JSON.stringify(write.progress)],
+  );
+  return (rowCount ?? 0) === 1 ? 'written' : 'lease_lost';
+}
+
+/**
+ * Hand a chunked job back to the queue with its cursor, runnable now.
+ *
+ * A yield is not a failed attempt: the job made progress and is asking for a fresh
+ * lease to make more, so `attempt_count` comes back down. Without that, the fourth
+ * chunk of any long sweep would be its death. The retry ladder still governs failures,
+ * because a failure goes through `failJob`, which does not touch this path.
+ */
+export async function requeueForNextChunk(db: Queryable, claim: ClaimedJob): Promise<'requeued' | 'lease_lost'> {
+  const { rowCount } = await db.query(
+    `UPDATE jobs
+        SET state = 'queued',
+            run_at = now(),
+            not_before = now(),
+            attempt_count = greatest(attempt_count - 1, 0),
+            lease_owner = NULL,
+            lease_expires_at = NULL,
+            updated_at = now()
+      WHERE workspace_id = $1 AND id = $2 AND state = 'running'
+        AND lease_owner = $3 AND fencing_token = $4::bigint`,
+    [claim.workspaceId, claim.id, claim.leaseOwner, claim.fencingToken],
+  );
+  return (rowCount ?? 0) === 1 ? 'requeued' : 'lease_lost';
+}
+
 /** Extend a lease this worker still holds. A long handler renews rather than gambling. */
 export async function renewLease(db: Queryable, claim: ClaimedJob, leaseSeconds: number): Promise<'renewed' | 'lease_lost'> {
   const { rowCount } = await db.query(

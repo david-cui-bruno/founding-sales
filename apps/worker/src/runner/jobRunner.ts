@@ -2,9 +2,25 @@ import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 import { withTransaction } from '@fss/domain/db/queryable.ts';
 import type { JobRunOutcome } from '@fss/domain/jobs/atLeastOnce.ts';
 import { DEFAULT_BACKOFF, type BackoffPolicy } from '@fss/domain/jobs/backoff.ts';
-import { scopeForJob, type HandlerRegistry, type JobHandler } from '@fss/domain/jobs/handlerRegistry.ts';
+import {
+  isJobChunk,
+  scopeForJob,
+  JOB_CLASSES,
+  type HandlerRegistry,
+  type JobChunk,
+  type JobClass,
+  type JobHandler,
+} from '@fss/domain/jobs/handlerRegistry.ts';
 import { recordHeartbeat } from '@fss/domain/jobs/heartbeats.ts';
-import { claimJobs, completeJob, failJob, reclaimExpiredLeases, type ClaimedJob } from '@fss/domain/jobs/jobStore.ts';
+import {
+  claimJobs,
+  completeJob,
+  failJob,
+  reclaimExpiredLeases,
+  requeueForNextChunk,
+  writeProgress,
+  type ClaimedJob,
+} from '@fss/domain/jobs/jobStore.ts';
 
 /**
  * The job runner (specification 13.2).
@@ -32,6 +48,13 @@ import { claimJobs, completeJob, failJob, reclaimExpiredLeases, type ClaimedJob 
  * In every case the outcome for a worker that lost its lease is `lease_lost`, and a
  * test runs each registered handler twice under a real stolen lease and counts the
  * business effects (Appendix G scenario 2).
+ *
+ * **Chunking.** A handler may instead return `{ progress, done: false }` after a
+ * bounded unit of work. The runner commits that unit together with a fenced write of
+ * the cursor into `payload.progress`, then calls the handler again with the new cursor
+ * while the lease has time left, and hands the job back to the queue — cursor kept,
+ * attempt not spent — when it does not. A crash anywhere in that loop loses at most the
+ * chunk in flight, because every earlier chunk is already committed with its cursor.
  */
 
 /** Internal: the signal that rolls back a handler whose completion lost the race. */
@@ -47,6 +70,8 @@ export interface RunClaimedJobOptions {
   readonly job: ClaimedJob;
   readonly backoff?: BackoffPolicy | undefined;
   readonly random?: (() => number) | undefined;
+  /** Milliseconds since the epoch. Only the chunk loop reads it; a test steers it. */
+  readonly now?: (() => number) | undefined;
 }
 
 /** True while this worker still holds the exact lease it was handed. */
@@ -78,29 +103,48 @@ function failureDetail(error: unknown): string {
   return message.slice(0, 500);
 }
 
-export async function runClaimedJob(session: SessionQueryable, options: RunClaimedJobOptions): Promise<JobRunOutcome> {
-  const { job, registry } = options;
-  const handler: JobHandler | undefined = registry.get(job.kind);
-  if (handler === undefined) {
-    // Never claimed in the first place unless the registry changed under us; still,
-    // report it rather than burning an attempt silently.
-    await failJob(session, job, { code: 'handler_unregistered', detail: `no handler for ${job.kind}` });
-    return 'no_handler';
-  }
+/** How close to the lease deadline the runner stops starting another chunk. */
+const CHUNK_MARGIN_MILLISECONDS = 2_000;
 
+type AttemptResult =
+  | { readonly outcome: JobRunOutcome; readonly chunk?: undefined }
+  | { readonly outcome: 'chunk'; readonly chunk: JobChunk };
+
+interface AttemptOptions {
+  readonly handler: JobHandler;
+  readonly job: ClaimedJob;
+  readonly failure: { readonly backoff: BackoffPolicy; readonly random: (() => number) | undefined };
+}
+
+/** One call of the handler, with the transaction shape its protection asks for. */
+async function runAttempt(session: SessionQueryable, options: AttemptOptions): Promise<AttemptResult> {
+  const { handler, job, failure } = options;
   const input = { session, scope: scopeForJob(job), job };
-  const failure = { backoff: options.backoff ?? DEFAULT_BACKOFF, random: options.random };
+  const progressOf = (chunk: JobChunk): Promise<'written' | 'lease_lost'> =>
+    writeProgress(session, {
+      jobId: job.id,
+      workspaceId: job.workspaceId,
+      fencingToken: job.fencingToken,
+      progress: chunk.progress,
+    });
 
   if (handler.protection === 'outbound_fence') {
+    let result: void | JobChunk;
     try {
-      await handler.handle(input);
+      result = await handler.handle(input);
     } catch (error) {
-      return await failJob(session, job, { code: failureCode(error), detail: failureDetail(error), ...failure });
+      return { outcome: await failJob(session, job, { code: failureCode(error), detail: failureDetail(error), ...failure }) };
     }
-    return await completeJob(session, job);
+    if (isJobChunk(result) && !result.done) {
+      // No transaction to commit with: the effect is already out in the world, so the
+      // cursor write is its own statement and its own commit.
+      return (await progressOf(result)) === 'written' ? { outcome: 'chunk', chunk: result } : { outcome: 'lease_lost' };
+    }
+    return { outcome: await completeJob(session, job) };
   }
 
   let outcome: JobRunOutcome = 'lease_lost';
+  let chunk: JobChunk | null = null;
   let thrown: unknown = null;
   try {
     await withTransaction(session, async () => {
@@ -108,7 +152,13 @@ export async function runClaimedJob(session: SessionQueryable, options: RunClaim
         outcome = 'lease_lost';
         return;
       }
-      await handler.handle(input);
+      const result = await handler.handle(input);
+      if (isJobChunk(result) && !result.done) {
+        // The chunk and its cursor commit together, or neither does.
+        if ((await progressOf(result)) === 'lease_lost') throw new LeaseLost();
+        chunk = result;
+        return;
+      }
       outcome = await completeJob(session, job);
       if (outcome === 'lease_lost') {
         // Undo the handler's work: it was done by a worker that no longer owns the job.
@@ -116,13 +166,45 @@ export async function runClaimedJob(session: SessionQueryable, options: RunClaim
       }
     });
   } catch (error) {
-    if (error instanceof LeaseLost) return 'lease_lost';
+    if (error instanceof LeaseLost) return { outcome: 'lease_lost' };
     thrown = error;
   }
   if (thrown !== null) {
-    return await failJob(session, job, { code: failureCode(thrown), detail: failureDetail(thrown), ...failure });
+    return { outcome: await failJob(session, job, { code: failureCode(thrown), detail: failureDetail(thrown), ...failure }) };
   }
-  return outcome;
+  if (chunk !== null) return { outcome: 'chunk', chunk };
+  return { outcome };
+}
+
+export async function runClaimedJob(session: SessionQueryable, options: RunClaimedJobOptions): Promise<JobRunOutcome> {
+  const { registry } = options;
+  const handler: JobHandler | undefined = registry.get(options.job.kind);
+  if (handler === undefined) {
+    // Never claimed in the first place unless the registry changed under us; still,
+    // report it rather than burning an attempt silently.
+    await failJob(session, options.job, { code: 'handler_unregistered', detail: `no handler for ${options.job.kind}` });
+    return 'no_handler';
+  }
+
+  const failure = { backoff: options.backoff ?? DEFAULT_BACKOFF, random: options.random };
+  const now = options.now ?? ((): number => Date.now());
+  const deadline = Date.parse(options.job.leaseExpiresAt);
+  let job = options.job;
+  // The worst chunk so far is the estimate for the next one: a chunk is a bounded unit
+  // of work, so the bound the handler already demonstrated is the honest guess.
+  let longestChunk = 0;
+
+  for (;;) {
+    const startedAt = now();
+    const attempt = await runAttempt(session, { handler, job, failure });
+    if (attempt.outcome !== 'chunk') return attempt.outcome;
+    longestChunk = Math.max(longestChunk, now() - startedAt);
+    job = { ...job, payload: { ...job.payload, progress: attempt.chunk.progress } };
+    if (!Number.isFinite(deadline) || now() + longestChunk + CHUNK_MARGIN_MILLISECONDS >= deadline) {
+      // Out of lease with work left: back to the queue, cursor kept, runnable now.
+      return (await requeueForNextChunk(session, job)) === 'requeued' ? 'requeued' : 'lease_lost';
+    }
+  }
 }
 
 export interface RunOnceOptions {
@@ -132,6 +214,13 @@ export interface RunOnceOptions {
   readonly instanceKey?: string | undefined;
   readonly backoff?: BackoffPolicy | undefined;
   readonly random?: (() => number) | undefined;
+  /**
+   * The lanes this slot claims, in order; with the worker's limit of one, the first
+   * lane with a runnable job wins the pass. Defaults to every lane, urgent first,
+   * which is what a single-slot worker does.
+   * `slots.ts` computes it from the slot's index.
+   */
+  readonly classes?: readonly JobClass[] | undefined;
 }
 
 export interface RunOnceReport {
@@ -140,31 +229,47 @@ export interface RunOnceReport {
   readonly completed: number;
   readonly failed: number;
   readonly leaseLost: number;
+  /** Chunked jobs handed back to the queue with their cursor. Neither done nor failed. */
+  readonly requeued: number;
+  /** The first lane the pass claimed from, or null when it claimed nothing. */
+  readonly claimedClass: JobClass | null;
 }
 
 /**
  * One pass of the worker loop: return expired leases to the runnable set, claim what
- * this worker has handlers for, run each, and record the worker heartbeat.
+ * this slot's lanes have handlers for, run each, and record the worker heartbeat.
  */
 export async function runOnce(session: SessionQueryable, options: RunOnceOptions): Promise<RunOnceReport> {
   const reclaimed = await reclaimExpiredLeases(session, { limit: Math.max(options.limit, 10) });
 
-  // One claim for every registered kind, so the lease has to cover the slowest of
-  // them. Over-leasing only delays a reclaim after a crash; under-leasing would let a
+  // One claim per lane, in the slot's order, until the pass's limit is spent. A slot
+  // polls with a limit of one, so in the worker this is "urgent first, then bulk, in
+  // the same poll"; a test that drains with a large limit still drains both lanes.
+  // The lease has to cover the slowest handler *of the kinds this claim names* — not of
+  // every registered kind, which would lease a mail sync for as long as a retention
+  // sweep. Over-leasing only delays a reclaim after a crash; under-leasing would let a
   // second worker claim a job the first is still running, which the fencing token
   // survives but which wastes the attempt.
-  const handlers = options.registry.all();
-  const leaseSeconds = handlers.reduce((longest, handler) => Math.max(longest, handler.leaseSeconds), 60);
-  const claims = await claimJobs(session, {
-    owner: options.owner,
-    kinds: options.registry.kinds(),
-    limit: options.limit,
-    leaseSeconds,
-  });
+  const claims: ClaimedJob[] = [];
+  let claimedClass: JobClass | null = null;
+  for (const jobClass of options.classes ?? JOB_CLASSES) {
+    const remaining = options.limit - claims.length;
+    if (remaining <= 0) break;
+    const kinds = options.registry.kindsOfClass(jobClass);
+    if (kinds.length === 0) continue;
+    const leaseSeconds = kinds.reduce(
+      (longest, kind) => Math.max(longest, options.registry.get(kind)?.leaseSeconds ?? 0),
+      60,
+    );
+    const lane = await claimJobs(session, { owner: options.owner, kinds, limit: remaining, leaseSeconds });
+    if (lane.length > 0) claimedClass ??= jobClass;
+    claims.push(...lane);
+  }
 
   let completed = 0;
   let failed = 0;
   let leaseLost = 0;
+  let requeued = 0;
   for (const job of claims) {
     const outcome = await runClaimedJob(session, {
       registry: options.registry,
@@ -174,6 +279,7 @@ export async function runOnce(session: SessionQueryable, options: RunOnceOptions
     });
     if (outcome === 'completed') completed += 1;
     else if (outcome === 'lease_lost') leaseLost += 1;
+    else if (outcome === 'requeued') requeued += 1;
     else failed += 1;
   }
 
@@ -184,5 +290,5 @@ export async function runOnce(session: SessionQueryable, options: RunOnceOptions
     detail: { claimed: claims.length, completed, failed },
   });
 
-  return { reclaimed, claimed: claims.length, completed, failed, leaseLost };
+  return { reclaimed, claimed: claims.length, completed, failed, leaseLost, requeued, claimedClass };
 }

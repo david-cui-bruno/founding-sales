@@ -151,3 +151,53 @@ export function quarterHourOf(instant: string | number): string {
   if (!Number.isFinite(milliseconds)) throw new RangeError('a quarter hour is derived from a real instant');
   return new Date(milliseconds - (milliseconds % CANARY_PERIOD_MILLISECONDS)).toISOString();
 }
+
+/**
+ * The lane a kind runs in.
+ *
+ * `urgent` is work a person is waiting on, directly or through the clock: a reply to
+ * classify, a mailbox to sync, the Today list for the morning, the canary that proves
+ * the pipe. `bulk` is work that may take as long as it takes without anybody noticing
+ * — a sequence step, a terminal stop, a route check, a retention sweep.
+ *
+ * The distinction exists because one runner slot claimed every kind by `run_at`, so
+ * fifty queued retention batches sat in front of the reply someone had just sent. The
+ * runner gives `urgent` a slot of its own, so the queue's depth in one lane cannot
+ * become the other lane's latency.
+ */
+export const JOB_CLASSES = ['urgent', 'bulk'] as const;
+export type JobClass = (typeof JOB_CLASSES)[number];
+
+/**
+ * Every kind's lane. The type is total over `JobKind`, so a kind added to `JOB_KINDS`
+ * without a lane does not typecheck; the registry refuses one at startup as well,
+ * because a table that is only enforced by the compiler is enforced only where the
+ * compiler runs.
+ */
+export const JOB_KIND_CLASS: Readonly<Record<JobKind, JobClass>> = Object.freeze({
+  // A person or the clock is waiting.
+  'mail.sync': 'urgent',
+  'mail.reconcile': 'urgent',
+  'mail.recover': 'urgent',
+  'mail.watch_renew': 'urgent',
+  'classify.reply': 'urgent',
+  'suppression.finalize': 'urgent',
+  'outbound.close_send_day': 'urgent',
+  'today.build': 'urgent',
+  canary: 'urgent',
+  // Nobody is watching the clock on these, and there can be a great many of them.
+  'sequence.action': 'bulk',
+  'sequence.terminal_stop': 'bulk',
+  'route.validate': 'bulk',
+  'retention.batch': 'bulk',
+});
+
+/** The lane a kind runs in, or `undefined` for a kind no table row classifies. */
+export function jobClassOf(kind: string): JobClass | undefined {
+  return isJobKind(kind) ? JOB_KIND_CLASS[kind] : undefined;
+}
+
+/** Every kind of one lane, in `JOB_KINDS` order. */
+export function kindsOfClass(jobClass: JobClass): JobKind[] {
+  return JOB_KINDS.filter(kind => JOB_KIND_CLASS[kind] === jobClass);
+}

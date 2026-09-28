@@ -14,7 +14,11 @@ import { claimJobs, enqueueJob, reclaimExpiredLeases, type ClaimedJob } from './
  * and try — rather than simulating it by calling the handler twice.
  */
 
-export type JobRunOutcome = 'completed' | 'lease_lost' | 'retryable' | 'dead' | 'no_handler';
+/**
+ * `requeued` is a chunked handler that ran out of lease with work still to do: the job
+ * is back in the queue with its cursor, which is neither a completion nor a failure.
+ */
+export type JobRunOutcome = 'completed' | 'lease_lost' | 'retryable' | 'dead' | 'no_handler' | 'requeued';
 
 /** The runner's entry point, as a type, so the harness does not import `apps/worker`. */
 export type RunClaimedJob = (
