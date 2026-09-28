@@ -13,9 +13,22 @@ records it happened to, a lower-case dotted kind, the module that wrote it, an a
 an instant, and a small `detail` object of flags and codes.
 
 There is no field a person could go in, and that is the property rather than a
-convention: a later change cannot leak a name by forgetting to strip one. The `detail`
-column is bounded at 4 000 characters and checked to be an object, so it cannot
-quietly become somewhere a message body is kept.
+convention: a later change cannot leak a name by forgetting to strip one.
+
+**Free text never enters this table**, and the reason is a deletion one. A firm-less
+fact — a demo visitor, a published post — has no firm for the deletion workflow to
+find it by, so it has no deletion path at all; a column that could hold a name would
+be a name nothing could ever redact. Three rules keep that true:
+
+* `dedupe_key` matches `^[0-9a-zA-Z_:.-]{1,200}$`. Ids, colons, dots and dashes —
+  enough for `<uuid>:<code>` and a provider's reference, and no space, so no name.
+* `detail` is bounded at 4 000 characters and checked to be an object by the
+  database, and `recordFunnelFact` narrows it further: a **flat** object, at most 32
+  keys, whose every value is a boolean, a finite number, null, or a string matching
+  `^[0-9a-zA-Z_:.-]{1,64}$` — an id or a code. No nesting, no arrays, no sentences.
+  `{ assigned: true, revision: 3, fit: 'yes' }` is a detail; `{ note: 'Dana said to
+  call back' }` is refused with `invalid_detail`.
+* Everything else is an id, a kind or a code.
 
 A fact is **not** the business record. The call is in `call_logs`, the message is in
 `mail_messages`, the firm is in `firms`. A fact is the sentence "this happened", kept
@@ -48,6 +61,26 @@ expect rather than to lose the fact.
 | `demo.started`, `demo.completed` | D | the demo session id |
 | `post.published` | L | the provider's post id |
 
+## One child id, never both
+
+A fact may name a contact **or** an opportunity, never both
+(`funnel_facts_one_child`), and `recordFunnelFact` refuses the pair with
+`invalid_subject` before the insert.
+
+This is a merge rule rather than a taste. `crm/merges.ts` moves contacts before
+opportunities, so a fact naming both would have its `firm_id` cascaded to the target
+by the contact triple while its opportunity triple still pointed at the source firm,
+and the opportunity key would fail *inside* the merge transaction. No kind of the v1
+dictionary needs both — a call or a meeting names a contact, an offer names an
+opportunity — so the constraint costs nothing, and making the keys deferrable to buy
+a shape nobody wants would have been the wrong trade.
+
+What a merge does to the facts, and it is what `crm_domain_events` does: a fact with
+a contact and a fact with an opportunity both follow their record to the target
+through `ON UPDATE CASCADE`; a firm-only fact stays on the merged source row, because
+the firm key does not cascade and a merged firm is a record that survives rather than
+one that is deleted.
+
 ## The dedupe rule
 
 `UNIQUE (workspace_id, kind, dedupe_key)`, named `funnel_facts_dedupe`.
@@ -59,9 +92,12 @@ and the second would be indistinguishable from a real second event.
 `recordFunnelFact` inserts `ON CONFLICT ON CONSTRAINT funnel_facts_dedupe DO NOTHING`
 and answers `{ recorded: false, reason: 'duplicate' }`. It never throws for a
 duplicate: a unique violation would abort the transaction the caller is replaying
-inside, which is the bug this shape exists to prevent. A kind or a source of the
-wrong shape is refused *before* the insert, for the same reason — `invalid_kind` and
-`invalid_source` leave the caller's transaction alive.
+inside, which is the bug this shape exists to prevent.
+
+Everything else it can refuse, it refuses *before* the statement, for the same
+reason — the caller's transaction stays alive and gets a reason:
+`invalid_kind`, `invalid_source`, `invalid_key`, `invalid_subject`,
+`invalid_detail`.
 
 ## The emit rule
 
@@ -108,10 +144,17 @@ state in so many words:
 
 The admin deletion workflow **redacts** a firm's facts: `detail` is cleared to `{}`
 and the row stays with its count and its ids (`docs/greenfield/retention.md`,
-"Deletion"). `DELETE` and `TRUNCATE` are revoked from both application roles, so the
-row could not go even if the workflow wanted it to — and it should not: the ids in it
-point at rows the same deletion redacted rather than removed. `UPDATE` is granted for
-exactly that one writer; the recorder never updates.
+"Deletion"). A contact deletion is narrower and redacts only that contact's facts.
+
+`DELETE` and `TRUNCATE` are revoked from both application roles, so the row could not
+go even if the workflow wanted it to — and it should not: the ids in it point at rows
+the same deletion redacted rather than removed.
+
+`UPDATE` is granted **on `detail` and no other column**
+(`GRANT UPDATE (detail) ON funnel_facts`). A table-wide UPDATE would let the
+application rewrite a fact's kind, its ids, its key and the instant it happened at,
+which is the whole of the row; the column grant is what makes "append-only but for
+the redaction" a privilege rather than a promise. The recorder never updates at all.
 
 Nothing sweeps the table. It is business history under 10.3's first row, which
 `RETENTION_TARGETS` states as the `business_records` target's `retained` no-op, and

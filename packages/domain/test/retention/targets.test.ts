@@ -68,7 +68,15 @@ describe('the registry covers the retention table', () => {
   });
 
   it('never lets a target reach an append-only table', () => {
-    const forbidden = ['audit_events', 'suppression_events', 'opportunity_stage_events', 'crm_domain_events'];
+    // `funnel_facts` joins them with migration 0022: DELETE and TRUNCATE are revoked
+    // there too, so a sweep that named it could not run and should not exist.
+    const forbidden = [
+      'audit_events',
+      'suppression_events',
+      'opportunity_stage_events',
+      'crm_domain_events',
+      'funnel_facts',
+    ];
     for (const target of RETENTION_TARGETS) {
       for (const table of target.tables) expect(forbidden, `${target.dataKind} names ${table}`).not.toContain(table);
     }

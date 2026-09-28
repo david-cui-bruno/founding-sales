@@ -31,6 +31,7 @@ const workspace = (f: FunnelCaseFixture): string => f.seeded.alpha.workspaceId;
 const MISSING = '00000000-0000-4000-8000-000000000000';
 
 interface Row {
+  readonly workspaceId?: string;
   readonly kind?: string;
   readonly firmId?: string | null;
   readonly contactId?: string | null;
@@ -53,7 +54,7 @@ async function insert(f: FunnelCaseFixture, row: Row): Promise<unknown> {
         dedupe_key, source, actor_kind, actor_user_id, detail)
      VALUES (COALESCE($11::uuid, gen_random_uuid()), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)`,
     [
-      workspace(f),
+      row.workspaceId ?? workspace(f),
       row.kind ?? 'firm.created',
       row.firmId === undefined ? f.crm.alpha.firmId : row.firmId,
       row.contactId ?? null,
@@ -85,6 +86,12 @@ export const FUNNEL_CONSTRAINT_CASES: readonly FunnelCase[] = [
     },
   },
   {
+    constraint: 'funnel_facts_workspace_fkey',
+    // A firm-less fact reaches no composite key, so this is the only thing standing
+    // between a typo and a fact in a tenant that is not there.
+    run: async f => await insert(f, { workspaceId: MISSING, firmId: null }),
+  },
+  {
     constraint: 'funnel_facts_firm_fkey',
     run: async f => await insert(f, { firmId: MISSING }),
   },
@@ -112,8 +119,16 @@ export const FUNNEL_CONSTRAINT_CASES: readonly FunnelCase[] = [
     run: async f => await insert(f, { firmId: null, contactId: f.crm.alpha.contactId }),
   },
   {
-    constraint: 'funnel_facts_dedupe_key_present',
-    run: async f => await insert(f, { dedupeKey: '   ' }),
+    constraint: 'funnel_facts_one_child',
+    // Both children. `crm/merges.ts` moves contacts before opportunities, so this
+    // row would break the opportunity key inside a later merge rather than here.
+    run: async f =>
+      await insert(f, { contactId: f.crm.alpha.contactId, opportunityId: f.crm.alpha.opportunityId }),
+  },
+  {
+    constraint: 'funnel_facts_dedupe_key_shape',
+    // A space. The alphabet has none, which is what stops a name being a key.
+    run: async f => await insert(f, { dedupeKey: 'Dana Placeholder' }),
   },
   {
     constraint: 'funnel_facts_source_shape',

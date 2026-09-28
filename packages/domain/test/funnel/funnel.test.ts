@@ -149,6 +149,63 @@ describe('the funnel', () => {
       expect(rows[0]?.count).toBe('0');
     });
 
+    it('refuses a key with a space in it, before any insert', async () => {
+      expect(
+        await recordFunnelFact(admin, { kind: 'firm.created', source: 'crm', dedupeKey: 'Dana Placeholder' }),
+      ).toEqual({ recorded: false, reason: 'invalid_key' });
+    });
+
+    it('refuses a contact and an opportunity together, which no merge could carry', async () => {
+      expect(
+        await recordFunnelFact(admin, {
+          kind: 'call.placed',
+          source: 'telephony',
+          dedupeKey: `both-${randomUUID()}`,
+          firmId: crm.alpha.firmId,
+          contactId: crm.alpha.contactId,
+          opportunityId: crm.alpha.opportunityId,
+        }),
+      ).toEqual({ recorded: false, reason: 'invalid_subject' });
+    });
+
+    it('takes a detail of ids, codes, numbers and booleans, and refuses anything else', async () => {
+      const good = `detail-good-${randomUUID()}`;
+      expect(
+        await recordFunnelFact(admin, {
+          kind: 'offer.sent',
+          source: 'offers',
+          dedupeKey: good,
+          detail: { assigned: true, revision: 3, fit: 'yes' },
+        }),
+      ).toMatchObject({ recorded: true });
+
+      const details: readonly [string, Record<string, unknown>][] = [
+        // Free text: the thing this rule exists for.
+        ['a sentence', { note: 'Dana said to call back on Friday' }],
+        ['a nested object', { firm: { id: 'abc' } }],
+        ['an array', { attempts: [1, 2] }],
+        ['an infinity', { ratio: Number.POSITIVE_INFINITY }],
+        ['too many keys', Object.fromEntries(Array.from({ length: 33 }, (_, index) => [`k${String(index)}`, 1]))],
+      ];
+      for (const [what, detail] of details) {
+        expect(
+          await recordFunnelFact(admin, {
+            kind: 'offer.sent',
+            source: 'offers',
+            dedupeKey: `detail-bad-${randomUUID()}`,
+            detail,
+          }),
+          what,
+        ).toEqual({ recorded: false, reason: 'invalid_detail' });
+      }
+
+      const { rows } = await database.session.query<{ count: string }>(
+        "SELECT count(*)::text AS count FROM funnel_facts WHERE workspace_id = $1 AND dedupe_key LIKE 'detail-bad-%'",
+        [seeded.alpha.workspaceId],
+      );
+      expect(rows[0]?.count).toBe('0');
+    });
+
     it('records a kind the v1 dictionary does not have, because the kind is open', async () => {
       const key = `open-kind-${randomUUID()}`;
       expect(isFunnelFactKind('widget.frobbed')).toBe(false);

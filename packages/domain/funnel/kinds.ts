@@ -63,6 +63,24 @@ export const FUNNEL_KIND_SHAPE = /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*){1,2}$/u;
 /** The shape of `funnel_facts.source`: the module that wrote the fact. */
 export const FUNNEL_SOURCE_SHAPE = /^[a-z][a-z0-9_]*$/u;
 
+/**
+ * The shape migration 0022's `funnel_facts_dedupe_key_shape` CHECK enforces.
+ *
+ * Ids, colons, dots and dashes — enough for `<uuid>:<code>` and a provider's own
+ * reference, and not enough for a name: there is no space in the alphabet.
+ */
+export const FUNNEL_DEDUPE_KEY_SHAPE = /^[0-9a-zA-Z_:.-]{1,200}$/u;
+
+/**
+ * What a `detail` key and a `detail` string value may look like.
+ *
+ * The database bounds the column and checks it is an object; these two keep it a
+ * *count*. A firm-less fact has no firm for the deletion workflow to find it by, so
+ * a `detail` that could hold a sentence would be a sentence with no deletion path.
+ */
+export const FUNNEL_KEY_SHAPE = /^[a-zA-Z][0-9a-zA-Z_]{0,63}$/u;
+export const FUNNEL_DETAIL_VALUE_SHAPE = /^[0-9a-zA-Z_:.-]{1,64}$/u;
+
 const DICTIONARY: ReadonlySet<string> = new Set<string>(FUNNEL_FACT_KINDS);
 
 /** Is this one of the v1 dictionary's kinds? Not a gate on recording; a question. */

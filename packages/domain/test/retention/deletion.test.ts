@@ -280,3 +280,67 @@ describe('the deletion commit', () => {
     expect(outcome).toMatchObject({ ok: false, reason: 'already_committed' });
   });
 });
+
+/**
+ * A contact deletion is narrower than a firm deletion, and the funnel has to be
+ * narrow with it: the deleted person's facts lose their `detail`, and the firm's own
+ * facts and the other contact's keep theirs. Its own firm, because the firm above
+ * has already been deleted.
+ */
+describe('a contact deletion and the funnel', () => {
+  it('redacts only that contact’s facts', async () => {
+    const context = adminContext(seeded.alpha.workspaceId, seeded.alpha.admin.userId);
+    const workspaceId = seeded.alpha.workspaceId;
+
+    const firm = await database.session.query<{ id: string }>(
+      "INSERT INTO firms (workspace_id, name) VALUES ($1, 'Rowan Test Partners') RETURNING id",
+      [workspaceId],
+    );
+    const firmId = firm.rows[0]?.id ?? '';
+    const contacts = await database.session.query<{ id: string }>(
+      `INSERT INTO contacts (workspace_id, firm_id, full_name)
+       VALUES ($1, $2, 'Dana Placeholder'), ($1, $2, 'Robin Placeholder') RETURNING id`,
+      [workspaceId, firmId],
+    );
+    const deleted = contacts.rows[0]?.id ?? '';
+    const survivor = contacts.rows[1]?.id ?? '';
+
+    const fact = async (key: string, contactId: string | null): Promise<void> => {
+      await database.session.query(
+        `INSERT INTO funnel_facts (workspace_id, kind, firm_id, contact_id, dedupe_key, source, actor_kind, detail)
+         VALUES ($1, 'call.placed', $2, $3, $4, 'telephony', 'system', '{"attempt": 1}'::jsonb)`,
+        [workspaceId, firmId, contactId, key],
+      );
+    };
+    await fact('contact-deletion-theirs', deleted);
+    await fact('contact-deletion-others', survivor);
+    await fact('contact-deletion-firm', null);
+
+    const preview = await previewDeletion(context, { targetKind: 'contact', firmId, contactId: deleted });
+    expect(preview.ok, preview.reason).toBe(true);
+    // One fact, not three: the count an approver is shown is the narrow one.
+    expect(preview.value?.redacts['funnel_facts']).toBe(1);
+
+    const outcome = await commitDeletion(context, {
+      requestId: preview.value?.requestId ?? '',
+      previewHash: preview.value?.previewHash ?? '',
+      commandId: 'deletion-contact-funnel',
+      journal: recordingSuppressionJournal(),
+    });
+    expect(outcome.ok, outcome.reason).toBe(true);
+
+    const { rows } = await database.session.query<{ dedupe_key: string; detail: unknown }>(
+      `SELECT dedupe_key, detail FROM funnel_facts
+        WHERE workspace_id = $1 AND firm_id = $2 ORDER BY dedupe_key`,
+      [workspaceId, firmId],
+    );
+    expect(rows).toHaveLength(3);
+    const detailOf = (key: string): unknown => rows.find(row => row.dedupe_key === key)?.detail;
+    expect(detailOf('contact-deletion-theirs')).toEqual({});
+    expect(detailOf('contact-deletion-others')).toEqual({ attempt: 1 });
+    // The firm's own fact is not this person's, and a contact deletion is not the
+    // firm's: a receptionist's number is not the deleted person's handle, and a
+    // firm-level count is not their count either.
+    expect(detailOf('contact-deletion-firm')).toEqual({ attempt: 1 });
+  });
+});

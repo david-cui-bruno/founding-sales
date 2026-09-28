@@ -44,6 +44,14 @@
 -- enforced by a unique constraint rather than by the writer remembering. The key is
 -- built from the ids that identify the thing, never from a timestamp, so a replayed
 -- command or a re-run handler produces one fact.
+--
+-- **Nothing here may carry free text.** The key's alphabet has no space in it and
+-- `detail` is bounded and checked to be an object; `recordFunnelFact` narrows
+-- `detail` further, to a flat object of ids, codes, numbers and booleans. That is
+-- not tidiness: a firm-less fact has no firm for the deletion workflow to find it
+-- by, so a fact that could hold a name would be a name with no deletion path.
+--
+-- UPDATE is granted on `detail` and nothing else; see the privileges at the foot.
 -- ---------------------------------------------------------------------------
 CREATE TABLE funnel_facts (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -66,6 +74,11 @@ CREATE TABLE funnel_facts (
   occurred_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT funnel_facts_pkey PRIMARY KEY (workspace_id, id),
   CONSTRAINT funnel_facts_dedupe UNIQUE (workspace_id, kind, dedupe_key),
+  -- The tenant, named directly. Every other table reaches `workspaces` through a
+  -- composite key onto `firms`, and a firm-less fact — a demo visitor, a published
+  -- post — has no such key, so without this one its `workspace_id` would be an
+  -- unconstrained uuid and a typo would create a fact in a tenant that is not there.
+  CONSTRAINT funnel_facts_workspace_fkey FOREIGN KEY (workspace_id) REFERENCES workspaces (id),
   -- The composite keys `crm_domain_events` uses, and for the same reason: the
   -- triples cascade on update so a merge that rewrites an id carries its facts with
   -- it rather than orphaning them.
@@ -82,8 +95,20 @@ CREATE TABLE funnel_facts (
   -- rule of the read would have a hole in it.
   CONSTRAINT funnel_facts_firm_present_for_child
     CHECK (firm_id IS NOT NULL OR (contact_id IS NULL AND opportunity_id IS NULL)),
-  CONSTRAINT funnel_facts_dedupe_key_present
-    CHECK (btrim(dedupe_key) <> '' AND length(dedupe_key) <= 200),
+  -- One child id, never both, and this is a merge rule rather than a taste.
+  -- `crm/merges.ts` moves contacts before opportunities, so a fact naming both would
+  -- have its `firm_id` cascaded to the target by the contact triple while its
+  -- opportunity triple still pointed at the source firm, and the opportunity key
+  -- would fail *inside* the merge transaction. No kind of the v1 dictionary needs
+  -- both — a call or a meeting names a contact, an offer names an opportunity — so
+  -- the constraint costs nothing and deferring the keys would have bought a shape
+  -- nobody wants.
+  CONSTRAINT funnel_facts_one_child CHECK (contact_id IS NULL OR opportunity_id IS NULL),
+  -- Ids, colons, dots and dashes: enough for `<uuid>:<code>` and a provider's own
+  -- reference, and not enough for a name — there is no space in the alphabet. The
+  -- shape `crm_domain_events.command_id` has, for the same reason.
+  CONSTRAINT funnel_facts_dedupe_key_shape
+    CHECK (dedupe_key ~ '^[0-9a-zA-Z_:.-]{1,200}$'),
   -- The module that wrote it: `crm`, and later `research`, `telephony`, `calendar`,
   -- `demo`, `social`, `offers`. One flat lower-case word, so a report can say which
   -- part of the system a figure came from.
@@ -101,6 +126,9 @@ CREATE TABLE funnel_facts (
 -- The two reads the dashboard makes: everything in a window by kind, and one firm's
 -- facts. The second is partial because a firm-less fact — a demo visitor, a
 -- published post — is never found through it.
+-- The window read comes first and asks for every kind at once, so the window leads.
+CREATE INDEX funnel_facts_by_window ON funnel_facts (workspace_id, occurred_at, kind);
+-- Kept for the per-kind reads the later slices will make.
 CREATE INDEX funnel_facts_by_kind ON funnel_facts (workspace_id, kind, occurred_at);
 CREATE INDEX funnel_facts_by_firm ON funnel_facts (workspace_id, firm_id, occurred_at)
   WHERE firm_id IS NOT NULL;
@@ -111,11 +139,18 @@ CREATE INDEX funnel_facts_by_firm ON funnel_facts (workspace_id, firm_id, occurr
 -- Migration 0001's `GRANT ... ON ALL TABLES` covered only the tables that existed
 -- then, so this one needs its own (docs/greenfield/migrations.md, step 4).
 --
--- `UPDATE` is granted for exactly one writer: the deletion workflow's redaction,
--- which clears `detail` and keeps the row (`packages/domain/retention/deletion.ts`).
--- The recorder never updates — a fact is written once and the unique constraint
--- makes a second write a no-op. `DELETE` and `TRUNCATE` are revoked, so business
--- history cannot be rewritten by anything, the deletion workflow included.
+-- **`UPDATE` is granted on one column and no others.** A table-wide UPDATE would
+-- let the application rewrite a fact's kind, its ids, its dedupe key and the instant
+-- it happened at — which is the whole of the row, and would make "append-only"
+-- untrue while the grant said otherwise. The one writer that has to change anything
+-- here is the deletion workflow's redaction, and all it clears is `detail`
+-- (`packages/domain/retention/deletion.ts`), so that is the only column granted. The
+-- recorder never updates at all: a fact is written once and the unique constraint
+-- makes a second write a no-op.
+--
+-- `DELETE` and `TRUNCATE` are revoked, so business history cannot be removed by
+-- anything, the deletion workflow included.
 -- ---------------------------------------------------------------------------
-GRANT SELECT, INSERT, UPDATE ON funnel_facts TO app_runtime, migration;
+GRANT SELECT, INSERT ON funnel_facts TO app_runtime, migration;
+GRANT UPDATE (detail) ON funnel_facts TO app_runtime, migration;
 REVOKE DELETE, TRUNCATE ON funnel_facts FROM app_runtime, migration;

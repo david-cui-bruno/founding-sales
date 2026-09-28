@@ -90,7 +90,7 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
   // ----------------------------------------------------------- funnel (0022)
   funnel_facts: coverage(
     ['retained', 'deletion_redacts'],
-    'Business history: counts of what happened, by kind, with ids and no name, address, number or body. Nothing sweeps it and DELETE is revoked; a deletion clears `detail` and keeps the row, whose ids point at rows the same deletion redacted.',
+    'Business history: counts of what happened, by kind, with ids and no name, address, number or body. Nothing sweeps it, DELETE and TRUNCATE are revoked, and UPDATE exists for one column and one writer — a deletion clears `detail` and keeps the row, whose ids point at rows the same deletion redacted.',
   ),
 
   // ---------------------------------------------------------------- policy
