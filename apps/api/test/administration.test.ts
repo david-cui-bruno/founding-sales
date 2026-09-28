@@ -4,6 +4,7 @@ import {
   RELEASE_RECORD_SCHEMA_ID,
   SETTING_KEYS,
   ciGateReleaseReference,
+  dashboardResponseSchema,
   pipelineBoardResponseSchema,
   pipelineStagesResponseSchema,
   publishedClientVersions,
@@ -535,6 +536,22 @@ describe('the administration surface', () => {
     expect(answer.body['classifier']).toMatchObject({ available: true, callsAttempted: 0 });
 
     expect((await call('POST', '/dashboard', salespersonToken, {})).status).toBe(400);
+
+    // The funnel is the fourth source (lane J-facts, migration 0022): live, with the
+    // four keys the read answers, and inside the schema the Mac parses back.
+    const theAdmins = await call('POST', '/dashboard', adminToken, {
+      window: { from: '2026-09-01T00:00:00.000Z', to: '2026-10-01T00:00:00.000Z' },
+    });
+    expect(theAdmins.status).toBe(200);
+    expect(theAdmins.body['funnel']).toEqual({
+      available: true,
+      byKind: expect.any(Array),
+      firmsByKind: expect.any(Array),
+      uniqueFirms: expect.any(Number),
+      firmsInScope: expect.any(Number),
+    });
+    expect(wireDrift(dashboardResponseSchema, theAdmins.body)).toEqual([]);
+    expect(() => dashboardResponseSchema.parse(theAdmins.body)).not.toThrow();
     expect(
       (
         await call('POST', '/dashboard', salespersonToken, {

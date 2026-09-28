@@ -12,6 +12,7 @@ import { CLASSIFICATION_CONSTRAINT_CASES } from './support/classificationCases.t
 import { SETTINGS_CONSTRAINT_CASES } from './support/settingsCases.ts';
 import { RETENTION_CONSTRAINT_CASES } from './support/retentionCases.ts';
 import { RELEASE_CONSTRAINT_CASES } from './support/releaseCases.ts';
+import { FUNNEL_CONSTRAINT_CASES } from './support/funnelCases.ts';
 import { seedCrm, type SeededCrm } from './support/crmFixtures.ts';
 import { seedMail, type SeededMail } from './support/mailFixtures.ts';
 import { OUTBOUND_CONSTRAINT_CASES } from './support/outboundCases.ts';
@@ -1351,6 +1352,7 @@ const cases: readonly Case[] = [
   ...SETTINGS_CONSTRAINT_CASES,
   ...RETENTION_CONSTRAINT_CASES,
   ...RELEASE_CONSTRAINT_CASES,
+  ...FUNNEL_CONSTRAINT_CASES,
 ];
 
 describe('foundation constraints', () => {

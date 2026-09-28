@@ -10,6 +10,7 @@ import {
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
 import { createContact } from '../../crm/contacts.ts';
+import { recordFunnelFact } from '../../funnel/facts.ts';
 import { readFirmForActor } from '../../crm/dto.ts';
 import { recordEvidence } from '../../crm/evidence.ts';
 import { createFirm, reassignFirm, resolveZoneForFirm, updateFirm } from '../../crm/firms.ts';
@@ -382,6 +383,55 @@ describe('CRM commands', () => {
     });
   });
 
+  // --------------------------------------------------------------- funnel
+  describe('the top of the funnel', () => {
+    it('records exactly one firm.created fact, in the transaction that created the firm', async () => {
+      await inRolledBackTransaction(admin, async context => {
+        const created = await createFirm(context, {
+          name: 'Funnel Test Firm',
+          assignedUserId: seeded.alpha.salesperson.userId,
+        });
+        expect(created).toMatchObject({ ok: true });
+        if (!created.ok) return;
+
+        const { rows } = await context.db.query<{
+          kind: string;
+          source: string;
+          dedupe_key: string;
+          firm_id: string;
+          detail: unknown;
+        }>(
+          'SELECT kind, source, dedupe_key, firm_id, detail FROM funnel_facts WHERE workspace_id = $1 AND firm_id = $2',
+          [seeded.alpha.workspaceId, created.value.id],
+        );
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toEqual({
+          kind: 'firm.created',
+          source: 'crm',
+          // The key is the firm's own id, so a re-run handler writes one fact.
+          dedupe_key: created.value.id,
+          firm_id: created.value.id,
+          detail: { assigned: true },
+        });
+      });
+    });
+
+    it('leaves no fact behind when the transaction that created the firm rolls back', async () => {
+      let firmId = '';
+      await inRolledBackTransaction(admin, async context => {
+        const created = await createFirm(context, { name: 'Rolled Back Test Firm' });
+        expect(created).toMatchObject({ ok: true });
+        if (!created.ok) return;
+        firmId = created.value.id;
+      });
+      const { rows } = await session.query<{ count: string }>(
+        'SELECT count(*)::text AS count FROM funnel_facts WHERE workspace_id = $1 AND firm_id = $2',
+        [seeded.alpha.workspaceId, firmId],
+      );
+      expect(rows[0]?.count).toBe('0');
+    });
+  });
+
   // ----------------------------------------------------------------- zone
   describe('firm time zone', () => {
     it('records the resolved zone with its confidence, source and rule version', async () => {
@@ -574,6 +624,72 @@ describe('CRM commands', () => {
         seeded.alpha.workspaceId,
         duplicateId,
       ]);
+    });
+
+    it('carries the source firm’s funnel facts to the target, and leaves the firm-only one behind', async () => {
+      await inRolledBackTransaction(admin, async context => {
+        const source = await createFirm(context, {
+          name: 'Merged Funnel Test Firm',
+          assignedUserId: seeded.alpha.salesperson.userId,
+        });
+        expect(source).toMatchObject({ ok: true });
+        if (!source.ok) return;
+        const sourceFirmId = source.value.id;
+
+        const contact = await createContact(context, { firmId: sourceFirmId, fullName: 'Robin Placeholder' });
+        expect(contact).toMatchObject({ ok: true });
+        if (!contact.ok) return;
+        const stage = await context.db.query<{ id: string }>(
+          'SELECT id FROM pipeline_stages WHERE workspace_id = $1 ORDER BY position LIMIT 1',
+          [seeded.alpha.workspaceId],
+        );
+        const opportunity = await context.db.query<{ id: string }>(
+          `INSERT INTO opportunities (workspace_id, firm_id, stage_id, control_mode_changed_at)
+           VALUES ($1, $2, $3, TIMESTAMPTZ '2026-09-01 12:00:00+00') RETURNING id`,
+          [seeded.alpha.workspaceId, sourceFirmId, stage.rows[0]?.id],
+        );
+        const opportunityId = opportunity.rows[0]?.id ?? '';
+
+        // One fact per subject shape. A fact may not name both a contact and an
+        // opportunity (`funnel_facts_one_child`), which is exactly what makes the
+        // two cascades below independent of each other.
+        await recordFunnelFact(context, {
+          kind: 'call.placed',
+          source: 'telephony',
+          dedupeKey: `merge-contact-${sourceFirmId}`,
+          firmId: sourceFirmId,
+          contactId: contact.value.id,
+        });
+        await recordFunnelFact(context, {
+          kind: 'offer.sent',
+          source: 'offers',
+          dedupeKey: `merge-opportunity-${sourceFirmId}`,
+          firmId: sourceFirmId,
+          opportunityId,
+        });
+
+        expect(
+          await mergeFirms(context, { sourceFirmId, targetFirmId: crm.alpha.firmId }),
+        ).toMatchObject({ ok: true });
+
+        const { rows } = await context.db.query<{ dedupe_key: string; firm_id: string }>(
+          `SELECT dedupe_key, firm_id FROM funnel_facts
+            WHERE workspace_id = $1 AND dedupe_key = ANY($2::text[]) ORDER BY dedupe_key`,
+          [
+            seeded.alpha.workspaceId,
+            [`merge-contact-${sourceFirmId}`, `merge-opportunity-${sourceFirmId}`, sourceFirmId],
+          ],
+        );
+        const firmOf = (key: string): string | undefined => rows.find(row => row.dedupe_key === key)?.firm_id;
+        // The two facts with a child follow their record to the target through
+        // `ON UPDATE CASCADE` on the composite key.
+        expect(firmOf(`merge-contact-${sourceFirmId}`)).toBe(crm.alpha.firmId);
+        expect(firmOf(`merge-opportunity-${sourceFirmId}`)).toBe(crm.alpha.firmId);
+        // The firm-only fact — `firm.created`, keyed by the firm's own id — stays on
+        // the merged source row, as `crm_domain_events` do: the firm key does not
+        // cascade, and the source is a merged record rather than a deleted one.
+        expect(firmOf(sourceFirmId)).toBe(sourceFirmId);
+      });
     });
 
     it('refuses a mutation of a firm that has already been merged away', async () => {

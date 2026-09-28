@@ -1,6 +1,7 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { classifierFacts } from './classifierSource.ts';
 import { enrollmentFacts } from './enrollmentSource.ts';
+import { funnelFacts } from '../funnel/read.ts';
 import {
   type DashboardAudience,
   type DashboardSources,
@@ -75,5 +76,5 @@ export async function sendingFacts(
  * figure whose table does not exist yet will take.
  */
 export function liveDashboardSources(): DashboardSources {
-  return { sending: sendingFacts, enrollments: enrollmentFacts, classifier: classifierFacts };
+  return { sending: sendingFacts, enrollments: enrollmentFacts, classifier: classifierFacts, funnel: funnelFacts };
 }

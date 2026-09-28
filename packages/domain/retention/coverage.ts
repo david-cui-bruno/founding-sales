@@ -87,6 +87,12 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
   record_aliases: coverage(['deletion_removes'], 'Preserved identifiers of a merged record, which name the prospect.'),
   crm_domain_events: coverage(['retained'], 'Append-only; DELETE revoked.'),
 
+  // ----------------------------------------------------------- funnel (0022)
+  funnel_facts: coverage(
+    ['retained', 'deletion_redacts'],
+    'Business history: counts of what happened, by kind, with ids and no name, address, number or body. Nothing sweeps it, DELETE and TRUNCATE are revoked, and UPDATE exists for one column and one writer — a deletion clears `detail` and keeps the row, whose ids point at rows the same deletion redacted.',
+  ),
+
   // ---------------------------------------------------------------- policy
   state_postures: coverage(['operational'], 'Callie’s reviewed legal posture.'),
   calling_windows: coverage(['operational'], 'Workspace configuration.'),

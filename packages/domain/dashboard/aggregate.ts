@@ -6,6 +6,7 @@ import {
   type DashboardSources,
   type DashboardWindow,
   type EnrollmentFacts,
+  type FunnelFacts,
   type SendingFacts,
   type Unavailable,
 } from './sources.ts';
@@ -78,6 +79,7 @@ export interface DashboardDto {
   readonly sending: SendingFacts | Unavailable;
   readonly enrollments: EnrollmentFacts | Unavailable;
   readonly classifier: ClassifierFacts | Unavailable;
+  readonly funnel: FunnelFacts | Unavailable;
 }
 
 function audienceOf(context: RepositoryContext): { readonly label: 'workspace' | 'assigned'; readonly userId: string | null } {
@@ -245,5 +247,6 @@ export async function readDashboard(
     sending: await sources.sending(context, input.window, audience),
     enrollments: await sources.enrollments(context, input.window, audience),
     classifier: await sources.classifier(context, input.window, audience),
+    funnel: await sources.funnel(context, input.window, audience),
   };
 }

@@ -78,6 +78,69 @@ describe('append-only privileges', () => {
     ).rejects.toMatchObject({ code: '42501' });
   });
 
+  /**
+   * The funnel (migration 0022). Its grant is `SELECT, INSERT` plus `UPDATE
+   * (detail)` and nothing else, so "append-only but for the redaction" is a
+   * privilege rather than a promise: `app_runtime` can clear a fact's `detail` and
+   * cannot touch what the fact says happened.
+   */
+  it('lets app_runtime clear a funnel fact’s detail and nothing else about it', async () => {
+    await database.session.query(
+      `INSERT INTO funnel_facts (workspace_id, kind, dedupe_key, source, actor_kind, detail)
+       VALUES ($1, 'demo.started', 'privilege-case-1', 'demo', 'system', '{"step": "one"}'::jsonb)`,
+      [seeded.alpha.workspaceId],
+    );
+
+    await runtime.query("UPDATE funnel_facts SET detail = '{}'::jsonb WHERE dedupe_key = 'privilege-case-1'");
+    const { rows } = await runtime.query<{ detail: unknown }>(
+      "SELECT detail FROM funnel_facts WHERE dedupe_key = 'privilege-case-1'",
+    );
+    expect(rows[0]?.detail).toEqual({});
+
+    // What the fact says happened is not the application's to rewrite.
+    for (const statement of [
+      "UPDATE funnel_facts SET kind = 'demo.completed' WHERE dedupe_key = 'privilege-case-1'",
+      "UPDATE funnel_facts SET firm_id = NULL WHERE dedupe_key = 'privilege-case-1'",
+      "UPDATE funnel_facts SET dedupe_key = 'rewritten' WHERE dedupe_key = 'privilege-case-1'",
+      "UPDATE funnel_facts SET occurred_at = now() WHERE dedupe_key = 'privilege-case-1'",
+    ]) {
+      await expect(runtime.query(statement), statement).rejects.toMatchObject({ code: '42501' });
+    }
+
+    await expect(runtime.query('DELETE FROM funnel_facts')).rejects.toMatchObject({ code: '42501' });
+    await expect(runtime.query('TRUNCATE funnel_facts')).rejects.toMatchObject({ code: '42501' });
+  });
+
+  it('gives the migration role the same funnel matrix and no more', async () => {
+    // The same grant went to both roles, so the same matrix is asserted of both: a
+    // migration that could rewrite a fact would be a migration that could rewrite
+    // history, and `migration` is the role a release runs as.
+    const migration = await database.appRuntimeSession();
+    await migration.query('SET ROLE migration');
+
+    await migration.query(
+      `INSERT INTO funnel_facts (workspace_id, kind, dedupe_key, source, actor_kind, detail)
+       VALUES ($1, 'demo.started', 'privilege-case-2', 'demo', 'system', '{"step": "one"}'::jsonb)`,
+      [seeded.alpha.workspaceId],
+    );
+    await migration.query("UPDATE funnel_facts SET detail = '{}'::jsonb WHERE dedupe_key = 'privilege-case-2'");
+    const { rows } = await migration.query<{ detail: unknown }>(
+      "SELECT detail FROM funnel_facts WHERE dedupe_key = 'privilege-case-2'",
+    );
+    expect(rows[0]?.detail).toEqual({});
+
+    for (const statement of [
+      "UPDATE funnel_facts SET kind = 'demo.completed' WHERE dedupe_key = 'privilege-case-2'",
+      "UPDATE funnel_facts SET firm_id = NULL WHERE dedupe_key = 'privilege-case-2'",
+      "UPDATE funnel_facts SET dedupe_key = 'rewritten' WHERE dedupe_key = 'privilege-case-2'",
+      "UPDATE funnel_facts SET occurred_at = now() WHERE dedupe_key = 'privilege-case-2'",
+    ]) {
+      await expect(migration.query(statement), statement).rejects.toMatchObject({ code: '42501' });
+    }
+    await expect(migration.query('DELETE FROM funnel_facts')).rejects.toMatchObject({ code: '42501' });
+    await expect(migration.query('TRUNCATE funnel_facts')).rejects.toMatchObject({ code: '42501' });
+  });
+
   it('refuses writes to the hold reason-code reference table as app_runtime', async () => {
     await expect(
       runtime.query("INSERT INTO hold_reason_codes (code, description, recoverable) VALUES ('invented', 'x', true)"),

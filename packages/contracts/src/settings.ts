@@ -345,6 +345,22 @@ export const dashboardResponseSchema = z.object({
   sending: z.union([unavailableSchema, z.object({ available: z.literal(true) }).loose()]),
   enrollments: z.union([unavailableSchema, z.object({ available: z.literal(true) }).loose()]),
   classifier: z.union([unavailableSchema, z.object({ available: z.literal(true) }).loose()]),
+  // Lane J-facts' funnel (migration 0022). `z.object` strips what it does not name,
+  // so adding this key is not a wire break: 1.0.14 and 1.0.15 drop it unread. The
+  // shape is spelled out rather than left `.loose()` because it is small, closed and
+  // finished — the three other sources are loose because their own fields are still
+  // moving, and a schema that names the fields is what makes a later change visible
+  // on the wire.
+  funnel: z.union([
+    unavailableSchema,
+    z.object({
+      available: z.literal(true),
+      byKind: z.array(countByKeySchema),
+      firmsByKind: z.array(countByKeySchema),
+      uniqueFirms: z.number(),
+      firmsInScope: z.number(),
+    }),
+  ]),
 });
 export type DashboardResponse = z.infer<typeof dashboardResponseSchema>;
 
