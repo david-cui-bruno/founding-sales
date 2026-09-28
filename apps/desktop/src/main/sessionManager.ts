@@ -278,15 +278,21 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
    * sign-out waiting to be told to the server, and a role change, are transitions too,
    * and leaving the last role's list in the cache is leaving it to be read.
    */
-  const dropHeldData = async (): Promise<void> => {
+  const dropHeldData = async (): Promise<number> => {
     // Before the first `await`: see `beginTransition`. Everything below this line is
     // asynchronous, and everything already on the wire is judged by that number.
     beginTransition();
+    // This transition's own number, read before the wipe rather than after it. A
+    // sign-in landing while `cache.wipe()` is in flight moves `generation`, and a
+    // caller that read it afterwards would be holding the *new* session's number and
+    // could never tell the two apart.
+    const ours = generation;
     await options.cache.wipe();
     today = null;
     asOf = null;
     stale = false;
     devices = null;
+    return ours;
   };
 
   const forget = async (reason: string): Promise<void> => {
@@ -737,14 +743,16 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
       await ensureLoaded();
       if (sessionGeneration !== generation) return;
       notice = reason;
-      await dropHeldData();
       /*
        * From here the comparison is with *this* transition's number rather than the
        * caller's: emptying this Mac moves it (`beginTransition`), so the caller's number
        * is deliberately out of date from this line on. What must still stop the work is
-       * a *further* move — somebody signing in while `store.forget()` is in flight.
+       * a *further* move — somebody signing in while the wipe or `store.forget()` is in
+       * flight. `dropHeldData` hands back the number it began with, because reading
+       * `generation` after its await would read that sign-in's number and match itself.
        */
-      const ours = generation;
+      const ours = await dropHeldData();
+      if (ours !== generation) return;
       await options.store.forget();
       if (ours !== generation) return;
       device = null;

@@ -294,6 +294,40 @@ describe('session transitions the window is told about (1.0.12)', () => {
     expect(mac.vault.entries.has(DEVICE_SECRET_ACCOUNT)).toBe(true);
   });
 
+  it('keeps the new session whole when the wipe resumes after the sign-in, not before', async () => {
+    /*
+     * The same drop, with the ordering pinned rather than left to the scheduler.
+     *
+     * The held wipe is released only *after* the next sign-in has finished, so the
+     * refusal's flow resumes with `store.forget()` — which deletes `device.json` and
+     * the device secret — still ahead of it and a newer registration already written.
+     * The guard used to read `generation` after the wipe's await, which by then was
+     * the new session's own number, so it always matched and never fired: the wipe
+     * went on to delete the credential the sign-in had just stored.
+     */
+    const mac = await started({ holdCacheWipe: true });
+    await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
+    const madeUnder = mac.manager.sessionGeneration();
+
+    const wiping = mac.manager.noteAuthRefusal('device_revoked', madeUnder);
+    await eventually(() => mac.wipeHeld(), 'the cache wipe to begin');
+    await mac.manager.signOut();
+    const signedIn = await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
+    const newDeviceId = signedIn.device?.deviceId;
+    const newSecret = mac.vault.entries.get(DEVICE_SECRET_ACCOUNT);
+    expect(newDeviceId).toBeDefined();
+    expect(newSecret).toBeDefined();
+
+    mac.releaseCacheWipe();
+    await wiping;
+
+    // The new registration is still on disk, and so is the one secret it needs.
+    expect((await mac.manager.state()).device?.deviceId).toBe(newDeviceId);
+    expect(mac.vault.entries.get(DEVICE_SECRET_ACCOUNT)).toBe(newSecret);
+    const onDisk = await readFile(join(mac.directory, DEVICE_FILE), 'utf8');
+    expect(onDisk).toContain(newDeviceId ?? 'no-device-id');
+  });
+
   it('is not a wipe for a refusal that is not one: a 403 on one call is that call’s business', async () => {
     const mac = await started();
     await mac.manager.signIn({ workspaceId: mac.workspaceId, deviceLabel: 'A Mac' });
@@ -1535,8 +1569,14 @@ describe('a sign-out retry and a sign-in (P0-B)', () => {
 
     // And the clock that is still running does finish it once the server is back.
     ticked[0]?.();
-    await eventually(() => !mac.script.deviceActive(), 'the retry to reach the server');
-    expect((await mac.manager.state()).notice).toBe('signed_out');
+    /*
+     * The condition is the client's own state, not the server's flag. The fake server
+     * marks the device inactive inside the request handler, which is several awaits —
+     * the cache wipe, `store.forget()` — before the retry writes `signed_out` here; a
+     * loaded machine reads the stale notice in between.
+     */
+    await eventually(async () => (await mac.manager.state()).notice === 'signed_out', 'the retry to finish');
+    expect(mac.script.deviceActive()).toBe(false);
   });
 });
 
