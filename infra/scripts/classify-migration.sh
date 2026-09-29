@@ -3,9 +3,11 @@
 #
 #   infra/scripts/classify-migration.sh <packages/domain/db/migrations/NNNN_name.sql> [--applied-on=N]
 #
-# Prints `additive`, `touches-existing`, `privilege` or `destructive` on the first line
-# and the deciding statements after it, and exits 0. The release procedure
-# (docs/greenfield/release.md 3) rehearses the last three and not the first.
+# Prints `additive`, `replaces-routine`, `touches-existing`, `privilege`, `destructive`
+# or `unclassified` on the first line and the deciding statements after it, and exits 0.
+# The release procedure (docs/greenfield/release.md 3) rehearses `touches-existing`,
+# `privilege`, `destructive` and `unclassified`, and not `additive` or
+# `replaces-routine`, which the upgrade test covers instead.
 #
 # "Existing" is the set of tables migrations 1..N of the same directory leave behind,
 # where N is the file's own number minus one unless `--applied-on=` says otherwise; no

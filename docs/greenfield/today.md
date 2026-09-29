@@ -34,7 +34,7 @@ apps/api/src/routes/today.ts                  GET /today, POST /today/firm
 apps/api/src/routes/snooze.ts                 POST /today/snooze, /today/snooze/cancel, /today/pause/release
 apps/api/src/routes/callbacks.ts              GET /callbacks, POST /callbacks/complete, /callbacks/schedule (g79)
 packages/domain/dial/calls.ts                 logging a call against its task (g79: decide, record, apply)
-apps/desktop/src/renderer/today*.ts           the lanes: contract, view model, drawing (todayLanes.ts)
+apps/desktop/src/renderer/today*.ts           the lanes: contract, view model, drawing (today/Lanes.tsx)
 apps/desktop/src/renderer/home*.ts            Home, the main window that shows them (lane g65)
 apps/desktop/src/main/todayBridge.ts          the main-process half of its bridge
 apps/desktop/src/main/telHandoff.ts           the tel: driver and the two dial commands
@@ -231,7 +231,7 @@ window.
 
 **Since lane g65 there is no Today window.** The lanes are the main window's signed-in
 screen, Home, beside a status sidebar, the last seven days and a Needs-you list
-(`docs/archive/decisions/g65-today-is-the-home.md`). `todayPage.ts` became `todayLanes.ts`,
+(`docs/archive/decisions/g65-today-is-the-home.md`). `todayPage.ts` became `today/Lanes.tsx`,
 which Home calls; ⌘1 brings the main window forward. The bridge, the view model and
 every rule below are unchanged, and G6's Playwright scenarios run against Home in
 `apps/desktop/test/e2e/home.spec.ts`.
@@ -308,8 +308,8 @@ renderer code:
   through the existing `liveSession` so renewal stays serialised. Without it a second
   window would have to hold the refresh credential, and reuse revokes the device (5.3);
 * `apps/desktop/src/main/telHandoff.ts` — the macOS binding of G4's two handoff ports,
-  and `createDialApi`, which is the two commands of 9.2 through the window's
-  authenticated client.
+  read through `createTodayBridge` (`apps/desktop/src/main/todayBridge.ts`), which is
+  the two commands of 9.2 through the window's authenticated client.
 
 One thing the wiring cannot do yet, recorded rather than faked:
 

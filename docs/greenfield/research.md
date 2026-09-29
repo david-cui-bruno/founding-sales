@@ -73,7 +73,7 @@ is.
 | `provider_ledger` | Calls, failures and cents per provider per workspace business date. Generic: lanes C and D reuse it. |
 | `provider_reservations` | One row per **paid attempt**: what it authorized, which business date it belongs to, and how it settled. Generic on `(subject_kind, subject_id)`: lanes C and D reuse it too. |
 
-Migration 0023 is additive and **refuses on nothing**, so it has no
+Migration 0023 is `replaces-routine` and **refuses on nothing**, so it has no
 `fss admin schema-preflight` command and the release skips step 3. It also carries one
 `CREATE OR REPLACE` of `today_algorithm_version()`, because lane 4's order changed.
 

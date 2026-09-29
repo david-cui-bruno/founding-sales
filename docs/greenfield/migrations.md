@@ -28,7 +28,7 @@ worker run side by side, and a restore can put the database behind both.
 ## The `-- changes:` header, and what checks it
 
 ```sql
--- 0024_example.sql — one sentence about what this is for
+-- 0025_example.sql — one sentence about what this is for
 --
 -- changes: contacts, outbound_messages
 ```
