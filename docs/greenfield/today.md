@@ -94,6 +94,12 @@ card version 1**: `todayFirmResponseSchema` is a `z.object`, so an installed des
 that has never heard of the key strips it rather than refusing the card, and adding it
 is not a wire break.
 
+The first line of the brief, and of the dial panel under it, is the announcement said
+when somebody answers — `CALL_ANNOUNCEMENT` in `packages/contracts/src/dial.ts`, which
+is a constant today and becomes a workspace setting with the next migration that
+rewrites `workspace_settings_key_known`, because that CHECK pins the settings keys and a
+new one cannot be added without a migration and a schema release.
+
 ### 2. A promotion commits with its source event, and the source lane never learns about Today
 
 8.2: "Event-driven reply and callback promotions commit with their source event."
