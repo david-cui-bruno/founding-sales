@@ -102,10 +102,10 @@ export function composeResearch(classifier: ClassifyWorkerOptions | undefined): 
   if (classifier === undefined) return { pageFetch };
   return {
     pageFetch,
-    extraction: anthropicExtraction({
-      transport: classifier.transport,
-      modelName: DEFAULT_RESEARCH_SETTINGS.modelName,
-    }),
+    // No model here: the model and the output bound travel with each request, from the
+    // `provider_reservations` row that priced it. A model fixed at composition was a
+    // second answer to "what is this call?" that the money did not know about.
+    extraction: anthropicExtraction({ transport: classifier.transport }),
   };
 }
 

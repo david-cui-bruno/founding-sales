@@ -199,6 +199,66 @@ export function worstCaseInputTokens(input: Omit<WorstCaseInput, 'modelName'>): 
 }
 
 /**
+ * The margin the exact count is given before it is compared with a reservation.
+ *
+ * Anthropic documents `countTokens` as an estimate: "the token count is an estimate and
+ * may not exactly match the number of tokens used in a request"
+ * (platform.claude.com/docs/en/build-with-claude/token-counting). Five per cent is the
+ * headroom that estimate gets, so a request admitted at the boundary cannot be billed
+ * for more input than the cents being held for it.
+ */
+export const TOKEN_COUNT_HEADROOM = 1.05;
+
+/** The counted tokens plus their headroom, rounded up. What admission compares. */
+export function countedWithHeadroom(countedTokens: number): number {
+  return Math.ceil(Math.max(0, countedTokens) * TOKEN_COUNT_HEADROOM);
+}
+
+/**
+ * The priced shape of the call one reservation authorizes: what `provider_reservations`
+ * holds beside its cents.
+ */
+export interface ReservationSnapshot {
+  readonly modelName: string;
+  readonly maxInputTokens: number;
+  readonly maxOutputTokens: number;
+  readonly cents: number;
+}
+
+export type CallAdmission =
+  /** The request fits the snapshot. `inputTokens` is what it was priced at. */
+  | { readonly kind: 'call'; readonly inputTokens: number }
+  /** It does not, and nothing may be sent. */
+  | { readonly kind: 'refuse'; readonly reason: 'tokens' | 'cents' | 'unpriced' };
+
+/**
+ * Whether a counted request may be sent against the reservation being held for it.
+ *
+ * Pure, and decided against the **snapshot** rather than against the settings, which is
+ * the whole of the fix: chunk 3 used to re-read `research_settings` and compare the
+ * count with their current token limit without ever looking at `reservation.cents`, so
+ * raising `max_pages_per_firm` between two chunks admitted a request the money did not
+ * cover. Both halves are asked here:
+ *
+ *   * the counted input plus the snapshot's maximum output must fit the snapshot's own
+ *     total, with `TOKEN_COUNT_HEADROOM` on the count because the provider calls it an
+ *     estimate;
+ *   * and what that would cost at the snapshot's model must be within the cents the
+ *     reservation holds. A model with no reviewed price refuses: `centsOf` cannot price
+ *     it, and a call nobody can price is a call nobody cleared.
+ */
+export function admitCall(snapshot: ReservationSnapshot, countedTokens: number): CallAdmission {
+  if (!isPricedModel(snapshot.modelName)) return { kind: 'refuse', reason: 'unpriced' };
+  const inputTokens = countedWithHeadroom(countedTokens);
+  if (inputTokens + snapshot.maxOutputTokens > snapshot.maxInputTokens + snapshot.maxOutputTokens) {
+    return { kind: 'refuse', reason: 'tokens' };
+  }
+  const cents = centsOf(snapshot.modelName, { inputTokens, outputTokens: snapshot.maxOutputTokens });
+  if (cents > snapshot.cents) return { kind: 'refuse', reason: 'cents' };
+  return { kind: 'call', inputTokens };
+}
+
+/**
  * Whether what a call actually reported is inside the bound the ceiling authorized.
  *
  * Used by the test that would otherwise be the only thing standing between a raised

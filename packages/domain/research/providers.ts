@@ -116,6 +116,17 @@ export interface ExtractionSource {
 export interface ExtractionRequest {
   readonly sources: readonly ExtractionSource[];
   readonly firmName: string;
+  /**
+   * The model to call and the output bound to ask for, **from the reservation's
+   * snapshot** rather than from the settings.
+   *
+   * They are part of the request because the reservation is the authorization: the cents
+   * being held were computed from these two numbers, so a call that used anything else
+   * would be a call nobody priced. The adapter holds no model of its own to fall back
+   * on, which is why they are not optional.
+   */
+  readonly modelName: string;
+  readonly maxOutputTokens: number;
 }
 
 /**

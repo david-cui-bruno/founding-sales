@@ -443,6 +443,26 @@ LANGUAGE sql IMMUTABLE AS $$ SELECT 'today.2'::text $$;
 -- insertion exactly as `daily_counters` does. A run authorized yesterday and settled
 -- today adds its invoice to *yesterday's* ledger row, because that is the day whose
 -- budget it was cleared against.
+--
+-- ## The priced shape of the call, snapshotted
+--
+-- `model_name`, `max_input_tokens` and `max_output_tokens` are the three numbers
+-- `cents` was computed from, held beside it. Without them the admission check before
+-- the call read the *current* `research_settings`: raising `max_pages_per_firm` between
+-- two chunks admitted a request bigger than the money being held for it, and a changed
+-- model would have been called at another model's price. The reservation is the
+-- authorization, so the authorization has to say what it is for.
+--
+-- ## Why `calling → released` is not a CHECK or a trigger
+--
+-- The money rule of the state machine — a row marked `calling` is released by nobody
+-- except the claim that marked it — is about *who* is writing, and a row-level rule
+-- cannot see that. A trigger forbidding the transition outright would also forbid the
+-- legitimate one: chunk 3 marks its reservation in chunk 2, then sometimes declines to
+-- call (the fetch failed, the counted request did not fit), and handing those cents
+-- back is right. It is enforced in `research/reservations.ts` (`settleAttempt` takes
+-- `released` only from `reserved`) and proved in
+-- `test/research/reservationRace.test.ts`.
 -- ---------------------------------------------------------------------------
 CREATE TABLE provider_reservations (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -454,6 +474,9 @@ CREATE TABLE provider_reservations (
   business_date date NOT NULL,
   business_time_zone text NOT NULL,
   cents integer NOT NULL,
+  model_name text NOT NULL,
+  max_input_tokens integer NOT NULL,
+  max_output_tokens integer NOT NULL,
   state text NOT NULL DEFAULT 'reserved',
   settled_cents integer NOT NULL DEFAULT 0,
   created_at timestamptz NOT NULL DEFAULT now(),
@@ -468,6 +491,11 @@ CREATE TABLE provider_reservations (
   CONSTRAINT provider_reservations_subject_known CHECK (subject_kind IN ('research_run')),
   CONSTRAINT provider_reservations_attempt_positive CHECK (attempt >= 1),
   CONSTRAINT provider_reservations_cents_nonnegative CHECK (cents >= 0),
+  -- The priced shape of the call these cents authorize. See the note above.
+  CONSTRAINT provider_reservations_model_name_shape
+    CHECK (model_name ~ '^[a-z][a-z0-9.-]{1,63}$'),
+  CONSTRAINT provider_reservations_max_input_tokens_positive CHECK (max_input_tokens > 0),
+  CONSTRAINT provider_reservations_max_output_tokens_positive CHECK (max_output_tokens > 0),
   CONSTRAINT provider_reservations_settled_nonnegative CHECK (settled_cents >= 0),
   CONSTRAINT provider_reservations_state_known
     CHECK (state IN ('reserved', 'calling', 'settled', 'estimated', 'released')),

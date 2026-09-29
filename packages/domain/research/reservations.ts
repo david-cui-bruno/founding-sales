@@ -60,6 +60,14 @@ export interface ReservationRow {
   readonly businessDate: string;
   readonly businessTimeZone: string;
   readonly cents: number;
+  /**
+   * The priced shape of the call these cents authorize, as it was at the moment they
+   * were cleared. Chunk 3 admits its request against these three and never against the
+   * settings, which are mutable: see `pricing.admitCall`.
+   */
+  readonly modelName: string;
+  readonly maxInputTokens: number;
+  readonly maxOutputTokens: number;
   readonly state: ReservationState;
   readonly settledCents: number;
 }
@@ -71,13 +79,16 @@ interface ReservationDbRow {
   readonly business_date: string;
   readonly business_time_zone: string;
   readonly cents: number;
+  readonly model_name: string;
+  readonly max_input_tokens: number;
+  readonly max_output_tokens: number;
   readonly state: ReservationState;
   readonly settled_cents: number;
   readonly [column: string]: unknown;
 }
 
 const COLUMNS = `id, provider_key, attempt, business_date::text AS business_date, business_time_zone,
-  cents, state, settled_cents`;
+  cents, model_name, max_input_tokens, max_output_tokens, state, settled_cents`;
 
 const toRow = (row: ReservationDbRow): ReservationRow => ({
   id: row.id,
@@ -86,6 +97,9 @@ const toRow = (row: ReservationDbRow): ReservationRow => ({
   businessDate: row.business_date,
   businessTimeZone: row.business_time_zone,
   cents: Number(row.cents),
+  modelName: row.model_name,
+  maxInputTokens: Number(row.max_input_tokens),
+  maxOutputTokens: Number(row.max_output_tokens),
   state: row.state,
   settledCents: Number(row.settled_cents),
 });
@@ -99,6 +113,17 @@ export interface ReserveInput {
   readonly at: string;
   readonly businessTimeZone: string;
   readonly cents: number;
+  /**
+   * The three numbers `cents` was computed from, snapshotted onto the row.
+   *
+   * They come from the clearance rather than from a caller's own reading of the
+   * settings, because the reservation *is* the authorization: what may be sent against
+   * it has to be decided from what was priced, not from what the settings say by the
+   * time the call is made.
+   */
+  readonly modelName: string;
+  readonly maxInputTokens: number;
+  readonly maxOutputTokens: number;
 }
 
 /**
@@ -117,8 +142,8 @@ export async function reserveAttempt(
   await context.db.query(
     `INSERT INTO provider_reservations
        (workspace_id, provider_key, subject_kind, subject_id, attempt, business_date,
-        business_time_zone, cents, state)
-     VALUES ($1, $2, $3, $4, $5, $6::date, $7, $8, 'reserved')
+        business_time_zone, cents, model_name, max_input_tokens, max_output_tokens, state)
+     VALUES ($1, $2, $3, $4, $5, $6::date, $7, $8, $9, $10, $11, 'reserved')
      ON CONFLICT ON CONSTRAINT provider_reservations_one_per_attempt DO NOTHING`,
     [
       context.scope.workspaceId,
@@ -129,6 +154,9 @@ export async function reserveAttempt(
       businessDate,
       input.businessTimeZone,
       Math.max(0, Math.trunc(input.cents)),
+      input.modelName,
+      Math.max(1, Math.trunc(input.maxInputTokens)),
+      Math.max(1, Math.trunc(input.maxOutputTokens)),
     ],
   );
   const row = await readAttempt(context, input);

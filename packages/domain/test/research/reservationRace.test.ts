@@ -351,6 +351,9 @@ describe('a reservation is never released under a live paid call', () => {
       at: now,
       businessTimeZone: 'America/New_York',
       cents: 3,
+      modelName: 'claude-haiku-4-5',
+      maxInputTokens: 24_000,
+      maxOutputTokens: 600,
     });
     expect(await settleAttempt(sweepContext, { reservationId: second.id, at: now, outcome: { kind: 'released' } })).toEqual({
       recordedCents: 0,

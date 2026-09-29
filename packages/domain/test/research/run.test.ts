@@ -221,6 +221,9 @@ describe('one reservation per paid attempt', () => {
       at: AT,
       businessTimeZone: ZONE,
       cents: 30,
+      modelName: 'claude-haiku-4-5',
+      maxInputTokens: 24_000,
+      maxOutputTokens: 600,
     });
     // Authorized and not invoiced: the next clearance sees it as spent, which is the
     // only arrangement under which two runs cannot be cleared against the same cents.
@@ -258,6 +261,9 @@ describe('one reservation per paid attempt', () => {
       at: '2026-09-28T14:00:00.000Z',
       businessTimeZone: ZONE,
       cents: 3,
+      modelName: 'claude-haiku-4-5',
+      maxInputTokens: 24_000,
+      maxOutputTokens: 600,
     });
     await markCalling(context, reserved.id);
 
@@ -270,6 +276,9 @@ describe('one reservation per paid attempt', () => {
       at: '2026-09-29T14:00:00.000Z',
       businessTimeZone: ZONE,
       cents: 3,
+      modelName: 'claude-haiku-4-5',
+      maxInputTokens: 24_000,
+      maxOutputTokens: 600,
     });
 
     // Yesterday's run settles today.
@@ -298,6 +307,9 @@ describe('one reservation per paid attempt', () => {
       at: AT,
       businessTimeZone: ZONE,
       cents: 3,
+      modelName: 'claude-haiku-4-5',
+      maxInputTokens: 24_000,
+      maxOutputTokens: 600,
     });
     await markCalling(context, called.id);
     await reserveAttempt(context, {
@@ -307,6 +319,9 @@ describe('one reservation per paid attempt', () => {
       at: AT,
       businessTimeZone: ZONE,
       cents: 3,
+      modelName: 'claude-haiku-4-5',
+      maxInputTokens: 24_000,
+      maxOutputTokens: 600,
     });
 
     const finalised = await finaliseSubjectReservations(context, { ...subject(runId), at: AT });
@@ -336,6 +351,9 @@ describe('one reservation per paid attempt', () => {
       at: AT,
       businessTimeZone: ZONE,
       cents: 4,
+      modelName: 'claude-haiku-4-5',
+      maxInputTokens: 24_000,
+      maxOutputTokens: 600,
     });
     expect(await claimResearchClearance(context, firstAttempt(AT))).toEqual({ ok: false, reason: 'daily_cost_ceiling' });
   });

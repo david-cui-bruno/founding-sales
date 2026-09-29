@@ -124,9 +124,6 @@ export function parseExtractionAnswer(text: string): ParsedAnswer | null {
 
 export interface AnthropicExtractionOptions {
   readonly transport: AnthropicMessagesTransport;
-  /** `research_settings.model_name`. Must have a reviewed price row. */
-  readonly modelName: string;
-  readonly maxOutputTokens?: number | undefined;
 }
 
 // Re-exported so nothing that used to import them from here has to move. The strings
@@ -135,12 +132,18 @@ export interface AnthropicExtractionOptions {
 export { EXTRACTION_OUTPUT_SCHEMA, EXTRACTION_PROMPT_VERSION, EXTRACTION_SYSTEM_TEXT, extractionUserText };
 
 export function anthropicExtraction(options: AnthropicExtractionOptions): ExtractionProvider {
-  const maxOutputTokens = Math.min(options.maxOutputTokens ?? MAX_EXTRACTION_OUTPUT_TOKENS, MAX_EXTRACTION_OUTPUT_TOKENS);
-
-  /** Exactly what `extract` would send, so a count is a count of the real request. */
+  /**
+   * Exactly what `extract` would send, so a count is a count of the real request.
+   *
+   * The model and the output bound come from the request, which carries the
+   * **reservation's** snapshot of them. The adapter used to hold a model of its own,
+   * fixed at composition, and the caller compared token counts with whatever the
+   * settings said at the time: two numbers that could disagree with the cents being
+   * held. Now there is one source, and it is the row that authorized the money.
+   */
   const requestFor = (input: ExtractionRequest): ClassifierRequest => ({
-    model: options.modelName,
-    max_tokens: maxOutputTokens,
+    model: input.modelName,
+    max_tokens: Math.min(Math.max(1, Math.trunc(input.maxOutputTokens)), MAX_EXTRACTION_OUTPUT_TOKENS),
     // No `cache_control`. Prompt caching pays 1.25× on the write and 0.1× on a
     // read, so it only saves money when the same prefix is sent again — and it is
     // not: every run's message is a different firm's pages, and the only constant
@@ -194,7 +197,7 @@ export function anthropicExtraction(options: AnthropicExtractionOptions): Extrac
       // Priced whatever happened next: a refusal and a malformed answer both cost the
       // tokens they burned, and a ledger that only counted successes would be a budget
       // that a broken model could walk straight through.
-      const costCents = centsOf(options.modelName, {
+      const costCents = centsOf(input.modelName, {
         inputTokens,
         outputTokens,
         cacheWriteTokens,
@@ -216,7 +219,7 @@ export function anthropicExtraction(options: AnthropicExtractionOptions): Extrac
           selections: parsed.selections,
           questions: parsed.questions,
           opening: parsed.opening,
-          modelName: options.modelName,
+          modelName: input.modelName,
           inputTokens,
           outputTokens,
         },

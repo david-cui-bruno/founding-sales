@@ -18,7 +18,7 @@ import {
   type ReservationRow,
 } from './reservations.ts';
 import { MAX_BUDGET_DROPS, withoutTrailingBlocks } from './extractionPrompt.ts';
-import { worstCaseInputTokens, worstCaseRunCents, MAX_EXTRACTION_OUTPUT_TOKENS } from './pricing.ts';
+import { admitCall, type ReservationSnapshot } from './pricing.ts';
 import { researchUrlsForFirm } from './sourcePolicy.ts';
 import { readResearchSettings } from './settings.ts';
 import {
@@ -261,6 +261,9 @@ export async function beginFirmResearch(
     at: input.at,
     businessTimeZone: clearance.value.businessTimeZone,
     cents: clearance.value.worstCaseCents,
+    modelName: clearance.value.modelName,
+    maxInputTokens: clearance.value.maxInputTokens,
+    maxOutputTokens: clearance.value.maxOutputTokens,
   });
 
   return accept({ kind: 'reserved', runId });
@@ -385,6 +388,9 @@ export async function ensureResearchCalling(
     at: input.at,
     businessTimeZone: clearance.value.businessTimeZone,
     cents: clearance.value.worstCaseCents,
+    modelName: clearance.value.modelName,
+    maxInputTokens: clearance.value.maxInputTokens,
+    maxOutputTokens: clearance.value.maxOutputTokens,
   });
   await markCalling(context, fresh.id);
   return { kind: 'calling', attempt, reservationId: fresh.id, cents: fresh.cents };
@@ -593,17 +599,25 @@ export async function finishFirmResearch(
   let extractionOutcome: RunExtraction =
     sources.length === 0 ? 'no_pages' : input.extraction === undefined || !mayCall ? 'unconfigured' : 'used';
 
-  if (input.extraction !== undefined && mayCall && sources.length > 0) {
+  if (input.extraction !== undefined && mayCall && reservation !== null && sources.length > 0) {
     const extraction = input.extraction;
-    // The exact count, from the provider, of the request this would send. The cents
-    // were reserved from a characters-per-token bound, which is the right way to decide
-    // what to *hold* and the wrong way to decide what to *send*: dense scripts tokenize
-    // several times worse than 2.5 characters a token, so a page of CJK would have gone
-    // out against a third of the tokens it costs.
-    const budget = worstCaseInputTokens({
-      maxPagesPerFirm: settings.maxPagesPerFirm,
-      maxPageBytes: settings.maxPageBytes,
-    });
+    // The exact count, from the provider, of the request this would send, admitted
+    // against **the reservation** and nothing else.
+    //
+    // Two numbers used to decide this and neither was the money: a characters-per-token
+    // bound recomputed from the settings *now*, and the settings' current token limit.
+    // Raising `max_pages_per_firm` between chunk 1 and chunk 3 therefore admitted a
+    // request larger than the cents being held for it. The snapshot on the row is what
+    // was priced — model, input bound, output bound, cents — so it is what admits the
+    // call. The count itself is the provider's own, because a ratio is the right way to
+    // decide what to *hold* and the wrong way to decide what to *send*: dense scripts
+    // tokenize several times worse than 2.5 characters a token.
+    const snapshot: ReservationSnapshot = {
+      modelName: reservation.modelName,
+      maxInputTokens: reservation.maxInputTokens,
+      maxOutputTokens: reservation.maxOutputTokens,
+      cents: reservation.cents,
+    };
     let offered: readonly FactSource[] = sources;
     let counted: number | null = null;
     let countFailed = false;
@@ -613,15 +627,21 @@ export async function finishFirmResearch(
         count = await extraction.countInputTokens({
           sources: offered.map(source => ({ sourceReference: source.sourceReference, blocks: source.blocks })),
           firmName: firm.value.name,
+          modelName: snapshot.modelName,
+          maxOutputTokens: snapshot.maxOutputTokens,
         });
       } catch {
         countFailed = true;
         break;
       }
-      if (count + MAX_EXTRACTION_OUTPUT_TOKENS <= budget) {
-        counted = count;
+      const admission = admitCall(snapshot, count);
+      if (admission.kind === 'call') {
+        counted = admission.inputTokens;
         break;
       }
+      // A snapshot naming a model nobody priced cannot be made to fit by sending less
+      // of it: there is no price to compare with at all, so the loop stops.
+      if (admission.reason === 'unpriced') break;
       if (drop === MAX_BUDGET_DROPS) break;
       const trimmed = withoutTrailingBlocks(offered);
       if (trimmed === offered || trimmed.length === 0) break;
@@ -658,6 +678,10 @@ export async function finishFirmResearch(
         await extraction.extract({
           sources: offered.map(source => ({ sourceReference: source.sourceReference, blocks: source.blocks })),
           firmName: firm.value.name,
+          // The snapshot's model and output bound, never the settings': these are the
+          // two numbers the cents were computed from.
+          modelName: snapshot.modelName,
+          maxOutputTokens: snapshot.maxOutputTokens,
         }),
       );
       // Settled by id, exactly once. `estimated` when nobody said what it cost — a

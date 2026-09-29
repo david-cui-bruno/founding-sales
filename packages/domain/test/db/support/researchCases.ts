@@ -157,6 +157,9 @@ const reservation = async (f: Fixture, overrides: Readonly<Record<string, unknow
     business_date: '2026-09-28',
     business_time_zone: 'America/New_York',
     cents: 3,
+    model_name: 'claude-haiku-4-5',
+    max_input_tokens: 24_600,
+    max_output_tokens: 600,
     state: 'reserved',
     settled_cents: 0,
     settled_at: null,
@@ -434,6 +437,19 @@ export const RESEARCH_CONSTRAINT_CASES: readonly Case[] = [
   {
     constraint: 'provider_reservations_business_time_zone_shape',
     run: async f => await reservation(f, { business_time_zone: 'Mars/Olympus Mons' }),
+  },
+  {
+    // The snapshot of what these cents were priced for. A model id, not a display name.
+    constraint: 'provider_reservations_model_name_shape',
+    run: async f => await reservation(f, { model_name: 'Claude Haiku 4.5' }),
+  },
+  {
+    constraint: 'provider_reservations_max_input_tokens_positive',
+    run: async f => await reservation(f, { max_input_tokens: 0 }),
+  },
+  {
+    constraint: 'provider_reservations_max_output_tokens_positive',
+    run: async f => await reservation(f, { max_output_tokens: 0 }),
   },
 
   // ----------------------------------------------------------- firm_judgments

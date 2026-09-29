@@ -353,7 +353,12 @@ describe('what a run may cost', () => {
         text: 'x'.repeat(120),
       })),
     }));
-    const request = { sources, firmName: 'A Firm With A Deliberately Long Registered Name LLC' };
+    const request = {
+      sources,
+      firmName: 'A Firm With A Deliberately Long Registered Name LLC',
+      modelName: settings.modelName,
+      maxOutputTokens: MAX_EXTRACTION_OUTPUT_TOKENS,
+    };
     const characters =
       EXTRACTION_SYSTEM_TEXT.length +
       JSON.stringify(EXTRACTION_OUTPUT_SCHEMA).length +
@@ -380,7 +385,12 @@ describe('what a run may cost', () => {
         text: '物件管理会社の業務'.repeat(13).slice(0, 120),
       })),
     }));
-    const request = { sources, firmName: '不動産管理株式会社' };
+    const request = {
+      sources,
+      firmName: '不動産管理株式会社',
+      modelName: settings.modelName,
+      maxOutputTokens: MAX_EXTRACTION_OUTPUT_TOKENS,
+    };
     const characters = EXTRACTION_SYSTEM_TEXT.length + JSON.stringify(EXTRACTION_OUTPUT_SCHEMA).length + extractionUserText(request).length;
     // What the ratio would have believed, against what a tokenizer of dense script
     // actually returns for the same text.
