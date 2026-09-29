@@ -1,7 +1,12 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
-import { setManualControlMode } from '../../crm/pipeline.ts';
+import {
+  classifyControlModeOrigin,
+  keepFollowingUpAfterDirectSend,
+  setManualControlMode,
+  takeOverOpportunity,
+} from '../../crm/pipeline.ts';
 import { databaseNow } from '../../policy/clock.ts';
 import {
   CHANNEL_ACTION_KINDS,
@@ -54,6 +59,16 @@ const salesperson = (): RepositoryContext =>
     database.session,
   );
 
+const admin = (): RepositoryContext =>
+  repositoryContext(
+    workspaceScope(seeded.alpha.workspaceId, {
+      kind: 'user',
+      userId: seeded.alpha.admin.userId,
+      role: 'admin',
+    }),
+    database.session,
+  );
+
 const worker = (): RepositoryContext =>
   repositoryContext(
     workspaceScope(seeded.alpha.workspaceId, { kind: 'system', component: 'worker' }),
@@ -69,31 +84,43 @@ async function addContact(name: string): Promise<string> {
   return rows[0]?.id ?? '';
 }
 
-/** A recorded `interested` call with this person: the evidence a conversation leaves. */
-async function recordCall(contactId: string, firmId = crm.alpha.firmId): Promise<string> {
+/**
+ * A recorded call with this person, and what was agreed on it.
+ *
+ * Since the review of PR 332 (P0-1) the *log* carries the agreement — `agreed_follow_up`
+ * and the version it names — and `grantFollowUpPermission` derives the kind and the
+ * scope from it rather than from its caller. A log that agreed to nothing, or one whose
+ * outcome is a callback, supports no permission through any API, and the cases below
+ * assert exactly that.
+ */
+async function recordCall(
+  contactId: string | null,
+  agreement:
+    | { readonly kind: 'single_email'; readonly templateVersionId: string }
+    | { readonly kind: 'agreed_sequence'; readonly sequenceVersionId: string }
+    | { readonly kind: 'none' },
+  overrides: { readonly firmId?: string; readonly outcome?: string } = {},
+): Promise<string> {
+  const firmId = overrides.firmId ?? crm.alpha.firmId;
   const { rows } = await database.session.query<{ id: string }>(
     `INSERT INTO call_logs
-       (workspace_id, firm_id, contact_id, opportunity_id, outcome, step_effect, occurred_at, actor_user_id)
-     VALUES ($1, $2, $3, $4, 'interested', 'none', now() - interval '1 second', $5)
+       (workspace_id, firm_id, contact_id, opportunity_id, outcome, step_effect, occurred_at,
+        actor_user_id, agreed_follow_up, agreed_template_version_id, agreed_sequence_version_id)
+     VALUES ($1, $2, $3, $4, $5, 'none', now() - interval '1 second', $6, $7, $8, $9)
      RETURNING id`,
     [
       seeded.alpha.workspaceId,
       firmId,
       contactId,
       firmId === crm.alpha.firmId ? crm.alpha.opportunityId : null,
+      overrides.outcome ?? 'interested',
       seeded.alpha.salesperson.userId,
+      agreement.kind === 'none' ? null : agreement.kind,
+      agreement.kind === 'single_email' ? agreement.templateVersionId : null,
+      agreement.kind === 'agreed_sequence' ? agreement.sequenceVersionId : null,
     ],
   );
   return rows[0]?.id ?? '';
-}
-
-/** The sequence id of the seeded published version. */
-async function seededSequenceId(): Promise<string> {
-  const { rows } = await database.session.query<{ sequence_id: string }>(
-    'SELECT sequence_id FROM sequence_versions WHERE workspace_id = $1 AND id = $2',
-    [seeded.alpha.workspaceId, sequences.alpha.publishedVersionId],
-  );
-  return rows[0]?.sequence_id ?? '';
 }
 
 interface Granted {
@@ -102,26 +129,136 @@ interface Granted {
   readonly callLogId: string;
 }
 
-async function grant(
+/** A permission on the strength of a call that agreed to the seeded published version. */
+async function grantAgreedSequence(
   contactId: string,
-  scope: 'single_email' | 'contextual_reply' | 'agreed_sequence',
-  overrides: { readonly sequenceId?: string; readonly expiresAt?: string } = {},
+  versionId: string = sequences.alpha.publishedVersionId,
 ): Promise<Granted> {
-  const callLogId = await recordCall(contactId);
+  const callLogId = await recordCall(contactId, { kind: 'agreed_sequence', sequenceVersionId: versionId });
   const granted = await grantFollowUpPermission(salesperson(), {
     firmId: crm.alpha.firmId,
     contactId,
-    kind: scope === 'agreed_sequence' ? 'agreed_sequence' : 'conversation',
-    scope,
     callLogId,
-    ...(scope === 'agreed_sequence'
-      ? { sequenceId: overrides.sequenceId ?? (await seededSequenceId()) }
-      : {}),
-    ...(overrides.expiresAt === undefined ? {} : { expiresAt: overrides.expiresAt }),
     grantedByUserId: seeded.alpha.salesperson.userId,
   });
   if (!granted.ok) throw new Error(`the permission fixture was refused: ${granted.reason}`);
   return { permissionId: granted.value.id, contactId, callLogId };
+}
+
+/** A permission for the one e-mail agreed on a call, bound to the template it promised. */
+async function grantSingleEmail(contactId: string, templateVersionId: string): Promise<Granted> {
+  const callLogId = await recordCall(contactId, { kind: 'single_email', templateVersionId });
+  const granted = await grantFollowUpPermission(salesperson(), {
+    firmId: crm.alpha.firmId,
+    contactId,
+    callLogId,
+    grantedByUserId: seeded.alpha.salesperson.userId,
+  });
+  if (!granted.ok) throw new Error(`the permission fixture was refused: ${granted.reason}`);
+  return { permissionId: granted.value.id, contactId, callLogId };
+}
+
+
+/**
+ * An inbound message this workspace matched to the firm and a person **confirmed** as a
+ * request (P0-1).
+ *
+ * Three rows, because the evidence is all three: the message (`incoming`), the match
+ * that names the recipient, and the confirmation a person made with a disposition that
+ * asks to be written to and no callback committed. An unconfirmed candidate match is
+ * exactly what the review found being accepted, so the helper writes the confirmation
+ * and the cases below delete one row at a time to see which one carries the authority.
+ */
+async function seedInboundRequest(
+  contactId: string,
+  options: { readonly disposition?: string; readonly withCallback?: boolean } = {},
+): Promise<{ readonly messageId: string; readonly matchId: string; readonly confirmationId: string }> {
+  const suffix = String(inboundCounter++);
+  const { rows: mailbox } = await database.session.query<{ id: string }>(
+    `INSERT INTO mailboxes (workspace_id, owner_user_id, email_address, provider_account_id, status)
+     VALUES ($1, $2, $3, $4, 'connected')
+     ON CONFLICT (workspace_id, owner_user_id) DO UPDATE SET status = 'connected'
+     RETURNING id`,
+    [
+      seeded.alpha.workspaceId,
+      seeded.alpha.salesperson.userId,
+      'fu-mailbox@example.test',
+      'fu-account',
+    ],
+  );
+  const { rows: message } = await database.session.query<{ id: string }>(
+    `INSERT INTO mail_messages
+       (workspace_id, mailbox_id, provider_message_id, provider_thread_id, direction,
+        internal_date, header_from, matched)
+     VALUES ($1, $2, $3, $4, 'incoming', now(), 'prospect@example.test', true)
+     RETURNING id`,
+    [seeded.alpha.workspaceId, mailbox[0]?.id ?? '', `fu-message-${suffix}`, `fu-thread-${suffix}`],
+  );
+  const messageId = message[0]?.id ?? '';
+  const { rows: match } = await database.session.query<{ id: string }>(
+    `INSERT INTO mail_message_matches
+       (workspace_id, mail_message_id, firm_id, opportunity_id, contact_id, match_rule)
+     VALUES ($1, $2, $3, $4, $5, 'participant') RETURNING id`,
+    [seeded.alpha.workspaceId, messageId, crm.alpha.firmId, crm.alpha.opportunityId, contactId],
+  );
+  let callbackId: string | null = null;
+  if (options.withCallback === true) {
+    const { rows: callback } = await database.session.query<{ id: string }>(
+      `INSERT INTO callbacks
+         (workspace_id, firm_id, contact_id, opportunity_id, assigned_user_id,
+          requested_local_date, source_time_zone, due_at, confirmed_at, confirmed_by_user_id)
+       VALUES ($1, $2, $3, $4, $5, current_date + 1, 'America/New_York', now() + interval '1 day', now(), $5)
+       RETURNING id`,
+      [
+        seeded.alpha.workspaceId,
+        crm.alpha.firmId,
+        contactId,
+        crm.alpha.opportunityId,
+        seeded.alpha.salesperson.userId,
+      ],
+    );
+    callbackId = callback[0]?.id ?? null;
+  }
+  const { rows: confirmation } = await database.session.query<{ id: string }>(
+    `INSERT INTO mail_reply_confirmations
+       (workspace_id, mail_message_id, firm_id, opportunity_id, disposition, suggested_disposition,
+        suggested_by, corrected, confirmed_by_user_id, consequences, callback_id)
+     VALUES ($1, $2, $3, $4, $5, $5, 'deterministic', false, $6, $7::text[], $8)
+     RETURNING id`,
+    [
+      seeded.alpha.workspaceId,
+      messageId,
+      crm.alpha.firmId,
+      crm.alpha.opportunityId,
+      options.disposition ?? 'interested',
+      seeded.alpha.salesperson.userId,
+      callbackId === null ? ['opportunity_manual'] : ['opportunity_manual', 'callback_committed'],
+      callbackId,
+    ],
+  );
+  return {
+    messageId,
+    matchId: match[0]?.id ?? '',
+    confirmationId: confirmation[0]?.id ?? '',
+  };
+}
+
+let inboundCounter = 1;
+
+/** Another firm of this workspace, with its own open opportunity. */
+async function secondFirmWithOpportunity(): Promise<{ readonly firmId: string; readonly opportunityId: string }> {
+  const { rows: firms } = await database.session.query<{ id: string }>(
+    'INSERT INTO firms (workspace_id, name, assigned_user_id) VALUES ($1, $2, $3) RETURNING id',
+    [seeded.alpha.workspaceId, `Ambiguity Holdings ${String(inboundCounter++)}`, seeded.alpha.salesperson.userId],
+  );
+  const firmId = firms[0]?.id ?? '';
+  const { rows: opportunities } = await database.session.query<{ id: string }>(
+    `INSERT INTO opportunities (workspace_id, firm_id, stage_id, control_mode_changed_at)
+     VALUES ($1, $2, (SELECT id FROM pipeline_stages WHERE workspace_id = $1 ORDER BY position LIMIT 1), now())
+     RETURNING id`,
+    [seeded.alpha.workspaceId, firmId],
+  );
+  return { firmId, opportunityId: opportunities[0]?.id ?? '' };
 }
 
 /** The eligibility input for an enrollment's first step, as the worker builds it. */
@@ -213,6 +350,9 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+  // The two tables point at each other since migration 0025 (a permission names the one
+  // run it bought), so the binding is released before either is deleted.
+  await database.session.query('UPDATE follow_up_permissions SET enrollment_id = NULL');
   await database.session.query('DELETE FROM step_execution_shifts');
   await database.session.query('DELETE FROM step_executions');
   await database.session.query('DELETE FROM sequence_enrollments');
@@ -269,6 +409,34 @@ describe('cold_legacy: the enrollments that existed before the rule', () => {
     });
   });
 
+  it('is superseded, not revived, by a later evidenced follow-up: one command, no hand-stopping', async () => {
+    // P1-2 of the GPT-6 review of PR 332. The old shape of this case stopped the legacy
+    // row with an UPDATE of its own first, which proved nothing about the path a person
+    // takes: a live `cold_legacy` enrollment used to refuse the new evidenced one
+    // outright. The command now stops the legacy row terminally and creates the new
+    // enrollment in its own transaction, in that order.
+    const contactId = await addContact('Legacy Superseded');
+    const legacy = await insertLegacyEnrollment(contactId);
+    const granted = await grantAgreedSequence(contactId);
+    const fresh = await enrolFollowUp(contactId, granted.permissionId);
+    expect(fresh).not.toBe(legacy);
+
+    const stopped = await readEnrollment(worker(), { enrollmentId: legacy });
+    // Retained, with its history, and the end reason says what happened to it.
+    expect(stopped?.state).toBe('stopped');
+    expect(stopped?.endReason).toBe('superseded_by_follow_up');
+    expect(stopped?.originKind).toBe('cold_legacy');
+    // And nothing of the legacy run is due any more.
+    const legacySteps = await listStepExecutions(worker(), { enrollmentId: legacy });
+    expect(legacySteps.every(step => step.state !== 'pending')).toBe(true);
+
+    const { rows } = await database.session.query<{ id: string; origin_kind: string }>(
+      'SELECT id, origin_kind FROM sequence_enrollments WHERE workspace_id = $1 ORDER BY started_at',
+      [seeded.alpha.workspaceId],
+    );
+    expect(rows.map(row => row.origin_kind)).toEqual(['cold_legacy', 'follow_up']);
+  });
+
   it('is not what a later valid request revives: that is a new enrollment of its own', async () => {
     const contactId = await addContact('Legacy Four');
     const legacy = await insertLegacyEnrollment(contactId);
@@ -278,7 +446,7 @@ describe('cold_legacy: the enrollments that existed before the rule', () => {
       [seeded.alpha.workspaceId, legacy],
     );
 
-    const granted = await grant(contactId, 'agreed_sequence');
+    const granted = await grantAgreedSequence(contactId);
     const fresh = await enrolFollowUp(contactId, granted.permissionId);
     expect(fresh).not.toBe(legacy);
     const { rows } = await database.session.query<{ id: string; origin_kind: string }>(
@@ -292,7 +460,7 @@ describe('cold_legacy: the enrollments that existed before the rule', () => {
 describe('follow_up: the permission is a pointer, and the evidence is the authority', () => {
   it('refuses when the evidence row names another firm', async () => {
     const contactId = await addContact('Mismatch One');
-    const granted = await grant(contactId, 'agreed_sequence');
+    const granted = await grantAgreedSequence(contactId);
     const enrollmentId = await enrolFollowUp(contactId, granted.permissionId);
     // The call log is re-pointed at another firm in the same workspace — which a merge
     // could do — and the permission stops authorizing anything, although its own row is
@@ -316,7 +484,7 @@ describe('follow_up: the permission is a pointer, and the evidence is the author
 
   it('refuses when the evidence row names another person', async () => {
     const contactId = await addContact('Mismatch Two');
-    const granted = await grant(contactId, 'agreed_sequence');
+    const granted = await grantAgreedSequence(contactId);
     const enrollmentId = await enrolFollowUp(contactId, granted.permissionId);
     await database.session.query(
       `UPDATE call_logs SET contact_id = $3 WHERE workspace_id = $1 AND id = $2`,
@@ -330,35 +498,15 @@ describe('follow_up: the permission is a pointer, and the evidence is the author
   });
 
   it('refuses when the inbound message is no longer matched to the firm', async () => {
-    // The mail arm: `mail_messages` carries no firm, so the evidence is the match, and a
-    // match a merge or a deletion removed is a message that is no longer evidence here.
+    // The mail arm: `mail_messages` carries no firm, so the evidence is the confirmed
+    // match, and a match a merge or a deletion removed is a message that is no longer
+    // evidence here.
     const contactId = await addContact('Mismatch Three');
-    const { rows: mailbox } = await database.session.query<{ id: string }>(
-      `INSERT INTO mailboxes (workspace_id, owner_user_id, email_address, provider_account_id, status)
-       VALUES ($1, $2, 'fu-mailbox@example.test', 'fu-account', 'connected') RETURNING id`,
-      [seeded.alpha.workspaceId, seeded.alpha.salesperson.userId],
-    );
-    const { rows: message } = await database.session.query<{ id: string }>(
-      `INSERT INTO mail_messages
-         (workspace_id, mailbox_id, provider_message_id, provider_thread_id, direction,
-          internal_date, header_from, matched)
-       VALUES ($1, $2, 'fu-message-1', 'fu-thread-1', 'incoming', now(), 'prospect@example.test', true)
-       RETURNING id`,
-      [seeded.alpha.workspaceId, mailbox[0]?.id ?? ''],
-    );
-    const messageId = message[0]?.id ?? '';
-    const { rows: match } = await database.session.query<{ id: string }>(
-      `INSERT INTO mail_message_matches
-         (workspace_id, mail_message_id, firm_id, opportunity_id, contact_id, match_rule)
-       VALUES ($1, $2, $3, $4, $5, 'participant') RETURNING id`,
-      [seeded.alpha.workspaceId, messageId, crm.alpha.firmId, crm.alpha.opportunityId, contactId],
-    );
+    const inbound = await seedInboundRequest(contactId);
     const granted = await grantFollowUpPermission(salesperson(), {
       firmId: crm.alpha.firmId,
       contactId,
-      kind: 'request',
-      scope: 'contextual_reply',
-      mailMessageId: messageId,
+      mailMessageId: inbound.messageId,
       grantedByUserId: seeded.alpha.salesperson.userId,
     });
     if (!granted.ok) throw new Error(`the permission fixture was refused: ${granted.reason}`);
@@ -380,18 +528,152 @@ describe('follow_up: the permission is a pointer, and the evidence is the author
 
     await database.session.query('DELETE FROM mail_message_matches WHERE workspace_id = $1 AND id = $2', [
       seeded.alpha.workspaceId,
-      match[0]?.id ?? '',
+      inbound.matchId,
     ]);
     expect(await followUpPermissionSource().evaluate(worker(), await stepOf(enrollmentId))).toEqual({
       ok: false,
       reasonCode: 'follow_up_not_permitted',
-      detail: 'inbound_match_missing',
+      detail: 'inbound_request_unconfirmed',
     });
+  });
+
+  it('refuses an inbound message nobody confirmed: a candidate match is not consent', async () => {
+    // P0-1: verification used to accept any match row, selected or not, and a match with
+    // no contact at all. The authority is the *confirmation* a person made.
+    const contactId = await addContact('Unconfirmed');
+    const inbound = await seedInboundRequest(contactId);
+    await database.session.query(
+      'DELETE FROM mail_reply_confirmations WHERE workspace_id = $1 AND id = $2',
+      [seeded.alpha.workspaceId, inbound.confirmationId],
+    );
+    // The grant is refused by the evidence check, which throws so the command's
+    // transaction rolls back and no permission is left behind.
+    await expect(
+      grantFollowUpPermission(salesperson(), {
+        firmId: crm.alpha.firmId,
+        contactId,
+        mailMessageId: inbound.messageId,
+        grantedByUserId: seeded.alpha.salesperson.userId,
+      }),
+    ).rejects.toThrow('inbound_request_unconfirmed');
+  });
+
+  it('refuses an ambiguous inbound message whose match nobody selected', async () => {
+    const contactId = await addContact('Ambiguous');
+    const inbound = await seedInboundRequest(contactId);
+    // A second candidate for the same message, at another firm, and neither selected:
+    // `mail_message_matches_one_per_opportunity` means a second candidate is a second
+    // *conversation*, which is exactly what an ambiguous inbound message is.
+    const { rows: hold } = await database.session.query<{ id: string }>(
+      `INSERT INTO active_holds (workspace_id, scope_kind, scope_key, reason_code, blocked_action_kinds, source_event_kind)
+       VALUES ($1, 'firm', $2, 'ambiguous_match', ARRAY['email_send'], 'message') RETURNING id`,
+      [seeded.alpha.workspaceId, crm.alpha.firmId],
+    );
+    const elsewhere = await secondFirmWithOpportunity();
+    await database.session.query(
+      `INSERT INTO mail_message_matches
+         (workspace_id, mail_message_id, firm_id, opportunity_id, match_rule, ambiguous, hold_id)
+       VALUES ($1, $2, $3, $4, 'participant', true, $5)`,
+      [
+        seeded.alpha.workspaceId,
+        inbound.messageId,
+        elsewhere.firmId,
+        elsewhere.opportunityId,
+        hold[0]?.id ?? '',
+      ],
+    );
+    await expect(
+      grantFollowUpPermission(salesperson(), {
+        firmId: crm.alpha.firmId,
+        contactId,
+        mailMessageId: inbound.messageId,
+        grantedByUserId: seeded.alpha.salesperson.userId,
+      }),
+    ).rejects.toThrow();
+  });
+
+  it('refuses a follow_up_later whose consequence was a callback: that is a call, not an e-mail', async () => {
+    const contactId = await addContact('Booked A Call');
+    const inbound = await seedInboundRequest(contactId, {
+      disposition: 'follow_up_later',
+      withCallback: true,
+    });
+    await expect(
+      grantFollowUpPermission(salesperson(), {
+        firmId: crm.alpha.firmId,
+        contactId,
+        mailMessageId: inbound.messageId,
+        grantedByUserId: seeded.alpha.salesperson.userId,
+      }),
+    ).rejects.toThrow();
+  });
+
+  it('refuses a callback call log through the API, not only through the call command', async () => {
+    // P0-1's sharpest case: `logCallOutcome` refuses to grant on `callback_requested`,
+    // but the grant route took a call log id. It now reads the log, and a log that
+    // agreed to nothing supports nothing whatever the caller asks for.
+    const contactId = await addContact('Call Me Tuesday');
+    const callLogId = await recordCall(contactId, { kind: 'none' }, { outcome: 'callback_requested' });
+    const refused = await grantFollowUpPermission(salesperson(), {
+      firmId: crm.alpha.firmId,
+      contactId,
+      callLogId,
+      grantedByUserId: seeded.alpha.salesperson.userId,
+    });
+    expect(refused).toEqual({ ok: false, reason: 'follow_up_not_permitted' });
+  });
+
+  it('refuses a conversation that agreed to nothing', async () => {
+    const contactId = await addContact('Agreed Nothing');
+    const callLogId = await recordCall(contactId, { kind: 'none' });
+    expect(
+      await grantFollowUpPermission(salesperson(), {
+        firmId: crm.alpha.firmId,
+        contactId,
+        callLogId,
+        grantedByUserId: seeded.alpha.salesperson.userId,
+      }),
+    ).toEqual({ ok: false, reason: 'follow_up_not_permitted' });
+  });
+
+  it('refuses a call log that names no person: a main line is not somebody\u2019s consent', async () => {
+    const contactId = await addContact('Main Line');
+    const callLogId = await recordCall(null, {
+      kind: 'agreed_sequence',
+      sequenceVersionId: sequences.alpha.publishedVersionId,
+    });
+    await expect(
+      grantFollowUpPermission(salesperson(), {
+        firmId: crm.alpha.firmId,
+        contactId,
+        callLogId,
+        grantedByUserId: seeded.alpha.salesperson.userId,
+      }),
+    ).rejects.toThrow();
+  });
+
+  it('refuses two pieces of evidence at once', async () => {
+    // P0-1: with two, the first that holds up returned and the second was never read.
+    const contactId = await addContact('Two Evidences');
+    const callLogId = await recordCall(contactId, {
+      kind: 'agreed_sequence',
+      sequenceVersionId: sequences.alpha.publishedVersionId,
+    });
+    const inbound = await seedInboundRequest(contactId);
+    expect(
+      await grantFollowUpPermission(salesperson(), {
+        firmId: crm.alpha.firmId,
+        contactId,
+        callLogId,
+        mailMessageId: inbound.messageId,
+        grantedByUserId: seeded.alpha.salesperson.userId,
+      }),
+    ).toEqual({ ok: false, reason: 'invalid_input' });
   });
 
   it('refuses a revoked permission', async () => {
     const contactId = await addContact('Revoked');
-    const granted = await grant(contactId, 'agreed_sequence');
+    const granted = await grantAgreedSequence(contactId);
     const enrollmentId = await enrolFollowUp(contactId, granted.permissionId);
     expect((await revokeFollowUpPermission(worker(), granted.permissionId)).ok).toBe(true);
     expect(await followUpPermissionSource().evaluate(worker(), await stepOf(enrollmentId))).toEqual({
@@ -403,7 +685,7 @@ describe('follow_up: the permission is a pointer, and the evidence is the author
 
   it('refuses an expired permission: timing is part of the permission', async () => {
     const contactId = await addContact('Expired');
-    const granted = await grant(contactId, 'agreed_sequence');
+    const granted = await grantAgreedSequence(contactId);
     const enrollmentId = await enrolFollowUp(contactId, granted.permissionId);
     const { rows } = await database.session.query<{ expires_at: Date }>(
       `UPDATE follow_up_permissions SET expires_at = granted_at + interval '1 second'
@@ -425,7 +707,7 @@ describe('follow_up: the permission is a pointer, and the evidence is the author
     // A one-step enrollment, because that is all a `single_email` permission buys:
     // "'Email me an overview' permits that email, not an automatic multi-week sequence."
     const contactId = await addContact('One Email');
-    const granted = await grant(contactId, 'single_email');
+    const granted = await grantSingleEmail(contactId, sequences.alpha.template.templateVersionId);
     const oneStep = await onePublishedStep();
     const result = await enrollContact(salesperson(), {
       sequenceVersionId: oneStep,
@@ -453,7 +735,7 @@ describe('follow_up: the permission is a pointer, and the evidence is the author
 
   it('single_email: refuses a multi-step plan at the command, before an enrollment exists', async () => {
     const contactId = await addContact('One Email Only');
-    const granted = await grant(contactId, 'single_email');
+    const granted = await grantSingleEmail(contactId, sequences.alpha.template.templateVersionId);
     // The seeded published version has more than one step, which is exactly the
     // "automatic multi-week sequence" a single e-mail does not buy.
     const refused = await enrollContact(salesperson(), {
@@ -469,9 +751,10 @@ describe('follow_up: the permission is a pointer, and the evidence is the author
 
   it('agreed_sequence: refuses a step of another sequence', async () => {
     const contactId = await addContact('Agreed Elsewhere');
-    // The permission names a different sequence from the one the enrollment runs.
-    const other = await otherSequenceId();
-    const granted = await grant(contactId, 'agreed_sequence', { sequenceId: other });
+    // The permission names a different published **version** from the one the
+    // enrollment runs, which is the unit an agreement is made in since P0-3.
+    const other = await onePublishedStep();
+    const granted = await grantAgreedSequence(contactId, other);
     // The enrollment has to be written directly: `enrollContact` refuses this, which is
     // the same rule one layer earlier.
     const refused = await enrollContact(salesperson(), {
@@ -520,7 +803,7 @@ describe('follow_up: the permission is a pointer, and the evidence is the author
     expect(await followUpPermissionSource().evaluate(worker(), await stepOf(enrollmentId))).toEqual({
       ok: false,
       reasonCode: 'follow_up_scope_exhausted',
-      detail: 'another_sequence',
+      detail: 'another_version',
     });
   });
 
@@ -529,8 +812,6 @@ describe('follow_up: the permission is a pointer, and the evidence is the author
     const granted = await grantFollowUpPermission(salesperson(), {
       firmId: crm.alpha.firmId,
       contactId,
-      kind: 'booking',
-      scope: 'booking_communications',
       bookingReference: 'cal-booking-0001',
       grantedByUserId: seeded.alpha.salesperson.userId,
     });
@@ -550,7 +831,7 @@ describe('follow_up: the permission is a pointer, and the evidence is the author
 describe('the manual-mode wall, resolved for follow-ups only (David, item 1)', () => {
   it('a signal-set manual mode does not block a follow-up step', async () => {
     const contactId = await addContact('Replied');
-    const granted = await grant(contactId, 'agreed_sequence');
+    const granted = await grantAgreedSequence(contactId);
     const enrollmentId = await enrolFollowUp(contactId, granted.permissionId);
     const manual = await setManualControlMode(salesperson(), {
       opportunityId: crm.alpha.opportunityId,
@@ -563,7 +844,7 @@ describe('the manual-mode wall, resolved for follow-ups only (David, item 1)', (
 
   it("a person's explicit takeover does block it", async () => {
     const contactId = await addContact('Taken Over');
-    const granted = await grant(contactId, 'agreed_sequence');
+    const granted = await grantAgreedSequence(contactId);
     const enrollmentId = await enrolFollowUp(contactId, granted.permissionId);
     const manual = await setManualControlMode(salesperson(), {
       opportunityId: crm.alpha.opportunityId,
@@ -580,7 +861,7 @@ describe('the manual-mode wall, resolved for follow-ups only (David, item 1)', (
 
   it('a takeover after a signal escalates the recorded origin, and then blocks', async () => {
     const contactId = await addContact('Replied Then Taken Over');
-    const granted = await grant(contactId, 'agreed_sequence');
+    const granted = await grantAgreedSequence(contactId);
     const enrollmentId = await enrolFollowUp(contactId, granted.permissionId);
     await setManualControlMode(salesperson(), {
       opportunityId: crm.alpha.opportunityId,
@@ -603,7 +884,7 @@ describe('the manual-mode wall, resolved for follow-ups only (David, item 1)', (
 
   it('a signal never overwrites a recorded takeover', async () => {
     const contactId = await addContact('Taken Over Then Replied');
-    const granted = await grant(contactId, 'agreed_sequence');
+    const granted = await grantAgreedSequence(contactId);
     const enrollmentId = await enrolFollowUp(contactId, granted.permissionId);
     await setManualControlMode(salesperson(), {
       opportunityId: crm.alpha.opportunityId,
@@ -624,7 +905,7 @@ describe('the manual-mode wall, resolved for follow-ups only (David, item 1)', (
 
   it('an unrecorded origin — every opportunity that went manual before 0025 — blocks', async () => {
     const contactId = await addContact('Manual Before The Rule');
-    const granted = await grant(contactId, 'agreed_sequence');
+    const granted = await grantAgreedSequence(contactId);
     const enrollmentId = await enrolFollowUp(contactId, granted.permissionId);
     // The pre-0025 shape: manual, with no origin recorded anywhere the row can see.
     await database.session.query(
@@ -639,6 +920,132 @@ describe('the manual-mode wall, resolved for follow-ups only (David, item 1)', (
       reasonCode: 'opportunity_manual',
       detail: 'takeover:unrecorded',
     });
+  });
+
+  it("a salesperson's own Gmail send is a takeover, and blocks the follow-up", async () => {
+    // P1-1 of the GPT-6 review of PR 332, and the coordinator's reading of it: a direct
+    // send is the salesperson taking the conversation over, not a prospect signal.
+    const contactId = await addContact('Written To By Hand');
+    const granted = await grantAgreedSequence(contactId);
+    const enrollmentId = await enrolFollowUp(contactId, granted.permissionId);
+    const manual = await setManualControlMode(salesperson(), {
+      opportunityId: crm.alpha.opportunityId,
+      reason: 'sent from Gmail by hand',
+      origin: 'direct_send',
+    });
+    expect(manual.ok).toBe(true);
+    expect(await controlModeSource().evaluate(worker(), await stepOf(enrollmentId))).toEqual({
+      ok: false,
+      reasonCode: 'opportunity_manual',
+      detail: 'takeover:direct_send',
+    });
+  });
+
+  it('unless the person says to keep following up, which is a command and not an inference', async () => {
+    const contactId = await addContact('Keep Following Up');
+    const granted = await grantAgreedSequence(contactId);
+    const enrollmentId = await enrolFollowUp(contactId, granted.permissionId);
+    await setManualControlMode(salesperson(), {
+      opportunityId: crm.alpha.opportunityId,
+      reason: 'sent from Gmail by hand',
+      origin: 'direct_send',
+    });
+    const chosen = await keepFollowingUpAfterDirectSend(salesperson(), {
+      opportunityId: crm.alpha.opportunityId,
+      reason: 'I answered one question; Callie keeps the agreed sequence',
+    });
+    expect(chosen.ok).toBe(true);
+    expect(await controlModeSource().evaluate(worker(), await stepOf(enrollmentId))).toEqual({ ok: true });
+    // The opportunity is still manual: nothing here reverses manual mode.
+    const { rows } = await database.session.query<{ control_mode: string; control_mode_origin: string }>(
+      'SELECT control_mode, control_mode_origin FROM opportunities WHERE workspace_id = $1 AND id = $2',
+      [seeded.alpha.workspaceId, crm.alpha.opportunityId],
+    );
+    expect(rows[0]?.control_mode).toBe('manual');
+    expect(rows[0]?.control_mode_origin).toBe('direct_send_keep_automation');
+  });
+
+  it('and that choice cannot relabel a takeover: it is conditional on the origin it replaces', async () => {
+    const contactId = await addContact('Taken Over Not Relabelled');
+    const granted = await grantAgreedSequence(contactId);
+    const enrollmentId = await enrolFollowUp(contactId, granted.permissionId);
+    await takeOverOpportunity(salesperson(), {
+      opportunityId: crm.alpha.opportunityId,
+      reason: 'I will handle this firm myself',
+    });
+    const refused = await keepFollowingUpAfterDirectSend(salesperson(), {
+      opportunityId: crm.alpha.opportunityId,
+      reason: 'trying to hand it back',
+    });
+    expect(refused).toEqual({ ok: false, reason: 'invalid_input' });
+    expect(await controlModeSource().evaluate(worker(), await stepOf(enrollmentId))).toEqual({
+      ok: false,
+      reasonCode: 'opportunity_manual',
+      detail: 'takeover:salesperson_command',
+    });
+  });
+
+  it('the takeover command is what writes salesperson_command, and a person is authenticated for it', async () => {
+    const contactId = await addContact('Taken Over By Command');
+    const granted = await grantAgreedSequence(contactId);
+    const enrollmentId = await enrolFollowUp(contactId, granted.permissionId);
+    const taken = await takeOverOpportunity(salesperson(), {
+      opportunityId: crm.alpha.opportunityId,
+      reason: 'I will write to them myself',
+    });
+    expect(taken.ok).toBe(true);
+    expect(await controlModeSource().evaluate(worker(), await stepOf(enrollmentId))).toEqual({
+      ok: false,
+      reasonCode: 'opportunity_manual',
+      detail: 'takeover:salesperson_command',
+    });
+  });
+
+  it('an administrator classifies one NULL origin, with a reason, and only while it is NULL', async () => {
+    const contactId = await addContact('Classified By Hand');
+    const granted = await grantAgreedSequence(contactId);
+    const enrollmentId = await enrolFollowUp(contactId, granted.permissionId);
+    await database.session.query(
+      `UPDATE opportunities
+          SET control_mode = 'manual', control_mode_reason = 'they replied, set before 0025',
+              control_mode_changed_at = now(), control_mode_origin = NULL
+        WHERE workspace_id = $1 AND id = $2`,
+      [seeded.alpha.workspaceId, crm.alpha.opportunityId],
+    );
+    // Not a salesperson's command: 5.2's administrator, asked in the domain.
+    const refused = await classifyControlModeOrigin(salesperson(), {
+      opportunityId: crm.alpha.opportunityId,
+      origin: 'human_reply',
+      reason: 'I read the reply',
+    });
+    expect(refused).toEqual({ ok: false, reason: 'admin_only' });
+
+    const classified = await classifyControlModeOrigin(admin(), {
+      opportunityId: crm.alpha.opportunityId,
+      origin: 'human_reply',
+      reason: 'the message of 3 September is a confirmed human reply',
+    });
+    expect(classified.ok).toBe(true);
+    expect(await controlModeSource().evaluate(worker(), await stepOf(enrollmentId))).toEqual({ ok: true });
+    // The audit row carries the reason and the evidence the administrator was shown.
+    const { rows: audited } = await database.session.query<{ detail: Record<string, unknown> }>(
+      `SELECT detail FROM audit_events
+        WHERE workspace_id = $1 AND subject_id = $2 AND detail->>'classified' = 'true'`,
+      [seeded.alpha.workspaceId, crm.alpha.opportunityId],
+    );
+    expect(audited).toHaveLength(1);
+    expect(String(audited[0]?.detail?.['reason'] ?? '')).toContain('confirmed human reply');
+    // The evidence is kept as facts, not as the sentence: `audit.ts` keeps notes out of
+    // a detail, and the sentence stays on the opportunity, unchanged.
+    expect(audited[0]?.detail?.['evidence']).toMatchObject({ controlModeReasonRecorded: true });
+
+    // And a second classification cannot move a recorded origin.
+    const again = await classifyControlModeOrigin(admin(), {
+      opportunityId: crm.alpha.opportunityId,
+      origin: 'salesperson_command',
+      reason: 'changing my mind',
+    });
+    expect(again).toEqual({ ok: false, reason: 'invalid_input' });
   });
 
   it('a prospecting step is blocked by manual mode whatever set it', async () => {
@@ -670,17 +1077,6 @@ async function onePublishedStep(): Promise<string> {
     [seeded.alpha.workspaceId, `One step ${String(Date.now())}`, seeded.alpha.admin.userId],
   );
   return await publishOneStep(sequenceRows[0]?.id ?? '');
-}
-
-/** Another sequence, published, so "another sequence" is a real one. */
-async function otherSequenceId(): Promise<string> {
-  const { rows } = await database.session.query<{ id: string }>(
-    `INSERT INTO sequences (workspace_id, name, created_by_user_id) VALUES ($1, $2, $3) RETURNING id`,
-    [seeded.alpha.workspaceId, `Another sequence ${String(Date.now())}`, seeded.alpha.admin.userId],
-  );
-  const sequenceId = rows[0]?.id ?? '';
-  await publishOneStep(sequenceId);
-  return sequenceId;
 }
 
 async function publishOneStep(sequenceId: string): Promise<string> {

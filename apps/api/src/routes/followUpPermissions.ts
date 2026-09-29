@@ -5,13 +5,12 @@ import {
 import { z } from 'zod';
 import { uuid } from '@fss/contracts';
 import { readFirm } from '@fss/domain/crm/firms.ts';
-import { decideFirmMutation, decideFirmRead } from '@fss/domain/crm/authorization.ts';
+import { decideFirmRead } from '@fss/domain/crm/authorization.ts';
 import { databaseNow } from '@fss/domain/policy/clock.ts';
 import {
   followUpPermissionDto,
   grantFollowUpPermission,
   listFollowUpPermissions,
-  readFollowUpPermission,
   revokeFollowUpPermission,
 } from '@fss/domain/sequences/followUpPermissions.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
@@ -37,8 +36,21 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  * Authorization is the other CRM writes': the route establishes identity
  * (`policyRouteDeps` → `requirePrincipal` → `contextForPrincipal`), every mutation is a
  * command with a receipt (`runPolicyCommand`), and *who may write about this firm* is
- * decided by the domain under the firm's row lock — here `decideFirmMutation`, exactly
- * as `confirmReplyDisposition` and `logCallOutcome` do.
+ * decided by the domain under the firm's row lock — `grantFollowUpPermission` and
+ * `revokeFollowUpPermission` each take `loadFirmForUpdate` and ask `decideFirmMutation`
+ * inside the command's own transaction, exactly as `confirmReplyDisposition` and
+ * `logCallOutcome` do. The route asks nothing of an unlocked `readFirm` before them: a
+ * check on a row that is not held cannot survive a reassignment committing between the
+ * check and the write (P1-5 of the GPT-6 review of PR 332).
+ *
+ * The read is narrowed the same way. A list without a firm id used to answer for the
+ * whole workspace; it now answers only for the caller's assigned firms unless the caller
+ * is an administrator, and a list *with* a firm id still answers `not_found` to anybody
+ * the firm page would not answer.
+ *
+ * The grant command takes evidence and nothing else: the server derives the kind and the
+ * scope from the evidence row it reads (P0-1), so a client cannot ask for
+ * `agreed_sequence` on a callback log.
  */
 export const FOLLOW_UP_PERMISSION_PATHS: readonly string[] = [
   '/follow-up-permissions',
@@ -69,6 +81,8 @@ export async function routeFollowUpPermissions(
     }
     const scoped = contextForPrincipal(deps.auth, deps.principal);
     if (!scoped.ok) return scoped.result;
+    const actor = scoped.context.scope.actor;
+    const everyFirm = actor.kind === 'system' || actor.role === 'admin';
     if (parsed.data.firmId !== undefined) {
       // A read about one firm answers the assignment question the same way the firm
       // page does: an unassigned salesperson is told nothing about it.
@@ -84,6 +98,11 @@ export async function routeFollowUpPermissions(
     const permissions = await listFollowUpPermissions(scoped.context, {
       ...(parsed.data.firmId === undefined ? {} : { firmId: parsed.data.firmId }),
       ...(parsed.data.contactId === undefined ? {} : { contactId: parsed.data.contactId }),
+      // No firm id and not an administrator: the server, not the caller, decides which
+      // firms this answer may mention (P1-5).
+      ...(parsed.data.firmId === undefined && !everyFirm && actor.kind === 'user'
+        ? { assignedToUserId: actor.userId }
+        : {}),
     });
     return {
       status: 200,
@@ -100,19 +119,20 @@ export async function routeFollowUpPermissions(
       createFollowUpPermissionCommandSchema,
       'grant_follow_up_permission',
       async (context, body) => {
-        const firm = await readFirm(context, body.firmId);
-        if (firm === null) return { ok: false, reason: 'firm_unknown' };
-        const permitted = decideFirmMutation(context, firm);
-        if (!permitted.permitted) return { ok: false, reason: permitted.reason };
+        // Exactly one evidence source, refused here as well as by the domain and by
+        // migration 0025's CHECK (P0-1): the three ways of saying "somebody agreed" are
+        // three different agreements, and a command naming two of them names none.
+        const evidence =
+          (body.callLogId === undefined ? 0 : 1) +
+          (body.mailMessageId === undefined ? 0 : 1) +
+          (body.bookingReference === undefined ? 0 : 1);
+        if (evidence !== 1) return { ok: false, reason: 'invalid_input' };
         return await grantFollowUpPermission(context, {
           firmId: body.firmId,
           contactId: body.contactId,
-          kind: body.kind,
-          scope: body.scope,
           ...(body.callLogId === undefined ? {} : { callLogId: body.callLogId }),
           ...(body.mailMessageId === undefined ? {} : { mailMessageId: body.mailMessageId }),
           ...(body.bookingReference === undefined ? {} : { bookingReference: body.bookingReference }),
-          ...(body.sequenceId === undefined ? {} : { sequenceId: body.sequenceId }),
           ...(body.note === undefined ? {} : { note: body.note }),
           grantedByUserId: context.scope.actor.kind === 'user' ? context.scope.actor.userId : undefined,
           ...(context.scope.actor.kind === 'user' ? {} : { grantedByRule: 'call_outcome' as const }),
@@ -125,14 +145,9 @@ export async function routeFollowUpPermissions(
     deps,
     revokeFollowUpPermissionCommandSchema,
     'revoke_follow_up_permission',
-    async (context, body) => {
-      const existing = await readFollowUpPermission(context, body.permissionId);
-      if (existing === null) return { ok: false, reason: 'invalid_input' };
-      const firm = await readFirm(context, existing.firmId);
-      if (firm === null) return { ok: false, reason: 'firm_unknown' };
-      const permitted = decideFirmMutation(context, firm);
-      if (!permitted.permitted) return { ok: false, reason: permitted.reason };
-      return await revokeFollowUpPermission(context, body.permissionId);
-    },
+    async (context, body) =>
+      // The domain revokes under the send gate and the firm's row lock, and decides
+      // assignment there (P1-5): nothing is checked here against an unlocked read.
+      await revokeFollowUpPermission(context, body.permissionId),
   );
 }

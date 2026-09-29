@@ -1,5 +1,17 @@
-import { changeStageCommandSchema, openOpportunityCommandSchema } from '@fss/contracts';
-import { changeStage, openOpportunity } from '@fss/domain/crm/pipeline.ts';
+import {
+  changeStageCommandSchema,
+  classifyControlModeOriginCommandSchema,
+  keepFollowingUpCommandSchema,
+  openOpportunityCommandSchema,
+  takeOverOpportunityCommandSchema,
+} from '@fss/contracts';
+import {
+  changeStage,
+  classifyControlModeOrigin,
+  keepFollowingUpAfterDirectSend,
+  openOpportunity,
+  takeOverOpportunity,
+} from '@fss/domain/crm/pipeline.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { contextForPrincipal, requirePrincipal, runRouteCommand } from './routeSupport.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
@@ -12,6 +24,14 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  * the status and the control mode. An endpoint that answered "here is opportunity X"
  * would be a second place to get the read matrix wrong. (`/opportunities/reopen` and
  * `/opportunities/manual` had no caller and went in wave 2, S6.)
+ *
+ * `/opportunities/manual` came back with migration 0025, and for a reason wave 2 did not
+ * have: the eligibility gate now distinguishes a prospect's signal from a person's
+ * decision, so the explicit takeover has to be writable by a person (P1-1 of the GPT-6
+ * review of PR 332). Two neighbours come with it — the choice to keep the follow-up
+ * automation running after a direct Gmail send, and an administrator's classification of
+ * one pre-0025 manual mode whose origin is NULL. All three authorize in the domain,
+ * under the firm row lock, inside the command transaction.
  */
 export async function routeOpportunities(request: ApiRequest, options: RoutingOptions): Promise<RouteResult | null> {
   if (!request.path.startsWith('/opportunities')) return null;
@@ -39,6 +59,31 @@ export async function routeOpportunities(request: ApiRequest, options: RoutingOp
         await changeStage(repository, {
           opportunityId: body.opportunityId,
           toStageKey: body.toStageKey,
+          reason: body.reason,
+          commandId: body.commandId,
+        }),
+      );
+    case '/opportunities/manual':
+      return await runRouteCommand(deps, takeOverOpportunityCommandSchema, 'opportunity.manual', async (repository, body) =>
+        await takeOverOpportunity(repository, {
+          opportunityId: body.opportunityId,
+          reason: body.reason,
+          commandId: body.commandId,
+        }),
+      );
+    case '/opportunities/keep-following-up':
+      return await runRouteCommand(deps, keepFollowingUpCommandSchema, 'opportunity.manual', async (repository, body) =>
+        await keepFollowingUpAfterDirectSend(repository, {
+          opportunityId: body.opportunityId,
+          reason: body.reason,
+          commandId: body.commandId,
+        }),
+      );
+    case '/opportunities/control-mode-origin':
+      return await runRouteCommand(deps, classifyControlModeOriginCommandSchema, 'opportunity.manual', async (repository, body) =>
+        await classifyControlModeOrigin(repository, {
+          opportunityId: body.opportunityId,
+          origin: body.origin,
           reason: body.reason,
           commandId: body.commandId,
         }),

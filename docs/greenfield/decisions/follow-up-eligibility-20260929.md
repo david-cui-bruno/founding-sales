@@ -120,7 +120,8 @@ is no `manual → automated` path anywhere in the codebase.
 | --- | --- | --- |
 | `human_reply` | a confirmed reply — a prospect **signal** | no |
 | `engaged_call` | an engaged call outcome — a signal | no |
-| `direct_send` | a direct Gmail send — a signal | no |
+| `direct_send` | a salesperson's own Gmail send — a **takeover** | **yes** |
+| `direct_send_keep_automation` | that salesperson choosing to keep following up | no |
 | `salesperson_command` | `POST /opportunities/manual` — a **person's** takeover | **yes** |
 | NULL | not recorded: every opportunity that went manual before 0025 | **yes** |
 
@@ -138,6 +139,25 @@ would not have been recorded. It now **escalates** the stored origin to
 `salesperson_command` in that case, and a signal never overwrites a recorded takeover.
 Suppression, every pause switch and the terminal stop are untouched and still win.
 
+**After the review (P1-1).** Three things changed, and the first is a product decision the
+coordinator took on 29 September 2026 and flagged to David:
+
+* **A direct Gmail send is a takeover.** It is the salesperson deliberately writing to
+  this prospect by hand, not the prospect signalling anything, so it blocks the follow-up
+  automation. The exception is a *choice*, not an inference:
+  `POST /opportunities/keep-following-up` (`keepFollowingUpAfterDirectSend`) moves the
+  stored origin to `direct_send_keep_automation`, and its UPDATE is conditional on the
+  origin still being `direct_send`, so it can never relabel a takeover.
+* **The takeover is reachable.** `POST /opportunities/manual` (`takeOverOpportunity`) is
+  back, with a minimal control on the Firm page — "I will handle this myself", offered
+  only while the opportunity is open and automated. Before it, no production caller wrote
+  `salesperson_command` at all.
+* **A NULL origin is classified one row at a time.** `POST /opportunities/control-mode-origin`
+  (`classifyControlModeOrigin`) is admin-only in the domain, takes a reason, is conditional
+  on the origin still being NULL, and writes an audit row carrying the reason and the
+  facts the administrator was shown. There is no blanket backfill and there will not be
+  one.
+
 ## 6. Where a permission comes from
 
 * **A confirmed reply** with disposition `interested` or `follow_up_later` →
@@ -151,8 +171,42 @@ Suppression, every pause switch and the terminal stop are untouched and still wi
 * **`callback_requested`** → the callback task only. No e-mail permission.
 * **A booking** → reserved.
 * **By hand**: `POST /follow-up-permissions`, `POST /follow-up-permissions/list`,
-  `POST /follow-up-permissions/revoke`, authorized like the other CRM writes (identity at
-  the route, `decideFirmMutation` in the domain under the firm's row lock).
+  `POST /follow-up-permissions/revoke`, authorized like the other CRM writes: identity at
+  the route, `decideFirmMutation` in the domain **under the firm's row lock, inside the
+  command's transaction**. The route asks nothing of an unlocked `readFirm` before a
+  mutation (P1-5), and the grant takes evidence only — the server derives the kind and the
+  scope from the evidence row it reads (P0-1). A list with no firm id answers only about
+  the caller's assigned firms.
+
+## 6a. One lock order, written down (P1-4)
+
+The review's deadlock is a claim waiting for a firm row while a call outcome waits for the
+send gate. It cannot form, and this is the argument, which every path here now obeys:
+
+1. **The send gate first, always.** Every stop-fact writer takes it EXCLUSIVE
+   (`lockSendGateForStopFact`) before it touches any row: `setManualControlMode`,
+   `applyManualModeStop`, `logCallOutcome`, `enrollContact`, `revokeFollowUpPermission`,
+   the terminal stops. Every dispatch claim takes it SHARED (`lockSendGateForDispatch`)
+   before it touches any row. Nothing in either family locks a row before the gate.
+2. **Therefore the two families never hold a row the other needs.** A writer that holds
+   the gate EXCLUSIVE excludes every claim from starting; a claim in flight holds it
+   SHARED, so a writer waits at the gate before it has taken anything. A cycle needs each
+   side to hold something the other wants, and the gate is taken first by both.
+3. **Inside a family the order is fixed.** The claim:
+   send gate → fence → enrollment → permission → firm. Enrollment: send gate → firm →
+   opportunity → contact. A terminal stop: send gate → enrollment → step. Preparation asks
+   `firmExclusivitySource` for the firm while holding its enrollment and step, and it is
+   the only path that does; it is a reader of one row in a family whose writers all sit
+   behind the gate.
+4. **The winner is total.** `firmExclusivitySource` orders by `(started_at, id)` and reads
+   the comparison instant in SQL rather than through the driver, because a JavaScript
+   `Date` rounds microseconds down and a competitor started in the same millisecond would
+   otherwise compare as later than itself.
+
+The tests are in `packages/domain/test/outbound/firmExclusivityAtSend.test.ts`: a barrier
+case that proves both claim transactions are open at once through `pg_locks` before the
+barrier is released, a tied-`started_at` case, and the review's deadlock shape run as a
+real claim against a real stop-fact writer.
 
 ## 7. Deviations from the brief, each with its reason
 
@@ -172,35 +226,35 @@ Suppression, every pause switch and the terminal stop are untouched and still wi
    `GET /firms/:id/follow-up-permissions`. Every firm read in this API is a POST with the
    firm id in the body; a `GET /firms/:id/...` would need the route registry to claim a
    prefix of `/firms`, which `routes/modules.ts` explicitly does not do for new endpoints.
-4. **The recipient is compared with the enrollment's own `contact_id`**, not with the
-   step input's. In the product they are the same person — `runEmailStep` addresses the
-   enrollment's contact, the fence carries it, and `enrollContact` verified this very
-   permission against this very contact before the enrollment existed — and the
-   enrollment's column is the one the permission was granted about, so the answer does not
-   depend on which of the two askings is asking. The fence's own recipient address is
-   checked by `suppressionSource` (every address of the fence's contact) and by
-   `frozenRouteOutcome`. **Note for David:** the send path does not compare a fence's
-   `contact_id` with its enrollment's, and did not before this lane either; closing that
-   would be a one-line refusal in `outbound/stepPermission.ts` and is not in this brief.
+4. **The recipient is compared with the enrollment's own `contact_id`** — and, since the
+   review (P0-2), with the fence's, the execution's, the frozen route's owner and the
+   route's address as well. All five must agree at the claim
+   (`outbound/stepPermission.ts`), which closes the note this deviation used to carry.
 5. **The call-outcome form offers `single_email` or none, not `agreed_sequence`.** An
    agreed sequence needs a sequence picker, and Today's state does not carry the sequence
    list; adding that read is more than "the minimum that lets David grant a permission
    from the flows he already uses". An agreed sequence is granted through
    `POST /follow-up-permissions`. **Note for David:** say if you want the picker on the
    call card in the next slice.
-6. **A `single_email` permission does not carry the template.** The brief's
-   "needs the template" would mean authoring a one-step sequence version from a template
-   at call-outcome time, which is a new authoring path. Instead the rule is enforced where
-   it bites: `verifyFollowUpPermission` counts the version's steps and refuses a plan of
-   more than one step, so a `single_email` permission can only ever run a one-step
-   enrollment of whichever approved template the operator picks at enrollment.
-7. **`follow_up_permissions` is `deletion_removes`, and a firm deletion clears
-   `sequence_enrollments.permission_id` first.** The permission's foreign keys onto
-   `call_logs` and `mail_messages` are what make its evidence undeletable while a
-   permission rests on it — so the deletion path has to remove the permissions before the
-   correspondence, and the enrollment (which is *stopped*, not deleted) has to let go of
-   its pointer. `origin_kind` still says `follow_up`, so nothing can send on the cleared
-   column.
+6. **A `single_email` permission carries the template version it permits** — this
+   deviation is withdrawn. The review was right (P0-2): a scope that permitted "whichever
+   approved one-step template the operator picks" was not bound to what leaves. The call
+   log now records *what was agreed* (`call_logs.agreed_follow_up` with
+   `agreed_template_version_id` or `agreed_sequence_version_id`, a 0025 change), the
+   permission carries the same binding, and the claim requires the fence's template version
+   to be the permitted one. An `agreed_sequence` is bound to one immutable published
+   version, to the one enrollment that runs it (`follow_up_permissions_one_enrollment`),
+   and to an explicit step and time limit.
+7. **`follow_up_permissions` is `deletion_removes`, and a firm deletion stops the
+   enrollments before it clears `sequence_enrollments.permission_id`.** The permission's
+   foreign keys onto `call_logs` and `mail_messages` are what make its evidence undeletable
+   while a permission rests on it — so the deletion path removes the permissions before the
+   correspondence, and the enrollment (which is *stopped*, not deleted) lets go of its
+   pointer. The order matters (P1-3): a live `follow_up` enrollment may not have a null
+   pointer, so the stop comes first, and the CHECK's one exemption is `ended_at IS NOT
+   NULL`. `origin_kind` still says `follow_up`, so nothing can send on the cleared column.
+   `packages/domain/test/retention/followUpDeletion.test.ts` covers an active follow-up
+   and a completed one in the same commit.
 
 ## 8. What this does not do
 

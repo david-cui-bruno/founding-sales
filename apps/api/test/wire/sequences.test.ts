@@ -160,7 +160,7 @@ describe('8.0aj: the sequence editor reads a populated version and its enrollmen
       firmId,
       contactId: robin,
       opportunityId,
-      sequenceId,
+      sequenceVersionId,
     });
     const second = await post(
       '/enrollments/enroll',

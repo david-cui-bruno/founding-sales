@@ -96,6 +96,24 @@ export async function makeStepExecution(
   );
   const contactId = contact.rows[0]?.id ?? '';
 
+  // The contact's own usable address. Since the review of PR 332 (P0-2) the dispatch
+  // requires the fence's frozen route to **belong to the enrollment's contact** and its
+  // address to be the one the fence will send to, so a fixture whose enrollment is for
+  // one person and whose route is another's is a fixture that can no longer send — and
+  // that is the check working, not a limitation. RFC 6761 reserves `example.test`.
+  await session.query(
+    `INSERT INTO email_addresses (workspace_id, firm_id, contact_id, address, source, retrieved_at,
+                                  association_confidence, technical_validation, eligibility,
+                                  eligibility_policy_version)
+     VALUES ($1, $2, $3, $4, 'research_provider', now(), 0.900, 'passed', 'usable', 'route-policy.1')`,
+    [
+      input.workspaceId,
+      input.firmId,
+      contactId,
+      `fence.fixture.${String(counter).padStart(4, '0')}@example.test`,
+    ],
+  );
+
   const opportunityId = input.opportunityId ?? (await fixtureOpportunity(session, input));
 
   // `test/db/migrations.test.ts` seeds this fixture into a database stopped at an
@@ -179,19 +197,33 @@ async function fixturePermission(
 ): Promise<string> {
   const call = await session.query<{ id: string }>(
     `INSERT INTO call_logs
-       (workspace_id, firm_id, contact_id, opportunity_id, outcome, step_effect, occurred_at, actor_user_id)
-     VALUES ($1, $2, $3, $4, 'interested', 'none', now() - interval '1 second', $5)
+       (workspace_id, firm_id, contact_id, opportunity_id, outcome, step_effect, occurred_at,
+        actor_user_id, agreed_follow_up, agreed_sequence_version_id)
+     VALUES ($1, $2, $3, $4, 'interested', 'none', now() - interval '1 second', $5,
+             'agreed_sequence',
+             (SELECT s.sequence_version_id FROM sequence_steps s
+               WHERE s.workspace_id = $1 AND s.id = $6))
      RETURNING id`,
-    [input.workspaceId, input.firmId, input.contactId, input.opportunityId, input.userId],
+    [
+      input.workspaceId,
+      input.firmId,
+      input.contactId,
+      input.opportunityId,
+      input.userId,
+      input.stepId,
+    ],
   );
   const granted = await session.query<{ id: string }>(
     `INSERT INTO follow_up_permissions
-       (workspace_id, firm_id, contact_id, kind, scope, call_log_id, sequence_id, expires_at,
-        granted_by_user_id, note)
-     VALUES ($1, $2, $3, 'conversation', 'agreed_sequence', $4,
-             (SELECT v.sequence_id FROM sequence_steps s
-                JOIN sequence_versions v ON v.workspace_id = s.workspace_id AND v.id = s.sequence_version_id
+       (workspace_id, firm_id, contact_id, kind, scope, call_log_id, sequence_version_id, max_steps,
+        expires_at, granted_by_user_id, note)
+     VALUES ($1, $2, $3, 'agreed_sequence', 'agreed_sequence', $4,
+             (SELECT s.sequence_version_id FROM sequence_steps s
                WHERE s.workspace_id = $1 AND s.id = $5),
+             (SELECT count(*) FROM sequence_steps s2
+               WHERE s2.workspace_id = $1
+                 AND s2.sequence_version_id = (SELECT s3.sequence_version_id FROM sequence_steps s3
+                                                WHERE s3.workspace_id = $1 AND s3.id = $5)),
              now() + interval '365 days', $6, 'a fixture follow-up agreed on the call')
      RETURNING id`,
     [input.workspaceId, input.firmId, input.contactId, call.rows[0]?.id ?? '', input.stepId, input.userId],
@@ -223,6 +255,25 @@ const FIXTURE_SEQUENCE_NAME = 'Fence fixture sequence';
  * own database, and a cache that outlived one of them would hand back an id from
  * somebody else's schema.
  */
+/**
+ * The published one-step version this fixture enrols against, created if it is not there.
+ *
+ * Exported for the end-to-end case (P2-2 of the GPT-6 review of PR 332), which enrols a
+ * prospecting contact through `enrollContact` rather than by insert and therefore needs
+ * the version id the command takes.
+ */
+export async function fixtureSequenceVersionId(
+  session: SessionQueryable,
+  input: StepExecutionFixtureInput,
+): Promise<string> {
+  const stepId = await fixtureStep(session, input);
+  const { rows } = await session.query<{ sequence_version_id: string }>(
+    'SELECT sequence_version_id FROM sequence_steps WHERE workspace_id = $1 AND id = $2',
+    [input.workspaceId, stepId],
+  );
+  return rows[0]?.sequence_version_id ?? '';
+}
+
 async function fixtureStep(
   session: SessionQueryable,
   input: StepExecutionFixtureInput,

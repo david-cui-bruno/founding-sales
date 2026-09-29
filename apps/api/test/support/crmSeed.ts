@@ -56,15 +56,17 @@ export async function seedFollowUpPermission(
     readonly firmId: string;
     readonly contactId: string;
     readonly opportunityId?: string | undefined;
-    readonly sequenceId: string;
+    readonly sequenceVersionId: string;
   },
   workspace: SeededWorkspace = fixture.alpha,
 ): Promise<string> {
   const context = adminContext(fixture, workspace);
   const { rows } = await context.db.query<{ id: string }>(
     `INSERT INTO call_logs
-       (workspace_id, firm_id, contact_id, opportunity_id, outcome, step_effect, occurred_at, actor_user_id)
-     VALUES ($1, $2, $3, $4, 'interested', 'none', now() - interval '1 second', $5)
+       (workspace_id, firm_id, contact_id, opportunity_id, outcome, step_effect, occurred_at,
+        actor_user_id, agreed_follow_up, agreed_sequence_version_id)
+     VALUES ($1, $2, $3, $4, 'interested', 'none', now() - interval '1 second', $5,
+             'agreed_sequence', $6)
      RETURNING id`,
     [
       workspace.workspaceId,
@@ -72,15 +74,13 @@ export async function seedFollowUpPermission(
       input.contactId,
       input.opportunityId ?? null,
       workspace.admin.userId,
+      input.sequenceVersionId,
     ],
   );
   const granted = await grantFollowUpPermission(context, {
     firmId: input.firmId,
     contactId: input.contactId,
-    kind: 'agreed_sequence',
-    scope: 'agreed_sequence',
     callLogId: rows[0]?.id ?? '',
-    sequenceId: input.sequenceId,
     grantedByUserId: workspace.admin.userId,
   });
   if (!granted.ok) throw new Error(`seedFollowUpPermission refused: ${granted.reason}`);

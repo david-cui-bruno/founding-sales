@@ -575,16 +575,45 @@ export async function commitDeletion(
     removed[table] = rowCount ?? 0;
   };
 
-  // Migration 0025's permissions first, and the reason is the design: a permission's
-  // foreign keys onto `call_logs` and `mail_messages` are what make its evidence
-  // undeletable while the permission rests on it. So a deletion that removed the
+  // The stops come first, and P1-3 of the GPT-6 review of PR 332 is why. `step_executions`
+  // before its enrollment: an execution is the child, and a `pending` one under a
+  // `stopped` enrollment is a row the scheduler still claims. The execution update clears
+  // the column its new state forbids — `hold_reason_code` for a cancelled execution —
+  // because 0012 writes that as an equivalence rather than as a nullable field.
+  //
+  // They used to come *after* the removals, which migration 0025 made impossible: a live
+  // `follow_up` enrollment may not have a null `permission_id`, so clearing the pointer
+  // on an active row is refused by
+  // `sequence_enrollments_follow_up_has_permission` and the whole deletion fails. Ending
+  // the enrollment first is also the only ordering that is true to what a deletion is:
+  // the person's automation stops, and then their rows go.
+  const stopped: Record<string, number> = {};
+  const executions = await context.db.query(
+    `UPDATE step_executions
+        SET state = 'cancelled', cancelled_at = now(), cancel_reason = 'deleted under 10.3',
+            hold_reason_code = NULL, updated_at = now()
+      WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}
+        AND state IN ('pending', 'held')`,
+    byContact,
+  );
+  stopped['step_executions'] = executions.rowCount ?? 0;
+  const enrollments = await context.db.query(
+    `UPDATE sequence_enrollments
+        SET state = 'stopped', ended_at = now(), end_reason = 'admin_stop', updated_at = now()
+      WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}
+        AND state = 'active'`,
+    byContact,
+  );
+  stopped['sequence_enrollments'] = enrollments.rowCount ?? 0;
+
+  // Then migration 0025's permissions, and before the evidence they rest on: a
+  // permission's foreign keys onto `call_logs` and `mail_messages` are what make that
+  // evidence undeletable while the permission lives, so a deletion that removed the
   // correspondence or the call history first would be refused by those keys — which is
   // the check working, and this is the one path allowed to satisfy it. The enrollment
-  // that points at a permission is *stopped* rather than deleted below, so the key from
-  // `sequence_enrollments` has to be cleared here too; it is set to NULL only on
-  // enrollments of the firm being deleted, and only after their steps are cancelled a
-  // few statements later, which is a stop either way (`origin_kind` still says
-  // `follow_up`, so nothing can send on the cleared column).
+  // that points at a permission is stopped rather than deleted, so its pointer is cleared
+  // here; the row is ended by the statements above, `origin_kind` still says `follow_up`,
+  // and nothing can send on the cleared column.
   await context.db.query(
     `UPDATE sequence_enrollments
         SET permission_id = NULL, updated_at = now()
@@ -748,29 +777,6 @@ export async function commitDeletion(
     byContact,
   );
 
-  // The stops, after the removals and before the redactions. `step_executions`
-  // first: an execution is the child, and a `pending` one under a `stopped`
-  // enrollment is a row the scheduler still claims. The execution update clears the
-  // column its new state forbids — `hold_reason_code` for a cancelled execution —
-  // because 0012 writes that as an equivalence rather than as a nullable field.
-  const stopped: Record<string, number> = {};
-  const executions = await context.db.query(
-    `UPDATE step_executions
-        SET state = 'cancelled', cancelled_at = now(), cancel_reason = 'deleted under 10.3',
-            hold_reason_code = NULL, updated_at = now()
-      WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}
-        AND state IN ('pending', 'held')`,
-    byContact,
-  );
-  stopped['step_executions'] = executions.rowCount ?? 0;
-  const enrollments = await context.db.query(
-    `UPDATE sequence_enrollments
-        SET state = 'stopped', ended_at = now(), end_reason = 'admin_stop', updated_at = now()
-      WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}
-        AND state = 'active'`,
-    byContact,
-  );
-  stopped['sequence_enrollments'] = enrollments.rowCount ?? 0;
 
   const redacted: Record<string, number> = {};
   const fences = await context.db.query(

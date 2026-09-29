@@ -112,6 +112,7 @@ export interface CrmBridgeHost {
   previewImport(input: ImportFile): Promise<CrmState>;
   commitImport(): Promise<CrmState>;
   openOpportunity(): Promise<CrmState>;
+  takeOver(input: { readonly reason: string }): Promise<CrmState>;
   enroll(input: EnrollRequest): Promise<CrmState>;
   checkRoute(input: CheckRouteRequest): Promise<CrmState>;
 }
@@ -544,6 +545,31 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
       const answer = await deps.api.command('/opportunities/open', { firmId }, () => null);
       notice = answer.ok ? 'opportunity_opened' : answer.reason;
       await loadFirm(firmId);
+      return await snapshot();
+    },
+
+    /**
+     * "I will handle this myself": the explicit takeover (P1-1 of the GPT-6 review of PR
+     * 332).
+     *
+     * The opportunity goes to manual with the one origin that is a person's decision
+     * rather than a prospect's signal, which is what stops the follow-up automation
+     * running beside it. There is no control that reverses it: automation never reverses
+     * manual mode, and this app does not pretend otherwise.
+     */
+    async takeOver(input) {
+      const page = firm;
+      if (page === null || page.visibility !== 'assigned_or_admin' || page.opportunity?.status !== 'open') {
+        notice = 'opportunity_not_open';
+        return await snapshot();
+      }
+      const answer = await deps.api.command(
+        '/opportunities/manual',
+        { opportunityId: page.opportunity.id, reason: input.reason },
+        () => null,
+      );
+      notice = answer.ok ? 'taken_over' : answer.reason;
+      await loadFirm(page.read.firm.id);
       return await snapshot();
     },
 

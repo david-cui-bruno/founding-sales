@@ -386,7 +386,58 @@ function Sequences({
   );
 }
 
-function Opportunity({ page }: { readonly page: Extract<FirmPageResponse, { visibility: 'assigned_or_admin' }> }): JSX.Element {
+/**
+ * "I will handle this myself" (P1-1 of the GPT-6 review of PR 332).
+ *
+ * The one control that records an explicit takeover, which is the manual mode an
+ * evidenced follow-up does not run beside. It is offered only while the opportunity is
+ * open and automated: a firm already in manual needs no button to say so, and nothing
+ * here reverses manual mode, because automation never does.
+ */
+function TakeOver({
+  enabled,
+  saving,
+  onTakeOver,
+}: {
+  readonly enabled: boolean;
+  readonly saving: boolean;
+  onTakeOver(reason: string): void;
+}): JSX.Element {
+  const [reason, setReason] = useState('');
+  return (
+    <div data-testid="take-over" className="flex items-center gap-2 py-2">
+      <Input
+        data-testid="take-over-reason"
+        aria-label="Why you are taking this over"
+        placeholder="Why you are taking this over"
+        value={reason}
+        onChange={event => setReason(event.target.value)}
+      />
+      <Button
+        data-testid="take-over-submit"
+        disabled={!enabled || saving || reason.trim() === ''}
+        onClick={() => {
+          onTakeOver(reason.trim());
+          setReason('');
+        }}
+      >
+        I will handle this myself
+      </Button>
+    </div>
+  );
+}
+
+function Opportunity({
+  page,
+  actionsEnabled,
+  busy,
+  onTakeOver,
+}: {
+  readonly page: Extract<FirmPageResponse, { visibility: 'assigned_or_admin' }>;
+  readonly actionsEnabled: boolean;
+  busy(form: string): boolean;
+  onTakeOver(reason: string): void;
+}): JSX.Element {
   const opportunity = page.opportunity;
   return (
     <Section data-testid="firm-opportunity" title="Opportunity">
@@ -400,6 +451,9 @@ function Opportunity({ page }: { readonly page: Extract<FirmPageResponse, { visi
             {`${inWords(opportunity.status)} at ${inWords(opportunity.stageKey)}, opened ${shortDay(opportunity.openedAt)}`}
             {opportunity.closeReason === null ? '' : ` · closed because ${inWords(opportunity.closeReason)}`}
           </p>
+          {opportunity.status === 'open' && opportunity.controlMode === 'automated' ? (
+            <TakeOver enabled={actionsEnabled} saving={busy('take-over')} onTakeOver={onTakeOver} />
+          ) : null}
           <ol data-testid="stage-history" className="mt-1 flex flex-col border-t border-border">
             {page.stageHistory.map(event => (
               <li
@@ -540,6 +594,7 @@ export function FirmPage({
   onCheckRoute,
   onOpenOpportunity,
   onEnroll,
+  onTakeOver,
 }: {
   readonly page: FirmPageResponse;
   readonly sequences: FirmSequencesView | null;
@@ -551,6 +606,7 @@ export function FirmPage({
   onCheckRoute(request: CheckRouteRequest): void;
   onOpenOpportunity(): void;
   onEnroll(request: EnrollRequest): void;
+  onTakeOver(reason: string): void;
 }): JSX.Element {
   // Both discriminators, because they are two independent facts: the page's width and
   // the read's. They always agree — `readFirmPage` produces them together — and the
@@ -597,7 +653,7 @@ export function FirmPage({
               onEnroll={onEnroll}
             />
           )}
-          <Opportunity page={page} />
+          <Opportunity page={page} actionsEnabled={actionsEnabled} busy={busy} onTakeOver={onTakeOver} />
           <FollowUpPermissions page={page} />
           <Holds page={page} />
         </>

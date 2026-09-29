@@ -52,6 +52,8 @@ export interface CrmActions {
   changeStage(change: StageChange): void;
   resolveMerge(resolution: MergeResolution): void;
   openOpportunity(): void;
+  /** The explicit takeover (P1-1): manual mode with the origin only a person writes. */
+  takeOver(reason: string): void;
   enroll(request: EnrollRequest): void;
   checkRoute(request: CheckRouteRequest): void;
 }
@@ -137,6 +139,9 @@ export function useCrm(
       },
       openOpportunity: () => {
         command('opportunity', api => api.command('crm.openOpportunity', {}));
+      },
+      takeOver: reason => {
+        command('take-over', api => api.command('crm.takeOver', { reason }));
       },
       enroll: request => {
         command('enroll', api => api.command('crm.enroll', request));

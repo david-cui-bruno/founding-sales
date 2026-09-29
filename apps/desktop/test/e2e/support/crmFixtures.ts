@@ -107,7 +107,12 @@ export function assigneeFirmPage(): NonNullable<CrmState['firm']> {
         callLogId: '11111111-1111-4111-8111-111111111111',
         mailMessageId: null,
         bookingReference: null,
-        sequenceId: null,
+        // What the permission is bound to since P0-2: one approved template version, no
+        // sequence, one run, one step.
+        templateVersionId: '33333333-3333-4333-8333-333333333333',
+        sequenceVersionId: null,
+        enrollmentId: null,
+        maxSteps: 1,
         grantedAt: '2026-09-28T12:00:00.000Z',
         expiresAt: '2026-10-12T12:00:00.000Z',
         grantedByUserId: '22222222-2222-4222-8222-222222222222',

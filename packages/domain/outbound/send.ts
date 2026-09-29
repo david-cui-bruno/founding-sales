@@ -14,7 +14,7 @@ import {
   releaseFence,
   type OutboundFenceRow,
 } from './fence.ts';
-import { consumeFollowUpPermission } from '../sequences/followUpPermissions.ts';
+import { consumeFollowUpPermission, lockPermissionForClaim } from '../sequences/followUpPermissions.ts';
 import { reconcileFenceFooter } from './footer.ts';
 import type { SendFooterPolicy } from '../src/rules/templates.ts';
 import { decideSend, holdReasonForRefusal, type SendGateDeps, type SendPlan } from './gate.ts';
@@ -289,30 +289,6 @@ export async function dispatchOutboundMessage(
   };
 }
 
-/**
- * Mark this fence's `single_email` follow-up permission spent, if it has one.
- *
- * One statement: the permission of the enrollment of the step this fence belongs to,
- * and only when its scope is `single_email` (`consumeFollowUpPermission` carries that
- * predicate, so a `contextual_reply` or an `agreed_sequence` is untouched by a send).
- */
-async function consumeSingleEmailPermission(
-  context: RepositoryContext,
-  outboundMessageId: string,
-): Promise<void> {
-  const { rows } = await context.db.query<{ permission_id: string | null }>(
-    `SELECT n.permission_id
-       FROM outbound_messages f
-       JOIN step_executions e ON e.workspace_id = f.workspace_id AND e.id = f.step_execution_id
-       JOIN sequence_enrollments n ON n.workspace_id = e.workspace_id AND n.id = e.enrollment_id
-      WHERE f.workspace_id = $1 AND f.id = $2 AND n.origin_kind = 'follow_up'`,
-    [context.scope.workspaceId, outboundMessageId],
-  );
-  const permissionId = rows[0]?.permission_id ?? null;
-  if (permissionId === null) return;
-  await consumeFollowUpPermission(context, permissionId);
-}
-
 function refusalOf(reason: string): SendRefusalCode {
   switch (reason) {
     case 'grant_revoked':
@@ -371,6 +347,11 @@ async function recheckAndClaim(
     // The recheck. `precheck` is the answer from before the token refresh, and it is
     // not an answer to act on: a reply may have committed since. It is consulted for
     // one thing only, below — which mailbox the access token was minted for.
+    // The permission, locked, before anything is decided about the fence's contents
+    // (P0-4). The order inside this transaction is the one the decision document writes
+    // down: send gate (shared) → fence → enrollment → permission → firm.
+    const permission = await lockPermissionForClaim(context, fence.id);
+
     const gate = await decideSend(context, fence, deps);
     if (!gate.ok) {
       const held = await holdFence(context, {
@@ -443,20 +424,21 @@ async function recheckAndClaim(
       await context.db.query('ROLLBACK');
       return { kind: 'not_ready', refusal: claim.reason, detail: claim.detail };
     }
-    // The one e-mail a `single_email` follow-up permission bought, spent (migration
-    // 0025). Inside the claim's transaction and after the claim, so it commits with the
-    // attempt or rolls back with it. `decideSend` above asked
-    // `followUpPermissionSource` about this very fence in this very transaction, so a
-    // permission already consumed has already refused; what this adds is that the
-    // *next* attempt will refuse, with `follow_up_scope_exhausted`.
+    // The one message a `single_email` or `contextual_reply` follow-up permission bought,
+    // spent — and the spend is the *authorization*, not a note about it (P0-4, P2-1).
     //
-    // Why here rather than after `recordSent`: Appendix B says a claimed fence may have
-    // reached Gmail even when the call reports nothing, and a fence in doubt is
-    // re-decided later. Consuming at the claim can cost a permission whose e-mail never
-    // arrived; consuming after the provider answered could let a second e-mail leave on
-    // a permission that buys one. `docs/greenfield/decisions/follow-up-eligibility-20260929.md`
-    // records the choice.
-    await consumeSingleEmailPermission(context, fence.id);
+    // The permission row was locked at the top of this transaction, and the UPDATE
+    // carries the whole of its liveness: unspent, unrevoked, and unexpired against the
+    // database's own `clock_timestamp()` rather than against the instant the gate
+    // sampled minutes ago. **Zero affected rows aborts the claim**, so a revocation that
+    // commits between the recheck and here, or an expiry that passes during a long
+    // claim, stops the send instead of being overtaken by it.
+    if (permission !== null && (permission.scope === 'single_email' || permission.scope === 'contextual_reply')) {
+      if (!(await consumeFollowUpPermission(context, permission.id))) {
+        await context.db.query('ROLLBACK');
+        return { kind: 'not_ready', refusal: 'step_ineligible', detail: 'follow_up_scope_exhausted' };
+      }
+    }
     await context.db.query('COMMIT');
     return { kind: 'claimed', plan, claim: claim.value };
   } catch (error) {

@@ -292,6 +292,45 @@ export async function createOutboundWorld(): Promise<OutboundWorld> {
           WHERE e.workspace_id = $1 AND e.id = $2`,
         [mailbox.workspace.workspaceId, stepExecutionId],
       );
+      const contactOfEnrollment = enrollment.rows[0]?.contact_id ?? firm.contactId;
+      const { rows: routes } = await world.database.session.query<{ id: string; address: string }>(
+        `SELECT id, address FROM email_addresses
+          WHERE workspace_id = $1 AND contact_id = $2 AND eligibility = 'usable' AND retired_at IS NULL
+          ORDER BY created_at, id
+          LIMIT 1`,
+        [mailbox.workspace.workspaceId, contactOfEnrollment],
+      );
+      let route = routes[0];
+      // A scenario that wants a distinguishing recipient address (`toAddress`) is asking
+      // for a different *person's* address as far as the product is concerned: a real
+      // fence's address is always its frozen route's. The claim now checks that the two
+      // agree (P0-2), so the fixture gives the enrollment's contact a usable route at the
+      // requested address rather than letting the fence contradict itself.
+      if (
+        typeof overrides.toAddress === 'string' &&
+        overrides.emailAddressId === undefined &&
+        overrides.toAddress !== route?.address &&
+        enrollment.rows[0] !== undefined
+      ) {
+        const existing = await world.database.session.query<{ id: string; address: string }>(
+          `SELECT id, address FROM email_addresses
+            WHERE workspace_id = $1 AND contact_id = $2 AND address = $3
+            ORDER BY created_at, id LIMIT 1`,
+          [mailbox.workspace.workspaceId, contactOfEnrollment, overrides.toAddress],
+        );
+        const wanted =
+          existing.rows[0] !== undefined
+            ? existing
+            : await world.database.session.query<{ id: string; address: string }>(
+                `INSERT INTO email_addresses (workspace_id, firm_id, contact_id, address, source, retrieved_at,
+                                              association_confidence, technical_validation, eligibility,
+                                              eligibility_policy_version)
+                      VALUES ($1, $2, $3, $4, 'research_provider', now(), 0.900, 'passed', 'usable', 'route-policy.1')
+                   RETURNING id, address`,
+                [mailbox.workspace.workspaceId, firmId, contactOfEnrollment, overrides.toAddress],
+              );
+        route = wanted.rows[0] ?? route;
+      }
       const request: OutboundEmailRequest = {
         stepExecutionId,
         // The fence names its enrollment, as `runEmailStep`'s request always does.
@@ -307,8 +346,12 @@ export async function createOutboundWorld(): Promise<OutboundWorld> {
         ownerUserId: mailbox.workspace.salesperson.userId,
         templateVersionId: mailbox.templateVersionId,
         templateContentHash: mailbox.templateContentHash,
-        emailAddressId: mailbox.routeId,
-        toAddress: mailbox.recipientAddress,
+        // The enrollment's contact's own route, for the same reason as the contact
+        // above: the claim now requires the frozen route's owner and its address to
+        // agree with the enrollment (P0-2), which is what a real `runEmailStep` request
+        // always satisfied and what a fixture pointing at a shared route never did.
+        emailAddressId: route?.id ?? mailbox.routeId,
+        toAddress: route?.address ?? mailbox.recipientAddress,
         subject: TEMPLATE_SUBJECT,
         body: TEMPLATE_BODY,
         sendAt: OPEN_INSTANT,

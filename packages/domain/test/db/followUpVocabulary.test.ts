@@ -42,12 +42,42 @@ describe('the follow-up vocabularies in the database', () => {
     await database.drop();
   });
 
+  /** A published version, for the scope that must name one. */
+  async function publishedVersion(): Promise<string> {
+    const { rows: sequence } = await database.session.query<{ id: string }>(
+      'INSERT INTO sequences (workspace_id, name, created_by_user_id) VALUES ($1, $2, $3) RETURNING id',
+      [workspaceId, `Vocabulary version ${String(Date.now())}`, userId],
+    );
+    const { rows } = await database.session.query<{ id: string }>(
+      `INSERT INTO sequence_versions (workspace_id, sequence_id, version, state, published_at, published_by_user_id)
+       VALUES ($1, $2, 1, 'published', now(), $3) RETURNING id`,
+      [workspaceId, sequence[0]?.id ?? '', userId],
+    );
+    return rows[0]?.id ?? '';
+  }
+
+  /** An approved template version, for the scope that must name one. */
+  async function approvedTemplate(): Promise<string> {
+    const { rows } = await database.session.query<{ id: string }>(
+      `INSERT INTO template_versions
+         (workspace_id, template_id, version, name, subject, body, content_hash,
+          footer_sign_off, approved_at, approved_by_user_id)
+       VALUES ($1, gen_random_uuid(), 1, 'Vocabulary', 'A question', 'Hello,', repeat('d', 64),
+               'Sam Example', now(), $2)
+       RETURNING id`,
+      [workspaceId, userId],
+    );
+    return rows[0]?.id ?? '';
+  }
+
   it('accepts every kind the contract declares', async () => {
+    // Every kind against the one scope that needs no other table, so this case is about
+    // the kind vocabulary and nothing else.
     for (const kind of FOLLOW_UP_PERMISSION_KINDS) {
       await database.session.query(
         `INSERT INTO follow_up_permissions
            (workspace_id, firm_id, contact_id, kind, scope, booking_reference, expires_at, granted_by_user_id)
-         VALUES ($1, $2, $3, $4, 'single_email', $5, now() + interval '14 days', $6)`,
+         VALUES ($1, $2, $3, $4, 'booking_communications', $5, now() + interval '14 days', $6)`,
         [workspaceId, firmId, contactId, kind, `cal-${kind}`, userId],
       );
     }
@@ -60,21 +90,26 @@ describe('the follow-up vocabularies in the database', () => {
 
   it('accepts every scope the contract declares, and every one has a window rule', async () => {
     for (const scope of FOLLOW_UP_PERMISSION_SCOPES) {
-      const sequence =
-        scope === 'agreed_sequence'
-          ? (
-              await database.session.query<{ id: string }>(
-                'INSERT INTO sequences (workspace_id, name, created_by_user_id) VALUES ($1, $2, $3) RETURNING id',
-                [workspaceId, `Vocabulary ${scope}`, userId],
-              )
-            ).rows[0]?.id ?? null
-          : null;
+      // Each scope with the binding its own CHECK requires: a template for the one
+      // e-mail, an immutable version for the agreed sequence, a step limit for
+      // everything but the reserved booking scope.
+      const versionId = scope === 'agreed_sequence' ? await publishedVersion() : null;
+      const templateId = scope === 'single_email' ? await approvedTemplate() : null;
       await database.session.query(
         `INSERT INTO follow_up_permissions
-           (workspace_id, firm_id, contact_id, kind, scope, booking_reference, sequence_id,
-            expires_at, granted_by_rule)
-         VALUES ($1, $2, $3, 'request', $4, $5, $6, now() + interval '14 days', 'reply_confirmation')`,
-        [workspaceId, firmId, contactId, scope, `cal-scope-${scope}`, sequence],
+           (workspace_id, firm_id, contact_id, kind, scope, booking_reference, template_version_id,
+            sequence_version_id, max_steps, expires_at, granted_by_rule)
+         VALUES ($1, $2, $3, 'request', $4, $5, $6, $7, $8, now() + interval '14 days', 'reply_confirmation')`,
+        [
+          workspaceId,
+          firmId,
+          contactId,
+          scope,
+          `cal-scope-${scope}`,
+          templateId,
+          versionId,
+          scope === 'booking_communications' ? null : 1,
+        ],
       );
       // Every scope has an answer to "how long?", and exactly one of them is not a
       // constant: `agreed_sequence` lasts as long as its own sequence.
@@ -93,8 +128,8 @@ describe('the follow-up vocabularies in the database', () => {
         await database.session.query(
           `INSERT INTO follow_up_permissions
              (workspace_id, firm_id, contact_id, kind, scope, booking_reference, expires_at, granted_by_user_id)
-           VALUES ($1, $2, $3, ${column === 'kind' ? '$4' : "'request'"},
-                   ${column === 'scope' ? '$4' : "'single_email'"}, 'cal-refused',
+           VALUES ($1, $2, $3, ${column === 'kind' ? '$4' : "'booking'"},
+                   ${column === 'scope' ? '$4' : "'booking_communications'"}, 'cal-refused',
                    now() + interval '14 days', $5)`,
           [workspaceId, firmId, contactId, value, userId],
         );
@@ -124,7 +159,8 @@ describe('the follow-up vocabularies in the database', () => {
     const { rows: permission } = await database.session.query<{ id: string }>(
       `INSERT INTO follow_up_permissions
          (workspace_id, firm_id, contact_id, kind, scope, booking_reference, expires_at, granted_by_user_id)
-       VALUES ($1, $2, $3, 'conversation', 'single_email', 'cal-origins', now() + interval '14 days', $4)
+       VALUES ($1, $2, $3, 'booking', 'booking_communications', 'cal-origins',
+               now() + interval '14 days', $4)
        RETURNING id`,
       [workspaceId, firmId, contactId, userId],
     );

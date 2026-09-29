@@ -66,6 +66,13 @@ export const ENROLLMENT_END_REASONS = [
   'reassignment',
   'sequence_complete',
   'admin_stop',
+  /**
+   * A live `cold_legacy` enrollment that a later evidenced follow-up superseded
+   * (migration 0025; GPT-6 review of PR 332, P1-2). Its own reason rather than
+   * `admin_stop`, because no administrator did anything: the prospect asked, and the
+   * old cold sequence had to end for the new one to exist. The history stays.
+   */
+  'superseded_by_follow_up',
 ] as const;
 export type EnrollmentEndReason = (typeof ENROLLMENT_END_REASONS)[number];
 

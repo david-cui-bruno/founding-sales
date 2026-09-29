@@ -14,7 +14,7 @@ import {
   type SequenceVersionRow,
 } from './types.ts';
 import type { EnrollableOriginKind, EnrollmentEndReason } from '@fss/contracts';
-import { verifyFollowUpPermission } from './followUpPermissions.ts';
+import { bindFollowUpPermission, verifyFollowUpPermission } from './followUpPermissions.ts';
 
 /**
  * Enrollment, and the terminal stop (specification 11.2, 7.3, 8.1, Appendix A).
@@ -82,6 +82,17 @@ export async function enrollContact(
   context: RepositoryContext,
   input: EnrollContactInput,
 ): Promise<SequenceResult<EnrolledOutcome>> {
+  // The send gate, exclusively, before any row. Enrolling can be a **stop fact**: a
+  // valid later request supersedes a live `cold_legacy` enrollment (P1-2), and a stop
+  // fact takes the gate before the rows it stops (`policy/sendGate.ts`). Taking it
+  // unconditionally, rather than only on the path that stops something, is what makes
+  // the lock order one order rather than two: gate → firm → opportunity → contact →
+  // enrollment. A dispatch claim holds the same gate *shared*, so an enrollment and a
+  // claim are never inside each other's window at all, and the deadlock the review
+  // found between a claim waiting for a firm and a command waiting for the gate cannot
+  // form (P1-4, `docs/greenfield/decisions/follow-up-eligibility-20260929.md`).
+  await lockSendGateForStopFact(context);
+
   const version = await readSequenceVersion(context, input.sequenceVersionId);
   if (version === null) return refuseSequence('version_unknown');
   if (version.state === 'retired') return refuseSequence('version_retired');
@@ -127,8 +138,22 @@ export async function enrollContact(
     return refuseSequence('contact_unknown');
   }
 
+  // ------------------------------------------------- the contact's live enrollment
+  //
+  // One live enrollment per contact (`sequence_enrollments_one_active_per_contact`),
+  // with one exception David's decision requires: *"A later valid request can establish
+  // a new evidenced follow-up. It must not automatically revive the old cold
+  // sequence."* A `cold_legacy` row that is still live would have blocked that request
+  // for ever (P1-2), so an evidenced follow-up **supersedes** it — terminally, in this
+  // transaction, with its history kept and an end reason that names what happened.
+  //
+  // Only `cold_legacy` is superseded, and only by a `follow_up`: a prospecting
+  // enrollment is live work somebody chose, and it still refuses.
   const live = await listEnrollments(context, { contactId: input.contactId, liveOnly: true });
-  if (live.length > 0) return refuseSequence('contact_already_enrolled');
+  const superseded = live.filter(enrollment => enrollment.originKind === 'cold_legacy');
+  if (live.length > superseded.length || (superseded.length > 0 && input.originKind !== 'follow_up')) {
+    return refuseSequence('contact_already_enrolled');
+  }
 
   // ------------------------------------------------------- the origin, and its evidence
   //
@@ -155,14 +180,28 @@ export async function enrollContact(
       firmId: input.firmId,
       contactId: input.contactId,
       now: (clockNow[0]?.now ?? new Date()).toISOString(),
-      sequenceId: version.sequenceId,
+      sequenceVersionId: input.sequenceVersionId,
       stepCount: version.steps.length,
+      // Every step's bytes, not only the first: a `single_email` permission buys one
+      // template, and a plan whose only step is another template is not that e-mail.
+      templateVersionId: firstStep.templateVersionId,
     });
     // The refusal a person reads is the same sentence the step would have held under.
     // A `single_email` or `contextual_reply` permission cannot carry a multi-step
-    // version: `verifyFollowUpPermission` counts the steps and refuses
-    // `follow_up_scope_exhausted`, which is 'that permission does not buy this plan'.
+    // version: `verifyFollowUpPermission` compares the plan against `max_steps` and
+    // refuses `follow_up_scope_exhausted`, which is 'that permission does not buy this
+    // plan'.
     if (!verdict.ok) return refuseSequence('follow_up_not_permitted');
+  }
+
+  // The supersession, after every refusal and before the insert, so a command that is
+  // going to be refused never stops anything. The gate is already held exclusively.
+  for (const legacy of superseded) {
+    await stopEnrollments(context, {
+      enrollmentId: legacy.id,
+      reason: 'superseded_by_follow_up',
+      cancelReason: 'superseded by an evidenced follow-up',
+    });
   }
 
   const calendar = await currentHolidayCalendar(context);
@@ -216,11 +255,32 @@ export async function enrollContact(
   );
   const created = rows[0];
   if (created === undefined) return refuseSequence('invalid_input');
+
+  // The permission buys **this** run, and only this one. The bind is conditional on
+  // `enrollment_id IS NULL`, so a second enrollment on the same permission finds it
+  // taken and this command refuses rather than quietly running twice (P0-3).
+  if (input.permissionId !== undefined) {
+    const bound = await bindFollowUpPermission(context, input.permissionId, created.enrollment_id);
+    if (!bound) throw new FollowUpReuseError(input.permissionId);
+  }
   return acceptSequence({
     enrollmentId: created.enrollment_id,
     firstExecutionId: created.execution_id,
     firstDueAt: due.dueAt,
   });
+}
+
+/**
+ * A permission that already bought a run was offered for a second (P0-3).
+ *
+ * Thrown rather than returned, so the enrollment that was just inserted rolls back with
+ * it: by the time the bind fails the row exists, and a refusal value would leave it.
+ */
+export class FollowUpReuseError extends Error {
+  constructor(public readonly permissionId: string) {
+    super('that follow-up permission has already been used for an enrollment');
+    this.name = 'FollowUpReuseError';
+  }
 }
 
 /** G0's `SequenceStep`, from this lane's row. The two shapes differ only in naming. */

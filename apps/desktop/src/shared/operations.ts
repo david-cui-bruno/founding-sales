@@ -211,6 +211,14 @@ const mergeResolutionInput = z.strictObject({
 const enrollInput = z.strictObject({ sequenceVersionId: uuid, contactId: uuid });
 
 /** "Check again" on an address, at the version the page showed (lane g90). */
+/**
+ * "I will handle this firm myself" (P1-1 of the GPT-6 review of PR 332). The reason is
+ * the person's sentence; the opportunity is the open page's, never the window's word for
+ * it. This is the only control that writes the `salesperson_command` origin, which is the
+ * one manual mode an evidenced follow-up does not run beside.
+ */
+const takeOverInput = z.strictObject({ reason: z.string().min(1).max(2000) });
+
 const checkRouteInput = z.strictObject({ routeId: uuid, routeVersion: z.number().int().min(1) });
 
 const saveStepsInput = z.strictObject({
@@ -587,6 +595,19 @@ export const OPERATIONS = {
     input: nothing,
     output: crmStateSchema,
     transform: 'the open firm page\u2019s own id, never the window\u2019s word for it',
+  },
+  'crm.takeOver': {
+    kind: 'command',
+    calls: [
+      { method: 'POST', path: '/opportunities/manual' },
+      { method: 'POST', path: '/crm/firm-page' },
+      { method: 'GET', path: '/sequences' },
+      { method: 'POST', path: '/sequences/versions' },
+      { method: 'POST', path: '/enrollments' },
+    ],
+    input: takeOverInput,
+    output: crmStateSchema,
+    transform: 'the open firm page\u2019s own opportunity, and a reason the person typed',
   },
   'crm.enroll': {
     kind: 'command',

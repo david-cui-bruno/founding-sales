@@ -59,7 +59,10 @@ describe('at-most-once sending', () => {
     const sends = world.alpha.gmail.sends;
     expect(sends).toHaveLength(1);
     expect(sends[0]?.rfcMessageId).toBe(fence?.providerMessageIdHeader);
-    expect(sends[0]?.to).toBe(world.alpha.recipientAddress);
+    // The fence's own recipient, which since P0-2 is the enrollment contact's address:
+    // the claim requires the frozen route's owner and its address to agree with the
+    // enrollment, so "what left" is read from the fence rather than from the world.
+    expect(sends[0]?.to).toBe(fence?.recipientAddress);
     // 12.7: no open-tracking pixel, and what is left of 12.6 after 29 September 2026:
     // no *visible opt-out link*, and no mandatory stop line either.
     expect(hasOptOutLink(sends[0]?.body ?? '')).toBe(false);

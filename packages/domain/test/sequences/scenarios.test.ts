@@ -59,6 +59,9 @@ const worker = (workspace: 'alpha' | 'beta' = 'alpha'): RepositoryContext =>
   );
 
 async function clearEnrollments(): Promise<void> {
+  // The two tables point at each other since migration 0025 (a permission names the one
+  // run it bought), so the binding is released before either is deleted.
+  await database.session.query('UPDATE follow_up_permissions SET enrollment_id = NULL');
   await database.session.query('DELETE FROM step_execution_shifts');
   await database.session.query('DELETE FROM step_executions');
   await database.session.query('DELETE FROM sequence_enrollments');
@@ -121,8 +124,10 @@ async function enrollAlpha(contactId: string = crm.alpha.contactId): Promise<str
 async function grantFor(contactId: string): Promise<{ contactId: string; permissionId: string }> {
   const { rows: calls } = await database.session.query<{ id: string }>(
     `INSERT INTO call_logs
-       (workspace_id, firm_id, contact_id, opportunity_id, outcome, step_effect, occurred_at, actor_user_id)
-     VALUES ($1, $2, $3, $4, 'interested', 'none', now() - interval '1 second', $5)
+       (workspace_id, firm_id, contact_id, opportunity_id, outcome, step_effect, occurred_at,
+        actor_user_id, agreed_follow_up, agreed_sequence_version_id)
+     VALUES ($1, $2, $3, $4, 'interested', 'none', now() - interval '1 second', $5,
+             'agreed_sequence', $6)
      RETURNING id`,
     [
       seeded.alpha.workspaceId,
@@ -130,19 +135,13 @@ async function grantFor(contactId: string): Promise<{ contactId: string; permiss
       contactId,
       crm.alpha.opportunityId,
       seeded.alpha.salesperson.userId,
+      sequences.alpha.publishedVersionId,
     ],
-  );
-  const { rows: versions } = await database.session.query<{ sequence_id: string }>(
-    'SELECT sequence_id FROM sequence_versions WHERE workspace_id = $1 AND id = $2',
-    [seeded.alpha.workspaceId, sequences.alpha.publishedVersionId],
   );
   const granted = await grantFollowUpPermission(contextFor('alpha', 'salesperson'), {
     firmId: crm.alpha.firmId,
     contactId,
-    kind: 'agreed_sequence',
-    scope: 'agreed_sequence',
     callLogId: calls[0]?.id ?? '',
-    sequenceId: versions[0]?.sequence_id ?? '',
     grantedByUserId: seeded.alpha.salesperson.userId,
   });
   if (!granted.ok) throw new Error(`the permission fixture was refused: ${granted.reason}`);

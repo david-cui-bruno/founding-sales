@@ -87,6 +87,16 @@ export const MINIMUM_TODAY_CARDS = 5;
 export const EXPECTED_ELIGIBILITY_DECISION = 'cold_legacy';
 
 /**
+ * The decision a *post-upgrade* enrollment must reach: the workspace pause.
+ *
+ * The legacy enrollment above is refused for being legacy, which is the property 0025
+ * adds and also the reason it can no longer show that the pause still holds. So the same
+ * step writes one enrollment of its own with a real origin, asks the gate about it, and
+ * requires the switch that keeps production silent (P2-2 of the GPT-6 review of PR 332).
+ */
+export const EXPECTED_PROSPECTING_DECISION = 'scoped_pause';
+
+/**
  * The lane the fixture's primary firm's card must be in.
  *
  * Only two Today sources have a table to read today — callbacks and new firms — and
@@ -321,11 +331,12 @@ export async function runWorkflows(
           actionKind: CHANNEL_ACTION_KINDS[execution.channel],
           now,
         });
-        // The expected decision, named. The fixture's active enrolment sits on a
-        // message whose match is ambiguous, so the hold source refuses it with
-        // `ambiguous_match` — a real refusal, reached through the real sources. A
-        // different answer means the gate now decides something else about the same
-        // rows, which is exactly what an upgrade could break.
+        // The expected decision, named. The fixture's active enrolment was written by
+        // the deployed checkout, which has no `origin_kind` to write, so migration
+        // 0025's DEFAULT makes it `cold_legacy` and `followUpPermissionSource` — the
+        // first source after suppression — refuses it. A different answer means the gate
+        // now decides something else about the same rows, which is exactly what an
+        // upgrade could break.
         if (outcome.ok) {
           throw new Error(`expected the hold ${EXPECTED_ELIGIBILITY_DECISION}, and the step was eligible`);
         }
@@ -334,7 +345,74 @@ export async function runWorkflows(
             `expected the hold ${EXPECTED_ELIGIBILITY_DECISION}, got ${outcome.reasonCode}${outcome.detail === undefined ? '' : ` (${outcome.detail})`}`,
           );
         }
-        return `held: ${outcome.reasonCode}${outcome.detail === undefined ? '' : ` (${outcome.detail})`}`;
+        // And the pause this case used to observe, on a row that can reach it (P2-2 of
+        // the GPT-6 review of PR 332). `cold_legacy` is refused before every other
+        // source, so the legacy enrollment above no longer proves that the workspace
+        // switch still holds an otherwise-sendable step. This fixture is written *after*
+        // the upgrade, by the new code, with an origin the deployed checkout could not
+        // write: the same firm, the same person, an enrollment of its own that is
+        // `prospecting` rather than legacy, and a step that is due.
+        const probe = await session.query<{ id: string }>(
+          `WITH enrolled AS (
+             INSERT INTO sequence_enrollments
+               (workspace_id, sequence_version_id, opportunity_id, firm_id, contact_id, assigned_user_id,
+                started_at, firm_time_zone, holiday_calendar_version, origin_kind)
+             SELECT e.workspace_id, e.sequence_version_id, e.opportunity_id, e.firm_id, e.contact_id,
+                    e.assigned_user_id, now(), e.firm_time_zone, e.holiday_calendar_version, 'prospecting'
+               FROM sequence_enrollments e
+              WHERE e.workspace_id = $1 AND e.id = $2
+              RETURNING id, workspace_id, firm_id, contact_id, sequence_version_id
+           )
+           INSERT INTO step_executions
+             (workspace_id, enrollment_id, step_id, firm_id, contact_id, channel, ordinal,
+              due_at, not_before, original_due_at, source_zone, rule_version)
+           SELECT n.workspace_id, n.id, s.id, n.firm_id, n.contact_id, s.channel, s.ordinal,
+                  now() - interval '1 hour', now() - interval '1 hour', now() - interval '1 hour',
+                  'America/New_York', 'elapsed.1'
+             FROM enrolled n
+             JOIN sequence_steps s
+               ON s.workspace_id = n.workspace_id AND s.sequence_version_id = n.sequence_version_id
+            ORDER BY s.ordinal
+            LIMIT 1
+           RETURNING enrollment_id AS id`,
+          [candidate.workspace_id, candidate.id],
+        );
+        const probeEnrollmentId = probe.rows[0]?.id;
+        if (probeEnrollmentId === undefined) throw new Error('the post-upgrade probe enrolment was not written');
+        const probeEnrollment = await readEnrollment(worker, { enrollmentId: probeEnrollmentId });
+        const probeExecution = await nextUnfinishedExecution(worker, probeEnrollmentId);
+        if (probeEnrollment === null || probeExecution === null) {
+          throw new Error('the post-upgrade probe enrolment has no step');
+        }
+        const probeOutcome = await composeEligibility().evaluate(worker, {
+          execution: probeExecution,
+          opportunityId: probeEnrollment.opportunityId,
+          firmId: probeEnrollment.firmId,
+          contactId: probeEnrollment.contactId,
+          ownerUserId: probeEnrollment.assignedUserId,
+          channel: probeExecution.channel,
+          actionKind: CHANNEL_ACTION_KINDS[probeExecution.channel],
+          now,
+        });
+        if (probeOutcome.ok) {
+          throw new Error(`expected ${EXPECTED_PROSPECTING_DECISION} on the post-upgrade probe, and it was eligible`);
+        }
+        if (probeOutcome.reasonCode !== EXPECTED_PROSPECTING_DECISION) {
+          throw new Error(
+            `expected ${EXPECTED_PROSPECTING_DECISION} on the post-upgrade probe, got ${probeOutcome.reasonCode}`,
+          );
+        }
+        // The probe is a fixture, not a row the upgraded deployment should keep.
+        await session.query(
+          'DELETE FROM step_executions WHERE workspace_id = $1 AND enrollment_id = $2',
+          [candidate.workspace_id, probeEnrollmentId],
+        );
+        await session.query('DELETE FROM sequence_enrollments WHERE workspace_id = $1 AND id = $2', [
+          candidate.workspace_id,
+          probeEnrollmentId,
+        ]);
+
+        return `held: ${outcome.reasonCode}${outcome.detail === undefined ? '' : ` (${outcome.detail})`}; post-upgrade prospecting probe: ${probeOutcome.reasonCode}`;
       },
     },
     {

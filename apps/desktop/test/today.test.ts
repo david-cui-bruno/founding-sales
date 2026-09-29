@@ -851,9 +851,10 @@ describe('the CRM bridge G3b was waiting for', () => {
     expect(answer.screen).toBe('pipeline');
     expect(answer.role).toBe('salesperson');
     expect(calls.map(call => call.path)).toEqual(['/pipeline/board']);
-    // Fifteen named channels until 1.0.13; the CRM bridge is thirteen operations of the
-    // registry now, and `operations.test.ts` holds the list.
-    expect(OPERATION_NAMES.filter(name => name.startsWith('crm.'))).toHaveLength(13);
+    // Fifteen named channels until 1.0.13; the CRM bridge is fourteen operations of the
+    // registry now — the fourteenth is `crm.takeOver`, the explicit takeover (P1-1 of
+    // the GPT-6 review of PR 332) — and `operations.test.ts` holds the list.
+    expect(OPERATION_NAMES.filter(name => name.startsWith('crm.'))).toHaveLength(14);
   });
 
   it('offers a stage change only for the firms the board read named', async () => {

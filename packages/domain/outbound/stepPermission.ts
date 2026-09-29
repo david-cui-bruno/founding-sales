@@ -65,6 +65,24 @@ export async function decideStepPermission(
     return refuseSend('step_ineligible', 'opportunity_mismatch');
   }
   if (enrollment.assignedUserId !== mailbox.ownerUserId) return refuseSend('step_ineligible', 'reassignment');
+  // The fence and the enrollment must name the same **person**, and the fence's route
+  // must be that person's own address (GPT-6 review of PR 332, P0-2). Every fence the
+  // sequence engine prepares takes its contact from its enrollment and its route from
+  // that contact, so a mismatch is not a state the product produces; before this check
+  // it was a state nothing refused, and a permission granted about one person could
+  // have addressed another at the same firm.
+  if (fence.contactId !== null && fence.contactId !== enrollment.contactId) {
+    return refuseSend('step_ineligible', 'contact_mismatch');
+  }
+  if (execution.contactId !== enrollment.contactId) {
+    return refuseSend('step_ineligible', 'execution_contact_mismatch');
+  }
+  const route = await routeOfFence(context, fence);
+  if (route === null) return refuseSend('route_invalid', 'frozen_route_gone');
+  if (route.contactId !== enrollment.contactId) return refuseSend('step_ineligible', 'route_owner_mismatch');
+  if (route.address !== fence.recipientAddress) {
+    return refuseSend('step_ineligible', 'recipient_address_mismatch');
+  }
 
   const outcome = await composeEligibility().evaluate(context, {
     execution,
@@ -88,6 +106,28 @@ export async function decideStepPermission(
     return refuseSend(sendRefusalForIneligibility(outcome.reasonCode), detail);
   }
   return acceptSend({ execution, enrollment });
+}
+
+/**
+ * The address a fence froze, and whose it is.
+ *
+ * `frozenRouteOutcome` in `sequences/eligibility.ts` asks whether the route is usable at
+ * the version the fence named; it does not ask *whose* it is or what it reads. Both are
+ * this function's, because the fence's `recipient_address` is the string that actually
+ * reaches Gmail, and an address that is no longer the route's — a correction, a merge —
+ * is bytes addressed to somebody the permission never named.
+ */
+async function routeOfFence(
+  context: RepositoryContext,
+  fence: OutboundFenceRow,
+): Promise<{ readonly contactId: string; readonly address: string } | null> {
+  if (fence.recipientRouteId === null) return null;
+  const { rows } = await context.db.query<{ contact_id: string; address: string }>(
+    'SELECT contact_id, address FROM email_addresses WHERE workspace_id = $1 AND id = $2',
+    [context.scope.workspaceId, fence.recipientRouteId],
+  );
+  const row = rows[0];
+  return row === undefined ? null : { contactId: row.contact_id, address: row.address };
 }
 
 /**

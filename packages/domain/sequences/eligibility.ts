@@ -169,23 +169,29 @@ export function holdSource(): StepEligibilitySource {
  * The origins of manual mode that are a prospect **signal** rather than a person's
  * decision (migration 0025; `MANUAL_MODE_ORIGINS` in `packages/domain/crm/events.ts`).
  *
- * The three of them are the events 7.3 lists: a confirmed human reply, an engaged call
- * outcome, a direct Gmail send. Each is the prospect doing something, and each is also
- * — this is the whole of the "reply means manual for ever" wall the verification
- * document of 29 September describes — exactly the kind of event that *grants* a
- * follow-up permission. A permitted follow-up must therefore not be blocked by the
- * signal that permitted it.
+ * Two of them are events 7.3 lists: a confirmed human reply and an engaged call
+ * outcome. Each is the prospect doing something, and each is also — this is the whole of
+ * the "reply means manual for ever" wall the verification document of 29 September
+ * describes — exactly the kind of event that *grants* a follow-up permission. A
+ * permitted follow-up must therefore not be blocked by the signal that permitted it.
  *
- * `salesperson_command` is the fourth, and it is not a signal: it is
- * `POST /opportunities/manual`, a person inside deciding to handle this firm by hand.
- * That decision wins over every automation, follow-up included. So does an unrecorded
- * origin — a NULL, which is every opportunity that went manual before 0025 — because an
- * unrecorded reason is not evidence of a signal.
+ * The third, `direct_send_keep_automation`, is not an event at all: it is the person's
+ * own choice, recorded by `keepFollowingUpAfterDirectSend`, to let the follow-up
+ * automation continue after they wrote from Gmail themselves.
+ *
+ * `direct_send` is **not** in this set, and that is P1-1 of the GPT-6 review of PR 332:
+ * a salesperson writing to the prospect by hand is that salesperson taking the
+ * conversation over, not a prospect signal, so it blocks until the person says
+ * otherwise. Neither is `salesperson_command`, the explicit takeover
+ * (`POST /opportunities/manual`). And neither is an unrecorded origin — a NULL, which is
+ * every opportunity that went manual before 0025 — because an unrecorded reason is not
+ * evidence of a signal; an administrator classifies those one at a time
+ * (`classifyControlModeOrigin`).
  */
 const SIGNAL_MANUAL_MODE_ORIGINS: ReadonlySet<string> = new Set([
   'human_reply',
   'engaged_call',
-  'direct_send',
+  'direct_send_keep_automation',
 ]);
 
 /**
@@ -282,17 +288,21 @@ export function followUpPermissionSource(): StepEligibilitySource {
       const { rows } = await context.db.query<{
         origin_kind: EnrollmentOriginKind;
         permission_id: string | null;
-        sequence_id: string;
+        sequence_version_id: string;
         step_count: string;
         contact_id: string;
+        template_version_id: string | null;
       }>(
-        `SELECT n.origin_kind, n.permission_id, n.contact_id, v.sequence_id,
+        `SELECT n.origin_kind, n.permission_id, n.contact_id, n.sequence_version_id,
                 (SELECT count(*) FROM sequence_steps s WHERE s.workspace_id = v.workspace_id
-                                                         AND s.sequence_version_id = v.id) AS step_count
-           FROM sequence_enrollments n
+                                                         AND s.sequence_version_id = v.id) AS step_count,
+                (SELECT s.template_version_id FROM sequence_steps s
+                  WHERE s.workspace_id = e.workspace_id AND s.id = e.step_id) AS template_version_id
+           FROM step_executions e
+           JOIN sequence_enrollments n ON n.workspace_id = e.workspace_id AND n.id = e.enrollment_id
            JOIN sequence_versions v ON v.workspace_id = n.workspace_id AND v.id = n.sequence_version_id
-          WHERE n.workspace_id = $1 AND n.id = $2`,
-        [context.scope.workspaceId, input.execution.enrollmentId],
+          WHERE e.workspace_id = $1 AND e.id = $2`,
+        [context.scope.workspaceId, input.execution.id],
       );
       const enrollment = rows[0];
       // No enrollment is `enrollmentSource`'s refusal to make, and it makes it two
@@ -322,8 +332,13 @@ export function followUpPermissionSource(): StepEligibilitySource {
         firmId: input.firmId,
         contactId: enrollment.contact_id,
         now: input.now,
-        sequenceId: enrollment.sequence_id,
+        sequenceVersionId: enrollment.sequence_version_id,
+        enrollmentId: input.execution.enrollmentId,
         stepCount: Number(enrollment.step_count),
+        // The bytes this step would send: the frozen fence's template version at the
+        // dispatch asking, the step's own at preparation. A `single_email` permission
+        // is the agreed overview and not whatever approved template was picked (P0-2).
+        templateVersionId: input.frozen?.templateVersionId ?? enrollment.template_version_id,
       });
       return verdict.ok ? { ok: true } : { ok: false, reasonCode: verdict.refusal, detail: verdict.detail };
     },
@@ -362,8 +377,8 @@ export function firmExclusivitySource(): StepEligibilitySource {
   return {
     name: 'firm-exclusivity',
     evaluate: async (context, input) => {
-      const { rows: mine } = await context.db.query<{ origin_kind: EnrollmentOriginKind; started_at: Date }>(
-        'SELECT origin_kind, started_at FROM sequence_enrollments WHERE workspace_id = $1 AND id = $2',
+      const { rows: mine } = await context.db.query<{ origin_kind: EnrollmentOriginKind }>(
+        'SELECT origin_kind FROM sequence_enrollments WHERE workspace_id = $1 AND id = $2',
         [context.scope.workspaceId, input.execution.enrollmentId],
       );
       const enrollment = mine[0];
@@ -375,6 +390,11 @@ export function firmExclusivitySource(): StepEligibilitySource {
         context.scope.workspaceId,
         input.firmId,
       ]);
+      // The comparison instant is read in SQL rather than passed in. A JavaScript `Date`
+      // has milliseconds and `timestamptz` has microseconds, so a round trip through the
+      // driver rounds the value *down*, and a competitor started in the same millisecond
+      // then compares as later than itself and is missed. The tied-`started_at` case in
+      // `test/outbound/firmExclusivityAtSend.test.ts` is exactly that (P1-4).
       const { rows: others } = await context.db.query<{ id: string }>(
         `SELECT id FROM sequence_enrollments
           WHERE workspace_id = $1
@@ -382,10 +402,11 @@ export function firmExclusivitySource(): StepEligibilitySource {
             AND id <> $3
             AND ended_at IS NULL
             AND origin_kind = 'prospecting'
-            AND (started_at, id) < ($4::timestamptz, $3::uuid)
+            AND (started_at, id) < (SELECT started_at, id FROM sequence_enrollments
+                                     WHERE workspace_id = $1 AND id = $3)
           ORDER BY started_at, id
           LIMIT 1`,
-        [context.scope.workspaceId, input.firmId, input.execution.enrollmentId, enrollment.started_at.toISOString()],
+        [context.scope.workspaceId, input.firmId, input.execution.enrollmentId],
       );
       const earlier = others[0];
       return earlier === undefined

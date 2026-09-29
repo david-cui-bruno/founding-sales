@@ -108,7 +108,9 @@ describe('S02: the complete eligibility, asked again at the claim', () => {
       await world.database.session.query(
         `UPDATE email_addresses SET eligibility = $3, version = version + 1, updated_at = now()
           WHERE workspace_id = $1 AND id = $2`,
-        [workspaceId(), firm.routeId, eligibility],
+        // The route the *fence* froze, which since P0-2 is the enrollment's contact's
+        // own address rather than a route shared with the firm's first contact.
+        [workspaceId(), frozen?.recipientRouteId ?? firm.routeId, eligibility],
       );
     }
 
@@ -129,10 +131,11 @@ describe('S02: the complete eligibility, asked again at the claim', () => {
   it('refuses a candidate route, which the gate used to let through', async () => {
     const firm = await seedFirm(world, world.alpha, 'route-candidate');
     const fenceId = await prepareFor(world, world.alpha, firm);
+    const frozen = await readFence(context(), fenceId);
     await world.database.session.query(
       `UPDATE email_addresses SET eligibility = 'candidate', version = version + 1, updated_at = now()
         WHERE workspace_id = $1 AND id = $2`,
-      [workspaceId(), firm.routeId],
+      [workspaceId(), frozen?.recipientRouteId ?? firm.routeId],
     );
     const { report, sends } = await dispatch(fenceId);
     expect(report.outcome, why(report)).toBe('held');

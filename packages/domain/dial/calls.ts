@@ -104,8 +104,8 @@ export interface LogCallOutcomeInput {
    * of any kind.
    */
   readonly followUpPermission?:
-    | { readonly scope: 'single_email' }
-    | { readonly scope: 'agreed_sequence'; readonly sequenceId: string }
+    | { readonly scope: 'single_email'; readonly templateVersionId: string }
+    | { readonly scope: 'agreed_sequence'; readonly sequenceVersionId: string }
     | undefined;
   readonly commandId?: string | undefined;
   /** Required whenever the outcome may suppress. The journal write precedes the row. */
@@ -284,8 +284,9 @@ export async function logCallOutcome(
   const logged = await context.db.query<{ id: string }>(
     `INSERT INTO call_logs
        (workspace_id, firm_id, contact_id, opportunity_id, phone_route_id, calling_identity_id,
-        ticket_id, step_execution_id, outcome, step_effect, occurred_at, actor_user_id, command_id, note)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::timestamptz, $12, $13, $14)
+        ticket_id, step_execution_id, outcome, step_effect, occurred_at, actor_user_id, command_id, note,
+        agreed_follow_up, agreed_template_version_id, agreed_sequence_version_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::timestamptz, $12, $13, $14, $15, $16, $17)
      RETURNING id`,
     [
       context.scope.workspaceId,
@@ -302,6 +303,15 @@ export async function logCallOutcome(
       actor.userId,
       input.commandId ?? null,
       input.note ?? null,
+      // What the person on the call agreed to, on the call log itself (migration 0025,
+      // P0-1). The permission points at this row and re-reads these three columns on
+      // every step, so the log — not the permission — is where the agreement lives, and
+      // a log that agreed to nothing can never be turned into one through any API.
+      input.followUpPermission?.scope ?? null,
+      input.followUpPermission?.scope === 'single_email' ? input.followUpPermission.templateVersionId : null,
+      input.followUpPermission?.scope === 'agreed_sequence'
+        ? input.followUpPermission.sequenceVersionId
+        : null,
     ],
   );
   const callLogId = logged.rows[0]?.id;
@@ -407,13 +417,12 @@ export async function logCallOutcome(
       // and nothing else, which is David's own distinction.
       if (input.outcome !== 'interested') return refusePolicy('invalid_input');
       if (contactId === undefined) return refusePolicy('invalid_input');
+      // The kind and the scope are not passed: the call log decides them, because a
+      // caller that could name them could name a sequence over a callback (P0-1).
       const granted = await grantFollowUpPermission(context, {
         firmId: input.firmId,
         contactId,
-        kind: agreed.scope === 'agreed_sequence' ? 'agreed_sequence' : 'conversation',
-        scope: agreed.scope,
         callLogId,
-        ...(agreed.scope === 'agreed_sequence' ? { sequenceId: agreed.sequenceId } : {}),
         grantedByUserId: actor.userId,
         note: 'agreed on the call',
       });

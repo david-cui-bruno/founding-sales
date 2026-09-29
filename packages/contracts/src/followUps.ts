@@ -83,6 +83,11 @@ export const ENROLLABLE_ORIGIN_KINDS = ['prospecting', 'follow_up'] as const;
 export const enrollableOriginKindSchema = z.enum(ENROLLABLE_ORIGIN_KINDS);
 export type EnrollableOriginKind = (typeof ENROLLABLE_ORIGIN_KINDS)[number];
 
+/** What a call may agree to. A callback is not one of them (`call_logs_agreement_needs_interest`). */
+export const CALL_AGREED_FOLLOW_UPS = ['single_email', 'agreed_sequence'] as const;
+export const callAgreedFollowUpSchema = z.enum(CALL_AGREED_FOLLOW_UPS);
+export type CallAgreedFollowUp = (typeof CALL_AGREED_FOLLOW_UPS)[number];
+
 /** The rule names the system itself may grant under, in place of a user id. */
 export const FOLLOW_UP_GRANT_RULES = ['reply_confirmation', 'call_outcome'] as const;
 export type FollowUpGrantRule = (typeof FOLLOW_UP_GRANT_RULES)[number];
@@ -101,7 +106,11 @@ export const followUpPermissionDtoSchema = z.object({
   callLogId: uuid.nullable(),
   mailMessageId: uuid.nullable(),
   bookingReference: z.string().nullable(),
-  sequenceId: uuid.nullable(),
+  /** What the permission is bound to: the bytes, the version, and the one run. */
+  templateVersionId: uuid.nullable(),
+  sequenceVersionId: uuid.nullable(),
+  enrollmentId: uuid.nullable(),
+  maxSteps: z.number().int().nullable(),
   grantedAt: instant,
   expiresAt: instant,
   grantedByUserId: uuid.nullable(),
@@ -115,19 +124,21 @@ export type FollowUpPermissionDto = z.infer<typeof followUpPermissionDtoSchema>;
 const command = { commandId: commandIdSchema, clientVersion: semanticVersionSchema };
 
 /**
- * `POST /follow-up-permissions`. Exactly one piece of evidence is named by the caller;
- * the command re-reads it and refuses one that does not name this firm and this person.
+ * `POST /follow-up-permissions`.
+ *
+ * **Exactly one** piece of evidence, and the *evidence* decides the kind and the scope:
+ * a client that could name them could name `agreed_sequence` over a callback log
+ * (GPT-6 review of PR 332, P0-1), so they are not fields. The command re-reads the
+ * evidence row — its outcome, its firm, its recipient, and what it records as agreed —
+ * and refuses anything it does not support.
  */
 export const createFollowUpPermissionCommandSchema = z.strictObject({
   ...command,
   firmId: uuid,
   contactId: uuid,
-  kind: followUpPermissionKindSchema,
-  scope: followUpPermissionScopeSchema,
   callLogId: uuid.optional(),
   mailMessageId: uuid.optional(),
   bookingReference: z.string().min(1).max(200).optional(),
-  sequenceId: uuid.optional(),
   note: z.string().min(1).max(2000).optional(),
 });
 
@@ -135,6 +146,40 @@ export const createFollowUpPermissionCommandSchema = z.strictObject({
 export const revokeFollowUpPermissionCommandSchema = z.strictObject({
   ...command,
   permissionId: uuid,
+});
+
+/**
+ * A person takes a firm over by hand: `POST /opportunities/manual`
+ * (`salesperson_command`, the origin no production caller wrote before P1-1).
+ */
+export const takeOverOpportunityCommandSchema = z.strictObject({
+  ...command,
+  opportunityId: uuid,
+  reason: z.string().min(1).max(2000),
+});
+
+/**
+ * The user chooses to keep the evidenced follow-up automation running after their own
+ * direct Gmail send: `POST /opportunities/keep-following-up` (P1-1). A direct send is a
+ * takeover unless this command says otherwise; the opportunity stays manual either way.
+ */
+export const keepFollowingUpCommandSchema = z.strictObject({
+  ...command,
+  opportunityId: uuid,
+  reason: z.string().min(1).max(2000),
+});
+
+/**
+ * An administrator classifies an opportunity whose manual mode predates
+ * `control_mode_origin` (P1-1). Never a blanket backfill: one opportunity, one
+ * administrator, one reason, one audit row — and only where the origin is NULL, so a
+ * recorded takeover can never be downgraded to a signal.
+ */
+export const classifyControlModeOriginCommandSchema = z.strictObject({
+  ...command,
+  opportunityId: uuid,
+  origin: z.enum(['human_reply', 'engaged_call', 'direct_send', 'salesperson_command']),
+  reason: z.string().min(1).max(2000),
 });
 
 /** `GET /firms/:id/follow-up-permissions`, as a POST read like the other firm reads. */

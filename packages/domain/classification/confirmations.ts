@@ -339,31 +339,6 @@ export async function confirmReplyDisposition(
     consequences.push('callback_committed');
   }
 
-  // The follow-up this reply permits (migration 0025). After manual mode and the stop,
-  // and before the confirmation row, so a refusal of the grant rolls the whole command
-  // back rather than leaving a confirmed reply with a half-written permission.
-  //
-  // Scope `contextual_reply`: "an inbound question permits a contextual reply", which is
-  // one reply and not a sequence — `verifyFollowUpPermission` refuses a multi-step
-  // enrollment on it. The evidence is this message, and the *match* to the firm is what
-  // the step re-reads, so a merge that re-points the match withdraws the permission
-  // without anybody having to remember to.
-  let followUpPermissionId: string | null = null;
-  const permitsFollowUp = input.disposition === 'interested' || input.disposition === 'follow_up_later';
-  if (permitsFollowUp && input.grantFollowUp !== false && chosen.contactId !== null) {
-    const granted = await grantFollowUpPermission(context, {
-      firmId: chosen.firmId,
-      contactId: chosen.contactId,
-      kind: 'request',
-      scope: 'contextual_reply',
-      mailMessageId: input.messageId,
-      grantedByUserId: actor.userId,
-      note: `confirmed reply disposition: ${input.disposition}`,
-    });
-    if (!granted.ok) return refuseClassification('invalid_input');
-    followUpPermissionId = granted.value.id;
-  }
-
   // Only the holds this message opened, and only its own reason codes. A pause, a
   // mailbox hold or a suppression review on the same opportunity keeps its hold.
   const released = [
@@ -399,6 +374,37 @@ export async function confirmReplyDisposition(
   );
   const row = rows[0];
   if (row === undefined) return refuseClassification('invalid_input');
+
+  // The follow-up this reply permits (migration 0025), **after the confirmation row
+  // exists**. The order matters since the review of PR 332 (P0-1): the evidence a mail
+  // permission rests on is the confirmation a person made — an unconfirmed candidate
+  // match is not consent — so `verifyFollowUpPermission` reads that row, and a grant
+  // written before it would be refused by its own check. The whole command is one
+  // transaction, so a refusal here still takes the confirmation with it.
+  //
+  // Scope `contextual_reply`: "an inbound question permits a contextual reply", which is
+  // one reply and not a sequence — `verifyFollowUpPermission` refuses a multi-step
+  // enrollment on it. The evidence is this message, and the *match* to the firm is what
+  // the step re-reads, so a merge that re-points the match withdraws the permission
+  // without anybody having to remember to.
+  let followUpPermissionId: string | null = null;
+  // A `follow_up_later` that committed a callback is a **call**, not an e-mail: the
+  // person said "come back to me", and a date was written down. Granting an e-mail
+  // permission from it was P0-1's second half, and `verifyEvidence` refuses such a
+  // confirmation outright, so the command must not offer it either.
+  const permitsFollowUp = input.disposition === 'interested' || input.disposition === 'follow_up_later';
+  if (permitsFollowUp && callbackId === null && input.grantFollowUp !== false && chosen.contactId !== null) {
+    const granted = await grantFollowUpPermission(context, {
+      firmId: chosen.firmId,
+      contactId: chosen.contactId,
+      mailMessageId: input.messageId,
+      grantedByUserId: actor.userId,
+      note: `confirmed reply disposition: ${input.disposition}`,
+    });
+    if (!granted.ok) return refuseClassification('invalid_input');
+    followUpPermissionId = granted.value.id;
+  }
+
 
   // 12.4: "A false-positive or corrected classification is audited." Both are: the
   // action name distinguishes them so a drift report can count corrections without

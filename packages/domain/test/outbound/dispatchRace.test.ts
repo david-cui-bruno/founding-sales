@@ -221,12 +221,16 @@ describe('Appendix G 3: a reply commits while the dispatch is between its read a
   it('Appendix G 6: an opt-out committed on another connection stops the send', async () => {
     const firm = await seedFirm(world, world.alpha, 'optout');
     const fenceId = await prepareFor(world, world.alpha, firm);
+    // The address opted out is the one this fence would write to. Since P0-2 the claim
+    // requires the frozen route to belong to the enrollment's contact, so the fixture's
+    // fence names that person's own address rather than the firm's first one.
+    const suppressed = (await readFence(context(), fenceId))?.recipientAddress ?? firm.address;
 
     const { report, sends, refreshes } = await dispatchPausing(fenceId, async () => {
       await withTransaction(second.session, async () => {
         const recorded = await recordSuppression(second.context(workspaceId()), {
           scope: 'handle',
-          value: firm.address,
+          value: suppressed,
           source: 'prospect_opt_out',
           journal: world.journal,
         });
