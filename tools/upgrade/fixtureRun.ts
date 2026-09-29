@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import type { BaseCheckout } from './baseCheckout.ts';
 import { FIXTURE_JSON_PREFIX } from './fixtureProtocol.ts';
+import { redactConnectionStrings } from './redact.ts';
 import type { FixtureHandles, FixturePartReport } from './fixture.ts';
 
 /**
@@ -88,10 +89,13 @@ export async function loadFixtureInBaseCheckout(
     child.on('close', value => { resolve({ code: value, output: text }); });
   });
 
-  const line = output.split('\n').find(candidate => candidate.startsWith(FIXTURE_JSON_PREFIX));
+  // Redacted before it is kept: the evidence artifact is uploaded, and a `pg` error or
+  // a stack frame can carry the URL the child was handed (GPT-6 review, P2-2).
+  const safe = redactConnectionStrings(output);
+  const line = safe.split('\n').find(candidate => candidate.startsWith(FIXTURE_JSON_PREFIX));
   if (code !== 0 || line === undefined) {
     throw new Error(
-      `the fixture loader in ${base.directory} exited ${String(code)} without an answer:\n${output.split('\n').slice(-30).join('\n')}`,
+      `the fixture loader in ${base.directory} exited ${String(code)} without an answer:\n${safe.split('\n').slice(-30).join('\n')}`,
     );
   }
   const parsed = JSON.parse(line.slice(FIXTURE_JSON_PREFIX.length)) as {
@@ -104,6 +108,6 @@ export async function loadFixtureInBaseCheckout(
     handles: parsed.handles,
     parts,
     emptyTables: new Map(parsed.emptyTables),
-    output,
+    output: safe,
   };
 }

@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { cp, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -109,53 +111,58 @@ export async function withFailingMigration(directory: string, version: number): 
   return { directory: copy, fileName };
 }
 
+
+export interface DeployedMigrationDifference {
+  readonly fileName: string;
+  readonly reason: 'content_differs' | 'missing_in_head' | 'missing_in_base';
+  readonly baseChecksum: string | null;
+  readonly headChecksum: string | null;
+}
+
 /**
- * The membership `fss migrate` needs, which `database-users ensure` does not give it.
+ * Every migration up to `through` must be byte-identical in the two checkouts.
  *
- * PostgreSQL 16 grants a role created by a `CREATEROLE` user back to its creator with
- * `ADMIN TRUE, INHERIT FALSE, SET FALSE`. Migration 0001 creates `migration` and
- * `app_runtime`, and on a real instance it runs as the RDS master, which is such a
- * user. So afterwards:
+ * The runner records a sha256 of each file's bytes and refuses to continue when a
+ * recorded file has changed (`MIGRATION_CHECKSUM_MISMATCH`), because migrations are
+ * forward-only and there is nothing to fall back to. A branch that edits an already
+ * deployed file and adds a new one would therefore be *refused by production* — and
+ * would have passed this test, which applied HEAD's copy of the old file and recorded
+ * HEAD's checksum for it.
  *
- *   * `databaseUsers.ts` asks `pg_has_role(current_user, 'migration', 'MEMBER')`, which
- *     that automatic grant makes **true**, reports `migrationMembership: 'already'` and
- *     issues no `GRANT`;
- *   * `migrate.ts` asks `pg_has_role(current_user, 'migration', 'USAGE')`, which an
- *     `INHERIT FALSE` membership makes **false**, and every `fss migrate` after the
- *     first one is refused `not_migration_role`.
- *
- * The old rehearsal could not see this: it migrated an empty database exactly once, and
- * on the first run the role does not exist yet, which is the case `readMigrationRole`
- * deliberately lets through. An upgrade test migrates twice by construction, which is
- * how it turned up.
- *
- * This function is the test's way past it, not a fix: it makes the membership inherit,
- * as a `GRANT migration TO <migrator>` issued by `database-users ensure` would have, and
- * says whether it had to. The report prints that sentence whenever it did.
+ * So the deployed range is compared before anything is applied, and the answer is the
+ * same one production would give. The runner is still the backstop: 1..N are applied
+ * from the base checkout and N+1..M from HEAD, so a difference this function somehow
+ * missed fails again, with the runner's own error, at the second apply.
  */
-export async function ensureMigrationMembershipInherits(
-  owner: SessionQueryable,
-  migrator: SessionQueryable,
-): Promise<{ readonly repaired: boolean; readonly detail: string }> {
-  const role = await readMigrationRole(migrator);
-  if (!role.migrationRoleExists || role.isMigrationRole) {
-    return { repaired: false, detail: `${role.connectedRole} already carries ${MIGRATION_ROLE}'s privileges` };
+export function compareDeployedMigrations(
+  baseDirectory: string,
+  headDirectory: string,
+  through: number,
+): readonly DeployedMigrationDifference[] {
+  const checksum = (sql: string): string => createHash('sha256').update(sql, 'utf8').digest('hex');
+  const upTo = (directory: string): Map<string, string> =>
+    new Map(
+      loadMigrations(directory)
+        .filter(migration => migration.version <= through)
+        .map(migration => [migration.fileName, checksum(readFileSync(join(directory, migration.fileName), 'utf8'))]),
+    );
+  const base = upTo(baseDirectory);
+  const head = upTo(headDirectory);
+  const differences: DeployedMigrationDifference[] = [];
+  for (const [fileName, baseChecksum] of base) {
+    const headChecksum = head.get(fileName);
+    if (headChecksum === undefined) {
+      differences.push({ fileName, reason: 'missing_in_head', baseChecksum, headChecksum: null });
+      continue;
+    }
+    if (headChecksum !== baseChecksum) {
+      differences.push({ fileName, reason: 'content_differs', baseChecksum, headChecksum });
+    }
   }
-  const { rows } = await owner.query<{ inherit: boolean | null }>(
-    `SELECT a.inherit_option AS inherit
-       FROM pg_auth_members a
-       JOIN pg_roles r ON r.oid = a.roleid
-       JOIN pg_roles m ON m.oid = a.member
-      WHERE r.rolname = $1 AND m.rolname = $2`,
-    [MIGRATION_ROLE, role.connectedRole],
-  );
-  const membership = rows[0];
-  await owner.query(`GRANT ${MIGRATION_ROLE} TO "${role.connectedRole}" WITH INHERIT TRUE`);
-  return {
-    repaired: true,
-    detail:
-      membership === undefined
-        ? `${role.connectedRole} was not a member of ${MIGRATION_ROLE} at all`
-        : `${role.connectedRole}'s membership of ${MIGRATION_ROLE} had INHERIT ${String(membership.inherit)}, so \`fss migrate\` refuses it as not_migration_role`,
-  };
+  for (const [fileName, headChecksum] of head) {
+    if (!base.has(fileName)) {
+      differences.push({ fileName, reason: 'missing_in_base', baseChecksum: null, headChecksum });
+    }
+  }
+  return differences.sort((left, right) => left.fileName.localeCompare(right.fileName));
 }

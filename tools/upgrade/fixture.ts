@@ -39,6 +39,7 @@ import { rescheduleExecution } from '@fss/domain/sequences/shifts.ts';
 import { consumeTerminalStops } from '@fss/domain/sequences/terminalStops.ts';
 import { updateSetting } from '@fss/domain/settings/store.ts';
 import { POSTURE_STATEMENT_KEYS } from '@fss/domain/src/rules/statePosture.ts';
+import { SENDING_STOP_LINE } from '@fss/domain/src/rules/templates.ts';
 import { claimFinalization } from '@fss/domain/suppression/finalize.ts';
 import { recordingSuppressionJournal } from '@fss/domain/suppression/journal.ts';
 import { createTemplateVersion, readTemplateVersion } from '@fss/domain/templates/templates.ts';
@@ -198,6 +199,46 @@ const REGION = 'RI';
 
 /** How many firms the file imports. The brief asks for at least twenty. */
 const IMPORTED_FIRMS = 22;
+
+/**
+ * The business date the legacy Today card is written for: the business day before the
+ * fixture's own instant, so that nothing built for `businessDate` can rewrite it.
+ *
+ * A card the current build would rebuild is not a legacy row — it is this morning's row.
+ * Yesterday's card is never rebuilt by anything, which is exactly why production still
+ * holds cards at the algorithm version that was current when they were written.
+ */
+const LEGACY_BUSINESS_DATE = '2026-09-15';
+
+/**
+ * The algorithm version every Today card in this tree carries, and the one the subject
+ * branch's 0023 stops producing when it replaces `today_algorithm_version()` with
+ * `today.2`. Written literally rather than read from `TODAY_ALGORITHM_VERSION`, because
+ * the point of the row is to be pinned at the old value whatever the tree says.
+ */
+const LEGACY_TODAY_ALGORITHM_VERSION = 'today.1';
+
+/**
+ * The postal address the pre-0020 footer block carried.
+ *
+ * A fictional address: `example.test` is reserved by RFC 6761 and no such street exists
+ * in the 02903 ZIP. It is a literal here rather than the `postal_address` setting,
+ * because the row it composes is a row written before that setting existed.
+ */
+const LEGACY_POSTAL_ADDRESS = '1 Example Plaza, Suite 200, Providence, RI 02903';
+
+/**
+ * Every part this fixture must contain. Asserted by the caller so that an older or
+ * shorter loader in a base checkout cannot quietly reduce what the upgrade test covers
+ * (GPT-6 review, P1-6).
+ *
+ * The order is the order `loadFixture` runs them in, and the names are the names it
+ * reports. Both are part of the contract: the caller compares the list it holds against
+ * the names the child process reported, and `loadFixture` itself checks that it produced
+ * every one of them before it returns.
+ */
+export { REQUIRED_FIXTURE_PARTS } from './fixtureManifest.ts';
+import { REQUIRED_FIXTURE_PARTS } from './fixtureManifest.ts';
 
 /**
  * Why a table that exists at N is legitimately empty. Used to fill `emptyTables`.
@@ -369,9 +410,13 @@ export async function loadFixture(
     enrollmentPart(asSalesperson, state),
     mailboxPart(asSalesperson, state),
     outboundPart(session, asSalesperson, state),
+    legacyFooterWithoutAddressPart(session, asSalesperson, state),
+    legacyFooterWithAddressPart(session, asSalesperson, state),
+    preparedFencePart(session, asSalesperson, state),
     dialPart(asSalesperson, state),
     inboundMailPart(asSalesperson, state),
     classificationPart(asSalesperson, state),
+    legacyTodayCardPart(session, asSalesperson, state),
     todayPart(asSalesperson, state),
     jobsPart(session, state),
     funnelPart(asSalesperson, state),
@@ -414,6 +459,18 @@ export async function loadFixture(
       missing: [],
       ms: Date.now() - started,
     });
+  }
+
+  // The loader's own half of the manifest check (GPT-6 review, P1-6). The caller compares
+  // the names it was sent against `REQUIRED_FIXTURE_PARTS`; this compares the names this
+  // run actually produced, so a part deleted from the list above fails here rather than
+  // thinning the upgrade test's coverage in silence. A *skipped* part still counts: a skip
+  // is reported, reasoned about and, for anything but a missing object, failed by the
+  // caller — it is a missing name that nobody would notice.
+  const produced = new Set(reports.map(report => report.name));
+  const absentParts = REQUIRED_FIXTURE_PARTS.filter(name => !produced.has(name));
+  if (absentParts.length > 0) {
+    throw new Error(`the fixture did not produce its required parts: ${absentParts.join(', ')}`);
   }
 
   return {
@@ -943,6 +1000,220 @@ function outboundPart(session: SessionQueryable, asSalesperson: () => Repository
         }),
         'the sent evidence',
       );
+      return undefined;
+    },
+  };
+}
+
+/**
+ * The prerequisites every fence part shares, or the part that did not run.
+ *
+ * A fence needs a firm to be addressed to, an approved template version to name, and a
+ * connected mailbox to be sent from; `prepareOutboundMessage` refuses without all three.
+ */
+function fencePrerequisite(state: State): string | undefined {
+  if (state.primaryFirmId === '') return 'the firms part did not run';
+  if (state.templateVersionId === null || state.templateContentHash === null) return 'the template part did not run';
+  if (state.mailboxId === null) return 'the mailbox part did not run';
+  return undefined;
+}
+
+/** The subject every fixture fence carries: the approved template version's own. */
+const FENCE_SUBJECT = 'A short note about your properties';
+
+/**
+ * Write one `prepared` fence with the bytes the caller hands over, through the fence
+ * command itself.
+ *
+ * The body is the caller's because that is precisely the seam these parts exercise:
+ * `prepareOutboundMessage` freezes whatever bytes it is given (it checks only that they
+ * end in exactly one stop line, `sendBodyIssue`), and the thing that no longer produces
+ * the older shapes is `composeSendBody` one step upstream. So a legacy body still goes in
+ * through the real command, with the real refusals, the real events and the real
+ * `rendered_hash` — no direct INSERT is needed or wanted here.
+ *
+ * Each fence needs an origin of its own: `outbound_messages_one_per_step_execution` means
+ * one fence per step execution. `makeStepExecution` mints one against an existing open
+ * opportunity, because `opportunities_one_open_per_firm` forbids it opening a second.
+ */
+async function prepareFixtureFence(
+  session: SessionQueryable,
+  asSalesperson: () => RepositoryContext,
+  state: State,
+  input: { readonly firmIndex: number; readonly toAddress: string; readonly body: string; readonly what: string },
+): Promise<string | undefined> {
+  const prerequisite = fencePrerequisite(state);
+  if (prerequisite !== undefined) return prerequisite;
+  const templateVersionId = state.templateVersionId;
+  const templateContentHash = state.templateContentHash;
+  if (templateVersionId === null || templateContentHash === null) return 'the template part did not run';
+
+  const firmId = state.firmIds[input.firmIndex];
+  const opportunityId = state.openOpportunityIds[input.firmIndex];
+  if (firmId === undefined || opportunityId === undefined) return 'the fixture has no spare firm for this fence';
+
+  const stepExecutionId = await makeStepExecution(session, {
+    workspaceId: state.workspaceId,
+    firmId,
+    opportunityId,
+    userId: state.salespersonUserId,
+    templateVersionId,
+    zone: ZONE,
+  });
+  value(
+    await prepareOutboundMessage(asSalesperson(), {
+      stepExecutionId,
+      firmId,
+      ownerUserId: state.salespersonUserId,
+      templateVersionId,
+      templateContentHash,
+      toAddress: input.toAddress,
+      subject: FENCE_SUBJECT,
+      body: input.body,
+      sendAt: NOW,
+      sourceZone: ZONE,
+      businessDate: '2026-09-16',
+    }),
+    input.what,
+  );
+  return undefined;
+}
+
+/**
+ * A stored body whose footer block is the sign-off and the stop line, and no address.
+ *
+ * Production holds rows in this shape and nothing composes it deliberately any more: the
+ * footer stopped being part of the approved body at 0020 and became something a send
+ * composes from the workspace's `postal_address` setting, inside the claiming transaction
+ * (`packages/domain/outbound/footer.ts`). A row like this is what
+ * `reconcileFenceFooter` meets on an unsent fence prepared by the previous release, and
+ * it is what every CHECK a later migration adds to `outbound_messages.body` will be
+ * validated against.
+ *
+ * Two readings, both recorded here. The name is the coordinator's and is kept verbatim,
+ * but the migrations read the other way round: 0015 *dropped*
+ * `template_versions.footer_postal_address`, so it is the rows written **before 0015**
+ * that carry an address and the rows between 0015 and 0020 that do not. The pair of
+ * shapes covered is the same either way — with an address line and without — and this is
+ * the one without.
+ */
+function legacyFooterWithoutAddressPart(
+  session: SessionQueryable,
+  asSalesperson: () => RepositoryContext,
+  state: State,
+): Part {
+  return {
+    name: 'legacy footer (pre-0015, no postal address)',
+    tables: ['outbound_messages', 'outbound_message_events', 'step_executions'],
+    run: async () =>
+      await prepareFixtureFence(session, asSalesperson, state, {
+        firmIndex: 1,
+        toAddress: 'legacy.nofooter.address@firm02.example.test',
+        body: fixtureBody('Hello.\n\nA note written before the footer moved out of the approved body.'),
+        what: 'the pre-0015 footer fence',
+      }),
+  };
+}
+
+/**
+ * The same, with the postal-address line in the block: sign-off, address, stop line.
+ *
+ * The address is a literal rather than the `postal_address` setting, because the row is a
+ * row written before that setting existed — and deliberately *not* one this workspace has
+ * ever recorded, which is what makes it the interesting case: `composeSendBody` can only
+ * rebuild a block from something the database recorded, so a body like this is held
+ * `footer_ambiguous` rather than rewritten. That is a shape no current code path writes
+ * and one an upgrade still has to carry.
+ */
+function legacyFooterWithAddressPart(
+  session: SessionQueryable,
+  asSalesperson: () => RepositoryContext,
+  state: State,
+): Part {
+  return {
+    name: 'legacy footer (pre-0020, with postal address)',
+    tables: ['outbound_messages', 'outbound_message_events', 'step_executions'],
+    run: async () =>
+      await prepareFixtureFence(session, asSalesperson, state, {
+        firmIndex: 2,
+        toAddress: 'legacy.postal.address@firm03.example.test',
+        body:
+          'Hello.\n\nA note written while the postal address was still part of the footer.' +
+          `\n\n${FIXTURE_SIGN_OFF}\n${LEGACY_POSTAL_ADDRESS}\n${SENDING_STOP_LINE}`,
+        what: 'the pre-0020 footer fence',
+      }),
+  };
+}
+
+/**
+ * A fence sitting in `prepared` with its frozen envelope, as a part of its own.
+ *
+ * The `outbound` part prepares a fence and then drives it to `sent`, so without this
+ * there is no row left in the state every dispatch starts from — and `prepared` is the
+ * state with the most to lose: it is the one a migration can still move, the one
+ * `claimForDispatch` takes with `FOR UPDATE`, and the one `reconcileFenceFooter`
+ * recomposes. It is written by the real command, which is the one that freezes the
+ * envelope.
+ */
+function preparedFencePart(
+  session: SessionQueryable,
+  asSalesperson: () => RepositoryContext,
+  state: State,
+): Part {
+  return {
+    name: 'prepared fence',
+    tables: ['outbound_messages', 'outbound_message_events', 'step_executions'],
+    run: async () =>
+      await prepareFixtureFence(session, asSalesperson, state, {
+        firmIndex: 3,
+        toAddress: 'prepared.fence@firm04.example.test',
+        body: fixtureBody('Hello.\n\nThis one is still waiting for its dispatch window.'),
+        what: 'the prepared fence',
+      }),
+  };
+}
+
+/**
+ * Yesterday's Today card, pinned at algorithm version `today.1`.
+ *
+ * Built for `LEGACY_BUSINESS_DATE` through `buildTodaySnapshot` — the ordinary command,
+ * the one the 05:00 job calls — because a card is only ever produced by the build, and a
+ * hand-written card would prove nothing about the trigger that maintains its counts.
+ *
+ * The version itself is then set directly, and that is the honest exception. There is no
+ * command that writes `today_snapshots.algorithm_version`: the column takes its value
+ * from the `today_algorithm_version()` database function, which the subject branch's 0023
+ * replaces with `today.2`. So the moment the upgrade the test is exercising has run,
+ * nothing in the tree can produce a `today.1` row any more — which is exactly why
+ * production's existing `today.1` cards need to be in the fixture before it runs. Setting
+ * it explicitly also means the row is pinned at the old version whatever the base
+ * checkout's function happens to return.
+ */
+function legacyTodayCardPart(
+  session: SessionQueryable,
+  asSalesperson: () => RepositoryContext,
+  state: State,
+): Part {
+  return {
+    name: 'legacy today card (today.1)',
+    tables: ['today_snapshots', 'today_snapshots.algorithm_version', 'today_items'],
+    run: async () => {
+      if (state.primaryFirmId === '') return 'the firms part did not run';
+      // Before the `today` part, and for an earlier date than it builds: a card the
+      // current build would rebuild is this morning's card, not a legacy one, and no
+      // snooze exists yet to change what the build writes.
+      await buildTodaySnapshot(asSalesperson(), {
+        businessDate: LEGACY_BUSINESS_DATE,
+        now: NOW,
+        sources: defaultTodaySources(),
+      });
+      const pinned = await session.query<{ firm_id: string }>(
+        `UPDATE today_snapshots SET algorithm_version = $3
+          WHERE workspace_id = $1 AND snapshot_date = $2::date
+        RETURNING firm_id`,
+        [state.workspaceId, LEGACY_BUSINESS_DATE, LEGACY_TODAY_ALGORITHM_VERSION],
+      );
+      if (pinned.rows.length === 0) throw new Error('the legacy Today build produced no card to pin');
       return undefined;
     },
   };

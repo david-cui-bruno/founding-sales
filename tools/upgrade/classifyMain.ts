@@ -4,7 +4,7 @@ import { classifyMigration, renderClassification } from './classify.ts';
 function main(argv: readonly string[]): number {
   const file = argv[0];
   if (file === undefined || file === '--help' || argv.length > 2) {
-    process.stderr.write('usage: classify-migration.sh <migration.sql> [--applied-on N]\n');
+    process.stderr.write('usage: classify-migration.sh <migration.sql> [--applied-on=N]\n');
     return 2;
   }
   let appliedOn: number | undefined;

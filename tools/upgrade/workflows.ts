@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
-import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
+import { repositoryContext, workspaceScope, type RepositoryContext } from '@fss/domain/db/workspaceScope.ts';
 import { businessDateOf } from '@fss/domain/today/snapshots.ts';
 import { buildTodaySnapshot, defaultTodaySources } from '@fss/domain/today/build.ts';
-import { readTodayList } from '@fss/domain/today/dto.ts';
+import { readTodayFirm, readTodayList } from '@fss/domain/today/dto.ts';
 import { readFirmPage } from '@fss/domain/crm/firmPage.ts';
 import { readPipelineBoardForActor } from '@fss/domain/crm/board.ts';
 import { CHANNEL_ACTION_KINDS, composeEligibility } from '@fss/domain/sequences/eligibility.ts';
@@ -27,7 +27,91 @@ import type { FixtureHandles } from './fixture.ts';
  *
  * Every one runs as `app_runtime`, so a migration that added a table and forgot its
  * grant fails here with `42501` rather than in production at nine in the morning.
+ *
+ * ## What this does *not* cover, said plainly
+ *
+ * These are domain calls as the runtime role. They construct the actor context
+ * directly, so the API's sign-in, its command receipts and its HTTP routes are **not**
+ * exercised, and neither is the worker's job runner around a real handler (GPT-6
+ * review, P1-3). `docs/greenfield/migrations.md` says so in the same words. What the
+ * three tables `sessions`, `oidc_authorization_requests` and `command_receipts` hold
+ * is therefore outside this test, which is also why the fixture is excused for leaving
+ * them empty.
+ *
+ * ## Every case asserts something specific
+ *
+ * A workflow that "did not throw" is not evidence. Today has to produce at least
+ * `MINIMUM_TODAY_CARDS` cards and each read has to return the fixture's own firm with
+ * its lane; eligibility has to reach a decision and a `skipped` is a failure. The
+ * numbers below are properties of the fixture, so a fixture that quietly stopped
+ * loading a part fails here as well as in step 3.
  */
+
+/**
+ * The fixture enrols twenty firms and opens opportunities across the stages, so a
+ * Today build that produced fewer cards than this has lost work rather than found
+ * none. It is a floor, not an expectation: the exact number is a function of the
+ * fixture and of the day of the week the test runs on.
+ */
+export const MINIMUM_TODAY_CARDS = 5;
+
+/**
+ * The decision the fixture's active enrolment must reach.
+ *
+ * The fixture opens a workspace-scoped administrative pause blocking `email_send`, so
+ * the hold source refuses the step with `scoped_pause` — a real refusal, reached
+ * through the real sources, on a hold that was in the database before the upgrade.
+ *
+ * Naming the code rather than accepting "some refusal" is the point (GPT-6 review,
+ * P1-3): an eligibility gate that passed on any answer would pass on the wrong one. If
+ * a later change to the fixture makes a different source win, this fails loudly and
+ * somebody decides which decision the fixture is supposed to produce, rather than the
+ * assertion quietly becoming vacuous.
+ */
+export const EXPECTED_ELIGIBILITY_DECISION = 'scoped_pause';
+
+/**
+ * Read Today for one actor and assert it is about the fixture, not merely non-throwing.
+ *
+ * The salesperson's list is filtered to their own firms and the admin's is not, so the
+ * two are asserted to the same floor and only the admin is required to see the
+ * fixture's primary firm — a salesperson who is not that firm's assignee correctly
+ * sees nothing of it.
+ */
+async function readTodayFor(
+  context: RepositoryContext,
+  who: 'admin' | 'salesperson',
+  now: string,
+  businessDate: string,
+  handles: FixtureHandles,
+): Promise<string> {
+  const list = await readTodayList(context, { now });
+  if (list.snapshotDate !== businessDate) {
+    throw new Error(`read ${list.snapshotDate}, built ${businessDate}`);
+  }
+  if (list.cards.length < MINIMUM_TODAY_CARDS) {
+    throw new Error(`${String(list.cards.length)} card(s); at least ${String(MINIMUM_TODAY_CARDS)} were built`);
+  }
+  if (list.businessTimeZone.trim().length === 0) throw new Error('the list carries no business time zone');
+  const card = list.cards.find(candidate => candidate.firmId === handles.primaryFirmId);
+  if (who !== 'admin') {
+    // A salesperson's list is filtered to their own firms, so the fixture's firm may
+    // legitimately be absent. What is asserted of them is the floor and the date.
+    return `${String(list.cards.length)} card(s) for ${list.snapshotDate}; the fixture firm is ${card === undefined ? 'not visible to this salesperson' : 'visible'}`;
+  }
+  if (card === undefined) throw new Error("the admin's list does not carry the fixture's primary firm");
+  if (card.firmName.trim().length === 0) throw new Error("the fixture firm's card carries no name");
+  if (card.lane.trim().length === 0) throw new Error("the fixture firm's card carries no lane");
+  if (card.dueAt.trim().length === 0) throw new Error("the fixture firm's card carries no due instant");
+  // The expanded card is the second read, and the one that carries the tasks the lane
+  // is a summary of. A card with a lane and no task behind it is a card about nothing.
+  const page = await readTodayFirm(context, { firmId: handles.primaryFirmId, now });
+  if (page === null) throw new Error("the fixture firm's expanded card is not visible to the admin");
+  if (page.snapshotDate !== businessDate) throw new Error(`the expanded card is for ${page.snapshotDate}`);
+  if (page.tasks.length === 0) throw new Error("the fixture firm's card carries no task");
+  const lanes = [...new Set(page.tasks.map(task => task.lane))].sort();
+  return `${String(list.cards.length)} card(s) for ${list.snapshotDate}; the fixture firm is in lane ${card.lane} with ${String(page.tasks.length)} task(s) in lane(s) ${lanes.join(', ')}`;
+}
 
 export interface WorkflowOutcome {
   readonly name: string;
@@ -78,29 +162,40 @@ export async function runWorkflows(
       name: 'today.build',
       run: async () => {
         const report = await buildTodaySnapshot(admin, { businessDate, now, sources: defaultTodaySources() });
+        if (report.businessDate !== businessDate) {
+          throw new Error(`built ${report.businessDate}, asked for ${businessDate}`);
+        }
+        if (report.written < MINIMUM_TODAY_CARDS) {
+          throw new Error(
+            `wrote ${String(report.written)} item(s); the fixture's firms should produce at least ${String(MINIMUM_TODAY_CARDS)}`,
+          );
+        }
+        if (report.algorithmVersion.trim().length === 0) throw new Error('the build reported no algorithm version');
         return `business date ${report.businessDate}, algorithm ${report.algorithmVersion}, written ${String(report.written)}, cancelled ${String(report.cancelled)}`;
       },
     },
     {
       name: 'today.read (admin)',
-      run: async () => {
-        const list = await readTodayList(admin, { now });
-        return `${String(list.cards.length)} card(s) for ${list.snapshotDate}`;
-      },
+      run: async () => await readTodayFor(admin, 'admin', now, businessDate, handles),
     },
     {
       name: 'today.read (salesperson)',
-      run: async () => {
-        const list = await readTodayList(salesperson, { now });
-        return `${String(list.cards.length)} card(s) for ${list.snapshotDate}`;
-      },
+      run: async () => await readTodayFor(salesperson, 'salesperson', now, businessDate, handles),
     },
     {
       name: 'crm.firmPage',
       run: async () => {
         const page = await readFirmPage(admin, { firmId: handles.primaryFirmId });
         if (!page.ok) throw new Error(`refused: ${page.reason}`);
-        return `visibility ${page.value.visibility}, firm ${page.value.read.firm.name}`;
+        if (page.value.visibility !== 'assigned_or_admin') {
+          throw new Error(`an admin reads a firm at assigned_or_admin, not ${page.value.visibility}`);
+        }
+        const firm = page.value.read.firm;
+        if (firm.id !== handles.primaryFirmId) throw new Error('the page is about another firm');
+        if (firm.name.trim().length === 0) throw new Error('the firm has no name');
+        if (firm.timeZone === null) throw new Error('the firm has no resolved time zone, so nothing can be scheduled for it');
+        if (page.value.stageHistory.length === 0) throw new Error('the firm has no stage history');
+        return `visibility ${page.value.visibility}, firm ${firm.name}, zone ${firm.timeZone}, ${String(page.value.stageHistory.length)} stage event(s)`;
       },
     },
     {
@@ -108,6 +203,11 @@ export async function runWorkflows(
       run: async () => {
         const board = await readPipelineBoardForActor(admin);
         const placed = board.columns.reduce((total, column) => total + column.firms.length, 0);
+        if (board.columns.length < 7) throw new Error(`${String(board.columns.length)} stage column(s); 0004 seeds seven`);
+        if (placed === 0) throw new Error('no firm is placed on the board, though the fixture opens opportunities');
+        if (board.opportunityIdByFirmId[handles.primaryFirmId] === undefined) {
+          throw new Error('the fixture firm has no opportunity an admin may change');
+        }
         return `${String(board.columns.length)} column(s), ${String(placed)} placed firm(s), ${String(board.unplacedFirms.length)} unplaced`;
       },
     },
@@ -128,7 +228,11 @@ export async function runWorkflows(
           [handles.workspaceId, handles.activeEnrollmentId],
         );
         const candidate = candidates.rows[0];
-        if (candidate === undefined) return 'skipped: no active enrollment has an unfinished step';
+        if (candidate === undefined) {
+          // A skip is a failure here (P1-3): an eligibility gate with nothing to decide
+          // about asserts nothing, and the fixture is supposed to leave it work.
+          throw new Error('no active enrolment has an unfinished step; the fixture should leave one');
+        }
         // The scope the worker itself uses for a sequence job (`scopeForJob`): the
         // eligibility gate is evaluated by the worker, never by a person, and an
         // assignment source asked under the wrong actor would answer a different
@@ -154,7 +258,20 @@ export async function runWorkflows(
           actionKind: CHANNEL_ACTION_KINDS[execution.channel],
           now,
         });
-        return outcome.ok ? 'eligible' : `held: ${outcome.reasonCode}${outcome.detail === undefined ? '' : ` (${outcome.detail})`}`;
+        // The expected decision, named. The fixture's active enrolment sits on a
+        // message whose match is ambiguous, so the hold source refuses it with
+        // `ambiguous_match` — a real refusal, reached through the real sources. A
+        // different answer means the gate now decides something else about the same
+        // rows, which is exactly what an upgrade could break.
+        if (outcome.ok) {
+          throw new Error(`expected the hold ${EXPECTED_ELIGIBILITY_DECISION}, and the step was eligible`);
+        }
+        if (outcome.reasonCode !== EXPECTED_ELIGIBILITY_DECISION) {
+          throw new Error(
+            `expected the hold ${EXPECTED_ELIGIBILITY_DECISION}, got ${outcome.reasonCode}${outcome.detail === undefined ? '' : ` (${outcome.detail})`}`,
+          );
+        }
+        return `held: ${outcome.reasonCode}${outcome.detail === undefined ? '' : ` (${outcome.detail})`}`;
       },
     },
     {
@@ -241,6 +358,10 @@ export async function runWorkflows(
         if (!committed.ok) throw new Error(`commit refused: ${committed.reason}`);
         const removed = Object.entries(committed.value.removed).filter(([, count]) => count > 0);
         const redacted = Object.entries(committed.value.redacted).filter(([, count]) => count > 0);
+        if (removed.length === 0 && redacted.length === 0) throw new Error('the deletion removed and redacted nothing');
+        if (committed.value.tombstoneEventIds.length === 0) {
+          throw new Error('the deletion left no suppression tombstone, which is what stops the handle being contacted again');
+        }
         return `removed ${removed.map(([table, count]) => `${table}=${String(count)}`).join(' ') || 'nothing'}; redacted ${redacted.map(([table, count]) => `${table}=${String(count)}`).join(' ') || 'nothing'}; ${String(committed.value.tombstoneEventIds.length)} tombstone(s)`;
       },
     },
@@ -256,6 +377,12 @@ export async function runWorkflows(
           window: { from: from.toISOString(), to: to.toISOString() },
           sources: liveDashboardSources(),
         });
+        if (dashboard.audience !== 'workspace') throw new Error(`an admin's dashboard is the workspace, not ${dashboard.audience}`);
+        if (dashboard.firmsInScope < 20) {
+          throw new Error(`${String(dashboard.firmsInScope)} firm(s) in scope; the fixture creates at least twenty`);
+        }
+        if (dashboard.sending.available !== true) throw new Error('the sending source reported unavailable');
+        if (dashboard.enrollments.available !== true) throw new Error('the enrolment source reported unavailable');
         return `audience ${dashboard.audience}, ${String(dashboard.firmsInScope)} firm(s) in scope, ${String(dashboard.messages.incomingMatched)} matched message(s), ${String(dashboard.holds.open)} open hold(s)`;
       },
     },

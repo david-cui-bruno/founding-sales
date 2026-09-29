@@ -61,18 +61,25 @@ jobs:
 
   upgrade:
     # The automated upgrade test that replaced the schema rehearsal (lane RS, 29
-    # September 2026). It applies the base commit's schema, loads a representative
-    # fixture through the ordinary commands as `app_runtime`, applies this branch's
-    # migrations as the migration role, and checks data preservation, privileges,
-    # constraints, both services' startup, the workflows and the recovery paths.
+    # September 2026). It applies the DEPLOYED schema from the deployed commit's own
+    # migration files, loads a representative fixture through that commit's ordinary
+    # commands as `app_runtime`, applies this branch's migrations as the migration role,
+    # and checks data preservation, privileges, constraints, both services' startup, the
+    # workflows and the recovery paths.
+    #
+    # **FROM is what production runs, not what git history says** (GPT-6 review of PR
+    # 314, P0-2). A base-branch tip is not the deployed schema: if 23 has merged but
+    # production is still at 22, a release of 24 would otherwise be given evidence for
+    # 23→24 while production performs 22→24. The deployed state is held in two
+    # repository variables the release process maintains — `FSS_PROD_SCHEMA` and
+    # `FSS_PROD_COMMIT` — and every reading of them fails closed.
     #
     # The job always runs and decides for itself whether there is anything to do. A
     # `paths:` filter would leave a required check waiting for ever on a branch that
     # touches no migration (the same reason `g89-greenfield-is-the-default.md` gives for
-    # guarding the old gates by `if:` rather than by `paths:`), and "the schema did not
-    # move" is an answer worth printing rather than a run that never happened.
+    # guarding the old gates by `if:` rather than by `paths:`).
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     defaults:
       run:
         shell: bash
@@ -96,43 +103,60 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          # The base commit has to be in this checkout: the schema it was at is read
-          # out of its own copy of `schemaRange.ts`, never out of a number in a file
-          # somebody remembered to update.
+          # The deployed commit has to be in this checkout: the schema production runs
+          # is read out of its own copy of `schemaRange.ts`, and its own migration files
+          # are what build the deployed schema.
           fetch-depth: 0
           persist-credentials: false
-      - name: What this branch moved the schema from and to
+      - name: What production runs, and what this branch would move it to
         id: range
         env:
-          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          PROD_SCHEMA: ${{ vars.FSS_PROD_SCHEMA }}
+          PROD_COMMIT: ${{ vars.FSS_PROD_COMMIT }}
         run: |
           set -euo pipefail
           range_file=packages/domain/db/schemaRange.ts
-          if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = '0000000000000000000000000000000000000000' ] || ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
-            echo "no readable base commit; the upgrade test needs one and this run has nothing to compare with"
-            echo 'run=no' >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          touched="$(git diff --name-only "$BASE_SHA" HEAD -- packages/domain/db/migrations "$range_file")"
-          if [ -z "$touched" ]; then
-            echo "no migration and no schema range in the diff; nothing to upgrade"
-            echo 'run=no' >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "the diff touches:"
-          echo "$touched"
+          fail() { echo "FAIL: $1" >&2; exit 1; }
+
+          # Fail closed on every unreadable answer. A missing variable is not "nothing
+          # to do": it is a job that cannot tell what production runs.
+          [ -n "$PROD_SCHEMA" ] || fail 'the repository variable FSS_PROD_SCHEMA is unset; it names the schema production runs'
+          [ -n "$PROD_COMMIT" ] || fail 'the repository variable FSS_PROD_COMMIT is unset; it names the commit production'"'"'s images were built from'
+          case "$PROD_SCHEMA" in
+            ''|*[!0-9]*) fail "FSS_PROD_SCHEMA is '$PROD_SCHEMA', which is not a schema version" ;;
+          esac
+          [ "$PROD_SCHEMA" -gt 0 ] || fail 'FSS_PROD_SCHEMA is zero'
+          case "$PROD_COMMIT" in
+            0000000000000000000000000000000000000000) fail 'FSS_PROD_COMMIT is the zero commit' ;;
+          esac
+          git cat-file -e "$PROD_COMMIT^{commit}" 2>/dev/null || fail "FSS_PROD_COMMIT $PROD_COMMIT is not a commit in this repository"
+          git merge-base --is-ancestor "$PROD_COMMIT" HEAD \
+            || fail "FSS_PROD_COMMIT $PROD_COMMIT is not an ancestor of this branch; rebase onto what production runs before releasing a schema change"
+
           required_schema() {
             git show "$1:$range_file" | sed -n 's/^export const REQUIRED_SCHEMA = \([0-9][0-9]*\);$/\1/p'
           }
-          from="$(required_schema "$BASE_SHA")"
+          from="$(required_schema "$PROD_COMMIT")"
           to="$(required_schema HEAD)"
-          if [ -z "$from" ] || [ -z "$to" ]; then
-            echo "REQUIRED_SCHEMA could not be read (base='$from' head='$to')"
-            exit 1
+          [ -n "$from" ] || fail "REQUIRED_SCHEMA could not be read from $PROD_COMMIT"
+          [ -n "$to" ] || fail 'REQUIRED_SCHEMA could not be read from HEAD'
+          [ "$from" = "$PROD_SCHEMA" ] \
+            || fail "the deployed commit declares REQUIRED_SCHEMA $from but FSS_PROD_SCHEMA says $PROD_SCHEMA; one of the two is stale"
+          echo "production runs schema $from at $PROD_COMMIT; this branch declares $to"
+
+          # A migration at or below the deployed schema that differs from the deployed
+          # bytes is refused whatever the schema numbers say: production's runner
+          # records a sha256 of each applied file and would refuse the changed one.
+          edited="$(git diff --name-only "$PROD_COMMIT" HEAD -- packages/domain/db/migrations \
+                    | awk -F/ -v from="$from" '{ n = $NF + 0; if (n > 0 && n <= from) print }')"
+          if [ -n "$edited" ]; then
+            echo 'a migration at or below the deployed schema was changed:'
+            echo "$edited"
+            fail 'migrations are immutable once applied; production would refuse this with MIGRATION_CHECKSUM_MISMATCH'
           fi
-          echo "REQUIRED_SCHEMA: $from at the base, $to at HEAD"
+
           if [ "$from" = "$to" ]; then
-            echo "the schema did not move, so there is no upgrade to test; skipped"
+            echo "the schema this branch declares is the one production runs, and no deployed migration changed; there is no upgrade to test"
             echo 'run=no' >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -140,6 +164,7 @@ jobs:
             echo 'run=yes'
             echo "from=$from"
             echo "to=$to"
+            echo "base_commit=$PROD_COMMIT"
           } >> "$GITHUB_OUTPUT"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         if: steps.range.outputs.run == 'yes'
@@ -148,6 +173,16 @@ jobs:
       - name: Install
         if: steps.range.outputs.run == 'yes'
         run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: The deployed checkout the fixture is written by
+        # The data production already holds was written by the code production is
+        # already running, so that is the code that writes the fixture — and those are
+        # the migration files that build the schema it sits on.
+        if: steps.range.outputs.run == 'yes'
+        env:
+          BASE_COMMIT: ${{ steps.range.outputs.base_commit }}
+        run: |
+          set -euo pipefail
+          git worktree add --detach "$RUNNER_TEMP/upgrade-base" "$BASE_COMMIT"
       - name: No durability for the throwaway database
         if: steps.range.outputs.run == 'yes'
         env:
@@ -159,17 +194,6 @@ jobs:
             -c 'ALTER SYSTEM SET synchronous_commit = off' \
             -c 'ALTER SYSTEM SET full_page_writes = off' \
             -c 'SELECT pg_reload_conf()'
-      - name: The base checkout the fixture is written by
-        # The fixture is the data production already holds, so the code that writes it
-        # has to be the code production is already running. A worktree of the base
-        # commit is that code; `--base` refuses to run without one, and refuses one
-        # whose own `REQUIRED_SCHEMA` is not the `--from` it was given.
-        if: steps.range.outputs.run == 'yes'
-        env:
-          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
-        run: |
-          set -euo pipefail
-          git worktree add --detach "$RUNNER_TEMP/upgrade-base" "$BASE_SHA"
       - name: Upgrade test
         if: steps.range.outputs.run == 'yes'
         env:
@@ -183,7 +207,9 @@ jobs:
             --base "$RUNNER_TEMP/upgrade-base" \
             --evidence "upgrade-evidence-$HEAD_SHA.txt"
       - name: Upload the evidence
-        # `always()`: a failed upgrade is the run whose evidence somebody actually needs.
+        # `always()`: a failed upgrade is the run whose evidence somebody actually needs,
+        # and the tool writes a stub report before its first step so that even a run that
+        # died in the install leaves one.
         if: always() && steps.range.outputs.run == 'yes'
         # actions/upload-artifact v4, the same pin the images and release workflows use.
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

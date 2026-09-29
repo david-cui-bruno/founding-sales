@@ -1964,11 +1964,17 @@ describe('deploy.sh current prints what an operator plan must be given, and refu
   });
 });
 
-describe('the deploy workflow, P6: five jobs, one gates job, the read-back after the smoke, 400 lines at most', () => {
+describe('the deploy workflow, P6: five jobs, one gates job, the read-back after the smoke, 425 lines at most', () => {
   const workflow = DEPLOY_WORKFLOW;
 
-  it('is 400 lines or fewer, has five jobs, and only the deploy and read-back jobs can assume a role', () => {
-    expect(workflow.split('\n').length).toBeLessThanOrEqual(401);
+  it('is 425 lines or fewer, has five jobs, and only the deploy and read-back jobs can assume a role', () => {
+    // The budget moved from 400 to 425 for lane RS, and the five-job list did not.
+    // `FSS_PROD_COMMIT` — what the upgrade test migrates *from* — has to be written by
+    // whatever last proved production runs a commit, and that is this workflow. It went
+    // into `summary` rather than a sixth job precisely so the list stays five, and into
+    // `summary` rather than `read-back` so that the job writing a repository variable is
+    // the one holding no production credential.
+    expect(workflow.split('\n').length).toBeLessThanOrEqual(426);
     const jobs = [...workflow.slice(workflow.indexOf('\njobs:\n')).matchAll(/^ {2}([a-z-]+):\n/gmu)].map(match => match[1]);
     expect(jobs).toEqual(['gates', 'deploy', 'smoke', 'read-back', 'summary']);
     for (const name of ['gates', 'smoke', 'summary']) expect(job(workflow, name), name).not.toContain('id-token: write');

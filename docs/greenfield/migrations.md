@@ -52,17 +52,31 @@ rehearsal (David, 29 September 2026: *"The reported 48-minute rehearsal starts f
 empty database, so it does not test the actual upgrade."*). It runs against the same
 cluster the gate uses, makes no cloud call, and needs no credential.
 
-**Two checkouts, and which one runs what.** The fixture is the data production already
-holds, so it is written by the code production is already running: `--base` names a
-checkout whose own `REQUIRED_SCHEMA` is N — in CI a `git worktree` of the base commit —
-and the loader runs as a child process inside it, against that commit's
-`packages/domain`. HEAD's commands know schema M: they would insert into columns that do
+**Two checkouts, and which one runs what.** `--base` names a checkout whose own
+`REQUIRED_SCHEMA` is N — in CI a `git worktree` of *the commit production's images were
+built from*. Migrations 1..N are applied **from its migration directory**, and the
+fixture is written **by its domain code**, as a child process inside it. HEAD supplies
+N+1..M and every post-upgrade check — the constraint cases, the startup acceptance, the
+workflows — each of which also runs as a child process inside HEAD, never as an import
+into the tool. So `--tree` really does test that tree's application code.
+
+Both halves matter. HEAD's commands know schema M: they would insert into columns that do
 not exist yet and quietly write whatever subset of the fixture the new code could still
-manage, and every step after it would be green and vacuous. HEAD then applies N+1..M and
-runs everything from step 6 on. The base checkout gets a `node_modules` link farm from
-HEAD's — third-party modules shared, `@fss/*` repointed at the base tree — rather than a
-second `npm ci`, and a base commit older than this lane has HEAD's `tools/upgrade/`
-copied in for the run and removed afterwards. Nothing writes a tracked file there.
+manage, and every step after it would be green and vacuous. And HEAD's *files* for the
+deployed range would record HEAD's checksums: a branch that edited an already applied
+migration would pass here and be refused by production with
+`MIGRATION_CHECKSUM_MISMATCH`. **The deployed range is therefore compared byte for byte
+between the two checkouts before anything is created, and any difference fails the run**
+— which is also the answer to "it only changed a comment": the runner hashes the file's
+bytes.
+
+The base checkout gets a `node_modules` link farm from HEAD's — third-party modules
+shared, `@fss/*` repointed at the base tree — **only when the two `package-lock.json` are
+byte-identical**. When they differ, `npm ci` is run in the base worktree instead, because
+HEAD's third-party versions under the base's code could produce data the base image never
+could. The report says which happened. A base commit older than this lane has HEAD's
+`tools/upgrade/` copied in for the run and removed afterwards; nothing writes a tracked
+file there.
 
 **A skipped fixture part fails the run.** The loader reports every part as `loaded` or
 `skipped` with the objects it found missing, and a skip is only excused when everything
@@ -85,32 +99,62 @@ Eleven steps, each printing its wall-clock seconds:
    names every relation locked, the strongest mode taken and the longest
    `ACCESS EXCLUSIVE` held;
 6. data preservation, against the `-- changes:` headers above;
-7. the privileges `app_runtime` and `migration` hold at M, against the `GRANT` and
-   `REVOKE` lines the migration files declare — replayed in order, `GRANT … ON ALL
-   TABLES` included, and compared with `information_schema.role_table_grants`. A new
-   table with no grant fails here;
+7. the privileges at M, against a **committed baseline** (`tools/upgrade/grants-baseline.json`,
+   taken at schema 22: both group roles' table and column grants, `PUBLIC`, sequences,
+   functions and the schema grants) **plus** the `GRANT`/`REVOKE` lines migrations
+   N+1..M declare. Three rules, each of which the old replay-from-nothing check could
+   not state: a privilege the baseline had and the database no longer has is a loss and
+   fails; **every table new since the baseline must carry an explicit
+   `GRANT … TO app_runtime`, or be named in its migration's header as
+   `-- runtime-access: none <table>`** — a reviewed exception, because a table with
+   neither is a feature nobody can reach; and the effective privileges are checked
+   through the runtime **login** with `has_table_privilege('fss_runtime', …)`, not only
+   through the group, including that `audit_events` DELETE and `suppression_events`
+   UPDATE are still refused it;
 8. `packages/domain/test/db/constraints.test.ts` at M, run by Vitest as itself, so the
    coverage gate at the bottom of that file applies: a new constraint with no failing
    insert fails the upgrade test too;
-9. startup — the API's `buildReadinessReport` and the worker's `checkWorkerStartup`,
-   with the range `{M,M}` (accepts) and `{N,N}` (refuses), plus the worker's handler
-   registry;
-10. the workflows, as `app_runtime`: Today built and read for both users, the firm page,
-    the pipeline, step eligibility for an active enrollment, the provider-free half of
-    the reconcile pass, a job claimed → progress → completed with its fencing token, a
-    funnel fact, a contact deleted through the retention path, and the dashboard;
+9. startup, in **both** checkouts, each declaring its own range. HEAD's own
+   `buildReadinessReport` and `checkWorkerStartup` must report ready, and the base
+   checkout's own must refuse — that refusal is the previous images' own, not a generic
+   comparison against an invented range. The worker's handler registry must be built the
+   way its bootstrap builds it; a checkout that cannot is a failure, not a note;
+10. the workflows, in HEAD, as `app_runtime`, each asserting something specific rather
+    than not throwing: Today built (at least five cards) and read for both users, with
+    the fixture's own firm and its lane; the firm page with its zone and stage history;
+    the pipeline board; step eligibility for an active enrolment, which must reach one
+    named decision and fails on a skip; the provider-free half of the reconcile pass; a
+    job claimed → progress → completed with its fencing token and a stale token refused;
+    a funnel fact; a contact deleted through the retention path, leaving a tombstone; and
+    the dashboard with its live sources. A migration that replaced a routine must have
+    had it **called** — `pg_stat_user_functions` counts it, and an uncalled replacement
+    fails the step;
 11. recovery — the migrator run again at M is a no-op, and a synthetic migration whose
-    second statement is invalid leaves the schema and the step-4 snapshot untouched.
+    second statement is invalid leaves the schema, every `schema_versions` row, the
+    catalogue shape and a row written just before it exactly as they were. The snapshot
+    that case compares against is taken immediately before the injection, not at step 4:
+    step 4 is before the upgrade and before step 10, and step 10's workflows change rows
+    on purpose.
 
 `--migrations <dir>` and `--tree <path>` point the apply and the constraint cases at
 another checkout, which — with `--base` — is how a migration can be tested before the
 branch that carries it is merged.
 
-**In CI** the `upgrade` job of `greenfield.yml` runs it whenever the diff against the
-base commit touches `packages/domain/db/migrations/**` or `schemaRange.ts`. `FROM` is
-`REQUIRED_SCHEMA` read out of the *base commit's own copy* of `schemaRange.ts`
-(`git show <sha>:…`), `TO` is HEAD's; when they are equal the job prints why and passes
-without doing anything. The printed evidence — the timings, the lock table and the
+**In CI, `FROM` is what production runs**, not what git history says. Two repository
+variables hold it and the `upgrade` job of `greenfield.yml` fails closed on every
+unreadable answer:
+
+| variable | what it is | who moves it |
+| --- | --- | --- |
+| `FSS_PROD_COMMIT` | the full sha of the commit production's images were built from | the `deployed-commit` job of `greenfield-deploy.yml`, after a green deploy, smoke and read-back |
+| `FSS_PROD_SCHEMA` | the schema version production is on | a schema release, by hand, in the step that migrates |
+
+The job checks out `FSS_PROD_COMMIT` as the base worktree, requires it to be an ancestor
+of HEAD, takes `FROM` from *that checkout's own* `schemaRange.ts` and refuses unless it
+equals `FSS_PROD_SCHEMA` — so a stale variable is caught by the other one. `TO` is HEAD's.
+When `FROM` equals `TO` the job still fails if any migration at or below `FROM` differs
+from the deployed bytes, and otherwise prints why it has nothing to do. An unset,
+non-numeric, zero or non-ancestral value fails the job; none of them is a green skip. The printed evidence — the timings, the lock table and the
 recovery sentence — is uploaded as `upgrade-evidence-<sha>.txt`, and
 `docs/greenfield/release.md` 3 says which releases cite it instead of a rehearsal.
 
@@ -121,12 +165,46 @@ from-ci` writing a record for that commit at all.
 
 ## What a migration's class means
 
-`infra/scripts/classify-migration.sh <file>` prints `additive`, `touches-existing`,
-`privilege` or `destructive` and the statements that decided it. "Existing" is the set
-of tables the earlier migrations in the same directory create and do not drop — not a
-guess from a name — and a statement inside a `CREATE OR REPLACE FUNCTION` body is not a
-statement the migration performs. `release.md` 3 rehearses the last three and does not
-rehearse the first.
+`infra/scripts/classify-migration.sh <file>` prints one of six words and the statements
+that decided it:
+
+| class | what earns it |
+| --- | --- |
+| `additive` | every statement recognised, and every object it names is new |
+| `replaces-routine` | `CREATE OR REPLACE FUNCTION`/`PROCEDURE`/`TRIGGER`, or `ALTER FUNCTION`, of a routine that already exists |
+| `touches-existing` | `ALTER TABLE`, `CREATE INDEX`, `UPDATE`, `INSERT`, `DELETE … WHERE`, a `CREATE TRIGGER`, a default change, a `CHECK` added — on something that already exists |
+| `privilege` | `GRANT`/`REVOKE`/`ALTER ROLE` touching an existing object or role |
+| `destructive` | `DROP TABLE`/`COLUMN`/`CONSTRAINT`/`FUNCTION`/`TRIGGER`/`INDEX`, `TRUNCATE`, `DELETE` with no `WHERE` |
+| `unclassified` | a top-level form the classifier does not recognise, or a `DO $$ … $$` block whose body it cannot fully classify |
+
+**It fails closed.** Anything it does not recognise is `unclassified`, and the worst
+class any statement earns is the file's. That matters because a `DO $$ BEGIN DELETE FROM
+sessions; END $$` used to be called `additive` — `sessions` has no fixture rows, so the
+content hash never moved, and the release procedure would have said no rehearsal was
+needed. A `DO` block whose body does parse is classified by its contents, so that example
+now reports `destructive` and names the `DELETE`.
+
+"Existing" is the set of tables and routines the earlier migrations in the same directory
+create and do not drop — not a guess from a name — and a statement inside a function body
+is not a statement the migration performs. `release.md` 3 rehearses
+`touches-existing`, `privilege`, `destructive` and `unclassified`, and does not rehearse
+`additive` or `replaces-routine`.
+
+**One narrowing, and only one.** A `DROP CONSTRAINT x` whose `x` the same file adds back
+on the same table is a *swap*, and a swap loses no data: it is how a `CHECK` is widened
+while keeping the name its failing-insert case is written against. Migration 0014 says so
+in its own comment — "The constraint keeps its name, so its failing-insert case in
+`test/db/constraints.test.ts` keeps covering it" — and 0020 does the same inside a single
+`ALTER`. Both forms read as `touches-existing`, which still rehearses. A `DROP CONSTRAINT`
+with no matching `ADD`, or one that drops two and puts back one, stays `destructive`.
+
+**The class of a migration that has already been applied is informational.** The
+classifier decides whether a release needs a rehearsal, and a release of applied history
+is not a thing. So a conservative answer on an old file costs nothing, and several of
+them get one: 0001, 0004, 0007 and 0014 come out `unclassified`, because each ends in a
+bare `SELECT seed_…(…)` or a `DO` block with an `EXCEPTION` clause whose effect the
+classifier cannot read. That is the fail-closed answer working as intended, not a finding
+about those migrations.
 
 ## The three phases
 

@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { spawn } from 'node:child_process';
 import { cp, mkdir, readdir, readFile, rm, symlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -22,13 +24,16 @@ import { join } from 'node:path';
  *
  * ## Two things have to be arranged for that child to be able to run at all
  *
- * **Third-party modules.** A base checkout created with `git worktree add` has no
- * `node_modules`. Rather than a second `npm ci` — minutes, and a network the upgrade
- * test otherwise never needs — a link farm is built: every entry of HEAD's
- * `node_modules` symlinked, **except** `@fss`, whose five workspace packages are
- * symlinked into the *base* tree. So the child gets HEAD's third-party dependencies
- * and the base's own first-party code, which is exactly the split that matters. A base
- * that already has a real `node_modules` is left alone and used as it is.
+ * **Third-party modules, and whose they are.** A base checkout created with
+ * `git worktree add` has no `node_modules`. When the two checkouts' `package-lock.json`
+ * are byte-identical, a link farm is built instead of a second install: every entry of
+ * HEAD's `node_modules` symlinked, **except** `@fss`, whose workspace packages are
+ * symlinked into the *base* tree, so the child gets the base's own first-party code.
+ * When the locks differ, the link farm would be a lie — HEAD's third-party versions
+ * running under the base's code could produce data the base image never could (GPT-6
+ * review, P1-6) — so `npm ci` is run in the base worktree instead and the report says
+ * which of the two happened. A base that already has a real `node_modules` is left
+ * alone and used as it is.
  *
  * **The loader itself.** Every commit before this lane merged has no
  * `tools/upgrade/`, which includes the first pull request this job runs on. For those,
@@ -48,20 +53,27 @@ const WORKSPACE_PACKAGES: readonly (readonly [string, string])[] = [
   ['desktop', 'apps/desktop'],
 ];
 
+export type ModulesSource = 'already present' | 'linked from HEAD (identical lockfile)' | 'npm ci in the base worktree (lockfiles differ)';
+
 export interface BaseCheckout {
   readonly directory: string;
   /** `REQUIRED_SCHEMA` as this checkout declares it. */
   readonly schemaVersion: number;
   /** The loader entry point to run, absolute. */
   readonly loader: string;
+  /** The post-upgrade checks entry point in this checkout, absolute. */
+  readonly checks: string;
   /** True when HEAD's `tools/upgrade` was copied in because the base had none. */
   readonly copiedLoader: boolean;
-  /** True when a `node_modules` link farm was built for this run. */
-  readonly linkedModules: boolean;
+  /** Where the base checkout's third-party modules came from. */
+  readonly modules: ModulesSource;
   cleanup(): Promise<void>;
 }
 
 const REQUIRED_SCHEMA_LINE = /^export const REQUIRED_SCHEMA = (\d+);$/mu;
+
+/** The older name, kept because the base checkout is what it is mostly used for. */
+export const prepareBaseCheckout = prepareCheckout;
 
 /** `REQUIRED_SCHEMA` out of a checkout's own copy of the file, never out of memory. */
 export async function schemaVersionOf(checkout: string): Promise<number> {
@@ -70,6 +82,26 @@ export async function schemaVersionOf(checkout: string): Promise<number> {
   const match = REQUIRED_SCHEMA_LINE.exec(await readFile(path, 'utf8'));
   if (match?.[1] === undefined) throw new Error(`${path} declares no REQUIRED_SCHEMA`);
   return Number(match[1]);
+}
+
+/** The sha256 of a checkout's lockfile, or null when it has none. */
+async function lockfileDigest(checkout: string): Promise<string | null> {
+  const path = join(checkout, 'package-lock.json');
+  if (!existsSync(path)) return null;
+  return createHash('sha256').update(await readFile(path)).digest('hex');
+}
+
+/** `npm ci` in `checkout`, with the flags the greenfield gate uses. */
+async function install(checkout: string): Promise<void> {
+  const code = await new Promise<number | null>(resolve => {
+    const child = spawn('npm', ['ci', '--ignore-scripts', '--no-audit', '--no-fund'], {
+      cwd: checkout,
+      stdio: ['ignore', 'ignore', 'inherit'],
+    });
+    child.on('error', () => { resolve(-1); });
+    child.on('close', value => { resolve(value); });
+  });
+  if (code !== 0) throw new Error(`npm ci in ${checkout} exited ${String(code)}`);
 }
 
 async function buildLinkFarm(base: string, head: string): Promise<void> {
@@ -87,15 +119,42 @@ async function buildLinkFarm(base: string, head: string): Promise<void> {
   }
 }
 
-export async function prepareBaseCheckout(base: string, head: string): Promise<BaseCheckout> {
-  if (!existsSync(base)) throw new Error(`no base checkout at ${base}`);
-  if (base === head) throw new Error('the base checkout and this one are the same directory');
+/**
+ * Make a checkout runnable as a child of this process.
+ *
+ * Used for both of them. The **base** checkout runs the fixture loader and the previous
+ * images' startup check; the **target** checkout runs the post-upgrade startup, registry
+ * and workflows. Neither needs anything of this process but its `tools/upgrade`
+ * directory and a resolvable `node_modules`, and a checkout that already has both — the
+ * ordinary case in CI, where the target is this checkout — is left exactly as it is.
+ */
+export async function prepareCheckout(base: string, head: string): Promise<BaseCheckout> {
+  if (!existsSync(base)) throw new Error(`no checkout at ${base}`);
   const schemaVersion = await schemaVersionOf(base);
+  if (base === head) {
+    // This process's own tree: nothing to arrange, and nothing to clean up afterwards.
+    return {
+      directory: base,
+      schemaVersion,
+      loader: join(base, 'tools', 'upgrade', 'fixtureMain.ts'),
+      checks: join(base, 'tools', 'upgrade', 'checksMain.ts'),
+      copiedLoader: false,
+      modules: 'already present',
+      cleanup: async () => undefined,
+    };
+  }
 
   const created: string[] = [];
-  const linkedModules = !existsSync(join(base, 'node_modules'));
-  if (linkedModules) {
-    await buildLinkFarm(base, head);
+  let modules: ModulesSource = 'already present';
+  if (!existsSync(join(base, 'node_modules'))) {
+    const [baseLock, headLock] = await Promise.all([lockfileDigest(base), lockfileDigest(head)]);
+    if (baseLock !== null && baseLock === headLock) {
+      await buildLinkFarm(base, head);
+      modules = 'linked from HEAD (identical lockfile)';
+    } else {
+      await install(base);
+      modules = 'npm ci in the base worktree (lockfiles differ)';
+    }
     created.push(join(base, 'node_modules'));
   }
 
@@ -117,8 +176,9 @@ export async function prepareBaseCheckout(base: string, head: string): Promise<B
     directory: base,
     schemaVersion,
     loader,
+    checks: join(base, 'tools', 'upgrade', 'checksMain.ts'),
     copiedLoader,
-    linkedModules,
+    modules,
     async cleanup() {
       for (const path of created.reverse()) await rm(path, { recursive: true, force: true });
     },

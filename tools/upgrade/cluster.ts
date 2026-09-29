@@ -20,6 +20,8 @@ export interface Connection {
 export interface UpgradeCluster {
   readonly adminUrl: string;
   readonly source: PostgresCluster['source'];
+  /** The host the cluster is on. A public identifier; no credential is ever printed. */
+  readonly host: string;
   readonly databaseName: string;
   /**
    * The value `fss admin database-users ensure` reads out of the runtime secret. The
@@ -82,13 +84,53 @@ async function onCluster(adminUrl: string, statement: string): Promise<void> {
 }
 
 /**
+ * The hosts an adopted cluster may be on.
+ *
+ * `FSS_TEST_POSTGRES_URL` is how CI hands its `postgres:16` service container to the
+ * tests, and the tool adopts it. Nothing stops that variable naming a real database
+ * (GPT-6 review, P2-2), and this tool creates roles, applies migrations and then
+ * deliberately fails one — so it refuses anything that is not loopback unless the
+ * operator says otherwise out loud.
+ */
+const LOCAL_HOSTS: readonly string[] = ['localhost', '127.0.0.1', '::1', '[::1]'];
+
+export class ClusterRefused extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ClusterRefused';
+  }
+}
+
+/** Refuse an adopted cluster that is not on this machine. */
+export function assertLocalCluster(adminUrl: string, allowRemote: boolean): string {
+  let host: string;
+  try {
+    host = new URL(adminUrl).hostname;
+  } catch {
+    throw new ClusterRefused('the test cluster URL could not be parsed');
+  }
+  if (allowRemote || LOCAL_HOSTS.includes(host.toLowerCase())) return host;
+  throw new ClusterRefused(
+    `the test cluster is on ${host}, which is not this machine; this tool creates roles, migrates and deliberately fails a migration. Pass --allow-remote-test-cluster if that is really what you want.`,
+  );
+}
+
+/**
  * A fresh database on the run's cluster, with the migrator login role production
  * migrates as. `fss_runtime` is not created here: on a real instance it does not exist
  * until `fss admin database-users ensure` runs, which is after the first migration,
  * and the point of this test is to do it in that order.
  */
-export async function createUpgradeDatabase(): Promise<UpgradeCluster> {
+export async function createUpgradeDatabase(
+  options: { readonly allowRemoteCluster?: boolean } = {},
+): Promise<UpgradeCluster> {
   const cluster = await startPostgresCluster();
+  try {
+    assertLocalCluster(cluster.adminUrl, options.allowRemoteCluster === true);
+  } catch (error) {
+    await cluster.stop();
+    throw error;
+  }
   const databaseName = `fss_upgrade_${randomUUID().replaceAll('-', '')}`;
   const passwords: Record<string, string> = {
     [MIGRATOR_LOGIN_ROLE]: throwawayPassword(),
@@ -141,6 +183,7 @@ export async function createUpgradeDatabase(): Promise<UpgradeCluster> {
   return {
     adminUrl: cluster.adminUrl,
     source: cluster.source,
+    host: new URL(cluster.adminUrl).hostname,
     databaseName,
     runtimeSecretValue: JSON.stringify({ username: RUNTIME_LOGIN_ROLE, password: passwords[RUNTIME_LOGIN_ROLE] ?? '' }),
     runtimeUrl: urlFor(cluster.adminUrl, databaseName, {

@@ -357,8 +357,29 @@ jobs:
     if: always() && needs.gates.result != 'skipped'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
-    permissions: {}
+    permissions:
+      # One repository variable holding a commit sha, which is a public identifier.
+      # This job holds no production credential and assumes no role, which is why the
+      # write lives here rather than beside one that does.
+      actions: write
     steps:
+      - name: Record the commit production now runs
+        # The upgrade test migrates from the DEPLOYED schema, and git history cannot say
+        # what that is: a branch's base is the commit it was cut from, not the commit
+        # whose images are running (GPT-6 review of PR 314, P0-2). `FSS_PROD_COMMIT` is
+        # that answer, and this is the only thing that moves it. `FSS_PROD_SCHEMA` is
+        # moved by hand by a schema release, because a CI deploy never changes the
+        # schema — a migration is a protected path and answers `manual`.
+        if: needs.deploy.outputs.decision == 'deploy' && needs.smoke.result == 'success' && needs.read-back.result == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DEPLOYED: ${{ needs.gates.outputs.commit }}
+        run: |
+          set -euo pipefail
+          [ "${#DEPLOYED}" -eq 40 ] || { echo "FAIL: '$DEPLOYED' is not a full commit" >&2; exit 1; }
+          gh variable set FSS_PROD_COMMIT --body "$DEPLOYED"
+          echo "FSS_PROD_COMMIT is now $DEPLOYED"
       - name: One line
         env:
           COMMIT: ${{ needs.gates.outputs.commit }}
