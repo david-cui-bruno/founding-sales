@@ -209,8 +209,10 @@ async function burnFuses(appPath: string): Promise<void> {
 
 async function signBundle(appPath: string, entitlementsPath: string, plan: SigningPlan): Promise<void> {
   if (plan.kind === 'release') {
-    const { signAsync } = await import('@electron/osx-sign');
-    await signAsync({
+    // `sign` since @electron/osx-sign 2.0.0, which removed the `signAsync` alias
+    // when the exported functions became promise-based.
+    const { sign } = await import('@electron/osx-sign');
+    await sign({
       app: appPath,
       platform: 'darwin',
       identity: plan.identity,
