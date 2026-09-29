@@ -319,6 +319,12 @@ describe('the Firm page’s Research section', () => {
     expect(screen.getAllByTestId('research-fact-source')[0]?.textContent).toBe(
       'target_fit · northwind.example.test · 28 Sep 2026',
     );
+    // The evidence is reachable, not merely named: the whole source URL is the
+    // anchor's own, opened through `setWindowOpenHandler` like the brief's.
+    const source = screen.getAllByTestId('research-fact-source')[0];
+    expect(source?.getAttribute('href')).toBe('https://northwind.example.test/');
+    expect(source?.getAttribute('target')).toBe('_blank');
+    expect(source?.getAttribute('rel')).toBe('noreferrer');
 
     // A person key has no quote to show — the block it names names a person — so the
     // line says what the page did instead of quoting it, and no name appears anywhere.
