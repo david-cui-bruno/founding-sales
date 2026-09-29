@@ -650,7 +650,7 @@ export const OPERATIONS = {
     ],
     input: templateDraftInput,
     output: sequenceStateSchema,
-    transform: 'the sign-off and the stop line appended, the variables the text names declared, and approve in the same command',
+    transform: 'the sign-off appended, the variables the text names declared, and approve in the same command',
   },
   'sequences.publish': {
     kind: 'command',

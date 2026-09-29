@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
-import { SENDING_STOP_LINE } from '../../src/rules/templates.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
 import { seedSequences, type SeededSequences } from './support/sequenceFixtures.ts';
@@ -191,7 +190,7 @@ describe('template_versions is extended, not replaced (11.1)', () => {
     // David's 22 September decision: an automated email carries no postal address.
     // The column is gone, so the insert names it nowhere; the two workspaces use the
     // same template name, and neither sees the other's row.
-    const body = `Hello.\n\nSam Example\n${SENDING_STOP_LINE}`;
+    const body = 'Hello.\n\nSam Example';
     for (const workspaceId of [seeded.alpha.workspaceId, seeded.beta.workspaceId]) {
       const { rows } = await database.session.query<{ id: string }>(
         `INSERT INTO template_versions
@@ -210,17 +209,27 @@ describe('template_versions is extended, not replaced (11.1)', () => {
     expect(rows[0]?.count).toBe('1');
   });
 
-  it('still refuses an unsubscribe link', async () => {
-    expect(
-      await refusal(
-        `INSERT INTO template_versions
-           (workspace_id, template_id, version, name, subject, body, content_hash,
-            footer_sign_off)
-         VALUES ($1, gen_random_uuid(), 1, 'Bad', 'Hello', 'Unsubscribe here', repeat('a', 64),
-                 'Sam Example')`,
-        [seeded.alpha.workspaceId],
-      ),
-    ).toMatch(/no_unsubscribe_link/);
+  it('refuses an opt-out link and accepts the bare word (migration 0023)', async () => {
+    // David, 29 September 2026: the blanket ban on the word goes, the ban on a visible
+    // opt-out link stays. "Reply unsubscribe" is the thing the old CHECK made unwritable.
+    const insert = (body: string): string =>
+      `INSERT INTO template_versions
+         (workspace_id, template_id, version, name, subject, body, content_hash, footer_sign_off)
+       VALUES ($1, gen_random_uuid(), 1, 'Opt out', 'Hello', '${body}',
+               repeat('a', 64), 'Sam Example')`;
+
+    expect(await refusal(insert('https://mail.example.test/unsubscribe/abc'), [seeded.alpha.workspaceId])).toMatch(
+      /no_optout_link/,
+    );
+    expect(await refusal(insert('click here to opt out: https://x.example.test'), [seeded.alpha.workspaceId])).toMatch(
+      /no_optout_link/,
+    );
+
+    const { rows } = await database.session.query<{ id: string }>(
+      `${insert("just reply unsubscribe and I''ll stop")} RETURNING id`,
+      [seeded.alpha.workspaceId],
+    );
+    expect(rows[0]?.id, 'the database refused a body that merely says "reply unsubscribe"').toBeDefined();
   });
 });
 

@@ -94,12 +94,12 @@ function TemplatePanels({
                     </span>
                     {panel.footerPresent ? null : (
                       <span data-testid="template-problem" className="block text-destructive">
-                        The email does not end with the sign-off and the stop line.
+                        The email does not end with the sign-off.
                       </span>
                     )}
-                    {panel.unsubscribeMentioned ? (
+                    {panel.optOutLinkMentioned ? (
                       <span data-testid="template-problem" className="block text-destructive">
-                        The text mentions an unsubscribe link. Callie uses reply-to-stop only.
+                        The text carries an opt-out link. Callie takes a stop request in ordinary language instead.
                       </span>
                     ) : null}
                     <details data-testid="template-details" className="mt-1">

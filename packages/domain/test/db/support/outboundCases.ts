@@ -502,10 +502,21 @@ export const OUTBOUND_CONSTRAINT_CASES: readonly OutboundCase[] = [
     run: async f => await insertFence(f, { body: t('   ') }),
   },
   {
-    // 12.6 and David's decision, restated on the bytes that actually leave.
-    constraint: 'outbound_messages_no_unsubscribe_link',
+    // Migration 0023, restated on the bytes that actually leave: a URL whose own text
+    // says unsubscribe.
+    constraint: 'outbound_messages_no_optout_link',
     run: async f =>
-      await insertFence(f, { body: t(`${FIXTURE_BODY}\n\nOr Unsubscribe here.`) }),
+      await insertFence(f, { body: t(`${FIXTURE_BODY}\n\nhttps://mail.example.test/unsubscribe/abc`) }),
+  },
+  {
+    // A line carrying both a URL and an opt-out word.
+    constraint: 'outbound_messages_no_optout_link',
+    run: async f =>
+      await insertFence(f, { body: t(`${FIXTURE_BODY}\n\nclick here to opt out: https://x.example.test`) }),
+  },
+  {
+    constraint: 'outbound_messages_no_optout_link',
+    run: async f => await insertFence(f, { subject: t('Opt out at www.x.example.test') }),
   },
   {
     constraint: 'outbound_messages_rendered_hash_shape',

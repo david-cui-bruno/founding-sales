@@ -1,4 +1,4 @@
-import { SENDING_STOP_LINE, TEMPLATE_VARIABLE_NAMES } from '@fss/contracts';
+import { NO_OPTOUT_LINK_RULE, SENDING_STOP_LINE, TEMPLATE_VARIABLE_NAMES, hasOptOutLink } from '@fss/contracts';
 import { OFFLINE_BANNER, OFFLINE_SENTENCE, readErrorSentence } from './readError.ts';
 import type {
   DraftStep,
@@ -81,7 +81,7 @@ export interface TemplatePanel {
   readonly canApprove: boolean;
   /** The footer block the body must end with, and whether it does (12.6). */
   readonly footerPresent: boolean;
-  readonly unsubscribeMentioned: boolean;
+  readonly optOutLinkMentioned: boolean;
 }
 
 /**
@@ -224,13 +224,14 @@ function versionPanel(
 }
 
 /**
- * The block the body must end with (12.6): the sign-off, then the stop line. It
- * carried a postal address between the two until David's 22 September decision; see
- * `docs/decisions/g20-automated-email-carries-no-postal-address.md`. The stop line is
- * `@fss/contracts`' constant, which is the same bytes the server's approval rule
- * checks for, so the panel cannot drift from the rule it is describing.
+ * The block the body ends with: the sign-off, and nothing after it. It carried a postal
+ * address until David's 22 September decision and a stop line until his 29 September one
+ * (`docs/greenfield/decisions/email-presentation-20260929.md`); the address is now a
+ * workspace setting composed at send and the stop line is gone. The panel reads
+ * `@fss/contracts` for the rule it describes, so it cannot drift from the rule the
+ * server applies.
  */
-const FOOTER_OF = (template: TemplateVersion): string => `${template.footerSignOff}\n${SENDING_STOP_LINE}`;
+const FOOTER_OF = (template: TemplateVersion): string => template.footerSignOff;
 
 function templatePanel(
   template: TemplateVersion,
@@ -239,7 +240,7 @@ function templatePanel(
   const approved = template.approvedAt !== null;
   const retired = template.retiredAt !== null;
   const footerPresent = template.body.includes(FOOTER_OF(template));
-  const unsubscribeMentioned = /unsubscribe/iu.test(`${template.subject}\n${template.body}`);
+  const optOutLinkMentioned = hasOptOutLink(`${template.subject}\n${template.body}`);
   return {
     id: template.id,
     label: `${template.name} v${String(template.version)}`,
@@ -251,9 +252,9 @@ function templatePanel(
     retired,
     editable: !approved && !retired && options.isAdmin && options.mayMutate,
     canApprove:
-      !approved && !retired && options.isAdmin && options.mayMutate && footerPresent && !unsubscribeMentioned,
+      !approved && !retired && options.isAdmin && options.mayMutate && footerPresent && !optOutLinkMentioned,
     footerPresent,
-    unsubscribeMentioned,
+    optOutLinkMentioned,
   };
 }
 
@@ -490,24 +491,36 @@ export function draftChanged(version: SequenceVersion, steps: readonly DraftStep
 // Lane g88: writing a template
 // ---------------------------------------------------------------------------
 
-/** What every automated email ends with (12.6): the sign-off, then the stop line. */
+/** What every automated email ends with since 29 September 2026: the sign-off, alone. */
 export function templateFooter(signOff: string): string {
+  return signOff.trim();
+}
+
+/** The pre-0023 ending, recognised only so an older body's typed part can still be shown. */
+function legacyTemplateFooter(signOff: string): string {
   return `${signOff.trim()}\n${SENDING_STOP_LINE}`;
 }
 
 /**
- * The body a version stores: what the person typed, a blank line, and the footer. The
- * approval rule requires the body to *end* with the footer (`templateTextIssues`), so it
- * is appended here rather than left for the person to type correctly.
+ * The body a version stores: what the person typed, a blank line, and the footer — the
+ * sign-off, alone, since David's 29 September 2026 decision. The server composes the
+ * workspace's postal address in at send when it has one; the desktop never types it.
  */
 export function composeTemplateBody(body: string, signOff: string): string {
   return `${body.trim()}\n\n${templateFooter(signOff)}`;
 }
 
-/** The part of a stored body the person typed: everything before the footer, when it is there. */
+/**
+ * The part of a stored body the person typed: everything before the footer, when it is
+ * there. Both endings are recognised — today's sign-off and the pre-0023 sign-off with
+ * the stop line under it — so editing a template approved before the decision shows the
+ * words somebody wrote rather than the words plus a footer they cannot delete.
+ */
 export function typedBodyOf(template: Pick<TemplateVersion, 'body' | 'footerSignOff'>): string {
-  const footer = templateFooter(template.footerSignOff);
-  return template.body.endsWith(footer) ? template.body.slice(0, -footer.length).trimEnd() : template.body;
+  for (const footer of [legacyTemplateFooter(template.footerSignOff), templateFooter(template.footerSignOff)]) {
+    if (template.body.endsWith(footer)) return template.body.slice(0, -footer.length).trimEnd();
+  }
+  return template.body;
 }
 
 /** The `{name}` placeholders in a subject and body, split into the ones Callie can fill and the rest. */
@@ -541,8 +554,8 @@ export function templateFormIssues(draft: TemplateDraft): readonly TemplateFormI
   else if (/[\n\r]/u.test(draft.subject)) issues.push({ field: 'subject', text: 'The subject is one line.' });
   if (draft.body.trim() === '') issues.push({ field: 'body', text: 'Write the email.' });
   if (draft.signOff.trim() === '') issues.push({ field: 'signOff', text: 'Add your sign-off, such as your name.' });
-  if (/unsubscribe/iu.test(`${draft.subject}\n${draft.body}\n${draft.signOff}`)) {
-    issues.push({ field: 'body', text: 'Leave out any unsubscribe link: Callie ends every email with “Reply stop”.' });
+  if (hasOptOutLink(`${draft.subject}\n${draft.body}\n${draft.signOff}`)) {
+    issues.push({ field: 'body', text: NO_OPTOUT_LINK_RULE });
   }
   const { unknown } = templateVariablesIn(draft.subject, draft.body);
   if (unknown.length > 0) {
@@ -592,8 +605,8 @@ export const TEMPLATE_ISSUE_SENTENCES: Readonly<Record<string, string>> = Object
   template_body_markup: 'The email contains markup. Write it as plain text.',
   template_body_too_long: 'The email is longer than 89 words, sign-off included.',
   template_body_multiple_urls: 'The email has more than one link.',
-  template_footer_missing: 'The email does not end with the sign-off and the stop line.',
-  template_sign_off_repeats_stop_line: 'The sign-off repeats the stop line; the footer adds that line itself.',
+  template_footer_missing: 'Callie cannot tell where the sign-off starts: the email does not end with it.',
+  template_optout_link: NO_OPTOUT_LINK_RULE,
   template_required_sentence_missing: 'A sentence this workspace requires is missing.',
   template_pricing_or_guarantee_language: 'The email mentions prices, percentages or guarantees.',
   template_unknown_variable: 'The email names a variable Callie cannot fill.',

@@ -660,10 +660,10 @@ export const ROUTINE_SETTINGS: readonly string[] = Object.freeze(['business_time
  * The sentence under the postal address (David, 27 September 2026).
  *
  * There is no address until somebody sets one, and that is not an error: an automated
- * email's footer is the sign-off and the stop line, and it goes out either way. Saying so
- * where the field is stops the field reading like a thing that has to be filled in.
+ * email's footer is then the sign-off alone, and it goes out either way. Saying so where
+ * the field is stops the field reading like a thing that has to be filled in.
  */
-export const POSTAL_ADDRESS_HINT = 'With no address the footer is the sign-off and the stop line; sending continues.';
+export const POSTAL_ADDRESS_HINT = 'With no address the footer is your sign-off alone; sending continues.';
 
 /** The zones the business-zone control offers: the same US zones Add firm offers. */
 export const BUSINESS_ZONE_CHOICES = TIME_ZONE_CHOICES.filter(choice => choice.value !== '');

@@ -1414,13 +1414,39 @@ export const MAIL_CONSTRAINT_CASES: readonly MailCase[] = [
       ),
   },
   {
-    constraint: 'template_versions_no_unsubscribe_link',
+    // Migration 0023: the *link*, not the word. A URL whose own text says unsubscribe.
+    constraint: 'template_versions_no_optout_link',
     run: async f =>
       await f.session.query(
         `INSERT INTO template_versions (workspace_id, template_id, version, name, subject, body, content_hash,
                                         footer_sign_off)
          VALUES ($1, gen_random_uuid(), 1, 'Web opt out', 'Hello',
-                 'Hello.' || chr(10) || 'Click here to unsubscribe.', $2, 'Signed off')`,
+                 'Hello.' || chr(10) || 'https://mail.example.test/unsubscribe/abc', $2, 'Signed off')`,
+        [workspace(f), HASH],
+      ),
+  },
+  {
+    // The other shape: a line carrying both a URL and an opt-out word — the label and
+    // its link.
+    constraint: 'template_versions_no_optout_link',
+    run: async f =>
+      await f.session.query(
+        `INSERT INTO template_versions (workspace_id, template_id, version, name, subject, body, content_hash,
+                                        footer_sign_off)
+         VALUES ($1, gen_random_uuid(), 1, 'Labelled link', 'Hello',
+                 'Hello.' || chr(10) || 'click here to opt out: https://x.example.test', $2, 'Signed off')`,
+        [workspace(f), HASH],
+      ),
+  },
+  {
+    // And in the subject, where a link is refused the same way.
+    constraint: 'template_versions_no_optout_link',
+    run: async f =>
+      await f.session.query(
+        `INSERT INTO template_versions (workspace_id, template_id, version, name, subject, body, content_hash,
+                                        footer_sign_off)
+         VALUES ($1, gen_random_uuid(), 1, 'Subject link', 'Opt out at www.x.example.test',
+                 'Hello.', $2, 'Signed off')`,
         [workspace(f), HASH],
       ),
   },

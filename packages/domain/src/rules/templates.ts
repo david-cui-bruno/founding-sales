@@ -1,5 +1,12 @@
 import { createHash } from 'node:crypto';
-import { SENDING_STOP_LINE, TEMPLATE_WARNING_CODES, type TemplateWarningCode } from '@fss/contracts';
+import {
+  NO_OPTOUT_LINK_RULE,
+  OPT_OUT_LINK_PATTERN,
+  SENDING_STOP_LINE,
+  TEMPLATE_WARNING_CODES,
+  hasOptOutLink,
+  type TemplateWarningCode,
+} from '@fss/contracts';
 
 /**
  * Template content hash and footer block (specification 11.1, 12.6).
@@ -10,35 +17,53 @@ import { SENDING_STOP_LINE, TEMPLATE_WARNING_CODES, type TemplateWarningCode } f
  *   * the content hash covers the exact text that may be sent — identity, version,
  *     subject and body — so an approval is bound to bytes rather than to a name, and
  *     an edit in place recomputes it (wave 2, S3);
- *   * a body may not be approved unless it ends with the footer block. Since migration
- *     0019 dropped the stop-line CHECK, this rule is the only guard, and it applies
- *     unconditionally: at every approval and on every save of an approved version.
+ *   * a body may be approved only if Callie can give it exactly one footer block, which
+ *     since migration 0023 is the sign-off (and the workspace's postal address when it
+ *     has one) and nothing else. The rule applies unconditionally: at every approval and
+ *     on every save of an approved version.
  *
  * The copy rules — word count, links, price and guarantee wording — are warnings since
  * 26 September 2026 (`TEMPLATE_WARNING_CODES`): an approval reports them and approves.
  *
- * The block is the sign-off, then the workspace's postal address when it has one, then
- * the stop line. The address left the block on 22 September 2026
+ * The block is the sign-off, then the workspace's postal address when it has one. The
+ * address left the block on 22 September 2026
  * (`docs/archive/decisions/g20-automated-email-carries-no-postal-address.md`) and came
  * back on 27 September as a *setting* rather than a template column, composed at send
- * (migration 0020, lane W3-F): reversing G20 is a new migration, not a revert. The stop
- * line never moved, so 12.6 still holds in full: every automated template explains how
- * to stop by replying, and no web unsubscribe link is included.
+ * (migration 0020, lane W3-F): reversing G20 is a new migration, not a revert.
+ *
+ * **The stop line went on 29 September 2026** (David: "remove the mandatory 'Reply
+ * "stop"' footer and remove the blanket database ban on the word 'unsubscribe.'";
+ * `docs/greenfield/decisions/email-presentation-20260929.md`). Nothing appends
+ * `SENDING_STOP_LINE` any more. What is left of 12.6 is the part David kept: **no
+ * visible opt-out link** (`NO_OPTOUT_LINK_RULE`, `hasOptOutLink`, and migration 0023's
+ * two `*_no_optout_link` CHECKs), and a stop request in ordinary language still
+ * suppresses (`rules/replyClassification.ts`, untouched by that decision).
  *
  * **The footer is composed at send, before the fence freezes the bytes.** `composeSendBody`
- * is the one function that decides the final text: it removes a recognised legacy footer
- * block — and nothing else, never the sign-off a second time — and appends the block the
- * workspace's configuration says now. A body may be approved in either shape, the legacy
- * one (the block already inside the body, which desktop 1.0.11 requires) or the footerless
- * one, and both leave the fence with exactly one final stop line.
+ * is the one function that decides the final text: it removes a recognised footer block —
+ * and nothing else, never the sign-off a second time — and appends the block the
+ * workspace's configuration says now. A recognised block is one this workspace's records
+ * can rebuild, in today's shape or in the pre-0023 shape that ends with the stop line, so
+ * a template approved or a fence prepared before the decision loses the line at send
+ * rather than keeping it forever.
  *
  * What does not survive from the old module is its hard-coded sign-off, which carried
  * a real name, phone number and site. The sign-off is workspace configuration here;
  * no repository file carries a real contact detail.
  */
 
-/** The one stop line every approved body ends with. It lives in `@fss/contracts` so the Mac reads the same bytes. */
-export { SENDING_STOP_LINE, TEMPLATE_WARNING_CODES, type TemplateWarningCode };
+/**
+ * The legacy stop line: recognised so it can be removed, never appended. It lives in
+ * `@fss/contracts` so the Mac reads the same bytes, and so does the opt-out-link rule.
+ */
+export {
+  SENDING_STOP_LINE,
+  NO_OPTOUT_LINK_RULE,
+  OPT_OUT_LINK_PATTERN,
+  hasOptOutLink,
+  TEMPLATE_WARNING_CODES,
+  type TemplateWarningCode,
+};
 
 export const TEMPLATE_SUBJECT_MAX_LENGTH = 160;
 export const TEMPLATE_BODY_MAX_LENGTH = 4000;
@@ -71,13 +96,11 @@ export const TEMPLATE_FORBIDDEN_PHRASES: readonly string[] = Object.freeze([
 export interface FooterConfiguration {
   /** The workspace's approved sign-off block. Configuration; never a literal in this repository. */
   readonly signOff: string;
-  /** Overridable only to test the rule; production uses SENDING_STOP_LINE. */
+  /**
+   * The legacy last line, recognised at the end of a body so it can be removed. Never
+   * appended. Overridable only to test the rule; production uses SENDING_STOP_LINE.
+   */
   readonly stopLine?: string | undefined;
-}
-
-/** The footer block a body must end with: the sign-off, then the stop line. Nothing between them. */
-export function footerBlock(configuration: FooterConfiguration): string {
-  return `${configuration.signOff.trim()}\n${configuration.stopLine ?? SENDING_STOP_LINE}`;
 }
 
 /**
@@ -101,11 +124,10 @@ export interface SendFooterConfiguration extends FooterConfiguration {
   readonly recordedAddresses?: readonly string[] | undefined;
 }
 
-/** The block a send appends: the sign-off, the address when there is one, then the stop line. */
+/** The block a send appends: the sign-off, and the address when there is one. Nothing else. */
 export function sendFooterBlock(configuration: SendFooterConfiguration): string {
   const address = configuration.postalAddress?.trim() ?? '';
-  const middle = address.length === 0 ? '' : `${address}\n`;
-  return `${configuration.signOff.trim()}\n${middle}${configuration.stopLine ?? SENDING_STOP_LINE}`;
+  return address.length === 0 ? configuration.signOff.trim() : `${configuration.signOff.trim()}\n${address}`;
 }
 
 /**
@@ -139,13 +161,6 @@ export const COMPOSE_SEND_BODY_REFUSALS = [
   'footer_ambiguous',
   /** The composed body is longer than the fence's column allows. */
   'composed_body_too_long',
-  /**
-   * The composed bytes are not sendable, which can only mean the footer itself is wrong
-   * — a sign-off that contains the stop sentence produces two. The guard is on this
-   * function's own output, so no caller can be handed a body with two stop lines or
-   * none (review of PR 296, P0).
-   */
-  'composed_body_not_sendable',
 ] as const;
 export type ComposeSendBodyRefusal = (typeof COMPOSE_SEND_BODY_REFUSALS)[number];
 
@@ -168,6 +183,12 @@ export type ComposeSendBodyDecision =
  * migration 0015) or an address the `postal_address` setting recorded. Nothing here is
  * inferred from the shape of the body — that is the whole difference between replacing a
  * footer and deleting a sentence somebody wrote.
+ *
+ * Each block comes in two shapes: today's, which ends with the sign-off or the address,
+ * and the pre-0023 one, which ends with the stop line. Both are recognised so that a
+ * template approved or a fence prepared before 29 September 2026 has its footer
+ * *replaced* — the stop line goes at the next send — instead of a second sign-off
+ * appended underneath the first.
  */
 function candidateFooterBlocks(configuration: SendFooterConfiguration): readonly string[] {
   const stopLine = configuration.stopLine ?? SENDING_STOP_LINE;
@@ -175,8 +196,12 @@ function candidateFooterBlocks(configuration: SendFooterConfiguration): readonly
   const addresses = [configuration.postalAddress ?? '', ...(configuration.recordedAddresses ?? [])]
     .map(address => address.trim())
     .filter(address => address.length > 0);
-  const blocks = new Set<string>([`${signOff}\n${stopLine}`]);
-  for (const address of addresses) blocks.add(`${signOff}\n${address}\n${stopLine}`);
+  const heads = [signOff, ...addresses.map(address => `${signOff}\n${address}`)];
+  const blocks = new Set<string>();
+  for (const head of heads) {
+    blocks.add(head);
+    blocks.add(`${head}\n${stopLine}`);
+  }
   // Longest first: when an address block and the bare block both end the body, the
   // address block is the one that was actually written there.
   return [...blocks].sort((left, right) => right.length - left.length);
@@ -212,11 +237,9 @@ function footerBlockStart(body: string, configuration: SendFooterConfiguration):
  * is what makes reconciling an already-current fence a no-op.
  *
  * Three things can stop it, and each is a handled hold at the caller rather than a
- * mangled send: the switch with no address; a body whose stop line this workspace's
- * records cannot account for (`footer_ambiguous` — nothing is removed, a person looks at
- * it); and a composed body the fence's column would refuse. Its own output is checked
- * before it is returned, so a caller can never be handed a body with two stop lines or
- * none, whatever the footer configuration says.
+ * mangled send: the switch with no address; a body carrying the legacy stop line in a
+ * place this workspace's records cannot account for (`footer_ambiguous` — nothing is
+ * removed, a person looks at it); and a composed body the fence's column would refuse.
  */
 export function composeSendBody(
   body: string,
@@ -231,8 +254,8 @@ export function composeSendBody(
 
   const blockStart = footerBlockStart(body, configuration);
   const stripped = body.replace(/\s+$/u, '');
-  // No recognised block, but the stop line is in there somewhere: the body is ambiguous
-  // and this function does not guess which words are the footer.
+  // No recognised block, but the legacy stop line is in there somewhere: the body is
+  // ambiguous and this function does not guess which words are the footer.
   if (blockStart === null && stripped.includes(stopLine)) {
     return { composed: false, reason: 'footer_ambiguous' };
   }
@@ -240,11 +263,9 @@ export function composeSendBody(
   const footer = sendFooterBlock(configuration);
   const composedBody = head.trim().length === 0 ? footer : `${head.replace(/\s+$/u, '')}\n\n${footer}`;
 
-  const issue = sendBodyIssue(composedBody, stopLine);
-  if (issue === 'body_too_long') {
+  if (sendBodyIssue(composedBody) === 'body_too_long') {
     return { composed: false, reason: 'composed_body_too_long', detail: String(composedBody.length) };
   }
-  if (issue !== null) return { composed: false, reason: 'composed_body_not_sendable', detail: issue };
   return { composed: true, body: composedBody, changed: composedBody !== body, deduped: blockStart !== null };
 }
 
@@ -252,16 +273,14 @@ export function composeSendBody(
  * What is wrong with a body about to be frozen on a fence, or null when nothing is.
  *
  * The fence's own guard (`prepareOutboundMessage`), so that no path — a caller that
- * forgot to compose, a fence prepared by an older release — can store a body without
- * exactly one final stop line. It asks about the bytes and nothing else.
+ * forgot to compose, a fence prepared by an older release — can store bytes the fence's
+ * column would refuse. It asks about the bytes and nothing else, and since migration
+ * 0023 removed the mandatory last line there is exactly one such question left: the
+ * length. Whether the *footer* is right is a question about the workspace's sign-off,
+ * which this function is not given and never guessed at (`composeSendBody`).
  */
-export function sendBodyIssue(
-  body: string,
-  stopLine: string = SENDING_STOP_LINE,
-): 'footer_missing' | 'stop_line_repeated' | 'body_too_long' | null {
-  if (body.length > SENT_BODY_MAX_LENGTH) return 'body_too_long';
-  if (!body.replace(/\s+$/u, '').endsWith(stopLine)) return 'footer_missing';
-  return body.split(stopLine).length - 1 > 1 ? 'stop_line_repeated' : null;
+export function sendBodyIssue(body: string): 'body_too_long' | null {
+  return body.length > SENT_BODY_MAX_LENGTH ? 'body_too_long' : null;
 }
 
 export interface TemplateText {
@@ -327,22 +346,20 @@ export function templateTextIssues(text: TemplateText, rules: TemplateRules): st
   if (/[\x00-\x08\x0b-\x1f\x7f]|\r/.test(body)) issues.push('template_body_not_plain_text');
   if (/<[a-z/!][^>]*>/i.test(body)) issues.push('template_body_markup');
 
-  // 12.6: the sentence that says how to stop is the last thing a prospect reads. Since
-  // the footer is composed at send (lane W3-F), the rule is no longer "the body ends with
-  // the block" but "the body can be given exactly one final block": **both shapes are
-  // approvable**, the legacy one with the block already inside the body — which desktop
-  // 1.0.11 requires before it will enable Approve — and the footerless one, which the
-  // desktop after it writes. A body that carries the stop line anywhere else is refused,
-  // and so is one whose trailing block this workspace's records cannot account for:
-  // composing either would mean guessing which words are the footer (review of PR 296).
-  //
-  // A sign-off that contains the stop sentence is refused before any of that: it would
-  // compose a footer with two stop lines, and every body approved under it would be
-  // unsendable.
-  const stopLine = rules.footer.stopLine ?? SENDING_STOP_LINE;
-  const signOffRepeatsStopLine = rules.footer.signOff.includes(stopLine);
-  if (signOffRepeatsStopLine) issues.push('template_sign_off_repeats_stop_line');
+  // What is left of 12.6 after 29 September 2026: no visible opt-out link. The word is
+  // allowed — "just reply unsubscribe and I'll stop" is a sentence we want — and this is
+  // the same shape migration 0023's CHECKs refuse, so the save cannot offer an approval
+  // the database would answer with a 500.
+  if (hasOptOutLink(subject) || hasOptOutLink(body)) issues.push('template_optout_link');
 
+  // Since the footer is composed at send (lane W3-F), the rule is not "the body ends with
+  // the block" but "the body can be given exactly one final block": **both shapes are
+  // approvable**, the one with the block already inside the body — which desktop 1.0.11
+  // requires before it will enable Approve — and the footerless one, which the desktop
+  // after it writes. What is refused is a body whose trailing block this workspace's
+  // records cannot account for, including one carrying the legacy stop line somewhere of
+  // its own: composing it would mean guessing which words are the footer (review of PR
+  // 296).
   // Composed under `APPROVAL_FOOTER_POLICY`, with no address and none recorded: an
   // approval may not turn on whether the workspace has configured one, nor on the
   // switch's position, nor on an address it might configure later. The address's own
@@ -352,7 +369,7 @@ export function templateTextIssues(text: TemplateText, rules: TemplateRules): st
     { ...rules.footer, postalAddress: null, recordedAddresses: [] },
     APPROVAL_FOOTER_POLICY,
   );
-  if (!composed.composed && !signOffRepeatsStopLine) {
+  if (!composed.composed) {
     const issue =
       composed.reason === 'composed_body_too_long' ? 'template_body_too_long_in_characters' : 'template_footer_missing';
     if (!issues.includes(issue)) issues.push(issue);

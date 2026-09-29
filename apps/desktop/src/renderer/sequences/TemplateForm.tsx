@@ -1,5 +1,5 @@
 import type { JSX } from 'react';
-import { SENDING_STOP_LINE, TEMPLATE_VARIABLE_NAMES } from '@fss/contracts';
+import { TEMPLATE_VARIABLE_NAMES } from '@fss/contracts';
 import { useClearDrafts, useDrafts } from '../app/drafts.tsx';
 import type { TemplateDraft } from '../sequenceContract.ts';
 import { templateFormIssues, templateFormWarnings } from '../sequenceView.ts';
@@ -11,8 +11,10 @@ import { Textarea } from '../ui/textarea.tsx';
 /**
  * The template form (lane g88; wave 2, S3).
  *
- * A name, a subject, the email and the sign-off. The stop line is not typed: every email
- * ends with the sign-off and then it, and the form shows that ending under the body.
+ * A name, a subject, the email and the sign-off. The sign-off is not typed into the body:
+ * every email ends with it, and the form shows that ending under the body. There is no
+ * mandatory last line any more (David, 29 September 2026); what is still refused is a
+ * visible opt-out link.
  *
  * **One press saves and approves** (D5). `/templates/create` and `/templates/update` take
  * `approve: true` and refuse the whole command, with every issue, when the text does not
@@ -125,9 +127,9 @@ export function TemplateForm({
         />
       </Field>
 
-      <p className="text-xs text-muted-foreground">Every email ends with your sign-off and then:</p>
-      <blockquote data-testid="template-stop-line" className="border-l-2 border-border pl-3 text-xs text-muted-foreground">
-        {SENDING_STOP_LINE}
+      <p className="text-xs text-muted-foreground">Every email ends with your sign-off:</p>
+      <blockquote data-testid="template-footer-preview" className="border-l-2 border-border pl-3 text-xs whitespace-pre-wrap text-muted-foreground">
+        {draft.signOff.trim()}
       </blockquote>
 
       <div data-testid="template-advice" className="flex flex-col gap-0.5 empty:hidden">
