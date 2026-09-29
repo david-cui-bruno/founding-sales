@@ -199,8 +199,15 @@ describe('the step hands over composed bytes', () => {
       eligibility: allowAllEligibility(),
       sendHandoff: handoff,
     });
-    expect(outcome).toMatchObject({ kind: 'held', reasonCode: 'template_unapproved' });
+    // Its own hold reason since migration 0023: the operator has to be able to read why
+    // an approved template stopped (review of PR 311, second round).
+    expect(outcome).toMatchObject({ kind: 'held', reasonCode: 'optout_link' });
     expect(handoff.prepared).toEqual([]);
+    const held = await database.session.query<{ hold_reason_code: string }>(
+      'SELECT hold_reason_code FROM step_executions WHERE workspace_id = $1 AND enrollment_id = $2',
+      [seeded.alpha.workspaceId, enrollmentId],
+    );
+    expect(held.rows[0]?.hold_reason_code).toBe('optout_link');
     const { rows } = await database.session.query<{ count: string }>(
       'SELECT count(*) AS count FROM outbound_messages WHERE workspace_id = $1',
       [seeded.alpha.workspaceId],

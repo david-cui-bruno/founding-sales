@@ -176,9 +176,10 @@ and the TypeScript one in the same assertion.
   a Latin `O`**;
 * and it refuses some innocent copy: *"You can opt out by replying. Our website is
   https://firm.example"* **is** refused, although the website has nothing to do with
-  opting out. That is the price of a rule a CHECK can enforce, and the fix for a false
-  refusal is to put the website on its own line. The approval names the rule when it
-  refuses, so nobody has to guess why.
+  opting out. That is the price of a rule a CHECK can enforce. The fix for a false
+  refusal is a **blank line** between the unrelated link and the opt-out phrase — a line
+  that merely touches the phrase is adjacent, and adjacency is the rule. The approval
+  names the rule when it refuses, so nobody has to guess why.
 
 **The rule is applied to the final bytes, not only to the stored ones.** The sign-off is
 a field of its own on `POST /templates`, and a `{firm_website}` is whatever the CRM

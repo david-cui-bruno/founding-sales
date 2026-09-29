@@ -53,7 +53,7 @@ import {
  */
 
 /**
- * The legacy stop line: recognised so it can be removed, never appended. It lives in
+ * The pre-0023 stop line: recognised so it can be removed, never appended. It lives in
  * `@fss/contracts` so the Mac reads the same bytes, and so does the opt-out-link rule.
  */
 export {
@@ -134,8 +134,8 @@ export function sendFooterBlock(configuration: SendFooterConfiguration): string 
  * The one switch the owner flips to make the address compulsory.
  *
  * David's decision of 27 September 2026 (plan rev 3, "Sending across 0020"): an absent
- * address is **not** a refusal — the footer is the sign-off and the stop line, exactly
- * today's bytes, and sending continues, because a schema release must not stop sending.
+ * address is **not** a refusal — the footer is then the sign-off alone, and sending
+ * continues, because a schema release must not stop sending.
  * The stricter alternative the reviewer asked for — refuse every send until the address
  * is configured — is this one boolean, and both positions are tested
  * (`packages/domain/test/domain/rules.test.ts`, `test/outbound/footerAtSend.test.ts`).
@@ -222,7 +222,8 @@ function candidateFooterBlocks(configuration: SendFooterConfiguration): readonly
  *
  * The block must be one of `candidateFooterBlocks`, at the very end of the body, and it
  * must be a **complete separate block**: whole lines, with a blank line before them or
- * the start of the body. Never a line prefix and never a word suffix — with the sign-off
+ * the start of the body. A line of spaces or tabs is a blank line (`^[ \t]*$`), because
+ * an editor that left one behind must not turn a good footer into a hold. Never a line prefix and never a word suffix — with the sign-off
  * `David`, the body `Hi David` ends with the characters of a block and is not one
  * (the `Hi David` fix, review of PR 264), and `Hello.\nDavid` is a second line of prose
  * as far as anything here can tell (review of PR 311). Nothing of either is removed.
@@ -234,7 +235,7 @@ function footerBlockStart(body: string, configuration: SendFooterConfiguration):
   for (const block of candidateFooterBlocks(configuration)) {
     if (!stripped.endsWith(block)) continue;
     const start = stripped.length - block.length;
-    if (start === 0 || stripped.slice(0, start).endsWith('\n\n')) return start;
+    if (start === 0 || /\n[ \t]*\n$/u.test(stripped.slice(0, start))) return start;
   }
   return null;
 }
@@ -251,8 +252,11 @@ function footerBlockStart(body: string, configuration: SendFooterConfiguration):
 function signOffStandsAlone(body: string, rawSignOff: string): boolean {
   const signOff = rawSignOff.trim();
   if (signOff.length === 0) return false;
-  const lines = body.split('\n');
-  const block = signOff.split('\n');
+  // Trailing spaces on a line are not a different line: the same tolerance the blank
+  // separator gets, so the two halves of the recognition agree about whitespace.
+  const trimEnd = (line: string): string => line.replace(/[ \t]+$/u, '');
+  const lines = body.split('\n').map(trimEnd);
+  const block = signOff.split('\n').map(trimEnd);
   for (let start = 0; start + block.length <= lines.length; start += 1) {
     if (block.every((line, offset) => lines[start + offset] === line)) return true;
   }

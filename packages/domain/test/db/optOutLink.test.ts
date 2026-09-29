@@ -1,5 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { hasOptOutLink } from '@fss/contracts';
+import { readFileSync } from 'node:fs';
+import {
+  OPT_OUT_DASH_CODE_POINTS,
+  OPT_OUT_DASH_REPLACEMENT,
+  OPT_OUT_LOWERCASE,
+  OPT_OUT_SPACE_CODE_POINTS,
+  OPT_OUT_SPACE_REPLACEMENT,
+  OPT_OUT_UPPERCASE,
+  hasOptOutLink,
+} from '@fss/contracts';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import { OPT_OUT_LINK_CASES } from './support/optOutLinkCases.ts';
 
@@ -39,6 +48,32 @@ describe('the database and TypeScript spell the opt-out-link rule the same way',
       expect(rows[0]?.refused, `SQL: ${what}`).toBe(refused);
       expect(hasOptOutLink(text), `TypeScript: ${what}`).toBe(refused);
     }
+  });
+
+  it('translates exactly the code points `@fss/contracts` names, character for character', () => {
+    // Outcomes agreeing on 26 examples is not the same claim as the two normalisations
+    // being the same normalisation. This reads the migration and compares the three
+    // translation tables directly (review of PR 311, second round).
+    const sql = readFileSync(new URL('../../db/migrations/0023_email_presentation.sql', import.meta.url), 'utf8');
+    const unicodeLists = [...sql.matchAll(/U&'((?:\\[0-9A-Fa-f]{4})+)'/gu)].map(match =>
+      [...(match[1] ?? '').matchAll(/\\([0-9A-Fa-f]{4})/gu)]
+        .map(point => String.fromCodePoint(Number.parseInt(point[1] ?? '0', 16)))
+        .join(''),
+    );
+    expect(unicodeLists).toHaveLength(2);
+    expect(unicodeLists[0]).toBe(OPT_OUT_DASH_CODE_POINTS);
+    expect(unicodeLists[1]).toBe(OPT_OUT_SPACE_CODE_POINTS);
+    // And what each is translated *to*, which decides nothing unless the lengths match.
+    expect(sql).toContain(`'${OPT_OUT_DASH_REPLACEMENT}')`);
+    expect(sql).toContain(`'${OPT_OUT_SPACE_REPLACEMENT}')`);
+    expect(OPT_OUT_DASH_REPLACEMENT).toHaveLength(OPT_OUT_DASH_CODE_POINTS.length);
+    expect(OPT_OUT_SPACE_REPLACEMENT).toHaveLength(OPT_OUT_SPACE_CODE_POINTS.length);
+    // The case map, which is a `translate()` in both places and `lower()` in neither.
+    // Asserted over the function's body, not the file: the header explains why.
+    const body = sql.slice(sql.indexOf('CREATE FUNCTION email_has_optout_link'), sql.indexOf('$$;'));
+    expect(body).toContain(`'${OPT_OUT_UPPERCASE}', '${OPT_OUT_LOWERCASE}'`);
+    expect(body).not.toMatch(/\blower\(/u);
+    expect(body).toContain('normalize(candidate, NFKC)');
   });
 
   it('is immutable, which is what makes it legal inside a CHECK', async () => {

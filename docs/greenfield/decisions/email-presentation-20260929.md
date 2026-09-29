@@ -40,7 +40,9 @@ one.
   **Accepted limitations, written down rather than discovered later:** a bare shortener
   with no phrase near it passes, a Cyrillic `О` is not folded to a Latin `O`, and
   "You can opt out by replying. Our website is https://firm.example" is refused although
-  the website is unrelated — the price of a rule a CHECK can enforce.
+  the website is unrelated — the price of a rule a CHECK can enforce. The fix for a
+  false refusal is a blank line between the link and the phrase; a touching line is
+  adjacent.
 * **The rule is applied to the final bytes.** The sign-off arrives as its own API field
   and a `{firm_website}` is whatever the CRM holds, so approval checks subject, body and
   sign-off, and the composition and the fence check the rendered subject and composed

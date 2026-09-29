@@ -452,7 +452,7 @@ async function runEmailStep(
   // place a link can appear in it. The body's turn comes with the composition below;
   // both are held here rather than thrown by the insert (review of PR 311, P1-2).
   if (hasOptOutLink(rendered.subject)) {
-    return await holdExecution(context, execution, 'template_unapproved', { detail: ['optout_link'] });
+    return await holdExecution(context, execution, 'optout_link');
   }
 
   // The footer, composed **before** the fence stores anything (lane W3-F, migration
@@ -467,12 +467,15 @@ async function runEmailStep(
     signOff: template.footerSignOff,
   });
   if (!composed.composed) {
-    return await holdExecution(
-      context,
-      execution,
-      composed.reason === 'postal_address_required' ? 'scoped_pause' : 'template_unapproved',
-      { detail: [composed.reason] },
-    );
+    // The reason is persisted as the code, because `hold_reason_code` is the field the
+    // card and the operator read; `optout_link` has its own since migration 0023.
+    const reasonCode =
+      composed.reason === 'postal_address_required'
+        ? 'scoped_pause'
+        : composed.reason === 'optout_link'
+          ? 'optout_link'
+          : 'template_unapproved';
+    return await holdExecution(context, execution, reasonCode, { detail: [composed.reason] });
   }
 
   const route = await usableEmailRoute(context, enrollment.contactId);

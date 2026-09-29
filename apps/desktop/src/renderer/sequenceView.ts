@@ -233,12 +233,21 @@ function versionPanel(
  */
 const FOOTER_OF = (template: TemplateVersion): string => template.footerSignOff;
 
-/** Whether a body ends with the sign-off as a block of its own, in either shape. */
+/**
+ * Whether a body ends with the sign-off as a block of its own, in either shape.
+ *
+ * The separator above the block is a blank line, and a line of spaces or tabs is a
+ * blank line: an editor that left one behind must not turn a good footer into a hold
+ * (review of PR 311, second round). The same `^[ \t]*$` the server's own recognition
+ * uses.
+ */
 function endsWithFooterBlock(body: string, signOff: string): boolean {
   const stripped = body.replace(/\s+$/u, '');
-  return [`${signOff}\n${SENDING_STOP_LINE}`, signOff].some(
-    block => stripped === block || stripped.endsWith(`\n\n${block}`),
-  );
+  return [`${signOff}\n${SENDING_STOP_LINE}`, signOff].some(block => {
+    if (stripped === block) return true;
+    if (!stripped.endsWith(block)) return false;
+    return /\n[ \t]*\n$/u.test(stripped.slice(0, stripped.length - block.length));
+  });
 }
 
 function templatePanel(
@@ -250,7 +259,10 @@ function templatePanel(
   // The same boundary the server applies: a complete separate block at the end, in
   // today's shape or the pre-0023 one. `includes` would call `Hi David` a footer.
   const footerPresent = endsWithFooterBlock(template.body, template.footerSignOff);
-  const optOutLinkMentioned = hasOptOutLink(`${template.subject}\n${template.body}`);
+  // Column by column, as the server asks it: joining them would invent an adjacency
+  // between the last line of the subject and the first of the body, and refuse a
+  // template the database accepts (review of PR 311, second round).
+  const optOutLinkMentioned = hasOptOutLink(template.subject) || hasOptOutLink(template.body);
   return {
     id: template.id,
     label: `${template.name} v${String(template.version)}`,
@@ -535,7 +547,9 @@ export function composeTemplateBody(body: string, signOff: string): string {
 export function typedBodyOf(template: Pick<TemplateVersion, 'body' | 'footerSignOff'>): string {
   for (const footer of [legacyTemplateFooter(template.footerSignOff), templateFooter(template.footerSignOff)]) {
     if (template.body === footer) return '';
-    if (template.body.endsWith(`\n\n${footer}`)) return template.body.slice(0, -footer.length).trimEnd();
+    if (!template.body.endsWith(footer)) continue;
+    const head = template.body.slice(0, template.body.length - footer.length);
+    if (/\n[ \t]*\n$/u.test(head)) return head.trimEnd();
   }
   return template.body;
 }
@@ -571,7 +585,10 @@ export function templateFormIssues(draft: TemplateDraft): readonly TemplateFormI
   else if (/[\n\r]/u.test(draft.subject)) issues.push({ field: 'subject', text: 'The subject is one line.' });
   if (draft.body.trim() === '') issues.push({ field: 'body', text: 'Write the email.' });
   if (draft.signOff.trim() === '') issues.push({ field: 'signOff', text: 'Add your sign-off, such as your name.' });
-  if (hasOptOutLink(`${draft.subject}\n${draft.body}\n${draft.signOff}`)) {
+  // The subject on its own, and the body as it will be *stored* — the sign-off under
+  // it, exactly the bytes `composeTemplateBody` writes and the server then approves.
+  // Never the three joined together: that would invent an adjacency nothing sends.
+  if (hasOptOutLink(draft.subject) || hasOptOutLink(composeTemplateBody(draft.body, draft.signOff))) {
     issues.push({ field: 'body', text: NO_OPTOUT_LINK_RULE });
   }
   const { unknown } = templateVariablesIn(draft.subject, draft.body);

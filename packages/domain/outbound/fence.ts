@@ -692,11 +692,6 @@ export async function markPreDispatchFenceSent(
   },
 ): Promise<SendResult<OutboundFenceRow>> {
   const actor = input.actor ?? describeActor(context);
-  const detail = {
-    reconciled_from: SENT_FOLDER_PRE_DISPATCH_PROVENANCE,
-    providerMessageId: input.providerMessageId,
-    sentBytes: input.verifiedBytes === undefined ? 'unverified' : 'verified',
-  };
   const current = await readFence(context, input.outboundMessageId);
   if (current?.state === 'held') {
     // Safe for the reason the edge exists at all: `held` never entered dispatching.
@@ -704,9 +699,25 @@ export async function markPreDispatchFenceSent(
   }
   // Both columns or neither: a verified record is a subject and a body that were read
   // together from the same message (review of PR 296, second round).
-  const verified = input.verifiedBytes;
+  //
+  // And bytes Gmail holds are still bytes this table has an opinion about: a message
+  // that carries a visible opt-out link would break `outbound_messages_no_optout_link`
+  // and abort the whole restore transaction. The send already happened and cannot be
+  // unsent, so the fence is marked `sent` with the bytes it already stores and the
+  // recovery reports `sent_bytes_unverified` for the human step — the operator reads
+  // the real message in the mailbox (review of PR 311, second round).
+  const offered = input.verifiedBytes;
+  const refused =
+    offered !== undefined && (hasOptOutLink(offered.subject) || hasOptOutLink(offered.body));
+  const verified = refused ? undefined : offered;
   const subject = verified === undefined ? null : verified.subject;
   const body = verified === undefined ? null : verified.body;
+  const detail = {
+    reconciled_from: SENT_FOLDER_PRE_DISPATCH_PROVENANCE,
+    providerMessageId: input.providerMessageId,
+    sentBytes: verified === undefined ? 'unverified' : 'verified',
+    ...(refused ? { unverifiedReason: 'optout_link' } : {}),
+  };
   const claimed = await context.db.query<{ attempt_token: string }>(
     `UPDATE outbound_messages
         SET state = 'dispatching', attempt_token = gen_random_uuid(),

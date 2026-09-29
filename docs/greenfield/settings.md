@@ -76,13 +76,14 @@ column and not the old slice:
 * **A footer it cannot account for is held, not edited.** The composition replaces a
   trailing block only when it can rebuild that block from something recorded: the
   sign-off on the template version, with no address or with an address a version of this
-  setting holds. A body that ends in a stop line it cannot account for — an address that
+  setting holds. A body that is signed but does not end in a block it can account for —
+  a pre-0023 stop line it cannot place, an address that
   was never configured here, a sign-off edited since, a greeting that happens to end with
   the sign-off's words, prose after the block — is refused (`footer_ambiguous`): the step
   holds, nothing is sent, and a person fixes the text. `fss admin schema-preflight 0020`
   names every stored template and unsent fence in that state before the release.
-* With **no address configured the footer is the sign-off and the stop line** — today's
-  bytes exactly — and sending continues. `SEND_FOOTER_POLICY.postalAddressRequired` in
+* With **no address configured the footer is the sign-off alone** — and sending
+  continues. `SEND_FOOTER_POLICY.postalAddressRequired` in
   `packages/domain/src/rules/templates.ts` is the one switch that would refuse every send
   until an address is configured; it is false, and flipping it is the whole change.
 * `GET /settings` leaves the key out of its snapshot unless the caller asks for it

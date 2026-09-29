@@ -84,8 +84,7 @@ const businessTimeZoneSettingSchema = z.strictObject({ timeZone: ianaTimeZoneSch
  * The value is plain text and bounded, because it is appended to every automated body:
  * at most 200 characters, no markup, no link and no "unsubscribe" (which the fence's own
  * CHECK refuses in a body). `{ "address": null }` clears it, and a cleared address is not
- * an error: the footer is then the sign-off and the stop line, exactly today's bytes, and
- * sending continues. The switch that would make it compulsory is `SEND_FOOTER_POLICY`
+ * an error: the footer is then the sign-off alone, and sending continues. The switch that would make it compulsory is `SEND_FOOTER_POLICY`
  * in `packages/domain/src/rules/templates.ts`.
  */
 export const POSTAL_ADDRESS_MAX_LENGTH = 200;

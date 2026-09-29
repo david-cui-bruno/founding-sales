@@ -86,6 +86,16 @@ export const OPT_OUT_LINK_CASES: readonly OptOutLinkCase[] = Object.freeze([
 
   // ------------------------------------------------------------------ what still sends
   {
+    what: 'a URL on the line above its label, which the same-line rule alone would miss',
+    text: 'https://short.example/a\nUnsubscribe here.',
+    refused: true,
+  },
+  {
+    what: 'a phrase and a link two lines apart, which is neither a label nor next to one',
+    text: 'To unsubscribe, just say so.\n\nhttps://firm.example',
+    refused: false,
+  },
+  {
     what: 'the sentence the old word ban made unwritable',
     text: "just reply unsubscribe and I'll stop",
     refused: false,

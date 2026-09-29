@@ -150,6 +150,20 @@ describe('the template panel shows the digest and names what is wrong (11.1, 12.
     );
     expect(worded.templates[0]?.optOutLinkMentioned).toBe(false);
     expect(worded.templates[0]?.canApprove).toBe(true);
+
+    // Column by column, as the server asks it: a subject that says the word and a body
+    // that opens with a link are two columns, not one line (review of PR 311, second
+    // round). Joining them would refuse a template the database accepts.
+    const split = sequenceScreen(
+      state([
+        template({
+          approvedAt: null,
+          subject: 'Unsubscribe',
+          body: `https://firm.example is our site.\n\n${FOOTER_SIGN_OFF}`,
+        }),
+      ]),
+    );
+    expect(split.templates[0]?.optOutLinkMentioned).toBe(false);
   });
 
   it('offers approval, and no edit, for an approved body', () => {

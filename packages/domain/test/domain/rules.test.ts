@@ -607,6 +607,15 @@ describe('the footer is composed at send', () => {
       composed: false,
       reason: 'footer_ambiguous',
     });
+    // A line of spaces *is* a blank line, though: an editor that left one behind must
+    // not turn a good footer into a hold (review of PR 311, second round).
+    expect(composeSendBody(`Hello.\n \nSam\n${SENDING_STOP_LINE}`, { signOff: 'Sam' })).toMatchObject({
+      composed: true,
+      deduped: true,
+      // The block is recognised and replaced; the separator it writes back is a real
+      // blank line, which is the one thing about those bytes that changes.
+      body: 'Hello.\n\nSam',
+    });
   });
 
   it('holds a body whose trailing lines it cannot account for, rather than deleting them', () => {

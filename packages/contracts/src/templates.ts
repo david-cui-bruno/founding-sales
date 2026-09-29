@@ -32,7 +32,9 @@ export const SENDING_STOP_LINE = 'Reply "stop" and I will not email you again.';
  * above its link, a link above its label, or both in one sentence.
  *
  * Before matching, the text is normalised so that a lookalike cannot walk past the rule:
- * NFKC, then every named dash to `-`, then every named space to ` `, then case-folded.
+ * NFKC, then every named dash to `-`, then every named space to ` `, then the 26 ASCII
+ * capitals to their lower-case letters — an explicit map, because both `toLowerCase()`
+ * and SQL `lower()` are locale-dependent and would make this two rules rather than one.
  * The same four steps, over the same code points, are what
  * `email_has_optout_link(text)` does in SQL (migration 0023), and
  * `packages/domain/test/db/support/optOutLinkCases.ts` is one table of examples run
@@ -60,20 +62,44 @@ const URL_TOKEN = String.raw`https?://|www\.|mailto:`;
  * two lists have to be the same list.
  */
 export const OPT_OUT_DASH_CODE_POINTS =
-  '-֊־᠆‐‑‒–—―−⸺⸻〜〰﹘﹣－';
+  '\u002D\u058A\u05BE\u1806\u2010\u2011\u2012\u2013\u2014\u2015\u2212\u2E3A\u2E3B\u301C\u3030\uFE58\uFE63\uFF0D';
 export const OPT_OUT_SPACE_CODE_POINTS =
-  '\u0009              ​  　';
+  '\u0009\u0020\u00A0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u200B\u202F\u205F\u3000';
 
-const fold = (text: string, from: string, to: string): string =>
-  [...text].map(character => (from.includes(character) ? to : character)).join('');
+/** What each list above is translated *to*, character for character. */
+export const OPT_OUT_DASH_REPLACEMENT = '------------------';
+export const OPT_OUT_SPACE_REPLACEMENT = '                   ';
 
 /**
- * The bytes the rule is applied to: NFKC, dashes, spaces, lower case — in that order,
- * which is the order `email_has_optout_link` applies them in. A newline is never folded:
- * the rule counts lines.
+ * The case step, in full: 26 letters, and no locale anywhere near it.
+ *
+ * **Not** `toLowerCase()` and **not** SQL `lower()`. Both are locale-dependent, and in a
+ * Turkish locale they disagree about `I` — the database and the Mac would then be
+ * applying two different rules (review of PR 311, second round). Every phrase is ASCII
+ * and NFKC has already folded a full-width letter into an ASCII one, so these 26 pairs
+ * are the whole of it, and migration 0023's `translate()` names the same two strings.
+ */
+export const OPT_OUT_UPPERCASE = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+export const OPT_OUT_LOWERCASE = 'abcdefghijklmnopqrstuvwxyz';
+
+/** `translate()`, character for character, so the SQL and the TypeScript are one rule. */
+const translate = (text: string, from: string, to: string): string =>
+  [...text]
+    .map(character => {
+      const at = from.indexOf(character);
+      return at === -1 ? character : (to[at] ?? character);
+    })
+    .join('');
+
+/**
+ * The bytes the rule is applied to: NFKC, dashes, spaces, ASCII case — in that order,
+ * which is the order `email_has_optout_link` applies them in, with the same three
+ * translation tables. A newline is never folded: the rule counts lines.
  */
 export function normalizeForOptOutRule(text: string): string {
-  return fold(fold(text.normalize('NFKC'), OPT_OUT_DASH_CODE_POINTS, '-'), OPT_OUT_SPACE_CODE_POINTS, ' ').toLowerCase();
+  const dashed = translate(text.normalize('NFKC'), OPT_OUT_DASH_CODE_POINTS, OPT_OUT_DASH_REPLACEMENT);
+  const spaced = translate(dashed, OPT_OUT_SPACE_CODE_POINTS, OPT_OUT_SPACE_REPLACEMENT);
+  return translate(spaced, OPT_OUT_UPPERCASE, OPT_OUT_LOWERCASE);
 }
 
 /**

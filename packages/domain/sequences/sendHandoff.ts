@@ -16,12 +16,13 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
  * re-checks the hash against `template_versions` and freezes the envelope.
  *
  * The **footer is composed before the hand-off** (lane W3-F, migration 0020): the
- * sign-off, the workspace's `postal_address` when it has one, and the stop line are
- * appended to the rendered body by `outbound/footer.ts` while the step is still deciding,
- * so the bytes that cross this seam are the bytes the fence freezes and the bytes Gmail
- * receives. An approved body may carry the legacy block inside it or none at all; the
- * composition recognises and replaces the legacy one, and the fence refuses any body that
- * does not end with exactly one stop line.
+ * sign-off and the workspace's `postal_address` when it has one — and nothing else since
+ * migration 0023 — are appended to the rendered body by `outbound/footer.ts` while the
+ * step is still deciding, so the bytes that cross this seam are the bytes the fence
+ * freezes and the bytes Gmail receives. An approved body may carry a footer block inside
+ * it, in today's shape or the pre-0023 one that ends with the stop line, or none at all;
+ * the composition recognises and replaces a block it can rebuild, and the fence refuses
+ * bytes it may not store — too long, or carrying a visible opt-out link.
  *
  * The fence's *state machine* is G7-2's; driving it is not. Appendix C has no send job
  * kind, so `sequence.action` calls `dispatch` as well — after the step's transaction

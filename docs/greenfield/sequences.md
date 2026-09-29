@@ -331,10 +331,10 @@ its own.
 1. **New sequence** — a name. Two commands: `/sequences/create`, then an empty draft
    (`/sequences/versions/draft` with no steps), so the new sequence opens ready to type into.
 2. **Write the email** — **New template**: a name, a subject, the email and the sign-off.
-   The bridge appends the sign-off and 12.6's stop line, because the approval requires the
-   body to end with them. The declared variables are the ones the text names. The form
-   refuses, before sending, a variable Callie cannot fill (`TEMPLATE_VARIABLE_NAMES`, in
-   `@fss/contracts`) and an unsubscribe link. Since 26 September 2026 the approval answers
+   The bridge appends the sign-off, so nobody has to type the footer. The declared
+   variables are the ones the text names. The form refuses, before sending, a variable
+   Callie cannot fill (`TEMPLATE_VARIABLE_NAMES`, in `@fss/contracts`) and a visible
+   opt-out link (`hasOptOutLink`; the bare word is fine). Since 26 September 2026 the approval answers
    more than 89 words, more than one link, a link in the subject and pricing or guarantee
    language as `warnings` (`TEMPLATE_WARNING_CODES`), not refusals. **Approve** is a separate
    press. A refused approval lists every issue, read from the refusal's body, because the

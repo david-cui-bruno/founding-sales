@@ -17,6 +17,14 @@ export const HOLD_REASON_CODES = [
   'mailbox_disconnected',
   'coverage_incomplete',
   'template_unapproved',
+  /**
+   * The bytes that would leave carry a visible opt-out link — from the sign-off, or
+   * from a variable's value, neither of which the approval saw (migration 0023). Its
+   * own code rather than `template_unapproved` because the operator has to be able to
+   * read *why* an approved template stopped, and `hold_reason_code` is the field that
+   * is read (review of PR 311, second round).
+   */
+  'optout_link',
   'missing_variables',
   'daily_cap',
   'route_missing',
@@ -51,6 +59,7 @@ const RECOVERABLE_HOLD_REASON_CODES: ReadonlySet<HoldReasonCode> = new Set([
   'mailbox_disconnected',
   'coverage_incomplete',
   'template_unapproved',
+  'optout_link',
   'missing_variables',
   'daily_cap',
   'route_missing',

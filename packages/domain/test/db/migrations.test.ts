@@ -82,6 +82,33 @@ describe('forward-only migrations on a fresh database', () => {
     expect(Number(reasons.rows[0]?.count)).toBeGreaterThan(20);
   });
 
+  it('refuses a database that is not UTF8, before it applies anything (migration 0023)', async () => {
+    // `normalize(…, NFKC)` — the opt-out-link rule's first step — is only implemented on
+    // a UTF8 database. The runner asks once and refuses by name, so the answer arrives
+    // before a file is applied rather than out of a CHECK the first time it is used.
+    const { applyMigrations, MigrationError } = await import('../../db/migrationRunner.ts');
+    const asked: string[] = [];
+    const latin1: SessionQueryable = {
+      query: async <T,>(sql: string): Promise<{ rows: T[] }> => {
+        asked.push(sql);
+        if (sql.includes('server_encoding')) return { rows: [{ encoding: 'LATIN1' } as T] };
+        throw new Error(`the runner touched the database after a refusal: ${sql}`);
+      },
+    } as unknown as SessionQueryable;
+    await expect(applyMigrations(latin1)).rejects.toMatchObject({
+      name: 'MigrationError',
+      code: 'MIGRATION_ENCODING_NOT_UTF8',
+    });
+    expect(asked).toHaveLength(1);
+
+    // And the real database, which is the one every other test in this file ran on.
+    const { rows } = await database.session.query<{ encoding: string }>(
+      "SELECT current_setting('server_encoding') AS encoding",
+    );
+    expect(rows[0]?.encoding).toBe('UTF8');
+    expect(MigrationError).toBeDefined();
+  });
+
   it('refuses a migration file whose bytes changed after it was applied', async () => {
     const files = loadMigrations();
     const first = files[0];

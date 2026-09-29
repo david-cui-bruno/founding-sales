@@ -9,9 +9,9 @@ import { lockSettingForRead, readSetting, readSettingHistory } from './store.ts'
  * body:
  *
  *   * `readWorkspacePostalAddress` — the address in force, or null. A row that does not
- *     parse is null rather than an exception: the footer then carries the sign-off and
- *     the stop line, which is what every approved body already ends with, so an
- *     unreadable setting can never stop the mail or leak a half-parsed value into a body.
+ *     parse is null rather than an exception: the footer then carries the sign-off
+ *     alone, which is what an approved body already ends with, so an unreadable setting
+ *     can never stop the mail or leak a half-parsed value into a body.
  *   * `readRecordedPostalAddresses` — every address this workspace has *ever* saved,
  *     newest first, from the slice's own version history. That is the provenance the
  *     composition needs to recognise a footer it wrote earlier under an address that has

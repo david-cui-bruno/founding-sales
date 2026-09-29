@@ -93,6 +93,30 @@ export interface ApplyMigrationsOptions {
 }
 
 /**
+ * The one thing about the *database* the runner checks before it applies anything.
+ *
+ * Migration 0023's `email_has_optout_link` calls `normalize(…, NFKC)`, which PostgreSQL
+ * only implements on a UTF8 database; on any other encoding it raises, and it would
+ * raise from inside the `CREATE FUNCTION`'s first use rather than anywhere a person is
+ * looking. Asked once, here, so the answer is a named refusal before a single file is
+ * applied (review of PR 311, second round). It is not a `RAISE` inside the migration
+ * because the release helper reads a `RAISE` in a migration file as "this one needs a
+ * preflight command of its own".
+ */
+async function assertUtf8Database(session: SessionQueryable): Promise<void> {
+  const { rows } = await session.query<{ encoding: string }>(
+    "SELECT current_setting('server_encoding') AS encoding",
+  );
+  const encoding = rows[0]?.encoding ?? 'unknown';
+  if (encoding !== 'UTF8') {
+    throw new MigrationError(
+      'MIGRATION_ENCODING_NOT_UTF8',
+      `the database's server_encoding is ${encoding}; the schema needs UTF8 (migration 0023 normalizes text as NFKC). Nothing was applied.`,
+    );
+  }
+}
+
+/**
  * Apply every unapplied migration, in order, each in its own transaction, while holding
  * the migration advisory lock on `session`. Returns the migrations this call applied.
  */
@@ -103,6 +127,7 @@ export async function applyMigrations(
   const all = options.migrations ?? loadMigrations();
   const ceiling = options.throughVersion ?? Number.MAX_SAFE_INTEGER;
 
+  await assertUtf8Database(session);
   await session.query('SELECT pg_advisory_lock($1)', [MIGRATION_ADVISORY_LOCK_KEY]);
   try {
     await session.query(SCHEMA_VERSIONS_DDL);

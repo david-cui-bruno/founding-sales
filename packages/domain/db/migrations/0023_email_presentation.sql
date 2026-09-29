@@ -1,6 +1,6 @@
 -- ---------------------------------------------------------------------------
 -- 0023_email_presentation.sql — the stop line goes; the word ban becomes a link ban
--- changes: template_versions, outbound_messages
+-- changes: hold_reason_codes, template_versions, outbound_messages
 --
 -- David, 29 September 2026: "The presentation decisions are now settled: remove the
 -- mandatory Reply-stop footer and remove the blanket database ban on the word
@@ -117,13 +117,25 @@
 -- ---------------------------------------------------------------------------
 
 -- ---------------------------------------------------------------------------
--- (a) The mandatory stop line
+-- (a) A hold reason of its own, so the operator can read why a send stopped
+-- ---------------------------------------------------------------------------
+-- The composition, the step and the fence all refuse final bytes carrying a visible
+-- opt-out link, and each of those is a handled hold. Held under `template_unapproved`
+-- the operator would see an approved template stop with no way to tell this from a
+-- footer Callie could not account for, so it gets its own code (review of PR 311,
+-- second round). Recoverable: the fix is to edit the template, the sign-off or the
+-- firm's website and resume.
+INSERT INTO hold_reason_codes (code, description, recoverable) VALUES
+  ('optout_link', 'The bytes that would leave carry a visible opt-out link.', true);
+
+-- ---------------------------------------------------------------------------
+-- (b) The mandatory stop line
 -- ---------------------------------------------------------------------------
 -- Already dropped by 0019; stated here because this file is the decision.
 ALTER TABLE template_versions DROP CONSTRAINT IF EXISTS template_versions_approved_has_stop_line;
 
 -- ---------------------------------------------------------------------------
--- (b) The word ban becomes a link ban
+-- (c) The word ban becomes a link ban
 -- ---------------------------------------------------------------------------
 -- The rule, as David decided it on 29 September 2026 after the review of PR 311:
 --
@@ -139,8 +151,21 @@ ALTER TABLE template_versions DROP CONSTRAINT IF EXISTS template_versions_approv
 -- the sentence the product wants.
 --
 -- Before matching, the text is normalised, in this order: NFKC, then every named dash
--- to `-`, then every named space to ` `, then `lower()`. The newline is never folded —
--- the rule counts lines. The *same four steps over the same code points* are
+-- to `-`, then every named space to ` `, then the 26 ASCII capitals to their lower-case
+-- letters. The newline is never folded — the rule counts lines.
+--
+-- The case step is a `translate()` and **not** `lower()`, which is locale-dependent:
+-- under a Turkish collation `lower()` and JavaScript's `toLowerCase()` disagree about
+-- `I`, and the database and the Mac would be applying two different rules (review of
+-- PR 311, second round). Every phrase is ASCII and NFKC has already folded a full-width
+-- letter into an ASCII one, so 26 pairs are the whole of the case rule.
+--
+-- `normalize(…, NFKC)` requires a UTF8 database. That is asserted in
+-- `packages/domain/db/migrationRunner.ts`, which reads `server_encoding` once and
+-- refuses before it applies anything — not with a `RAISE` here, because the release
+-- helper reads a `RAISE` in a migration as "this file needs a preflight of its own".
+--
+-- The *same four steps over the same code points* are
 -- `normalizeForOptOutRule` in `packages/contracts/src/templates.ts`, and
 -- `packages/domain/test/db/support/optOutLinkCases.ts` is one table of examples run
 -- against this function and against `hasOptOutLink` in the same assertion
@@ -155,8 +180,9 @@ ALTER TABLE template_versions DROP CONSTRAINT IF EXISTS template_versions_approv
 --     it does not fold a Cyrillic `О` into a Latin `O`.
 --   * **A false refusal, deliberately.** "You can opt out by replying. Our website is
 --     https://firm.example" *is* refused, although the website is unrelated. A rule that
---     could tell those apart is not a rule a CHECK can apply; the fix for a false
---     refusal is to put the website on its own line.
+--     could tell those apart is not a rule a CHECK can apply. The fix for a false
+--     refusal is a **blank line** between the unrelated URL and the opt-out phrase: a
+--     line that merely touches the phrase is adjacent, and adjacency is the rule.
 --
 -- A function inside a CHECK has a precedent in this schema: `funnel_facts_detail_coded`
 -- (0022) and `today_lane_of_kind` (0008), declared the same way — `LANGUAGE sql
@@ -166,7 +192,7 @@ ALTER TABLE template_versions DROP CONSTRAINT IF EXISTS template_versions_approv
 -- rule rather than two copies of it.
 CREATE FUNCTION email_has_optout_link(candidate text) RETURNS boolean
 LANGUAGE sql IMMUTABLE STRICT AS $$
-  SELECT lower(
+  SELECT translate(
            translate(
              translate(
                normalize(candidate, NFKC),
@@ -176,8 +202,8 @@ LANGUAGE sql IMMUTABLE STRICT AS $$
                '------------------'),
              -- U+0009 U+0020 U+00A0 U+1680 U+2000..U+200B U+202F U+205F U+3000
              U&'\0009\0020\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\200B\202F\205F\3000',
-             '                   ')
-         ) ~ ('(?:unsubscribe|opt[ -]?out|remove me|stop receiving|stop these (?:emails|messages)'
+             '                   '),
+           'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz') ~ ('(?:unsubscribe|opt[ -]?out|remove me|stop receiving|stop these (?:emails|messages)'
               || '|no longer receive|list-manage|manage (?:your )?preferences)'
               || '[^\n]*(?:\n[^\n]*)?(?:https?://|www\.|mailto:)'
               || '|(?:https?://|www\.|mailto:)[^\n]*(?:\n[^\n]*)?'

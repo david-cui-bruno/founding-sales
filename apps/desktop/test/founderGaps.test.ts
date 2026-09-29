@@ -180,6 +180,15 @@ describe('the template form (audit G03)', () => {
     );
     // The word on its own is not a link, and the form says nothing about it.
     expect(templateFormIssues({ ...draft, body: "Just reply unsubscribe and I'll stop." })).toEqual([]);
+    // Subject and body are two columns, not one line: this is what the server accepts.
+    expect(templateFormIssues({ ...draft, subject: 'Unsubscribe', body: 'https://firm.example is our site.' })).toEqual(
+      [],
+    );
+    // But the body *with its sign-off* — the bytes that get stored — is checked as one:
+    // a link in the sign-off is a link in the email.
+    expect(
+      templateFormIssues({ ...draft, signOff: 'Sam\nUnsubscribe: https://x.example/a' })[0]?.text,
+    ).toBe(NO_OPTOUT_LINK_RULE);
   });
 
   it('warns about a long email and still lets it be saved (wave 1)', () => {

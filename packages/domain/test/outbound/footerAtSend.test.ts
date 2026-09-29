@@ -1,7 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { SENDING_STOP_LINE } from '@fss/contracts';
 import { makeStepExecution } from '../../db/testing/stepExecutions.ts';
-import { holdFence, prepareOutboundMessage, readFence, readFenceEvents, renderedHash } from '../../outbound/fence.ts';
+import {
+  holdFence,
+  prepareOutboundMessage,
+  readFence,
+  readFenceEvents,
+  renderedHash,
+  rewritePreparedBody,
+} from '../../outbound/fence.ts';
 import { composeBodyForWorkspace } from '../../outbound/footer.ts';
 import { dispatchOutboundMessage, type SendReport } from '../../outbound/send.ts';
 import { sendFooterBlock } from '../../src/rules/templates.ts';
@@ -209,6 +216,33 @@ describe('the fence never freezes a body a send may not carry', () => {
     if (!worded.ok) return;
     const stored = await readFence(context(), worded.value.outboundMessageId);
     expect(stored?.body).toContain('reply unsubscribe');
+  });
+
+  it('carries the rewrite refusal detail, and cannot be reached from a stored row (P1-c)', async () => {
+    await setPostalAddress(null);
+    const firm = await seedFirm(world, world.alpha, 'rewrite-detail');
+    const fenceId = await prepareFor(world, world.alpha, firm);
+
+    // The guard on the rewrite path names what is wrong, and `reconcileFenceFooter`
+    // passes that detail on rather than repeating its own code — the operator reads
+    // `optout_link`, not `footer_not_composed` twice.
+    expect(
+      await rewritePreparedBody(context(), {
+        outboundMessageId: fenceId,
+        body: `${TEMPLATE_BODY}\n\nUnsubscribe: https://x.example/a`,
+        reason: 'footer_composed_at_send',
+      }),
+    ).toEqual({ ok: false, reason: 'footer_not_composed', detail: 'optout_link' });
+
+    // And it is belt and braces on purpose: a stored subject cannot carry a link in the
+    // first place, because the CHECK refuses the UPDATE that would put one there.
+    await expect(
+      world.database.session.query('UPDATE outbound_messages SET subject = $3 WHERE workspace_id = $1 AND id = $2', [
+        workspaceId(),
+        fenceId,
+        'Opt out at https://x.example/a',
+      ]),
+    ).rejects.toThrow(/outbound_messages_no_optout_link/);
   });
 
   it('holds a fence whose body carries a stray legacy stop line above a recognised block (P1-3)', async () => {
