@@ -173,6 +173,16 @@ export interface UpdateTemplateVersionInput extends TemplateTextInput {
   readonly templateVersionId: string;
 }
 
+/**
+ * Bytes this table would refuse outright: a visible opt-out link in the subject, the
+ * body or the sign-off (`template_versions_no_optout_link`, migration 0023, and the
+ * composed bytes at send). The save answers `invalid_input` rather than letting the
+ * database answer with a 500.
+ */
+function linkedBytes(input: TemplateTextInput): boolean {
+  return hasOptOutLink(input.subject) || hasOptOutLink(input.body) || hasOptOutLink(input.footer.signOff);
+}
+
 /** The rules a save and an approval apply: the same for every workspace, footer included. */
 function rulesFor(input: {
   readonly footer: FooterConfiguration;
@@ -199,12 +209,16 @@ export async function createTemplateVersion(
 ): Promise<TemplateResult<TemplateSaveResult>> {
   if (!isAdminScope(context.scope)) return { ok: false, reason: 'admin_only' };
   if (input.name.trim().length === 0) return { ok: false, reason: 'invalid_input' };
-  if (hasOptOutLink(input.subject) || hasOptOutLink(input.body)) return { ok: false, reason: 'invalid_input' };
   const approver = approverOf(context);
   if (input.approve === true && approver === null) return { ok: false, reason: 'admin_only' };
 
+  // Order matters (review of PR 311, P2). "Save and approve" answers with the issue
+  // list, so `template_optout_link` reaches the person and the Mac's sentence for it;
+  // a plain save that cannot even be stored is `invalid_input`, because the issue list
+  // is about approvals and the database would refuse these bytes outright.
   const issues = templateTextIssues(input, rulesFor(input));
   if (input.approve === true && issues.length > 0) return { ok: false, reason: 'template_unapproved', issues };
+  if (linkedBytes(input)) return { ok: false, reason: 'invalid_input' };
 
   const templateId = input.templateId ?? (await newTemplateId(context));
   const { rows: existing } = await context.db.query<{ next: number }>(
@@ -266,7 +280,6 @@ export async function updateTemplateVersion(
 ): Promise<TemplateResult<TemplateSaveResult>> {
   if (!isAdminScope(context.scope)) return { ok: false, reason: 'admin_only' };
   if (input.name.trim().length === 0) return { ok: false, reason: 'invalid_input' };
-  if (hasOptOutLink(input.subject) || hasOptOutLink(input.body)) return { ok: false, reason: 'invalid_input' };
   const approver = approverOf(context);
   if (input.approve === true && approver === null) return { ok: false, reason: 'admin_only' };
 
@@ -278,8 +291,11 @@ export async function updateTemplateVersion(
   if (current === undefined) return { ok: false, reason: 'template_unknown' };
   if (current.retired_at !== null) return { ok: false, reason: 'template_retired' };
 
+  // As in `createTemplateVersion`: an approval answers with the issue list, a plain save
+  // of bytes the table would refuse answers `invalid_input` (review of PR 311, P2).
   const issues = templateTextIssues(input, rulesFor(input));
   if (input.approve === true && issues.length > 0) return { ok: false, reason: 'template_unapproved', issues };
+  if (linkedBytes(input)) return { ok: false, reason: 'invalid_input' };
 
   const contentHash = templateContentHash({
     templateId: current.template_id,

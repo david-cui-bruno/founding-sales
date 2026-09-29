@@ -27,13 +27,25 @@ one.
 
 ## What is kept, and where it lives now
 
-* **No visible opt-out link.** Bodies are plain text, so a visible opt-out link is a URL.
-  Refused, case-insensitively: a URL whose own text carries an opt-out word
-  (`.../unsubscribe`, a `list-manage` host, `mailto:unsubscribe@…`), and any single line
-  carrying both a URL and one of those words. `template_versions_no_optout_link` and
-  `outbound_messages_no_optout_link` (migration 0023), spelled once in TypeScript as
-  `OPT_OUT_LINK_PATTERN` / `hasOptOutLink` in `@fss/contracts` so the Mac's refusal, the
-  save's refusal and the database's refusal cannot drift apart.
+* **No visible opt-out link**, meaning (decided 29 September, after the review of PR
+  311) a URL or `mailto:` on the same line as, or the line immediately before or after,
+  an opt-out phrase: `unsubscribe`, `opt out` / `opt-out` / `optout`, `remove me`,
+  `stop receiving`, `stop these emails|messages`, `no longer receive`, `list-manage`,
+  `manage (your) preferences`. Normalised first — NFKC, named dashes to `-`, named
+  spaces to ` `, case-folded — so a non-breaking hyphen does not walk past it.
+  `template_versions_no_optout_link` and `outbound_messages_no_optout_link` both call
+  `email_has_optout_link()` (migration 0023), and `OPT_OUT_LINK_PATTERN` /
+  `hasOptOutLink` in `@fss/contracts` is the same rule for the Mac and the save; one
+  table of examples is run against both.
+  **Accepted limitations, written down rather than discovered later:** a bare shortener
+  with no phrase near it passes, a Cyrillic `О` is not folded to a Latin `O`, and
+  "You can opt out by replying. Our website is https://firm.example" is refused although
+  the website is unrelated — the price of a rule a CHECK can enforce.
+* **The rule is applied to the final bytes.** The sign-off arrives as its own API field
+  and a `{firm_website}` is whatever the CRM holds, so approval checks subject, body and
+  sign-off, and the composition and the fence check the rendered subject and composed
+  body. A violation there is a handled hold (`footer_not_composed`, detail
+  `optout_link`) and never a database exception.
 * **Stop requests in ordinary language.** `packages/domain/src/rules/replyClassification.ts`
   is untouched: explicit stop wording suppresses immediately, ambiguous wording holds for
   confirmation (Appendix G 35), and `packages/domain/test/domain/optOutWording.test.ts`

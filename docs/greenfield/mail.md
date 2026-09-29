@@ -143,22 +143,49 @@ David, 29 September 2026:
 > language, and eligibility/suppression checks.
 
 So there are two rules here now where there used to be three, and the one that is left
-is about a **link**, not a word (migration 0023):
+is about a **link**, not a word. Migration 0023 states it once, as a function both
+CHECKs call:
 
 ```sql
 CONSTRAINT template_versions_no_optout_link
-  CHECK (body !~* '<url>[^\n]*<opt-out word>|<opt-out word>[^\n]*<url>|mailto:…'
-     AND subject !~* '…the same…')
+  CHECK (NOT email_has_optout_link(body) AND NOT email_has_optout_link(subject))
 ```
 
-with `<url>` being `https?://` or `www.`, and `<opt-out word>` one of `unsubscribe`,
-`opt out`, `optout`, `remove me`, `list-manage`. Two shapes are refused: a URL whose
-own text carries one of those words, and any single line carrying both. The exact
-predicate is in `packages/domain/db/migrations/0023_email_presentation.sql`, and
-`outbound_messages_no_optout_link` restates it on the bytes that actually leave. It is
-spelled once in TypeScript as `OPT_OUT_LINK_PATTERN` / `hasOptOutLink`
-(`packages/contracts/src/templates.ts`), so the Mac's refusal, the save's refusal and
-the two CHECKs cannot drift apart; the sentence the Mac shows is `NO_OPTOUT_LINK_RULE`.
+A visible opt-out link is **a URL or `mailto:` on the same line as, or on the line
+immediately before or after, an opt-out phrase** — the phrases being `unsubscribe`,
+`opt out` / `opt-out` / `optout`, `remove me`, `stop receiving`, `stop these
+emails|messages`, `no longer receive`, `list-manage`, `manage (your) preferences`.
+Bodies are plain text and a subject is one line, so that is what "a link and its label"
+can mean here: a label above its link, a link above its label, or both in one sentence.
+Before matching, the text is normalised — NFKC, then every named dash to `-`, then every
+named space to ` `, then case-folded — so `Opt‑out: https://…` with a non-breaking
+hyphen is refused like the ordinary spelling.
+
+`outbound_messages_no_optout_link` restates it on the bytes that actually leave, and
+`OPT_OUT_LINK_PATTERN` / `hasOptOutLink` in `packages/contracts/src/templates.ts` is the
+same rule in TypeScript, so the Mac's refusal, the save's refusal and the two CHECKs
+cannot drift apart. One table of examples
+(`packages/domain/test/db/support/optOutLinkCases.ts`) is run against the SQL function
+and the TypeScript one in the same assertion.
+
+**Three things this rule cannot do, named rather than implied:**
+
+* a **bare shortener** — `https://short.example/a` with no phrase near it — passes, because
+  the stored bytes cannot say where it redirects;
+* NFKC folds a non-breaking hyphen and a full-width space, but **not a Cyrillic `О` into
+  a Latin `O`**;
+* and it refuses some innocent copy: *"You can opt out by replying. Our website is
+  https://firm.example"* **is** refused, although the website has nothing to do with
+  opting out. That is the price of a rule a CHECK can enforce, and the fix for a false
+  refusal is to put the website on its own line. The approval names the rule when it
+  refuses, so nobody has to guess why.
+
+**The rule is applied to the final bytes, not only to the stored ones.** The sign-off is
+a field of its own on `POST /templates`, and a `{firm_website}` is whatever the CRM
+holds, so approval checks the subject, the body *and* the sign-off, and the composition
+and the fence check the rendered subject and the composed body before anything is
+frozen. A violation there is a handled hold (`footer_not_composed`, detail `optout_link`),
+never an exception out of the insert; the CHECK is the backstop underneath it.
 
 **The bare word is allowed**, and that is the point of the change: the old CHECK refused
 `unsubscribe` anywhere, which made *"just reply unsubscribe and I'll stop"* — the very
@@ -188,7 +215,12 @@ shapes, and *replaces* it with the block the workspace composes now — so the l
 disappears at the next send, from bytes nobody had to edit. A body that is signed but
 does not end with a block this workspace's records can rebuild — an address never
 configured here, a postscript under the sign-off, a stop line in the middle of the text —
-is **held for a person** (`footer_ambiguous`) rather than edited or signed twice.
+is **held for a person** (`footer_ambiguous`) rather than edited or signed twice. The
+block has to stand as whole lines with a blank line above it, so `Hi David` is not a
+sign-off and `Hello.\nSam discussed repairs.` is not a signed body; and a legacy stop
+line anywhere in the bytes that would leave — above a block that *was* recognised, or
+inside a sign-off that still carries the old sentence — is a hold too, because the line
+is exactly what this release removes.
 
 ## The matching order
 

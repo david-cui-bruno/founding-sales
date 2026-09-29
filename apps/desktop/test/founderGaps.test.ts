@@ -161,6 +161,13 @@ describe('the template form (audit G03)', () => {
     expect(typedBodyOf({ body, footerSignOff: 'David\nCallie' })).toBe(draft.body);
     // A template approved before 29 September 2026 still opens showing only the words.
     expect(typedBodyOf({ body: `${body}\n${SENDING_STOP_LINE}`, footerSignOff: 'David\nCallie' })).toBe(draft.body);
+    // And the footer is a complete separate block, never a word suffix: editing the
+    // valid footerless body `Hi David` under the sign-off `David` must not hand the form
+    // `Hi` (review of PR 311, P1-4). It round-trips instead.
+    expect(typedBodyOf({ body: 'Hi David', footerSignOff: 'David' })).toBe('Hi David');
+    expect(composeTemplateBody(typedBodyOf({ body: 'Hi David', footerSignOff: 'David' }), 'David')).toBe(
+      'Hi David\n\nDavid',
+    );
     expect(templateVariablesIn(draft.subject, body)).toEqual({ known: ['firm_name', 'contact_first_name'], unknown: [] });
   });
 

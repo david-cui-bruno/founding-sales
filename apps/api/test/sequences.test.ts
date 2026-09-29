@@ -151,6 +151,43 @@ describe('the sequence, template and enrollment routes', () => {
     expect(String(approved.body['reason'] ?? '')).toContain('template_footer_missing');
   });
 
+  it('refuses an approval whose sign-off carries an opt-out link, and names the rule', async () => {
+    // The sign-off is a field of its own on this route, so it is bytes no approved body
+    // ever carried. Approval checks it with the subject and the body, and answers with
+    // the issue rather than `invalid_input`, so the Mac has a sentence to show
+    // (review of PR 311, P1-2 and P2).
+    const refused = await post(
+      '/templates/create',
+      adminToken,
+      command({
+        name: 'A link in the sign-off',
+        subject: 'Hello',
+        body: 'Hello, a short note.',
+        footerSignOff: 'Sam\nUnsubscribe: https://x.example/a',
+        requiredVariables: [],
+        approve: true,
+      }),
+    );
+    expect(refused.status).toBe(409);
+    expect(String(refused.body['reason'] ?? '')).toContain('template_optout_link');
+
+    // The bare word in the same place is not a link, and it approves.
+    const approved = await post(
+      '/templates/create',
+      adminToken,
+      command({
+        name: 'The word in the sign-off',
+        subject: 'Hello',
+        body: "Hello. Just reply unsubscribe and I'll stop.",
+        footerSignOff: 'Sam Example',
+        requiredVariables: [],
+        approve: true,
+      }),
+    );
+    expect(approved.status).toBe(200);
+    expect(resultOf(approved)['approvedAt']).not.toBeNull();
+  });
+
   it('refuses a create that still names a postal address, rather than dropping the field', async () => {
     // The create body is a strict object, so an older Mac — or anything else built
     // against the pre-0015 contract — is told, not quietly obeyed. An automated email

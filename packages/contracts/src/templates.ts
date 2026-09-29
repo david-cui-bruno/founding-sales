@@ -24,39 +24,79 @@ export const SENDING_STOP_LINE = 'Reply "stop" and I will not email you again.';
  * *word* is not the problem and is allowed: "just reply unsubscribe and I'll stop" is a
  * sentence we want to be able to write. A *link* is the problem.
  *
- * Bodies are plain text, so a visible opt-out link is a URL. Two shapes are refused,
- * case-insensitively:
+ * ## The rule, exactly (decided 29 September 2026, after the review of PR 311)
  *
- *   * a URL (`https://…`, `www.…`, `mailto:…`) whose own text carries one of the opt-out
- *     words — `.../unsubscribe`, a `list-manage` host, `mailto:unsubscribe@…`;
- *   * any single LINE that carries both a URL and one of those words, whichever comes
- *     first — "click here to opt out: https://x" is a link with its label.
+ * A visible opt-out link is a URL or `mailto:` that appears **on the same line as, or on
+ * the line immediately before or after, an opt-out phrase**. Bodies are plain text and a
+ * subject is one line, so that is what "the link and its label" means here: a label
+ * above its link, a link above its label, or both in one sentence.
  *
- * These are the same two shapes migration 0023's `template_versions_no_optout_link` and
- * `outbound_messages_no_optout_link` CHECKs refuse, written once here so the Mac's
- * refusal, the save's refusal and the database's refusal cannot drift apart.
+ * Before matching, the text is normalised so that a lookalike cannot walk past the rule:
+ * NFKC, then every named dash to `-`, then every named space to ` `, then case-folded.
+ * The same four steps, over the same code points, are what
+ * `email_has_optout_link(text)` does in SQL (migration 0023), and
+ * `packages/domain/test/db/support/optOutLinkCases.ts` is one table of examples run
+ * against both — so the Mac's refusal, the save's refusal and the two CHECKs cannot
+ * drift apart.
+ *
+ * ## What this rule cannot see, and we accept
+ *
+ *   * **A bare shortener.** `https://short.example/a` with no phrase near it passes: the
+ *     stored bytes cannot say where it redirects to. David writes the copy, and the
+ *     approval names the rule when it refuses.
+ *   * **A confusable letter from another script.** NFKC folds a non-breaking hyphen and
+ *     a full-width space; it does not fold a Cyrillic `О` into a Latin `O`.
+ *   * **The price of a rule a CHECK can enforce:** "You can opt out by replying. Our
+ *     website is https://firm.example" *is* refused, although the website has nothing to
+ *     do with opting out. A rule that could tell those apart is not a rule a CHECK can
+ *     apply, and the answer to a false refusal is to put the website on another line.
  */
-const OPT_OUT_WORDS = String.raw`unsubscribe|opt[-_ ]?out|optout|remove[-_ ]?me|list-manage`;
-const URL_TOKEN = String.raw`https?://|www\.`;
+const OPT_OUT_PHRASES = String.raw`unsubscribe|opt[ -]?out|remove me|stop receiving|stop these (?:emails|messages)|no longer receive|list-manage|manage (?:your )?preferences`;
+const URL_TOKEN = String.raw`https?://|www\.|mailto:`;
 
-/** The opt-out-link shape, mirroring the CHECKs of migration 0023 line for line. */
+/**
+ * The dashes folded to `-` before matching, and the spaces folded to ` `. Named code
+ * point by code point because migration 0023's `translate()` names exactly these and the
+ * two lists have to be the same list.
+ */
+export const OPT_OUT_DASH_CODE_POINTS =
+  '-֊־᠆‐‑‒–—―−⸺⸻〜〰﹘﹣－';
+export const OPT_OUT_SPACE_CODE_POINTS =
+  '\u0009              ​  　';
+
+const fold = (text: string, from: string, to: string): string =>
+  [...text].map(character => (from.includes(character) ? to : character)).join('');
+
+/**
+ * The bytes the rule is applied to: NFKC, dashes, spaces, lower case — in that order,
+ * which is the order `email_has_optout_link` applies them in. A newline is never folded:
+ * the rule counts lines.
+ */
+export function normalizeForOptOutRule(text: string): string {
+  return fold(fold(text.normalize('NFKC'), OPT_OUT_DASH_CODE_POINTS, '-'), OPT_OUT_SPACE_CODE_POINTS, ' ').toLowerCase();
+}
+
+/**
+ * The opt-out-link shape over normalised text: a phrase and a URL on one line, or on two
+ * lines that touch, in either order. No `i` flag and no `\s`: the normalisation has
+ * already done the folding, so this pattern and the SQL one are the same pattern.
+ */
 export const OPT_OUT_LINK_PATTERN = new RegExp(
   [
-    `(?:${URL_TOKEN})[^\\n]*(?:${OPT_OUT_WORDS})`,
-    `(?:${OPT_OUT_WORDS})[^\\n]*(?:${URL_TOKEN})`,
-    `mailto:[^\\s]*(?:${OPT_OUT_WORDS})`,
+    `(?:${OPT_OUT_PHRASES})[^\\n]*(?:\\n[^\\n]*)?(?:${URL_TOKEN})`,
+    `(?:${URL_TOKEN})[^\\n]*(?:\\n[^\\n]*)?(?:${OPT_OUT_PHRASES})`,
   ].join('|'),
-  'iu',
+  'u',
 );
 
-/** Whether a subject or body carries a visible opt-out link. */
+/** Whether a subject, a body or a sign-off carries a visible opt-out link. */
 export function hasOptOutLink(text: string): boolean {
-  return OPT_OUT_LINK_PATTERN.test(text);
+  return OPT_OUT_LINK_PATTERN.test(normalizeForOptOutRule(text));
 }
 
 /** The refusal the Mac shows, and the sentence the rule is written as. */
 export const NO_OPTOUT_LINK_RULE =
-  'Leave out any opt-out link: Callie takes a stop request in ordinary language, so write "reply unsubscribe" rather than linking to one.';
+  'Leave out any opt-out link: Callie takes a stop request in ordinary language, so write "reply unsubscribe" rather than putting a link near those words.';
 
 export const TEMPLATE_VARIABLE_NAMES = [
   'firm_name',

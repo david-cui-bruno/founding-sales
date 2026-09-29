@@ -164,6 +164,75 @@ describe('the fence never freezes a body a send may not carry', () => {
     const footerless = await prepareBody(await seedFirm(world, world.alpha, 'fence-footerless'), 'Just the words.');
     expect(footerless.ok).toBe(true);
   });
+
+  it('refuses final bytes carrying an opt-out link, as a hold, and stores the bare word (P1-2)', async () => {
+    // These bytes would break `outbound_messages_no_optout_link`. The fence answers with
+    // a refusal its caller holds on, so the CHECK is the backstop and not the thing that
+    // raises. The subject is checked too: composition never sees it.
+    const firm = await seedFirm(world, world.alpha, 'fence-optout');
+    expect(await prepareBody(firm, `${TEMPLATE_BODY}\n\nUnsubscribe: https://x.example/a`)).toEqual({
+      ok: false,
+      reason: 'footer_not_composed',
+      detail: 'optout_link',
+    });
+    const subjectFirm = await seedFirm(world, world.alpha, 'fence-optout-subject');
+    const linkedSubject = await prepareOutboundMessage(context(), {
+      stepExecutionId: await makeStepExecution(world.database.session, {
+        workspaceId: workspaceId(),
+        firmId: subjectFirm.firmId,
+        opportunityId: subjectFirm.opportunityId,
+        userId: world.alpha.workspace.salesperson.userId,
+        templateVersionId: world.alpha.templateVersionId,
+      }),
+      firmId: subjectFirm.firmId,
+      contactId: subjectFirm.contactId,
+      opportunityId: subjectFirm.opportunityId,
+      ownerUserId: world.alpha.workspace.salesperson.userId,
+      templateVersionId: world.alpha.templateVersionId,
+      templateContentHash: world.alpha.templateContentHash,
+      emailAddressId: subjectFirm.routeId,
+      toAddress: subjectFirm.address,
+      subject: 'Opt out at https://x.example/a',
+      body: TEMPLATE_BODY,
+      sendAt: '2026-09-23T09:00:00.000Z',
+      sourceZone: 'UTC',
+      businessDate: '2026-09-23',
+    });
+    expect(linkedSubject).toEqual({ ok: false, reason: 'footer_not_composed', detail: 'optout_link' });
+
+    // And the bare word, which migration 0023 exists to allow, is stored.
+    const worded = await prepareBody(
+      await seedFirm(world, world.alpha, 'fence-bare-word'),
+      `Just reply unsubscribe and I'll stop.\n\nSigned off`,
+    );
+    expect(worded.ok).toBe(true);
+    if (!worded.ok) return;
+    const stored = await readFence(context(), worded.value.outboundMessageId);
+    expect(stored?.body).toContain('reply unsubscribe');
+  });
+
+  it('holds a fence whose body carries a stray legacy stop line above a recognised block (P1-3)', async () => {
+    // The P0 of the review of PR 296, restored under the new rule. The final block is
+    // recognised and would be replaced, and the earlier stop line would go out with the
+    // send: composing is not the composer's to do here, so the fence is held.
+    await setPostalAddress(null);
+    const firm = await seedFirm(world, world.alpha, 'stray-stop-line');
+    const malformed = `Hello\n${SENDING_STOP_LINE}\n\n${SIGN_OFF}\n${SENDING_STOP_LINE}`;
+    const fenceId = await prepareFor(world, world.alpha, firm);
+    await world.database.session.query('UPDATE outbound_messages SET body = $3 WHERE workspace_id = $1 AND id = $2', [
+      workspaceId(),
+      fenceId,
+      malformed,
+    ]);
+    await world.clearHolds(workspaceId());
+
+    const { report, sent } = await dispatch(fenceId);
+    expect(report.outcome, why(report)).toBe('held');
+    expect(report.refusal).toBe('footer_not_composed');
+    expect(report.detail).toBe('footer_ambiguous');
+    expect(sent).toHaveLength(0);
+    expect((await readFence(context(), fenceId))?.body).toBe(malformed);
+  });
 });
 
 describe('a fence prepared before the address is reconciled under the claim lock', () => {

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { sendBodyIssue } from '../src/rules/templates.ts';
+import { hasOptOutLink, sendBodyIssue } from '../src/rules/templates.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import {
   PLACEMENT_RULE_VERSION,
@@ -249,11 +249,13 @@ export interface PreparedFence {
  *     which means the two sides are looking at different text and nobody should
  *     guess which;
  *   * `mailbox_unknown` / `mailbox_inactive` — the owner has no connected mailbox;
- *   * `footer_not_composed` — the body does not end with exactly one stop line, or is
- *     longer than the column allows (lane W3-F). The footer is composed *before* this
- *     call (`packages/domain/outbound/footer.ts`, `sequences/executions.ts`), and this is
- *     the guard that makes that unconditional: whatever the caller did, a fence never
- *     freezes a footerless body, a doubled stop line, or bytes the insert would throw on.
+ *   * `footer_not_composed` — the final bytes may not be frozen: longer than the column
+ *     allows, or carrying a visible opt-out link (`optout_link`, migration 0023). The
+ *     footer is composed *before* this call (`packages/domain/outbound/footer.ts`,
+ *     `sequences/executions.ts`), and this is the guard that makes that unconditional:
+ *     whatever the caller did — a sign-off supplied straight to the API, a
+ *     `{firm_website}` the CRM holds — a fence never freezes bytes the insert would
+ *     throw on. A handled hold, never a database exception (review of PR 311).
  *
  * A hold is a different thing and comes later, from `gate.ts`.
  */
@@ -264,11 +266,15 @@ export async function prepareOutboundMessage(
   const existing = await readFenceByStepExecution(context, request.stepExecutionId);
   if (existing !== null) return acceptSend({ outboundMessageId: existing.id, created: false });
 
-  // Before anything is read or written: the bytes. 12.6's stop line is the last thing a
-  // prospect reads, and the fence is where "what will be sent" stops being editable, so
-  // the check belongs here and not only in the caller that composed them.
+  // Before anything is read or written: the bytes. The fence is where "what will be
+  // sent" stops being editable, so the checks belong here and not only in the caller
+  // that composed them. The subject is checked too, because composition never sees it
+  // and a rendered variable can put a link in one.
   const bodyIssue = sendBodyIssue(request.body);
   if (bodyIssue !== null) return refuseSend('footer_not_composed', bodyIssue);
+  if (hasOptOutLink(request.body) || hasOptOutLink(request.subject)) {
+    return refuseSend('footer_not_composed', 'optout_link');
+  }
 
   const template = await context.db.query<{ content_hash: string; approved_at: Date | null }>(
     'SELECT content_hash, approved_at FROM template_versions WHERE workspace_id = $1 AND id = $2',
@@ -538,9 +544,11 @@ export const SENT_TOMBSTONE_FALLBACK_SUBJECT = '(recovered from the Sent folder)
 /** A Subject header as a fence subject: one line, within the column's bound, or the fallback. */
 export function tombstoneSubject(subject: string | null): string {
   const flattened = (subject ?? '').replace(/\s+/gu, ' ').trim().slice(0, 160).trim();
-  // The table refuses a blank subject and any mention of unsubscribing. FSS never sends
-  // either, so a Sent message that has one is not worth an exception mid-restore.
-  if (flattened === '' || /unsubscribe/iu.test(flattened)) return SENT_TOMBSTONE_FALLBACK_SUBJECT;
+  // The table refuses a blank subject and a visible opt-out link. Since migration 0023
+  // the bare word is not one of those, so a recovered subject that merely says
+  // "unsubscribe" keeps its own words — losing the original subject of a real send is
+  // the worse answer (review of PR 311).
+  if (flattened === '' || hasOptOutLink(flattened)) return SENT_TOMBSTONE_FALLBACK_SUBJECT;
   return flattened;
 }
 
@@ -1180,6 +1188,11 @@ export async function rewritePreparedBody(
   if (issue !== null) return refuseSend('footer_not_composed', issue);
   const current = await readFence(context, input.outboundMessageId);
   if (current === null) return refuseSend('fence_unknown');
+  // The rewrite is an insert of final bytes as much as the prepare is: the same guard,
+  // over the body about to be written and the subject already stored.
+  if (hasOptOutLink(input.body) || hasOptOutLink(current.subject)) {
+    return refuseSend('footer_not_composed', 'optout_link');
+  }
   const { rows } = await context.db.query<FenceDbRow>(
     `UPDATE outbound_messages
         SET body = $3, rendered_hash = $4, updated_at = now()

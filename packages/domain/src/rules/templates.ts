@@ -162,6 +162,15 @@ export const COMPOSE_SEND_BODY_REFUSALS = [
   'footer_ambiguous',
   /** The composed body is longer than the fence's column allows. */
   'composed_body_too_long',
+  /**
+   * The composed bytes carry a visible opt-out link — from the sign-off, or from a
+   * variable's value, neither of which the approval saw
+   * (`apps/api/src/routes/templates.ts` takes `footerSignOff` on its own; a
+   * `{firm_website}` can be anything the CRM holds). The database refuses those bytes
+   * too (`outbound_messages_no_optout_link`), and this is what makes that refusal a
+   * handled hold instead of an exception out of the insert.
+   */
+  'optout_link',
 ] as const;
 export type ComposeSendBodyRefusal = (typeof COMPOSE_SEND_BODY_REFUSALS)[number];
 
@@ -212,10 +221,11 @@ function candidateFooterBlocks(configuration: SendFooterConfiguration): readonly
  * Where a recognised footer block starts inside `body`, or null.
  *
  * The block must be one of `candidateFooterBlocks`, at the very end of the body, and it
- * must start a line. The line boundary is the `Hi David` fix (review of PR 264): with the
- * sign-off `David`, the body `Hi David` before the stop line ends with the characters of
- * a block and is not one, so nothing of it is removed — and, since the review of PR 296,
- * nothing of it is *sent* either: a body like that is ambiguous and held.
+ * must be a **complete separate block**: whole lines, with a blank line before them or
+ * the start of the body. Never a line prefix and never a word suffix — with the sign-off
+ * `David`, the body `Hi David` ends with the characters of a block and is not one
+ * (the `Hi David` fix, review of PR 264), and `Hello.\nDavid` is a second line of prose
+ * as far as anything here can tell (review of PR 311). Nothing of either is removed.
  */
 function footerBlockStart(body: string, configuration: SendFooterConfiguration): number | null {
   const signOff = configuration.signOff.trim();
@@ -224,9 +234,29 @@ function footerBlockStart(body: string, configuration: SendFooterConfiguration):
   for (const block of candidateFooterBlocks(configuration)) {
     if (!stripped.endsWith(block)) continue;
     const start = stripped.length - block.length;
-    if (start === 0 || stripped[start - 1] === '\n') return start;
+    if (start === 0 || stripped.slice(0, start).endsWith('\n\n')) return start;
   }
   return null;
+}
+
+/**
+ * Whether the sign-off stands in this body as whole lines of its own.
+ *
+ * The ambiguity test, and the reason it is written line by line rather than as a
+ * substring search: with the sign-off `Sam`, the body `Hello.\nSam discussed repairs.`
+ * mentions the name and is not signed, and holding it would be a false refusal of a
+ * perfectly good footerless body (review of PR 311). `Hello.\n\nSam\n\nP.S. call me`
+ * *is* signed, and is held.
+ */
+function signOffStandsAlone(body: string, rawSignOff: string): boolean {
+  const signOff = rawSignOff.trim();
+  if (signOff.length === 0) return false;
+  const lines = body.split('\n');
+  const block = signOff.split('\n');
+  for (let start = 0; start + block.length <= lines.length; start += 1) {
+    if (block.every((line, offset) => lines[start + offset] === line)) return true;
+  }
+  return false;
 }
 
 /**
@@ -256,22 +286,29 @@ export function composeSendBody(
   const blockStart = footerBlockStart(body, configuration);
   const stripped = body.replace(/\s+$/u, '');
   // No recognised block, but the body is signed all the same: the legacy stop line is in
-  // there somewhere, or the sign-off itself starts a line — an address this workspace
-  // never recorded under it, a postscript after it, a sign-off since edited. Appending
-  // the block would send the sign-off twice and removing anything would mean guessing
-  // which words are the footer, so the body is held for a person to look at.
-  const signOff = configuration.signOff.trim();
-  const signed = signOff.length > 0 && (stripped === signOff || stripped.includes(`\n${signOff}`));
-  if (blockStart === null && (stripped.includes(stopLine) || signed)) {
+  // there somewhere, or the sign-off stands as whole lines of its own — an address this
+  // workspace never recorded under it, a postscript after it, a sign-off since edited.
+  // Appending the block would send the sign-off twice and removing anything would mean
+  // guessing which words are the footer, so the body is held for a person to look at.
+  if (blockStart === null && (stripped.includes(stopLine) || signOffStandsAlone(stripped, configuration.signOff))) {
     return { composed: false, reason: 'footer_ambiguous' };
   }
   const head = body.slice(0, blockStart ?? stripped.length);
   const footer = sendFooterBlock(configuration);
   const composedBody = head.trim().length === 0 ? footer : `${head.replace(/\s+$/u, '')}\n\n${footer}`;
 
+  // Its own output, checked before it is returned (the P0 of the review of PR 296, kept
+  // under the new rule). A legacy stop line anywhere in the bytes that would leave — in
+  // the head above a block that was recognised, or inside a sign-off that still carries
+  // the old sentence — is a body nobody may compose: the line is exactly what this
+  // release removes, and which words are the footer is not a thing to guess at.
+  if (composedBody.includes(stopLine)) return { composed: false, reason: 'footer_ambiguous' };
   if (sendBodyIssue(composedBody) === 'body_too_long') {
     return { composed: false, reason: 'composed_body_too_long', detail: String(composedBody.length) };
   }
+  // The sign-off is not part of an approved body and a variable's value is not either,
+  // so this is the first place the *final* bytes are seen (review of PR 311, P1-2).
+  if (hasOptOutLink(composedBody)) return { composed: false, reason: 'optout_link' };
   return { composed: true, body: composedBody, changed: composedBody !== body, deduped: blockStart !== null };
 }
 
@@ -354,9 +391,23 @@ export function templateTextIssues(text: TemplateText, rules: TemplateRules): st
 
   // What is left of 12.6 after 29 September 2026: no visible opt-out link. The word is
   // allowed — "just reply unsubscribe and I'll stop" is a sentence we want — and this is
-  // the same shape migration 0023's CHECKs refuse, so the save cannot offer an approval
-  // the database would answer with a 500.
-  if (hasOptOutLink(subject) || hasOptOutLink(body)) issues.push('template_optout_link');
+  // the same rule migration 0023's CHECKs apply, so the save cannot offer an approval the
+  // database would answer with a 500.
+  //
+  // The **sign-off** is checked here with the subject and the body, because it is not
+  // part of either: `POST /templates` takes it as a field of its own, so an approval that
+  // looked only at what the author typed would clear bytes that carry a link
+  // (review of PR 311, P1-2). The composed bytes are checked again below.
+  if (hasOptOutLink(subject) || hasOptOutLink(body) || hasOptOutLink(rules.footer.signOff)) {
+    issues.push('template_optout_link');
+  }
+
+  // A sign-off that still carries the old stop sentence is refused before anything else
+  // is said about the body: every send composed under it would carry a line this release
+  // exists to remove, and `composeSendBody` refuses those bytes (review of PR 311, P1-3).
+  const stopLine = rules.footer.stopLine ?? SENDING_STOP_LINE;
+  const signOffRepeatsStopLine = rules.footer.signOff.includes(stopLine);
+  if (signOffRepeatsStopLine) issues.push('template_sign_off_repeats_stop_line');
 
   // Since the footer is composed at send (lane W3-F), the rule is not "the body ends with
   // the block" but "the body can be given exactly one final block": **both shapes are
@@ -375,9 +426,13 @@ export function templateTextIssues(text: TemplateText, rules: TemplateRules): st
     { ...rules.footer, postalAddress: null, recordedAddresses: [] },
     APPROVAL_FOOTER_POLICY,
   );
-  if (!composed.composed) {
+  if (!composed.composed && !signOffRepeatsStopLine) {
     const issue =
-      composed.reason === 'composed_body_too_long' ? 'template_body_too_long_in_characters' : 'template_footer_missing';
+      composed.reason === 'composed_body_too_long'
+        ? 'template_body_too_long_in_characters'
+        : composed.reason === 'optout_link'
+          ? 'template_optout_link'
+          : 'template_footer_missing';
     if (!issues.includes(issue)) issues.push(issue);
   }
   if (rules.requiredSentence !== undefined && !body.includes(rules.requiredSentence)) {

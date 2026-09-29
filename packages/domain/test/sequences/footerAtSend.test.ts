@@ -70,13 +70,13 @@ async function setPostalAddress(address: string | null): Promise<void> {
 }
 
 /** The seeded template, edited in place to `body` and kept approved. */
-async function templateBody(body: string): Promise<void> {
+async function templateBody(body: string, variables: readonly string[] = ['firm_name']): Promise<void> {
   const edited = await updateTemplateVersion(contextFor('admin'), {
     name: 'Seeded, edited',
     subject: 'Hello {firm_name}',
     body,
     footer: { signOff: FIXTURE_SIGN_OFF },
-    requiredVariables: ['firm_name'],
+    requiredVariables: ['firm_name', ...variables],
     templateVersionId: sequences.alpha.template.templateVersionId,
     approve: true,
   });
@@ -178,6 +178,39 @@ describe('the step hands over composed bytes', () => {
         postalAddress: ADDRESS,
       })}`,
     );
+  });
+
+  it('holds the step when a rendered variable puts an opt-out link in the bytes (P1-2)', async () => {
+    // `{firm_website}` is whatever the CRM holds, so an approval can be clean and the
+    // rendered bytes still carry a link the outbound CHECK refuses. A handled hold,
+    // before any fence exists — never an exception out of the insert.
+    await setPostalAddress(null);
+    await database.session.query('UPDATE firms SET website = $3 WHERE workspace_id = $1 AND id = $2', [
+      seeded.alpha.workspaceId,
+      crm.alpha.firmId,
+      'https://x.example/unsubscribe',
+    ]);
+    await templateBody('Our site: {firm_website}', ['firm_website']);
+    const enrollmentId = await enrolledAndDue();
+    const handoff = recordingSendHandoff();
+    const outcome = await runDueStepExecution(worker(), {
+      enrollmentId,
+      now: DUE,
+      eligibility: allowAllEligibility(),
+      sendHandoff: handoff,
+    });
+    expect(outcome).toMatchObject({ kind: 'held', reasonCode: 'template_unapproved' });
+    expect(handoff.prepared).toEqual([]);
+    const { rows } = await database.session.query<{ count: string }>(
+      'SELECT count(*) AS count FROM outbound_messages WHERE workspace_id = $1',
+      [seeded.alpha.workspaceId],
+    );
+    expect(Number(rows[0]?.count)).toBe(0);
+    await database.session.query('UPDATE firms SET website = $3 WHERE workspace_id = $1 AND id = $2', [
+      seeded.alpha.workspaceId,
+      crm.alpha.firmId,
+      'https://firm.example',
+    ]);
   });
 
   it('holds the step before any fence exists when the composed body would pass 4,000', async () => {

@@ -233,13 +233,23 @@ function versionPanel(
  */
 const FOOTER_OF = (template: TemplateVersion): string => template.footerSignOff;
 
+/** Whether a body ends with the sign-off as a block of its own, in either shape. */
+function endsWithFooterBlock(body: string, signOff: string): boolean {
+  const stripped = body.replace(/\s+$/u, '');
+  return [`${signOff}\n${SENDING_STOP_LINE}`, signOff].some(
+    block => stripped === block || stripped.endsWith(`\n\n${block}`),
+  );
+}
+
 function templatePanel(
   template: TemplateVersion,
   options: { readonly isAdmin: boolean; readonly mayMutate: boolean },
 ): TemplatePanel {
   const approved = template.approvedAt !== null;
   const retired = template.retiredAt !== null;
-  const footerPresent = template.body.includes(FOOTER_OF(template));
+  // The same boundary the server applies: a complete separate block at the end, in
+  // today's shape or the pre-0023 one. `includes` would call `Hi David` a footer.
+  const footerPresent = endsWithFooterBlock(template.body, template.footerSignOff);
   const optOutLinkMentioned = hasOptOutLink(`${template.subject}\n${template.body}`);
   return {
     id: template.id,
@@ -515,10 +525,17 @@ export function composeTemplateBody(body: string, signOff: string): string {
  * there. Both endings are recognised — today's sign-off and the pre-0023 sign-off with
  * the stop line under it — so editing a template approved before the decision shows the
  * words somebody wrote rather than the words plus a footer they cannot delete.
+ *
+ * The footer must be a **complete separate block**: whole lines, with a blank line above
+ * them, exactly as `composeTemplateBody` writes it and as the server's own recognition
+ * requires. Never a word suffix — with the sign-off `David`, the valid footerless body
+ * `Hi David` is not a signed body, and stripping it by suffix would hand the edit form
+ * `Hi` and silently delete a name (review of PR 311, P1-4).
  */
 export function typedBodyOf(template: Pick<TemplateVersion, 'body' | 'footerSignOff'>): string {
   for (const footer of [legacyTemplateFooter(template.footerSignOff), templateFooter(template.footerSignOff)]) {
-    if (template.body.endsWith(footer)) return template.body.slice(0, -footer.length).trimEnd();
+    if (template.body === footer) return '';
+    if (template.body.endsWith(`\n\n${footer}`)) return template.body.slice(0, -footer.length).trimEnd();
   }
   return template.body;
 }
@@ -607,6 +624,8 @@ export const TEMPLATE_ISSUE_SENTENCES: Readonly<Record<string, string>> = Object
   template_body_multiple_urls: 'The email has more than one link.',
   template_footer_missing: 'Callie cannot tell where the sign-off starts: the email does not end with it.',
   template_optout_link: NO_OPTOUT_LINK_RULE,
+  template_sign_off_repeats_stop_line:
+    'The sign-off still carries the old “Reply stop” sentence. Callie no longer adds that line; take it out of the sign-off.',
   template_required_sentence_missing: 'A sentence this workspace requires is missing.',
   template_pricing_or_guarantee_language: 'The email mentions prices, percentages or guarantees.',
   template_unknown_variable: 'The email names a variable Callie cannot fill.',

@@ -79,15 +79,19 @@ the CHECK beside the one that names it, and the approved-version immutability tr
 was replaced so that it covers them too.
 
 The footer a version stores is its sign-off, and the block a send appends is that
-sign-off, the workspace's `postal_address` when it has configured one, and then `Reply
-"stop" and I will not email you again.` There is still no postal address *column*:
+sign-off and the workspace's `postal_address` when it has configured one. Nothing else:
+the mandatory `Reply "stop"` line went with migration 0023
+(`docs/greenfield/decisions/email-presentation-20260929.md`). There is still no postal
+address *column*:
 migration 0015 dropped `footer_postal_address` and migration 0020 made the address a
 settings key instead, composed at send (`docs/greenfield/settings.md`). So an approval
 may keep the legacy block inside the body — desktop 1.0.11 requires it — or leave it out,
-and either way `composeSendBody` gives the rendered body exactly one final stop line
-before the fence stores it — or, when it cannot say which words are the footer, refuses
-and the step holds. It never guesses: the block it removes is one it can rebuild from the
-sign-off the version stores and an address the settings history holds.
+and either way `composeSendBody` gives the rendered body exactly one final block before
+the fence stores it — or, when it cannot say which words are the footer, refuses and the
+step holds. It never guesses: the block it removes is one it can rebuild from the
+sign-off the version stores and an address the settings history holds, standing as whole
+lines of its own at the end of the body. A pre-0023 body still ending with the old stop
+line is one of those blocks, so the line comes off at the first send.
 
 ### 2. Enrollment and its first execution are one statement
 

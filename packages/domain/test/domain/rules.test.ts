@@ -559,6 +559,56 @@ describe('the footer is composed at send', () => {
     });
   });
 
+  it('never lets a legacy stop line through, wherever it is (review of PR 311, P1-3)', () => {
+    // The block at the end is recognised and removed; the earlier line is not a block
+    // and is not the composer's to delete. Composing would send a stop line this
+    // release exists to remove, so the answer is a hold.
+    const malformed = `Hello\n${SENDING_STOP_LINE}\n\n${FOOTER.signOff}\n${SENDING_STOP_LINE}`;
+    expect(composeSendBody(malformed, { ...FOOTER, postalAddress: null })).toEqual({
+      composed: false,
+      reason: 'footer_ambiguous',
+    });
+    // A sign-off that still carries the old sentence composes the same line back in, so
+    // it is refused at composition and named at approval.
+    const stale = { signOff: `Best,\n${SENDING_STOP_LINE}` };
+    expect(composeSendBody(FOOTERLESS, stale)).toEqual({ composed: false, reason: 'footer_ambiguous' });
+    expect(
+      templateTextIssues({ subject: 'A note', body: FOOTERLESS }, { footer: stale, allowedVariables: [] }),
+    ).toEqual(['template_sign_off_repeats_stop_line']);
+  });
+
+  it('refuses composed bytes that carry an opt-out link the approval never saw (P1-2)', () => {
+    // `POST /templates` takes the sign-off as a field of its own, so these bytes exist
+    // without any approved body ever having carried them.
+    const linking = { signOff: 'Sam\nUnsubscribe: https://x.example/a' };
+    expect(composeSendBody(FOOTERLESS, linking)).toEqual({ composed: false, reason: 'optout_link' });
+    expect(
+      templateTextIssues({ subject: 'A note', body: FOOTERLESS }, { footer: linking, allowedVariables: [] }),
+    ).toEqual(['template_optout_link']);
+    // And a rendered value can do it to the body: this is `{firm_website}` substituted.
+    expect(composeSendBody('Our site: https://x.example/unsubscribe', FOOTER)).toEqual({
+      composed: false,
+      reason: 'optout_link',
+    });
+  });
+
+  it('recognises the sign-off only as a complete separate block (P1-4)', () => {
+    // A name in a sentence is not a sign-off: this body is footerless and composes.
+    const prose = composeSendBody('Hello.\nSam discussed repairs.', { signOff: 'Sam', postalAddress: null });
+    expect(prose).toMatchObject({ composed: true, body: 'Hello.\nSam discussed repairs.\n\nSam', deduped: false });
+    // A real sign-off with a postscript under it is signed and not final: held.
+    expect(composeSendBody('Hello.\n\nSam\n\nP.S. call me', { signOff: 'Sam', postalAddress: null })).toEqual({
+      composed: false,
+      reason: 'footer_ambiguous',
+    });
+    // And a sign-off on the line straight under the words, with no blank line, is not a
+    // block anything here may claim to recognise.
+    expect(composeSendBody(`Hello.\nSam\n${SENDING_STOP_LINE}`, { signOff: 'Sam' })).toEqual({
+      composed: false,
+      reason: 'footer_ambiguous',
+    });
+  });
+
   it('holds a body whose trailing lines it cannot account for, rather than deleting them', () => {
     // The reviewer's case: `Please call Tuesday.` is not an address, and a rule that
     // guessed by counting lines would send the email without it.

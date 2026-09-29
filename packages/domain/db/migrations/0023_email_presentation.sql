@@ -63,9 +63,10 @@
 -- Expected: **no rows at all**, and the reason is the constraint being replaced. Both
 -- tables have refused the substring `unsubscribe`, case-insensitively, in body and
 -- subject since the tables were created, so no stored row can carry it. The new rule's
--- other words — `opt out`, `optout`, `remove me`, `list-manage`, `mailto:` — were never
--- refused, so they are the only way a row could fail, and only when a URL shares the
--- same line with one of them:
+-- other phrases — `opt out`, `optout`, `remove me`, `stop receiving`, `stop these
+-- emails|messages`, `no longer receive`, `list-manage`, `manage (your) preferences` —
+-- were never refused, so they are the only way a row could fail, and only when a URL or
+-- `mailto:` is on their line or on the line touching it:
 --
 --   * `template_versions`: bodies are written by hand in the Mac's template form by the
 --     one operator, and a body with more than one link is already advised against
@@ -78,13 +79,20 @@
 --     and the word `unsubscribe` (`packages/contracts/src/settings.ts`). So a fence can
 --     only carry what its template carried.
 --
--- Read-only, before the release, if the operator wants the count rather than the
--- argument (both should be 0):
+-- The **one** class the argument above does not settle is a body whose copy mentions
+-- opting out near an unrelated link ("You can opt out by replying. Our website is
+-- https://firm.example"): that is a deliberate refusal of this rule, not an accident of
+-- it, and it would be found by the count below rather than argued about.
 --
---   SELECT count(*) FROM template_versions
---    WHERE body ~* '(https?://|www\.)[^\n]*(unsubscribe|opt[-_ ]?out|optout|remove[-_ ]?me|list-manage)|(unsubscribe|opt[-_ ]?out|optout|remove[-_ ]?me|list-manage)[^\n]*(https?://|www\.)|mailto:[^[:space:]]*(unsubscribe|opt[-_ ]?out|optout|remove[-_ ]?me)'
---       OR subject ~* '…the same…';
---   -- and the same two columns of outbound_messages.
+-- Read-only and exact, before the release — the function is created above, so this runs
+-- as written once (b) has been applied to a copy, or with the function alone applied to
+-- production. Both counts must be 0, and `VALIDATE CONSTRAINT` below asks the same
+-- question of the same rows:
+--
+--   SELECT count(*) AS refused FROM template_versions
+--    WHERE email_has_optout_link(body) OR email_has_optout_link(subject);
+--   SELECT count(*) AS refused FROM outbound_messages
+--    WHERE email_has_optout_link(body) OR email_has_optout_link(subject);
 --
 -- Approved template versions carrying the old stop line stay valid: the line is a
 -- sentence, not a link, and nothing here refuses it. They lose it at the next send,
@@ -117,27 +125,77 @@ ALTER TABLE template_versions DROP CONSTRAINT IF EXISTS template_versions_approv
 -- ---------------------------------------------------------------------------
 -- (b) The word ban becomes a link ban
 -- ---------------------------------------------------------------------------
--- Bodies and subjects are plain text, so a *visible opt-out link* is a URL. Refused,
--- case-insensitively: a URL whose own text carries one of the opt-out words, and any
--- single line carrying both a URL and one of those words, in either order. The bare
--- word is allowed: "just reply unsubscribe and I'll stop" is a sentence we want.
--- The same two shapes are spelled once in TypeScript as `OPT_OUT_LINK_PATTERN`
--- (`packages/contracts/src/templates.ts`), which is what the Mac and the save refuse
--- with, so no path offers an approval this database would answer with a 500.
+-- The rule, as David decided it on 29 September 2026 after the review of PR 311:
+--
+--   A visible opt-out link is a URL or `mailto:` on the **same line as, or on the line
+--   immediately before or after**, an opt-out phrase.
+--
+-- Bodies are plain text and a subject is one line, so that is what "a link and its
+-- label" means here: a label above its link, a link above its label, or both in one
+-- sentence. The phrases are `unsubscribe`, `opt out` / `opt-out` / `optout`,
+-- `remove me`, `stop receiving`, `stop these emails|messages`, `no longer receive`,
+-- `list-manage`, `manage (your) preferences`. The bare word is allowed: "just reply
+-- unsubscribe and I'll stop" is the sentence the old CHECK made unwritable, and it is
+-- the sentence the product wants.
+--
+-- Before matching, the text is normalised, in this order: NFKC, then every named dash
+-- to `-`, then every named space to ` `, then `lower()`. The newline is never folded —
+-- the rule counts lines. The *same four steps over the same code points* are
+-- `normalizeForOptOutRule` in `packages/contracts/src/templates.ts`, and
+-- `packages/domain/test/db/support/optOutLinkCases.ts` is one table of examples run
+-- against this function and against `hasOptOutLink` in the same assertion
+-- (`test/db/optOutLink.test.ts`), so the two spellings cannot drift.
+--
+-- What this rule cannot see, and we accept:
+--
+--   * **A bare shortener.** `https://short.example/a` with no phrase near it passes: the
+--     stored bytes cannot say where it redirects. David writes the copy, and the
+--     approval names the rule when it refuses.
+--   * **A confusable letter.** NFKC folds a non-breaking hyphen and a full-width space;
+--     it does not fold a Cyrillic `О` into a Latin `O`.
+--   * **A false refusal, deliberately.** "You can opt out by replying. Our website is
+--     https://firm.example" *is* refused, although the website is unrelated. A rule that
+--     could tell those apart is not a rule a CHECK can apply; the fix for a false
+--     refusal is to put the website on its own line.
+--
+-- A function inside a CHECK has a precedent in this schema: `funnel_facts_detail_coded`
+-- (0022) and `today_lane_of_kind` (0008), declared the same way — `LANGUAGE sql
+-- IMMUTABLE STRICT`. IMMUTABLE is what makes it legal in a CHECK at all, and it is
+-- honestly immutable: it reads nothing but its argument. One function rather than four
+-- inline predicates is also the only way the two tables can be said to carry the *same*
+-- rule rather than two copies of it.
+CREATE FUNCTION email_has_optout_link(candidate text) RETURNS boolean
+LANGUAGE sql IMMUTABLE STRICT AS $$
+  SELECT lower(
+           translate(
+             translate(
+               normalize(candidate, NFKC),
+               -- U+002D U+058A U+05BE U+1806 U+2010..U+2015 U+2212 U+2E3A U+2E3B
+               -- U+301C U+3030 U+FE58 U+FE63 U+FF0D
+               U&'\002D\058A\05BE\1806\2010\2011\2012\2013\2014\2015\2212\2E3A\2E3B\301C\3030\FE58\FE63\FF0D',
+               '------------------'),
+             -- U+0009 U+0020 U+00A0 U+1680 U+2000..U+200B U+202F U+205F U+3000
+             U&'\0009\0020\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\200B\202F\205F\3000',
+             '                   ')
+         ) ~ ('(?:unsubscribe|opt[ -]?out|remove me|stop receiving|stop these (?:emails|messages)'
+              || '|no longer receive|list-manage|manage (?:your )?preferences)'
+              || '[^\n]*(?:\n[^\n]*)?(?:https?://|www\.|mailto:)'
+              || '|(?:https?://|www\.|mailto:)[^\n]*(?:\n[^\n]*)?'
+              || '(?:unsubscribe|opt[ -]?out|remove me|stop receiving|stop these (?:emails|messages)'
+              || '|no longer receive|list-manage|manage (?:your )?preferences)')
+$$;
+
+COMMENT ON FUNCTION email_has_optout_link(text) IS
+  'A visible opt-out link: a URL or mailto: on the same line as, or the line touching, an opt-out phrase. Mirrored by hasOptOutLink in @fss/contracts.';
+
 ALTER TABLE template_versions DROP CONSTRAINT IF EXISTS template_versions_no_unsubscribe_link;
 ALTER TABLE template_versions
   ADD CONSTRAINT template_versions_no_optout_link
-    CHECK (
-      body !~* '(https?://|www\.)[^\n]*(unsubscribe|opt[-_ ]?out|optout|remove[-_ ]?me|list-manage)|(unsubscribe|opt[-_ ]?out|optout|remove[-_ ]?me|list-manage)[^\n]*(https?://|www\.)|mailto:[^[:space:]]*(unsubscribe|opt[-_ ]?out|optout|remove[-_ ]?me|list-manage)'
-      AND subject !~* '(https?://|www\.)[^\n]*(unsubscribe|opt[-_ ]?out|optout|remove[-_ ]?me|list-manage)|(unsubscribe|opt[-_ ]?out|optout|remove[-_ ]?me|list-manage)[^\n]*(https?://|www\.)|mailto:[^[:space:]]*(unsubscribe|opt[-_ ]?out|optout|remove[-_ ]?me|list-manage)'
-    ) NOT VALID;
+    CHECK (NOT email_has_optout_link(body) AND NOT email_has_optout_link(subject)) NOT VALID;
 ALTER TABLE template_versions VALIDATE CONSTRAINT template_versions_no_optout_link;
 
 ALTER TABLE outbound_messages DROP CONSTRAINT IF EXISTS outbound_messages_no_unsubscribe_link;
 ALTER TABLE outbound_messages
   ADD CONSTRAINT outbound_messages_no_optout_link
-    CHECK (
-      body !~* '(https?://|www\.)[^\n]*(unsubscribe|opt[-_ ]?out|optout|remove[-_ ]?me|list-manage)|(unsubscribe|opt[-_ ]?out|optout|remove[-_ ]?me|list-manage)[^\n]*(https?://|www\.)|mailto:[^[:space:]]*(unsubscribe|opt[-_ ]?out|optout|remove[-_ ]?me|list-manage)'
-      AND subject !~* '(https?://|www\.)[^\n]*(unsubscribe|opt[-_ ]?out|optout|remove[-_ ]?me|list-manage)|(unsubscribe|opt[-_ ]?out|optout|remove[-_ ]?me|list-manage)[^\n]*(https?://|www\.)|mailto:[^[:space:]]*(unsubscribe|opt[-_ ]?out|optout|remove[-_ ]?me|list-manage)'
-    ) NOT VALID;
+    CHECK (NOT email_has_optout_link(body) AND NOT email_has_optout_link(subject)) NOT VALID;
 ALTER TABLE outbound_messages VALIDATE CONSTRAINT outbound_messages_no_optout_link;

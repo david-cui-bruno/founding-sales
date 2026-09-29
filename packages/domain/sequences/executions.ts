@@ -1,4 +1,4 @@
-import type { HoldReasonCode } from '@fss/contracts';
+import { hasOptOutLink, type HoldReasonCode } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { openHold, releaseHoldsOfEvent } from '../policy/holds.ts';
 import type { WorkspaceHolidayCalendar } from '../src/rules/businessDays.ts';
@@ -448,13 +448,20 @@ async function runEmailStep(
     });
   }
 
+  // A variable's value is whatever the CRM holds, so the *rendered* subject is the first
+  // place a link can appear in it. The body's turn comes with the composition below;
+  // both are held here rather than thrown by the insert (review of PR 311, P1-2).
+  if (hasOptOutLink(rendered.subject)) {
+    return await holdExecution(context, execution, 'template_unapproved', { detail: ['optout_link'] });
+  }
+
   // The footer, composed **before** the fence stores anything (lane W3-F, migration
   // 0020). The approved body may carry the legacy block or none at all; either way the
-  // bytes handed over end with the sign-off, the workspace's `postal_address` when it has
-  // one, and exactly one stop line. A body that cannot be given one — the stop line
-  // somewhere else in the text, a composed body past the fence's 4,000 characters, or the
-  // address switch on with nothing configured — holds the step here, with nothing written
-  // and no fence created.
+  // bytes handed over end with the sign-off and the workspace's `postal_address` when it
+  // has one. A body that cannot be given one — a legacy stop line the composition cannot
+  // account for, a composed body past the fence's 4,000 characters, a link in the final
+  // bytes, or the address switch on with nothing configured — holds the step here, with
+  // nothing written and no fence created.
   const composed = await composeBodyForWorkspace(context, {
     body: rendered.body,
     signOff: template.footerSignOff,
