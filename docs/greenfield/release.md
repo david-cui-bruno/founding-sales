@@ -243,3 +243,21 @@ Both the enable and each send compare their own half of the record, in the same 
 ## 8. Records, and what is still unverified
 
 The records of what each credentialed run proved and refuted, and of what each lane's change did, 8.0 to 8.0aw, are in [`docs/archive/release-records.md`](../archive/release-records.md), unchanged: a numbered reference such as "8.0u", in this document or anywhere else, names one of them. From 25 September 2026 a change is its merged pull request instead. **8.1, what production still has not proved**, moved with the rest of the history to [`docs/archive/release-history.md`](../archive/release-history.md).
+
+---
+
+## 9. Dependency updates
+
+`.github/dependabot.yml` opens the dependency pull requests: npm at the repository root
+(one manifest and one lockfile for every workspace) and the GitHub Actions used by the
+workflows, both monthly, at most three open at a time, with `deps` as the commit prefix.
+Non-major npm updates arrive as one grouped pull request, `minor-and-patch`; the desktop
+chain (`electron` and the `@electron/*` packages) arrives as one major pull request,
+because the signing and update path is exercised by *Greenfield desktop* and not by the
+gate; every other major is its own pull request. A Dependabot pull request is a pull
+request: *Greenfield gate* runs on it exactly as it runs on ours, and it merges the same
+way. A green gate and the coordinator's read merge a grouped minor/patch pull request; a
+major waits for the coordinator's decision, and a desktop major is not merged until
+someone is ready to build and publish a desktop release. **Nothing auto-merges** — there
+is no auto-merge rule, no `dependabot merge` command in CI, and a red gate on a
+dependency pull request is a red gate like any other.
