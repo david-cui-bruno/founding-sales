@@ -36,10 +36,22 @@ const AT = '2026-09-28T14:00:00.000Z';
 
 const brief = (overrides: Partial<CallBriefDto> = {}): CallBriefDto => ({
   whyFit: [
-    { quote: 'We manage residential property for owners.', sourceReference: 'https://northwind.example.test/', retrievedAt: AT },
+    {
+      quote: 'We manage residential property for owners.',
+      sourceReference: 'https://northwind.example.test/',
+      retrievedAt: AT,
+      firstParty: true,
+      attribution: null,
+    },
   ],
   whatChanged: [
-    { quote: 'We opened a second office.', sourceReference: 'https://northwind.example.test/about', retrievedAt: AT },
+    {
+      quote: 'We opened a second office.',
+      sourceReference: 'https://northwind.example.test/about',
+      retrievedAt: AT,
+      firstParty: true,
+      attribution: null,
+    },
   ],
   likelyPerson: { contactId: FIRM_ID, name: 'Dana Example', title: 'Maintenance Coordinator' },
   questions: ['How do you take work orders today?', 'Who picks them up after hours?'],
@@ -49,6 +61,7 @@ const brief = (overrides: Partial<CallBriefDto> = {}): CallBriefDto => ({
   judgedAt: AT,
   revision: 2,
   sources: [{ sourceReference: 'https://northwind.example.test/', retrievedAt: AT }],
+  failedTries: 0,
   ...overrides,
 });
 
@@ -61,7 +74,29 @@ const state = (overrides: Partial<ResearchState> = {}): ResearchState => ({
         id: '22222222-2222-4222-8222-222222222222',
         key: 'target_fit',
         quote: 'We manage residential property for owners.',
+        firstParty: true,
         sourceReference: 'https://northwind.example.test/',
+        retrievedAt: AT,
+        confidence: null,
+      },
+      {
+        // A person key: no quote at all, because the block it names names a person and
+        // a contact's deletion does not reach a firm's rows.
+        id: '33333333-3333-4333-8333-333333333333',
+        key: 'named_role',
+        quote: null,
+        firstParty: true,
+        sourceReference: 'https://northwind.example.test/team',
+        retrievedAt: AT,
+        confidence: null,
+      },
+      {
+        // And a fact off a link somebody added, which is not the firm speaking.
+        id: '44444444-4444-4444-8444-444444444444',
+        key: 'recent_change',
+        quote: 'The firm has opened a second office, we are told.',
+        firstParty: false,
+        sourceReference: 'https://news.example.test/piece',
         retrievedAt: AT,
         confidence: null,
       },
@@ -149,6 +184,50 @@ describe('the call brief on the Today card', () => {
     expect(generated.textContent).not.toContain('We manage residential property');
   });
 
+  it('marks a quote from somebody else’s page with its host', () => {
+    // A link a person adds is fetched and quoted through the same path as the firm's
+    // own site, so without this the card would read a trade article's sentence as
+    // something the firm said.
+    render(
+      <Brief
+        brief={brief({
+          whatChanged: [
+            {
+              quote: 'The firm has opened a second office, we are told.',
+              sourceReference: 'https://news.example.test/piece',
+              retrievedAt: AT,
+              firstParty: false,
+              attribution: 'per news.example.test',
+            },
+          ],
+        })}
+        enabled
+        onResearchAgain={noop}
+        researching={false}
+      />,
+    );
+    expect(screen.getByTestId('brief-attribution').textContent).toBe('per news.example.test');
+    // And the firm's own words carry no attribution at all: one of the two quotes here
+    // is attributed and one is not, so a component that labelled both would fail.
+    expect(screen.getAllByTestId('brief-attribution').length).toBe(1);
+  });
+
+  it('says how many runs have failed, and that Callie has stopped after three', () => {
+    render(<Brief brief={brief({ failedTries: 1 })} enabled onResearchAgain={noop} researching={false} />);
+    expect(screen.getByTestId('brief-failed').textContent).toBe(
+      'Research failed, 1 try. Callie will try again tomorrow.',
+    );
+    cleanup();
+    render(<Brief brief={brief({ failedTries: 3 })} enabled onResearchAgain={noop} researching={false} />);
+    expect(screen.getByTestId('brief-failed').textContent).toBe(
+      'Research failed, 3 tries. Callie has stopped trying this firm.',
+    );
+    cleanup();
+    // And nothing at all when the last run completed, which is the ordinary case.
+    render(<Brief brief={brief()} enabled onResearchAgain={noop} researching={false} />);
+    expect(screen.queryByTestId('brief-failed')).toBeNull();
+  });
+
   it('shows the four judgments as four small labels, with unknown as a dash', () => {
     render(<Brief brief={brief()} enabled onResearchAgain={noop} researching={false} />);
     expect(screen.getByTestId('judgment-fit').textContent).toContain('Fit yes');
@@ -212,12 +291,26 @@ describe('the Firm page’s Research section', () => {
     install({ 'research.open': open });
     mount();
 
-    await screen.findByTestId('research-fact');
+    await screen.findAllByTestId('research-fact');
     expect(open).toHaveBeenCalledWith({ firmId: FIRM_ID });
     expect(screen.getByTestId('research-judgment-fit').textContent).toContain('Fit yes');
     expect(screen.getAllByTestId('research-reason')[0]?.textContent).toContain('manages property for owners');
-    expect(screen.getByTestId('research-fact').textContent).toContain('“We manage residential property for owners.”');
-    expect(screen.getByTestId('research-fact-source').textContent).toBe('target_fit · northwind.example.test · 28 Sep 2026');
+    const facts = screen.getAllByTestId('research-fact');
+    expect(facts[0]?.textContent).toContain('“We manage residential property for owners.”');
+    expect(screen.getAllByTestId('research-fact-source')[0]?.textContent).toBe(
+      'target_fit · northwind.example.test · 28 Sep 2026',
+    );
+
+    // A person key has no quote to show — the block it names names a person — so the
+    // line says what the page did instead of quoting it, and no name appears anywhere.
+    expect(facts[1]?.textContent).toContain('The firm’s own site names a person with a title.');
+    expect(facts[1]?.textContent).not.toContain('“');
+
+    // And a fact off a link somebody added says so: a page on another host is not the
+    // firm speaking, and a line laid out identically would present it as though it were.
+    expect(screen.getAllByTestId('research-fact-source')[2]?.textContent).toBe(
+      'recent_change · news.example.test · 28 Sep 2026 · another source',
+    );
     expect(screen.getByTestId('research-run').textContent).toBe('28 Sep 2026 — 1 fact, $0.02');
   });
 
@@ -226,7 +319,7 @@ describe('the Firm page’s Research section', () => {
     const addLink = vi.fn(async (_input: unknown) => await Promise.resolve(state()));
     install({ 'research.run': run, 'research.addLink': addLink });
     mount();
-    await screen.findByTestId('research-fact');
+    await screen.findAllByTestId('research-fact');
 
     const user = userEvent.setup();
     await user.click(screen.getByTestId('research-now'));

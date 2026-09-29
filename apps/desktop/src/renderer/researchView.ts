@@ -98,6 +98,61 @@ export function dollars(cents: number): string {
 /** The one grey line a firm nobody has researched shows in place of a brief. */
 export const NOT_RESEARCHED_LINE = 'Not researched yet.';
 
+/**
+ * The line a firm whose last runs failed shows above its brief, or null.
+ *
+ * A provider failure completes its job rather than throwing, because throwing would
+ * roll back the accounting of a call that was already paid for, so the retry is the
+ * daily sweep's and it stops after three. Without this line the card would show a brief
+ * that is quietly a week out of date and nothing to say so — which of the two silences
+ * is the worse one.
+ */
+export function failedTriesLine(failedTries: number): string | null {
+  const tries = Math.max(0, Math.trunc(failedTries));
+  if (tries === 0) return null;
+  const plural = `${String(tries)} tr${tries === 1 ? 'y' : 'ies'}`;
+  return tries >= 3
+    ? `Research failed, ${plural}. Callie has stopped trying this firm.`
+    : `Research failed, ${plural}. Callie will try again tomorrow.`;
+}
+
+/**
+ * What a fact's source line says: the key, the host, the date — and, when the page is
+ * not the firm's own, that it is somebody else's.
+ *
+ * The brief carries `attribution` for the same reason, from `research/brief.ts`. A
+ * quote from a link a person added is not the firm saying anything, and a section that
+ * laid it out identically would be presenting it as though it were.
+ */
+export function factSourceLine(fact: {
+  readonly key: string;
+  readonly sourceReference: string;
+  readonly retrievedAt: string;
+  readonly firstParty: boolean;
+}): string {
+  const own = fact.firstParty ? '' : ' · another source';
+  return `${fact.key} · ${sourceHost(fact.sourceReference)} · ${shortDate(fact.retrievedAt)}${own}`;
+}
+
+/**
+ * What a fact shows in place of a quote when it has none.
+ *
+ * `named_role`, `phone_listed` and `role` store no quote: the block they name is a
+ * block naming a person, and a contact's deletion does not reach a firm's rows
+ * (`research/facts.ts`, `PERSON_FACT_KEYS`). The fact is still worth showing — it is
+ * what a judgment rests on — so the line says what the page did rather than quoting it.
+ */
+const QUOTELESS_LINES: Readonly<Record<string, string>> = Object.freeze({
+  named_role: 'The firm’s own site names a person with a title.',
+  phone_listed: 'The firm’s own site publishes a number to call.',
+  role: 'The firm’s own site names a job title.',
+});
+
+export function factLine(fact: { readonly key: string; readonly quote: string | null }): string {
+  if (fact.quote !== null) return `“${fact.quote}”`;
+  return QUOTELESS_LINES[fact.key] ?? 'Recorded from the page, without a quotation.';
+}
+
 /** What the runs list says about one run. */
 export function runLine(run: {
   readonly startedAt: string;

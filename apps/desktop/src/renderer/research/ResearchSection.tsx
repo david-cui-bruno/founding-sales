@@ -3,7 +3,7 @@ import type { ResearchState } from '../researchContract.ts';
 import { Button } from '../ui/button.tsx';
 import { Input } from '../ui/input.tsx';
 import { Row, RowActions, RowMain, Rows, Section } from '../ui/layout.tsx';
-import { judgmentChips, researchNotice, runLine, shortDate, sourceHost } from '../researchView.ts';
+import { factLine, factSourceLine, judgmentChips, researchNotice, runLine } from '../researchView.ts';
 
 /**
  * The Firm page's Research section (lane R).
@@ -87,7 +87,7 @@ export function ResearchSection({
           {firm.facts.map(fact => (
             <Row key={fact.id} data-testid="research-fact">
               <RowMain
-                line={`“${fact.quote}”`}
+                line={factLine(fact)}
                 detail={
                   <a
                     data-testid="research-fact-source"
@@ -96,7 +96,7 @@ export function ResearchSection({
                     rel="noreferrer"
                     className="underline-offset-2 hover:underline"
                   >
-                    {fact.key} · {sourceHost(fact.sourceReference)} · {shortDate(fact.retrievedAt)}
+                    {factSourceLine(fact)}
                   </a>
                 }
               />
