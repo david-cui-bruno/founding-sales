@@ -97,7 +97,7 @@ jobs:
             || { echo "::error::stage=apply needs plan_sha256: the digest on the first line of that run's plan.txt."; exit 1; }
 
       - name: Assume the narrow AWS state role
-        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
         with:
           role-to-assume: ${{ secrets.FSS_PRODUCTION_CI_GOOGLE_ROLE_ARN }}
           aws-region: us-east-1
