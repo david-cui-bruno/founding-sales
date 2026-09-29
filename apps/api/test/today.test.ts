@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  callsPlacedTodayResponseSchema,
   todayFirmResponseSchema,
   todayListResponseSchema,
   todayPauseReleaseResultSchema,
@@ -160,6 +161,7 @@ describe('the Today routes', () => {
 
   it('refuses every path in this lane without a session', async () => {
     expect((await get('/today', null)).status).toBe(401);
+    expect((await get('/today/calls-placed', null)).status).toBe(401);
     for (const path of ['/today/firm', '/today/snooze', '/today/snooze/cancel', '/today/pause/release']) {
       expect((await post(path, null, command())).status, path).toBe(401);
     }
@@ -184,6 +186,30 @@ describe('the Today routes', () => {
     expect(Object.keys(card).sort()).toEqual(['counts', 'dueAt', 'firmId', 'firmName', 'lane']);
     expect(card['firmId']).toBe(firmId);
     expect(card['counts']).toEqual({ replies: 0, emailsDue: 1, callsDue: 1 });
+  });
+
+  it('answers how many calls were placed on the workspace’s own business date', async () => {
+    const answer = await get('/today/calls-placed', assigneeToken);
+    expect(answer.status).toBe(200);
+    expect(wireDrift(callsPlacedTodayResponseSchema, answer.body)).toEqual([]);
+    expect(Object.keys(answer.body).sort()).toEqual(['businessDate', 'businessTimeZone', 'calls']);
+    // The same business date the list is built for, and no calls have been logged here.
+    expect(answer.body['businessDate']).toBe(businessDate);
+    expect(answer.body['businessTimeZone']).toBe('America/New_York');
+    expect(answer.body['calls']).toBe(0);
+
+    // One call at the assigned firm, on the workspace's business date, counts.
+    await fixture.db.query(
+      `INSERT INTO call_logs (workspace_id, firm_id, outcome, step_effect, occurred_at, recorded_at, actor_user_id)
+       VALUES ($1, $2, 'no_answer', 'none', now(), now(), $3)`,
+      [fixture.alpha.workspaceId, firmId, assigneeUserId],
+    );
+    expect((await get('/today/calls-placed', assigneeToken)).body['calls']).toBe(1);
+    expect((await get('/today/calls-placed', adminToken)).body['calls']).toBe(1);
+
+    // It is a GET and nothing else: the request carries nothing, so there is no body to
+    // post, and a POST is refused rather than read as one.
+    expect((await post('/today/calls-placed', assigneeToken, command())).status).toBe(405);
   });
 
   it('expands a card into its contact tasks', async () => {

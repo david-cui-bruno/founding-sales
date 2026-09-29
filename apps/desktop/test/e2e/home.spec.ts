@@ -241,9 +241,11 @@ test('the last 7 days are read over the last seven days, and a figure not in thi
   server = await startAppServer();
   await page.goto(server.url());
 
-  await expect(page.getByTestId('figures-label')).toHaveText('Last 7 days');
+  // The heading is "Numbers" since 29 September 2026: "Calls placed today" joined the
+  // row, and each cell says its own window instead.
+  await expect(page.getByTestId('figures-label')).toHaveText('Numbers');
   await expect(page.getByTestId('figure-replies')).toHaveText('Replies21 uncertain');
-  await expect(page.getByTestId('figure-calls')).toHaveText('Calls placed3');
+  await expect(page.getByTestId('figure-calls')).toHaveText('Calls placed, 7 days3');
   await expect(page.getByTestId('figure-meetings')).toHaveText('Meetings booked1');
   // 2 replies, 1 handled.
   await expect(page.getByTestId('figure-waiting')).toHaveText('Replies waiting1');

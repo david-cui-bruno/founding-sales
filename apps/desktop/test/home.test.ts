@@ -201,6 +201,15 @@ function dashboard(overrides: Partial<DashboardResponse> = {}): DashboardRespons
 
 const read = (value: DashboardResponse | null): FiguresRead => ({ requested: WINDOW, answered: true, dashboard: value });
 
+/** The figures row, with the one figure that is not the dashboard's handed in beside it. */
+const figures = (input: { admin?: boolean; figures: FiguresRead; callsToday?: number | null }) =>
+  figuresView({
+    admin: input.admin ?? true,
+    figures: input.figures,
+    // An explicit null is "the read has not answered" and must survive the default.
+    callsToday: 'callsToday' in input ? (input.callsToday ?? null) : 7,
+  });
+
 function input(overrides: Partial<HomeInput> = {}): HomeInput {
   const state = overrides.today === undefined ? today() : overrides.today;
   return {
@@ -212,6 +221,7 @@ function input(overrides: Partial<HomeInput> = {}): HomeInput {
     mailboxWaiting: false,
     admin: admin(),
     figures: read(dashboard()),
+    callsToday: 7,
     ...overrides,
   };
 }
@@ -531,21 +541,25 @@ describe('Needs you', () => {
   });
 });
 
-describe('the last 7 days', () => {
-  it('is labelled by its real window and covers exactly seven days', () => {
+describe('the numbers row', () => {
+  it('covers exactly seven days, and says so per cell rather than in the heading', () => {
     const window = figuresWindow(new Date('2026-09-25T12:00:00.000Z'));
     expect(window).toEqual({ from: '2026-09-18T12:00:00.000Z', to: '2026-09-25T12:00:00.000Z' });
-    expect(figuresView({ admin: true, figures: read(dashboard()) }).label).toBe(FIGURES_LABEL);
-    expect(FIGURES_LABEL).toBe('Last 7 days');
+    expect(figures({ figures: read(dashboard()) }).label).toBe(FIGURES_LABEL);
+    // "Last 7 days" would be a lie over "Calls placed today", which is the row's first
+    // cell since 29 September 2026.
+    expect(FIGURES_LABEL).toBe('Numbers');
   });
 
   it('shows the day’s sales numbers, and a dash for sending not in this build', () => {
     // The six the Dashboard's departure from the navigation left on Today (David,
-    // 29 September 2026), every one of them from the dashboard DTO that page read.
-    expect(figuresView({ admin: true, figures: read(dashboard()) })).toEqual({
-      label: 'Last 7 days',
+    // 29 September 2026), every one of them from the dashboard DTO that page read, and
+    // today's calls first, from a read of their own.
+    expect(figures({ figures: read(dashboard()), callsToday: 3 })).toEqual({
+      label: 'Numbers',
       cells: [
-        { key: 'calls', label: 'Calls placed', value: '5', note: null },
+        { key: 'calls_today', label: 'Calls placed today', value: '3', note: null },
+        { key: 'calls', label: 'Calls placed, 7 days', value: '5', note: null },
         { key: 'meetings', label: 'Meetings booked', value: '2', note: null },
         { key: 'replies', label: 'Replies', value: '4', note: '2 uncertain' },
         // 4 replies, 3 handled.
@@ -559,50 +573,65 @@ describe('the last 7 days', () => {
 
   it('shows a dash for meetings on a server whose funnel is not in the build', () => {
     // Never a 0: "no meetings booked" and "nothing counted them" are different news.
-    const view = figuresView({
-      admin: true,
+    const view = figures({
       figures: read(dashboard({ funnel: { available: false, owner: 'J-facts', reason: 'not in this build' } })),
     });
-    expect(view.cells[1]).toEqual({ key: 'meetings', label: 'Meetings booked', value: '—', note: 'not in this build' });
+    expect(view.cells[2]).toEqual({ key: 'meetings', label: 'Meetings booked', value: '—', note: 'not in this build' });
   });
 
   it('never shows fewer than no replies waiting', () => {
-    const view = figuresView({
-      admin: true,
+    const view = figures({
       figures: read(dashboard({ replyHandling: { replies: 2, handled: 5, medianSecondsToHandle: null, slowestSecondsToHandle: null } })),
     });
-    expect(view.cells[3]?.value).toBe('0');
+    expect(view.cells[4]?.value).toBe('0');
   });
 
   it('shows emails sent, and held, when sending is in the build', () => {
-    const view = figuresView({
-      admin: true,
+    const view = figures({
       figures: read(dashboard({ sending: { available: true, sent: 12, held: 4 } as unknown as DashboardResponse['sending'] })),
     });
-    expect(view.cells[5]).toEqual({ key: 'emails', label: 'Emails sent', value: '12', note: '4 held' });
+    expect(view.cells[6]).toEqual({ key: 'emails', label: 'Emails sent', value: '12', note: '4 held' });
   });
 
   it('is dashes and one grey line when the read failed or answered for another window', () => {
-    const dashes = ['—', '—', '—', '—', '—', '—'];
-    const failed = figuresView({ admin: true, figures: read(null) });
+    // Today's calls are their own read and survive the dashboard's failure: the seven-day
+    // cells go to dashes and this one does not.
+    const dashes = ['3', '—', '—', '—', '—', '—', '—'];
+    const failed = figures({ figures: read(null), callsToday: 3 });
     expect(failed.cells.map(cell => cell.value)).toEqual(dashes);
     expect(failed.line).toBe(FIGURES_UNREAD);
     // The bridge keeps its last figures when a read fails, and those may be
     // Administration's thirty days. They are not these.
-    const other = figuresView({
-      admin: true,
+    const other = figures({
       figures: read(dashboard({ window: { from: '2026-08-26T12:00:00.000Z', to: '2026-09-25T12:00:00.000Z' } })),
+      callsToday: 3,
     });
     expect(other.cells.map(cell => cell.value)).toEqual(dashes);
     expect(other.line).toBe(FIGURES_UNREAD);
     // The same instants written differently are the same window.
-    expect(figuresView({ admin: true, figures: read(dashboard({ window: { from: '2026-09-18T12:00:00Z', to: '2026-09-25T12:00:00Z' } })) }).line).toBeNull();
+    expect(figures({ figures: read(dashboard({ window: { from: '2026-09-18T12:00:00Z', to: '2026-09-25T12:00:00Z' } })) }).line).toBeNull();
   });
 
   it('is dashes with no line while the read is in flight', () => {
-    const view = figuresView({ admin: true, figures: { requested: WINDOW, answered: false, dashboard: null } });
-    expect(view.cells.map(cell => cell.value)).toEqual(['—', '—', '—', '—', '—', '—']);
+    const view = figures({ figures: { requested: WINDOW, answered: false, dashboard: null }, callsToday: 0 });
+    expect(view.cells.map(cell => cell.value)).toEqual(['0', '—', '—', '—', '—', '—', '—']);
     expect(view.line).toBeNull();
+  });
+
+  it('is a dash for today’s calls until that read answers, and a zero when it says none', () => {
+    // A dash is "Callie could not ask"; a zero is "no calls yet this morning". They must
+    // not be the same mark, and neither is the dashboard's to say.
+    expect(figures({ figures: read(dashboard()), callsToday: null }).cells[0]).toEqual({
+      key: 'calls_today',
+      label: 'Calls placed today',
+      value: '—',
+      note: null,
+    });
+    expect(figures({ figures: read(dashboard()), callsToday: 0 }).cells[0]?.value).toBe('0');
+    // And it is shown to a salesperson, for whom the seven-day read is refused.
+    const salesperson = figures({ admin: false, figures: read(dashboard()), callsToday: 4 });
+    expect(salesperson.cells[0]?.value).toBe('4');
+    expect(salesperson.cells[1]?.value).toBe('—');
   });
 });
 

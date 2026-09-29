@@ -144,7 +144,7 @@ describe('Today’s numbers row', () => {
       status: [],
       needs: [],
       needsLine: 'Nothing needs you.',
-      figures: figuresView({ admin: true, figures: { requested: WINDOW, answered: true, dashboard } }),
+      figures: figuresView({ admin: true, figures: { requested: WINDOW, answered: true, dashboard }, callsToday: 3 }),
     } as unknown as HomeView;
 
     render(
@@ -162,7 +162,9 @@ describe('Today’s numbers row', () => {
       />,
     );
 
-    expect(screen.getByTestId('figure-calls').textContent).toBe('Calls placed5');
+    // Today's calls first, from their own read, then the seven-day cells beside them.
+    expect(screen.getByTestId('figure-calls_today').textContent).toBe('Calls placed today3');
+    expect(screen.getByTestId('figure-calls').textContent).toBe('Calls placed, 7 days5');
     expect(screen.getByTestId('figure-meetings').textContent).toBe('Meetings booked2');
     expect(screen.getByTestId('figure-waiting').textContent).toBe('Replies waiting1');
     expect(screen.getByTestId('figure-replies').textContent).toBe('Replies4');

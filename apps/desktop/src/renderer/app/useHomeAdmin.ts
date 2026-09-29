@@ -23,12 +23,15 @@ import type { Generation } from './generation.ts';
 export interface HomeAdmin {
   readonly admin: AdminState | null;
   readonly figures: FiguresRead;
+  /** The workspace's calls on its own business date, or null until a read has answered. */
+  readonly callsToday: number | null;
   /** Read the status and the figures again, as Refresh does. */
   refresh(): void;
 }
 
 const ADMIN_KEY = 'admin';
 const FIGURES_KEY = 'figures';
+const CALLS_TODAY_KEY = 'calls-today';
 
 export function useHomeAdmin(identity: string | null, generation: number, guard: Generation): HomeAdmin {
   const client = useQueryClient();
@@ -54,6 +57,23 @@ export function useHomeAdmin(identity: string | null, generation: number, guard:
     retry: false,
   });
 
+  /*
+   * "Calls placed today", its own read (29 September 2026).
+   *
+   * Not part of the figures query: it is a different window, a different route, and a
+   * different audience — `/today/calls-placed` answers a salesperson, for whom
+   * `settings.loadDashboard` is refused — so one failing must not take the other with
+   * it. No `staleTime`, because it is the one figure that moves during a morning and
+   * Refresh is what re-reads it.
+   */
+  const callsToday = useQuery({
+    queryKey: [CALLS_TODAY_KEY, identity, generation],
+    queryFn: async () => (await operations()?.read('today.callsPlaced', {})) ?? null,
+    enabled,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
+
   const refetchAdmin = admin.refetch;
   useEffect(() => {
     // Coming back from Settings is when a calling number has just been added: the
@@ -69,6 +89,7 @@ export function useHomeAdmin(identity: string | null, generation: number, guard:
   }, [refetchAdmin]);
 
   const refetchFigures = dashboard.refetch;
+  const refetchCallsToday = callsToday.refetch;
   const refresh = useCallback((): void => {
     const api = operations();
     if (api === undefined) return;
@@ -84,7 +105,8 @@ export function useHomeAdmin(identity: string | null, generation: number, guard:
       if (guard.fresh(started)) client.setQueryData([ADMIN_KEY, identity, started], state);
     });
     void refetchFigures();
-  }, [client, guard, identity, refetchFigures]);
+    void refetchCallsToday();
+  }, [client, guard, identity, refetchFigures, refetchCallsToday]);
 
   const figures: FiguresRead = {
     requested: enabled ? requested : null,
@@ -93,5 +115,7 @@ export function useHomeAdmin(identity: string | null, generation: number, guard:
     dashboard: dashboard.data?.dashboard ?? null,
   };
 
-  return { admin: admin.data ?? null, figures, refresh };
+  // A refused or unreadable read answers null, and the figure is a dash rather than a
+  // zero: "no calls yet this morning" is not the same as "Callie could not ask".
+  return { admin: admin.data ?? null, figures, callsToday: callsToday.data?.calls ?? null, refresh };
 }

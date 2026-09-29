@@ -35,7 +35,12 @@ export const TODAY_HEADING = 'Today';
 export const HOME_EMPTY = 'Nothing today. Add firms and a sequence, and tomorrow’s list builds at 05:00.';
 export const NOTHING_NEEDS_YOU = 'Nothing needs you.';
 export const CHECKING = 'Checking…';
-export const FIGURES_LABEL = 'Last 7 days';
+/**
+ * The row's heading (29 September 2026). It was "Last 7 days" until "Calls placed today"
+ * joined the row, and a heading that says seven days over a figure that means today is a
+ * heading that lies about one of its cells. Each cell says its own window instead.
+ */
+export const FIGURES_LABEL = 'Numbers';
 export const FIGURES_UNREAD = 'Callie could not read the last 7 days.';
 /** The window the figures cover, ending now. Seven days of milliseconds, not a calendar week. */
 const FIGURES_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
@@ -118,6 +123,8 @@ export interface HomeInput {
   /** Null until `callieAdmin` has answered. */
   readonly admin: AdminState | null;
   readonly figures: FiguresRead;
+  /** The workspace's calls on its own business date, or null until a read has answered. */
+  readonly callsToday: number | null;
   /** Lane g83: what `callieUpdate` last said. Absent or null draws no update line. */
   readonly update?: UpdateStatus | null;
 }
@@ -145,7 +152,7 @@ export interface NeedsRow {
 }
 
 interface FigureCell {
-  readonly key: 'calls' | 'meetings' | 'replies' | 'waiting' | 'holds' | 'emails';
+  readonly key: 'calls_today' | 'calls' | 'meetings' | 'replies' | 'waiting' | 'holds' | 'emails';
   readonly label: string;
   readonly value: string;
   readonly note: string | null;
@@ -538,6 +545,10 @@ export function figuresWindow(now: Date): { readonly from: string; readonly to: 
 
 const DASH = '—';
 
+/** The two calls figures, which must not read as the same number over two windows. */
+export const CALLS_TODAY_LABEL = 'Calls placed today';
+export const CALLS_SEVEN_DAYS_LABEL = 'Calls placed, 7 days';
+
 /** The funnel kind that is one meeting in the calendar (`packages/domain/funnel/kinds.ts`). */
 const MEETING_BOOKED = 'meeting.booked';
 
@@ -553,9 +564,16 @@ const sameInstant = (left: string, right: string): boolean => Date.parse(left) =
  * that page has to be looked up somewhere else. Firms in each pipeline stage are the
  * Pipeline's own columns, each with its count, and are not repeated here.
  *
- * The window is the seven days `figuresWindow` asks for. There is no "today" column
- * because there is no read for one: a second window would be a second dashboard call,
- * and the DTO carries no per-day breakdown.
+ * **"Calls placed today" is the first of them, and the only one that is not the
+ * dashboard's.** Seven days is the number that says whether the week went well; it is not
+ * the number that says whether this morning has gone anywhere, which is what somebody
+ * working a call list wants in front of them. It has its own read — `GET
+ * /today/calls-placed`, counted on the workspace's own business date — because the
+ * dashboard DTO carries no per-day breakdown and a second window would be a second
+ * dashboard call. A read that did not answer is a dash: "no calls yet" and "Callie could
+ * not ask" are different facts, and the seven-day cells beside it are unaffected either
+ * way, including for a salesperson, for whom the dashboard read is refused and this one
+ * is not.
  *
  * "Meetings booked" is the funnel's `meeting.booked` (migration 0022). An older server
  * that answers `available: false` gets a dash and "not in this build", never a 0 —
@@ -566,11 +584,23 @@ const sameInstant = (left: string, right: string): boolean => Date.parse(left) =
  * the answer's own window must be the one requested, or the row shows dashes and one
  * grey line. Sending that is `available: false` is "—, not in this build", never 0.
  */
-export function figuresView(input: { readonly admin: boolean; readonly figures: FiguresRead }): FiguresView {
+export function figuresView(input: {
+  readonly admin: boolean;
+  readonly figures: FiguresRead;
+  /** The workspace's calls on its own business date, or null until a read has answered. */
+  readonly callsToday: number | null;
+}): FiguresView {
+  const today: FigureCell = {
+    key: 'calls_today',
+    label: CALLS_TODAY_LABEL,
+    value: input.callsToday === null ? DASH : String(input.callsToday),
+    note: null,
+  };
   const dashes = (line: string | null): FiguresView => ({
     label: FIGURES_LABEL,
     cells: [
-      { key: 'calls', label: 'Calls placed', value: DASH, note: null },
+      today,
+      { key: 'calls', label: CALLS_SEVEN_DAYS_LABEL, value: DASH, note: null },
       { key: 'meetings', label: 'Meetings booked', value: DASH, note: null },
       { key: 'replies', label: 'Replies', value: DASH, note: null },
       { key: 'waiting', label: 'Replies waiting', value: DASH, note: null },
@@ -602,9 +632,10 @@ export function figuresView(input: { readonly admin: boolean; readonly figures: 
   return {
     label: FIGURES_LABEL,
     cells: [
+      today,
       {
         key: 'calls',
-        label: 'Calls placed',
+        label: CALLS_SEVEN_DAYS_LABEL,
         value: String(dashboard.calls.reduce((total, entry) => total + entry.count, 0)),
         note: null,
       },
@@ -677,6 +708,6 @@ export function buildHomeView(input: HomeInput, desktopBanners: readonly BannerV
     status: statusRows(input),
     needs,
     needsLine: needsLine(input, needs),
-    figures: figuresView({ admin: input.hasOperations, figures: input.figures }),
+    figures: figuresView({ admin: input.hasOperations, figures: input.figures, callsToday: input.callsToday }),
   };
 }

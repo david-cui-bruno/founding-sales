@@ -91,6 +91,7 @@ function Column({
       mailboxWaiting: session.mailboxWaiting,
       admin: home.admin,
       figures: home.figures,
+      callsToday: home.callsToday,
       update: session.update,
     },
     // The session's own lines — offline, stale, a refusal — above Today's.

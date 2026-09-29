@@ -1,5 +1,6 @@
 import { TODAY_CARD_VERSION, todayFirmRequestSchema } from '@fss/contracts';
 import { databaseNow } from '@fss/domain/policy/clock.ts';
+import { readCallsPlacedToday } from '@fss/domain/today/callsPlaced.ts';
 import { readTodayFirm, readTodayList, todayFirmVersion1 } from '@fss/domain/today/dto.ts';
 import { REFUSAL_STATUS, redactError } from '../limits.ts';
 import { policyRouteDeps } from './dialSupport.ts';
@@ -21,11 +22,17 @@ import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
  * data either — it is a POST for the reason G3b gave `/crm/firm-page`, that a rule
  * which applies to some of a family is a rule somebody gets wrong on the rest.
  *
- * Neither route decides who may see what. `readTodayList` does, from the scope's own
- * role, because 8.2's "Admins see all entries; salespeople see their own" is a
- * property of the read and not of the transport.
+ * `GET /today/calls-placed` is the third, added 29 September 2026: how many calls were
+ * placed on the workspace's own business date, which is the number a person working a
+ * call list wants in front of them and not the seven-day figure beside it. A GET for the
+ * same reason as the list — the request carries nothing at all, because the caller is the
+ * session and the date is the server's.
+ *
+ * No route here decides who may see what. `readTodayList` and `readCallsPlacedToday` do,
+ * from the scope's own role, because 8.2's "Admins see all entries; salespeople see their
+ * own" is a property of the read and not of the transport.
  */
-export const TODAY_PATHS: readonly string[] = ['/today', '/today/firm'];
+export const TODAY_PATHS: readonly string[] = ['/today', '/today/firm', '/today/calls-placed'];
 
 /*
  * `cardVersion: 2` (`todayFirmRequestSchema` in `@fss/contracts`) asks for the tasks
@@ -55,6 +62,15 @@ export async function routeToday(request: ApiRequest, options: RoutingOptions): 
     // Database time, so the business date the Mac caches is the one the 05:00 job
     // built and not the one this task's clock believes in (Appendix D).
     return { status: 200, body: await readTodayList(context, { now: await databaseNow(context) }) };
+  }
+
+  if (request.path === '/today/calls-placed') {
+    if (request.method !== 'GET') {
+      return { status: REFUSAL_STATUS.method_not_allowed, body: redactError('method_not_allowed') };
+    }
+    // Database time again: the boundary between one business date and the next is the
+    // database's clock in the workspace's zone, not this task's.
+    return { status: 200, body: await readCallsPlacedToday(context, { now: await databaseNow(context) }) };
   }
 
   if (request.method !== 'POST') {

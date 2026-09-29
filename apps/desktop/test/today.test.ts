@@ -779,12 +779,13 @@ describe('the Today bridge', () => {
   });
 
   it('names one operation per method, and nothing else', () => {
-    // Since 1.0.12 the view has no channels of its own: the nine methods are nine
-    // operations of the registry, and dialling is the one named channel beside it.
+    // Since 1.0.12 the view has no channels of its own: every method is an operation of
+    // the registry, and dialling is the one named channel beside it.
     expect(OPERATION_NAMES.filter(name => name.startsWith('today.'))).toEqual([
       'today.state',
       'today.refresh',
       'today.expand',
+      'today.callsPlaced',
       'today.collapse',
       'today.snooze',
       'today.recordOutcome',
