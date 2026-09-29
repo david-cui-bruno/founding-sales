@@ -3,6 +3,7 @@ import { CALL_OUTCOMES, instant, uuid } from '@fss/contracts';
 import { crmStateSchema, addFirmDraftSchema } from '../renderer/firmWorkspaceContract.ts';
 import { replyStateSchema, REPLY_DISPOSITIONS } from '../renderer/replyContract.ts';
 import { draftStepSchema, sequenceStateSchema } from '../renderer/sequenceContract.ts';
+import { researchStateSchema } from '../renderer/researchContract.ts';
 import { todayStateSchema } from '../renderer/todayContract.ts';
 import {
   addCallingNumberInputSchema,
@@ -95,6 +96,19 @@ const outcomeInput = z.strictObject({
     })
     .nullable(),
   doNotCallCoversAllContact: z.boolean(),
+});
+
+/**
+ * The research ceilings an admin may change. Every bound is also a CHECK in migration
+ * 0022 and a refusal in `updateResearchSettings`; this one stops the Mac offering a
+ * value it already knows the server will refuse. The model is not here: v1 admits one.
+ */
+const researchSettingsInput = z.strictObject({
+  enabled: z.boolean().optional(),
+  dailyFirmCeiling: z.number().int().min(0).max(10_000).optional(),
+  dailyCostCeilingCents: z.number().int().min(0).max(1_000_000).optional(),
+  monthlyCostCeilingCents: z.number().int().min(0).max(10_000_000).optional(),
+  maxPagesPerFirm: z.number().int().min(1).max(8).optional(),
 });
 
 const confirmReplyInput = z.strictObject({
@@ -295,6 +309,52 @@ export const OPERATIONS = {
     input: z.strictObject({ holdId: uuid }),
     output: todayStateSchema,
     transform: 're-reads the list and the open card, keeping the command’s notice',
+  },
+
+  // --- Research (lane R) --------------------------------------------------
+  'research.state': {
+    kind: 'read',
+    calls: [],
+    input: nothing,
+    output: researchStateSchema,
+    transform: 'the research last read; nothing about it is ever written to disk',
+  },
+  'research.open': {
+    kind: 'read',
+    calls: [
+      { method: 'POST', path: '/research/firm' },
+      { method: 'POST', path: '/research/settings' },
+    ],
+    input: z.strictObject({ firmId: uuid }),
+    output: researchStateSchema,
+    transform: 'the firm’s brief, facts, runs and links, plus the ceilings and the month’s spend for an admin',
+  },
+  'research.run': {
+    kind: 'command',
+    calls: [
+      { method: 'POST', path: '/research/firm/run' },
+      { method: 'POST', path: '/research/firm' },
+    ],
+    input: z.strictObject({ firmId: uuid }),
+    output: researchStateSchema,
+    transform: 're-reads the firm keeping the command’s notice: a queued run is a running row, not a brief',
+  },
+  'research.addLink': {
+    kind: 'command',
+    calls: [
+      { method: 'POST', path: '/research/firm/links/add' },
+      { method: 'POST', path: '/research/firm' },
+    ],
+    input: z.strictObject({ firmId: uuid, url: z.string().min(8).max(500) }),
+    output: researchStateSchema,
+    transform: 're-reads the firm keeping the command’s notice; the link is saved even when the run it triggers refuses',
+  },
+  'research.saveSettings': {
+    kind: 'command',
+    calls: [{ method: 'POST', path: '/research/settings' }],
+    input: researchSettingsInput,
+    output: researchStateSchema,
+    transform: 'one admin-only path answers both the read and the update; a salesperson is given no settings at all',
   },
 
   // --- Replies -----------------------------------------------------------

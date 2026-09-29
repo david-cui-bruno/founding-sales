@@ -221,6 +221,8 @@ export function registerWindows(configuration: DesktopConfiguration, manager: Se
     // The reply state is never cached, so it needs nothing from the offline cache but the
     // token, the online flag and the version gate.
     replies: { api, session },
+    // The brief, the facts and the ceilings. Nothing of it is ever cached (lane R).
+    research: { api, session },
     crm: { api, session, clientVersion: configuration.clientVersion },
     sequences: { api, session },
     settings: { api, session },

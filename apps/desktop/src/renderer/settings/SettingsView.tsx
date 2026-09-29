@@ -6,6 +6,7 @@ import { Alert } from '../ui/alert.tsx';
 import { Page, ViewHeader } from '../ui/layout.tsx';
 import { cn } from '../lib/utils.ts';
 import { Administration } from './Administration.tsx';
+import { ResearchSettings } from './ResearchSettings.tsx';
 import { Panels } from './Panels.tsx';
 import { RecoveryControls } from './RecoveryControls.tsx';
 import { tabForScreen, useAdmin } from './useAdmin.ts';
@@ -105,7 +106,11 @@ export function SettingsView({
           </div>
 
           {tabForScreen(view.screen) === 'administration' ? (
-            <Administration view={view} actions={admin.actions} busy={admin.busy} />
+            <>
+              <Administration view={view} actions={admin.actions} busy={admin.busy} />
+              {/* Absent for anyone who is not an admin: the read is the budget (lane R). */}
+              <ResearchSettings identity={identity} generation={generation} guard={guard} />
+            </>
           ) : tabForScreen(view.screen) === 'dashboard' ? (
             <Panels view={view} />
           ) : (

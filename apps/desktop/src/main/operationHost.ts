@@ -10,6 +10,7 @@ import type { AuthedClient } from './authedClient.ts';
 import type { CrmBridgeHost } from './crmBridge.ts';
 import type { MailboxBridgeHost } from './mailboxBridge.ts';
 import type { ReplyBridgeHost } from './replyBridge.ts';
+import type { ResearchBridgeHost } from './researchBridge.ts';
 import type { SequenceBridgeHost } from './sequenceBridge.ts';
 import type { AdminBridgeHost } from './settingsBridge.ts';
 import type { TodayBridgeHost } from './todayBridge.ts';
@@ -40,6 +41,7 @@ export interface OperationHostDeps {
   readonly api: AuthedClient;
   readonly today: TodayBridgeHost;
   readonly replies: ReplyBridgeHost;
+  readonly research: ResearchBridgeHost;
   readonly crm: CrmBridgeHost;
   readonly sequences: SequenceBridgeHost;
   readonly settings: AdminBridgeHost;
@@ -57,6 +59,7 @@ type Handler = (input: never) => Promise<unknown>;
 const FALLBACK: Readonly<Record<string, OperationName>> = Object.freeze({
   today: 'today.state',
   replies: 'replies.state',
+  research: 'research.state',
   crm: 'crm.state',
   sequences: 'sequences.state',
   settings: 'settings.state',
@@ -85,6 +88,14 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
     'replies.forget': async () => await deps.replies.forget(),
     'replies.confirm': async (input: Parameters<ReplyBridgeHost['confirm']>[0]) => await deps.replies.confirm(input),
     'replies.resolve': async (input: Parameters<ReplyBridgeHost['resolve']>[0]) => await deps.replies.resolve(input),
+
+    'research.state': async () => await deps.research.state(),
+    'research.open': async (input: { readonly firmId: string }) => await deps.research.open(input),
+    'research.run': async (input: { readonly firmId: string }) => await deps.research.run(input),
+    'research.addLink': async (input: Parameters<ResearchBridgeHost['addLink']>[0]) =>
+      await deps.research.addLink(input),
+    'research.saveSettings': async (input: Parameters<ResearchBridgeHost['saveSettings']>[0]) =>
+      await deps.research.saveSettings(input),
 
     'crm.state': async () => await deps.crm.state(),
     'crm.openFirm': async (input: { readonly firmId: string }) => await deps.crm.openFirm(input),

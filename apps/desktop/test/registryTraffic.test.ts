@@ -3,6 +3,7 @@ import { createAuthedClient } from '../src/main/authedClient.ts';
 import { createCrmBridge } from '../src/main/crmBridge.ts';
 import { createMailboxBridge } from '../src/main/mailboxBridge.ts';
 import { createReplyBridge } from '../src/main/replyBridge.ts';
+import { createResearchBridge } from '../src/main/researchBridge.ts';
 import { createSequenceBridge } from '../src/main/sequenceBridge.ts';
 import { createAdminBridge } from '../src/main/settingsBridge.ts';
 import { createTodayBridge } from '../src/main/todayBridge.ts';
@@ -95,6 +96,10 @@ const INPUTS: Readonly<Partial<Record<OperationName, unknown>>> = Object.freeze(
   'replies.open': { messageId: UUID },
   'replies.confirm': { messageId: FIXTURE_IDS.message, classification: 'human_reply', callback: null },
   'replies.resolve': { messageId: FIXTURE_IDS.message, opportunityId: FIXTURE_IDS.opportunity },
+  'research.open': { firmId: UUID },
+  'research.run': { firmId: UUID },
+  'research.addLink': { firmId: UUID, url: 'https://news.example.test/piece' },
+  'research.saveSettings': { dailyFirmCeiling: 25 },
   'crm.openFirm': { firmId: UUID },
   'crm.saveContact': { contactId: UUID, fullName: 'Kim Placeholder', title: null, makePrimary: false },
   'crm.changeStage': { opportunityId: UUID, toStageKey: 'new', reason: null },
@@ -182,6 +187,7 @@ function hostsFor(api: ReturnType<typeof createAuthedClient>): Readonly<Record<s
       }),
     }) as unknown as Host,
     replies: createReplyBridge({ api, session }) as unknown as Host,
+    research: createResearchBridge({ api, session }) as unknown as Host,
     crm: createCrmBridge({ api, session, clientVersion: '1.0.13' }) as unknown as Host,
     sequences: createSequenceBridge({ api, session }) as unknown as Host,
     settings: createAdminBridge({ api, session }) as unknown as Host,
