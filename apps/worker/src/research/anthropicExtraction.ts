@@ -207,7 +207,13 @@ export function anthropicExtraction(options: AnthropicExtractionOptions): Extrac
         response = await options.transport.create({
           model: options.modelName,
           max_tokens: maxOutputTokens,
-          system: [{ type: 'text', text: SYSTEM_TEXT, cache_control: { type: 'ephemeral' } }],
+          // No `cache_control`. Prompt caching pays 1.25× on the write and 0.1× on a
+          // read, so it only saves money when the same prefix is sent again — and it is
+          // not: every run's message is a different firm's pages, and the only constant
+          // part is the system text, which is far too small to be worth a cache write.
+          // Caching here was a 25% surcharge on the one thing that repeats and no
+          // saving at all on the rest, and it made the priced worst case wrong.
+          system: [{ type: 'text', text: SYSTEM_TEXT }],
           messages: [{ role: 'user', content: extractionUserText(input) }],
           // No `effort`: Claude Haiku 4.5 returns a 400 for it (`MODEL_CAPABILITIES`),
           // and there is no thinking to ask for. Temperature is left at the model
@@ -223,10 +229,21 @@ export function anthropicExtraction(options: AnthropicExtractionOptions): Extrac
 
       const inputTokens = response.usage?.input_tokens ?? 0;
       const outputTokens = response.usage?.output_tokens ?? 0;
+      // Read even though this request enables no caching: a category nobody reads is a
+      // category the ceilings cannot see, and a cache write is *dearer* than an
+      // ordinary input token. If a later change re-enables caching, or the provider
+      // reports these for its own reasons, the ledger already counts them.
+      const cacheWriteTokens = response.usage?.cache_creation_input_tokens ?? 0;
+      const cacheReadTokens = response.usage?.cache_read_input_tokens ?? 0;
       // Priced whatever happened next: a refusal and a malformed answer both cost the
       // tokens they burned, and a ledger that only counted successes would be a budget
       // that a broken model could walk straight through.
-      const costCents = centsOf(options.modelName, { inputTokens, outputTokens });
+      const costCents = centsOf(options.modelName, {
+        inputTokens,
+        outputTokens,
+        cacheWriteTokens,
+        cacheReadTokens,
+      });
 
       if (response.stop_reason === 'refusal') return { ok: false, failureCode: 'model_refusal', costCents };
       const text = textOf(response);

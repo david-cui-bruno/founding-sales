@@ -31,7 +31,9 @@ const ZONE = 'America/New_York';
 const bytes = (text: string): Uint8Array => new TextEncoder().encode(text);
 const hashOf = (text: string): string => createHash('sha256').update(text, 'utf8').digest('hex');
 
-function fakeFetch(pages: readonly { readonly url: string; readonly html: string }[]): PageFetchProvider {
+function fakeFetch(
+  pages: readonly { readonly url: string; readonly html: string; readonly firstParty?: boolean }[],
+): PageFetchProvider {
   return {
     providerKey: 'company_page',
     fetchPages: async request => ({
@@ -47,6 +49,7 @@ function fakeFetch(pages: readonly { readonly url: string; readonly html: string
               contentType: 'text/html; charset=utf-8',
               body: bytes(page.html),
               retrievedAt: AT,
+              firstParty: page.firstParty ?? true,
             })),
         ),
         skipped: {},
@@ -469,12 +472,25 @@ describe('links, the enqueue and the sweep', () => {
   it('takes an https link on another public host and refuses the rest', async () => {
     const added = await addFirmLink(salesperson(), { firmId: crm.alpha.firmId, url: 'https://news.test/piece' });
     expect(added.ok).toBe(true);
-    for (const url of ['http://news.test/piece', 'https://linkedin.com/company/x', 'https://127.0.0.1/']) {
+    // A query string is refused rather than truncated: a link is stored, and it becomes
+    // the source reference of every quote from the page, so a session token or an
+    // address in it would outlive the run in a column retention cannot search.
+    for (const url of [
+      'http://news.test/piece',
+      'https://linkedin.com/company/x',
+      'https://127.0.0.1/',
+      'https://news.test/piece?token=abc123',
+    ]) {
       expect(await addFirmLink(salesperson(), { firmId: crm.alpha.firmId, url })).toEqual({
         ok: false,
         reason: 'link_not_permitted',
       });
     }
+  });
+
+  it('drops a fragment from a link rather than storing two URLs for one page', async () => {
+    const added = await addFirmLink(salesperson(), { firmId: crm.alpha.firmId, url: 'https://news.test/piece#top' });
+    expect(added.ok && added.value.url).toBe('https://news.test/piece');
   });
 
   it('reads a linked page in the same run as the firm’s own', async () => {
@@ -522,6 +538,66 @@ describe('links, the enqueue and the sweep', () => {
     expect(await selectFirmsForSweep(context, { limit: 10, at: AT })).toEqual([]);
     // Ninety-one days later it is stale again.
     expect((await selectFirmsForSweep(context, { limit: 10, at: '2026-12-29T14:00:00.000Z' })).length).toBe(1);
+  });
+
+  it('sweeps a firm whose last run failed, on the next business day, three times at most', async () => {
+    // A provider failure completes its job — throwing would roll back the accounting of
+    // a call already paid for — so this is the retry ladder, and the sweep is it.
+    const failed = async (revision: number, completedAt: string): Promise<void> => {
+      await session.query(
+        `INSERT INTO research_runs (workspace_id, firm_id, revision, trigger, completed_at, outcome, refusal_code)
+         VALUES ($1, $2, $3, 'sweep', $4::timestamptz, 'failed', 'provider_failure')`,
+        [seeded.alpha.workspaceId, crm.alpha.firmId, revision, completedAt],
+      );
+    };
+    await failed(1, AT);
+    // The same business day: a provider that failed this morning will fail again this
+    // morning, and a unit of the day's budget is worth more than that.
+    expect(await selectFirmsForSweep(context, { limit: 10, at: '2026-09-28T22:00:00.000Z' })).toEqual([]);
+    // The next one: due.
+    expect((await selectFirmsForSweep(context, { limit: 10, at: '2026-09-29T14:00:00.000Z' })).length).toBe(1);
+
+    await failed(2, '2026-09-29T14:00:00.000Z');
+    expect((await selectFirmsForSweep(context, { limit: 10, at: '2026-09-30T14:00:00.000Z' })).length).toBe(1);
+    await failed(3, '2026-09-30T14:00:00.000Z');
+    // Three in a row is a firm whose site cannot be read. The firm page says so; the
+    // sweep stops spending a unit a day on it.
+    expect(await selectFirmsForSweep(context, { limit: 10, at: '2026-10-01T14:00:00.000Z' })).toEqual([]);
+  });
+
+  it('sweeps a firm whose run completed with no model, once a model is configured', async () => {
+    await session.query(
+      `INSERT INTO research_runs (workspace_id, firm_id, revision, trigger, completed_at, outcome)
+       VALUES ($1, $2, 1, 'sweep', $3::timestamptz, 'completed')`,
+      [seeded.alpha.workspaceId, crm.alpha.firmId, AT],
+    );
+    // With no extraction port there is nothing to gain by reading the pages again.
+    expect(await selectFirmsForSweep(context, { limit: 10, at: AT })).toEqual([]);
+    // With one, the firm has pages recorded and no facts, and ninety days of silence
+    // would be the shape of bug nobody finds until a quarter later.
+    expect(
+      (await selectFirmsForSweep(context, { limit: 10, at: AT, extractionConfigured: true })).length,
+    ).toBe(1);
+    // A run that did have a model is fresh either way.
+    await session.query("UPDATE research_runs SET model_name = 'claude-haiku-4-5'");
+    expect(await selectFirmsForSweep(context, { limit: 10, at: AT, extractionConfigured: true })).toEqual([]);
+  });
+
+  it('sweeps a firm whose link was added after its last run', async () => {
+    await session.query(
+      `INSERT INTO research_runs (workspace_id, firm_id, revision, trigger, started_at, completed_at, outcome, model_name)
+       VALUES ($1, $2, 1, 'sweep', $3::timestamptz, $3::timestamptz, 'completed', 'claude-haiku-4-5')`,
+      [seeded.alpha.workspaceId, crm.alpha.firmId, AT],
+    );
+    expect(await selectFirmsForSweep(context, { limit: 10, at: AT })).toEqual([]);
+    // Adding a link enqueues a run of its own, and that run can refuse — a spent
+    // ceiling, a run in flight. Without this the link would never be read.
+    await session.query(
+      `INSERT INTO firm_links (workspace_id, firm_id, url, added_by_user_id, added_at)
+       VALUES ($1, $2, 'https://news.test/piece', $3, $4::timestamptz)`,
+      [seeded.alpha.workspaceId, crm.alpha.firmId, seeded.alpha.salesperson.userId, '2026-09-28T15:00:00.000Z'],
+    );
+    expect((await selectFirmsForSweep(context, { limit: 10, at: AT })).length).toBe(1);
   });
 
   it('never sweeps a firm with a closed opportunity: a client or somebody who said no', async () => {

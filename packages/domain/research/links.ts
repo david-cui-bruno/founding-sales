@@ -1,7 +1,7 @@
 import { decideFirmMutation } from '../crm/authorization.ts';
 import { loadFirmForUpdate } from '../crm/firms.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
-import { isPublicResearchUrl } from './sourcePolicy.ts';
+import { isPublicResearchUrl, withoutFragment } from './sourcePolicy.ts';
 import { accept, refuse, type ResearchResult } from './types.ts';
 
 /**
@@ -15,6 +15,15 @@ import { accept, refuse, type ResearchResult } from './types.ts';
  * The URL still has to be an https URL on a public host that is not one of the
  * blocked ones (`isPublicResearchUrl`). A person may point research at a page; a
  * person may not point it at LinkedIn or at the metadata endpoint.
+ *
+ * And it may not carry a **query string**. A link is stored, and it becomes the
+ * `source_reference` of every quote taken from the page, so it is a URL that outlives
+ * the run. A query string is where a session token, a reset code and a signed URL's
+ * signature live, and retention cannot find a secret inside a URL. Pasting the link
+ * from a browser's address bar is exactly how one would arrive, so the refusal is
+ * explicit — `link_not_permitted` — rather than a silent truncation of what somebody
+ * typed. A fragment is dropped, because it never reaches the server and never names a
+ * different page.
  */
 
 export interface FirmLink {
@@ -42,7 +51,7 @@ export async function addFirmLink(
   context: RepositoryContext,
   input: { readonly firmId: string; readonly url: string },
 ): Promise<ResearchResult<FirmLink>> {
-  const url = input.url.trim();
+  const url = withoutFragment(input.url.trim());
   if (!isPublicResearchUrl(url) || url.length > 500) return refuse('link_not_permitted');
 
   const firm = await loadFirmForUpdate(context, input.firmId);

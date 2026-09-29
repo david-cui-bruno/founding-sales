@@ -6,7 +6,8 @@ import { runTwiceUnderStolenLease } from '@fss/domain/jobs/atLeastOnce.ts';
 import { HandlerRegistry } from '@fss/domain/jobs/handlerRegistry.ts';
 import { jobIdempotencyKey } from '@fss/domain/jobs/jobKinds.ts';
 import type { ExtractionProvider, PageFetchProvider } from '@fss/domain/research/providers.ts';
-import { runClaimedJob } from '../src/runner/jobRunner.ts';
+import { enqueueJob } from '@fss/domain/jobs/jobStore.ts';
+import { runClaimedJob, runOnce } from '../src/runner/jobRunner.ts';
 import { runSchedulerPass } from '../src/scheduler/schedulerPass.ts';
 import {
   parseResearchFirmPayload,
@@ -56,6 +57,7 @@ function countingFetch(): PageFetchProvider & { calls: number } {
                   contentType: 'text/html',
                   body: bytes(HOME),
                   retrievedAt: new Date().toISOString(),
+                  firstParty: true,
                 },
               ]
             : [],
@@ -89,6 +91,22 @@ function countingExtraction(): ExtractionProvider & { calls: number } {
   };
   return state as unknown as ExtractionProvider & { calls: number };
 }
+
+/** A fetch that throws rather than returning a failure. The adapter's worst day. */
+const throwingFetch: PageFetchProvider = {
+  providerKey: 'company_page',
+  fetchPages: async () => {
+    throw new Error('ECONNRESET');
+  },
+};
+
+/** An extraction that throws *after* the fetch has already recorded evidence. */
+const throwingExtraction: ExtractionProvider = {
+  providerKey: 'anthropic_extraction',
+  extract: async () => {
+    throw new Error('socket hang up');
+  },
+};
 
 describe('the research jobs', () => {
   let database: TestDatabase;
@@ -189,6 +207,105 @@ describe('the research jobs', () => {
       'SELECT coalesce(sum(cost_cents), 0)::int AS cost FROM provider_ledger',
     );
     expect(ledger.rows[0]?.cost).toBe(1);
+  });
+
+  it('commits a failed run and completes the job, so a paid call keeps its accounting', async () => {
+    // The rule the whole arrangement exists for. The runner wraps one job in one
+    // transaction and the run's paid calls happen inside it, so a throw would roll back
+    // the run row, the evidence, the ledger cents *and* the consumed daily count while
+    // the money stayed spent at the provider — and then the ladder would call again
+    // against a budget with no record of the first attempt.
+    const cases = [
+      {
+        name: 'the extraction throws after the fetch succeeded',
+        options: { pageFetch: countingFetch(), extraction: throwingExtraction },
+        evidence: 1,
+        // Two providers were asked, so there are two ledger rows and one failure.
+        ledger: 2,
+      },
+      { name: 'the fetch itself throws', options: { pageFetch: throwingFetch }, evidence: 0, ledger: 1 },
+    ] as const;
+
+    for (const scenario of cases) {
+      await database.session.query('DELETE FROM firm_judgments');
+      await database.session.query('DELETE FROM firm_facts');
+      await database.session.query('DELETE FROM research_runs');
+      await database.session.query('DELETE FROM evidence_items');
+      await database.session.query('DELETE FROM provider_ledger');
+      await database.session.query('DELETE FROM daily_counters');
+      await database.session.query('DELETE FROM jobs');
+
+      const registry = new HandlerRegistry().register(researchFirmJobHandler(scenario.options));
+      const key = jobIdempotencyKey.researchFirm(firmId, 1);
+      await enqueueJob(database.session, {
+        workspaceId,
+        kind: 'research.firm',
+        idempotencyKey: key,
+        payload: { firmId, revision: 1, trigger: 'sweep' },
+        maxAttempts: 3,
+      });
+
+      const report = await runOnce(database.session, { registry, owner: 'worker-research-failure', limit: 5 });
+      // The job is done. There is no ladder for a provider failure, because a retry has
+      // to be a new revision with a new clearance — which is the sweep's business.
+      expect(report.completed, scenario.name).toBe(1);
+      expect(report.failed, scenario.name).toBe(0);
+
+      const state = await database.session.query<{
+        runs: number;
+        outcome: string | null;
+        refusal: string | null;
+        evidence: number;
+        ledger: number;
+        failures: number;
+        counters: number;
+        counter_value: number | null;
+        job_status: string | null;
+      }>(
+        `SELECT (SELECT count(*) FROM research_runs)::int AS runs,
+                (SELECT outcome FROM research_runs LIMIT 1) AS outcome,
+                (SELECT refusal_code FROM research_runs LIMIT 1) AS refusal,
+                (SELECT count(*) FROM evidence_items)::int AS evidence,
+                (SELECT count(*) FROM provider_ledger)::int AS ledger,
+                (SELECT coalesce(sum(failures), 0) FROM provider_ledger)::int AS failures,
+                (SELECT count(*) FROM daily_counters)::int AS counters,
+                (SELECT max(count) FROM daily_counters)::int AS counter_value,
+                (SELECT state FROM jobs WHERE idempotency_key = $1) AS job_status`,
+        [key],
+      );
+      expect(state.rows[0], scenario.name).toEqual({
+        runs: 1,
+        outcome: 'failed',
+        refusal: 'provider_failure',
+        // The pages the fetch did record are kept: a page the firm published is worth
+        // keeping whatever a model later failed to say about it.
+        evidence: scenario.evidence,
+        // The ledger rows exist and count the failure, which is what says the attempt
+        // happened at all.
+        ledger: scenario.ledger,
+        failures: 1,
+        // And the day's count is still spent, so three failures are three units rather
+        // than an unbounded loop.
+        counters: 1,
+        counter_value: 1,
+        job_status: 'done',
+      });
+
+      // A second claim of the same job key does nothing: the key is taken and the
+      // revision's run row is already there.
+      const again = await enqueueJob(database.session, {
+        workspaceId,
+        kind: 'research.firm',
+        idempotencyKey: key,
+        payload: { firmId, revision: 1, trigger: 'sweep' },
+        maxAttempts: 3,
+      });
+      expect(again.inserted, scenario.name).toBe(false);
+      const second = await runOnce(database.session, { registry, owner: 'worker-research-failure', limit: 5 });
+      expect(second.completed + second.failed, scenario.name).toBe(0);
+      const after = await database.session.query<{ runs: number }>('SELECT count(*)::int AS runs FROM research_runs');
+      expect(after.rows[0]?.runs, scenario.name).toBe(1);
+    }
   });
 
   it('materializes one sweep per workspace per business date, however many passes run', async () => {

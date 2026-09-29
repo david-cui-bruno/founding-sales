@@ -103,7 +103,13 @@ claim finds the insert refused and reports `already_recorded` having fetched not
 and asked no model. It is deliberately **not** chunked — a chunk boundary inside a run
 would commit some pages' evidence and not others under a clearance that was claimed
 once, so a resumed second half would either re-claim a unit of the day's budget or
-spend one it never claimed. `research.sweep` is one job per workspace per business
+spend one it never claimed. It also has **no ladder for a provider failure**: the run's
+paid calls happen inside the runner's transaction, so throwing would roll back the run
+row, the evidence, the ledger cents and the consumed daily count while the money stayed
+spent — and then retry the same paid calls against a budget with no record of the first
+attempt. Every outcome is committed and the job completes; the retry is the sweep's, as
+a new revision with a new clearance. `maxAttempts` there is about a poison payload and a
+stolen lease, not about providers. `research.sweep` is one job per workspace per business
 date, keyed like the Today build's, and its whole effect is enqueueing
 `research.firm` jobs that are themselves unique per revision.
 

@@ -133,4 +133,48 @@ describe('the deletion workflow and research', () => {
     expect(await count('firm_facts', crm.alpha.firmId)).toBe(1);
     expect(await count('research_runs', crm.alpha.firmId)).toBe(1);
   });
+
+  it('keeps no quote naming a person, so a contact deletion has nothing left to miss', async () => {
+    // The reason the person keys store no quote at all. A contact-scoped deletion does
+    // not touch a firm's rows — the test above is the rule, and it is the right rule —
+    // so a `named_role` quote reading a person's name and number would outlive the
+    // contact it names, in a table nobody would think to search. The schema is what
+    // makes that impossible: `firm_facts_person_keys_have_no_quote`.
+    const run = await database.session.query<{ id: string }>(
+      `INSERT INTO research_runs (workspace_id, firm_id, revision, trigger, completed_at, outcome)
+       VALUES ($1, $2, 99, 'sweep', now(), 'completed') RETURNING id`,
+      [seeded.alpha.workspaceId, crm.alpha.firmId],
+    );
+    const evidence = await database.session.query<{ id: string }>(
+      `INSERT INTO evidence_items (workspace_id, firm_id, provider, source_reference, content_hash)
+       VALUES ($1, $2, 'company_page', 'https://example.test/team', $3) RETURNING id`,
+      [seeded.alpha.workspaceId, crm.alpha.firmId, 'e'.repeat(64)],
+    );
+    // The insert a real run makes for these keys: the block is named, the text is not.
+    for (const key of ['named_role', 'phone_listed', 'role']) {
+      await database.session.query(
+        `INSERT INTO firm_facts (workspace_id, firm_id, run_id, evidence_id, key, block_id, quote, retrieved_at)
+         VALUES ($1, $2, $3, $4, $5, 'b1', NULL, now())`,
+        [seeded.alpha.workspaceId, crm.alpha.firmId, run.rows[0]?.id, evidence.rows[0]?.id, key],
+      );
+    }
+    // And the schema refuses the other shape outright.
+    await expect(
+      database.session.query(
+        `INSERT INTO firm_facts (workspace_id, firm_id, run_id, evidence_id, key, block_id, quote, retrieved_at)
+         VALUES ($1, $2, $3, $4, 'named_role', 'b2', 'Dana Placeholder, Maintenance Coordinator', now())`,
+        [seeded.alpha.workspaceId, crm.alpha.firmId, run.rows[0]?.id, evidence.rows[0]?.id],
+      ),
+    ).rejects.toThrow(/firm_facts_person_keys_have_no_quote/u);
+
+    // Every quote this workspace holds, searched for the name and the number a team
+    // page would carry. There is nowhere for either to be.
+    const quotes = await database.session.query<{ quote: string | null }>(
+      'SELECT quote FROM firm_facts WHERE workspace_id = $1',
+      [seeded.alpha.workspaceId],
+    );
+    const all = quotes.rows.map(row => row.quote ?? '').join('\n');
+    expect(all).not.toContain('Dana Placeholder');
+    expect(all).not.toContain('555-0100');
+  });
 });

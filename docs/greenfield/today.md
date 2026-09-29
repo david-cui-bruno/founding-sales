@@ -78,6 +78,16 @@ migration 0023 moved the database-side `today_algorithm_version()` with it. Appe
 makes the version part of the Today job's identity, so the change makes this morning's
 build a different job rather than a second attempt at yesterday's.
 
+**And the partition applies only to a snapshot built under `today.2`.** A card row
+carries the version it was built under; re-ordering a date whose cards say `today.1`
+would rewrite a morning list that has already happened, and `today_snapshots` is the
+record of what that list *was*. One card at an older version therefore leaves the whole
+date alone — half a list ordered two ways is worse than either. Migration 0023 also
+makes `today_refresh_card` stamp `today_algorithm_version()` on the cards it rebuilds
+(its `ON CONFLICT DO UPDATE` branch never touched the column, so a card built yesterday
+and recomputed this morning went on claiming `today.1` for ever), which is what lets a
+date convert wholly at its first rebuild rather than staying mixed.
+
 The expanded card carries `brief` — the call brief of `docs/greenfield/research.md`, or
 null for a firm nobody has researched. It is **optional on the wire and omitted from
 card version 1**: `todayFirmResponseSchema` is a `z.object`, so an installed desktop

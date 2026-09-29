@@ -1,5 +1,6 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
+import { enqueueFirmResearchBestEffort } from '../research/enqueue.ts';
 import { decideFirmMutation } from './authorization.ts';
 import { recordCrmAuditEvent } from './audit.ts';
 import { emitCrmDomainEvent } from './events.ts';
@@ -158,6 +159,15 @@ export async function mergeFirms(
   // badge, because the target is the record that survives.
   await demoteSourcePrimaryIfTargetHasOne(context, source.id, target.id);
 
+  // Lane R's rows, and they have to be dealt with *before* the contacts move.
+  // `firm_judgments.likely_contact_id` carries the semantic composite key
+  // `(workspace_id, contact_id, firm_id)` with `ON UPDATE CASCADE`, so moving a
+  // contact rewrites the `firm_id` of the source's judgment row underneath us — and
+  // when both firms were researched that lands on the target's judgment and violates
+  // `firm_judgments_pkey`, failing a merge for a reason no reader of this function
+  // could see.
+  await mergeResearch(context, source.id, target.id, preserved);
+
   // Contacts move first, and the routes, evidence, aliases and events that name a
   // contact follow through `ON UPDATE CASCADE` on the semantic composite key — which
   // is the only way the append-only tables could move at all.
@@ -175,6 +185,12 @@ export async function mergeFirms(
 
   await preserveIdentifiers(context, source, target);
   await preserveFirmSuppressions(context, source.id, target.id, input.commandId);
+
+  // And a fresh run, so the target's judgment is rebuilt from the target's own pages
+  // rather than inherited from a firm that no longer exists. Best-effort inside a
+  // savepoint: a merge does not fail because the jobs table would not take a row, and
+  // the sweep reaches the firm either way.
+  await enqueueFirmResearchBestEffort(context, { firmId: target.id, trigger: 'sweep' });
 
   // Fill the target's blanks, and apply whatever the person decided.
   await applyFirmResolutions(context, source, target, resolutions);
@@ -199,6 +215,68 @@ export async function mergeFirms(
   });
 
   return accept({ sourceId: source.id, targetId: target.id, preserved });
+}
+
+/**
+ * The research rows, at a merge.
+ *
+ * Three different answers, because the three tables mean three different things.
+ *
+ *   * **`firm_judgments` is a current opinion**, one row per firm, so there is nothing
+ *     to merge: two firms' judgments cannot be added together and the source's is about
+ *     a record that is about to become history. If the target has one, the source's is
+ *     deleted; if it has none, the source's is moved so the target is not left blank
+ *     until the fresh run lands. Moving means clearing `likely_contact_id` first — the
+ *     contact it names has not moved yet, and the composite key would refuse a row
+ *     naming a contact at another firm.
+ *   * **`firm_links` are decisions somebody made**, and both firms' decisions are still
+ *     decisions about the surviving firm. So they are copied — `firm_links_one_per_url`
+ *     makes the same URL on both firms one row rather than a conflict — and the
+ *     source's are then dropped, because a link is a thing to fetch next time and the
+ *     source will not be fetched again.
+ *   * **`research_runs` and `firm_facts` stay on the source**, as `crm_domain_events`
+ *     do. They are the record of what was read on a particular day at a particular URL,
+ *     and re-attributing them to a firm they were not read for would be inventing
+ *     provenance. Their FKs to `firms` carry no `ON DELETE`, so they keep pointing at
+ *     the merged record, which is exactly where the truth is.
+ */
+async function mergeResearch(
+  context: RepositoryContext,
+  sourceId: string,
+  targetId: string,
+  preserved: Record<string, number>,
+): Promise<void> {
+  const parameters = [context.scope.workspaceId, sourceId, targetId];
+
+  const { rows } = await context.db.query<{ present: boolean }>(
+    'SELECT true AS present FROM firm_judgments WHERE workspace_id = $1 AND firm_id = $2 LIMIT 1',
+    [context.scope.workspaceId, targetId],
+  );
+  if (rows[0]?.present === true) {
+    await context.db.query('DELETE FROM firm_judgments WHERE workspace_id = $1 AND firm_id = $2', [
+      context.scope.workspaceId,
+      sourceId,
+    ]);
+  } else {
+    await context.db.query(
+      `UPDATE firm_judgments SET likely_contact_id = NULL, firm_id = $3
+        WHERE workspace_id = $1 AND firm_id = $2`,
+      parameters,
+    );
+  }
+
+  const copied = await context.db.query(
+    `INSERT INTO firm_links (workspace_id, firm_id, url, added_by_user_id, added_at)
+     SELECT workspace_id, $3, url, added_by_user_id, added_at
+       FROM firm_links WHERE workspace_id = $1 AND firm_id = $2
+     ON CONFLICT ON CONSTRAINT firm_links_one_per_url DO NOTHING`,
+    parameters,
+  );
+  preserved['firm_links'] = copied.rowCount ?? 0;
+  await context.db.query('DELETE FROM firm_links WHERE workspace_id = $1 AND firm_id = $2', [
+    context.scope.workspaceId,
+    sourceId,
+  ]);
 }
 
 /** The target's primary contact keeps the badge; the source's is demoted first. */

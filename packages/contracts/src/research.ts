@@ -71,11 +71,21 @@ export const RESEARCH_REFUSAL_CODES = [
   'model_unpriced',
 ] as const;
 
-/** One quote, with the source it came from and when it was read. */
+/**
+ * One quote, with the source it came from, when it was read, and whose words they are.
+ *
+ * `firstParty` is false for a page on a host that is not the firm's own — a link
+ * somebody added — and `attribution` is the line to render beside it ("per news.test").
+ * Without the pair, the brief would present a trade article's sentence as something the
+ * firm said, which is precisely the distinction the design record asks the brief to
+ * keep.
+ */
 export const briefQuoteSchema = z.object({
   quote: z.string().min(1).max(500),
   sourceReference: z.string().min(1).max(500),
   retrievedAt: instant,
+  firstParty: z.boolean(),
+  attribution: z.string().min(1).max(200).nullable(),
 });
 
 /**
@@ -103,13 +113,29 @@ export const callBriefSchema = z.object({
   judgedAt: instant,
   revision: z.number().int().min(0),
   sources: z.array(z.object({ sourceReference: z.string().min(1).max(500), retrievedAt: instant })),
+  /**
+   * Failed runs since the last completed one, so the firm page can say "research
+   * failed, N tries" rather than showing a brief that is quietly out of date. Three is
+   * where the sweep stops trying.
+   */
+  failedTries: z.number().int().min(0),
 });
 export type CallBriefDto = z.infer<typeof callBriefSchema>;
 
+/**
+ * One recorded fact.
+ *
+ * `quote` is **null** for `named_role`, `phone_listed` and `role`. Those keys are
+ * selected because a block names a person or publishes a number, and a contact-scoped
+ * deletion does not reach a firm's rows, so the block is referenced and never copied
+ * (`research/facts.ts`, `PERSON_FACT_KEYS`). The fact still counts towards a judgment;
+ * it is simply never rendered as a quotation.
+ */
 export const researchFactSchema = z.object({
   id: uuid,
   key: z.string().min(1).max(40),
-  quote: z.string().min(1).max(500),
+  quote: z.string().min(1).max(500).nullable(),
+  firstParty: z.boolean(),
   sourceReference: z.string().min(1).max(500),
   retrievedAt: instant,
   confidence: z.number().min(0).max(1).nullable(),

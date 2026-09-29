@@ -70,6 +70,15 @@ export interface FetchedPage {
   /** The bytes read, for `parsePageText`. Never stored. */
   readonly body: Uint8Array;
   readonly retrievedAt: string;
+  /**
+   * True when the page is on the firm's own site — an allow-listed path, or one its own
+   * homepage linked to. False for a link a person added on another host.
+   *
+   * It travels with the page rather than being re-derived at the other end, because the
+   * adapter is the only place that knows which of the two permissions a URL was fetched
+   * under after a chain of redirects.
+   */
+  readonly firstParty: boolean;
 }
 
 export interface PageFetchResult {

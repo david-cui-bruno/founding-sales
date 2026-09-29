@@ -56,10 +56,16 @@
 -- date is stored beside it, exactly as `daily_counters` does, so changing the
 -- workspace zone later cannot re-date yesterday's spend.
 --
--- ## Merges carry the rows
+-- ## Merges
 --
--- Every firm reference is `ON UPDATE CASCADE` on the firm triple, like 0004's children:
--- a merge moves a firm's rows to the surviving firm rather than orphaning them.
+-- Every firm reference is `ON UPDATE CASCADE`, like 0004's children, so nothing here is
+-- orphaned by a merge. What a merge *does* with each table is `crm/merges.ts`'s
+-- decision and it is not the same for all four: the judgment is one current opinion and
+-- cannot be added to another firm's, the links are decisions about the surviving firm
+-- and are copied, and the runs and the facts stay on the merged record because a page
+-- read for one firm is not provenance for another. `firm_judgments.likely_contact_id`
+-- carries the semantic triple, so the judgment has to be dealt with *before* the
+-- contacts move or the cascade lands it on the target's primary key.
 --
 -- Seeded rows carry a named constant instant rather than now(); this migration seeds
 -- none.
@@ -178,6 +184,29 @@ CREATE INDEX research_runs_in_progress ON research_runs (workspace_id, firm_id, 
 -- Uniqueness is `(workspace, firm, key, evidence, block)`: the same sentence selected
 -- for the same key twice is one row, and the same sentence selected for two different
 -- keys is two, which is correct — one block can say two things.
+--
+-- ## `first_party` — whose words these are
+--
+-- True for the firm's own site (an allow-listed path, or a page its own homepage linked
+-- to). False for a link a person added on somebody else's host. The column exists
+-- because the call brief presents a quote as what the firm said, and a page on another
+-- host is not the firm saying anything: `judgments.ts` will not let a third-party block
+-- decide `fit`, and `brief.ts` renders one with its host attached. Without the column
+-- the read side cannot tell the two apart, and "the firm's own words" would quietly
+-- become "a sentence from a page somebody pasted".
+--
+-- ## The person keys store no quote
+--
+-- `named_role`, `phone_listed` and `role` are selected *because* a block names a person
+-- or publishes a number — that is the whole point of them — so the block's text is
+-- exactly the text a person's deletion is supposed to remove. A contact-scoped deletion
+-- does not touch firm rows, so a quote kept here would outlive the contact it names.
+--
+-- So for those three keys the quote is NULL and the evidence id and block id stay: the
+-- reachability judgment needs to know a page said so, and it does not need the sentence
+-- to be repeated in a second table. `firm_facts_person_keys_have_no_quote` is an
+-- equality rather than an implication, so a key in that set cannot acquire a quote and
+-- a key outside it cannot lose one.
 -- ---------------------------------------------------------------------------
 CREATE TABLE firm_facts (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -187,7 +216,8 @@ CREATE TABLE firm_facts (
   evidence_id uuid NOT NULL,
   key text NOT NULL,
   block_id text NOT NULL,
-  quote text NOT NULL,
+  quote text,
+  first_party boolean NOT NULL DEFAULT true,
   confidence numeric(4, 3),
   retrieved_at timestamptz NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
@@ -201,7 +231,10 @@ CREATE TABLE firm_facts (
     REFERENCES evidence_items (workspace_id, id),
   CONSTRAINT firm_facts_key_shape CHECK (key ~ '^[a-z][a-z0-9_]{1,39}$'),
   CONSTRAINT firm_facts_block_id_bounded CHECK (btrim(block_id) <> '' AND length(block_id) <= 64),
-  CONSTRAINT firm_facts_quote_present CHECK (btrim(quote) <> '' AND length(quote) <= 500),
+  CONSTRAINT firm_facts_quote_present
+    CHECK (quote IS NULL OR (btrim(quote) <> '' AND length(quote) <= 500)),
+  CONSTRAINT firm_facts_person_keys_have_no_quote
+    CHECK ((quote IS NULL) = (key IN ('named_role', 'phone_listed', 'role'))),
   CONSTRAINT firm_facts_confidence_range CHECK (confidence IS NULL OR (confidence >= 0 AND confidence <= 1))
 );
 
@@ -332,6 +365,92 @@ CREATE TABLE provider_ledger (
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION today_algorithm_version() RETURNS text
 LANGUAGE sql IMMUTABLE AS $$ SELECT 'today.2'::text $$;
+
+-- ---------------------------------------------------------------------------
+-- today_refresh_card — 0018's body, stamping the version it rebuilt under
+--
+-- `today_snapshots.algorithm_version` defaults to `today_algorithm_version()`, and a
+-- default applies to an INSERT. A card that already existed when this release landed
+-- is refreshed by the `ON CONFLICT DO UPDATE` branch below, which never touched the
+-- column — so a card built yesterday under `today.1` and recomputed this morning under
+-- `today.2` went on saying `today.1` for ever.
+--
+-- That matters because the read side asks. Lane 4's new order is applied only to a
+-- snapshot that says it was built under `today.2`, so that a day's list recorded under
+-- the old algorithm is still the list that day actually showed. A version that does not
+-- move when the card does would make that check answer about the wrong algorithm.
+--
+-- Replaced rather than patched: a plpgsql function has no ALTER for one line of its
+-- body. Everything else is byte for byte 0018's.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION today_refresh_card(p_workspace_id uuid, p_snapshot_date date, p_firm_id uuid)
+RETURNS void LANGUAGE plpgsql AS $today$
+DECLARE
+  v_lane text;
+  v_sort timestamptz;
+  v_open integer;
+  v_replies integer;
+  v_emails integer;
+  v_calls integer;
+  v_assignee uuid;
+BEGIN
+  SELECT count(*)::integer,
+         (count(*) FILTER (WHERE kind = 'reply'))::integer,
+         (count(*) FILTER (WHERE kind = 'email_due'))::integer,
+         (count(*) FILTER (WHERE kind = 'call_due'))::integer
+    INTO v_open, v_replies, v_emails, v_calls
+    FROM today_items
+   WHERE workspace_id = p_workspace_id
+     AND snapshot_date = p_snapshot_date
+     AND firm_id = p_firm_id
+     AND status = 'open';
+
+  -- `item_key` is the last tiebreak rather than `id`, so two databases holding the
+  -- same tasks choose the same one: a generated uuid is not the same in both.
+  SELECT lane, due_at
+    INTO v_lane, v_sort
+    FROM today_items
+   WHERE workspace_id = p_workspace_id
+     AND snapshot_date = p_snapshot_date
+     AND firm_id = p_firm_id
+     AND status = 'open'
+   ORDER BY today_lane_precedence(lane), due_at, item_key
+   LIMIT 1;
+
+  SELECT assigned_user_id INTO v_assignee
+    FROM firms WHERE workspace_id = p_workspace_id AND id = p_firm_id;
+
+  -- Nothing unfinished and no card: there is nothing to say. A card is never created
+  -- empty, so the list never shows a firm with no work on it.
+  IF v_lane IS NULL AND NOT EXISTS (
+    SELECT 1 FROM today_snapshots
+     WHERE workspace_id = p_workspace_id AND snapshot_date = p_snapshot_date AND firm_id = p_firm_id
+  ) THEN
+    RETURN;
+  END IF;
+
+  INSERT INTO today_snapshots
+    (workspace_id, snapshot_date, firm_id, lane, sort_at, assigned_user_id,
+     open_items, replies_due, emails_due, calls_due)
+  VALUES
+    (p_workspace_id, p_snapshot_date, p_firm_id, COALESCE(v_lane, 'new_firm'),
+     COALESCE(v_sort, now()), v_assignee, v_open, v_replies, v_emails, v_calls)
+  ON CONFLICT ON CONSTRAINT today_snapshots_pkey DO UPDATE
+     SET lane = COALESCE(v_lane, today_snapshots.lane),
+         sort_at = COALESCE(v_sort, today_snapshots.sort_at),
+         assigned_user_id = v_assignee,
+         open_items = v_open,
+         replies_due = v_replies,
+         emails_due = v_emails,
+         calls_due = v_calls,
+         -- The one line that is not 0018's. A card recomputed now is a card ordered by
+         -- the algorithm running now, and a row that went on claiming `today.1` after
+         -- being rebuilt under `today.2` would make the read side's version check a
+         -- lie about the row it is looking at.
+         algorithm_version = today_algorithm_version(),
+         updated_at = greatest(now(), today_snapshots.built_at);
+END
+$today$;
 
 -- ---------------------------------------------------------------------------
 -- Privileges

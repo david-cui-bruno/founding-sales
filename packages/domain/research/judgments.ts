@@ -32,6 +32,17 @@ import type { AdmittedFact, FactKey } from './facts.ts';
  * `reachability: 'no'` (an active firm-wide suppression, which is a fact about us and
  * not about the firm).
  *
+ * ## A page on somebody else's host is not the firm speaking
+ *
+ * A link a person adds is fetched and quoted through the same path as the firm's own
+ * site, and on the brief it would read as what the firm said. So every fact carries
+ * `firstParty`, and a third-party fact counts for **`problem_evidence` and `timing`
+ * only**. `fit` is a statement about what the firm is, and the firm's own site is the
+ * only source that gets to make it — a trade article calling a brokerage a property
+ * manager must not turn into `fit: 'yes'`, and nor must the brokerage's own site saying
+ * otherwise be outvoted. `reachability` is the same kind of claim: that the *firm*
+ * publishes a way to reach a person, which a directory listing is not.
+ *
  * Pure. No database, no clock, no provider. Everything it needs is an argument.
  */
 
@@ -53,6 +64,17 @@ export interface JudgmentInput {
   readonly suppressed: boolean;
   /** The firm's active contacts, for `likelyContactId`. */
   readonly contacts: readonly JudgmentContact[];
+  /**
+   * The text of the blocks the run's `role` and `named_role` selections named, in
+   * memory, for `likelyContactId` alone.
+   *
+   * Not stored anywhere and not carried on the result: those keys hold no quote
+   * (`PERSON_FACT_KEYS`), because a block naming a person would outlive that person's
+   * deletion. Matching a contact's recorded title against the published text is still
+   * worth doing, and what comes out of it is a contact **id** — a row deletion already
+   * reaches — so the text is read during the run and then dropped.
+   */
+  readonly roleBlocks?: readonly string[] | undefined;
 }
 
 export interface Judgments {
@@ -69,8 +91,16 @@ export interface Judgments {
 /** `firm_judgments_reasons_bounded` bounds the whole object; each sentence is bounded here. */
 export const MAX_REASON_CHARACTERS = 300;
 
-function idsFor(input: JudgmentInput, keys: readonly FactKey[]): readonly string[] {
-  return input.facts.filter(fact => keys.includes(fact.key)).map(fact => fact.id);
+/**
+ * The ids of the facts a judgment rests on.
+ *
+ * `firstPartyOnly` matches the rule the judgment itself used, so a reason never cites a
+ * fact that was not allowed to count towards it.
+ */
+function idsFor(input: JudgmentInput, keys: readonly FactKey[], firstPartyOnly = false): readonly string[] {
+  return input.facts
+    .filter(fact => keys.includes(fact.key) && (!firstPartyOnly || fact.firstParty))
+    .map(fact => fact.id);
 }
 
 function reason(sentence: string, ids: readonly string[]): string {
@@ -81,17 +111,16 @@ function reason(sentence: string, ids: readonly string[]): string {
 /**
  * Which contact is most likely the person to ask for.
  *
- * A role fact quotes a title the firm published; a contact carries a title somebody
- * recorded. The match is a case-insensitive containment either way, which is
+ * A role selection named a block carrying a title the firm published; a contact carries
+ * a title somebody recorded. The block's text is passed in (`roleBlocks`) rather than
+ * read off the fact, because a person key stores no quote. The match is a case-insensitive containment either way, which is
  * deliberately loose — "Maintenance Coordinator" should match a `role` quote that
  * says "our maintenance coordinator handles every request" — and deliberately
  * suggestive: `likely_contact_id` is what the brief offers as "probably this person",
  * and nothing acts on it.
  */
 function likelyContact(input: JudgmentInput): string | null {
-  const roleQuotes = input.facts
-    .filter(fact => fact.key === 'role' || fact.key === 'named_role')
-    .map(fact => fact.quote.toLowerCase());
+  const roleQuotes = (input.roleBlocks ?? []).map(text => text.toLowerCase());
   if (roleQuotes.length === 0) return null;
   for (const contact of input.contacts) {
     const title = contact.title?.trim().toLowerCase();
@@ -102,11 +131,15 @@ function likelyContact(input: JudgmentInput): string | null {
 }
 
 export function judgeFirm(input: JudgmentInput): Judgments {
+  /** Any source. Used by the two judgments a third party may speak to. */
   const has = (key: FactKey): boolean => input.facts.some(fact => fact.key === key);
+  /** The firm's own site only. Used by the two that are claims about the firm itself. */
+  const hasOwn = (key: FactKey): boolean => input.facts.some(fact => fact.key === key && fact.firstParty);
 
   // Fit. `not_target` wins over `target_fit`: the conservative direction is not to
-  // call a firm a prospect when its own site says otherwise.
-  const fit: JudgmentValue = has('not_target') ? 'no' : has('target_fit') ? 'yes' : 'unknown';
+  // call a firm a prospect when its own site says otherwise. First-party only: what
+  // kind of firm this is, is the firm's own site's to say.
+  const fit: JudgmentValue = hasOwn('not_target') ? 'no' : hasOwn('target_fit') ? 'yes' : 'unknown';
 
   // A relevant problem. Either the firm describes how it handles maintenance, or it
   // is hiring for it. Silence is `unknown`, never `no`.
@@ -123,11 +156,11 @@ export function judgeFirm(input: JudgmentInput): Judgments {
   const reachKeys: readonly FactKey[] = ['phone_listed', 'named_role'];
   const reachability: JudgmentValue = input.suppressed
     ? 'no'
-    : input.hasPhoneRoute || reachKeys.some(has)
+    : input.hasPhoneRoute || reachKeys.some(hasOwn)
       ? 'yes'
       : 'unknown';
 
-  const fitIds = idsFor(input, ['not_target', 'target_fit']);
+  const fitIds = idsFor(input, ['not_target', 'target_fit'], true);
   const reasons = {
     fit: reason(
       fit === 'no'
@@ -157,7 +190,7 @@ export function judgeFirm(input: JudgmentInput): Judgments {
             ? 'the firm has a recorded telephone route'
             : 'the firm publishes a way to reach a person'
           : 'nothing read names a number or a person',
-      reachability === 'no' ? [] : idsFor(input, reachKeys),
+      reachability === 'no' ? [] : idsFor(input, reachKeys, true),
     ),
   } as const;
 

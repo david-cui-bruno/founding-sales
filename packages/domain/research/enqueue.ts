@@ -64,3 +64,45 @@ export async function enqueueFirmResearch(
   });
   return accept({ revision, jobId: outcome.jobId, inserted: outcome.inserted });
 }
+
+const ENQUEUE_SAVEPOINT = 'research_enqueue';
+
+/**
+ * Enqueue a run for a firm whose caller must succeed whatever this does.
+ *
+ * `createFirm` and `mergeFirms` both want a firm looked at, and neither may fail
+ * because of it. The refusal was already ignored — research being off is not a reason a
+ * firm cannot be created — but an **exception** was not: a jobs table that refuses an
+ * insert, a payload the store rejects, a bug in this file, and a firm somebody typed in
+ * does not exist. The savepoint is the difference between "the run was not queued" and
+ * "the firm was not created", and only the first of those is acceptable. The sweep
+ * picks the firm up either way, which is what makes swallowing the error honest rather
+ * than lossy.
+ *
+ * Inside a transaction — every command, through `runCommand` — this is a savepoint.
+ * Outside one, which only a test calling the domain directly on an autocommit session
+ * does, there is nothing to protect and nothing to undo: the enqueue is its own
+ * statement. Both give the same answer, and the pattern is `dial/calls.ts`'s.
+ */
+export async function enqueueFirmResearchBestEffort(
+  context: RepositoryContext,
+  input: EnqueueResearchInput,
+): Promise<void> {
+  let nested = true;
+  try {
+    await context.db.query(`SAVEPOINT ${ENQUEUE_SAVEPOINT}`);
+  } catch (error) {
+    // 25P01 no_active_sql_transaction: not inside a transaction block.
+    if ((error as { code?: string }).code !== '25P01') throw error;
+    nested = false;
+  }
+  try {
+    await enqueueFirmResearch(context, input);
+    if (nested) await context.db.query(`RELEASE SAVEPOINT ${ENQUEUE_SAVEPOINT}`);
+  } catch {
+    if (!nested) return;
+    // Everything the failed attempt wrote, undone — and nothing before it.
+    await context.db.query(`ROLLBACK TO SAVEPOINT ${ENQUEUE_SAVEPOINT}`);
+    await context.db.query(`RELEASE SAVEPOINT ${ENQUEUE_SAVEPOINT}`);
+  }
+}

@@ -30,9 +30,29 @@ price every model call in cents before it is made.
 
 ### Sources, in v1
 
-The firm's own website — home, about, services, team, contact, careers and jobs pages
+The firm's own website — home, about, services, careers, jobs, team and contact pages
 on the same host — the firm's own public job page when it is on that host, links David
 adds by hand, and the CSV import or the Add-firm form as the discovery input.
+
+The path order above is the order they are read in, and it is load-bearing, because
+`max_pages_per_firm` is a prefix of the list and its default is four. Careers comes
+before team and contact because a maintenance job posting is the only evidence
+`hiring_maintenance` has, and that one key feeds two of the four judgments — problem
+evidence and timing. With careers fifth, the default settings would never fetch it and
+two judgments would read `unknown` on every firm for a reason nobody could see.
+
+**A firm's own navigation beats that list.** Real sites call these pages `/about-us`,
+`/our-team`, `/contact-us`, `/services/` and `/join-our-team`, and on one of those an
+exact-path allow-list reads the homepage and nothing else. So after the homepage is
+read, its own anchors are scanned — a small lexical `<a href>` pass in `pageText.ts`,
+no HTML dependency — the same-site ones are normalised (absolute, https, no query, no
+fragment, no trailing slash), at most twenty are kept, and the ones whose path matches
+`about|service|team|staff|contact|career|job|hiring` are queued behind the fixed list.
+Each one still goes through the permission rule, a fresh resolution with every address
+checked, that host's robots and the byte cap, and they are fetched only while the
+`max_pages_per_firm` budget has room — so in practice they spend the budget a `404` on
+a guessed path freed. A link off the firm's site, or to a blocked host, is not queued at
+all, and `mailto:`, `tel:` and `javascript:` hrefs are not URLs research reads.
 
 Deliberately **not** here: LinkedIn and every social host, any paid enrichment
 provider, any directory or job aggregator, and any Places query. Places is deferred and
@@ -108,9 +128,14 @@ Four obligations, each one learned the hard way by the build before this one:
   one, because a name that also answers with `169.254.169.254` is a name that will one
   day answer with only that — and the socket connects to the checked address with
   `servername` and `Host` carrying the name.
-* **Re-check every redirect.** A redirect is a new URL and gets the whole rule again:
-  the policy, a fresh resolution, a fresh pin. Three hops at most. Otherwise the firm's
-  own server decides where this worker connects.
+* **Re-check every redirect.** A redirect is a new URL and gets a fresh resolution and
+  a fresh pin. Three hops at most. Otherwise the firm's own server decides where this
+  worker connects. A **same-site** hop inherits the permission of the URL that led to
+  it, whatever its path: a homepage that answers `301` to `/home`, `/en/` or
+  `/index.html` is ordinary, and re-applying the exact-path allow-list there made such
+  a firm yield nothing at all. A **cross-site** hop is blocked unless the target is
+  itself a link a person added — the firm's own server does not get to choose a second
+  site for research to read.
 * **Bound the response in bytes before decoding, and hash the exact bytes read.** The
   content hash is the evidence item's identity, so it has to be over what was actually
   read and nothing else. A page over the cap is dropped whole; a half page is text
@@ -120,11 +145,54 @@ Four obligations, each one learned the hard way by the build before this one:
   up locally. A model that paraphrases, trims a qualifier or drops a negation is
   refused rather than believed.
 
-`robots.txt` is fetched first, the same pinned way, once per host per run, and honoured
-for `*` and for `CallieResearch`. A disallowed path is skipped. A host that will not
-serve the file has disallowed nothing: the absence is the permissive answer in the
-standard, and treating a timeout as a prohibition would make a slow host unreadable for
-ever.
+* **A URL that is fetched is stored, so it may not carry a query string.** A fetched
+  URL becomes an evidence item's `source_reference` and lives as long as the quote does,
+  and a query string is where a session token, a reset code, a signed URL's signature
+  and an e-mail address live — none of which retention can find inside a URL. So
+  `isPublicResearchUrl` refuses one: `addFirmLink` answers `link_not_permitted`
+  (explicitly, because pasting from an address bar is exactly how one would arrive), and
+  a redirect target with a query is skipped `url_has_query`. Fragments are dropped
+  everywhere, because they never reach the server and never name a different page.
+
+### robots.txt
+
+Fetched first, the same pinned way, cached per host **and per checked address** for the
+run, and honoured for `*` and for `CallieResearch`. Four rules:
+
+* **A file that cannot be read completely means the host's pages are not fetched**
+  (`robots_unreadable`). A `500`, a timeout, a file over 64 KB, a redirect off the site:
+  none of those is permission. Only a `404` or a `410` is — the *absence* of the file is
+  the permissive answer in the standard, and the absence is all that is.
+* **A redirected robots is followed**, on the same site only, up to three hops, each
+  with a fresh resolution and pin. `host/robots.txt` redirecting to
+  `www.host/robots.txt` is how a great many sites serve it, and reading that as "no
+  rules" would ignore a firm that had asked.
+* **`*` and `$` mean what the standard says.** `Disallow: /*.pdf$` is a rule about
+  extensions, not a literal prefix that matches nothing.
+* **`Allow` is honoured, longest match wins, and a tie goes to `Allow`.** A site that
+  says `Disallow: /` and then `Allow: /about` has told us exactly which page it wants
+  read, and the old "ignore Allow" made that site unreadable.
+
+### When a provider fails
+
+A provider failure — a reported failure or a thrown transport error — becomes a
+**committed `failed` run** and the job **completes**. It is never a throw.
+
+The reason is money. The runner wraps one job in one transaction and the run's paid
+calls happen inside it, so a throw rolls back the run row, the evidence, the ledger
+cents and the consumed daily count — while the money stays spent at the provider. The
+retry ladder then makes the same paid calls again against a budget with no record of the
+first attempt: three attempts, three invoices, one visible cent. So the rule is: **once
+`claimResearchClearance` has consumed a count, nothing in the run may throw**, and every
+outcome is committed with the cents actually spent and a ledger row that counts the
+failure.
+
+The retry is therefore the sweep's: a new revision with a new clearance, one a business
+day, three consecutive failures at most (`MAX_CONSECUTIVE_FAILED_RUNS`). After that the
+firm is left alone and the firm page shows "research failed, N tries" rather than a
+brief that is quietly a week out of date. A database error is the one thing that still
+aborts, and there it is right: the accounting is written in the same transaction as the
+work, so a transaction that cannot commit has no accounting to lose.
 
 ## The caps, and the price table
 
@@ -137,7 +205,7 @@ provider is reached:
 | `daily_firm_ceiling` | 50 | Runs per workspace business date |
 | `daily_cost_ceiling_cents` | 50 | Today's spend, across every provider |
 | `monthly_cost_ceiling_cents` | 1000 | Month-to-date spend, in the workspace's zone |
-| `max_pages_per_firm` | 4 | How far down the path allow-list a run reads |
+| `max_pages_per_firm` | 4 | **Total** pages one run may fetch |
 | `max_page_bytes` | 1 000 000 | The fetch's byte cap |
 | `model_name` | `claude-haiku-4-5` | The one model with a reviewed price row |
 
@@ -158,22 +226,83 @@ million input tokens, 500 cents per million output. A model with no row **cannot
 budget in an afternoon. Adding a model is three edits (the CHECK, the price table, the
 contract's enum) and that friction is the feature.
 
-At the defaults the worst case is **2 cents a run**: four pages at the parse cap of
-12 000 characters each, about 13 500 input tokens, plus 600 bounded output tokens. So
-50 cents a day is 25 runs and $10 a month is 500. The bound is the parse cap and not
-`max_page_bytes`: a page is fetched as bytes and then parsed, and `parsePageText` never
-offers the extractor more than 12 000 characters however large the page was. Using the
-byte cap would give a worst case of about a dollar a run, which the default daily
-ceiling would refuse for ever.
+Cached input tokens are priced too — a cache write at 1.25× input, a cache read at
+0.1× — even though the extraction sends no `cache_control`. A category nobody prices is
+a category the ceilings cannot see, and a cache *write* is dearer than an ordinary
+token. Caching was removed from the request rather than kept: every run's message is a
+different firm's pages, so there is no prefix worth reusing and it bought a surcharge on
+the one small part that repeats.
+
+At the defaults the worst case is **3 cents a run**, and three things make it a bound
+rather than an estimate:
+
+* **`max_pages_per_firm` is the total page count**, not the count of the firm's own
+  pages. `researchUrlsForFirm` enforces the same number — added links first, then the
+  allow-listed paths, then homepage-discovered links — and the adapter enforces it
+  again. When added links were appended *on top of* this figure, a firm with six links
+  sent ten pages priced as four.
+* **Per page it is the parse cap, not `max_page_bytes`.** A page is fetched as bytes and
+  then parsed, and `parsePageText` never offers the extractor more than 12 000
+  characters however large the page was. Using the byte cap would give a worst case of
+  about a dollar a run, which the default daily ceiling would refuse for ever.
+* **Characters per token is 2.5 and the prompt overhead is 2 000 tokens**, both chosen
+  high. Four characters a token is the figure for prose; what the extractor is sent is
+  nav labels, addresses, telephone numbers and JSON punctuation, which tokenize far
+  worse. A bound that is too small is a ceiling that authorized a call it had not
+  priced, and the headroom costs a fraction of a cent a run.
+
+So 50 cents a day is 16 runs and $10 a month is 333. The ledger always records the
+**actual** figure, never truncated to the bound: a ledger that clipped its own numbers
+would hide exactly the overrun the bound exists to prevent.
+
+## At a merge
+
+Four tables, three different answers, because they mean three different things
+(`crm/merges.ts`):
+
+* **`firm_judgments`** is one current opinion per firm, so there is nothing to merge.
+  If the target has one, the source's is deleted; if it has none, the source's is moved
+  with `likely_contact_id` cleared first — the contact it names has not moved yet, and
+  the composite key refuses a row naming a contact at another firm. Either way a fresh
+  run is enqueued for the target, so its judgment is rebuilt from its own pages.
+* **`firm_links`** are decisions somebody made about a firm that is about to be one
+  firm, so both sides' links are copied onto the target (`firm_links_one_per_url` makes
+  the same URL on both one row) and the source's are dropped.
+* **`research_runs` and `firm_facts` stay on the merged source**, as `crm_domain_events`
+  do. They record what was read, at which URL, on which day; re-attributing them would
+  be inventing provenance.
+
+All of it happens **before the contacts move**. `firm_judgments.likely_contact_id`
+carries `(workspace_id, contact_id, firm_id)` with `ON UPDATE CASCADE`, so moving a
+contact rewrites the source judgment's `firm_id` — and when both firms were researched
+that lands on the target's primary key and fails a merge for a reason no reader of the
+merge function could see.
 
 ## The four judgments
 
-| Judgment | `yes` when | `no` when | otherwise |
-|---|---|---|---|
-| `fit` | `target_fit` | `not_target` (which beats `target_fit`) | `unknown` |
-| `problem_evidence` | `maintenance_workflow` or `hiring_maintenance` | never | `unknown` |
-| `timing` | `recent_change` or `hiring_maintenance` | never | `unknown` |
-| `reachability` | a usable or candidate phone route, or `phone_listed`, or `named_role` | an active firm-wide suppression | `unknown` |
+| Judgment | `yes` when | `no` when | otherwise | third-party facts |
+|---|---|---|---|---|
+| `fit` | `target_fit` | `not_target` (which beats `target_fit`) | `unknown` | ignored |
+| `problem_evidence` | `maintenance_workflow` or `hiring_maintenance` | never | `unknown` | counted |
+| `timing` | `recent_change` or `hiring_maintenance` | never | `unknown` | counted |
+| `reachability` | a usable or candidate phone route, or `phone_listed`, or `named_role` | an active firm-wide suppression | `unknown` | ignored |
+
+**A page on somebody else's host is not the firm speaking.** Every fact carries
+`first_party`: true for the firm's own site and for a page its own homepage linked to,
+false for a link a person added on another host. `fit` is a statement about what the
+firm *is* and `reachability` that the *firm* publishes a way to reach a person, so both
+use first-party facts only — a trade article calling a brokerage a property manager
+must not become `fit: 'yes'`. Problem evidence and timing are claims about the world and
+count either source. On the brief a third-party quote is rendered with its host
+("per news.test").
+
+**Three keys store no quote.** `named_role`, `phone_listed` and `role` are selected
+*because* a block names a person or publishes a number, and a contact-scoped deletion
+does not touch a firm's rows — so a quote here would outlive the person it names, in a
+table nobody would think to search. The evidence id and the block id stay, so the
+judgment can still cite the page; the sentence is not copied.
+`firm_facts_person_keys_have_no_quote` is that rule as an equality, so the key set and
+the schema cannot drift apart.
 
 `call_first = fit === 'yes' && reachability !== 'no'`, and
 `firm_judgments_call_first_consistent` holds the row to exactly that expression.

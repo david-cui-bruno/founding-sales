@@ -4,13 +4,25 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   BLOCKED_RESEARCH_HOSTS,
+  discoverSameSiteUrls,
   isPublicResearchAddress,
   isPublicResearchUrl,
+  MAX_DISCOVERED_CANDIDATES,
+  permittedRedirectTarget,
   permittedResearchUrl,
   researchUrlsForFirm,
+  withoutFragment,
 } from '../../research/sourcePolicy.ts';
-import { blocksFromPlainText, parsePageText, MAX_BLOCKS, MAX_TEXT_CHARACTERS } from '../../research/pageText.ts';
-import { FACT_KEYS, validateFactSelections } from '../../research/facts.ts';
+import {
+  anchorHrefs,
+  blocksFromPlainText,
+  parsePageText,
+  MAX_ANCHOR_HREFS,
+  MAX_BLOCKS,
+  MAX_TEXT_CHARACTERS,
+} from '../../research/pageText.ts';
+import { DEFAULT_RESEARCH_SETTINGS } from '../../research/settings.ts';
+import { FACT_KEYS, PERSON_FACT_KEYS, validateFactSelections } from '../../research/facts.ts';
 
 /**
  * The rules research is made of, proved without a socket.
@@ -137,9 +149,23 @@ describe('which URLs research may request', () => {
 
   it('refuses a path nobody allow-listed, and a page past max_pages_per_firm', () => {
     expect(permittedResearchUrl(firm, 'https://example.test/blog/2026/hello')).toBe('blocked');
-    // `/careers` is the sixth path; four pages stops at `/contact`.
-    expect(permittedResearchUrl(firm, 'https://example.test/careers')).toBe('blocked');
-    expect(permittedResearchUrl({ ...firm, maxPagesPerFirm: 8 }, 'https://example.test/careers')).toBe('firm_site');
+    // `/team` is the sixth path; four pages stops at `/careers`.
+    expect(permittedResearchUrl(firm, 'https://example.test/team')).toBe('blocked');
+    expect(permittedResearchUrl({ ...firm, maxPagesPerFirm: 8 }, 'https://example.test/team')).toBe('firm_site');
+  });
+
+  it('reads a careers or jobs page at the default settings, because two judgments need one', () => {
+    // The order of `RESEARCH_PAGE_PATHS` is load-bearing against the default of four:
+    // `hiring_maintenance` is the only evidence problem-evidence and timing have, and a
+    // job posting is the only place it comes from. Careers fifth would mean two
+    // judgments read `unknown` on every firm for a reason nobody could see.
+    const urls = researchUrlsForFirm({
+      firmWebsite: 'https://example.test/',
+      links: [],
+      maxPagesPerFirm: DEFAULT_RESEARCH_SETTINGS.maxPagesPerFirm,
+    });
+    expect(urls.some(url => /\/careers$|\/jobs$/u.test(url)), urls.join(' ')).toBe(true);
+    expect(permittedResearchUrl(firm, 'https://example.test/careers')).toBe('firm_site');
   });
 
   it('refuses another host, plain http, credentials, a port and a bare private address', () => {
@@ -172,16 +198,219 @@ describe('which URLs research may request', () => {
     expect(permittedResearchUrl({ ...firm, links: ['https://linkedin.com/company/x'] }, 'https://linkedin.com/company/x')).toBe('blocked');
   });
 
-  it('builds the run’s URL list: the firm’s pages first, then the links', () => {
+  it('builds the run’s URL list: the added links first, then the firm’s pages', () => {
+    // A link is a person's decision about this firm; a fixed path is a guess about
+    // every firm. If the budget covers one page and somebody has said which page
+    // matters, that is the page.
     expect(researchUrlsForFirm({ firmWebsite: 'https://example.test/', links: ['https://news.test/piece'], maxPagesPerFirm: 2 })).toEqual([
-      'https://example.test/',
-      'https://example.test/about',
       'https://news.test/piece',
+      'https://example.test/',
     ]);
+  });
+
+  it('never returns more URLs than max_pages_per_firm, however many links there are', () => {
+    // The number `worstCaseRunCents` prices, and therefore the number
+    // `claimResearchClearance` authorized. Appending links on top of it meant a firm
+    // with six links sent ten pages against a bound computed for four.
+    const links = Array.from({ length: 6 }, (_, index) => `https://news.test/piece-${String(index)}`);
+    for (const maxPagesPerFirm of [1, 2, 4, 8]) {
+      const urls = researchUrlsForFirm({ firmWebsite: 'https://example.test/', links, maxPagesPerFirm });
+      expect(urls.length, String(maxPagesPerFirm)).toBe(maxPagesPerFirm);
+    }
+  });
+
+  it('refuses a URL with a query string, and drops a fragment', () => {
+    // A fetched URL is stored — in `firm_links`, and as an evidence item's source
+    // reference — and a query string is where a session token or an address lives.
+    expect(isPublicResearchUrl('https://example.test/about?session=abc')).toBe(false);
+    expect(isPublicResearchUrl('https://example.test/about#team')).toBe(false);
+    expect(permittedResearchUrl(firm, 'https://example.test/about?utm_source=x')).toBe('blocked');
+    expect(withoutFragment('https://example.test/about#team')).toBe('https://example.test/about');
+    // A link somebody pasted with a fragment is normalised and then permitted.
+    const withLink = { ...firm, links: ['https://news.test/piece'] };
+    expect(permittedResearchUrl(withLink, withoutFragment('https://news.test/piece#top'))).toBe('added_link');
   });
 
   it('gives a firm with no website and no link nothing to read', () => {
     expect(researchUrlsForFirm({ firmWebsite: null, links: [], maxPagesPerFirm: 4 })).toEqual([]);
+  });
+});
+
+describe('where a redirect may land', () => {
+  const firm = { firmWebsite: 'https://example.test/', links: [], maxPagesPerFirm: 4 };
+  const from = { url: 'https://example.test/', permission: 'firm_site' as const };
+
+  it('lets a same-site hop keep the permission of the URL that led to it, whatever the path', () => {
+    // The ordinary case, and the one the exact-path re-check used to lose: a homepage
+    // that answers 301 to `/home`, `/en/` or `/index.html`. None of those is an
+    // allow-listed path, and refusing them made such a firm yield nothing at all.
+    for (const target of ['https://example.test/home', 'https://example.test/en/', 'https://example.test/index.html']) {
+      expect(permittedRedirectTarget(firm, from, target), target).toBe('firm_site');
+    }
+    // www and the bare host are the same site in both directions.
+    expect(permittedRedirectTarget(firm, from, 'https://www.example.test/home')).toBe('firm_site');
+    expect(
+      permittedRedirectTarget(firm, { url: 'https://www.example.test/', permission: 'firm_site' }, 'https://example.test/x'),
+    ).toBe('firm_site');
+  });
+
+  it('still refuses a target that is not an https URL on a public, unblocked host', () => {
+    for (const target of [
+      'http://example.test/home',
+      'https://example.test:8443/home',
+      'https://user:pass@example.test/home',
+    ]) {
+      expect(permittedRedirectTarget(firm, from, target), target).toBe('blocked');
+    }
+  });
+
+  it('refuses a cross-site hop unless the target is itself a link a person added', () => {
+    // The firm's own server does not get to choose a second site for research to read.
+    expect(permittedRedirectTarget(firm, from, 'https://other.test/')).toBe('blocked');
+    expect(permittedRedirectTarget(firm, from, 'https://linkedin.com/company/x')).toBe('blocked');
+    const withLink = { ...firm, links: ['https://news.test/piece'] };
+    expect(permittedRedirectTarget(withLink, from, 'https://news.test/piece')).toBe('added_link');
+    // An added link that redirects on its own site stays an added link, and one that
+    // redirects to the firm's site gets the ordinary firm rule.
+    const fromLink = { url: 'https://news.test/piece', permission: 'added_link' as const };
+    expect(permittedRedirectTarget(withLink, fromLink, 'https://news.test/piece-moved')).toBe('added_link');
+    expect(permittedRedirectTarget(withLink, fromLink, 'https://example.test/about')).toBe('firm_site');
+    expect(permittedRedirectTarget(withLink, fromLink, 'https://example.test/blog/x')).toBe('blocked');
+  });
+
+  it('cannot turn a blocked URL into a permitted one', () => {
+    expect(
+      permittedRedirectTarget(firm, { url: 'https://other.test/', permission: 'blocked' }, 'https://other.test/x'),
+    ).toBe('blocked');
+  });
+});
+
+describe('the links a firm’s own homepage offers', () => {
+  const firm = { firmWebsite: 'https://example.test/', links: [], maxPagesPerFirm: 4 };
+  const found = (...hrefs: readonly string[]): { from: string; hrefs: readonly string[] } => ({
+    from: 'https://example.test/',
+    hrefs,
+  });
+
+  it('keeps the same-site pages that look like the pages research was going to ask for', () => {
+    // Exactly the names real sites use, and exactly the ones the fixed path list misses.
+    expect(
+      discoverSameSiteUrls(firm, found('/about-us', '/our-team', '/contact-us', '/join-our-team', '/staff/')),
+    ).toEqual([
+      'https://example.test/about-us',
+      'https://example.test/our-team',
+      'https://example.test/contact-us',
+      'https://example.test/join-our-team',
+      'https://example.test/staff',
+    ]);
+  });
+
+  it('drops a page that is not one of those, and the homepage itself', () => {
+    expect(discoverSameSiteUrls(firm, found('/', '/blog/2026/hello', '/privacy', 'index.html'))).toEqual([]);
+  });
+
+  it('drops another host, a blocked host, and every scheme that is not https', () => {
+    expect(
+      discoverSameSiteUrls(
+        firm,
+        found(
+          'https://other.test/about-us',
+          'https://www.linkedin.com/company/x/about',
+          'http://example.test/about-us',
+          'mailto:hello@example.test',
+          'tel:+15551234567',
+          'javascript:void(0)',
+          '#about-us',
+          '',
+        ),
+      ),
+    ).toEqual([]);
+  });
+
+  it('normalises a relative, query-bearing, fragment-bearing or www href to one URL', () => {
+    expect(
+      discoverSameSiteUrls(firm, found(
+        'about-us',
+        '/about-us?utm_source=nav',
+        '/about-us#top',
+        'https://www.example.test/about-us/',
+        '//example.test/about-us',
+      )),
+    ).toEqual(['https://example.test/about-us', 'https://www.example.test/about-us']);
+  });
+
+  it('does not offer a page this run is already fetching from the fixed list', () => {
+    // At four pages the run asks for `/`, `/about`, `/services` and `/careers`, so a
+    // link to any of them is a second fetch of the same bytes.
+    expect(discoverSameSiteUrls(firm, found('/about', '/services', '/careers'))).toEqual([]);
+    // At two it is not reading that far down, so `/careers` is a page it would lose.
+    expect(discoverSameSiteUrls({ ...firm, maxPagesPerFirm: 2 }, found('/careers'))).toEqual([
+      'https://example.test/careers',
+    ]);
+  });
+
+  it('bounds the candidates before the filter, so a page of a thousand links costs the same', () => {
+    const hrefs = [
+      ...Array.from({ length: MAX_DISCOVERED_CANDIDATES }, (_, index) => `/section-${String(index)}`),
+      '/about-us',
+    ];
+    // The twenty-first same-site link is never looked at, whatever it says.
+    expect(discoverSameSiteUrls(firm, found(...hrefs))).toEqual([]);
+    expect(discoverSameSiteUrls(firm, found('/about-us', ...hrefs))).toEqual(['https://example.test/about-us']);
+  });
+
+  it('gives a firm with no website nothing to discover', () => {
+    expect(discoverSameSiteUrls({ ...firm, firmWebsite: null }, found('/about-us'))).toEqual([]);
+  });
+
+  it('permits a discovered URL as the firm’s own page, and only the exact ones discovered', () => {
+    const discovered = ['https://example.test/about-us'];
+    expect(permittedResearchUrl({ ...firm, discovered }, 'https://example.test/about-us')).toBe('firm_site');
+    // Not by prefix: a discovered page is not a discovered directory.
+    expect(permittedResearchUrl({ ...firm, discovered }, 'https://example.test/about-us/history')).toBe('blocked');
+    expect(permittedResearchUrl(firm, 'https://example.test/about-us')).toBe('blocked');
+  });
+});
+
+describe('scanning a page for its anchors', () => {
+  const bytes = (text: string): Uint8Array => new TextEncoder().encode(text);
+  const html = (source: string): readonly string[] => anchorHrefs(bytes(source), 'text/html; charset=utf-8');
+
+  it('reads href values in document order, quoted three ways', () => {
+    expect(html('<a href="/about-us">About</a> <a href=\'/our-team\'>Team</a> <a href=/contact-us>Contact</a>')).toEqual([
+      '/about-us',
+      '/our-team',
+      '/contact-us',
+    ]);
+  });
+
+  it('reads an href that is not the first attribute, and ignores an anchor without one', () => {
+    expect(html('<a class="nav" data-x="1" href="/careers" rel="nofollow">Jobs</a><a name="top"></a>')).toEqual([
+      '/careers',
+    ]);
+  });
+
+  it('decodes the entities an href in real markup contains', () => {
+    expect(html('<a href="/about-us?a=1&amp;b=2">x</a>')).toEqual(['/about-us?a=1&b=2']);
+  });
+
+  it('does not decide anything: mailto, javascript and broken values come back as written', () => {
+    // Every decision about these is `discoverSameSiteUrls`, which is pure.
+    expect(html('<a href="mailto:x@y.test">m</a><a href="javascript:void(0)">j</a><a href="  ">b</a>')).toEqual([
+      'mailto:x@y.test',
+      'javascript:void(0)',
+    ]);
+  });
+
+  it('is not a link scan of plain text, an oversized body, or an `abbr` tag', () => {
+    expect(anchorHrefs(bytes('<a href="/about-us">x</a>'), 'text/plain')).toEqual([]);
+    expect(anchorHrefs(new Uint8Array(1_000_001), 'text/html')).toEqual([]);
+    expect(html('<abbr href="/about-us">x</abbr>')).toEqual([]);
+  });
+
+  it('stops at its own bound', () => {
+    const source = Array.from({ length: MAX_ANCHOR_HREFS + 5 }, (_, index) => `<a href="/p${String(index)}">x</a>`).join('');
+    expect(html(source).length).toBe(MAX_ANCHOR_HREFS);
   });
 });
 
@@ -224,10 +453,12 @@ describe('admitting what a provider selected', () => {
   const sources = [
     {
       sourceReference: 'https://example.test/',
+      firstParty: true,
       blocks: [
         { id: 'b1', text: 'We manage residential property for owners.' },
         { id: 'b2', text: 'Our maintenance team handles every work order.' },
         { id: 'b3', text: '' },
+        { id: 'b4', text: 'Dana Placeholder, Maintenance Coordinator — call 555-0100.' },
       ],
     },
   ];
@@ -243,8 +474,39 @@ describe('admitting what a provider selected', () => {
         sourceReference: 'https://example.test/',
         blockId: 'b1',
         quote: 'We manage residential property for owners.',
+        firstParty: true,
       },
     ]);
+  });
+
+  it('stores no quote for a key whose block names a person or a number', () => {
+    // The block is still checked — an unknown or overlong one is refused — and then
+    // not carried, because a contact's deletion does not reach a firm's rows and this
+    // sentence would outlive the person in it.
+    const { facts } = validateFactSelections(
+      [
+        { key: 'named_role', sourceReference: 'https://example.test/', blockId: 'b4' },
+        { key: 'phone_listed', sourceReference: 'https://example.test/', blockId: 'b4' },
+        { key: 'role', sourceReference: 'https://example.test/', blockId: 'b4' },
+      ],
+      sources,
+    );
+    expect(facts.map(fact => fact.key)).toEqual(['named_role', 'phone_listed', 'role']);
+    expect(facts.map(fact => fact.quote)).toEqual([null, null, null]);
+    // And the block is still named, so the judgment can cite it.
+    expect(facts.every(fact => fact.blockId === 'b4')).toBe(true);
+    expect(JSON.stringify(facts)).not.toContain('Dana Placeholder');
+    expect(JSON.stringify(facts)).not.toContain('555-0100');
+    expect(PERSON_FACT_KEYS).toEqual(['named_role', 'phone_listed', 'role']);
+  });
+
+  it('carries the source’s first-party flag onto every fact', () => {
+    const thirdParty = [{ ...sources[0]!, sourceReference: 'https://news.test/piece', firstParty: false }];
+    const { facts } = validateFactSelections(
+      [{ key: 'target_fit', sourceReference: 'https://news.test/piece', blockId: 'b1' }],
+      thirdParty,
+    );
+    expect(facts[0]?.firstParty).toBe(false);
   });
 
   it('refuses an unknown key, an unknown source, an unknown block and a repeat', () => {
@@ -272,7 +534,7 @@ describe('admitting what a provider selected', () => {
   it('refuses a block too long to be a quote rather than cutting it', () => {
     const { facts, refused } = validateFactSelections(
       [{ key: 'ownership', sourceReference: 'https://long.test/', blockId: 'b1' }],
-      [{ sourceReference: 'https://long.test/', blocks: [{ id: 'b1', text: 'a'.repeat(501) }] }],
+      [{ sourceReference: 'https://long.test/', firstParty: true, blocks: [{ id: 'b1', text: 'a'.repeat(501) }] }],
     );
     expect(facts).toEqual([]);
     expect(refused[0]?.refusal).toBe('quote_too_long');

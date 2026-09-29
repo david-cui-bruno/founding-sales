@@ -92,10 +92,41 @@ export const FACT_KEY_DEFINITIONS: Readonly<Record<FactKey, string>> = Object.fr
   not_target: 'the firm is not that: brokerage only, an association, commercial only, or a vendor',
 });
 
+/**
+ * The keys that are selected *because* a block names a person or publishes a number.
+ *
+ * They store no quote. That is not squeamishness: it is the only way a person's
+ * deletion can be complete. A contact-scoped deletion removes the contact's rows and
+ * does not touch the firm's, so a `named_role` quote reading "Dana Placeholder,
+ * Maintenance Coordinator" would outlive the contact it names, in a table nobody would
+ * think to search. The judgment needs to know that a page said so — that is the block
+ * reference and the evidence id, both of which stay — and it does not need the sentence
+ * copied into a second table.
+ *
+ * `role` is here because its definition is a job title the firm names, and a title on a
+ * team page arrives attached to the person holding it.
+ *
+ * `firm_facts_person_keys_have_no_quote` is the same rule in the schema, as an equality,
+ * so this set and that CHECK cannot drift apart without a failing insert.
+ */
+export const PERSON_FACT_KEYS: readonly FactKey[] = Object.freeze(['named_role', 'phone_listed', 'role']);
+
+const PERSON_KEY_SET: ReadonlySet<string> = new Set(PERSON_FACT_KEYS);
+
+/** True when a fact of this key stores no quote, because its block describes a person. */
+export function isPersonFactKey(key: FactKey): boolean {
+  return PERSON_KEY_SET.has(key);
+}
+
 /** One source of blocks: a fetched page, named by the evidence reference it produced. */
 export interface FactSource {
   readonly sourceReference: string;
   readonly blocks: readonly PageBlock[];
+  /**
+   * True when the page is on the firm's own site. False for a link a person added on
+   * another host, whose words are not the firm's.
+   */
+  readonly firstParty: boolean;
 }
 
 /** What an extraction provider returns. Deliberately no text field. */
@@ -110,7 +141,10 @@ export interface AdmittedFact {
   readonly key: FactKey;
   readonly sourceReference: string;
   readonly blockId: string;
-  readonly quote: string;
+  /** Null for a `PERSON_FACT_KEYS` key: the block is referenced, never copied. */
+  readonly quote: string | null;
+  /** From the source. False means a page on somebody else's host. */
+  readonly firstParty: boolean;
 }
 
 export type FactRefusal = 'unknown_key' | 'unknown_source' | 'unknown_block' | 'duplicate_selection' | 'quote_too_long';
@@ -136,11 +170,11 @@ export function validateFactSelections(
   selections: readonly FactSelection[],
   sources: readonly FactSource[],
 ): FactValidation {
-  const index = new Map<string, Map<string, string>>();
+  const index = new Map<string, { readonly blocks: Map<string, string>; readonly firstParty: boolean }>();
   for (const source of sources) {
     const blocks = new Map<string, string>();
     for (const block of source.blocks) blocks.set(block.id, block.text);
-    index.set(source.sourceReference, blocks);
+    index.set(source.sourceReference, { blocks, firstParty: source.firstParty });
   }
 
   const facts: AdmittedFact[] = [];
@@ -152,12 +186,12 @@ export function validateFactSelections(
       refused.push({ selection, refusal: 'unknown_key' });
       continue;
     }
-    const blocks = index.get(selection.sourceReference);
-    if (blocks === undefined) {
+    const source = index.get(selection.sourceReference);
+    if (source === undefined) {
       refused.push({ selection, refusal: 'unknown_source' });
       continue;
     }
-    const quote = blocks.get(selection.blockId);
+    const quote = source.blocks.get(selection.blockId);
     if (quote === undefined || quote.trim() === '') {
       refused.push({ selection, refusal: 'unknown_block' });
       continue;
@@ -173,7 +207,15 @@ export function validateFactSelections(
       continue;
     }
     seen.add(fingerprint);
-    facts.push({ key: selection.key, sourceReference: selection.sourceReference, blockId: selection.blockId, quote });
+    facts.push({
+      key: selection.key,
+      sourceReference: selection.sourceReference,
+      blockId: selection.blockId,
+      // The block is still checked — an unknown or overlong one is refused above — and
+      // then, for a person key, not carried. Checked and not stored.
+      quote: isPersonFactKey(selection.key) ? null : quote,
+      firstParty: source.firstParty,
+    });
   }
 
   return { facts, refused };

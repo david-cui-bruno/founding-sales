@@ -1,6 +1,6 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
-import { enqueueFirmResearch } from '../research/enqueue.ts';
+import { enqueueFirmResearchBestEffort } from '../research/enqueue.ts';
 import { resolveFirmZone } from '../src/rules/statePosture.ts';
 import { decideAdminOnly, decideFirmMutation } from './authorization.ts';
 import { recordCrmAuditEvent } from './audit.ts';
@@ -161,11 +161,13 @@ export async function createFirm(
   // across days — which is intended, and is why the sweep exists to finish the ones a
   // day's budget did not reach.
   //
-  // The refusal is deliberately ignored. Research being off, or the firm being under a
-  // suppression the import already knew about, is not a reason a firm cannot be
-  // created, and a `createFirm` that failed because of the research settings would be
-  // the tail wagging the dog.
-  await enqueueFirmResearch(context, { firmId: created.id, trigger: 'firm_created' });
+  // The refusal is deliberately ignored, and so is an exception — that is what
+  // `enqueueFirmResearchBestEffort` adds, inside a savepoint. Research being off, or
+  // the firm being under a suppression the import already knew about, or the jobs
+  // table refusing an insert, is not a reason a firm cannot be created; a `createFirm`
+  // that failed because of the research settings would be the tail wagging the dog.
+  // The sweep reaches a firm whose enqueue did not happen.
+  await enqueueFirmResearchBestEffort(context, { firmId: created.id, trigger: 'firm_created' });
   return accept(created);
 }
 

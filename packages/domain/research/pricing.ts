@@ -23,15 +23,28 @@ import { MAX_TEXT_CHARACTERS } from './pageText.ts';
  *
  * Read from Anthropic's published price list on **28 September 2026**. Claude Haiku
  * 4.5: $1.00 per million input tokens, $5.00 per million output tokens — 100 and 500
- * cents. Cache reads and writes are not priced separately here: this lane sends one
- * message per run with no cache_control, so every input token is an ordinary one, and
- * a worst case that ignored a *cheaper* tier would be the safe direction anyway.
+ * cents.
+ *
+ * ## Cached input tokens
+ *
+ * Priced, at the published multipliers: a cache **write** is 1.25× the input price and
+ * a cache **read** is 0.1×. `anthropicExtraction.ts` sends no `cache_control` — the
+ * pages differ every run, so there is no prefix worth reusing and caching only bought a
+ * 1.25× charge on the system text — so in this lane these two are always zero. They are
+ * priced anyway, because the alternative is a `centsOf` that silently ignores a usage
+ * category: if a later change re-enables caching, or a provider reports cached tokens
+ * for its own reasons, the ledger must not read a write as free. A category nobody
+ * prices is a category the ceilings cannot see.
  */
 
 export interface ModelPrice {
   readonly input: number;
   readonly output: number;
 }
+
+/** A cache write costs 1.25× an input token; a cache read, 0.1×. Published multipliers. */
+export const CACHE_WRITE_MULTIPLIER = 1.25;
+export const CACHE_READ_MULTIPLIER = 0.1;
 
 /** Cents per million tokens. Reviewed 28 September 2026. */
 export const PRICE_CENTS_PER_MILLION: Readonly<Record<string, ModelPrice>> = Object.freeze({
@@ -55,6 +68,10 @@ export function isPricedModel(modelName: string): boolean {
 export interface TokenUsage {
   readonly inputTokens: number;
   readonly outputTokens: number;
+  /** `cache_creation_input_tokens`, charged at 1.25× input. */
+  readonly cacheWriteTokens?: number | undefined;
+  /** `cache_read_input_tokens`, charged at 0.1× input. */
+  readonly cacheReadTokens?: number | undefined;
 }
 
 /**
@@ -67,9 +84,17 @@ export interface TokenUsage {
 export function centsOf(modelName: string, usage: TokenUsage): number {
   const price = PRICE_CENTS_PER_MILLION[modelName];
   if (price === undefined) throw new UnpricedModelError(modelName);
-  const input = Math.max(0, Math.trunc(usage.inputTokens));
-  const output = Math.max(0, Math.trunc(usage.outputTokens));
-  const exact = (input * price.input + output * price.output) / 1_000_000;
+  const nonNegative = (value: number | undefined): number => Math.max(0, Math.trunc(value ?? 0));
+  const input = nonNegative(usage.inputTokens);
+  const output = nonNegative(usage.outputTokens);
+  const cacheWrite = nonNegative(usage.cacheWriteTokens);
+  const cacheRead = nonNegative(usage.cacheReadTokens);
+  const exact =
+    (input * price.input +
+      output * price.output +
+      cacheWrite * price.input * CACHE_WRITE_MULTIPLIER +
+      cacheRead * price.input * CACHE_READ_MULTIPLIER) /
+    1_000_000;
   return exact === 0 ? 0 : Math.max(1, Math.ceil(exact));
 }
 
@@ -77,15 +102,22 @@ export function centsOf(modelName: string, usage: TokenUsage): number {
 export const MAX_EXTRACTION_OUTPUT_TOKENS = 600;
 
 /**
- * Roughly four characters to a token. A deliberate under-estimate of tokens per
- * character would make the worst case too small, so this is the conservative
- * direction: markup and punctuation tokenize worse than prose, and what the extractor
- * is sent is *parsed block text*, which has had the markup taken out of it.
+ * Characters per token, for the bound.
+ *
+ * Two and a half, not four. Four is the figure for ordinary English prose, and this is
+ * a bound rather than an estimate: what the extractor is actually sent is nav labels,
+ * addresses, telephone numbers, product names and JSON punctuation, all of which
+ * tokenize far worse than prose, and a bound that is too small is a ceiling that
+ * authorized a call it had not priced. Two and a half is the conservative direction, and
+ * being conservative here costs a fraction of a cent of headroom per run.
  */
-const CHARACTERS_PER_TOKEN = 4;
+const CHARACTERS_PER_TOKEN = 2.5;
 
-/** What the prompt adds beyond the page text: the dictionary, the instructions, the schema. */
-const PROMPT_OVERHEAD_TOKENS = 1_500;
+/**
+ * What the prompt adds beyond the page text: the dictionary, the instructions, the
+ * schema, and the JSON envelope each block is wrapped in.
+ */
+const PROMPT_OVERHEAD_TOKENS = 2_000;
 
 export interface WorstCaseInput {
   readonly modelName: string;
@@ -97,15 +129,23 @@ export interface WorstCaseInput {
  * The most one run of one firm can cost, in whole cents.
  *
  * One message per run, so the input is bounded by the text of every page the run may
- * read. The bound is **not** `max_page_bytes`: a page is fetched as bytes and then
- * parsed, and `parsePageText` drops every block past `MAX_TEXT_CHARACTERS`, so the
- * extractor is never offered more than that per page however large the page was. The
- * smaller of the two is therefore the true bound, and using the larger would produce a
- * worst case of about a dollar a run, which at the default fifty-cent daily ceiling
- * would refuse every run there has ever been.
+ * read. Three things make it a bound rather than an estimate:
  *
- * At the defaults — four pages, twelve thousand characters each — this is 2 cents, so
- * the fifty-cent daily ceiling is 25 runs and the ten-dollar monthly ceiling is 500.
+ *   * **`maxPagesPerFirm` is the total page count**, not the count of the firm's own
+ *     pages. `researchUrlsForFirm` enforces the same number — added links, allow-listed
+ *     paths and homepage-discovered links all spend from it — and the adapter enforces
+ *     it again. When added links were appended *on top of* this figure, a firm with six
+ *     links sent ten pages priced as four.
+ *   * **Per page it is `MAX_TEXT_CHARACTERS`, not `max_page_bytes`.** A page is fetched
+ *     as bytes and then parsed, and `parsePageText` drops every block past that
+ *     character bound, so the extractor is never offered more however large the page
+ *     was. Using the larger would give a worst case of about a dollar a run, which at
+ *     the default fifty-cent daily ceiling would refuse every run there has ever been.
+ *   * **Characters per token is 2.5 and the overhead is 2 000 tokens**, both chosen
+ *     high. See `CHARACTERS_PER_TOKEN`.
+ *
+ * At the defaults — four pages, twelve thousand characters each — this is 3 cents, so
+ * the fifty-cent daily ceiling is 16 runs and the ten-dollar monthly ceiling is 333.
  *
  * This is the number `claimResearchClearance` adds to today's spend before deciding,
  * which is why it must never be optimistic: a provider that reports less afterwards
@@ -117,4 +157,17 @@ export function worstCaseRunCents(input: WorstCaseInput): number {
   const perPage = Math.min(Math.max(1024, Math.trunc(input.maxPageBytes)), MAX_TEXT_CHARACTERS);
   const inputTokens = PROMPT_OVERHEAD_TOKENS + Math.ceil((pages * perPage) / CHARACTERS_PER_TOKEN);
   return centsOf(input.modelName, { inputTokens, outputTokens: MAX_EXTRACTION_OUTPUT_TOKENS });
+}
+
+/**
+ * Whether what a call actually reported is inside the bound the ceiling authorized.
+ *
+ * Used by the test that would otherwise be the only thing standing between a raised
+ * price, a widened prompt or a re-enabled cache and a ceiling that quietly means
+ * nothing. The ledger always records the **actual** figure — never truncated to the
+ * bound, because a ledger that clipped its own numbers would hide exactly the overrun
+ * this function exists to find.
+ */
+export function withinWorstCase(input: WorstCaseInput, usage: TokenUsage): boolean {
+  return centsOf(input.modelName, usage) <= worstCaseRunCents(input);
 }

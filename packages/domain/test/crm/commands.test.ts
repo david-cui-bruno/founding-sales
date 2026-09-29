@@ -1,6 +1,7 @@
+import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
-import type { SessionQueryable } from '../../db/queryable.ts';
+import type { QueryOutcome, QueryResultRowLike, SessionQueryable } from '../../db/queryable.ts';
 import {
   repositoryContext,
   workspaceScope,
@@ -432,6 +433,52 @@ describe('CRM commands', () => {
     });
   });
 
+  // ------------------------------------------------- the research enqueue
+  describe('the research enqueue a new firm triggers', () => {
+    it('creates the firm and the funnel fact even when the enqueue throws', async () => {
+      await inRolledBackTransaction(admin, async context => {
+        // Research being off already refused without stopping anything. An exception
+        // did not: a jobs table that would not take the row would have failed the
+        // whole command, which is the tail wagging the dog. The savepoint is the
+        // difference between "the run was not queued" and "the firm was not created".
+        const failing = {
+          ...context,
+          db: {
+            query: async <Row extends QueryResultRowLike>(
+              text: string,
+              values?: readonly unknown[],
+            ): Promise<QueryOutcome<Row>> => {
+              if (/INSERT INTO jobs/iu.test(text)) {
+                throw Object.assign(new Error('jobs is unavailable'), { code: '40001' });
+              }
+              return await context.db.query<Row>(text, values);
+            },
+          },
+        };
+
+        const created = await createFirm(failing, { name: 'Enqueue Failure Test Firm' });
+        expect(created).toMatchObject({ ok: true });
+        if (!created.ok) return;
+
+        // The firm exists, and so does its funnel fact: everything written before the
+        // enqueue survived the rollback of the enqueue alone.
+        const rows = await context.db.query<{ firms: string; facts: string; jobs: string }>(
+          `SELECT (SELECT count(*) FROM firms WHERE workspace_id = $1 AND id = $2) AS firms,
+                  (SELECT count(*) FROM funnel_facts
+                    WHERE workspace_id = $1 AND firm_id = $2 AND kind = 'firm.created') AS facts,
+                  (SELECT count(*) FROM jobs
+                    WHERE workspace_id = $1 AND kind = 'research.firm'
+                      AND payload->>'firmId' = $2::text) AS jobs`,
+          [seeded.alpha.workspaceId, created.value.id],
+        );
+        // That this read succeeded at all is the other half of the point: a statement
+        // that failed inside a transaction poisons it, and only the rolled-back
+        // savepoint leaves the transaction able to run anything afterwards.
+        expect(rows.rows[0]).toEqual({ firms: '1', facts: '1', jobs: '0' });
+      });
+    });
+  });
+
   // ----------------------------------------------------------------- zone
   describe('firm time zone', () => {
     it('records the resolved zone with its confidence, source and rule version', async () => {
@@ -495,6 +542,139 @@ describe('CRM commands', () => {
 
   // --------------------------------------------------------- Appendix G 37
   describe('merges (Appendix G 37)', () => {
+    it('carries lane R’s rows, and a judgment on both sides does not fail the merge', async () => {
+      await inRolledBackTransaction(admin, async context => {
+        const duplicate = await createFirm(context, { name: 'Northwind Test Holdings (researched dup)' });
+        expect(duplicate).toMatchObject({ ok: true });
+        if (!duplicate.ok) return;
+
+        /** One completed run, one fact, one judgment naming a contact, and one link. */
+        const research = async (firmId: string, url: string, contactName: string): Promise<void> => {
+          const contact = await createContact(context, { firmId, fullName: contactName, title: 'Owner' });
+          expect(contact).toMatchObject({ ok: true });
+          if (!contact.ok) return;
+          const run = await context.db.query<{ id: string }>(
+            `INSERT INTO research_runs (workspace_id, firm_id, revision, trigger, completed_at, outcome)
+             VALUES ($1, $2, 1, 'sweep', now(), 'completed') RETURNING id`,
+            [seeded.alpha.workspaceId, firmId],
+          );
+          const runId = run.rows[0]?.id ?? '';
+          const evidence = await recordEvidence(context, {
+            firmId,
+            provider: 'company_page',
+            sourceReference: url,
+            contentHash: createHash('sha256').update(url).digest('hex'),
+          });
+          expect(evidence).toMatchObject({ ok: true });
+          if (!evidence.ok) return;
+          await context.db.query(
+            `INSERT INTO firm_facts (workspace_id, firm_id, run_id, evidence_id, key, block_id, quote, retrieved_at)
+             VALUES ($1, $2, $3, $4, 'target_fit', 'b1', 'We manage property for owners.', now())`,
+            [seeded.alpha.workspaceId, firmId, runId, evidence.value.id],
+          );
+          await context.db.query(
+            `INSERT INTO firm_judgments
+               (workspace_id, firm_id, run_id, fit, problem_evidence, timing, reachability, call_first, likely_contact_id)
+             VALUES ($1, $2, $3, 'yes', 'unknown', 'unknown', 'yes', true, $4)`,
+            [seeded.alpha.workspaceId, firmId, runId, contact.value.id],
+          );
+          await context.db.query(
+            `INSERT INTO firm_links (workspace_id, firm_id, url, added_by_user_id)
+             VALUES ($1, $2, $3, $4)`,
+            [seeded.alpha.workspaceId, firmId, url, seeded.alpha.admin.userId],
+          );
+        };
+
+        await research(crm.alpha.firmId, 'https://alpha.example.test/about', 'Target Person');
+        await research(duplicate.value.id, 'https://dup.example.test/about', 'Source Person');
+
+        // Both firms have a judgment naming one of their own contacts, and
+        // `likely_contact_id` carries `(workspace, contact, firm)` ON UPDATE CASCADE —
+        // so moving the contacts would have rewritten the source judgment's firm_id
+        // onto the target's and violated the primary key. That is the merge this test
+        // exists for.
+        const merged = await mergeFirms(context, {
+          sourceFirmId: duplicate.value.id,
+          targetFirmId: crm.alpha.firmId,
+        });
+        expect(merged).toMatchObject({ ok: true });
+
+        const judgments = await context.db.query<{ count: string }>(
+          'SELECT count(*) AS count FROM firm_judgments WHERE workspace_id = $1 AND firm_id = $2',
+          [seeded.alpha.workspaceId, crm.alpha.firmId],
+        );
+        expect(Number(judgments.rows[0]?.count)).toBe(1);
+
+        // The links are decisions about the surviving firm, so the target has both.
+        const links = await context.db.query<{ url: string }>(
+          'SELECT url FROM firm_links WHERE workspace_id = $1 AND firm_id = $2 ORDER BY url',
+          [seeded.alpha.workspaceId, crm.alpha.firmId],
+        );
+        expect(links.rows.map(row => row.url)).toEqual([
+          'https://alpha.example.test/about',
+          'https://dup.example.test/about',
+        ]);
+        const left = await context.db.query<{ count: string }>(
+          'SELECT count(*) AS count FROM firm_links WHERE workspace_id = $1 AND firm_id = $2',
+          [seeded.alpha.workspaceId, duplicate.value.id],
+        );
+        expect(Number(left.rows[0]?.count)).toBe(0);
+
+        // The runs and the facts stay where they were read, as the domain events do: a
+        // page read for another firm is not provenance for this one.
+        const history = await context.db.query<{ runs: string; facts: string }>(
+          `SELECT (SELECT count(*) FROM research_runs WHERE workspace_id = $1 AND firm_id = $2) AS runs,
+                  (SELECT count(*) FROM firm_facts WHERE workspace_id = $1 AND firm_id = $2) AS facts`,
+          [seeded.alpha.workspaceId, duplicate.value.id],
+        );
+        expect(history.rows[0]).toEqual({ runs: '1', facts: '1' });
+
+        // And a fresh run is queued, so the target's judgment is rebuilt from the
+        // target's own pages rather than inherited.
+        const jobs = await context.db.query<{ count: string }>(
+          "SELECT count(*) AS count FROM jobs WHERE workspace_id = $1 AND kind = 'research.firm'",
+          [seeded.alpha.workspaceId],
+        );
+        expect(Number(jobs.rows[0]?.count)).toBeGreaterThan(0);
+      });
+    });
+
+    it('moves the source’s judgment when the target has none', async () => {
+      await inRolledBackTransaction(admin, async context => {
+        const duplicate = await createFirm(context, { name: 'Northwind Test Holdings (one judgment)' });
+        if (!duplicate.ok) return;
+        const contact = await createContact(context, {
+          firmId: duplicate.value.id,
+          fullName: 'Source Person',
+          title: 'Owner',
+        });
+        if (!contact.ok) return;
+        const run = await context.db.query<{ id: string }>(
+          `INSERT INTO research_runs (workspace_id, firm_id, revision, trigger, completed_at, outcome)
+           VALUES ($1, $2, 1, 'sweep', now(), 'completed') RETURNING id`,
+          [seeded.alpha.workspaceId, duplicate.value.id],
+        );
+        await context.db.query(
+          `INSERT INTO firm_judgments
+             (workspace_id, firm_id, run_id, fit, problem_evidence, timing, reachability, call_first, likely_contact_id)
+           VALUES ($1, $2, $3, 'yes', 'unknown', 'unknown', 'yes', true, $4)`,
+          [seeded.alpha.workspaceId, duplicate.value.id, run.rows[0]?.id ?? '', contact.value.id],
+        );
+
+        expect(
+          await mergeFirms(context, { sourceFirmId: duplicate.value.id, targetFirmId: crm.alpha.firmId }),
+        ).toMatchObject({ ok: true });
+
+        const moved = await context.db.query<{ fit: string; likely_contact_id: string | null }>(
+          'SELECT fit, likely_contact_id FROM firm_judgments WHERE workspace_id = $1 AND firm_id = $2',
+          [seeded.alpha.workspaceId, crm.alpha.firmId],
+        );
+        // Moved, and the contact reference cleared: the contact had not moved yet, and
+        // the composite key would have refused a row naming a contact at another firm.
+        expect(moved.rows[0]).toEqual({ fit: 'yes', likely_contact_id: null });
+      });
+    });
+
     it('preserves suppressions, evidence, stage events, aliases and external ids', async () => {
       await inRolledBackTransaction(admin, async context => {
         const duplicate = await createFirm(context, {

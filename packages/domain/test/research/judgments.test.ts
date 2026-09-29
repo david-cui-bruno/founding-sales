@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { judgeFirm, type JudgmentInput } from '../../research/judgments.ts';
 import { buildCallBrief, generatedPartsOf, type FirmFactDto } from '../../research/brief.ts';
-import { PRICE_CENTS_PER_MILLION, UnpricedModelError, centsOf, worstCaseRunCents } from '../../research/pricing.ts';
+import {
+  MAX_EXTRACTION_OUTPUT_TOKENS,
+  PRICE_CENTS_PER_MILLION,
+  UnpricedModelError,
+  centsOf,
+  withinWorstCase,
+  worstCaseRunCents,
+} from '../../research/pricing.ts';
 
 /**
  * The four judgments, the brief they go on, and the price the ceilings compare.
@@ -16,17 +23,23 @@ const AT = '2026-09-28T14:00:00.000Z';
 /** A fact as both the judgment input and the brief read it: one shape, two views. */
 const fact = (
   key: string,
-  quote = 'a sentence the firm published',
+  quote: string | null = 'a sentence the firm published',
   id = key,
+  firstParty = true,
 ): FirmFactDto & JudgmentInput['facts'][number] => ({
   id,
   key: key as JudgmentInput['facts'][number]['key'],
   quote,
+  firstParty,
   blockId: 'b1',
-  sourceReference: 'https://example.test/',
+  sourceReference: firstParty ? 'https://example.test/' : 'https://news.test/piece',
   retrievedAt: AT,
   confidence: null,
 });
+
+/** The same fact, read off a page on somebody else's host. */
+const thirdPartyFact = (key: string, quote = 'a sentence somebody else published', id = key) =>
+  fact(key, quote, id, false);
 
 const base: JudgmentInput = { facts: [], hasPhoneRoute: false, suppressed: false, contacts: [] };
 const withFacts = (...keys: string[]): JudgmentInput => ({
@@ -121,18 +134,43 @@ describe('the reasons, and the likely person', () => {
     for (const reason of Object.values(judged.reasons)) expect(reason.length).toBeLessThanOrEqual(300);
   });
 
-  it('picks the contact whose title a role fact names, and null otherwise', () => {
+  it('picks the contact whose title a role block names, and null otherwise', () => {
     const contacts = [
       { contactId: 'c1', fullName: 'A Person', title: 'Owner' },
       { contactId: 'c2', fullName: 'Another', title: 'Maintenance Coordinator' },
     ];
+    // The text comes in as `roleBlocks`, not off the fact: a `role` fact stores no
+    // quote, because the block it names is a block naming a person.
     const matched = judgeFirm({
       ...base,
       contacts,
-      facts: [fact('role', 'Our maintenance coordinator handles every request.', 'f1')],
+      facts: [fact('role', null, 'f1')],
+      roleBlocks: ['Our maintenance coordinator handles every request.'],
     });
     expect(matched.likelyContactId).toBe('c2');
     expect(judgeFirm({ ...base, contacts }).likelyContactId).toBeNull();
+    // A `role` fact with no block text offered is no match, and never a guess.
+    expect(judgeFirm({ ...base, contacts, facts: [fact('role', null, 'f1')] }).likelyContactId).toBeNull();
+  });
+
+  it('never lets a page on somebody else’s host decide fit or reachability', () => {
+    // A trade article calling a brokerage a property manager is not the firm saying so,
+    // and a directory listing a number is not the firm publishing one.
+    const third = judgeFirm({ ...base, facts: [thirdPartyFact('target_fit'), thirdPartyFact('phone_listed', null)] });
+    expect(third.fit).toBe('unknown');
+    expect(third.reachability).toBe('unknown');
+    expect(third.callFirst).toBe(false);
+    // No fact id is cited for a judgment the fact was not allowed to reach.
+    expect(third.reasons.fit).not.toContain('target_fit');
+    // The same two facts on the firm's own site do decide both.
+    const own = judgeFirm({ ...base, facts: [fact('target_fit'), fact('phone_listed', null)] });
+    expect(own.fit).toBe('yes');
+    expect(own.reachability).toBe('yes');
+    // And a third-party page may still be evidence of a problem and of timing: those
+    // two are about the world, not about what the firm claims to be.
+    const problem = judgeFirm({ ...base, facts: [thirdPartyFact('hiring_maintenance')] });
+    expect(problem.problemEvidence).toBe('yes');
+    expect(problem.timing).toBe('yes');
   });
 
   it('has no judgment, field or reason about budget or intent', () => {
@@ -184,6 +222,43 @@ describe('the call brief', () => {
     expect(brief.sources).toEqual([{ sourceReference: 'https://example.test/', retrievedAt: AT }]);
   });
 
+  it('attributes a third-party quote to its host, and the firm’s own to nobody', () => {
+    const facts = [
+      fact('target_fit', 'We manage property for owners.', 'f1'),
+      thirdPartyFact('recent_change', 'The firm opened a second office, we hear.', 'f2'),
+    ];
+    const brief = buildCallBrief({ facts, judgments, revision: 2, runBrief: null, likelyPerson: null });
+    expect(brief.whyFit[0]).toMatchObject({ firstParty: true, attribution: null });
+    // Rendered beside the quote, so the brief cannot present somebody else's sentence
+    // as the firm's own words.
+    expect(brief.whatChanged[0]).toMatchObject({ firstParty: false, attribution: 'per news.test' });
+  });
+
+  it('renders no quote for a key whose block names a person', () => {
+    // There is nothing to render: `named_role`, `phone_listed` and `role` store no
+    // quote at all, and an empty quotation line would be worse than none.
+    const brief = buildCallBrief({
+      facts: [fact('named_role', null, 'f1'), fact('phone_listed', null, 'f2')],
+      judgments,
+      revision: 1,
+      runBrief: null,
+      likelyPerson: null,
+    });
+    expect(brief.whyFit).toEqual([]);
+    expect(brief.whatChanged).toEqual([]);
+    expect(brief.sources).toEqual([]);
+  });
+
+  it('carries how many runs have failed since the last one that completed', () => {
+    // A provider failure completes its job, so the retry is the sweep's. Without this
+    // the firm page would show a brief three days stale and no hint why.
+    expect(buildCallBrief({ facts: [], judgments, revision: 1, runBrief: null, likelyPerson: null }).failedTries).toBe(0);
+    expect(
+      buildCallBrief({ facts: [], judgments, revision: 1, runBrief: null, likelyPerson: null, failedTries: 3 })
+        .failedTries,
+    ).toBe(3);
+  });
+
   it('is not generated when nothing was generated', () => {
     const brief = buildCallBrief({ facts: [], judgments, revision: 1, runBrief: null, likelyPerson: null });
     expect(brief.generated).toBe(false);
@@ -229,7 +304,31 @@ describe('what a run may cost', () => {
     // fifty-cent daily ceiling would refuse for ever. The parse never offers the
     // extractor more than twelve thousand characters a page.
     const worst = worstCaseRunCents({ modelName: 'claude-haiku-4-5', maxPagesPerFirm: 4, maxPageBytes: 1_000_000 });
-    expect(worst).toBe(2);
-    expect(worstCaseRunCents({ modelName: 'claude-haiku-4-5', maxPagesPerFirm: 8, maxPageBytes: 1_000_000 })).toBe(3);
+    expect(worst).toBe(3);
+    expect(worstCaseRunCents({ modelName: 'claude-haiku-4-5', maxPagesPerFirm: 8, maxPageBytes: 1_000_000 })).toBe(5);
+  });
+
+  it('bounds a run that reported every usage category, cached tokens included', () => {
+    // The bound is what `claimResearchClearance` authorized the run against, so a call
+    // whose actual usage came in over it would mean the ceiling authorized a price it
+    // had not seen. Maximum pages, maximum output, and every category reported.
+    const settings = { modelName: 'claude-haiku-4-5', maxPagesPerFirm: 8, maxPageBytes: 1_000_000 } as const;
+    // 8 pages × 12 000 characters is 96 000 characters. Real tokenizers give well under
+    // one token per 2.5 characters for page text; this is that figure plus every extra.
+    const reported = {
+      inputTokens: 30_000,
+      outputTokens: MAX_EXTRACTION_OUTPUT_TOKENS,
+      cacheWriteTokens: 1_000,
+      cacheReadTokens: 4_000,
+    };
+    expect(withinWorstCase(settings, reported)).toBe(true);
+    // A cache write is *dearer* than an ordinary token, and priced as such.
+    expect(centsOf('claude-haiku-4-5', { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 1_000_000 })).toBe(125);
+    expect(centsOf('claude-haiku-4-5', { inputTokens: 0, outputTokens: 0, cacheReadTokens: 1_000_000 })).toBe(10);
+    // And a run that did come in over the bound is recorded at what it cost, never
+    // truncated: the ledger is the thing that would have to show the overrun.
+    const over = { inputTokens: 10_000_000, outputTokens: 0 };
+    expect(withinWorstCase(settings, over)).toBe(false);
+    expect(centsOf('claude-haiku-4-5', over)).toBe(1_000);
   });
 });

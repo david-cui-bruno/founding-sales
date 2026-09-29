@@ -3,6 +3,7 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { recordFunnelFact } from '../funnel/facts.ts';
 import { firmIsResearchable, firmIsSuppressed } from './firmState.ts';
 import { validateFactSelections, type AdmittedFact, type FactSource } from './facts.ts';
+import type { ProviderOutcome } from './providers.ts';
 import { judgeFirm, type JudgmentContact } from './judgments.ts';
 import { parsePageText } from './pageText.ts';
 import { claimResearchClearance } from './ceilings.ts';
@@ -54,6 +55,27 @@ import {
  * No website and no added link is `no_sources`. It is a refusal rather than a
  * completion, because "we looked and there was nothing" and "there was nowhere to
  * look" are different things to see in a runs list.
+ *
+ * ## Once the clearance is consumed, nothing in this function throws
+ *
+ * This is the rule the whole file is arranged around, and it is about money.
+ *
+ * The runner wraps one job in one transaction. `claimResearchClearance` consumes a
+ * unit of the day's count and the run's paid calls happen inside that transaction, so a
+ * throw anywhere after it rolls back the run row, the evidence, the ledger cents **and
+ * the consumed count** — while the money stays spent at the provider. The retry ladder
+ * then makes the same paid calls again against a budget that has no record of the first
+ * attempt. Three attempts, three invoices, one visible cent.
+ *
+ * So every outcome is committed. A provider that returns a failure and a provider that
+ * throws both become a `failed` run with the cents actually spent on it and a ledger
+ * row that counts the failure, and the caller reports a refusal that **completes** the
+ * job. Retrying is the sweep's business, as a new revision with a new clearance —
+ * which is a retry the budget can see.
+ *
+ * A database error is the one thing that still aborts, and it is the one case where
+ * aborting is right: the accounting is written in the same transaction as the work, so
+ * a transaction that cannot commit has no accounting to lose.
  */
 
 export interface RunFirmResearchInput {
@@ -139,13 +161,18 @@ export async function runFirmResearch(
     return refuse('no_sources');
   }
 
-  const fetched = await input.pageFetch.fetchPages({
-    urls,
-    firmWebsite: firm.value.website,
-    links,
-    maxPagesPerFirm: settings.maxPagesPerFirm,
-    maxBytes: settings.maxPageBytes,
-  });
+  // A provider that throws is a provider that failed, and a failure after a consumed
+  // clearance is a committed `failed` run rather than a rollback. `providerAttempt`
+  // is the only place either of them is turned into a value.
+  const fetched = await providerAttempt(async () =>
+    await input.pageFetch.fetchPages({
+      urls,
+      firmWebsite: firm.value.website,
+      links,
+      maxPagesPerFirm: settings.maxPagesPerFirm,
+      maxBytes: settings.maxPageBytes,
+    }),
+  );
   // The fetch is free, so its ledger row is a count and a failure code rather than
   // money. It is recorded anyway: "what refused research today" is the question the
   // ledger exists to answer, and a fetch that fails every morning is the answer.
@@ -193,7 +220,7 @@ export async function runFirmResearch(
       continue;
     }
     evidenceRecorded += 1;
-    sources.push({ sourceReference: page.url, blocks: parsed.blocks });
+    sources.push({ sourceReference: page.url, blocks: parsed.blocks, firstParty: page.firstParty });
     evidenceByReference.set(page.url, { id: evidence.value.id, retrievedAt: page.retrievedAt });
   }
 
@@ -205,10 +232,13 @@ export async function runFirmResearch(
   let generated: { readonly questions: readonly [string, string]; readonly opening: string } | null = null;
 
   if (input.extraction !== undefined && sources.length > 0) {
-    const answer = await input.extraction.extract({
-      sources: sources.map(source => ({ sourceReference: source.sourceReference, blocks: source.blocks })),
-      firmName: firm.value.name,
-    });
+    const extraction = input.extraction;
+    const answer = await providerAttempt(async () =>
+      await extraction.extract({
+        sources: sources.map(source => ({ sourceReference: source.sourceReference, blocks: source.blocks })),
+        firmName: firm.value.name,
+      }),
+    );
     await recordProviderCall(context, {
       providerKey: input.extraction.providerKey,
       at: input.at,
@@ -249,6 +279,9 @@ export async function runFirmResearch(
     hasPhoneRoute: await firmHasPhoneRoute(context, input.firmId),
     suppressed: await firmIsSuppressed(context, input.firmId),
     contacts: await listFirmContacts(context, input.firmId),
+    // Read from memory and never stored: a person key holds no quote, and what comes
+    // out of the match is a contact id.
+    roleBlocks: roleBlockTexts(recorded, sources),
   });
   const wasCallFirst = await currentCallFirst(context, input.firmId);
   await upsertJudgments(context, { firmId: input.firmId, runId, at: input.at, judgments });
@@ -306,6 +339,45 @@ export async function runFirmResearch(
   });
 }
 
+/**
+ * A provider call as a value, whatever it does.
+ *
+ * `ProviderOutcome` already covers a provider that reports a failure. This covers the
+ * other one — a transport that throws, a JSON parse that throws, an adapter with a bug
+ * — because after `claimResearchClearance` a throw does not fail the run, it erases
+ * the run's accounting and re-authorizes the spend. `costCents: 0` is the honest figure
+ * for a call whose response never arrived: what it actually cost is unknowable, and the
+ * ledger's failure count is what says the attempt happened.
+ */
+async function providerAttempt<T>(call: () => Promise<ProviderOutcome<T>>): Promise<ProviderOutcome<T>> {
+  try {
+    return await call();
+  } catch {
+    return { ok: false, failureCode: 'transport_error', costCents: 0 };
+  }
+}
+
+/**
+ * The published text of the blocks this run's `role` and `named_role` facts named.
+ *
+ * In memory, from the pages just fetched, for `likelyContactId` alone. The facts
+ * themselves carry no quote for those keys, so this is the only place the text exists,
+ * and it exists for the length of one function call.
+ */
+function roleBlockTexts(
+  facts: readonly AdmittedFact[],
+  sources: readonly FactSource[],
+): readonly string[] {
+  const texts: string[] = [];
+  for (const fact of facts) {
+    if (fact.key !== 'role' && fact.key !== 'named_role') continue;
+    const source = sources.find(entry => entry.sourceReference === fact.sourceReference);
+    const block = source?.blocks.find(entry => entry.id === fact.blockId);
+    if (block !== undefined) texts.push(block.text);
+  }
+  return texts;
+}
+
 /** The https links a person added for this firm. */
 export async function readFirmLinks(context: RepositoryContext, firmId: string): Promise<readonly string[]> {
   const { rows } = await context.db.query<{ url: string }>(
@@ -333,10 +405,11 @@ async function insertFacts(
     // most recently is the one that should own it, so the runs list stays truthful.
     const { rows } = await context.db.query<{ id: string }>(
       `INSERT INTO firm_facts
-         (workspace_id, firm_id, run_id, evidence_id, key, block_id, quote, retrieved_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz)
+         (workspace_id, firm_id, run_id, evidence_id, key, block_id, quote, first_party, retrieved_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::timestamptz)
        ON CONFLICT ON CONSTRAINT firm_facts_one_per_selection DO UPDATE
-          SET run_id = EXCLUDED.run_id, quote = EXCLUDED.quote, retrieved_at = EXCLUDED.retrieved_at
+          SET run_id = EXCLUDED.run_id, quote = EXCLUDED.quote, first_party = EXCLUDED.first_party,
+              retrieved_at = EXCLUDED.retrieved_at
        RETURNING id`,
       [
         context.scope.workspaceId,
@@ -346,6 +419,7 @@ async function insertFacts(
         fact.key,
         fact.blockId,
         fact.quote,
+        fact.firstParty,
         evidence.retrievedAt,
       ],
     );

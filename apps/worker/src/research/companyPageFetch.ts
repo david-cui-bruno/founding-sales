@@ -2,9 +2,16 @@ import { createHash } from 'node:crypto';
 import dns from 'node:dns';
 import https from 'node:https';
 import type { IncomingMessage } from 'node:http';
+import { anchorHrefs } from '@fss/domain/research/pageText.ts';
 import {
+  discoverSameSiteUrls,
   isPublicResearchAddress,
+  isSameResearchSite,
+  MAX_PAGES_CEILING,
+  permittedRedirectTarget,
   permittedResearchUrl,
+  withoutFragment,
+  type UrlPermission,
 } from '@fss/domain/research/sourcePolicy.ts';
 import type {
   FetchedPage,
@@ -39,16 +46,45 @@ import { COMPANY_PAGE_PROVIDER } from '@fss/domain/research/types.ts';
  *
  * ## Redirects
  *
- * Three at most, and each one is a new URL that gets the whole rule again —
- * `permittedResearchUrl`, a fresh resolution, a fresh pin. A redirect that is not
- * permitted is a skip with a reason rather than a followed hop, because otherwise the
- * firm's own server decides where this worker connects.
+ * Three at most, and each one is a new URL that gets a fresh resolution and a fresh
+ * pin. A redirect that is not permitted is a skip with a reason rather than a followed
+ * hop, because otherwise the firm's own server decides where this worker connects.
+ *
+ * What a redirect target is permitted to be is `permittedRedirectTarget`'s decision,
+ * not this file's: on the same site it inherits the permission of the URL that led to
+ * it, whatever its path, because a homepage that answers `301` to `/home`, `/en/` or
+ * `/index.html` is ordinary and the old exact-path re-check made such a firm yield
+ * nothing. Off the site it is blocked unless a person added it as a link.
+ *
+ * ## Discovery
+ *
+ * A fixed list of paths is a guess at what a site calls its pages. After the firm's
+ * homepage is read, its own anchors are scanned (`anchorHrefs`, a lexical scan, no HTML
+ * dependency), the same-site ones that look like an about/services/team/contact/careers
+ * page are kept (`discoverSameSiteUrls`), and they are queued behind the fixed list.
+ * They are fetched only while the firm-page budget — `max_pages_per_firm` — has room,
+ * so in practice they fill the budget that a `404` on a guessed path freed. Every one
+ * still goes through the permission rule, a resolution, robots and the byte cap.
  *
  * ## robots.txt
  *
  * Fetched first, the same pinned way, and honoured for `*` and for `CallieResearch`.
  * A firm that has asked crawlers not to read a path has asked us, and the block that
- * would have become a quote must not exist. The file is fetched once per host per run.
+ * would have become a quote must not exist. Four things that matters for:
+ *
+ *   * **A robots file that cannot be read completely means the host's pages are not
+ *     fetched** (`robots_unreadable`). A file over the cap, a `500`, a timeout or a
+ *     redirect off the site is not permission; a `404` or a `410` is — the absence of
+ *     the file is the permissive answer in the standard, and only the absence.
+ *   * **A redirected robots is followed**, up to `MAX_REDIRECTS`, on the same site
+ *     only, with a fresh resolution and pin for each hop. `https://host/robots.txt`
+ *     redirecting to `https://www.host/robots.txt` is how a great many sites serve it,
+ *     and reading that as "no rules" would ignore a firm that had asked.
+ *   * **`*` and `$` mean what the standard says**, and `Allow` is honoured with
+ *     longest-match-wins, so a site that disallows `/` and allows `/about` is read the
+ *     way it asked to be rather than not at all.
+ *   * **Cached per host and per checked address** for the run, because the rules that
+ *     were read are the rules of the server that answered.
  *
  * ## Testability
  *
@@ -63,6 +99,8 @@ export const RESEARCH_USER_AGENT = 'CallieResearch/1.0 (+https://usecallie.com)'
 export const RESEARCH_ROBOTS_TOKEN = 'callieresearch';
 
 export const PAGE_TIMEOUT_MILLISECONDS = 10_000;
+/** A robots file larger than this is not a robots file. */
+export const MAX_ROBOTS_BYTES = 64 * 1024;
 export const FIRM_TIMEOUT_MILLISECONDS = 30_000;
 export const MAX_REDIRECTS = 3;
 
@@ -177,16 +215,29 @@ function headerOf(response: RawResponse, name: string): string {
   return Array.isArray(value) ? (value[0] ?? '') : (value ?? '');
 }
 
+// ---------------------------------------------------------------------------
+// robots.txt
+// ---------------------------------------------------------------------------
+
+/** The `Allow` and `Disallow` patterns of the groups that apply to this fetcher. */
+export interface RobotsRules {
+  readonly allow: readonly string[];
+  readonly disallow: readonly string[];
+}
+
+export const EMPTY_ROBOTS_RULES: RobotsRules = Object.freeze({ allow: [], disallow: [] });
+
 /**
- * The paths a host's robots.txt disallows for `*` or for this fetcher.
+ * The rules a host's robots.txt states for `*` or for this fetcher by name.
  *
- * A deliberately small parser: group by `User-agent`, keep the `Disallow` prefixes of
- * the groups that name us or everybody, and ignore everything else. `Allow` is not
- * honoured, which is the conservative direction — a path both allowed and disallowed
- * is skipped.
+ * A deliberately small parser, but no longer a one-sided one: `Allow` is collected as
+ * well as `Disallow`, because the previous "ignore Allow, a disallowed path is skipped"
+ * made a site that says `Disallow: /` then `Allow: /about` unreadable, and such a site
+ * has told us exactly which page it wants read.
  */
-export function disallowedPaths(robots: string): readonly string[] {
-  const disallowed: string[] = [];
+export function robotsRules(robots: string): RobotsRules {
+  const allow: string[] = [];
+  const disallow: string[] = [];
   let applies = false;
   let sawAgentInGroup = false;
   for (const rawLine of robots.split(/\r?\n/u)) {
@@ -205,14 +256,73 @@ export function disallowedPaths(robots: string): readonly string[] {
       continue;
     }
     sawAgentInGroup = false;
-    if (field === 'disallow' && applies && value !== '') disallowed.push(value);
+    if (!applies || value === '') continue;
+    // An empty `Disallow` is the standard's way of saying "nothing", and it is dropped
+    // by the `value === ''` above rather than turned into a pattern matching every path.
+    if (field === 'disallow') disallow.push(value);
+    if (field === 'allow') allow.push(value);
   }
-  return disallowed;
+  return { allow, disallow };
 }
 
-function robotsForbids(disallowed: readonly string[], path: string): boolean {
-  return disallowed.some(prefix => path === prefix || path.startsWith(prefix));
+/** How long a robots pattern may be before it is ignored as not a path. */
+const MAX_ROBOTS_PATTERN = 500;
+
+/**
+ * One robots pattern as a regular expression.
+ *
+ * `*` is any sequence and a trailing `$` anchors the end; everything else is literal,
+ * which is why every other regular-expression character is escaped. Both are in the
+ * standard and both change the answer: `/*.pdf$` and `/private` are different rules,
+ * and treating the first as a literal prefix would read it as forbidding nothing.
+ */
+function robotsPattern(pattern: string): RegExp | null {
+  if (pattern.length > MAX_ROBOTS_PATTERN) return null;
+  const anchored = pattern.endsWith('$');
+  const literal = anchored ? pattern.slice(0, -1) : pattern;
+  const escaped = literal
+    .replace(/[.*+?^${}()|[\]\\]/gu, character => (character === '*' ? '\u0000' : `\\${character}`))
+    .replaceAll('\u0000', '.*');
+  try {
+    return new RegExp(`^${escaped}${anchored ? '$' : ''}`, 'u');
+  } catch {
+    return null;
+  }
 }
+
+/** The length of the longest pattern in `patterns` that matches `path`, or -1. */
+function longestMatch(patterns: readonly string[], path: string): number {
+  let longest = -1;
+  for (const pattern of patterns) {
+    const expression = robotsPattern(pattern);
+    if (expression === null || !expression.test(path)) continue;
+    longest = Math.max(longest, pattern.length);
+  }
+  return longest;
+}
+
+/**
+ * Whether the rules forbid this path.
+ *
+ * Longest-match-wins between `Allow` and `Disallow`, and a tie goes to `Allow`. That is
+ * the standard's rule and it is also the only one that makes `Disallow: /` plus
+ * `Allow: /about` mean what the site meant, rather than either "read nothing" or "read
+ * everything".
+ */
+export function robotsForbids(rules: RobotsRules, path: string): boolean {
+  const forbidden = longestMatch(rules.disallow, path);
+  if (forbidden < 0) return false;
+  return forbidden > longestMatch(rules.allow, path);
+}
+
+/**
+ * What one host's robots.txt said, or that it could not be read.
+ *
+ * `unreadable` is not "no rules". A file this fetcher could not read completely is a
+ * file whose `Disallow` lines it cannot claim to be honouring, so the host's pages are
+ * skipped rather than fetched on an assumption.
+ */
+type RobotsAnswer = { readonly kind: 'rules'; readonly rules: RobotsRules } | { readonly kind: 'unreadable' };
 
 interface Skips {
   readonly bump: (reason: string) => void;
@@ -255,44 +365,108 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
       const skips = skipCounter();
       const pages: FetchedPage[] = [];
       const deadline = clock() + FIRM_TIMEOUT_MILLISECONDS;
-      const robotsByHost = new Map<string, readonly string[] | null>();
+      /**
+       * Keyed by host **and** by the address that answered: the rules that were read
+       * are that server's rules, and a name that answers with a different address is
+       * not a name whose earlier answer can be reused.
+       */
+      const robotsByHost = new Map<string, RobotsAnswer>();
 
-      const robotsFor = async (hostname: string, address: string): Promise<readonly string[] | null> => {
-        const cached = robotsByHost.get(hostname);
+      const robotsFor = async (hostname: string, address: string): Promise<RobotsAnswer> => {
+        const cacheKey = `${hostname}|${address}`;
+        const cached = robotsByHost.get(cacheKey);
         if (cached !== undefined) return cached;
-        let rules: readonly string[] | null = [];
-        try {
-          const response = await request({
-            url: `https://${hostname}/robots.txt`,
-            address,
-            hostname,
-            // A robots file larger than this is not a robots file.
-            maxBytes: 64 * 1024,
-            timeoutMilliseconds: PAGE_TIMEOUT_MILLISECONDS,
-          });
-          if (response.statusCode === 200 && response.body !== null) {
-            rules = disallowedPaths(new TextDecoder('utf-8').decode(response.body));
-          }
-        } catch {
-          // A host that will not serve robots.txt has not disallowed anything. It is
-          // not a reason to refuse the site: the absence of the file is the permissive
-          // answer in the standard, and treating a timeout as a prohibition would make
-          // a slow host unreadable for ever.
-          rules = [];
-        }
-        robotsByHost.set(hostname, rules);
-        return rules;
+        const answer = await readRobots(hostname, address);
+        robotsByHost.set(cacheKey, answer);
+        return answer;
       };
 
-      for (const initial of input.urls) {
+      const readRobots = async (hostname: string, firstAddress: string): Promise<RobotsAnswer> => {
+        let url = `https://${hostname}/robots.txt`;
+        let address = firstAddress;
+        let followed = 0;
+        for (;;) {
+          let response: RawResponse;
+          try {
+            response = await request({
+              url,
+              address,
+              hostname: new URL(url).hostname,
+              maxBytes: MAX_ROBOTS_BYTES,
+              timeoutMilliseconds: PAGE_TIMEOUT_MILLISECONDS,
+            });
+          } catch {
+            // A timeout or a reset is not permission.
+            return { kind: 'unreadable' };
+          }
+
+          if (response.statusCode >= 300 && response.statusCode < 400) {
+            const location = headerOf(response, 'location');
+            if (location === '' || followed >= MAX_REDIRECTS) return { kind: 'unreadable' };
+            let target: string;
+            try {
+              target = withoutFragment(new URL(location, url).toString());
+            } catch {
+              return { kind: 'unreadable' };
+            }
+            // Same site only. Another host's robots file is not this host's rules.
+            if (!isSameResearchSite(url, target)) return { kind: 'unreadable' };
+            const nextHost = new URL(target).hostname.toLowerCase();
+            const nextAddress = await checkedAddress(lookup, nextHost);
+            if (nextAddress === null) return { kind: 'unreadable' };
+            followed += 1;
+            url = target;
+            address = nextAddress;
+            continue;
+          }
+
+          // The file is absent, and only the absence is the permissive answer.
+          if (response.statusCode === 404 || response.statusCode === 410) {
+            return { kind: 'rules', rules: EMPTY_ROBOTS_RULES };
+          }
+          if (response.abortedOverCap || response.statusCode !== 200 || response.body === null) {
+            return { kind: 'unreadable' };
+          }
+          return { kind: 'rules', rules: robotsRules(new TextDecoder('utf-8').decode(response.body)) };
+        }
+      };
+
+      /**
+       * How many pages this run may read in total.
+       *
+       * Every page, not just the firm's own: `worstCaseRunCents` prices this many pages
+       * and `claimResearchClearance` authorized the run against that number, so an
+       * added link, an allow-listed path and a discovered link all spend from the same
+       * budget. `researchUrlsForFirm` builds a list already inside it; this is the
+       * second half of the same rule, and the one discovery has to obey.
+       */
+      const pageBudget = Math.max(1, Math.min(Math.trunc(input.maxPagesPerFirm), MAX_PAGES_CEILING));
+
+      /**
+       * The queue. Seeded with the caller's list, and appended to once by discovery,
+       * which is why it is walked by index rather than iterated.
+       */
+      const queue: string[] = [...input.urls];
+      /** The URLs the homepage named. Passed to the policy, which permits exactly these. */
+      const discovered: string[] = [];
+      let discoveryDone = false;
+
+      for (let index = 0; index < queue.length; index += 1) {
+        const initial = queue[index] ?? '';
+        if (pages.length >= pageBudget) {
+          // Nothing is wrong with the rest of the queue; there is no budget left.
+          skips.bump('page_budget_reached');
+          continue;
+        }
         if (clock() >= deadline) {
           skips.bump('firm_timeout');
           continue;
         }
         let url = initial;
+        let permission: UrlPermission = permittedResearchUrl({ ...input, discovered }, url);
         let followed = 0;
         for (;;) {
-          if (permittedResearchUrl(input, url) === 'blocked') {
+          if (permission === 'blocked') {
             skips.bump('url_not_permitted');
             break;
           }
@@ -302,8 +476,12 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
             skips.bump('address_not_public');
             break;
           }
-          const rules = await robotsFor(hostname, address);
-          if (rules !== null && robotsForbids(rules, new URL(url).pathname)) {
+          const robots = await robotsFor(hostname, address);
+          if (robots.kind === 'unreadable') {
+            skips.bump('robots_unreadable');
+            break;
+          }
+          if (robotsForbids(robots.rules, new URL(url).pathname)) {
             skips.bump('robots_disallowed');
             break;
           }
@@ -329,9 +507,20 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
               break;
             }
             followed += 1;
-            // Resolved against the URL we asked for, then re-checked from the top of
-            // this loop: a new policy decision, a new lookup, a new pin.
-            url = new URL(location, url).toString();
+            // Resolved against the URL we asked for, its fragment dropped, and then
+            // decided again: a same-site hop keeps this URL's permission, anything else
+            // gets the ordinary rule. Either way the loop starts over with a new
+            // lookup, a new robots answer and a new pin.
+            const target = withoutFragment(new URL(location, url).toString());
+            if (new URL(target).search !== '') {
+              // A URL that is fetched is stored, as this page's evidence reference. A
+              // query string is where a token or an address would be, and retention
+              // cannot find one inside a URL.
+              skips.bump('url_has_query');
+              break;
+            }
+            permission = permittedRedirectTarget({ ...input, discovered }, { url, permission }, target);
+            url = target;
             continue;
           }
           if (response.abortedOverCap) {
@@ -342,15 +531,33 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
             skips.bump(`status_${String(response.statusCode)}`);
             break;
           }
+          const contentType = headerOf(response, 'content-type');
           pages.push({
             url,
             // The exact bytes read, and nothing else: the hash and the blocks
             // `parsePageText` produces describe the same thing.
             contentHash: createHash('sha256').update(response.body).digest('hex'),
-            contentType: headerOf(response, 'content-type'),
+            contentType,
             body: response.body,
             retrievedAt: new Date(clock()).toISOString(),
+            // Whose words these are, decided where it is knowable: after the redirect
+            // chain, by the permission the page was actually fetched under.
+            firstParty: permission === 'firm_site',
           });
+
+          if (!discoveryDone && permission === 'firm_site') {
+            // Once, from the first page of the firm's own site that answered — which is
+            // the homepage, including a homepage that redirected somewhere first.
+            discoveryDone = true;
+            for (const candidate of discoverSameSiteUrls(input, {
+              from: url,
+              hrefs: anchorHrefs(response.body, contentType),
+            })) {
+              if (queue.includes(candidate)) continue;
+              discovered.push(candidate);
+              queue.push(candidate);
+            }
+          }
           break;
         }
       }

@@ -25,12 +25,32 @@ import type { JudgmentValue } from './judgments.ts';
  * A brief with no generated part is still a brief: quotes, judgments and a likely
  * person, with `generated: false`. That is what a run without an extraction provider
  * produces, and it is a smaller answer rather than a failure.
+ *
+ * ## And a page on somebody else's host is not the firm's own words
+ *
+ * A link a person adds is fetched and quoted through the same path as the firm's own
+ * site, so without saying otherwise the brief would present a trade article's sentence
+ * as something the firm said. Every quote therefore carries `firstParty`, and a
+ * third-party quote carries an `attribution` — "per news.test" — which the desktop
+ * renders beside it. `judgments.ts` is the other half of the same rule: a third-party
+ * fact never decides fit or reachability.
+ *
+ * ## Some facts have no quote, on purpose
+ *
+ * `named_role`, `phone_listed` and `role` store none (`PERSON_FACT_KEYS`), because the
+ * block they name is a block naming a person and a contact's deletion could not reach
+ * it here. They still count towards a judgment and they are never rendered as a quote;
+ * `pick` skips them rather than printing an empty line.
  */
 
 export interface BriefQuote {
   readonly quote: string;
   readonly sourceReference: string;
   readonly retrievedAt: string;
+  /** False for a link a person added on another host. */
+  readonly firstParty: boolean;
+  /** `per <host>` for a third-party quote, and null for the firm's own words. */
+  readonly attribution: string | null;
 }
 
 export interface BriefPerson {
@@ -60,6 +80,16 @@ export interface CallBrief {
   readonly revision: number;
   /** Every distinct source behind the quotes above, so a reader can open them all. */
   readonly sources: readonly { readonly sourceReference: string; readonly retrievedAt: string }[];
+  /**
+   * How many runs have failed since the last one that completed, and whether the sweep
+   * has given up.
+   *
+   * A provider failure completes its job rather than throwing, so the retry is the
+   * sweep's — one a business day, three times (`MAX_CONSECUTIVE_FAILED_RUNS`). Without
+   * this the firm page would show a stale brief and no hint that the last three
+   * attempts to refresh it failed, which is the worst of the two silences.
+   */
+  readonly failedTries: number;
 }
 
 export const MAX_WHY_FIT_QUOTES = 3;
@@ -87,7 +117,8 @@ const WHAT_CHANGED_KEYS = ['recent_change', 'hiring_maintenance'] as const;
 interface FactRow {
   readonly id: string;
   readonly key: string;
-  readonly quote: string;
+  readonly quote: string | null;
+  readonly first_party: boolean;
   readonly source_reference: string;
   readonly retrieved_at: Date;
   readonly confidence: string | null;
@@ -110,7 +141,10 @@ interface JudgmentRow {
 export interface FirmFactDto {
   readonly id: string;
   readonly key: string;
-  readonly quote: string;
+  /** Null for a `PERSON_FACT_KEYS` key: the block is referenced, never copied. */
+  readonly quote: string | null;
+  /** False for a page on a host that is not the firm's own. */
+  readonly firstParty: boolean;
   readonly sourceReference: string;
   readonly retrievedAt: string;
   readonly confidence: number | null;
@@ -140,7 +174,7 @@ export async function listFirmFacts(
   firmId: string,
 ): Promise<readonly FirmFactDto[]> {
   const { rows } = await context.db.query<FactRow>(
-    `SELECT f.id, f.key, f.quote, e.source_reference, f.retrieved_at, f.confidence
+    `SELECT f.id, f.key, f.quote, f.first_party, e.source_reference, f.retrieved_at, f.confidence
        FROM firm_facts f
        JOIN evidence_items e ON e.workspace_id = f.workspace_id AND e.id = f.evidence_id
       WHERE f.workspace_id = $1 AND f.firm_id = $2
@@ -151,6 +185,7 @@ export async function listFirmFacts(
     id: row.id,
     key: row.key,
     quote: row.quote,
+    firstParty: row.first_party,
     sourceReference: row.source_reference,
     retrievedAt: row.retrieved_at.toISOString(),
     confidence: row.confidence === null ? null : Number(row.confidence),
@@ -184,6 +219,17 @@ export async function readFirmJudgments(
   };
 }
 
+/** `per <host>` for a page that is not the firm's own, and null for one that is. */
+export function attributionOf(fact: { readonly firstParty: boolean; readonly sourceReference: string }): string | null {
+  if (fact.firstParty) return null;
+  try {
+    return `per ${new URL(fact.sourceReference).hostname.replace(/^www\./u, '')}`;
+  } catch {
+    // A reference that will not parse is still not the firm's own words.
+    return 'per another source';
+  }
+}
+
 function pick(
   facts: readonly FirmFactDto[],
   keys: readonly string[],
@@ -193,9 +239,17 @@ function pick(
   const seen = new Set<string>();
   for (const key of keys) {
     for (const fact of facts) {
-      if (fact.key !== key || seen.has(fact.quote)) continue;
+      // A person key holds no quote. It counted towards a judgment and it is not
+      // rendered, which is the whole arrangement `PERSON_FACT_KEYS` describes.
+      if (fact.key !== key || fact.quote === null || seen.has(fact.quote)) continue;
       seen.add(fact.quote);
-      chosen.push({ quote: fact.quote, sourceReference: fact.sourceReference, retrievedAt: fact.retrievedAt });
+      chosen.push({
+        quote: fact.quote,
+        sourceReference: fact.sourceReference,
+        retrievedAt: fact.retrievedAt,
+        firstParty: fact.firstParty,
+        attribution: attributionOf(fact),
+      });
       if (chosen.length >= limit) return chosen;
     }
   }
@@ -229,6 +283,8 @@ export interface BuildBriefInput {
   /** `research_runs.brief` of the run the judgment came from. */
   readonly runBrief: Readonly<Record<string, unknown>> | null;
   readonly likelyPerson: BriefPerson | null;
+  /** Failed runs since the last completed one. Zero when the last run completed. */
+  readonly failedTries?: number | undefined;
 }
 
 /** Pure. Everything it needs is an argument; the reads above are the caller's. */
@@ -260,7 +316,29 @@ export function buildCallBrief(input: BuildBriefInput): CallBrief {
     judgedAt: input.judgments.judgedAt,
     revision: input.revision,
     sources: [...sources].map(([sourceReference, retrievedAt]) => ({ sourceReference, retrievedAt })),
+    failedTries: Math.max(0, Math.trunc(input.failedTries ?? 0)),
   };
+}
+
+/**
+ * How many runs have failed since the last one that completed.
+ *
+ * The same count the sweep uses to decide whether to try again, read here so the firm
+ * page can say "research failed, N tries" instead of showing a brief that is quietly
+ * three days out of date.
+ */
+export async function countFailedTries(context: RepositoryContext, firmId: string): Promise<number> {
+  const { rows } = await context.db.query<{ tries: string }>(
+    `SELECT count(*)::text AS tries
+       FROM research_runs r
+      WHERE r.workspace_id = $1 AND r.firm_id = $2 AND r.outcome = 'failed'
+        AND r.revision > COALESCE((
+          SELECT max(c.revision) FROM research_runs c
+           WHERE c.workspace_id = $1 AND c.firm_id = $2 AND c.outcome = 'completed'
+        ), 0)`,
+    [context.scope.workspaceId, firmId],
+  );
+  return Number(rows[0]?.tries ?? '0');
 }
 
 /**
@@ -299,5 +377,6 @@ export async function readCallBrief(
     revision: Number(run?.revision ?? 0),
     runBrief: run?.brief ?? null,
     likelyPerson,
+    failedTries: await countFailedTries(context, firmId),
   });
 }

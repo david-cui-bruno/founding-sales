@@ -98,16 +98,40 @@ export const BLOCKED_RESEARCH_HOSTS: readonly string[] = Object.freeze([
   'zoominfo.com',
 ]);
 
-/** The paths research reads on a firm's own host, in this order. */
+/**
+ * The paths research reads on a firm's own host, **in this order**.
+ *
+ * The order is load-bearing, because `max_pages_per_firm` is a prefix of this list and
+ * its default is four. `/careers` and `/jobs` come before `/team` and `/contact` for
+ * that reason: a maintenance job posting is the only evidence `hiring_maintenance` has,
+ * and that one key feeds two of the four judgments — problem evidence and timing. With
+ * careers fifth the default settings would never fetch it, and two judgments would be
+ * `unknown` on every firm for a reason nobody could see.
+ */
 export const RESEARCH_PAGE_PATHS: readonly string[] = Object.freeze([
   '/',
   '/about',
   '/services',
-  '/team',
-  '/contact',
   '/careers',
   '/jobs',
+  '/team',
+  '/contact',
 ]);
+
+/**
+ * The paths a link found on the firm's own homepage may have.
+ *
+ * The fixed list above is a guess at what a site calls its pages, and real sites call
+ * them `/about-us`, `/our-team`, `/contact-us`, `/services/` and `/join-our-team`. On
+ * one of those, an exact-path allow-list reads the homepage and nothing else. So the
+ * homepage's own links are read as well — the firm's own navigation is a better guide
+ * to the firm's own site than a list written here — and this is the filter that keeps
+ * the discovery to the pages research was going to ask for anyway.
+ */
+export const DISCOVERED_PATH_PATTERN = /about|service|team|staff|contact|career|job|hiring/iu;
+
+/** How many same-site links one homepage may contribute before the filter is applied. */
+export const MAX_DISCOVERED_CANDIDATES = 20;
 
 /** The largest `max_pages_per_firm` the settings CHECK admits. */
 export const MAX_PAGES_CEILING = 8;
@@ -135,6 +159,22 @@ function isBlockedHost(host: string): boolean {
  * has to pass this and *not* the firm-host rule: a person may add a page on another
  * public host once, and it is still refused if it is a social network or a bare
  * private address.
+ *
+ * ## No query string, and no fragment
+ *
+ * A URL research fetches is stored: in `firm_links` where a person put it, and in
+ * `evidence_items.source_reference` where it is the provenance of a quote. A query
+ * string is where a session token, a password-reset code, a signed URL's signature and
+ * an e-mail address live, and retention has no way to find one inside a URL. So a URL
+ * with a query is not fetched and not stored — `addFirmLink` refuses it
+ * `link_not_permitted`, a redirect target with one is skipped `url_has_query`, and this
+ * function is where all three of those get their answer.
+ *
+ * A fragment is dropped rather than refused, because it is never sent to the server and
+ * never identifies a different page — but a URL that still carries one has not been
+ * normalised by whoever is asking, and storing `…/about#team` and `…/about` as two
+ * evidence references for one page would be wrong. `withoutFragment` is the dropper and
+ * every entry point calls it; this refuses what is left, so nothing can skip it.
  */
 export function isPublicResearchUrl(value: string): boolean {
   let url: URL;
@@ -147,6 +187,7 @@ export function isPublicResearchUrl(value: string): boolean {
   if (url.protocol !== 'https:') return false;
   if (url.username !== '' || url.password !== '') return false;
   if (url.port !== '' && url.port !== '443') return false;
+  if (url.search !== '' || url.hash !== '') return false;
   if (!host.includes('.') || host.includes(':')) return false;
   if (host.endsWith('.local') || host.endsWith('.localhost')) return false;
   // A literal address in the URL is checked here; a *name* is checked after it is
@@ -155,10 +196,40 @@ export function isPublicResearchUrl(value: string): boolean {
   return !isBlockedHost(host);
 }
 
+/**
+ * The same URL with its fragment removed.
+ *
+ * Total, and it leaves anything it cannot parse exactly as it found it: the caller's
+ * next step is `isPublicResearchUrl`, which refuses what this could not normalise.
+ */
+export function withoutFragment(value: string): string {
+  try {
+    const url = new URL(value);
+    url.hash = '';
+    return url.toString();
+  } catch {
+    return value;
+  }
+}
+
 /** `example.test` and `www.example.test` are the same firm's site. */
 function sameSite(firmHost: string, host: string): boolean {
   const bare = firmHost.replace(/^www\./u, '');
   return host === bare || host === `www.${bare}`;
+}
+
+/**
+ * Whether two URLs are on the same site, by the rule above.
+ *
+ * Exported for the adapter, which needs it for one thing the policy cannot decide for
+ * it: whether a `robots.txt` that answered with a redirect is still the same host's
+ * robots file. Anything that is not is not this host's rules, and a host whose rules
+ * cannot be read is a host whose pages are not fetched.
+ */
+export function isSameResearchSite(a: string, b: string): boolean {
+  const left = normalizedHost(a);
+  const right = normalizedHost(b);
+  return left !== null && right !== null && sameSite(left, right);
 }
 
 export type UrlPermission =
@@ -175,6 +246,15 @@ export interface PermittedUrlInput {
   readonly links?: readonly string[] | undefined;
   /** `research_settings.max_pages_per_firm`: how far down `RESEARCH_PAGE_PATHS` to read. */
   readonly maxPagesPerFirm: number;
+  /**
+   * Same-site URLs found in the firm's own homepage (`discoverSameSiteUrls`).
+   *
+   * Permitted like a fixed path, and for the same reason: they are on the firm's own
+   * host and the firm itself linked to them. They are *not* permitted by prefix — the
+   * set is the exact URLs the homepage named, so a redirect cannot walk into one that
+   * was never on the page.
+   */
+  readonly discovered?: readonly string[] | undefined;
 }
 
 /**
@@ -196,6 +276,8 @@ export function permittedResearchUrl(input: PermittedUrlInput, value: string): U
   const host = normalizedHost(value);
   if (host === null || !sameSite(firmHost, host)) return 'blocked';
 
+  if ((input.discovered ?? []).includes(value)) return 'firm_site';
+
   const bounded = Math.max(1, Math.min(Math.trunc(input.maxPagesPerFirm), MAX_PAGES_CEILING));
   const paths = RESEARCH_PAGE_PATHS.slice(0, bounded);
   const path = new URL(value).pathname.replace(/\/+$/u, '');
@@ -203,24 +285,130 @@ export function permittedResearchUrl(input: PermittedUrlInput, value: string): U
 }
 
 /**
- * Exactly the URLs one run may request for one firm, in order: the firm's own pages
- * within `maxPagesPerFirm`, then the links a person added.
+ * What research may do with a URL a redirect pointed it at.
  *
- * Each is re-checked by `permittedResearchUrl` in the adapter, so this function is a
- * convenience for the caller and never the authority.
+ * A redirect on the **same site** inherits the permission of the URL that led to it,
+ * whatever its path. Re-applying the exact-path allow-list here was wrong and it is
+ * the ordinary case that suffers: a homepage that answers `301` to `/home`, `/en/` or
+ * `/index.html` — which a great many do — would be skipped as `url_not_permitted` and
+ * the firm would yield nothing at all.
+ *
+ * Nothing else is relaxed. The target still has to be an https URL on a public host
+ * that is not a blocked one (`isPublicResearchUrl`), the adapter still resolves it,
+ * checks every address and pins the socket, still asks that host's robots, and still
+ * counts the hop against `MAX_REDIRECTS`. A **cross-site** redirect is blocked unless
+ * the target is itself a link a person added: the firm's own server does not get to
+ * choose a second site for research to read.
+ */
+export function permittedRedirectTarget(
+  input: PermittedUrlInput,
+  from: { readonly url: string; readonly permission: UrlPermission },
+  to: string,
+): UrlPermission {
+  if (from.permission === 'blocked') return 'blocked';
+  if (!isPublicResearchUrl(to)) return 'blocked';
+  // An added link is itself, wherever it was reached from.
+  if ((input.links ?? []).includes(to)) return 'added_link';
+
+  const fromHost = normalizedHost(from.url);
+  const toHost = normalizedHost(to);
+  if (fromHost !== null && toHost !== null && sameSite(fromHost, toHost)) return from.permission;
+
+  // Off the site it came from: the ordinary rule, which for a firm page means the
+  // firm's own host and an allow-listed or discovered path, and nothing else.
+  return permittedResearchUrl(input, to);
+}
+
+/**
+ * The same-site links a firm's own homepage offers, normalised and filtered.
+ *
+ * Pure: `anchorHrefs` in `pageText.ts` does the scanning and this does the deciding,
+ * so every rule below is provable without a page.
+ *
+ * Normalised means absolute against the page it was found on, https, no query and no
+ * fragment (two links to the same page with different tracking parameters are one
+ * page), and no trailing slash — so `/services/` and `/services` are one URL rather
+ * than two fetches of the same bytes.
+ *
+ * The cap is applied to the same-site candidates **before** the keyword filter, so a
+ * page with a thousand links costs a bounded amount of work whatever they say.
+ */
+export function discoverSameSiteUrls(
+  input: PermittedUrlInput,
+  found: { readonly from: string; readonly hrefs: readonly string[] },
+): readonly string[] {
+  const firmHost = input.firmWebsite === null ? null : normalizedHost(input.firmWebsite);
+  if (firmHost === null || isBlockedHost(firmHost)) return [];
+
+  const candidates: string[] = [];
+  for (const href of found.hrefs) {
+    if (candidates.length >= MAX_DISCOVERED_CANDIDATES) break;
+    let url: URL;
+    try {
+      url = new URL(href, found.from);
+    } catch {
+      continue;
+    }
+    // `mailto:`, `tel:`, `javascript:` and every other scheme fall out here.
+    if (url.protocol !== 'https:') continue;
+    const host = url.hostname.toLowerCase().replace(/\.$/u, '');
+    if (!sameSite(firmHost, host)) continue;
+    const path = url.pathname.replace(/\/+$/u, '');
+    const normalized = `https://${host}${path === '' ? '/' : path}`;
+    if (!candidates.includes(normalized)) candidates.push(normalized);
+  }
+
+  /**
+   * Deduped against the paths this run will actually ask for — the bounded prefix of
+   * the fixed list, which is exactly what `researchUrlsForFirm` produced — and not
+   * against the whole of `RESEARCH_PAGE_PATHS`. Dropping a discovered `/careers/`
+   * because `/careers` appears somewhere in a list that this run is not reading that
+   * far down would lose the page and fetch nothing in its place.
+   */
+  const bounded = Math.max(1, Math.min(Math.trunc(input.maxPagesPerFirm), MAX_PAGES_CEILING));
+  const fixed = new Set(
+    RESEARCH_PAGE_PATHS.slice(0, bounded).map(path => `https://${firmHost}${path === '/' ? '/' : path}`),
+  );
+  return Object.freeze(
+    candidates.filter(url => {
+      const path = new URL(url).pathname;
+      if (path === '/' || fixed.has(url)) return false;
+      return DISCOVERED_PATH_PATTERN.test(path);
+    }),
+  );
+}
+
+/**
+ * Exactly the URLs one run may request for one firm, in order: the links a person
+ * added, then the firm's own pages — **and never more than `maxPagesPerFirm` of them
+ * in total**.
+ *
+ * The total is the point. `worstCaseRunCents` is what `claimResearchClearance` checks a
+ * ceiling against before any call is made, and it prices `maxPagesPerFirm` pages. When
+ * this function appended every added link *on top of* that number, a firm with six
+ * links sent ten pages to a bound computed for four, and the cents ceiling that is the
+ * only thing standing between this feature and a month's budget was authorizing a run
+ * it had not priced. One number, enforced in one place, checked in the other.
+ *
+ * Added links first, because a link is a person's decision about this firm and a fixed
+ * path is a guess about every firm. If the budget only covers one page and somebody has
+ * said which page matters, that is the page.
+ *
+ * Each URL is re-checked by `permittedResearchUrl` in the adapter, so this function is
+ * the caller's convenience and never the authority.
  */
 export function researchUrlsForFirm(input: PermittedUrlInput): readonly string[] {
+  const budget = Math.max(1, Math.min(Math.trunc(input.maxPagesPerFirm), MAX_PAGES_CEILING));
   const urls: string[] = [];
+  const add = (candidate: string, expected: UrlPermission): void => {
+    if (urls.length >= budget || urls.includes(candidate)) return;
+    if (permittedResearchUrl(input, candidate) === expected) urls.push(candidate);
+  };
+
+  for (const link of input.links ?? []) add(withoutFragment(link.trim()), 'added_link');
   const firmHost = input.firmWebsite === null ? null : normalizedHost(input.firmWebsite);
   if (firmHost !== null && !isBlockedHost(firmHost)) {
-    const bounded = Math.max(1, Math.min(Math.trunc(input.maxPagesPerFirm), MAX_PAGES_CEILING));
-    for (const path of RESEARCH_PAGE_PATHS.slice(0, bounded)) {
-      const candidate = `https://${firmHost}${path}`;
-      if (permittedResearchUrl(input, candidate) === 'firm_site') urls.push(candidate);
-    }
-  }
-  for (const link of input.links ?? []) {
-    if (!urls.includes(link) && permittedResearchUrl(input, link) === 'added_link') urls.push(link);
+    for (const path of RESEARCH_PAGE_PATHS.slice(0, budget)) add(`https://${firmHost}${path}`, 'firm_site');
   }
   return Object.freeze(urls);
 }

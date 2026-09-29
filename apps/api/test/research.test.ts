@@ -228,7 +228,9 @@ describe('the research routes', () => {
     const settings = (read.body['result'] as Record<string, unknown>)['settings'] as Record<string, unknown>;
     expect(settings['enabled']).toBe(true);
     expect(settings['dailyCostCeilingCents']).toBe(50);
-    expect((read.body['result'] as Record<string, unknown>)['worstCaseRunCents']).toBe(2);
+    // Three cents at the defaults: four pages, twelve thousand characters each, priced
+    // at 2.5 characters to a token with two thousand tokens of prompt overhead.
+    expect((read.body['result'] as Record<string, unknown>)['worstCaseRunCents']).toBe(3);
 
     const refused = await post('/research/settings', assigneeToken, command({}));
     expect(refused.status).toBe(409);

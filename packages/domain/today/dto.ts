@@ -2,7 +2,13 @@ import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { currentCallingIdentityId } from '../dial/identities.ts';
 import { businessDateOf, listTodayCards, listTodayItems, workspaceBusinessTimeZone } from './snapshots.ts';
 import { readCallBrief, type CallBrief } from '../research/brief.ts';
-import { TODAY_PAUSE_SOURCE_EVENT_KIND, callLogIdOfItemKey, type TodayCounts, type TodayItemRow } from './types.ts';
+import {
+  TODAY_ALGORITHM_VERSION,
+  TODAY_PAUSE_SOURCE_EVENT_KIND,
+  callLogIdOfItemKey,
+  type TodayCounts,
+  type TodayItemRow,
+} from './types.ts';
 import type { TodayItemKind, TodayLane } from '@fss/contracts';
 
 /**
@@ -282,11 +288,23 @@ async function callFirstFirmIds(context: RepositoryContext): Promise<ReadonlySet
  *
  * Because the order changed, `TODAY_ALGORITHM_VERSION` is `today.2` and migration
  * 0023 moved `today_algorithm_version()` with it.
+ *
+ * ## And only to a snapshot built under `today.2`
+ *
+ * A card row carries the version it was built under. Applying this partition to a day
+ * whose cards say `today.1` would re-order a list that day already showed, which is the
+ * one thing a snapshot is for: `today_snapshots` is the record of what the morning list
+ * *was*, not a query that answers differently as the code changes. So one card at an
+ * older version leaves the whole date alone — the rows of a date are one snapshot, and
+ * half a list ordered two ways is worse than either. Migration 0023 makes
+ * `today_refresh_card` stamp the current version on every card it rebuilds, so a date
+ * converts wholly at its first rebuild rather than becoming permanently mixed.
  */
-function callFirstFirst<Card extends { readonly lane: string; readonly firmId: string }>(
+function callFirstFirst<Card extends { readonly lane: string; readonly firmId: string; readonly algorithmVersion: string }>(
   cards: readonly Card[],
   callFirst: ReadonlySet<string>,
 ): readonly Card[] {
+  if (!cards.every(card => card.algorithmVersion === TODAY_ALGORITHM_VERSION)) return cards;
   const first: Card[] = [];
   const rest: Card[] = [];
   const others: Card[] = [];

@@ -30,6 +30,21 @@ import type { DueWorkSource } from '../scheduler/schedulerPass.ts';
  * a useful one — the evidence is what a later run's facts will point at — so the
  * handler is registered whenever the page fetch is, which is always.
  *
+ * ## The job always completes, even when the run failed
+ *
+ * This handler has no retry ladder for a provider failure, and that is deliberate.
+ * The runner wraps the job in one transaction; the run's paid calls happen inside it.
+ * Throwing would roll back the run row, the evidence, the ledger cents and the
+ * consumed daily count while the money stayed spent — and then retry the same paid
+ * calls against a budget with no record of the first attempt. So `runFirmResearch`
+ * commits every outcome (see its "nothing throws" section), including a `failed` run,
+ * and this handler treats a refusal the same way it treats a completion: the job is
+ * done. A retry is the sweep's, as a new revision with a new clearance, which is a
+ * retry the budget can see.
+ *
+ * `maxAttempts` is therefore about a poison payload and a stolen lease, not about
+ * providers.
+ *
  * ## Why `business_uniqueness`, and why it is not chunked
  *
  * The run's first write is the insert into `research_runs`, unique on
@@ -105,7 +120,9 @@ export function researchFirmJobHandler(options: ResearchWorkerOptions): JobHandl
         throw new ResearchHandlerError('a research.firm payload names a firm, a revision and a trigger');
       }
       const context = repositoryContext(input.scope, input.session);
-      const outcome = await runFirmResearch(context, {
+      // Every outcome, including a failure, is recorded on the run row inside this
+      // transaction. Nothing here throws on one: see the header.
+      await runFirmResearch(context, {
         firmId: payload.firmId,
         revision: payload.revision,
         trigger: payload.trigger,
@@ -114,13 +131,6 @@ export function researchFirmJobHandler(options: ResearchWorkerOptions): JobHandl
         pageFetch: options.pageFetch,
         ...(options.extraction === undefined ? {} : { extraction: options.extraction }),
       });
-      // A refusal completes the job: a ceiling, a suppression or a firm with no
-      // website is an answer, recorded on the run row, and retrying it three times
-      // would spend the ladder on a decision that will not change this minute.
-      // `provider_failure` is the exception — the ladder is exactly what it is for.
-      if (!outcome.ok && outcome.reason === 'provider_failure') {
-        throw new ResearchHandlerError(`research.firm: ${outcome.reason}`);
-      }
     },
   };
 }
@@ -139,11 +149,15 @@ export function researchSweepJobHandler(options: ResearchWorkerOptions): JobHand
       const settings = await readResearchSettings(context);
       if (!settings.enabled) return;
       const at = await databaseNow(context);
+      // Whether this deployment can extract at all changes which firms are worth
+      // re-reading: a run that completed with no model is a run with no facts, and it
+      // should not hold the firm off for ninety days once a key exists.
+      const extractionConfigured = options.extraction !== undefined;
       // Bounded by the day's own firm ceiling: a sweep that queued more than the day
       // can run would fill the queue with jobs that each refuse and complete, which
       // is the shape 13.1 asks a source to avoid.
       const limit = Math.min(settings.dailyFirmCeiling, RESEARCH_SWEEP_LIMIT);
-      for (const candidate of await selectFirmsForSweep(context, { limit, at })) {
+      for (const candidate of await selectFirmsForSweep(context, { limit, at, extractionConfigured })) {
         // Every refusal is ignored: a firm suppressed since the select, or one whose
         // run opened in between, is a firm the next sweep will see again.
         await enqueueFirmResearch(context, { firmId: candidate.firmId, trigger: 'sweep' });

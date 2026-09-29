@@ -86,6 +86,62 @@ export function blocksFromPlainText(text: string): PageText {
   return assemble(text.split(/\r?\n/u));
 }
 
+/** How many `<a href>` values one page may contribute. A bound, not a policy. */
+export const MAX_ANCHOR_HREFS = 200;
+
+/**
+ * The raw `href` values of a page's anchors, in document order.
+ *
+ * A small lexical scan, on purpose: research needs a firm's own navigation to find
+ * `/about-us` and `/join-our-team`, and it does not need — and must not grow — an HTML
+ * parser to do it. Nothing here resolves, filters or trusts anything. The values come
+ * back exactly as the page wrote them, including `mailto:`, `javascript:`, protocol-
+ * relative and plainly broken ones; `discoverSameSiteUrls` in `sourcePolicy.ts` is
+ * where every decision about them is made, and it is pure so those decisions are
+ * provable without a page.
+ *
+ * Bounded twice over: nothing is scanned unless it is HTML inside `MAX_PAGE_BYTES`,
+ * and at most `MAX_ANCHOR_HREFS` values come back.
+ */
+export function anchorHrefs(body: Uint8Array, contentType: string): readonly string[] {
+  if (body.byteLength > MAX_PAGE_BYTES) return [];
+  if (mediaTypeOf(contentType) !== 'text/html') return [];
+
+  const source = new TextDecoder('utf-8').decode(body);
+  const hrefs: string[] = [];
+  const pattern = /<a\s[^>]*?href\s*=\s*("([^"]*)"|'([^']*)'|([^\s"'>`=]+))/giu;
+  for (const match of source.matchAll(pattern)) {
+    if (hrefs.length >= MAX_ANCHOR_HREFS) break;
+    const raw = match[2] ?? match[3] ?? match[4] ?? '';
+    const value = decodeMarkupEntities(raw).trim();
+    if (value !== '') hrefs.push(value);
+  }
+  return Object.freeze(hrefs);
+}
+
+/**
+ * The five predefined XML entities, which is what an `href` in real markup contains.
+ *
+ * `&amp;` is the one that matters: `?a=1&amp;b=2` is one URL written two ways, and
+ * `discoverSameSiteUrls` drops the query anyway — but a numeric entity left in a path
+ * would otherwise make two URLs out of one page.
+ */
+function decodeMarkupEntities(value: string): string {
+  return value
+    .replace(/&#(\d{1,7});/gu, (_, digits: string) => codePoint(Number.parseInt(digits, 10)))
+    .replace(/&#[xX]([0-9a-fA-F]{1,6});/gu, (_, digits: string) => codePoint(Number.parseInt(digits, 16)))
+    .replace(/&quot;/giu, '"')
+    .replace(/&apos;/giu, "'")
+    .replace(/&lt;/giu, '<')
+    .replace(/&gt;/giu, '>')
+    .replace(/&amp;/giu, '&');
+}
+
+function codePoint(value: number): string {
+  if (!Number.isInteger(value) || value <= 0 || value > 0x10ffff) return '';
+  return String.fromCodePoint(value);
+}
+
 function assemble(candidates: readonly string[]): PageText {
   const blocks: PageBlock[] = [];
   let text = '';

@@ -317,6 +317,13 @@ export const RESEARCH_CONSTRAINT_CASES: readonly Case[] = [
   { constraint: 'firm_facts_key_shape', run: async f => await fact(f, { key: 'TargetFit' }) },
   { constraint: 'firm_facts_block_id_bounded', run: async f => await fact(f, { block_id: '  ' }) },
   { constraint: 'firm_facts_quote_present', run: async f => await fact(f, { quote: '   ' }) },
+  {
+    // `named_role`, `phone_listed` and `role` name a block that names a person, and a
+    // contact's deletion does not reach a firm's rows. The rule is an equality, so
+    // this is the half that refuses a quote for one of those keys.
+    constraint: 'firm_facts_person_keys_have_no_quote',
+    run: async f => await fact(f, { key: 'named_role', quote: 'Dana Placeholder, Maintenance Coordinator' }),
+  },
   { constraint: 'firm_facts_confidence_range', run: async f => await fact(f, { confidence: 1.5 }) },
 
   // ----------------------------------------------------------- firm_judgments

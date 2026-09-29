@@ -85,6 +85,50 @@ describe('lane 4 puts the call-first firms in front', () => {
     expect(list.cards.map(card => card.firmId)).toEqual([middle, alsoCallFirst, oldest, newest]);
   });
 
+  it('leaves a snapshot built under today.1 in the order that day showed', async () => {
+    const oldest = await firm('v1 oldest, not researched', '2026-08-01T12:00:00Z');
+    const middle = await firm('v1 middle, call first', '2026-08-02T12:00:00Z');
+    await judge(middle, true);
+
+    const context = worker();
+    const now = await databaseNow(context);
+    const businessDate = await businessDateOf(context, now);
+    await buildTodaySnapshot(context, { businessDate, now, sources: [newFirmSource()] });
+
+    const salesperson = repositoryContext(
+      workspaceScope(seeded.alpha.workspaceId, {
+        kind: 'user',
+        userId: seeded.alpha.salesperson.userId,
+        role: 'salesperson',
+      }),
+      database.session,
+    );
+
+    // Put the date's cards back to the version they would carry if they had been built
+    // before this release. `today_snapshots` is the record of what the morning list
+    // *was*, so re-ordering it now would rewrite a day that has already happened.
+    await database.session.query(
+      "UPDATE today_snapshots SET algorithm_version = 'today.1' WHERE workspace_id = $1 AND snapshot_date = $2::date",
+      [seeded.alpha.workspaceId, businessDate],
+    );
+    const asBuilt = await readTodayList(salesperson, { now });
+    const positions = asBuilt.cards.map(card => card.firmId);
+    expect(positions.indexOf(oldest)).toBeLessThan(positions.indexOf(middle));
+
+    // A rebuild stamps the current version — migration 0023 puts
+    // `algorithm_version = today_algorithm_version()` on `today_refresh_card`'s update
+    // branch — and then the new order applies.
+    await buildTodaySnapshot(context, { businessDate, now, sources: [newFirmSource()] });
+    const { rows } = await database.session.query<{ version: string }>(
+      'SELECT DISTINCT algorithm_version AS version FROM today_snapshots WHERE workspace_id = $1 AND snapshot_date = $2::date',
+      [seeded.alpha.workspaceId, businessDate],
+    );
+    expect(rows.map(row => row.version)).toEqual([TODAY_ALGORITHM_VERSION]);
+    const rebuilt = await readTodayList(salesperson, { now });
+    const after = rebuilt.cards.map(card => card.firmId);
+    expect(after.indexOf(middle)).toBeLessThan(after.indexOf(oldest));
+  });
+
   it('is `today.2`, on both sides of the seam', async () => {
     const { rows } = await database.session.query<{ version: string }>('SELECT today_algorithm_version() AS version');
     expect(TODAY_ALGORITHM_VERSION).toBe('today.2');

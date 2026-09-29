@@ -19,6 +19,7 @@ import { anthropicExtraction, extractionUserText, parseExtractionAnswer } from '
 const sources = [
   {
     sourceReference: 'https://example.test/',
+    firstParty: true,
     blocks: [
       { id: 'b1', text: 'We manage residential property for owners.' },
       { id: 'b2', text: 'Our maintenance team handles every work order.' },
