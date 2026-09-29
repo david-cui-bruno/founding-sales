@@ -17,6 +17,33 @@ import { STEP_NO_ANSWER_ACTIONS } from './sequences.ts';
  */
 
 // ---------------------------------------------------------------------------
+// What the caller says when the call connects
+// ---------------------------------------------------------------------------
+
+/**
+ * The announcement, said first on every call (David, 29 September 2026).
+ *
+ * Calls are recorded and transcribed, and the person on the other end is told so before
+ * anything else is said. It is one sentence, and it is here — in the contracts, beside
+ * the outcomes and the refusal codes — for the reason this whole module is here: the Mac
+ * shows it and may not compose it, and a sentence retyped in the renderer is a sentence
+ * that drifts from the one the policy means.
+ *
+ * It is a **constant** today and not a workspace setting. `workspace_settings` pins its
+ * keys with a database CHECK (`workspace_settings_key_known`, last rewritten by migration
+ * 0020), so a `call_announcement` key is a migration and a schema release; it becomes a
+ * setting with the next migration that rewrites that constraint. Until then it is one
+ * string in one place, which is the property a setting would have to preserve anyway.
+ *
+ * Do not edit the wording without David: it is what is said to a stranger about being
+ * recorded, and a test asserts it exactly.
+ */
+export const CALL_ANNOUNCEMENT = 'Hi, this is David from Callie. This call is being recorded and transcribed for my notes.';
+
+/** The label above it, wherever it is shown. */
+export const CALL_ANNOUNCEMENT_LABEL = 'Say when they answer';
+
+// ---------------------------------------------------------------------------
 // Refusals
 // ---------------------------------------------------------------------------
 

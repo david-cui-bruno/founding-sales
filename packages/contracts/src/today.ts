@@ -54,6 +54,22 @@ export const todayListResponseSchema = z.object({
   cards: z.array(todayCardDtoSchema),
 });
 
+/**
+ * `GET /today/calls-placed`: how many calls were placed on the workspace's own business
+ * date (David, 29 September 2026).
+ *
+ * A read of its own rather than a field on the list. `todayListResponseSchema` is the one
+ * read whose shape is also a retention decision — the Mac caches it for 24 hours (5.3)
+ * against a strict schema with no field a note or an address could occupy — and a live
+ * count that changes every time somebody rings off does not belong in a cache.
+ */
+export const callsPlacedTodayResponseSchema = z.object({
+  businessDate,
+  businessTimeZone: ianaTimeZone,
+  calls: z.number().int().min(0),
+});
+export type CallsPlacedTodayResponse = z.infer<typeof callsPlacedTodayResponseSchema>;
+
 const todayTaskDtoSchema = z.object({
   itemId: uuid,
   contactId: uuid.nullable(),

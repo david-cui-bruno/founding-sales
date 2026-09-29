@@ -34,11 +34,15 @@ test.afterEach(async () => {
   await app.stop();
 });
 
-/** The Firms view on `state`: a firm page by its own route, anything else by `firms`. */
-async function openCrm(page: Page, state: CrmState): Promise<void> {
+/**
+ * The CRM view on `state`: a firm page by its own route, anything else by the sidebar row
+ * asked for. Pipeline and Firms are two routes since 1.0.14 — the board of opportunities
+ * being worked, and every firm on file — and the bridge state is the same on both.
+ */
+async function openCrm(page: Page, state: CrmState, row: 'pipeline' | 'firms' = 'pipeline'): Promise<void> {
   app = await startAppServer({ crm: state });
   server = app.crm;
-  await page.goto(app.url(state.screen === 'firm' && state.firm !== null ? `#firm/${state.firm.read.firm.id}` : '#firms'));
+  await page.goto(app.url(state.screen === 'firm' && state.firm !== null ? `#firm/${state.firm.read.firm.id}` : `#${row}`));
 }
 
 // ------------------------------------------------------------------- Firm page

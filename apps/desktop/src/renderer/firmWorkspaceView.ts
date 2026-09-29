@@ -34,6 +34,11 @@ export interface FirmWorkspaceView {
 
 export const FIRM_HEADING = 'Firm';
 export const PIPELINE_HEADING = 'Pipeline';
+/**
+ * The Firms row's own heading (1.0.14). Not in `HEADINGS`: the bridge has one screen for
+ * the board read, and which of the two rows is drawing it is the route's to say.
+ */
+export const FIRMS_HEADING = 'Firms';
 export const MERGE_HEADING = 'Resolve this merge';
 export const ADD_FIRM_HEADING = 'Add firm';
 export const IMPORT_HEADING = 'Import firms';

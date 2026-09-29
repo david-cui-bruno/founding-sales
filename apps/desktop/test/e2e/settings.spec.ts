@@ -53,13 +53,17 @@ test('an admin sees every slice, its provenance, and an editor for each', async 
 /**
  * Wave 3b: the workspace's postal address, the one setting 12.6's footer needs and the
  * page had no field for. Emptied, it is saved as null and the footer is the sign-off
- * and the stop line alone; sending carries on either way.
+ * alone; sending carries on either way.
+ *
+ * The hint below is quoted from `POSTAL_ADDRESS_HINT`. PR 311 (e-mail presentation)
+ * rewrote the sentence — the footer no longer carries a stop line — and left this spec
+ * quoting the old one, so it was failing on `main` before this branch existed.
  */
 test('an admin sets and clears the postal address, and the page says what an empty one means', async ({ page }) => {
   await openAdmin(page, adminState());
 
   await expect(page.getByTestId('setting-postal_address')).toContainText(
-    'With no address the footer is the sign-off and the stop line; sending continues.',
+    'With no address the footer is your sign-off alone; sending continues.',
   );
   await page.getByTestId('field-postal_address-address').fill('1 Example Street, Providence RI 02903');
   await page.getByTestId('save-postal_address').click();

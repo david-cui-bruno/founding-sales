@@ -139,6 +139,7 @@ describe('what the API mounts', () => {
       '/templates/create',
       '/templates/update',
       '/today',
+      '/today/calls-placed',
       '/today/firm',
       '/today/pause/release',
       '/today/snooze',

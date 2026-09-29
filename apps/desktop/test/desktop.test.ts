@@ -801,11 +801,14 @@ describe('the state that crosses the bridge', () => {
 });
 
 describe('one window: the routes the menu and deep links may name (wave 1)', () => {
-  it('names exactly five views and seven targets, and nothing for any other value', () => {
-    expect(ROUTE_NAMES).toEqual(['today', 'replies', 'firms', 'sequences', 'settings']);
+  it('names exactly six views and eight targets, and nothing for any other value', () => {
+    // Pipeline is a row of its own since 1.0.14: the board of opportunities being
+    // worked, beside a Firms row that is every firm on file.
+    expect(ROUTE_NAMES).toEqual(['today', 'replies', 'pipeline', 'firms', 'sequences', 'settings']);
     expect(NAVIGATION_TARGETS).toEqual([
       'today',
       'replies',
+      'pipeline',
       'firms',
       'sequences',
       'settings/administration',
@@ -844,13 +847,22 @@ describe('one window: the routes the menu and deep links may name (wave 1)', () 
     expect(routeOf('settings')).toEqual({ name: 'settings', tab: 'administration' });
     expect(routeOf('settings/diagnostics')).toEqual({ name: 'settings', tab: 'diagnostics' });
     expect(routeOf(`firm/${firmId}`)).toEqual({ name: 'firm', firmId });
+    expect(routeOf('pipeline')).toEqual({ name: 'pipeline' });
+    expect(routeOf('firms')).toEqual({ name: 'firms' });
     for (const text of ['', 'firm', 'firm/', 'firm/not-an-id', `firm/${firmId}/x`, 'settings/elsewhere', 'today/x', 'Today']) {
       expect(routeOf(text), text).toBeNull();
     }
-    for (const route of [{ name: 'firms' }, { name: 'firm', firmId }, { name: 'settings', tab: 'diagnostics' }] as const) {
+    for (const route of [
+      { name: 'pipeline' },
+      { name: 'firms' },
+      { name: 'firm', firmId },
+      { name: 'settings', tab: 'diagnostics' },
+    ] as const) {
       expect(routeOf(routeText(route))).toEqual(route);
     }
+    // A firm's page is under Firms, whether the board or the list opened it.
     expect(sidebarRowOf({ name: 'firm', firmId })).toBe('firms');
+    expect(sidebarRowOf({ name: 'pipeline' })).toBe('pipeline');
     expect(sidebarRowOf({ name: 'settings', tab: 'dashboard' })).toBe('settings');
   });
 
@@ -915,7 +927,7 @@ describe('one window: the routes the menu and deep links may name (wave 1)', () 
 });
 
 describe('the Window menu (wave 1)', () => {
-  it('shows each view in the one window: ⌘1 to ⌘4, then Settings with ⌘, and its two tabs', () => {
+  it('shows each view in the one window: ⌘1 to ⌘5, then Settings with ⌘, and its two tabs', () => {
     const shown: string[] = [];
     const menu = windowMenuTemplate(route => {
       shown.push(route);
@@ -926,16 +938,20 @@ describe('the Window menu (wave 1)', () => {
     expect(views.map(item => ('label' in item ? `${item.label} ${item.accelerator}` : ''))).toEqual([
       'Today CmdOrCtrl+1',
       'Replies CmdOrCtrl+2',
-      'Firms CmdOrCtrl+3',
-      'Sequences CmdOrCtrl+4',
+      'Pipeline CmdOrCtrl+3',
+      'Firms CmdOrCtrl+4',
+      'Sequences CmdOrCtrl+5',
       'Settings CmdOrCtrl+,',
-      'Dashboard CmdOrCtrl+5',
-      'Diagnostics CmdOrCtrl+6',
+      // 1.0.14: Pipeline is a fifth selling view, so Sequences took ⌘5 and the two
+      // Settings tabs moved down. One key cannot mean two views.
+      'Dashboard CmdOrCtrl+6',
+      'Diagnostics CmdOrCtrl+7',
     ]);
     for (const item of views) if ('click' in item) item.click();
     expect(shown).toEqual([
       'today',
       'replies',
+      'pipeline',
       'firms',
       'sequences',
       'settings/administration',

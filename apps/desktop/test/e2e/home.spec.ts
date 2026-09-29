@@ -84,18 +84,26 @@ test('Home opens on the business date, a line of counts, and the four lanes in t
 
   // The cached list first, then today's: the morning list is there without a press.
   await settled(page);
+  // "Calls placed today" is read once, before the list, because the shell asks for the
+  // sidebar's figures (`useHomeAdmin`) before Today's own state (`useToday`). It is a
+  // read of its own and not part of that sequence — the list is still the cache first
+  // and the server second (29 September 2026).
   expect(server.calls.map(call => call.method).filter(method => method.startsWith('today.'))).toEqual([
+    'today.callsPlaced',
     'today.state',
     'today.refresh',
   ]);
 });
 
-test('the sidebar names the four selling views with their keys, and Settings at the foot', async ({ page }) => {
+test('the sidebar names the five selling views with their keys, and Settings at the foot', async ({ page }) => {
   server = await startAppServer();
   await page.goto(server.url());
 
   const nav = page.getByTestId('nav');
-  await expect(nav.getByRole('button')).toHaveText(['Today⌘1', 'Replies⌘2', 'Firms⌘3', 'Sequences⌘4']);
+  // Pipeline is a row of its own since 1.0.14 — the board of opportunities being worked,
+  // beside a Firms row that is every firm on file — so every key below Replies moved
+  // down one. Settings is not in this list; it is the entry at the foot, below.
+  await expect(nav.getByRole('button')).toHaveText(['Today⌘1', 'Replies⌘2', 'Pipeline⌘3', 'Firms⌘4', 'Sequences⌘5']);
   // Administration and the Dashboard were rows five and six until 1.0.12; they are tabs
   // of Settings now, and Settings is not in the day's list of views.
   await expect(page.getByTestId('nav-admin')).toHaveCount(0);
@@ -241,9 +249,11 @@ test('the last 7 days are read over the last seven days, and a figure not in thi
   server = await startAppServer();
   await page.goto(server.url());
 
-  await expect(page.getByTestId('figures-label')).toHaveText('Last 7 days');
+  // The heading is "Numbers" since 29 September 2026: "Calls placed today" joined the
+  // row, and each cell says its own window instead.
+  await expect(page.getByTestId('figures-label')).toHaveText('Numbers');
   await expect(page.getByTestId('figure-replies')).toHaveText('Replies21 uncertain');
-  await expect(page.getByTestId('figure-calls')).toHaveText('Calls placed3');
+  await expect(page.getByTestId('figure-calls')).toHaveText('Calls placed, 7 days3');
   await expect(page.getByTestId('figure-meetings')).toHaveText('Meetings booked1');
   // 2 replies, 1 handled.
   await expect(page.getByTestId('figure-waiting')).toHaveText('Replies waiting1');
@@ -263,7 +273,9 @@ test('figures that could not be read are dashes and one grey line, never a dialo
   await page.goto(server.url());
 
   await expect(page.getByTestId('figures-line')).toHaveText('Callie could not read the last 7 days.');
-  await expect(page.getByTestId('figure-value')).toHaveText(['—', '—', '—', '—', '—', '—']);
+  // Seven cells since 29 September 2026: "Calls placed today" joined the row, and this
+  // harness answers its read no more than it answers the dashboard's.
+  await expect(page.getByTestId('figure-value')).toHaveText(['—', '—', '—', '—', '—', '—', '—']);
   expect(dialogs).toEqual([]);
 });
 

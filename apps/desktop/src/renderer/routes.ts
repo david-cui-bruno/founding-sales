@@ -3,7 +3,7 @@
  *
  * Until wave 1 every sidebar row opened its own `BrowserWindow`. There is one window now,
  * with the sidebar always on its left, and the column on its right shows one view at a
- * time. A route names that view: the sidebar sets it, the Window menu's ⌘1–⌘4 and ⌘, and
+ * time. A route names that view: the sidebar sets it, the Window menu's ⌘1–⌘5 and ⌘, and
  * a deep link set it through `callie:navigate`, and a Today or reply card sets it to the
  * firm it is about.
  *
@@ -15,6 +15,11 @@
  *
  * `firm/<id>` is the one route with an argument, and only the page sets it — never the
  * main process.
+ *
+ * Since 1.0.14 the board and the firms are two routes rather than one (David, 29
+ * September 2026). `pipeline` is the board of opportunities being worked; `firms` is
+ * every firm on file, the cold ones included; `firm/<id>` is one firm's page and lights
+ * Firms up, wherever it was opened from.
  */
 
 import { SETTINGS_TABS, routeNameOf, type RouteName, type SettingsTab } from '../shared/contract.ts';
@@ -27,7 +32,7 @@ const ADMIN_SECTIONS = ['calling-number', 'sending-admin', 'alerts'] as const;
 export type AdminSection = (typeof ADMIN_SECTIONS)[number];
 
 export type Route =
-  | { readonly name: 'today' | 'replies' | 'firms' | 'sequences' }
+  | { readonly name: 'today' | 'replies' | 'pipeline' | 'firms' | 'sequences' }
   | { readonly name: 'firm'; readonly firmId: string }
   | {
       readonly name: 'settings';
