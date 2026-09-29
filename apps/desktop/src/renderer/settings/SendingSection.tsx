@@ -1,5 +1,5 @@
 import { useState, type JSX } from 'react';
-import { SENDING_CHECK_LABELS, type AdminView } from '../settingsView.ts';
+import { SENDING_CHECK_LABELS, SENDING_CHECK_NAMES, type AdminView, type SendingAdminSectionView, type SendingCheckName } from '../settingsView.ts';
 import type { RecordSendingAuthenticationInput, SetSendingCapInput } from '../settingsContract.ts';
 import { Button } from '../ui/button.tsx';
 import { Input } from '../ui/input.tsx';
@@ -18,9 +18,37 @@ import { Row, RowActions, RowMain, Rows, Section, Unread } from '../ui/layout.ts
  * and `sending_domains` has a CHECK that refuses it without the other four — the page
  * does not pre-empt that refusal, it shows it. Nothing is clamped either: a raise above
  * 75 must come back as a refusal an admin reads, not a silent 75.
+ *
+ * The form starts at what is saved, never blank (David, 29 September 2026): four boxes
+ * ticked as `/outbound/status` has them and a cap field carrying the cap in force. It
+ * re-seeds when the *saved values themselves* change — a save that went through, a
+ * Refresh, another admin — and not merely when the page renders again, so a re-read
+ * that answers the same thing does not take away what somebody is half-way through
+ * typing.
  */
 
-const CHECKS = ['spfPass', 'dkimPass', 'dmarcPass', 'postmasterReviewed', 'automatedSendingEnabled'] as const;
+/** The saved checklist and caps as one string, so "changed" is a value question. */
+function savedText(section: SendingAdminSectionView): string {
+  return JSON.stringify([section.checks, section.ramps.map(ramp => [ramp.mailboxId, ramp.cap])]);
+}
+
+interface Draft {
+  /** The saved values this draft was seeded from. */
+  readonly saved: string;
+  readonly checks: Readonly<Record<string, boolean>>;
+  readonly caps: Readonly<Record<string, string>>;
+}
+
+/** Nothing to seed from: the section is about to render nothing at all. */
+const EMPTY_DRAFT: Draft = { saved: '', checks: {}, caps: {} };
+
+function seedOf(section: SendingAdminSectionView): Draft {
+  return {
+    saved: savedText(section),
+    checks: { ...section.checks },
+    caps: Object.fromEntries(section.ramps.map(ramp => [ramp.mailboxId, String(ramp.cap)])),
+  };
+}
 
 export function SendingSection({
   view,
@@ -39,8 +67,24 @@ export function SendingSection({
   onCap(input: SetSendingCapInput): void;
   onRetry(): void;
 }): JSX.Element | null {
-  const [checks, setChecks] = useState<Readonly<Record<string, boolean>>>({});
-  const [caps, setCaps] = useState<Readonly<Record<string, string>>>({});
+  const section = view.sendingAdmin;
+  const [draft, setDraft] = useState<Draft>(() => (section === null ? EMPTY_DRAFT : seedOf(section)));
+  // Adjusting state while rendering, which React allows for exactly this: the form is
+  // derived from the answer until somebody edits it, and an effect would draw the old
+  // values once before replacing them.
+  let form = draft;
+  if (section !== null && draft.saved !== savedText(section)) {
+    form = seedOf(section);
+    setDraft(form);
+  }
+  const checks = form.checks;
+  const caps = form.caps;
+  const setChecks = (next: (was: Readonly<Record<string, boolean>>) => Readonly<Record<string, boolean>>): void => {
+    setDraft(was => ({ ...was, checks: next(was.checks) }));
+  };
+  const setCaps = (next: (was: Readonly<Record<string, string>>) => Readonly<Record<string, string>>): void => {
+    setDraft(was => ({ ...was, caps: next(was.caps) }));
+  };
 
   if (view.sendingUnread !== null) {
     return (
@@ -49,7 +93,6 @@ export function SendingSection({
       </Section>
     );
   }
-  const section = view.sendingAdmin;
   if (section === null) return null;
   const domain = section.domain;
 
@@ -62,7 +105,7 @@ export function SendingSection({
       {domain === null ? null : (
         <>
           <div className="mt-2 flex flex-col gap-1">
-            {CHECKS.map(name => (
+            {SENDING_CHECK_NAMES.map((name: SendingCheckName) => (
               <label key={name} className="flex items-center gap-2 text-sm">
                 <input
                   type="checkbox"
