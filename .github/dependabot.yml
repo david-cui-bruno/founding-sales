@@ -1,0 +1,44 @@
+# Dependency-update automation. See docs/greenfield/release.md, section 9.
+#
+# One npm entry at the root: this is an npm-workspaces repository (`apps/*`,
+# `packages/*`), so the root manifest and lockfile are the whole dependency set and
+# Dependabot resolves every workspace from them.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    versioning-strategy: increase
+    commit-message:
+      prefix: deps
+    groups:
+      # Everything that is not a major, in one pull request the gate can judge as a
+      # whole. Listed first, so it also takes the desktop packages' minors and patches.
+      minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+      # The desktop signing and update chain moves as one, and only as a major: that
+      # chain is exercised by `greenfield-desktop.yml`, not by the gate, so its majors
+      # are read together and released deliberately rather than one package at a time.
+      electron:
+        patterns:
+          - electron
+          - electron-builder
+          - electron-updater
+          - "@electron/*"
+        update-types:
+          - major
+    # Every other major is its own pull request: that is Dependabot's default for a
+    # dependency no group claims.
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: deps

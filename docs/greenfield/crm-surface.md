@@ -275,7 +275,6 @@ npm run test --workspace apps/api -- test/capture.test.ts
 npm run test --workspace packages/domain -- test/crm/export.test.ts
 npm run test --workspace packages/domain -- test/crm/firmPage.test.ts
 npm run test --workspace apps/api -- test/crmSurface.test.ts
-npm run test --workspace packages/domain -- test/crm/routeConfirm.test.ts   # Confirm this number
 npm run test --workspace apps/api -- test/founderGaps.test.ts        # confirm, the title patch, the review read
 npm run test:e2e --workspace apps/desktop                              # needs a browser
 ```
