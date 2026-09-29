@@ -125,8 +125,15 @@
 -- footer Callie could not account for, so it gets its own code (review of PR 311,
 -- second round). Recoverable: the fix is to edit the template, the sign-off or the
 -- firm's website and resume.
+--
+-- An upsert, not a plain INSERT: `code` is the primary key, and a file that would fail
+-- on a row somebody had already put there is a file that fails for the wrong reason.
+-- This way the statement states the canonical description and `recoverable` value
+-- whatever it finds (review of PR 311, third round).
 INSERT INTO hold_reason_codes (code, description, recoverable) VALUES
-  ('optout_link', 'The bytes that would leave carry a visible opt-out link.', true);
+  ('optout_link', 'The bytes that would leave carry a visible opt-out link.', true)
+ON CONFLICT (code) DO UPDATE
+  SET description = EXCLUDED.description, recoverable = EXCLUDED.recoverable;
 
 -- ---------------------------------------------------------------------------
 -- (b) The mandatory stop line

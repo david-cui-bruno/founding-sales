@@ -165,6 +165,16 @@ describe('the template form (audit G03)', () => {
     // valid footerless body `Hi David` under the sign-off `David` must not hand the form
     // `Hi` (review of PR 311, P1-4). It round-trips instead.
     expect(typedBodyOf({ body: 'Hi David', footerSignOff: 'David' })).toBe('Hi David');
+    // Trailing whitespace after the footer is still the footer — the panel says so, and
+    // an extraction that disagreed would hand the form its own footer back and save a
+    // second sign-off under the first (review of PR 311, third round).
+    for (const trailing of ['\n', '\n\n', ' \n', '\t']) {
+      const stored = `${body}${trailing}`;
+      expect(typedBodyOf({ body: stored, footerSignOff: 'David\nCallie' }), trailing).toBe(draft.body);
+      expect(composeTemplateBody(typedBodyOf({ body: stored, footerSignOff: 'David\nCallie' }), 'David\nCallie')).toBe(
+        body,
+      );
+    }
     expect(composeTemplateBody(typedBodyOf({ body: 'Hi David', footerSignOff: 'David' }), 'David')).toBe(
       'Hi David\n\nDavid',
     );

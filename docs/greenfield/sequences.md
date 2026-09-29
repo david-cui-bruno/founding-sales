@@ -33,7 +33,9 @@ packages/domain/src/rules/businessDays.ts         G0: elapsed and business-day d
 packages/domain/src/rules/sendingWindow.ts        G0: the window, the Monday rule, pacing
 packages/domain/src/rules/holds.ts                G0: the union, and the seven-day rule
 packages/domain/src/rules/templates.ts            G0: the content hash and the footer
-                                                  (sign-off + stop line; G20 removed the address)
+                                                  (the sign-off, and the postal-address
+                                                  setting at send; 0023 removed the stop
+                                                  line, G20 the address column)
 
 packages/domain/templates/templates.ts   create, approve, retire, render
 packages/domain/sequences/types.ts       the vocabulary and the refusal codes

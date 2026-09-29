@@ -185,8 +185,11 @@ and the TypeScript one in the same assertion.
 a field of its own on `POST /templates`, and a `{firm_website}` is whatever the CRM
 holds, so approval checks the subject, the body *and* the sign-off, and the composition
 and the fence check the rendered subject and the composed body before anything is
-frozen. A violation there is a handled hold (`footer_not_composed`, detail `optout_link`),
-never an exception out of the insert; the CHECK is the backstop underneath it.
+frozen. A violation there is a handled hold and never an exception out of the insert,
+with the CHECK as the backstop underneath it: a *step* stopped before its fence exists
+holds under the `optout_link` reason code of its own (migration 0023 seeds it), so the
+operator can read why an approved template stopped; a fence already prepared refuses
+with `footer_not_composed` and carries `optout_link` as its detail.
 
 **The bare word is allowed**, and that is the point of the change: the old CHECK refused
 `unsubscribe` anywhere, which made *"just reply unsubscribe and I'll stop"* — the very

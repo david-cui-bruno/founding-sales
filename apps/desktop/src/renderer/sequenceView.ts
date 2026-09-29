@@ -543,12 +543,19 @@ export function composeTemplateBody(body: string, signOff: string): string {
  * requires. Never a word suffix — with the sign-off `David`, the valid footerless body
  * `Hi David` is not a signed body, and stripping it by suffix would hand the edit form
  * `Hi` and silently delete a name (review of PR 311, P1-4).
+ *
+ * Trailing whitespace is stripped first, for the reason the panel strips it: a body
+ * ending `…\n\nDavid\n` *has* its footer, and an extraction that could not see it would
+ * hand the form the footer back and the next save would write a second sign-off under
+ * the first (review of PR 311, third round). The two functions ask the same question of
+ * the same bytes.
  */
 export function typedBodyOf(template: Pick<TemplateVersion, 'body' | 'footerSignOff'>): string {
+  const stripped = template.body.replace(/\s+$/u, '');
   for (const footer of [legacyTemplateFooter(template.footerSignOff), templateFooter(template.footerSignOff)]) {
-    if (template.body === footer) return '';
-    if (!template.body.endsWith(footer)) continue;
-    const head = template.body.slice(0, template.body.length - footer.length);
+    if (stripped === footer) return '';
+    if (!stripped.endsWith(footer)) continue;
+    const head = stripped.slice(0, stripped.length - footer.length);
     if (/\n[ \t]*\n$/u.test(head)) return head.trimEnd();
   }
   return template.body;
