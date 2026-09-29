@@ -42,6 +42,15 @@ export interface TodayActions {
   /** Its own channel: it opens a URI on the operating system rather than answering one. */
   dial(input: { readonly firmId: string; readonly contactId: string | null; readonly routeId: string }): void;
   /**
+   * Read this firm's site again (lane R).
+   *
+   * A research command that answers a `ResearchState`, so the Today list is read again
+   * afterwards rather than the answer being drawn: the brief on the card comes from
+   * `/today/firm` and a queued run has not produced one yet. The card is told the run
+   * was queued and the next refresh brings it.
+   */
+  researchAgain(firmId: string): void;
+  /**
    * Whether *this* control's own command is on the wire (1.0.13, P1-4).
    *
    * Until the review a command held the whole column read-only, so snoozing one task
@@ -60,6 +69,7 @@ export const todayForm = {
   task: (itemId: string): string => `task:${itemId}`,
   outcome: (firmId: string): string => `outcome:${firmId}`,
   callback: (callLogId: string): string => `callback:${callLogId}`,
+  research: (firmId: string): string => `research-run:${firmId}`,
   hold: (holdId: string): string => `hold:${holdId}`,
   dial: (routeId: string): string => `dial:${routeId}`,
 } as const;
@@ -190,6 +200,15 @@ export function useToday(identity: string | null, generation: number, guard: Gen
         const bridge = dialBridge();
         if (bridge === undefined) return;
         command(bridge.call(input), todayForm.dial(input.routeId));
+      },
+      researchAgain: firmId => {
+        // The research command's own answer is a `ResearchState`, which is not this
+        // view's; what Today wants is the card again once the run has produced a brief.
+        // So the command is awaited and the *expansion* is what is kept.
+        command(
+          value.command('research.run', { firmId }).then(async () => await value.read('today.expand', { firmId })),
+          todayForm.research(firmId),
+        );
       },
       busy: form => (inFlight.get(form) ?? 0) > 0,
     };

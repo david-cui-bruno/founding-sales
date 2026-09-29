@@ -9,6 +9,7 @@ import type { AuthedClient } from '../src/main/authedClient.ts';
 import type { CrmBridgeHost } from '../src/main/crmBridge.ts';
 import type { MailboxBridgeHost } from '../src/main/mailboxBridge.ts';
 import type { ReplyBridgeHost } from '../src/main/replyBridge.ts';
+import type { ResearchBridgeHost } from '../src/main/researchBridge.ts';
 import type { SequenceBridgeHost } from '../src/main/sequenceBridge.ts';
 import type { AdminBridgeHost } from '../src/main/settingsBridge.ts';
 import type { TodayBridgeHost } from '../src/main/todayBridge.ts';
@@ -101,6 +102,10 @@ const hosts = () => {
       ['state', 'show', 'saveSetting', 'openHistory', 'loadDashboard', 'retireStage', 'acknowledgeAlert', 'setSendingCap', 'recordSendingAuthentication', 'recordHolidayCalendar', 'addCallingNumber', 'retireCallingNumber', 'allowStates', 'revokePosture'],
       () => ({}) as never,
     ),
+    research: stub<ResearchBridgeHost>(
+      ['state', 'open', 'run', 'addLink', 'saveSettings'],
+      () => ({}) as never,
+    ),
     mailbox: stub<MailboxBridgeHost>(['state', 'refresh', 'connect'], () => ({}) as never),
     spies: { today, replies, api },
   };
@@ -110,7 +115,7 @@ describe('the operation registry', () => {
   it('is a closed list covering every view, with two channels and the two handoffs beside them', () => {
     // Every view is here since 1.0.13; the names are the vocabulary a renderer may use.
     const families = [...new Set(OPERATION_NAMES.map(name => name.slice(0, name.indexOf('.'))))];
-    expect(families).toEqual(['today', 'replies', 'diagnostics', 'crm', 'sequences', 'settings', 'mailbox']);
+    expect(families).toEqual(['today', 'research', 'replies', 'diagnostics', 'crm', 'sequences', 'settings', 'mailbox']);
     expect(OPERATION_NAMES.filter(name => name.startsWith('today.'))).toEqual([
       'today.state',
       'today.refresh',

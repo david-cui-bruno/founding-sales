@@ -7,6 +7,7 @@ import { createMailboxBridge, type MailboxBridgeDeps, type MailboxBridgeHost } f
 import { registerOperations } from './operationHost.ts';
 import { createTodayBridge, type TodayBridgeDeps, type TodayBridgeHost } from './todayBridge.ts';
 import { createReplyBridge, type ReplyBridgeDeps, type ReplyBridgeHost } from './replyBridge.ts';
+import { createResearchBridge, type ResearchBridgeDeps, type ResearchBridgeHost } from './researchBridge.ts';
 import { createSequenceBridge, type SequenceBridgeDeps, type SequenceBridgeHost } from './sequenceBridge.ts';
 import { createAdminBridge, type AdminBridgeDeps, type AdminBridgeHost } from './settingsBridge.ts';
 
@@ -40,6 +41,7 @@ export function resetWindowRegistrations(): void {
 export interface WindowBridges {
   readonly today: TodayBridgeHost;
   readonly replies: ReplyBridgeHost;
+  readonly research: ResearchBridgeHost;
   readonly crm: CrmBridgeHost;
   readonly sequences: SequenceBridgeHost;
   readonly settings: AdminBridgeHost;
@@ -49,6 +51,7 @@ export interface WindowBridges {
 export interface WindowBridgeDeps {
   readonly today: TodayBridgeDeps;
   readonly replies: ReplyBridgeDeps;
+  readonly research: ResearchBridgeDeps;
   readonly crm: CrmBridgeDeps;
   readonly sequences: SequenceBridgeDeps;
   readonly settings: AdminBridgeDeps;
@@ -66,7 +69,7 @@ export interface WindowBridgeDeps {
 }
 
 /**
- * Build the six bridges and register the four channels.
+ * Build the seven bridges and register the four channels.
  *
  * The transformations did not move when the channels went: `createTodayBridge` is still
  * where the stale expansion and the refusal eviction live, `createCrmBridge` where the
@@ -81,11 +84,12 @@ export function registerWindowBridges(deps: WindowBridgeDeps): WindowBridges {
   const guard = <H extends { forget(): Promise<unknown> }>(host: H): H => guardIdentity(host, generation);
   const today = guard(createTodayBridge(deps.today));
   const replies = guard(createReplyBridge(deps.replies));
+  const research = guard(createResearchBridge(deps.research));
   const crm = guard(createCrmBridge(deps.crm));
   const sequences = guard(createSequenceBridge(deps.sequences));
   const settings = guard(createAdminBridge(deps.settings));
   const mailbox = guard(createMailboxBridge(deps.mailbox));
-  registerOperations({ api: deps.today.api, today, replies, crm, sequences, settings, mailbox }, handleOnce);
+  registerOperations({ api: deps.today.api, today, replies, research, crm, sequences, settings, mailbox }, handleOnce);
 
   handleOnce(DIAL_IPC_CHANNELS.call, async argument => {
     // The renderer's word is never taken for a shape: a malformed request is the current
@@ -106,7 +110,7 @@ export function registerWindowBridges(deps: WindowBridgeDeps): WindowBridges {
     return file === null ? await crm.state() : await crm.previewImport(file);
   });
 
-  return { today, replies, crm, sequences, settings, mailbox };
+  return { today, replies, research, crm, sequences, settings, mailbox };
 }
 
 export { createImportHandoff };

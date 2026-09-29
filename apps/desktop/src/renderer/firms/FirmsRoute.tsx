@@ -10,6 +10,7 @@ import { FirmMerge } from './FirmMerge.tsx';
 import { FirmPage } from './FirmPage.tsx';
 import { ImportScreen } from './ImportScreen.tsx';
 import { PipelineBoard } from './PipelineBoard.tsx';
+import { FirmResearch } from '../research/FirmResearch.tsx';
 import { useCrm } from './useCrm.ts';
 
 /**
@@ -106,6 +107,7 @@ export function FirmsRoute({
       <Banners notices={view.banners} />
 
       {onFirm && state.firm !== null ? (
+        <>
         <FirmPage
           page={state.firm}
           sequences={state.sequences}
@@ -117,6 +119,16 @@ export function FirmsRoute({
           onOpenOpportunity={crm.actions.openOpportunity}
           onEnroll={crm.actions.enroll}
         />
+        {/* Its own read, because the firm page's contract is strict behind
+            `pageVersion` and a key added to it is a wire break (lane R). */}
+        <FirmResearch
+          firmId={state.firm.read.firm.id}
+          identity={identity}
+          generation={generation}
+          guard={guard}
+          enabled={view.actionsEnabled}
+        />
+        </>
       ) : state.screen === 'add_firm' && state.addFirm !== null ? (
         <AddFirmForm
           view={state.addFirm}

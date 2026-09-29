@@ -4,6 +4,7 @@ import type { LaneSection } from '../homeView.ts';
 import type { TodayState } from '../todayContract.ts';
 import type { CardView, TodayScreenView } from '../todayView.ts';
 import { Button } from '../ui/button.tsx';
+import { Brief } from '../research/Brief.tsx';
 import { OutcomeForm } from './OutcomeForm.tsx';
 import { TaskRow } from './TaskRow.tsx';
 import { todayForm, type TodayActions } from './useToday.ts';
@@ -90,6 +91,15 @@ function ExpandedFirm({
       <h3 data-testid="firm-name" className="sr-only">
         {expanded.firmName}
       </h3>
+      {/* Above the tasks: what this firm is and why, before what is owed on it. */}
+      <Brief
+        brief={expanded.brief ?? null}
+        enabled={view.actionsEnabled}
+        researching={actions.busy(todayForm.research(expanded.firmId))}
+        onResearchAgain={() => {
+          actions.researchAgain(expanded.firmId);
+        }}
+      />
       <ul data-testid="today-tasks" className="flex flex-col">
         {view.tasks.map(entry => (
           <TaskRow key={entry.task.itemId} entry={entry} state={state} actionsEnabled={view.actionsEnabled} actions={actions} />
