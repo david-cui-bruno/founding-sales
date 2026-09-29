@@ -74,7 +74,7 @@ untouched: a reply is ordered by when it arrived, and no judgment about a firm s
 move one.
 
 Because the order is part of the algorithm, `TODAY_ALGORITHM_VERSION` is `today.2` and
-migration 0022 moved the database-side `today_algorithm_version()` with it. Appendix C
+migration 0023 moved the database-side `today_algorithm_version()` with it. Appendix C
 makes the version part of the Today job's identity, so the change makes this morning's
 build a different job rather than a second attempt at yesterday's.
 

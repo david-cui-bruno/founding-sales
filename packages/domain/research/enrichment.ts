@@ -1,5 +1,6 @@
 import { recordEvidence } from '../crm/evidence.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
+import { recordFunnelFact } from '../funnel/facts.ts';
 import { firmIsResearchable, firmIsSuppressed } from './firmState.ts';
 import { validateFactSelections, type AdmittedFact, type FactSource } from './facts.ts';
 import { judgeFirm, type JudgmentContact } from './judgments.ts';
@@ -251,6 +252,31 @@ export async function runFirmResearch(
   });
   const wasCallFirst = await currentCallFirst(context, input.firmId);
   await upsertJudgments(context, { firmId: input.firmId, runId, at: input.at, judgments });
+
+  // The funnel, inside the run's transaction (lane J-facts,
+  // `docs/greenfield/funnel.md`). `{firm}:{revision}` is the run's identity, so a
+  // handler claimed twice — which cannot get this far, because the run row is already
+  // there — and a replay both produce one fact rather than a unique violation that
+  // would abort this transaction. The detail carries only the two judgments a funnel
+  // reader needs; `recordFunnelFact` refuses anything that is not a flat coded value.
+  await recordFunnelFact(context, {
+    kind: 'firm.researched',
+    source: 'research',
+    dedupeKey: `${input.firmId}:${String(input.revision)}`,
+    firmId: input.firmId,
+    detail: { revision: input.revision, fit: judgments.fit, reachability: judgments.reachability },
+  });
+  // And the moment a firm joins the call-first queue. Keyed by the firm alone, so the
+  // fact is "this firm became callable", recorded once however many later runs agree —
+  // which is what a funnel counts, rather than how often research ran.
+  if (judgments.callFirst && !wasCallFirst) {
+    await recordFunnelFact(context, {
+      kind: 'firm.queued_for_call',
+      source: 'research',
+      dedupeKey: input.firmId,
+      firmId: input.firmId,
+    });
+  }
 
   await completeRun(context, {
     runId,

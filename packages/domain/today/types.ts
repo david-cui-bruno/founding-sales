@@ -35,7 +35,7 @@ export type TodaySourceKind = (typeof TODAY_SOURCE_KINDS)[number];
  * side, and `test/today/today.test.ts` compares them.
  */
 /**
- * `today.2` since lane R (migration 0022): lane 4 puts a researched firm whose
+ * `today.2` since lane R (migration 0023): lane 4 puts a researched firm whose
  * judgment says call it first ahead of the rest, each group still oldest first.
  * The order is part of the algorithm, so the string moved with it.
  */

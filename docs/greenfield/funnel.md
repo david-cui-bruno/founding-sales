@@ -66,7 +66,8 @@ expect rather than to lose the fact.
 | Kind | Slice | Dedupe key |
 |---|---|---|
 | `firm.created` | J-facts | the firm id |
-| `firm.researched` | R | the research run id |
+| `firm.researched` | R | `{firm}:{revision}` |
+| `firm.queued_for_call` | R | the firm id: the *first* time it became callable |
 | `call.placed`, `call.connected`, `call.engaged` | C | the call log id |
 | `meeting.booked`, `meeting.held` | M | the calendar event id |
 | `mail.warm_sent` | W | the outbound message id |

@@ -169,7 +169,7 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
   deletion_requests: coverage(['retained'], 'What was previewed and what was committed; DELETE revoked.'),
   departures: coverage(['retained'], 'What a departure revoked; DELETE revoked.'),
 
-  // ---------------------------------------------------------- research (0022)
+  // ---------------------------------------------------------- research (0023)
   research_settings: coverage(['operational'], 'The workspace’s research ceilings and model; no prospect data.'),
   provider_ledger: coverage(['operational'], 'Calls, failures and cents per provider per business date; no prospect identity.'),
   // The four below quote the firm’s own site or name a person at it, so they go with

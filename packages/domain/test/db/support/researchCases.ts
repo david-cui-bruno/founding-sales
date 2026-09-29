@@ -3,7 +3,7 @@ import type { TwoWorkspaces } from './fixtures.ts';
 import type { SeededCrm } from './crmFixtures.ts';
 
 /**
- * A failing insert for every constraint migration 0022 adds.
+ * A failing insert for every constraint migration 0023 adds.
  *
  * The coverage test at the bottom of `constraints.test.ts` asks the catalog for the
  * enforced set and fails when one has no case, so this file is not optional and its

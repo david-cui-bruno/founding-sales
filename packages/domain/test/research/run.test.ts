@@ -114,6 +114,7 @@ beforeEach(async () => {
   await session.query('DELETE FROM daily_counters');
   await session.query('DELETE FROM research_settings');
   await session.query('DELETE FROM jobs');
+  await session.query('DELETE FROM funnel_facts');
   // The suppression one case records: `effective_suppressions` is a view over these
   // rows, so leaving it would suppress the firm for every case after it.
   await session.query("DELETE FROM suppression_events WHERE event_id = 'stop-research'");
@@ -399,6 +400,45 @@ describe('one run', () => {
     expect(outcome.ok && outcome.value.factsRecorded).toBe(1);
     expect(outcome.ok && outcome.value.factsRefused).toBe(1);
     expect(outcome.ok && outcome.value.skipped['fact_unknown_block']).toBe(1);
+  });
+
+  it('records the two funnel facts, once each, inside the run’s transaction', async () => {
+    const pageFetch = fakeFetch([{ url: 'https://alpha.example.test/', html: HOME }]);
+    const extraction = fakeExtraction([
+      { key: 'target_fit', sourceReference: 'https://alpha.example.test/', blockId: 'b1' },
+    ]);
+    await runFirmResearch(context, { firmId: crm.alpha.firmId, revision: 1, trigger: 'sweep', at: AT, pageFetch, extraction });
+    await runFirmResearch(context, { firmId: crm.alpha.firmId, revision: 2, trigger: 'sweep', at: AT, pageFetch, extraction });
+
+    const { rows } = await session.query<{ kind: string; dedupe_key: string; source: string; detail: Record<string, unknown> }>(
+      'SELECT kind, dedupe_key, source, detail FROM funnel_facts ORDER BY kind, dedupe_key',
+    );
+    expect(rows.map(row => `${row.kind} ${row.dedupe_key}`)).toEqual([
+      // One per revision for the run…
+      `firm.queued_for_call ${crm.alpha.firmId}`,
+      `firm.researched ${crm.alpha.firmId}:1`,
+      `firm.researched ${crm.alpha.firmId}:2`,
+    ]);
+    // …and exactly one for the queue, however many later runs agree.
+    expect(rows.every(row => row.source === 'research')).toBe(true);
+    expect(rows.find(row => row.kind === 'firm.researched')?.detail).toEqual({
+      revision: 1,
+      fit: 'yes',
+      reachability: 'yes',
+    });
+  });
+
+  it('records no funnel fact for a run that refused', async () => {
+    await session.query('UPDATE firms SET website = NULL WHERE id = $1', [crm.alpha.firmId]);
+    await runFirmResearch(context, {
+      firmId: crm.alpha.firmId,
+      revision: 1,
+      trigger: 'sweep',
+      at: AT,
+      pageFetch: fakeFetch([]),
+    });
+    const { rows } = await session.query<{ count: number }>('SELECT count(*)::int AS count FROM funnel_facts');
+    expect(rows[0]?.count).toBe(0);
   });
 
   it('says when call_first became true, and not when it already was', async () => {

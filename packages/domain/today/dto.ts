@@ -281,7 +281,7 @@ async function callFirstFirmIds(context: RepositoryContext): Promise<ReadonlySet
  * it happened, and no judgment about a firm should move one.
  *
  * Because the order changed, `TODAY_ALGORITHM_VERSION` is `today.2` and migration
- * 0022 moved `today_algorithm_version()` with it.
+ * 0023 moved `today_algorithm_version()` with it.
  */
 function callFirstFirst<Card extends { readonly lane: string; readonly firmId: string }>(
   cards: readonly Card[],

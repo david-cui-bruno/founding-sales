@@ -1,5 +1,5 @@
 -- ---------------------------------------------------------------------------
--- 0022_research.sql — research with evidence (lane R)
+-- 0023_research.sql — research with evidence (lane R)
 --
 -- The research feature was deleted on 26 September 2026 (commit 59b3e1bb) and
 -- migration 0019 dropped its eight tables. This is the smaller thing that replaces
@@ -17,7 +17,7 @@
 -- with a two-line SQL function and reads no rows.
 --
 -- It is still a schema release: `packages/domain/db/schemaRange.ts` moves both ranges
--- together, as every release since 0006 has, so an image only ever meets its own
+-- together (to {23, 23}), as every release since 0006 has, so an image only ever meets its own
 -- schema.
 --
 -- ## Five things run through the file

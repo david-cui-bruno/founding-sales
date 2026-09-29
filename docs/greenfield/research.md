@@ -41,7 +41,7 @@ could not be shown as the firm's own words even if the terms allowed reading it 
 is the same sentence that makes the firm's own careers page the only job source there
 is.
 
-## The tables (migration 0022)
+## The tables (migration 0023)
 
 | Table | What it holds |
 |---|---|
@@ -52,7 +52,7 @@ is.
 | `firm_links` | The https pages a person added by hand. `added_by_user_id` is NOT NULL. |
 | `provider_ledger` | Calls, failures and cents per provider per workspace business date. Generic: lanes C and D reuse it. |
 
-Migration 0022 is additive and **refuses on nothing**, so it has no
+Migration 0023 is additive and **refuses on nothing**, so it has no
 `fss admin schema-preflight` command and the release skips step 3. It also carries one
 `CREATE OR REPLACE` of `today_algorithm_version()`, because lane 4's order changed.
 
@@ -244,6 +244,21 @@ It selects firms that are active, not merged, not suppressed, have **no closed
 opportunity** — a Won firm is a client and a Lost one has said no; re-researching either
 is spending money to put somebody back on a morning list they have already left — and
 were never researched or last completed more than ninety days ago. Oldest first.
+
+## The funnel
+
+Two facts, both inside the run's transaction (`docs/greenfield/funnel.md`):
+
+* `firm.researched`, keyed `{firm}:{revision}`, with
+  `{ revision, fit, reachability }` — the run's identity, so a replay produces one
+  fact rather than a unique violation that would abort the transaction;
+* `firm.queued_for_call`, keyed by the **firm alone**, recorded only when `call_first`
+  becomes true for a firm whose previous judgment was not. A funnel counts the firms
+  that reached the call-first queue, not how many times research agreed with itself, so
+  the key is the firm and the later runs are duplicates the recorder drops.
+
+A refused or failed run records neither: nothing reached the queue and nothing was
+learned.
 
 ## What is deliberately not here
 

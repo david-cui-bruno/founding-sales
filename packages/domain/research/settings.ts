@@ -29,7 +29,7 @@ export interface ResearchSettings {
   readonly updatedAt: string | null;
 }
 
-/** The row a workspace that has never been configured behaves as. Mirrors 0022's defaults. */
+/** The row a workspace that has never been configured behaves as. Mirrors 0023's defaults. */
 export const DEFAULT_RESEARCH_SETTINGS: ResearchSettings = Object.freeze({
   enabled: true,
   dailyFirmCeiling: 50,
@@ -92,7 +92,7 @@ const bounded = (value: number | undefined, low: number, high: number): boolean 
 /**
  * Update the settings. Admin only, and the row is created on first write.
  *
- * Every bound here is also a CHECK in 0022. Both, on purpose: the CHECK is what makes
+ * Every bound here is also a CHECK in 0023. Both, on purpose: the CHECK is what makes
  * the claim true of the database, and these are what make a bad value a refusal with
  * a name rather than a constraint violation a route has to translate.
  */
