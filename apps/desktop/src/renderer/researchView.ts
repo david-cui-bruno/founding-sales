@@ -160,6 +160,11 @@ export function factLine(fact: { readonly key: string; readonly quote: string | 
  * A cost the provider never reported reads "about $0.03" rather than as a figure: it is
  * what the run reserved, recorded because a call that may have been billed must not be
  * shown as free. `costEstimated` on the wire is the same claim.
+ *
+ * A completed run with no facts has a reason, and `extraction` is it. `over_budget` is
+ * the one worth a word here: the pages were read and kept, and the model was not asked
+ * because the request would not fit inside what the ceiling authorized. Without the
+ * word it reads as a run that found nothing, which is a different thing entirely.
  */
 export function runLine(run: {
   readonly startedAt: string;
@@ -167,13 +172,16 @@ export function runLine(run: {
   readonly refusalCode: string | null;
   readonly costCents: number;
   readonly costEstimated?: boolean | undefined;
+  readonly extraction?: string | undefined;
   readonly factsRecorded: number;
 }): string {
   const when = shortDate(run.startedAt);
   const cost = run.costEstimated === true ? `about ${dollars(run.costCents)}` : dollars(run.costCents);
   if (run.outcome === 'running') return `${when} — running`;
   if (run.outcome === 'completed') {
-    return `${when} — ${String(run.factsRecorded)} fact${run.factsRecorded === 1 ? '' : 's'}, ${cost}`;
+    const facts = `${String(run.factsRecorded)} fact${run.factsRecorded === 1 ? '' : 's'}, ${cost}`;
+    if (run.extraction === 'over_budget') return `${when} — pages kept, too long to read in one go (${cost})`;
+    return `${when} — ${facts}`;
   }
   const why = researchNotice(run.refusalCode ?? 'refused');
   return run.costCents > 0 ? `${when} — ${run.outcome}: ${why} (${cost})` : `${when} — ${run.outcome}: ${why}`;

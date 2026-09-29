@@ -365,6 +365,31 @@ describe('the Firm page’s Research section', () => {
     expect(runs[1]?.textContent).not.toContain('lease_lost');
   });
 
+  it('says why a completed run recorded nothing when the pages were too long to read', async () => {
+    // `over_budget` is a completion with no facts: the pages were fetched and kept, and
+    // the model was never asked, because the request would not fit inside the cents the
+    // ceiling had authorized. "0 facts" alone would read as a firm that says nothing.
+    const overBudget = {
+      revision: 3,
+      trigger: 'sweep',
+      startedAt: AT,
+      completedAt: AT,
+      outcome: 'completed',
+      refusalCode: null,
+      pagesFetched: 4,
+      factsRecorded: 0,
+      costCents: 0,
+      costEstimated: false,
+      extraction: 'over_budget',
+    } as const;
+    const base = state().firm;
+    if (base === null || base === undefined) throw new Error('the default state has a firm');
+    install({}, state({ firm: { ...base, runs: [overBudget] } }));
+    mount();
+    const runs = await screen.findAllByTestId('research-run');
+    expect(runs[0]?.textContent).toBe('28 Sep 2026 — pages kept, too long to read in one go ($0.00)');
+  });
+
   it('turns a refusal code into a sentence and never shows the code', async () => {
     install({}, state({ notice: 'link_not_permitted' }));
     mount();
