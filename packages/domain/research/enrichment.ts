@@ -483,7 +483,29 @@ export async function finishFirmResearch(
   // the provider call included — so the sweep cannot close this run or release its
   // reservation while the call is in flight. See `lockRun`.
   const run = await lockRun(context, runId);
-  if (run === null) return refuse('invalid_input');
+  if (run === null) {
+    // The run is gone, and the only thing that removes one is the firm's deletion
+    // (`retention/deletion.ts`) landing between chunk 2 and this chunk. There is no row
+    // left to lock, to close or to report on — but this claim's reservation is not part
+    // of the firm's data and was not deleted with it, and an open one would count
+    // against the day's budget for ever with no run for the sweep to find it by.
+    //
+    // So this claim settles its own row, by id, on the one fact it has first hand: it
+    // has not called. `released_not_called` is the transition for exactly that caller.
+    // Deletion settles every open reservation of a run before it removes the run, so in
+    // the ordinary case this finds the row already `estimated` and does nothing; this is
+    // the path for a claim whose chunk 2 committed after deletion had passed the run.
+    const orphan = await readAttempt(context, { ...subject, attempt: input.attempt });
+    if (orphan !== null) {
+      await settleAttempt(context, {
+        reservationId: orphan.id,
+        at: input.at,
+        outcome: { kind: 'released_not_called' },
+      });
+    }
+    // A finished job, not a failure: nothing is owed and nothing is retryable.
+    return accept(replayed(input.firmId, input.revision));
+  }
   if (run.outcome !== 'running') return accept(replayed(input.firmId, input.revision));
 
   const settings = await readResearchSettings(context);

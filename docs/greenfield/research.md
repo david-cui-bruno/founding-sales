@@ -279,9 +279,20 @@ outcome this whole arrangement exists to prevent. Three rules, together:
   call (the fetch failed, or the counted request did not fit). No reader from outside may
   make that claim. It is not a CHECK or a trigger because the rule is about *who* is
   writing, which a row-level rule cannot see;
-* **a live lease is left alone.** `finaliseAbandonedRuns` joins the run's `research.firm`
-  job by its idempotency key and skips a row whose `lease_expires_at` is still in the
-  future, whatever the run's age;
+* **a live lease is left alone, and it is read twice.** `finaliseAbandonedRuns` joins the
+  run's `research.firm` job by its idempotency key and skips a row whose
+  `lease_expires_at` is still in the future, whatever the run's age — and then, *under
+  the run lock*, takes that job row `FOR UPDATE` and reads the lease again. The first
+  read is unlocked, and an expired lease is exactly the state in which the queue hands
+  the job to somebody else: a successor could reclaim it and commit chunk 2 while the
+  sweep waited for the run lock, and rechecking `outcome` alone let the sweep through,
+  because a live claim's run is still `running`. **The lock order is run row then job
+  row, everywhere.** That is the order the runner already uses for this kind:
+  `research.firm` is `business_uniqueness`, so the runner's `holdsLease` — the one place
+  a job row is locked before the handler — is not called for it, and the chunk
+  transaction takes the run row in the handler before it writes the job row in
+  `writeProgress`/`completeJob`. A `fencing_token` kind would be the other way round,
+  and this sweep must not be extended to one without turning the order around;
 * and **every close is guarded.** `completeRun`, `refuseRun` and `failRun` carry
   `WHERE outcome = 'running'` and report false when that matched nothing, so a claim
   returning from a call cannot overwrite the sweep's outcome, refusal code and estimated

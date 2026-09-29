@@ -137,7 +137,18 @@ What a commit does:
   them all. Their order matters — `firm_facts` references both `research_runs` and
   `evidence_items`, so all four go before `evidence_items` below them in the list, and
   a statement in the wrong place would be a foreign-key violation on a command an admin
-  had already approved (`test/research/deletion.test.ts`);
+  had already approved (`test/research/deletion.test.ts`).
+
+  A firm deletion also **closes the money before it removes the runs**. A run still
+  `running` when the firm is deleted has an open `provider_reservations` row, and that
+  table is `operational` and has no foreign key to `research_runs` — cents authorized
+  are money history, not the firm's data. So the row survived the run that caused it,
+  counting against the day's and the month's budget in `readSpend` for ever, with no
+  run left for the abandoned-run sweep to find it by. Each affected run is now locked
+  (`lockRun`) and its open reservations finalised first, on the sweep's rule:
+  `reserved` is `released` because no call could have happened, and `calling` is
+  `estimated` because one may have been made. A claim that reaches chunk 3 and finds no
+  run settles its own reservation by id and completes;
 * **stops** live `sequence_enrollments` with 11.2's `admin_stop` and cancels
   unexecuted `step_executions` — nothing is removed or blanked; what changes is that
   no worker will act on the plan again;

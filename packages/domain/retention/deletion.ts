@@ -2,6 +2,9 @@ import { createHash } from 'node:crypto';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { isAdminScope } from '../db/workspaceScope.ts';
 import { recordCrmAuditEvent } from '../crm/audit.ts';
+import { databaseNow } from '../policy/clock.ts';
+import { finaliseSubjectReservations } from '../research/reservations.ts';
+import { lockRun } from '../research/runs.ts';
 import { recordSuppression } from '../suppression/events.ts';
 import type { SuppressionJournal } from '../suppression/journal.ts';
 import { accept, refuse, type RetentionResult } from './result.ts';
@@ -633,6 +636,51 @@ export async function commitDeletion(
            WHERE o.workspace_id = a.workspace_id AND o.recipient_route_id = a.id)`,
     byContact,
   );
+  // Lane R's money, before Lane R's rows.
+  //
+  // `provider_reservations` has no foreign key to `research_runs` — a reservation is an
+  // authorization of cents and outlives the thing it was authorized for, which is the
+  // reason it is `operational` in the retention catalog and not `deletion_removes`. So
+  // deleting a run cannot cascade to one and did not close one either: a firm deleted
+  // between chunk 2 and chunk 3 left a `calling` row open, counting against the day's
+  // and the month's budget in `readSpend` for ever, with no run left for the sweep to
+  // find it by.
+  //
+  // Each affected run is therefore locked and its open reservations finalised first,
+  // exactly as the abandoned-run sweep does it: `reserved` is `released`, because no
+  // call could have happened, and `calling` is `estimated`, because a call may have
+  // been made and zero is the one answer that is certainly wrong. The lock is the run
+  // row's, which the `DELETE` two statements below would take anyway — this takes it
+  // slightly earlier, so the order (firm row, then run row) is unchanged.
+  //
+  // Only a firm deletion reaches this: a contact deletion leaves the firm's research
+  // alone, and `FIRM_SCOPED_ONLY` below says so for the rows.
+  if (scope.contactId === null) {
+    const { rows: openRuns } = await context.db.query<{ id: string }>(
+      `SELECT r.id FROM research_runs r
+        WHERE r.workspace_id = $1 AND r.firm_id = $2
+          AND EXISTS (
+            SELECT 1 FROM provider_reservations p
+             WHERE p.workspace_id = r.workspace_id
+               AND p.subject_kind = 'research_run' AND p.subject_id = r.id
+               AND p.state IN ('reserved', 'calling'))
+        ORDER BY r.started_at`,
+      [workspace, scope.firmId],
+    );
+    if (openRuns.length > 0) {
+      const at = await databaseNow(context);
+      for (const run of openRuns) {
+        // The lock, and then the settlement: a claim that is mid-chunk finishes first
+        // and its reservation is closed by the time this reads it.
+        if ((await lockRun(context, run.id)) === null) continue;
+        await finaliseSubjectReservations(context, {
+          subjectKind: 'research_run',
+          subjectId: run.id,
+          at,
+        });
+      }
+    }
+  }
   // Lane R, in foreign-key order and before the evidence a fact points at: the
   // judgment references the run, the facts reference the run *and* the evidence item,
   // so both go before `research_runs` and before `evidence_items` below.
