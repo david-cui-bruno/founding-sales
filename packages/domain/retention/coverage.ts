@@ -172,6 +172,11 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
   // ---------------------------------------------------------- research (0023)
   research_settings: coverage(['operational'], 'The workspace’s research ceilings and model; no prospect data.'),
   provider_ledger: coverage(['operational'], 'Calls, failures and cents per provider per business date; no prospect identity.'),
+  // Authorized-and-not-yet-invoiced cents, one row per paid attempt. A uuid and an
+  // amount: it names the run it paid for, never a firm, a person or an address — and it
+  // outlives the run deliberately, because what a provider billed is not a prospect
+  // record that a deletion may remove.
+  provider_reservations: coverage(['operational'], 'Cents authorized per paid attempt and how each one settled; no prospect identity.'),
   // The four below quote the firm’s own site or name a person at it, so they go with
   // the firm exactly as `call_logs` does, rather than being swept on a horizon.
   research_runs: coverage(['deletion_removes'], 'One run of one firm; removed with the firm it researched.'),

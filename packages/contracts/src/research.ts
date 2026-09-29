@@ -156,7 +156,14 @@ export const researchJudgmentsSchema = z.object({
 });
 
 /** Why the model was or was not used. `research_runs_extraction_known` is the same set. */
-export const RESEARCH_EXTRACTION_OUTCOMES = ['used', 'unconfigured', 'no_pages', 'failed'] as const;
+export const RESEARCH_EXTRACTION_OUTCOMES = [
+  'used',
+  'unconfigured',
+  'no_pages',
+  'failed',
+  /** The exact token count refused the request the reservation would not cover. */
+  'over_budget',
+] as const;
 
 export const researchRunSchema = z.object({
   revision: z.number().int().min(1),

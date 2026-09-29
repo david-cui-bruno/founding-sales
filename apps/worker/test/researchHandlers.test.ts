@@ -71,10 +71,15 @@ function countingFetch(): PageFetchProvider & { calls: number } {
   return state as unknown as PageFetchProvider & { calls: number };
 }
 
-function countingExtraction(): ExtractionProvider & { calls: number } {
+function countingExtraction(): ExtractionProvider & { calls: number; counts: number } {
   const state = {
     calls: 0,
+    counts: 0,
     providerKey: 'anthropic_extraction',
+    countInputTokens: async () => {
+      state.counts += 1;
+      return 100;
+    },
     extract: async () => {
       state.calls += 1;
       return {
@@ -91,7 +96,7 @@ function countingExtraction(): ExtractionProvider & { calls: number } {
       };
     },
   };
-  return state as unknown as ExtractionProvider & { calls: number };
+  return state as unknown as ExtractionProvider & { calls: number; counts: number };
 }
 
 /** A fetch that throws rather than returning a failure. The adapter's worst day. */
@@ -105,6 +110,7 @@ const throwingFetch: PageFetchProvider = {
 /** An extraction that throws *after* the fetch has already recorded evidence. */
 const throwingExtraction: ExtractionProvider = {
   providerKey: 'anthropic_extraction',
+  countInputTokens: async () => 100,
   extract: async () => {
     throw new Error('socket hang up');
   },
@@ -145,6 +151,25 @@ describe('the research jobs', () => {
   const context = (): RepositoryContext =>
     repositoryContext(workspaceScope(workspaceId, { kind: 'system', component: 'worker' }), database.session);
 
+  /** Every reservation of this workspace, oldest attempt first. The money, as rows. */
+  const reservations = async (): Promise<readonly { attempt: number; state: string; cents: number; settled: number }[]> => {
+    const { rows } = await database.session.query<{ attempt: number; state: string; cents: number; settled: number }>(
+      `SELECT attempt, state, cents, settled_cents AS settled FROM provider_reservations
+        WHERE workspace_id = $1 ORDER BY attempt`,
+      [workspaceId],
+    );
+    return rows;
+  };
+
+  /** What the ledger has invoiced, in cents. A reservation is not in here until settled. */
+  const invoiced = async (): Promise<number> => {
+    const { rows } = await database.session.query<{ cost: number }>(
+      'SELECT coalesce(sum(cost_cents), 0)::int AS cost FROM provider_ledger WHERE workspace_id = $1',
+      [workspaceId],
+    );
+    return rows[0]?.cost ?? 0;
+  };
+
   beforeAll(async () => {
     database = await createTestDatabase();
     const workspace = await database.session.query<{ id: string }>(
@@ -180,6 +205,7 @@ describe('the research jobs', () => {
     await database.session.query('DELETE FROM research_runs');
     await database.session.query('DELETE FROM evidence_items');
     await database.session.query('DELETE FROM provider_ledger');
+    await database.session.query('DELETE FROM provider_reservations');
     await database.session.query('DELETE FROM daily_counters');
     await database.session.query('DELETE FROM jobs');
     await database.session.query('DELETE FROM research_settings');
@@ -190,8 +216,9 @@ describe('the research jobs', () => {
     const registry = new HandlerRegistry().register(researchFirmJobHandler(options)).register(researchSweepJobHandler(options));
     expect(registry.get('research.firm')?.protection).toBe('business_uniqueness');
     expect(registry.get('research.sweep')?.protection).toBe('business_uniqueness');
-    // Chunked, and the boundary is where the money is: chunk 1 opens the run, consumes
-    // the day's count and reserves the worst case; chunk 2 makes the calls. Before the
+    // Chunked, and the boundaries are where the money is: chunk 1 opens the run,
+    // consumes the day's count and reserves the worst case; chunk 2 marks that
+    // reservation `calling` and nothing else; chunk 3 calls and settles. Before the
     // split, a lease reclaimed during the extraction rolled back the accounting of a
     // call that had already been billed.
     expect(registry.get('research.firm')?.chunked).toBe(true);
@@ -245,13 +272,12 @@ describe('the research jobs', () => {
     expect(counts.rows[0]).toEqual({ runs: 1, evidence: 1 });
     // The stolen worker's whole transaction rolled back, so the model was asked once
     // *for an effect*. The second attempt spent no cents that survived.
-    const ledger = await database.session.query<{ cost: number; reserved: number }>(
-      `SELECT coalesce(sum(cost_cents), 0)::int AS cost,
-              coalesce(sum(reserved_cents), 0)::int AS reserved FROM provider_ledger`,
-    );
-    // Ends at the invoiced figure with nothing still held: the happy path settles the
-    // reservation rather than leaving the month over-counted.
-    expect(ledger.rows[0]).toEqual({ cost: 1, reserved: 0 });
+    // Ends at the invoiced figure with nothing still held: the happy path settles its
+    // one reservation by id rather than leaving the month over-counted.
+    expect(await invoiced()).toBe(1);
+    // One reservation, numbered 1: the reclaiming worker ran all three chunks in its
+    // own claim, and the stale worker's whole transaction rolled back.
+    expect(await reservations()).toEqual([{ attempt: 1, state: 'settled', cents: 3, settled: 1 }]);
   });
 
   it('commits a failed run and completes the job, so a paid call keeps its accounting', async () => {
@@ -267,16 +293,20 @@ describe('the research jobs', () => {
         evidence: 1,
         // Two providers were asked, so there are two ledger rows and one failure.
         ledger: 2,
+        // A call that may have been billed and gave no figure: the reservation closes
+        // `estimated` at what it held, and that is what the run and the ledger say.
+        reservation: { attempt: 1, state: 'estimated', cents: 3, settled: 3 },
+        cost: 3,
       },
       {
-        // Two rows here as well: the extraction's row exists from chunk 1's
-        // reservation, even though the fetch never got far enough to ask it anything.
-        // Its reserved cents went back; the row stays, because a ledger row is the
-        // record that a run was authorized against this provider today.
+        // One row here: the page fetch's. Nothing was asked of the model, so nothing
+        // invoices it — the authorization lived on the reservation and went back.
         name: 'the fetch itself throws',
         options: { pageFetch: throwingFetch },
         evidence: 0,
-        ledger: 2,
+        ledger: 1,
+        reservation: { attempt: 1, state: 'released', cents: 3, settled: 0 },
+        cost: 0,
       },
     ] as const;
 
@@ -286,6 +316,7 @@ describe('the research jobs', () => {
       await database.session.query('DELETE FROM research_runs');
       await database.session.query('DELETE FROM evidence_items');
       await database.session.query('DELETE FROM provider_ledger');
+    await database.session.query('DELETE FROM provider_reservations');
       await database.session.query('DELETE FROM daily_counters');
       await database.session.query('DELETE FROM jobs');
 
@@ -344,6 +375,8 @@ describe('the research jobs', () => {
         counter_value: 1,
         job_status: 'done',
       });
+      expect(await reservations(), scenario.name).toEqual([scenario.reservation]);
+      expect(await invoiced(), scenario.name).toBe(scenario.cost);
 
       // A second claim of the same job key does nothing: the key is taken and the
       // revision's run row is already there.
@@ -362,7 +395,7 @@ describe('the research jobs', () => {
     }
   });
 
-  it('keeps the run, the reservation and the count when chunk 2 rolls back, and resumes from the cursor', async () => {
+  it('settles the ambiguous attempt as estimated and reserves a second when chunk 3 rolls back after the call', async () => {
     const pageFetch = countingFetch();
     const extraction = countingExtraction();
     const registry = new HandlerRegistry().register(researchFirmJobHandler({ pageFetch, extraction }));
@@ -375,9 +408,9 @@ describe('the research jobs', () => {
       maxAttempts: 3,
     });
 
-    // Chunk 1 commits; the extraction answers; and then the fact insert fails, which
-    // rolls chunk 2 back. Before the split this rolled back the run row, the ledger and
-    // the counter too, while the model call stayed billed.
+    // Chunks 1 and 2 commit; the extraction answers; and then the fact insert fails,
+    // which rolls chunk 3 back. Before the split this rolled back the run row, the
+    // ledger and the counter too, while the model call stayed billed.
     const broken = failingOnce(database.session, /INSERT INTO firm_facts/iu);
     const first = await runOnce(broken, { registry, owner: 'worker-chunk-rollback', limit: 5, backoff: NO_BACKOFF, random: () => 0 });
     expect(first.failed).toBe(1);
@@ -388,77 +421,111 @@ describe('the research jobs', () => {
       outcome: string | null;
       facts: number;
       counter: number | null;
-      reserved: number;
-      total: number;
       progress: string | null;
+      step: string | null;
     }>(
       `SELECT (SELECT count(*) FROM research_runs)::int AS runs,
               (SELECT outcome FROM research_runs LIMIT 1) AS outcome,
               (SELECT count(*) FROM firm_facts)::int AS facts,
               (SELECT max(count) FROM daily_counters)::int AS counter,
-              (SELECT coalesce(sum(reserved_cents), 0) FROM provider_ledger)::int AS reserved,
-              (SELECT coalesce(sum(cost_cents + reserved_cents), 0) FROM provider_ledger)::int AS total,
-              (SELECT payload->'progress'->>'runId' FROM jobs WHERE idempotency_key = $1) AS progress`,
+              (SELECT payload->'progress'->>'runId' FROM jobs WHERE idempotency_key = $1) AS progress,
+              (SELECT payload->'progress'->>'step' FROM jobs WHERE idempotency_key = $1) AS step`,
       [key],
     );
     // The run row and its reservation survived; the facts did not, because that is the
-    // work chunk 2 was rolled back for.
-    expect(after.rows[0]).toMatchObject({ runs: 1, outcome: 'running', facts: 0, counter: 1, reserved: 3 });
-    // The ledger never drops below what was reserved, whatever chunk 2 did.
-    expect(after.rows[0]?.total).toBeGreaterThanOrEqual(3);
-    // And the cursor is still there, naming the run chunk 2 must resume.
+    // work chunk 3 was rolled back for.
+    expect(after.rows[0]).toMatchObject({ runs: 1, outcome: 'running', facts: 0, counter: 1, step: 'calling' });
+    // The reservation is still open and still says `calling`, which is the durable
+    // record that a call may already have happened under attempt 1.
+    expect(await reservations()).toEqual([{ attempt: 1, state: 'calling', cents: 3, settled: 0 }]);
+    // Nothing invoiced yet: an open reservation is authorized, not billed.
+    expect(await invoiced()).toBe(0);
+    // And the cursor is still there, naming the run chunk 3 must resume.
     expect(after.rows[0]?.progress).toEqual(expect.any(String));
 
-    // The second claim resumes at chunk 2: no second run row, no second unit of the
-    // day's count, and the reservation turns into the invoiced figure.
+    // The second claim is a second attempt. It cannot know whether attempt 1's call
+    // was made, so it charges attempt 1 what it held — `estimated` — and opens its own
+    // reservation before calling again. One authorization, one call, each time.
     const second = await runOnce(database.session, { registry, owner: 'worker-chunk-resume', limit: 5, backoff: NO_BACKOFF, random: () => 0 });
     expect(second.completed).toBe(1);
     expect(extraction.calls).toBe(2);
+    expect(await reservations()).toEqual([
+      { attempt: 1, state: 'estimated', cents: 3, settled: 3 },
+      { attempt: 2, state: 'settled', cents: 3, settled: 1 },
+    ]);
+    // The ledger holds the estimate of the first call plus the invoice of the second,
+    // and the run says its figure is partly an estimate.
+    expect(await invoiced()).toBe(4);
     const settled = await database.session.query<{
       runs: number;
       outcome: string | null;
       counter: number | null;
-      reserved: number;
       cost: number;
+      estimated: boolean;
     }>(
       `SELECT (SELECT count(*) FROM research_runs)::int AS runs,
               (SELECT outcome FROM research_runs LIMIT 1) AS outcome,
               (SELECT max(count) FROM daily_counters)::int AS counter,
-              (SELECT coalesce(sum(reserved_cents), 0) FROM provider_ledger)::int AS reserved,
-              (SELECT coalesce(sum(cost_cents), 0) FROM provider_ledger)::int AS cost`,
+              (SELECT cost_cents FROM research_runs LIMIT 1)::int AS cost,
+              (SELECT cost_estimated FROM research_runs LIMIT 1) AS estimated`,
     );
-    expect(settled.rows[0]).toEqual({ runs: 1, outcome: 'completed', counter: 1, reserved: 0, cost: 1 });
+    // One run, one unit of the day's count — the retry did not consume a second — and
+    // the run's cost is the sum of both reservations.
+    expect(settled.rows[0]).toEqual({ runs: 1, outcome: 'completed', counter: 1, cost: 4, estimated: true });
   });
 
-  it('finalises a run abandoned between the chunks as lease_lost, keeping its reservation as the cost', async () => {
-    // A worker that disappears after chunk 1 — a pause past its lease, a container
-    // replaced, a failover — leaves a row `running` with cents held against it, and
-    // `run_in_progress` refuses the firm a new revision while it sits there.
+  it('finalises a run abandoned during the call as lease_lost, keeping every reservation as the cost', async () => {
+    // A worker that disappears after chunk 2 — a pause past its lease, a container
+    // replaced, a failover, a lease stolen while the call was in flight — leaves a row
+    // `running` with cents held against it, and `run_in_progress` refuses the firm a new
+    // revision while it sits there.
     const handler = researchFirmJobHandler({ pageFetch: countingFetch(), extraction: countingExtraction() });
-    const chunkOne = await handler.handle({
-      session: database.session,
-      scope: workspaceScope(workspaceId, { kind: 'system', component: 'worker' }),
-      job: {
-        id: '00000000-0000-4000-8000-00000000000a',
-        workspaceId,
-        kind: 'research.firm',
-        idempotencyKey: jobIdempotencyKey.researchFirm(firmId, 1),
-        payload: { firmId, revision: 1, trigger: 'sweep' },
-        attempt: 1,
-        maxAttempts: 3,
-        fencingToken: '1',
-        leaseOwner: 'test',
-        leaseExpiresAt: now,
-      },
+    const scope = workspaceScope(workspaceId, { kind: 'system', component: 'worker' });
+    // One claim, one fencing token: that is what the queue hands out, and what the
+    // cursor carries.
+    const claimed = (fencingToken: string, progress?: unknown): Parameters<typeof handler.handle>[0]['job'] => ({
+      id: '00000000-0000-4000-8000-00000000000a',
+      workspaceId,
+      kind: 'research.firm',
+      idempotencyKey: jobIdempotencyKey.researchFirm(firmId, 1),
+      payload: { firmId, revision: 1, trigger: 'sweep', ...(progress === undefined ? {} : { progress }) },
+      attempt: 1,
+      maxAttempts: 3,
+      fencingToken,
+      leaseOwner: 'test',
+      leaseExpiresAt: now,
     });
-    expect(chunkOne).toMatchObject({ done: false });
+
+    const chunkOne = await handler.handle({ session: database.session, scope, job: claimed('1') });
+    expect(chunkOne).toMatchObject({ done: false, progress: { attempt: 1, step: 'reserved' } });
+    // Chunk 2 marks the reservation `calling`: from here on nobody can say whether the
+    // model was asked.
+    const chunkTwo = await handler.handle({
+      session: database.session,
+      scope,
+      job: claimed('1', (chunkOne as { progress: unknown }).progress),
+    });
+    expect(chunkTwo).toMatchObject({ done: false, progress: { attempt: 1, step: 'calling' } });
+    // A second claim — a stolen lease, from the queue's side. Its fencing token is
+    // higher, so reservation 1 is charged its estimate and reservation 2 opens and is
+    // marked `calling`; and then this worker disappears too.
+    await handler.handle({
+      session: database.session,
+      scope,
+      job: claimed('2', (chunkTwo as { progress: unknown }).progress),
+    });
+    expect(await reservations()).toEqual([
+      { attempt: 1, state: 'estimated', cents: 3, settled: 3 },
+      { attempt: 2, state: 'calling', cents: 3, settled: 0 },
+    ]);
+
     // Thirty-one minutes ago, which is what the sweep is looking for.
     await database.session.query("UPDATE research_runs SET started_at = now() - interval '31 minutes'");
 
     const sweep = researchSweepJobHandler({ pageFetch: countingFetch() });
     await sweep.handle({
       session: database.session,
-      scope: workspaceScope(workspaceId, { kind: 'system', component: 'worker' }),
+      scope,
       job: {
         id: '00000000-0000-4000-8000-00000000000b',
         workspaceId,
@@ -477,23 +544,34 @@ describe('the research jobs', () => {
       outcome: string;
       refusal: string | null;
       estimated: boolean;
-      reserved: number;
+      cost: number;
     }>(
       `SELECT (SELECT outcome FROM research_runs LIMIT 1) AS outcome,
               (SELECT refusal_code FROM research_runs LIMIT 1) AS refusal,
               (SELECT cost_estimated FROM research_runs LIMIT 1) AS estimated,
-              (SELECT coalesce(sum(reserved_cents), 0) FROM provider_ledger)::int AS reserved`,
+              (SELECT cost_cents FROM research_runs LIMIT 1)::int AS cost`,
     );
-    // The reservation **stays**: the last thing that worker did before disappearing may
-    // well have been to make the call, and releasing it would be claiming it did not.
-    expect(closed.rows[0]).toEqual({ outcome: 'failed', refusal: 'lease_lost', estimated: true, reserved: 3 });
+    // Both amounts, because both attempts were marked: the last thing either worker did
+    // before disappearing may well have been to make the call, and releasing the cents
+    // would be claiming it did not.
+    expect(closed.rows[0]).toEqual({ outcome: 'failed', refusal: 'lease_lost', estimated: true, cost: 6 });
+    expect(await reservations()).toEqual([
+      { attempt: 1, state: 'estimated', cents: 3, settled: 3 },
+      { attempt: 2, state: 'estimated', cents: 3, settled: 3 },
+    ]);
+    // Nothing is left open, so the day's spend is the ledger's six cents once, not
+    // twelve counted twice.
+    expect(await invoiced()).toBe(6);
   });
 
-  it('resumes at chunk 2 after an admin requeue, without reserving twice', async () => {
+  it('reserves no fourth attempt after an admin requeue, and closes the run instead', async () => {
+    // The bound that makes the whole arrangement affordable: three reservations is the
+    // most one firm can cost in a day, whatever an operator requeues. Without it a dead
+    // job could be requeued for ever, and each requeue is a fresh authorization.
     const pageFetch = countingFetch();
     const extraction = countingExtraction();
     const registry = new HandlerRegistry().register(
-      // One attempt, so the rolled-back chunk 2 buries the job at once.
+      // One attempt, so each rolled-back chunk 3 buries the job at once.
       researchFirmJobHandler({ pageFetch, extraction, maxAttempts: 1 }),
     );
     const key = jobIdempotencyKey.researchFirm(firmId, 1);
@@ -504,41 +582,135 @@ describe('the research jobs', () => {
       payload: { firmId, revision: 1, trigger: 'sweep' },
       maxAttempts: 1,
     });
-    const broken = failingOnce(database.session, /INSERT INTO firm_facts/iu);
-    await runOnce(broken, { registry, owner: 'worker-requeue', limit: 5, backoff: NO_BACKOFF, random: () => 0 });
-
-    const dead = await database.session.query<{ id: string; state: string }>(
-      'SELECT id, state FROM jobs WHERE idempotency_key = $1',
-      [key],
-    );
-    expect(dead.rows[0]?.state).toBe('dead');
-
-    // `requeueDeadJob` clears the chunk budget and keeps the cursor, which is exactly
-    // what stops a requeue from opening a second run and reserving a second time.
     const admin = repositoryContext(
       workspaceScope(workspaceId, { kind: 'user', userId: adminUserId, role: 'admin' }),
       database.session,
     );
+
+    // Three claims, each of which calls and then loses chunk 3 to a broken insert.
+    // `requeueDeadJob` clears the chunk budget and keeps the cursor, which is what
+    // stops a requeue from opening a second run or consuming a second unit of the day.
+    for (let round = 1; round <= 3; round += 1) {
+      const broken = failingOnce(database.session, /INSERT INTO firm_facts/iu);
+      await runOnce(broken, { registry, owner: `worker-requeue-${String(round)}`, limit: 5, backoff: NO_BACKOFF, random: () => 0 });
+      const dead = await database.session.query<{ id: string; state: string }>(
+        'SELECT id, state FROM jobs WHERE idempotency_key = $1',
+        [key],
+      );
+      expect(dead.rows[0]?.state, String(round)).toBe('dead');
+      if (round === 3) break;
+      expect(await requeueDeadJob(admin, { jobId: dead.rows[0]?.id ?? '', reason: 'test' })).toMatchObject({
+        requeued: true,
+      });
+    }
+    expect(extraction.calls).toBe(3);
+    const three = await reservations();
+    expect(three.map(row => row.attempt)).toEqual([1, 2, 3]);
+
+    // A fourth requeue. The run is closed here rather than reserving again, and the
+    // model is not asked a fourth time.
+    const dead = await database.session.query<{ id: string }>('SELECT id FROM jobs WHERE idempotency_key = $1', [key]);
     expect(await requeueDeadJob(admin, { jobId: dead.rows[0]?.id ?? '', reason: 'test' })).toMatchObject({
       requeued: true,
     });
-
-    await runOnce(database.session, { registry, owner: 'worker-requeued', limit: 5, backoff: NO_BACKOFF, random: () => 0 });
-    const settled = await database.session.query<{
+    await runOnce(database.session, { registry, owner: 'worker-requeue-4', limit: 5, backoff: NO_BACKOFF, random: () => 0 });
+    expect(extraction.calls).toBe(3);
+    expect((await reservations()).map(row => row.attempt)).toEqual([1, 2, 3]);
+    const closed = await database.session.query<{
       runs: number;
       outcome: string | null;
+      refusal: string | null;
       counter: number | null;
-      reserved: number;
       cost: number;
+      estimated: boolean;
     }>(
       `SELECT (SELECT count(*) FROM research_runs)::int AS runs,
               (SELECT outcome FROM research_runs LIMIT 1) AS outcome,
+              (SELECT refusal_code FROM research_runs LIMIT 1) AS refusal,
               (SELECT max(count) FROM daily_counters)::int AS counter,
-              (SELECT coalesce(sum(reserved_cents), 0) FROM provider_ledger)::int AS reserved,
-              (SELECT coalesce(sum(cost_cents), 0) FROM provider_ledger)::int AS cost`,
+              (SELECT cost_cents FROM research_runs LIMIT 1)::int AS cost,
+              (SELECT cost_estimated FROM research_runs LIMIT 1) AS estimated`,
     );
-    // One run, one unit of the day's count, nothing still reserved, one invoice.
-    expect(settled.rows[0]).toEqual({ runs: 1, outcome: 'completed', counter: 1, reserved: 0, cost: 1 });
+    // Three calls, three estimates, one unit of the day's count, and a run that says
+    // provider_failure rather than sitting `running` for ever.
+    expect(closed.rows[0]).toEqual({
+      runs: 1,
+      outcome: 'failed',
+      refusal: 'provider_failure',
+      counter: 1,
+      cost: 9,
+      estimated: true,
+    });
+    expect(await invoiced()).toBe(9);
+  });
+
+  it('does nothing for a cursor that names a run somebody already finished', async () => {
+    // A stale cursor: an operator requeues a job whose run the sweep finalised, or a
+    // duplicate claim arrives for a revision that has been recorded. Neither may call
+    // the model, and neither may reopen the run — a terminal run is terminal.
+    const pageFetch = countingFetch();
+    const extraction = countingExtraction();
+    const handler = researchFirmJobHandler({ pageFetch, extraction });
+    const scope = workspaceScope(workspaceId, { kind: 'system', component: 'worker' });
+    const base = {
+      id: '00000000-0000-4000-8000-00000000000c',
+      workspaceId,
+      kind: 'research.firm',
+      idempotencyKey: jobIdempotencyKey.researchFirm(firmId, 1),
+      attempt: 1,
+      maxAttempts: 3,
+      fencingToken: '1',
+      leaseOwner: 'test',
+      leaseExpiresAt: now,
+    };
+    const opened = await handler.handle({
+      session: database.session,
+      scope,
+      job: { ...base, payload: { firmId, revision: 1, trigger: 'sweep' } },
+    });
+    const progress = (opened as unknown as { progress: { runId: string; attempt: number; fencing: string } }).progress;
+    await database.session.query(
+      "UPDATE research_runs SET outcome = 'completed', completed_at = now() WHERE id = $1",
+      [progress.runId],
+    );
+    await database.session.query("UPDATE provider_reservations SET state = 'released', settled_at = now()");
+    const before = await reservations();
+
+    // Chunk 2 under a later claim, which is the shape a requeue produces: a higher
+    // fencing token against a cursor written by somebody else. Nothing is reserved and
+    // nothing is closed — the run is already closed.
+    expect(
+      await handler.handle({
+        session: database.session,
+        scope,
+        job: { ...base, fencingToken: '9', payload: { firmId, revision: 1, trigger: 'sweep', progress } },
+      }),
+    ).toBeUndefined();
+    // Chunk 3 from this claim's own cursor, saying the call was made. A replay: the run
+    // is reported as it stands and no provider is touched.
+    expect(
+      await handler.handle({
+        session: database.session,
+        scope,
+        job: {
+          ...base,
+          fencingToken: '9',
+          payload: {
+            firmId,
+            revision: 1,
+            trigger: 'sweep',
+            progress: { ...progress, step: 'calling', fencing: '9' },
+          },
+        },
+      }),
+    ).toMatchObject({ done: true });
+    expect(extraction.calls).toBe(0);
+    expect(pageFetch.calls).toBe(0);
+    expect(await reservations()).toEqual(before);
+    const still = await database.session.query<{ outcome: string; cost: number }>(
+      'SELECT outcome, cost_cents::int AS cost FROM research_runs',
+    );
+    expect(still.rows).toEqual([{ outcome: 'completed', cost: 0 }]);
   });
 
   it('materializes one sweep per workspace per business date, however many passes run', async () => {
@@ -609,34 +781,50 @@ describe('the research jobs', () => {
 
     // Chunk 1: the run row, the day's count and the reservation. No provider yet.
     const first = await handler.handle({ session: database.session, scope, job: claimed });
-    expect(first).toEqual({ progress: { runId: expect.any(String), reservedCents: 3, step: 'reserved' }, done: false });
+    expect(first).toEqual({
+      progress: { runId: expect.any(String), attempt: 1, step: 'reserved', fencing: '1' },
+      done: false,
+    });
     expect(pageFetch.calls).toBe(0);
 
     // Chunk 2, from the cursor the runner would have carried in `payload.progress`.
+    // One column on one row: the reservation is marked, and nothing else happens.
     const second = await handler.handle({
       session: database.session,
       scope,
       job: { ...claimed, payload: { ...claimed.payload, progress: (first as { progress: unknown }).progress } },
     });
-    expect(second).toMatchObject({ done: true });
+    expect(second).toEqual({
+      progress: { runId: expect.any(String), attempt: 1, step: 'calling', fencing: '1' },
+      done: false,
+    });
+    expect(pageFetch.calls).toBe(0);
+
+    // Chunk 3, from this claim's own cursor.
+    const third = await handler.handle({
+      session: database.session,
+      scope,
+      job: { ...claimed, payload: { ...claimed.payload, progress: (second as { progress: unknown }).progress } },
+    });
+    expect(third).toMatchObject({ done: true });
 
     const counts = await database.session.query<{
       evidence: number;
       facts: number;
       fit: string | null;
       extraction: string | null;
-      reserved: number;
     }>(
       `SELECT (SELECT count(*) FROM evidence_items)::int AS evidence,
               (SELECT count(*) FROM firm_facts)::int AS facts,
               (SELECT fit FROM firm_judgments LIMIT 1) AS fit,
-              (SELECT extraction FROM research_runs LIMIT 1) AS extraction,
-              (SELECT coalesce(sum(reserved_cents), 0) FROM provider_ledger)::int AS reserved`,
+              (SELECT extraction FROM research_runs LIMIT 1) AS extraction`,
     );
     // `unconfigured` rather than a null model name, so the sweep can tell this apart
-    // from a firm whose pages could not be read — and the reservation came back,
-    // because nothing was asked of a model.
-    expect(counts.rows[0]).toEqual({ evidence: 1, facts: 0, fit: 'unknown', extraction: 'unconfigured', reserved: 0 });
+    // from a firm whose pages could not be read.
+    expect(counts.rows[0]).toEqual({ evidence: 1, facts: 0, fit: 'unknown', extraction: 'unconfigured' });
+    // And the cents came back, because nothing was asked of a model.
+    expect(await reservations()).toEqual([{ attempt: 1, state: 'released', cents: 3, settled: 0 }]);
+    expect(await invoiced()).toBe(0);
     expect(context().scope.workspaceId).toBe(workspaceId);
   });
 });
@@ -648,7 +836,7 @@ describe('what the worker composes', () => {
     expect(withoutKey.extraction).toBeUndefined();
     expect(describeResearch(withoutKey)).toEqual({ research_extraction_configured: false });
 
-    const transport = { create: async () => ({}) };
+    const transport = { countTokens: async () => 0, create: async () => ({}) };
     const withKey = composeResearch({ transport, processEnabled: true });
     expect(withKey.extraction?.providerKey).toBe('anthropic_extraction');
     expect(describeResearch(withKey)).toEqual({ research_extraction_configured: true });

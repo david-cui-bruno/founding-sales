@@ -44,6 +44,8 @@ function fakeClient(response: AnthropicMessageResponse): {
   return {
     sent,
     transport: {
+      // The classifier never counts; the seam requires it for the extraction path.
+      countTokens: async () => await Promise.resolve(0),
       create: async request => {
         sent.push(request);
         return await Promise.resolve(response);
@@ -224,6 +226,7 @@ describe('an answer that cannot be used', () => {
   it('records a provider error without carrying the message into the record', async () => {
     const attempt = await anthropicReplyClassifier({
       transport: {
+        countTokens: async () => await Promise.resolve(0),
         create: async () => {
           await Promise.resolve();
           throw new Error('400 invalid_request_error: body was reception@northwind.example.test');

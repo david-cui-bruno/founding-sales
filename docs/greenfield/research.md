@@ -71,12 +71,13 @@ is.
 | `firm_judgments` | The **current** judgment, keyed by the firm and replaced by each completed run. |
 | `firm_links` | The https pages a person added by hand. `added_by_user_id` is NOT NULL. |
 | `provider_ledger` | Calls, failures and cents per provider per workspace business date. Generic: lanes C and D reuse it. |
+| `provider_reservations` | One row per **paid attempt**: what it authorized, which business date it belongs to, and how it settled. Generic on `(subject_kind, subject_id)`: lanes C and D reuse it too. |
 
 Migration 0023 is additive and **refuses on nothing**, so it has no
 `fss admin schema-preflight` command and the release skips step 3. It also carries one
 `CREATE OR REPLACE` of `today_algorithm_version()`, because lane 4's order changed.
 
-`provider_ledger` is not `research_provider_ledger` on purpose. Telephony (lane C) and
+Neither `provider_ledger` nor `provider_reservations` is `research_*` on purpose. Telephony (lane C) and
 calendar (lane D) each need "what did this provider cost today, and what failed", and
 three tables with the same five columns would be three places to get the business date
 wrong. The date is derived in the workspace's zone and stored beside the zone that
@@ -184,27 +185,63 @@ run, and honoured for `*` and for `CallieResearch`. Four rules:
   octets decoded, the rest upper-cased. `/~joe` and `/%7Ejoe` are one path, and a site
   that disallowed one of them meant both.
 
-## A run is two committed steps, because the middle of it spends money
+## A run is three committed steps, because the middle of it spends money
 
 `research.firm` is a **chunked** handler (`docs/greenfield/jobs.md`, "Chunked bulk
-work"), and the chunk boundary is where the money is:
+work"), and the chunk boundaries are where the money is:
 
 | | What it does | What the runner does with it |
 |---|---|---|
-| **Chunk 1** | `beginFirmResearch`: the firm is researchable, the run row is opened, a unit of the day's count is consumed, and the worst case is **reserved** on `provider_ledger`. No provider is touched. | Commits it together with the cursor `{ runId, reservedCents, step: 'reserved' }`. |
-| **Chunk 2** | `finishFirmResearch`: fetch, extract, record the evidence, the facts, the judgment, the funnel facts; turn the reservation into the actual figure; close the run. | Commits it as the job's completion. |
+| **Chunk 1** | `beginFirmResearch`: the firm is researchable, the run row is opened, a unit of the day's count is consumed, and the worst case is **reserved** as a row in `provider_reservations`, state `reserved`. No provider is touched. | Commits it together with the cursor `{ runId, attempt: 1, step: 'reserved', fencing }`. |
+| **Chunk 2** | `ensureResearchCalling`: that reservation moves to `calling`, and **nothing else is written**. | Commits it together with the cursor `{ runId, attempt, step: 'calling', fencing }`. |
+| **Chunk 3** | `finishFirmResearch`: fetch, count the request exactly, extract, record the evidence, the facts, the judgment, the funnel facts; settle this attempt's reservation by id; close the run. | Commits it as the job's completion. |
 
-Before the split both halves ran in the runner's single job transaction, and that was
+Before the split all of it ran in the runner's single job transaction, and that was
 the worst bug this lane had. A lease reclaimed during the extraction — or any database
 error after the paid call — rolled back the run row, the ledger row **and the consumed
 counter**, while the money stayed spent at the provider. The retry then spent it again
 against a budget that had never heard of the first attempt: three attempts, three
 invoices, one visible cent.
 
-Now a rollback of chunk 2 leaves chunk 1 standing. The second claim resumes from the
-cursor, finds its run row and its reservation, and consumes no second unit. The month is
-over-counted by a few cents until the run settles, which is the direction in which
-nothing can be lost.
+Now a rollback of chunk 3 leaves chunks 1 and 2 standing. The next claim resumes from
+the cursor, finds its run row and its reservations, and consumes no second unit of the
+day's count. The month is over-counted by a few cents until the run settles, which is
+the direction in which nothing can be lost.
+
+The middle chunk looks like a chunk that does nothing, and it is the one that makes the
+rest safe: a marker written in the same transaction as the work is rolled back *by* that
+work's failure, and then the call which followed it has no record anywhere.
+
+### Which claim marked it: the fencing token, not the attempt
+
+A reservation found `calling` means one of two things — this claim marked it and is
+about to call, or an earlier claim called and died before recording anything. The rows
+cannot tell those apart, so the cursor carries the **fencing token of the claim that
+wrote it**:
+
+* cursor written by *this* claim → chunk 3, and the reservation this claim marked is the
+  one it spends;
+* cursor written by anybody else → chunk 2, where the open reservation is settled
+  `estimated` (the call may well have been billed) and a **fresh** reservation is opened
+  for this claim. A second call is therefore a second authorization, never a second
+  invoice against the first one.
+
+The job's own `attempt` cannot carry this, and that is worth stating because it is the
+obvious thing to reach for: `requeueDeadJob` sets `attempt_count` back to zero, so a
+requeued claim carries the same number as the claim that died. `fencing_token` is
+incremented by every claim and never reset.
+
+For the same reason the money bound is **not** `maxAttempts`, which a handler option can
+lower and a requeue resets. It is `RESEARCH_FIRM_MAX_RESERVATIONS` — three — counted
+from the durable rows: the fourth claim closes the run `provider_failure` with the sum of
+its reservations instead of opening a fourth. Three worst cases, nine cents at the
+defaults, is the most one firm can cost however often it is requeued.
+
+**This is the pattern the next paid call reuses.** `provider_reservations` is generic on
+purpose (`subject_kind`, `subject_id`, `provider_key`), so Twilio's recorded calls add a
+`subject_kind` and inherit the whole arrangement: one row per paid attempt, `readSpend`
+counting the open ones as spent, settlement by id on the reservation's own business date,
+and the three-chunk handler around it.
 
 **`outcome = 'running'` is therefore a normal state**, not a crash — and a row still
 `running` after thirty minutes is one. The sweep's first act is `finaliseAbandonedRuns`:
@@ -214,18 +251,47 @@ disappearing may well have been to make the call, and releasing the cents would 
 claiming it did not. `run_in_progress` refuses the firm a new revision inside the same
 window, so the firm becomes researchable again in the same breath.
 
-### The ledger reserves before it spends
+### The reservation table, and its five states
 
-`cost_cents` is what was invoiced; `reserved_cents` is what has been authorized and not
-yet invoiced. `readSpend` counts **both**, so a run in flight is already spent as far as
-the next clearance is concerned — anything else lets two runs started in the same minute
-each be cleared against the same remaining cents.
+`provider_ledger.cost_cents` is what was invoiced. `provider_reservations` is what has
+been authorized and not yet invoiced, **one row per paid attempt**, carrying its own
+`business_date` and `business_time_zone`. `readSpend` sums the ledger and every open
+reservation, so a run in flight is already spent as far as the next clearance is
+concerned — anything else lets two runs started in the same minute each be cleared
+against the same remaining cents.
 
-A reservation is settled three ways: released whole when the run asked the provider
-nothing (no sources, no model key), turned into the invoice when a figure comes back, or
-**recorded as the cost** when no figure does. That last one is `cost_estimated` on the
-run row, and it covers a thrown transport, a response with no `usage`, and a lost lease.
-Zero is the one answer that is certainly wrong about a call that may have been billed.
+```
+reserved ──markCalling──▶ calling ──┬──▶ settled    (a figure came back: the invoice)
+    │                               └──▶ estimated  (no figure: the reservation is the cost)
+    └──────────────────────────────────▶ released   (nothing was asked of the provider)
+```
+
+Five states, and the invariants that matter: a row leaves `reserved`/`calling` exactly
+once, by id; `settled_at` is set precisely when it is no longer open; `released` settles
+nothing; and settlement writes the ledger on the **reservation's own** business date, so
+a run authorized on Monday and settled on Tuesday invoices Monday and leaves Tuesday's
+ceiling alone. A `calling` row is the only ambiguous state, and it always costs its
+reservation — `cost_estimated` on the run row is how that is said out loud. It covers a
+thrown transport, a response with no `usage`, and a lost lease. Zero is the one answer
+that is certainly wrong about a call that may have been billed.
+
+### The token bound is exact, not a ratio
+
+The reservation is sized from characters — `CHARACTERS_PER_TOKEN`, 2.5 — because at
+reservation time there is nothing else to size it from. That ratio is the right way to
+decide what to *hold* and the wrong way to decide what to *send*: Japanese and Chinese
+text tokenizes at roughly one token a character, so the largest request the settings
+allow can count about two and a half times the bound the ceiling authorized.
+
+So chunk 3 asks the provider's own tokenizer before it calls
+(`AnthropicMessagesTransport.countTokens`, on the very request `extract` would send).
+If the count plus `MAX_EXTRACTION_OUTPUT_TOKENS` does not fit, trailing blocks are
+dropped — whole pages last — and it counts again, at most three times. If it still does
+not fit the run is a **completion** with `extraction = 'over_budget'`: the evidence is
+kept, the judgments come from the firm's routes and its suppression, the reservation is
+released, and no call is made. A counter that throws is a `provider_failure` with no
+cents, for the same reason: spending against a number nobody has is worse than not
+spending.
 
 ### When a provider fails
 
@@ -265,9 +331,9 @@ provider is reached:
 | `model_name` | `claude-haiku-4-5` | The one model with a reviewed price row |
 
 `research_runs.extraction` records why the model was or was not used — `used`,
-`unconfigured`, `no_pages`, `failed` — because a null `model_name` could not say, and the
-difference decides whether the sweep ever comes back. Only `unconfigured` is re-selected
-once a key exists: a run that found no readable pages will find none tomorrow either, and
+`unconfigured`, `no_pages`, `failed`, `over_budget` — because a null `model_name` could
+not say, and the difference decides whether the sweep ever comes back. Only
+`unconfigured` is re-selected once a key exists, and only on a later business date: a run that found no readable pages will find none tomorrow either, and
 re-selecting it was a unit of the day's budget spent on the same nothing every morning
 for ever.
 
@@ -443,6 +509,27 @@ It selects firms that are active, not merged, not suppressed, have **no closed
 opportunity** — a Won firm is a client and a Lost one has said no; re-researching either
 is spending money to put somebody back on a morning list they have already left — and
 were never researched or last completed more than ninety days ago. Oldest first.
+
+Six branches make a firm due, and the query carries the list as a comment with the gates
+on each, because the bug this section keeps getting is a branch that forgot one:
+
+1. **never looked at** — no completed, failed or `no_sources` run exists. No gates: this
+   is the backlog;
+2. **stale** — the latest run completed over ninety days ago;
+3. **the last run failed** — gated on a later business day and fewer than three
+   consecutive failures;
+4. **no model then** — the latest run completed `unconfigured`, gated on a model being
+   configured *now* as well as on a later business day;
+5. **a link was added** after the latest run started — a backstop; the link's own
+   enqueue is the prompt path;
+6. **a website appeared** — the latest run refused `no_sources` and the firm has had a
+   website set since.
+
+A `no_sources` refusal **counts as having been looked at**, which is the point of the
+list: while it did not, a firm with no website and no links was selected every morning,
+refused, and selected again — a unit of the day's budget, every day, for ever, for a firm
+there was nothing to read about. Only a real change (branch 5 or 6) brings it back, and
+the three-failure gate brackets every branch above rather than sitting beside one.
 
 ## The funnel
 

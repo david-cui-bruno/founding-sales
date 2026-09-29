@@ -363,6 +363,33 @@ describe('what a run may cost', () => {
     expect(withinWorstCase(settings, { inputTokens: tokens, outputTokens: MAX_EXTRACTION_OUTPUT_TOKENS })).toBe(true);
   });
 
+  it('is exceeded by the same request in dense script, which is why the count is exact', () => {
+    // The adversarial case for a characters-per-token ratio. Japanese and Chinese text
+    // tokenizes at roughly one token a character, not 2.5, so the maximal request the
+    // settings allow can count about two and a half times the bound the ceiling
+    // authorized it against. The ratio therefore sizes the *reservation* and never
+    // admits the call: `finishFirmResearch` asks the provider for the exact count,
+    // drops trailing blocks, and records `over_budget` rather than calling over it.
+    const settings = { modelName: 'claude-haiku-4-5', maxPagesPerFirm: 4, maxPageBytes: 1_000_000 } as const;
+    const sources = Array.from({ length: settings.maxPagesPerFirm }, (_, page) => ({
+      sourceReference: `https://example.test/${String(page)}`,
+      firstParty: true,
+      blocks: Array.from({ length: MAX_BLOCKS }, (_, index) => ({
+        id: `b${String(index + 1)}`,
+        // 120 characters of Japanese: the same parse cap as the test above.
+        text: '物件管理会社の業務'.repeat(13).slice(0, 120),
+      })),
+    }));
+    const request = { sources, firmName: '不動産管理株式会社' };
+    const characters = EXTRACTION_SYSTEM_TEXT.length + JSON.stringify(EXTRACTION_OUTPUT_SCHEMA).length + extractionUserText(request).length;
+    // What the ratio would have believed, against what a tokenizer of dense script
+    // actually returns for the same text.
+    const ratioEstimate = Math.ceil(characters / 2.5);
+    const dense = [...extractionUserText(request)].filter(character => (character.codePointAt(0) ?? 0) > 0x2e7f).length;
+    expect(ratioEstimate).toBeLessThanOrEqual(worstCaseInputTokens(settings));
+    expect(dense).toBeGreaterThan(worstCaseInputTokens(settings));
+  });
+
   it('bounds a run that reported every usage category, cached tokens included', () => {
     // The bound is what `claimResearchClearance` authorized the run against, so a call
     // whose actual usage came in over it would mean the ceiling authorized a price it

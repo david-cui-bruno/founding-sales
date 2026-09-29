@@ -285,6 +285,31 @@ describe('bounds and robots', () => {
     expect(robotsForbids(robotsRules('User-agent: *\nDisallow: /a%2fb\n'), '/a%2Fb')).toBe(true);
   });
 
+  it('matches a non-ASCII path against its percent-encoded rule, and a literal star as a literal', () => {
+    // Both sides are brought to percent-encoded octets before they are compared, which
+    // is the only form the two can meet in: a site writes `/caf%C3%A9` and a link
+    // carries `/café`, and they are one path.
+    expect(robotsForbids(robotsRules('User-agent: *\nDisallow: /caf%C3%A9\n'), '/café/menu')).toBe(true);
+    expect(robotsForbids(robotsRules('User-agent: *\nDisallow: /café\n'), '/caf%C3%A9/menu')).toBe(true);
+    // `*` in a rule is the wildcard; `%2A` in a rule is a literal star and matches only
+    // one. A request path's own star is encoded, so it cannot become a wildcard.
+    const literal = robotsRules('User-agent: *\nDisallow: /file-%2A\n');
+    expect(robotsForbids(literal, '/file-*')).toBe(true);
+    expect(robotsForbids(literal, '/file-anything')).toBe(false);
+    const wildcard = robotsRules('User-agent: *\nDisallow: /file-*\n');
+    expect(robotsForbids(wildcard, '/file-anything')).toBe(true);
+    expect(robotsForbids(wildcard, '/file-*')).toBe(true);
+  });
+
+  it('lets an empty named group win over a restrictive `*` group', () => {
+    // §2.2.1: the most specific group applies *alone*, and a group with no rules is
+    // still a group. A file that names CallieResearch and says nothing under it has
+    // allowed everything, however strict the `*` group above it is.
+    const rules = robotsRules('User-agent: *\nDisallow: /\n\nUser-agent: CallieResearch\n');
+    expect(rules).toEqual({ allow: [], disallow: [] });
+    expect(robotsForbids(rules, '/about')).toBe(false);
+  });
+
   it('gives the longest match the answer, so Disallow / plus Allow /about is readable', () => {
     const rules = robotsRules('User-agent: *\nDisallow: /\nAllow: /about\n');
     expect(robotsForbids(rules, '/about')).toBe(false);

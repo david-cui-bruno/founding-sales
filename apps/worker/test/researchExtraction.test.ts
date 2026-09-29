@@ -28,12 +28,24 @@ const sources = [
 ];
 const request = { sources, firmName: 'Northwind Test Holdings' };
 
-function transportOf(response: AnthropicMessageResponse | Error): AnthropicMessagesTransport & {
+function transportOf(
+  response: AnthropicMessageResponse | Error,
+  count: number | Error = 100,
+): AnthropicMessagesTransport & {
   readonly seen: unknown[];
+  /** The bodies handed to `countTokens`, so the parity with `create` can be asserted. */
+  readonly counted: unknown[];
 } {
   const seen: unknown[] = [];
+  const counted: unknown[] = [];
   return {
     seen,
+    counted,
+    countTokens: async body => {
+      counted.push(body);
+      if (count instanceof Error) throw count;
+      return await Promise.resolve(count);
+    },
     create: async body => {
       seen.push(body);
       if (response instanceof Error) throw response;
@@ -184,6 +196,28 @@ describe('the answer', () => {
     const transport = transportOf(answered({ selections: [], questions: ['a?', 'b?'], opening: 'hi' }));
     await anthropicExtraction({ transport, modelName: 'claude-haiku-4-5' }).extract(request);
     expect(JSON.stringify(transport.seen)).not.toContain('cache_control');
+  });
+
+  it('counts the request it would send, and lets the counter’s failure through', async () => {
+    // The parity is the whole point: an exact count of a *different* body is an
+    // estimate again. Both paths are built by one function, and this is what says so.
+    const transport = transportOf(answered({ selections: [], questions: ['a?', 'b?'], opening: 'hi' }));
+    const provider = anthropicExtraction({ transport, modelName: 'claude-haiku-4-5' });
+    expect(await provider.countInputTokens(request)).toBe(100);
+    await provider.extract(request);
+    const counted = { ...(transport.counted[0] as Record<string, unknown>) };
+    const sent = { ...(transport.seen[0] as Record<string, unknown>) };
+    delete counted['max_tokens'];
+    delete sent['max_tokens'];
+    expect(counted).toEqual(sent);
+
+    // A counter that throws is not a call that may proceed: the caller turns this into
+    // a provider failure with no cents, because nothing was ever sent.
+    const broken = anthropicExtraction({
+      transport: transportOf(answered({ selections: [], questions: ['a?', 'b?'], opening: 'hi' }), new Error('429')),
+      modelName: 'claude-haiku-4-5',
+    });
+    await expect(broken.countInputTokens(request)).rejects.toThrow('429');
   });
 
   it('reads a generated pair only when both halves are there', () => {

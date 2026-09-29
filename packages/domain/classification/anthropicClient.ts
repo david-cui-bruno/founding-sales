@@ -50,6 +50,19 @@ export interface AnthropicMessageResponse {
 export interface AnthropicMessagesTransport {
   /** One non-streaming message. Throws on an API error, as the SDK does. */
   create(request: ClassifierRequest): Promise<AnthropicMessageResponse>;
+  /**
+   * How many input tokens a request would cost, from `messages.count_tokens`.
+   *
+   * A second narrow method rather than a second transport, because it is the same
+   * client, the same key and the same seam. The classifier does not use it; research's
+   * extraction does, and for a reason a ratio cannot serve: the cents a run has
+   * authorized are a bound computed from characters, and dense text tokenizes several
+   * times worse than the ratio assumes. Counting before calling is what makes the
+   * authorization true rather than approximate.
+   *
+   * Throws as the SDK does. A fake answers a number.
+   */
+  countTokens(request: ClassifierRequest): Promise<number>;
 }
 
 /** Where the API key comes from. Mirrors `mail/secretProvider.ts`'s seam exactly. */
@@ -132,7 +145,12 @@ export function describeClassifierSecrets(provider: ClassifierSecretProvider): {
 }
 
 interface SdkClient {
-  readonly beta: { readonly messages: { create(body: unknown): Promise<AnthropicMessageResponse> } };
+  readonly beta: {
+    readonly messages: {
+      create(body: unknown): Promise<AnthropicMessageResponse>;
+      countTokens(body: unknown): Promise<{ readonly input_tokens?: number | null }>;
+    };
+  };
 }
 
 /**
@@ -173,5 +191,19 @@ export async function loadAnthropicTransport(options: {
   });
   return {
     create: async request => await client.beta.messages.create(request),
+    countTokens: async request => {
+      // `max_tokens` is not part of a count and the SDK rejects it here, so the request
+      // is passed without it. Everything that contributes input tokens — the system
+      // blocks, the messages, the output schema — is.
+      const { max_tokens: _ignored, ...counted } = request;
+      const answer = await client.beta.messages.countTokens(counted);
+      const tokens = answer.input_tokens;
+      if (typeof tokens !== 'number' || !Number.isFinite(tokens) || tokens < 0) {
+        // A count that is not a number is not a count. Refusing here is what stops the
+        // caller reading an absent answer as "it fits".
+        throw new Error('count_tokens returned no input_tokens');
+      }
+      return Math.trunc(tokens);
+    },
   };
 }

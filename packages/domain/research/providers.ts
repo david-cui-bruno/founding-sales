@@ -136,6 +136,21 @@ export interface ExtractionAnswer {
 
 export interface ExtractionProvider {
   readonly providerKey: string;
+  /**
+   * How many input tokens this exact request would cost, from the provider itself.
+   *
+   * The provider's own tokenizer, not a ratio. A characters-per-token figure is the
+   * right way to decide what to *reserve* — it is computable before anything is built —
+   * and the wrong way to decide whether to *call*: dense scripts tokenize several times
+   * worse than the 2.5 characters a token this repository reserves at, so a page of CJK
+   * would have been sent against a reservation a third of its size. The caller counts,
+   * drops trailing blocks if it does not fit, and refuses to call at all if it still
+   * does not (`extraction = 'over_budget'`).
+   *
+   * Throws as the transport does. A count that cannot be taken is a call that is not
+   * made, because the alternative is spending against a number nobody has.
+   */
+  countInputTokens(request: ExtractionRequest): Promise<number>;
   /** Selections, never text. The quote is looked up from the block the selection names. */
   extract(request: ExtractionRequest): Promise<ProviderOutcome<ExtractionAnswer>>;
 }

@@ -250,6 +250,8 @@ export function robotsRules(robots: string): RobotsRules {
   /** The groups the current run of `User-agent:` lines is writing into. */
   let active: ('named' | 'star')[] = [];
   let sawAgentInGroup = false;
+  /** Whether the file names us at all, which is not the same as having rules for us. */
+  let namedGroupExists = false;
 
   for (const rawLine of robots.split(/\r?\n/u)) {
     const line = rawLine.split('#')[0]?.trim() ?? '';
@@ -265,8 +267,10 @@ export function robotsRules(robots: string): RobotsRules {
       if (!sawAgentInGroup) active = [];
       sawAgentInGroup = true;
       const agent = value.toLowerCase();
-      if (agent === RESEARCH_ROBOTS_TOKEN) active.push('named');
-      else if (agent === '*') active.push('star');
+      if (agent === RESEARCH_ROBOTS_TOKEN) {
+        active.push('named');
+        namedGroupExists = true;
+      } else if (agent === '*') active.push('star');
       continue;
     }
     sawAgentInGroup = false;
@@ -279,29 +283,62 @@ export function robotsRules(robots: string): RobotsRules {
     }
   }
 
-  // The named group wins *by existing*, empty or not: a file that says
+  // The named group wins **by existing**, empty or not — which is why its existence is
+  // tracked separately from whether it has rules. A file that says
   // `User-agent: CallieResearch` with `Disallow:` under it has granted everything, and
-  // falling back to a restrictive `*` group there would ignore what it said.
-  const named = groups.named;
-  const chosen = named.allow.length > 0 || named.disallow.length > 0 ? named : groups.star;
+  // deciding on "has rules" fell back to a restrictive `*` group there and read a grant
+  // as a refusal.
+  const chosen = namedGroupExists ? groups.named : groups.star;
   return { allow: chosen.allow, disallow: chosen.disallow };
 }
 
 /**
- * A path in one form, so a rule and a request can be compared.
+ * A path in one canonical form, so a rule and a request can be compared.
  *
- * RFC 9309 §2.2.2 asks that percent-encoded octets be compared after normalisation:
- * `/~x`, `/%7Ex` and `/%7ex` are one path, and a site that disallowed one of the three
- * meant all of them. Unreserved characters are decoded, everything else keeps its
- * escape with the hex digits upper-cased.
+ * RFC 9309 §2.2.2 asks that paths be compared as percent-encoded octets. Both sides go
+ * through this: unreserved characters are decoded, and **everything else is encoded** —
+ * which is the half that was missing. A request for `/café` and a rule reading
+ * `Disallow: /caf%C3%A9` are the same path, and comparing one encoded with one not made
+ * them different, so the site's rule matched nothing.
+ *
+ * `keepWildcard` is the asymmetry the standard requires. In a **rule**, a bare `*` is
+ * the wildcard and `%2A` is a literal star; in a **request path** there is no wildcard,
+ * so a literal `*` is encoded to `%2A` before matching. Without that, a request for
+ * `/file-*` matched `Disallow: /file-%2A` only by accident and a rule reading
+ * `Disallow: /file-*` matched paths it never meant.
  */
-export function normaliseRobotsPath(path: string): string {
-  return path.replace(/%([0-9a-fA-F]{2})/gu, (whole, hex: string) => {
-    const code = Number.parseInt(hex, 16);
-    const character = String.fromCharCode(code);
-    // The unreserved set of RFC 3986 §2.3.
+export function normaliseRobotsPath(path: string, options: { readonly keepWildcard?: boolean } = {}): string {
+  const keepWildcard = options.keepWildcard === true;
+  let out = '';
+  for (const character of path) {
+    if (keepWildcard && (character === '*' || character === '$')) {
+      out += character;
+      continue;
+    }
+    if (character === '%') {
+      out += '%';
+      continue;
+    }
+    // The unreserved set of RFC 3986 §2.3 passes through; everything else — reserved
+    // characters, spaces, and every non-ASCII code point — is encoded as its UTF-8
+    // octets, upper-cased.
+    out += /[A-Za-z0-9\-._~/]/u.test(character) ? character : encodeOctets(character);
+  }
+  // Now fold the escapes that were already there: `%7e` and `%7E` are `~`, and a
+  // reserved escape keeps its escape with upper-case hex.
+  return out.replace(/%([0-9a-fA-F]{2})/gu, (whole, hex: string) => {
+    const character = String.fromCharCode(Number.parseInt(hex, 16));
     return /[A-Za-z0-9\-._~]/u.test(character) ? character : whole.toUpperCase();
   });
+}
+
+/** One character as upper-case percent-encoded UTF-8 octets. */
+function encodeOctets(character: string): string {
+  let out = '';
+  for (const byte of new TextEncoder().encode(character)) {
+    out += `%${byte.toString(16).toUpperCase().padStart(2, '0')}`;
+  }
+  return out;
 }
 
 /** How long a pattern is for the longest-match rule: octets, not UTF-16 code units. */
@@ -323,7 +360,9 @@ const MAX_ROBOTS_PATTERN = 500;
 function robotsPattern(pattern: string): RegExp | null {
   if (pattern.length > MAX_ROBOTS_PATTERN) return null;
   const anchored = pattern.endsWith('$');
-  const literal = normaliseRobotsPath(anchored ? pattern.slice(0, -1) : pattern);
+  // A rule keeps its wildcard; everything else in it is canonicalised the same way a
+  // request path is.
+  const literal = normaliseRobotsPath(anchored ? pattern.slice(0, -1) : pattern, { keepWildcard: true });
   const escaped = literal
     .replace(/[.*+?^${}()|[\]\\]/gu, character => (character === '*' ? '\u0000' : `\\${character}`))
     .replaceAll('\u0000', '.*');
@@ -340,7 +379,7 @@ function longestMatch(patterns: readonly string[], path: string): number {
   for (const pattern of patterns) {
     const expression = robotsPattern(pattern);
     if (expression === null || !expression.test(path)) continue;
-    longest = Math.max(longest, octets(normaliseRobotsPath(pattern)));
+    longest = Math.max(longest, octets(normaliseRobotsPath(pattern, { keepWildcard: true })));
   }
   return longest;
 }
@@ -354,6 +393,8 @@ function longestMatch(patterns: readonly string[], path: string): number {
  * everything".
  */
 export function robotsForbids(rules: RobotsRules, path: string): boolean {
+  // A request path has no wildcard: a literal `*` in it is encoded, so it can only be
+  // matched by a rule that wrote `%2A`.
   const normalized = normaliseRobotsPath(path);
   const forbidden = longestMatch(rules.disallow, normalized);
   if (forbidden < 0) return false;

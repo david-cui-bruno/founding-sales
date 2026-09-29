@@ -1,4 +1,5 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
+import { finaliseSubjectReservations } from './reservations.ts';
 import type { ResearchOutcome, ResearchTrigger } from './types.ts';
 
 /**
@@ -17,8 +18,9 @@ import type { ResearchOutcome, ResearchTrigger } from './types.ts';
  * between two commits, which is exactly why it cannot be read as a crash — and why
  * something else has to notice when it *is* one. `finaliseAbandonedRuns` is that
  * something: a row still `running` after `RUN_IN_PROGRESS_MINUTES` is finalised
- * `failed` with `refusal_code = 'lease_lost'`, and its reservation stays on the ledger
- * as the recorded cost, because nobody can know whether the call was made.
+ * `failed` with `refusal_code = 'lease_lost'`, and the sum of its reservations becomes
+ * its recorded cost — `estimated` for any that reached `calling`, because nobody can
+ * know whether the call was made, and `released` for any that never did.
  */
 
 /** A run still `running` after this long is not in progress; it is a crashed worker. */
@@ -132,8 +134,14 @@ export async function openRun(context: RepositoryContext, input: OpenRunInput): 
   return rows[0]?.id ?? null;
 }
 
-/** Why the model was or was not used. `research_runs_extraction_known` is the same set. */
-export type RunExtraction = 'used' | 'unconfigured' | 'no_pages' | 'failed';
+/**
+ * Why the model was or was not used. `research_runs_extraction_known` is the same set.
+ *
+ * `over_budget` is the exact token count refusing a request the reservation would not
+ * cover, decided **before** the call — so it costs nothing and is not a failure. The
+ * run keeps its evidence and judges from the firm's routes alone.
+ */
+export type RunExtraction = 'used' | 'unconfigured' | 'no_pages' | 'failed' | 'over_budget';
 
 export interface CompleteRunInput {
   readonly runId: string;
@@ -248,11 +256,13 @@ async function closeRun(
  * database failover — leaves that row `running` for ever, and with it a reservation on
  * the ledger and a firm that `run_in_progress` will refuse a new revision for.
  *
- * So the sweep closes them: `failed`, `refusal_code = 'lease_lost'`, and the cents left
- * exactly where they were. The reservation **stays** and is the recorded cost, because
- * the honest answer to "did the model call happen?" is that nobody knows — the last
- * thing that worker did before disappearing may well have been to make it. Releasing it
- * would be claiming it did not.
+ * So the sweep closes them: `failed`, `refusal_code = 'lease_lost'`, and the sum of the
+ * run's reservations written into `cost_cents` — which the previous shape could not do
+ * at all, because a per-run amount did not exist anywhere. A reservation that reached
+ * `calling` is `estimated`: the honest answer to "did the model call happen?" is that
+ * nobody knows, and the last thing that worker did before disappearing may well have
+ * been to make it. One still `reserved` is `released`, because no call could have
+ * happened.
  *
  * `RUN_IN_PROGRESS_MINUTES` is the same window `run_in_progress` uses, so a firm becomes
  * researchable again in the same breath as its abandoned run is closed.
@@ -261,16 +271,34 @@ export async function finaliseAbandonedRuns(
   context: RepositoryContext,
   input: { readonly at: string },
 ): Promise<number> {
-  const { rowCount } = await context.db.query(
-    `UPDATE research_runs
-        SET outcome = 'failed', completed_at = $2::timestamptz, refusal_code = 'lease_lost',
-            cost_estimated = true
+  const { rows } = await context.db.query<{ id: string }>(
+    `SELECT id FROM research_runs
       WHERE workspace_id = $1
         AND outcome = 'running'
-        AND started_at <= $2::timestamptz - ($3 || ' minutes')::interval`,
+        AND started_at <= $2::timestamptz - ($3 || ' minutes')::interval
+      ORDER BY started_at`,
     [context.scope.workspaceId, input.at, String(RUN_IN_PROGRESS_MINUTES)],
   );
-  return rowCount ?? 0;
+
+  for (const row of rows) {
+    // Every open reservation of the run is closed first, and *how* depends on whether
+    // it had been marked `calling`: one that had is `estimated`, because the last thing
+    // the vanished worker may have done was make the call; one still `reserved` is
+    // `released`, because no call could have happened. The sum is what the run cost.
+    const settled = await finaliseSubjectReservations(context, {
+      subjectKind: 'research_run',
+      subjectId: row.id,
+      at: input.at,
+    });
+    await context.db.query(
+      `UPDATE research_runs
+          SET outcome = 'failed', completed_at = $2::timestamptz, refusal_code = 'lease_lost',
+              cost_cents = $4, cost_estimated = $5
+        WHERE workspace_id = $1 AND id = $3 AND outcome = 'running'`,
+      [context.scope.workspaceId, input.at, row.id, settled.cents, settled.estimated],
+    );
+  }
+  return rows.length;
 }
 
 /**
@@ -300,6 +328,36 @@ export async function recordRefusedRun(
       input.refusalCode,
     ],
   );
+}
+
+/** One run by id, or null. What chunk 3 asks before it does anything at all. */
+export async function readRunById(context: RepositoryContext, runId: string): Promise<RunRow | null> {
+  const { rows } = await context.db.query<RunDbRow>(
+    `SELECT ${RUN_COLUMNS} FROM research_runs WHERE workspace_id = $1 AND id = $2`,
+    [context.scope.workspaceId, runId],
+  );
+  const row = rows[0];
+  return row === undefined ? null : toRun(row);
+}
+
+/**
+ * The run row of one revision, or null.
+ *
+ * How a handler with a missing or malformed cursor finds its own work again: the
+ * revision is the job's identity, so this is the same question the cursor answers and
+ * the durable one.
+ */
+export async function readRunForRevision(
+  context: RepositoryContext,
+  input: { readonly firmId: string; readonly revision: number },
+): Promise<RunRow | null> {
+  const { rows } = await context.db.query<RunDbRow>(
+    `SELECT ${RUN_COLUMNS} FROM research_runs
+      WHERE workspace_id = $1 AND firm_id = $2 AND revision = $3`,
+    [context.scope.workspaceId, input.firmId, Math.trunc(input.revision)],
+  );
+  const row = rows[0];
+  return row === undefined ? null : toRun(row);
 }
 
 /** The firm's most recent runs, newest first. The firm page shows five. */

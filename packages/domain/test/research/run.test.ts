@@ -6,12 +6,13 @@ import { repositoryContext, workspaceScope, type RepositoryContext } from '../..
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
 import { claimResearchClearance, researchClearanceAvailable } from '../../research/ceilings.ts';
+import { readSpend, recordProviderCall } from '../../research/ledger.ts';
 import {
-  readSpend,
-  recordProviderCall,
-  releaseProviderReservation,
-  reserveProviderSpend,
-} from '../../research/ledger.ts';
+  finaliseSubjectReservations,
+  markCalling,
+  reserveAttempt,
+  settleAttempt,
+} from '../../research/reservations.ts';
 import { runFirmResearch } from '../../research/enrichment.ts';
 import { addFirmLink } from '../../research/links.ts';
 import { enqueueFirmResearch } from '../../research/enqueue.ts';
@@ -63,12 +64,16 @@ function fakeFetch(
   };
 }
 
+/** A counter that always fits. The budget cases have their own fakes. */
+const fitsBudget = async (): Promise<number> => 100;
+
 function fakeExtraction(
   selections: readonly { readonly key: string; readonly sourceReference: string; readonly blockId: string }[],
   options: { readonly costCents?: number; readonly generated?: boolean } = {},
 ): ExtractionProvider {
   return {
     providerKey: 'anthropic_extraction',
+    countInputTokens: fitsBudget,
     extract: async () => ({
       ok: true,
       costCents: options.costCents ?? 1,
@@ -87,12 +92,14 @@ function fakeExtraction(
 
 const failingExtraction: ExtractionProvider = {
   providerKey: 'anthropic_extraction',
+  countInputTokens: fitsBudget,
   extract: async () => ({ ok: false, failureCode: 'malformed_answer', costCents: 1 }),
 };
 
 /** A call nobody priced: the socket broke, or the response carried no usage. */
 const unpricedExtraction: ExtractionProvider = {
   providerKey: 'anthropic_extraction',
+  countInputTokens: fitsBudget,
   extract: async () => ({ ok: false, failureCode: 'provider_error', costCents: 0, costEstimated: true }),
 };
 
@@ -124,6 +131,7 @@ beforeEach(async () => {
   await session.query('DELETE FROM firm_links');
   await session.query('DELETE FROM research_runs');
   await session.query('DELETE FROM evidence_items');
+  await session.query('DELETE FROM provider_reservations');
   await session.query('DELETE FROM provider_ledger');
   await session.query('DELETE FROM daily_counters');
   await session.query('DELETE FROM research_settings');
@@ -178,75 +186,140 @@ describe('the ledger and the spend', () => {
   });
 });
 
-describe('the ledger reserves before it spends', () => {
-  it('counts a reservation as spend, and settles it when the call comes back', async () => {
-    // The arrangement the two chunks need. Between them the cents are authorized and
-    // not invoiced, and a second run started in that window must be cleared against a
-    // budget that already includes the first — otherwise two runs are each authorized
-    // against the same remaining cents.
-    await reserveProviderSpend(context, {
+describe('one reservation per paid attempt', () => {
+  const subject = (runId: string) => ({ subjectKind: 'research_run' as const, subjectId: runId });
+
+  /** A run row to hang reservations on. */
+  const openRunRow = async (revision: number): Promise<string> => {
+    const { rows } = await session.query<{ id: string }>(
+      `INSERT INTO research_runs (workspace_id, firm_id, revision, trigger) VALUES ($1, $2, $3, 'sweep')
+       RETURNING id`,
+      [seeded.alpha.workspaceId, crm.alpha.firmId, revision],
+    );
+    return rows[0]?.id ?? '';
+  };
+
+  it('counts an open reservation as spend, and settles it once by id', async () => {
+    const runId = await openRunRow(1);
+    const reserved = await reserveAttempt(context, {
       providerKey: 'anthropic_extraction',
+      ...subject(runId),
+      attempt: 1,
       at: AT,
       businessTimeZone: ZONE,
       cents: 30,
     });
+    // Authorized and not invoiced: the next clearance sees it as spent, which is the
+    // only arrangement under which two runs cannot be cleared against the same cents.
     expect(await readSpend(context, { businessTimeZone: ZONE, at: AT })).toEqual({
       todayCents: 30,
       monthToDateCents: 30,
     });
 
-    // The call comes back at four cents: the reservation goes, the invoice stays.
-    await recordProviderCall(context, {
-      providerKey: 'anthropic_extraction',
+    expect(await markCalling(context, reserved.id)).toBe(true);
+    // Idempotent and narrow: only a `reserved` row moves, so a second call is a no.
+    expect(await markCalling(context, reserved.id)).toBe(false);
+
+    const settled = await settleAttempt(context, {
+      reservationId: reserved.id,
       at: AT,
-      businessTimeZone: ZONE,
-      costCents: 4,
-      releaseReservedCents: 30,
+      outcome: { kind: 'settled', cents: 4 },
     });
+    expect(settled).toEqual({ recordedCents: 4, state: 'settled' });
+    // Settled exactly once: a caller that runs twice adds cents once.
+    expect(await settleAttempt(context, { reservationId: reserved.id, at: AT, outcome: { kind: 'settled', cents: 4 } })).toBeNull();
     expect(await readSpend(context, { businessTimeZone: ZONE, at: AT })).toEqual({
       todayCents: 4,
       monthToDateCents: 4,
     });
-    const { rows } = await session.query<{ calls: number; reserved: number; cost: number }>(
-      `SELECT calls, reserved_cents AS reserved, cost_cents AS cost FROM provider_ledger
-        WHERE provider_key = 'anthropic_extraction'`,
-    );
-    expect(rows[0]).toEqual({ calls: 1, reserved: 0, cost: 4 });
   });
 
-  it('never drives a reservation below zero, however much is released', async () => {
-    // A release larger than what is held would refuse the row on
-    // `provider_ledger_reserved_nonnegative`, and a failed accounting write is worse
-    // than a cent of drift.
-    await reserveProviderSpend(context, { providerKey: 'company_page', at: AT, businessTimeZone: ZONE, cents: 2 });
-    await recordProviderCall(context, {
-      providerKey: 'company_page',
-      at: AT,
+  it('settles on the reservation’s own date, not the settling day’s', async () => {
+    // The defect a `reserved_cents` column could not avoid: a run authorized yesterday
+    // released *today's* number, silently giving away the cents another run was holding.
+    const yesterday = await openRunRow(1);
+    const reserved = await reserveAttempt(context, {
+      providerKey: 'anthropic_extraction',
+      ...subject(yesterday),
+      attempt: 1,
+      at: '2026-09-28T14:00:00.000Z',
       businessTimeZone: ZONE,
-      costCents: 0,
-      releaseReservedCents: 99,
+      cents: 3,
     });
-    await releaseProviderReservation(context, {
-      providerKey: 'company_page',
-      at: AT,
+    await markCalling(context, reserved.id);
+
+    // A second run, authorized the next day, holding its own cents.
+    const today = await openRunRow(2);
+    await reserveAttempt(context, {
+      providerKey: 'anthropic_extraction',
+      ...subject(today),
+      attempt: 1,
+      at: '2026-09-29T14:00:00.000Z',
       businessTimeZone: ZONE,
-      cents: 99,
+      cents: 3,
     });
-    const { rows } = await session.query<{ reserved: number }>(
-      "SELECT reserved_cents AS reserved FROM provider_ledger WHERE provider_key = 'company_page'",
+
+    // Yesterday's run settles today.
+    await settleAttempt(context, {
+      reservationId: reserved.id,
+      at: '2026-09-29T15:00:00.000Z',
+      outcome: { kind: 'settled', cents: 2 },
+    });
+
+    const { rows } = await session.query<{ business_date: string; cost: number }>(
+      `SELECT business_date::text AS business_date, cost_cents AS cost FROM provider_ledger
+        WHERE provider_key = 'anthropic_extraction' ORDER BY business_date`,
     );
-    expect(rows[0]?.reserved).toBe(0);
+    // The invoice landed on the day whose budget cleared it.
+    expect(rows).toEqual([{ business_date: '2026-09-28', cost: 2 }]);
+    // And the other run's authorization is untouched.
+    expect((await readSpend(context, { businessTimeZone: ZONE, at: '2026-09-29T15:00:00.000Z' })).todayCents).toBe(3);
   });
 
-  it('refuses the next clearance on cents that are reserved and not yet invoiced', async () => {
-    // The reason `readSpend` counts both columns, as a refusal rather than an argument.
+  it('closes an abandoned run’s reservations by whether a call could have happened', async () => {
+    const runId = await openRunRow(1);
+    const called = await reserveAttempt(context, {
+      providerKey: 'anthropic_extraction',
+      ...subject(runId),
+      attempt: 1,
+      at: AT,
+      businessTimeZone: ZONE,
+      cents: 3,
+    });
+    await markCalling(context, called.id);
+    await reserveAttempt(context, {
+      providerKey: 'anthropic_extraction',
+      ...subject(runId),
+      attempt: 2,
+      at: AT,
+      businessTimeZone: ZONE,
+      cents: 3,
+    });
+
+    const finalised = await finaliseSubjectReservations(context, { ...subject(runId), at: AT });
+    // The one that reached `calling` is estimated; the one that did not is released,
+    // because no call could have happened against it.
+    expect(finalised).toEqual({ cents: 3, estimated: true });
+    const { rows } = await session.query<{ attempt: number; state: string; settled: number }>(
+      `SELECT attempt, state, settled_cents AS settled FROM provider_reservations ORDER BY attempt`,
+    );
+    expect(rows).toEqual([
+      { attempt: 1, state: 'estimated', settled: 3 },
+      { attempt: 2, state: 'released', settled: 0 },
+    ]);
+  });
+
+  it('refuses the next clearance on cents that are authorized and not yet invoiced', async () => {
     const admin = repositoryContext(
       workspaceScope(seeded.alpha.workspaceId, { kind: 'user', userId: seeded.alpha.admin.userId, role: 'admin' }),
       session,
     );
     await updateResearchSettings(admin, { dailyCostCeilingCents: 5 });
-    await reserveProviderSpend(context, {
+    const runId = await openRunRow(1);
+    await reserveAttempt(context, {
       providerKey: 'anthropic_extraction',
+      ...subject(runId),
+      attempt: 1,
       at: AT,
       businessTimeZone: ZONE,
       cents: 4,
@@ -500,12 +573,125 @@ describe('one run', () => {
     // available figure for a call whose invoice never arrived.
     expect(run).toMatchObject({ outcome: 'failed', refusalCode: 'provider_failure', costCents: 3, costEstimated: true });
     expect((await readSpend(context, { businessTimeZone: ZONE, at: AT })).todayCents).toBe(3);
-    const { rows } = await session.query<{ reserved: number }>(
-      "SELECT reserved_cents AS reserved FROM provider_ledger WHERE provider_key = 'anthropic_extraction'",
+    const { rows } = await session.query<{ state: string; settled: number }>(
+      'SELECT state, settled_cents AS settled FROM provider_reservations',
     );
-    // Settled: recorded as spent rather than left held, so the figure is not counted
-    // twice.
-    expect(rows[0]?.reserved).toBe(0);
+    // Closed as `estimated` rather than left open, so the figure is counted once: the
+    // ledger holds it and the reservation no longer does.
+    expect(rows).toEqual([{ state: 'estimated', settled: 3 }]);
+  });
+
+  it('counts the request before it calls, drops trailing blocks, and refuses to call what will not fit', async () => {
+    // The reservation is sized by characters per token, which is the right way to decide
+    // what to *hold* and the wrong way to decide what to *send*: a page of dense script
+    // tokenizes several times worse than 2.5 characters a token. So the exact count is
+    // what admits the call.
+    const counts: number[] = [];
+    const sizes: number[] = [];
+    let calls = 0;
+    const overThenUnder: ExtractionProvider = {
+      providerKey: 'anthropic_extraction',
+      countInputTokens: async request => {
+        sizes.push(request.sources.reduce((total, source) => total + source.blocks.length, 0));
+        const answer = counts.length === 0 ? 1_000_000 : 100;
+        counts.push(answer);
+        return answer;
+      },
+      extract: async () => {
+        calls += 1;
+        return {
+          ok: true,
+          costCents: 1,
+          value: {
+            selections: [],
+            questions: null,
+            opening: null,
+            modelName: 'claude-haiku-4-5',
+            inputTokens: 100,
+            outputTokens: 10,
+          },
+        };
+      },
+    };
+    const outcome = await runFirmResearch(context, {
+      firmId: crm.alpha.firmId,
+      revision: 1,
+      trigger: 'sweep',
+      at: AT,
+      pageFetch: fakeFetch([{ url: 'https://alpha.example.test/', html: HOME }]),
+      extraction: overThenUnder,
+    });
+    expect(outcome.ok).toBe(true);
+    // Counted twice — once over, once under after a drop — and called once.
+    expect(counts.length).toBe(2);
+    expect(sizes[1]).toBeLessThan(sizes[0] ?? 0);
+    expect(calls).toBe(1);
+    expect((await listRuns(context, crm.alpha.firmId))[0]).toMatchObject({ outcome: 'completed', extraction: 'used' });
+  });
+
+  it('never calls a request that will not fit, and records it as over_budget at no cost', async () => {
+    let calls = 0;
+    const alwaysOver: ExtractionProvider = {
+      providerKey: 'anthropic_extraction',
+      countInputTokens: async () => 1_000_000,
+      extract: async () => {
+        calls += 1;
+        return { ok: false, failureCode: 'provider_error', costCents: 0 };
+      },
+    };
+    const outcome = await runFirmResearch(context, {
+      firmId: crm.alpha.firmId,
+      revision: 1,
+      trigger: 'sweep',
+      at: AT,
+      pageFetch: fakeFetch([{ url: 'https://alpha.example.test/', html: HOME }]),
+      extraction: alwaysOver,
+    });
+    // A completion, not a failure: the pages are recorded, the judgments come from the
+    // firm's routes and its suppression, and a person can raise the ceiling.
+    expect(outcome.ok).toBe(true);
+    expect(calls).toBe(0);
+    expect((await listRuns(context, crm.alpha.firmId))[0]).toMatchObject({
+      outcome: 'completed',
+      extraction: 'over_budget',
+      costCents: 0,
+    });
+    // The cents came back rather than being recorded against a call nobody made.
+    expect((await readSpend(context, { businessTimeZone: ZONE, at: AT })).todayCents).toBe(0);
+    const { rows } = await session.query<{ state: string }>('SELECT state FROM provider_reservations');
+    expect(rows).toEqual([{ state: 'released' }]);
+  });
+
+  it('does not call when the counter itself fails', async () => {
+    let calls = 0;
+    const brokenCounter: ExtractionProvider = {
+      providerKey: 'anthropic_extraction',
+      countInputTokens: async () => {
+        throw new Error('count_tokens: 503');
+      },
+      extract: async () => {
+        calls += 1;
+        return { ok: false, failureCode: 'provider_error', costCents: 0 };
+      },
+    };
+    const outcome = await runFirmResearch(context, {
+      firmId: crm.alpha.firmId,
+      revision: 1,
+      trigger: 'sweep',
+      at: AT,
+      pageFetch: fakeFetch([{ url: 'https://alpha.example.test/', html: HOME }]),
+      extraction: brokenCounter,
+    });
+    // Spending against a number nobody has is the one thing worse than not spending.
+    expect(outcome).toEqual({ ok: false, reason: 'provider_failure' });
+    expect(calls).toBe(0);
+    expect((await listRuns(context, crm.alpha.firmId))[0]).toMatchObject({
+      outcome: 'failed',
+      extraction: 'failed',
+      costCents: 0,
+    });
+    const { rows } = await session.query<{ state: string }>('SELECT state FROM provider_reservations');
+    expect(rows).toEqual([{ state: 'released' }]);
   });
 
   it('says why the model was not used, so the sweep can tell the two cases apart', async () => {
@@ -723,13 +909,19 @@ describe('links, the enqueue and the sweep', () => {
     // With no extraction port there is nothing to gain by reading the pages again.
     expect(await selectFirmsForSweep(context, { limit: 10, at: AT })).toEqual([]);
     // With one, the firm has pages recorded and no facts, and ninety days of silence
-    // would be the shape of bug nobody finds until a quarter later.
+    // would be the shape of bug nobody finds until a quarter later — but not on the
+    // same business day the run completed on, which is the gate every branch but
+    // staleness now sits behind.
+    expect(await selectFirmsForSweep(context, { limit: 10, at: AT, extractionConfigured: true })).toEqual([]);
     expect(
-      (await selectFirmsForSweep(context, { limit: 10, at: AT, extractionConfigured: true })).length,
+      (await selectFirmsForSweep(context, { limit: 10, at: '2026-09-29T14:00:00.000Z', extractionConfigured: true }))
+        .length,
     ).toBe(1);
     // A run that did have a model is fresh either way.
     await session.query("UPDATE research_runs SET model_name = 'claude-haiku-4-5', extraction = 'used'");
-    expect(await selectFirmsForSweep(context, { limit: 10, at: AT, extractionConfigured: true })).toEqual([]);
+    expect(
+      await selectFirmsForSweep(context, { limit: 10, at: '2026-09-29T14:00:00.000Z', extractionConfigured: true }),
+    ).toEqual([]);
   });
 
   it('never sweeps again a firm whose pages could not be read, model or no model', async () => {
@@ -786,6 +978,33 @@ describe('links, the enqueue and the sweep', () => {
       [seeded.alpha.workspaceId, crm.alpha.firmId, seeded.alpha.salesperson.userId, '2026-09-29T09:00:00.000Z'],
     );
     expect(await selectFirmsForSweep(context, { limit: 10, at: '2026-09-30T14:00:00.000Z' })).toEqual([]);
+  });
+
+  it('does not sweep a firm with nothing to read twice, and does once a website appears', async () => {
+    // The branch that used to loop for ever: a firm with no website and no links was
+    // selected, refused `no_sources`, and — because a refused run was not "researched" —
+    // selected again the next morning, and every morning after that.
+    await session.query('UPDATE firms SET website = NULL WHERE id = $1', [crm.alpha.firmId]);
+    const first = await runFirmResearch(context, {
+      firmId: crm.alpha.firmId,
+      revision: 1,
+      trigger: 'sweep',
+      at: AT,
+      pageFetch: fakeFetch([]),
+    });
+    expect(first).toEqual({ ok: false, reason: 'no_sources' });
+    expect(await selectFirmsForSweep(context, { limit: 10, at: AT })).toEqual([]);
+    expect(await selectFirmsForSweep(context, { limit: 10, at: '2026-10-05T14:00:00.000Z' })).toEqual([]);
+
+    // A website typed in is the thing that changed, and it is worth reading at once
+    // rather than tomorrow: it can only happen once per edit.
+    await session.query(
+      "UPDATE firms SET website = 'https://alpha.example.test/', updated_at = now() WHERE id = $1",
+      [crm.alpha.firmId],
+    );
+    expect((await selectFirmsForSweep(context, { limit: 10, at: AT })).map(row => row.firmId)).toEqual([
+      crm.alpha.firmId,
+    ]);
   });
 
   it('never sweeps a firm with a closed opportunity: a client or somebody who said no', async () => {

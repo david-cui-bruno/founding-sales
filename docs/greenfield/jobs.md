@@ -100,10 +100,12 @@ table:
 Two of those are lane R's (`docs/greenfield/research.md`). `research.firm` is one run
 of one firm at one revision, protected by `research_runs_one_per_revision`: a second
 claim finds the insert refused and reports `already_recorded` having fetched nothing
-and asked no model. It is deliberately **not** chunked — a chunk boundary inside a run
-would commit some pages' evidence and not others under a clearance that was claimed
-once — which is exactly why chunk 1 commits the clearance before chunk 2 spends it, and
-why the cursor names the run rather than a page. It also has **no ladder for a provider
+and asked no model. It is chunked in **three**, and the boundaries are where the money
+is rather than where the work is long: chunk 1 authorizes and reserves, chunk 2 makes
+"a call may now have happened" durable and writes nothing else, chunk 3 calls, records
+and settles. No boundary falls between two pages of one run — a clearance is claimed
+once, so the evidence of one run commits together — and the cursor therefore names the
+run and the reservation, never a page. It also has **no ladder for a provider
 failure**: the run's
 paid calls happen inside the runner's transaction, so throwing would roll back the run
 row, the evidence, the ledger cents and the consumed daily count while the money stayed
@@ -216,12 +218,28 @@ lease affects zero rows, is told `lease_lost`, and cannot drag a live worker's c
 backwards. A yield is not a failed attempt — `requeueForNextChunk` puts the attempt
 back — because otherwise the fourth chunk of any long sweep would be its death.
 
-**`research.firm` is the first handler to chunk**, and not for length: its two chunks
-are "authorize and reserve" and "spend and record" (`docs/greenfield/research.md`). The
-protocol's guarantee that a crash costs one chunk is what keeps a paid model call from
-being rolled back together with the ledger row and the consumed counter that were the
-only record of it. The protocol's own tests are in
-`apps/worker/test/jobChunks.test.ts`.
+**`research.firm` is the first handler to chunk**, and not for length: its three chunks
+are "authorize and reserve", "mark the reservation `calling`" and "spend, record and
+settle" (`docs/greenfield/research.md`). The protocol's guarantee that a crash costs one
+chunk is what keeps a paid model call from being rolled back together with the ledger
+row and the consumed counter that were the only record of it. The middle chunk is there
+because a marker that shared a transaction with the work could be rolled back *by* that
+work's failure, leaving a call with no record at all.
+
+Two details of the protocol are load-bearing for any lane that spends money this way,
+and both are about telling one claim from another:
+
+* **the cursor carries the claim's fencing token**, not the job's attempt. A cursor this
+  claim wrote means the claim is still running and may proceed; a cursor an earlier claim
+  wrote means that claim died somewhere unknown, and anything it marked is ambiguous.
+  `requeueDeadJob` sets `attempt_count` back to zero, so the attempt number cannot carry
+  this distinction — `fencing_token` is incremented by every claim and never reset;
+* **the money bound is not `maxAttempts`**. A handler option can lower the ladder and an
+  admin requeue resets it, so the number of paid attempts is bounded by counting the
+  durable reservation rows (`RESEARCH_FIRM_MAX_RESERVATIONS`, three) and closing the run
+  instead of opening a fourth.
+
+The protocol's own tests are in `apps/worker/test/jobChunks.test.ts`.
 
 ## The scheduler
 

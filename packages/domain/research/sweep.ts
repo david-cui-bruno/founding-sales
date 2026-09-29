@@ -19,11 +19,14 @@ import { workspaceBusinessZone } from './ledger.ts';
  *     Lost has said no. Re-researching either is spending money to put somebody back
  *     on a morning list they have already left. This is the same sentence Today's
  *     lane 4 uses for "new", and deliberately the same one;
- *   * never researched, or **due** by one of the four reasons below;
+ *   * never looked at, or **due** by one of the five reasons below;
  *   * oldest first, by `created_at`, so the backlog drains in the order it arrived
  *     and two sweeps of the same data choose the same firms.
  *
- * ## The four reasons a researched firm is due again
+ * ## The five reasons a firm that has been looked at is due again
+ *
+ * The query carries the same list as a comment, branch by branch, with the gates on
+ * each — because the bug this section keeps getting is a branch that forgot one.
  *
  *   * **Stale.** The last completed run is more than ninety days old. A firm's own
  *     website does not change weekly, and re-reading one that has not is the cheapest
@@ -51,6 +54,10 @@ import { workspaceBusinessZone } from './ledger.ts';
  *     is a **backstop**, not the prompt path, so it sits behind the same two gates as
  *     the failure branch: a firm whose site cannot be read does not become an
  *     every-morning expense because somebody pasted a URL at it.
+ *   * **A website appeared.** A `no_sources` refusal counts as having been looked at —
+ *     otherwise a firm with no website and no links was selected, refused and selected
+ *     again every morning for ever — so the way back in is the thing that changed:
+ *     `firms.updated_at` later than the run, with a website now set.
  *
  * ## Every branch terminates
  *
@@ -104,49 +111,85 @@ export async function selectFirmsForSweep(
           SELECT 1 FROM opportunities o
            WHERE o.workspace_id = f.workspace_id AND o.firm_id = f.id AND o.status <> 'open'
         )
+        -- ------------------------------------------------------------------
+        -- Every branch that makes a firm due, and the gates on each. Nothing
+        -- selects a firm except one of these.
+        --
+        --   1. never looked at    — no completed, failed or no_sources run exists.
+        --                           No gates: this is the backlog.
+        --   2. stale              — the latest run completed over ninety days ago.
+        --                           No failure gate: a completed run means zero
+        --                           consecutive failures.
+        --   3. last run failed    — gates: a later business day, and fewer than
+        --                           three consecutive failures.
+        --   4. no model then      — the latest run completed with
+        --                           extraction = 'unconfigured'. Gates: a model is
+        --                           configured now, a later business day, and the
+        --                           failure gate.
+        --   5. a link was added   — after the latest run started. Gates: a later
+        --                           business day and the failure gate. A backstop;
+        --                           the link's own enqueue is the prompt path.
+        --   6. a website appeared — the latest run refused no_sources and the firm
+        --                           has had a website set since. Gates: the failure
+        --                           gate.
+        --
+        -- A no_sources refusal counts as having been looked at (branch 1 includes it),
+        -- which
+        -- is the whole of this comment's reason for existing: while it did not, a firm
+        -- with no website and no links was selected every single morning, refused, and
+        -- selected again — a unit of the day's budget, every day, for ever, for a firm
+        -- there was nothing to read about.
+        -- ------------------------------------------------------------------
         AND (
-          -- Never researched at all.
+          -- 1. Never looked at.
           NOT EXISTS (
             SELECT 1 FROM research_runs r
              WHERE r.workspace_id = f.workspace_id AND r.firm_id = f.id
-               AND r.outcome IN ('completed', 'failed')
+               AND (r.outcome IN ('completed', 'failed')
+                 OR (r.outcome = 'refused' AND r.refusal_code = 'no_sources'))
           )
           OR EXISTS (
             SELECT 1
               FROM (
-                SELECT r.outcome, r.completed_at, r.started_at, r.extraction,
+                SELECT r.outcome, r.refusal_code, r.completed_at, r.started_at, r.extraction,
                        -- A later business day than the one the latest run closed on.
                        ((r.completed_at AT TIME ZONE $6)::date
                           < ($2::timestamptz AT TIME ZONE $6)::date) AS later_day
                   FROM research_runs r
                  WHERE r.workspace_id = f.workspace_id AND r.firm_id = f.id
-                   AND r.outcome IN ('completed', 'failed')
+                   AND (r.outcome IN ('completed', 'failed')
+                     OR (r.outcome = 'refused' AND r.refusal_code = 'no_sources'))
                  ORDER BY r.revision DESC
                  LIMIT 1
               ) latest
              WHERE
-               -- Stale: ninety days since the last completed run. No gate, because a
-               -- firm with a completed run has no consecutive failures to count.
+               -- 2. Stale.
                (latest.outcome = 'completed'
                  AND latest.completed_at <= $2::timestamptz - ($3 || ' days')::interval)
                OR (
                  (
-                   -- The last run failed, and not today: a provider that failed this
+                   -- 3. The last run failed, and not today: a provider that failed this
                    -- morning will most likely fail again this morning.
                    (latest.outcome = 'failed' AND latest.later_day)
-                   -- It completed with no model configured, and there is one now.
+                   -- 4. It completed with no model configured, and there is one now.
                    -- no_pages and failed are deliberately not here: a firm whose site
                    -- cannot be read will be unreadable tomorrow too, and a null
                    -- model_name could not tell the two apart.
-                   OR (latest.outcome = 'completed' AND latest.extraction = 'unconfigured' AND $7)
-                   -- A link was added after the last run started. A backstop: adding a
-                   -- link enqueues its own run through the link_added trigger, and this
-                   -- is only for the case where that run refused.
+                   OR (latest.outcome = 'completed' AND latest.extraction = 'unconfigured'
+                     AND $7 AND latest.later_day)
+                   -- 5. A link was added after the last run started. A backstop: adding
+                   -- a link enqueues its own run through the link_added trigger, and
+                   -- this is only for the case where that run refused.
                    OR (latest.later_day AND EXISTS (
                      SELECT 1 FROM firm_links l
                       WHERE l.workspace_id = f.workspace_id AND l.firm_id = f.id
                         AND l.added_at > latest.started_at
                    ))
+                   -- 6. The run refused for want of anything to read, and the firm has
+                   -- had a website since. Not "not today": a website typed in now is
+                   -- worth reading now, and it can only happen once per edit.
+                   OR (latest.outcome = 'refused' AND latest.refusal_code = 'no_sources'
+                     AND f.website IS NOT NULL AND f.updated_at > latest.started_at)
                  )
                  -- The termination gate, over every branch above. Three consecutive
                  -- failed revisions and the sweep stops asking, whatever else has

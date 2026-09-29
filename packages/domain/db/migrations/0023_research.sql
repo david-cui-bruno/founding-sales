@@ -47,15 +47,15 @@
 --     `enabled = false`, and the result was a feature nobody ever turned on. The
 --     ceilings are what makes an enabled default safe.
 --
--- ## The ledger reserves before it spends
+-- ## Invoices live in provider_ledger; authorizations live in provider_reservations
 --
--- `cost_cents` is what was invoiced; `reserved_cents` is what has been authorized and
--- not yet invoiced. The two exist because the provider call is not inside the
--- transaction that authorizes it: a run reserves its worst case in one committed step,
--- makes the call in the next, and moves the figure from one column to the other. A
--- crash between the two leaves the reservation standing, which over-counts the month by
--- a few cents — the safe direction, and the only direction in which a rollback cannot
--- make spent money invisible.
+-- `provider_ledger.cost_cents` is what was invoiced, aggregated per provider per
+-- business date. What has been *authorized and not yet invoiced* is one row per attempt
+-- in `provider_reservations`, and the difference between a column and a row is the whole
+-- point: an aggregate counter can be incremented by one run and decremented by another,
+-- and a run reserved yesterday settling against today's total is a silent loss of
+-- somebody else's cents. A row has an identity, a date of its own, and a state — so a
+-- call can be settled exactly once, by id, on the date it was authorized on.
 --
 -- ## provider_ledger is generic on purpose
 --
@@ -122,17 +122,22 @@ CREATE TABLE research_settings (
 -- a `research.firm` job claimed twice finds the row it already opened and records
 -- nothing a second time.
 --
--- The run row is written in **two committed steps**, because the middle of it spends
--- money. Chunk 1 opens the row, consumes the day's count and reserves the worst-case
--- cents on `provider_ledger`; chunk 2 fetches, extracts, records and closes the row,
--- turning the reservation into the actual figure. `outcome = 'running'` between the two
--- is therefore a normal state and not a crash — but a row still `running` half an hour
--- later is one, and the sweep finalises it `failed` with `refusal_code = 'lease_lost'`,
--- keeping the reservation as the recorded cost because nobody can know whether the call
--- was made. `cost_estimated` says that the figure is the reservation rather than an
--- invoice: a transport that threw, a response with no usage, and a lost lease all
--- record what was reserved rather than zero, because zero is the one answer that is
--- certainly wrong.
+-- The run row is written in **three committed steps**, because the middle of it spends
+-- money:
+--
+--   1. open the row, consume the day's count, insert `provider_reservations` attempt 1
+--      in state `reserved`. Nothing has been called;
+--   2. mark that reservation `calling` and commit *nothing else*. This step exists only
+--      to make "a call may now have happened" durable;
+--   3. fetch, extract, record, settle the reservation by its id, and close the row.
+--
+-- `outcome = 'running'` between them is therefore a normal state and not a crash — but a
+-- row still `running` half an hour later is one, and the sweep finalises it `failed`
+-- with `refusal_code = 'lease_lost'`, writing the sum of that run's reservations into
+-- `cost_cents`. `cost_estimated` says the figure is a reservation rather than an
+-- invoice: a transport that threw, a response with no usage, and a lost lease all record
+-- what was reserved rather than zero, because zero is the one answer that is certainly
+-- wrong about a call that may have been billed.
 --
 -- `brief` holds the **generated** parts only — the two questions and the opening line
 -- a model wrote. Everything else on the call brief is assembled from quotes and
@@ -186,9 +191,11 @@ CREATE TABLE research_runs (
   -- Why the model was or was not used, which `model_name IS NULL` could not say.
   -- `unconfigured` is the only one the sweep re-selects: a run that read no pages will
   -- read no pages tomorrow either, and re-selecting it was an unbounded daily spend on
-  -- a firm with nothing to read.
+  -- a firm with nothing to read. `over_budget` is the exact token count refusing a
+  -- request the reservation would not cover — a decision made *before* the call, so it
+  -- costs nothing and is not a failure.
   CONSTRAINT research_runs_extraction_known
-    CHECK (extraction IN ('used', 'unconfigured', 'no_pages', 'failed')),
+    CHECK (extraction IN ('used', 'unconfigured', 'no_pages', 'failed', 'over_budget')),
   CONSTRAINT research_runs_extraction_consistent
     CHECK ((extraction = 'used') = (model_name IS NOT NULL)),
   CONSTRAINT research_runs_input_tokens_nonnegative CHECK (input_tokens >= 0),
@@ -362,12 +369,6 @@ CREATE TABLE provider_ledger (
   calls integer NOT NULL DEFAULT 0,
   failures integer NOT NULL DEFAULT 0,
   cost_cents integer NOT NULL DEFAULT 0,
-  -- Cents authorized but not yet invoiced: a run's worst case, held from the moment its
-  -- clearance is consumed until its call comes back. `readSpend` counts it, so a run in
-  -- flight is already spent as far as the next clearance is concerned — which is the
-  -- only arrangement under which two runs cannot each be authorized against the same
-  -- remaining budget.
-  reserved_cents integer NOT NULL DEFAULT 0,
   last_failure_code text,
   last_failure_at timestamptz,
   updated_at timestamptz NOT NULL DEFAULT now(),
@@ -377,7 +378,6 @@ CREATE TABLE provider_ledger (
   CONSTRAINT provider_ledger_failures_nonnegative CHECK (failures >= 0),
   CONSTRAINT provider_ledger_failures_within_calls CHECK (failures <= calls),
   CONSTRAINT provider_ledger_cost_nonnegative CHECK (cost_cents >= 0),
-  CONSTRAINT provider_ledger_reserved_nonnegative CHECK (reserved_cents >= 0),
   CONSTRAINT provider_ledger_failure_code_shape
     CHECK (last_failure_code IS NULL OR last_failure_code ~ '^[a-z][a-z0-9_]{2,63}$'),
   CONSTRAINT provider_ledger_failure_recorded
@@ -404,6 +404,93 @@ CREATE TABLE provider_ledger (
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION today_algorithm_version() RETURNS text
 LANGUAGE sql IMMUTABLE AS $$ SELECT 'today.2'::text $$;
+
+-- ---------------------------------------------------------------------------
+-- provider_reservations — one row per paid attempt, from authorized to settled
+--
+-- A paid provider call cannot be inside the transaction that records it: the call is
+-- out in the world before the commit, so a rollback loses the record and keeps the
+-- invoice. This table is how that is survived, and it is deliberately generic — the
+-- telephony lane's calls and the demo product's model calls need exactly the same
+-- thing, which is why `subject_kind` exists at all with one value in it today.
+--
+-- ## The state machine
+--
+--   reserved  — cents authorized, nothing called yet. A crash here costs nothing: no
+--               call can have happened, so the row is `released`.
+--   calling   — committed *before* the call. This is the marker that says "a call may
+--               now have happened", and it is the reason a retry cannot quietly make a
+--               second one for free: a reservation found still `calling` means the
+--               previous attempt is ambiguous.
+--   settled   — the provider reported a figure. `settled_cents` is that figure.
+--   estimated — nobody reported one: the transport threw, the response carried no
+--               usage, or the worker vanished after `calling`. `settled_cents` is the
+--               reservation, because zero is the one answer certainly wrong about a
+--               call that may have been billed.
+--   released  — no call happened and none can have. `settled_cents` is zero.
+--
+-- ## Why the attempt is in the key
+--
+-- `UNIQUE (workspace, subject_kind, subject_id, attempt)` makes a retry's reservation a
+-- *different row* from the attempt it is retrying. Reusing one row would mean either
+-- settling it twice or calling twice against one authorization, and the handler's
+-- `maxAttempts` then bounds the number of rows — three reservations at three cents is
+-- the worst a firm can cost in a day, and that is a number a person can check.
+--
+-- ## Dates
+--
+-- `business_date` and `business_time_zone` are the reservation's own, copied at
+-- insertion exactly as `daily_counters` does. A run authorized yesterday and settled
+-- today adds its invoice to *yesterday's* ledger row, because that is the day whose
+-- budget it was cleared against.
+-- ---------------------------------------------------------------------------
+CREATE TABLE provider_reservations (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces (id),
+  provider_key text NOT NULL,
+  subject_kind text NOT NULL,
+  subject_id uuid NOT NULL,
+  attempt integer NOT NULL,
+  business_date date NOT NULL,
+  business_time_zone text NOT NULL,
+  cents integer NOT NULL,
+  state text NOT NULL DEFAULT 'reserved',
+  settled_cents integer NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  settled_at timestamptz,
+  CONSTRAINT provider_reservations_pkey PRIMARY KEY (workspace_id, id),
+  CONSTRAINT provider_reservations_one_per_attempt
+    UNIQUE (workspace_id, subject_kind, subject_id, attempt),
+  CONSTRAINT provider_reservations_provider_key_shape
+    CHECK (provider_key ~ '^[a-z][a-z0-9_.-]{1,63}$'),
+  -- One value today. The column exists so the next paid lane adds a value rather than
+  -- a table, and the CHECK is what makes adding one a deliberate edit.
+  CONSTRAINT provider_reservations_subject_known CHECK (subject_kind IN ('research_run')),
+  CONSTRAINT provider_reservations_attempt_positive CHECK (attempt >= 1),
+  CONSTRAINT provider_reservations_cents_nonnegative CHECK (cents >= 0),
+  CONSTRAINT provider_reservations_settled_nonnegative CHECK (settled_cents >= 0),
+  CONSTRAINT provider_reservations_state_known
+    CHECK (state IN ('reserved', 'calling', 'settled', 'estimated', 'released')),
+  -- An open reservation has settled nothing and is not dated as settled; a closed one
+  -- is. The pair is what makes `readSpend`'s "reserved or calling" filter total.
+  CONSTRAINT provider_reservations_settlement_consistent
+    CHECK ((state IN ('reserved', 'calling')) = (settled_at IS NULL)),
+  CONSTRAINT provider_reservations_open_settles_nothing
+    CHECK (state NOT IN ('reserved', 'calling') OR settled_cents = 0),
+  -- A released reservation is the claim that no call happened, so it cannot carry cents.
+  CONSTRAINT provider_reservations_released_is_free
+    CHECK (state <> 'released' OR settled_cents = 0),
+  CONSTRAINT provider_reservations_business_time_zone_shape
+    CHECK (business_time_zone ~ '^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+){1,2}$')
+);
+
+-- `readSpend` sums the open reservations of one business date; the handler reads one
+-- subject's rows newest first to recover its own step after a lost cursor.
+CREATE INDEX provider_reservations_open_by_date
+  ON provider_reservations (workspace_id, business_date, provider_key)
+  WHERE state IN ('reserved', 'calling');
+CREATE INDEX provider_reservations_by_subject
+  ON provider_reservations (workspace_id, subject_kind, subject_id, attempt DESC);
 
 -- ---------------------------------------------------------------------------
 -- today_refresh_card — 0018's body, stamping the version it rebuilt under
@@ -503,3 +590,4 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON firm_facts TO app_runtime, migration;
 GRANT SELECT, INSERT, UPDATE, DELETE ON firm_judgments TO app_runtime, migration;
 GRANT SELECT, INSERT, UPDATE, DELETE ON firm_links TO app_runtime, migration;
 GRANT SELECT, INSERT, UPDATE, DELETE ON provider_ledger TO app_runtime, migration;
+GRANT SELECT, INSERT, UPDATE, DELETE ON provider_reservations TO app_runtime, migration;

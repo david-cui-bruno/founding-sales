@@ -5,7 +5,14 @@ import { jobIdempotencyKey } from '@fss/domain/jobs/jobKinds.ts';
 import type { JobSpecification } from '@fss/domain/jobs/jobStore.ts';
 import { databaseNow } from '@fss/domain/policy/clock.ts';
 import { enqueueFirmResearch } from '@fss/domain/research/enqueue.ts';
-import { beginFirmResearch, finishFirmResearch } from '@fss/domain/research/enrichment.ts';
+import {
+  beginFirmResearch,
+  ensureResearchCalling,
+  finishFirmResearch,
+  recoverResearchCursor,
+  RESEARCH_FIRM_MAX_RESERVATIONS,
+  type ResearchStep,
+} from '@fss/domain/research/enrichment.ts';
 import type { ExtractionProvider, PageFetchProvider } from '@fss/domain/research/providers.ts';
 import { readResearchSettings } from '@fss/domain/research/settings.ts';
 import { finaliseAbandonedRuns } from '@fss/domain/research/runs.ts';
@@ -31,32 +38,33 @@ import type { DueWorkSource } from '../scheduler/schedulerPass.ts';
  * a useful one — the evidence is what a later run's facts will point at — so the
  * handler is registered whenever the page fetch is, which is always.
  *
- * ## Two chunks, because the middle of a run spends money
+ * ## Three chunks, because the middle of a run spends money
  *
  * `research.firm` is chunked (`docs/greenfield/jobs.md`, "Chunked bulk work"), and the
- * boundary is where the money is:
+ * boundaries are where the money is:
  *
  *   * **chunk 1** — `beginFirmResearch`: the run row, the consumed unit of the day's
- *     count, and the worst case **reserved** on `provider_ledger`. No provider has been
- *     touched. The runner commits this together with the cursor
- *     `{ runId, reservedCents, step: 'reserved' }`;
- *   * **chunk 2** — `finishFirmResearch`: the fetch, the model call, the evidence, the
- *     facts, the judgment, the funnel facts, and the reservation turned into the actual
- *     figure. `done: true`.
+ *     count, and a `provider_reservations` row in state `reserved`. No provider has been
+ *     touched;
+ *   * **chunk 2** — `ensureResearchCalling`: that reservation moves to `calling`, and
+ *     **nothing else is written**. This chunk exists only to make "a call may now have
+ *     happened" durable, because a marker that shared a transaction with work could be
+ *     rolled back by that work's failure — and then the call which followed it would
+ *     have no record at all;
+ *   * **chunk 3** — `finishFirmResearch`: the fetch, the exact token count, the model
+ *     call, the evidence, the facts, the judgment, the funnel facts, and the reservation
+ *     settled by id. `done: true`.
  *
- * Before the split, both halves ran in the runner's single job transaction. A lease
- * reclaimed during the extraction — or any database error after the call — rolled back
- * the run row, the ledger row and the consumed counter while the money stayed spent at
- * the provider, and the next attempt spent it again against a budget that had never
- * heard of the first. Now a rollback of chunk 2 leaves chunk 1 committed: the second
- * claim resumes from the cursor, finds its run row and its reservation, and does not
- * consume a second unit.
+ * With two chunks, a chunk-2 failure *after* the call was retried and made a second
+ * paid call against the same reservation. Now the retry finds its own reservation still
+ * `calling` under an **earlier job attempt**, settles it `estimated`, and opens a fresh
+ * reservation for this attempt — so a second call is a second authorization, and
+ * `maxAttempts` bounds the pair at three.
  *
- * A worker that disappears between the chunks leaves a row `running` with a reservation
- * standing. `finaliseAbandonedRuns`, in the sweep, closes it `failed` with
- * `lease_lost` after `RUN_IN_PROGRESS_MINUTES` and keeps the reservation as the recorded
- * cost — nobody can know whether the call was made, and over-counting is the direction
- * in which nothing is lost.
+ * A worker that disappears leaves a row `running` with reservations standing.
+ * `finaliseAbandonedRuns`, in the sweep, closes it `failed` with `lease_lost` after
+ * `RUN_IN_PROGRESS_MINUTES` and writes the sum of those reservations into `cost_cents` —
+ * `estimated` for any that reached `calling`, `released` for any that did not.
  *
  * ## The job always completes, even when the run failed
  *
@@ -124,34 +132,48 @@ export function researchHandlers(options: ResearchWorkerOptions | undefined): re
   return [researchFirmJobHandler(options), researchSweepJobHandler(options)];
 }
 
-/** The cursor chunk 1 leaves behind, as it comes back out of `payload.progress`. */
+/**
+ * The cursor, as it comes back out of `payload.progress`.
+ *
+ * `attempt` names the `provider_reservations` row this cursor is about, and `fencing`
+ * is the fencing token of the claim that wrote it. The pair is what tells a reservation
+ * *this* claim marked `calling` apart from one a previous claim marked and then died
+ * holding — the job's own attempt counter cannot, because `requeueDeadJob` resets it.
+ */
 export interface ResearchProgress {
   readonly runId: string;
-  readonly reservedCents: number;
-  readonly step: 'reserved';
+  readonly attempt: number;
+  readonly step: ResearchStep;
+  readonly fencing: string;
   /** `JobChunk.progress` is an open JSON record; this is what makes the shape one. */
   readonly [key: string]: unknown;
 }
+
+const STEPS: readonly ResearchStep[] = ['reserved', 'calling'];
 
 export function parseResearchProgress(progress: unknown): ResearchProgress | null {
   if (typeof progress !== 'object' || progress === null) return null;
   const row = progress as Record<string, unknown>;
   const runId = row['runId'];
-  const reservedCents = row['reservedCents'];
+  const attempt = row['attempt'];
+  const step = row['step'];
+  const fencing = row['fencing'];
   if (typeof runId !== 'string' || runId === '') return null;
-  if (typeof reservedCents !== 'number' || !Number.isFinite(reservedCents) || reservedCents < 0) return null;
-  if (row['step'] !== 'reserved') return null;
-  return { runId, reservedCents, step: 'reserved' };
+  if (typeof attempt !== 'number' || !Number.isInteger(attempt) || attempt < 1) return null;
+  if (typeof step !== 'string' || !STEPS.includes(step as ResearchStep)) return null;
+  if (typeof fencing !== 'string' || fencing === '') return null;
+  return { runId, attempt, step: step as ResearchStep, fencing };
 }
 
 export function researchFirmJobHandler(options: ResearchWorkerOptions): JobHandler {
+  const maxAttempts = options.maxAttempts ?? RESEARCH_FIRM_MAX_ATTEMPTS;
   return {
     kind: 'research.firm',
     protection: 'business_uniqueness',
-    maxAttempts: options.maxAttempts ?? RESEARCH_FIRM_MAX_ATTEMPTS,
+    maxAttempts,
     // Thirty seconds of fetching plus one model call, with room to spare.
     leaseSeconds: options.leaseSeconds ?? 120,
-    // Two chunks, and the boundary is where the money is: see the header.
+    // Three chunks, and the boundaries are where the money is: see the header.
     chunked: true,
     handle: async (input): Promise<void | JobChunk> => {
       const payload = parseResearchFirmPayload(input.job.payload);
@@ -162,7 +184,13 @@ export function researchFirmJobHandler(options: ResearchWorkerOptions): JobHandl
       const at = await databaseNow(context);
       const carried = parseResearchProgress(input.job.payload['progress']);
 
-      if (carried === null) {
+      // A missing or malformed cursor is recovered from the durable rows rather than
+      // restarting: the run row of this revision is the same fact the cursor names, and
+      // starting again would consume a second unit of the day's count for one firm.
+      const runId =
+        carried?.runId ?? (await recoverResearchCursor(context, { firmId: payload.firmId, revision: payload.revision }))?.runId;
+
+      if (runId === undefined) {
         // Chunk 1. Nothing here touches a provider, and what it writes — the run row,
         // the consumed count, the reservation — is committed with the cursor below.
         const started = await beginFirmResearch(context, {
@@ -177,20 +205,55 @@ export function researchFirmJobHandler(options: ResearchWorkerOptions): JobHandl
         if (!started.ok || started.value.kind === 'done') return;
         const progress: ResearchProgress = {
           runId: started.value.runId,
-          reservedCents: started.value.reservedCents,
+          attempt: 1,
           step: 'reserved',
+          fencing: input.job.fencingToken,
         };
         return { progress, done: false };
       }
 
-      // Chunk 2, from the cursor. Every outcome, including a failure, is recorded on the
-      // run row inside this transaction; nothing here throws on one.
+      if (carried === null || carried.step === 'reserved' || carried.fencing !== input.job.fencingToken) {
+        // Chunk 2: make "a call may now have happened" durable, and nothing else.
+        //
+        // The fencing token is the discriminator. A cursor written by *this* claim goes
+        // straight on to chunk 3; a cursor written by any earlier claim means that claim
+        // died somewhere after marking the reservation, so its call is ambiguous and
+        // `ensureResearchCalling` settles it `estimated` before opening a fresh
+        // reservation. Without the comparison the retry called a second time against the
+        // first attempt's authorization — one reservation, two invoices.
+        //
+        // The job's own `attempt` cannot do this job: `requeueDeadJob` sets
+        // `attempt_count` back to zero, so a requeued claim would carry the same number
+        // as the claim that died. The fencing token is incremented by every claim.
+        //
+        // A chunk requeue (out of lease, cursor kept) is a new claim and therefore a new
+        // token: it settles the open reservation and opens the next one, which is right,
+        // because out of lease is exactly the case where nobody knows if the call landed.
+        const permission = await ensureResearchCalling(context, {
+          runId,
+          at,
+          maxReservations: RESEARCH_FIRM_MAX_RESERVATIONS,
+        });
+        if (permission.kind === 'closed') return;
+        const progress: ResearchProgress = {
+          runId,
+          attempt: permission.attempt,
+          step: 'calling',
+          fencing: input.job.fencingToken,
+        };
+        return { progress, done: false };
+      }
+
+      // Chunk 3, from the cursor. Every outcome, including a failure, is recorded on the
+      // run row inside this transaction; nothing here throws on one, and a run that is
+      // no longer `running` is left exactly as it is.
       await finishFirmResearch(context, {
-        runId: carried.runId,
-        reservedCents: carried.reservedCents,
+        runId,
         firmId: payload.firmId,
         revision: payload.revision,
         at,
+        attempt: carried.attempt,
+        mayCall: carried.step === 'calling',
         pageFetch: options.pageFetch,
         ...(options.extraction === undefined ? {} : { extraction: options.extraction }),
       });

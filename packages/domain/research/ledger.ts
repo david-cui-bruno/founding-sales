@@ -19,23 +19,22 @@ import { localDate } from '../src/rules/localClock.ts';
  * accounting row written in the same statement as a decision that has to be made
  * before the thing it is accounting for happened.
  *
- * ## Reserved before spent
+ * ## Invoices here, authorizations in `provider_reservations`
  *
- * `cost_cents` is what was invoiced. `reserved_cents` is what has been authorized and
- * not yet invoiced, and it exists because the provider call is not inside the
- * transaction that authorizes it. A run reserves its worst case in one committed step
- * (`reserveProviderSpend`), makes the call in the next, and moves the figure across
- * (`recordProviderCall` with `releaseReservedCents`).
+ * `cost_cents` is what was invoiced. What has been authorized and not yet invoiced is
+ * one row per attempt in `research/reservations.ts`, and `readSpend` adds the open ones
+ * in. It used to be a `reserved_cents` column here, and the reason it is not any more is
+ * that a counter has no identity: a run authorized yesterday, settling today, decremented
+ * *today's* number, which silently gave away the cents another run was holding.
  *
- * Two consequences, both deliberate:
+ * Two consequences of counting the open rows, both deliberate:
  *
- *   * **`readSpend` counts both columns.** A run in flight is already spent as far as
- *     the next clearance is concerned. Anything else lets two runs be authorized
- *     against the same remaining budget, which is how a fifty-cent day buys a dollar.
- *   * **A crash between the two steps leaves the reservation standing.** The month is
- *     over-counted by a few cents until the sweep finalises the run. That is the safe
- *     direction, and the only direction in which a rollback cannot make money that was
- *     really spent invisible.
+ *   * **A run in flight is already spent** as far as the next clearance is concerned.
+ *     Anything else lets two runs be authorized against the same remaining budget,
+ *     which is how a fifty-cent day buys a dollar.
+ *   * **A crash leaves the authorization standing** until the sweep finalises the run.
+ *     The month is over-counted by a few cents in the meantime, which is the direction
+ *     in which a rollback cannot make money that was really spent invisible.
  */
 
 /** The workspace's business zone. Read here rather than imported from `today`, to keep
@@ -56,13 +55,6 @@ export interface RecordProviderCallInput {
   readonly costCents: number;
   /** A short lower-snake code. `provider_ledger_failure_code_shape` refuses the rest. */
   readonly failureCode?: string | undefined;
-  /**
-   * Cents this call had reserved, released in the same statement that records what it
-   * actually cost. Clamped at the row's own reservation with `greatest(…, 0)`, so a
-   * release larger than what is held cannot drive the column negative — the CHECK would
-   * refuse the row, and a failed accounting write is worse than a cent of drift.
-   */
-  readonly releaseReservedCents?: number | undefined;
 }
 
 /**
@@ -79,13 +71,12 @@ export async function recordProviderCall(
   await context.db.query(
     `INSERT INTO provider_ledger
        (workspace_id, provider_key, business_date, business_time_zone, calls, failures, cost_cents,
-        reserved_cents, last_failure_code, last_failure_at, updated_at)
-     VALUES ($1, $2, $3::date, $4, 1, $5::integer, $6::integer, 0, $7, $8, now())
+        last_failure_code, last_failure_at, updated_at)
+     VALUES ($1, $2, $3::date, $4, 1, $5::integer, $6::integer, $7, $8, now())
      ON CONFLICT (workspace_id, provider_key, business_date) DO UPDATE
         SET calls = provider_ledger.calls + 1,
             failures = provider_ledger.failures + $5::integer,
             cost_cents = provider_ledger.cost_cents + $6::integer,
-            reserved_cents = greatest(provider_ledger.reserved_cents - $9::integer, 0),
             -- The *last* failure, so a day that recovered still says what went wrong.
             last_failure_code = COALESCE($7, provider_ledger.last_failure_code),
             last_failure_at = COALESCE($8, provider_ledger.last_failure_at),
@@ -99,61 +90,7 @@ export async function recordProviderCall(
       cents,
       input.failureCode ?? null,
       failed ? input.at : null,
-      Math.max(0, Math.trunc(input.releaseReservedCents ?? 0)),
     ],
-  );
-}
-
-/**
- * Hold the worst case for a call that has not been made yet.
- *
- * One statement, like `recordProviderCall`, and deliberately **not** counted as a call:
- * `calls` is what was asked of the provider, and nothing has been asked yet. A caller
- * that dies here has over-reserved; a caller that reserved nothing and then spent would
- * have under-counted, and only one of those two errors can be fixed afterwards.
- */
-export async function reserveProviderSpend(
-  context: RepositoryContext,
-  input: { readonly providerKey: string; readonly at: string; readonly businessTimeZone: string; readonly cents: number },
-): Promise<void> {
-  const cents = Math.max(0, Math.trunc(input.cents));
-  if (cents === 0) return;
-  const businessDate = localDate(input.at, input.businessTimeZone);
-  await context.db.query(
-    `INSERT INTO provider_ledger
-       (workspace_id, provider_key, business_date, business_time_zone, calls, failures, cost_cents,
-        reserved_cents, updated_at)
-     VALUES ($1, $2, $3::date, $4, 0, 0, 0, $5::integer, now())
-     ON CONFLICT (workspace_id, provider_key, business_date) DO UPDATE
-        SET reserved_cents = provider_ledger.reserved_cents + $5::integer,
-            updated_at = now()`,
-    [context.scope.workspaceId, input.providerKey, businessDate, input.businessTimeZone, cents],
-  );
-}
-
-/**
- * Give a reservation back, for a run that turned out to make no call at all.
- *
- * A firm with nothing to read and a deployment with no model key both reach the end of
- * a run without asking the provider anything, and the cents they reserved are not
- * spent. `calls` is deliberately untouched — nothing was called — which is what makes
- * this different from `recordProviderCall`'s release.
- *
- * Clamped at what the row holds, for the reason that function's release is: a failed
- * accounting write is worse than a cent of drift.
- */
-export async function releaseProviderReservation(
-  context: RepositoryContext,
-  input: { readonly providerKey: string; readonly at: string; readonly businessTimeZone: string; readonly cents: number },
-): Promise<void> {
-  const cents = Math.max(0, Math.trunc(input.cents));
-  if (cents === 0) return;
-  const businessDate = localDate(input.at, input.businessTimeZone);
-  await context.db.query(
-    `UPDATE provider_ledger
-        SET reserved_cents = greatest(reserved_cents - $4::integer, 0), updated_at = now()
-      WHERE workspace_id = $1 AND provider_key = $2 AND business_date = $3::date`,
-    [context.scope.workspaceId, input.providerKey, businessDate, cents],
   );
 }
 
@@ -170,8 +107,11 @@ export interface Spend {
  * should stop researching, because David's answer 8 puts calls ahead of everything
  * else.
  *
- * **Invoiced plus reserved.** A run whose clearance is consumed and whose call has not
- * come back yet has spent its worst case as far as the next clearance is concerned.
+ * **Invoiced plus authorized.** A run whose clearance is consumed and whose call has
+ * not come back yet has spent its worst case as far as the next clearance is concerned,
+ * so the open rows of `provider_reservations` are added in — each on **its own**
+ * business date, which is the half a `reserved_cents` column could not express: a
+ * reservation made yesterday counts against yesterday however long it stays open.
  * Counting only `cost_cents` would let every run started in the same minute be
  * authorized against the same remaining budget.
  */
@@ -182,11 +122,15 @@ export async function readSpend(
   const businessDate = localDate(input.at, input.businessTimeZone);
   const monthStart = `${businessDate.slice(0, 7)}-01`;
   const { rows } = await context.db.query<{ today: string | null; month: string | null }>(
-    `SELECT sum(cost_cents + reserved_cents) FILTER (WHERE business_date = $2::date) AS today,
-            sum(cost_cents + reserved_cents)
-              FILTER (WHERE business_date >= $3::date AND business_date <= $2::date) AS month
-       FROM provider_ledger
-      WHERE workspace_id = $1`,
+    `WITH spend AS (
+       SELECT business_date, cost_cents AS cents FROM provider_ledger WHERE workspace_id = $1
+       UNION ALL
+       SELECT business_date, cents FROM provider_reservations
+        WHERE workspace_id = $1 AND state IN ('reserved', 'calling')
+     )
+     SELECT sum(cents) FILTER (WHERE business_date = $2::date) AS today,
+            sum(cents) FILTER (WHERE business_date >= $3::date AND business_date <= $2::date) AS month
+       FROM spend`,
     [context.scope.workspaceId, businessDate, monthStart],
   );
   const row = rows[0];

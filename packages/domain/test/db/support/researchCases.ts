@@ -142,6 +142,34 @@ const runRow = async (f: Fixture, overrides: Readonly<Record<string, unknown>>):
   );
 };
 
+/** A settlement instant, for the closed states. */
+const NOW = new Date().toISOString();
+
+/** A reservation row that satisfies everything, for a case to break one column of. */
+const reservation = async (f: Fixture, overrides: Readonly<Record<string, unknown>>): Promise<unknown> => {
+  const subjectId = overrides['subject_id'] ?? (await seedRun(f));
+  const row: Record<string, unknown> = {
+    workspace_id: workspace(f),
+    provider_key: 'anthropic_extraction',
+    subject_kind: 'research_run',
+    subject_id: subjectId,
+    attempt: 1,
+    business_date: '2026-09-28',
+    business_time_zone: 'America/New_York',
+    cents: 3,
+    state: 'reserved',
+    settled_cents: 0,
+    settled_at: null,
+    ...overrides,
+  };
+  const columns = Object.keys(row);
+  return await f.session.query(
+    `INSERT INTO provider_reservations (${columns.join(', ')})
+     VALUES (${columns.map((_, index) => `$${String(index + 1)}`).join(', ')})`,
+    columns.map(column => row[column]),
+  );
+};
+
 /** A link row that satisfies everything. */
 const link = async (f: Fixture, overrides: Readonly<Record<string, unknown>>): Promise<unknown> => {
   const row: Record<string, unknown> = {
@@ -342,6 +370,72 @@ export const RESEARCH_CONSTRAINT_CASES: readonly Case[] = [
   },
   { constraint: 'firm_facts_confidence_range', run: async f => await fact(f, { confidence: 1.5 }) },
 
+  // ------------------------------------------------------ provider_reservations
+  {
+    constraint: 'provider_reservations_pkey',
+    run: async f => {
+      const id = '44444444-4444-4444-8444-444444444444';
+      // One run row, reused, so the run's own uniqueness cannot fire instead.
+      const subjectId = await seedRun(f);
+      await reservation(f, { id, subject_id: subjectId, attempt: 1 });
+      // A different attempt, so only the primary key can fire.
+      return await reservation(f, { id, subject_id: subjectId, attempt: 2 });
+    },
+  },
+  {
+    constraint: 'provider_reservations_workspace_id_fkey',
+    run: async f => await reservation(f, { workspace_id: ABSENT, subject_id: await seedRun(f) }),
+  },
+  {
+    constraint: 'provider_reservations_one_per_attempt',
+    run: async f => {
+      const subjectId = await seedRun(f);
+      await reservation(f, { subject_id: subjectId });
+      return await reservation(f, { subject_id: subjectId });
+    },
+  },
+  {
+    constraint: 'provider_reservations_provider_key_shape',
+    run: async f => await reservation(f, { provider_key: 'Anthropic Extraction' }),
+  },
+  {
+    // One value today. A second paid lane adds one here deliberately rather than by
+    // writing a row nobody's code knows how to settle.
+    constraint: 'provider_reservations_subject_known',
+    run: async f => await reservation(f, { subject_kind: 'phone_call' }),
+  },
+  { constraint: 'provider_reservations_attempt_positive', run: async f => await reservation(f, { attempt: 0 }) },
+  { constraint: 'provider_reservations_cents_nonnegative', run: async f => await reservation(f, { cents: -1 }) },
+  {
+    constraint: 'provider_reservations_settled_nonnegative',
+    run: async f => await reservation(f, { state: 'settled', settled_cents: -1, settled_at: NOW }),
+  },
+  {
+    // CHECKs fire in alphabetical order, and `settlement_consistent` sorts first — so
+    // the row has to be consistent about being closed for this one to be reached.
+    constraint: 'provider_reservations_state_known',
+    run: async f => await reservation(f, { state: 'pending', settled_at: NOW }),
+  },
+  {
+    // An open reservation has settled nothing and carries no settlement time; a closed
+    // one carries both. The pair is what makes the "reserved or calling" filter total.
+    constraint: 'provider_reservations_settlement_consistent',
+    run: async f => await reservation(f, { state: 'reserved', settled_at: NOW }),
+  },
+  {
+    constraint: 'provider_reservations_open_settles_nothing',
+    run: async f => await reservation(f, { state: 'calling', settled_cents: 3, settled_at: null }),
+  },
+  {
+    // `released` is the claim that no call happened, so it cannot carry cents.
+    constraint: 'provider_reservations_released_is_free',
+    run: async f => await reservation(f, { state: 'released', settled_cents: 3, settled_at: NOW }),
+  },
+  {
+    constraint: 'provider_reservations_business_time_zone_shape',
+    run: async f => await reservation(f, { business_time_zone: 'Mars/Olympus Mons' }),
+  },
+
   // ----------------------------------------------------------- firm_judgments
   {
     constraint: 'firm_judgments_pkey',
@@ -441,12 +535,7 @@ export const RESEARCH_CONSTRAINT_CASES: readonly Case[] = [
     run: async f => await ledger(f, { calls: 0, failures: 1, last_failure_code: 'timeout', last_failure_at: new Date().toISOString() }),
   },
   { constraint: 'provider_ledger_cost_nonnegative', run: async f => await ledger(f, { cost_cents: -1 }) },
-  {
-    // Cents authorized and not yet invoiced. A negative reservation would mean a run
-    // released more than it held, which is money appearing out of nowhere.
-    constraint: 'provider_ledger_reserved_nonnegative',
-    run: async f => await ledger(f, { reserved_cents: -1 }),
-  },
+
   {
     constraint: 'provider_ledger_failure_code_shape',
     run: async f =>

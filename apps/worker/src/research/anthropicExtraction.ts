@@ -2,6 +2,7 @@ import type {
   AnthropicMessageResponse,
   AnthropicMessagesTransport,
 } from '@fss/domain/classification/anthropicClient.ts';
+import type { ClassifierRequest } from '@fss/domain/classification/prompt.ts';
 import {
   EXTRACTION_OUTPUT_SCHEMA,
   EXTRACTION_PROMPT_VERSION,
@@ -136,27 +137,38 @@ export { EXTRACTION_OUTPUT_SCHEMA, EXTRACTION_PROMPT_VERSION, EXTRACTION_SYSTEM_
 export function anthropicExtraction(options: AnthropicExtractionOptions): ExtractionProvider {
   const maxOutputTokens = Math.min(options.maxOutputTokens ?? MAX_EXTRACTION_OUTPUT_TOKENS, MAX_EXTRACTION_OUTPUT_TOKENS);
 
+  /** Exactly what `extract` would send, so a count is a count of the real request. */
+  const requestFor = (input: ExtractionRequest): ClassifierRequest => ({
+    model: options.modelName,
+    max_tokens: maxOutputTokens,
+    // No `cache_control`. Prompt caching pays 1.25× on the write and 0.1× on a
+    // read, so it only saves money when the same prefix is sent again — and it is
+    // not: every run's message is a different firm's pages, and the only constant
+    // part is the system text, which is far too small to be worth a cache write.
+    // Caching here was a 25% surcharge on the one thing that repeats and no
+    // saving at all on the rest, and it made the priced worst case wrong.
+    system: [{ type: 'text', text: EXTRACTION_SYSTEM_TEXT }],
+    messages: [{ role: 'user', content: extractionUserText(input) }],
+    // No `effort`: Claude Haiku 4.5 returns a 400 for it (`MODEL_CAPABILITIES`),
+    // and there is no thinking to ask for. Temperature is left at the model
+    // default, which for a schema-constrained extraction is the same answer.
+    output_config: { format: { type: 'json_schema', schema: EXTRACTION_OUTPUT_SCHEMA } },
+  });
+
   return {
     providerKey: EXTRACTION_PROVIDER,
+    /**
+     * The provider's own count of the request `extract` would send.
+     *
+     * Built from the same function, so what is counted and what is sent cannot drift:
+     * the whole value of an exact count is that it is a count of *this* request.
+     */
+    countInputTokens: async (input: ExtractionRequest): Promise<number> =>
+      await options.transport.countTokens(requestFor(input)),
     extract: async (input: ExtractionRequest): Promise<ProviderOutcome<ExtractionAnswer>> => {
       let response: AnthropicMessageResponse;
       try {
-        response = await options.transport.create({
-          model: options.modelName,
-          max_tokens: maxOutputTokens,
-          // No `cache_control`. Prompt caching pays 1.25× on the write and 0.1× on a
-          // read, so it only saves money when the same prefix is sent again — and it is
-          // not: every run's message is a different firm's pages, and the only constant
-          // part is the system text, which is far too small to be worth a cache write.
-          // Caching here was a 25% surcharge on the one thing that repeats and no
-          // saving at all on the rest, and it made the priced worst case wrong.
-          system: [{ type: 'text', text: EXTRACTION_SYSTEM_TEXT }],
-          messages: [{ role: 'user', content: extractionUserText(input) }],
-          // No `effort`: Claude Haiku 4.5 returns a 400 for it (`MODEL_CAPABILITIES`),
-          // and there is no thinking to ask for. Temperature is left at the model
-          // default, which for a schema-constrained extraction is the same answer.
-          output_config: { format: { type: 'json_schema', schema: EXTRACTION_OUTPUT_SCHEMA } },
-        });
+        response = await options.transport.create(requestFor(input));
       } catch {
         // The error is deliberately not carried out of here. An SDK error message can
         // quote a request body, and a request body is a firm's published pages plus

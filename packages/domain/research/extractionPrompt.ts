@@ -88,3 +88,43 @@ export function extractionUserText(request: ExtractionRequest): string {
     pages,
   ].join('\n');
 }
+
+/** How many times the caller may drop blocks and recount before giving up. */
+export const MAX_BUDGET_DROPS = 3;
+
+/**
+ * The same sources with their trailing blocks dropped, for a request that did not fit.
+ *
+ * Trailing, and whole pages last: the fixed path order puts the homepage first and the
+ * pages a judgment is least likely to rest on at the end, so dropping from the back
+ * loses the least. A page is removed only when its last block has gone, because a page
+ * with no blocks in the prompt is a `SOURCE` line the model can select nothing from.
+ *
+ * Returns the same array when there is nothing left to drop, so a caller's loop
+ * terminates on identity rather than on a count it has to maintain.
+ */
+export function withoutTrailingBlocks(
+  sources: readonly ExtractionRequest['sources'][number][],
+  fraction = 0.25,
+): readonly ExtractionRequest['sources'][number][] {
+  const total = sources.reduce((count, source) => count + source.blocks.length, 0);
+  if (total === 0) return sources;
+  // At least one block, so a request that is barely over still shrinks.
+  const drop = Math.max(1, Math.ceil(total * fraction));
+  let remaining = drop;
+  const kept: ExtractionRequest['sources'][number][] = [];
+  for (const source of [...sources].reverse()) {
+    if (remaining <= 0) {
+      kept.push(source);
+      continue;
+    }
+    if (source.blocks.length <= remaining) {
+      remaining -= source.blocks.length;
+      // The whole page goes: nothing of it would have been quotable.
+      continue;
+    }
+    kept.push({ ...source, blocks: source.blocks.slice(0, source.blocks.length - remaining) });
+    remaining = 0;
+  }
+  return kept.reverse();
+}
