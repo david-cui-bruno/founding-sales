@@ -1,4 +1,4 @@
-// ESLint 9 flat configuration for the whole tree: apps/, packages/, test/ops/ and the
+// ESLint 10 flat configuration for the whole tree: apps/, packages/, test/ops/ and the
 // scripts at the repository root. `npm run lint` runs it.
 import js from '@eslint/js';
 import tsPlugin from '@typescript-eslint/eslint-plugin';
@@ -8,7 +8,7 @@ import reactHooks from 'eslint-plugin-react-hooks';
 
 export default [
   {
-    // Generated output and nested checkouts. ESLint 9 does not skip dot-directories.
+    // Generated output and nested checkouts. ESLint does not skip dot-directories.
     ignores: ['**/node_modules/**', '**/dist/**', '**/.*/', 'out/**', 'coverage/**', 'test-results/**', 'playwright-report/**', 'artifacts/**'],
   },
   {
