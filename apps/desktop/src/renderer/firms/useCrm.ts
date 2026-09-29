@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { OperationApi } from '../../shared/operations.ts';
 import { importBridge } from '../app/bridges.ts';
 import type { Generation } from '../app/generation.ts';
@@ -15,16 +15,25 @@ import type {
 import { routeShown, type Route } from '../routes.ts';
 
 /**
- * The Firms view's reads and commands (1.0.13).
+ * The CRM view's reads and commands: Pipeline, Firms and a firm's page (1.0.14).
  *
  * The main process holds the screen — the board, a firm's page, the Add firm form, a
  * half-finished import, a merge waiting to be resolved — and every call answers the whole
- * of it. So this hook is `useViewState` plus two things only Firms needs.
+ * of it. So this hook is `useViewState` plus three things only this view needs.
  *
- * **The route follows the screen.** `firm/<id>` opens that firm; `firms` asks the bridge
- * what it is holding, and never shows a firm page under that name, because the sidebar's
- * Firms means the board. Opening a firm from the board stays in this view and the route
- * follows through `routeShown`, so nothing is mounted again and the sidebar stays true.
+ * **The route follows the screen.** `firm/<id>` opens that firm; `pipeline` and `firms`
+ * ask the bridge what it is holding, and never show a firm page under either name.
+ * Opening a firm from the board or from the list stays in this view and the route follows
+ * through `routeShown`, so nothing is mounted again and the sidebar stays true.
+ *
+ * **One board read serves both routes.** `POST /pipeline/board` answers with every active
+ * firm — the ones in a stage, in their columns, and the ones with no open opportunity
+ * beside them — so Pipeline and Firms are two readings of one answer rather than two
+ * reads. `crm.openPipeline` is the name that answer has always had.
+ *
+ * **Where the person came from is remembered.** A firm page's way back says Pipeline when
+ * the board sent them and Firms when the list did; a firm opened from a Today or reply
+ * card was sent by neither, and its way back is Firms, which is where a firm page lives.
  *
  * **Choosing a file is not an operation.** It opens macOS's file panel, so it is a named
  * channel like dialling, and the CSV never crosses the bridge.
@@ -49,11 +58,24 @@ export interface CrmActions {
 
 export interface Crm extends ViewState<CrmState> {
   readonly actions: CrmActions;
+  /** The row a firm page's way back names: the board, or the list. */
+  readonly origin: CrmRouteName;
 }
 
-/** The route the state on screen is: one firm's, or the Firms view's. */
-export function routeOfState(state: CrmState): Route {
-  return state.screen === 'firm' && state.firm !== null ? { name: 'firm', firmId: state.firm.read.firm.id } : { name: 'firms' };
+/** The two sidebar rows this view answers for. A firm's page is under Firms. */
+export type CrmRouteName = 'pipeline' | 'firms';
+
+/**
+ * The route the state on screen is.
+ *
+ * A firm page is its own route. Everything else — the board, the list, and the three
+ * capture screens — is the row the person was already on, because the board answer is
+ * the same answer on both and the bridge's screen cannot tell them apart. A capture
+ * screen is Firms', which is where Add firm and Import are offered.
+ */
+export function routeOfState(state: CrmState, from: CrmRouteName): Route {
+  if (state.screen === 'firm' && state.firm !== null) return { name: 'firm', firmId: state.firm.read.firm.id };
+  return { name: state.screen === 'pipeline' ? from : 'firms' };
 }
 
 export function useCrm(
@@ -67,8 +89,8 @@ export function useCrm(
     () =>
       async (api: OperationApi): Promise<CrmState> => {
         if (wanted !== null) return await api.read('crm.openFirm', { firmId: wanted });
-        // The sidebar's Firms is the board, or a capture screen the bridge is still
-        // holding; a firm page it last showed is not what Firms means.
+        // Pipeline and Firms are the board read, or a capture screen the bridge is still
+        // holding; a firm page it last showed is not what either row means.
         const held = await api.read('crm.state', {});
         return held.screen === 'firm' ? await api.read('crm.openPipeline', {}) : held;
       },
@@ -126,18 +148,26 @@ export function useCrm(
     [read, command],
   );
 
+  // The row the person is on, kept across the firm page they open from it. A firm
+  // reached from a Today or reply card was sent by neither row, and Firms is where a
+  // firm page lives, so that is what its way back says.
+  const [from, setFrom] = useState<CrmRouteName>(route.name === 'pipeline' ? 'pipeline' : 'firms');
+  useEffect(() => {
+    if (route.name === 'pipeline' || route.name === 'firms') setFrom(route.name);
+  }, [route.name]);
+
   // The screen the bridge answered with is where the window is. The route follows it
   // rather than the other way round, and `routeShown` moves nothing and mounts nothing.
   const state = view.state;
   const shown = useRef<string | null>(null);
   useEffect(() => {
     if (state === null) return;
-    const next = routeOfState(state);
-    const text = next.name === 'firm' ? `firm/${next.firmId}` : 'firms';
+    const next = routeOfState(state, from);
+    const text = next.name === 'firm' ? `firm/${next.firmId}` : next.name;
     if (shown.current === text) return;
     shown.current = text;
     routeShown(next);
-  }, [state]);
+  }, [state, from]);
 
-  return useMemo(() => ({ ...view, actions }), [view, actions]);
+  return useMemo(() => ({ ...view, actions, origin: from }), [view, actions, from]);
 }

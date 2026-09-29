@@ -4,7 +4,7 @@ import type { LaneSection } from '../homeView.ts';
 import type { TodayState } from '../todayContract.ts';
 import type { CardView, TodayScreenView } from '../todayView.ts';
 import { Button } from '../ui/button.tsx';
-import { Brief } from '../research/Brief.tsx';
+import { Brief, CallAnnouncement } from '../research/Brief.tsx';
 import { OutcomeForm } from './OutcomeForm.tsx';
 import { TaskRow } from './TaskRow.tsx';
 import { todayForm, type TodayActions } from './useToday.ts';
@@ -29,7 +29,7 @@ interface LanesContent {
   readonly emptyLine: string | null;
 }
 
-function DialPanel({
+export function DialPanel({
   state,
   view,
   actions,
@@ -41,6 +41,10 @@ function DialPanel({
   const firmId = state.expanded?.firmId ?? '';
   return (
     <div data-testid="dial-panel" className="mt-3 flex flex-col gap-2">
+      {/* First, before the buttons: what is said the moment they answer. Somebody who
+          pressed Call from here has the sentence in front of them and has not had to
+          keep the brief above in view (29 September 2026). */}
+      <CallAnnouncement />
       {view.dialRoutes.map(entry => (
         <div key={entry.route.routeId} data-testid="dial-route" className="flex flex-wrap items-center gap-2">
           <Button

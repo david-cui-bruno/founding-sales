@@ -1,11 +1,13 @@
 import {
   TODAY_CARD_VERSION,
   callbackInstant,
+  callsPlacedTodayResponseSchema,
   dialCheckResponseSchema,
   loggedCallResultSchema,
   todayFirmResponseSchema,
   todayPauseReleaseResultSchema,
   todaySnoozeResultSchema,
+  type CallsPlacedTodayResponse,
   type LoggedCallResult,
 } from '@fss/contracts';
 import {
@@ -103,6 +105,15 @@ export interface TodayBridgeHost {
   refresh(input?: RefreshRequest): Promise<TodayState>;
   expand(input: { readonly firmId: string }): Promise<TodayState>;
   collapse(): Promise<TodayState>;
+  /**
+   * How many calls were placed on the workspace's own business date (29 September 2026).
+   *
+   * Not part of `TodayState`: the state is the cached list and what the window is doing
+   * with it, and this is a live count that moves every time somebody rings off. A read
+   * that did not answer is null, so the figure says nothing rather than zero — "no calls
+   * yet this morning" and "Callie could not ask" are different facts.
+   */
+  callsPlaced(): Promise<CallsPlacedTodayResponse | null>;
   snooze(input: SnoozeRequest): Promise<TodayState>;
   dial(input: DialRequest): Promise<TodayState>;
   recordOutcome(input: OutcomeRequest): Promise<TodayState>;
@@ -356,6 +367,13 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
     async expand(input) {
       await loadExpansion(input.firmId);
       return await snapshot();
+    },
+
+    async callsPlaced() {
+      const answer = await deps.api.read('/today/calls-placed', value => callsPlacedTodayResponseSchema.parse(value));
+      // A refusal or an unreadable answer is null. It is not this read's business to put
+      // a notice on the day's list: the figure alone goes quiet.
+      return answer.ok ? answer.value : null;
     },
 
     async collapse() {

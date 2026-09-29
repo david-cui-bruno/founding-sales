@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { CALL_OUTCOMES, instant, uuid } from '@fss/contracts';
+import { CALL_OUTCOMES, callsPlacedTodayResponseSchema, instant, uuid } from '@fss/contracts';
 import { crmStateSchema, addFirmDraftSchema } from '../renderer/firmWorkspaceContract.ts';
 import { replyStateSchema, REPLY_DISPOSITIONS } from '../renderer/replyContract.ts';
 import { draftStepSchema, sequenceStateSchema } from '../renderer/sequenceContract.ts';
@@ -274,6 +274,13 @@ export const OPERATIONS = {
     input: z.strictObject({ firmId: uuid }),
     output: todayStateSchema,
     transform: 'stale expansion from the in-memory page, eviction on 404 or not_assigned, and the dial advice per usable number',
+  },
+  'today.callsPlaced': {
+    kind: 'read',
+    calls: [{ method: 'GET', path: '/today/calls-placed' }],
+    input: nothing,
+    output: callsPlacedTodayResponseSchema.nullable(),
+    transform: 'none: the server’s count for its own business date, or null when the read did not answer',
   },
   'today.collapse': {
     kind: 'read',

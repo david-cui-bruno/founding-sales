@@ -120,6 +120,7 @@ describe('the operation registry', () => {
       'today.state',
       'today.refresh',
       'today.expand',
+      'today.callsPlaced',
       'today.collapse',
       'today.snooze',
       'today.recordOutcome',

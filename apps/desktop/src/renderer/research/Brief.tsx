@@ -1,5 +1,5 @@
 import type { JSX } from 'react';
-import type { CallBriefDto } from '@fss/contracts';
+import { CALL_ANNOUNCEMENT, CALL_ANNOUNCEMENT_LABEL, type CallBriefDto } from '@fss/contracts';
 import { Button } from '../ui/button.tsx';
 import { failedTriesLine, judgmentChips, shortDate, sourceHost, NOT_RESEARCHED_LINE } from '../researchView.ts';
 
@@ -22,11 +22,31 @@ import { failedTriesLine, judgmentChips, shortDate, sourceHost, NOT_RESEARCHED_L
  *     other action in this build, and a firm with no brief shows one grey line and the
  *     same action rather than an empty section.
  *
+ * Since 29 September 2026 the first line of the brief is the announcement — what is said
+ * the moment somebody answers, because the call is recorded. It is above the judgments and
+ * above the failed-tries line, and it is there whether or not this firm has ever been
+ * researched: it is not a fact about the firm, it is the sentence the call opens with.
+ *
  * A source opens in the system browser through the seam that already exists:
  * `app.ts`'s `setWindowOpenHandler` hands an `https:` URL to `shell.openExternal` and
  * denies everything else. There is no new channel, because a channel that opened a URL
  * the renderer chose is exactly what that handler was narrowed to prevent in 1.0.12.
  */
+
+/**
+ * "Say when they answer", and the sentence. Grey, with a divider under it, so it reads as
+ * an instruction to the caller rather than as something the firm said.
+ */
+export function CallAnnouncement(): JSX.Element {
+  return (
+    <div data-testid="call-announcement" className="mb-2 border-b border-border pb-2">
+      <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">{CALL_ANNOUNCEMENT_LABEL}</p>
+      <p data-testid="call-announcement-text" className="text-sm text-muted-foreground">
+        {CALL_ANNOUNCEMENT}
+      </p>
+    </div>
+  );
+}
 
 function Source({ url, retrievedAt }: { readonly url: string; readonly retrievedAt: string }): JSX.Element {
   return (
@@ -99,13 +119,16 @@ export function Brief({
 
   if (brief === null) {
     return (
-      <div data-testid="today-brief" className="group/brief mb-3 flex items-baseline justify-between gap-3">
-        <p data-testid="brief-absent" className="text-sm text-muted-foreground">
-          {NOT_RESEARCHED_LINE}
-        </p>
-        <span className="opacity-0 transition-opacity group-focus-within/brief:opacity-100 group-hover/brief:opacity-100">
-          {again}
-        </span>
+      <div data-testid="today-brief" className="group/brief mb-3">
+        <CallAnnouncement />
+        <div className="flex items-baseline justify-between gap-3">
+          <p data-testid="brief-absent" className="text-sm text-muted-foreground">
+            {NOT_RESEARCHED_LINE}
+          </p>
+          <span className="opacity-0 transition-opacity group-focus-within/brief:opacity-100 group-hover/brief:opacity-100">
+            {again}
+          </span>
+        </div>
       </div>
     );
   }
@@ -114,6 +137,8 @@ export function Brief({
 
   return (
     <div data-testid="today-brief" className="group/brief mb-3 border-b border-border pb-3">
+      {/* First, above everything: what is said the moment they answer. */}
+      <CallAnnouncement />
       {failed === null ? null : (
         // Above everything, because it is a statement about how old the rest of this is.
         <p data-testid="brief-failed" className="mb-1 text-xs text-muted-foreground">

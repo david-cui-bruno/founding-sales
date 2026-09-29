@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   BLOCKED_ACTION_KINDS,
+  CALL_ANNOUNCEMENT,
+  CALL_ANNOUNCEMENT_LABEL,
   HOLD_REASON_CODES,
   activeHoldSchema,
   callingIdentitySchema,
@@ -243,5 +245,26 @@ describe('the supported client-version range', () => {
 
   it('refuses a range whose minimum is above its maximum', () => {
     expect(clientVersionRangeSchema.safeParse({ minimum: '2.0.0', maximum: '1.0.0' }).success).toBe(false);
+  });
+});
+
+describe('the announcement said when a call connects', () => {
+  it('is exactly the sentence David settled, to the character', () => {
+    // Not a paraphrase and not a template. It is what a stranger is told about being
+    // recorded, so it is asserted whole rather than matched loosely, and a change to it
+    // is a change somebody has to make here on purpose.
+    expect(CALL_ANNOUNCEMENT).toBe(
+      'Hi, this is David from Callie. This call is being recorded and transcribed for my notes.',
+    );
+    expect(CALL_ANNOUNCEMENT_LABEL).toBe('Say when they answer');
+  });
+
+  it('is one line of plain text, with nothing in it to interpolate', () => {
+    // A constant today and a workspace setting after the migration that rewrites
+    // `workspace_settings_key_known`; whichever it is, it is a sentence and not a format
+    // string, and the renderer shows it as a React child.
+    expect(CALL_ANNOUNCEMENT).not.toMatch(/[\r\n]/u);
+    expect(CALL_ANNOUNCEMENT).not.toContain('{');
+    expect(CALL_ANNOUNCEMENT).not.toContain('$');
   });
 });

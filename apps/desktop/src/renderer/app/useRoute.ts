@@ -5,7 +5,7 @@ import { desktopBridge } from './bridges.ts';
 /**
  * Where the window is, as React state (1.0.12).
  *
- * No router library: there is one window, seven places it can be, and the only things
+ * No router library: there is one window, eight places it can be, and the only things
  * that move it are the sidebar, the Window menu, a deep link and a view saying where its
  * own answer took it. A library would be a second vocabulary for that.
  *
@@ -70,8 +70,8 @@ export function useRoute(): RouteState {
   }, [navigate, routeShown]);
 
   useEffect(() => {
-    // The Window menu's ⌘1–⌘4 and ⌘,, and a `callie://` link. The main process sends one
-    // of the seven targets and nothing else; the preload has checked it before here.
+    // The Window menu's ⌘1–⌘5 and ⌘,, and a `callie://` link. The main process sends one
+    // of the eight targets and nothing else; the preload has checked it before here.
     desktopBridge().onNavigate(target => {
       const next = routeOf(target);
       if (next !== null) navigate(next);

@@ -31,11 +31,15 @@ test.afterEach(async () => {
   await app.stop();
 });
 
-/** The Firms view on `state`: a firm page by its own route, anything else by `firms`. */
-async function openCrm(page: Page, state: CrmState): Promise<void> {
+/**
+ * The CRM view on `state`: a firm page by its own route, anything else by the sidebar row
+ * asked for. Pipeline and Firms are two routes since 1.0.14 — the board of opportunities
+ * being worked, and every firm on file — and the bridge state is the same on both.
+ */
+async function openCrm(page: Page, state: CrmState, row: 'pipeline' | 'firms' = 'firms'): Promise<void> {
   app = await startAppServer({ crm: state });
   server = app.crm;
-  await page.goto(app.url(state.screen === 'firm' && state.firm !== null ? `#firm/${state.firm.read.firm.id}` : '#firms'));
+  await page.goto(app.url(state.screen === 'firm' && state.firm !== null ? `#firm/${state.firm.read.firm.id}` : `#${row}`));
 }
 
 const pipelineWithUnplaced = () => ({
@@ -43,14 +47,18 @@ const pipelineWithUnplaced = () => ({
   unplacedFirms: [unplacedIdentity('99999999-9999-4999-8999-999999999990', 'Aspen Test Wealth')],
 });
 
-test('the pipeline offers Add firm and, to an admin, Import CSV, and lists the firms no column holds', async ({ page }) => {
+test('Firms offers Add firm and, to an admin, Import CSV, and lists the firms no column holds', async ({ page }) => {
   await openCrm(page, crmState({ screen: 'pipeline', role: 'admin', firm: null, pipeline: pipelineWithUnplaced() }));
 
+  // Add firm and Import put a firm on file rather than into the pipeline, so they are
+  // offered here and not on the board (1.0.14).
   await expect(page.getByTestId('open-add-firm')).toBeEnabled();
   await expect(page.getByTestId('open-import')).toBeEnabled();
-  await expect(page.getByTestId('unplaced-firm')).toHaveCount(1);
-  await expect(page.getByTestId('unplaced-firms')).toContainText('Not in the pipeline yet');
-  await page.getByTestId('unplaced-open-firm').click();
+  // Every firm, cold ones included, with the stage of each as a tag.
+  await expect(page.getByTestId('firms-row')).toHaveCount(3);
+  const cold = page.getByTestId('firms-row').filter({ hasText: 'Aspen Test Wealth' });
+  await expect(cold).toContainText('Not in the pipeline');
+  await cold.getByTestId('firms-open-firm').click();
   expect(server.calls.at(-1)).toEqual({ method: 'openFirm', argument: { firmId: '99999999-9999-4999-8999-999999999990' } });
 });
 

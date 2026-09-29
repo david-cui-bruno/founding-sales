@@ -73,6 +73,7 @@ export function operationHandlers(deps: OperationHostDeps): Readonly<Record<Oper
       await deps.today.refresh({ quiet: input.quiet === true }),
     'today.expand': async (input: { readonly firmId: string }) => await deps.today.expand(input),
     'today.collapse': async () => await deps.today.collapse(),
+    'today.callsPlaced': async () => await deps.today.callsPlaced(),
     'today.snooze': async (input: Parameters<TodayBridgeHost['snooze']>[0]) => await deps.today.snooze(input),
     'today.recordOutcome': async (input: Parameters<TodayBridgeHost['recordOutcome']>[0]) =>
       await deps.today.recordOutcome(input),
