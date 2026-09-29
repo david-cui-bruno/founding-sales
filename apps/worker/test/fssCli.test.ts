@@ -48,11 +48,12 @@ const INVOCATIONS = CALLERS.flatMap(relative =>
 describe('the fss command line accepts every invocation the release scripts make', () => {
   it('finds every `fss` invocation in the scripts', () => {
     // A floor on purpose: an extractor that silently found none would make every case
-    // below vacuous, and the scripts are the specification here. Five is the number of
-    // distinct commands the release actually issues — `migrate`,
-    // `admin database-users ensure`, `verify`, `admin workspace bootstrap` since g39 and
-    // `admin release-record put` since g71. The planned lines went with the drill script
-    // (W3-S8); the calls left are real ones.
+    // below vacuous, and the scripts are the specification here. Four is the number of
+    // distinct commands the release issues since lane RS-2 — `release-prepare` (which is
+    // `migrate` and then `admin database-users ensure`, in one migration task), `verify`,
+    // `admin workspace bootstrap` since g39 and `admin release-record put` since g71 —
+    // over five invocations, because `verify` runs twice. The planned lines went with
+    // the drill script (W3-S8); the calls left are real ones.
     expect(INVOCATIONS.length).toBeGreaterThanOrEqual(5);
     expect(INVOCATIONS.some(invocation => !invocation.planned)).toBe(true);
 
@@ -65,8 +66,11 @@ describe('the fss command line accepts every invocation the release scripts make
       return (flagAt < 0 ? invocation.argv : invocation.argv.slice(0, flagAt)).join(' ');
     });
     for (const expected of [
-      'migrate',
-      'admin database-users ensure',
+      // Lane RS-2: the schema release's two migration-identity steps are one task now.
+      // `migrate` and `admin database-users ensure` are still commands the tool has —
+      // an operator runs them by hand — but the release does not issue them separately,
+      // and asserting that it did would be asserting the slow shape back into place.
+      'release-prepare',
       'verify',
       'admin workspace bootstrap',
       // g71: deploy.sh release --release-record stores the record the admin attests to.
@@ -169,9 +173,11 @@ describe('the commands deploy.sh release runs on the migration task definition',
       return (firstOption === -1 ? argv : argv.slice(0, firstOption)).join(' ');
     });
 
-  it('the script runs at least migrate and database-users there, and each is a migration-identity command', () => {
-    expect(onMigrationTask).toContain('migrate');
-    expect(onMigrationTask).toContain('admin database-users ensure');
+  it('the script runs release-prepare there, and everything it runs there is a migration-identity command', () => {
+    // Lane RS-2: one command on that task definition, and it is the one that migrates
+    // and then ensures the runtime user. A `migrate` that never reached the database
+    // because the tool refused it up front is exactly the failure this guards.
+    expect(onMigrationTask).toEqual(['release-prepare']);
     for (const command of onMigrationTask) {
       expect(MIGRATION_IDENTITY_COMMANDS, `${command} runs on the migration task definition`).toContain(command);
     }

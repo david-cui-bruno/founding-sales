@@ -94,6 +94,18 @@ export const FSS_COMMANDS: readonly FssCommandSpec[] = Object.freeze([
     summary: 'the same thing, spelled the long way',
   },
   {
+    // Lane RS-2. One migration task instead of two: `migrate` and then
+    // `admin database-users ensure`, in that order, under the one RunTask start
+    // latency. `--migrate-report` and `--users-report` write each step's own report,
+    // byte for byte the shape the two commands write on their own, so anything that
+    // reads those files reads the same thing; stdout carries both under one object.
+    path: ['release-prepare'],
+    valueFlags: ['--runtime-secret', '--migrate-report', '--users-report', ...REPORTABLE],
+    booleanFlags: ['--allow-any-role'],
+    requiredFlags: [],
+    summary: 'migrate, then ensure the runtime database user: the two migration-identity steps of a schema release, in one task',
+  },
+  {
     path: ['migrate', 'status'],
     valueFlags: [...REPORTABLE],
     booleanFlags: [],

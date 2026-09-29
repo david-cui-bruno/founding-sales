@@ -82,6 +82,8 @@ export const MIGRATION_IDENTITY_COMMANDS: readonly string[] = Object.freeze([
   'migrate',
   'migrate up',
   'admin database-users ensure',
+  // Lane RS-2: the two above, in one task, which is what the schema release runs.
+  'release-prepare',
 ]);
 
 const write = (line: string): void => {
@@ -314,6 +316,56 @@ async function runCommand(
     const outcome = await runMigrate(migrationSession, { allowAnyRole: switches.has('--allow-any-role') });
     return outcome.ok ? { ok: true, value: { ...outcome.value } } : { ok: false, reason: outcome.reason, detail: outcome.detail };
   }
+  if (path === 'release-prepare') {
+    // `migrate` and then `admin database-users ensure`, in that order, in one task
+    // (lane RS-2). Each one-off ECS task costs about a minute of RunTask start latency
+    // for sub-second work, and these two want the same identity, the same connection
+    // and the same moment: everything between them was start-up.
+    //
+    // The order is not an implementation detail. `database-users ensure` grants the
+    // `migration` membership `migrate` checks for on the next release, and it is the
+    // credential the services are about to connect with, so it goes last — after the
+    // schema it is being granted against exists.
+    //
+    // A migrate that refuses stops here: nothing ensures a user against a schema that
+    // did not move. The refusal carries the migrate report so the operator sees how far
+    // it got, and `--migrate-report` has already been written.
+    if (migrationSession === null) return missingMigrationCredential();
+    const migrated = await runMigrate(migrationSession, { allowAnyRole: switches.has('--allow-any-role') });
+    if (!migrated.ok) {
+      return {
+        ok: false,
+        reason: migrated.reason,
+        detail: migrated.detail,
+        report: { step: 'migrate', migrate: null },
+      };
+    }
+    await report(options['--migrate-report'], migrated.value);
+
+    const variable = options['--runtime-secret'] ?? RUNTIME_SECRET_VARIABLE;
+    const secretValue = environment[variable]?.trim();
+    if (secretValue === undefined || secretValue.length === 0) {
+      return {
+        ok: false,
+        reason: 'secret_variable_missing',
+        detail: `${variable} is not set; --runtime-secret names the environment variable the runtime credential's secret value is injected into, never the credential itself`,
+        report: { step: 'database-users', migrate: { ...migrated.value } },
+      };
+    }
+    const ensured = await ensureRuntimeDatabaseUser(migrationSession, { secretValue, rotatePassword: false });
+    if (!ensured.ok) {
+      return {
+        ok: false,
+        reason: ensured.reason,
+        detail: ensured.detail,
+        report: { step: 'database-users', migrate: { ...migrated.value } },
+      };
+    }
+    await report(options['--users-report'], ensured.value);
+    // Both sub-reports keep their own shape; stdout is the two of them under one object,
+    // so a caller that reads the task's log stream still reads one JSON answer.
+    return { ok: true, value: { migrate: { ...migrated.value }, databaseUsers: { ...ensured.value } } };
+  }
   if (path === 'admin database-users ensure') {
     // On the migration task, as the migration credential: creating a login role is not
     // something the application's own user may do, and the runtime credential is the
@@ -336,7 +388,7 @@ async function runCommand(
       ? { ok: true, value: { ...outcome.value } }
       : { ok: false, reason: outcome.reason, detail: outcome.detail };
   }
-  // The two commands above are MIGRATION_IDENTITY_COMMANDS: they run on the migration
+  // The three commands above are MIGRATION_IDENTITY_COMMANDS: they run on the migration
   // task definition, which injects no runtime connection. Everything below needs one.
   if (session === null) return missingRuntimeCredential();
   if (path === 'migrate status' || path === 'schema-version') {
