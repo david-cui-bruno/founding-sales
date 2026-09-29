@@ -21,6 +21,7 @@ import {
   MAX_BLOCKS,
   MAX_TEXT_CHARACTERS,
 } from '../../research/pageText.ts';
+import { jobIdempotencyKey, RESEARCH_FIRM_JOB_KEY_PREFIX } from '../../jobs/jobKinds.ts';
 import { DEFAULT_RESEARCH_SETTINGS } from '../../research/settings.ts';
 import { FACT_KEYS, PERSON_FACT_KEYS, validateFactSelections } from '../../research/facts.ts';
 
@@ -543,5 +544,13 @@ describe('admitting what a provider selected', () => {
   it('has no key that could hold a name, an address, a number or an e-mail', () => {
     const contactish = FACT_KEYS.filter(key => /email|address|phone_number|full_name|person_name/u.test(key));
     expect(contactish, 'a fact key would carry contact data').toEqual([]);
+  });
+
+  it('builds a research.firm job key in SQL the same way the helper does', () => {
+    // `finaliseAbandonedRuns` joins a run to its job by this key, in SQL, to leave a run
+    // whose lease is still live alone. The prefix is shared rather than repeated, and
+    // this is the comparison that keeps the SQL and the helper the same string.
+    const firmId = '00000000-0000-4000-8000-00000000000f';
+    expect(jobIdempotencyKey.researchFirm(firmId, 7)).toBe(`${RESEARCH_FIRM_JOB_KEY_PREFIX}${firmId}:7`);
   });
 });

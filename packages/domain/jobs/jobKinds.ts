@@ -104,6 +104,16 @@ export const JOB_KIND_PROTECTION: Readonly<Record<JobKind, IdempotencyProtection
   'research.sweep': 'business_uniqueness',
 });
 
+/**
+ * The fixed half of a `research.firm` job key.
+ *
+ * Exported because `research/runs.ts` rebuilds the key **in SQL**, to join a run row to
+ * its job and leave a run whose lease is still live alone. A literal there would be a
+ * second copy of this format that nothing compared; `test/research/rules.test.ts`
+ * compares the prefix with `jobIdempotencyKey.researchFirm`.
+ */
+export const RESEARCH_FIRM_JOB_KEY_PREFIX = 'research-firm:';
+
 /** Appendix C, second column. Each builder produces the whole key, dotted prefix and all. */
 export const jobIdempotencyKey = Object.freeze({
   /**
@@ -149,7 +159,8 @@ export const jobIdempotencyKey = Object.freeze({
   routeValidate: (routeId: string, version: number, round: string): string =>
     `route-validate:${routeId}:${String(version)}:${round}`,
   /** Appendix C: `research-firm:{firm}:{revision}`. The revision is the job's identity. */
-  researchFirm: (firmId: string, revision: number): string => `research-firm:${firmId}:${String(revision)}`,
+  researchFirm: (firmId: string, revision: number): string =>
+    `${RESEARCH_FIRM_JOB_KEY_PREFIX}${firmId}:${String(revision)}`,
   /** One sweep per workspace business date, like the Today build's key rule. */
   researchSweep: (workspaceSlug: string, businessDate: string): string =>
     `research-sweep:${workspaceSlug}:${businessDate}`,

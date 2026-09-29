@@ -24,8 +24,8 @@ import { readResearchSettings } from './settings.ts';
 import {
   completeRun,
   failRun,
+  lockRun,
   openRun,
-  readRunById,
   readRunForRevision,
   recordRefusedRun,
   refuseRun,
@@ -314,11 +314,17 @@ export async function ensureResearchCalling(
 ): Promise<CallPermission> {
   const subject = { subjectKind: 'research_run' as const, subjectId: input.runId };
 
-  // A terminal run is never called against again, and never closed again. A stale
-  // cursor — an admin requeue of a job whose run the sweep already finalised, a
-  // duplicate claim of a replayed revision — arrives here, and without this it would
-  // reserve a fresh attempt against a run that is finished and call the model for it.
-  const run = await readRunById(context, input.runId);
+  // The run row, locked for the rest of this transaction. Chunk 2, chunk 3 and the
+  // abandoned-run sweep all begin here, so exactly one of them is deciding about this
+  // run's money at a time: without the lock the sweep could read a reservation as
+  // `reserved`, this chunk could mark it `calling`, and the sweep's later write could
+  // release the cents under the call chunk 3 was about to make.
+  //
+  // The state is then re-read under the lock. A terminal run is never called against
+  // again, and never closed again — a stale cursor (an admin requeue of a job whose run
+  // the sweep already finalised, a duplicate claim of a replayed revision) would
+  // otherwise reserve a fresh attempt against a finished run and call the model for it.
+  const run = await lockRun(context, input.runId);
   if (run === null || run.outcome !== 'running') return { kind: 'closed' };
 
   const rows = await listAttempts(context, subject);
@@ -407,9 +413,12 @@ export async function finishFirmResearch(
   const { runId } = input;
   const subject = { subjectKind: 'research_run' as const, subjectId: runId };
 
-  // First, before anything: a run that is not `running` is finished. A stale cursor
-  // pointing at a closed run must not fetch a page, call a model or reopen a decision.
-  const run = await readRunById(context, runId);
+  // First, before anything: the run row's lock, and then its state. A run that is not
+  // `running` is finished, and a stale cursor pointing at one must not fetch a page,
+  // call a model or reopen a decision. The lock is held for the whole of this chunk —
+  // the provider call included — so the sweep cannot close this run or release its
+  // reservation while the call is in flight. See `lockRun`.
+  const run = await lockRun(context, runId);
   if (run === null) return refuse('invalid_input');
   if (run.outcome !== 'running') return accept(replayed(input.firmId, input.revision));
 
@@ -421,11 +430,34 @@ export async function finishFirmResearch(
   const reservation: ReservationRow | null = await readAttempt(context, { ...subject, attempt: input.attempt });
   const mayCall = input.mayCall && reservation !== null && reservation.state === 'calling';
 
-  /** Hand this attempt's cents back, for a run that asked the provider nothing. */
+  /**
+   * Hand this attempt's cents back, for a run that asked the provider nothing.
+   *
+   * `released_not_called` rather than `released`, because this is the one caller that
+   * may release a row already marked `calling`: chunk 2 of this same claim marked it,
+   * this chunk holds the run's lock, and it knows first-hand that it did not call. No
+   * reader from outside — the sweep above all — may make that claim.
+   */
   const release = async (): Promise<void> => {
     if (reservation === null) return;
-    await settleAttempt(context, { reservationId: reservation.id, at: input.at, outcome: { kind: 'released' } });
+    await settleAttempt(context, {
+      reservationId: reservation.id,
+      at: input.at,
+      outcome: { kind: 'released_not_called' },
+    });
   };
+  /**
+   * What this chunk reports when its close affected no row: the run is already
+   * terminal, closed by the sweep or by another claim.
+   *
+   * Every close below carries `WHERE outcome = 'running'` (`completeRun`, `refuseRun`,
+   * `failRun` all return false when it matched nothing), because an unconditional update
+   * would overwrite the sweep's `lease_lost` outcome and its estimated cents with a
+   * cheaper story. This attempt's reservation has already been settled or released by
+   * the time any of them is reached, so there is nothing left to do but say so and let
+   * the job complete.
+   */
+  const closedElsewhere = (): ResearchResult<ResearchRunReport> => accept(replayed(input.firmId, input.revision));
   /** Everything this run has been recorded as costing, across every attempt. */
   const totalCost = async (): Promise<{ readonly cents: number; readonly estimated: boolean }> => {
     const rows = await listAttempts(context, subject);
@@ -441,7 +473,14 @@ export async function finishFirmResearch(
   if (!firm.ok) {
     await release();
     const cost = await totalCost();
-    await refuseRun(context, { runId, at: input.at, refusalCode: firm.reason, costCents: cost.cents, costEstimated: cost.estimated });
+    const closed = await refuseRun(context, {
+      runId,
+      at: input.at,
+      refusalCode: firm.reason,
+      costCents: cost.cents,
+      costEstimated: cost.estimated,
+    });
+    if (!closed) return closedElsewhere();
     return firm;
   }
 
@@ -454,7 +493,14 @@ export async function finishFirmResearch(
   if (urls.length === 0) {
     await release();
     const cost = await totalCost();
-    await refuseRun(context, { runId, at: input.at, refusalCode: 'no_sources', costCents: cost.cents, costEstimated: cost.estimated });
+    const closed = await refuseRun(context, {
+      runId,
+      at: input.at,
+      refusalCode: 'no_sources',
+      costCents: cost.cents,
+      costEstimated: cost.estimated,
+    });
+    if (!closed) return closedElsewhere();
     return refuse('no_sources');
   }
 
@@ -484,13 +530,14 @@ export async function finishFirmResearch(
     // No model call was made, so this attempt's cents go back.
     await release();
     const cost = await totalCost();
-    await failRun(context, {
+    const closed = await failRun(context, {
       runId,
       at: input.at,
       refusalCode: 'provider_failure',
       costCents: cost.cents,
       costEstimated: cost.estimated,
     });
+    if (!closed) return closedElsewhere();
     return refuse('provider_failure');
   }
 
@@ -581,7 +628,7 @@ export async function finishFirmResearch(
       await release();
       const cost = await totalCost();
       bump('extraction_count_failed');
-      await failRun(context, {
+      const closed = await failRun(context, {
         runId,
         at: input.at,
         refusalCode: 'provider_failure',
@@ -589,6 +636,7 @@ export async function finishFirmResearch(
         costEstimated: cost.estimated,
         extraction: 'failed',
       });
+      if (!closed) return closedElsewhere();
       return refuse('provider_failure');
     }
 
@@ -642,7 +690,7 @@ export async function finishFirmResearch(
         // The sweep retries tomorrow as a new revision; the evidence stays.
         bump(`extraction_${answer.failureCode}`);
         const cost = await totalCost();
-        await failRun(context, {
+        const closed = await failRun(context, {
           runId,
           at: input.at,
           refusalCode: 'provider_failure',
@@ -650,6 +698,7 @@ export async function finishFirmResearch(
           costEstimated: cost.estimated,
           extraction: 'failed',
         });
+        if (!closed) return closedElsewhere();
         return refuse('provider_failure');
       }
     }
@@ -707,7 +756,7 @@ export async function finishFirmResearch(
   }
 
   const cost = await totalCost();
-  await completeRun(context, {
+  const closed = await completeRun(context, {
     runId,
     at: input.at,
     pagesFetched: fetched.value.pages.length,
@@ -720,6 +769,7 @@ export async function finishFirmResearch(
     extraction: extractionOutcome,
     brief: generated === null ? null : { ...generated, generated: true },
   });
+  if (!closed) return closedElsewhere();
 
   return accept({
     runId,

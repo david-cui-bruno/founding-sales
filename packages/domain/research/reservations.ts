@@ -26,6 +26,16 @@ import { localDate } from '../src/rules/localClock.ts';
  *     `settled_cents` is the reservation, because zero is certainly wrong.
  *   * `released` — no call happened and none can have; `settled_cents` is zero.
  *
+ * ## The one asymmetry: `calling` is released by nobody else
+ *
+ * `reserved → released` is a fact anybody may write. `calling → released` is not: the
+ * marker says a call may be in flight, so a caller that releases it is claiming to know
+ * something only the claim holding the run's lock can know. The abandoned-run sweep used
+ * to be allowed to do it, and between its read of the state and its write a live claim
+ * could mark the row — so the sweep released the cents while the call went out. From
+ * `calling` the settlements are `settled`, `estimated`, and `released_not_called` for
+ * the one claim that marked the row and then declined to call.
+ *
  * ## Why the attempt is in the key
  *
  * A retry's reservation is a different row from the attempt it retries. Reusing one row
@@ -185,8 +195,27 @@ export type SettleOutcome =
   | { readonly kind: 'settled'; readonly cents: number }
   /** Nobody reported one. The reservation is the cost. */
   | { readonly kind: 'estimated' }
-  /** No call happened and none can have. */
-  | { readonly kind: 'released' };
+  /**
+   * No call happened and none can have — permitted **only** from `reserved`.
+   *
+   * `reserved` is the one state in which "no call happened" is a fact about the row
+   * rather than a belief of the caller's. A third party that releases a `calling` row
+   * is claiming to know something it cannot: the marker exists precisely because
+   * somebody may be in the middle of the call. The sweep's release used to be allowed
+   * from `calling`, and between its read and its write a live claim could mark the row —
+   * so the sweep handed the cents back under a call that was about to be billed.
+   */
+  | { readonly kind: 'released' }
+  /**
+   * No call happened, and this caller is the one that would have made it.
+   *
+   * The only way a `calling` row is released. Chunk 3 marks its own reservation in
+   * chunk 2 and then sometimes declines to call at all — the fetch failed, the exact
+   * token count did not fit the reservation — and it is the one caller with first-hand
+   * knowledge of that, holding the run row's lock while it says so. Nothing that reads
+   * the row from outside may use this.
+   */
+  | { readonly kind: 'released_not_called' };
 
 /**
  * Close one reservation, exactly once, by id.
@@ -195,6 +224,10 @@ export type SettleOutcome =
  * so a caller that runs twice adds cents once. The guard is in the statement rather
  * than in a read-then-write, because the whole point of this table is to be right when
  * the process disappears between two statements.
+ *
+ * The guard is also *asymmetric*, and that is the money rule of the state machine: a
+ * `calling` row may be settled or estimated by anybody, and released by nobody except
+ * the claim that marked it (`released_not_called`). See `SettleOutcome`.
  */
 export async function settleAttempt(
   context: RepositoryContext,
@@ -202,6 +235,9 @@ export async function settleAttempt(
 ): Promise<{ readonly recordedCents: number; readonly state: ReservationState } | null> {
   const state: ReservationState =
     input.outcome.kind === 'settled' ? 'settled' : input.outcome.kind === 'estimated' ? 'estimated' : 'released';
+  // Whether a row still marked `calling` may be closed this way. Everything except a
+  // third party's `released` may; see `SettleOutcome`.
+  const fromCalling = input.outcome.kind !== 'released';
   const { rows } = await context.db.query<{
     business_date: string;
     business_time_zone: string;
@@ -216,7 +252,8 @@ export async function settleAttempt(
               ELSE 0
             END,
             settled_at = $5::timestamptz
-      WHERE workspace_id = $1 AND id = $2 AND state IN ('reserved', 'calling')
+      WHERE workspace_id = $1 AND id = $2
+        AND (state = 'reserved' OR (state = 'calling' AND $6::boolean))
       RETURNING business_date::text AS business_date, business_time_zone, provider_key, settled_cents`,
     [
       context.scope.workspaceId,
@@ -224,6 +261,7 @@ export async function settleAttempt(
       state,
       input.outcome.kind === 'settled' ? Math.max(0, Math.trunc(input.outcome.cents)) : 0,
       input.at,
+      fromCalling,
     ],
   );
   const row = rows[0];
