@@ -29,9 +29,11 @@ import { APP_RUNTIME_ROLE, MIGRATION_ROLE, runMigrate } from '../src/tools/fss/m
  * embedded PostgreSQL 16 where the migrator really does create the two roles.
  *
  * In CI that same call returns the shared `postgres:16` service container, whose roles
- * were created by globalSetup before this file ran. There the automatic grant is
- * written out instead, with the exact options PostgreSQL 16 gives it — that is the one
- * thing this file will stage rather than observe, and `pristine` below says which
+ * were created by globalSetup before this file ran. There the automatic grants are
+ * written out instead, with the exact options PostgreSQL 16 gives them — one per group
+ * role 0001 creates, because `ensure` needs `ADMIN OPTION` on `app_runtime` to put the
+ * runtime user in it, as well as on `migration` for the grant under test. That is the
+ * one thing this file will stage rather than observe, and `pristine` below says which
  * happened. Everything after it is the real command against the real server either way.
  *
  * ## The vacuous-pass traps, named
@@ -182,13 +184,20 @@ describe('ensure, then migrate again, as a non-superuser CREATEROLE owner', () =
       expect(first.ok).toBe(true);
     } else {
       // A cluster whose group roles someone else created: the schema is still applied
-      // by the migrator, and the membership PostgreSQL 16 would have given it is
-      // written out with the options it uses.
+      // by the migrator, and the memberships PostgreSQL 16 would have given it are
+      // written out with the options it uses — one for each role 0001 creates.
+      // `app_runtime` is not optional here: `ensure` runs `CREATE ROLE … IN ROLE
+      // app_runtime`, and on PostgreSQL 16 a CREATEROLE user may grant membership only
+      // in roles it holds `ADMIN OPTION` on. The creator holds it automatically; a
+      // migrator that did not create the role has to be given it, or the shared-cluster
+      // run fails at the runtime user's creation before the grant under test is reached.
       await applyMigrations(migrator);
-      await onCluster(
-        cluster?.adminUrl ?? '',
-        `GRANT ${MIGRATION_ROLE} TO ${MIGRATOR_LOGIN_ROLE} WITH ADMIN OPTION, INHERIT FALSE, SET FALSE`,
-      );
+      for (const group of [APP_RUNTIME_ROLE, MIGRATION_ROLE]) {
+        await onCluster(
+          cluster?.adminUrl ?? '',
+          `GRANT ${group} TO ${MIGRATOR_LOGIN_ROLE} WITH ADMIN OPTION, INHERIT FALSE, SET FALSE`,
+        );
+      }
     }
 
     // The defect's precondition, asserted rather than assumed.
