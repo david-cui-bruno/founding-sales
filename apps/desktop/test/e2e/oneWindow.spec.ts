@@ -36,7 +36,9 @@ async function stillTheSameDocument(page: Page): Promise<boolean> {
 /** Each sidebar row, the heading its view draws, and the route the column reports. */
 const HEADINGS: readonly (readonly [string, string, string])[] = [
   ['replies', 'Replies', 'replies'],
-  ['firms', 'Pipeline', 'firms'],
+  // Two rows since 1.0.14: the board of opportunities being worked, and every firm.
+  ['pipeline', 'Pipeline', 'pipeline'],
+  ['firms', 'Firms', 'firms'],
   ['sequences', 'Sequences', 'sequences'],
   ['settings', 'Settings', 'settings/administration'],
   ['today', 'Monday, 21 September', 'today'],
@@ -76,7 +78,7 @@ test('the Window menu shows each view in the one window, and a Settings tab is n
   await expect(page.getByTestId('tab-dashboard')).toHaveAttribute('aria-current', 'page');
   await expect(page.getByTestId('nav-settings')).toHaveAttribute('aria-current', 'page');
   await expect(page.getByTestId('column')).toHaveAttribute('data-route', 'settings/dashboard');
-  await navigateByMenu(page, 'firms');
+  await navigateByMenu(page, 'pipeline');
   await expect(page.getByTestId('heading')).toHaveText('Pipeline');
   // A target outside the closed set is ignored — the preload drops it first, and the
   // page refuses it again.
@@ -93,7 +95,7 @@ test('the Window menu shows each view in the one window, and a Settings tab is n
   expect(server.called('settings.show')).toEqual([{ screen: 'settings' }, { screen: 'dashboard' }, { screen: 'settings' }]);
 });
 
-test('a Today card opens its firm through the CRM bridge, and the firm page leads back to the board', async ({ page }) => {
+test('a Today card opens its firm through the CRM bridge, and the firm page leads back to Firms', async ({ page }) => {
   server = await startAppServer({ crm: crmState({ screen: 'pipeline', firm: null, pipeline: pipelineView() }) });
   await page.goto(server.url());
   await expect(page.getByTestId('today-card')).toHaveCount(4);
@@ -105,8 +107,11 @@ test('a Today card opens its firm through the CRM bridge, and the firm page lead
   await expect(page.getByTestId('nav-firms')).toHaveAttribute('aria-current', 'page');
   await expect(page.getByTestId('column')).toHaveAttribute('data-route', `firm/${REPLY_FIRM_ID}`);
 
+  // A card sent them from neither row, and a firm page lives under Firms, so that is
+  // what the way back says (1.0.14).
+  await expect(page.getByTestId('back-to-pipeline')).toHaveText('Firms');
   await page.getByTestId('back-to-pipeline').click();
-  await expect(page.getByTestId('heading')).toHaveText('Pipeline');
+  await expect(page.getByTestId('heading')).toHaveText('Firms');
   await expect(page.getByTestId('column')).toHaveAttribute('data-route', 'firms');
   expect(server.called('crm.openPipeline')).toHaveLength(1);
 });
@@ -122,13 +127,13 @@ test('a reply card opens the firm it is about', async ({ page }) => {
   await expect(page.getByTestId('nav-firms')).toHaveAttribute('aria-current', 'page');
 });
 
-test('Firms from a firm page is the board: the sidebar never lands on the firm the bridge last held', async ({ page }) => {
+test('Firms from a firm page is the list: the sidebar never lands on the firm the bridge last held', async ({ page }) => {
   server = await startAppServer({ crm: crmState() });
   await page.goto(server.url(`#firm/${FIRM_ID}`));
   await expect(page.getByTestId('heading')).toHaveText('Northwind Test Holdings');
 
   await page.getByTestId('nav-firms').click();
-  await expect(page.getByTestId('heading')).toHaveText('Pipeline');
+  await expect(page.getByTestId('heading')).toHaveText('Firms');
   expect(server.crm.calls.map(call => call.method)).toEqual(['openFirm', 'state', 'openPipeline']);
 });
 
@@ -138,7 +143,7 @@ test('an answer that arrives after its view was left draws nothing', async ({ pa
   await expect(page.getByTestId('heading')).toHaveText('Monday, 21 September');
 
   const release = server.hold('crm.state');
-  await page.getByTestId('nav-firms').click();
+  await page.getByTestId('nav-pipeline').click();
   await expect.poll(() => server.called('crm.state')).toHaveLength(1);
   await page.getByTestId('nav-replies').click();
   await expect(page.getByTestId('heading')).toHaveText('Replies');
@@ -158,15 +163,15 @@ test('a late answer for a view mounted again is dropped: the firm asked for firs
   await page.goto(server.url(`#firm/${FIRM_ID}`));
   await expect.poll(() => server.called('crm.openFirm')).toHaveLength(1);
 
-  // Firms again before the firm has answered: the same view, mounted a second time.
-  await page.getByTestId('nav-firms').click();
+  // Pipeline again before the firm has answered: the same view, mounted a second time.
+  await page.getByTestId('nav-pipeline').click();
   await expect(page.getByTestId('heading')).toHaveText('Pipeline');
 
   release();
   await page.waitForTimeout(300);
   await expect(page.getByTestId('heading')).toHaveText('Pipeline');
   await expect(page.getByTestId('firm-identity')).toHaveCount(0);
-  await expect(page.getByTestId('column')).toHaveAttribute('data-route', 'firms');
+  await expect(page.getByTestId('column')).toHaveAttribute('data-route', 'pipeline');
 });
 
 test('many route changes in a row end on the last one, drawn once', async ({ page }) => {
@@ -175,7 +180,7 @@ test('many route changes in a row end on the last one, drawn once', async ({ pag
   await expect(page.getByTestId('heading')).toHaveText('Monday, 21 September');
 
   for (let round = 0; round < 3; round += 1) {
-    for (const route of ['firms', 'replies', 'sequences', 'settings', 'today', 'replies']) {
+    for (const route of ['pipeline', 'firms', 'replies', 'sequences', 'settings', 'today', 'replies']) {
       await page.getByTestId(`nav-${route}`).click();
     }
   }
@@ -228,13 +233,13 @@ test('a deep link that arrives before sign-in is where the window opens once sig
 test('the route is in the address, so the View menu’s Reload comes back to the same view', async ({ page }) => {
   server = await startAppServer({ crm: crmState({ screen: 'pipeline', firm: null, pipeline: pipelineView() }) });
   await page.goto(server.url());
-  await page.getByTestId('nav-firms').click();
+  await page.getByTestId('nav-pipeline').click();
   await expect(page.getByTestId('heading')).toHaveText('Pipeline');
-  expect(new URL(page.url()).hash).toBe('#firms');
+  expect(new URL(page.url()).hash).toBe('#pipeline');
 
   await page.reload();
   await expect(page.getByTestId('heading')).toHaveText('Pipeline');
-  await expect(page.getByTestId('nav-firms')).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByTestId('nav-pipeline')).toHaveAttribute('aria-current', 'page');
 });
 
 test('leaving Replies while a read is in flight does not leave the next view inert', async ({ page }) => {

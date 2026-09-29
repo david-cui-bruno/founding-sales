@@ -185,14 +185,19 @@ export const desktopStateSchema = z.strictObject({
 export type DesktopState = z.infer<typeof desktopStateSchema>;
 
 /**
- * The views the sidebar shows, as a closed set, in the sidebar's order (1.0.12).
+ * The views the sidebar shows, as a closed set, in the sidebar's order (1.0.14).
  *
- * Four selling views with ⌘1–⌘4, and Settings at the bottom with ⌘,. Administration and
+ * Five selling views with ⌘1–⌘5, and Settings at the bottom with ⌘,. Administration and
  * the Dashboard were rows of their own until 1.0.12; they are tabs of Settings now, and
  * `admin` and `dashboard` are no longer route names. A firm's own route is the page's
  * alone and is not in this list.
+ *
+ * `pipeline` and `firms` were one row until 1.0.14, and were two different things under
+ * one name: the board of opportunities somebody is working, and every firm on file
+ * including the cold ones. They are two rows now (David, 29 September 2026). A firm's
+ * page is still under Firms, wherever it was opened from.
  */
-export const ROUTE_NAMES = ['today', 'replies', 'firms', 'sequences', 'settings'] as const;
+export const ROUTE_NAMES = ['today', 'replies', 'pipeline', 'firms', 'sequences', 'settings'] as const;
 export type RouteName = (typeof ROUTE_NAMES)[number];
 
 /** Settings is one view with three tabs, and the tab is part of the route. */
@@ -200,7 +205,7 @@ export const SETTINGS_TABS = ['administration', 'dashboard', 'diagnostics'] as c
 export type SettingsTab = (typeof SETTINGS_TABS)[number];
 
 /**
- * Everything the main process may ask the window to show: the four views, and Settings
+ * Everything the main process may ask the window to show: the five views, and Settings
  * open at one of its three tabs. A closed set of exact strings, because a deep link is
  * something any web page can ask macOS to open — nothing from a URL becomes an argument,
  * a path or a query, and a target outside this list is dropped before the page hears it.
@@ -208,6 +213,7 @@ export type SettingsTab = (typeof SETTINGS_TABS)[number];
 export const NAVIGATION_TARGETS = [
   'today',
   'replies',
+  'pipeline',
   'firms',
   'sequences',
   ...SETTINGS_TABS.map(tab => `settings/${tab}` as const),
@@ -215,14 +221,14 @@ export const NAVIGATION_TARGETS = [
 export type NavigationTarget = (typeof NAVIGATION_TARGETS)[number];
 
 /**
- * One of the five names, or null. Compared with each literal rather than looked up as a
+ * One of the six names, or null. Compared with each literal rather than looked up as a
  * key, so `constructor` and `__proto__` are refused like any other string.
  */
 export function routeNameOf(value: unknown): RouteName | null {
   return ROUTE_NAMES.find(name => name === value) ?? null;
 }
 
-/** One of the seven navigation targets, or null. Compared the same way, for the same reason. */
+/** One of the eight navigation targets, or null. Compared the same way, for the same reason. */
 export function navigationTargetOf(value: unknown): NavigationTarget | null {
   return NAVIGATION_TARGETS.find(target => target === value) ?? null;
 }

@@ -13,9 +13,13 @@ import { NAVIGATION_TARGETS, navigationTargetOf, type NavigationTarget } from '.
  * nothing opens a second window.
  *
  * 1.0.12 moved Administration and the Dashboard into Settings. The menu is the sidebar:
- * the four selling views with ⌘1–⌘4, then Settings with ⌘,, which opens the tab that
- * used to be Administration. The two keys that opened those views are the two tabs
- * beside it, so nobody loses the shortcut they had.
+ * the selling views with ⌘1–⌘5, then Settings with ⌘,, which opens the tab that used to
+ * be Administration. The two keys that opened those views are the two tabs beside it, so
+ * nobody loses the shortcut they had.
+ *
+ * 1.0.14 split Firms into Pipeline and Firms, which is a fifth selling view, so Sequences
+ * takes ⌘5 and the two Settings tabs beside ⌘, move down to ⌘6 and ⌘7. One key cannot
+ * mean two views, and the day's work has the low numbers.
  */
 
 /** The menu's words and keys, in the sidebar's order. */
@@ -23,16 +27,17 @@ export const MENU_ROUTES: readonly { readonly target: NavigationTarget; readonly
   Object.freeze([
     { target: 'today', label: 'Today', accelerator: 'CmdOrCtrl+1' },
     { target: 'replies', label: 'Replies', accelerator: 'CmdOrCtrl+2' },
-    { target: 'firms', label: 'Firms', accelerator: 'CmdOrCtrl+3' },
-    { target: 'sequences', label: 'Sequences', accelerator: 'CmdOrCtrl+4' },
+    { target: 'pipeline', label: 'Pipeline', accelerator: 'CmdOrCtrl+3' },
+    { target: 'firms', label: 'Firms', accelerator: 'CmdOrCtrl+4' },
+    { target: 'sequences', label: 'Sequences', accelerator: 'CmdOrCtrl+5' },
   ]);
 
 /** Settings and its three tabs, below a separator. ⌘, is where a Mac keeps this. */
 export const MENU_SETTINGS: readonly { readonly target: NavigationTarget; readonly label: string; readonly accelerator: string }[] =
   Object.freeze([
     { target: 'settings/administration', label: 'Settings', accelerator: 'CmdOrCtrl+,' },
-    { target: 'settings/dashboard', label: 'Dashboard', accelerator: 'CmdOrCtrl+5' },
-    { target: 'settings/diagnostics', label: 'Diagnostics', accelerator: 'CmdOrCtrl+6' },
+    { target: 'settings/dashboard', label: 'Dashboard', accelerator: 'CmdOrCtrl+6' },
+    { target: 'settings/diagnostics', label: 'Diagnostics', accelerator: 'CmdOrCtrl+7' },
   ]);
 
 export type MenuItem =

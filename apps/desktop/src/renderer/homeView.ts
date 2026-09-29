@@ -64,12 +64,18 @@ export interface NavRow {
  * six until 1.0.12; they are tabs of Settings now, which sits at the foot of the sidebar
  * under `SETTINGS_ROW` rather than in this list, because it is not something a person
  * opens while working the day's list.
+ *
+ * Pipeline and Firms were one row called Firms until 1.0.14, and were two different
+ * things under one name: the board of opportunities somebody is working, and every firm
+ * on file including the ones nobody has spoken to. They are two rows now, and the keys
+ * below Replies each moved down one.
  */
 export const NAV_ROWS: readonly NavRow[] = Object.freeze([
   { label: 'Today', route: 'today', keys: '⌘1' },
   { label: 'Replies', route: 'replies', keys: '⌘2' },
-  { label: 'Firms', route: 'firms', keys: '⌘3' },
-  { label: 'Sequences', route: 'sequences', keys: '⌘4' },
+  { label: 'Pipeline', route: 'pipeline', keys: '⌘3' },
+  { label: 'Firms', route: 'firms', keys: '⌘4' },
+  { label: 'Sequences', route: 'sequences', keys: '⌘5' },
 ]);
 
 /** The bottom-left entry. One row, with the gear the shell draws beside it. */

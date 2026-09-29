@@ -44,9 +44,9 @@ function viewKeyOf(route: Route, epoch: number): string {
   // Today is the exception: its lanes may hold a half-typed snooze reason, and ⌘1 or
   // the sidebar row must not throw that away.
   if (route.name === 'today') return 'today';
-  // A firm and the pipeline are one view, so the CRM bridge opening a firm from the
-  // board does not remount it.
-  if (route.name === 'firms' || route.name === 'firm') return `firms:${String(epoch)}`;
+  // The board, the firms and a firm's page are one view, so the CRM bridge opening a
+  // firm from either list does not remount it — and nor does the way back.
+  if (route.name === 'pipeline' || route.name === 'firms' || route.name === 'firm') return `crm:${String(epoch)}`;
   // Settings chooses its own tab; the tab is not in the key for the same reason.
   if (route.name === 'settings') return `settings:${String(epoch)}`;
   return `${routeText(route)}:${String(epoch)}`;

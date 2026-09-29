@@ -13,10 +13,14 @@ import { routeOf } from '../src/renderer/routes.ts';
 /**
  * The navigation as David settled it (29 September 2026).
  *
- * Today, Replies, Firms — the pipeline board and the firms in it — Sequences, and
- * Settings at the foot. Administration and Diagnostics are inside Settings, and the
- * Dashboard is not a place a person navigates to at all: its figures are on Today and
- * the count of firms in each stage is the Pipeline's own column headings.
+ * Today, Replies, Pipeline, Firms, Sequences, and Settings at the foot. Administration
+ * and Diagnostics are inside Settings, and the Dashboard is not a place a person
+ * navigates to at all: its figures are on Today and the count of firms in each stage is
+ * the Pipeline's own column headings.
+ *
+ * Pipeline and Firms were one row until 1.0.14 and were two questions answered on one
+ * screen — what am I working, and who is on file. They are two rows, and every key below
+ * Replies moved down one.
  *
  * This is a lock rather than a description. Both halves of it went wrong once: the
  * sidebar carried Administration and the Dashboard as rows five and six until 1.0.12,
@@ -51,14 +55,14 @@ describe('the sidebar', () => {
       .getAllByRole('button')
       .filter(node => node.dataset['testid']?.startsWith('nav-') === true)
       .map(node => node.textContent);
-    expect(labels).toEqual(['Today⌘1', 'Replies⌘2', 'Firms⌘3', 'Sequences⌘4', 'Settings⌘,']);
+    expect(labels).toEqual(['Today⌘1', 'Replies⌘2', 'Pipeline⌘3', 'Firms⌘4', 'Sequences⌘5', 'Settings⌘,']);
     // Neither of the two that moved into Settings is a row here.
     expect(screen.queryByTestId('nav-dashboard')).toBeNull();
     expect(screen.queryByTestId('nav-admin')).toBeNull();
   });
 
   it('keeps the Dashboard out of the rows the shell builds from', () => {
-    expect(NAV_ROWS.map(row => row.route)).toEqual(['today', 'replies', 'firms', 'sequences']);
+    expect(NAV_ROWS.map(row => row.route)).toEqual(['today', 'replies', 'pipeline', 'firms', 'sequences']);
     expect(SETTINGS_ROW.route).toBe('settings');
   });
 
