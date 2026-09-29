@@ -129,17 +129,30 @@ describe('the template panel shows the digest and names what is wrong (11.1, 12.
     expect(screen.templates[0]?.canApprove).toBe(false);
   });
 
-  it('refuses to offer approval for a body mentioning an unsubscribe link', () => {
-    const screen = sequenceScreen(
+  it('refuses to offer approval for a body carrying an opt-out link, and offers it for the bare word', () => {
+    const linked = sequenceScreen(
       state([
         template({
           approvedAt: null,
-          body: `Unsubscribe here.\n\n${FOOTER_SIGN_OFF}\n${STOP_LINE}`,
+          body: `Unsubscribe here: https://mail.example.test/unsubscribe/1\n\n${FOOTER_SIGN_OFF}`,
         }),
       ]),
     );
-    expect(screen.templates[0]?.unsubscribeMentioned).toBe(true);
-    expect(screen.templates[0]?.canApprove).toBe(false);
+    expect(linked.templates[0]?.optOutLinkMentioned).toBe(true);
+    expect(linked.templates[0]?.canApprove).toBe(false);
+
+    // David, 29 September 2026: the word is not the problem. "Reply unsubscribe" is the
+    // sentence the old rule made unwritable, and it approves.
+    const worded = sequenceScreen(
+      state([
+        template({
+          approvedAt: null,
+          body: `Just reply unsubscribe and I'll stop.\n\n${FOOTER_SIGN_OFF}`,
+        }),
+      ]),
+    );
+    expect(worded.templates[0]?.optOutLinkMentioned).toBe(false);
+    expect(worded.templates[0]?.canApprove).toBe(true);
   });
 
   it('offers approval, and no edit, for an approved body', () => {

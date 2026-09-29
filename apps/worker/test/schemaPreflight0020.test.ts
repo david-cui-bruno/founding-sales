@@ -169,7 +169,10 @@ describe('fss and migration 0020', () => {
       counts: {
         blocking: { oversizeFences: 0, oversizeTemplates: 1 },
         settings: [{ settingKey: 'business_time_zone', versions: 1, current: 1 }],
-        fences: { prepared: 2, held: 1, alreadyComposed: 1, recomposed: 1, withoutTemplateVersion: 0, heldForRepair: 1 },
+        // Since migration 0023 the composition also takes the pre-0023 stop line off, so
+        // the fence that used to carry exactly today's bytes is one this read would
+        // rewrite: `alreadyComposed` 1 → 0, `recomposed` 1 → 2.
+        fences: { prepared: 2, held: 1, alreadyComposed: 0, recomposed: 2, withoutTemplateVersion: 0, heldForRepair: 1 },
         templates: { versions: 4, approved: 4, legacyFooterBlock: 1, footerless: 1, ambiguousFooter: 1 },
         postalAddress: { configured: false },
         oversize: { fenceIds: [], templateVersionIds: [oversizeTemplateId] },

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SENDING_STOP_LINE } from '@fss/contracts';
+import { NO_OPTOUT_LINK_RULE, SENDING_STOP_LINE } from '@fss/contracts';
 import type { HttpAnswer } from '../src/main/apiClient.ts';
 import { createAuthedClient } from '../src/main/authedClient.ts';
 import { contactPatchBody, createCrmBridge } from '../src/main/crmBridge.ts';
@@ -155,18 +155,24 @@ describe('the step editor (audit G03)', () => {
 describe('the template form (audit G03)', () => {
   const draft = { templateVersionId: null, name: 'First touch', subject: 'A question for {firm_name}', body: 'Hello {contact_first_name},\n\nA note.', signOff: 'David\nCallie' };
 
-  it('ends the email with the sign-off and the stop line, and gives the person back only what they typed', () => {
+  it('ends the email with the sign-off, and gives the person back only what they typed', () => {
     const body = composeTemplateBody(draft.body, draft.signOff);
-    expect(body).toBe(`Hello {contact_first_name},\n\nA note.\n\nDavid\nCallie\n${SENDING_STOP_LINE}`);
+    expect(body).toBe('Hello {contact_first_name},\n\nA note.\n\nDavid\nCallie');
     expect(typedBodyOf({ body, footerSignOff: 'David\nCallie' })).toBe(draft.body);
+    // A template approved before 29 September 2026 still opens showing only the words.
+    expect(typedBodyOf({ body: `${body}\n${SENDING_STOP_LINE}`, footerSignOff: 'David\nCallie' })).toBe(draft.body);
     expect(templateVariablesIn(draft.subject, body)).toEqual({ known: ['firm_name', 'contact_first_name'], unknown: [] });
   });
 
-  it('refuses a name-less form, an unknown variable and an unsubscribe link before sending', () => {
+  it('refuses a name-less form, an unknown variable and an opt-out link before sending', () => {
     expect(templateFormIssues(draft)).toEqual([]);
     expect(templateFormIssues({ ...draft, name: ' ' }).map(issue => issue.field)).toEqual(['name']);
     expect(templateFormIssues({ ...draft, body: 'Hi {first}' })[0]?.text).toContain('Callie cannot fill {first}');
-    expect(templateFormIssues({ ...draft, body: 'Click to unsubscribe' })[0]?.text).toContain('unsubscribe');
+    expect(templateFormIssues({ ...draft, body: 'Click https://x.example.test/unsubscribe' })[0]?.text).toBe(
+      NO_OPTOUT_LINK_RULE,
+    );
+    // The word on its own is not a link, and the form says nothing about it.
+    expect(templateFormIssues({ ...draft, body: "Just reply unsubscribe and I'll stop." })).toEqual([]);
   });
 
   it('warns about a long email and still lets it be saved (wave 1)', () => {
@@ -178,12 +184,10 @@ describe('the template form (audit G03)', () => {
 
   it('names every issue of a refused approval in words', () => {
     expect(sequenceNotice('template_unapproved:template_footer_missing,template_body_multiple_urls')).toBe(
-      'Not approved. The email does not end with the sign-off and the stop line. The email has more than one link.',
+      'Not approved. Callie cannot tell where the sign-off starts: the email does not end with it. The email has more than one link.',
     );
-    // The server's newest rule (wave 3b): a sign-off that repeats the stop line.
-    expect(sequenceNotice('template_unapproved:template_sign_off_repeats_stop_line')).toBe(
-      'Not approved. The sign-off repeats the stop line; the footer adds that line itself.',
-    );
+    // The server's newest rule (migration 0023): a visible opt-out link.
+    expect(sequenceNotice('template_unapproved:template_optout_link')).toBe(`Not approved. ${NO_OPTOUT_LINK_RULE}`);
     expect(sequenceNotice('steps_saved')).toBe('Saved.');
     expect(sequenceNotice('Message copied.')).toBe('Message copied.');
   });
@@ -253,7 +257,7 @@ describe('the sequence bridge authors through the commands (audit G03)', () => {
     expect(body).toMatchObject({
       name: 'First touch',
       subject: 'A question for {firm_name}',
-      body: `Hello {contact_first_name},\n\nDavid\n${SENDING_STOP_LINE}`,
+      body: 'Hello {contact_first_name},\n\nDavid',
       footerSignOff: 'David',
       requiredVariables: ['firm_name', 'contact_first_name'],
       approve: true,
