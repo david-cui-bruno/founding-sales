@@ -127,8 +127,7 @@ function contextFor(
   return repositoryContext(workspaceScope(workspaceId, { kind: 'user', userId, role }), database.session);
 }
 
-const FIXTURE_BODY =
-  'Hello.\n\nSigned off\nReply "stop" and I will not email you again.';
+const FIXTURE_BODY = 'Hello.\n\nSigned off';
 
 async function insertFence(
   database: TestDatabase,

@@ -6,7 +6,7 @@ import type { SessionQueryable } from '../../db/queryable.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from './support/fixtures.ts';
 import { seedCrm } from './support/crmFixtures.ts';
 import { seedMail } from './support/mailFixtures.ts';
-import { seedOutbound } from './support/outboundFixtures.ts';
+import { LEGACY_FIXTURE_BODY, seedOutbound } from './support/outboundFixtures.ts';
 
 /**
  * Tables the foundation migration creates and later migrations keep, scoped and
@@ -198,7 +198,9 @@ async function seedProductionShape(session: SessionQueryable): Promise<Productio
   const seeded = await seedTwoWorkspaces(session);
   const crm = await seedCrm(session, seeded);
   const mail = await seedMail(session, seeded, crm);
-  const outbound = await seedOutbound(session, seeded, crm, mail);
+  // Schema 18 still carried `template_versions_approved_has_stop_line`, so the seed is
+  // the pre-0023 body: this is a database as production actually was.
+  const outbound = await seedOutbound(session, seeded, crm, mail, LEGACY_FIXTURE_BODY);
   const workspaceId = seeded.alpha.workspaceId;
   const adminId = seeded.alpha.admin.userId;
   const one = async (sql: string, values: readonly unknown[]): Promise<string> => {

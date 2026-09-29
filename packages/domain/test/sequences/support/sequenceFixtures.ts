@@ -20,6 +20,11 @@ export const FIXTURE_SIGN_OFF = 'Sam Example\nCallie';
 
 /** A body that satisfies every rule `templateTextIssues` applies, including the footer. */
 export function fixtureBody(opening: string): string {
+  return `${opening}\n\n${FIXTURE_SIGN_OFF}`;
+}
+
+/** The same body in the pre-0023 shape, which a send still recognises and rewrites. */
+export function legacyFixtureBody(opening: string): string {
   return `${opening}\n\n${FIXTURE_SIGN_OFF}\n${SENDING_STOP_LINE}`;
 }
 

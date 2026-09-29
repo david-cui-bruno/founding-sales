@@ -62,9 +62,14 @@ export const FIXTURE_SEND_AT = '2026-09-02T13:00:00.000Z';
 export const FIXTURE_ZONE = 'America/New_York';
 export const FIXTURE_PLACEMENT_RULE = 'email-window.1';
 
-/** An approvable body: it ends with the reply-to-stop line and names no web link. */
-export const FIXTURE_BODY =
-  'Hello.\n\nSigned off\nReply "stop" and I will not email you again.';
+/** An approvable body: it ends with the sign-off and carries no opt-out link. */
+export const FIXTURE_BODY = 'Hello.\n\nSigned off';
+
+/**
+ * The same body in the pre-0023 shape. A seed on a schema-18 database needs it: back
+ * there `template_versions_approved_has_stop_line` refused an approved body without it.
+ */
+export const LEGACY_FIXTURE_BODY = `${FIXTURE_BODY}\nReply "stop" and I will not email you again.`;
 export const FIXTURE_SUBJECT = 'A short note about your properties';
 const FIXTURE_HASH = 'b'.repeat(64);
 
@@ -73,6 +78,7 @@ async function seedWorkspaceOutbound(
   workspace: SeededWorkspace,
   crm: { readonly firmId: string; readonly contactId: string; readonly opportunityId: string },
   mail: { readonly mailboxId: string },
+  body: string,
 ): Promise<SeededOutboundWorkspace> {
   const domain = await session.query<{ id: string }>(
     `INSERT INTO sending_domains (workspace_id, domain, spf_pass, dkim_pass, dmarc_pass,
@@ -109,7 +115,7 @@ async function seedWorkspaceOutbound(
       workspace.workspaceId,
       templateId,
       FIXTURE_SUBJECT,
-      FIXTURE_BODY,
+      body,
       FIXTURE_HASH,
       workspace.admin.userId,
     ],
@@ -163,7 +169,7 @@ async function seedWorkspaceOutbound(
       routeId,
       routeVersion,
       FIXTURE_SUBJECT,
-      FIXTURE_BODY,
+      body,
       template.rows[0]?.id ?? '',
       FIXTURE_HASH,
       COLLIDING_HEADER,
@@ -200,7 +206,7 @@ async function seedWorkspaceOutbound(
       routeId,
       routeVersion,
       FIXTURE_SUBJECT,
-      FIXTURE_BODY,
+      body,
       template.rows[0]?.id ?? '',
       FIXTURE_HASH,
       `<fss.prepared-${workspace.slug}@sending.example.test>`,
@@ -227,10 +233,12 @@ export async function seedOutbound(
   seeded: TwoWorkspaces,
   crm: SeededCrm,
   mail: SeededMail,
+  /** The body to seed with. A schema-18 database needs `LEGACY_FIXTURE_BODY`. */
+  body: string = FIXTURE_BODY,
 ): Promise<SeededOutbound> {
   return {
-    alpha: await seedWorkspaceOutbound(session, seeded.alpha, crm.alpha, mail.alpha),
-    beta: await seedWorkspaceOutbound(session, seeded.beta, crm.beta, mail.beta),
+    alpha: await seedWorkspaceOutbound(session, seeded.alpha, crm.alpha, mail.alpha, body),
+    beta: await seedWorkspaceOutbound(session, seeded.beta, crm.beta, mail.beta, body),
     collidingDomain: COLLIDING_DOMAIN,
     collidingStepExecutionId: COLLIDING_STEP_EXECUTION_ID,
     collidingHeader: COLLIDING_HEADER,

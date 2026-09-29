@@ -62,6 +62,17 @@ describe('Appendix G 35: explicit stop suppresses, ambiguity holds', () => {
     expect(classifyReply(message(text)).class).not.toBe('opt_out');
   });
 
+  it('still suppresses on ordinary language after the presentation change (migration 0023)', () => {
+    // David, 29 September 2026, kept exactly this: the mandatory stop line goes and the
+    // word ban goes, but "automatic handling of stop requests in ordinary language"
+    // stays. Nothing in that change touches `replyClassification.ts`, and this is the
+    // test that would notice if it had.
+    for (const text of ['please unsubscribe me', 'Please unsubscribe me.', 'stop emailing me', 'Stop emailing me.']) {
+      expect(hasExplicitOptOut(authoredText(text)), text).toBe(true);
+      expect(classifyReply(message(text)).class, text).toBe('opt_out');
+    }
+  });
+
   it('a truncated body cannot prove an opt-out', () => {
     // 12.3 fetches a bounded body. A sentence that was cut off may continue, so the
     // conservative answer is confirmation rather than an irreversible suppression.

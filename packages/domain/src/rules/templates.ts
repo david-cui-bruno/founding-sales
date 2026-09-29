@@ -153,10 +153,11 @@ export const COMPOSE_SEND_BODY_REFUSALS = [
   /** The switch is on and the workspace has configured no address. */
   'postal_address_required',
   /**
-   * The body carries the stop line and does not end with a block this workspace's own
-   * records can account for: an address that was never configured here, a sign-off that
-   * has since been edited, a stop line in the middle of the text. Nothing is removed and
-   * nothing is appended — the body is held for a person to look at.
+   * The body is signed — it carries the legacy stop line, or the sign-off starting a
+   * line — and does not *end* with a block this workspace's own records can account for:
+   * an address that was never configured here, a sign-off that has since been edited, a
+   * postscript under the footer. Nothing is removed and nothing is appended — the body is
+   * held for a person to look at.
    */
   'footer_ambiguous',
   /** The composed body is longer than the fence's column allows. */
@@ -254,9 +255,14 @@ export function composeSendBody(
 
   const blockStart = footerBlockStart(body, configuration);
   const stripped = body.replace(/\s+$/u, '');
-  // No recognised block, but the legacy stop line is in there somewhere: the body is
-  // ambiguous and this function does not guess which words are the footer.
-  if (blockStart === null && stripped.includes(stopLine)) {
+  // No recognised block, but the body is signed all the same: the legacy stop line is in
+  // there somewhere, or the sign-off itself starts a line — an address this workspace
+  // never recorded under it, a postscript after it, a sign-off since edited. Appending
+  // the block would send the sign-off twice and removing anything would mean guessing
+  // which words are the footer, so the body is held for a person to look at.
+  const signOff = configuration.signOff.trim();
+  const signed = signOff.length > 0 && (stripped === signOff || stripped.includes(`\n${signOff}`));
+  if (blockStart === null && (stripped.includes(stopLine) || signed)) {
     return { composed: false, reason: 'footer_ambiguous' };
   }
   const head = body.slice(0, blockStart ?? stripped.length);

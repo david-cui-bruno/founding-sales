@@ -43,9 +43,8 @@ export const SENDING_DOMAIN = 'example.test';
 const WORLD_GATE_RUN_ID = '41000000900';
 export const RELEASE_GATE_REFERENCE = ciGateReleaseReference(WORLD_GATE_RUN_ID, FIXTURE_CI_COMMIT);
 export const TEMPLATE_SUBJECT = 'A short note about your properties';
-export const TEMPLATE_BODY =
-  'Hello.\n\nI work with property managers nearby.\n\nSigned off\n' +
-  'Reply "stop" and I will not email you again.';
+/** Today's shape: the words, a blank line and the sign-off. No mandatory last line. */
+export const TEMPLATE_BODY = 'Hello.\n\nI work with property managers nearby.\n\nSigned off';
 
 export interface OutboundWorldMailbox extends MailWorldMailbox {
   readonly templateVersionId: string;

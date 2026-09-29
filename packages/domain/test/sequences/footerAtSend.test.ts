@@ -123,7 +123,7 @@ beforeEach(async () => {
 });
 
 describe('the step hands over composed bytes', () => {
-  it('appends the sign-off, the configured address and one stop line', async () => {
+  it('appends the sign-off and the configured address, and no stop line', async () => {
     await setPostalAddress(ADDRESS);
     const enrollmentId = await enrolledAndDue();
     const handoff = recordingSendHandoff();
@@ -141,7 +141,7 @@ describe('the step hands over composed bytes', () => {
         postalAddress: ADDRESS,
       })}`,
     );
-    expect(request?.body.split(SENDING_STOP_LINE)).toHaveLength(2);
+    expect(request?.body).not.toContain(SENDING_STOP_LINE);
   });
 
   it('hands over today’s bytes exactly when no address is configured', async () => {
@@ -182,7 +182,7 @@ describe('the step hands over composed bytes', () => {
 
   it('holds the step before any fence exists when the composed body would pass 4,000', async () => {
     await setPostalAddress(null);
-    const footer = `${FIXTURE_SIGN_OFF}\n${SENDING_STOP_LINE}`;
+    const footer = FIXTURE_SIGN_OFF;
     // The longest body the template rules admit with no address: 4,000 composed.
     await templateBody(`${'x'.repeat(4000 - footer.length - 2)}\n\n${footer}`);
     await setPostalAddress(ADDRESS);

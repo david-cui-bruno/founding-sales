@@ -368,8 +368,8 @@ describe('sends whose fence a point-in-time restore lost (lane g73)', () => {
     const fenceId = await world.prepare(world.alpha);
     const prepared = await readFence(context(), fenceId);
     const whatLeft = `${prepared?.body ?? ''}`.replace(
-      'Reply "stop" and I will not email you again.',
-      '1 Example Way, Suite 2\nReply "stop" and I will not email you again.',
+      'Signed off',
+      'Signed off\n1 Example Way, Suite 2',
     );
     expect(whatLeft).not.toBe(prepared?.body);
     const at = '2026-09-24T18:00:00.000Z';
