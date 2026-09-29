@@ -59,6 +59,139 @@ jobs:
       - name: Greenfield gate
         run: npm run gate:greenfield
 
+  upgrade:
+    # The automated upgrade test that replaced the schema rehearsal (lane RS, 29
+    # September 2026). It applies the base commit's schema, loads a representative
+    # fixture through the ordinary commands as `app_runtime`, applies this branch's
+    # migrations as the migration role, and checks data preservation, privileges,
+    # constraints, both services' startup, the workflows and the recovery paths.
+    #
+    # The job always runs and decides for itself whether there is anything to do. A
+    # `paths:` filter would leave a required check waiting for ever on a branch that
+    # touches no migration (the same reason `g89-greenfield-is-the-default.md` gives for
+    # guarding the old gates by `if:` rather than by `paths:`), and "the schema did not
+    # move" is an answer worth printing rather than a run that never happened.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          # A throwaway credential for a container that exists for one job and is
+          # reachable only from it. Nothing in the repository depends on this value.
+          POSTGRES_PASSWORD: greenfield-ci
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      FSS_TEST_POSTGRES_URL: postgresql://postgres:greenfield-ci@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          # The base commit has to be in this checkout: the schema it was at is read
+          # out of its own copy of `schemaRange.ts`, never out of a number in a file
+          # somebody remembered to update.
+          fetch-depth: 0
+          persist-credentials: false
+      - name: What this branch moved the schema from and to
+        id: range
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          range_file=packages/domain/db/schemaRange.ts
+          if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = '0000000000000000000000000000000000000000' ] || ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            echo "no readable base commit; the upgrade test needs one and this run has nothing to compare with"
+            echo 'run=no' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          touched="$(git diff --name-only "$BASE_SHA" HEAD -- packages/domain/db/migrations "$range_file")"
+          if [ -z "$touched" ]; then
+            echo "no migration and no schema range in the diff; nothing to upgrade"
+            echo 'run=no' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "the diff touches:"
+          echo "$touched"
+          required_schema() {
+            git show "$1:$range_file" | sed -n 's/^export const REQUIRED_SCHEMA = \([0-9][0-9]*\);$/\1/p'
+          }
+          from="$(required_schema "$BASE_SHA")"
+          to="$(required_schema HEAD)"
+          if [ -z "$from" ] || [ -z "$to" ]; then
+            echo "REQUIRED_SCHEMA could not be read (base='$from' head='$to')"
+            exit 1
+          fi
+          echo "REQUIRED_SCHEMA: $from at the base, $to at HEAD"
+          if [ "$from" = "$to" ]; then
+            echo "the schema did not move, so there is no upgrade to test; skipped"
+            echo 'run=no' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          {
+            echo 'run=yes'
+            echo "from=$from"
+            echo "to=$to"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        if: steps.range.outputs.run == 'yes'
+        with:
+          node-version-file: .node-version
+      - name: Install
+        if: steps.range.outputs.run == 'yes'
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: No durability for the throwaway database
+        if: steps.range.outputs.run == 'yes'
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          docker exec "$POSTGRES_CONTAINER" psql -U postgres -v ON_ERROR_STOP=1 \
+            -c 'ALTER SYSTEM SET fsync = off' \
+            -c 'ALTER SYSTEM SET synchronous_commit = off' \
+            -c 'ALTER SYSTEM SET full_page_writes = off' \
+            -c 'SELECT pg_reload_conf()'
+      - name: The base checkout the fixture is written by
+        # The fixture is the data production already holds, so the code that writes it
+        # has to be the code production is already running. A worktree of the base
+        # commit is that code; `--base` refuses to run without one, and refuses one
+        # whose own `REQUIRED_SCHEMA` is not the `--from` it was given.
+        if: steps.range.outputs.run == 'yes'
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          git worktree add --detach "$RUNNER_TEMP/upgrade-base" "$BASE_SHA"
+      - name: Upgrade test
+        if: steps.range.outputs.run == 'yes'
+        env:
+          FROM_SCHEMA: ${{ steps.range.outputs.from }}
+          TO_SCHEMA: ${{ steps.range.outputs.to }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          npm run upgrade:test -- \
+            --from "$FROM_SCHEMA" --to "$TO_SCHEMA" \
+            --base "$RUNNER_TEMP/upgrade-base" \
+            --evidence "upgrade-evidence-$HEAD_SHA.txt"
+      - name: Upload the evidence
+        # `always()`: a failed upgrade is the run whose evidence somebody actually needs.
+        if: always() && steps.range.outputs.run == 'yes'
+        # actions/upload-artifact v4, the same pin the images and release workflows use.
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: upgrade-evidence-${{ github.event.pull_request.head.sha || github.sha }}
+          path: upgrade-evidence-*.txt
+          if-no-files-found: error
+
   workflows:
     # actionlint 1.7.12 over every workflow, from the linux_amd64 tarball pinned by the
     # SHA-256 in the v1.7.12 release's checksums file. actionlint's own findings fail the

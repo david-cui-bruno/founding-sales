@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@fss/contracts": ["../../packages/contracts/src/index.ts"],
+      "@fss/domain/restore": ["../../packages/domain/restore/index.ts"],
+      "@fss/domain/*": ["../../packages/domain/*"],
+      "@fss/worker/*": ["../../apps/worker/*"],
+      "@fss/api/*": ["../../apps/api/*"]
+    }
+  },
+  "include": ["**/*.ts"]
+}

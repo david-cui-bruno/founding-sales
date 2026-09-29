@@ -59,7 +59,19 @@ Three things about it are invariants rather than procedure:
 - **Every stage tears down and every stage guards.** Items 13 and 14 keep `if: always()` and carry no stage condition at all, so that a mistyped stage condition cannot leave an environment standing with nothing to destroy it. `rehearsal.sh guard` fails closed: a reading it cannot make is not an absence.
 - **It writes no release record.** The record a release puts comes from the CI gate (4.2).
 
-**When it is needed (lane g97, 25 September 2026).** Before the production plan of every release that changes the schema, the infrastructure or a release script. An app-only release needs none, because CI deploys it; a desktop-only one needs none either.
+**When it is needed (lane g97, 25 September 2026; narrowed by lane RS, 29 September 2026).** Before the production plan of every release that changes the infrastructure or a release script, and of a schema release whose migrations `infra/scripts/classify-migration.sh` calls `touches-existing`, `privilege` or `destructive`. An app-only release needs none, because CI deploys it; a desktop-only one needs none either.
+
+**An `additive` schema release needs none either.** What it needs instead is the upgrade test's evidence. David, 29 September 2026: *"The reported 48-minute rehearsal starts from an empty database, so it does not test the actual upgrade… 'Additive' and constraint tests alone don't satisfy that requirement. Removing the old rehearsal must not remove upgrade verification."* The rehearsal is removed from these releases because something stronger replaced it, not because the release got easier: `npm run upgrade:test` migrates a database that already holds representative data, as the roles production migrates with, and checks data preservation, privileges, constraints, both services' startup, the workflows and the recovery paths (`docs/greenfield/migrations.md`). The `upgrade` job of `greenfield.yml` runs it on every branch that touches a migration and uploads `upgrade-evidence-<sha>.txt`.
+
+So an additive schema release is:
+
+```
+prepare → record → plan → stop → apply → deploy → smoke
+```
+
+— the order of 4.1 with the rehearsal taken out. Every migration in the release must be `additive`; one that is not puts the rehearsal back.
+
+**The record already names the evidence, and no field was added to it.** `upgrade` is a job of `greenfield.yml`, so the *Greenfield gate* run the record's `gateRunId` names is the run that produced `upgrade-evidence-<commit>.txt`, and a workflow run is `success` only when every job of it was. A `ci-gate` record therefore cannot exist for a commit whose upgrade test failed, and the artifact is one click from `gateRunUrl`. That is why nothing here writes an artifact id into the record: `fss.release-record.v1` is a strict object (`packages/contracts/src/release.ts`), an unknown field is refused rather than stripped, and a record that had to carry the id would be a record `record.sh from-ci` could not write. **Cite the artifact in the release log entry**, by the reference the record carries.
 
 ---
 

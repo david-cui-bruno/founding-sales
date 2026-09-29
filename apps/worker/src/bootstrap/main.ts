@@ -77,7 +77,12 @@ export interface HandlerComposition {
   readonly send: OutboundSendDeps | undefined;
 }
 
-function registerHandlers(
+/**
+ * Exported for the upgrade test (`npm run upgrade:test`), which builds the registry
+ * this function builds rather than a list of its own: "the worker starts" is not a
+ * claim worth making about a registry nobody assembles the way the bootstrap does.
+ */
+export function registerHandlers(
   registry: HandlerRegistry,
   composition: HandlerComposition,
 ): HandlerRegistry {
