@@ -361,7 +361,8 @@ function orderStub(directory: string): string {
     `state='${directory}'`,
     'printf "%s\\n" "$*" >> "$state/calls.log"',
     'service=$1; operation=$2; shift 2',
-    'name=""; count=""; tasks=""; pointed=""; rolled=""; latest=""; taskdef=""',
+    'name=""; count=""; tasks=""; pointed=""; rolled=""; latest=""; taskdef=""; created=""',
+  'key=""; container=""; status=""; revimage=""; revmin=""; revmax=""',
     'while [ "$#" -gt 0 ]; do',
     '  case "$1" in',
     '    --service|--services|--service-name) name=$2; shift ;;',
@@ -390,12 +391,24 @@ function orderStub(directory: string): string {
     // revision unless a case makes them differ, which is what a rollback looks like.
     '    pointed=$(cat "$state/$name.service-definition" 2>/dev/null || definition "$name")',
     '    rolled=$(cat "$state/$name.rollout-definition" 2>/dev/null || definition "$name")',
-    '    printf \'{"services":[{"serviceName":"%s","status":"ACTIVE","taskDefinition":"%s","desiredCount":%s,"runningCount":%s,"pendingCount":0,"deployments":[{"status":"PRIMARY","taskDefinition":"%s","rolloutState":"%s"}],"events":[%s]}],"failures":[]}\\n\' "$name" "$pointed" "$desired" "$running" "$rolled" "$rollout" "$events"',
+    // When ECS created this deployment. `release-timing:` will only count a target
+    // registration that is not older than it, so a registration from the rollout before
+    // this one cannot be paired with this release's stop.
+    '    created=$(cat "$state/$name.deployment-created" 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)',
+    '    printf \'{"services":[{"serviceName":"%s","status":"ACTIVE","taskDefinition":"%s","desiredCount":%s,"runningCount":%s,"pendingCount":0,"deployments":[{"status":"PRIMARY","id":"ecs-svc/1","createdAt":"%s","taskDefinition":"%s","rolloutState":"%s"}],"events":[%s]}],"failures":[]}\\n\' "$name" "$pointed" "$desired" "$running" "$created" "$rolled" "$rollout" "$events"',
     '    exit 0 ;;',
-    // The family's newest ACTIVE revision, which is the one an apply just registered.
+    // A revision, by ARN: its status, its one container, that container's image and the
+    // schema range it declares. `<service>.revision-*` files make each of them wrong in
+    // turn, which is what the pre-migration checks are asked to catch.
     '  "ecs describe-task-definition")',
-    '    latest=$(cat "$state/$name.latest" 2>/dev/null || definition "$name")',
-    '    printf \'{"taskDefinition":{"taskDefinitionArn":"%s"}}\\n\' "$latest"',
+    '    key=${name##*/}; key=${key%%:*}',
+    '    container=${key##*-}',
+    '    status=$(cat "$state/$key.revision-status" 2>/dev/null || echo ACTIVE)',
+    '    revimage=$(cat "$state/$key.revision-image" 2>/dev/null || echo "registry/$container@$(cat "$state/$key.digest")")',
+    '    revmin=$(cat "$state/$key.revision-schema-min" 2>/dev/null || echo 30)',
+    '    revmax=$(cat "$state/$key.revision-schema-max" 2>/dev/null || echo 30)',
+    '    latest=$(cat "$state/$key.latest" 2>/dev/null || definition "$key")',
+    '    printf \'{"taskDefinition":{"taskDefinitionArn":"%s","status":"%s","containerDefinitions":[{"name":"%s","image":"%s","environment":[{"name":"FSS_SCHEMA_MIN","value":"%s"},{"name":"FSS_SCHEMA_MAX","value":"%s"}]}]}}\\n\' "$latest" "$status" "$container" "$revimage" "$revmin" "$revmax"',
     '    exit 0 ;;',
     '  "ecs update-service")',
     '    if [ -n "$count" ]; then',
@@ -475,14 +488,22 @@ interface OrderOptions {
    *   `rolloutNext`       and on every read after it
    */
   readonly revisions?: Readonly<Partial<Record<'api' | 'worker', {
-    readonly latest?: string;
     readonly pointed?: string;
     readonly rolled?: string;
     readonly rollout?: string;
     readonly rolloutNext?: string;
+    /** What `describe-task-definition` says about the revision: PR 310 second review. */
+    readonly revisionStatus?: string;
+    readonly revisionImage?: string;
+    readonly revisionSchemaMin?: string;
+    readonly revisionSchemaMax?: string;
+    /** When ECS created the service's PRIMARY deployment, as an ISO instant. */
+    readonly deploymentCreated?: string;
   }>>>;
   /** The stop marker `stop.sh` leaves, as the contents of release-stop-instant.txt. */
   readonly stopInstant?: string;
+  /** The task-definition ARN the apply's `deployment_plan` names, per service. */
+  readonly plan?: Readonly<Partial<Record<'api' | 'worker', string>>>;
 }
 
 function runOrder(
@@ -503,11 +524,15 @@ function runOrder(
   if (options.apiEvents !== undefined) writeFileSync(join(directory, `${ORDER_PREFIX}-api.events`), options.apiEvents);
   for (const [service, revisions] of Object.entries(options.revisions ?? {})) {
     const files: Readonly<Record<string, string | undefined>> = {
-      latest: revisions.latest,
       'service-definition': revisions.pointed,
       'rollout-definition': revisions.rolled,
       rollout: revisions.rollout,
       'rollout-next': revisions.rolloutNext,
+      'revision-status': revisions.revisionStatus,
+      'revision-image': revisions.revisionImage,
+      'revision-schema-min': revisions.revisionSchemaMin,
+      'revision-schema-max': revisions.revisionSchemaMax,
+      'deployment-created': revisions.deploymentCreated,
     };
     for (const [suffix, value] of Object.entries(files)) {
       if (value !== undefined) writeFileSync(join(directory, `${ORDER_PREFIX}-${service}.${suffix}`), `${value}\n`);
@@ -546,10 +571,28 @@ function runOrder(
       database_host: ORDER_HOST,
       inbound_rule_count: 0,
     }),
+    // PR 310 second review: the apply's own answer to which revision, of what, for
+    // which schema. `:7` is what the fake CLI has both services pointing at.
     FSS_RELEASE_OUTPUT_DEPLOYMENT_PLAN: JSON.stringify({
       bootstrap: options.bootstrap === true,
-      api: { service_name: `${ORDER_PREFIX}-api`, declared_desired_count: 2, planned_desired_count: 2 },
-      worker: { service_name: `${ORDER_PREFIX}-worker`, declared_desired_count: 1, planned_desired_count: 1 },
+      api: {
+        service_name: `${ORDER_PREFIX}-api`,
+        declared_desired_count: 2,
+        planned_desired_count: 2,
+        task_definition: options.plan?.api ?? `arn:aws:ecs:us-east-1:${ORDER_ACCOUNT}:task-definition/${ORDER_PREFIX}-api:7`,
+        image: `registry/api@${ORDER_API_DIGEST}`,
+        schema_min: '30',
+        schema_max: '30',
+      },
+      worker: {
+        service_name: `${ORDER_PREFIX}-worker`,
+        declared_desired_count: 1,
+        planned_desired_count: 1,
+        task_definition: options.plan?.worker ?? `arn:aws:ecs:us-east-1:${ORDER_ACCOUNT}:task-definition/${ORDER_PREFIX}-worker:7`,
+        image: `registry/worker@${ORDER_WORKER_DIGEST}`,
+        schema_min: '30',
+        schema_max: '30',
+      },
     }),
     FSS_RELEASE_TASK_DEFINITION: JSON.stringify({
       containerDefinitions: [
@@ -786,10 +829,22 @@ describe('RS-2: a schema release is two one-off tasks and one wait for both serv
     const run = runOrder(DEPLOY, deployArgs('--schema-change'), STOPPED, {
       oneOffsPass: true,
       apiEvents: [event(60, REGISTERED), event(-240, STOPPED_TASKS)].join(','),
-      stopInstant: `api_stopped_at=${String(Math.floor(Date.now() / 1000) - 540)}`,
+      stopInstant: `root=infra/roots/rehearsal prefix=${ORDER_PREFIX} api_stopped_at=${String(Math.floor(Date.now() / 1000) - 540)}`,
     });
     expect(run.code, run.output).toBe(0);
     expect(timing(run.output)?.[4]).toBe('600s');
+  });
+
+  it('ignores a marker another release left, however fresh, and falls back to the event', () => {
+    // The shared report directory is the trap: a marker from a different prefix is a
+    // perfectly recent number about a different outage.
+    const run = runOrder(DEPLOY, deployArgs('--schema-change'), STOPPED, {
+      oneOffsPass: true,
+      apiEvents: [event(60, REGISTERED), event(-240, STOPPED_TASKS)].join(','),
+      stopInstant: `root=infra/roots/rehearsal prefix=fss-rh-somewhere-else api_stopped_at=${String(Math.floor(Date.now() / 1000) - 540)}`,
+    });
+    expect(run.code, run.output).toBe(0);
+    expect(timing(run.output)?.[4]).toBe('300s');
   });
 
   it('ignores a marker too old to be this release, and falls back to the event', () => {
@@ -797,7 +852,7 @@ describe('RS-2: a schema release is two one-off tasks and one wait for both serv
       oneOffsPass: true,
       apiEvents: [event(60, REGISTERED), event(-240, STOPPED_TASKS)].join(','),
       // Seven hours ago: past the window, so it is another release's stop.
-      stopInstant: `api_stopped_at=${String(Math.floor(Date.now() / 1000) - 7 * 60 * 60)}`,
+      stopInstant: `root=infra/roots/rehearsal prefix=${ORDER_PREFIX} api_stopped_at=${String(Math.floor(Date.now() / 1000) - 7 * 60 * 60)}`,
     });
     expect(run.code, run.output).toBe(0);
     expect(timing(run.output)?.[4]).toBe('300s');
@@ -813,14 +868,23 @@ describe('RS-2: a schema release is two one-off tasks and one wait for both serv
     expect(noRegistration.code, noRegistration.output).toBe(0);
     expect(noRegistration.output).toContain('api_unreachable≈unknown');
 
-    // The previous release's registration, from before this deploy scaled anything up:
-    // pairing it with this release's stop would invent a negative or a nonsense span.
+    // A registration from before this rollout's own deployment existed. It is recent —
+    // two minutes ago — so "recent enough" would have taken it; attribution does not.
     const stale = runOrder(DEPLOY, deployArgs('--schema-change'), STOPPED, {
       oneOffsPass: true,
       apiEvents: [event(-120, REGISTERED), event(-240, STOPPED_TASKS)].join(','),
     });
     expect(stale.code, stale.output).toBe(0);
     expect(stale.output).toContain('api_unreachable≈unknown');
+
+    // And the same registration, once this rollout's deployment is old enough to own it.
+    const attributable = runOrder(DEPLOY, deployArgs('--schema-change'), STOPPED, {
+      oneOffsPass: true,
+      apiEvents: [event(-120, REGISTERED), event(-240, STOPPED_TASKS)].join(','),
+      revisions: { api: { deploymentCreated: iso(-180) } },
+    });
+    expect(attributable.code, attributable.output).toBe(0);
+    expect(attributable.output).toContain('api_unreachable≈120s');
   });
 
   it('makes no AWS call of its own for the timing: the events come out of the rollout read', () => {
@@ -858,20 +922,51 @@ describe('RS-2: the rollout is finished when ECS says so, on the revision the ap
   const revision = (service: 'api' | 'worker', number: number): string =>
     `arn:aws:ecs:us-east-1:${ORDER_ACCOUNT}:task-definition/${ORDER_PREFIX}-${service}:${String(number)}`;
 
-  it('refuses before the migration when a service is not on its family’s newest ACTIVE revision', () => {
-    // A skipped or half-finished apply. The schema has not moved yet, so the refusal
-    // costs nothing — which is the whole reason this read comes first.
+  it('refuses before the migration when a service is not on the revision this apply registered', () => {
+    // A skipped or half-finished apply: the plan says :7 and the service is on :6. The
+    // schema has not moved yet, so the refusal costs nothing — the reason for the order.
     const run = runOrder(DEPLOY, deployArgs('--schema-change'), STOPPED, {
       oneOffsPass: true,
-      revisions: { api: { pointed: revision('api', 6), latest: revision('api', 7) } },
+      revisions: { api: { pointed: revision('api', 6) } },
     });
     expect(run.code).not.toBe(0);
-    expect(run.output).toContain(`${ORDER_PREFIX}-api points at ${revision('api', 6)}`);
-    expect(run.output).toContain(`newest ACTIVE revision of its family is ${revision('api', 7)}`);
+    expect(run.output).toContain(`${ORDER_PREFIX}-api is on ${revision('api', 6)}, and this apply registered ${revision('api', 7)}`);
+    // Not the family lookup: the repair names the apply, because a newer ACTIVE revision
+    // is something `deploy.sh ci` legitimately registers between hand releases.
+    expect(run.output).not.toContain('newest ACTIVE');
+    expect(run.output).toContain('apply this root again');
     // Nothing was migrated and nothing was started: that is the point of the ordering.
     expect(launched(run.calls), 'a refused deploy migrated the database').toEqual([]);
     expect(scaled(run.calls), 'a refused deploy scaled a service').toEqual([]);
     expect(run.report).toBeNull();
+  });
+
+  it('refuses a revision that is not ACTIVE, is not this release’s image, or is another schema', () => {
+    // "An apply ran" is not "the right apply ran". Each of the three is asked for on its
+    // own, because a check that only looked at the ARN would pass all three.
+    const deregistered = runOrder(DEPLOY, deployArgs('--schema-change'), STOPPED, {
+      oneOffsPass: true,
+      revisions: { api: { revisionStatus: 'INACTIVE' } },
+    });
+    expect(deregistered.code).not.toBe(0);
+    expect(deregistered.output).toContain('ECS reports it as INACTIVE, not ACTIVE');
+    expect(launched(deregistered.calls)).toEqual([]);
+
+    const otherImage = runOrder(DEPLOY, deployArgs('--schema-change'), STOPPED, {
+      oneOffsPass: true,
+      revisions: { api: { revisionImage: `registry/api@${ORDER_OLD_DIGEST}` } },
+    });
+    expect(otherImage.code).not.toBe(0);
+    expect(otherImage.output).toContain(`and this release is ${ORDER_API_DIGEST}`);
+    expect(launched(otherImage.calls)).toEqual([]);
+
+    const otherSchema = runOrder(DEPLOY, deployArgs('--schema-change'), STOPPED, {
+      oneOffsPass: true,
+      revisions: { worker: { revisionSchemaMax: '31' } },
+    });
+    expect(otherSchema.code).not.toBe(0);
+    expect(otherSchema.output).toContain('it declares FSS_SCHEMA_MAX=31 and this apply was made with 30');
+    expect(launched(otherSchema.calls)).toEqual([]);
   });
 
   it('waits out a rollout ECS still calls IN_PROGRESS, then passes when it completes', () => {
@@ -911,14 +1006,37 @@ describe('RS-2: the rollout is finished when ECS says so, on the revision the ap
     // deploy would have reported a successful release of code that is not running.
     const run = runOrder(DEPLOY, deployArgs('--schema-change'), STOPPED, {
       oneOffsPass: true,
-      revisions: { api: { latest: revision('api', 7), pointed: revision('api', 7), rolled: revision('api', 6) } },
+      revisions: { api: { rolled: revision('api', 6) } },
     });
     expect(run.code).not.toBe(0);
-    expect(run.output).toContain(`${ORDER_PREFIX}-api:7`);
     expect(run.output).toContain('and the apply registered');
     expect(run.output).toContain(`FAIL: ${ORDER_PREFIX}-api is not running this release`);
-    // Its digest was right all along, which is why the digest alone was not enough.
-    expect(run.output).not.toContain('and this release is');
+    expect(run.report).toBeNull();
+  });
+
+  it('fails the same rollback on the rolling path, which carries the applied ARN too', () => {
+    // PR 310 second review, P1: the rolling path left the applied ARN empty, so a
+    // completed rollback to a same-digest revision returned 0 and the deploy reported a
+    // release that is not running. It is an infrastructure-only release that makes this
+    // reachable, and an infrastructure-only release is exactly the rolling path.
+    const run = runOrder(DEPLOY, deployArgs(), { api: { desired: 2, running: 2 }, worker: { desired: 1, running: 1 } }, {
+      revisions: { api: { rolled: revision('api', 6) } },
+    });
+    expect(run.code).not.toBe(0);
+    expect(run.output).toContain(`its deployment runs ${ORDER_PREFIX}-api:6 and the apply registered ${ORDER_PREFIX}-api:7`);
+    expect(run.output).toContain(`FAIL: ${ORDER_PREFIX}-api is not running this release`);
+    expect(run.report).toBeNull();
+  });
+
+  it('refuses a missing PRIMARY task definition rather than reading it as a match', () => {
+    // `if definition and definition != applied` skipped the comparison when ECS omitted
+    // the field, which let same-digest tasks on the old revision through. An empty
+    // string here is that answer.
+    const run = runOrder(DEPLOY, deployArgs(), { api: { desired: 2, running: 2 }, worker: { desired: 1, running: 1 } }, {
+      revisions: { api: { rolled: '' } },
+    });
+    expect(run.code).not.toBe(0);
+    expect(run.output).toContain('ECS does not say which task definition its deployment runs');
     expect(run.report).toBeNull();
   });
 
@@ -1109,7 +1227,7 @@ describe('Appendix G 22 (g70), continued: the stop', () => {
     const before = Math.floor(Date.now() / 1000);
     const run = runOrder(STOP, ['infra/roots/rehearsal', ORDER_PREFIX], RUNNING, { report: 'release-stop-instant.txt' });
     expect(run.code, run.output).toBe(0);
-    const recorded = /^api_stopped_at=([0-9]+)$/u.exec(run.report ?? '');
+    const recorded = /^root=infra\/roots\/rehearsal prefix=fss-rh-order api_stopped_at=([0-9]+)$/u.exec(run.report ?? '');
     expect(recorded, `no stop instant in ${String(run.report)}`).not.toBeNull();
     // A real instant from this run, not a zero or a constant: it is between the moment
     // this test started and the moment it read the file back.
@@ -1117,12 +1235,21 @@ describe('Appendix G 22 (g70), continued: the stop', () => {
     expect(Number(recorded?.[1])).toBeLessThanOrEqual(Math.floor(Date.now() / 1000));
   });
 
-  it('records nothing when there was nothing to stop, because that instant is not an outage', () => {
+  it('records nothing when there was nothing to stop, and deletes any marker left before', () => {
     // Both already at zero: a marker here would name a moment this release did not cause,
-    // and the deploy would print a confident wrong number instead of `unknown`.
-    const run = runOrder(STOP, ['infra/roots/rehearsal', ORDER_PREFIX], STOPPED, { report: 'release-stop-instant.txt' });
+    // and the deploy would print a confident wrong number instead of `unknown`. A stop
+    // that stops nothing must also clear an earlier one out of the shared report
+    // directory, rather than leave it to age out (PR 310 second review, P2).
+    const reports = mkdtempSync(join(tmpdir(), 'fss-order-stale-'));
+    const earlier = join(reports, 'release-stop-instant.txt');
+    writeFileSync(earlier, `root=infra/roots/rehearsal prefix=${ORDER_PREFIX} api_stopped_at=${String(Math.floor(Date.now() / 1000) - 60)}\n`);
+    const run = runOrder(STOP, ['infra/roots/rehearsal', ORDER_PREFIX], STOPPED, {
+      report: 'release-stop-instant.txt',
+      fixtures: { FSS_REHEARSAL_REPORTS: reports },
+    });
     expect(run.code, run.output).toBe(0);
-    expect(run.report).toBeNull();
+    expect(run.output).toContain('the earlier stop instant is discarded');
+    expect(existsSync(earlier), 'a no-op stop left an older release’s instant behind').toBe(false);
   });
 
   it('is idempotent: services already at zero are reported and not touched', () => {

@@ -74,6 +74,17 @@ output "deployment_plan" {
     After the first apply `planned_desired_count` is the count Terraform last
     read from ECS rather than one it sets: both services ignore changes to
     `desired_count` (lane g70), and the release scripts own it from there.
+
+    `task_definition`, `image` and the schema range are this apply's own answer
+    to "which revision, of what, for which schema" (lane RS-2, PR 310 review).
+    Only `desired_count` is ignored on either service, so an apply that registers
+    a revision also points the service at it, even at count zero — and this is
+    the only place that knows *which* revision that was. The family's newest
+    ACTIVE revision is not the same fact: a CI deploy registers one before it
+    updates the service, so a release that compared against the family would
+    refuse a correct hand apply, and a skipped apply with no newer registration
+    would pass. `deploy.sh release` holds each service to the ARN here before it
+    migrates anything.
   EOT
   value = {
     bootstrap = var.bootstrap
@@ -81,11 +92,19 @@ output "deployment_plan" {
       service_name           = aws_ecs_service.api.name
       declared_desired_count = var.api_desired_count
       planned_desired_count  = aws_ecs_service.api.desired_count
+      task_definition        = aws_ecs_task_definition.api.arn
+      image                  = var.api_image
+      schema_min             = tostring(var.api_schema_range.min)
+      schema_max             = tostring(var.api_schema_range.max)
     }
     worker = {
       service_name           = aws_ecs_service.worker.name
       declared_desired_count = local.worker_declared_desired_count
       planned_desired_count  = aws_ecs_service.worker.desired_count
+      task_definition        = aws_ecs_task_definition.worker.arn
+      image                  = var.worker_image
+      schema_min             = tostring(var.worker_schema_range.min)
+      schema_max             = tostring(var.worker_schema_range.max)
     }
     migration_task_definition  = aws_ecs_task_definition.migration.arn
     operations_task_definition = aws_ecs_task_definition.operations.arn

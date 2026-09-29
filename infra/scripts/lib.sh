@@ -408,7 +408,13 @@ if applied:
     # read as a finished release.
     if primary.get("rolloutState") != "COMPLETED":
         settling.append("its rollout is {}, not COMPLETED".format(primary.get("rolloutState") or "unreported"))
-    if definition and definition != applied:
+    # Guarding the comparison on a truthy definition was the bug: ECS omitting the
+    # field has to be a refusal, not a pass. A missing ARN was the one way that
+    # same-digest tasks on the old revision could still get through the opt-in
+    # check (PR 310 second review, P1).
+    if not definition:
+        failures.append("ECS does not say which task definition its deployment runs")
+    elif definition != applied:
         failures.append("its deployment runs {} and the apply registered {}".format(short(definition), short(applied)))
     counts = dict((field, entry.get(field)) for field in ("desiredCount", "runningCount", "pendingCount"))
     if any(not isinstance(value, int) for value in counts.values()):
@@ -423,10 +429,16 @@ if applied:
 tasks = [t for t in (json.loads(os.environ["FSS_TASKS"] or "{}") or {}).get("tasks") or [] if t.get("lastStatus") == "RUNNING"]
 if len(tasks) != expected:
     (settling if applied else failures).append("{} task(s) are RUNNING and the root declares {}".format(len(tasks), expected))
+# What each running task must be on: the revision the apply registered when the caller
+# named one, and otherwise the deployment own revision, which is all an unnamed caller
+# has to compare with.
+wanted = applied or definition
 for task in tasks:
     label = "task {}".format(short(task.get("taskArn")))
-    if definition and task.get("taskDefinitionArn") != definition:
-        failures.append("{} runs {}, and the deployment is {}".format(label, short(task.get("taskDefinitionArn")), short(definition)))
+    if not wanted:
+        failures.append("{}: nothing names the task definition it should be running".format(label))
+    elif task.get("taskDefinitionArn") != wanted:
+        failures.append("{} runs {}, and this release is {}".format(label, short(task.get("taskDefinitionArn")), short(wanted)))
     found = next((c for c in task.get("containers") or [] if c.get("name") == container), None)
     if found is None:
         failures.append("{} has no container named {}".format(label, container))

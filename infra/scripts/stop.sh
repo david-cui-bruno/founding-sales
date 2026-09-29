@@ -71,11 +71,27 @@ stop_service "$API_SERVICE" || exit 1
 # Its own file, so release-stop.txt stays the one line everything already reads, and only
 # for a stop that really stopped something: a service already at zero says nothing about
 # when this release's outage started, and a wrong number is worse than none.
-case "$SUMMARY" in
-  *"$API_SERVICE=stopped_from_"*)
-    rehearsal_dry_run || rehearsal_write_report "release-stop-instant.txt" "api_stopped_at=$(date -u +%s)"
-    ;;
-esac
+if ! rehearsal_dry_run; then
+  case "$SUMMARY" in
+    *"$API_SERVICE=stopped_from_"*)
+      # Named with the release it belongs to. `deploy.sh release` takes the instant only
+      # when the root and the prefix are its own; the apply has not happened yet, so
+      # those two are the whole identity available here.
+      rehearsal_write_report "release-stop-instant.txt" \
+        "root=$ROOT_DIRECTORY prefix=$PREFIX api_stopped_at=$(date -u +%s)"
+      ;;
+    *)
+      # A stop that stopped nothing must not leave an older release's instant behind for
+      # the next deploy to pair with its own scale-up (PR 310 second review, P2). The
+      # marker is deleted rather than left to age out: six hours is a long time to be
+      # wrong in, and `unknown` is the honest answer.
+      if [ -e "$(rehearsal_report_dir)/release-stop-instant.txt" ]; then
+        rm -f "$(rehearsal_report_dir)/release-stop-instant.txt"
+        rehearsal_log "nothing was stopped, so the earlier stop instant is discarded"
+      fi
+      ;;
+  esac
+fi
 rehearsal_log "2/2 $WORKER_SERVICE to zero"
 stop_service "$WORKER_SERVICE" || exit 1
 
