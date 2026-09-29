@@ -235,6 +235,7 @@ describe('a reservation is never released under a live paid call', () => {
       runId,
       at: now,
       maxReservations: RESEARCH_FIRM_MAX_RESERVATIONS,
+      hasExtraction: true,
     });
     expect(permission.kind).toBe('calling');
 
@@ -278,6 +279,7 @@ describe('a reservation is never released under a live paid call', () => {
       runId,
       at: now,
       maxReservations: RESEARCH_FIRM_MAX_RESERVATIONS,
+      hasExtraction: true,
     });
     expect(permission.kind).toBe('calling');
 

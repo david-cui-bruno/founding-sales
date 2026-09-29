@@ -194,6 +194,7 @@ const upToTheCall = async (): Promise<{ runId: string; attempt: number }> => {
     runId: started.value.runId,
     at: AT,
     maxReservations: RESEARCH_FIRM_MAX_RESERVATIONS,
+    hasExtraction: true,
   });
   if (permission.kind !== 'calling') throw new Error('chunk 2 did not mark the reservation');
   return { runId: started.value.runId, attempt: permission.attempt };

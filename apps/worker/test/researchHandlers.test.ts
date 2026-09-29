@@ -788,16 +788,19 @@ describe('the research jobs', () => {
     expect(pageFetch.calls).toBe(0);
 
     // Chunk 2, from the cursor the runner would have carried in `payload.progress`.
-    // One column on one row: the reservation is marked, and nothing else happens.
+    // With no extraction port there is no call to mark: the step says `uncalled` and
+    // the cents go straight back, because a `calling` row on a deployment that cannot
+    // call is a claim about a call that cannot happen.
     const second = await handler.handle({
       session: database.session,
       scope,
       job: { ...claimed, payload: { ...claimed.payload, progress: (first as { progress: unknown }).progress } },
     });
     expect(second).toEqual({
-      progress: { runId: expect.any(String), attempt: 1, step: 'calling', fencing: '1' },
+      progress: { runId: expect.any(String), attempt: 1, step: 'uncalled', fencing: '1' },
       done: false,
     });
+    expect(await reservations()).toEqual([{ attempt: 1, state: 'released', cents: 3, settled: 0 }]);
     expect(pageFetch.calls).toBe(0);
 
     // Chunk 3, from this claim's own cursor.
@@ -826,6 +829,66 @@ describe('the research jobs', () => {
     expect(await reservations()).toEqual([{ attempt: 1, state: 'released', cents: 3, settled: 0 }]);
     expect(await invoiced()).toBe(0);
     expect(context().scope.workspaceId).toBe(workspaceId);
+  });
+
+  it('books no call for a deployment with no model key, even if the worker then dies', async () => {
+    // The review's P1. Chunk 2 used to mark the reservation `calling` whatever the
+    // deployment could do, so a worker that disappeared before chunk 3 left the sweep to
+    // estimate the full price of a call that could not have been made: three cents a
+    // firm a day, invented, on a deployment with no key at all.
+    const handler = researchFirmJobHandler({ pageFetch: countingFetch() });
+    const scope = workspaceScope(workspaceId, { kind: 'system', component: 'worker' });
+    const claimed = (progress?: unknown): Parameters<typeof handler.handle>[0]['job'] => ({
+      id: '00000000-0000-4000-8000-00000000000d',
+      workspaceId,
+      kind: 'research.firm',
+      idempotencyKey: jobIdempotencyKey.researchFirm(firmId, 1),
+      payload: { firmId, revision: 1, trigger: 'sweep', ...(progress === undefined ? {} : { progress }) },
+      attempt: 1,
+      maxAttempts: 3,
+      fencingToken: '1',
+      leaseOwner: 'test',
+      leaseExpiresAt: now,
+    });
+
+    const chunkOne = await handler.handle({ session: database.session, scope, job: claimed() });
+    const chunkTwo = await handler.handle({
+      session: database.session,
+      scope,
+      job: claimed((chunkOne as { progress: unknown }).progress),
+    });
+    expect(chunkTwo).toMatchObject({ done: false, progress: { step: 'uncalled' } });
+    // Nothing is held and nothing is marked, so there is nothing for finalisation to be
+    // uncertain about.
+    expect(await reservations()).toEqual([{ attempt: 1, state: 'released', cents: 3, settled: 0 }]);
+
+    // And now the worker vanishes. Half an hour later the sweep closes the run, and the
+    // run costs nothing.
+    await database.session.query("UPDATE research_runs SET started_at = now() - interval '31 minutes'");
+    const sweep = researchSweepJobHandler({ pageFetch: countingFetch() });
+    await sweep.handle({
+      session: database.session,
+      scope,
+      job: {
+        id: '00000000-0000-4000-8000-00000000000e',
+        workspaceId,
+        kind: 'research.sweep',
+        idempotencyKey: 'research-sweep:alpha:2026-09-28',
+        payload: { businessDate: '2026-09-28' },
+        attempt: 1,
+        maxAttempts: 2,
+        fencingToken: '1',
+        leaseOwner: 'test',
+        leaseExpiresAt: now,
+      },
+    });
+    const closed = await database.session.query<{ outcome: string; refusal: string | null; cost: number; estimated: boolean }>(
+      `SELECT outcome, refusal_code AS refusal, cost_cents::int AS cost, cost_estimated AS estimated
+         FROM research_runs LIMIT 1`,
+    );
+    expect(closed.rows[0]).toEqual({ outcome: 'failed', refusal: 'lease_lost', cost: 0, estimated: false });
+    expect(await reservations()).toEqual([{ attempt: 1, state: 'released', cents: 3, settled: 0 }]);
+    expect(await invoiced()).toBe(0);
   });
 });
 

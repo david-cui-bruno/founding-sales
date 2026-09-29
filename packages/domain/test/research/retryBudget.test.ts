@@ -103,8 +103,15 @@ const chunkOne = async (revision: number): Promise<string | null> => {
 };
 
 /** Chunk 2, with the real bound. Each call after the first opens the next attempt. */
-const chunkTwo = async (runId: string): Promise<'calling' | 'closed'> =>
-  (await ensureResearchCalling(context, { runId, at: AT, maxReservations: RESEARCH_FIRM_MAX_RESERVATIONS })).kind;
+const chunkTwo = async (runId: string): Promise<'calling' | 'unconfigured' | 'closed'> =>
+  (
+    await ensureResearchCalling(context, {
+      runId,
+      at: AT,
+      maxReservations: RESEARCH_FIRM_MAX_RESERVATIONS,
+      hasExtraction: true,
+    })
+  ).kind;
 
 describe('a retry is cleared like a first attempt', () => {
   it('refuses the retry that would take the day past its cents', async () => {

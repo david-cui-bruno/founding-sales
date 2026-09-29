@@ -72,6 +72,11 @@ import {
  * That is the state of a worker with no API key: a smaller answer, not a failure, and
  * the same shape `classify.reply` chose for the same reason.
  *
+ * Chunk 2 asks *first* and marks nothing: the reservation goes straight back to the
+ * budget. Marking `calling` on a deployment that cannot call is a claim about a call
+ * that cannot happen, and a worker that then disappeared left the sweep to estimate the
+ * full price of it.
+ *
  * ## A firm with nothing to read
  *
  * No website and no added link is `no_sources`. It is a refusal rather than a
@@ -176,7 +181,12 @@ export type ResearchStep =
   /** The run row and its clearance exist; no reservation has been marked calling. */
   | 'reserved'
   /** This reservation is marked `calling`: a call may be made, exactly once, in this claim. */
-  | 'calling';
+  | 'calling'
+  /**
+   * There is no extraction port, so no call was marked and the cents have gone back.
+   * Chunk 3 records the pages and judges from the firm's routes.
+   */
+  | 'uncalled';
 
 export interface ResearchCursor {
   readonly runId: string;
@@ -277,6 +287,12 @@ export { RESEARCH_FIRM_MAX_RESERVATIONS };
 export type CallPermission =
   /** This claim may make exactly one call, against `reservationId`. */
   | { readonly kind: 'calling'; readonly attempt: number; readonly reservationId: string; readonly cents: number }
+  /**
+   * This deployment has no extraction port, so there is no call to mark and the cents
+   * are handed back here. Chunk 3 still runs: it records the pages as evidence and
+   * judges from the firm's routes.
+   */
+  | { readonly kind: 'unconfigured'; readonly attempt: number }
   /** The run has been closed here, or was closed already. Nothing further to do. */
   | { readonly kind: 'closed' };
 
@@ -312,6 +328,15 @@ export async function ensureResearchCalling(
     readonly at: string;
     /** Reservations this run may ever hold. `RESEARCH_FIRM_MAX_RESERVATIONS`. */
     readonly maxReservations: number;
+    /**
+     * Whether this deployment has an extraction port at all.
+     *
+     * False means no call can happen, so marking a reservation `calling` would be a
+     * claim about a call that cannot be made — and if the worker then disappeared,
+     * finalisation would estimate the full cost of it. The cents are released here
+     * instead. See `CallPermission`.
+     */
+    readonly hasExtraction: boolean;
   },
 ): Promise<CallPermission> {
   const subject = { subjectKind: 'research_run' as const, subjectId: input.runId };
@@ -331,6 +356,22 @@ export async function ensureResearchCalling(
 
   const rows = await listAttempts(context, subject);
   const reserved = rows.find(row => row.state === 'reserved');
+
+  if (!input.hasExtraction) {
+    // No port, so nothing is marked. A `reserved` row goes back to the budget, because
+    // no call happened and none can; a `calling` row from an earlier claim is still
+    // ambiguous — that claim may have run on a deployment that had a key — and is
+    // charged as an estimate exactly as it would be below.
+    for (const row of rows) {
+      if (row.state === 'reserved') {
+        await settleAttempt(context, { reservationId: row.id, at: input.at, outcome: { kind: 'released' } });
+      } else if (row.state === 'calling') {
+        await settleAttempt(context, { reservationId: row.id, at: input.at, outcome: { kind: 'estimated' } });
+      }
+    }
+    return { kind: 'unconfigured', attempt: reserved?.attempt ?? rows[0]?.attempt ?? 1 };
+  }
+
   if (reserved !== undefined) {
     await markCalling(context, reserved.id);
     return { kind: 'calling', attempt: reserved.attempt, reservationId: reserved.id, cents: reserved.cents };
@@ -851,6 +892,7 @@ export async function runFirmResearch(
     runId: started.value.runId,
     at: input.at,
     maxReservations: RESEARCH_FIRM_MAX_RESERVATIONS,
+    hasExtraction: input.extraction !== undefined,
   });
   if (permission.kind === 'closed') return refuse('provider_failure');
   return await finishFirmResearch(context, {
@@ -859,7 +901,7 @@ export async function runFirmResearch(
     revision: input.revision,
     at: input.at,
     attempt: permission.attempt,
-    mayCall: true,
+    mayCall: permission.kind === 'calling',
     pageFetch: input.pageFetch,
     ...(input.extraction === undefined ? {} : { extraction: input.extraction }),
   });

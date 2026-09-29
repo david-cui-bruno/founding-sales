@@ -50,7 +50,10 @@ import type { DueWorkSource } from '../scheduler/schedulerPass.ts';
  *     **nothing else is written**. This chunk exists only to make "a call may now have
  *     happened" durable, because a marker that shared a transaction with work could be
  *     rolled back by that work's failure — and then the call which followed it would
- *     have no record at all;
+ *     have no record at all. A deployment with no extraction port marks nothing and
+ *     releases the cents here instead: there is no call to be ambiguous about, and a
+ *     `calling` row left behind by a worker that then vanished would be finalised at
+ *     the full price of a call that could not have happened;
  *   * **chunk 3** — `finishFirmResearch`: the fetch, the exact token count, the model
  *     call, the evidence, the facts, the judgment, the funnel facts, and the reservation
  *     settled by id. `done: true`.
@@ -149,7 +152,7 @@ export interface ResearchProgress {
   readonly [key: string]: unknown;
 }
 
-const STEPS: readonly ResearchStep[] = ['reserved', 'calling'];
+const STEPS: readonly ResearchStep[] = ['reserved', 'calling', 'uncalled'];
 
 export function parseResearchProgress(progress: unknown): ResearchProgress | null {
   if (typeof progress !== 'object' || progress === null) return null;
@@ -233,12 +236,16 @@ export function researchFirmJobHandler(options: ResearchWorkerOptions): JobHandl
           runId,
           at,
           maxReservations: RESEARCH_FIRM_MAX_RESERVATIONS,
+          // A deployment with no key marks nothing: there is no call to be ambiguous
+          // about, and a `calling` row left behind by a worker that then died would be
+          // finalised at the full cost of a call that could not have happened.
+          hasExtraction: options.extraction !== undefined,
         });
         if (permission.kind === 'closed') return;
         const progress: ResearchProgress = {
           runId,
           attempt: permission.attempt,
-          step: 'calling',
+          step: permission.kind === 'calling' ? 'calling' : 'uncalled',
           fencing: input.job.fencingToken,
         };
         return { progress, done: false };
