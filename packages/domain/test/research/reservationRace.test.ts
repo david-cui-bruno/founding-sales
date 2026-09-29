@@ -36,7 +36,9 @@ import { completeRun, finaliseAbandonedRuns, refuseRun } from '../../research/ru
  *      `settled`, `estimated`, and `released_not_called` for the claim that marked the
  *      row itself (`settleAttempt`);
  *   3. a run whose `research.firm` job still holds a live lease is not abandoned,
- *      whatever its age (`finaliseAbandonedRuns`).
+ *      whatever its age — and that lease is read again from the job row *under the run
+ *      lock*, so a successor that reclaimed an expired job while the sweep was waiting
+ *      for that lock is a live call and not an abandoned run (`finaliseAbandonedRuns`).
  *
  * No socket is opened: both ports are fakes.
  */
@@ -264,6 +266,65 @@ describe('a reservation is never released under a live paid call', () => {
     expect(finished.ok).toBe(true);
     expect(extraction.calls).toBe(1);
     // Settled by id at the figure the provider reported: one call, one charge.
+    expect(await reservations()).toEqual([{ attempt: 1, state: 'settled', cents: 3, settled: 1 }]);
+    expect(await runRow()).toEqual({ outcome: 'completed', refusal: null, cost: 1, estimated: false });
+  });
+
+  it('leaves the run alone when a successor reclaimed the expired job before the sweep got the lock', async () => {
+    // The interleaving the first select cannot see. The lease has expired, so the
+    // sweep's unlocked read picks the run — and while it is waiting for the run lock a
+    // fresh claim reclaims the job and commits chunk 2. Rechecking `outcome` alone let
+    // the sweep through, because a live claim's run is still `running`: it estimated
+    // that claim's reservation and failed the run before chunk 3 called.
+    const runId = await chunkOne();
+    await claimJobRow(1, '-1 second');
+
+    // The successor, on the worker's session: the reclaim `claimJobs` writes — a new
+    // owner, a new lease, the next fencing token — and then chunk 2 against it.
+    await beta.query('BEGIN');
+    await beta.query(
+      `UPDATE jobs
+          SET lease_owner = 'worker-gamma',
+              lease_expires_at = now() + interval '1 hour',
+              fencing_token = fencing_token + 1
+        WHERE workspace_id = $1 AND kind = 'research.firm' AND idempotency_key = $2`,
+      [seeded.alpha.workspaceId, jobIdempotencyKey.researchFirm(crm.alpha.firmId, 1)],
+    );
+    const permission = await ensureResearchCalling(workerContext, {
+      runId,
+      at: now,
+      maxReservations: RESEARCH_FIRM_MAX_RESERVATIONS,
+      hasExtraction: true,
+    });
+    expect(permission.kind).toBe('calling');
+
+    // The sweep starts while that transaction is open: its select reads the committed
+    // expired lease and picks the run, and `lockRun` then waits on the successor.
+    await alpha.query('BEGIN');
+    await alpha.query("SET LOCAL lock_timeout = '20s'");
+    const sweeping = finaliseAbandonedRuns(sweepContext, { at: later });
+    await delay(150);
+    await beta.query('COMMIT');
+    // Nothing finalised: under the run lock the job row says a claim holds the lease.
+    expect(await sweeping).toBe(0);
+    await alpha.query('COMMIT');
+    expect(await reservations()).toEqual([{ attempt: 1, state: 'calling', cents: 3, settled: 0 }]);
+    expect(await runRow()).toMatchObject({ outcome: 'running', refusal: null });
+
+    // And the successor's chunk 3 calls against an authorization that is still open.
+    const extraction = countingExtraction();
+    const finished = await finishFirmResearch(workerContext, {
+      runId,
+      firmId: crm.alpha.firmId,
+      revision: 1,
+      at: now,
+      attempt: permission.kind === 'calling' ? permission.attempt : 1,
+      mayCall: true,
+      pageFetch: fakeFetch(now),
+      extraction,
+    });
+    expect(finished.ok).toBe(true);
+    expect(extraction.calls).toBe(1);
     expect(await reservations()).toEqual([{ attempt: 1, state: 'settled', cents: 3, settled: 1 }]);
     expect(await runRow()).toEqual({ outcome: 'completed', refusal: null, cost: 1, estimated: false });
   });

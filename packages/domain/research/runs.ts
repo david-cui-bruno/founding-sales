@@ -1,5 +1,5 @@
 import type { RepositoryContext } from '../db/workspaceScope.ts';
-import { RESEARCH_FIRM_JOB_KEY_PREFIX } from '../jobs/jobKinds.ts';
+import { jobIdempotencyKey, RESEARCH_FIRM_JOB_KEY_PREFIX } from '../jobs/jobKinds.ts';
 import { finaliseSubjectReservations } from './reservations.ts';
 import type { ResearchOutcome, ResearchTrigger } from './types.ts';
 
@@ -309,7 +309,58 @@ async function closeRun(
  *
  * Each run is then locked (`lockRun`) before its money is touched, so a claim that is
  * mid-chunk either finishes first or waits, and never interleaves.
+ *
+ * ## The lease is checked again under the run lock, and that is not belt and braces
+ *
+ * The select above is an unlocked read, and a lease that has expired is exactly the
+ * state in which the queue hands the job to somebody else. So the interleaving was:
+ * the lease expires, the select picks the run, a fresh claim reclaims the job and
+ * commits chunk 2 — a new `calling` row — and only then does the sweep get the run
+ * lock. Rechecking `outcome` alone let it through: the run is still `running`, because
+ * the live claim has not finished it yet. The sweep then estimated that claim's
+ * reservation and failed the run out from under a call chunk 3 was about to make.
+ *
+ * `liveClaimHoldsJob` closes it: under the run lock the job row is taken `FOR UPDATE`
+ * and its lease read from the row rather than from the earlier snapshot. A live lease
+ * means somebody is working and the run is left exactly as it is.
+ *
+ * **Lock order: the run row first, then the job row — everywhere.** That is the order
+ * the runner already uses for `research.firm`, which is why the sweep may take the
+ * second lock at all. The kind's protection is `business_uniqueness`, so the runner's
+ * `holdsLease` (the one place a job row is locked *before* the handler) is not called
+ * for it: the chunk transaction runs the handler first, which takes the run row in
+ * `lockRun`, and only then writes the job row in `writeProgress`/`completeJob`. Run
+ * then job in both, so there is no cycle. A `fencing_token` handler would lock the job
+ * row first, and this sweep must never be extended to one of those without turning
+ * this around.
  */
+/**
+ * Whether a claim still holds the lease on this run's `research.firm` job.
+ *
+ * Called under the run's row lock, and it takes the job row `FOR UPDATE` before it
+ * reads the lease — the state is taken, not sampled. A claimer cannot slip in behind
+ * the read, because `claimJobs` takes the same row `FOR UPDATE SKIP LOCKED` and
+ * therefore skips this job entirely while the sweep's transaction is open; and a claim
+ * that is already out cannot commit its chunk, because that chunk needs the run row
+ * this caller is holding. See the lock-order paragraph on `finaliseAbandonedRuns`.
+ *
+ * A job row that is gone — the queue's own retention has removed a finished job — is
+ * not a live claim, and the run is as abandoned as the age says it is.
+ */
+async function liveClaimHoldsJob(
+  context: RepositoryContext,
+  input: { readonly firmId: string; readonly revision: number; readonly at: string },
+): Promise<boolean> {
+  const { rows } = await context.db.query<{ live: boolean }>(
+    `SELECT (state = 'running' AND lease_expires_at > $3::timestamptz) AS live
+       FROM jobs
+      WHERE workspace_id = $1 AND kind = 'research.firm' AND idempotency_key = $2
+      FOR UPDATE`,
+    [context.scope.workspaceId, jobIdempotencyKey.researchFirm(input.firmId, input.revision), input.at],
+  );
+  return rows[0]?.live === true;
+}
+
 export async function finaliseAbandonedRuns(
   context: RepositoryContext,
   input: { readonly at: string },
@@ -337,6 +388,10 @@ export async function finaliseAbandonedRuns(
     // `running` is somebody else's answer and is left exactly as it is.
     const locked = await lockRun(context, row.id);
     if (locked === null || locked.outcome !== 'running') continue;
+    // And the lease again, from the job row rather than from the select's snapshot: a
+    // claim that reclaimed the expired job and committed chunk 2 while this loop was
+    // getting the run lock is a live call, not an abandoned run. Nothing is settled.
+    if (await liveClaimHoldsJob(context, { firmId: locked.firmId, revision: locked.revision, at: input.at })) continue;
     // Every open reservation of the run is closed next, and *how* depends on whether
     // it had been marked `calling`: one that had is `estimated`, because the last thing
     // the vanished worker may have done was make the call; one still `reserved` is
