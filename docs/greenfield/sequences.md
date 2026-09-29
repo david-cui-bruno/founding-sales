@@ -34,7 +34,7 @@ packages/domain/src/rules/sendingWindow.ts        G0: the window, the Monday rul
 packages/domain/src/rules/holds.ts                G0: the union, and the seven-day rule
 packages/domain/src/rules/templates.ts            G0: the content hash and the footer
                                                   (the sign-off, and the postal-address
-                                                  setting at send; 0023 removed the stop
+                                                  setting at send; 0024 removed the stop
                                                   line, G20 the address column)
 
 packages/domain/templates/templates.ts   create, approve, retire, render
@@ -82,7 +82,7 @@ was replaced so that it covers them too.
 
 The footer a version stores is its sign-off, and the block a send appends is that
 sign-off and the workspace's `postal_address` when it has configured one. Nothing else:
-the mandatory `Reply "stop"` line went with migration 0023
+the mandatory `Reply "stop"` line went with migration 0024
 (`docs/greenfield/decisions/email-presentation-20260929.md`). There is still no postal
 address *column*:
 migration 0015 dropped `footer_postal_address` and migration 0020 made the address a
@@ -92,7 +92,7 @@ and either way `composeSendBody` gives the rendered body exactly one final block
 the fence stores it — or, when it cannot say which words are the footer, refuses and the
 step holds. It never guesses: the block it removes is one it can rebuild from the
 sign-off the version stores and an address the settings history holds, standing as whole
-lines of its own at the end of the body. A pre-0023 body still ending with the old stop
+lines of its own at the end of the body. A pre-0024 body still ending with the old stop
 line is one of those blocks, so the line comes off at the first send.
 
 ### 2. Enrollment and its first execution are one statement

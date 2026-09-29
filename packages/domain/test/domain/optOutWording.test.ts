@@ -62,7 +62,7 @@ describe('Appendix G 35: explicit stop suppresses, ambiguity holds', () => {
     expect(classifyReply(message(text)).class).not.toBe('opt_out');
   });
 
-  it('still suppresses on ordinary language after the presentation change (migration 0023)', () => {
+  it('still suppresses on ordinary language after the presentation change (migration 0024)', () => {
     // David, 29 September 2026, kept exactly this: the mandatory stop line goes and the
     // word ban goes, but "automatic handling of stop requests in ordinary language"
     // stays. Nothing in that change touches `replyClassification.ts`, and this is the

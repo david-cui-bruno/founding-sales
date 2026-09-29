@@ -18,7 +18,7 @@ import {
  *     subject and body — so an approval is bound to bytes rather than to a name, and
  *     an edit in place recomputes it (wave 2, S3);
  *   * a body may be approved only if Callie can give it exactly one footer block, which
- *     since migration 0023 is the sign-off (and the workspace's postal address when it
+ *     since migration 0024 is the sign-off (and the workspace's postal address when it
  *     has one) and nothing else. The rule applies unconditionally: at every approval and
  *     on every save of an approved version.
  *
@@ -35,7 +35,7 @@ import {
  * "stop"' footer and remove the blanket database ban on the word 'unsubscribe.'";
  * `docs/greenfield/decisions/email-presentation-20260929.md`). Nothing appends
  * `SENDING_STOP_LINE` any more. What is left of 12.6 is the part David kept: **no
- * visible opt-out link** (`NO_OPTOUT_LINK_RULE`, `hasOptOutLink`, and migration 0023's
+ * visible opt-out link** (`NO_OPTOUT_LINK_RULE`, `hasOptOutLink`, and migration 0024's
  * two `*_no_optout_link` CHECKs), and a stop request in ordinary language still
  * suppresses (`rules/replyClassification.ts`, untouched by that decision).
  *
@@ -43,7 +43,7 @@ import {
  * is the one function that decides the final text: it removes a recognised footer block —
  * and nothing else, never the sign-off a second time — and appends the block the
  * workspace's configuration says now. A recognised block is one this workspace's records
- * can rebuild, in today's shape or in the pre-0023 shape that ends with the stop line, so
+ * can rebuild, in today's shape or in the pre-0024 shape that ends with the stop line, so
  * a template approved or a fence prepared before the decision loses the line at send
  * rather than keeping it forever.
  *
@@ -53,7 +53,7 @@ import {
  */
 
 /**
- * The pre-0023 stop line: recognised so it can be removed, never appended. It lives in
+ * The pre-0024 stop line: recognised so it can be removed, never appended. It lives in
  * `@fss/contracts` so the Mac reads the same bytes, and so does the opt-out-link rule.
  */
 export {
@@ -195,7 +195,7 @@ export type ComposeSendBodyDecision =
  * footer and deleting a sentence somebody wrote.
  *
  * Each block comes in two shapes: today's, which ends with the sign-off or the address,
- * and the pre-0023 one, which ends with the stop line. Both are recognised so that a
+ * and the pre-0024 one, which ends with the stop line. Both are recognised so that a
  * template approved or a fence prepared before 29 September 2026 has its footer
  * *replaced* — the stop line goes at the next send — instead of a second sign-off
  * appended underneath the first.
@@ -322,7 +322,7 @@ export function composeSendBody(
  * The fence's own guard (`prepareOutboundMessage`), so that no path — a caller that
  * forgot to compose, a fence prepared by an older release — can store bytes the fence's
  * column would refuse. It asks about the bytes and nothing else, and since migration
- * 0023 removed the mandatory last line there is exactly one such question left: the
+ * 0024 removed the mandatory last line there is exactly one such question left: the
  * length. Whether the *footer* is right is a question about the workspace's sign-off,
  * which this function is not given and never guessed at (`composeSendBody`).
  */
@@ -395,7 +395,7 @@ export function templateTextIssues(text: TemplateText, rules: TemplateRules): st
 
   // What is left of 12.6 after 29 September 2026: no visible opt-out link. The word is
   // allowed — "just reply unsubscribe and I'll stop" is a sentence we want — and this is
-  // the same rule migration 0023's CHECKs apply, so the save cannot offer an approval the
+  // the same rule migration 0024's CHECKs apply, so the save cannot offer an approval the
   // database would answer with a 500.
   //
   // The **sign-off** is checked here with the subject and the body, because it is not

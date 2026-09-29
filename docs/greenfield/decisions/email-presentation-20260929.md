@@ -1,6 +1,6 @@
 # The e-mail's presentation: no mandatory stop line, no banned word, still no opt-out link
 
-**David, 29 September 2026.** Decided; migration 0023 and the code around it are the
+**David, 29 September 2026.** Decided; migration 0024 and the code around it are the
 change.
 
 > The presentation decisions are now settled: remove the mandatory 'Reply "stop"'
@@ -34,7 +34,7 @@ one.
   `manage (your) preferences`. Normalised first — NFKC, named dashes to `-`, named
   spaces to ` `, case-folded — so a non-breaking hyphen does not walk past it.
   `template_versions_no_optout_link` and `outbound_messages_no_optout_link` both call
-  `email_has_optout_link()` (migration 0023), and `OPT_OUT_LINK_PATTERN` /
+  `email_has_optout_link()` (migration 0024), and `OPT_OUT_LINK_PATTERN` /
   `hasOptOutLink` in `@fss/contracts` is the same rule for the Mac and the save; one
   table of examples is run against both.
   **Accepted limitations, written down rather than discovered later:** a bare shortener
@@ -74,10 +74,11 @@ workspace's records.
 
 ## The number
 
-The brief provisionally called this migration 0024. The runner refuses a gap in the
-sequence (`MIGRATION_VERSIONS_NOT_CONTIGUOUS`) and 0022 is the last file on main, so it
-is **0023**. If another 0023 lands first, the coordinator renumbers this file and the
-schema range with it.
+It is **0024**, and it was 0023 while it was being written. The runner refuses a gap in
+the sequence (`MIGRATION_VERSIONS_NOT_CONTIGUOUS`), so a migration takes the next free
+number rather than a reserved one; research's `0023_research.sql` landed on main first,
+and this file moved up behind it. The bytes did not change when it moved — only the
+name, the schema range and the pin.
 
 ## What this decision does not touch
 

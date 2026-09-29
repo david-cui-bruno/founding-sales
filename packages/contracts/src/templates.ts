@@ -36,7 +36,7 @@ export const SENDING_STOP_LINE = 'Reply "stop" and I will not email you again.';
  * capitals to their lower-case letters — an explicit map, because both `toLowerCase()`
  * and SQL `lower()` are locale-dependent and would make this two rules rather than one.
  * The same four steps, over the same code points, are what
- * `email_has_optout_link(text)` does in SQL (migration 0023), and
+ * `email_has_optout_link(text)` does in SQL (migration 0024), and
  * `packages/domain/test/db/support/optOutLinkCases.ts` is one table of examples run
  * against both — so the Mac's refusal, the save's refusal and the two CHECKs cannot
  * drift apart.
@@ -58,7 +58,7 @@ const URL_TOKEN = String.raw`https?://|www\.|mailto:`;
 
 /**
  * The dashes folded to `-` before matching, and the spaces folded to ` `. Named code
- * point by code point because migration 0023's `translate()` names exactly these and the
+ * point by code point because migration 0024's `translate()` names exactly these and the
  * two lists have to be the same list.
  */
 export const OPT_OUT_DASH_CODE_POINTS =
@@ -77,7 +77,7 @@ export const OPT_OUT_SPACE_REPLACEMENT = '                   ';
  * Turkish locale they disagree about `I` — the database and the Mac would then be
  * applying two different rules (review of PR 311, second round). Every phrase is ASCII
  * and NFKC has already folded a full-width letter into an ASCII one, so these 26 pairs
- * are the whole of it, and migration 0023's `translate()` names the same two strings.
+ * are the whole of it, and migration 0024's `translate()` names the same two strings.
  */
 export const OPT_OUT_UPPERCASE = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 export const OPT_OUT_LOWERCASE = 'abcdefghijklmnopqrstuvwxyz';

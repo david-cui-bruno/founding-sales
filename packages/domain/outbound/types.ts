@@ -54,7 +54,7 @@ export const SEND_REFUSAL_CODES = [
   /**
    * The bytes handed to the fence are not the bytes a send may carry: a composed body
    * past the column's 4,000 characters, or a visible opt-out link in the body or the
-   * subject (`optout_link`, migration 0023). The fence refuses rather than storing them,
+   * subject (`optout_link`, migration 0024). The fence refuses rather than storing them,
    * so bytes the table would throw on can never be frozen, and the step holds — the text
    * is what has to change.
    */

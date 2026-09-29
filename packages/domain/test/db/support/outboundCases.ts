@@ -502,7 +502,7 @@ export const OUTBOUND_CONSTRAINT_CASES: readonly OutboundCase[] = [
     run: async f => await insertFence(f, { body: t('   ') }),
   },
   {
-    // Migration 0023, restated on the bytes that actually leave: a URL whose own text
+    // Migration 0024, restated on the bytes that actually leave: a URL whose own text
     // says unsubscribe.
     constraint: 'outbound_messages_no_optout_link',
     run: async f =>

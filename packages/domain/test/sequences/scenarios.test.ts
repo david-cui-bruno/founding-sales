@@ -518,7 +518,7 @@ describe('the send hand-off is a rendered request, and the fence is G7-2’s', (
     expect(request?.templateContentHash).toBe(sequences.alpha.template.contentHash);
     expect(request?.subject).toContain(crm.collidingFirmName);
     expect(request?.body).toContain(FIXTURE_SIGN_OFF);
-    // Nothing appends a stop line since migration 0023.
+    // Nothing appends a stop line since migration 0024.
     expect(request?.body).not.toContain('Reply "stop"');
     expect(request?.body).not.toMatch(/\{[a-z_]+\}/);
     expect(request?.toAddress).toBe(crm.collidingEmail);

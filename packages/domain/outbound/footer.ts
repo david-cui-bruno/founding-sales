@@ -53,7 +53,7 @@ import { rewritePreparedBody, type OutboundFenceRow } from './fence.ts';
  * bytes differ, or refuses, and a refusal holds the fence for repair. **Every** body it
  * lets through is checked first — including the one it did not have to change, which is
  * how a fence that already carried bytes no send may carry is held rather than sent
- * (review of PR 296, P0; and, since migration 0023, a stray pre-0023 stop line or an
+ * (review of PR 296, P0; and, since migration 0024, a stray pre-0024 stop line or an
  * opt-out link is one of those).
  *
  * In-flight fences — `dispatching`, `reconciling` — and `unknown_terminal` ones are not

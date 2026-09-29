@@ -359,7 +359,7 @@ describe('the calling window', () => {
 describe('templates', () => {
   const rules = { footer: FOOTER, allowedVariables: ['firm', 'city'] };
   const body = `Hi {firm}, a short note about resident maintenance requests in {city}.\n\n${sendFooterBlock(FOOTER)}`;
-  /** The pre-0023 ending: the block, and the stop line under it. */
+  /** The pre-0024 ending: the block, and the stop line under it. */
   const legacyBlock = `${FOOTER.signOff}\n${SENDING_STOP_LINE}`;
 
   it('hashes the exact text that may be sent, and nothing else', () => {
@@ -377,7 +377,7 @@ describe('templates', () => {
     expect(footer).not.toContain(SENDING_STOP_LINE);
   });
 
-  it('approves a body in today’s shape and in the pre-0023 one, neither carrying an address', () => {
+  it('approves a body in today’s shape and in the pre-0024 one, neither carrying an address', () => {
     const withoutAddress = `Hi {firm}, a short note about {city}.\n\n${FOOTER.signOff}`;
     expect(templateTextIssues({ subject: 'A note', body: withoutAddress }, rules)).not.toContain(
       'template_footer_missing',
@@ -389,7 +389,7 @@ describe('templates', () => {
     expect(templateTextIssues({ subject: 'A note', body: legacyShape }, rules)).toEqual([]);
   });
 
-  it('refuses a visible opt-out link and approves the bare word (migration 0023)', () => {
+  it('refuses a visible opt-out link and approves the bare word (migration 0024)', () => {
     const refusals = (subject: string, text: string): string[] => templateTextIssues({ subject, body: text }, rules);
     expect(refusals('A note', `Stop at https://mail.example.test/unsubscribe/1\n\n${FOOTER.signOff}`)).toContain(
       'template_optout_link',
@@ -508,7 +508,7 @@ describe('the footer is composed at send', () => {
     }
   });
 
-  it('strips the pre-0023 stop line from a body approved before the decision', () => {
+  it('strips the pre-0024 stop line from a body approved before the decision', () => {
     expect(composeSendBody(legacy, { ...FOOTER, postalAddress: null })).toMatchObject({
       composed: true,
       body: composed,
@@ -687,7 +687,7 @@ describe('the footer is composed at send', () => {
   });
 
   it('says what is wrong with bytes about to be frozen on a fence: the length, and only the length', () => {
-    // Since 0023 there is no mandatory last line, so a function that is handed bytes and
+    // Since 0024 there is no mandatory last line, so a function that is handed bytes and
     // no sign-off has exactly one honest question left. Whether the *footer* is right is
     // `composeSendBody`'s, which is given the workspace's records.
     expect(sendBodyIssue(legacy)).toBeNull();

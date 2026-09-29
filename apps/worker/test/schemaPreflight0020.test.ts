@@ -169,7 +169,7 @@ describe('fss and migration 0020', () => {
       counts: {
         blocking: { oversizeFences: 0, oversizeTemplates: 1 },
         settings: [{ settingKey: 'business_time_zone', versions: 1, current: 1 }],
-        // This historical read calls today's composer, so migration 0023 moves two of
+        // This historical read calls today's composer, so migration 0024 moves two of
         // its counts. The stop line now comes off, so the held fence that carried
         // exactly the old bytes is one this read would rewrite (`alreadyComposed`
         // 1 → 0, `recomposed` 1 → 2 → 1); and a sign-off is recognised only as a

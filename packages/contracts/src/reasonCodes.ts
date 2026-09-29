@@ -19,7 +19,7 @@ export const HOLD_REASON_CODES = [
   'template_unapproved',
   /**
    * The bytes that would leave carry a visible opt-out link — from the sign-off, or
-   * from a variable's value, neither of which the approval saw (migration 0023). Its
+   * from a variable's value, neither of which the approval saw (migration 0024). Its
    * own code rather than `template_unapproved` because the operator has to be able to
    * read *why* an approved template stopped, and `hold_reason_code` is the field that
    * is read (review of PR 311, second round).

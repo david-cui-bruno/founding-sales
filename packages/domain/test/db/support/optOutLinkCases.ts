@@ -2,7 +2,7 @@
  * One table of examples for the no-visible-opt-out-link rule, run against **both**
  * spellings of it: `hasOptOutLink` in `@fss/contracts`
  * (`packages/domain/test/domain/optOutLink.test.ts`) and `email_has_optout_link` in
- * migration 0023 (`packages/domain/test/db/optOutLink.test.ts`). A rule written twice is
+ * migration 0024 (`packages/domain/test/db/optOutLink.test.ts`). A rule written twice is
  * a rule that drifts; this file is what makes the two answers the same answer.
  *
  * Every row of the reviewer's table in the review of PR 311 is here, with the answer the

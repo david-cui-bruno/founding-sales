@@ -212,7 +212,7 @@ describe('the template form (audit G03)', () => {
     expect(sequenceNotice('template_unapproved:template_footer_missing,template_body_multiple_urls')).toBe(
       'Not approved. Callie cannot tell where the sign-off starts: the email does not end with it. The email has more than one link.',
     );
-    // The server's newest rule (migration 0023): a visible opt-out link.
+    // The server's newest rule (migration 0024): a visible opt-out link.
     expect(sequenceNotice('template_unapproved:template_optout_link')).toBe(`Not approved. ${NO_OPTOUT_LINK_RULE}`);
     expect(sequenceNotice('steps_saved')).toBe('Saved.');
     expect(sequenceNotice('Message copied.')).toBe('Message copied.');

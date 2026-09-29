@@ -30,13 +30,13 @@ import {
  * A body or subject carrying a *visible opt-out link* is refused by a CHECK (12.6, and
  * the part of it David kept on 29 September 2026); the save refuses it first, as
  * `invalid_input`, rather than letting the database answer with a 500. The bare word is
- * allowed — the blanket ban on "unsubscribe" went with migration 0023, because it banned
+ * allowed — the blanket ban on "unsubscribe" went with migration 0024, because it banned
  * "reply unsubscribe", which is the very thing Callie wants to offer.
  *
  * Every body must be one Callie can give exactly one footer to — the sign-off, and the
  * workspace's postal address when it has one (`template_footer_missing`) — at every
  * approval and on every save that keeps or grants one. Migration 0019 dropped the CHECK
- * that repeated this rule and 0023 dropped the stop line from the block itself, so the
+ * that repeated this rule and 0024 dropped the stop line from the block itself, so the
  * rule is the guard and nothing waives it.
  */
 
@@ -175,7 +175,7 @@ export interface UpdateTemplateVersionInput extends TemplateTextInput {
 
 /**
  * Bytes this table would refuse outright: a visible opt-out link in the subject, the
- * body or the sign-off (`template_versions_no_optout_link`, migration 0023, and the
+ * body or the sign-off (`template_versions_no_optout_link`, migration 0024, and the
  * composed bytes at send). The save answers `invalid_input` rather than letting the
  * database answer with a 500.
  */

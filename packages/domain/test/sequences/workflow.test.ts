@@ -479,7 +479,7 @@ describe('templates edit in place (wave 2, S3)', () => {
     ).toEqual({ ok: false, reason: 'admin_only' });
     expect(
       await updateTemplateVersion(contextFor('alpha', 'admin'), {
-        // The *link*, not the word: since migration 0023 "click unsubscribe to stop" is
+        // The *link*, not the word: since migration 0024 "click unsubscribe to stop" is
         // a sentence the save accepts.
         ...text('Click https://mail.example.test/unsubscribe/1 to stop.'),
         templateVersionId: created.value.id,
@@ -530,7 +530,7 @@ describe('templates edit in place (wave 2, S3)', () => {
     // Lane W3-F: the footer is composed at send, so a footerless body is approvable —
     // desktop 1.0.12 writes them — and so is the signed shape desktop 1.0.11 requires
     // before it will enable Approve. What is never approvable is a body carrying the
-    // pre-0023 stop line somewhere that is not a block Callie can account for: nobody
+    // pre-0024 stop line somewhere that is not a block Callie can account for: nobody
     // may guess which of those words are the footer.
     const footerless = { ...text('ignored'), body: 'Just the words, no footer.' };
     const approvedFooterless = await createTemplateVersion(contextFor('alpha', 'admin'), {
@@ -544,14 +544,14 @@ describe('templates edit in place (wave 2, S3)', () => {
     if (!signed.ok) throw new Error(`the signed body was refused: ${signed.reason}`);
     expect(signed.value.body.endsWith(FIXTURE_SIGN_OFF)).toBe(true);
 
-    // And the pre-0023 shape, which every template approved before 29 September 2026 is
+    // And the pre-0024 shape, which every template approved before 29 September 2026 is
     // in, is approvable too: the block is recognised, so the send can replace it.
     const legacy = await createTemplateVersion(contextFor('alpha', 'admin'), {
       ...text('ignored'),
-      body: legacyFixtureBody('The pre-0023 shape.'),
+      body: legacyFixtureBody('The pre-0024 shape.'),
       approve: true,
     });
-    if (!legacy.ok) throw new Error(`the pre-0023 body was refused: ${legacy.reason}`);
+    if (!legacy.ok) throw new Error(`the pre-0024 body was refused: ${legacy.reason}`);
     expect(legacy.value.approvedAt).not.toBeNull();
 
     const misplaced = { ...text('ignored'), body: `${SENDING_STOP_LINE}\n\nAnd a postscript.` };
@@ -576,7 +576,7 @@ describe('templates edit in place (wave 2, S3)', () => {
     expect(broken.ok && broken.value.approvedAt).toBeNull();
 
     // And nothing in this workspace carries an opt-out link, whatever shape it is in:
-    // the save refuses one and so does `template_versions_no_optout_link` (0023).
+    // the save refuses one and so does `template_versions_no_optout_link` (0024).
     const { rows } = await database.session.query<{ count: string }>(
       `SELECT count(*) AS count FROM template_versions WHERE body ~* $1 OR subject ~* $1`,
       ['(https?://|www\\.)[^\\n]*(unsubscribe|opt[-_ ]?out|optout|remove[-_ ]?me|list-manage)'],

@@ -143,7 +143,7 @@ David, 29 September 2026:
 > language, and eligibility/suppression checks.
 
 So there are two rules here now where there used to be three, and the one that is left
-is about a **link**, not a word. Migration 0023 states it once, as a function both
+is about a **link**, not a word. Migration 0024 states it once, as a function both
 CHECKs call:
 
 ```sql
@@ -187,7 +187,7 @@ holds, so approval checks the subject, the body *and* the sign-off, and the comp
 and the fence check the rendered subject and the composed body before anything is
 frozen. A violation there is a handled hold and never an exception out of the insert,
 with the CHECK as the backstop underneath it: a *step* stopped before its fence exists
-holds under the `optout_link` reason code of its own (migration 0023 seeds it), so the
+holds under the `optout_link` reason code of its own (migration 0024 seeds it), so the
 operator can read why an approved template stopped; a fence already prepared refuses
 with `footer_not_composed` and carries `optout_link` as its detail.
 
@@ -201,7 +201,7 @@ untouched by this decision.
 
 The other two guards this section used to name are gone. Migration 0019 dropped
 `template_versions_approved_has_stop_line` and the approved-version immutability
-trigger, because wave 2 (S3) made an approved version editable in place; 0023 drops it
+trigger, because wave 2 (S3) made an approved version editable in place; 0024 drops it
 again, `IF EXISTS`, so the file that reverses the decision says so. And
 `sequence_steps_no_unsubscribe_link` went with `sequence_steps.linkedin_message` in
 0018.

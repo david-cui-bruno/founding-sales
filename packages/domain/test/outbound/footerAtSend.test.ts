@@ -38,7 +38,7 @@ import { settingLockName } from '../../settings/store.ts';
  *
  *   1. **Exactly one final footer block, whatever the address is doing.** The fence
  *      refuses to store a body too long for its column, and a send goes out with one
- *      block whether the address is set, changed or cleared. Since migration 0023 the
+ *      block whether the address is set, changed or cleared. Since migration 0024 the
  *      block is the sign-off and the address; a body approved before it loses its stop
  *      line here, at the send, rather than keeping it for ever.
  *   2. **A recognised block is removed and nothing else is.** `Hi Signed off` before the
@@ -148,7 +148,7 @@ describe('the fence never freezes a body a send may not carry', () => {
       'SELECT count(*) AS count FROM outbound_messages WHERE workspace_id = $1',
       [workspaceId()],
     );
-    // One question is left at the fence since 0023: the column's length. A footerless
+    // One question is left at the fence since 0024: the column's length. A footerless
     // body is not a refusal — the footer is composed at the claim, which is the case
     // below this one.
     for (const [body, detail] of [[`${'x'.repeat(4001)}\n${SIGN_OFF}`, 'body_too_long']] as const) {
@@ -207,7 +207,7 @@ describe('the fence never freezes a body a send may not carry', () => {
     });
     expect(linkedSubject).toEqual({ ok: false, reason: 'footer_not_composed', detail: 'optout_link' });
 
-    // And the bare word, which migration 0023 exists to allow, is stored.
+    // And the bare word, which migration 0024 exists to allow, is stored.
     const worded = await prepareBody(
       await seedFirm(world, world.alpha, 'fence-bare-word'),
       `Just reply unsubscribe and I'll stop.\n\nSigned off`,
@@ -372,12 +372,12 @@ describe('a fence prepared before the address is reconciled under the claim lock
     expect(held?.state).toBe('held');
   });
 
-  it('takes the stop line off a fence prepared before 0023, and sends the sign-off alone', async () => {
+  it('takes the stop line off a fence prepared before 0024, and sends the sign-off alone', async () => {
     // Every fence prepared before David's 29 September decision ends with the sign-off
     // and then the stop line. The block is recognised, so it is *replaced* rather than
     // appended to: the line goes at the send and no row was edited by the migration.
     await setPostalAddress(null);
-    const firm = await seedFirm(world, world.alpha, 'pre-0023');
+    const firm = await seedFirm(world, world.alpha, 'pre-0024');
     const legacy = `${TEMPLATE_BODY}\n${SENDING_STOP_LINE}`;
     const fenceId = await prepareFor(world, world.alpha, firm, { body: legacy });
     expect((await readFence(context(), fenceId))?.body).toBe(legacy);

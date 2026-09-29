@@ -13,7 +13,7 @@ import { createTestDatabase, type TestDatabase } from '../../db/testing/testData
 import { OPT_OUT_LINK_CASES } from './support/optOutLinkCases.ts';
 
 /**
- * `email_has_optout_link(text)` — migration 0023's spelling of the no-visible-opt-out-link
+ * `email_has_optout_link(text)` — migration 0024's spelling of the no-visible-opt-out-link
  * rule — against the same table `packages/domain/test/domain/optOutLink.test.ts` runs
  * against `hasOptOutLink`.
  *
@@ -54,7 +54,7 @@ describe('the database and TypeScript spell the opt-out-link rule the same way',
     // Outcomes agreeing on 26 examples is not the same claim as the two normalisations
     // being the same normalisation. This reads the migration and compares the three
     // translation tables directly (review of PR 311, second round).
-    const sql = readFileSync(new URL('../../db/migrations/0023_email_presentation.sql', import.meta.url), 'utf8');
+    const sql = readFileSync(new URL('../../db/migrations/0024_email_presentation.sql', import.meta.url), 'utf8');
     const unicodeLists = [...sql.matchAll(/U&'((?:\\[0-9A-Fa-f]{4})+)'/gu)].map(match =>
       [...(match[1] ?? '').matchAll(/\\([0-9A-Fa-f]{4})/gu)]
         .map(point => String.fromCodePoint(Number.parseInt(point[1] ?? '0', 16)))

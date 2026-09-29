@@ -250,7 +250,7 @@ export interface PreparedFence {
  *     guess which;
  *   * `mailbox_unknown` / `mailbox_inactive` — the owner has no connected mailbox;
  *   * `footer_not_composed` — the final bytes may not be frozen: longer than the column
- *     allows, or carrying a visible opt-out link (`optout_link`, migration 0023). The
+ *     allows, or carrying a visible opt-out link (`optout_link`, migration 0024). The
  *     footer is composed *before* this call (`packages/domain/outbound/footer.ts`,
  *     `sequences/executions.ts`), and this is the guard that makes that unconditional:
  *     whatever the caller did — a sign-off supplied straight to the API, a
@@ -544,7 +544,7 @@ export const SENT_TOMBSTONE_FALLBACK_SUBJECT = '(recovered from the Sent folder)
 /** A Subject header as a fence subject: one line, within the column's bound, or the fallback. */
 export function tombstoneSubject(subject: string | null): string {
   const flattened = (subject ?? '').replace(/\s+/gu, ' ').trim().slice(0, 160).trim();
-  // The table refuses a blank subject and a visible opt-out link. Since migration 0023
+  // The table refuses a blank subject and a visible opt-out link. Since migration 0024
   // the bare word is not one of those, so a recovered subject that merely says
   // "unsubscribe" keeps its own words — losing the original subject of a real send is
   // the worse answer (review of PR 311).

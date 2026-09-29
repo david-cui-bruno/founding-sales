@@ -113,7 +113,7 @@ export type SentMessageRecovery =
       /**
        * Why they are not, when the reason is not simply that nobody could read them:
        * `optout_link` means Gmail's own bytes carry a visible opt-out link, which
-       * `outbound_messages_no_optout_link` refuses (migration 0023). The fence is still
+       * `outbound_messages_no_optout_link` refuses (migration 0024). The fence is still
        * marked `sent` — the send happened — with the bytes it already stored.
        */
       readonly sentBytesUnverifiedReason?: 'optout_link' | undefined;

@@ -11,11 +11,11 @@ import { loadMigrations } from '../../db/migrationRunner.ts';
  * launches the migration task. Stale text inside an applied migration stays stale
  * forever. That is the cost of the checksum, and it is the right cost.
  *
- * **0022 and 0023 are pinned before they are applied**, and that is not the same claim
+ * **0022, 0023 and 0024 are pinned before they are applied**, and that is not the same claim
  * as the rest. The twenty-one below them say "this is what production recorded" —
  * production ran schema 21 on 28 September 2026 — and these two say "these are the
  * bytes the release will record", each written as the last commit of its lane once the
- * file was final (J-facts for 0022, R for 0023).
+ * file was final (J-facts for 0022, R for 0023, E for 0024).
  * 0022's pin has moved with each round of review of PR 307 — a workspace foreign
  * key and a column-level UPDATE grant in the first, a CHECK function over `detail`
  * in the second. The rule those moves follow: **the file changes in the commit that

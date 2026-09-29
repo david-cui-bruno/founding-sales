@@ -82,7 +82,7 @@ describe('forward-only migrations on a fresh database', () => {
     expect(Number(reasons.rows[0]?.count)).toBeGreaterThan(20);
   });
 
-  it('refuses a database that is not UTF8, before it applies anything (migration 0023)', async () => {
+  it('refuses a database that is not UTF8, before it applies anything (migration 0024)', async () => {
     // `normalize(…, NFKC)` — the opt-out-link rule's first step — is only implemented on
     // a UTF8 database. The runner asks once and refuses by name, so the answer arrives
     // before a file is applied rather than out of a CHECK the first time it is used.
@@ -226,7 +226,7 @@ async function seedProductionShape(session: SessionQueryable): Promise<Productio
   const crm = await seedCrm(session, seeded);
   const mail = await seedMail(session, seeded, crm);
   // Schema 18 still carried `template_versions_approved_has_stop_line`, so the seed is
-  // the pre-0023 body: this is a database as production actually was.
+  // the pre-0024 body: this is a database as production actually was.
   const outbound = await seedOutbound(session, seeded, crm, mail, LEGACY_FIXTURE_BODY);
   const workspaceId = seeded.alpha.workspaceId;
   const adminId = seeded.alpha.admin.userId;

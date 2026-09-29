@@ -282,7 +282,7 @@ export function holdReasonForRefusal(
     // `footer_not_composed` joins these two (lane W3-F): a body that cannot be given a
     // single final footer block is a body nobody may send, and the fix is the template's
     // text, so the step waits under the reason an author can act on. (A *step* stopped
-    // by an opt-out link holds under `optout_link` since migration 0023; a fence already
+    // by an opt-out link holds under `optout_link` since migration 0024; a fence already
     // prepared carries the reason in its refusal detail.)
     case 'template_unapproved':
     case 'template_mismatch':

@@ -199,7 +199,7 @@ describe('the step hands over composed bytes', () => {
       eligibility: allowAllEligibility(),
       sendHandoff: handoff,
     });
-    // Its own hold reason since migration 0023: the operator has to be able to read why
+    // Its own hold reason since migration 0024: the operator has to be able to read why
     // an approved template stopped (review of PR 311, second round).
     expect(outcome).toMatchObject({ kind: 'held', reasonCode: 'optout_link' });
     expect(handoff.prepared).toEqual([]);

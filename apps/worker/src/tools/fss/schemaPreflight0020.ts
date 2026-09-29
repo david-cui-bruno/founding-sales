@@ -40,7 +40,7 @@ import type { AdminInvocation, AdminOutcome } from './admin.ts';
  *
  * Composition is measured with **no address**, because that is what the release meets:
  * schema 19's CHECK makes a `postal_address` row impossible, so on the day of the release
- * the footer is the sign-off alone (migration 0023). The worst case an
+ * the footer is the sign-off alone (migration 0024). The worst case an
  * address would add is reported beside it, not as a refusal: `withMaxAddress` is what a
  * 200-character address (`POSTAL_ADDRESS_MAX_LENGTH`, plus its newline) would push past
  * the limit, so the owner knows which template to shorten before configuring one.

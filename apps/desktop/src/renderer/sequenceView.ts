@@ -257,7 +257,7 @@ function templatePanel(
   const approved = template.approvedAt !== null;
   const retired = template.retiredAt !== null;
   // The same boundary the server applies: a complete separate block at the end, in
-  // today's shape or the pre-0023 one. `includes` would call `Hi David` a footer.
+  // today's shape or the pre-0024 one. `includes` would call `Hi David` a footer.
   const footerPresent = endsWithFooterBlock(template.body, template.footerSignOff);
   // Column by column, as the server asks it: joining them would invent an adjacency
   // between the last line of the subject and the first of the body, and refuse a
@@ -518,7 +518,7 @@ export function templateFooter(signOff: string): string {
   return signOff.trim();
 }
 
-/** The pre-0023 ending, recognised only so an older body's typed part can still be shown. */
+/** The pre-0024 ending, recognised only so an older body's typed part can still be shown. */
 function legacyTemplateFooter(signOff: string): string {
   return `${signOff.trim()}\n${SENDING_STOP_LINE}`;
 }
@@ -534,7 +534,7 @@ export function composeTemplateBody(body: string, signOff: string): string {
 
 /**
  * The part of a stored body the person typed: everything before the footer, when it is
- * there. Both endings are recognised — today's sign-off and the pre-0023 sign-off with
+ * there. Both endings are recognised — today's sign-off and the pre-0024 sign-off with
  * the stop line under it — so editing a template approved before the decision shows the
  * words somebody wrote rather than the words plus a footer they cannot delete.
  *

@@ -468,7 +468,7 @@ async function runEmailStep(
   });
   if (!composed.composed) {
     // The reason is persisted as the code, because `hold_reason_code` is the field the
-    // card and the operator read; `optout_link` has its own since migration 0023.
+    // card and the operator read; `optout_link` has its own since migration 0024.
     const reasonCode =
       composed.reason === 'postal_address_required'
         ? 'scoped_pause'

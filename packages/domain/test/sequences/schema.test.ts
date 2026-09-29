@@ -209,7 +209,7 @@ describe('template_versions is extended, not replaced (11.1)', () => {
     expect(rows[0]?.count).toBe('1');
   });
 
-  it('refuses an opt-out link and accepts the bare word (migration 0023)', async () => {
+  it('refuses an opt-out link and accepts the bare word (migration 0024)', async () => {
     // David, 29 September 2026: the blanket ban on the word goes, the ban on a visible
     // opt-out link stays. "Reply unsubscribe" is the thing the old CHECK made unwritable.
     const insert = (body: string): string =>

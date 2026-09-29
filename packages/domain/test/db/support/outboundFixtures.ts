@@ -66,7 +66,7 @@ export const FIXTURE_PLACEMENT_RULE = 'email-window.1';
 export const FIXTURE_BODY = 'Hello.\n\nSigned off';
 
 /**
- * The same body in the pre-0023 shape. A seed on a schema-18 database needs it: back
+ * The same body in the pre-0024 shape. A seed on a schema-18 database needs it: back
  * there `template_versions_approved_has_stop_line` refused an approved body without it.
  */
 export const LEGACY_FIXTURE_BODY = `${FIXTURE_BODY}\nReply "stop" and I will not email you again.`;

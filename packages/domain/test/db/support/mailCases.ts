@@ -1414,7 +1414,7 @@ export const MAIL_CONSTRAINT_CASES: readonly MailCase[] = [
       ),
   },
   {
-    // Migration 0023: the *link*, not the word. A URL whose own text says unsubscribe.
+    // Migration 0024: the *link*, not the word. A URL whose own text says unsubscribe.
     constraint: 'template_versions_no_optout_link',
     run: async f =>
       await f.session.query(

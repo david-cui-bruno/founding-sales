@@ -95,7 +95,7 @@ export interface ApplyMigrationsOptions {
 /**
  * The one thing about the *database* the runner checks before it applies anything.
  *
- * Migration 0023's `email_has_optout_link` calls `normalize(…, NFKC)`, which PostgreSQL
+ * Migration 0024's `email_has_optout_link` calls `normalize(…, NFKC)`, which PostgreSQL
  * only implements on a UTF8 database; on any other encoding it raises, and it would
  * raise from inside the `CREATE FUNCTION`'s first use rather than anywhere a person is
  * looking. Asked once, here, so the answer is a named refusal before a single file is
@@ -111,7 +111,7 @@ async function assertUtf8Database(session: SessionQueryable): Promise<void> {
   if (encoding !== 'UTF8') {
     throw new MigrationError(
       'MIGRATION_ENCODING_NOT_UTF8',
-      `the database's server_encoding is ${encoding}; the schema needs UTF8 (migration 0023 normalizes text as NFKC). Nothing was applied.`,
+      `the database's server_encoding is ${encoding}; the schema needs UTF8 (migration 0024 normalizes text as NFKC). Nothing was applied.`,
     );
   }
 }
