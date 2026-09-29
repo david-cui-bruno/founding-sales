@@ -169,15 +169,23 @@ describe('fss and migration 0020', () => {
       counts: {
         blocking: { oversizeFences: 0, oversizeTemplates: 1 },
         settings: [{ settingKey: 'business_time_zone', versions: 1, current: 1 }],
-        fences: { prepared: 2, held: 1, alreadyComposed: 1, recomposed: 1, withoutTemplateVersion: 0, heldForRepair: 1 },
+        // This historical read calls today's composer, so migration 0024 moves two of
+        // its counts. The stop line now comes off, so the held fence that carried
+        // exactly the old bytes is one this read would rewrite (`alreadyComposed`
+        // 1 → 0, `recomposed` 1 → 2 → 1); and a sign-off is recognised only as a
+        // complete separate block, so the fence whose sign-off has no blank line above
+        // it is held for a person instead of rewritten (`heldForRepair` 1 → 2).
+        fences: { prepared: 2, held: 1, alreadyComposed: 0, recomposed: 1, withoutTemplateVersion: 0, heldForRepair: 2 },
         templates: { versions: 4, approved: 4, legacyFooterBlock: 1, footerless: 1, ambiguousFooter: 1 },
         postalAddress: { configured: false },
         oversize: { fenceIds: [], templateVersionIds: [oversizeTemplateId] },
-        repair: { fenceIds: [repairFenceId], templateVersionIds: [ambiguousTemplateId] },
+        repair: { templateVersionIds: [ambiguousTemplateId] },
       },
     });
-    // The fence whose footer is stale is the one that would be recomposed; the read
-    // writes nothing, whatever it found.
+    const repaired = ((report['counts'] as Record<string, Record<string, string[]>>)['repair'] ?? {})['fenceIds'] ?? [];
+    expect([...repaired].sort()).toEqual([repairFenceId, staleFenceId].sort());
+    // The read writes nothing, whatever it found: the stale fence still carries its own
+    // bytes afterwards.
     const { rows } = await database.session.query<{ body: string }>(
       'SELECT body FROM outbound_messages WHERE workspace_id = $1 AND id = $2',
       [workspaceId, staleFenceId],
@@ -193,9 +201,9 @@ describe('fss and migration 0020', () => {
     // ambiguous template are still counted, still named, and still not blockers.
     expect(after['counts']).toMatchObject({
       blocking: { oversizeFences: 0, oversizeTemplates: 0 },
-      fences: { heldForRepair: 1 },
+      fences: { heldForRepair: 2 },
       templates: { ambiguousFooter: 1 },
-      repair: { fenceIds: [repairFenceId], templateVersionIds: [ambiguousTemplateId] },
+      repair: { templateVersionIds: [ambiguousTemplateId] },
     });
 
     const { code } = await run(['migrate']);

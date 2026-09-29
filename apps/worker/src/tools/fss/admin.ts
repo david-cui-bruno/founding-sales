@@ -774,6 +774,9 @@ function missingFenceLine(workspaceId: string, mailboxId: string, message: strin
         stepExecutionId: recovery.stepExecutionId,
         stepCompleted: recovery.stepCompleted,
         sentBytesVerified: recovery.sentBytesVerified,
+        ...(recovery.sentBytesUnverifiedReason === undefined
+          ? {}
+          : { sentBytesUnverifiedReason: recovery.sentBytesUnverifiedReason }),
       };
     case 'tombstoned':
       return {
@@ -922,6 +925,9 @@ export async function mailboxReconcileSentCommand(invocation: AdminInvocation): 
           mailboxId: mailbox.id,
           outboundMessageId: recovery.outboundMessageId,
           message: redactedMessageId(message.rfcMessageId),
+          ...(recovery.sentBytesUnverifiedReason === undefined
+            ? {}
+            : { reason: recovery.sentBytesUnverifiedReason }),
         });
       }
       if (recovery.outcome === 'unattached') {

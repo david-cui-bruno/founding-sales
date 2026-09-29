@@ -52,8 +52,9 @@ import { rewritePreparedBody, type OutboundFenceRow } from './fence.ts';
  * atomic `prepared → dispatching`: it recomposes the stored body and rewrites it when the
  * bytes differ, or refuses, and a refusal holds the fence for repair. **Every** body it
  * lets through is checked first — including the one it did not have to change, which is
- * how a schema-19 fence that already carried two stop lines is held rather than sent
- * (review of PR 296, P0).
+ * how a fence that already carried bytes no send may carry is held rather than sent
+ * (review of PR 296, P0; and, since migration 0024, a stray pre-0024 stop line or an
+ * opt-out link is one of those).
  *
  * In-flight fences — `dispatching`, `reconciling` — and `unknown_terminal` ones are not
  * touched here at all: their bytes may already have left, and Appendix B's reconciliation
@@ -185,7 +186,10 @@ export async function reconcileFenceFooter(
     ...(options.actor === undefined ? {} : { actor: options.actor }),
   });
   if (!rewritten.ok) {
-    return { reconciled: false, reason: 'footer_not_composed', detail: rewritten.reason };
+    // The rewrite's own detail, not just its code: `optout_link` is the difference
+    // between "a footer nobody could compose" and "these bytes carry a link", and the
+    // operator reads this string (review of PR 311, second round).
+    return { reconciled: false, reason: 'footer_not_composed', detail: rewritten.detail ?? rewritten.reason };
   }
   return { reconciled: true, fence: rewritten.value, rewritten: true };
 }

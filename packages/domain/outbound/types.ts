@@ -52,11 +52,11 @@ export const SEND_REFUSAL_CODES = [
   'template_unapproved',
   'template_mismatch',
   /**
-   * The bytes handed to the fence are not the bytes a send may carry: no final stop
-   * line, the stop line more than once, or a composed body past the column's 4,000
-   * characters (lane W3-F). The fence refuses rather than storing them, so no footerless
-   * body can ever be frozen, and the step holds `template_unapproved` — the text is what
-   * has to change.
+   * The bytes handed to the fence are not the bytes a send may carry: a composed body
+   * past the column's 4,000 characters, or a visible opt-out link in the body or the
+   * subject (`optout_link`, migration 0024). The fence refuses rather than storing them,
+   * so bytes the table would throw on can never be frozen, and the step holds — the text
+   * is what has to change.
    */
   'footer_not_composed',
   /**

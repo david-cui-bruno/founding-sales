@@ -368,8 +368,8 @@ describe('sends whose fence a point-in-time restore lost (lane g73)', () => {
     const fenceId = await world.prepare(world.alpha);
     const prepared = await readFence(context(), fenceId);
     const whatLeft = `${prepared?.body ?? ''}`.replace(
-      'Reply "stop" and I will not email you again.',
-      '1 Example Way, Suite 2\nReply "stop" and I will not email you again.',
+      'Signed off',
+      'Signed off\n1 Example Way, Suite 2',
     );
     expect(whatLeft).not.toBe(prepared?.body);
     const at = '2026-09-24T18:00:00.000Z';
@@ -407,6 +407,54 @@ describe('sends whose fence a point-in-time restore lost (lane g73)', () => {
       [workspaceId(), fenceId],
     );
     expect(events.rows[0]?.detail['sentBytes']).toBe('verified');
+  });
+
+  it('marks the fence sent from its stored bytes when the verified ones carry an opt-out link (P1-b)', async () => {
+    // The send already happened and cannot be unsent. Recording what Gmail holds would
+    // break `outbound_messages_no_optout_link` and abort the restore transaction, so the
+    // fence is marked `sent` with the bytes it already stores and the operator is told
+    // both that the bytes are unverified and why (review of PR 311, second round).
+    const fenceId = await world.prepare(world.alpha);
+    const prepared = await readFence(context(), fenceId);
+    const at = '2026-09-24T20:30:00.000Z';
+    const gmail = clientWithSent([
+      sentMessage({
+        header: prepared?.providerMessageIdHeader ?? '',
+        to: world.alpha.recipientAddress,
+        at,
+        body: `${prepared?.body ?? ''}\n\nUnsubscribe: https://x.example/a`,
+      }),
+    ]);
+    const scan = await scanSentFolder(context(), scanDeps(gmail), { mailboxId: world.alpha.mailboxId, ...around(at) });
+    const message = scan.messages[0];
+    expect(message).toBeDefined();
+    if (message === undefined) return;
+    const recovery = await recoverSentFolderMessage(context(), {
+      mailbox: mailbox(),
+      message,
+      actor: 'test-restore',
+      readSentBytes: async sent =>
+        await readSentMessageBytes(context(), scanDeps(gmail), {
+          mailboxId: world.alpha.mailboxId,
+          providerMessageId: sent.providerMessageId,
+        }),
+    });
+    expect(recovery).toMatchObject({
+      outcome: 'pre_dispatch_marked_sent',
+      sentBytesVerified: false,
+      sentBytesUnverifiedReason: 'optout_link',
+    });
+
+    const fence = await readFence(context(), fenceId);
+    expect(fence?.state).toBe('sent');
+    expect(fence?.body).toBe(prepared?.body);
+    const events = await world.database.session.query<{ detail: Record<string, unknown> }>(
+      `SELECT detail FROM outbound_message_events
+        WHERE workspace_id = $1 AND outbound_message_id = $2 AND to_state = 'sent'`,
+      [workspaceId(), fenceId],
+    );
+    expect(events.rows[0]?.detail['sentBytes']).toBe('unverified');
+    expect(events.rows[0]?.detail['unverifiedReason']).toBe('optout_link');
   });
 
   it('will not call a body verified without the subject it was sent with', async () => {

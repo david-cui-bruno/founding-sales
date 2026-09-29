@@ -1,7 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { SENDING_STOP_LINE } from '@fss/contracts';
 import { makeStepExecution } from '../../db/testing/stepExecutions.ts';
-import { holdFence, prepareOutboundMessage, readFence, readFenceEvents, renderedHash } from '../../outbound/fence.ts';
+import {
+  holdFence,
+  prepareOutboundMessage,
+  readFence,
+  readFenceEvents,
+  renderedHash,
+  rewritePreparedBody,
+} from '../../outbound/fence.ts';
 import { composeBodyForWorkspace } from '../../outbound/footer.ts';
 import { dispatchOutboundMessage, type SendReport } from '../../outbound/send.ts';
 import { sendFooterBlock } from '../../src/rules/templates.ts';
@@ -29,10 +36,12 @@ import { settingLockName } from '../../settings/store.ts';
  *
  * Five things are asserted here, each the answer to one of that review's P0s:
  *
- *   1. **Exactly one final stop line, whatever the address is doing.** The fence refuses
- *      to store a body without one, with two, or too long for its column; and a send goes
- *      out with one whether the address is set, changed or cleared.
- *   2. **The legacy block is removed and nothing else is.** `Hi Signed off` before the
+ *   1. **Exactly one final footer block, whatever the address is doing.** The fence
+ *      refuses to store a body too long for its column, and a send goes out with one
+ *      block whether the address is set, changed or cleared. Since migration 0024 the
+ *      block is the sign-off and the address; a body approved before it loses its stop
+ *      line here, at the send, rather than keeping it for ever.
+ *   2. **A recognised block is removed and nothing else is.** `Hi Signed off` before the
  *      stop line keeps its words — the sign-off is never stripped a second time.
  *   3. **Fences prepared before the address are reconciled under the claim lock.** A
  *      `prepared` fence and a `held` one both leave with the current footer, and the
@@ -133,17 +142,16 @@ async function prepareBody(firm: SeededFirm, body: string): Promise<ReturnType<t
 }
 
 describe('the fence never freezes a body a send may not carry', () => {
-  it('refuses a footerless body, a doubled stop line and one past 4,000 characters, and writes no row', async () => {
+  it('refuses a body past 4,000 characters, writes no row, and composes a footerless one at send', async () => {
     const firm = await seedFirm(world, world.alpha, 'fence-guard');
     const before = await world.database.session.query<{ count: string }>(
       'SELECT count(*) AS count FROM outbound_messages WHERE workspace_id = $1',
       [workspaceId()],
     );
-    for (const [body, detail] of [
-      ['Just the words, no footer.', 'footer_missing'],
-      [`${TEMPLATE_BODY}\n\n${TEMPLATE_BODY}`, 'stop_line_repeated'],
-      [`${'x'.repeat(4001)}\n${SENDING_STOP_LINE}`, 'body_too_long'],
-    ] as const) {
+    // One question is left at the fence since 0024: the column's length. A footerless
+    // body is not a refusal — the footer is composed at the claim, which is the case
+    // below this one.
+    for (const [body, detail] of [[`${'x'.repeat(4001)}\n${SIGN_OFF}`, 'body_too_long']] as const) {
       expect(await prepareBody(firm, body), detail).toEqual({
         ok: false,
         reason: 'footer_not_composed',
@@ -157,9 +165,107 @@ describe('the fence never freezes a body a send may not carry', () => {
     expect(Number(after.rows[0]?.count)).toBe(Number(before.rows[0]?.count));
 
     // The same firm, with bytes a send may carry: the guard refused the body and not
-    // the world.
+    // the world. And a footerless body is accepted and signed at the claim.
     const accepted = await prepareBody(firm, TEMPLATE_BODY);
     expect(accepted.ok).toBe(true);
+    const footerless = await prepareBody(await seedFirm(world, world.alpha, 'fence-footerless'), 'Just the words.');
+    expect(footerless.ok).toBe(true);
+  });
+
+  it('refuses final bytes carrying an opt-out link, as a hold, and stores the bare word (P1-2)', async () => {
+    // These bytes would break `outbound_messages_no_optout_link`. The fence answers with
+    // a refusal its caller holds on, so the CHECK is the backstop and not the thing that
+    // raises. The subject is checked too: composition never sees it.
+    const firm = await seedFirm(world, world.alpha, 'fence-optout');
+    expect(await prepareBody(firm, `${TEMPLATE_BODY}\n\nUnsubscribe: https://x.example/a`)).toEqual({
+      ok: false,
+      reason: 'footer_not_composed',
+      detail: 'optout_link',
+    });
+    const subjectFirm = await seedFirm(world, world.alpha, 'fence-optout-subject');
+    const linkedSubject = await prepareOutboundMessage(context(), {
+      stepExecutionId: await makeStepExecution(world.database.session, {
+        workspaceId: workspaceId(),
+        firmId: subjectFirm.firmId,
+        opportunityId: subjectFirm.opportunityId,
+        userId: world.alpha.workspace.salesperson.userId,
+        templateVersionId: world.alpha.templateVersionId,
+      }),
+      firmId: subjectFirm.firmId,
+      contactId: subjectFirm.contactId,
+      opportunityId: subjectFirm.opportunityId,
+      ownerUserId: world.alpha.workspace.salesperson.userId,
+      templateVersionId: world.alpha.templateVersionId,
+      templateContentHash: world.alpha.templateContentHash,
+      emailAddressId: subjectFirm.routeId,
+      toAddress: subjectFirm.address,
+      subject: 'Opt out at https://x.example/a',
+      body: TEMPLATE_BODY,
+      sendAt: '2026-09-23T09:00:00.000Z',
+      sourceZone: 'UTC',
+      businessDate: '2026-09-23',
+    });
+    expect(linkedSubject).toEqual({ ok: false, reason: 'footer_not_composed', detail: 'optout_link' });
+
+    // And the bare word, which migration 0024 exists to allow, is stored.
+    const worded = await prepareBody(
+      await seedFirm(world, world.alpha, 'fence-bare-word'),
+      `Just reply unsubscribe and I'll stop.\n\nSigned off`,
+    );
+    expect(worded.ok).toBe(true);
+    if (!worded.ok) return;
+    const stored = await readFence(context(), worded.value.outboundMessageId);
+    expect(stored?.body).toContain('reply unsubscribe');
+  });
+
+  it('carries the rewrite refusal detail, and cannot be reached from a stored row (P1-c)', async () => {
+    await setPostalAddress(null);
+    const firm = await seedFirm(world, world.alpha, 'rewrite-detail');
+    const fenceId = await prepareFor(world, world.alpha, firm);
+
+    // The guard on the rewrite path names what is wrong, and `reconcileFenceFooter`
+    // passes that detail on rather than repeating its own code — the operator reads
+    // `optout_link`, not `footer_not_composed` twice.
+    expect(
+      await rewritePreparedBody(context(), {
+        outboundMessageId: fenceId,
+        body: `${TEMPLATE_BODY}\n\nUnsubscribe: https://x.example/a`,
+        reason: 'footer_composed_at_send',
+      }),
+    ).toEqual({ ok: false, reason: 'footer_not_composed', detail: 'optout_link' });
+
+    // And it is belt and braces on purpose: a stored subject cannot carry a link in the
+    // first place, because the CHECK refuses the UPDATE that would put one there.
+    await expect(
+      world.database.session.query('UPDATE outbound_messages SET subject = $3 WHERE workspace_id = $1 AND id = $2', [
+        workspaceId(),
+        fenceId,
+        'Opt out at https://x.example/a',
+      ]),
+    ).rejects.toThrow(/outbound_messages_no_optout_link/);
+  });
+
+  it('holds a fence whose body carries a stray legacy stop line above a recognised block (P1-3)', async () => {
+    // The P0 of the review of PR 296, restored under the new rule. The final block is
+    // recognised and would be replaced, and the earlier stop line would go out with the
+    // send: composing is not the composer's to do here, so the fence is held.
+    await setPostalAddress(null);
+    const firm = await seedFirm(world, world.alpha, 'stray-stop-line');
+    const malformed = `Hello\n${SENDING_STOP_LINE}\n\n${SIGN_OFF}\n${SENDING_STOP_LINE}`;
+    const fenceId = await prepareFor(world, world.alpha, firm);
+    await world.database.session.query('UPDATE outbound_messages SET body = $3 WHERE workspace_id = $1 AND id = $2', [
+      workspaceId(),
+      fenceId,
+      malformed,
+    ]);
+    await world.clearHolds(workspaceId());
+
+    const { report, sent } = await dispatch(fenceId);
+    expect(report.outcome, why(report)).toBe('held');
+    expect(report.refusal).toBe('footer_not_composed');
+    expect(report.detail).toBe('footer_ambiguous');
+    expect(sent).toHaveLength(0);
+    expect((await readFence(context(), fenceId))?.body).toBe(malformed);
   });
 });
 
@@ -182,7 +288,7 @@ describe('a fence prepared before the address is reconciled under the claim lock
       postalAddress: ADDRESS,
     })}`;
     expect(sent.at(-1)?.body).toBe(composed);
-    expect(sent.at(-1)?.body.split(SENDING_STOP_LINE)).toHaveLength(2);
+    expect(sent.at(-1)?.body).not.toContain(SENDING_STOP_LINE);
 
     // What left is what the fence froze, hash included.
     const after = await readFence(context(), fenceId);
@@ -230,7 +336,7 @@ describe('a fence prepared before the address is reconciled under the claim lock
     expect(events.map(event => event.toState)).toEqual(['prepared', 'dispatching', 'sent']);
   });
 
-  it('drops an address that was cleared, and still sends exactly one stop line', async () => {
+  it('drops an address that was cleared, and sends the sign-off alone', async () => {
     await setPostalAddress(ADDRESS);
     const firm = await seedFirm(world, world.alpha, 'address-cleared');
     const composed = await composeBodyForWorkspace(context(), { body: TEMPLATE_BODY, signOff: SIGN_OFF });
@@ -245,7 +351,7 @@ describe('a fence prepared before the address is reconciled under the claim lock
     expect(report.outcome, why(report)).toBe('sent');
     expect(sent.at(-1)?.body).toBe(TEMPLATE_BODY);
     expect(sent.at(-1)?.body).not.toContain(ADDRESS);
-    expect(sent.at(-1)?.body.split(SENDING_STOP_LINE)).toHaveLength(2);
+    expect(sent.at(-1)?.body).not.toContain(SENDING_STOP_LINE);
   });
 
   it('holds a body whose greeting ends with the sign-off rather than editing it (the `Hi David` bug)', async () => {
@@ -266,37 +372,25 @@ describe('a fence prepared before the address is reconciled under the claim lock
     expect(held?.state).toBe('held');
   });
 
-  it('holds a schema-19 fence that already carries two stop lines, even though nothing needs composing', async () => {
-    // The P0 of the review of PR 296. The template contract allowed a sign-off that is
-    // itself the stop sentence, so a fence prepared before 0020 can hold a body ending in
-    // two of them; composition returns the same bytes, so only a check on the *unchanged*
-    // branch can catch it.
+  it('takes the stop line off a fence prepared before 0024, and sends the sign-off alone', async () => {
+    // Every fence prepared before David's 29 September decision ends with the sign-off
+    // and then the stop line. The block is recognised, so it is *replaced* rather than
+    // appended to: the line goes at the send and no row was edited by the migration.
     await setPostalAddress(null);
-    const firm = await seedFirm(world, world.alpha, 'two-stop-lines');
-    const doubled = `Hello.\n\n${SENDING_STOP_LINE}\n${SENDING_STOP_LINE}`;
-    const fenceId = await prepareFor(world, world.alpha, firm);
-    // Straight into the column, as the previous release would have left it: the new
-    // preparation guard refuses these, which is why this one is written behind it.
-    await world.database.session.query('UPDATE outbound_messages SET body = $3 WHERE workspace_id = $1 AND id = $2', [
-      workspaceId(),
-      fenceId,
-      doubled,
-    ]);
-    await world.database.session.query(
-      `UPDATE template_versions SET footer_sign_off = $3 WHERE workspace_id = $1 AND id = $2`,
-      [workspaceId(), world.alpha.templateVersionId, SENDING_STOP_LINE],
-    );
+    const firm = await seedFirm(world, world.alpha, 'pre-0024');
+    const legacy = `${TEMPLATE_BODY}\n${SENDING_STOP_LINE}`;
+    const fenceId = await prepareFor(world, world.alpha, firm, { body: legacy });
+    expect((await readFence(context(), fenceId))?.body).toBe(legacy);
     await world.clearHolds(workspaceId());
 
     const { report, sent } = await dispatch(fenceId);
-    expect(report.outcome, why(report)).toBe('held');
-    expect(sent).toHaveLength(0);
-    expect((await readFence(context(), fenceId))?.body).toBe(doubled);
-
-    await world.database.session.query(
-      `UPDATE template_versions SET footer_sign_off = $3 WHERE workspace_id = $1 AND id = $2`,
-      [workspaceId(), world.alpha.templateVersionId, SIGN_OFF],
-    );
+    expect(report.outcome, why(report)).toBe('sent');
+    expect(sent.at(-1)?.body).toBe(TEMPLATE_BODY);
+    expect(sent.at(-1)?.body).not.toContain(SENDING_STOP_LINE);
+    // What left is what the fence froze.
+    const after = await readFence(context(), fenceId);
+    expect(after?.body).toBe(TEMPLATE_BODY);
+    expect(after?.renderedHash).toBe(renderedHash(TEMPLATE_SUBJECT, TEMPLATE_BODY));
   });
 });
 
@@ -395,7 +489,7 @@ describe('a body that cannot be composed is a handled hold', () => {
   it('holds the fence for repair when the address would push it past 4,000, and never calls Gmail', async () => {
     await setPostalAddress(null);
     const firm = await seedFirm(world, world.alpha, 'too-long');
-    const footer = `${SIGN_OFF}\n${SENDING_STOP_LINE}`;
+    const footer = SIGN_OFF;
     const body = `${'x'.repeat(4000 - footer.length - 2)}\n\n${footer}`;
     const fenceId = await prepareFor(world, world.alpha, firm, { body });
     expect((await readFence(context(), fenceId))?.body).toHaveLength(4000);

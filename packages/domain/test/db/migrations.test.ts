@@ -6,7 +6,7 @@ import type { SessionQueryable } from '../../db/queryable.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from './support/fixtures.ts';
 import { seedCrm } from './support/crmFixtures.ts';
 import { seedMail } from './support/mailFixtures.ts';
-import { seedOutbound } from './support/outboundFixtures.ts';
+import { LEGACY_FIXTURE_BODY, seedOutbound } from './support/outboundFixtures.ts';
 
 /**
  * Tables the foundation migration creates and later migrations keep, scoped and
@@ -80,6 +80,33 @@ describe('forward-only migrations on a fresh database', () => {
   it('seeds the closed hold reason-code set', async () => {
     const reasons = await database.session.query<{ count: string }>('SELECT count(*) AS count FROM hold_reason_codes');
     expect(Number(reasons.rows[0]?.count)).toBeGreaterThan(20);
+  });
+
+  it('refuses a database that is not UTF8, before it applies anything (migration 0024)', async () => {
+    // `normalize(…, NFKC)` — the opt-out-link rule's first step — is only implemented on
+    // a UTF8 database. The runner asks once and refuses by name, so the answer arrives
+    // before a file is applied rather than out of a CHECK the first time it is used.
+    const { applyMigrations, MigrationError } = await import('../../db/migrationRunner.ts');
+    const asked: string[] = [];
+    const latin1: SessionQueryable = {
+      query: async <T,>(sql: string): Promise<{ rows: T[] }> => {
+        asked.push(sql);
+        if (sql.includes('server_encoding')) return { rows: [{ encoding: 'LATIN1' } as T] };
+        throw new Error(`the runner touched the database after a refusal: ${sql}`);
+      },
+    } as unknown as SessionQueryable;
+    await expect(applyMigrations(latin1)).rejects.toMatchObject({
+      name: 'MigrationError',
+      code: 'MIGRATION_ENCODING_NOT_UTF8',
+    });
+    expect(asked).toHaveLength(1);
+
+    // And the real database, which is the one every other test in this file ran on.
+    const { rows } = await database.session.query<{ encoding: string }>(
+      "SELECT current_setting('server_encoding') AS encoding",
+    );
+    expect(rows[0]?.encoding).toBe('UTF8');
+    expect(MigrationError).toBeDefined();
   });
 
   it('refuses a migration file whose bytes changed after it was applied', async () => {
@@ -198,7 +225,9 @@ async function seedProductionShape(session: SessionQueryable): Promise<Productio
   const seeded = await seedTwoWorkspaces(session);
   const crm = await seedCrm(session, seeded);
   const mail = await seedMail(session, seeded, crm);
-  const outbound = await seedOutbound(session, seeded, crm, mail);
+  // Schema 18 still carried `template_versions_approved_has_stop_line`, so the seed is
+  // the pre-0024 body: this is a database as production actually was.
+  const outbound = await seedOutbound(session, seeded, crm, mail, LEGACY_FIXTURE_BODY);
   const workspaceId = seeded.alpha.workspaceId;
   const adminId = seeded.alpha.admin.userId;
   const one = async (sql: string, values: readonly unknown[]): Promise<string> => {

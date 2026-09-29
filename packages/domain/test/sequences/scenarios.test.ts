@@ -17,7 +17,7 @@ import { consumeTerminalStops } from '../../sequences/terminalStops.ts';
 import { listStepWakes } from '../../sequences/wake.ts';
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
-import { seedSequences, type SeededSequences } from './support/sequenceFixtures.ts';
+import { FIXTURE_SIGN_OFF, seedSequences, type SeededSequences } from './support/sequenceFixtures.ts';
 
 /**
  * Appendix G scenarios 26, 28, 31, 32 and 33, and the terminal stop the coordinator
@@ -517,7 +517,9 @@ describe('the send hand-off is a rendered request, and the fence is G7-2’s', (
     expect(request?.templateVersionId).toBe(sequences.alpha.template.templateVersionId);
     expect(request?.templateContentHash).toBe(sequences.alpha.template.contentHash);
     expect(request?.subject).toContain(crm.collidingFirmName);
-    expect(request?.body).toContain('Reply "stop"');
+    expect(request?.body).toContain(FIXTURE_SIGN_OFF);
+    // Nothing appends a stop line since migration 0024.
+    expect(request?.body).not.toContain('Reply "stop"');
     expect(request?.body).not.toMatch(/\{[a-z_]+\}/);
     expect(request?.toAddress).toBe(crm.collidingEmail);
   });

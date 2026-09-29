@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { hasOptOutLink } from '@fss/contracts';
 import { recordSuppression } from '../../suppression/events.ts';
 import {
   claimForDispatch,
@@ -59,9 +60,11 @@ describe('at-most-once sending', () => {
     expect(sends).toHaveLength(1);
     expect(sends[0]?.rfcMessageId).toBe(fence?.providerMessageIdHeader);
     expect(sends[0]?.to).toBe(world.alpha.recipientAddress);
-    // 12.7: no open-tracking pixel, and 12.6: no unsubscribe link.
-    expect(sends[0]?.body).not.toMatch(/unsubscribe/i);
-    expect(sends[0]?.body).toContain('Reply "stop"');
+    // 12.7: no open-tracking pixel, and what is left of 12.6 after 29 September 2026:
+    // no *visible opt-out link*, and no mandatory stop line either.
+    expect(hasOptOutLink(sends[0]?.body ?? '')).toBe(false);
+    expect(sends[0]?.body).not.toContain('Reply "stop"');
+    expect(sends[0]?.body).toContain('Signed off');
 
     const events = await readFenceEvents(context(), fenceId);
     expect(events.map(event => event.toState)).toEqual(['prepared', 'dispatching', 'sent']);

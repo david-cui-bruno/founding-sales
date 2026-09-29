@@ -90,9 +90,8 @@ export type DraftStep = z.infer<typeof draftStepSchema>;
 /**
  * A template version as the form writes it (lane g88; wave 2, S3).
  *
- * `body` is what the person typed; the sign-off and the stop line are appended by the
- * bridge, so the footer 12.6 requires is always the last thing in the email and never
- * something the person had to type. `templateVersionId` names the version being edited
+ * `body` is what the person typed; the sign-off is appended by the bridge, so the footer
+ * is always the last thing in the email and never something the person had to type. `templateVersionId` names the version being edited
  * **in place** — since wave 2 a version is edited rather than superseded, and the same
  * command approves it, so writing and approving are one press.
  */

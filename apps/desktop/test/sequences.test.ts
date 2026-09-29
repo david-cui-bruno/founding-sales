@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { SENDING_STOP_LINE } from '@fss/contracts';
 import { OFFLINE_BANNER } from '../src/renderer/readError.ts';
 import { createAuthedClient } from '../src/main/authedClient.ts';
 import { createSequenceBridge } from '../src/main/sequenceBridge.ts';
@@ -41,8 +40,6 @@ import {
  */
 
 const HASH = 'a'.repeat(64);
-/** Imported rather than typed, so the panel and the server's rule cannot disagree. */
-const STOP_LINE = SENDING_STOP_LINE;
 
 const template = (patch: Partial<TemplateVersion> = {}): TemplateVersion =>
   templateVersionAnswer({ personalizationStrategy: 'deterministic', ...patch });
@@ -129,17 +126,44 @@ describe('the template panel shows the digest and names what is wrong (11.1, 12.
     expect(screen.templates[0]?.canApprove).toBe(false);
   });
 
-  it('refuses to offer approval for a body mentioning an unsubscribe link', () => {
-    const screen = sequenceScreen(
+  it('refuses to offer approval for a body carrying an opt-out link, and offers it for the bare word', () => {
+    const linked = sequenceScreen(
       state([
         template({
           approvedAt: null,
-          body: `Unsubscribe here.\n\n${FOOTER_SIGN_OFF}\n${STOP_LINE}`,
+          body: `Unsubscribe here: https://mail.example.test/unsubscribe/1\n\n${FOOTER_SIGN_OFF}`,
         }),
       ]),
     );
-    expect(screen.templates[0]?.unsubscribeMentioned).toBe(true);
-    expect(screen.templates[0]?.canApprove).toBe(false);
+    expect(linked.templates[0]?.optOutLinkMentioned).toBe(true);
+    expect(linked.templates[0]?.canApprove).toBe(false);
+
+    // David, 29 September 2026: the word is not the problem. "Reply unsubscribe" is the
+    // sentence the old rule made unwritable, and it approves.
+    const worded = sequenceScreen(
+      state([
+        template({
+          approvedAt: null,
+          body: `Just reply unsubscribe and I'll stop.\n\n${FOOTER_SIGN_OFF}`,
+        }),
+      ]),
+    );
+    expect(worded.templates[0]?.optOutLinkMentioned).toBe(false);
+    expect(worded.templates[0]?.canApprove).toBe(true);
+
+    // Column by column, as the server asks it: a subject that says the word and a body
+    // that opens with a link are two columns, not one line (review of PR 311, second
+    // round). Joining them would refuse a template the database accepts.
+    const split = sequenceScreen(
+      state([
+        template({
+          approvedAt: null,
+          subject: 'Unsubscribe',
+          body: `https://firm.example is our site.\n\n${FOOTER_SIGN_OFF}`,
+        }),
+      ]),
+    );
+    expect(split.templates[0]?.optOutLinkMentioned).toBe(false);
   });
 
   it('offers approval, and no edit, for an approved body', () => {

@@ -1,3 +1,4 @@
+import { hasOptOutLink } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import {
   insertSentTombstone,
@@ -109,6 +110,13 @@ export type SentMessageRecovery =
        * lists it for the human step (review of PR 296, P1).
        */
       readonly sentBytesVerified: boolean;
+      /**
+       * Why they are not, when the reason is not simply that nobody could read them:
+       * `optout_link` means Gmail's own bytes carry a visible opt-out link, which
+       * `outbound_messages_no_optout_link` refuses (migration 0024). The fence is still
+       * marked `sent` — the send happened — with the bytes it already stored.
+       */
+      readonly sentBytesUnverifiedReason?: 'optout_link' | undefined;
     }
   | {
       readonly outcome: 'tombstoned';
@@ -250,7 +258,14 @@ export async function recoverSentFolderMessage(
     const sentSubject = message.subject?.trim() ?? '';
     const actualBody =
       input.readSentBytes === undefined || sentSubject.length === 0 ? null : await input.readSentBytes(message);
-    const verifiedBytes = actualBody === null ? undefined : { subject: sentSubject, body: actualBody.body };
+    const read = actualBody === null ? undefined : { subject: sentSubject, body: actualBody.body };
+    // Bytes this table would refuse are not bytes this pass may record. The fence still
+    // becomes `sent`, from what it already stores, and the operator is told why the
+    // verified copy was not taken (review of PR 311, second round).
+    // The fence is the one that refuses them — it is the guard over that column — and
+    // this asks the same question so the report can say *why* the bytes were not taken.
+    const refusedBytes = read !== undefined && (hasOptOutLink(read.subject) || hasOptOutLink(read.body));
+    const verifiedBytes = read;
     const marked = await markPreDispatchFenceSent(context, {
       outboundMessageId: fence.id,
       providerMessageId: message.providerMessageId,
@@ -277,7 +292,8 @@ export async function recoverSentFolderMessage(
       outboundMessageId: fence.id,
       stepExecutionId: fence.stepExecutionId,
       stepCompleted,
-      sentBytesVerified: verifiedBytes !== undefined,
+      sentBytesVerified: verifiedBytes !== undefined && !refusedBytes,
+      ...(refusedBytes ? { sentBytesUnverifiedReason: 'optout_link' as const } : {}),
     };
   }
 

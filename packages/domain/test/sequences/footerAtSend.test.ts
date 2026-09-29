@@ -70,13 +70,13 @@ async function setPostalAddress(address: string | null): Promise<void> {
 }
 
 /** The seeded template, edited in place to `body` and kept approved. */
-async function templateBody(body: string): Promise<void> {
+async function templateBody(body: string, variables: readonly string[] = ['firm_name']): Promise<void> {
   const edited = await updateTemplateVersion(contextFor('admin'), {
     name: 'Seeded, edited',
     subject: 'Hello {firm_name}',
     body,
     footer: { signOff: FIXTURE_SIGN_OFF },
-    requiredVariables: ['firm_name'],
+    requiredVariables: ['firm_name', ...variables],
     templateVersionId: sequences.alpha.template.templateVersionId,
     approve: true,
   });
@@ -123,7 +123,7 @@ beforeEach(async () => {
 });
 
 describe('the step hands over composed bytes', () => {
-  it('appends the sign-off, the configured address and one stop line', async () => {
+  it('appends the sign-off and the configured address, and no stop line', async () => {
     await setPostalAddress(ADDRESS);
     const enrollmentId = await enrolledAndDue();
     const handoff = recordingSendHandoff();
@@ -141,7 +141,7 @@ describe('the step hands over composed bytes', () => {
         postalAddress: ADDRESS,
       })}`,
     );
-    expect(request?.body.split(SENDING_STOP_LINE)).toHaveLength(2);
+    expect(request?.body).not.toContain(SENDING_STOP_LINE);
   });
 
   it('hands over today’s bytes exactly when no address is configured', async () => {
@@ -180,9 +180,49 @@ describe('the step hands over composed bytes', () => {
     );
   });
 
+  it('holds the step when a rendered variable puts an opt-out link in the bytes (P1-2)', async () => {
+    // `{firm_website}` is whatever the CRM holds, so an approval can be clean and the
+    // rendered bytes still carry a link the outbound CHECK refuses. A handled hold,
+    // before any fence exists — never an exception out of the insert.
+    await setPostalAddress(null);
+    await database.session.query('UPDATE firms SET website = $3 WHERE workspace_id = $1 AND id = $2', [
+      seeded.alpha.workspaceId,
+      crm.alpha.firmId,
+      'https://x.example/unsubscribe',
+    ]);
+    await templateBody('Our site: {firm_website}', ['firm_website']);
+    const enrollmentId = await enrolledAndDue();
+    const handoff = recordingSendHandoff();
+    const outcome = await runDueStepExecution(worker(), {
+      enrollmentId,
+      now: DUE,
+      eligibility: allowAllEligibility(),
+      sendHandoff: handoff,
+    });
+    // Its own hold reason since migration 0024: the operator has to be able to read why
+    // an approved template stopped (review of PR 311, second round).
+    expect(outcome).toMatchObject({ kind: 'held', reasonCode: 'optout_link' });
+    expect(handoff.prepared).toEqual([]);
+    const held = await database.session.query<{ hold_reason_code: string }>(
+      'SELECT hold_reason_code FROM step_executions WHERE workspace_id = $1 AND enrollment_id = $2',
+      [seeded.alpha.workspaceId, enrollmentId],
+    );
+    expect(held.rows[0]?.hold_reason_code).toBe('optout_link');
+    const { rows } = await database.session.query<{ count: string }>(
+      'SELECT count(*) AS count FROM outbound_messages WHERE workspace_id = $1',
+      [seeded.alpha.workspaceId],
+    );
+    expect(Number(rows[0]?.count)).toBe(0);
+    await database.session.query('UPDATE firms SET website = $3 WHERE workspace_id = $1 AND id = $2', [
+      seeded.alpha.workspaceId,
+      crm.alpha.firmId,
+      'https://firm.example',
+    ]);
+  });
+
   it('holds the step before any fence exists when the composed body would pass 4,000', async () => {
     await setPostalAddress(null);
-    const footer = `${FIXTURE_SIGN_OFF}\n${SENDING_STOP_LINE}`;
+    const footer = FIXTURE_SIGN_OFF;
     // The longest body the template rules admit with no address: 4,000 composed.
     await templateBody(`${'x'.repeat(4000 - footer.length - 2)}\n\n${footer}`);
     await setPostalAddress(ADDRESS);
