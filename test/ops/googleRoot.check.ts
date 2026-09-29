@@ -173,7 +173,7 @@ describe('greenfield-google.yml is dispatch-only, in the production-deploy envir
       'google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093',
       'google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db',
       'hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd',
-      'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
+      'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a',
     ]);
     for (const action of uses) expect(action, action).toMatch(/@[0-9a-f]{40}$/u);
     // The checkout is the first step and carries no token into the job.

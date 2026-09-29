@@ -764,11 +764,11 @@ jobs:
       # actions/upload-artifact v4
       - name: Keep the reports
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: rehearsal-reports-${{ steps.prefix.outputs.prefix }}
           path: ${{ env.FSS_REHEARSAL_REPORTS }}
-          # The directory is `.rehearsal-reports`; v4 skips hidden paths unless told not to,
-          # and run 35679472666 uploaded nothing for that reason.
+          # The directory is `.rehearsal-reports`; the action skips hidden paths unless
+          # told not to, and run 35679472666 uploaded nothing for that reason.
           include-hidden-files: true
           retention-days: 90

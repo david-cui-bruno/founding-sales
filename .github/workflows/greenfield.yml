@@ -339,7 +339,7 @@ jobs:
         # died in the install leaves one.
         if: always() && steps.range.outputs.run == 'yes'
         # actions/upload-artifact v4, the same pin the images and release workflows use.
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: upgrade-evidence-${{ github.event.pull_request.head.sha || github.sha }}
           # Outside both checkouts: the tool refuses an evidence path inside one,
