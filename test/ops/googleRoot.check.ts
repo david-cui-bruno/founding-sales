@@ -172,7 +172,7 @@ describe('greenfield-google.yml is dispatch-only, in the production-deploy envir
       'aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502',
       'google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093',
       'google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db',
-      'hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd',
+      'hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e',
       'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a',
     ]);
     for (const action of uses) expect(action, action).toMatch(/@[0-9a-f]{40}$/u);
