@@ -133,6 +133,11 @@ test('Firms from a firm page is the list: the sidebar never lands on the firm th
   await expect(page.getByTestId('heading')).toHaveText('Northwind Test Holdings');
 
   await page.getByTestId('nav-firms').click();
+  // The list itself, not the heading: a mounting view draws its row's heading before its
+  // first read has answered, so waiting for "Firms" alone would pass on the empty frame
+  // — which is the whole of what this spec is about. The board answer is what Firms is a
+  // reading of, and the bridge is holding a firm page, so it has to be asked for.
+  await expect(page.getByTestId('firms-list')).toBeVisible();
   await expect(page.getByTestId('heading')).toHaveText('Firms');
   expect(server.crm.calls.map(call => call.method)).toEqual(['openFirm', 'state', 'openPipeline']);
 });
