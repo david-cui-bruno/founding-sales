@@ -139,7 +139,7 @@ export interface NeedsRow {
 }
 
 interface FigureCell {
-  readonly key: 'replies' | 'calls' | 'holds' | 'emails';
+  readonly key: 'calls' | 'meetings' | 'replies' | 'waiting' | 'holds' | 'emails';
   readonly label: string;
   readonly value: string;
   readonly note: string | null;
@@ -532,10 +532,28 @@ export function figuresWindow(now: Date): { readonly from: string; readonly to: 
 
 const DASH = '—';
 
+/** The funnel kind that is one meeting in the calendar (`packages/domain/funnel/kinds.ts`). */
+const MEETING_BOOKED = 'meeting.booked';
+
 const sameInstant = (left: string, right: string): boolean => Date.parse(left) === Date.parse(right);
 
 /**
- * Replies, calls, holds open and emails sent, over the window Home asked for.
+ * The day's sales numbers, over the window Home asked for.
+ *
+ * Six figures since the Dashboard left the navigation (David, 29 September 2026):
+ * calls placed, meetings booked, human replies, replies still waiting to be handled,
+ * holds open and emails sent. Every one of them is read out of the dashboard DTO the
+ * Dashboard tab already reads — no new query, no new route — so nothing that was on
+ * that page has to be looked up somewhere else. Firms in each pipeline stage are the
+ * Pipeline's own columns, each with its count, and are not repeated here.
+ *
+ * The window is the seven days `figuresWindow` asks for. There is no "today" column
+ * because there is no read for one: a second window would be a second dashboard call,
+ * and the DTO carries no per-day breakdown.
+ *
+ * "Meetings booked" is the funnel's `meeting.booked` (migration 0022). An older server
+ * that answers `available: false` gets a dash and "not in this build", never a 0 —
+ * nobody may read "no meetings" off a figure nothing computed.
  *
  * A dashboard for any other window is not these figures: the bridge keeps the last
  * figures it read when a read fails, and they may be Administration's thirty days. So
@@ -546,8 +564,10 @@ export function figuresView(input: { readonly admin: boolean; readonly figures: 
   const dashes = (line: string | null): FiguresView => ({
     label: FIGURES_LABEL,
     cells: [
+      { key: 'calls', label: 'Calls placed', value: DASH, note: null },
+      { key: 'meetings', label: 'Meetings booked', value: DASH, note: null },
       { key: 'replies', label: 'Replies', value: DASH, note: null },
-      { key: 'calls', label: 'Calls', value: DASH, note: null },
+      { key: 'waiting', label: 'Replies waiting', value: DASH, note: null },
       { key: 'holds', label: 'Holds open', value: DASH, note: null },
       { key: 'emails', label: 'Emails sent', value: DASH, note: null },
     ],
@@ -567,21 +587,29 @@ export function figuresView(input: { readonly admin: boolean; readonly figures: 
   const sending = dashboard.sending as { readonly available: boolean; readonly sent?: unknown; readonly held?: unknown };
   const sent = sending.available && typeof sending.sent === 'number' ? sending.sent : null;
   const held = sending.available && typeof sending.held === 'number' && sending.held > 0 ? sending.held : null;
+  const funnel = dashboard.funnel;
+  const meetings = funnel.available
+    ? String(funnel.byKind.find(entry => entry.key === MEETING_BOOKED)?.count ?? 0)
+    : DASH;
+  const waiting = Math.max(dashboard.replyHandling.replies - dashboard.replyHandling.handled, 0);
+
   return {
     label: FIGURES_LABEL,
     cells: [
+      {
+        key: 'calls',
+        label: 'Calls placed',
+        value: String(dashboard.calls.reduce((total, entry) => total + entry.count, 0)),
+        note: null,
+      },
+      { key: 'meetings', label: 'Meetings booked', value: meetings, note: funnel.available ? null : 'not in this build' },
       {
         key: 'replies',
         label: 'Replies',
         value: String(dashboard.messages.human),
         note: dashboard.messages.uncertain > 0 ? `${String(dashboard.messages.uncertain)} uncertain` : null,
       },
-      {
-        key: 'calls',
-        label: 'Calls',
-        value: String(dashboard.calls.reduce((total, entry) => total + entry.count, 0)),
-        note: null,
-      },
+      { key: 'waiting', label: 'Replies waiting', value: String(waiting), note: null },
       { key: 'holds', label: 'Holds open', value: String(dashboard.holds.open), note: null },
       sent === null
         ? { key: 'emails', label: 'Emails sent', value: DASH, note: 'not in this build' }

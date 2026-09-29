@@ -243,7 +243,10 @@ test('the last 7 days are read over the last seven days, and a figure not in thi
 
   await expect(page.getByTestId('figures-label')).toHaveText('Last 7 days');
   await expect(page.getByTestId('figure-replies')).toHaveText('Replies21 uncertain');
-  await expect(page.getByTestId('figure-calls')).toHaveText('Calls3');
+  await expect(page.getByTestId('figure-calls')).toHaveText('Calls placed3');
+  await expect(page.getByTestId('figure-meetings')).toHaveText('Meetings booked1');
+  // 2 replies, 1 handled.
+  await expect(page.getByTestId('figure-waiting')).toHaveText('Replies waiting1');
   await expect(page.getByTestId('figure-holds')).toHaveText('Holds open1');
   // `sending: { available: false }`: not a zero, which would be a measurement.
   await expect(page.getByTestId('figure-emails')).toHaveText('Emails sent—not in this build');
@@ -260,7 +263,7 @@ test('figures that could not be read are dashes and one grey line, never a dialo
   await page.goto(server.url());
 
   await expect(page.getByTestId('figures-line')).toHaveText('Callie could not read the last 7 days.');
-  await expect(page.getByTestId('figure-value')).toHaveText(['—', '—', '—', '—']);
+  await expect(page.getByTestId('figure-value')).toHaveText(['—', '—', '—', '—', '—', '—']);
   expect(dialogs).toEqual([]);
 });
 

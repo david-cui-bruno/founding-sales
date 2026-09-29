@@ -45,15 +45,37 @@ export interface PanelView {
   readonly unavailable: string | null;
 }
 
+/** The five facts 12.7's checklist records, in the order the section draws them. */
+export const SENDING_CHECK_NAMES = [
+  'spfPass',
+  'dkimPass',
+  'dmarcPass',
+  'postmasterReviewed',
+  'automatedSendingEnabled',
+] as const;
+export type SendingCheckName = (typeof SENDING_CHECK_NAMES)[number];
+
 export interface SendingAdminSectionView {
   /** The checklist as one sentence, naming what is still missing. */
   readonly domainLine: string;
   readonly domain: string | null;
+  /**
+   * The checklist as the server has it recorded, which is what the form starts from.
+   *
+   * Read out of `/outbound/status` and never derived: `postmasterReviewed` is "there
+   * is a review date", and the enable is the server's own `automatedSendingEnabled`
+   * rather than a conclusion drawn from the other four. Before this the form began
+   * empty, so a recorded checklist read as an unchecked one and the only way to keep
+   * it was to tick all four again (David, 29 September 2026).
+   */
+  readonly checks: Readonly<Record<SendingCheckName, boolean>>;
   readonly editable: boolean;
   readonly notEditableBecause: string | null;
   readonly ramps: readonly {
     readonly mailboxId: string;
     readonly line: string;
+    /** The cap in force, which the field starts at. The server computed it; 12.7. */
+    readonly cap: number;
     readonly editable: boolean;
   }[];
 }
@@ -462,10 +484,18 @@ function sendingAdminSection(state: AdminState, reason: string | null): SendingA
   return {
     domainLine,
     domain: domain?.domain ?? null,
+    checks: {
+      spfPass: domain?.spfPass === true,
+      dkimPass: domain?.dkimPass === true,
+      dmarcPass: domain?.dmarcPass === true,
+      postmasterReviewed: domain != null && domain.postmasterReviewedAt !== null,
+      automatedSendingEnabled: domain?.automatedSendingEnabled === true,
+    },
     editable,
     notEditableBecause: reason,
     ramps: posture.ramps.map(ramp => ({
       mailboxId: ramp.mailboxId,
+      cap: ramp.effectiveCap,
       line: `${String(ramp.healthySendingDays)} healthy days, cap ${String(ramp.effectiveCap)}${
         ramp.adminDailyCap === null ? '' : ` (lowered to ${String(ramp.adminDailyCap)})`
       }${ramp.raisedDailyCap === null ? '' : ` (raised to ${String(ramp.raisedDailyCap)})`}${

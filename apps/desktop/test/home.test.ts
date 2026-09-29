@@ -184,6 +184,17 @@ function dashboard(overrides: Partial<DashboardResponse> = {}): DashboardRespons
     sending: { available: false, owner: 'G7-2', reason: 'not in this build' },
     enrollments: { available: false, owner: 'G8', reason: 'not in this build' },
     classifier: { available: false, owner: 'G7b', reason: 'not in this build' },
+    // Lane J-facts' funnel (migration 0022): the kinds Today's numbers row reads.
+    funnel: {
+      available: true,
+      byKind: [
+        { key: 'call.placed', count: 5 },
+        { key: 'meeting.booked', count: 2 },
+      ],
+      firmsByKind: [{ key: 'meeting.booked', count: 2 }],
+      uniqueFirms: 3,
+      firmsInScope: 5,
+    },
     ...overrides,
   } as DashboardResponse;
 }
@@ -527,12 +538,17 @@ describe('the last 7 days', () => {
     expect(FIGURES_LABEL).toBe('Last 7 days');
   });
 
-  it('shows replies with uncertain, calls summed, holds open, and a dash for sending not in this build', () => {
+  it('shows the day’s sales numbers, and a dash for sending not in this build', () => {
+    // The six the Dashboard's departure from the navigation left on Today (David,
+    // 29 September 2026), every one of them from the dashboard DTO that page read.
     expect(figuresView({ admin: true, figures: read(dashboard()) })).toEqual({
       label: 'Last 7 days',
       cells: [
+        { key: 'calls', label: 'Calls placed', value: '5', note: null },
+        { key: 'meetings', label: 'Meetings booked', value: '2', note: null },
         { key: 'replies', label: 'Replies', value: '4', note: '2 uncertain' },
-        { key: 'calls', label: 'Calls', value: '5', note: null },
+        // 4 replies, 3 handled.
+        { key: 'waiting', label: 'Replies waiting', value: '1', note: null },
         { key: 'holds', label: 'Holds open', value: '3', note: null },
         { key: 'emails', label: 'Emails sent', value: '—', note: 'not in this build' },
       ],
@@ -540,16 +556,33 @@ describe('the last 7 days', () => {
     });
   });
 
+  it('shows a dash for meetings on a server whose funnel is not in the build', () => {
+    // Never a 0: "no meetings booked" and "nothing counted them" are different news.
+    const view = figuresView({
+      admin: true,
+      figures: read(dashboard({ funnel: { available: false, owner: 'J-facts', reason: 'not in this build' } })),
+    });
+    expect(view.cells[1]).toEqual({ key: 'meetings', label: 'Meetings booked', value: '—', note: 'not in this build' });
+  });
+
+  it('never shows fewer than no replies waiting', () => {
+    const view = figuresView({
+      admin: true,
+      figures: read(dashboard({ replyHandling: { replies: 2, handled: 5, medianSecondsToHandle: null, slowestSecondsToHandle: null } })),
+    });
+    expect(view.cells[3]?.value).toBe('0');
+  });
+
   it('shows emails sent, and held, when sending is in the build', () => {
     const view = figuresView({
       admin: true,
       figures: read(dashboard({ sending: { available: true, sent: 12, held: 4 } as unknown as DashboardResponse['sending'] })),
     });
-    expect(view.cells[3]).toEqual({ key: 'emails', label: 'Emails sent', value: '12', note: '4 held' });
+    expect(view.cells[5]).toEqual({ key: 'emails', label: 'Emails sent', value: '12', note: '4 held' });
   });
 
   it('is dashes and one grey line when the read failed or answered for another window', () => {
-    const dashes = ['—', '—', '—', '—'];
+    const dashes = ['—', '—', '—', '—', '—', '—'];
     const failed = figuresView({ admin: true, figures: read(null) });
     expect(failed.cells.map(cell => cell.value)).toEqual(dashes);
     expect(failed.line).toBe(FIGURES_UNREAD);
@@ -567,7 +600,7 @@ describe('the last 7 days', () => {
 
   it('is dashes with no line while the read is in flight', () => {
     const view = figuresView({ admin: true, figures: { requested: WINDOW, answered: false, dashboard: null } });
-    expect(view.cells.map(cell => cell.value)).toEqual(['—', '—', '—', '—']);
+    expect(view.cells.map(cell => cell.value)).toEqual(['—', '—', '—', '—', '—', '—']);
     expect(view.line).toBeNull();
   });
 });
