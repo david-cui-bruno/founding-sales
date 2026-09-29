@@ -26,7 +26,6 @@ import { retentionBatchJobHandler, retentionSource } from '../handlers/retention
 import { researchHandlers, researchSweepSource, type ResearchWorkerOptions } from '../handlers/research.ts';
 import { anthropicExtraction } from '../research/anthropicExtraction.ts';
 import { researchPageFetch } from '../research/companyPageFetch.ts';
-import { DEFAULT_RESEARCH_SETTINGS } from '@fss/domain/research/settings.ts';
 import { suppressionFinalizeJobHandler } from '../handlers/suppressionFinalize.ts';
 import { terminalStopJobHandler, terminalStopSource } from '../handlers/terminalStop.ts';
 import { todayBuildJobHandler, todayBuildSource } from '../handlers/todayBuild.ts';

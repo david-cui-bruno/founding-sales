@@ -5,7 +5,7 @@ import { repositoryContext, workspaceScope, type RepositoryContext } from '@fss/
 import { runTwiceUnderStolenLease } from '@fss/domain/jobs/atLeastOnce.ts';
 import { HandlerRegistry } from '@fss/domain/jobs/handlerRegistry.ts';
 import { jobIdempotencyKey } from '@fss/domain/jobs/jobKinds.ts';
-import { requeueDeadJob } from '@fss/domain/jobs/jobStore.ts';
+import { reclaimExpiredLeases, requeueDeadJob } from '@fss/domain/jobs/jobStore.ts';
 import type { QueryOutcome, QueryResultRowLike, SessionQueryable } from '@fss/domain/db/queryable.ts';
 import type { ExtractionProvider, PageFetchProvider } from '@fss/domain/research/providers.ts';
 import { enqueueJob } from '@fss/domain/jobs/jobStore.ts';
@@ -829,6 +829,73 @@ describe('the research jobs', () => {
     expect(await reservations()).toEqual([{ attempt: 1, state: 'released', cents: 3, settled: 0 }]);
     expect(await invoiced()).toBe(0);
     expect(context().scope.workspaceId).toBe(workspaceId);
+  });
+
+  it('estimates the claim whose lease was stolen mid-call, and charges the successor’s own', async () => {
+    // The lease is stolen *while the model is answering*, which is the case the
+    // three-chunk shape exists for and the one the earlier stolen-lease probe could not
+    // reach: it stole the lease before either worker got as far as a call. Here the
+    // theft happens inside `extract`, on a second connection, so the claimant's whole
+    // chunk 3 is rolled back by the runner's fenced completion — with the call already
+    // out in the world and possibly billed.
+    const thief = await database.appRuntimeSession();
+    const extraction = countingExtraction();
+    let stolen = false;
+    const pausedExtraction: ExtractionProvider = {
+      providerKey: extraction.providerKey,
+      countInputTokens: extraction.countInputTokens.bind(extraction),
+      extract: async request => {
+        if (!stolen) {
+          stolen = true;
+          // Mid-call: the lease expires and somebody else's runner reclaims the row.
+          await thief.query(
+            "UPDATE jobs SET lease_expires_at = now() - INTERVAL '1 second' WHERE workspace_id = $1 AND kind = 'research.firm'",
+            [workspaceId],
+          );
+          await reclaimExpiredLeases(thief, { limit: 10 });
+        }
+        return await extraction.extract(request);
+      },
+    };
+    const registry = new HandlerRegistry().register(researchFirmJobHandler({ pageFetch: countingFetch(), extraction: pausedExtraction }));
+    const key = jobIdempotencyKey.researchFirm(firmId, 1);
+    await enqueueJob(database.session, {
+      workspaceId,
+      kind: 'research.firm',
+      idempotencyKey: key,
+      payload: { firmId, revision: 1, trigger: 'sweep' },
+      maxAttempts: 3,
+    });
+
+    // One claim runs the chunks in sequence — chunk 1, chunk 2, and the chunk 3 whose
+    // call is stolen out from under it.
+    await runOnce(database.session, { registry, owner: 'worker-stolen-call', limit: 5, backoff: NO_BACKOFF, random: () => 0 });
+    expect(extraction.calls).toBe(1);
+    // The call happened and its record did not commit: the row is still `calling`, which
+    // is precisely the durable "nobody knows" the marker exists to leave behind.
+    expect(await reservations()).toEqual([{ attempt: 1, state: 'calling', cents: 3, settled: 0 }]);
+    expect(await invoiced()).toBe(0);
+
+    // The successor. A different claim, so a different fencing token: attempt 1 is
+    // charged what it held, attempt 2 is opened and marked, and the second call is the
+    // one whose figure is known.
+    await runOnce(database.session, { registry, owner: 'worker-successor', limit: 5, backoff: NO_BACKOFF, random: () => 0 });
+    expect(extraction.calls).toBe(2);
+    expect(await reservations()).toEqual([
+      { attempt: 1, state: 'estimated', cents: 3, settled: 3 },
+      { attempt: 2, state: 'settled', cents: 3, settled: 1 },
+    ]);
+    // Three cents nobody can invoice plus one cent somebody did, and the run says its
+    // figure is partly an estimate.
+    expect(await invoiced()).toBe(4);
+    const closed = await database.session.query<{ outcome: string; cost: number; estimated: boolean; counter: number | null }>(
+      `SELECT (SELECT outcome FROM research_runs LIMIT 1) AS outcome,
+              (SELECT cost_cents FROM research_runs LIMIT 1)::int AS cost,
+              (SELECT cost_estimated FROM research_runs LIMIT 1) AS estimated,
+              (SELECT max(count) FROM daily_counters)::int AS counter`,
+    );
+    // One firm, one unit of the day's count, two paid attempts of the three it may have.
+    expect(closed.rows[0]).toEqual({ outcome: 'completed', cost: 4, estimated: true, counter: 1 });
   });
 
   it('books no call for a deployment with no model key, even if the worker then dies', async () => {

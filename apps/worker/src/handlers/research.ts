@@ -283,7 +283,7 @@ export function researchSweepJobHandler(options: ResearchWorkerOptions): JobHand
       const settings = await readResearchSettings(context);
       if (!settings.enabled) return;
       const at = await databaseNow(context);
-      // First, the runs a worker abandoned between their two chunks: closed `lease_lost`
+      // First, the runs a worker abandoned between two chunks: closed `lease_lost`
       // with their reservation kept as the cost. Before the select, because until a
       // run is closed `run_in_progress` refuses the firm a new revision.
       await finaliseAbandonedRuns(context, { at });

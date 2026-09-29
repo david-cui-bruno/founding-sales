@@ -14,14 +14,19 @@ import type { ResearchOutcome, ResearchTrigger } from './types.ts';
  *
  * ## `running` is a committed state, and a stale one is a lost lease
  *
- * The handler is chunked: chunk 1 commits the row and the money it reserved, chunk 2
- * makes the calls and closes it. So a row that says `running` is the ordinary state
- * between two commits, which is exactly why it cannot be read as a crash — and why
- * something else has to notice when it *is* one. `finaliseAbandonedRuns` is that
- * something: a row still `running` after `RUN_IN_PROGRESS_MINUTES` is finalised
- * `failed` with `refusal_code = 'lease_lost'`, and the sum of its reservations becomes
- * its recorded cost — `estimated` for any that reached `calling`, because nobody can
- * know whether the call was made, and `released` for any that never did.
+ * The handler is chunked in three: chunk 1 commits the row and the money it reserved,
+ * chunk 2 commits "a call may now have happened", chunk 3 makes the call and closes the
+ * row. So `running` is the ordinary state between three commits, which is exactly why it
+ * cannot be read as a crash — and why something else has to notice when it *is* one.
+ * `finaliseAbandonedRuns` is that something: a row still `running` after
+ * `RUN_IN_PROGRESS_MINUTES` **whose `research.firm` job no longer holds a lease** is
+ * finalised `failed` with `refusal_code = 'lease_lost'`, and the sum of its reservations
+ * becomes its recorded cost — `estimated` for any that reached `calling`, because nobody
+ * can know whether the call was made, and `released` for any that never did.
+ *
+ * Both halves of that sentence matter. Age alone said nothing about whether anyone was
+ * still working, and closing a run under a live claim released the cents out from under
+ * a call that was about to be made.
  */
 
 /** A run still `running` after this long is not in progress; it is a crashed worker. */
@@ -272,7 +277,7 @@ async function closeRun(
  * Finalise every run abandoned mid-flight, and say how many.
  *
  * A chunked run commits `running` before it spends anything. A worker that loses its
- * lease between the two chunks — a pause past the deadline, a container replaced, a
+ * lease between two chunks — a pause past the deadline, a container replaced, a
  * database failover — leaves that row `running` for ever, and with it a reservation on
  * the ledger and a firm that `run_in_progress` will refuse a new revision for.
  *

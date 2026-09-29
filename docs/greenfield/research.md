@@ -193,7 +193,7 @@ work"), and the chunk boundaries are where the money is:
 | | What it does | What the runner does with it |
 |---|---|---|
 | **Chunk 1** | `beginFirmResearch`: the firm is researchable, the run row is opened, a unit of the day's count is consumed, and the worst case is **reserved** as a row in `provider_reservations`, state `reserved`. No provider is touched. | Commits it together with the cursor `{ runId, attempt: 1, step: 'reserved', fencing }`. |
-| **Chunk 2** | `ensureResearchCalling`: that reservation moves to `calling`, and **nothing else is written**. | Commits it together with the cursor `{ runId, attempt, step: 'calling', fencing }`. |
+| **Chunk 2** | `ensureResearchCalling`: that reservation moves to `calling`, and **nothing else is written**. A deployment with no extraction port marks nothing and releases the cents here instead. | Commits it together with the cursor `{ runId, attempt, step: 'calling' \| 'uncalled', fencing }`. |
 | **Chunk 3** | `finishFirmResearch`: fetch, count the request exactly, extract, record the evidence, the facts, the judgment, the funnel facts; settle this attempt's reservation by id; close the run. | Commits it as the job's completion. |
 
 Before the split all of it ran in the runner's single job transaction, and that was
@@ -232,10 +232,14 @@ requeued claim carries the same number as the claim that died. `fencing_token` i
 incremented by every claim and never reset.
 
 For the same reason the money bound is **not** `maxAttempts`, which a handler option can
-lower and a requeue resets. It is `RESEARCH_FIRM_MAX_RESERVATIONS` — three — counted
-from the durable rows: the fourth claim closes the run `provider_failure` with the sum of
-its reservations instead of opening a fourth. Three worst cases, nine cents at the
-defaults, is the most one firm can cost however often it is requeued.
+lower and a requeue resets. It is `RESEARCH_FIRM_MAX_RESERVATIONS` — three — counted from
+the durable rows, **per firm per business date across every one of that firm's runs**,
+inside the one clearance every reservation passes through. Counted per run it bounded
+nothing: two revisions of one firm on one day were two runs and six paid calls. Three
+worst cases, nine cents at the defaults, is the most one firm can cost however often it
+is requeued or re-enqueued; the fourth attempt of a run closes it `provider_failure` with
+the sum of its reservations, and a fourth reservation asked for anywhere else is refused
+`over_budget`.
 
 **This is the pattern the next paid call reuses.** `provider_reservations` is generic on
 purpose (`subject_kind`, `subject_id`, `provider_key`), so Twilio's recorded calls add a
@@ -244,12 +248,45 @@ counting the open ones as spent, settlement by id on the reservation's own busin
 and the three-chunk handler around it.
 
 **`outcome = 'running'` is therefore a normal state**, not a crash — and a row still
-`running` after thirty minutes is one. The sweep's first act is `finaliseAbandonedRuns`:
-those rows become `failed` with `refusal_code = 'lease_lost'` and **keep their
-reservation as the recorded cost**, because the last thing that worker did before
-disappearing may well have been to make the call, and releasing the cents would be
-claiming it did not. `run_in_progress` refuses the firm a new revision inside the same
-window, so the firm becomes researchable again in the same breath.
+`running` after thirty minutes *whose job no longer holds a lease* is one. The sweep's
+first act is `finaliseAbandonedRuns`: those rows become `failed` with
+`refusal_code = 'lease_lost'` and **keep a `calling` reservation as the recorded cost**,
+because the last thing that worker did before disappearing may well have been to make
+the call, and releasing the cents would be claiming it did not. `run_in_progress`
+refuses the firm a new revision inside the same window, so the firm becomes researchable
+again in the same breath.
+
+### Nobody decides about one run's money twice at once
+
+Age alone is not evidence that a worker is gone, and this is where that mattered. The
+sweep used to read a reservation's state and settle it later with that stale state,
+while `settleAttempt` allowed `released` from `calling` — so a live claim could mark the
+row between the two, the sweep handed the cents back, and chunk 3 then made the paid
+call against an authorization nobody held. A call with no charge anywhere is the one
+outcome this whole arrangement exists to prevent. Three rules, together:
+
+* **the run row is the lock.** Chunk 2, chunk 3 and the sweep's finalisation each begin
+  with `SELECT … FROM research_runs WHERE id = $1 FOR UPDATE` (`lockRun`) and re-read the
+  outcome under it. Chunk 3 holds it across the provider call, because the runner owns the
+  transaction boundary — and that is the property worth having: while a claim is out at
+  the provider nothing can close its run or touch its reservation. The cost is that the
+  sweep waits for a run whose call is in flight, which is a bounded wait on a job nobody
+  is waiting for;
+* **`released` only from `reserved`.** That is the one state in which "no call happened"
+  is a fact about the row rather than a guess. From `calling` the settlements are
+  `settled`, `estimated`, and `released_not_called` — used by exactly one caller, the
+  claim that marked the row in chunk 2, holding the run's lock, having then declined to
+  call (the fetch failed, or the counted request did not fit). No reader from outside may
+  make that claim. It is not a CHECK or a trigger because the rule is about *who* is
+  writing, which a row-level rule cannot see;
+* **a live lease is left alone.** `finaliseAbandonedRuns` joins the run's `research.firm`
+  job by its idempotency key and skips a row whose `lease_expires_at` is still in the
+  future, whatever the run's age;
+* and **every close is guarded.** `completeRun`, `refuseRun` and `failRun` carry
+  `WHERE outcome = 'running'` and report false when that matched nothing, so a claim
+  returning from a call cannot overwrite the sweep's outcome, refusal code and estimated
+  cents with a cheaper story. Chunk 3 reads false as "closed elsewhere", reports a replay
+  and completes the job.
 
 ### The reservation table, and its five states
 
@@ -268,7 +305,7 @@ reserved ──markCalling──▶ calling ──┬──▶ settled    (a fig
 
 Five states, and the invariants that matter: a row leaves `reserved`/`calling` exactly
 once, by id; `settled_at` is set precisely when it is no longer open; `released` settles
-nothing; and settlement writes the ledger on the **reservation's own** business date, so
+nothing and is reachable from `calling` only by the claim that marked it; and settlement writes the ledger on the **reservation's own** business date, so
 a run authorized on Monday and settled on Tuesday invoices Monday and leaves Tuesday's
 ceiling alone. A `calling` row is the only ambiguous state, and it always costs its
 reservation — `cost_estimated` on the run row is how that is said out loud. It covers a
@@ -284,14 +321,30 @@ text tokenizes at roughly one token a character, so the largest request the sett
 allow can count about two and a half times the bound the ceiling authorized.
 
 So chunk 3 asks the provider's own tokenizer before it calls
-(`AnthropicMessagesTransport.countTokens`, on the very request `extract` would send).
-If the count plus `MAX_EXTRACTION_OUTPUT_TOKENS` does not fit, trailing blocks are
-dropped — whole pages last — and it counts again, at most three times. If it still does
-not fit the run is a **completion** with `extraction = 'over_budget'`: the evidence is
-kept, the judgments come from the firm's routes and its suppression, the reservation is
-released, and no call is made. A counter that throws is a `provider_failure` with no
-cents, for the same reason: spending against a number nobody has is worse than not
-spending.
+(`AnthropicMessagesTransport.countTokens`, on the very request `extract` would send) —
+and compares the answer with **the reservation**, never with the settings. The row
+carries `model_name`, `max_input_tokens` and `max_output_tokens` beside `cents`, all four
+written by the clearance that priced them, and `pricing.admitCall` is the whole decision:
+
+* the counted input, plus `TOKEN_COUNT_HEADROOM` (1.05, because Anthropic documents
+  `countTokens` as an estimate that "may not exactly match the number of tokens used in a
+  request"), plus the snapshot's output bound must fit the snapshot's total;
+* and what that would cost at the snapshot's model must be within the reservation's
+  cents. A snapshot naming a model with no reviewed price refuses rather than being
+  priced at zero.
+
+Reading the settings here instead was the hole: raising `max_pages_per_firm` between
+chunk 1 and chunk 3 admitted a request bigger than the money being held for it, and the
+model called was whichever one the adapter had been composed with. The request now
+carries the snapshot's model and output bound, so what is counted, what is sent and what
+is priced are one thing.
+
+If it does not fit, trailing blocks are dropped — whole pages last — and it counts again,
+at most three times. If it still does not fit the run is a **completion** with
+`extraction = 'over_budget'`: the evidence is kept, the judgments come from the firm's
+routes and its suppression, the reservation is released, and no call is made. A counter
+that throws is a `provider_failure` with no cents, for the same reason: spending against
+a number nobody has is worse than not spending.
 
 ### When a provider fails
 
@@ -318,7 +371,11 @@ already committed.
 ## The caps, and the price table
 
 Three ceilings, all in whole cents, all checked in `claimResearchClearance` before any
-provider is reached:
+provider is reached — and `claimResearchClearance` is the **only** way a reservation is
+priced, for a retry exactly as for attempt 1. It takes the workspace's budget lock
+(`pg_advisory_xact_lock`) before it reads a sum, so two claims cannot clear against the
+same remaining cents; only attempt 1 consumes a unit of the day's firm count, because the
+count is of firms looked at and what bounds attempts is the three rows above:
 
 | Setting | Default | What it bounds |
 |---|---|---|
@@ -495,7 +552,8 @@ Research section reads `/research/firm` instead.
 `monthly_cost_ceiling`, `ceiling_reached` (the route's summary of the three above),
 `firm_unknown`, `firm_merged`, `firm_suppressed`, `not_assigned`, `admin_only`,
 `run_in_progress`, `no_sources`, `provider_failure`, `link_not_permitted`,
-`model_unpriced`.
+`model_unpriced`, `over_budget` (the firm's three paid attempts for the day are spent, or
+the counted request did not fit the reservation held for it).
 
 ## The sweep
 

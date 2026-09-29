@@ -83,33 +83,44 @@ import {
  * completion, because "we looked and there was nothing" and "there was nowhere to
  * look" are different things to see in a runs list.
  *
- * ## Two committed steps, because the middle of a run spends money
+ * ## Three committed steps, because the middle of a run spends money
  *
  * `research.firm` is a **chunked** handler (`docs/greenfield/jobs.md`), and this file is
- * the two halves:
+ * the three parts:
  *
  *   1. `beginFirmResearch` — the firm is researchable, the run row is opened, the day's
- *      count is consumed, and the worst case is **reserved** on the ledger. No provider
- *      has been touched. The runner commits this together with the cursor.
- *   2. `finishFirmResearch` — fetch, extract, record, judge, and turn the reservation
- *      into the actual figure. The runner commits this as the job's completion.
+ *      count is consumed, and the clearance's worst case is **reserved** as a
+ *      `provider_reservations` row in state `reserved`, carrying the model, the token
+ *      bounds and the cents it was priced at. No provider has been touched. The runner
+ *      commits this together with the cursor.
+ *   2. `ensureResearchCalling` — that reservation moves to `calling` and **nothing else
+ *      is written**. This step exists only to make "a call may now have happened"
+ *      durable before it can have, because a marker sharing a transaction with work can
+ *      be rolled back by that work's failure, and then the call that followed it has no
+ *      record at all. A deployment with no extraction port marks nothing and releases
+ *      the cents here.
+ *   3. `finishFirmResearch` — fetch, count, call, record, judge, and settle the
+ *      reservation by its id. The runner commits this as the job's completion.
  *
  * The split is the whole point. Before it, the paid call happened inside the single
  * transaction that also held the run row, the ledger row and the consumed counter — so
  * a lease reclaimed during the extraction, or any database error after the call, rolled
  * back every trace of a call that had already been billed, and the retry spent the money
  * again against a budget that had never heard of the first attempt. Now a rollback of
- * chunk 2 leaves chunk 1 standing: the run exists, the count is spent, and the
- * reservation is still on the ledger. The month is over-counted by a few cents until the
- * run is finalised, and over-counting is the direction in which nothing can be lost.
+ * chunk 3 leaves chunks 1 and 2 standing: the run exists, the count is spent, and the
+ * reservation still says `calling` — which is the durable "nobody knows" the next claim
+ * settles as an estimate before opening its own. The month is over-counted by a few
+ * cents until the run is finalised, and over-counting is the direction in which nothing
+ * can be lost.
  *
- * If chunk 2's own SQL fails, the reservation stands and the row stays `running`;
- * `finaliseAbandonedRuns` closes it half an hour later as `lease_lost` and keeps the
- * reservation as the recorded cost, because nobody can know whether the call was made.
+ * If chunk 3's own SQL fails, the reservation stands and the row stays `running`;
+ * `finaliseAbandonedRuns` closes it half an hour later as `lease_lost` — once the run's
+ * job has no live lease — and keeps a `calling` reservation as the recorded cost,
+ * because nobody can know whether the call was made.
  *
- * `runFirmResearch` runs both halves in sequence. It is what a direct caller and most
+ * `runFirmResearch` runs all three in sequence. It is what a direct caller and most
  * tests want — one call, one answer — and it is *not* what the handler uses, because
- * two halves in one transaction is exactly the arrangement the split exists to end.
+ * three steps in one transaction is exactly the arrangement the split exists to end.
  *
  * ## Once the clearance is consumed, nothing in this function throws
  *
