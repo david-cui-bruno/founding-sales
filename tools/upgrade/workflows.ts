@@ -352,12 +352,35 @@ export async function runWorkflows(
         // the upgrade, by the new code, with an origin the deployed checkout could not
         // write: the same firm, the same person, an enrollment of its own that is
         // `prospecting` rather than legacy, and a step that is due.
+        // Its own person, so the one-live-enrollment-per-contact rule is not the thing
+        // this probe runs into, and its own usable address, because a step with no route
+        // is refused for that instead.
+        const probeContact = await session.query<{ id: string }>(
+          `WITH person AS (
+             INSERT INTO contacts (workspace_id, firm_id, full_name)
+             SELECT e.workspace_id, e.firm_id, 'Upgrade Probe'
+               FROM sequence_enrollments e WHERE e.workspace_id = $1 AND e.id = $2
+             RETURNING id, workspace_id, firm_id
+           ), route AS (
+             INSERT INTO email_addresses (workspace_id, firm_id, contact_id, address, source, retrieved_at,
+                                          association_confidence, technical_validation, eligibility,
+                                          eligibility_policy_version)
+             SELECT p.workspace_id, p.firm_id, p.id, 'upgrade.probe@example.test', 'research_provider', now(),
+                    0.900, 'passed', 'usable', 'route-policy.1'
+               FROM person p
+             RETURNING contact_id
+           )
+           SELECT id FROM person`,
+          [candidate.workspace_id, candidate.id],
+        );
+        const probeContactId = probeContact.rows[0]?.id;
+        if (probeContactId === undefined) throw new Error('the post-upgrade probe contact was not written');
         const probe = await session.query<{ id: string }>(
           `WITH enrolled AS (
              INSERT INTO sequence_enrollments
                (workspace_id, sequence_version_id, opportunity_id, firm_id, contact_id, assigned_user_id,
                 started_at, firm_time_zone, holiday_calendar_version, origin_kind)
-             SELECT e.workspace_id, e.sequence_version_id, e.opportunity_id, e.firm_id, e.contact_id,
+             SELECT e.workspace_id, e.sequence_version_id, e.opportunity_id, e.firm_id, $3::uuid,
                     e.assigned_user_id, now(), e.firm_time_zone, e.holiday_calendar_version, 'prospecting'
                FROM sequence_enrollments e
               WHERE e.workspace_id = $1 AND e.id = $2
@@ -375,7 +398,7 @@ export async function runWorkflows(
             ORDER BY s.ordinal
             LIMIT 1
            RETURNING enrollment_id AS id`,
-          [candidate.workspace_id, candidate.id],
+          [candidate.workspace_id, candidate.id, probeContactId],
         );
         const probeEnrollmentId = probe.rows[0]?.id;
         if (probeEnrollmentId === undefined) throw new Error('the post-upgrade probe enrolment was not written');
@@ -410,6 +433,14 @@ export async function runWorkflows(
         await session.query('DELETE FROM sequence_enrollments WHERE workspace_id = $1 AND id = $2', [
           candidate.workspace_id,
           probeEnrollmentId,
+        ]);
+        await session.query('DELETE FROM email_addresses WHERE workspace_id = $1 AND contact_id = $2', [
+          candidate.workspace_id,
+          probeContactId,
+        ]);
+        await session.query('DELETE FROM contacts WHERE workspace_id = $1 AND id = $2', [
+          candidate.workspace_id,
+          probeContactId,
         ]);
 
         return `held: ${outcome.reasonCode}${outcome.detail === undefined ? '' : ` (${outcome.detail})`}; post-upgrade prospecting probe: ${probeOutcome.reasonCode}`;
