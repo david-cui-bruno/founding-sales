@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { SENDING_STOP_LINE } from '@fss/contracts';
 import { OFFLINE_BANNER } from '../src/renderer/readError.ts';
 import { createAuthedClient } from '../src/main/authedClient.ts';
 import { createSequenceBridge } from '../src/main/sequenceBridge.ts';
@@ -41,8 +40,6 @@ import {
  */
 
 const HASH = 'a'.repeat(64);
-/** Imported rather than typed, so the panel and the server's rule cannot disagree. */
-const STOP_LINE = SENDING_STOP_LINE;
 
 const template = (patch: Partial<TemplateVersion> = {}): TemplateVersion =>
   templateVersionAnswer({ personalizationStrategy: 'deterministic', ...patch });
