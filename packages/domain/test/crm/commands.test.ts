@@ -621,13 +621,28 @@ describe('CRM commands', () => {
         expect(Number(left.rows[0]?.count)).toBe(0);
 
         // The runs and the facts stay where they were read, as the domain events do: a
-        // page read for another firm is not provenance for this one.
-        const history = await context.db.query<{ runs: string; facts: string }>(
+        // page read for another firm is not provenance for this one — and the evidence
+        // row a fact cites stays with it, rather than being carried to the target by the
+        // generic evidence move and leaving the fact quoting a page the other firm is
+        // now said to have published.
+        const history = await context.db.query<{ runs: string; facts: string; evidence: string }>(
           `SELECT (SELECT count(*) FROM research_runs WHERE workspace_id = $1 AND firm_id = $2) AS runs,
-                  (SELECT count(*) FROM firm_facts WHERE workspace_id = $1 AND firm_id = $2) AS facts`,
+                  (SELECT count(*) FROM firm_facts WHERE workspace_id = $1 AND firm_id = $2) AS facts,
+                  (SELECT count(*) FROM firm_facts ff
+                     JOIN evidence_items e ON e.workspace_id = ff.workspace_id AND e.id = ff.evidence_id
+                    WHERE ff.workspace_id = $1 AND ff.firm_id = $2 AND e.firm_id = ff.firm_id) AS evidence`,
           [seeded.alpha.workspaceId, duplicate.value.id],
         );
-        expect(history.rows[0]).toEqual({ runs: '1', facts: '1' });
+        expect(history.rows[0]).toEqual({ runs: '1', facts: '1', evidence: '1' });
+        // And every fact in the workspace, on either firm, still cites evidence that
+        // sits on the same firm it does.
+        const split = await context.db.query<{ count: string }>(
+          `SELECT count(*) AS count FROM firm_facts ff
+             JOIN evidence_items e ON e.workspace_id = ff.workspace_id AND e.id = ff.evidence_id
+            WHERE ff.workspace_id = $1 AND e.firm_id <> ff.firm_id`,
+          [seeded.alpha.workspaceId],
+        );
+        expect(Number(split.rows[0]?.count)).toBe(0);
 
         // And a fresh run is queued, so the target's judgment is rebuilt from the
         // target's own pages rather than inherited.

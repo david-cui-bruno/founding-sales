@@ -129,6 +129,60 @@ describe('lane 4 puts the call-first firms in front', () => {
     expect(after.indexOf(middle)).toBeLessThan(after.indexOf(oldest));
   });
 
+  it('asks the version question of the date, not of the reader’s own cards', async () => {
+    // The check used to run over the viewer's filtered list, which made the ordering a
+    // property of who was looking: a salesperson whose own cards happened to be
+    // `today.2` would get the new order on a date an admin saw as mixed, and the two
+    // would read one morning in two different orders.
+    // The newest firm of the date, and the one research says to call first: a
+    // partitioned list would put it first, and an unpartitioned one puts it last.
+    const mine = await firm('Mixed date, mine, call first', '2026-10-05T12:00:00Z');
+    const theirs = await firm('Mixed date, somebody else’s', '2026-10-06T12:00:00Z');
+    await judge(mine, true);
+    await database.session.query('UPDATE firms SET assigned_user_id = $2 WHERE workspace_id = $1 AND id = $3', [
+      seeded.alpha.workspaceId,
+      seeded.alpha.admin.userId,
+      theirs,
+    ]);
+
+    const context = worker();
+    const now = await databaseNow(context);
+    const businessDate = await businessDateOf(context, now);
+    await buildTodaySnapshot(context, { businessDate, now, sources: [newFirmSource()] });
+    // Only the card the salesperson cannot see is stale, so their own slice is entirely
+    // `today.2` and the old check would have partitioned it.
+    await database.session.query(
+      `UPDATE today_snapshots SET algorithm_version = 'today.1'
+        WHERE workspace_id = $1 AND snapshot_date = $2::date AND firm_id = $3`,
+      [seeded.alpha.workspaceId, businessDate, theirs],
+    );
+
+    const salesperson = repositoryContext(
+      workspaceScope(seeded.alpha.workspaceId, {
+        kind: 'user',
+        userId: seeded.alpha.salesperson.userId,
+        role: 'salesperson',
+      }),
+      database.session,
+    );
+    const admin = repositoryContext(
+      workspaceScope(seeded.alpha.workspaceId, { kind: 'user', userId: seeded.alpha.admin.userId, role: 'admin' }),
+      database.session,
+    );
+    const sales = (await readTodayList(salesperson, { now })).cards.map(card => card.firmId);
+    const everyone = (await readTodayList(admin, { now })).cards.map(card => card.firmId);
+    // Neither reader gets the partition, because the date is mixed — and the reader who
+    // cannot see the stale card is the one the old check got wrong.
+    expect(sales).not.toContain(theirs);
+    expect(everyone).toContain(theirs);
+    for (const positions of [sales, everyone]) {
+      expect(positions.length).toBeGreaterThan(1);
+      // Last, by creation order, rather than lifted to the front by `call_first`.
+      expect(positions.at(-1)).toBe(positions.includes(theirs) ? theirs : mine);
+      expect(positions[0]).not.toBe(mine);
+    }
+  });
+
   it('is `today.2`, on both sides of the seam', async () => {
     const { rows } = await database.session.query<{ version: string }>('SELECT today_algorithm_version() AS version');
     expect(TODAY_ALGORITHM_VERSION).toBe('today.2');

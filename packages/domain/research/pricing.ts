@@ -1,4 +1,6 @@
-import { MAX_TEXT_CHARACTERS } from './pageText.ts';
+import { EXTRACTION_OUTPUT_SCHEMA, EXTRACTION_SYSTEM_TEXT } from './extractionPrompt.ts';
+import { FACT_KEYS, FACT_KEY_DEFINITIONS } from './facts.ts';
+import { MAX_BLOCKS, MAX_TEXT_CHARACTERS } from './pageText.ts';
 
 /**
  * What a research run may cost, in whole cents (David's answer 8: a budget of $20–30
@@ -113,11 +115,37 @@ export const MAX_EXTRACTION_OUTPUT_TOKENS = 600;
  */
 const CHARACTERS_PER_TOKEN = 2.5;
 
+const tokensFor = (characters: number): number => Math.ceil(characters / CHARACTERS_PER_TOKEN);
+
 /**
- * What the prompt adds beyond the page text: the dictionary, the instructions, the
- * schema, and the JSON envelope each block is wrapped in.
+ * What the request carries besides page text, **measured** rather than guessed.
+ *
+ * Every one of these is a constant string in this repository, so the bound is computed
+ * from the strings themselves at module load. A round number here was the review's
+ * finding and it was right: `PROMPT_OVERHEAD_TOKENS = 2_000` was a figure somebody
+ * chose, and widening the system text or adding a fact key would have moved the real
+ * request without moving the price. Now it cannot: adding a key to
+ * `FACT_KEY_DEFINITIONS` lengthens the dictionary, which lengthens this, which raises
+ * `worstCaseRunCents`, which is what a ceiling compares against.
  */
-const PROMPT_OVERHEAD_TOKENS = 2_000;
+const FIXED_PROMPT_TOKENS = tokensFor(
+  EXTRACTION_SYSTEM_TEXT.length +
+    FACT_KEYS.map(key => `- ${key}: ${FACT_KEY_DEFINITIONS[key]}`).join('\n').length +
+    JSON.stringify(EXTRACTION_OUTPUT_SCHEMA).length,
+);
+
+/**
+ * What one page adds besides its text: a `[b12] ` marker on every block and a `SOURCE`
+ * line carrying a URL, plus room for the firm's name.
+ *
+ * Eight tokens a block is generous for `[b100] ` — it is three or four — and three
+ * hundred for the URL and the name is generous for a 500-character URL bound. Generous
+ * on purpose: this is the term that is *not* a measured constant, because the URL and
+ * the firm name are a firm's data rather than ours, so it is the one term where being
+ * wrong has to cost headroom rather than correctness.
+ */
+const PER_PAGE_MARKER_TOKENS = MAX_BLOCKS * 8;
+const PER_PAGE_TEXT_TOKENS = 300;
 
 export interface WorstCaseInput {
   readonly modelName: string;
@@ -141,8 +169,11 @@ export interface WorstCaseInput {
  *     character bound, so the extractor is never offered more however large the page
  *     was. Using the larger would give a worst case of about a dollar a run, which at
  *     the default fifty-cent daily ceiling would refuse every run there has ever been.
- *   * **Characters per token is 2.5 and the overhead is 2 000 tokens**, both chosen
- *     high. See `CHARACTERS_PER_TOKEN`.
+ *   * **The prompt's own size is measured, not guessed.** `FIXED_PROMPT_TOKENS` is the
+ *     system text, the fact dictionary and the serialized output schema, counted at
+ *     module load; each page adds `MAX_BLOCKS × 8` tokens of block markers and 300 for
+ *     its `SOURCE` URL and the firm's name. Characters per token is 2.5. See
+ *     `CHARACTERS_PER_TOKEN`.
  *
  * At the defaults — four pages, twelve thousand characters each — this is 3 cents, so
  * the fifty-cent daily ceiling is 16 runs and the ten-dollar monthly ceiling is 333.
@@ -153,10 +184,18 @@ export interface WorstCaseInput {
  * authorized in the first place.
  */
 export function worstCaseRunCents(input: WorstCaseInput): number {
+  return centsOf(input.modelName, {
+    inputTokens: worstCaseInputTokens(input),
+    outputTokens: MAX_EXTRACTION_OUTPUT_TOKENS,
+  });
+}
+
+/** The input half of the bound, exported so a test can compare a real request with it. */
+export function worstCaseInputTokens(input: Omit<WorstCaseInput, 'modelName'>): number {
   const pages = Math.max(1, Math.trunc(input.maxPagesPerFirm));
-  const perPage = Math.min(Math.max(1024, Math.trunc(input.maxPageBytes)), MAX_TEXT_CHARACTERS);
-  const inputTokens = PROMPT_OVERHEAD_TOKENS + Math.ceil((pages * perPage) / CHARACTERS_PER_TOKEN);
-  return centsOf(input.modelName, { inputTokens, outputTokens: MAX_EXTRACTION_OUTPUT_TOKENS });
+  const charactersPerPage = Math.min(Math.max(1024, Math.trunc(input.maxPageBytes)), MAX_TEXT_CHARACTERS);
+  const perPage = tokensFor(charactersPerPage) + PER_PAGE_MARKER_TOKENS + PER_PAGE_TEXT_TOKENS;
+  return FIXED_PROMPT_TOKENS + pages * perPage;
 }
 
 /**

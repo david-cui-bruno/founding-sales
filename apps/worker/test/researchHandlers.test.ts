@@ -5,6 +5,8 @@ import { repositoryContext, workspaceScope, type RepositoryContext } from '@fss/
 import { runTwiceUnderStolenLease } from '@fss/domain/jobs/atLeastOnce.ts';
 import { HandlerRegistry } from '@fss/domain/jobs/handlerRegistry.ts';
 import { jobIdempotencyKey } from '@fss/domain/jobs/jobKinds.ts';
+import { requeueDeadJob } from '@fss/domain/jobs/jobStore.ts';
+import type { QueryOutcome, QueryResultRowLike, SessionQueryable } from '@fss/domain/db/queryable.ts';
 import type { ExtractionProvider, PageFetchProvider } from '@fss/domain/research/providers.ts';
 import { enqueueJob } from '@fss/domain/jobs/jobStore.ts';
 import { runClaimedJob, runOnce } from '../src/runner/jobRunner.ts';
@@ -108,10 +110,36 @@ const throwingExtraction: ExtractionProvider = {
   },
 };
 
+/**
+ * A session that throws once, on the first statement matching `pattern`.
+ *
+ * Used to break chunk 2 *after* a successful extraction, which is the failure the two
+ * chunks exist for: the money is spent and the transaction that would have recorded the
+ * result cannot commit. Everything chunk 1 wrote has to survive it.
+ */
+function failingOnce(session: SessionQueryable, pattern: RegExp): SessionQueryable {
+  let armed = true;
+  return {
+    query: async <Row extends QueryResultRowLike>(
+      text: string,
+      values?: readonly unknown[],
+    ): Promise<QueryOutcome<Row>> => {
+      if (armed && pattern.test(text)) {
+        armed = false;
+        throw Object.assign(new Error('the fact insert failed'), { code: '40001' });
+      }
+      return await session.query<Row>(text, values);
+    },
+  };
+}
+
+const NO_BACKOFF = { baseSeconds: 0, factor: 1, maximumSeconds: 0, jitterFraction: 0 };
+
 describe('the research jobs', () => {
   let database: TestDatabase;
   let workspaceId = '';
   let firmId = '';
+  let adminUserId = '';
   let now = '';
 
   const context = (): RepositoryContext =>
@@ -128,6 +156,16 @@ describe('the research jobs', () => {
       [workspaceId],
     );
     firmId = firm.rows[0]?.id ?? '';
+    // An admin membership, for the audited requeue `requeueDeadJob` asks for.
+    const user = await database.session.query<{ id: string }>(
+      `INSERT INTO users (google_sub, email, display_name)
+       VALUES ('research-handlers-admin', 'admin@alpha.example.test', 'Alpha Admin') RETURNING id`,
+    );
+    adminUserId = user.rows[0]?.id ?? '';
+    await database.session.query(
+      "INSERT INTO workspace_memberships (workspace_id, user_id, role) VALUES ($1, $2, 'admin')",
+      [workspaceId, adminUserId],
+    );
     const clock = await database.session.query<{ now: Date }>('SELECT now() AS now');
     now = (clock.rows[0]?.now ?? new Date()).toISOString();
   });
@@ -152,9 +190,13 @@ describe('the research jobs', () => {
     const registry = new HandlerRegistry().register(researchFirmJobHandler(options)).register(researchSweepJobHandler(options));
     expect(registry.get('research.firm')?.protection).toBe('business_uniqueness');
     expect(registry.get('research.sweep')?.protection).toBe('business_uniqueness');
-    // Not chunked: a chunk boundary inside a run would commit some pages and not
-    // others under a clearance that was claimed once.
-    expect(registry.get('research.firm')?.chunked).toBeUndefined();
+    // Chunked, and the boundary is where the money is: chunk 1 opens the run, consumes
+    // the day's count and reserves the worst case; chunk 2 makes the calls. Before the
+    // split, a lease reclaimed during the extraction rolled back the accounting of a
+    // call that had already been billed.
+    expect(registry.get('research.firm')?.chunked).toBe(true);
+    // The sweep is one bounded pass and stays unchunked.
+    expect(registry.get('research.sweep')?.chunked).toBeUndefined();
   });
 
   it('refuses a payload that names no firm, no revision or a trigger that is not one', () => {
@@ -203,10 +245,13 @@ describe('the research jobs', () => {
     expect(counts.rows[0]).toEqual({ runs: 1, evidence: 1 });
     // The stolen worker's whole transaction rolled back, so the model was asked once
     // *for an effect*. The second attempt spent no cents that survived.
-    const ledger = await database.session.query<{ cost: number }>(
-      'SELECT coalesce(sum(cost_cents), 0)::int AS cost FROM provider_ledger',
+    const ledger = await database.session.query<{ cost: number; reserved: number }>(
+      `SELECT coalesce(sum(cost_cents), 0)::int AS cost,
+              coalesce(sum(reserved_cents), 0)::int AS reserved FROM provider_ledger`,
     );
-    expect(ledger.rows[0]?.cost).toBe(1);
+    // Ends at the invoiced figure with nothing still held: the happy path settles the
+    // reservation rather than leaving the month over-counted.
+    expect(ledger.rows[0]).toEqual({ cost: 1, reserved: 0 });
   });
 
   it('commits a failed run and completes the job, so a paid call keeps its accounting', async () => {
@@ -223,7 +268,16 @@ describe('the research jobs', () => {
         // Two providers were asked, so there are two ledger rows and one failure.
         ledger: 2,
       },
-      { name: 'the fetch itself throws', options: { pageFetch: throwingFetch }, evidence: 0, ledger: 1 },
+      {
+        // Two rows here as well: the extraction's row exists from chunk 1's
+        // reservation, even though the fetch never got far enough to ask it anything.
+        // Its reserved cents went back; the row stays, because a ledger row is the
+        // record that a run was authorized against this provider today.
+        name: 'the fetch itself throws',
+        options: { pageFetch: throwingFetch },
+        evidence: 0,
+        ledger: 2,
+      },
     ] as const;
 
     for (const scenario of cases) {
@@ -308,6 +362,185 @@ describe('the research jobs', () => {
     }
   });
 
+  it('keeps the run, the reservation and the count when chunk 2 rolls back, and resumes from the cursor', async () => {
+    const pageFetch = countingFetch();
+    const extraction = countingExtraction();
+    const registry = new HandlerRegistry().register(researchFirmJobHandler({ pageFetch, extraction }));
+    const key = jobIdempotencyKey.researchFirm(firmId, 1);
+    await enqueueJob(database.session, {
+      workspaceId,
+      kind: 'research.firm',
+      idempotencyKey: key,
+      payload: { firmId, revision: 1, trigger: 'sweep' },
+      maxAttempts: 3,
+    });
+
+    // Chunk 1 commits; the extraction answers; and then the fact insert fails, which
+    // rolls chunk 2 back. Before the split this rolled back the run row, the ledger and
+    // the counter too, while the model call stayed billed.
+    const broken = failingOnce(database.session, /INSERT INTO firm_facts/iu);
+    const first = await runOnce(broken, { registry, owner: 'worker-chunk-rollback', limit: 5, backoff: NO_BACKOFF, random: () => 0 });
+    expect(first.failed).toBe(1);
+    expect(extraction.calls).toBe(1);
+
+    const after = await database.session.query<{
+      runs: number;
+      outcome: string | null;
+      facts: number;
+      counter: number | null;
+      reserved: number;
+      total: number;
+      progress: string | null;
+    }>(
+      `SELECT (SELECT count(*) FROM research_runs)::int AS runs,
+              (SELECT outcome FROM research_runs LIMIT 1) AS outcome,
+              (SELECT count(*) FROM firm_facts)::int AS facts,
+              (SELECT max(count) FROM daily_counters)::int AS counter,
+              (SELECT coalesce(sum(reserved_cents), 0) FROM provider_ledger)::int AS reserved,
+              (SELECT coalesce(sum(cost_cents + reserved_cents), 0) FROM provider_ledger)::int AS total,
+              (SELECT payload->'progress'->>'runId' FROM jobs WHERE idempotency_key = $1) AS progress`,
+      [key],
+    );
+    // The run row and its reservation survived; the facts did not, because that is the
+    // work chunk 2 was rolled back for.
+    expect(after.rows[0]).toMatchObject({ runs: 1, outcome: 'running', facts: 0, counter: 1, reserved: 3 });
+    // The ledger never drops below what was reserved, whatever chunk 2 did.
+    expect(after.rows[0]?.total).toBeGreaterThanOrEqual(3);
+    // And the cursor is still there, naming the run chunk 2 must resume.
+    expect(after.rows[0]?.progress).toEqual(expect.any(String));
+
+    // The second claim resumes at chunk 2: no second run row, no second unit of the
+    // day's count, and the reservation turns into the invoiced figure.
+    const second = await runOnce(database.session, { registry, owner: 'worker-chunk-resume', limit: 5, backoff: NO_BACKOFF, random: () => 0 });
+    expect(second.completed).toBe(1);
+    expect(extraction.calls).toBe(2);
+    const settled = await database.session.query<{
+      runs: number;
+      outcome: string | null;
+      counter: number | null;
+      reserved: number;
+      cost: number;
+    }>(
+      `SELECT (SELECT count(*) FROM research_runs)::int AS runs,
+              (SELECT outcome FROM research_runs LIMIT 1) AS outcome,
+              (SELECT max(count) FROM daily_counters)::int AS counter,
+              (SELECT coalesce(sum(reserved_cents), 0) FROM provider_ledger)::int AS reserved,
+              (SELECT coalesce(sum(cost_cents), 0) FROM provider_ledger)::int AS cost`,
+    );
+    expect(settled.rows[0]).toEqual({ runs: 1, outcome: 'completed', counter: 1, reserved: 0, cost: 1 });
+  });
+
+  it('finalises a run abandoned between the chunks as lease_lost, keeping its reservation as the cost', async () => {
+    // A worker that disappears after chunk 1 — a pause past its lease, a container
+    // replaced, a failover — leaves a row `running` with cents held against it, and
+    // `run_in_progress` refuses the firm a new revision while it sits there.
+    const handler = researchFirmJobHandler({ pageFetch: countingFetch(), extraction: countingExtraction() });
+    const chunkOne = await handler.handle({
+      session: database.session,
+      scope: workspaceScope(workspaceId, { kind: 'system', component: 'worker' }),
+      job: {
+        id: '00000000-0000-4000-8000-00000000000a',
+        workspaceId,
+        kind: 'research.firm',
+        idempotencyKey: jobIdempotencyKey.researchFirm(firmId, 1),
+        payload: { firmId, revision: 1, trigger: 'sweep' },
+        attempt: 1,
+        maxAttempts: 3,
+        fencingToken: '1',
+        leaseOwner: 'test',
+        leaseExpiresAt: now,
+      },
+    });
+    expect(chunkOne).toMatchObject({ done: false });
+    // Thirty-one minutes ago, which is what the sweep is looking for.
+    await database.session.query("UPDATE research_runs SET started_at = now() - interval '31 minutes'");
+
+    const sweep = researchSweepJobHandler({ pageFetch: countingFetch() });
+    await sweep.handle({
+      session: database.session,
+      scope: workspaceScope(workspaceId, { kind: 'system', component: 'worker' }),
+      job: {
+        id: '00000000-0000-4000-8000-00000000000b',
+        workspaceId,
+        kind: 'research.sweep',
+        idempotencyKey: 'research-sweep:alpha:2026-09-28',
+        payload: { businessDate: '2026-09-28' },
+        attempt: 1,
+        maxAttempts: 2,
+        fencingToken: '1',
+        leaseOwner: 'test',
+        leaseExpiresAt: now,
+      },
+    });
+
+    const closed = await database.session.query<{
+      outcome: string;
+      refusal: string | null;
+      estimated: boolean;
+      reserved: number;
+    }>(
+      `SELECT (SELECT outcome FROM research_runs LIMIT 1) AS outcome,
+              (SELECT refusal_code FROM research_runs LIMIT 1) AS refusal,
+              (SELECT cost_estimated FROM research_runs LIMIT 1) AS estimated,
+              (SELECT coalesce(sum(reserved_cents), 0) FROM provider_ledger)::int AS reserved`,
+    );
+    // The reservation **stays**: the last thing that worker did before disappearing may
+    // well have been to make the call, and releasing it would be claiming it did not.
+    expect(closed.rows[0]).toEqual({ outcome: 'failed', refusal: 'lease_lost', estimated: true, reserved: 3 });
+  });
+
+  it('resumes at chunk 2 after an admin requeue, without reserving twice', async () => {
+    const pageFetch = countingFetch();
+    const extraction = countingExtraction();
+    const registry = new HandlerRegistry().register(
+      // One attempt, so the rolled-back chunk 2 buries the job at once.
+      researchFirmJobHandler({ pageFetch, extraction, maxAttempts: 1 }),
+    );
+    const key = jobIdempotencyKey.researchFirm(firmId, 1);
+    await enqueueJob(database.session, {
+      workspaceId,
+      kind: 'research.firm',
+      idempotencyKey: key,
+      payload: { firmId, revision: 1, trigger: 'sweep' },
+      maxAttempts: 1,
+    });
+    const broken = failingOnce(database.session, /INSERT INTO firm_facts/iu);
+    await runOnce(broken, { registry, owner: 'worker-requeue', limit: 5, backoff: NO_BACKOFF, random: () => 0 });
+
+    const dead = await database.session.query<{ id: string; state: string }>(
+      'SELECT id, state FROM jobs WHERE idempotency_key = $1',
+      [key],
+    );
+    expect(dead.rows[0]?.state).toBe('dead');
+
+    // `requeueDeadJob` clears the chunk budget and keeps the cursor, which is exactly
+    // what stops a requeue from opening a second run and reserving a second time.
+    const admin = repositoryContext(
+      workspaceScope(workspaceId, { kind: 'user', userId: adminUserId, role: 'admin' }),
+      database.session,
+    );
+    expect(await requeueDeadJob(admin, { jobId: dead.rows[0]?.id ?? '', reason: 'test' })).toMatchObject({
+      requeued: true,
+    });
+
+    await runOnce(database.session, { registry, owner: 'worker-requeued', limit: 5, backoff: NO_BACKOFF, random: () => 0 });
+    const settled = await database.session.query<{
+      runs: number;
+      outcome: string | null;
+      counter: number | null;
+      reserved: number;
+      cost: number;
+    }>(
+      `SELECT (SELECT count(*) FROM research_runs)::int AS runs,
+              (SELECT outcome FROM research_runs LIMIT 1) AS outcome,
+              (SELECT max(count) FROM daily_counters)::int AS counter,
+              (SELECT coalesce(sum(reserved_cents), 0) FROM provider_ledger)::int AS reserved,
+              (SELECT coalesce(sum(cost_cents), 0) FROM provider_ledger)::int AS cost`,
+    );
+    // One run, one unit of the day's count, nothing still reserved, one invoice.
+    expect(settled.rows[0]).toEqual({ runs: 1, outcome: 'completed', counter: 1, reserved: 0, cost: 1 });
+  });
+
   it('materializes one sweep per workspace per business date, however many passes run', async () => {
     const report = await runSchedulerPass(database.session, { sources: [researchSweepSource()], now });
     expect(report.inserted).toBe(1);
@@ -360,28 +593,50 @@ describe('the research jobs', () => {
   it('records the pages and completes when the deployment has no model key', async () => {
     const pageFetch = countingFetch();
     const handler = researchFirmJobHandler({ pageFetch });
-    await handler.handle({
+    const claimed = {
+      id: '00000000-0000-4000-8000-000000000001',
+      workspaceId,
+      kind: 'research.firm' as const,
+      idempotencyKey: jobIdempotencyKey.researchFirm(firmId, 1),
+      payload: { firmId, revision: 1, trigger: 'sweep' } as Readonly<Record<string, unknown>>,
+      attempt: 1,
+      maxAttempts: 3,
+      fencingToken: '1',
+      leaseOwner: 'test',
+      leaseExpiresAt: now,
+    };
+    const scope = workspaceScope(workspaceId, { kind: 'system', component: 'worker' });
+
+    // Chunk 1: the run row, the day's count and the reservation. No provider yet.
+    const first = await handler.handle({ session: database.session, scope, job: claimed });
+    expect(first).toEqual({ progress: { runId: expect.any(String), reservedCents: 3, step: 'reserved' }, done: false });
+    expect(pageFetch.calls).toBe(0);
+
+    // Chunk 2, from the cursor the runner would have carried in `payload.progress`.
+    const second = await handler.handle({
       session: database.session,
-      scope: workspaceScope(workspaceId, { kind: 'system', component: 'worker' }),
-      job: {
-        id: '00000000-0000-4000-8000-000000000001',
-        workspaceId,
-        kind: 'research.firm',
-        idempotencyKey: jobIdempotencyKey.researchFirm(firmId, 1),
-        payload: { firmId, revision: 1, trigger: 'sweep' },
-        attempt: 1,
-        maxAttempts: 3,
-        fencingToken: '1',
-        leaseOwner: 'test',
-        leaseExpiresAt: now,
-      },
+      scope,
+      job: { ...claimed, payload: { ...claimed.payload, progress: (first as { progress: unknown }).progress } },
     });
-    const counts = await database.session.query<{ evidence: number; facts: number; fit: string | null }>(
+    expect(second).toMatchObject({ done: true });
+
+    const counts = await database.session.query<{
+      evidence: number;
+      facts: number;
+      fit: string | null;
+      extraction: string | null;
+      reserved: number;
+    }>(
       `SELECT (SELECT count(*) FROM evidence_items)::int AS evidence,
               (SELECT count(*) FROM firm_facts)::int AS facts,
-              (SELECT fit FROM firm_judgments LIMIT 1) AS fit`,
+              (SELECT fit FROM firm_judgments LIMIT 1) AS fit,
+              (SELECT extraction FROM research_runs LIMIT 1) AS extraction,
+              (SELECT coalesce(sum(reserved_cents), 0) FROM provider_ledger)::int AS reserved`,
     );
-    expect(counts.rows[0]).toEqual({ evidence: 1, facts: 0, fit: 'unknown' });
+    // `unconfigured` rather than a null model name, so the sweep can tell this apart
+    // from a firm whose pages could not be read — and the reservation came back,
+    // because nothing was asked of a model.
+    expect(counts.rows[0]).toEqual({ evidence: 1, facts: 0, fit: 'unknown', extraction: 'unconfigured', reserved: 0 });
     expect(context().scope.workspaceId).toBe(workspaceId);
   });
 });

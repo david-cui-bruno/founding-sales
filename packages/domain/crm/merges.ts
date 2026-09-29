@@ -139,7 +139,11 @@ export async function mergeFirms(
    * would lose a retrieval time and a source; overwriting the target's would lose a
    * verification. Neither is a merge's business.
    */
-  const move = async (table: string, uniqueColumns: readonly string[] = []): Promise<void> => {
+  const move = async (
+    table: string,
+    uniqueColumns: readonly string[] = [],
+    extraCondition = '',
+  ): Promise<void> => {
     const twin =
       uniqueColumns.length === 0
         ? ''
@@ -148,7 +152,8 @@ export async function mergeFirms(
               WHERE t.workspace_id = r.workspace_id AND t.firm_id = $3
                 AND ${uniqueColumns.map(column => `t.${column} IS NOT DISTINCT FROM r.${column}`).join(' AND ')})`;
     const { rowCount } = await context.db.query(
-      `UPDATE ${table} AS r SET firm_id = $3 WHERE r.workspace_id = $1 AND r.firm_id = $2${twin}`,
+      `UPDATE ${table} AS r SET firm_id = $3
+        WHERE r.workspace_id = $1 AND r.firm_id = $2${twin}${extraCondition}`,
       [context.scope.workspaceId, source.id, target.id],
     );
     preserved[table] = rowCount ?? 0;
@@ -174,7 +179,18 @@ export async function mergeFirms(
   await move('contacts');
   await move('phone_routes', ['contact_id', 'e164']);
   await move('email_addresses', ['contact_id', 'address']);
-  await move('evidence_items', ['contact_id', 'provider', 'content_hash']);
+  await move(
+    'evidence_items',
+    ['contact_id', 'provider', 'content_hash'],
+    // An evidence row a research fact points at stays where its fact is. `firm_facts`
+    // is left on the merged source on purpose — it records what was read, at which URL,
+    // on which day, and re-attributing it would be inventing provenance — so moving its
+    // evidence would split one piece of history across two firms and leave the fact
+    // citing a page the other firm is now said to have published.
+    ` AND NOT EXISTS (
+         SELECT 1 FROM firm_facts ff
+          WHERE ff.workspace_id = r.workspace_id AND ff.evidence_id = r.id)`,
+  );
   await move('record_aliases', ['contact_id', 'alias_kind', 'alias_value']);
 
   // The opportunities need care: the target may already have an open one, and only
@@ -238,7 +254,10 @@ export async function mergeFirms(
  *     do. They are the record of what was read on a particular day at a particular URL,
  *     and re-attributing them to a firm they were not read for would be inventing
  *     provenance. Their FKs to `firms` carry no `ON DELETE`, so they keep pointing at
- *     the merged record, which is exactly where the truth is.
+ *     the merged record, which is exactly where the truth is. The `evidence_items` rows
+ *     those facts cite stay with them, which is why the generic evidence move excludes
+ *     any row a `firm_facts` row references: one piece of history split across two firms
+ *     is worse than either half.
  */
 async function mergeResearch(
   context: RepositoryContext,

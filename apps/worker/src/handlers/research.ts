@@ -1,13 +1,14 @@
 import type { SessionQueryable } from '@fss/domain/db/queryable.ts';
 import { repositoryContext, workspaceScope } from '@fss/domain/db/workspaceScope.ts';
-import type { JobHandler } from '@fss/domain/jobs/handlerRegistry.ts';
+import type { JobChunk, JobHandler } from '@fss/domain/jobs/handlerRegistry.ts';
 import { jobIdempotencyKey } from '@fss/domain/jobs/jobKinds.ts';
 import type { JobSpecification } from '@fss/domain/jobs/jobStore.ts';
 import { databaseNow } from '@fss/domain/policy/clock.ts';
 import { enqueueFirmResearch } from '@fss/domain/research/enqueue.ts';
-import { runFirmResearch } from '@fss/domain/research/enrichment.ts';
+import { beginFirmResearch, finishFirmResearch } from '@fss/domain/research/enrichment.ts';
 import type { ExtractionProvider, PageFetchProvider } from '@fss/domain/research/providers.ts';
 import { readResearchSettings } from '@fss/domain/research/settings.ts';
+import { finaliseAbandonedRuns } from '@fss/domain/research/runs.ts';
 import { selectFirmsForSweep } from '@fss/domain/research/sweep.ts';
 import { RESEARCH_TRIGGERS, type ResearchTrigger } from '@fss/domain/research/types.ts';
 import type { DueWorkSource } from '../scheduler/schedulerPass.ts';
@@ -30,34 +31,50 @@ import type { DueWorkSource } from '../scheduler/schedulerPass.ts';
  * a useful one — the evidence is what a later run's facts will point at — so the
  * handler is registered whenever the page fetch is, which is always.
  *
+ * ## Two chunks, because the middle of a run spends money
+ *
+ * `research.firm` is chunked (`docs/greenfield/jobs.md`, "Chunked bulk work"), and the
+ * boundary is where the money is:
+ *
+ *   * **chunk 1** — `beginFirmResearch`: the run row, the consumed unit of the day's
+ *     count, and the worst case **reserved** on `provider_ledger`. No provider has been
+ *     touched. The runner commits this together with the cursor
+ *     `{ runId, reservedCents, step: 'reserved' }`;
+ *   * **chunk 2** — `finishFirmResearch`: the fetch, the model call, the evidence, the
+ *     facts, the judgment, the funnel facts, and the reservation turned into the actual
+ *     figure. `done: true`.
+ *
+ * Before the split, both halves ran in the runner's single job transaction. A lease
+ * reclaimed during the extraction — or any database error after the call — rolled back
+ * the run row, the ledger row and the consumed counter while the money stayed spent at
+ * the provider, and the next attempt spent it again against a budget that had never
+ * heard of the first. Now a rollback of chunk 2 leaves chunk 1 committed: the second
+ * claim resumes from the cursor, finds its run row and its reservation, and does not
+ * consume a second unit.
+ *
+ * A worker that disappears between the chunks leaves a row `running` with a reservation
+ * standing. `finaliseAbandonedRuns`, in the sweep, closes it `failed` with
+ * `lease_lost` after `RUN_IN_PROGRESS_MINUTES` and keeps the reservation as the recorded
+ * cost — nobody can know whether the call was made, and over-counting is the direction
+ * in which nothing is lost.
+ *
  * ## The job always completes, even when the run failed
  *
- * This handler has no retry ladder for a provider failure, and that is deliberate.
- * The runner wraps the job in one transaction; the run's paid calls happen inside it.
- * Throwing would roll back the run row, the evidence, the ledger cents and the
- * consumed daily count while the money stayed spent — and then retry the same paid
- * calls against a budget with no record of the first attempt. So `runFirmResearch`
- * commits every outcome (see its "nothing throws" section), including a `failed` run,
- * and this handler treats a refusal the same way it treats a completion: the job is
- * done. A retry is the sweep's, as a new revision with a new clearance, which is a
- * retry the budget can see.
+ * No retry ladder for a provider failure, deliberately: a retry has to be a new
+ * revision with a new clearance, or it spends money the budget cannot see.
+ * `finishFirmResearch` commits every outcome, including a `failed` run, and this
+ * handler treats a refusal the same way it treats a completion — the job is done. The
+ * sweep issues the retry, one a business day, three times at most.
  *
  * `maxAttempts` is therefore about a poison payload and a stolen lease, not about
  * providers.
  *
- * ## Why `business_uniqueness`, and why it is not chunked
+ * ## Why `business_uniqueness`
  *
  * The run's first write is the insert into `research_runs`, unique on
- * `(workspace, firm, revision)`. A second claim of the same job finds it refused and
- * returns `already_recorded` having fetched nothing. The runner commits the whole run
- * with the completion, so a stolen lease rolls back every row it wrote and the
- * reclaiming worker does the work once.
- *
- * Not chunked, deliberately. A chunk boundary inside a run would mean committing
- * some pages' evidence and not others under a cursor, and the ceiling was claimed for
- * one run: a resumed second half would either re-claim a unit or spend one it never
- * claimed. A firm's four pages fit inside a lease (`FIRM_TIMEOUT_MILLISECONDS` is
- * thirty seconds).
+ * `(workspace, firm, revision)`. A second claim that has no cursor finds the insert
+ * refused and returns `already_recorded` having fetched nothing; a second claim that
+ * *has* a cursor is the ordinary resumption of chunk 2.
  */
 
 const RESEARCH_FIRM_MAX_ATTEMPTS = 3;
@@ -107,6 +124,26 @@ export function researchHandlers(options: ResearchWorkerOptions | undefined): re
   return [researchFirmJobHandler(options), researchSweepJobHandler(options)];
 }
 
+/** The cursor chunk 1 leaves behind, as it comes back out of `payload.progress`. */
+export interface ResearchProgress {
+  readonly runId: string;
+  readonly reservedCents: number;
+  readonly step: 'reserved';
+  /** `JobChunk.progress` is an open JSON record; this is what makes the shape one. */
+  readonly [key: string]: unknown;
+}
+
+export function parseResearchProgress(progress: unknown): ResearchProgress | null {
+  if (typeof progress !== 'object' || progress === null) return null;
+  const row = progress as Record<string, unknown>;
+  const runId = row['runId'];
+  const reservedCents = row['reservedCents'];
+  if (typeof runId !== 'string' || runId === '') return null;
+  if (typeof reservedCents !== 'number' || !Number.isFinite(reservedCents) || reservedCents < 0) return null;
+  if (row['step'] !== 'reserved') return null;
+  return { runId, reservedCents, step: 'reserved' };
+}
+
 export function researchFirmJobHandler(options: ResearchWorkerOptions): JobHandler {
   return {
     kind: 'research.firm',
@@ -114,23 +151,50 @@ export function researchFirmJobHandler(options: ResearchWorkerOptions): JobHandl
     maxAttempts: options.maxAttempts ?? RESEARCH_FIRM_MAX_ATTEMPTS,
     // Thirty seconds of fetching plus one model call, with room to spare.
     leaseSeconds: options.leaseSeconds ?? 120,
-    handle: async input => {
+    // Two chunks, and the boundary is where the money is: see the header.
+    chunked: true,
+    handle: async (input): Promise<void | JobChunk> => {
       const payload = parseResearchFirmPayload(input.job.payload);
       if (payload === null) {
         throw new ResearchHandlerError('a research.firm payload names a firm, a revision and a trigger');
       }
       const context = repositoryContext(input.scope, input.session);
-      // Every outcome, including a failure, is recorded on the run row inside this
-      // transaction. Nothing here throws on one: see the header.
-      await runFirmResearch(context, {
+      const at = await databaseNow(context);
+      const carried = parseResearchProgress(input.job.payload['progress']);
+
+      if (carried === null) {
+        // Chunk 1. Nothing here touches a provider, and what it writes — the run row,
+        // the consumed count, the reservation — is committed with the cursor below.
+        const started = await beginFirmResearch(context, {
+          firmId: payload.firmId,
+          revision: payload.revision,
+          trigger: payload.trigger,
+          ...(payload.requestedByUserId === undefined ? {} : { requestedByUserId: payload.requestedByUserId }),
+          at,
+        });
+        // A refusal and a replay are both finished jobs: the run row already says why,
+        // and there is nothing for a second chunk to do.
+        if (!started.ok || started.value.kind === 'done') return;
+        const progress: ResearchProgress = {
+          runId: started.value.runId,
+          reservedCents: started.value.reservedCents,
+          step: 'reserved',
+        };
+        return { progress, done: false };
+      }
+
+      // Chunk 2, from the cursor. Every outcome, including a failure, is recorded on the
+      // run row inside this transaction; nothing here throws on one.
+      await finishFirmResearch(context, {
+        runId: carried.runId,
+        reservedCents: carried.reservedCents,
         firmId: payload.firmId,
         revision: payload.revision,
-        trigger: payload.trigger,
-        ...(payload.requestedByUserId === undefined ? {} : { requestedByUserId: payload.requestedByUserId }),
-        at: await databaseNow(context),
+        at,
         pageFetch: options.pageFetch,
         ...(options.extraction === undefined ? {} : { extraction: options.extraction }),
       });
+      return { progress: { ...carried }, done: true };
     },
   };
 }
@@ -149,6 +213,10 @@ export function researchSweepJobHandler(options: ResearchWorkerOptions): JobHand
       const settings = await readResearchSettings(context);
       if (!settings.enabled) return;
       const at = await databaseNow(context);
+      // First, the runs a worker abandoned between their two chunks: closed `lease_lost`
+      // with their reservation kept as the cost. Before the select, because until a
+      // run is closed `run_in_progress` refuses the firm a new revision.
+      await finaliseAbandonedRuns(context, { at });
       // Whether this deployment can extract at all changes which firms are worth
       // re-reading: a run that completed with no model is a run with no facts, and it
       // should not hold the firm off for ninety days once a key exists.

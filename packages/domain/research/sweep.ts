@@ -36,14 +36,28 @@ import { workspaceBusinessZone } from './ledger.ts';
  *     morning will most likely fail again this morning. Three consecutive failures and
  *     the sweep leaves the firm alone: a fourth attempt is a firm whose site cannot be
  *     read, and the firm page says so rather than spending a unit a day for ever.
- *   * **There was no model when it ran.** A run with no extraction port records the
- *     pages and no facts. Without this condition, configuring the key would leave every
- *     firm already swept excluded for ninety days, which is the shape of bug nobody
- *     finds until a quarter later.
+ *   * **There was no model when it ran.** `research_runs.extraction` says why, and only
+ *     `unconfigured` comes back: a run that recorded no readable pages (`no_pages`) will
+ *     record none tomorrow either, and `model_name IS NULL` could not tell the two
+ *     apart — so every firm with an unreachable site was re-selected every single day
+ *     for ever, which is an unbounded spend with nothing to show for it. Without the
+ *     condition at all, configuring the key would leave every firm already swept
+ *     excluded for ninety days, which is the shape of bug nobody finds until a quarter
+ *     later.
  *   * **A link was added after it ran.** Adding a link enqueues a run of its own, and
  *     that run can refuse — a spent ceiling, a run already in flight. The link would
  *     then never be read, because the firm looks fresh. Comparing against the latest
- *     run's `started_at` is what makes the enqueue's refusal recoverable.
+ *     run's `started_at` is what makes the enqueue's refusal recoverable. This branch
+ *     is a **backstop**, not the prompt path, so it sits behind the same two gates as
+ *     the failure branch: a firm whose site cannot be read does not become an
+ *     every-morning expense because somebody pasted a URL at it.
+ *
+ * ## Every branch terminates
+ *
+ * The failure count and the next-business-day gate apply to the *whole* of the
+ * "researched but due" test rather than to one branch of it. That is the property worth
+ * stating on its own: with three consecutive failed revisions recorded, no condition
+ * here selects the firm again, whatever else has happened to it.
  */
 
 /** How long a completed run stays fresh. */
@@ -67,7 +81,8 @@ export interface SweepInput {
   readonly at: string;
   /**
    * True when this deployment has an extraction port. A completed run with
-   * `model_name IS NULL` is only due again if there is a model to run it with now.
+   * `research_runs.extraction = 'unconfigured'` run is only due again if there is a
+   * model to run it with now.
    */
   readonly extractionConfigured?: boolean | undefined;
 }
@@ -99,7 +114,10 @@ export async function selectFirmsForSweep(
           OR EXISTS (
             SELECT 1
               FROM (
-                SELECT r.outcome, r.completed_at, r.started_at, r.model_name
+                SELECT r.outcome, r.completed_at, r.started_at, r.extraction,
+                       -- A later business day than the one the latest run closed on.
+                       ((r.completed_at AT TIME ZONE $6)::date
+                          < ($2::timestamptz AT TIME ZONE $6)::date) AS later_day
                   FROM research_runs r
                  WHERE r.workspace_id = f.workspace_id AND r.firm_id = f.id
                    AND r.outcome IN ('completed', 'failed')
@@ -107,30 +125,43 @@ export async function selectFirmsForSweep(
                  LIMIT 1
               ) latest
              WHERE
-               -- Stale.
+               -- Stale: ninety days since the last completed run. No gate, because a
+               -- firm with a completed run has no consecutive failures to count.
                (latest.outcome = 'completed'
                  AND latest.completed_at <= $2::timestamptz - ($3 || ' days')::interval)
-               -- The last run failed, it is a later business day than the one it failed
-               -- on, and it has not failed three times in a row.
-               OR (latest.outcome = 'failed'
-                 AND (latest.completed_at AT TIME ZONE $6)::date < ($2::timestamptz AT TIME ZONE $6)::date
+               OR (
+                 (
+                   -- The last run failed, and not today: a provider that failed this
+                   -- morning will most likely fail again this morning.
+                   (latest.outcome = 'failed' AND latest.later_day)
+                   -- It completed with no model configured, and there is one now.
+                   -- no_pages and failed are deliberately not here: a firm whose site
+                   -- cannot be read will be unreadable tomorrow too, and a null
+                   -- model_name could not tell the two apart.
+                   OR (latest.outcome = 'completed' AND latest.extraction = 'unconfigured' AND $7)
+                   -- A link was added after the last run started. A backstop: adding a
+                   -- link enqueues its own run through the link_added trigger, and this
+                   -- is only for the case where that run refused.
+                   OR (latest.later_day AND EXISTS (
+                     SELECT 1 FROM firm_links l
+                      WHERE l.workspace_id = f.workspace_id AND l.firm_id = f.id
+                        AND l.added_at > latest.started_at
+                   ))
+                 )
+                 -- The termination gate, over every branch above. Three consecutive
+                 -- failed revisions and the sweep stops asking, whatever else has
+                 -- happened to the firm — a pasted link included, which is why that
+                 -- branch is inside this bracket and not beside it.
                  AND (
                    SELECT count(*) FROM research_runs c
                     WHERE c.workspace_id = f.workspace_id AND c.firm_id = f.id
-                      AND c.outcome IN ('completed', 'failed')
+                      AND c.outcome = 'failed'
                       AND c.revision > COALESCE((
                         SELECT max(d.revision) FROM research_runs d
                          WHERE d.workspace_id = f.workspace_id AND d.firm_id = f.id
                            AND d.outcome = 'completed'
                       ), 0)
-                 ) < $5)
-               -- It completed without a model, and there is one now.
-               OR (latest.outcome = 'completed' AND latest.model_name IS NULL AND $7)
-               -- A link was added after it started.
-               OR EXISTS (
-                 SELECT 1 FROM firm_links l
-                  WHERE l.workspace_id = f.workspace_id AND l.firm_id = f.id
-                    AND l.added_at > latest.started_at
+                 ) < $5
                )
           )
         )

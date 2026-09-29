@@ -164,35 +164,90 @@ run, and honoured for `*` and for `CallieResearch`. Four rules:
   none of those is permission. Only a `404` or a `410` is — the *absence* of the file is
   the permissive answer in the standard, and the absence is all that is.
 * **A redirected robots is followed**, on the same site only, up to three hops, each
-  with a fresh resolution and pin. `host/robots.txt` redirecting to
-  `www.host/robots.txt` is how a great many sites serve it, and reading that as "no
-  rules" would ignore a firm that had asked.
+  with a fresh resolution and pin — and each target goes through `isPublicResearchUrl`
+  like every other request. Without that last part `/robots.txt` was the one URL exempt
+  from the rule, and a firm's own server could have redirected it to
+  `/robots.txt?token=…`: a query string this fetcher refuses everywhere else, because a
+  fetched URL is a stored URL.
+* **One group applies, and it is the most specific one** (RFC 9309 §2.2.1). If the file
+  names `CallieResearch` anywhere, those lines are the whole of what applies and the
+  `*` group is ignored; otherwise the `*` group is. Merging them was wrong in the
+  direction that matters: a site that shuts `*` out and then writes a group for us has
+  told us exactly what we may read, and a union honoured the refusal and threw away the
+  permission.
 * **`*` and `$` mean what the standard says.** `Disallow: /*.pdf$` is a rule about
   extensions, not a literal prefix that matches nothing.
-* **`Allow` is honoured, longest match wins, and a tie goes to `Allow`.** A site that
-  says `Disallow: /` and then `Allow: /about` has told us exactly which page it wants
-  read, and the old "ignore Allow" made that site unreadable.
+* **`Allow` is honoured, longest match wins in octets, and a tie goes to `Allow`.** A
+  site that says `Disallow: /` and then `Allow: /about` has told us exactly which page it
+  wants read.
+* **Percent-encoding is normalised on both sides before matching** (§2.2.2): unreserved
+  octets decoded, the rest upper-cased. `/~joe` and `/%7Ejoe` are one path, and a site
+  that disallowed one of them meant both.
+
+## A run is two committed steps, because the middle of it spends money
+
+`research.firm` is a **chunked** handler (`docs/greenfield/jobs.md`, "Chunked bulk
+work"), and the chunk boundary is where the money is:
+
+| | What it does | What the runner does with it |
+|---|---|---|
+| **Chunk 1** | `beginFirmResearch`: the firm is researchable, the run row is opened, a unit of the day's count is consumed, and the worst case is **reserved** on `provider_ledger`. No provider is touched. | Commits it together with the cursor `{ runId, reservedCents, step: 'reserved' }`. |
+| **Chunk 2** | `finishFirmResearch`: fetch, extract, record the evidence, the facts, the judgment, the funnel facts; turn the reservation into the actual figure; close the run. | Commits it as the job's completion. |
+
+Before the split both halves ran in the runner's single job transaction, and that was
+the worst bug this lane had. A lease reclaimed during the extraction — or any database
+error after the paid call — rolled back the run row, the ledger row **and the consumed
+counter**, while the money stayed spent at the provider. The retry then spent it again
+against a budget that had never heard of the first attempt: three attempts, three
+invoices, one visible cent.
+
+Now a rollback of chunk 2 leaves chunk 1 standing. The second claim resumes from the
+cursor, finds its run row and its reservation, and consumes no second unit. The month is
+over-counted by a few cents until the run settles, which is the direction in which
+nothing can be lost.
+
+**`outcome = 'running'` is therefore a normal state**, not a crash — and a row still
+`running` after thirty minutes is one. The sweep's first act is `finaliseAbandonedRuns`:
+those rows become `failed` with `refusal_code = 'lease_lost'` and **keep their
+reservation as the recorded cost**, because the last thing that worker did before
+disappearing may well have been to make the call, and releasing the cents would be
+claiming it did not. `run_in_progress` refuses the firm a new revision inside the same
+window, so the firm becomes researchable again in the same breath.
+
+### The ledger reserves before it spends
+
+`cost_cents` is what was invoiced; `reserved_cents` is what has been authorized and not
+yet invoiced. `readSpend` counts **both**, so a run in flight is already spent as far as
+the next clearance is concerned — anything else lets two runs started in the same minute
+each be cleared against the same remaining cents.
+
+A reservation is settled three ways: released whole when the run asked the provider
+nothing (no sources, no model key), turned into the invoice when a figure comes back, or
+**recorded as the cost** when no figure does. That last one is `cost_estimated` on the
+run row, and it covers a thrown transport, a response with no `usage`, and a lost lease.
+Zero is the one answer that is certainly wrong about a call that may have been billed.
 
 ### When a provider fails
 
-A provider failure — a reported failure or a thrown transport error — becomes a
-**committed `failed` run** and the job **completes**. It is never a throw.
+A provider failure — reported or thrown — becomes a **committed `failed` run** and the
+job **completes**. It is never a throw, for the reason above.
 
-The reason is money. The runner wraps one job in one transaction and the run's paid
-calls happen inside it, so a throw rolls back the run row, the evidence, the ledger
-cents and the consumed daily count — while the money stays spent at the provider. The
-retry ladder then makes the same paid calls again against a budget with no record of the
-first attempt: three attempts, three invoices, one visible cent. So the rule is: **once
-`claimResearchClearance` has consumed a count, nothing in the run may throw**, and every
-outcome is committed with the cents actually spent and a ledger row that counts the
-failure.
+The retry is the sweep's: a new revision with a new clearance, one a business day, three
+consecutive failures at most (`MAX_CONSECUTIVE_FAILED_RUNS`), and that gate covers every
+branch of the sweep's "due again" test rather than one of them. After three the firm is
+left alone and the firm page shows "research failed, N tries" rather than a brief that is
+quietly a week out of date.
 
-The retry is therefore the sweep's: a new revision with a new clearance, one a business
-day, three consecutive failures at most (`MAX_CONSECUTIVE_FAILED_RUNS`). After that the
-firm is left alone and the firm page shows "research failed, N tries" rather than a
-brief that is quietly a week out of date. A database error is the one thing that still
-aborts, and there it is right: the accounting is written in the same transaction as the
-work, so a transaction that cannot commit has no accounting to lose.
+**"The next business day" is the next local calendar date, weekends included.** A firm
+whose site failed on a Friday is retried on the Saturday. That is deliberate: research
+sends nothing and contacts nobody, so a Saturday run costs a fraction of a cent and no
+goodwill, and a five-day-week retry ladder would be a calendar the rest of this system
+does not have.
+
+A database error is the one thing that still aborts, and there it is right: the
+accounting is written in the same transaction as the work, so a transaction that cannot
+commit has no accounting to lose — and chunk 1's, which is the part that matters, has
+already committed.
 
 ## The caps, and the price table
 
@@ -208,6 +263,13 @@ provider is reached:
 | `max_pages_per_firm` | 4 | **Total** pages one run may fetch |
 | `max_page_bytes` | 1 000 000 | The fetch's byte cap |
 | `model_name` | `claude-haiku-4-5` | The one model with a reviewed price row |
+
+`research_runs.extraction` records why the model was or was not used — `used`,
+`unconfigured`, `no_pages`, `failed` — because a null `model_name` could not say, and the
+difference decides whether the sweep ever comes back. Only `unconfigured` is re-selected
+once a key exists: a run that found no readable pages will find none tomorrow either, and
+re-selecting it was a unit of the day's budget spent on the same nothing every morning
+for ever.
 
 The count ceiling is `daily_counters` through `incrementDailyCounter`, which is one
 statement, because "a read of 'are we under the cap?' followed by a write is the
@@ -251,9 +313,13 @@ rather than an estimate:
   worse. A bound that is too small is a ceiling that authorized a call it had not
   priced, and the headroom costs a fraction of a cent a run.
 
-So 50 cents a day is 16 runs and $10 a month is 333. The ledger always records the
-**actual** figure, never truncated to the bound: a ledger that clipped its own numbers
-would hide exactly the overrun the bound exists to prevent.
+At the defaults that is **3 cents a run** (24 866 input tokens), so 50 cents a day is 16
+runs and $10 a month is 333; at the maximum of eight pages it is 6 cents. The ledger
+always records the **actual** figure, never truncated to the bound: a ledger that clipped
+its own numbers would hide exactly the overrun the bound exists to prevent. One test
+builds a real request at the maximum — four pages of a hundred full blocks, every marker,
+a 500-character source URL — and measures it against the bound, because a bound that was
+never compared with a request is a number in a comment.
 
 ## At a merge
 
@@ -288,8 +354,12 @@ merge function could see.
 | `reachability` | a usable or candidate phone route, or `phone_listed`, or `named_role` | an active firm-wide suppression | `unknown` | ignored |
 
 **A page on somebody else's host is not the firm speaking.** Every fact carries
-`first_party`: true for the firm's own site and for a page its own homepage linked to,
-false for a link a person added on another host. `fit` is a statement about what the
+`first_party`, derived from the **final URL's** relationship to the firm's own site and
+not from how the URL came to be permitted — an added link to a page on the firm's own
+host is the firm's own words, and deriving the flag from the permission marked it as
+somebody else's because `added_link` is decided before the host check. True for the
+firm's own site and for a page its own homepage linked to; false for a link on another
+host. `fit` is a statement about what the
 firm *is* and `reachability` that the *firm* publishes a way to reach a person, so both
 use first-party facts only — a trade article calling a brokerage a property manager
 must not become `fit: 'yes'`. Problem evidence and timing are claims about the world and

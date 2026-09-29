@@ -47,6 +47,16 @@
 --     `enabled = false`, and the result was a feature nobody ever turned on. The
 --     ceilings are what makes an enabled default safe.
 --
+-- ## The ledger reserves before it spends
+--
+-- `cost_cents` is what was invoiced; `reserved_cents` is what has been authorized and
+-- not yet invoiced. The two exist because the provider call is not inside the
+-- transaction that authorizes it: a run reserves its worst case in one committed step,
+-- makes the call in the next, and moves the figure from one column to the other. A
+-- crash between the two leaves the reservation standing, which over-counts the month by
+-- a few cents — the safe direction, and the only direction in which a rollback cannot
+-- make spent money invisible.
+--
 -- ## provider_ledger is generic on purpose
 --
 -- Not `research_provider_ledger`. The telephony lane (C) and the calendar lane (D)
@@ -112,6 +122,18 @@ CREATE TABLE research_settings (
 -- a `research.firm` job claimed twice finds the row it already opened and records
 -- nothing a second time.
 --
+-- The run row is written in **two committed steps**, because the middle of it spends
+-- money. Chunk 1 opens the row, consumes the day's count and reserves the worst-case
+-- cents on `provider_ledger`; chunk 2 fetches, extracts, records and closes the row,
+-- turning the reservation into the actual figure. `outcome = 'running'` between the two
+-- is therefore a normal state and not a crash — but a row still `running` half an hour
+-- later is one, and the sweep finalises it `failed` with `refusal_code = 'lease_lost'`,
+-- keeping the reservation as the recorded cost because nobody can know whether the call
+-- was made. `cost_estimated` says that the figure is the reservation rather than an
+-- invoice: a transport that threw, a response with no usage, and a lost lease all
+-- record what was reserved rather than zero, because zero is the one answer that is
+-- certainly wrong.
+--
 -- `brief` holds the **generated** parts only — the two questions and the opening line
 -- a model wrote. Everything else on the call brief is assembled from quotes and
 -- judgments at read time, so the one part of the brief that is not the firm's own
@@ -133,6 +155,8 @@ CREATE TABLE research_runs (
   pages_fetched integer NOT NULL DEFAULT 0,
   facts_recorded integer NOT NULL DEFAULT 0,
   model_name text,
+  extraction text NOT NULL DEFAULT 'unconfigured',
+  cost_estimated boolean NOT NULL DEFAULT false,
   input_tokens integer NOT NULL DEFAULT 0,
   output_tokens integer NOT NULL DEFAULT 0,
   cost_cents integer NOT NULL DEFAULT 0,
@@ -159,6 +183,14 @@ CREATE TABLE research_runs (
   CONSTRAINT research_runs_facts_nonnegative CHECK (facts_recorded >= 0),
   CONSTRAINT research_runs_model_name_shape
     CHECK (model_name IS NULL OR model_name ~ '^[a-z][a-z0-9.-]{1,63}$'),
+  -- Why the model was or was not used, which `model_name IS NULL` could not say.
+  -- `unconfigured` is the only one the sweep re-selects: a run that read no pages will
+  -- read no pages tomorrow either, and re-selecting it was an unbounded daily spend on
+  -- a firm with nothing to read.
+  CONSTRAINT research_runs_extraction_known
+    CHECK (extraction IN ('used', 'unconfigured', 'no_pages', 'failed')),
+  CONSTRAINT research_runs_extraction_consistent
+    CHECK ((extraction = 'used') = (model_name IS NOT NULL)),
   CONSTRAINT research_runs_input_tokens_nonnegative CHECK (input_tokens >= 0),
   CONSTRAINT research_runs_output_tokens_nonnegative CHECK (output_tokens >= 0),
   CONSTRAINT research_runs_cost_nonnegative CHECK (cost_cents >= 0),
@@ -330,6 +362,12 @@ CREATE TABLE provider_ledger (
   calls integer NOT NULL DEFAULT 0,
   failures integer NOT NULL DEFAULT 0,
   cost_cents integer NOT NULL DEFAULT 0,
+  -- Cents authorized but not yet invoiced: a run's worst case, held from the moment its
+  -- clearance is consumed until its call comes back. `readSpend` counts it, so a run in
+  -- flight is already spent as far as the next clearance is concerned — which is the
+  -- only arrangement under which two runs cannot each be authorized against the same
+  -- remaining budget.
+  reserved_cents integer NOT NULL DEFAULT 0,
   last_failure_code text,
   last_failure_at timestamptz,
   updated_at timestamptz NOT NULL DEFAULT now(),
@@ -339,6 +377,7 @@ CREATE TABLE provider_ledger (
   CONSTRAINT provider_ledger_failures_nonnegative CHECK (failures >= 0),
   CONSTRAINT provider_ledger_failures_within_calls CHECK (failures <= calls),
   CONSTRAINT provider_ledger_cost_nonnegative CHECK (cost_cents >= 0),
+  CONSTRAINT provider_ledger_reserved_nonnegative CHECK (reserved_cents >= 0),
   CONSTRAINT provider_ledger_failure_code_shape
     CHECK (last_failure_code IS NULL OR last_failure_code ~ '^[a-z][a-z0-9_]{2,63}$'),
   CONSTRAINT provider_ledger_failure_recorded

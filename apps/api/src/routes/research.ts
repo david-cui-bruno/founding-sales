@@ -189,6 +189,11 @@ export async function routeResearch(request: ApiRequest, options: RoutingOptions
         pagesFetched: run.pagesFetched,
         factsRecorded: run.factsRecorded,
         costCents: run.costCents,
+        // Whether that figure is an invoice or the run's own reservation, and why the
+        // model was or was not used. Both are the difference between "this run cost
+        // nothing" and "nobody told us what this run cost".
+        costEstimated: run.costEstimated,
+        extraction: run.extraction,
       })),
       links: await listFirmLinks(context, firmId),
       spend: await readSpend(context, { businessTimeZone, at: now }),

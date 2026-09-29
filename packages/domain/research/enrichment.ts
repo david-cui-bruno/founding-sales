@@ -7,12 +7,14 @@ import type { ProviderOutcome } from './providers.ts';
 import { judgeFirm, type JudgmentContact } from './judgments.ts';
 import { parsePageText } from './pageText.ts';
 import { claimResearchClearance } from './ceilings.ts';
-import { recordProviderCall } from './ledger.ts';
+import { recordProviderCall, releaseProviderReservation, reserveProviderSpend, workspaceBusinessZone } from './ledger.ts';
 import { researchUrlsForFirm } from './sourcePolicy.ts';
-import { completeRun, failRun, openRun, recordRefusedRun, refuseRun } from './runs.ts';
+import { readResearchSettings } from './settings.ts';
+import { completeRun, failRun, openRun, recordRefusedRun, refuseRun, type RunExtraction } from './runs.ts';
 import type { ExtractionProvider, PageFetchProvider } from './providers.ts';
 import {
   COMPANY_PAGE_PROVIDER,
+  EXTRACTION_PROVIDER,
   accept,
   refuse,
   type ResearchResult,
@@ -55,6 +57,34 @@ import {
  * No website and no added link is `no_sources`. It is a refusal rather than a
  * completion, because "we looked and there was nothing" and "there was nowhere to
  * look" are different things to see in a runs list.
+ *
+ * ## Two committed steps, because the middle of a run spends money
+ *
+ * `research.firm` is a **chunked** handler (`docs/greenfield/jobs.md`), and this file is
+ * the two halves:
+ *
+ *   1. `beginFirmResearch` — the firm is researchable, the run row is opened, the day's
+ *      count is consumed, and the worst case is **reserved** on the ledger. No provider
+ *      has been touched. The runner commits this together with the cursor.
+ *   2. `finishFirmResearch` — fetch, extract, record, judge, and turn the reservation
+ *      into the actual figure. The runner commits this as the job's completion.
+ *
+ * The split is the whole point. Before it, the paid call happened inside the single
+ * transaction that also held the run row, the ledger row and the consumed counter — so
+ * a lease reclaimed during the extraction, or any database error after the call, rolled
+ * back every trace of a call that had already been billed, and the retry spent the money
+ * again against a budget that had never heard of the first attempt. Now a rollback of
+ * chunk 2 leaves chunk 1 standing: the run exists, the count is spent, and the
+ * reservation is still on the ledger. The month is over-counted by a few cents until the
+ * run is finalised, and over-counting is the direction in which nothing can be lost.
+ *
+ * If chunk 2's own SQL fails, the reservation stands and the row stays `running`;
+ * `finaliseAbandonedRuns` closes it half an hour later as `lease_lost` and keeps the
+ * reservation as the recorded cost, because nobody can know whether the call was made.
+ *
+ * `runFirmResearch` runs both halves in sequence. It is what a direct caller and most
+ * tests want — one call, one answer — and it is *not* what the handler uses, because
+ * two halves in one transaction is exactly the arrangement the split exists to end.
  *
  * ## Once the clearance is consumed, nothing in this function throws
  *
@@ -121,10 +151,39 @@ const replayed = (firmId: string, revision: number): ResearchRunReport => ({
   skipped: {},
 });
 
-export async function runFirmResearch(
+/** What chunk 1 leaves for chunk 2. The handler carries it in `payload.progress`. */
+export interface ResearchReservation {
+  readonly runId: string;
+  /** Cents held on `provider_ledger` for the extraction this run has not made yet. */
+  readonly reservedCents: number;
+}
+
+export type ResearchStart =
+  /** Chunk 2 has work to do. */
+  | ({ readonly kind: 'reserved' } & ResearchReservation)
+  /** The revision was already recorded by an earlier claim. Nothing more to do. */
+  | { readonly kind: 'done'; readonly report: ResearchRunReport };
+
+export interface BeginResearchInput {
+  readonly firmId: string;
+  readonly revision: number;
+  readonly trigger: ResearchTrigger;
+  readonly requestedByUserId?: string | undefined;
+  /** Database time. One run dates every write it makes identically. */
+  readonly at: string;
+}
+
+/**
+ * Chunk 1: everything that must be committed **before** a provider is touched.
+ *
+ * Nothing here opens a socket. What it does is make the run's existence, its consumed
+ * unit of the day's count and its reserved cents durable, so that whatever happens to
+ * the worker next, the budget already knows this run was authorized.
+ */
+export async function beginFirmResearch(
   context: RepositoryContext,
-  input: RunFirmResearchInput,
-): Promise<ResearchResult<ResearchRunReport>> {
+  input: BeginResearchInput,
+): Promise<ResearchResult<ResearchStart>> {
   if (!Number.isInteger(input.revision) || input.revision < 1) return refuse('invalid_input');
   const opening = {
     firmId: input.firmId,
@@ -141,14 +200,73 @@ export async function runFirmResearch(
   }
 
   const runId = await openRun(context, opening);
-  if (runId === null) return accept(replayed(input.firmId, input.revision));
+  if (runId === null) return accept({ kind: 'done', report: replayed(input.firmId, input.revision) });
 
   const clearance = await claimResearchClearance(context, { at: input.at });
   if (!clearance.ok) {
     await refuseRun(context, { runId, at: input.at, refusalCode: clearance.reason });
     return refuse(clearance.reason);
   }
-  const settings = clearance.value.settings;
+
+  // The number the two money checks were just made against, held on the ledger under
+  // the provider that will spend it. From here on `readSpend` counts this run, so a
+  // second run started in the same minute is authorized against a budget that already
+  // includes it — which is the only arrangement under which two runs cannot each be
+  // cleared against the same remaining cents.
+  const reservedCents = clearance.value.worstCaseCents;
+  await reserveProviderSpend(context, {
+    providerKey: EXTRACTION_PROVIDER,
+    at: input.at,
+    businessTimeZone: clearance.value.businessTimeZone,
+    cents: reservedCents,
+  });
+
+  return accept({ kind: 'reserved', runId, reservedCents });
+}
+
+export interface FinishResearchInput extends ResearchReservation {
+  readonly firmId: string;
+  readonly revision: number;
+  readonly at: string;
+  readonly pageFetch: PageFetchProvider;
+  /** Absent when the deployment has no model key. The run is smaller, not failed. */
+  readonly extraction?: ExtractionProvider | undefined;
+}
+
+/**
+ * Chunk 2: the calls, the evidence, the judgment, and the money moved from reserved to
+ * spent.
+ *
+ * Every exit from here closes the run row and settles the reservation — released when
+ * no call was made, turned into the actual figure when one was. The one exit that does
+ * neither is a database error, which rolls this chunk back and leaves the row `running`
+ * for `finaliseAbandonedRuns`.
+ */
+export async function finishFirmResearch(
+  context: RepositoryContext,
+  input: FinishResearchInput,
+): Promise<ResearchResult<ResearchRunReport>> {
+  const { runId, reservedCents } = input;
+  const settings = await readResearchSettings(context);
+  const businessTimeZone = await workspaceBusinessZone(context);
+  /** Hand back cents for a run that asked the provider nothing. */
+  const releaseAll = async (): Promise<void> => {
+    await releaseProviderReservation(context, {
+      providerKey: EXTRACTION_PROVIDER,
+      at: input.at,
+      businessTimeZone,
+      cents: reservedCents,
+    });
+  };
+
+  // Asked again, because a suppression or a merge may have landed between the chunks,
+  // and a firm that has asked to be left alone is left alone from the moment it asks.
+  const firm = await firmIsResearchable(context, input.firmId);
+  if (!firm.ok) {
+    await releaseAll();
+    await refuseRun(context, { runId, at: input.at, refusalCode: firm.reason });
+    return firm;
+  }
 
   const links = await readFirmLinks(context, input.firmId);
   const urls = researchUrlsForFirm({
@@ -157,6 +275,7 @@ export async function runFirmResearch(
     maxPagesPerFirm: settings.maxPagesPerFirm,
   });
   if (urls.length === 0) {
+    await releaseAll();
     await refuseRun(context, { runId, at: input.at, refusalCode: 'no_sources' });
     return refuse('no_sources');
   }
@@ -179,11 +298,14 @@ export async function runFirmResearch(
   await recordProviderCall(context, {
     providerKey: input.pageFetch.providerKey,
     at: input.at,
-    businessTimeZone: clearance.value.businessTimeZone,
+    businessTimeZone,
     costCents: fetched.costCents,
     ...(fetched.ok ? {} : { failureCode: fetched.failureCode }),
   });
   if (!fetched.ok) {
+    // No model call was made, so the reservation goes back and the run records the
+    // fetch's own cost, which is nothing.
+    await releaseAll();
     await failRun(context, { runId, at: input.at, refusalCode: 'provider_failure', costCents: fetched.costCents });
     return refuse('provider_failure');
   }
@@ -229,7 +351,13 @@ export async function runFirmResearch(
   let modelName: string | null = null;
   let inputTokens = 0;
   let outputTokens = 0;
+  let costEstimated = false;
   let generated: { readonly questions: readonly [string, string]; readonly opening: string } | null = null;
+  // Why the model was or was not used, recorded so the sweep can tell the difference
+  // between "there was no key" and "there was nothing to read". Re-selecting the second
+  // every day was an unbounded spend on a firm with no pages.
+  let extractionOutcome: RunExtraction =
+    sources.length === 0 ? 'no_pages' : input.extraction === undefined ? 'unconfigured' : 'used';
 
   if (input.extraction !== undefined && sources.length > 0) {
     const extraction = input.extraction;
@@ -239,14 +367,20 @@ export async function runFirmResearch(
         firmName: firm.value.name,
       }),
     );
+    // What the call actually cost — unless nobody said, in which case the reservation is
+    // the honest figure. A transport that threw and a response with no usage may both
+    // have been billed, and zero is the one answer that is certainly wrong.
+    costEstimated = answer.costEstimated === true;
+    const extractionCents = costEstimated ? reservedCents : answer.costCents;
     await recordProviderCall(context, {
-      providerKey: input.extraction.providerKey,
+      providerKey: extraction.providerKey,
       at: input.at,
-      businessTimeZone: clearance.value.businessTimeZone,
-      costCents: answer.costCents,
+      businessTimeZone,
+      costCents: extractionCents,
+      releaseReservedCents: reservedCents,
       ...(answer.ok ? {} : { failureCode: answer.failureCode }),
     });
-    costCents += answer.costCents;
+    costCents += extractionCents;
     if (answer.ok) {
       const validation = validateFactSelections(answer.value.selections, sources);
       facts = validation.facts;
@@ -260,11 +394,22 @@ export async function runFirmResearch(
       }
     } else {
       // Observed, and never a reason to discard the pages this run already recorded.
-      // The job's ladder retries; the evidence stays.
+      // The sweep retries tomorrow as a new revision; the evidence stays.
       bump(`extraction_${answer.failureCode}`);
-      await failRun(context, { runId, at: input.at, refusalCode: 'provider_failure', costCents });
+      extractionOutcome = 'failed';
+      await failRun(context, {
+        runId,
+        at: input.at,
+        refusalCode: 'provider_failure',
+        costCents,
+        costEstimated,
+        extraction: extractionOutcome,
+      });
       return refuse('provider_failure');
     }
+  } else {
+    // Nothing was asked of the model, so the cents come back.
+    await releaseAll();
   }
 
   const recorded = await insertFacts(context, {
@@ -286,7 +431,7 @@ export async function runFirmResearch(
   const wasCallFirst = await currentCallFirst(context, input.firmId);
   await upsertJudgments(context, { firmId: input.firmId, runId, at: input.at, judgments });
 
-  // The funnel, inside the run's transaction (lane J-facts,
+  // The funnel, inside the chunk's transaction (lane J-facts,
   // `docs/greenfield/funnel.md`). `{firm}:{revision}` is the run's identity, so a
   // handler claimed twice — which cannot get this far, because the run row is already
   // there — and a replay both produce one fact rather than a unique violation that
@@ -320,6 +465,8 @@ export async function runFirmResearch(
     inputTokens,
     outputTokens,
     costCents,
+    costEstimated,
+    extraction: extractionOutcome,
     brief: generated === null ? null : { ...generated, generated: true },
   });
 
@@ -340,20 +487,45 @@ export async function runFirmResearch(
 }
 
 /**
+ * Both halves, in sequence.
+ *
+ * For a direct caller that wants one answer. The **handler does not use this**: running
+ * the two halves in one transaction is the arrangement the split exists to end, and a
+ * caller here is a caller with no chunk protocol to commit between them.
+ */
+export async function runFirmResearch(
+  context: RepositoryContext,
+  input: RunFirmResearchInput,
+): Promise<ResearchResult<ResearchRunReport>> {
+  const started = await beginFirmResearch(context, input);
+  if (!started.ok) return started;
+  if (started.value.kind === 'done') return accept(started.value.report);
+  return await finishFirmResearch(context, {
+    runId: started.value.runId,
+    reservedCents: started.value.reservedCents,
+    firmId: input.firmId,
+    revision: input.revision,
+    at: input.at,
+    pageFetch: input.pageFetch,
+    ...(input.extraction === undefined ? {} : { extraction: input.extraction }),
+  });
+}
+
+/**
  * A provider call as a value, whatever it does.
  *
  * `ProviderOutcome` already covers a provider that reports a failure. This covers the
  * other one — a transport that throws, a JSON parse that throws, an adapter with a bug
  * — because after `claimResearchClearance` a throw does not fail the run, it erases
- * the run's accounting and re-authorizes the spend. `costCents: 0` is the honest figure
- * for a call whose response never arrived: what it actually cost is unknowable, and the
- * ledger's failure count is what says the attempt happened.
+ * the run's accounting and re-authorizes the spend. `costEstimated` is what stops the
+ * zero being read as free: the call may have been billed, and the caller records the
+ * run's reservation instead.
  */
 async function providerAttempt<T>(call: () => Promise<ProviderOutcome<T>>): Promise<ProviderOutcome<T>> {
   try {
     return await call();
   } catch {
-    return { ok: false, failureCode: 'transport_error', costCents: 0 };
+    return { ok: false, failureCode: 'transport_error', costCents: 0, costEstimated: true };
   }
 }
 

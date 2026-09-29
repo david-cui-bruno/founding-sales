@@ -67,6 +67,8 @@ export const RESEARCH_REFUSAL_CODES = [
   'run_in_progress',
   'no_sources',
   'provider_failure',
+  /** A worker vanished between the run's two chunks; the sweep closed the run. */
+  'lease_lost',
   'link_not_permitted',
   'model_unpriced',
 ] as const;
@@ -153,6 +155,9 @@ export const researchJudgmentsSchema = z.object({
   judgedAt: instant,
 });
 
+/** Why the model was or was not used. `research_runs_extraction_known` is the same set. */
+export const RESEARCH_EXTRACTION_OUTCOMES = ['used', 'unconfigured', 'no_pages', 'failed'] as const;
+
 export const researchRunSchema = z.object({
   revision: z.number().int().min(1),
   trigger: z.enum(RESEARCH_TRIGGERS),
@@ -163,6 +168,15 @@ export const researchRunSchema = z.object({
   pagesFetched: z.number().int().min(0),
   factsRecorded: z.number().int().min(0),
   costCents: z.number().int().min(0),
+  /**
+   * True when `costCents` is the run's **reservation** rather than an invoice.
+   *
+   * A transport that threw, a response that carried no usage, and a lease lost between
+   * the run's two chunks all record what was authorized instead of zero, because zero
+   * is the one answer that is certainly wrong about a call that may have been billed.
+   */
+  costEstimated: z.boolean(),
+  extraction: z.enum(RESEARCH_EXTRACTION_OUTCOMES),
 });
 
 export const researchLinkSchema = z.object({

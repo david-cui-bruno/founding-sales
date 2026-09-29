@@ -7,8 +7,16 @@ import {
   UnpricedModelError,
   centsOf,
   withinWorstCase,
+  worstCaseInputTokens,
   worstCaseRunCents,
 } from '../../research/pricing.ts';
+import {
+  EXTRACTION_OUTPUT_SCHEMA,
+  EXTRACTION_SYSTEM_TEXT,
+  extractionUserText,
+} from '../../research/extractionPrompt.ts';
+import { FACT_KEYS, FACT_KEY_DEFINITIONS } from '../../research/facts.ts';
+import { MAX_BLOCKS, MAX_TEXT_CHARACTERS } from '../../research/pageText.ts';
 
 /**
  * The four judgments, the brief they go on, and the price the ceilings compare.
@@ -308,7 +316,51 @@ describe('what a run may cost', () => {
     // extractor more than twelve thousand characters a page.
     const worst = worstCaseRunCents({ modelName: 'claude-haiku-4-5', maxPagesPerFirm: 4, maxPageBytes: 1_000_000 });
     expect(worst).toBe(3);
-    expect(worstCaseRunCents({ modelName: 'claude-haiku-4-5', maxPagesPerFirm: 8, maxPageBytes: 1_000_000 })).toBe(5);
+    expect(worstCaseRunCents({ modelName: 'claude-haiku-4-5', maxPagesPerFirm: 8, maxPageBytes: 1_000_000 })).toBe(6);
+  });
+
+  it('measures the prompt’s own size rather than guessing it', () => {
+    // The figure used to be a round 2 000 tokens somebody chose, which meant widening
+    // the system text or adding a fact key moved the real request without moving the
+    // price — and the price is what a ceiling compares against. Now the bound is
+    // computed from the constants themselves, so the request cannot outgrow it in
+    // silence. One page's worth of the bound is the parse cap plus the markers:
+    const onePage = worstCaseInputTokens({ maxPagesPerFirm: 1, maxPageBytes: 1_000_000 });
+    const twoPages = worstCaseInputTokens({ maxPagesPerFirm: 2, maxPageBytes: 1_000_000 });
+    const perPage = twoPages - onePage;
+    expect(perPage).toBe(Math.ceil(MAX_TEXT_CHARACTERS / 2.5) + MAX_BLOCKS * 8 + 300);
+    // And the fixed part is the measured length of the three constant strings.
+    const dictionary = FACT_KEYS.map(key => `- ${key}: ${FACT_KEY_DEFINITIONS[key]}`).join('\n');
+    const fixed =
+      EXTRACTION_SYSTEM_TEXT.length + dictionary.length + JSON.stringify(EXTRACTION_OUTPUT_SCHEMA).length;
+    expect(onePage - perPage).toBe(Math.ceil(fixed / 2.5));
+  });
+
+  it('bounds a real request built at the maximum, marker for marker', () => {
+    // The vacuous-pass trap this whole item is about: a bound that was never compared
+    // with a request. So the request is built — the actual prompt, the actual
+    // dictionary, the actual schema, four pages of a hundred full blocks each with its
+    // `[b12]` marker and a 500-character source URL — and measured against the bound
+    // the ceiling authorized it with.
+    const settings = { modelName: 'claude-haiku-4-5', maxPagesPerFirm: 4, maxPageBytes: 1_000_000 } as const;
+    const url = `https://example.test/${'p'.repeat(460)}`;
+    const sources = Array.from({ length: settings.maxPagesPerFirm }, (_, page) => ({
+      sourceReference: `${url}-${String(page)}`,
+      firstParty: true,
+      blocks: Array.from({ length: MAX_BLOCKS }, (_, index) => ({
+        id: `b${String(index + 1)}`,
+        // A hundred blocks of a hundred and twenty characters is the parse cap exactly.
+        text: 'x'.repeat(120),
+      })),
+    }));
+    const request = { sources, firmName: 'A Firm With A Deliberately Long Registered Name LLC' };
+    const characters =
+      EXTRACTION_SYSTEM_TEXT.length +
+      JSON.stringify(EXTRACTION_OUTPUT_SCHEMA).length +
+      extractionUserText(request).length;
+    const tokens = Math.ceil(characters / 2.5);
+    expect(tokens).toBeLessThanOrEqual(worstCaseInputTokens(settings));
+    expect(withinWorstCase(settings, { inputTokens: tokens, outputTokens: MAX_EXTRACTION_OUTPUT_TOKENS })).toBe(true);
   });
 
   it('bounds a run that reported every usage category, cached tokens included', () => {

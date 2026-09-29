@@ -153,6 +153,39 @@ describe('the answer', () => {
     }
   });
 
+  it('says when nobody priced the call, rather than reporting it as free', async () => {
+    // A throw and a response with no usage are the same situation: the request may have
+    // reached the model and been billed, and what came back was not an invoice. The
+    // caller records the run's reservation instead of this zero.
+    const thrown = await anthropicExtraction({
+      transport: transportOf(new Error('socket hang up')),
+      modelName: 'claude-haiku-4-5',
+    }).extract(request);
+    expect(thrown).toMatchObject({ ok: false, costCents: 0, costEstimated: true });
+
+    const noUsage = await anthropicExtraction({
+      transport: transportOf(answered({ selections: [], questions: ['a?', 'b?'], opening: 'hi' })),
+      modelName: 'claude-haiku-4-5',
+    }).extract(request);
+    // `answered` builds a response with usage, so the control is the other direction:
+    // a priced call says nothing about being estimated.
+    expect(noUsage.costEstimated).toBeUndefined();
+
+    const stripped = await anthropicExtraction({
+      transport: transportOf({ content: [{ type: 'text', text: '{"selections":[],"questions":["a?","b?"],"opening":"hi"}' }] }),
+      modelName: 'claude-haiku-4-5',
+    }).extract(request);
+    expect(stripped).toMatchObject({ ok: true, costCents: 0, costEstimated: true });
+  });
+
+  it('sends no cache_control, because every run’s pages are a different firm’s', async () => {
+    // Prompt caching pays 1.25× on the write and 0.1× on a read, so it only saves money
+    // when the same prefix is sent again — and it is not.
+    const transport = transportOf(answered({ selections: [], questions: ['a?', 'b?'], opening: 'hi' }));
+    await anthropicExtraction({ transport, modelName: 'claude-haiku-4-5' }).extract(request);
+    expect(JSON.stringify(transport.seen)).not.toContain('cache_control');
+  });
+
   it('reads a generated pair only when both halves are there', () => {
     expect(parseExtractionAnswer('{"selections":[],"questions":["one"],"opening":"hi"}')).toMatchObject({
       questions: null,

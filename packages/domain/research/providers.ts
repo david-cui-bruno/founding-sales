@@ -37,6 +37,17 @@ export type ProviderFailureCode = string;
 export interface ProviderCallCost {
   /** What this call cost, in whole cents. Zero for a fetch, which is free. */
   readonly costCents: number;
+  /**
+   * True when `costCents` is not a figure the provider reported.
+   *
+   * A transport that threw and a response that carried no `usage` are the two cases,
+   * and in both of them the call may well have happened and been billed. The caller
+   * records the run's **reservation** rather than this zero and marks the run
+   * `cost_estimated`, because zero is the one answer that is certainly wrong: a budget
+   * that reads a burned call as free is a budget a broken provider walks straight
+   * through.
+   */
+  readonly costEstimated?: boolean | undefined;
 }
 
 export type ProviderOutcome<T> =

@@ -6,7 +6,12 @@ import { repositoryContext, workspaceScope, type RepositoryContext } from '../..
 import { seedTwoWorkspaces, type TwoWorkspaces } from '../db/support/fixtures.ts';
 import { seedCrm, type SeededCrm } from '../db/support/crmFixtures.ts';
 import { claimResearchClearance, researchClearanceAvailable } from '../../research/ceilings.ts';
-import { readSpend, recordProviderCall } from '../../research/ledger.ts';
+import {
+  readSpend,
+  recordProviderCall,
+  releaseProviderReservation,
+  reserveProviderSpend,
+} from '../../research/ledger.ts';
 import { runFirmResearch } from '../../research/enrichment.ts';
 import { addFirmLink } from '../../research/links.ts';
 import { enqueueFirmResearch } from '../../research/enqueue.ts';
@@ -83,6 +88,12 @@ function fakeExtraction(
 const failingExtraction: ExtractionProvider = {
   providerKey: 'anthropic_extraction',
   extract: async () => ({ ok: false, failureCode: 'malformed_answer', costCents: 1 }),
+};
+
+/** A call nobody priced: the socket broke, or the response carried no usage. */
+const unpricedExtraction: ExtractionProvider = {
+  providerKey: 'anthropic_extraction',
+  extract: async () => ({ ok: false, failureCode: 'provider_error', costCents: 0, costEstimated: true }),
 };
 
 const HOME = '<p>We manage residential property for owners.</p><p>Our maintenance team handles every work order.</p>';
@@ -164,6 +175,83 @@ describe('the ledger and the spend', () => {
     expect(september.monthToDateCents).toBe(9);
     const october = await readSpend(context, { businessTimeZone: ZONE, at: '2026-10-02T14:00:00.000Z' });
     expect(october.monthToDateCents).toBe(0);
+  });
+});
+
+describe('the ledger reserves before it spends', () => {
+  it('counts a reservation as spend, and settles it when the call comes back', async () => {
+    // The arrangement the two chunks need. Between them the cents are authorized and
+    // not invoiced, and a second run started in that window must be cleared against a
+    // budget that already includes the first — otherwise two runs are each authorized
+    // against the same remaining cents.
+    await reserveProviderSpend(context, {
+      providerKey: 'anthropic_extraction',
+      at: AT,
+      businessTimeZone: ZONE,
+      cents: 30,
+    });
+    expect(await readSpend(context, { businessTimeZone: ZONE, at: AT })).toEqual({
+      todayCents: 30,
+      monthToDateCents: 30,
+    });
+
+    // The call comes back at four cents: the reservation goes, the invoice stays.
+    await recordProviderCall(context, {
+      providerKey: 'anthropic_extraction',
+      at: AT,
+      businessTimeZone: ZONE,
+      costCents: 4,
+      releaseReservedCents: 30,
+    });
+    expect(await readSpend(context, { businessTimeZone: ZONE, at: AT })).toEqual({
+      todayCents: 4,
+      monthToDateCents: 4,
+    });
+    const { rows } = await session.query<{ calls: number; reserved: number; cost: number }>(
+      `SELECT calls, reserved_cents AS reserved, cost_cents AS cost FROM provider_ledger
+        WHERE provider_key = 'anthropic_extraction'`,
+    );
+    expect(rows[0]).toEqual({ calls: 1, reserved: 0, cost: 4 });
+  });
+
+  it('never drives a reservation below zero, however much is released', async () => {
+    // A release larger than what is held would refuse the row on
+    // `provider_ledger_reserved_nonnegative`, and a failed accounting write is worse
+    // than a cent of drift.
+    await reserveProviderSpend(context, { providerKey: 'company_page', at: AT, businessTimeZone: ZONE, cents: 2 });
+    await recordProviderCall(context, {
+      providerKey: 'company_page',
+      at: AT,
+      businessTimeZone: ZONE,
+      costCents: 0,
+      releaseReservedCents: 99,
+    });
+    await releaseProviderReservation(context, {
+      providerKey: 'company_page',
+      at: AT,
+      businessTimeZone: ZONE,
+      cents: 99,
+    });
+    const { rows } = await session.query<{ reserved: number }>(
+      "SELECT reserved_cents AS reserved FROM provider_ledger WHERE provider_key = 'company_page'",
+    );
+    expect(rows[0]?.reserved).toBe(0);
+  });
+
+  it('refuses the next clearance on cents that are reserved and not yet invoiced', async () => {
+    // The reason `readSpend` counts both columns, as a refusal rather than an argument.
+    const admin = repositoryContext(
+      workspaceScope(seeded.alpha.workspaceId, { kind: 'user', userId: seeded.alpha.admin.userId, role: 'admin' }),
+      session,
+    );
+    await updateResearchSettings(admin, { dailyCostCeilingCents: 5 });
+    await reserveProviderSpend(context, {
+      providerKey: 'anthropic_extraction',
+      at: AT,
+      businessTimeZone: ZONE,
+      cents: 4,
+    });
+    expect(await claimResearchClearance(context, { at: AT })).toEqual({ ok: false, reason: 'daily_cost_ceiling' });
   });
 });
 
@@ -385,7 +473,68 @@ describe('one run', () => {
     // The cents are still on the ledger: a model that burned tokens and gave nothing
     // back has spent the budget either way.
     expect((await readSpend(context, { businessTimeZone: ZONE, at: AT })).todayCents).toBe(1);
-    expect((await listRuns(context, crm.alpha.firmId))[0]).toMatchObject({ outcome: 'failed', refusalCode: 'provider_failure' });
+    expect((await listRuns(context, crm.alpha.firmId))[0]).toMatchObject({
+      outcome: 'failed',
+      refusalCode: 'provider_failure',
+      // The model was asked and broke, which is not the same fact as "nobody had
+      // configured one" — and only one of the two is worth a sweep coming back for.
+      extraction: 'failed',
+    });
+  });
+
+  it('records the reservation, not zero, when nobody said what the call cost', async () => {
+    // A transport that threw and a response with no usage may both have been billed.
+    // Zero is the one answer that is certainly wrong: a budget that reads a burned call
+    // as free is a budget a broken provider walks straight through.
+    const outcome = await runFirmResearch(context, {
+      firmId: crm.alpha.firmId,
+      revision: 1,
+      trigger: 'sweep',
+      at: AT,
+      pageFetch: fakeFetch([{ url: 'https://alpha.example.test/', html: HOME }]),
+      extraction: unpricedExtraction,
+    });
+    expect(outcome).toEqual({ ok: false, reason: 'provider_failure' });
+    const run = (await listRuns(context, crm.alpha.firmId))[0];
+    // Three cents at the defaults: what the ceiling authorized, which is the best
+    // available figure for a call whose invoice never arrived.
+    expect(run).toMatchObject({ outcome: 'failed', refusalCode: 'provider_failure', costCents: 3, costEstimated: true });
+    expect((await readSpend(context, { businessTimeZone: ZONE, at: AT })).todayCents).toBe(3);
+    const { rows } = await session.query<{ reserved: number }>(
+      "SELECT reserved_cents AS reserved FROM provider_ledger WHERE provider_key = 'anthropic_extraction'",
+    );
+    // Settled: recorded as spent rather than left held, so the figure is not counted
+    // twice.
+    expect(rows[0]?.reserved).toBe(0);
+  });
+
+  it('says why the model was not used, so the sweep can tell the two cases apart', async () => {
+    // No extraction port at all.
+    await runFirmResearch(context, {
+      firmId: crm.alpha.firmId,
+      revision: 1,
+      trigger: 'sweep',
+      at: AT,
+      pageFetch: fakeFetch([{ url: 'https://alpha.example.test/', html: HOME }]),
+    });
+    expect((await listRuns(context, crm.alpha.firmId))[0]).toMatchObject({
+      outcome: 'completed',
+      extraction: 'unconfigured',
+    });
+
+    // A port, and nothing readable to send it.
+    await runFirmResearch(context, {
+      firmId: crm.alpha.firmId,
+      revision: 2,
+      trigger: 'sweep',
+      at: AT,
+      pageFetch: fakeFetch([]),
+      extraction: fakeExtraction([]),
+    });
+    expect((await listRuns(context, crm.alpha.firmId))[0]).toMatchObject({
+      outcome: 'completed',
+      extraction: 'no_pages',
+    });
   });
 
   it('drops a selection naming a block nobody published', async () => {
@@ -567,8 +716,8 @@ describe('links, the enqueue and the sweep', () => {
 
   it('sweeps a firm whose run completed with no model, once a model is configured', async () => {
     await session.query(
-      `INSERT INTO research_runs (workspace_id, firm_id, revision, trigger, completed_at, outcome)
-       VALUES ($1, $2, 1, 'sweep', $3::timestamptz, 'completed')`,
+      `INSERT INTO research_runs (workspace_id, firm_id, revision, trigger, completed_at, outcome, extraction)
+       VALUES ($1, $2, 1, 'sweep', $3::timestamptz, 'completed', 'unconfigured')`,
       [seeded.alpha.workspaceId, crm.alpha.firmId, AT],
     );
     // With no extraction port there is nothing to gain by reading the pages again.
@@ -579,14 +728,31 @@ describe('links, the enqueue and the sweep', () => {
       (await selectFirmsForSweep(context, { limit: 10, at: AT, extractionConfigured: true })).length,
     ).toBe(1);
     // A run that did have a model is fresh either way.
-    await session.query("UPDATE research_runs SET model_name = 'claude-haiku-4-5'");
+    await session.query("UPDATE research_runs SET model_name = 'claude-haiku-4-5', extraction = 'used'");
     expect(await selectFirmsForSweep(context, { limit: 10, at: AT, extractionConfigured: true })).toEqual([]);
   });
 
-  it('sweeps a firm whose link was added after its last run', async () => {
+  it('never sweeps again a firm whose pages could not be read, model or no model', async () => {
+    // The difference a null model_name could not express. A run that recorded no
+    // readable pages will record none tomorrow, so re-selecting it whenever a key is
+    // configured was a unit of the day's budget spent on the same nothing, every day,
+    // for ever.
     await session.query(
-      `INSERT INTO research_runs (workspace_id, firm_id, revision, trigger, started_at, completed_at, outcome, model_name)
-       VALUES ($1, $2, 1, 'sweep', $3::timestamptz, $3::timestamptz, 'completed', 'claude-haiku-4-5')`,
+      `INSERT INTO research_runs (workspace_id, firm_id, revision, trigger, completed_at, outcome, extraction)
+       VALUES ($1, $2, 1, 'sweep', $3::timestamptz, 'completed', 'no_pages')`,
+      [seeded.alpha.workspaceId, crm.alpha.firmId, AT],
+    );
+    expect(await selectFirmsForSweep(context, { limit: 10, at: AT })).toEqual([]);
+    expect(await selectFirmsForSweep(context, { limit: 10, at: AT, extractionConfigured: true })).toEqual([]);
+    // Ninety days later it is stale, and stale is a different question.
+    expect((await selectFirmsForSweep(context, { limit: 10, at: '2026-12-29T14:00:00.000Z' })).length).toBe(1);
+  });
+
+  it('sweeps a firm whose link was added after its last run, on a later day', async () => {
+    await session.query(
+      `INSERT INTO research_runs
+         (workspace_id, firm_id, revision, trigger, started_at, completed_at, outcome, model_name, extraction)
+       VALUES ($1, $2, 1, 'sweep', $3::timestamptz, $3::timestamptz, 'completed', 'claude-haiku-4-5', 'used')`,
       [seeded.alpha.workspaceId, crm.alpha.firmId, AT],
     );
     expect(await selectFirmsForSweep(context, { limit: 10, at: AT })).toEqual([]);
@@ -597,7 +763,29 @@ describe('links, the enqueue and the sweep', () => {
        VALUES ($1, $2, 'https://news.test/piece', $3, $4::timestamptz)`,
       [seeded.alpha.workspaceId, crm.alpha.firmId, seeded.alpha.salesperson.userId, '2026-09-28T15:00:00.000Z'],
     );
-    expect((await selectFirmsForSweep(context, { limit: 10, at: AT })).length).toBe(1);
+    // Not the same business day as the run: the link's own enqueue is the prompt path,
+    // and this branch is the backstop the next morning.
+    expect(await selectFirmsForSweep(context, { limit: 10, at: '2026-09-28T22:00:00.000Z' })).toEqual([]);
+    expect((await selectFirmsForSweep(context, { limit: 10, at: '2026-09-29T14:00:00.000Z' })).length).toBe(1);
+  });
+
+  it('stops sweeping after three failures, even when a link is added', async () => {
+    // The branch that used to bypass the ladder. A firm whose site cannot be read does
+    // not become an every-morning expense because somebody pasted a URL at it.
+    for (const revision of [1, 2, 3]) {
+      await session.query(
+        `INSERT INTO research_runs
+           (workspace_id, firm_id, revision, trigger, started_at, completed_at, outcome, refusal_code)
+         VALUES ($1, $2, $3, 'sweep', $4::timestamptz, $4::timestamptz, 'failed', 'provider_failure')`,
+        [seeded.alpha.workspaceId, crm.alpha.firmId, revision, AT],
+      );
+    }
+    await session.query(
+      `INSERT INTO firm_links (workspace_id, firm_id, url, added_by_user_id, added_at)
+       VALUES ($1, $2, 'https://news.test/fresh', $3, $4::timestamptz)`,
+      [seeded.alpha.workspaceId, crm.alpha.firmId, seeded.alpha.salesperson.userId, '2026-09-29T09:00:00.000Z'],
+    );
+    expect(await selectFirmsForSweep(context, { limit: 10, at: '2026-09-30T14:00:00.000Z' })).toEqual([]);
   });
 
   it('never sweeps a firm with a closed opportunity: a client or somebody who said no', async () => {

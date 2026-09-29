@@ -6,6 +6,7 @@ import { anchorHrefs } from '@fss/domain/research/pageText.ts';
 import {
   discoverSameSiteUrls,
   isPublicResearchAddress,
+  isPublicResearchUrl,
   isSameResearchSite,
   MAX_PAGES_CEILING,
   permittedRedirectTarget,
@@ -219,7 +220,7 @@ function headerOf(response: RawResponse, name: string): string {
 // robots.txt
 // ---------------------------------------------------------------------------
 
-/** The `Allow` and `Disallow` patterns of the groups that apply to this fetcher. */
+/** The `Allow` and `Disallow` patterns of the one group that applies to this fetcher. */
 export interface RobotsRules {
   readonly allow: readonly string[];
   readonly disallow: readonly string[];
@@ -228,18 +229,28 @@ export interface RobotsRules {
 export const EMPTY_ROBOTS_RULES: RobotsRules = Object.freeze({ allow: [], disallow: [] });
 
 /**
- * The rules a host's robots.txt states for `*` or for this fetcher by name.
+ * The rules a host's robots.txt states for this fetcher.
  *
- * A deliberately small parser, but no longer a one-sided one: `Allow` is collected as
- * well as `Disallow`, because the previous "ignore Allow, a disallowed path is skipped"
- * made a site that says `Disallow: /` then `Allow: /about` unreadable, and such a site
- * has told us exactly which page it wants read.
+ * **One group, not a merge.** RFC 9309 §2.2.1: the most specific matching user-agent
+ * group applies, and only it. So if the file names `CallieResearch` anywhere, those
+ * lines are the whole of what applies and the `*` group is ignored entirely; if it does
+ * not, the `*` group is. Merging the two was wrong in the direction that matters most:
+ * a site that disallows everything for `*` and then writes a `CallieResearch` group
+ * saying which paths we may read has asked for exactly that, and a union of the two
+ * would have honoured the refusal and thrown away the permission.
+ *
+ * `Allow` is collected as well as `Disallow`, with longest-match-wins in
+ * `robotsForbids`, for the same reason.
  */
 export function robotsRules(robots: string): RobotsRules {
-  const allow: string[] = [];
-  const disallow: string[] = [];
-  let applies = false;
+  const groups: Record<'named' | 'star', { allow: string[]; disallow: string[] }> = {
+    named: { allow: [], disallow: [] },
+    star: { allow: [], disallow: [] },
+  };
+  /** The groups the current run of `User-agent:` lines is writing into. */
+  let active: ('named' | 'star')[] = [];
   let sawAgentInGroup = false;
+
   for (const rawLine of robots.split(/\r?\n/u)) {
     const line = rawLine.split('#')[0]?.trim() ?? '';
     if (line === '') continue;
@@ -248,21 +259,54 @@ export function robotsRules(robots: string): RobotsRules {
     const field = line.slice(0, colon).trim().toLowerCase();
     const value = line.slice(colon + 1).trim();
     if (field === 'user-agent') {
-      // A new group starts at the first agent line after a rule line.
-      if (!sawAgentInGroup) applies = false;
+      // A new group starts at the first agent line after a rule line. Several agent
+      // lines in a row share one group, which is what the standard says and what real
+      // files do.
+      if (!sawAgentInGroup) active = [];
       sawAgentInGroup = true;
       const agent = value.toLowerCase();
-      if (agent === '*' || agent === RESEARCH_ROBOTS_TOKEN) applies = true;
+      if (agent === RESEARCH_ROBOTS_TOKEN) active.push('named');
+      else if (agent === '*') active.push('star');
       continue;
     }
     sawAgentInGroup = false;
-    if (!applies || value === '') continue;
+    if (active.length === 0 || value === '') continue;
     // An empty `Disallow` is the standard's way of saying "nothing", and it is dropped
     // by the `value === ''` above rather than turned into a pattern matching every path.
-    if (field === 'disallow') disallow.push(value);
-    if (field === 'allow') allow.push(value);
+    for (const group of active) {
+      if (field === 'disallow') groups[group].disallow.push(value);
+      if (field === 'allow') groups[group].allow.push(value);
+    }
   }
-  return { allow, disallow };
+
+  // The named group wins *by existing*, empty or not: a file that says
+  // `User-agent: CallieResearch` with `Disallow:` under it has granted everything, and
+  // falling back to a restrictive `*` group there would ignore what it said.
+  const named = groups.named;
+  const chosen = named.allow.length > 0 || named.disallow.length > 0 ? named : groups.star;
+  return { allow: chosen.allow, disallow: chosen.disallow };
+}
+
+/**
+ * A path in one form, so a rule and a request can be compared.
+ *
+ * RFC 9309 §2.2.2 asks that percent-encoded octets be compared after normalisation:
+ * `/~x`, `/%7Ex` and `/%7ex` are one path, and a site that disallowed one of the three
+ * meant all of them. Unreserved characters are decoded, everything else keeps its
+ * escape with the hex digits upper-cased.
+ */
+export function normaliseRobotsPath(path: string): string {
+  return path.replace(/%([0-9a-fA-F]{2})/gu, (whole, hex: string) => {
+    const code = Number.parseInt(hex, 16);
+    const character = String.fromCharCode(code);
+    // The unreserved set of RFC 3986 §2.3.
+    return /[A-Za-z0-9\-._~]/u.test(character) ? character : whole.toUpperCase();
+  });
+}
+
+/** How long a pattern is for the longest-match rule: octets, not UTF-16 code units. */
+function octets(value: string): number {
+  return new TextEncoder().encode(value).byteLength;
 }
 
 /** How long a robots pattern may be before it is ignored as not a path. */
@@ -279,7 +323,7 @@ const MAX_ROBOTS_PATTERN = 500;
 function robotsPattern(pattern: string): RegExp | null {
   if (pattern.length > MAX_ROBOTS_PATTERN) return null;
   const anchored = pattern.endsWith('$');
-  const literal = anchored ? pattern.slice(0, -1) : pattern;
+  const literal = normaliseRobotsPath(anchored ? pattern.slice(0, -1) : pattern);
   const escaped = literal
     .replace(/[.*+?^${}()|[\]\\]/gu, character => (character === '*' ? '\u0000' : `\\${character}`))
     .replaceAll('\u0000', '.*');
@@ -290,13 +334,13 @@ function robotsPattern(pattern: string): RegExp | null {
   }
 }
 
-/** The length of the longest pattern in `patterns` that matches `path`, or -1. */
+/** The octet length of the longest pattern in `patterns` that matches `path`, or -1. */
 function longestMatch(patterns: readonly string[], path: string): number {
   let longest = -1;
   for (const pattern of patterns) {
     const expression = robotsPattern(pattern);
     if (expression === null || !expression.test(path)) continue;
-    longest = Math.max(longest, pattern.length);
+    longest = Math.max(longest, octets(normaliseRobotsPath(pattern)));
   }
   return longest;
 }
@@ -310,9 +354,10 @@ function longestMatch(patterns: readonly string[], path: string): number {
  * everything".
  */
 export function robotsForbids(rules: RobotsRules, path: string): boolean {
-  const forbidden = longestMatch(rules.disallow, path);
+  const normalized = normaliseRobotsPath(path);
+  const forbidden = longestMatch(rules.disallow, normalized);
   if (forbidden < 0) return false;
-  return forbidden > longestMatch(rules.allow, path);
+  return forbidden > longestMatch(rules.allow, normalized);
 }
 
 /**
@@ -409,8 +454,14 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
             } catch {
               return { kind: 'unreadable' };
             }
-            // Same site only. Another host's robots file is not this host's rules.
-            if (!isSameResearchSite(url, target)) return { kind: 'unreadable' };
+            // Same site only — another host's robots file is not this host's rules —
+            // and past the same URL rule every other request goes through. Without it a
+            // firm's server could redirect `/robots.txt` to `/robots.txt?token=…`, and
+            // the one request that was exempt from the rule would have carried a query
+            // string this fetcher refuses everywhere else.
+            if (!isPublicResearchUrl(target) || !isSameResearchSite(url, target)) {
+              return { kind: 'unreadable' };
+            }
             const nextHost = new URL(target).hostname.toLowerCase();
             const nextAddress = await checkedAddress(lookup, nextHost);
             if (nextAddress === null) return { kind: 'unreadable' };
@@ -540,9 +591,13 @@ export function researchPageFetch(deps: PageFetchDeps = {}): PageFetchProvider {
             contentType,
             body: response.body,
             retrievedAt: new Date(clock()).toISOString(),
-            // Whose words these are, decided where it is knowable: after the redirect
-            // chain, by the permission the page was actually fetched under.
-            firstParty: permission === 'firm_site',
+            // Whose words these are: the final URL's relationship to the firm's own
+            // site, and nothing else. Deriving it from the permission was wrong for the
+            // ordinary case of somebody pasting a link to a page **on the firm's own
+            // host** — `added_link` wins before the host check, so the firm's own words
+            // were being marked as somebody else's and could not decide fit.
+            firstParty:
+              input.firmWebsite !== null && isSameResearchSite(input.firmWebsite, url),
           });
 
           if (!discoveryDone && permission === 'firm_site') {

@@ -2,7 +2,12 @@ import type {
   AnthropicMessageResponse,
   AnthropicMessagesTransport,
 } from '@fss/domain/classification/anthropicClient.ts';
-import { FACT_KEYS, FACT_KEY_DEFINITIONS } from '@fss/domain/research/facts.ts';
+import {
+  EXTRACTION_OUTPUT_SCHEMA,
+  EXTRACTION_PROMPT_VERSION,
+  EXTRACTION_SYSTEM_TEXT,
+  extractionUserText,
+} from '@fss/domain/research/extractionPrompt.ts';
 import type {
   ExtractionAnswer,
   ExtractionProvider,
@@ -50,79 +55,6 @@ import { EXTRACTION_PROVIDER } from '@fss/domain/research/types.ts';
  * cost still recorded. The run records it and the job retries under the ladder; the
  * pages the run already fetched stay.
  */
-
-export const EXTRACTION_PROMPT_VERSION = 'research.extract.1';
-
-const SYSTEM_TEXT = [
-  'You read text a property-management firm published on its own website and say which',
-  'blocks of it support which of a fixed list of facts.',
-  '',
-  'Rules you must follow:',
-  '',
-  '1. You never write a quote. You name a block by its id, and the code looks the text',
-  '   up. A block id you did not see in the input is dropped.',
-  '2. You select a fact key only when a block plainly supports it. Saying nothing is',
-  '   correct and expected; an empty selection list is a good answer for a thin page.',
-  '3. You never infer a budget, a buying intention, a deal size or a likelihood of',
-  '   purchase, and there is no key for any of them. A portal link supports a software',
-  '   inference. A maintenance job posting suggests something worth discussing. Neither',
-  '   proves that the firm wants to buy anything.',
-  '4. You do not record a person’s name, telephone number, postal address or e-mail',
-  '   address. `phone_listed` means "this block shows the firm publishes a number", not',
-  '   the number; `named_role` means "this block names a person with a title".',
-  '',
-  'You also write two short questions a salesperson could ask this firm on a first call,',
-  'and one opening sentence. Both are suggestions from you, not the firm’s words, and',
-  'they are shown to the reader labelled as such. Keep each under 200 characters.',
-].join('\n');
-
-const OUTPUT_SCHEMA: Readonly<Record<string, unknown>> = Object.freeze({
-  type: 'object',
-  additionalProperties: false,
-  required: ['selections', 'questions', 'opening'],
-  properties: {
-    selections: {
-      type: 'array',
-      maxItems: 30,
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['key', 'sourceReference', 'blockId'],
-        properties: {
-          key: { type: 'string', enum: [...FACT_KEYS] },
-          sourceReference: { type: 'string', maxLength: 500 },
-          blockId: { type: 'string', maxLength: 64 },
-        },
-      },
-    },
-    questions: {
-      type: 'array',
-      minItems: 2,
-      maxItems: 2,
-      items: { type: 'string', maxLength: 200 },
-    },
-    opening: { type: 'string', maxLength: 300 },
-  },
-});
-
-/** The dictionary and the blocks, by id. The one message a run sends. */
-export function extractionUserText(request: ExtractionRequest): string {
-  const dictionary = FACT_KEYS.map(key => `- ${key}: ${FACT_KEY_DEFINITIONS[key]}`).join('\n');
-  const pages = request.sources
-    .map(source =>
-      [`SOURCE ${source.sourceReference}`, ...source.blocks.map(block => `[${block.id}] ${block.text}`)].join('\n'),
-    )
-    .join('\n\n');
-  return [
-    `Firm: ${request.firmName}`,
-    '',
-    'Fact keys:',
-    dictionary,
-    '',
-    'Pages:',
-    pages,
-  ].join('\n');
-}
 
 interface ParsedAnswer {
   readonly selections: readonly { readonly key: string; readonly sourceReference: string; readonly blockId: string }[];
@@ -196,6 +128,11 @@ export interface AnthropicExtractionOptions {
   readonly maxOutputTokens?: number | undefined;
 }
 
+// Re-exported so nothing that used to import them from here has to move. The strings
+// themselves are in the domain package because `pricing.ts` measures them: see
+// `research/extractionPrompt.ts`.
+export { EXTRACTION_OUTPUT_SCHEMA, EXTRACTION_PROMPT_VERSION, EXTRACTION_SYSTEM_TEXT, extractionUserText };
+
 export function anthropicExtraction(options: AnthropicExtractionOptions): ExtractionProvider {
   const maxOutputTokens = Math.min(options.maxOutputTokens ?? MAX_EXTRACTION_OUTPUT_TOKENS, MAX_EXTRACTION_OUTPUT_TOKENS);
 
@@ -213,20 +150,27 @@ export function anthropicExtraction(options: AnthropicExtractionOptions): Extrac
           // part is the system text, which is far too small to be worth a cache write.
           // Caching here was a 25% surcharge on the one thing that repeats and no
           // saving at all on the rest, and it made the priced worst case wrong.
-          system: [{ type: 'text', text: SYSTEM_TEXT }],
+          system: [{ type: 'text', text: EXTRACTION_SYSTEM_TEXT }],
           messages: [{ role: 'user', content: extractionUserText(input) }],
           // No `effort`: Claude Haiku 4.5 returns a 400 for it (`MODEL_CAPABILITIES`),
           // and there is no thinking to ask for. Temperature is left at the model
           // default, which for a schema-constrained extraction is the same answer.
-          output_config: { format: { type: 'json_schema', schema: OUTPUT_SCHEMA } },
+          output_config: { format: { type: 'json_schema', schema: EXTRACTION_OUTPUT_SCHEMA } },
         });
       } catch {
         // The error is deliberately not carried out of here. An SDK error message can
         // quote a request body, and a request body is a firm's published pages plus
         // the prompt — nothing secret, but nothing a ledger row needs either.
-        return { ok: false, failureCode: 'provider_error', costCents: 0 };
+        //
+        // `costEstimated` is what stops that zero being believed. The request may have
+        // reached the model and been billed; what came back was a broken socket, not an
+        // invoice. The caller records the run's reservation instead.
+        return { ok: false, failureCode: 'provider_error', costCents: 0, costEstimated: true };
       }
 
+      // A response with no usage at all is the same situation as a throw: the call
+      // happened, and nobody said what it cost.
+      const costEstimated = response.usage === undefined || response.usage === null;
       const inputTokens = response.usage?.input_tokens ?? 0;
       const outputTokens = response.usage?.output_tokens ?? 0;
       // Read even though this request enables no caching: a category nobody reads is a
@@ -245,11 +189,14 @@ export function anthropicExtraction(options: AnthropicExtractionOptions): Extrac
         cacheReadTokens,
       });
 
-      if (response.stop_reason === 'refusal') return { ok: false, failureCode: 'model_refusal', costCents };
+      const estimated = costEstimated ? { costEstimated: true } : {};
+      if (response.stop_reason === 'refusal') {
+        return { ok: false, failureCode: 'model_refusal', costCents, ...estimated };
+      }
       const text = textOf(response);
-      if (text === null) return { ok: false, failureCode: 'no_answer', costCents };
+      if (text === null) return { ok: false, failureCode: 'no_answer', costCents, ...estimated };
       const parsed = parseExtractionAnswer(text);
-      if (parsed === null) return { ok: false, failureCode: 'malformed_answer', costCents };
+      if (parsed === null) return { ok: false, failureCode: 'malformed_answer', costCents, ...estimated };
 
       return {
         ok: true,
@@ -262,6 +209,7 @@ export function anthropicExtraction(options: AnthropicExtractionOptions): Extrac
           outputTokens,
         },
         costCents,
+        ...estimated,
       };
     },
   };

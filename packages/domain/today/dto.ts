@@ -267,6 +267,27 @@ function assigneeFilter(context: RepositoryContext): string | undefined {
  * rule is lane 4's alone, and putting it in the card query would make every lane's
  * order depend on a table only one of them is about.
  */
+/**
+ * Whether every card of this business date was built under the current algorithm.
+ *
+ * One read of the date, deliberately without the assignee filter the viewer's own list
+ * carries: the version of a snapshot is a fact about the day, and making it a fact about
+ * a viewer's slice would let two people read one morning in two different orders.
+ */
+async function snapshotIsCurrent(
+  context: RepositoryContext,
+  snapshotDate: string,
+): Promise<boolean> {
+  const { rows } = await context.db.query<{ stale: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM today_snapshots
+        WHERE workspace_id = $1 AND snapshot_date = $2::date AND algorithm_version <> $3
+     ) AS stale`,
+    [context.scope.workspaceId, snapshotDate, TODAY_ALGORITHM_VERSION],
+  );
+  return rows[0]?.stale !== true;
+}
+
 async function callFirstFirmIds(context: RepositoryContext): Promise<ReadonlySet<string>> {
   const { rows } = await context.db.query<{ firm_id: string }>(
     'SELECT firm_id FROM firm_judgments WHERE workspace_id = $1 AND call_first',
@@ -299,12 +320,17 @@ async function callFirstFirmIds(context: RepositoryContext): Promise<ReadonlySet
  * half a list ordered two ways is worse than either. Migration 0023 makes
  * `today_refresh_card` stamp the current version on every card it rebuilds, so a date
  * converts wholly at its first rebuild rather than becoming permanently mixed.
+ *
+ * **The question is asked of the date, not of the reader.** `snapshotIsCurrent` reads
+ * every card of the business date with no assignee filter, because the alternative is a
+ * property of who is looking: a salesperson whose own three cards happen to be `today.2`
+ * would get the new order on a date an admin sees as mixed, and the two of them would be
+ * reading the same morning in two different orders. One snapshot, one answer.
  */
-function callFirstFirst<Card extends { readonly lane: string; readonly firmId: string; readonly algorithmVersion: string }>(
+function callFirstFirst<Card extends { readonly lane: string; readonly firmId: string }>(
   cards: readonly Card[],
   callFirst: ReadonlySet<string>,
 ): readonly Card[] {
-  if (!cards.every(card => card.algorithmVersion === TODAY_ALGORITHM_VERSION)) return cards;
   const first: Card[] = [];
   const rest: Card[] = [];
   const others: Card[] = [];
@@ -334,11 +360,16 @@ export async function readTodayList(
     snapshotDate,
     ...(assignedUserId === undefined ? {} : { assignedUserId }),
   });
+  // Lane 4's order, but only on a date whose every card was built under this
+  // algorithm — asked of the date rather than of this viewer's slice of it.
+  const ordered = (await snapshotIsCurrent(context, snapshotDate))
+    ? callFirstFirst(cards, await callFirstFirmIds(context))
+    : cards;
   return {
     workspaceId: context.scope.workspaceId,
     snapshotDate,
     businessTimeZone,
-    cards: callFirstFirst(cards, await callFirstFirmIds(context)).map(card => ({
+    cards: ordered.map(card => ({
       firmId: card.firmId,
       firmName: card.firmName,
       lane: card.lane,

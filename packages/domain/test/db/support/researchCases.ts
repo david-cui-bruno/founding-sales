@@ -126,6 +126,8 @@ const runRow = async (f: Fixture, overrides: Readonly<Record<string, unknown>>):
     pages_fetched: 0,
     facts_recorded: 0,
     model_name: null,
+    extraction: 'unconfigured',
+    cost_estimated: false,
     input_tokens: 0,
     output_tokens: 0,
     cost_cents: 0,
@@ -276,8 +278,22 @@ export const RESEARCH_CONSTRAINT_CASES: readonly Case[] = [
   { constraint: 'research_runs_pages_nonnegative', run: async f => await runRow(f, { pages_fetched: -1 }) },
   { constraint: 'research_runs_facts_nonnegative', run: async f => await runRow(f, { facts_recorded: -1 }) },
   {
+    // CHECKs fire in alphabetical order of their names, and
+    // `research_runs_extraction_consistent` sorts before this one — so the row has to
+    // be consistent about *having* a model for the shape rule to be the one that fires.
     constraint: 'research_runs_model_name_shape',
-    run: async f => await runRow(f, { model_name: 'Claude Haiku 4.5' }),
+    run: async f => await runRow(f, { model_name: 'Claude Haiku 4.5', extraction: 'used' }),
+  },
+  {
+    constraint: 'research_runs_extraction_known',
+    run: async f => await runRow(f, { extraction: 'skipped' }),
+  },
+  {
+    // The pair that cannot drift: a run that names a model used one, and a run that
+    // used one names it. `research_runs.extraction` is what the sweep reads to tell "no
+    // key was configured" from "there was nothing to read".
+    constraint: 'research_runs_extraction_consistent',
+    run: async f => await runRow(f, { extraction: 'used', model_name: null }),
   },
   { constraint: 'research_runs_input_tokens_nonnegative', run: async f => await runRow(f, { input_tokens: -1 }) },
   { constraint: 'research_runs_output_tokens_nonnegative', run: async f => await runRow(f, { output_tokens: -1 }) },
@@ -425,6 +441,12 @@ export const RESEARCH_CONSTRAINT_CASES: readonly Case[] = [
     run: async f => await ledger(f, { calls: 0, failures: 1, last_failure_code: 'timeout', last_failure_at: new Date().toISOString() }),
   },
   { constraint: 'provider_ledger_cost_nonnegative', run: async f => await ledger(f, { cost_cents: -1 }) },
+  {
+    // Cents authorized and not yet invoiced. A negative reservation would mean a run
+    // released more than it held, which is money appearing out of nowhere.
+    constraint: 'provider_ledger_reserved_nonnegative',
+    run: async f => await ledger(f, { reserved_cents: -1 }),
+  },
   {
     constraint: 'provider_ledger_failure_code_shape',
     run: async f =>

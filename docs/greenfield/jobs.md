@@ -102,8 +102,9 @@ of one firm at one revision, protected by `research_runs_one_per_revision`: a se
 claim finds the insert refused and reports `already_recorded` having fetched nothing
 and asked no model. It is deliberately **not** chunked — a chunk boundary inside a run
 would commit some pages' evidence and not others under a clearance that was claimed
-once, so a resumed second half would either re-claim a unit of the day's budget or
-spend one it never claimed. It also has **no ladder for a provider failure**: the run's
+once — which is exactly why chunk 1 commits the clearance before chunk 2 spends it, and
+why the cursor names the run rather than a page. It also has **no ladder for a provider
+failure**: the run's
 paid calls happen inside the runner's transaction, so throwing would roll back the run
 row, the evidence, the ledger cents and the consumed daily count while the money stayed
 spent — and then retry the same paid calls against a budget with no record of the first
@@ -215,8 +216,12 @@ lease affects zero rows, is told `lease_lost`, and cannot drag a live worker's c
 backwards. A yield is not a failed attempt — `requeueForNextChunk` puts the attempt
 back — because otherwise the fourth chunk of any long sweep would be its death.
 
-No handler chunks yet. The protocol and its tests (`apps/worker/test/jobChunks.test.ts`)
-are here so the first sweep that needs it does not have to invent it.
+**`research.firm` is the first handler to chunk**, and not for length: its two chunks
+are "authorize and reserve" and "spend and record" (`docs/greenfield/research.md`). The
+protocol's guarantee that a crash costs one chunk is what keeps a paid model call from
+being rolled back together with the ledger row and the consumed counter that were the
+only record of it. The protocol's own tests are in
+`apps/worker/test/jobChunks.test.ts`.
 
 ## The scheduler
 

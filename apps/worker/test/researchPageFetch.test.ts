@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   MAX_REDIRECTS,
   RESEARCH_USER_AGENT,
+  normaliseRobotsPath,
   robotsForbids,
   robotsRules,
   researchPageFetch,
@@ -245,6 +246,45 @@ describe('bounds and robots', () => {
     expect(robotsForbids(robotsRules('User-agent: *\nDisallow: /a.b\n'), '/axb')).toBe(false);
   });
 
+  it('uses the CallieResearch group alone when there is one, and never merges it with `*`', () => {
+    // RFC 9309 §2.2.1: the most specific matching group applies, and only it. A site
+    // that shuts `*` out and then writes a group for us has told us exactly what we may
+    // read, and a union of the two would honour the refusal and throw away the
+    // permission.
+    const both = robotsRules('User-agent: *\nDisallow: /\n\nUser-agent: CallieResearch\nDisallow: /private\n');
+    expect(both).toEqual({ allow: [], disallow: ['/private'] });
+    expect(robotsForbids(both, '/about')).toBe(false);
+    expect(robotsForbids(both, '/private/x')).toBe(true);
+    // The named group wins by existing, even when it says nothing is forbidden.
+    const permissive = robotsRules('User-agent: *\nDisallow: /\n\nUser-agent: callieresearch\nAllow: /\n');
+    expect(robotsForbids(permissive, '/anything')).toBe(false);
+    // With no named group, the `*` group is the one that applies.
+    expect(robotsRules('User-agent: *\nDisallow: /x\n')).toEqual({ allow: [], disallow: ['/x'] });
+    // Two agent lines in a row share one group, as real files write them.
+    const shared = robotsRules('User-agent: GPTBot\nUser-agent: CallieResearch\nDisallow: /x\n');
+    expect(shared.disallow).toEqual(['/x']);
+  });
+
+  it('gives a named Disallow the answer over a longer Allow from the ignored `*` group', () => {
+    // The trap: a wildcard Allow in the `*` group is not a longer match, because the
+    // `*` group is not consulted at all when a named one exists.
+    const rules = robotsRules(
+      'User-agent: *\nAllow: /reports/quarterly/2026/index.html\n\nUser-agent: CallieResearch\nDisallow: /reports\n',
+    );
+    expect(robotsForbids(rules, '/reports/quarterly/2026/index.html')).toBe(true);
+  });
+
+  it('compares percent-encoded and literal paths as one path', () => {
+    // §2.2.2: unreserved octets are compared decoded. A site that disallowed `/%7Ejoe`
+    // meant `/~joe`, and a fetcher that read the two as different paths would walk
+    // straight past what it asked.
+    expect(normaliseRobotsPath('/%7Ejoe/%7ex')).toBe('/~joe/~x');
+    expect(robotsForbids(robotsRules('User-agent: *\nDisallow: /%7Ejoe\n'), '/~joe/cv')).toBe(true);
+    expect(robotsForbids(robotsRules('User-agent: *\nDisallow: /~joe\n'), '/%7Ejoe/cv')).toBe(true);
+    // A reserved octet keeps its escape, upper-cased, so the two forms still meet.
+    expect(robotsForbids(robotsRules('User-agent: *\nDisallow: /a%2fb\n'), '/a%2Fb')).toBe(true);
+  });
+
   it('gives the longest match the answer, so Disallow / plus Allow /about is readable', () => {
     const rules = robotsRules('User-agent: *\nDisallow: /\nAllow: /about\n');
     expect(robotsForbids(rules, '/about')).toBe(false);
@@ -334,6 +374,32 @@ describe('a robots file that cannot be read is not permission', () => {
       });
       const outcome = await provider.fetchPages({ ...request, urls: ['https://example.test/'] });
       expect(outcome.ok && outcome.value.pages.length, String(statusCode)).toBe(1);
+    }
+  });
+
+  it('refuses a robots redirect that the URL rule refuses, query string included', async () => {
+    // The one request that used to be exempt from `isPublicResearchUrl`. A firm's own
+    // server could point `/robots.txt` at `/robots.txt?token=…`, and this fetcher
+    // refuses a query string everywhere else because a fetched URL is a stored URL.
+    for (const location of ['/robots.txt?token=abc123', 'http://example.test/robots.txt', '/robots.txt#top']) {
+      const { provider, sent } = harness({
+        answers: { 'example.test': ['93.184.216.34'] },
+        responses: {
+          'https://example.test/robots.txt': {
+            statusCode: 301,
+            headers: { location },
+            body: null,
+            abortedOverCap: false,
+          },
+          ...pageResponses,
+        },
+      });
+      const outcome = await provider.fetchPages({ ...request, urls: ['https://example.test/'] });
+      // A fragment is dropped rather than refused, so that one is followed — to the
+      // same URL, which the fake answers with the same redirect until the hop limit.
+      const skipped = outcome.ok ? outcome.value.skipped : {};
+      expect(skipped['robots_unreadable'], location).toBe(1);
+      expect(sent.some(entry => entry.url.includes('token=')), location).toBe(false);
     }
   });
 
@@ -446,6 +512,26 @@ describe('a redirect on the firm’s own site keeps its permission', () => {
     const outcome = await provider.fetchPages({ ...request, urls: ['https://example.test/'] });
     expect(outcome.ok && outcome.value.pages[0]?.url).toBe('https://example.test/home');
     expect(sent.some(entry => entry.url.includes('#'))).toBe(false);
+  });
+
+  it('marks a page on the firm’s own host as the firm’s own words, however it was permitted', async () => {
+    // `added_link` wins before the host check, so a link somebody pastes to a page on
+    // the firm's *own* site used to come back marked third-party — and a third-party
+    // fact cannot decide fit. Whose words these are is a fact about the URL, not about
+    // which clause let it through.
+    const { provider } = harness({
+      answers: { 'example.test': ['93.184.216.34'] },
+      responses: {
+        'https://example.test/robots.txt': robotsAllowing,
+        'https://example.test/news/we-grew': ok('<p>We now manage 400 doors.</p>'),
+      },
+    });
+    const outcome = await provider.fetchPages({
+      ...request,
+      links: ['https://example.test/news/we-grew'],
+      urls: ['https://example.test/news/we-grew'],
+    });
+    expect(outcome.ok && outcome.value.pages[0]?.firstParty).toBe(true);
   });
 
   it('marks a page fetched from an added link as not the firm’s own words', async () => {
