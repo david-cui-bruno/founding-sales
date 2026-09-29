@@ -9,7 +9,7 @@ import { updateClassifierSettings } from '@fss/domain/classification/settings.ts
 import { recordClassifierCall, recordModelClassification } from '@fss/domain/classification/store.ts';
 import { addFirm, commitImportRow, previewCsvImport } from '@fss/domain/crm/import.ts';
 import { changeStage, openOpportunity } from '@fss/domain/crm/pipeline.ts';
-import { confirmPhoneRoute, listRoutes, verifyRoute } from '@fss/domain/crm/routes.ts';
+import { listRoutes, verifyRoute } from '@fss/domain/crm/routes.ts';
 import { createCallback, resolveConfirmedInstant } from '@fss/domain/dial/callbacks.ts';
 import { logCallOutcome } from '@fss/domain/dial/calls.ts';
 import { registerCallingIdentity } from '@fss/domain/dial/identities.ts';
@@ -775,9 +775,11 @@ function firmsPart(
  * The primary firm's two routes, verified.
  *
  * An imported route is a `candidate` — a spreadsheet has passed no validation — and a
- * candidate cannot be dialed. `confirmPhoneRoute` is the person's confirmation that
+ * candidate cannot be dialed. `verifyRoute` with a passed technical validation is what
  * makes the number usable, and it bumps the version, which is the version the dial
- * ticket then has to name.
+ * ticket then has to name. (`confirmPhoneRoute`, the operator's one-click form of the
+ * same write, was deleted as a dead export on 29 Sep 2026 — PR 312 — after this
+ * fixture was written against it; hotfix of main 5ac10740.)
  */
 function routesPart(asSalesperson: () => RepositoryContext, state: State): Part {
   return {
@@ -790,8 +792,13 @@ function routesPart(asSalesperson: () => RepositoryContext, state: State): Part 
       if (phone === undefined || email === undefined) throw new Error('the primary firm has no imported routes');
 
       const confirmed = value(
-        await confirmPhoneRoute(asSalesperson(), { routeId: phone.id, routeVersion: Number(phone.version) }),
-        'phone route confirmation',
+        await verifyRoute(asSalesperson(), {
+          routeKind: 'phone',
+          routeId: phone.id,
+          technicalValidation: 'passed',
+          associationConfidence: 1,
+        }),
+        'phone route verification',
       );
       state.primaryPhoneRouteId = confirmed.id;
       state.primaryPhoneRouteVersion = Number(confirmed.version);
