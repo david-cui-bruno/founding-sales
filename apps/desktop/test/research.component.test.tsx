@@ -9,6 +9,8 @@ import { FirmResearch } from '../src/renderer/research/FirmResearch.tsx';
 import { ResearchSettings } from '../src/renderer/settings/ResearchSettings.tsx';
 import { createGeneration } from '../src/renderer/app/generation.ts';
 import type { ResearchState } from '../src/renderer/researchContract.ts';
+import { RESEARCH_REFUSAL_CODES } from '@fss/contracts';
+import { researchNotice } from '../src/renderer/researchView.ts';
 import type { OperationApi, OperationName } from '../src/shared/operations.ts';
 
 /**
@@ -454,5 +456,16 @@ describe('Settings › Research', () => {
       expect(save).toHaveBeenCalledTimes(1);
     });
     expect(save.mock.calls[0]?.[0]).toMatchObject({ maxPagesPerFirm: 99 });
+  });
+});
+
+describe('the words for a refusal', () => {
+  it('has English for every code the contract can send', () => {
+    // `researchNotice` falls back to the code itself, which is the right behaviour for a
+    // server newer than this build and the wrong thing for a code that shipped with it:
+    // a person would read `over_budget`. Every code on the wire is checked here, so
+    // adding one to the contract without a sentence fails the gate.
+    const raw = RESEARCH_REFUSAL_CODES.filter(code => researchNotice(code) === code);
+    expect(raw, 'a refusal code has no English').toEqual([]);
   });
 });

@@ -37,6 +37,8 @@ const NOTICES: Readonly<Record<string, string>> = Object.freeze({
   provider_failure: 'The last run could not finish. Callie will try again.',
   lease_lost: 'That run stopped part-way. Callie will try again, and has kept what it may have cost.',
   model_unpriced: 'The configured model has no reviewed price, so nothing may run.',
+  over_budget:
+    'Callie has already read this firm as often as a day’s budget allows. It will pick it up again tomorrow.',
   invalid_input: 'Callie could not use that.',
   refused: 'The server refused that.',
   unreadable_answer: 'Callie could not read the server’s answer.',
