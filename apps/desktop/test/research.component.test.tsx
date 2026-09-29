@@ -121,7 +121,24 @@ const state = (overrides: Partial<ResearchState> = {}): ResearchState => ({
         refusalCode: null,
         pagesFetched: 2,
         factsRecorded: 1,
-        costCents: 2,
+        costCents: 3,
+        costEstimated: false,
+        extraction: 'used',
+      },
+      {
+        // A run nobody priced: the socket broke, or the lease was lost between the
+        // run's two chunks. It records what it reserved rather than zero.
+        revision: 1,
+        trigger: 'sweep',
+        startedAt: AT,
+        completedAt: AT,
+        outcome: 'failed',
+        refusalCode: 'lease_lost',
+        pagesFetched: 0,
+        factsRecorded: 0,
+        costCents: 3,
+        costEstimated: true,
+        extraction: 'unconfigured',
       },
     ],
     links: [],
@@ -311,7 +328,7 @@ describe('the Firm page’s Research section', () => {
     expect(screen.getAllByTestId('research-fact-source')[2]?.textContent).toBe(
       'recent_change · news.example.test · 28 Sep 2026 · another source',
     );
-    expect(screen.getByTestId('research-run').textContent).toBe('28 Sep 2026 — 1 fact, $0.02');
+    expect(screen.getAllByTestId('research-run')[0]?.textContent).toBe('28 Sep 2026 — 1 fact, $0.03');
   });
 
   it('sends Research now and Add a link as commands, and clears the field', async () => {
@@ -334,6 +351,18 @@ describe('the Firm page’s Research section', () => {
       expect(addLink).toHaveBeenCalledWith({ firmId: FIRM_ID, url: 'https://news.example.test/piece' });
     });
     expect((field as HTMLInputElement).value).toBe('');
+  });
+
+  it('shows an unpriced run as an estimate, and says what stopped it', async () => {
+    install({});
+    mount();
+    const runs = await screen.findAllByTestId('research-run');
+    expect(runs[0]?.textContent).toBe('28 Sep 2026 — 1 fact, $0.03');
+    // "about", because the figure is what the run reserved and not an invoice; and the
+    // refusal in words rather than as a code.
+    expect(runs[1]?.textContent).toContain('about $0.03');
+    expect(runs[1]?.textContent).toContain('stopped part-way');
+    expect(runs[1]?.textContent).not.toContain('lease_lost');
   });
 
   it('turns a refusal code into a sentence and never shows the code', async () => {

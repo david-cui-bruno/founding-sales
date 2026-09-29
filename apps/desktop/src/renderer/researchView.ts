@@ -35,6 +35,7 @@ const NOTICES: Readonly<Record<string, string>> = Object.freeze({
   admin_only: 'Only an admin may change the research settings.',
   link_not_permitted: 'Callie reads https pages, and never a directory, a social network or a job board.',
   provider_failure: 'The last run could not finish. Callie will try again.',
+  lease_lost: 'That run stopped part-way. Callie will try again, and has kept what it may have cost.',
   model_unpriced: 'The configured model has no reviewed price, so nothing may run.',
   invalid_input: 'Callie could not use that.',
   refused: 'The server refused that.',
@@ -153,20 +154,29 @@ export function factLine(fact: { readonly key: string; readonly quote: string | 
   return QUOTELESS_LINES[fact.key] ?? 'Recorded from the page, without a quotation.';
 }
 
-/** What the runs list says about one run. */
+/**
+ * What the runs list says about one run.
+ *
+ * A cost the provider never reported reads "about $0.03" rather than as a figure: it is
+ * what the run reserved, recorded because a call that may have been billed must not be
+ * shown as free. `costEstimated` on the wire is the same claim.
+ */
 export function runLine(run: {
   readonly startedAt: string;
   readonly outcome: string;
   readonly refusalCode: string | null;
   readonly costCents: number;
+  readonly costEstimated?: boolean | undefined;
   readonly factsRecorded: number;
 }): string {
   const when = shortDate(run.startedAt);
+  const cost = run.costEstimated === true ? `about ${dollars(run.costCents)}` : dollars(run.costCents);
   if (run.outcome === 'running') return `${when} — running`;
   if (run.outcome === 'completed') {
-    return `${when} — ${String(run.factsRecorded)} fact${run.factsRecorded === 1 ? '' : 's'}, ${dollars(run.costCents)}`;
+    return `${when} — ${String(run.factsRecorded)} fact${run.factsRecorded === 1 ? '' : 's'}, ${cost}`;
   }
-  return `${when} — ${run.outcome}: ${researchNotice(run.refusalCode ?? 'refused')}`;
+  const why = researchNotice(run.refusalCode ?? 'refused');
+  return run.costCents > 0 ? `${when} — ${run.outcome}: ${why} (${cost})` : `${when} — ${run.outcome}: ${why}`;
 }
 
 /** The month-to-date line an admin reads beside the ceilings. */
