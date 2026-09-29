@@ -112,14 +112,16 @@ That answer only decides whether the deploy job starts. **Every production write
 
 | | | |
 |---|---|---|
-| 1/6 | both services already at zero | a refusal naming `stop.sh`, not a scale |
+| 1/6 | both services already at zero, **and each already on its family's newest ACTIVE revision** | a refusal naming `stop.sh`, not a scale; and a refusal naming the apply, read before the schema moves |
 | 2/6 | `fss release-prepare` | `fss migrate` and then `fss admin database-users ensure`, **in one** migration task |
 | 3/6 | `fss verify` | the operations task: the *runtime* credential against the new schema, before anything starts |
 | 4/6 | the worker and the API to their declared counts | back to back, then **one** `wait services-stable` naming both |
-| 5/6 | the running digests | `release_require_release_running`: every running task of both services, held to this release's digest and count |
+| 5/6 | the rollout, polled until it has finished | per service: one PRIMARY deployment ECS calls `COMPLETED`, on the task definition the apply registered, `desiredCount` the declared count, `pendingCount` 0, and every running task on that revision carrying this release's digest. On timeout it fails and prints both services' events |
 | 6/6 | `fss verify` again | against what is deployed |
 
-Without the flag it is three: one rolling deployment of both services and one wait (step 4 above), the running digests, and nothing else.
+Without the flag it is two: one rolling deployment of both services and one wait (step 4 above), then the running digests — held to the digest and the count, but not to an applied revision, because a rolling release starts from a running service whose family may carry newer revisions a CI deploy registered.
+
+**Why `wait services-stable` is not the check** (PR 310 review). The AWS waiter returns on one deployment with `runningCount == desiredCount`; it does not require `rolloutState=COMPLETED`, so it can return while health checks are still running. And a digest cannot tell two revisions of one image apart, so an infrastructure-only release — a changed subnet, a new environment variable — would pass a digest comparison after a circuit-breaker rollback. The wait is the first gate; step 5 is the check.
 
 - **Every entry first.** Terraform creates the Secrets Manager entries empty, and an ECS task whose `secrets` block names an entry with no value does not start at all — `ResourceInitializationError … can't find the specified secret value`, before the container exists. Every task definition but the migration's names them all, so the values go in **before** the deploy, not after.
 - **Stop during migration.** From migration 0006 every declared range is a strict `{N,N}`, so there is no build of this software that straddles a schema change and no honest way to migrate without an outage. `stop.sh` scales the API to zero first — so no request reaches a schema about to move — then the worker, which is given time to release its job leases, and it does so **before** the apply registers task definitions that refuse the current schema. `deploy.sh release --schema-change` then refuses to migrate unless both are still at zero; it no longer stops them itself, because by then the apply has pointed them at definitions that refuse the schema and a quiet stop would make the wrong order look right. The apply cannot restart them: `ignore_changes = [desired_count]`.
@@ -132,7 +134,8 @@ Without the flag it is three: one rolling deployment of both services and one wa
   release-timing: stop_to_migrate=…s migrate_tasks=…s services_start_to_stable=…s api_unreachable≈…s
   ```
 
-  The first three come from the script's own clock; `api_unreachable` is read from the API service's ECS events — its last "has stopped N running tasks" to its last "registered N targets" — and is `unknown` when the events no longer hold both. It is a measurement, never a gate.
+  The first three come from the script's own clock. `api_unreachable` pairs the instant `stop.sh` recorded when the API's last task went away (`release-stop-instant.txt`, its own file beside `release-stop.txt`) with the "registered N targets" event this release's scale-up produced; without the marker it falls back to the newest "has stopped N running tasks" event older than the scale-up. Anything that does not make a pair — a registration older than the scale-up, a marker from another release, events that have rolled past the stop — is `unknown`, because a plausible wrong number is worse than none. It costs no extra AWS call (the events come out of the rollout poll's last read) and it is a measurement, never a gate.
+- **A failure before either service starts leaves both at zero**, and says so: `services remain stopped; repair and rerun release-prepare, or restore`. The database never rolls back, so a migration that committed stays committed; the forward repair is a new digest deployed again with `--schema-change`.
 - **Every one-off launch is checked before it is made.** `infra/scripts/lib.sh` refuses a bare cluster name, a wrong account, a wrong region, a cluster tagged as the other environment, a task definition whose image is not the digest this release is about, a network configuration that is not the root's own subnets under the worker security group, and a definition resolving a credential entry this release did not name. Afterwards it reads the `failures` array, refuses a task that never started and a stopped task with no exit code, and records the task ARN so a retry waits on the task already running rather than starting a second migration.
 
 **The drift rule: every production plan starts from what production runs, and every apply checks it again.**

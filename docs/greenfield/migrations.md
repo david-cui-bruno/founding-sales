@@ -53,8 +53,8 @@ there is never a rolling path across a migration, and the order is stop, apply, 
 `infra/scripts/stop.sh` scales both services to zero **before** the apply that
 registers the new task definitions, the apply replaces them and starts nothing, and
 `infra/scripts/deploy.sh release --schema-change` refuses unless both are still at zero,
-migrates, verifies and starts the worker and then the API (`docs/greenfield/release.md`
-4.1 and 8.0af). The worker exits non-zero when the database is outside its range
+migrates and ensures the database users in one task, verifies, and starts the worker and
+the API together under one wait (`docs/greenfield/release.md` 4.1 and 8.0af; lane RS-2). The worker exits non-zero when the database is outside its range
 (`WORKER_EXIT_CODES.schemaOutOfRange`) rather than writing rows another binary cannot
 read; the API reports `degraded` on `/health` with the reason.
 

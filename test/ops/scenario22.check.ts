@@ -361,10 +361,13 @@ function orderStub(directory: string): string {
     `state='${directory}'`,
     'printf "%s\\n" "$*" >> "$state/calls.log"',
     'service=$1; operation=$2; shift 2',
-    'name=""; count=""; tasks=""',
+    'name=""; count=""; tasks=""; pointed=""; rolled=""; latest=""; taskdef=""',
     'while [ "$#" -gt 0 ]; do',
     '  case "$1" in',
     '    --service|--services|--service-name) name=$2; shift ;;',
+    // Lane RS-2: `describe-task-definition --task-definition <family>` is asked for the
+    // newest ACTIVE revision of a family, whose name is the service\'s.
+    '    --task-definition) name=$2; shift ;;',
     '    --desired-count) count=$2; shift ;;',
     '    --tasks) shift; while [ "$#" -gt 0 ] && [ "${1#--}" = "$1" ]; do tasks="$tasks $1"; shift; done; continue ;;',
     '  esac',
@@ -376,10 +379,23 @@ function orderStub(directory: string): string {
     '    desired=$(cat "$state/$name.desired" 2>/dev/null || echo 0)',
     '    running=$(cat "$state/$name.running" 2>/dev/null || echo 0)',
     '    rollout=$(cat "$state/$name.rollout" 2>/dev/null || echo COMPLETED)',
-    // Lane RS-2: the service's events, newest first, as ECS answers them. Absent unless
-    // a case writes them, so every other check sees the empty list a fresh service has.
+    // Lane RS-2: a rollout that finishes while the deploy watches. `<name>.rollout-next`
+    // becomes `<name>.rollout` after the first read *of a scaled-up service*, so the
+    // reads the stop and the applied-definition check make at zero do not consume it.
+    '    if [ "$desired" != 0 ] && [ -f "$state/$name.rollout-next" ]; then mv "$state/$name.rollout-next" "$state/$name.rollout"; fi',
+    // The service's events, newest first, as ECS answers them. Absent unless a case
+    // writes them, so every other check sees the empty list a fresh service has.
     '    events=$(cat "$state/$name.events" 2>/dev/null || echo "")',
-    '    printf \'{"services":[{"serviceName":"%s","status":"ACTIVE","desiredCount":%s,"runningCount":%s,"pendingCount":0,"deployments":[{"status":"PRIMARY","taskDefinition":"%s","rolloutState":"%s"}],"events":[%s]}],"failures":[]}\\n\' "$name" "$desired" "$running" "$(definition "$name")" "$rollout" "$events"',
+    // What the service points at, and what its one deployment runs. They are the same
+    // revision unless a case makes them differ, which is what a rollback looks like.
+    '    pointed=$(cat "$state/$name.service-definition" 2>/dev/null || definition "$name")',
+    '    rolled=$(cat "$state/$name.rollout-definition" 2>/dev/null || definition "$name")',
+    '    printf \'{"services":[{"serviceName":"%s","status":"ACTIVE","taskDefinition":"%s","desiredCount":%s,"runningCount":%s,"pendingCount":0,"deployments":[{"status":"PRIMARY","taskDefinition":"%s","rolloutState":"%s"}],"events":[%s]}],"failures":[]}\\n\' "$name" "$pointed" "$desired" "$running" "$rolled" "$rollout" "$events"',
+    '    exit 0 ;;',
+    // The family's newest ACTIVE revision, which is the one an apply just registered.
+    '  "ecs describe-task-definition")',
+    '    latest=$(cat "$state/$name.latest" 2>/dev/null || definition "$name")',
+    '    printf \'{"taskDefinition":{"taskDefinitionArn":"%s"}}\\n\' "$latest"',
     '    exit 0 ;;',
     '  "ecs update-service")',
     '    if [ -n "$count" ]; then',
@@ -402,7 +418,10 @@ function orderStub(directory: string): string {
     '      case "$id" in',
     '        oneoff-*) entry=\'{"lastStatus":"STOPPED","stopCode":"EssentialContainerExited","containers":[{"name":"one-off","exitCode":0}]}\' ;;',
     '        *) owner=${id%-*}; container=${owner##*-}',
-    '           entry=$(printf \'{"taskArn":"%s","lastStatus":"RUNNING","taskDefinitionArn":"%s","containers":[{"name":"%s","image":"registry/%s","imageDigest":"%s"}]}\' "$arn" "$(definition "$owner")" "$container" "$container" "$(cat "$state/$owner.digest")") ;;',
+    // A task belongs to the deployment that started it, so it carries whatever revision
+    // that deployment runs — the rolled-back one in a rollback case.
+    '           taskdef=$(cat "$state/$owner.rollout-definition" 2>/dev/null || definition "$owner")',
+    '           entry=$(printf \'{"taskArn":"%s","lastStatus":"RUNNING","taskDefinitionArn":"%s","containers":[{"name":"%s","image":"registry/%s","imageDigest":"%s"}]}\' "$arn" "$taskdef" "$container" "$container" "$(cat "$state/$owner.digest")") ;;',
     '      esac',
     '      out="$out${out:+,}$entry"',
     '    done',
@@ -446,6 +465,24 @@ interface OrderOptions {
    * `events` array — what `release-timing:`'s `api_unreachable` is read from.
    */
   readonly apiEvents?: string;
+  /**
+   * PR 310 review, P1. Per service, the revisions and rollout states ECS answers with:
+   *
+   *   `latest`            the newest ACTIVE revision of the family — the apply's
+   *   `pointed`           the revision the *service* names
+   *   `rolled`            the revision its one deployment runs, and its tasks with it
+   *   `rollout`           `rolloutState` on the first read of a scaled-up service
+   *   `rolloutNext`       and on every read after it
+   */
+  readonly revisions?: Readonly<Partial<Record<'api' | 'worker', {
+    readonly latest?: string;
+    readonly pointed?: string;
+    readonly rolled?: string;
+    readonly rollout?: string;
+    readonly rolloutNext?: string;
+  }>>>;
+  /** The stop marker `stop.sh` leaves, as the contents of release-stop-instant.txt. */
+  readonly stopInstant?: string;
 }
 
 function runOrder(
@@ -464,6 +501,19 @@ function runOrder(
   writeFileSync(join(directory, `${ORDER_PREFIX}-worker.digest`), `${options.running?.worker ?? ORDER_WORKER_DIGEST}\n`);
   if (options.sticky === true) writeFileSync(join(directory, 'sticky'), '');
   if (options.apiEvents !== undefined) writeFileSync(join(directory, `${ORDER_PREFIX}-api.events`), options.apiEvents);
+  for (const [service, revisions] of Object.entries(options.revisions ?? {})) {
+    const files: Readonly<Record<string, string | undefined>> = {
+      latest: revisions.latest,
+      'service-definition': revisions.pointed,
+      'rollout-definition': revisions.rolled,
+      rollout: revisions.rollout,
+      'rollout-next': revisions.rolloutNext,
+    };
+    for (const [suffix, value] of Object.entries(files)) {
+      if (value !== undefined) writeFileSync(join(directory, `${ORDER_PREFIX}-${service}.${suffix}`), `${value}\n`);
+    }
+  }
+  if (options.stopInstant !== undefined) writeFileSync(join(reports, 'release-stop-instant.txt'), `${options.stopInstant}\n`);
   if (options.oneOffsPass === true) writeFileSync(join(directory, 'one-offs-pass'), '');
   if (options.logEvents !== undefined) writeFileSync(join(directory, 'log-events.json'), options.logEvents);
   const env: Record<string, string> = {};
@@ -476,6 +526,10 @@ function runOrder(
     FSS_REHEARSAL_REPORTS: reports,
     FSS_REHEARSAL_AWS_COMMAND: orderStub(directory),
     RELEASE_LOG_POLL_SECONDS: '0',
+    // PR 310 review, P1: the rollout read is a bounded poll now. Offline it must not
+    // sleep, and a case that never settles must give up in a handful of reads.
+    FSS_RELEASE_SETTLE_READS: '5',
+    FSS_RELEASE_SETTLE_SECONDS: '0',
     FSS_RELEASE_ACCOUNT: ORDER_ACCOUNT,
     FSS_RELEASE_CALLER_ACCOUNT: ORDER_ACCOUNT,
     FSS_RELEASE_CLUSTER_TAGS: JSON.stringify([{ key: 'Environment', value: 'rehearsal' }]),
@@ -687,39 +741,195 @@ describe('RS-2: a schema release is two one-off tasks and one wait for both serv
     }
   });
 
+  /**
+   * The instants below are built from the clock this test runs on, not written out.
+   *
+   * `api_unreachable` is now bound to *this* release: the registration must not be older
+   * than the moment the deploy scaled the services up, and the stop must be older than
+   * it. Fixed calendar dates would drift out of that window and every case would answer
+   * `unknown` — which is exactly the vacuous pass this whole measurement is guarding
+   * against, so the numbers are asserted exactly.
+   */
+  const iso = (offsetSeconds: number): string =>
+    new Date(Date.now() + offsetSeconds * 1000).toISOString().replace(/\.\d{3}Z$/u, 'Z');
+  const event = (offsetSeconds: number, message: string): string =>
+    `{"createdAt":"${iso(offsetSeconds)}","message":"(service ${ORDER_PREFIX}-api) ${message}"}`;
+  const REGISTERED = 'registered 2 targets in (target-group tg)';
+  const STOPPED_TASKS = 'has stopped 2 running tasks: (task a) (task b).';
+  const timing = (output: string): RegExpExecArray | null =>
+    /release-timing: stop_to_migrate=(\S+?) migrate_tasks=(\S+?) services_start_to_stable=(\S+?) api_unreachable≈(\S+)/u.exec(output);
+
   it('times every step and ends with one release-timing line, in the log and in the report', () => {
-    // The API's events, newest first, as ECS answers them: it registered its targets
-    // five minutes after the stop took its tasks away. Nothing else in the run knows
-    // when the stop was — it happened in stop.sh, before the apply.
-    const events = [
-      '{"createdAt":"2026-09-29T00:46:04Z","message":"(service fss-rh-order-api) registered 2 targets in (target-group tg)"}',
-      '{"createdAt":"2026-09-29T00:41:04Z","message":"(service fss-rh-order-api) has stopped 2 running tasks: (task a) (task b)."}',
-    ].join(',');
-    const run = runOrder(DEPLOY, deployArgs('--schema-change'), STOPPED, { oneOffsPass: true, apiEvents: events });
+    // The API registered its targets 300 s after its last task went away. Both instants
+    // straddle the scale-up this run performs, which is what ties them to this release.
+    const run = runOrder(DEPLOY, deployArgs('--schema-change'), STOPPED, {
+      oneOffsPass: true,
+      apiEvents: [event(60, REGISTERED), event(-240, STOPPED_TASKS)].join(','),
+    });
     expect(run.code, run.output).toBe(0);
-    const timing = /release-timing: stop_to_migrate=(\S+?)s migrate_tasks=(\S+?)s services_start_to_stable=(\S+?)s api_unreachable≈(\S+?)s/u.exec(run.output);
-    expect(timing, `no release-timing line in:\n${run.output}`).not.toBeNull();
-    // Offline the three `date` parts are whole seconds and tiny; the shape is what is
-    // asserted, and the one number that comes from ECS is asserted exactly.
-    for (const part of [timing?.[1], timing?.[2], timing?.[3]]) expect(part).toMatch(/^[0-9]+$/u);
-    expect(timing?.[4]).toBe('300');
-    expect(run.report).toContain(`release-timing: stop_to_migrate=`);
+    const parts = timing(run.output);
+    expect(parts, `no release-timing line in:\n${run.output}`).not.toBeNull();
+    // Offline the three `date` parts are whole seconds and tiny; their shape is the
+    // assertion, and the one number that comes from ECS is asserted exactly.
+    for (const part of [parts?.[1], parts?.[2], parts?.[3]]) expect(part).toMatch(/^[0-9]+s$/u);
+    expect(parts?.[4]).toBe('300s');
+    expect(run.report).toContain('release-timing: stop_to_migrate=');
     expect(run.report).toContain('api_unreachable≈300s');
     // Every step line carries the instant it started.
     expect(run.output).toMatch(/\[deploy\.sh\] [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z 2\/6 fss release-prepare/u);
     expect(run.output).toMatch(/\[deploy\.sh\] [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z 6\/6 fss verify \(deployed\)/u);
   });
 
-  it('says unknown rather than guessing when the service has no such pair of events', () => {
-    // A vacuous `api_unreachable≈0s` would be worse than no number: the next release
-    // would be judged against it. An events list that has rolled past the stop, or a
-    // registration older than it, is `unknown`.
+  it('prefers the stop instant stop.sh recorded over the service’s own stop event', () => {
+    // stop.sh knows the moment to the second; the event is ECS's paraphrase of it. When
+    // the marker is there it wins — 600 s here, against the 240 s the event would give.
     const run = runOrder(DEPLOY, deployArgs('--schema-change'), STOPPED, {
       oneOffsPass: true,
-      apiEvents: '{"createdAt":"2026-09-29T00:41:04Z","message":"(service fss-rh-order-api) has stopped 2 running tasks: (task a)."}',
+      apiEvents: [event(60, REGISTERED), event(-240, STOPPED_TASKS)].join(','),
+      stopInstant: `api_stopped_at=${String(Math.floor(Date.now() / 1000) - 540)}`,
     });
     expect(run.code, run.output).toBe(0);
-    expect(run.output).toContain('api_unreachable≈unknown');
+    expect(timing(run.output)?.[4]).toBe('600s');
+  });
+
+  it('ignores a marker too old to be this release, and falls back to the event', () => {
+    const run = runOrder(DEPLOY, deployArgs('--schema-change'), STOPPED, {
+      oneOffsPass: true,
+      apiEvents: [event(60, REGISTERED), event(-240, STOPPED_TASKS)].join(','),
+      // Seven hours ago: past the window, so it is another release's stop.
+      stopInstant: `api_stopped_at=${String(Math.floor(Date.now() / 1000) - 7 * 60 * 60)}`,
+    });
+    expect(run.code, run.output).toBe(0);
+    expect(timing(run.output)?.[4]).toBe('300s');
+  });
+
+  it('says unknown rather than guessing: no registration, and a registration older than this scale-up', () => {
+    // A plausible wrong number would be worse than none: the next release is judged
+    // against this one. Both halves of the pair must belong to this release.
+    const noRegistration = runOrder(DEPLOY, deployArgs('--schema-change'), STOPPED, {
+      oneOffsPass: true,
+      apiEvents: event(-240, STOPPED_TASKS),
+    });
+    expect(noRegistration.code, noRegistration.output).toBe(0);
+    expect(noRegistration.output).toContain('api_unreachable≈unknown');
+
+    // The previous release's registration, from before this deploy scaled anything up:
+    // pairing it with this release's stop would invent a negative or a nonsense span.
+    const stale = runOrder(DEPLOY, deployArgs('--schema-change'), STOPPED, {
+      oneOffsPass: true,
+      apiEvents: [event(-120, REGISTERED), event(-240, STOPPED_TASKS)].join(','),
+    });
+    expect(stale.code, stale.output).toBe(0);
+    expect(stale.output).toContain('api_unreachable≈unknown');
+  });
+
+  it('makes no AWS call of its own for the timing: the events come out of the rollout read', () => {
+    const run = runOrder(DEPLOY, deployArgs('--schema-change'), STOPPED, {
+      oneOffsPass: true,
+      apiEvents: [event(60, REGISTERED), event(-240, STOPPED_TASKS)].join(','),
+    });
+    expect(run.code, run.output).toBe(0);
+    // Step 1 reads each service twice (stopped, then its applied revision) and the
+    // rollout read once each: six describe-services, and not a seventh for the timing.
+    expect(run.calls.filter(call => call.startsWith('ecs describe-services'))).toHaveLength(6);
+  });
+});
+
+/**
+ * PR 310 review, P1: a stable service is not a finished one.
+ *
+ * `aws ecs wait services-stable` returns when a service has one deployment and
+ * `runningCount == desiredCount`. It does **not** require `rolloutState=COMPLETED`, so
+ * it can return while health checks are still running; and the read after it compared
+ * the digest, which cannot tell two revisions of one image apart — an infrastructure-only
+ * release registers a new revision of the *same* image, so a circuit-breaker rollback
+ * would have passed every check the deploy made.
+ *
+ * ## The vacuous-pass trap
+ *
+ * The fake CLI's waiter always succeeds, so "the deploy passed" proves nothing about
+ * either. Each case below therefore drives a state the waiter is happy with and the
+ * deploy must not be: a rollout ECS still calls IN_PROGRESS (which must be *waited on*,
+ * not failed — a check that failed it would break every healthy release), and a PRIMARY
+ * deployment on the previous revision carrying this release's digest (which must fail,
+ * and would have passed before). Both are paired with the positive control above.
+ */
+describe('RS-2: the rollout is finished when ECS says so, on the revision the apply registered', () => {
+  const revision = (service: 'api' | 'worker', number: number): string =>
+    `arn:aws:ecs:us-east-1:${ORDER_ACCOUNT}:task-definition/${ORDER_PREFIX}-${service}:${String(number)}`;
+
+  it('refuses before the migration when a service is not on its family’s newest ACTIVE revision', () => {
+    // A skipped or half-finished apply. The schema has not moved yet, so the refusal
+    // costs nothing — which is the whole reason this read comes first.
+    const run = runOrder(DEPLOY, deployArgs('--schema-change'), STOPPED, {
+      oneOffsPass: true,
+      revisions: { api: { pointed: revision('api', 6), latest: revision('api', 7) } },
+    });
+    expect(run.code).not.toBe(0);
+    expect(run.output).toContain(`${ORDER_PREFIX}-api points at ${revision('api', 6)}`);
+    expect(run.output).toContain(`newest ACTIVE revision of its family is ${revision('api', 7)}`);
+    // Nothing was migrated and nothing was started: that is the point of the ordering.
+    expect(launched(run.calls), 'a refused deploy migrated the database').toEqual([]);
+    expect(scaled(run.calls), 'a refused deploy scaled a service').toEqual([]);
+    expect(run.report).toBeNull();
+  });
+
+  it('waits out a rollout ECS still calls IN_PROGRESS, then passes when it completes', () => {
+    const run = runOrder(DEPLOY, deployArgs('--schema-change'), STOPPED, {
+      oneOffsPass: true,
+      revisions: {
+        api: { rollout: 'IN_PROGRESS', rolloutNext: 'COMPLETED' },
+        worker: { rollout: 'IN_PROGRESS', rolloutNext: 'COMPLETED' },
+      },
+    });
+    expect(run.code, run.output).toBe(0);
+    expect(run.output).toContain('its rollout is IN_PROGRESS, not COMPLETED');
+    expect(run.output).toContain('the rollout has not finished (read 1 of 5); reading again');
+    // It read again rather than giving up, and the second read was enough.
+    expect(run.output).not.toContain('the rollout has not finished (read 2 of 5)');
+    expect(run.report).toContain('running_digests=verified');
+  });
+
+  it('gives up, naming both services’ events, on a rollout that never completes', () => {
+    const run = runOrder(DEPLOY, deployArgs('--schema-change'), STOPPED, {
+      oneOffsPass: true,
+      apiEvents: '{"createdAt":"2026-09-29T00:46:04Z","message":"(service fss-rh-order-api) was unable to place a task"}',
+      revisions: { api: { rollout: 'IN_PROGRESS', rolloutNext: 'IN_PROGRESS' } },
+    });
+    expect(run.code).not.toBe(0);
+    expect(run.output).toContain('did not both finish their rollout');
+    // Five reads, four of which said "reading again"; the fifth gave up instead.
+    expect(run.output).toContain('the rollout has not finished (read 4 of 5); reading again');
+    expect(run.output.match(/the rollout has not finished/gu) ?? []).toHaveLength(4);
+    expect(run.output).toContain('was unable to place a task');
+    expect(run.report).toBeNull();
+  });
+
+  it('fails a circuit-breaker rollback whose old revision carries this release’s digest', () => {
+    // The case a digest comparison alone cannot see: an infrastructure-only release, so
+    // revisions 6 and 7 are the same image, and ECS rolled back to 6. Before this the
+    // deploy would have reported a successful release of code that is not running.
+    const run = runOrder(DEPLOY, deployArgs('--schema-change'), STOPPED, {
+      oneOffsPass: true,
+      revisions: { api: { latest: revision('api', 7), pointed: revision('api', 7), rolled: revision('api', 6) } },
+    });
+    expect(run.code).not.toBe(0);
+    expect(run.output).toContain(`${ORDER_PREFIX}-api:7`);
+    expect(run.output).toContain('and the apply registered');
+    expect(run.output).toContain(`FAIL: ${ORDER_PREFIX}-api is not running this release`);
+    // Its digest was right all along, which is why the digest alone was not enough.
+    expect(run.output).not.toContain('and this release is');
+    expect(run.report).toBeNull();
+  });
+
+  it('fails a prestart step with both services still at zero, and says so', () => {
+    // `oneOffsPass` is off, so the stub stops the run at the prepare task.
+    const run = runOrder(DEPLOY, deployArgs('--schema-change'), STOPPED);
+    expect(run.code).not.toBe(0);
+    expect(run.output).toContain('services remain stopped; repair and rerun release-prepare, or restore');
+    expect(run.counts).toEqual({ api: { desired: 0, running: 0 }, worker: { desired: 0, running: 0 } });
+    expect(scaled(run.calls), 'a failed prepare started a service').toEqual([]);
+    expect(run.report).toBeNull();
   });
 });
 
@@ -763,7 +973,7 @@ describe('g80: an app-only release is one rolling deployment, and ends only when
     expect(run.calls.filter(call => call.startsWith('ecs describe-tasks'))).toHaveLength(2);
     expect(run.output).toContain(`${ORDER_PREFIX}-worker: task ${ORDER_PREFIX}-worker-1 runs ${ORDER_WORKER_DIGEST}`);
     expect(run.output).toContain(`${ORDER_PREFIX}-api: task ${ORDER_PREFIX}-api-2 runs ${ORDER_API_DIGEST}`);
-    expect(run.output).toContain('1/3 one rolling deployment');
+    expect(run.output).toContain('1/2 one rolling deployment');
     expect(run.counts).toEqual(RELEASE_RUNNING);
     expect(run.report).toContain('schema_change=0');
     expect(run.report).toContain('running_digests=verified');
@@ -891,6 +1101,28 @@ describe('Appendix G 22 (g70), continued: the stop', () => {
     );
     // And the deploy that follows it is the one that reaches the migration.
     expect(launched(run.calls)).toEqual([]);
+  });
+
+  it('records the instant the API’s last task went away, for the deploy to measure against', () => {
+    // PR 310 review, P2. `api_unreachable` pairs this marker with the registration the
+    // deploy's own scale-up produces; nothing else in the release knows this instant.
+    const before = Math.floor(Date.now() / 1000);
+    const run = runOrder(STOP, ['infra/roots/rehearsal', ORDER_PREFIX], RUNNING, { report: 'release-stop-instant.txt' });
+    expect(run.code, run.output).toBe(0);
+    const recorded = /^api_stopped_at=([0-9]+)$/u.exec(run.report ?? '');
+    expect(recorded, `no stop instant in ${String(run.report)}`).not.toBeNull();
+    // A real instant from this run, not a zero or a constant: it is between the moment
+    // this test started and the moment it read the file back.
+    expect(Number(recorded?.[1])).toBeGreaterThanOrEqual(before);
+    expect(Number(recorded?.[1])).toBeLessThanOrEqual(Math.floor(Date.now() / 1000));
+  });
+
+  it('records nothing when there was nothing to stop, because that instant is not an outage', () => {
+    // Both already at zero: a marker here would name a moment this release did not cause,
+    // and the deploy would print a confident wrong number instead of `unknown`.
+    const run = runOrder(STOP, ['infra/roots/rehearsal', ORDER_PREFIX], STOPPED, { report: 'release-stop-instant.txt' });
+    expect(run.code, run.output).toBe(0);
+    expect(run.report).toBeNull();
   });
 
   it('is idempotent: services already at zero are reported and not touched', () => {

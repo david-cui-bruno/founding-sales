@@ -64,6 +64,18 @@ stop_service() { # stop_service <service>
 
 rehearsal_log "1/2 $API_SERVICE to zero"
 stop_service "$API_SERVICE" || exit 1
+# The instant the API's last task was confirmed gone: where the interruption an operator
+# feels begins, and the only place in the release that knows it (lane RS-2, PR 310 P2).
+# `deploy.sh release` pairs it with the moment the API registers its targets again.
+#
+# Its own file, so release-stop.txt stays the one line everything already reads, and only
+# for a stop that really stopped something: a service already at zero says nothing about
+# when this release's outage started, and a wrong number is worse than none.
+case "$SUMMARY" in
+  *"$API_SERVICE=stopped_from_"*)
+    rehearsal_dry_run || rehearsal_write_report "release-stop-instant.txt" "api_stopped_at=$(date -u +%s)"
+    ;;
+esac
 rehearsal_log "2/2 $WORKER_SERVICE to zero"
 stop_service "$WORKER_SERVICE" || exit 1
 

@@ -233,7 +233,7 @@ describe('Appendix G 42: the attestation is bound to the release record (lane g7
       expect(code, output).toBe(0);
       const commands = plannedCommands(output);
       expect(commands.map(command => command.slice(0, 3).join(' '))).toEqual(['admin release-record put']);
-      const digests = output.indexOf('2/3 the running tasks of fss-prod-worker and fss-prod-api');
+      const digests = output.indexOf('2/2 the running tasks of fss-prod-worker and fss-prod-api');
       expect(digests, 'the running digests are not planned').toBeGreaterThan(-1);
       expect(output.indexOf('admin release-record put')).toBeGreaterThan(digests);
       const encoded = commands[0]?.[(commands[0]?.indexOf('--json-base64') ?? -2) + 1] ?? '';
