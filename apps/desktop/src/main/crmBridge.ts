@@ -16,6 +16,7 @@ import {
   sequenceVersionsResponseSchema,
   sequencesResponseSchema,
   type FirmIdentityDto,
+  type FirmPageResponse,
   type MergeConflict,
   type PipelineStageDto,
 } from '@fss/contracts';
@@ -558,6 +559,14 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
         notice = 'opportunity_not_open';
         return await snapshot();
       }
+      // Migration 0025: an enrollment says what it is for, and there is no default.
+      // The Mac does not ask — it reads. If the firm page already shows a live
+      // follow-up permission for this person, granted from the reply card or the call
+      // outcome, this is that follow-up; otherwise it is a cold first touch, and the
+      // server refuses a second prospecting contact at the firm with
+      // `firm_already_enrolled`. No new control, which is what "the minimum that lets
+      // David grant a permission from the flows he already uses" asks for.
+      const permission = livePermissionFor(page, input.contactId);
       const answer = await deps.api.command(
         '/enrollments/enroll',
         {
@@ -565,6 +574,8 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
           opportunityId: page.opportunity.id,
           firmId: page.read.firm.id,
           contactId: input.contactId,
+          originKind: permission === null ? 'prospecting' : 'follow_up',
+          ...(permission === null ? {} : { permissionId: permission }),
         },
         () => null,
       );
@@ -641,6 +652,29 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
       return await snapshot();
     },
   };
+}
+
+/**
+ * A live follow-up permission for this person on the firm page, or null.
+ *
+ * Live is all four of David's conditions read from the row the page already carries:
+ * unrevoked, unspent, unexpired against this Mac's clock, and *this* person's. The
+ * server re-reads the permission and its evidence anyway — that is the whole design —
+ * so a clock a few seconds out costs at most a refusal the operator can read.
+ */
+export function livePermissionFor(
+  page: Extract<FirmPageResponse, { visibility: 'assigned_or_admin' }>,
+  contactId: string,
+): string | null {
+  const now = Date.now();
+  const usable = page.followUpPermissions.find(
+    permission =>
+      permission.contactId === contactId &&
+      permission.revokedAt === null &&
+      permission.consumedAt === null &&
+      Date.parse(permission.expiresAt) > now,
+  );
+  return usable?.id ?? null;
 }
 
 /** Turn a refused merge body into the conflicts screen, when it carries them. */

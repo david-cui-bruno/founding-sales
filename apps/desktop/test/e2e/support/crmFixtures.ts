@@ -95,6 +95,28 @@ export function assigneeFirmPage(): NonNullable<CrmState['firm']> {
         recoveryAction: 'resume_after_review',
       },
     ],
+    // Migration 0025: one live permission, so the section has something to render and
+    // the empty case is the one the other fixture shows.
+    followUpPermissions: [
+      {
+        id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+        firmId: IDENTITY.id,
+        contactId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+        kind: 'conversation',
+        scope: 'single_email',
+        callLogId: '11111111-1111-4111-8111-111111111111',
+        mailMessageId: null,
+        bookingReference: null,
+        sequenceId: null,
+        grantedAt: '2026-09-28T12:00:00.000Z',
+        expiresAt: '2026-10-12T12:00:00.000Z',
+        grantedByUserId: '22222222-2222-4222-8222-222222222222',
+        grantedByRule: null,
+        consumedAt: null,
+        revokedAt: null,
+        note: 'They asked for an overview.',
+      },
+    ],
   };
 }
 

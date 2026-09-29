@@ -1,7 +1,14 @@
-import type { BlockedActionKind, HoldReasonCode, PauseChannel, StepChannel } from '@fss/contracts';
+import type {
+  BlockedActionKind,
+  EnrollmentOriginKind,
+  HoldReasonCode,
+  PauseChannel,
+  StepChannel,
+} from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { coverageRefusal, readMailboxCoverage } from '../mail/coverage.ts';
 import { listApplicableHolds } from '../policy/holds.ts';
+import { verifyFollowUpPermission } from './followUpPermissions.ts';
 import type { StepExecutionRow } from './types.ts';
 
 /**
@@ -26,6 +33,9 @@ import type { StepExecutionRow } from './types.ts';
  * The order is not alphabetical and is not negotiable:
  *
  *   1. suppression — the fact that must never be worked around;
+ *   1a. the follow-up permission and the firm rule (migration 0025) — whether Callie
+ *       may write to this person at all, and whether another contact at the firm is
+ *       already being prospected;
  *   2. control mode — an opportunity a human is handling is not automated;
  *   3. the enrollment — live, and the execution still its own;
  *   4. holds — every reversible blocker, in one indexed statement;
@@ -156,27 +166,231 @@ export function holdSource(): StepEligibilitySource {
 }
 
 /**
- * The opportunity's control mode (7.3).
+ * The origins of manual mode that are a prospect **signal** rather than a person's
+ * decision (migration 0025; `MANUAL_MODE_ORIGINS` in `packages/domain/crm/events.ts`).
  *
- * `manual` is entered by a confirmed human email reply, an engaged call outcome or a
- * direct Gmail send, and "automation never reverses manual mode". A manual opportunity is not a hold — there is no interval to shift by
+ * The three of them are the events 7.3 lists: a confirmed human reply, an engaged call
+ * outcome, a direct Gmail send. Each is the prospect doing something, and each is also
+ * — this is the whole of the "reply means manual for ever" wall the verification
+ * document of 29 September describes — exactly the kind of event that *grants* a
+ * follow-up permission. A permitted follow-up must therefore not be blocked by the
+ * signal that permitted it.
+ *
+ * `salesperson_command` is the fourth, and it is not a signal: it is
+ * `POST /opportunities/manual`, a person inside deciding to handle this firm by hand.
+ * That decision wins over every automation, follow-up included. So does an unrecorded
+ * origin — a NULL, which is every opportunity that went manual before 0025 — because an
+ * unrecorded reason is not evidence of a signal.
+ */
+const SIGNAL_MANUAL_MODE_ORIGINS: ReadonlySet<string> = new Set([
+  'human_reply',
+  'engaged_call',
+  'direct_send',
+]);
+
+/**
+ * The opportunity's control mode (7.3), and — since migration 0025 — which of the four
+ * ways in it took.
+ *
+ * `manual` is entered by a confirmed human email reply, an engaged call outcome, a
+ * direct Gmail send or a salesperson's explicit command, and "automation never reverses
+ * manual mode". A manual opportunity is not a hold — there is no interval to shift by
  * and no control that clears it — so it is a refusal with its own reason code.
+ *
+ * **Prospecting and legacy steps are unchanged**: manual is manual, whatever put it
+ * there. For a `follow_up` step the rule is David's: *"Use separate follow-up automation
+ * to resolve the current 'reply means manual forever' behavior. Preserve explicit manual
+ * takeover, suppression, and all pause switches."* A signal-set manual mode does not
+ * block a follow-up whose permission rests on that very signal; an explicit takeover
+ * does, and so does an unrecorded origin.
+ *
+ * Nothing here reverses manual mode. The opportunity stays `manual`, the card still
+ * says so, and the only thing that changes is whether one evidenced follow-up step may
+ * run beside it.
  */
 export function controlModeSource(): StepEligibilitySource {
   return {
     name: 'control-mode',
     evaluate: async (context, input) => {
-      const { rows } = await context.db.query<{ control_mode: string; status: string }>(
-        'SELECT control_mode, status FROM opportunities WHERE workspace_id = $1 AND id = $2',
+      const { rows } = await context.db.query<{
+        control_mode: string;
+        status: string;
+        control_mode_origin: string | null;
+      }>(
+        `SELECT control_mode, status, control_mode_origin
+           FROM opportunities WHERE workspace_id = $1 AND id = $2`,
         [context.scope.workspaceId, input.opportunityId],
       );
       const opportunity = rows[0];
       if (opportunity === undefined || opportunity.status !== 'open') {
         return { ok: false, reasonCode: 'opportunity_manual' };
       }
-      return opportunity.control_mode === 'automated'
+      if (opportunity.control_mode === 'automated') return { ok: true };
+      const origin = await originKindOf(context, input.execution.enrollmentId);
+      if (origin !== 'follow_up') return { ok: false, reasonCode: 'opportunity_manual' };
+      return SIGNAL_MANUAL_MODE_ORIGINS.has(opportunity.control_mode_origin ?? '')
         ? { ok: true }
-        : { ok: false, reasonCode: 'opportunity_manual' };
+        : {
+            ok: false,
+            reasonCode: 'opportunity_manual',
+            detail: `takeover:${opportunity.control_mode_origin ?? 'unrecorded'}`,
+          };
+    },
+  };
+}
+
+/** One enrollment's `origin_kind`. Absent only for an enrollment that has gone. */
+async function originKindOf(
+  context: RepositoryContext,
+  enrollmentId: string,
+): Promise<EnrollmentOriginKind | null> {
+  const { rows } = await context.db.query<{ origin_kind: EnrollmentOriginKind }>(
+    'SELECT origin_kind FROM sequence_enrollments WHERE workspace_id = $1 AND id = $2',
+    [context.scope.workspaceId, enrollmentId],
+  );
+  return rows[0]?.origin_kind ?? null;
+}
+
+/**
+ * The enrollment's origin, and the permission behind it (migration 0025; David, 29
+ * September 2026, item 1).
+ *
+ * > "The origin label alone must not authorize sending — the eligibility check re-reads
+ * > the evidence."
+ *
+ * Three answers, one per `origin_kind`:
+ *
+ *   * `cold_legacy` — refuse, always, with no way back. Every enrollment that existed
+ *     before 0025 is one of these (the column's DEFAULT is the backfill), and so is any
+ *     row a future code path forgets to label. "History preserved, excluded from
+ *     automatic sending forever, never revived."
+ *   * `prospecting` — nothing to check here. A cold first touch needs no permission; it
+ *     needs suppression, the firm rule and the pause switches, which are other sources.
+ *   * `follow_up` — load the permission and **re-read its evidence**:
+ *     `verifyFollowUpPermission` asks whether the call log or the inbound match still
+ *     exists and still names this firm and this recipient, whether the permission is
+ *     unrevoked and unexpired, and whether its scope still has room for this step.
+ *
+ * Placed immediately after `suppressionSource` in `defaultEligibilitySources`: a person
+ * who asked to stop is the fact that must never be worked around, and after that the
+ * next question is whether Callie may write to this person at all.
+ */
+export function followUpPermissionSource(): StepEligibilitySource {
+  return {
+    name: 'follow-up-permission',
+    evaluate: async (context, input) => {
+      const { rows } = await context.db.query<{
+        origin_kind: EnrollmentOriginKind;
+        permission_id: string | null;
+        sequence_id: string;
+        step_count: string;
+        contact_id: string;
+      }>(
+        `SELECT n.origin_kind, n.permission_id, n.contact_id, v.sequence_id,
+                (SELECT count(*) FROM sequence_steps s WHERE s.workspace_id = v.workspace_id
+                                                         AND s.sequence_version_id = v.id) AS step_count
+           FROM sequence_enrollments n
+           JOIN sequence_versions v ON v.workspace_id = n.workspace_id AND v.id = n.sequence_version_id
+          WHERE n.workspace_id = $1 AND n.id = $2`,
+        [context.scope.workspaceId, input.execution.enrollmentId],
+      );
+      const enrollment = rows[0];
+      // No enrollment is `enrollmentSource`'s refusal to make, and it makes it two
+      // sources later. Refusing here would name the wrong reason.
+      if (enrollment === undefined) return { ok: true };
+      if (enrollment.origin_kind === 'cold_legacy') {
+        return { ok: false, reasonCode: 'cold_legacy' };
+      }
+      if (enrollment.origin_kind === 'prospecting') return { ok: true };
+
+      const permissionId = enrollment.permission_id;
+      // Unrepresentable since 0025 (`sequence_enrollments_follow_up_has_permission`),
+      // and still answered: a CHECK is not a reason to read a column as non-null.
+      if (permissionId === null) {
+        return { ok: false, reasonCode: 'follow_up_not_permitted', detail: 'no_permission' };
+      }
+      // The recipient compared against the permission is **the enrollment's own
+      // contact**, not `input.contactId`. In the product the two are the same person:
+      // `runEmailStep` addresses the enrollment's contact and the fence carries it, and
+      // `enrollContact` verified this very permission against this very contact before
+      // the enrollment existed. The enrollment's column is the one the permission was
+      // granted about, and reading it here means the answer does not depend on which of
+      // the two askings is doing the asking. The fence's own recipient address is
+      // checked by `suppressionSource` (which unions every address of the fence's
+      // contact) and by `frozenRouteOutcome`.
+      const verdict = await verifyFollowUpPermission(context, permissionId, {
+        firmId: input.firmId,
+        contactId: enrollment.contact_id,
+        now: input.now,
+        sequenceId: enrollment.sequence_id,
+        stepCount: Number(enrollment.step_count),
+      });
+      return verdict.ok ? { ok: true } : { ok: false, reasonCode: verdict.refusal, detail: verdict.detail };
+    },
+  };
+}
+
+/**
+ * One live prospecting contact per firm, asked again immediately before the send
+ * (David, 29 September 2026, item 2: *"Enforce the rule at enrollment and immediately
+ * before sending, including concurrent-worker behavior."*).
+ *
+ * `enrollContact` refuses a second prospecting enrollment at a firm under the firm's
+ * row lock, and that is the half that stops the state from being created. This is the
+ * other half, and it is the one that matters tonight: the rows that already exist were
+ * created when the schema deliberately permitted two people at one firm
+ * (`docs/greenfield/sequences.md`, Appendix G 33), so an enrollment-time refusal alone
+ * would leave those parallel threads running.
+ *
+ * **The lock.** `SELECT … FROM firms … FOR UPDATE` — the same lock `enrollContact`
+ * takes, in the same order — so two workers deciding two contacts of one firm in the
+ * same tick serialise on the firm row, and the second reads what the first committed.
+ * At preparation this runs in the step's own transaction; at the dispatch claim it runs
+ * inside the claim's, under the send gate, which is the transaction Appendix B says the
+ * decision must be made in.
+ *
+ * **The winner is deterministic**: the live prospecting enrollment with the earliest
+ * `started_at`, and its id breaks a tie. Two steps due in the same tick therefore agree
+ * about which of them may go, rather than each refusing the other or both proceeding.
+ *
+ * **Follow-ups are exempt**, and that is David's own exception: *"This restriction
+ * applies to prospecting; it must not prevent ordinary customer conversations involving
+ * multiple people."* Follow-up permissions to several people at a customer firm are not
+ * limited by it.
+ */
+export function firmExclusivitySource(): StepEligibilitySource {
+  return {
+    name: 'firm-exclusivity',
+    evaluate: async (context, input) => {
+      const { rows: mine } = await context.db.query<{ origin_kind: EnrollmentOriginKind; started_at: Date }>(
+        'SELECT origin_kind, started_at FROM sequence_enrollments WHERE workspace_id = $1 AND id = $2',
+        [context.scope.workspaceId, input.execution.enrollmentId],
+      );
+      const enrollment = mine[0];
+      if (enrollment === undefined || enrollment.origin_kind !== 'prospecting') return { ok: true };
+
+      // The firm row, locked: the serialisation point the rule needs, and nothing is
+      // read from it. `enrollContact` locks the same row before it counts.
+      await context.db.query('SELECT id FROM firms WHERE workspace_id = $1 AND id = $2 FOR UPDATE', [
+        context.scope.workspaceId,
+        input.firmId,
+      ]);
+      const { rows: others } = await context.db.query<{ id: string }>(
+        `SELECT id FROM sequence_enrollments
+          WHERE workspace_id = $1
+            AND firm_id = $2
+            AND id <> $3
+            AND ended_at IS NULL
+            AND origin_kind = 'prospecting'
+            AND (started_at, id) < ($4::timestamptz, $3::uuid)
+          ORDER BY started_at, id
+          LIMIT 1`,
+        [context.scope.workspaceId, input.firmId, input.execution.enrollmentId, enrollment.started_at.toISOString()],
+      );
+      const earlier = others[0];
+      return earlier === undefined
+        ? { ok: true }
+        : { ok: false, reasonCode: 'firm_already_enrolled', detail: earlier.id };
     },
   };
 }
@@ -419,6 +633,8 @@ export function templateApprovalSource(): StepEligibilitySource {
 export function defaultEligibilitySources(): readonly StepEligibilitySource[] {
   return [
     suppressionSource(),
+    followUpPermissionSource(),
+    firmExclusivitySource(),
     controlModeSource(),
     enrollmentSource(),
     holdSource(),

@@ -295,7 +295,7 @@ describe('the sequence, template and enrollment routes', () => {
   });
 
   it('enrols a contact once, and answers a replay from the receipt', async () => {
-    const payload = command({ sequenceVersionId, opportunityId, firmId, contactId });
+    const payload = command({ originKind: 'prospecting', sequenceVersionId, opportunityId, firmId, contactId });
     const first = await post('/enrollments/enroll', salespersonToken, payload);
     expect(first.status).toBe(200);
     const enrollmentId = String(resultOf(first)['enrollmentId']);
@@ -313,7 +313,7 @@ describe('the sequence, template and enrollment routes', () => {
     const again = await post(
       '/enrollments/enroll',
       salespersonToken,
-      command({ sequenceVersionId, opportunityId, firmId, contactId }),
+      command({ originKind: 'prospecting', sequenceVersionId, opportunityId, firmId, contactId }),
     );
     expect(again.status).toBe(409);
     expect(again.body['reason']).toBe('contact_already_enrolled');

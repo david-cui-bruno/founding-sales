@@ -36,6 +36,11 @@ import type { StepChannel } from '@fss/contracts';
  *
  * ## What is woken
  *
+ * Never woken, whatever else is true: an enrollment whose `origin_kind` is
+ * `cold_legacy` (migration 0025). Those are the enrollments that existed before
+ * evidenced follow-up permissions, and David's decision of 29 September 2026 is that
+ * their history is preserved and they never send again.
+ *
  * * **Due pending work**, always. A pending step blocked by a hold runs once and is
  *   held with the hold's reason, so the card says why.
  * * **Held work whose `not_before` has passed and that no open hold blocks.** The
@@ -172,6 +177,16 @@ export async function listStepWakes(
          ON n.workspace_id = e.workspace_id AND n.id = e.enrollment_id
       WHERE n.ended_at IS NULL
         AND n.state = 'active'
+        -- Belt and braces with the followUpPermissionSource, which refuses the same
+        -- rows at the step (migration 0025). This predicate is what makes the eight
+        -- read-before-lift queries of docs/greenfield/send-path-verification-20260929.md
+        -- show zero due legacy steps rather than a pile of rows that would each be
+        -- refused one at a time: an excluded enrollment stops being woken at all, so no
+        -- job is materialized, no fence is prepared, and nothing is held. Two places
+        -- state the rule because the source alone would leave a prepared fence to
+        -- re-decide, and this alone could be bypassed by any other path that reaches
+        -- runDueStepExecution.
+        AND n.origin_kind <> 'cold_legacy'
         AND (
               (e.state IN ('pending', 'held')
                AND e.due_at <= $1::timestamptz

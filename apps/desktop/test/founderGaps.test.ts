@@ -425,6 +425,7 @@ describe('the Firm page enrols, confirms a number, and clears a title (audit G03
           },
     stageHistory: [],
     holds: [],
+    followUpPermissions: [],
   });
   const reads = (opportunity: 'open' | 'lost' | null) => ({
     '/crm/firm-page': { status: 200, body: page(opportunity) },

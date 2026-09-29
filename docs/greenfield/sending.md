@@ -341,6 +341,18 @@ daily cap is reported as suppressed, because that is the fact somebody needs to 
 
 1. mailbox unknown or not connected;
 2. **firm or handle suppressed** (9.2);
+2a. **the follow-up permission, and the firm rule** (migration 0025; David, 29 September
+   2026). The gate asks the sequences lane's own `composeEligibility`, so its first two
+   sources after suppression arrive here too: an enrollment whose `origin_kind` is
+   `cold_legacy` is refused for ever, a `follow_up` has its permission's **evidence
+   re-read inside the claim** — the call log, or the inbound message's match to the firm
+   — and a second live *prospecting* contact at a firm is refused
+   `firm_already_enrolled` under the firm's row lock. Each arrives as `step_ineligible`
+   with the section 15 code in the detail, because Gmail was never asked anything. A
+   `single_email` permission is **spent by the claim that sends it** (`consumed_at`), in
+   the same committed transaction as the day's counter, so the second attempt reads
+   `follow_up_scope_exhausted`. See
+   `docs/greenfield/decisions/follow-up-eligibility-20260929.md`;
 3. the frozen route invalidated or retired since preparation (12.3's bounce handling);
 4. any open hold blocking `email_send` for this owner or firm (4.2, 12.6);
 5. coverage unproved;

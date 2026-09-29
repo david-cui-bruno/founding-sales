@@ -56,6 +56,10 @@ export function OutcomeForm({
   const [callbackDate, setCallbackDate] = useDraft(`${prefix}callbackDate`);
   const [callbackTime, setCallbackTime] = useDraft(`${prefix}callbackTime`);
   const [coversAll, setCoversAll] = useDraft(`${prefix}coversAll`);
+  // Migration 0025: the follow-up agreed on the call. Empty is "none", which is the
+  // default, because a permission to write to somebody is not something a form should
+  // grant by accident.
+  const [followUp, setFollowUp] = useDraft(`${prefix}followUp`);
   const clear = useClearDrafts();
   if (expanded === null) return null;
 
@@ -80,6 +84,9 @@ export function OutcomeForm({
   const busy = actions.busy(todayForm.outcome(expanded.firmId));
   const suppression = outcomeSuppresses(draft);
   const wantsCallback = draft.outcome === 'callback_requested';
+  // Only a conversation grants a follow-up. "Call me Tuesday" is the callback below and
+  // grants no e-mail permission, which is David's own distinction of 29 September 2026.
+  const offersFollowUp = draft.outcome === 'interested';
 
   return (
     <form
@@ -114,6 +121,10 @@ export function OutcomeForm({
                     sourceTimeZone: draft.callbackTimeZone,
                   },
           doNotCallCoversAllContact: built.command.doNotCallCoversAllContact ?? false,
+          followUpPermission:
+            built.command.outcome === 'interested' && followUp === 'single_email'
+              ? { scope: 'single_email' }
+              : null,
         });
         clear(prefix);
       }}
@@ -161,6 +172,24 @@ export function OutcomeForm({
           </Select>
         </Label>
       </div>
+
+      <Label data-testid="outcome-follow-up-label" hidden={!offersFollowUp} className="flex-col items-start gap-1">
+        Did they ask for an e-mail?
+        <Select
+          data-testid="outcome-follow-up"
+          disabled={!enabled || busy}
+          value={followUp}
+          onChange={event => {
+            setFollowUp(event.target.value);
+          }}
+        >
+          <option value="">No follow-up e-mail</option>
+          <option value="single_email">Yes — one e-mail they asked for</option>
+        </Select>
+        <span className="text-xs text-muted-foreground">
+          One e-mail, for fourteen days. A sequence is agreed on the firm page.
+        </span>
+      </Label>
 
       <fieldset data-testid="outcome-callback" hidden={!wantsCallback} className="flex flex-wrap items-end gap-2 border-0 p-0">
         <legend className="mb-1 w-full text-xs font-medium text-muted-foreground">

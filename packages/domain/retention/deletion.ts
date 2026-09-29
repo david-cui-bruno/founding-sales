@@ -236,6 +236,15 @@ async function measure(
         WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
       byContact,
     ),
+    // Migration 0025. Previewed as well as removed, because the preview is what a
+    // person approves and "one permission to write to this person" is exactly the kind
+    // of row somebody would want to see named before it goes.
+    follow_up_permissions: await countOf(
+      context,
+      `SELECT count(*) AS count FROM follow_up_permissions
+        WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
+      byContact,
+    ),
     callbacks: await countOf(
       context,
       `SELECT count(*) AS count FROM callbacks
@@ -565,6 +574,30 @@ export async function commitDeletion(
     const { rowCount } = await context.db.query(sql, values);
     removed[table] = rowCount ?? 0;
   };
+
+  // Migration 0025's permissions first, and the reason is the design: a permission's
+  // foreign keys onto `call_logs` and `mail_messages` are what make its evidence
+  // undeletable while the permission rests on it. So a deletion that removed the
+  // correspondence or the call history first would be refused by those keys — which is
+  // the check working, and this is the one path allowed to satisfy it. The enrollment
+  // that points at a permission is *stopped* rather than deleted below, so the key from
+  // `sequence_enrollments` has to be cleared here too; it is set to NULL only on
+  // enrollments of the firm being deleted, and only after their steps are cancelled a
+  // few statements later, which is a stop either way (`origin_kind` still says
+  // `follow_up`, so nothing can send on the cleared column).
+  await context.db.query(
+    `UPDATE sequence_enrollments
+        SET permission_id = NULL, updated_at = now()
+      WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}
+        AND permission_id IS NOT NULL`,
+    byContact,
+  );
+  await remove(
+    'follow_up_permissions',
+    `DELETE FROM follow_up_permissions
+      WHERE workspace_id = $1 AND firm_id = $3 AND ${contactPredicate('contact_id', '$2')}`,
+    byContact,
+  );
 
   // G7b's confirmations before the messages that would cascade them, because a
   // confirmation also references a callback this workflow is about to remove.

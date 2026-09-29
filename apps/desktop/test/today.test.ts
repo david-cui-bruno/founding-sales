@@ -600,6 +600,7 @@ describe('the Today bridge', () => {
         stepApplication: 'completed',
         callbackId: null,
         completedCallbackId: null,
+        followUpPermissionId: null,
         followUps: [],
       }),
     });
@@ -621,6 +622,7 @@ describe('the Today bridge', () => {
       note: '',
       callback: null,
       doNotCallCoversAllContact: false,
+      followUpPermission: null,
     });
     expect(answer.notice).toBe('outcome_recorded');
     const sent = calls.find(call => call.path === '/calls/log')?.body as Record<string, unknown>;
@@ -652,6 +654,7 @@ describe('the Today bridge', () => {
         stepApplication: null,
         callbackId: null,
         completedCallbackId: null,
+        followUpPermissionId: null,
         followUps: [{ kind: 'callback_time_needed', reason: 'no_instant' }],
       }),
     });
@@ -669,6 +672,7 @@ describe('the Today bridge', () => {
       note: '',
       callback: null,
       doNotCallCoversAllContact: false,
+      followUpPermission: null,
     });
     expect(answer.notice).toBe('outcome_recorded_callback_time_needed');
     expect(noticeSentence('outcome_recorded_callback_time_needed')).toContain('needs a time');
@@ -691,6 +695,7 @@ describe('the Today bridge', () => {
       note: '',
       callback: { localDate: '2026-03-08', localTime: '02:30', dueAt: '', sourceTimeZone: '' },
       doNotCallCoversAllContact: false,
+      followUpPermission: null,
     });
     const sent = calls.find(call => call.path === '/calls/log')?.body as Record<string, unknown>;
     expect(sent['callback']).toEqual({

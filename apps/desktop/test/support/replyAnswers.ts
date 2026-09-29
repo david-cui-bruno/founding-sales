@@ -48,6 +48,7 @@ export function confirmReplyResultAnswer(overrides: Partial<ConfirmReplyResult> 
     confirmation: replyConfirmationAnswer(),
     suggestsLost: false,
     releasedHoldIds: ['88888888-8888-4888-8888-888888888888'],
+    followUpPermissionId: null,
     ...overrides,
   };
 }

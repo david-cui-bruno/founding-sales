@@ -94,6 +94,7 @@ async function setDue(enrollmentId: string): Promise<void> {
 async function enrolledAndDue(): Promise<string> {
   const result = await enrollContact(contextFor('salesperson'), {
     sequenceVersionId: sequences.alpha.publishedVersionId,
+    originKind: 'prospecting' as const,
     opportunityId: crm.alpha.opportunityId,
     firmId: crm.alpha.firmId,
     contactId: crm.alpha.contactId,

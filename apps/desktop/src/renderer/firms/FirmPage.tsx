@@ -463,6 +463,73 @@ function Holds({ page }: { readonly page: Extract<FirmPageResponse, { visibility
   );
 }
 
+/**
+ * The firm's follow-up permissions (migration 0025).
+ *
+ * The four facts David's decision names, in the order a person reads them: what was
+ * agreed, how much it permits, when it stops, and the event it rests on. The evidence is
+ * shown as what it is — a recorded call, an inbound e-mail, a booking reference — rather
+ * than as an id, because the id means nothing to the one person who uses this app; the
+ * id is in the title attribute for the day it is needed.
+ */
+function FollowUpPermissions({
+  page,
+}: {
+  readonly page: Extract<FirmPageResponse, { visibility: 'assigned_or_admin' }>;
+}): JSX.Element {
+  const permissions = page.followUpPermissions;
+  return (
+    <Section data-testid="firm-follow-ups" title="Follow-up permissions" count={permissions.length}>
+      {permissions.length === 0 ? (
+        <p data-testid="follow-ups-none" className="py-2 text-sm text-muted-foreground">
+          Callie may not write to anybody at this firm.
+        </p>
+      ) : (
+        <Rows>
+          {permissions.map(permission => (
+            <Row key={permission.id} data-testid="firm-follow-up">
+              <RowMain
+                line={<span data-testid="follow-up-scope">{inWords(permission.scope)}</span>}
+                detail={
+                  <>
+                    <span data-testid="follow-up-kind">{inWords(permission.kind)}</span>
+                    {' · '}
+                    <span data-testid="follow-up-evidence" title={evidenceId(permission)}>
+                      {evidenceWords(permission)}
+                    </span>
+                    {' · '}
+                    <span data-testid="follow-up-state">{permissionState(permission)}</span>
+                  </>
+                }
+              />
+            </Row>
+          ))}
+        </Rows>
+      )}
+    </Section>
+  );
+}
+
+type FollowUp = Extract<FirmPageResponse, { visibility: 'assigned_or_admin' }>['followUpPermissions'][number];
+
+function evidenceWords(permission: FollowUp): string {
+  if (permission.callLogId !== null) return 'from a recorded call';
+  if (permission.mailMessageId !== null) return 'from an e-mail they sent';
+  return 'from a booking';
+}
+
+function evidenceId(permission: FollowUp): string {
+  return permission.callLogId ?? permission.mailMessageId ?? permission.bookingReference ?? '';
+}
+
+/** Revoked, spent, expired or live — the one sentence that says whether it still counts. */
+function permissionState(permission: FollowUp): string {
+  if (permission.revokedAt !== null) return `withdrawn ${shortDayTime(permission.revokedAt)}`;
+  if (permission.consumedAt !== null) return `used ${shortDayTime(permission.consumedAt)}`;
+  if (Date.parse(permission.expiresAt) <= Date.now()) return `expired ${shortDayTime(permission.expiresAt)}`;
+  return `until ${shortDayTime(permission.expiresAt)}`;
+}
+
 export function FirmPage({
   page,
   sequences,
@@ -531,6 +598,7 @@ export function FirmPage({
             />
           )}
           <Opportunity page={page} />
+          <FollowUpPermissions page={page} />
           <Holds page={page} />
         </>
       )}

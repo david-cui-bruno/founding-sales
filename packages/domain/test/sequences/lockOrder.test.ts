@@ -83,6 +83,7 @@ async function clearEnrollments(): Promise<void> {
 async function heldEnrollment(): Promise<{ enrollmentId: string; stepExecutionId: string }> {
   const enrolled = await enrollContact(salesperson(database.session), {
     sequenceVersionId: sequences.alpha.publishedVersionId,
+    originKind: 'prospecting' as const,
     opportunityId: crm.alpha.opportunityId,
     firmId: crm.alpha.firmId,
     contactId: crm.alpha.contactId,

@@ -39,7 +39,8 @@ import {
  */
 
 const OPPORTUNITY_COLUMNS = `id, workspace_id, firm_id, stage_id, status, control_mode, control_mode_reason,
-  control_mode_changed_at, opened_at, closed_at, close_reason, reopened_from_opportunity_id, created_at, updated_at`;
+  control_mode_changed_at, control_mode_origin, opened_at, closed_at, close_reason,
+  reopened_from_opportunity_id, created_at, updated_at`;
 
 const STAGE_COLUMNS = 'id, workspace_id, key, display_name, position, terminal_kind, retired, created_at, updated_at';
 
@@ -234,6 +235,12 @@ export async function changeStage(
  * defaulted so that a new caller has to say which of 7.3's four ways in it is, instead
  * of inheriting somebody else's answer — G15 recorded `human_reply` for every one of
  * them precisely because the signal did not carry this.
+ *
+ * Since migration 0025 the origin is also **stored on the opportunity**
+ * (`control_mode_origin`), not only emitted in the event's detail. The eligibility gate
+ * reads the opportunity row, and it now has a question the row could not answer: was
+ * this a prospect signal, which does not block an evidenced follow-up, or a person's
+ * explicit takeover, which does (`controlModeSource`)?
  */
 export async function setManualControlMode(
   context: RepositoryContext,
@@ -255,14 +262,43 @@ export async function setManualControlMode(
   const decision = decideFirmMutation(context, firm);
   if (!decision.permitted) return refuse(decision.reason);
   if (input.reason.trim().length === 0) return refuse('invalid_input');
-  if (opportunity.control_mode === 'manual') return accept(opportunity);
+  if (opportunity.control_mode === 'manual') {
+    // Already manual, so there is no transition to record — except one. Migration 0025
+    // stores *which* of `MANUAL_MODE_ORIGINS` put the opportunity here, because the
+    // eligibility gate now asks: a signal-set manual mode does not block an evidenced
+    // follow-up, an explicit takeover does. An opportunity that went manual on a reply
+    // and is then taken over by a person must stop being a signal, or the takeover
+    // would be the one fact this design ignores. Escalation only — a signal never
+    // overwrites a recorded takeover, and nothing here reverses manual mode.
+    if (input.origin === 'salesperson_command' && opportunity['control_mode_origin'] !== 'salesperson_command') {
+      const { rows: escalated } = await context.db.query<OpportunityRow>(
+        `UPDATE opportunities
+            SET control_mode_origin = 'salesperson_command', updated_at = now()
+          WHERE workspace_id = $1 AND id = $2
+          RETURNING ${OPPORTUNITY_COLUMNS}`,
+        [context.scope.workspaceId, input.opportunityId],
+      );
+      const takenOver = escalated[0];
+      if (takenOver !== undefined) {
+        await recordCrmAuditEvent(context, {
+          action: 'opportunity.manual',
+          subjectKind: 'opportunity',
+          subjectId: takenOver.id,
+          detail: { firmId: takenOver.firm_id, origin: input.origin, escalated: true },
+        });
+        return accept(takenOver);
+      }
+    }
+    return accept(opportunity);
+  }
 
   const { rows } = await context.db.query<OpportunityRow>(
     `UPDATE opportunities
-        SET control_mode = 'manual', control_mode_reason = $3, control_mode_changed_at = now(), updated_at = now()
+        SET control_mode = 'manual', control_mode_reason = $3, control_mode_origin = $4,
+            control_mode_changed_at = now(), updated_at = now()
       WHERE workspace_id = $1 AND id = $2
       RETURNING ${OPPORTUNITY_COLUMNS}`,
-    [context.scope.workspaceId, input.opportunityId, input.reason.trim()],
+    [context.scope.workspaceId, input.opportunityId, input.reason.trim(), input.origin],
   );
   const updated = rows[0];
   if (updated === undefined) return refuse('opportunity_unknown');

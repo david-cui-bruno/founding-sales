@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { followUpPermissionDtoSchema } from './followUps.ts';
 import { commandIdSchema } from './auth.ts';
 import { semanticVersionSchema } from './clientVersion.ts';
 import { holdReasonCodeSchema } from './reasonCodes.ts';
@@ -323,6 +324,13 @@ export const firmPageResponseSchema = z.discriminatedUnion('visibility', [
     opportunity: opportunitySummaryDtoSchema.nullable(),
     stageHistory: z.array(stageEventDtoSchema),
     holds: z.array(firmHoldDtoSchema),
+    /**
+     * The firm's follow-up permissions, newest grant first (migration 0025). Here
+     * rather than on a screen of its own because the question a person asks is "why
+     * may Callie write to these people, and until when?", and the firm page is where
+     * they ask it.
+     */
+    followUpPermissions: z.array(followUpPermissionDtoSchema),
   }),
 ]);
 export type FirmPageResponse = z.infer<typeof firmPageResponseSchema>;

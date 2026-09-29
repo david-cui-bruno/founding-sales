@@ -166,6 +166,11 @@ export interface OutcomeRequest {
     readonly sourceTimeZone: string;
   } | null;
   readonly doNotCallCoversAllContact: boolean;
+  /**
+   * The follow-up agreed on the call (migration 0025). `null` is "none", and it is the
+   * only value any outcome other than `interested` may carry.
+   */
+  readonly followUpPermission: { readonly scope: 'single_email' } | null;
 }
 
 /**

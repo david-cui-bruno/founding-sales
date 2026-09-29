@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { commandIdSchema, semanticVersionSchema, uuid } from '@fss/contracts';
+import { commandIdSchema, enrollableOriginKindSchema, semanticVersionSchema, uuid } from '@fss/contracts';
 import { databaseNow } from '@fss/domain/policy/clock.ts';
 import { enrollContact, stopEnrollments } from '@fss/domain/sequences/enrollments.ts';
 import { listEnrollments, listStepExecutions } from '@fss/domain/sequences/rows.ts';
@@ -31,12 +31,21 @@ export const ENROLLMENT_PATHS: readonly string[] = [
 
 const command = { commandId: commandIdSchema, clientVersion: semanticVersionSchema };
 
+/**
+ * Enrolling names what it is for (migration 0025). `originKind` is required and there
+ * is no default: `cold_legacy` is the column's default and it is history, so a command
+ * that inherited it would create an enrollment nothing will ever send. A `follow_up`
+ * carries the permission it rests on, and `enrollContact` re-reads that permission's
+ * own evidence before it writes a row.
+ */
 const enrollSchema = z.strictObject({
   ...command,
   sequenceVersionId: uuid,
   opportunityId: uuid,
   firmId: uuid,
   contactId: uuid,
+  originKind: enrollableOriginKindSchema,
+  permissionId: uuid.optional(),
 });
 
 const stopSchema = z.strictObject({
@@ -110,6 +119,8 @@ export async function routeEnrollments(
         opportunityId: body.opportunityId,
         firmId: body.firmId,
         contactId: body.contactId,
+        originKind: body.originKind,
+        ...(body.permissionId === undefined ? {} : { permissionId: body.permissionId }),
         commandId: body.commandId,
       }),
     );

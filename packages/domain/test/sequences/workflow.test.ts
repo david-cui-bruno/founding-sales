@@ -21,6 +21,7 @@ import {
 } from '../../sequences/definitions.ts';
 import { allowAllEligibility } from '../../sequences/eligibility.ts';
 import { enrollContact } from '../../sequences/enrollments.ts';
+import { grantFollowUpPermission } from '../../sequences/followUpPermissions.ts';
 import { completeStepExecution, runDueStepExecution } from '../../sequences/executions.ts';
 import { listStepExecutions, readSequenceVersion } from '../../sequences/rows.ts';
 import { recordingSendHandoff } from '../../sequences/sendHandoff.ts';
@@ -76,13 +77,62 @@ async function clearEnrollments(): Promise<void> {
   await database.session.query('DELETE FROM active_holds');
 }
 
-async function enroll(workspace: 'alpha' | 'beta', contactId?: string): Promise<string> {
+/**
+ * A follow-up permission for a second person at the firm, on a recorded call
+ * (migration 0025).
+ *
+ * The firm's first contact is enrolled as `prospecting`, which is David's "one active
+ * prospecting contact per firm". A colleague may still be written to — "it must not
+ * prevent ordinary customer conversations involving multiple people" — and that is what
+ * a follow-up permission is for, so the cases below that need two people at one firm
+ * ask for one rather than for a second cold sequence.
+ */
+async function permissionFor(workspace: 'alpha' | 'beta', contactId: string): Promise<string> {
   const firm = crm[workspace];
+  const { rows: calls } = await database.session.query<{ id: string }>(
+    `INSERT INTO call_logs
+       (workspace_id, firm_id, contact_id, opportunity_id, outcome, step_effect, occurred_at, actor_user_id)
+     VALUES ($1, $2, $3, $4, 'interested', 'none', now() - interval '1 second', $5)
+     RETURNING id`,
+    [
+      seeded[workspace].workspaceId,
+      firm.firmId,
+      contactId,
+      firm.opportunityId,
+      seeded[workspace].salesperson.userId,
+    ],
+  );
+  const { rows: versions } = await database.session.query<{ sequence_id: string }>(
+    'SELECT sequence_id FROM sequence_versions WHERE workspace_id = $1 AND id = $2',
+    [seeded[workspace].workspaceId, sequences[workspace].publishedVersionId],
+  );
+  const granted = await grantFollowUpPermission(contextFor(workspace, 'salesperson'), {
+    firmId: firm.firmId,
+    contactId,
+    kind: 'agreed_sequence',
+    scope: 'agreed_sequence',
+    callLogId: calls[0]?.id ?? '',
+    sequenceId: versions[0]?.sequence_id ?? '',
+    grantedByUserId: seeded[workspace].salesperson.userId,
+  });
+  if (!granted.ok) throw new Error(`the permission fixture was refused: ${granted.reason}`);
+  return granted.value.id;
+}
+
+async function enroll(
+  workspace: 'alpha' | 'beta',
+  contactId?: string,
+  origin: 'prospecting' | 'follow_up' = 'prospecting',
+): Promise<string> {
+  const firm = crm[workspace];
+  const target = contactId ?? firm.contactId;
   const result = await enrollContact(contextFor(workspace, 'salesperson'), {
     sequenceVersionId: sequences[workspace].publishedVersionId,
+    originKind: origin,
+    ...(origin === 'follow_up' ? { permissionId: await permissionFor(workspace, target) } : {}),
     opportunityId: firm.opportunityId,
     firmId: firm.firmId,
-    contactId: contactId ?? firm.contactId,
+    contactId: target,
   });
   if (!result.ok) throw new Error(`the enrollment fixture was refused: ${result.reason}`);
   return result.value.enrollmentId;
@@ -184,7 +234,7 @@ describe('the Today source: lane 3 is due sequence work (8.2)', () => {
       `INSERT INTO contacts (workspace_id, firm_id, full_name) VALUES ($1, $2, $3) RETURNING id`,
       [seeded.alpha.workspaceId, crm.alpha.firmId, 'Alex Example'],
     );
-    const id = await enroll('alpha', rows[0]?.id ?? '');
+    const id = await enroll('alpha', rows[0]?.id ?? '', 'follow_up');
     const first = (await listStepExecutions(worker(), { enrollmentId: id }))[0];
     if (first !== undefined) {
       await completeStepExecution(worker(), {
@@ -244,7 +294,7 @@ describe('a held step says how long it has been held (wave 2, S4.1)', () => {
       `INSERT INTO contacts (workspace_id, firm_id, full_name) VALUES ($1, $2, $3) RETURNING id`,
       [seeded.alpha.workspaceId, crm.alpha.firmId, 'Alex Example'],
     );
-    const pending = await enroll('alpha', rows[0]?.id ?? '');
+    const pending = await enroll('alpha', rows[0]?.id ?? '', 'follow_up');
     await setDue('alpha', pending, now);
 
     await buildTodaySnapshot(worker(), {

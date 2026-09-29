@@ -120,6 +120,7 @@ beforeAll(async () => {
     ),
     {
       sequenceVersionId: sequences.alpha.publishedVersionId,
+      originKind: 'prospecting' as const,
       opportunityId: crm.alpha.opportunityId,
       firmId: crm.alpha.firmId,
       contactId: crm.alpha.contactId,

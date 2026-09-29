@@ -14,6 +14,7 @@ import {
   releaseFence,
   type OutboundFenceRow,
 } from './fence.ts';
+import { consumeFollowUpPermission } from '../sequences/followUpPermissions.ts';
 import { reconcileFenceFooter } from './footer.ts';
 import type { SendFooterPolicy } from '../src/rules/templates.ts';
 import { decideSend, holdReasonForRefusal, type SendGateDeps, type SendPlan } from './gate.ts';
@@ -288,6 +289,30 @@ export async function dispatchOutboundMessage(
   };
 }
 
+/**
+ * Mark this fence's `single_email` follow-up permission spent, if it has one.
+ *
+ * One statement: the permission of the enrollment of the step this fence belongs to,
+ * and only when its scope is `single_email` (`consumeFollowUpPermission` carries that
+ * predicate, so a `contextual_reply` or an `agreed_sequence` is untouched by a send).
+ */
+async function consumeSingleEmailPermission(
+  context: RepositoryContext,
+  outboundMessageId: string,
+): Promise<void> {
+  const { rows } = await context.db.query<{ permission_id: string | null }>(
+    `SELECT n.permission_id
+       FROM outbound_messages f
+       JOIN step_executions e ON e.workspace_id = f.workspace_id AND e.id = f.step_execution_id
+       JOIN sequence_enrollments n ON n.workspace_id = e.workspace_id AND n.id = e.enrollment_id
+      WHERE f.workspace_id = $1 AND f.id = $2 AND n.origin_kind = 'follow_up'`,
+    [context.scope.workspaceId, outboundMessageId],
+  );
+  const permissionId = rows[0]?.permission_id ?? null;
+  if (permissionId === null) return;
+  await consumeFollowUpPermission(context, permissionId);
+}
+
 function refusalOf(reason: string): SendRefusalCode {
   switch (reason) {
     case 'grant_revoked':
@@ -418,6 +443,20 @@ async function recheckAndClaim(
       await context.db.query('ROLLBACK');
       return { kind: 'not_ready', refusal: claim.reason, detail: claim.detail };
     }
+    // The one e-mail a `single_email` follow-up permission bought, spent (migration
+    // 0025). Inside the claim's transaction and after the claim, so it commits with the
+    // attempt or rolls back with it. `decideSend` above asked
+    // `followUpPermissionSource` about this very fence in this very transaction, so a
+    // permission already consumed has already refused; what this adds is that the
+    // *next* attempt will refuse, with `follow_up_scope_exhausted`.
+    //
+    // Why here rather than after `recordSent`: Appendix B says a claimed fence may have
+    // reached Gmail even when the call reports nothing, and a fence in doubt is
+    // re-decided later. Consuming at the claim can cost a permission whose e-mail never
+    // arrived; consuming after the provider answered could let a second e-mail leave on
+    // a permission that buys one. `docs/greenfield/decisions/follow-up-eligibility-20260929.md`
+    // records the choice.
+    await consumeSingleEmailPermission(context, fence.id);
     await context.db.query('COMMIT');
     return { kind: 'claimed', plan, claim: claim.value };
   } catch (error) {

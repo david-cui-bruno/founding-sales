@@ -126,6 +126,7 @@ const firmPageBody = {
   },
   stageHistory: [],
   holds: [],
+  followUpPermissions: [],
 };
 
 const settingsBody = {

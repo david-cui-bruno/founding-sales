@@ -125,7 +125,7 @@ export function templateVersionAnswer(overrides: Partial<TemplateVersionDto> = {
   };
 }
 
-/** `toEnrollment`: all thirteen fields, including the four 1.0.4 refused. */
+/** `toEnrollment`: every field, including the four 1.0.4 refused and 0025's two. */
 export function enrollmentAnswer(overrides: Partial<EnrollmentDto> = {}): EnrollmentDto {
   return {
     id: SEQUENCE_IDS.enrollment,
@@ -138,6 +138,8 @@ export function enrollmentAnswer(overrides: Partial<EnrollmentDto> = {}): Enroll
     startedAt: '2026-09-01T12:00:00.000Z',
     endedAt: null,
     endReason: null,
+    originKind: 'prospecting',
+    permissionId: null,
     firmTimeZone: 'America/New_York',
     holidayCalendarVersion: 'none',
     reviewUnionMilliseconds: null,

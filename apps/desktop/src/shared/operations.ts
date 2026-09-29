@@ -96,6 +96,18 @@ const outcomeInput = z.strictObject({
     })
     .nullable(),
   doNotCallCoversAllContact: z.boolean(),
+  /**
+   * The follow-up the salesperson agreed to on the call (migration 0025). `null` is
+   * "none", which is the default the form offers, and the only value the server accepts
+   * for any outcome other than `interested`. An `agreed_sequence` names its sequence;
+   * "Call me Tuesday" is `callback` above and grants no e-mail permission at all.
+   */
+  followUpPermission: z
+    .discriminatedUnion('scope', [
+      z.strictObject({ scope: z.literal('single_email') }),
+      z.strictObject({ scope: z.literal('agreed_sequence'), sequenceId: uuid }),
+    ])
+    .nullable(),
 });
 
 /**
@@ -123,6 +135,13 @@ const confirmReplyInput = z.strictObject({
     .nullable(),
   firmWideOptOut: z.boolean(),
   note: z.string().max(2000),
+  /**
+   * Whether this confirmation grants a contextual-reply permission (migration 0025).
+   * `true` is the default the form offers for `interested` and `follow_up_later` — David:
+   * "an inbound question permits a contextual reply" — and `false` is the person saying
+   * no follow-up. It is ignored for every other disposition.
+   */
+  grantFollowUp: z.boolean(),
 });
 
 /** One dead job, as `GET /admin/jobs/dead` lists it. Never a payload: a job's arguments

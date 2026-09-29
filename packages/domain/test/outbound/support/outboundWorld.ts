@@ -281,8 +281,12 @@ export async function createOutboundWorld(): Promise<OutboundWorld> {
         templateVersionId: mailbox.templateVersionId,
         ...(typeof requested === 'string' ? { id: requested } : {}),
       });
-      const enrollment = await world.database.session.query<{ enrollment_id: string; opportunity_id: string }>(
-        `SELECT e.enrollment_id, n.opportunity_id
+      const enrollment = await world.database.session.query<{
+        enrollment_id: string;
+        opportunity_id: string;
+        contact_id: string;
+      }>(
+        `SELECT e.enrollment_id, n.opportunity_id, n.contact_id
            FROM step_executions e
            JOIN sequence_enrollments n ON n.workspace_id = e.workspace_id AND n.id = e.enrollment_id
           WHERE e.workspace_id = $1 AND e.id = $2`,
@@ -293,7 +297,12 @@ export async function createOutboundWorld(): Promise<OutboundWorld> {
         // The fence names its enrollment, as `runEmailStep`'s request always does.
         enrollmentId: enrollment.rows[0]?.enrollment_id ?? null,
         firmId,
-        contactId: firm.contactId,
+        // The enrollment's own contact, which is what `runEmailStep` puts on a real
+        // fence. It used to be the firm's first contact while the enrollment was for a
+        // fixture contact of its own, and the two disagreeing is a state the product
+        // cannot produce; migration 0025's permission is granted to *a person*, so the
+        // disagreement became visible as `follow_up_not_permitted:recipient_mismatch`.
+        contactId: enrollment.rows[0]?.contact_id ?? firm.contactId,
         opportunityId: enrollment.rows[0]?.opportunity_id ?? firm.opportunityId,
         ownerUserId: mailbox.workspace.salesperson.userId,
         templateVersionId: mailbox.templateVersionId,

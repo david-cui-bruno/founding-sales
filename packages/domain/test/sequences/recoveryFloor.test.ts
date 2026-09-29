@@ -47,6 +47,7 @@ async function enrol(): Promise<{ enrollmentId: string; executionId: string }> {
     ),
     {
       sequenceVersionId: sequences.alpha.publishedVersionId,
+      originKind: 'prospecting' as const,
       opportunityId: crm.alpha.opportunityId,
       firmId: crm.alpha.firmId,
       contactId: crm.alpha.contactId,

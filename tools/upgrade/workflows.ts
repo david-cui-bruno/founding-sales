@@ -63,9 +63,20 @@ export const MINIMUM_TODAY_CARDS = 5;
 /**
  * The decision the fixture's active enrolment must reach.
  *
- * The fixture opens a workspace-scoped administrative pause blocking `email_send`, so
- * the hold source refuses the step with `scoped_pause` — a real refusal, reached
- * through the real sources, on a hold that was in the database before the upgrade.
+ * **`cold_legacy` since migration 0025**, and this constant moving is the single most
+ * informative line of that migration's upgrade evidence. The fixture is written by the
+ * *deployed* checkout's own code, which has no `origin_kind` column to write, so every
+ * enrollment it creates takes 0025's DEFAULT — which is the backfill, and which is
+ * David's decision of 29 September 2026 that every enrollment existing before evidenced
+ * follow-up permissions is excluded from automatic sending for ever. The step is
+ * refused by `followUpPermissionSource`, the first source after suppression, before the
+ * workspace pause this case used to observe (`scoped_pause`) is ever reached.
+ *
+ * So the change of value here is the property under test, seen from the outside: run
+ * the deployed code's data through the new gate and nothing legacy can send. A future
+ * lane that wants this case to observe the pause again has to give the fixture an
+ * enrollment with a real origin, which the base checkout cannot write — and that is the
+ * honest state of affairs rather than a limitation of this file.
  *
  * Naming the code rather than accepting "some refusal" is the point (GPT-6 review,
  * P1-3): an eligibility gate that passed on any answer would pass on the wrong one. If
@@ -73,7 +84,7 @@ export const MINIMUM_TODAY_CARDS = 5;
  * somebody decides which decision the fixture is supposed to produce, rather than the
  * assertion quietly becoming vacuous.
  */
-export const EXPECTED_ELIGIBILITY_DECISION = 'scoped_pause';
+export const EXPECTED_ELIGIBILITY_DECISION = 'cold_legacy';
 
 /**
  * The lane the fixture's primary firm's card must be in.

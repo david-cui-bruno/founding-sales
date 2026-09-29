@@ -24,6 +24,27 @@ import type { SessionQueryable } from '../queryable.ts';
  *
  * No real person, firm or address appears; the names are fixture names and the
  * addresses are in `example.test`, which RFC 6761 reserves.
+ *
+ * ## The origin, since migration 0025
+ *
+ * Every enrollment now says what it is for, and the default is `cold_legacy` — which
+ * never sends. So this fixture has to choose, and it chooses **`follow_up` on a real
+ * permission with real evidence**: a `call_logs` row with outcome `interested` for this
+ * contact, and a `follow_up_permissions` row of scope `agreed_sequence` naming the
+ * fixture sequence, granted by the fixture's own user and expiring in a year.
+ *
+ * Two reasons, and neither is convenience. First, it is the only origin that matches
+ * what these fixtures *are*: several of them make more than one contact at one firm, and
+ * David's rule of 29 September 2026 is that a firm has one active *prospecting* contact
+ * while follow-up permissions to several people at a customer firm are explicitly
+ * permitted — so `prospecting` would make the fixture refuse itself with
+ * `firm_already_enrolled`, which is a true refusal about the wrong thing. Second, the
+ * evidence is real rather than stubbed, so `followUpPermissionSource` does the whole of
+ * its work — it re-reads the call log, matches the firm and the recipient, checks the
+ * expiry and the scope — on every send test in the repository, rather than being
+ * exercised only by its own file.
+ *
+ * `originKind` overrides it, and `'cold_legacy'` is how a test asks for a pre-0025 row.
  */
 
 export interface StepExecutionFixtureInput {
@@ -38,6 +59,12 @@ export interface StepExecutionFixtureInput {
   /** Force the execution's id, for the fixtures that assert on a known uuid. */
   readonly id?: string | undefined;
   readonly zone?: string | undefined;
+  /**
+   * Migration 0025's origin. Defaults to `follow_up` with a granted permission and its
+   * evidence (see the header). `cold_legacy` is a pre-0025 row; `prospecting` is a cold
+   * first touch, and is refused for a second contact at one firm, which is the point.
+   */
+  readonly originKind?: 'cold_legacy' | 'prospecting' | 'follow_up' | undefined;
 }
 
 let counter = 0;
@@ -71,14 +98,45 @@ export async function makeStepExecution(
 
   const opportunityId = input.opportunityId ?? (await fixtureOpportunity(session, input));
 
+  // `test/db/migrations.test.ts` seeds this fixture into a database stopped at an
+  // earlier schema, to prove a later migration is correct on production-shaped data. At
+  // schema 24 and below there is no origin column and no permissions table, so the
+  // fixture writes the pre-0025 shape — which is exactly the row that migration turns
+  // into a `cold_legacy` one.
+  const hasOrigin = await tableExists(session, 'follow_up_permissions');
+  const originKind = input.originKind ?? 'follow_up';
+  const permissionId =
+    hasOrigin && originKind === 'follow_up'
+      ? await fixturePermission(session, { ...input, contactId, opportunityId, stepId })
+      : null;
+
   const enrollment = await session.query<{ id: string }>(
-    `INSERT INTO sequence_enrollments
-       (workspace_id, sequence_version_id, opportunity_id, firm_id, contact_id,
-        assigned_user_id, firm_time_zone, holiday_calendar_version)
-     VALUES ($1, (SELECT sequence_version_id FROM sequence_steps
-                   WHERE workspace_id = $1 AND id = $2), $3, $4, $5, $6, $7, 'none.1')
-     RETURNING id`,
-    [input.workspaceId, stepId, opportunityId, input.firmId, contactId, input.userId, zone],
+    hasOrigin
+      ? `INSERT INTO sequence_enrollments
+           (workspace_id, sequence_version_id, opportunity_id, firm_id, contact_id,
+            assigned_user_id, firm_time_zone, holiday_calendar_version, origin_kind, permission_id)
+         VALUES ($1, (SELECT sequence_version_id FROM sequence_steps
+                       WHERE workspace_id = $1 AND id = $2), $3, $4, $5, $6, $7, 'none.1', $8, $9)
+         RETURNING id`
+      : `INSERT INTO sequence_enrollments
+           (workspace_id, sequence_version_id, opportunity_id, firm_id, contact_id,
+            assigned_user_id, firm_time_zone, holiday_calendar_version)
+         VALUES ($1, (SELECT sequence_version_id FROM sequence_steps
+                       WHERE workspace_id = $1 AND id = $2), $3, $4, $5, $6, $7, 'none.1')
+         RETURNING id`,
+    hasOrigin
+      ? [
+          input.workspaceId,
+          stepId,
+          opportunityId,
+          input.firmId,
+          contactId,
+          input.userId,
+          zone,
+          originKind,
+          permissionId,
+        ]
+      : [input.workspaceId, stepId, opportunityId, input.firmId, contactId, input.userId, zone],
   );
   const enrollmentId = enrollment.rows[0]?.id ?? '';
 
@@ -92,6 +150,53 @@ export async function makeStepExecution(
     [input.workspaceId, input.id ?? null, enrollmentId, stepId, input.firmId, contactId, zone],
   );
   return execution.rows[0]?.id ?? '';
+}
+
+/** Whether this database has reached the migration that creates `name`. */
+async function tableExists(session: SessionQueryable, name: string): Promise<boolean> {
+  const { rows } = await session.query<{ present: boolean }>(
+    'SELECT to_regclass($1) IS NOT NULL AS present',
+    [name],
+  );
+  return rows[0]?.present === true;
+}
+
+/**
+ * The permission a `follow_up` fixture enrollment rests on, and the call it rests on.
+ *
+ * The call log is the evidence `verifyFollowUpPermission` re-reads: same firm, same
+ * person, outcome `interested`. `step_effect` is `none` because no step was applied by
+ * it; `occurred_at` is a second in the past so `call_logs_recorded_not_before_occurred`
+ * holds however fast the clock is read.
+ */
+async function fixturePermission(
+  session: SessionQueryable,
+  input: StepExecutionFixtureInput & {
+    readonly contactId: string;
+    readonly opportunityId: string;
+    readonly stepId: string;
+  },
+): Promise<string> {
+  const call = await session.query<{ id: string }>(
+    `INSERT INTO call_logs
+       (workspace_id, firm_id, contact_id, opportunity_id, outcome, step_effect, occurred_at, actor_user_id)
+     VALUES ($1, $2, $3, $4, 'interested', 'none', now() - interval '1 second', $5)
+     RETURNING id`,
+    [input.workspaceId, input.firmId, input.contactId, input.opportunityId, input.userId],
+  );
+  const granted = await session.query<{ id: string }>(
+    `INSERT INTO follow_up_permissions
+       (workspace_id, firm_id, contact_id, kind, scope, call_log_id, sequence_id, expires_at,
+        granted_by_user_id, note)
+     VALUES ($1, $2, $3, 'conversation', 'agreed_sequence', $4,
+             (SELECT v.sequence_id FROM sequence_steps s
+                JOIN sequence_versions v ON v.workspace_id = s.workspace_id AND v.id = s.sequence_version_id
+               WHERE s.workspace_id = $1 AND s.id = $5),
+             now() + interval '365 days', $6, 'a fixture follow-up agreed on the call')
+     RETURNING id`,
+    [input.workspaceId, input.firmId, input.contactId, call.rows[0]?.id ?? '', input.stepId, input.userId],
+  );
+  return granted.rows[0]?.id ?? '';
 }
 
 /** An open opportunity on the workspace's first pipeline stage, for a firm without one. */

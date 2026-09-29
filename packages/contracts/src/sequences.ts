@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { enrollmentOriginKindSchema } from './followUps.ts';
 import { ianaTimeZone, instant, sha256Hex, uuid } from './foundationRows.ts';
 
 /**
@@ -218,6 +219,13 @@ export const enrollmentDtoSchema = z.object({
    * parses the enrollment row strictly and would throw on its absence.
    */
   reviewUnionMilliseconds: z.null(),
+  /**
+   * Migration 0025. `cold_legacy` on every enrollment that existed before it, and the
+   * fail-closed default for anything that forgets to say. Additive on the wire: these
+   * objects strip rather than refuse an unknown key, so an older Mac ignores both.
+   */
+  originKind: enrollmentOriginKindSchema,
+  permissionId: uuid.nullable(),
 });
 export type EnrollmentDto = z.infer<typeof enrollmentDtoSchema>;
 

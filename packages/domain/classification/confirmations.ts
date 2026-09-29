@@ -8,6 +8,7 @@ import { listMatches } from '../mail/matching.ts';
 import { readMessage } from '../mail/messages.ts';
 import { recordDaySignal } from '../outbound/ramp.ts';
 import { releaseHoldsOfEvent } from '../policy/holds.ts';
+import { grantFollowUpPermission } from '../sequences/followUpPermissions.ts';
 import { applyManualModeStop } from '../sequences/terminalStops.ts';
 import { recordSuppression } from '../suppression/events.ts';
 import type { SuppressionJournal } from '../suppression/journal.ts';
@@ -149,6 +150,17 @@ export interface ConfirmReplyDispositionInput {
    */
   readonly firmWideOptOut?: boolean | undefined;
   readonly note?: string | undefined;
+  /**
+   * Whether to grant a follow-up permission for this reply (migration 0025).
+   *
+   * David, 29 September 2026: an inbound question "permits a contextual reply". So a
+   * confirmed `interested` or `follow_up_later` grants one by default — kind `request`,
+   * scope `contextual_reply`, evidence this very message, granted by the confirming
+   * person — and `false` is the person saying "no follow-up". Any other disposition
+   * grants nothing whatever this says: `not_interested` and `opt_out` are refusals, and
+   * a permission from one would be absurd.
+   */
+  readonly grantFollowUp?: boolean | undefined;
   /** 10.2's object-locked journal. Every suppression is written to it before its row. */
   readonly journal: SuppressionJournal;
 }
@@ -158,6 +170,13 @@ export interface ConfirmReplyDispositionOutcome {
   /** 9.1: "Not interested — ... suggest Lost; salesperson confirms closure." */
   readonly suggestsLost: boolean;
   readonly releasedHoldIds: readonly string[];
+  /**
+   * The permission this confirmation granted, if it granted one (migration 0025). Null
+   * when the disposition permits nothing, when the person declined, or when the
+   * message's match names no contact — a permission is a *person's*, and there is
+   * nobody to name.
+   */
+  readonly followUpPermissionId: string | null;
 }
 
 export async function confirmReplyDisposition(
@@ -320,6 +339,31 @@ export async function confirmReplyDisposition(
     consequences.push('callback_committed');
   }
 
+  // The follow-up this reply permits (migration 0025). After manual mode and the stop,
+  // and before the confirmation row, so a refusal of the grant rolls the whole command
+  // back rather than leaving a confirmed reply with a half-written permission.
+  //
+  // Scope `contextual_reply`: "an inbound question permits a contextual reply", which is
+  // one reply and not a sequence — `verifyFollowUpPermission` refuses a multi-step
+  // enrollment on it. The evidence is this message, and the *match* to the firm is what
+  // the step re-reads, so a merge that re-points the match withdraws the permission
+  // without anybody having to remember to.
+  let followUpPermissionId: string | null = null;
+  const permitsFollowUp = input.disposition === 'interested' || input.disposition === 'follow_up_later';
+  if (permitsFollowUp && input.grantFollowUp !== false && chosen.contactId !== null) {
+    const granted = await grantFollowUpPermission(context, {
+      firmId: chosen.firmId,
+      contactId: chosen.contactId,
+      kind: 'request',
+      scope: 'contextual_reply',
+      mailMessageId: input.messageId,
+      grantedByUserId: actor.userId,
+      note: `confirmed reply disposition: ${input.disposition}`,
+    });
+    if (!granted.ok) return refuseClassification('invalid_input');
+    followUpPermissionId = granted.value.id;
+  }
+
   // Only the holds this message opened, and only its own reason codes. A pause, a
   // mailbox hold or a suppression review on the same opportunity keeps its hold.
   const released = [
@@ -374,6 +418,7 @@ export async function confirmReplyDisposition(
       confidence: model?.confidence ?? null,
       consequences,
       suppressionEventId: suppressionRecorded,
+      followUpPermissionId,
     },
   });
 
@@ -382,6 +427,7 @@ export async function confirmReplyDisposition(
     // Suggest, never do. The close is `changeStage`, and it is a separate click.
     suggestsLost: input.disposition === 'not_interested' || input.disposition === 'opt_out',
     releasedHoldIds: released.map(hold => hold.id),
+    followUpPermissionId,
   });
 }
 

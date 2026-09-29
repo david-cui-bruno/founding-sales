@@ -13,7 +13,8 @@ import {
   type SequenceStepRow,
   type SequenceVersionRow,
 } from './types.ts';
-import type { EnrollmentEndReason } from '@fss/contracts';
+import type { EnrollableOriginKind, EnrollmentEndReason } from '@fss/contracts';
+import { verifyFollowUpPermission } from './followUpPermissions.ts';
 
 /**
  * Enrollment, and the terminal stop (specification 11.2, 7.3, 8.1, Appendix A).
@@ -36,6 +37,14 @@ import type { EnrollmentEndReason } from '@fss/contracts';
  */
 
 export interface EnrollContactInput {
+  /**
+   * What this enrollment is for (migration 0025). Required, and never defaulted: the
+   * column's DEFAULT is `cold_legacy`, which is history, and a command that inherited
+   * it would be a command creating an enrollment nothing will ever send.
+   */
+  readonly originKind: EnrollableOriginKind;
+  /** The permission a `follow_up` enrollment rests on. Required for it, refused otherwise. */
+  readonly permissionId?: string | undefined;
   readonly sequenceVersionId: string;
   readonly opportunityId: string;
   readonly firmId: string;
@@ -121,6 +130,41 @@ export async function enrollContact(
   const live = await listEnrollments(context, { contactId: input.contactId, liveOnly: true });
   if (live.length > 0) return refuseSequence('contact_already_enrolled');
 
+  // ------------------------------------------------------- the origin, and its evidence
+  //
+  // David, 29 September 2026, item 2: "Enforce the rule at enrollment and immediately
+  // before sending." This is the enrollment half, and it is correct under concurrent
+  // workers because the firm row above was locked `FOR UPDATE` before it was read: a
+  // second command for another contact at the same firm waits here and then reads what
+  // the first committed. The send half is `firmExclusivitySource`, which takes the same
+  // lock in the same order, for the rows that already exist.
+  //
+  // Prospecting only. "This restriction applies to prospecting; it must not prevent
+  // ordinary customer conversations involving multiple people."
+  if (input.originKind === 'prospecting') {
+    if (input.permissionId !== undefined) return refuseSequence('invalid_input');
+    const atFirm = await listEnrollments(context, { firmId: input.firmId, liveOnly: true });
+    if (atFirm.some(enrollment => enrollment.originKind === 'prospecting')) {
+      return refuseSequence('firm_already_enrolled');
+    }
+  } else {
+    const permissionId = input.permissionId;
+    if (permissionId === undefined) return refuseSequence('invalid_input');
+    const { rows: clockNow } = await context.db.query<{ now: Date }>('SELECT now() AS now');
+    const verdict = await verifyFollowUpPermission(context, permissionId, {
+      firmId: input.firmId,
+      contactId: input.contactId,
+      now: (clockNow[0]?.now ?? new Date()).toISOString(),
+      sequenceId: version.sequenceId,
+      stepCount: version.steps.length,
+    });
+    // The refusal a person reads is the same sentence the step would have held under.
+    // A `single_email` or `contextual_reply` permission cannot carry a multi-step
+    // version: `verifyFollowUpPermission` counts the steps and refuses
+    // `follow_up_scope_exhausted`, which is 'that permission does not buy this plan'.
+    if (!verdict.ok) return refuseSequence('follow_up_not_permitted');
+  }
+
   const calendar = await currentHolidayCalendar(context);
   const { rows: clock } = await context.db.query<{ now: Date }>('SELECT now() AS now');
   const startedAt = (clock[0]?.now ?? new Date()).toISOString();
@@ -137,8 +181,8 @@ export async function enrollContact(
     `WITH enrolled AS (
        INSERT INTO sequence_enrollments
          (workspace_id, sequence_version_id, opportunity_id, firm_id, contact_id, assigned_user_id,
-          started_at, firm_time_zone, holiday_calendar_version)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz, $8, $9)
+          started_at, firm_time_zone, holiday_calendar_version, origin_kind, permission_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz, $8, $9, $16, $17)
        RETURNING id
      ), executed AS (
        INSERT INTO step_executions
@@ -166,6 +210,8 @@ export async function enrollContact(
       due.dueAt,
       due.sourceZone,
       due.ruleVersion,
+      input.originKind,
+      input.permissionId ?? null,
     ],
   );
   const created = rows[0];

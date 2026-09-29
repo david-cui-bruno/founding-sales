@@ -119,6 +119,7 @@ async function enrolledProspect(workspace: Slug): Promise<Prospect> {
   );
   const enrolled = await enrollContact(salesperson(workspace), {
     sequenceVersionId: sequences[workspace].publishedVersionId,
+    originKind: 'prospecting' as const,
     opportunityId,
     firmId,
     contactId,

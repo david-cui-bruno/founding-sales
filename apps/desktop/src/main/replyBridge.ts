@@ -243,6 +243,13 @@ export function createReplyBridge(deps: ReplyBridgeDeps): ReplyBridgeHost {
           ...(callback === undefined ? {} : { callback }),
           ...(input.disposition === 'opt_out' ? { firmWideOptOut: input.firmWideOptOut } : {}),
           ...(input.note === '' ? {} : { note: input.note }),
+          // Migration 0025. Sent only for the two dispositions that permit a follow-up,
+          // and only when the person turned it off: the server's own default is to grant
+          // one, so silence means "yes" on both sides.
+          ...((input.disposition === 'interested' || input.disposition === 'follow_up_later') &&
+          !input.grantFollowUp
+            ? { grantFollowUp: false }
+            : {}),
         },
         value => confirmReplyResultSchema.parse(value),
       );

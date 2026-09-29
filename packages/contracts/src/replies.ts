@@ -195,5 +195,11 @@ export const confirmReplyResultSchema = z.object({
   /** 9.1: a suggestion, and it stays one. Closing is a separate, deliberate command. */
   suggestsLost: z.boolean(),
   releasedHoldIds: z.array(uuid),
+  /**
+   * The follow-up permission this confirmation granted (migration 0025), or null when
+   * the disposition permits nothing, the person declined, or the message's match names
+   * no contact — a permission is a person's, and then there is nobody to name.
+   */
+  followUpPermissionId: uuid.nullable(),
 });
 export type ConfirmReplyResult = z.infer<typeof confirmReplyResultSchema>;

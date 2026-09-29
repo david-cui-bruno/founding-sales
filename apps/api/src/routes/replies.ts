@@ -81,6 +81,12 @@ const confirmReplyCommandSchema = z
       .optional(),
     firmWideOptOut: z.boolean().optional(),
     note: z.string().trim().min(1).max(2000).optional(),
+    /**
+     * Migration 0025. Absent means "grant it", because David's rule is that an inbound
+     * question permits a contextual reply; `false` is the person declining, and the
+     * command ignores it for every disposition that permits nothing.
+     */
+    grantFollowUp: z.boolean().optional(),
   })
   .strict();
 
@@ -118,6 +124,7 @@ export async function routeReplies(request: ApiRequest, options: RoutingOptions)
         ...(body.callback === undefined ? {} : { callback: body.callback }),
         ...(body.firmWideOptOut === undefined ? {} : { firmWideOptOut: body.firmWideOptOut }),
         ...(body.note === undefined ? {} : { note: body.note }),
+        ...(body.grantFollowUp === undefined ? {} : { grantFollowUp: body.grantFollowUp }),
         // 10.2: the object-locked journal is written before the suppression row, and
         // the route never chooses whether there is one — `routingOptions` supplies
         // the local no-op when the deployment has no bucket.

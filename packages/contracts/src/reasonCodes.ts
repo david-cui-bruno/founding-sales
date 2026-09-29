@@ -48,6 +48,30 @@ export const HOLD_REASON_CODES = [
   'send_unknown_terminal',
   'long_hold_review',
   'restore_in_progress',
+  /**
+   * Migration 0025, David's send-path decisions of 29 September 2026. Five refusals
+   * the corrected send path needs, and each is a sentence an operator reads on a card:
+   *
+   *   * `cold_legacy` — the enrollment predates evidenced follow-up permissions. Not
+   *     recoverable: nothing clears it, and a later valid request is a *new*
+   *     enrollment with a new permission, never a revival of this one.
+   *   * `follow_up_not_permitted` — no unrevoked permission whose evidence still names
+   *     this firm and this recipient. Recoverable: record the evidence, or grant the
+   *     permission from the flow that should have granted it.
+   *   * `follow_up_expired` — the permission's `expires_at` has passed. Recoverable by
+   *     a fresh request, which is a fresh permission.
+   *   * `follow_up_scope_exhausted` — the one e-mail a `single_email` permission bought
+   *     has left. Not recoverable: there is nothing to clear, only a new permission to
+   *     grant, and a control offering to clear it would be a control offering to send
+   *     the second e-mail David refused.
+   *   * `firm_already_enrolled` — another contact at this firm is already in a live
+   *     prospecting sequence. Recoverable: that enrollment ends and this one proceeds.
+   */
+  'cold_legacy',
+  'follow_up_not_permitted',
+  'follow_up_expired',
+  'follow_up_scope_exhausted',
+  'firm_already_enrolled',
 ] as const;
 
 export const holdReasonCodeSchema = z.enum(HOLD_REASON_CODES);
@@ -74,6 +98,9 @@ const RECOVERABLE_HOLD_REASON_CODES: ReadonlySet<HoldReasonCode> = new Set([
   'provider_refusal',
   'send_unknown_terminal',
   'long_hold_review',
+  'follow_up_not_permitted',
+  'follow_up_expired',
+  'firm_already_enrolled',
 ]);
 
 export function isRecoverableHoldReason(code: HoldReasonCode): boolean {

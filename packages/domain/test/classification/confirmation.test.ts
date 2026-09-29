@@ -312,6 +312,7 @@ describe('the confirmed reply stops the sequence in its own transaction', () => 
     const enroll = async (which: 'alpha' | 'beta'): Promise<string> => {
       const result = await enrollContact(adminContextOf(w, which), {
         sequenceVersionId: sequences[which].publishedVersionId,
+        originKind: 'prospecting' as const,
         opportunityId: w.mail.crm[which].opportunityId,
         firmId: w.mail.crm[which].firmId,
         contactId: w.mail.crm[which].contactId,

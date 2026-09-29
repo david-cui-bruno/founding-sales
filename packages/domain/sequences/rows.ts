@@ -1,4 +1,4 @@
-import type { HoldReasonCode } from '@fss/contracts';
+import type { EnrollmentOriginKind, HoldReasonCode } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import type { EnrollmentRow, SequenceStepRow, SequenceVersionRow, StepExecutionRow } from './types.ts';
 import {
@@ -137,7 +137,8 @@ export async function listSequenceVersions(
 }
 
 const ENROLLMENT_COLUMNS = `id, sequence_version_id, opportunity_id, firm_id, contact_id, assigned_user_id,
-  state, started_at, ended_at, end_reason, firm_time_zone, holiday_calendar_version`;
+  state, started_at, ended_at, end_reason, firm_time_zone, holiday_calendar_version,
+  origin_kind, permission_id`;
 
 interface EnrollmentDbRow {
   readonly id: string;
@@ -152,6 +153,9 @@ interface EnrollmentDbRow {
   readonly end_reason: string | null;
   readonly firm_time_zone: string;
   readonly holiday_calendar_version: string;
+  /** Migration 0025. `cold_legacy` on every row written before it. */
+  readonly origin_kind: EnrollmentOriginKind;
+  readonly permission_id: string | null;
   readonly [column: string]: unknown;
 }
 
@@ -169,6 +173,8 @@ export function toEnrollment(row: EnrollmentDbRow): EnrollmentRow {
     endReason: known<EnrollmentEndReason>(ENROLLMENT_END_REASONS, row.end_reason),
     firmTimeZone: row.firm_time_zone,
     holidayCalendarVersion: row.holiday_calendar_version,
+    originKind: row.origin_kind,
+    permissionId: row.permission_id,
     // A constant, not a column. Migration 0021 made `review_union_milliseconds`
     // null-only with the `review_required` state it belonged to; the field stays on the
     // wire because desktop 1.0.14 parses the enrollment row strictly.

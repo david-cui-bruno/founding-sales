@@ -183,6 +183,18 @@ export const TABLE_RETENTION_COVERAGE: Readonly<Record<string, TableCoverage>> =
   firm_facts: coverage(['deletion_removes'], 'Quotes from the firm’s own pages; removed with the firm.'),
   firm_judgments: coverage(['deletion_removes'], 'The firm’s current judgment and the contact it points at; removed with the firm.'),
   firm_links: coverage(['deletion_removes'], 'Pages a person added for this firm; removed with the firm.'),
+
+  // ------------------------------------------ follow-up permissions (0025)
+  // Why a firm’s deletion removes these rather than keeping them as history: a
+  // permission is a pointer at one person’s call log or one inbound e-mail, both of
+  // which a deletion removes, and its foreign keys onto them are what stop the evidence
+  // being deleted from under it. A permission whose evidence has gone is exactly the
+  // row `followUpPermissionSource` refuses anyway, so keeping it would preserve nothing
+  // and block the deletion.
+  follow_up_permissions: coverage(
+    ['deletion_removes'],
+    'Why Callie might write to one person at this firm, and the event it rests on; removed with the firm.',
+  ),
 });
 
 /** Tables the coverage registry deliberately does not classify. */

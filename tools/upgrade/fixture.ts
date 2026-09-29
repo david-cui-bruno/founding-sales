@@ -963,6 +963,7 @@ function enrollmentPart(asSalesperson: () => RepositoryContext, state: State): P
         const outcome = value(
           await enrollContact(asSalesperson(), {
             sequenceVersionId: versionId,
+            originKind: 'prospecting' as const,
             opportunityId,
             firmId,
             contactId,

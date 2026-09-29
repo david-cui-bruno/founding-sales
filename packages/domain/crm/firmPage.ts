@@ -1,5 +1,6 @@
-import { knownBlockedActionKinds } from '@fss/contracts';
+import { knownBlockedActionKinds, type FollowUpPermissionDto } from '@fss/contracts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
+import { followUpPermissionDto, listFollowUpPermissions } from '../sequences/followUpPermissions.ts';
 import type { FirmReadDto } from './dto.ts';
 import { readFirmForActor } from './dto.ts';
 import { accept, type CrmResult } from './types.ts';
@@ -64,6 +65,7 @@ export type FirmPageDto =
       readonly opportunity: OpportunitySummaryDto | null;
       readonly stageHistory: readonly StageEventDto[];
       readonly holds: readonly FirmHoldDto[];
+      readonly followUpPermissions: readonly FollowUpPermissionDto[];
     };
 
 interface StageEventRow {
@@ -178,5 +180,10 @@ export async function readFirmPage(
       startedAt: hold.started_at.toISOString(),
       recoveryAction: hold.recovery_action,
     })),
+    // Migration 0025. Read after the holds because it is the same kind of fact: what
+    // the automation may and may not do about this firm, and on whose authority.
+    followUpPermissions: (await listFollowUpPermissions(context, { firmId: input.firmId })).map(
+      followUpPermissionDto,
+    ),
   });
 }

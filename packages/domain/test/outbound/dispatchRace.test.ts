@@ -206,8 +206,15 @@ describe('Appendix G 3: a reply commits while the dispatch is between its read a
     expect(refreshes).toBe(1);
     expect(report.outcome).toBe('held');
     expect(report.refusal).toBe('step_ineligible');
-    // Control mode is asked before the enrollment, so manual mode is the reason named.
-    expect(report.detail ?? '').toMatch(/^opportunity_manual/);
+    // The reason named changed with migration 0025, and the change is the property
+    // David asked for. The fixture's enrollment is a `follow_up` on a permission
+    // (`makeStepExecution`), and a manual mode whose origin is a prospect SIGNAL —
+    // `human_reply` here — no longer blocks an evidenced follow-up: "use separate
+    // follow-up automation to resolve the current 'reply means manual forever'
+    // behavior". What still stops this send is the other half of the same reply, the
+    // terminal stop, which ended the enrollment in the same transaction. Nothing leaves
+    // either way, which is what this scenario is about.
+    expect(report.detail ?? '').toMatch(/^scoped_pause:enrollment_ended/);
     expect(sends).toBe(0);
   });
 

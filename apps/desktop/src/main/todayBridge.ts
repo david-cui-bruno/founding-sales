@@ -504,6 +504,13 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
           ...(input.outcome === 'do_not_call'
             ? { doNotCallCoversAllContact: input.doNotCallCoversAllContact }
             : {}),
+          // The agreed follow-up (migration 0025). Sent only for `interested`, which
+          // is the only outcome the server grants one on: another outcome would be
+          // refused, and refusing a whole call log because of a stale field in the
+          // form would lose the outcome itself.
+          ...(input.followUpPermission !== null && input.outcome === 'interested'
+            ? { followUpPermission: input.followUpPermission }
+            : {}),
         },
         value => {
           const parsed = loggedCallResultSchema.safeParse(value);

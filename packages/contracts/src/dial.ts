@@ -480,6 +480,17 @@ export const logCallOutcomeCommandSchema = z.strictObject({
     .optional(),
   /** `do_not_call` suppresses the firm only when the request covered all Callie contact (9.1). */
   doNotCallCoversAllContact: z.boolean().optional(),
+  /**
+   * The follow-up the salesperson agreed to on this call (migration 0025). Permitted
+   * only for `interested`: "Call me Tuesday" is the `callback` above and grants no
+   * e-mail permission, which is David's own distinction of 29 September 2026.
+   */
+  followUpPermission: z
+    .discriminatedUnion('scope', [
+      z.strictObject({ scope: z.literal('single_email') }),
+      z.strictObject({ scope: z.literal('agreed_sequence'), sequenceId: uuid }),
+    ])
+    .optional(),
 });
 
 /**
@@ -557,6 +568,8 @@ export const loggedCallResultSchema = z.object({
   successorExecutionId: uuid.nullable(),
   /** The callback this call fulfilled (Appendix A "Callback confirm/complete"). */
   completedCallbackId: uuid.nullable(),
+  /** The follow-up permission this outcome granted, if the salesperson agreed to one (0025). */
+  followUpPermissionId: uuid.nullable(),
   followUps: z.array(callFollowUpSchema),
 });
 export type LoggedCallResult = z.infer<typeof loggedCallResultSchema>;

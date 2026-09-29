@@ -10,6 +10,7 @@ import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { decideFirmMutation } from '../crm/authorization.ts';
 import { loadFirmForUpdate } from '../crm/firms.ts';
 import { readOpenOpportunity, setManualControlMode } from '../crm/pipeline.ts';
+import { grantFollowUpPermission } from '../sequences/followUpPermissions.ts';
 import { retireRoute } from '../crm/routes.ts';
 import { databaseNow } from '../policy/clock.ts';
 import {
@@ -88,6 +89,24 @@ export interface LogCallOutcomeInput {
     | undefined;
   /** `do_not_call` suppresses the firm only when the request covered all Callie contact. */
   readonly doNotCallCoversAllContact?: boolean | undefined;
+  /**
+   * The follow-up the salesperson agreed with the person on this call (migration 0025).
+   *
+   * David, 29 September 2026: *"'Email me an overview' permits that email, not an
+   * automatic multi-week sequence. ... An agreed follow-up sequence can run within its
+   * agreed scope."* So the choice belongs to the salesperson at the moment of recording
+   * the outcome, and there are exactly three answers: one e-mail, a named sequence, or
+   * nothing. Permitted only on `interested`, which is the outcome that means a
+   * conversation happened.
+   *
+   * `callback_requested` is deliberately **not** one of them: "Call me Tuesday" means a
+   * callback task, and this command already creates one. It grants no e-mail permission
+   * of any kind.
+   */
+  readonly followUpPermission?:
+    | { readonly scope: 'single_email' }
+    | { readonly scope: 'agreed_sequence'; readonly sequenceId: string }
+    | undefined;
   readonly commandId?: string | undefined;
   /** Required whenever the outcome may suppress. The journal write precedes the row. */
   readonly journal?: SuppressionJournal | undefined;
@@ -111,6 +130,8 @@ export interface LoggedCall {
   readonly successorExecutionId: string | null;
   /** The callback this call fulfilled (Appendix A "Callback confirm/complete"). */
   readonly completedCallbackId: string | null;
+  /** The follow-up permission this outcome granted, if any (migration 0025). */
+  readonly followUpPermissionId: string | null;
   readonly followUps: readonly CallFollowUp[];
 }
 
@@ -372,6 +393,34 @@ export async function logCallOutcome(
       await completeTodayItemsByKey(context, { firmId: input.firmId, itemKey: boundNeedsTimeKey });
     }
 
+    // The follow-up the salesperson agreed to, inside the savepoint with every other
+    // effect of this call: a permission that survived a rolled-back outcome would be a
+    // permission resting on a conversation the record does not have.
+    //
+    // The evidence is this very call log — the row inserted a few statements above —
+    // and `verifyFollowUpPermission` re-reads it before every step: the log's firm must
+    // still be this firm, and, when the log names a person, still this person.
+    let followUpPermissionId: string | null = null;
+    const agreed = input.followUpPermission;
+    if (agreed !== undefined) {
+      // Only a conversation grants one. A callback request grants the callback above
+      // and nothing else, which is David's own distinction.
+      if (input.outcome !== 'interested') return refusePolicy('invalid_input');
+      if (contactId === undefined) return refusePolicy('invalid_input');
+      const granted = await grantFollowUpPermission(context, {
+        firmId: input.firmId,
+        contactId,
+        kind: agreed.scope === 'agreed_sequence' ? 'agreed_sequence' : 'conversation',
+        scope: agreed.scope,
+        callLogId,
+        ...(agreed.scope === 'agreed_sequence' ? { sequenceId: agreed.sequenceId } : {}),
+        grantedByUserId: actor.userId,
+        note: 'agreed on the call',
+      });
+      if (!granted.ok) return refusePolicy('invalid_input');
+      followUpPermissionId = granted.value.id;
+    }
+
     let callbackId: string | null = null;
     if (confirmedCallback !== null && input.callback !== undefined) {
       const created = await createCallback(context, {
@@ -397,6 +446,7 @@ export async function logCallOutcome(
       retiredRouteId,
       completedCallbackId,
       callbackId,
+      followUpPermissionId,
     });
   });
 
@@ -410,6 +460,7 @@ export async function logCallOutcome(
         retiredRouteId: null,
         completedCallbackId: null,
         callbackId: null,
+        followUpPermissionId: null,
       };
   if (!applied.ok) followUps.push({ kind: 'effects_not_applied', reason: applied.reason });
 
@@ -463,6 +514,7 @@ export async function logCallOutcome(
     stepApplication: outcomes.stepApplication,
     successorExecutionId: outcomes.successorExecutionId,
     completedCallbackId: outcomes.completedCallbackId,
+    followUpPermissionId: outcomes.followUpPermissionId,
     followUps,
   });
 }
@@ -475,6 +527,7 @@ interface AppliedEffects {
   readonly retiredRouteId: string | null;
   readonly completedCallbackId: string | null;
   readonly callbackId: string | null;
+  readonly followUpPermissionId: string | null;
 }
 
 /** A suppression refusal, in this command's vocabulary. The code itself is kept in the audit. */

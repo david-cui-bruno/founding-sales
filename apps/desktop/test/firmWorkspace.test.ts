@@ -64,6 +64,7 @@ function identityPage(assigned: boolean): CrmState['firm'] {
         opportunity: null,
         stageHistory: [],
         holds: [],
+        followUpPermissions: [],
       })
     : firmPageResponseSchema.parse({
         visibility: 'any_active_member',
