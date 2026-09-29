@@ -25,6 +25,13 @@ export default defineConfig({
   test: {
     pool: 'forks',
     include: ['test/ops/**/*.check.ts'],
-    testTimeout: 30_000,
+    // These checks drive real shell scripts against stub CLIs: hundreds of processes per
+    // test, so their wall time is set by how many files the runner has in flight, not by
+    // the work itself. Under Vitest 2 the slowest already reported over thirty seconds and
+    // passed; Vitest 5 schedules more of the sixteen files at once, and six of them went
+    // past the limit while each still passed every assertion (`scenario39.check.ts` alone:
+    // 28/28 in 95s, against 228s for the same file inside the full run). The timeout here
+    // is a stop for a hung script, not a budget for a slow one.
+    testTimeout: 120_000,
   },
 });
