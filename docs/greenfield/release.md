@@ -97,7 +97,7 @@ When *Greenfield images* publishes the images of a push to main, *Greenfield dep
 - a migration;
 - `packages/domain/db/schemaRange.ts`, `migrationRunner.ts` or `queryable.ts` — the schema acceptance rule and the migration runner, with what they read (lane A1). `check` compares the declared ranges, so a change to how a version is accepted would otherwise pass unseen;
 - `scripts/productionSmoke.mjs` or another release script;
-- `.github/**`;
+- `.github/workflows/**`. `.github/dependabot.yml` is not protected: it only opens update pull requests and cannot change what CI runs;
 - a path the list does not know.
 
 It also answers `manual` when a running image carries no commit tag, or when production's commit is not behind the images commit.

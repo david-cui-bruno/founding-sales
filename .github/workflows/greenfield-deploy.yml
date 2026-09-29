@@ -221,12 +221,12 @@ jobs:
               packages/domain/db/schemaRange.ts) why='the schema acceptance rule' ;;
               packages/domain/db/migrationRunner.ts) why='the migration runner, which schema acceptance reads the version through' ;;
               packages/domain/db/queryable.ts) why='the session helpers the migration runner applies migrations with' ;;
-              .github/*) why='a workflow' ;;
+              .github/workflows/*) why='a workflow' ;;
               scripts/productionSmoke.mjs) why='the production smoke this deploy is judged by' ;;
               scripts/*[Rr]elease*) why='a release script' ;;
               apps/* | packages/* | scripts/* | docs/* | test/* | tests/*) why='' ;;
               Dockerfile.api | Dockerfile.worker | Dockerfile.api.dockerignore | Dockerfile.worker.dockerignore) why='' ;;
-              package.json | package-lock.json | certs/*) why='' ;;
+              package.json | package-lock.json | certs/* | .github/dependabot.yml) why='' ;; # dependabot only opens update PRs
               tsconfig*.json | eslint*.mjs | README.md) why='' ;;
               *) why='not an application path this deploy knows' ;;
             esac
