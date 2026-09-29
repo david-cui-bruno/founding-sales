@@ -143,7 +143,21 @@ export function classifierUserText(input: ClassifierInput): string {
 export interface ClassifierRequest {
   readonly model: string;
   readonly max_tokens: number;
-  readonly system: readonly { readonly type: 'text'; readonly text: string; readonly cache_control: { readonly type: 'ephemeral' } }[];
+  /**
+   * `cache_control` is optional on the block, not on the classifier's own request.
+   *
+   * The classifier always sets it — `buildRequest` below does, and the adapter test
+   * asserts the whole request byte for byte, so that has not loosened. It is optional
+   * because research's extraction (`apps/worker/src/research/anthropicExtraction.ts`)
+   * shares this transport and deliberately sends no breakpoint: its message is a
+   * different firm's pages every run, so a cached prefix would be a 1.25× write charge
+   * against a prefix nothing reuses.
+   */
+  readonly system: readonly {
+    readonly type: 'text';
+    readonly text: string;
+    readonly cache_control?: { readonly type: 'ephemeral' } | undefined;
+  }[];
   readonly messages: readonly { readonly role: 'user'; readonly content: string }[];
   readonly output_config: {
     readonly effort?: ClassifierEffort;

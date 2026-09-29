@@ -32,6 +32,8 @@ export const JOB_KINDS = [
   'outbound.close_send_day',
   'canary',
   'route.validate',
+  'research.firm',
+  'research.sweep',
 ] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 
@@ -91,7 +93,26 @@ export const JOB_KIND_PROTECTION: Readonly<Record<JobKind, IdempotencyProtection
   // moved on and writes nothing. That is business uniqueness in the same sense as
   // `sequence.terminal_stop` above. See docs/decisions/g90-email-technical-validation.md.
   'route.validate': 'business_uniqueness',
+  // Appendix C's `research-firm:{firm}:{revision}` and its "firm/evidence revision".
+  // The run row is unique on `(workspace, firm, revision)` and the handler's first
+  // write is that insert, so a second claim finds the row it already opened and
+  // fetches nothing. See `packages/domain/research/runs.ts`.
+  'research.firm': 'business_uniqueness',
+  // One sweep per workspace per business date. The key carries the date and the
+  // sweep's own effect is enqueueing, which is itself unique on the run's revision,
+  // so a sweep that ran twice materializes the same jobs rather than twice as many.
+  'research.sweep': 'business_uniqueness',
 });
+
+/**
+ * The fixed half of a `research.firm` job key.
+ *
+ * Exported because `research/runs.ts` rebuilds the key **in SQL**, to join a run row to
+ * its job and leave a run whose lease is still live alone. A literal there would be a
+ * second copy of this format that nothing compared; `test/research/rules.test.ts`
+ * compares the prefix with `jobIdempotencyKey.researchFirm`.
+ */
+export const RESEARCH_FIRM_JOB_KEY_PREFIX = 'research-firm:';
 
 /** Appendix C, second column. Each builder produces the whole key, dotted prefix and all. */
 export const jobIdempotencyKey = Object.freeze({
@@ -137,6 +158,12 @@ export const jobIdempotencyKey = Object.freeze({
    */
   routeValidate: (routeId: string, version: number, round: string): string =>
     `route-validate:${routeId}:${String(version)}:${round}`,
+  /** Appendix C: `research-firm:{firm}:{revision}`. The revision is the job's identity. */
+  researchFirm: (firmId: string, revision: number): string =>
+    `${RESEARCH_FIRM_JOB_KEY_PREFIX}${firmId}:${String(revision)}`,
+  /** One sweep per workspace business date, like the Today build's key rule. */
+  researchSweep: (workspaceSlug: string, businessDate: string): string =>
+    `research-sweep:${workspaceSlug}:${businessDate}`,
 });
 
 /** Fifteen minutes in milliseconds; the canary's period (13.3). */
@@ -190,6 +217,10 @@ export const JOB_KIND_CLASS: Readonly<Record<JobKind, JobClass>> = Object.freeze
   'sequence.terminal_stop': 'bulk',
   'route.validate': 'bulk',
   'retention.batch': 'bulk',
+  // Nobody is waiting on a page fetch: the brief is read the next morning, and an
+  // import of two hundred firms is two hundred of these.
+  'research.firm': 'bulk',
+  'research.sweep': 'bulk',
 });
 
 /** The lane a kind runs in, or `undefined` for a kind no table row classifies. */

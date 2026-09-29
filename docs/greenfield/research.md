@@ -1,0 +1,626 @@
+# Research: firm facts with sources, four judgments, a call brief
+
+Design record `.context/DECISION-20260928-crm-design.md` ("Research"), plan
+`.context/PLAN-20260928-crm-v1.md` §3 "R", and David's answers 5 and 8: read-only
+lookups of the firm's own site, a budget of $20–30 a month with calls ahead of
+everything else.
+
+The old research feature was deleted on 26 September 2026 (commit `59b3e1bb`) and
+migration 0019 dropped its eight tables. It had no live adapter, no scheduler source
+and no caller on the Mac. This is the smaller thing that replaces it: read the firm's
+own website, record what it published as evidence, keep four judgments apart, and
+price every model call in cents before it is made.
+
+## The rules, in the design record's words
+
+* **Every fact shows its source, its retrieval date and its uncertainty.** A fact row
+  points at the `evidence_items` row that recorded the page; the quote is the whole
+  text of a block from that page; `retrieved_at` is when it was read.
+* **Four judgments, kept separate**: fit, evidence of a relevant problem, timing,
+  ability to reach someone. They fail separately, so they are stored separately.
+* **No judgment claims budget or intent.** "A portal link can support a software
+  inference; a maintenance job posting can suggest an opportunity for discussion.
+  Neither proves budget or buying intent." There is no column, no key and no judgment
+  for either, deliberately.
+* **The brief distinguishes the firm's own words from an AI interpretation.** A quote
+  carries its source; the two questions and the opening line are written by a model,
+  stored under `generated: true`, and labelled "AI suggestion" on the card.
+* **Research never initiates outreach.** It creates no contact, no route and no
+  opportunity, and it never touches a suppressed or merged firm.
+
+### Sources, in v1
+
+The firm's own website — home, about, services, careers, jobs, team and contact pages
+on the same host — the firm's own public job page when it is on that host, links David
+adds by hand, and the CSV import or the Add-firm form as the discovery input.
+
+The path order above is the order they are read in, and it is load-bearing, because
+`max_pages_per_firm` is a prefix of the list and its default is four. Careers comes
+before team and contact because a maintenance job posting is the only evidence
+`hiring_maintenance` has, and that one key feeds two of the four judgments — problem
+evidence and timing. With careers fifth, the default settings would never fetch it and
+two judgments would read `unknown` on every firm for a reason nobody could see.
+
+**A firm's own navigation beats that list.** Real sites call these pages `/about-us`,
+`/our-team`, `/contact-us`, `/services/` and `/join-our-team`, and on one of those an
+exact-path allow-list reads the homepage and nothing else. So after the homepage is
+read, its own anchors are scanned — a small lexical `<a href>` pass in `pageText.ts`,
+no HTML dependency — the same-site ones are normalised (absolute, https, no query, no
+fragment, no trailing slash), at most twenty are kept, and the ones whose path matches
+`about|service|team|staff|contact|career|job|hiring` are queued behind the fixed list.
+Each one still goes through the permission rule, a fresh resolution with every address
+checked, that host's robots and the byte cap, and they are fetched only while the
+`max_pages_per_firm` budget has room — so in practice they spend the budget a `404` on
+a guessed path freed. A link off the firm's site, or to a blocked host, is not queued at
+all, and `mailto:`, `tel:` and `javascript:` hrefs are not URLs research reads.
+
+Deliberately **not** here: LinkedIn and every social host, any paid enrichment
+provider, any directory or job aggregator, and any Places query. Places is deferred and
+David-held. A listing is somebody else's database about the firm, so a quote from one
+could not be shown as the firm's own words even if the terms allowed reading it — which
+is the same sentence that makes the firm's own careers page the only job source there
+is.
+
+## The tables (migration 0023)
+
+| Table | What it holds |
+|---|---|
+| `research_settings` | One row per workspace. **An absent row is the defaults**, not "off". |
+| `research_runs` | One run of one firm at one revision. Unique on `(workspace, firm, revision)`. |
+| `firm_facts` | One admitted selection: a key, the evidence item, the block id, and the block's whole text as the quote. |
+| `firm_judgments` | The **current** judgment, keyed by the firm and replaced by each completed run. |
+| `firm_links` | The https pages a person added by hand. `added_by_user_id` is NOT NULL. |
+| `provider_ledger` | Calls, failures and cents per provider per workspace business date. Generic: lanes C and D reuse it. |
+| `provider_reservations` | One row per **paid attempt**: what it authorized, which business date it belongs to, and how it settled. Generic on `(subject_kind, subject_id)`: lanes C and D reuse it too. |
+
+Migration 0023 is additive and **refuses on nothing**, so it has no
+`fss admin schema-preflight` command and the release skips step 3. It also carries one
+`CREATE OR REPLACE` of `today_algorithm_version()`, because lane 4's order changed.
+
+Neither `provider_ledger` nor `provider_reservations` is `research_*` on purpose. Telephony (lane C) and
+calendar (lane D) each need "what did this provider cost today, and what failed", and
+three tables with the same five columns would be three places to get the business date
+wrong. The date is derived in the workspace's zone and stored beside the zone that
+produced it, exactly as `daily_counters` does.
+
+## One run, step by step
+
+1. **Is the firm researchable** — active, not merged, no active firm-wide
+   do-not-contact (`firmState.ts`). Asked *before* any clearance, so a refusal here
+   does not spend a unit of the day's budget. A refusal is still recorded as a run row:
+   "research is disabled" and "research has never looked at this firm" are different
+   facts and the runs list is where a person finds out which.
+2. **Open the run** (`runs.ts`). The insert *is* the idempotency check: a second claim
+   of the same job finds `research_runs_one_per_revision` refuses it and reports
+   `already_recorded` having fetched nothing.
+3. **Claim the clearance** (`ceilings.ts`). Consumed, not reserved.
+4. **Build the URL list** from the firm's website and its links (`sourcePolicy.ts`),
+   and refuse `no_sources` when there is nothing to read.
+5. **Fetch** through the port. Each page is parsed into bounded blocks
+   (`pageText.ts`) and recorded as one `evidence_items` row, idempotent on the content
+   hash — so a page unchanged since the last run is recorded once.
+6. **Extract**, when the port is there: the blocks by id, the key dictionary, and a
+   schema-constrained JSON answer of selections and two generated lines. Every
+   selection goes through `validateFactSelections` before it becomes a `firm_facts`
+   row.
+7. **Judge** (`judgments.ts`), upsert `firm_judgments`, write the generated parts to
+   `research_runs.brief`, record the ledger row, and complete.
+
+Without an extraction port the run records the evidence, sets fit, problem evidence
+and timing to `unknown`, derives reachability from the firm's routes and its
+suppression, and completes. That is a smaller answer, not a failure, and the evidence
+is what a later run's facts will point at.
+
+## The ports, and what they owe
+
+Two seams, both interfaces in `packages/domain/research/providers.ts`, with the live
+adapters in `apps/worker/src/research/`. Nothing under `packages/domain/research`
+imports `node:https`, `node:http`, `node:dns`, `undici` or `fetch`, and
+`test/research/rules.test.ts` reads every file in the directory and fails on one that
+does — which is what makes "no live provider call in the domain" checkable rather than
+claimed.
+
+Four obligations, each one learned the hard way by the build before this one:
+
+* **Resolve the name, check every answer, pin the connection.** A firm's DNS answer is
+  attacker-controlled input. `https.request('https://host/')` resolves inside the
+  socket, so a check made before the request would be checking a different lookup from
+  the one that connects. Every address must pass `isPublicResearchAddress` — *every*
+  one, because a name that also answers with `169.254.169.254` is a name that will one
+  day answer with only that — and the socket connects to the checked address with
+  `servername` and `Host` carrying the name.
+* **Re-check every redirect.** A redirect is a new URL and gets a fresh resolution and
+  a fresh pin. Three hops at most. Otherwise the firm's own server decides where this
+  worker connects. A **same-site** hop inherits the permission of the URL that led to
+  it, whatever its path: a homepage that answers `301` to `/home`, `/en/` or
+  `/index.html` is ordinary, and re-applying the exact-path allow-list there made such
+  a firm yield nothing at all. A **cross-site** hop is blocked unless the target is
+  itself a link a person added — the firm's own server does not get to choose a second
+  site for research to read.
+* **Bound the response in bytes before decoding, and hash the exact bytes read.** The
+  content hash is the evidence item's identity, so it has to be over what was actually
+  read and nothing else. A page over the cap is dropped whole; a half page is text
+  nobody published.
+* **Never let a provider supply a quote.** An extraction returns
+  `{ key, sourceReference, blockId }` and no text field at all, and the quote is looked
+  up locally. A model that paraphrases, trims a qualifier or drops a negation is
+  refused rather than believed.
+
+* **A URL that is fetched is stored, so it may not carry a query string.** A fetched
+  URL becomes an evidence item's `source_reference` and lives as long as the quote does,
+  and a query string is where a session token, a reset code, a signed URL's signature
+  and an e-mail address live — none of which retention can find inside a URL. So
+  `isPublicResearchUrl` refuses one: `addFirmLink` answers `link_not_permitted`
+  (explicitly, because pasting from an address bar is exactly how one would arrive), and
+  a redirect target with a query is skipped `url_has_query`. Fragments are dropped
+  everywhere, because they never reach the server and never name a different page.
+
+### robots.txt
+
+Fetched first, the same pinned way, cached per host **and per checked address** for the
+run, and honoured for `*` and for `CallieResearch`. Four rules:
+
+* **A file that cannot be read completely means the host's pages are not fetched**
+  (`robots_unreadable`). A `500`, a timeout, a file over 64 KB, a redirect off the site:
+  none of those is permission. Only a `404` or a `410` is — the *absence* of the file is
+  the permissive answer in the standard, and the absence is all that is.
+* **A redirected robots is followed**, on the same site only, up to three hops, each
+  with a fresh resolution and pin — and each target goes through `isPublicResearchUrl`
+  like every other request. Without that last part `/robots.txt` was the one URL exempt
+  from the rule, and a firm's own server could have redirected it to
+  `/robots.txt?token=…`: a query string this fetcher refuses everywhere else, because a
+  fetched URL is a stored URL.
+* **One group applies, and it is the most specific one** (RFC 9309 §2.2.1). If the file
+  names `CallieResearch` anywhere, those lines are the whole of what applies and the
+  `*` group is ignored; otherwise the `*` group is. Merging them was wrong in the
+  direction that matters: a site that shuts `*` out and then writes a group for us has
+  told us exactly what we may read, and a union honoured the refusal and threw away the
+  permission.
+* **`*` and `$` mean what the standard says.** `Disallow: /*.pdf$` is a rule about
+  extensions, not a literal prefix that matches nothing.
+* **`Allow` is honoured, longest match wins in octets, and a tie goes to `Allow`.** A
+  site that says `Disallow: /` and then `Allow: /about` has told us exactly which page it
+  wants read.
+* **Percent-encoding is normalised on both sides before matching** (§2.2.2): unreserved
+  octets decoded, the rest upper-cased. `/~joe` and `/%7Ejoe` are one path, and a site
+  that disallowed one of them meant both.
+
+## A run is three committed steps, because the middle of it spends money
+
+`research.firm` is a **chunked** handler (`docs/greenfield/jobs.md`, "Chunked bulk
+work"), and the chunk boundaries are where the money is:
+
+| | What it does | What the runner does with it |
+|---|---|---|
+| **Chunk 1** | `beginFirmResearch`: the firm is researchable, the run row is opened, a unit of the day's count is consumed, and the worst case is **reserved** as a row in `provider_reservations`, state `reserved`. No provider is touched. | Commits it together with the cursor `{ runId, attempt: 1, step: 'reserved', fencing }`. |
+| **Chunk 2** | `ensureResearchCalling`: that reservation moves to `calling`, and **nothing else is written**. A deployment with no extraction port marks nothing and releases the cents here instead. | Commits it together with the cursor `{ runId, attempt, step: 'calling' \| 'uncalled', fencing }`. |
+| **Chunk 3** | `finishFirmResearch`: fetch, count the request exactly, extract, record the evidence, the facts, the judgment, the funnel facts; settle this attempt's reservation by id; close the run. | Commits it as the job's completion. |
+
+Before the split all of it ran in the runner's single job transaction, and that was
+the worst bug this lane had. A lease reclaimed during the extraction — or any database
+error after the paid call — rolled back the run row, the ledger row **and the consumed
+counter**, while the money stayed spent at the provider. The retry then spent it again
+against a budget that had never heard of the first attempt: three attempts, three
+invoices, one visible cent.
+
+Now a rollback of chunk 3 leaves chunks 1 and 2 standing. The next claim resumes from
+the cursor, finds its run row and its reservations, and consumes no second unit of the
+day's count. The month is over-counted by a few cents until the run settles, which is
+the direction in which nothing can be lost.
+
+The middle chunk looks like a chunk that does nothing, and it is the one that makes the
+rest safe: a marker written in the same transaction as the work is rolled back *by* that
+work's failure, and then the call which followed it has no record anywhere.
+
+### Which claim marked it: the fencing token, not the attempt
+
+A reservation found `calling` means one of two things — this claim marked it and is
+about to call, or an earlier claim called and died before recording anything. The rows
+cannot tell those apart, so the cursor carries the **fencing token of the claim that
+wrote it**:
+
+* cursor written by *this* claim → chunk 3, and the reservation this claim marked is the
+  one it spends;
+* cursor written by anybody else → chunk 2, where the open reservation is settled
+  `estimated` (the call may well have been billed) and a **fresh** reservation is opened
+  for this claim. A second call is therefore a second authorization, never a second
+  invoice against the first one.
+
+The job's own `attempt` cannot carry this, and that is worth stating because it is the
+obvious thing to reach for: `requeueDeadJob` sets `attempt_count` back to zero, so a
+requeued claim carries the same number as the claim that died. `fencing_token` is
+incremented by every claim and never reset.
+
+For the same reason the money bound is **not** `maxAttempts`, which a handler option can
+lower and a requeue resets. It is `RESEARCH_FIRM_MAX_RESERVATIONS` — three — counted from
+the durable rows, **per firm per business date across every one of that firm's runs**,
+inside the one clearance every reservation passes through. Counted per run it bounded
+nothing: two revisions of one firm on one day were two runs and six paid calls. Three
+worst cases, nine cents at the defaults, is the most one firm can cost however often it
+is requeued or re-enqueued; the fourth attempt of a run closes it `provider_failure` with
+the sum of its reservations, and a fourth reservation asked for anywhere else is refused
+`over_budget`.
+
+**This is the pattern the next paid call reuses.** `provider_reservations` is generic on
+purpose (`subject_kind`, `subject_id`, `provider_key`), so Twilio's recorded calls add a
+`subject_kind` and inherit the whole arrangement: one row per paid attempt, `readSpend`
+counting the open ones as spent, settlement by id on the reservation's own business date,
+and the three-chunk handler around it.
+
+**`outcome = 'running'` is therefore a normal state**, not a crash — and a row still
+`running` after thirty minutes *whose job no longer holds a lease* is one. The sweep's
+first act is `finaliseAbandonedRuns`: those rows become `failed` with
+`refusal_code = 'lease_lost'` and **keep a `calling` reservation as the recorded cost**,
+because the last thing that worker did before disappearing may well have been to make
+the call, and releasing the cents would be claiming it did not. `run_in_progress`
+refuses the firm a new revision inside the same window, so the firm becomes researchable
+again in the same breath.
+
+### Nobody decides about one run's money twice at once
+
+Age alone is not evidence that a worker is gone, and this is where that mattered. The
+sweep used to read a reservation's state and settle it later with that stale state,
+while `settleAttempt` allowed `released` from `calling` — so a live claim could mark the
+row between the two, the sweep handed the cents back, and chunk 3 then made the paid
+call against an authorization nobody held. A call with no charge anywhere is the one
+outcome this whole arrangement exists to prevent. Three rules, together:
+
+* **the run row is the lock.** Chunk 2, chunk 3 and the sweep's finalisation each begin
+  with `SELECT … FROM research_runs WHERE id = $1 FOR UPDATE` (`lockRun`) and re-read the
+  outcome under it. Chunk 3 holds it across the provider call, because the runner owns the
+  transaction boundary — and that is the property worth having: while a claim is out at
+  the provider nothing can close its run or touch its reservation. The cost is that the
+  sweep waits for a run whose call is in flight, which is a bounded wait on a job nobody
+  is waiting for;
+* **`released` only from `reserved`.** That is the one state in which "no call happened"
+  is a fact about the row rather than a guess. From `calling` the settlements are
+  `settled`, `estimated`, and `released_not_called` — used by exactly one caller, the
+  claim that marked the row in chunk 2, holding the run's lock, having then declined to
+  call (the fetch failed, or the counted request did not fit). No reader from outside may
+  make that claim. It is not a CHECK or a trigger because the rule is about *who* is
+  writing, which a row-level rule cannot see;
+* **a live lease is left alone, and it is read twice.** `finaliseAbandonedRuns` joins the
+  run's `research.firm` job by its idempotency key and skips a row whose
+  `lease_expires_at` is still in the future, whatever the run's age — and then, *under
+  the run lock*, takes that job row `FOR UPDATE` and reads the lease again. The first
+  read is unlocked, and an expired lease is exactly the state in which the queue hands
+  the job to somebody else: a successor could reclaim it and commit chunk 2 while the
+  sweep waited for the run lock, and rechecking `outcome` alone let the sweep through,
+  because a live claim's run is still `running`. **The lock order is run row then job
+  row, everywhere.** That is the order the runner already uses for this kind:
+  `research.firm` is `business_uniqueness`, so the runner's `holdsLease` — the one place
+  a job row is locked before the handler — is not called for it, and the chunk
+  transaction takes the run row in the handler before it writes the job row in
+  `writeProgress`/`completeJob`. A `fencing_token` kind would be the other way round,
+  and this sweep must not be extended to one without turning the order around;
+* and **every close is guarded.** `completeRun`, `refuseRun` and `failRun` carry
+  `WHERE outcome = 'running'` and report false when that matched nothing, so a claim
+  returning from a call cannot overwrite the sweep's outcome, refusal code and estimated
+  cents with a cheaper story. Chunk 3 reads false as "closed elsewhere", reports a replay
+  and completes the job.
+
+### The reservation table, and its five states
+
+`provider_ledger.cost_cents` is what was invoiced. `provider_reservations` is what has
+been authorized and not yet invoiced, **one row per paid attempt**, carrying its own
+`business_date` and `business_time_zone`. `readSpend` sums the ledger and every open
+reservation, so a run in flight is already spent as far as the next clearance is
+concerned — anything else lets two runs started in the same minute each be cleared
+against the same remaining cents.
+
+```
+reserved ──markCalling──▶ calling ──┬──▶ settled    (a figure came back: the invoice)
+    │                               └──▶ estimated  (no figure: the reservation is the cost)
+    └──────────────────────────────────▶ released   (nothing was asked of the provider)
+```
+
+Five states, and the invariants that matter: a row leaves `reserved`/`calling` exactly
+once, by id; `settled_at` is set precisely when it is no longer open; `released` settles
+nothing and is reachable from `calling` only by the claim that marked it; and settlement writes the ledger on the **reservation's own** business date, so
+a run authorized on Monday and settled on Tuesday invoices Monday and leaves Tuesday's
+ceiling alone. A `calling` row is the only ambiguous state, and it always costs its
+reservation — `cost_estimated` on the run row is how that is said out loud. It covers a
+thrown transport, a response with no `usage`, and a lost lease. Zero is the one answer
+that is certainly wrong about a call that may have been billed.
+
+### The token bound is exact, not a ratio
+
+The reservation is sized from characters — `CHARACTERS_PER_TOKEN`, 2.5 — because at
+reservation time there is nothing else to size it from. That ratio is the right way to
+decide what to *hold* and the wrong way to decide what to *send*: Japanese and Chinese
+text tokenizes at roughly one token a character, so the largest request the settings
+allow can count about two and a half times the bound the ceiling authorized.
+
+So chunk 3 asks the provider's own tokenizer before it calls
+(`AnthropicMessagesTransport.countTokens`, on the very request `extract` would send) —
+and compares the answer with **the reservation**, never with the settings. The row
+carries `model_name`, `max_input_tokens` and `max_output_tokens` beside `cents`, all four
+written by the clearance that priced them, and `pricing.admitCall` is the whole decision:
+
+* the counted input, plus `TOKEN_COUNT_HEADROOM` (1.05, because Anthropic documents
+  `countTokens` as an estimate that "may not exactly match the number of tokens used in a
+  request"), plus the snapshot's output bound must fit the snapshot's total;
+* and what that would cost at the snapshot's model must be within the reservation's
+  cents. A snapshot naming a model with no reviewed price refuses rather than being
+  priced at zero.
+
+Reading the settings here instead was the hole: raising `max_pages_per_firm` between
+chunk 1 and chunk 3 admitted a request bigger than the money being held for it, and the
+model called was whichever one the adapter had been composed with. The request now
+carries the snapshot's model and output bound, so what is counted, what is sent and what
+is priced are one thing.
+
+If it does not fit, trailing blocks are dropped — whole pages last — and it counts again,
+at most three times. If it still does not fit the run is a **completion** with
+`extraction = 'over_budget'`: the evidence is kept, the judgments come from the firm's
+routes and its suppression, the reservation is released, and no call is made. A counter
+that throws is a `provider_failure` with no cents, for the same reason: spending against
+a number nobody has is worse than not spending.
+
+### When a provider fails
+
+A provider failure — reported or thrown — becomes a **committed `failed` run** and the
+job **completes**. It is never a throw, for the reason above.
+
+The retry is the sweep's: a new revision with a new clearance, one a business day, three
+consecutive failures at most (`MAX_CONSECUTIVE_FAILED_RUNS`), and that gate covers every
+branch of the sweep's "due again" test rather than one of them. After three the firm is
+left alone and the firm page shows "research failed, N tries" rather than a brief that is
+quietly a week out of date.
+
+**"The next business day" is the next local calendar date, weekends included.** A firm
+whose site failed on a Friday is retried on the Saturday. That is deliberate: research
+sends nothing and contacts nobody, so a Saturday run costs a fraction of a cent and no
+goodwill, and a five-day-week retry ladder would be a calendar the rest of this system
+does not have.
+
+A database error is the one thing that still aborts, and there it is right: the
+accounting is written in the same transaction as the work, so a transaction that cannot
+commit has no accounting to lose — and chunk 1's, which is the part that matters, has
+already committed.
+
+## The caps, and the price table
+
+Three ceilings, all in whole cents, all checked in `claimResearchClearance` before any
+provider is reached — and `claimResearchClearance` is the **only** way a reservation is
+priced, for a retry exactly as for attempt 1. It takes the workspace's budget lock
+(`pg_advisory_xact_lock`) before it reads a sum, so two claims cannot clear against the
+same remaining cents; only attempt 1 consumes a unit of the day's firm count, because the
+count is of firms looked at and what bounds attempts is the three rows above:
+
+| Setting | Default | What it bounds |
+|---|---|---|
+| `enabled` | `true` | Whether anything runs at all |
+| `daily_firm_ceiling` | 50 | Runs per workspace business date |
+| `daily_cost_ceiling_cents` | 50 | Today's spend, across every provider |
+| `monthly_cost_ceiling_cents` | 1000 | Month-to-date spend, in the workspace's zone |
+| `max_pages_per_firm` | 4 | **Total** pages one run may fetch |
+| `max_page_bytes` | 1 000 000 | The fetch's byte cap |
+| `model_name` | `claude-haiku-4-5` | The one model with a reviewed price row |
+
+`research_runs.extraction` records why the model was or was not used — `used`,
+`unconfigured`, `no_pages`, `failed`, `over_budget` — because a null `model_name` could
+not say, and the difference decides whether the sweep ever comes back. Only
+`unconfigured` is re-selected once a key exists, and only on a later business date: a run that found no readable pages will find none tomorrow either, and
+re-selecting it was a unit of the day's budget spent on the same nothing every morning
+for ever.
+
+The count ceiling is `daily_counters` through `incrementDailyCounter`, which is one
+statement, because "a read of 'are we under the cap?' followed by a write is the
+classic way to send the fifty-first message of a fifty-message day". A clearance is
+**consumed**: a caller that abandons the work has still used the unit. The alternative
+— a reservation released on failure — is a distributed transaction with a provider, and
+losing a unit of a daily count is the cheaper error.
+
+The two money checks use a **worst case**, because the invoice does not exist yet. A
+run that turns out cheaper frees budget for the next; a run that could turn out dearer
+could not have been authorized at all.
+
+**Prices, read on 28 September 2026** (`pricing.ts`). Claude Haiku 4.5: 100 cents per
+million input tokens, 500 cents per million output. A model with no row **cannot run**
+— `centsOf` throws rather than returning zero, because a zero would spend a month's
+budget in an afternoon. Adding a model is three edits (the CHECK, the price table, the
+contract's enum) and that friction is the feature.
+
+Cached input tokens are priced too — a cache write at 1.25× input, a cache read at
+0.1× — even though the extraction sends no `cache_control`. A category nobody prices is
+a category the ceilings cannot see, and a cache *write* is dearer than an ordinary
+token. Caching was removed from the request rather than kept: every run's message is a
+different firm's pages, so there is no prefix worth reusing and it bought a surcharge on
+the one small part that repeats.
+
+At the defaults the worst case is **3 cents a run**, and three things make it a bound
+rather than an estimate:
+
+* **`max_pages_per_firm` is the total page count**, not the count of the firm's own
+  pages. `researchUrlsForFirm` enforces the same number — added links first, then the
+  allow-listed paths, then homepage-discovered links — and the adapter enforces it
+  again. When added links were appended *on top of* this figure, a firm with six links
+  sent ten pages priced as four.
+* **Per page it is the parse cap, not `max_page_bytes`.** A page is fetched as bytes and
+  then parsed, and `parsePageText` never offers the extractor more than 12 000
+  characters however large the page was. Using the byte cap would give a worst case of
+  about a dollar a run, which the default daily ceiling would refuse for ever.
+* **Characters per token is 2.5 and the prompt overhead is 2 000 tokens**, both chosen
+  high. Four characters a token is the figure for prose; what the extractor is sent is
+  nav labels, addresses, telephone numbers and JSON punctuation, which tokenize far
+  worse. A bound that is too small is a ceiling that authorized a call it had not
+  priced, and the headroom costs a fraction of a cent a run.
+
+At the defaults that is **3 cents a run** (24 866 input tokens), so 50 cents a day is 16
+runs and $10 a month is 333; at the maximum of eight pages it is 6 cents. The ledger
+always records the **actual** figure, never truncated to the bound: a ledger that clipped
+its own numbers would hide exactly the overrun the bound exists to prevent. One test
+builds a real request at the maximum — four pages of a hundred full blocks, every marker,
+a 500-character source URL — and measures it against the bound, because a bound that was
+never compared with a request is a number in a comment.
+
+## At a merge
+
+Four tables, three different answers, because they mean three different things
+(`crm/merges.ts`):
+
+* **`firm_judgments`** is one current opinion per firm, so there is nothing to merge.
+  If the target has one, the source's is deleted; if it has none, the source's is moved
+  with `likely_contact_id` cleared first — the contact it names has not moved yet, and
+  the composite key refuses a row naming a contact at another firm. Either way a fresh
+  run is enqueued for the target, so its judgment is rebuilt from its own pages.
+* **`firm_links`** are decisions somebody made about a firm that is about to be one
+  firm, so both sides' links are copied onto the target (`firm_links_one_per_url` makes
+  the same URL on both one row) and the source's are dropped.
+* **`research_runs` and `firm_facts` stay on the merged source**, as `crm_domain_events`
+  do. They record what was read, at which URL, on which day; re-attributing them would
+  be inventing provenance.
+
+All of it happens **before the contacts move**. `firm_judgments.likely_contact_id`
+carries `(workspace_id, contact_id, firm_id)` with `ON UPDATE CASCADE`, so moving a
+contact rewrites the source judgment's `firm_id` — and when both firms were researched
+that lands on the target's primary key and fails a merge for a reason no reader of the
+merge function could see.
+
+## The four judgments
+
+| Judgment | `yes` when | `no` when | otherwise | third-party facts |
+|---|---|---|---|---|
+| `fit` | `target_fit` | `not_target` (which beats `target_fit`) | `unknown` | ignored |
+| `problem_evidence` | `maintenance_workflow` or `hiring_maintenance` | never | `unknown` | counted |
+| `timing` | `recent_change` or `hiring_maintenance` | never | `unknown` | counted |
+| `reachability` | a usable or candidate phone route, or `phone_listed`, or `named_role` | an active firm-wide suppression | `unknown` | ignored |
+
+**A page on somebody else's host is not the firm speaking.** Every fact carries
+`first_party`, derived from the **final URL's** relationship to the firm's own site and
+not from how the URL came to be permitted — an added link to a page on the firm's own
+host is the firm's own words, and deriving the flag from the permission marked it as
+somebody else's because `added_link` is decided before the host check. True for the
+firm's own site and for a page its own homepage linked to; false for a link on another
+host. `fit` is a statement about what the
+firm *is* and `reachability` that the *firm* publishes a way to reach a person, so both
+use first-party facts only — a trade article calling a brokerage a property manager
+must not become `fit: 'yes'`. Problem evidence and timing are claims about the world and
+count either source. On the brief a third-party quote is rendered with its host
+("per news.test").
+
+**Three keys store no quote.** `named_role`, `phone_listed` and `role` are selected
+*because* a block names a person or publishes a number, and a contact-scoped deletion
+does not touch a firm's rows — so a quote here would outlive the person it names, in a
+table nobody would think to search. The evidence id and the block id stay, so the
+judgment can still cite the page; the sentence is not copied.
+`firm_facts_person_keys_have_no_quote` is that rule as an equality, so the key set and
+the schema cannot drift apart.
+
+`call_first = fit === 'yes' && reachability !== 'no'`, and
+`firm_judgments_call_first_consistent` holds the row to exactly that expression.
+
+**`unknown` is never `no`.** Silence is not a denial. A firm whose site says nothing
+about maintenance gets `unknown`, and the only two `no`s reachable are the firm's own
+site saying it is not that kind of firm, and a suppression — which is a fact about us
+rather than about them.
+
+**Nothing infers budget or intent.** There is no fifth judgment, no score and no field
+that could hold one. A reader who wants either has to make the call themselves, which
+is the honest arrangement.
+
+`reasons` is one short sentence per judgment naming the `firm_facts` ids it rests on,
+so "why does this say yes" is answerable without re-deriving it.
+
+## The call brief
+
+Assembled at read time from `firm_facts`, `firm_judgments`, `research_runs.brief` and
+`contacts` — only the generated parts are stored, so a brief can never be staler than
+the facts behind it.
+
+```
+whyFit        up to three quotes, each with its source and retrieval date
+whatChanged   up to two quotes
+likelyPerson  the contact whose title a role fact names, or null
+questions     two, written by a model            ← generated
+opening       one line, written by a model       ← generated
+generated     true whenever either of those two is present
+judgments     the four, judgedAt, revision
+sources       every distinct source behind the quotes
+```
+
+`generated` is the claim the desktop turns into the words "AI suggestion". A brief with
+no generated part is still a brief.
+
+## The surface
+
+| Path | What it is |
+|---|---|
+| `POST /research/firm` | The read: brief, facts, judgments, the last five runs, the links, the spend. Assignee or admin; a colleague gets the firm page's `not_found`. |
+| `POST /research/firm/run` | A command. `ceiling_reached` when the clearance would refuse now. |
+| `POST /research/firm/links/add` | A command. https only; adds the link and enqueues a run. |
+| `POST /research/settings` | Admin only, including the read: the read *is* the workspace's budget. |
+
+The Today card gains `brief` (optional, omitted from card version 1), and lane 4 puts
+the `call_first` firms in front. The firm page's `crmSurface.ts` contract is
+**untouched** — it is a `z.strictObject` behind `pageVersion`, and the desktop's
+Research section reads `/research/firm` instead.
+
+### Every refusal code
+
+`invalid_input`, `research_disabled`, `daily_firm_ceiling`, `daily_cost_ceiling`,
+`monthly_cost_ceiling`, `ceiling_reached` (the route's summary of the three above),
+`firm_unknown`, `firm_merged`, `firm_suppressed`, `not_assigned`, `admin_only`,
+`run_in_progress`, `no_sources`, `provider_failure`, `link_not_permitted`,
+`model_unpriced`, `over_budget` (the firm's three paid attempts for the day are spent, or
+the counted request did not fit the reservation held for it).
+
+## The sweep
+
+`research.sweep`, one per workspace per business date. Research is otherwise driven by
+events — a firm is created, a person clicks, a link is added — and events do not cover
+the case that matters most: a firm imported on a day the ceiling was already spent. An
+import of two hundred rows enqueues two hundred runs that the ceilings pace across
+days, and the sweep is what finishes the ones a day's budget did not reach.
+
+It selects firms that are active, not merged, not suppressed, have **no closed
+opportunity** — a Won firm is a client and a Lost one has said no; re-researching either
+is spending money to put somebody back on a morning list they have already left — and
+were never researched or last completed more than ninety days ago. Oldest first.
+
+Six branches make a firm due, and the query carries the list as a comment with the gates
+on each, because the bug this section keeps getting is a branch that forgot one:
+
+1. **never looked at** — no completed, failed or `no_sources` run exists. No gates: this
+   is the backlog;
+2. **stale** — the latest run completed over ninety days ago;
+3. **the last run failed** — gated on a later business day and fewer than three
+   consecutive failures;
+4. **no model then** — the latest run completed `unconfigured`, gated on a model being
+   configured *now* as well as on a later business day;
+5. **a link was added** after the latest run started — a backstop; the link's own
+   enqueue is the prompt path;
+6. **a website appeared** — the latest run refused `no_sources` and the firm has had a
+   website set since.
+
+A `no_sources` refusal **counts as having been looked at**, which is the point of the
+list: while it did not, a firm with no website and no links was selected every morning,
+refused, and selected again — a unit of the day's budget, every day, for ever, for a firm
+there was nothing to read about. Only a real change (branch 5 or 6) brings it back, and
+the three-failure gate brackets every branch above rather than sitting beside one.
+
+## The funnel
+
+Two facts, both inside the run's transaction (`docs/greenfield/funnel.md`):
+
+* `firm.researched`, keyed `{firm}:{revision}`, with
+  `{ revision, fit, reachability }` — the run's identity, so a replay produces one
+  fact rather than a unique violation that would abort the transaction;
+* `firm.queued_for_call`, keyed by the **firm alone**, recorded only when `call_first`
+  becomes true for a firm whose previous judgment was not. A funnel counts the firms
+  that reached the call-first queue, not how many times research agreed with itself, so
+  the key is the firm and the later runs are duplicates the recorder drops.
+
+A refused or failed run records neither: nothing reached the queue and nothing was
+learned.
+
+## What is deliberately not here
+
+* **Places discovery.** Deferred; David-held.
+* **Any paid enrichment provider.** The only paid call is the extraction, and it is the
+  key the reply classifier already has.
+* **Contact and route creation.** Research suggests a likely person by pointing at a
+  contact that already exists. It creates none, and it promotes no route.
+* **LinkedIn, social hosts and job aggregators.** Blocked by host, on any path, however
+  the URL was reached — including a link a person tries to add.

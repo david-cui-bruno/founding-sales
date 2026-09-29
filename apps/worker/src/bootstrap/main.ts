@@ -23,6 +23,9 @@ import { routeValidateJobHandler, routeValidationSource, systemMailDomainResolve
 import { sendDayCloseJobHandler, sendDayCloseSource } from '../handlers/sendDayClose.ts';
 import { sequenceActionJobHandler, sequenceActionSource } from '../handlers/sequenceAction.ts';
 import { retentionBatchJobHandler, retentionSource } from '../handlers/retention.ts';
+import { researchHandlers, researchSweepSource, type ResearchWorkerOptions } from '../handlers/research.ts';
+import { anthropicExtraction } from '../research/anthropicExtraction.ts';
+import { researchPageFetch } from '../research/companyPageFetch.ts';
 import { suppressionFinalizeJobHandler } from '../handlers/suppressionFinalize.ts';
 import { terminalStopJobHandler, terminalStopSource } from '../handlers/terminalStop.ts';
 import { todayBuildJobHandler, todayBuildSource } from '../handlers/todayBuild.ts';
@@ -75,6 +78,41 @@ export interface HandlerComposition {
   readonly classifier: ClassifyWorkerOptions | undefined;
   readonly mail: MailWorkerOptions | undefined;
   readonly send: OutboundSendDeps | undefined;
+  readonly research: ResearchWorkerOptions | undefined;
+}
+
+/**
+ * Lane R's two ports (`docs/greenfield/research.md`).
+ *
+ * The page fetch is always present: it needs no credential, and a run with nothing
+ * else still records the firm's own pages as evidence. The extraction is present only
+ * when the classifier transport is — the **same** transport, from the same
+ * `classifyWorkerOptions` call, so the key is read once per process and this file
+ * never sees a value.
+ *
+ * The model is `DEFAULT_RESEARCH_SETTINGS.modelName` rather than a per-workspace read,
+ * because `research_settings_model_known` admits exactly one model in v1 and
+ * `pricing.ts` has exactly one price row. The day a second model is added, this
+ * becomes a per-run construction and the CHECK, the price table and this line move
+ * together.
+ */
+export function composeResearch(classifier: ClassifyWorkerOptions | undefined): ResearchWorkerOptions {
+  const pageFetch = researchPageFetch();
+  if (classifier === undefined) return { pageFetch };
+  return {
+    pageFetch,
+    // No model here: the model and the output bound travel with each request, from the
+    // `provider_reservations` row that priced it. A model fixed at composition was a
+    // second answer to "what is this call?" that the money did not know about.
+    extraction: anthropicExtraction({ transport: classifier.transport }),
+  };
+}
+
+/** The startup line. Says whether the extraction port is configured, never with what. */
+export function describeResearch(options: ResearchWorkerOptions | undefined): {
+  readonly research_extraction_configured: boolean;
+} {
+  return { research_extraction_configured: options?.extraction !== undefined };
 }
 
 /**
@@ -122,6 +160,12 @@ export function registerHandlers(
   registry.register(routeValidateJobHandler({ resolver: systemMailDomainResolver() }));
   for (const handler of mailHandlers(composition.mail)) registry.register(handler);
   for (const handler of classifyHandlers(classifier)) registry.register(handler);
+  // Lane R. Registered whenever the page fetch is, which is always: a run with no
+  // extraction port records the firm's pages and completes with three of the four
+  // judgments `unknown`, which is a smaller answer rather than a failure. That is
+  // the opposite of `classify.reply`, and the difference is that a classification
+  // with no model has nothing at all to record.
+  for (const handler of researchHandlers(composition.research)) registry.register(handler);
   return registry;
 }
 
@@ -211,8 +255,9 @@ export async function composeHandlers(
     readonly imageDigest?: string | undefined;
   } = {},
 ): Promise<HandlerComposition> {
+  const research = composeResearch(classifier);
   const gmail = deployment.gmail;
-  if (gmail === undefined) return { classifier, mail: undefined, send: undefined };
+  if (gmail === undefined) return { classifier, mail: undefined, send: undefined, research };
 
   const journal =
     options.journal ??
@@ -226,11 +271,12 @@ export async function composeHandlers(
     // Only reachable with `FSS_DEPENDENCIES=recorded` and no bucket: `live` refuses in
     // `readWorkerDeployment`. A rehearsal without a bucket registers no mail handler
     // rather than one that could acknowledge an opt-out it cannot journal.
-    return { classifier, mail: undefined, send: undefined };
+    return { classifier, mail: undefined, send: undefined, research };
   }
 
   return {
     classifier,
+    research,
     mail: {
       gmail: gmail.gmail,
       oauth: gmail.oauth,
@@ -275,6 +321,7 @@ export function workerDueWorkSources(): readonly DueWorkSource[] {
     terminalStopSource(),
     sendDayCloseSource(),
     retentionSource(),
+    researchSweepSource(),
     ...mailSources(),
     classifyReplySource(),
     routeValidationSource(),
@@ -310,13 +357,15 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
     return WORKER_EXIT_CODES.configurationInvalid;
   }
 
+  const selftestClassifier = argv.includes('--selftest') ? await classifyWorkerOptions(environment) : undefined;
   if (argv.includes('--selftest')) {
     // No database, no AWS, no signal handler: this is the image smoke test. The
     // deployment line names which parts are configured and never what any of them is.
     log.log('info', 'worker_selftest', {
       ...describeWorkerConfig(config),
       ...describeDeployment(deployment),
-      ...describeClassifier(await classifyWorkerOptions(environment)),
+      ...describeClassifier(selftestClassifier),
+      ...describeResearch(composeResearch(selftestClassifier)),
     });
     return WORKER_EXIT_CODES.ok;
   }
@@ -336,6 +385,7 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
   log.log('info', 'worker_configuration', {
     ...describeWorkerConfig(config),
     ...describeClassifier(classifier),
+    ...describeResearch(composition.research),
     ...describeDeployment(deployment),
     image_digest: identity.digest,
     image_digest_source: identity.source,

@@ -104,6 +104,22 @@ export function recordedAnthropicTransport(options: RecordedTransportOptions): R
   return {
     calls,
     prefixCount: () => seenPrefixes.size,
+    /**
+     * A count, from the same characters-per-token figure the reservation uses.
+     *
+     * The classifier never asks for one; research's extraction does. A fixture cannot
+     * know a real tokenizer's answer, so it answers the arithmetic — which is enough
+     * for every test about *what the caller does with a count*, and deliberately not a
+     * claim about what the provider would say.
+     */
+    countTokens: async (request: ClassifierRequest): Promise<number> => {
+      await Promise.resolve();
+      const characters =
+        request.system.reduce((total, block) => total + block.text.length, 0) +
+        request.messages.reduce((total, message) => total + message.content.length, 0) +
+        JSON.stringify(request.output_config).length;
+      return Math.ceil(characters / 4);
+    },
     create: async (request: ClassifierRequest): Promise<AnthropicMessageResponse> => {
       await Promise.resolve();
       const key = keyOf(request);

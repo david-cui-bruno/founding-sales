@@ -28,6 +28,7 @@
 !packages/domain/settings
 !packages/domain/sequences
 !packages/domain/templates
+!packages/domain/research
 !packages/domain/retention
 !packages/domain/restore
 !packages/domain/release

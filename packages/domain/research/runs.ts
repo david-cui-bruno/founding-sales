@@ -1,0 +1,533 @@
+import type { RepositoryContext } from '../db/workspaceScope.ts';
+import { jobIdempotencyKey, RESEARCH_FIRM_JOB_KEY_PREFIX } from '../jobs/jobKinds.ts';
+import { finaliseSubjectReservations } from './reservations.ts';
+import type { ResearchOutcome, ResearchTrigger } from './types.ts';
+
+/**
+ * The life of one `research_runs` row.
+ *
+ * `UNIQUE (workspace, firm, revision)` is the `research.firm` handler's declared
+ * `business_uniqueness`: a job claimed twice tries to open the row it already opened,
+ * finds the insert refused, and reports `already_recorded` instead of fetching the
+ * firm's site a second time. Nothing here needs a lock or a token for that, which is
+ * the point of choosing the revision as the job's identity.
+ *
+ * ## `running` is a committed state, and a stale one is a lost lease
+ *
+ * The handler is chunked in three: chunk 1 commits the row and the money it reserved,
+ * chunk 2 commits "a call may now have happened", chunk 3 makes the call and closes the
+ * row. So `running` is the ordinary state between three commits, which is exactly why it
+ * cannot be read as a crash — and why something else has to notice when it *is* one.
+ * `finaliseAbandonedRuns` is that something: a row still `running` after
+ * `RUN_IN_PROGRESS_MINUTES` **whose `research.firm` job no longer holds a lease** is
+ * finalised `failed` with `refusal_code = 'lease_lost'`, and the sum of its reservations
+ * becomes its recorded cost — `estimated` for any that reached `calling`, because nobody
+ * can know whether the call was made, and `released` for any that never did.
+ *
+ * Both halves of that sentence matter. Age alone said nothing about whether anyone was
+ * still working, and closing a run under a live claim released the cents out from under
+ * a call that was about to be made.
+ */
+
+/** A run still `running` after this long is not in progress; it is a crashed worker. */
+export const RUN_IN_PROGRESS_MINUTES = 30;
+
+export interface RunRow {
+  readonly id: string;
+  /** The firm the run is of. What chunk 2 clears its retry's reservation against. */
+  readonly firmId: string;
+  readonly revision: number;
+  readonly trigger: ResearchTrigger;
+  readonly startedAt: string;
+  readonly completedAt: string | null;
+  readonly outcome: ResearchOutcome;
+  readonly refusalCode: string | null;
+  readonly pagesFetched: number;
+  readonly factsRecorded: number;
+  readonly costCents: number;
+  /** True when the cost is the run's reservation rather than a figure a provider gave. */
+  readonly costEstimated: boolean;
+  readonly extraction: RunExtraction;
+  readonly brief: Readonly<Record<string, unknown>> | null;
+}
+
+interface RunDbRow {
+  readonly id: string;
+  readonly firm_id: string;
+  readonly revision: number;
+  readonly trigger: ResearchTrigger;
+  readonly started_at: Date;
+  readonly completed_at: Date | null;
+  readonly outcome: ResearchOutcome;
+  readonly refusal_code: string | null;
+  readonly pages_fetched: number;
+  readonly facts_recorded: number;
+  readonly cost_cents: number;
+  readonly cost_estimated: boolean;
+  readonly extraction: RunExtraction;
+  readonly brief: Readonly<Record<string, unknown>> | null;
+  readonly [column: string]: unknown;
+}
+
+const RUN_COLUMNS = `id, firm_id, revision, trigger, started_at, completed_at, outcome, refusal_code,
+  pages_fetched, facts_recorded, cost_cents, cost_estimated, extraction, brief`;
+
+const toRun = (row: RunDbRow): RunRow => ({
+  id: row.id,
+  firmId: row.firm_id,
+  revision: Number(row.revision),
+  trigger: row.trigger,
+  startedAt: row.started_at.toISOString(),
+  completedAt: row.completed_at?.toISOString() ?? null,
+  outcome: row.outcome,
+  refusalCode: row.refusal_code,
+  pagesFetched: Number(row.pages_fetched),
+  factsRecorded: Number(row.facts_recorded),
+  costCents: Number(row.cost_cents),
+  costEstimated: row.cost_estimated,
+  extraction: row.extraction,
+  brief: row.brief,
+});
+
+/** The revision a new run for this firm should carry: one more than its highest. */
+export async function nextRevision(context: RepositoryContext, firmId: string): Promise<number> {
+  const { rows } = await context.db.query<{ revision: number | null }>(
+    'SELECT max(revision) AS revision FROM research_runs WHERE workspace_id = $1 AND firm_id = $2',
+    [context.scope.workspaceId, firmId],
+  );
+  return Number(rows[0]?.revision ?? 0) + 1;
+}
+
+/** True when a run for this firm is open and younger than `RUN_IN_PROGRESS_MINUTES`. */
+export async function runInProgress(context: RepositoryContext, firmId: string): Promise<boolean> {
+  const { rows } = await context.db.query<{ present: boolean }>(
+    `SELECT true AS present FROM research_runs
+      WHERE workspace_id = $1 AND firm_id = $2 AND outcome = 'running'
+        AND started_at > now() - ($3 || ' minutes')::interval
+      LIMIT 1`,
+    [context.scope.workspaceId, firmId, String(RUN_IN_PROGRESS_MINUTES)],
+  );
+  return rows[0]?.present === true;
+}
+
+export interface OpenRunInput {
+  readonly firmId: string;
+  readonly revision: number;
+  readonly trigger: ResearchTrigger;
+  readonly requestedByUserId?: string | null | undefined;
+  readonly at: string;
+}
+
+/**
+ * Open the run, or null when this revision already has a row.
+ *
+ * Null is the replay: the job was claimed twice and the first claim already did the
+ * work, so the caller reports `already_recorded` rather than doing it again. The
+ * insert is the check — `ON CONFLICT DO NOTHING` on the unique key — so there is no
+ * window between asking and writing.
+ */
+export async function openRun(context: RepositoryContext, input: OpenRunInput): Promise<string | null> {
+  const { rows } = await context.db.query<{ id: string }>(
+    `INSERT INTO research_runs (workspace_id, firm_id, revision, trigger, requested_by_user_id, started_at)
+     VALUES ($1, $2, $3, $4, $5, $6::timestamptz)
+     ON CONFLICT ON CONSTRAINT research_runs_one_per_revision DO NOTHING
+     RETURNING id`,
+    [
+      context.scope.workspaceId,
+      input.firmId,
+      input.revision,
+      input.trigger,
+      input.requestedByUserId ?? null,
+      input.at,
+    ],
+  );
+  return rows[0]?.id ?? null;
+}
+
+/**
+ * Why the model was or was not used. `research_runs_extraction_known` is the same set.
+ *
+ * `over_budget` is the exact token count refusing a request the reservation would not
+ * cover, decided **before** the call — so it costs nothing and is not a failure. The
+ * run keeps its evidence and judges from the firm's routes alone.
+ */
+export type RunExtraction = 'used' | 'unconfigured' | 'no_pages' | 'failed' | 'over_budget';
+
+export interface CompleteRunInput {
+  readonly runId: string;
+  readonly at: string;
+  readonly pagesFetched: number;
+  readonly factsRecorded: number;
+  readonly modelName?: string | null | undefined;
+  /**
+   * Why the model was or was not used.
+   *
+   * `model_name IS NULL` could not say, and the difference decides whether the sweep
+   * ever comes back: `unconfigured` is a run worth repeating once a key exists, and
+   * `no_pages` is a firm that will have no pages tomorrow either. Re-selecting the
+   * second was an unbounded daily spend on a firm with nothing to read.
+   */
+  readonly extraction: RunExtraction;
+  /** True when `costCents` is the run's reservation rather than a reported figure. */
+  readonly costEstimated?: boolean | undefined;
+  readonly inputTokens?: number | undefined;
+  readonly outputTokens?: number | undefined;
+  readonly costCents: number;
+  /** The generated parts only: `{ questions, opening, generated: true }`, or null. */
+  readonly brief?: Readonly<Record<string, unknown>> | null | undefined;
+}
+
+/**
+ * Close the run as completed. **False means the run was closed elsewhere.**
+ *
+ * `WHERE outcome = 'running'` is the terminal guard, and it is about money: without it
+ * a claim returning from a call could overwrite the sweep's `lease_lost` row — the
+ * outcome, the refusal code and the estimated cents the sweep had already recorded —
+ * with a cheaper story of its own. A run is closed once, by whoever gets there first,
+ * and the loser reports a replay rather than a second opinion.
+ */
+export async function completeRun(context: RepositoryContext, input: CompleteRunInput): Promise<boolean> {
+  const { rowCount } = await context.db.query(
+    `UPDATE research_runs
+        SET outcome = 'completed', completed_at = $3::timestamptz, pages_fetched = $4, facts_recorded = $5,
+            model_name = $6, input_tokens = $7, output_tokens = $8, cost_cents = $9, brief = $10::jsonb,
+            extraction = $11, cost_estimated = $12
+      WHERE workspace_id = $1 AND id = $2 AND outcome = 'running'`,
+    [
+      context.scope.workspaceId,
+      input.runId,
+      input.at,
+      Math.max(0, Math.trunc(input.pagesFetched)),
+      Math.max(0, Math.trunc(input.factsRecorded)),
+      input.modelName ?? null,
+      Math.max(0, Math.trunc(input.inputTokens ?? 0)),
+      Math.max(0, Math.trunc(input.outputTokens ?? 0)),
+      Math.max(0, Math.trunc(input.costCents)),
+      input.brief === null || input.brief === undefined ? null : JSON.stringify(input.brief),
+      input.extraction,
+      input.costEstimated === true,
+    ],
+  );
+  return (rowCount ?? 0) > 0;
+}
+
+export interface CloseRunInput {
+  readonly runId: string;
+  readonly at: string;
+  readonly refusalCode: string;
+  readonly costCents?: number | undefined;
+  /** True when `costCents` is the run's reservation rather than a reported figure. */
+  readonly costEstimated?: boolean | undefined;
+  /**
+   * Why the model was or was not used, when the closing path knows.
+   *
+   * Absent leaves the column as it was, which for a row that never reached the model is
+   * the `unconfigured` default. A run whose extraction *failed* says so, because
+   * "nobody had configured a model" and "the model was asked and broke" are different
+   * facts and only one of them is worth trying again for.
+   */
+  readonly extraction?: RunExtraction | undefined;
+}
+
+/**
+ * A run stopped by a rule: a ceiling, a suppression, a firm with no sources.
+ *
+ * False means the run was closed elsewhere. See `completeRun`.
+ */
+export async function refuseRun(context: RepositoryContext, input: CloseRunInput): Promise<boolean> {
+  return await closeRun(context, input, 'refused');
+}
+
+/**
+ * A run stopped by something that went wrong.
+ *
+ * Committed, never thrown — see `enrichment.ts`. The retry is the sweep's, as a new
+ * revision with a new clearance, because a throw would roll back the accounting of a
+ * call that was already paid for.
+ */
+export async function failRun(context: RepositoryContext, input: CloseRunInput): Promise<boolean> {
+  return await closeRun(context, input, 'failed');
+}
+
+async function closeRun(
+  context: RepositoryContext,
+  input: CloseRunInput,
+  outcome: 'refused' | 'failed',
+): Promise<boolean> {
+  const { rowCount } = await context.db.query(
+    `UPDATE research_runs
+        SET outcome = $3, completed_at = $4::timestamptz, refusal_code = $5, cost_cents = $6,
+            cost_estimated = $7, extraction = COALESCE($8, extraction)
+      WHERE workspace_id = $1 AND id = $2 AND outcome = 'running'`,
+    [
+      context.scope.workspaceId,
+      input.runId,
+      outcome,
+      input.at,
+      input.refusalCode,
+      Math.max(0, Math.trunc(input.costCents ?? 0)),
+      input.costEstimated === true,
+      input.extraction ?? null,
+    ],
+  );
+  return (rowCount ?? 0) > 0;
+}
+
+/**
+ * Finalise every run abandoned mid-flight, and say how many.
+ *
+ * A chunked run commits `running` before it spends anything. A worker that loses its
+ * lease between two chunks — a pause past the deadline, a container replaced, a
+ * database failover — leaves that row `running` for ever, and with it a reservation on
+ * the ledger and a firm that `run_in_progress` will refuse a new revision for.
+ *
+ * So the sweep closes them: `failed`, `refusal_code = 'lease_lost'`, and the sum of the
+ * run's reservations written into `cost_cents` — which the previous shape could not do
+ * at all, because a per-run amount did not exist anywhere. A reservation that reached
+ * `calling` is `estimated`: the honest answer to "did the model call happen?" is that
+ * nobody knows, and the last thing that worker did before disappearing may well have
+ * been to make it. One still `reserved` is `released`, because no call could have
+ * happened.
+ *
+ * `RUN_IN_PROGRESS_MINUTES` is the same window `run_in_progress` uses, so a firm becomes
+ * researchable again in the same breath as its abandoned run is closed.
+ *
+ * ## Abandoned means the job is gone too, not just old
+ *
+ * Half an hour is not evidence on its own. A `research.firm` job whose lease is still
+ * live is a worker that still holds the run — the lease may have been extended, the
+ * model may be answering slowly — and finalising it was the other half of the race this
+ * sweep used to lose: the run was closed and its `calling` reservation released while
+ * the claim that held it was still going to call. So the run's own job row is joined and
+ * a live lease is left alone. Only a run that is *both* lease-expired and older than
+ * `RUN_IN_PROGRESS_MINUTES` is abandoned.
+ *
+ * The join is by the job's identity, which is the same pair the run row carries:
+ * `jobIdempotencyKey.researchFirm(firmId, revision)`. `RESEARCH_FIRM_JOB_KEY_PREFIX`
+ * below is the one place that string is built in SQL, and a test compares it with the
+ * helper so the two cannot drift.
+ *
+ * Each run is then locked (`lockRun`) before its money is touched, so a claim that is
+ * mid-chunk either finishes first or waits, and never interleaves.
+ *
+ * ## The lease is checked again under the run lock, and that is not belt and braces
+ *
+ * The select above is an unlocked read, and a lease that has expired is exactly the
+ * state in which the queue hands the job to somebody else. So the interleaving was:
+ * the lease expires, the select picks the run, a fresh claim reclaims the job and
+ * commits chunk 2 — a new `calling` row — and only then does the sweep get the run
+ * lock. Rechecking `outcome` alone let it through: the run is still `running`, because
+ * the live claim has not finished it yet. The sweep then estimated that claim's
+ * reservation and failed the run out from under a call chunk 3 was about to make.
+ *
+ * `liveClaimHoldsJob` closes it: under the run lock the job row is taken `FOR UPDATE`
+ * and its lease read from the row rather than from the earlier snapshot. A live lease
+ * means somebody is working and the run is left exactly as it is.
+ *
+ * **Lock order: the run row first, then the job row — everywhere.** That is the order
+ * the runner already uses for `research.firm`, which is why the sweep may take the
+ * second lock at all. The kind's protection is `business_uniqueness`, so the runner's
+ * `holdsLease` (the one place a job row is locked *before* the handler) is not called
+ * for it: the chunk transaction runs the handler first, which takes the run row in
+ * `lockRun`, and only then writes the job row in `writeProgress`/`completeJob`. Run
+ * then job in both, so there is no cycle. A `fencing_token` handler would lock the job
+ * row first, and this sweep must never be extended to one of those without turning
+ * this around.
+ */
+/**
+ * Whether a claim still holds the lease on this run's `research.firm` job.
+ *
+ * Called under the run's row lock, and it takes the job row `FOR UPDATE` before it
+ * reads the lease — the state is taken, not sampled. A claimer cannot slip in behind
+ * the read, because `claimJobs` takes the same row `FOR UPDATE SKIP LOCKED` and
+ * therefore skips this job entirely while the sweep's transaction is open; and a claim
+ * that is already out cannot commit its chunk, because that chunk needs the run row
+ * this caller is holding. See the lock-order paragraph on `finaliseAbandonedRuns`.
+ *
+ * A job row that is gone — the queue's own retention has removed a finished job — is
+ * not a live claim, and the run is as abandoned as the age says it is.
+ */
+async function liveClaimHoldsJob(
+  context: RepositoryContext,
+  input: { readonly firmId: string; readonly revision: number; readonly at: string },
+): Promise<boolean> {
+  const { rows } = await context.db.query<{ live: boolean }>(
+    `SELECT (state = 'running' AND lease_expires_at > $3::timestamptz) AS live
+       FROM jobs
+      WHERE workspace_id = $1 AND kind = 'research.firm' AND idempotency_key = $2
+      FOR UPDATE`,
+    [context.scope.workspaceId, jobIdempotencyKey.researchFirm(input.firmId, input.revision), input.at],
+  );
+  return rows[0]?.live === true;
+}
+
+export async function finaliseAbandonedRuns(
+  context: RepositoryContext,
+  input: { readonly at: string },
+): Promise<number> {
+  const { rows } = await context.db.query<{ id: string }>(
+    `SELECT r.id FROM research_runs r
+      WHERE r.workspace_id = $1
+        AND r.outcome = 'running'
+        AND r.started_at <= $2::timestamptz - ($3 || ' minutes')::interval
+        AND NOT EXISTS (
+          SELECT 1 FROM jobs j
+           WHERE j.workspace_id = r.workspace_id
+             AND j.kind = 'research.firm'
+             AND j.idempotency_key = $4 || r.firm_id::text || ':' || r.revision::text
+             AND j.state = 'running'
+             AND j.lease_expires_at > $2::timestamptz)
+      ORDER BY r.started_at`,
+    [context.scope.workspaceId, input.at, String(RUN_IN_PROGRESS_MINUTES), RESEARCH_FIRM_JOB_KEY_PREFIX],
+  );
+
+  let finalised = 0;
+  for (const row of rows) {
+    // The lock first, and then the state again: between the select above and here a
+    // claim may have taken the run, called, and closed it. A row that is no longer
+    // `running` is somebody else's answer and is left exactly as it is.
+    const locked = await lockRun(context, row.id);
+    if (locked === null || locked.outcome !== 'running') continue;
+    // And the lease again, from the job row rather than from the select's snapshot: a
+    // claim that reclaimed the expired job and committed chunk 2 while this loop was
+    // getting the run lock is a live call, not an abandoned run. Nothing is settled.
+    if (await liveClaimHoldsJob(context, { firmId: locked.firmId, revision: locked.revision, at: input.at })) continue;
+    // Every open reservation of the run is closed next, and *how* depends on whether
+    // it had been marked `calling`: one that had is `estimated`, because the last thing
+    // the vanished worker may have done was make the call; one still `reserved` is
+    // `released`, because no call could have happened. The sum is what the run cost.
+    const settled = await finaliseSubjectReservations(context, {
+      subjectKind: 'research_run',
+      subjectId: row.id,
+      at: input.at,
+    });
+    await context.db.query(
+      `UPDATE research_runs
+          SET outcome = 'failed', completed_at = $2::timestamptz, refusal_code = 'lease_lost',
+              cost_cents = $4, cost_estimated = $5
+        WHERE workspace_id = $1 AND id = $3 AND outcome = 'running'`,
+      [context.scope.workspaceId, input.at, row.id, settled.cents, settled.estimated],
+    );
+    finalised += 1;
+  }
+  return finalised;
+}
+
+/**
+ * A run that never opened, recorded so a refusal is visible rather than silent.
+ *
+ * A refusal before `openRun` still deserves a row: "research is disabled" and
+ * "research has never looked at this firm" are different facts, and the runs list on
+ * the firm page is where a person finds out which.
+ */
+export async function recordRefusedRun(
+  context: RepositoryContext,
+  input: OpenRunInput & { readonly refusalCode: string },
+): Promise<void> {
+  await context.db.query(
+    `INSERT INTO research_runs
+       (workspace_id, firm_id, revision, trigger, requested_by_user_id, started_at, completed_at,
+        outcome, refusal_code)
+     VALUES ($1, $2, $3, $4, $5, $6::timestamptz, $6::timestamptz, 'refused', $7)
+     ON CONFLICT ON CONSTRAINT research_runs_one_per_revision DO NOTHING`,
+    [
+      context.scope.workspaceId,
+      input.firmId,
+      input.revision,
+      input.trigger,
+      input.requestedByUserId ?? null,
+      input.at,
+      input.refusalCode,
+    ],
+  );
+}
+
+/** One run by id, or null. A plain read, for the API and the brief. */
+export async function readRunById(context: RepositoryContext, runId: string): Promise<RunRow | null> {
+  const { rows } = await context.db.query<RunDbRow>(
+    `SELECT ${RUN_COLUMNS} FROM research_runs WHERE workspace_id = $1 AND id = $2`,
+    [context.scope.workspaceId, runId],
+  );
+  const row = rows[0];
+  return row === undefined ? null : toRun(row);
+}
+
+/**
+ * The run row, locked for the rest of this transaction. The serialization point of the
+ * whole feature.
+ *
+ * Chunk 2, chunk 3 and the abandoned-run sweep all begin here, so exactly one of them
+ * is deciding about a run's money at a time. Without it they interleaved: the sweep read
+ * a reservation as `reserved`, chunk 2 marked it `calling`, and the sweep's later write
+ * released the cents out from under a call chunk 3 was about to make — a paid call with
+ * no charge recorded anywhere.
+ *
+ * The lock is held across chunk 3's provider call, and that is deliberate rather than
+ * ideal. The runner wraps one chunk in one transaction (`runner/jobRunner.ts`), so this
+ * code has no commit of its own to release a lock with; and the property that follows is
+ * the one worth having — while a claim is out at the provider, nothing else can close
+ * its run or touch its reservation, and a successor cannot start a second call against
+ * the same run until the first claim's transaction is over. What it costs is that the
+ * sweep waits for a run whose call is in flight, which is a bounded wait on a job that
+ * nobody is waiting for.
+ */
+export async function lockRun(context: RepositoryContext, runId: string): Promise<RunRow | null> {
+  const { rows } = await context.db.query<RunDbRow>(
+    `SELECT ${RUN_COLUMNS} FROM research_runs WHERE workspace_id = $1 AND id = $2 FOR UPDATE`,
+    [context.scope.workspaceId, runId],
+  );
+  const row = rows[0];
+  return row === undefined ? null : toRun(row);
+}
+
+/**
+ * The run row of one revision, or null.
+ *
+ * How a handler with a missing or malformed cursor finds its own work again: the
+ * revision is the job's identity, so this is the same question the cursor answers and
+ * the durable one.
+ */
+export async function readRunForRevision(
+  context: RepositoryContext,
+  input: { readonly firmId: string; readonly revision: number },
+): Promise<RunRow | null> {
+  const { rows } = await context.db.query<RunDbRow>(
+    `SELECT ${RUN_COLUMNS} FROM research_runs
+      WHERE workspace_id = $1 AND firm_id = $2 AND revision = $3`,
+    [context.scope.workspaceId, input.firmId, Math.trunc(input.revision)],
+  );
+  const row = rows[0];
+  return row === undefined ? null : toRun(row);
+}
+
+/** The firm's most recent runs, newest first. The firm page shows five. */
+export async function listRuns(
+  context: RepositoryContext,
+  firmId: string,
+  limit = 5,
+): Promise<readonly RunRow[]> {
+  const { rows } = await context.db.query<RunDbRow>(
+    `SELECT ${RUN_COLUMNS} FROM research_runs
+      WHERE workspace_id = $1 AND firm_id = $2
+      ORDER BY revision DESC
+      LIMIT $3`,
+    [context.scope.workspaceId, firmId, Math.trunc(limit)],
+  );
+  return rows.map(toRun);
+}
+
+/** The newest completed run, which is the one the brief's revision names. */
+export async function readLatestCompletedRun(
+  context: RepositoryContext,
+  firmId: string,
+): Promise<RunRow | null> {
+  const { rows } = await context.db.query<RunDbRow>(
+    `SELECT ${RUN_COLUMNS} FROM research_runs
+      WHERE workspace_id = $1 AND firm_id = $2 AND outcome = 'completed'
+      ORDER BY revision DESC
+      LIMIT 1`,
+    [context.scope.workspaceId, firmId],
+  );
+  const row = rows[0];
+  return row === undefined ? null : toRun(row);
+}

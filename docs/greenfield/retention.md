@@ -126,10 +126,29 @@ What a commit does:
 * **removes** `mail_reply_confirmations` (first, because they reference callbacks),
   the firm's `mail_messages` and everything cascading from them, `dial_tickets`,
   `call_logs`, `callbacks`, `today_snoozes`, `today_items`, `phone_routes`,
-  `email_addresses`, `evidence_items` and `record_aliases`. Three tables left this list
+  `email_addresses`, lane R's `firm_judgments`, `firm_facts`, `research_runs` and
+  `firm_links`, then `evidence_items` and `record_aliases`. Three tables left this list
   with the schema rather than with the code: `enrollment_linkedin_results`, dropped by
   migration 0018, and `research_suggestions` and `firm_locations`, dropped by 0019 with
-  the rest of research;
+  the rest of research.
+
+  The four research tables are **firm-scoped only**: a quote from a firm's careers page
+  is not one person's data, so a contact deletion leaves them and a firm deletion takes
+  them all. Their order matters — `firm_facts` references both `research_runs` and
+  `evidence_items`, so all four go before `evidence_items` below them in the list, and
+  a statement in the wrong place would be a foreign-key violation on a command an admin
+  had already approved (`test/research/deletion.test.ts`).
+
+  A firm deletion also **closes the money before it removes the runs**. A run still
+  `running` when the firm is deleted has an open `provider_reservations` row, and that
+  table is `operational` and has no foreign key to `research_runs` — cents authorized
+  are money history, not the firm's data. So the row survived the run that caused it,
+  counting against the day's and the month's budget in `readSpend` for ever, with no
+  run left for the abandoned-run sweep to find it by. Each affected run is now locked
+  (`lockRun`) and its open reservations finalised first, on the sweep's rule:
+  `reserved` is `released` because no call could have happened, and `calling` is
+  `estimated` because one may have been made. A claim that reaches chunk 3 and finds no
+  run settles its own reservation by id and completes;
 * **stops** live `sequence_enrollments` with 11.2's `admin_stop` and cancels
   unexecuted `step_executions` — nothing is removed or blanked; what changes is that
   no worker will act on the plan again;

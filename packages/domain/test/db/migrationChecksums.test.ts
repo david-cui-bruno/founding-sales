@@ -11,10 +11,11 @@ import { loadMigrations } from '../../db/migrationRunner.ts';
  * launches the migration task. Stale text inside an applied migration stays stale
  * forever. That is the cost of the checksum, and it is the right cost.
  *
- * **0022 is pinned before it is applied**, and that is not the same claim as the rest.
- * The twenty-one below it say "this is what production recorded" — production ran
- * schema 21 on 28 September 2026 — and this one says "these are the bytes the release
- * will record", written as the last commit of lane J-facts once the file was final.
+ * **0022 and 0023 are pinned before they are applied**, and that is not the same claim
+ * as the rest. The twenty-one below them say "this is what production recorded" —
+ * production ran schema 21 on 28 September 2026 — and these two say "these are the
+ * bytes the release will record", each written as the last commit of its lane once the
+ * file was final (J-facts for 0022, R for 0023).
  * 0022's pin has moved with each round of review of PR 307 — a workspace foreign
  * key and a column-level UPDATE grant in the first, a CHECK function over `detail`
  * in the second. The rule those moves follow: **the file changes in the commit that
@@ -64,6 +65,7 @@ const APPLIED: readonly (readonly [number, string, string])[] = [
   [20, '0020_postal_address.sql', 'ce741ddaec6051fb58c78ed03b927a1c970a7db236db325e2a06563cc395eb4c'],
   [21, '0021_compat_cleanup.sql', 'b782e33de64302ec7265678118a7e85432535bd435cbc6c5ec56830d6e974d93'],
   [22, '0022_funnel_facts.sql', '24a12518575536f95ca1f098d0af45ec341f43dfa3fc738365bfb4afab80f2aa'],
+  [23, '0023_research.sql', 'f3aa198989dca6cdbe6292fded4f16a015c1bc4ad7df490f955dad10bf2bab6d'],
 ];
 
 const EDITED = (fileName: string): string =>

@@ -21,8 +21,14 @@
 export const FUNNEL_FACT_KINDS = [
   /** J-facts. A firm record was created. Key: the firm id. */
   'firm.created',
-  /** R (research). A firm's research run completed. Key: the research run id. */
+  /** R (research). A firm's research run completed. Key: `{firm}:{revision}`. */
   'firm.researched',
+  /**
+   * R. Research judged the firm a fit it can reach, and it was not before. Key: the
+   * firm id, so the *first* time a firm joins the call-first queue is one fact however
+   * many times it is researched again afterwards.
+   */
+  'firm.queued_for_call',
   /** C (telephony). A call was dialled. Key: the call log id. */
   'call.placed',
   /** C. The call reached a person. Key: the call log id. */

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { callBriefSchema } from './research.ts';
 import { blockedActionKindSchema } from './reasonCodes.ts';
 import { routeEligibilitySchema } from './crm.ts';
 import { businessDate, e164, ianaTimeZone, instant, uuid } from './foundationRows.ts';
@@ -127,6 +128,15 @@ export const todayFirmResponseSchema = z.object({
   routes: z.array(todayRouteDtoSchema),
   /** The acting salesperson's own verified number, or null: a card with no Call button. */
   callingIdentityId: uuid.nullable(),
+  /**
+   * The call brief (lane R), or null when no research run has completed for this firm.
+   *
+   * Optional, and omitted from card version 1. `todayFirmResponseSchema` is a
+   * `z.object`, so an installed desktop that has never heard of this key strips it
+   * rather than refusing the card — which is what lets the API be deployed ahead of
+   * the Macs it serves. Adding it is not a wire break.
+   */
+  brief: callBriefSchema.nullable().optional(),
 });
 export type TodayFirmResponse = z.infer<typeof todayFirmResponseSchema>;
 

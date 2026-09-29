@@ -74,7 +74,7 @@ export interface RegistryReport {
 interface WorkerBootstrap {
   readonly registerHandlers?: (
     registry: HandlerRegistry,
-    composition: { classifier: undefined; mail: undefined; send: undefined },
+    composition: { classifier: undefined; mail: undefined; send: undefined; research: undefined },
   ) => HandlerRegistry;
 }
 
@@ -104,6 +104,12 @@ export function buildWorkerRegistrySync(bootstrap: WorkerBootstrap): RegistryRep
     classifier: undefined,
     mail: undefined,
     send: undefined,
+    // Lane R's ports. `pageFetch` needs no credential, so a deployed worker always has
+    // them — but they are `apps/worker` adapters over `node:https` and the Anthropic
+    // transport, and this test composes no provider adapter at all. So the two research
+    // kinds are absent from the registry this step reports, which is the same treatment
+    // Gmail and the classifier get.
+    research: undefined,
   });
   const classes: Record<string, number> = {};
   for (const [name, kinds] of Object.entries(registry.classes())) classes[name] = kinds.length;

@@ -39,6 +39,8 @@ import { SETTINGS_PATHS, routeSettings } from './settings.ts';
 import { SNOOZE_PATHS, routeSnooze } from './snooze.ts';
 import { TODAY_PATHS, routeToday } from './today.ts';
 // The deletion requests and the attachment link.
+// Research: the call brief, the facts and the ceilings.
+import { RESEARCH_PATHS, routeResearch } from './research.ts';
 import { RETENTION_PATHS, routeRetention } from './retention.ts';
 import { ATTACHMENT_PATHS, routeAttachments } from './retentionAttachments.ts';
 import type { ApiRequest, RouteResult, RoutingOptions } from './types.ts';
@@ -179,6 +181,10 @@ export function apiRouteModules(routing: RoutingOptions): readonly RouteModule[]
     // refuses a prefix that swallows another module's exact path, so declaring
     // `/today` and `/today/snooze` separately is what keeps them separable at all.
     moduleOf('today', { paths: TODAY_PATHS }, routeToday, routing),
+    // Research. Exact paths, and one module rather than two: the read and the three
+    // commands are one feature and a `/research` prefix would have let the read's
+    // claim answer for a command that spends money.
+    moduleOf('research', { paths: RESEARCH_PATHS }, routeResearch, routing),
     moduleOf('snooze', { paths: SNOOZE_PATHS }, routeSnooze, routing),
     // Sequences, templates and enrollments. Exact paths again, and three
     // modules rather than one: `/sequences` publishes the plan, `/templates`
