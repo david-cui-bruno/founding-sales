@@ -169,7 +169,7 @@ describe('greenfield-google.yml is dispatch-only, in the production-deploy envir
     const uses = [...workflow.matchAll(/^ {6}- uses: (\S+)$|^ {8}uses: (\S+)$/gmu)].map(match => match[1] ?? match[2] ?? '');
     expect(uses).toEqual([
       'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
-      'aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502',
+      'aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd',
       'google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093',
       'google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db',
       'hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e',

@@ -159,9 +159,9 @@ jobs:
           echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
           echo "run prefix: $prefix"
 
-      # aws-actions/configure-aws-credentials v4
+      # aws-actions/configure-aws-credentials v6
       - name: Assume the rehearsal deployment role
-        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
         with:
           role-to-assume: ${{ secrets.FSS_REHEARSAL_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -724,10 +724,10 @@ jobs:
       # they do: a renewal conditional on success is a renewal that is missing exactly
       # when it is needed.
       #
-      # aws-actions/configure-aws-credentials v4, the same pin as the first assumption.
+      # aws-actions/configure-aws-credentials v6, the same pin as the first assumption.
       - name: Renew the session before the teardown, whatever happened above
         if: ${{ always() }}
-        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
         with:
           role-to-assume: ${{ secrets.FSS_REHEARSAL_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}

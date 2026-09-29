@@ -248,9 +248,9 @@ jobs:
             echo "WORKER_SCHEMA_MAX=$worker_max"
           } >> "$GITHUB_ENV"
 
-      # aws-actions/configure-aws-credentials v4, the pin the rehearsal uses.
+      # aws-actions/configure-aws-credentials v6, the pin the rehearsal uses.
       - name: Assume the rehearsal deployment role
-        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
         with:
           role-to-assume: ${{ secrets.FSS_REHEARSAL_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
