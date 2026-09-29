@@ -208,6 +208,9 @@ const NOTHING_LEFT = [
   `  "ec2 describe-network-interfaces") ${notFound('InvalidNetworkInterfaceID.NotFound')} ;;`,
   `  "ec2 describe-security-groups") ${notFound('InvalidGroup.NotFound')} ;;`,
   `  "ec2 describe-security-group-rules") ${notFound('InvalidSecurityGroupRuleId.NotFound')} ;;`,
+  `  "ec2 describe-subnets") ${notFound('InvalidSubnetID.NotFound')} ;;`,
+  `  "ec2 describe-route-tables") ${notFound('InvalidRouteTableID.NotFound')} ;;`,
+  `  "ec2 describe-internet-gateways") ${notFound('InvalidInternetGatewayID.NotFound')} ;;`,
   '  "kms describe-key") echo "PendingDeletion"; exit 0 ;;',
   '  "rds describe-db-instance-automated-backups") echo "retained"; exit 0 ;;',
   'esac',
@@ -228,6 +231,10 @@ const ARN = {
   interface: 'arn:aws:ec2:us-east-1:123456789012:network-interface/eni-0a',
   group: 'arn:aws:ec2:us-east-1:123456789012:security-group/sg-0a',
   rule: 'arn:aws:ec2:us-east-1:123456789012:security-group-rule/sgr-0a',
+  subnet: 'arn:aws:ec2:us-east-1:123456789012:subnet/subnet-0ed16954b1007bb29',
+  vpc: 'arn:aws:ec2:us-east-1:123456789012:vpc/vpc-0a',
+  routeTable: 'arn:aws:ec2:us-east-1:123456789012:route-table/rtb-0a',
+  gateway: 'arn:aws:ec2:us-east-1:123456789012:internet-gateway/igw-0a',
   key: 'arn:aws:kms:us-east-1:123456789012:key/11111111-2222-4333-8444-555555555555',
   backup: 'arn:aws:rds:us-east-1:123456789012:auto-backup:ab-0a',
 } as const;
@@ -560,10 +567,72 @@ describe('Appendix G 39: rehearsal.sh guard, after the teardown: an empty state,
     expect(aside.calls.map(call => call.split(' ').slice(1, 3).join(' '))).toEqual(
       expect.arrayContaining(['ecs describe-tasks', 'ec2 describe-network-interfaces', 'ec2 describe-security-groups', 'ec2 describe-security-group-rules', 'kms describe-key', 'rds describe-db-instance-automated-backups']),
     );
-    // A VPC carrying the prefix is not a candidate at all: a group that really stayed keeps it.
-    const vpc = guard({ terraform: 'exit 0', leftovers: answering(taggedWith('arn:aws:ec2:us-east-1:123456789012:vpc/vpc-0a')) });
+    // A VPC EC2 still describes fails the guard: the reading settles it, not the class.
+    const vpc = guard({
+      terraform: 'exit 0',
+      leftovers: answering(taggedWith(ARN.vpc), '  "ec2 describe-vpcs") echo "vpc-0a"; exit 0 ;;'),
+    });
     expect(vpc.code).toBe(1);
-    expect(vpc.output).toContain('tagged arn:aws:ec2:us-east-1:123456789012:vpc/vpc-0a');
+    expect(vpc.output).toContain(`ec2-vpc ${ARN.vpc} (still there)`);
+  });
+
+  it('confirms every other ec2 ARN with its own describe call, and sets aside only what EC2 says is gone', () => {
+    // Run 36547424579 (29 September 2026) destroyed all 119 resources and then failed
+    // five reads of the teardown and five of the guard on one subnet ARN, which
+    // `describe-subnets` answered InvalidSubnetID.NotFound for: the tagging API served
+    // it for thirteen minutes after the VPC holding it was gone.
+    const gone = guard({
+      terraform: 'exit 0',
+      leftovers: answering(taggedWith(ARN.subnet, ARN.vpc, ARN.routeTable, ARN.gateway), `  "ec2 describe-vpcs") ${notFound('InvalidVpcID.NotFound')} ;;`),
+    });
+    expect(gone.code, gone.output).toBe(0);
+    expect(gone.output).toContain('1 ec2-internet-gateway, 1 ec2-route-table, 1 ec2-subnet, 1 ec2-vpc');
+    // Each was asked of EC2, and each confirmation is logged by ARN.
+    expect(gone.calls.map(call => call.split(' ').slice(1, 3).join(' '))).toEqual(
+      expect.arrayContaining(['ec2 describe-subnets', 'ec2 describe-vpcs', 'ec2 describe-route-tables', 'ec2 describe-internet-gateways']),
+    );
+    expect(gone.calls.join('\n')).toContain(`--subnet-ids subnet-0ed16954b1007bb29`);
+    expect(gone.output).toContain(`confirmed with EC2: ${ARN.subnet} is set aside (EC2 has no such subnet)`);
+    expect(gone.output).toContain(`confirmed with EC2: ${ARN.gateway} is set aside (EC2 has no such internet gateway)`);
+
+    // One EC2 still has is a leftover, whatever the tagging API says about the rest.
+    for (const [arn, answer, named] of [
+      [ARN.subnet, '  "ec2 describe-subnets") echo "subnet-0ed16954b1007bb29"; exit 0 ;;', `ec2-subnet ${ARN.subnet} (still there)`],
+      [ARN.routeTable, '  "ec2 describe-route-tables") echo "rtb-0a"; exit 0 ;;', `ec2-route-table ${ARN.routeTable} (still there)`],
+      [ARN.gateway, '  "ec2 describe-internet-gateways") echo "igw-0a"; exit 0 ;;', `ec2-internet-gateway ${ARN.gateway} (still there)`],
+    ] as const) {
+      const live = guard({ terraform: 'exit 0', leftovers: answering(taggedWith(arn), answer) });
+      expect(live.code, live.output).toBe(1);
+      expect(live.output).toContain(named);
+      expect(live.report).toBeNull();
+    }
+  });
+
+  it('will not read a refusal that is not an absence, or an empty answer, as a gone ec2 resource', () => {
+    // The two failure modes the settled/unsettled split has to keep apart: a call that
+    // was refused, and a call that answered nothing. Neither is EC2 saying it is gone.
+    const denied = guard({
+      terraform: 'exit 0',
+      leftovers: answering(taggedWith(ARN.subnet), '  "ec2 describe-subnets") echo "An error occurred (UnauthorizedOperation) when calling it" >&2; exit 254 ;;'),
+    });
+    expect(denied.code).toBe(1);
+    expect(denied.output).toContain('could not be read, and not because it is gone');
+
+    const empty = guard({
+      terraform: 'exit 0',
+      leftovers: answering(taggedWith(ARN.subnet), '  "ec2 describe-subnets") echo "None"; exit 0 ;;'),
+    });
+    expect(empty.code).toBe(1);
+    expect(empty.output).toContain('an empty answer is not an absence');
+  });
+
+  it('counts an ec2 class it has no reader for as still there, rather than guessing', () => {
+    const unknown = guard({
+      terraform: 'exit 0',
+      leftovers: answering(taggedWith('arn:aws:ec2:us-east-1:123456789012:natgateway/nat-0a')),
+    });
+    expect(unknown.code).toBe(1);
+    expect(unknown.output).toContain('ec2-natgateway arn:aws:ec2:us-east-1:123456789012:natgateway/nat-0a (no status reader for ec2-natgateway, so it counts as still there)');
   });
 
   it('reports a candidate that is still live, in every class, with the state it was read in', () => {
