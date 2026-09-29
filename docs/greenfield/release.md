@@ -105,14 +105,34 @@ That answer only decides whether the deploy job starts. **Every production write
 ### 4.1 The order inside a release, and the policy that is not negotiable
 
 ```
-[schema change: stop.sh]  →  terraform apply  →  every entry filled  →  fss migrate  →  database users  →  fss verify  →  worker  →  API  →  fss verify
+[schema change: stop.sh]  →  terraform apply  →  every entry filled  →  fss release-prepare (migrate, database users)  →  fss verify  →  worker and API together  →  fss verify
 ```
+
+`deploy.sh release --schema-change` is six steps, in this order:
+
+| | | |
+|---|---|---|
+| 1/6 | both services already at zero | a refusal naming `stop.sh`, not a scale |
+| 2/6 | `fss release-prepare` | `fss migrate` and then `fss admin database-users ensure`, **in one** migration task |
+| 3/6 | `fss verify` | the operations task: the *runtime* credential against the new schema, before anything starts |
+| 4/6 | the worker and the API to their declared counts | back to back, then **one** `wait services-stable` naming both |
+| 5/6 | the running digests | `release_require_release_running`: every running task of both services, held to this release's digest and count |
+| 6/6 | `fss verify` again | against what is deployed |
+
+Without the flag it is three: one rolling deployment of both services and one wait (step 4 above), the running digests, and nothing else.
 
 - **Every entry first.** Terraform creates the Secrets Manager entries empty, and an ECS task whose `secrets` block names an entry with no value does not start at all — `ResourceInitializationError … can't find the specified secret value`, before the container exists. Every task definition but the migration's names them all, so the values go in **before** the deploy, not after.
 - **Stop during migration.** From migration 0006 every declared range is a strict `{N,N}`, so there is no build of this software that straddles a schema change and no honest way to migrate without an outage. `stop.sh` scales the API to zero first — so no request reaches a schema about to move — then the worker, which is given time to release its job leases, and it does so **before** the apply registers task definitions that refuse the current schema. `deploy.sh release --schema-change` then refuses to migrate unless both are still at zero; it no longer stops them itself, because by then the apply has pointed them at definitions that refuse the schema and a quiet stop would make the wrong order look right. The apply cannot restart them: `ignore_changes = [desired_count]`.
 - **The database never rolls back.** There is no down migration in this repository and there will not be one. `packages/domain/db/migrations` is forward-only, `loadMigrations` refuses a gap, and the runner checksums an applied file's bytes, so editing one fails with `MIGRATION_CHECKSUM_MISMATCH` rather than diverging silently from production.
 - **After a successful migration and a failed deployment there are exactly two paths.** *Forward repair*: fix the code, build a new digest, deploy it. Or *a restore*: [`runbooks/restore.md`](runbooks/restore.md), with both services stopped and nothing sending until it restarts them. Redeploying the previous digests is a rollback only when their declared ranges accept the current schema version, which after a migration they usually do not. What is never a path is undoing the schema.
 - **The declared counts come from the plan**, not from a number in a shell file: the script scales each service to `terraform output deployment_plan`'s `declared_desired_count`. Terraform sets a count only when it creates a service; after that both ignore changes to it.
+- **The interruption is measured, not remembered** (lane RS-2, 29 September 2026). The 0022 release left the API unreachable for 8.7 minutes and almost none of it was work: three sequential one-off tasks at about a minute each of RunTask start latency, and then the worker started, waited on, forcibly redeployed and waited on again before the API was asked for at all. So `migrate` and `database-users ensure` are one task (`fss release-prepare`); both services are started together under one wait; and the forced second deployment is gone — `terraform apply` already updated each service's task definition while it sat at zero, so `--desired-count N` starts the definition the apply registered, and what proves the release is running is step 5, not a second rollout. Lane g80 had dropped the same forced rollout from the rolling path for the same reason. Every step line in the deploy log carries a UTC timestamp and the run ends with one line, also written into `release-deploy.txt`:
+
+  ```
+  release-timing: stop_to_migrate=…s migrate_tasks=…s services_start_to_stable=…s api_unreachable≈…s
+  ```
+
+  The first three come from the script's own clock; `api_unreachable` is read from the API service's ECS events — its last "has stopped N running tasks" to its last "registered N targets" — and is `unknown` when the events no longer hold both. It is a measurement, never a gate.
 - **Every one-off launch is checked before it is made.** `infra/scripts/lib.sh` refuses a bare cluster name, a wrong account, a wrong region, a cluster tagged as the other environment, a task definition whose image is not the digest this release is about, a network configuration that is not the root's own subnets under the worker security group, and a definition resolving a credential entry this release did not name. Afterwards it reads the `failures` array, refuses a task that never started and a stopped task with no exit code, and records the task ARN so a retry waits on the task already running rather than starting a second migration.
 
 **The drift rule: every production plan starts from what production runs, and every apply checks it again.**
