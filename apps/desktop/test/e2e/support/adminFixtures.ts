@@ -78,9 +78,18 @@ export function dashboard(): NonNullable<AdminState['dashboard']> {
     sending: { available: false, owner: 'G7-2', reason: 'the outbound fence is not in this build' },
     enrollments: { available: false, owner: 'G8', reason: 'sequences are not in this build' },
     classifier: { available: false, owner: 'G7b', reason: 'model records are not in this build' },
-    // Lane J-facts' funnel (migration 0022). The desktop does not render it yet —
-    // slice F does — and the schema names the key, so the fixture has to answer it.
-    funnel: { available: false, owner: 'J-facts', reason: 'the funnel is not in this build' },
+    // Lane J-facts' funnel (migration 0022). Today's numbers row reads
+    // `meeting.booked` out of it since the Dashboard left the navigation.
+    funnel: {
+      available: true,
+      byKind: [
+        { key: 'call.placed', count: 3 },
+        { key: 'meeting.booked', count: 1 },
+      ],
+      firmsByKind: [{ key: 'meeting.booked', count: 1 }],
+      uniqueFirms: 2,
+      firmsInScope: 3,
+    },
   } as NonNullable<AdminState['dashboard']>;
 }
 
