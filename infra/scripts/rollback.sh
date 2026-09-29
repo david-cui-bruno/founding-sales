@@ -25,6 +25,13 @@
 #
 # ## What it refuses, each in one `FAIL:` line and before anything is written
 #
+#   0b. **A checkout that does not publish `deployment_plan.<service>.task_definition`**
+#      (lane RS-2, PR 310). `deploy.sh release` holds every running task to the revision
+#      the apply registered, and refuses a root that cannot name it; a target from before
+#      that output would apply and then be refused, leaving production mid-rollback. The
+#      test is the field in `infra/modules/cluster/outputs.tf` of the target checkout,
+#      not a second SHA to keep in step with main.
+#
 #   0. **A checkout older than main beed2d90 (PR 272).** That merge deleted the restore
 #      drill's task definition, its roles and policies, its metric filter and its alarm,
 #      and the Terraform of every older commit declares them: its plan would create them
@@ -207,6 +214,23 @@ if ! git -C "$CHECKOUT" cat-file -e "${BOUNDARY_COMMIT}^{commit}" 2>/dev/null; t
 fi
 if ! git -C "$CHECKOUT" merge-base --is-ancestor "$BOUNDARY_COMMIT" "$COMMIT"; then
   rollback_fail "$COMMIT is older than ${BOUNDARY_COMMIT:0:8} (PR 272), which deleted the restore drill's task definition, roles, policies, metric filter and alarm; its Terraform would create them again. Across that boundary only the images roll back, without Terraform (release.md 4.1a), and infrastructure is repaired forward. Nothing was read or planned."
+fi
+
+# 0b. Not across the applied-revision boundary (lane RS-2, PR 310). `deploy.sh release`
+# — which `--apply` runs at the end of this — refuses a root whose `deployment_plan`
+# output does not name the revision the apply registered, because without it a service
+# ECS rolled back to the previous revision of the same image reads as a finished
+# release. A target checkout from before that output exists would therefore apply
+# cleanly and then be refused, leaving production on a half-rolled-back plan. It is
+# refused here instead, before anything is read from AWS.
+#
+# The file is grepped rather than the commit named, so there is no second SHA to keep in
+# step with main: the boundary is "does this checkout publish the field", which is the
+# thing that actually matters.
+CLUSTER_OUTPUTS="$CHECKOUT/infra/modules/cluster/outputs.tf"
+if ! grep -qE '^[[:space:]]*task_definition[[:space:]]*=[[:space:]]*aws_ecs_task_definition\.api\.arn' "$CLUSTER_OUTPUTS" 2>/dev/null \
+  || ! grep -qE '^[[:space:]]*task_definition[[:space:]]*=[[:space:]]*aws_ecs_task_definition\.worker\.arn' "$CLUSTER_OUTPUTS" 2>/dev/null; then
+  rollback_fail "$COMMIT's infra/modules/cluster/outputs.tf does not publish deployment_plan.<service>.task_definition: this target predates the applied-revision release; a rollback across it is a hand reconciliation (release.md: recovery is a forward fix or a restore). Nothing was read or planned."
 fi
 
 # A copy to stay on needs a root that can name it (refusal 5).

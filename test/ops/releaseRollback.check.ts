@@ -299,6 +299,12 @@ interface WorldOptions {
    * wave 1 on) commits the four settings, `variables` (a commit from before) declares them.
    */
   readonly root?: 'literals' | 'variables';
+  /**
+   * Whether the target checkout's `infra/modules/cluster/outputs.tf` publishes
+   * `deployment_plan.<service>.task_definition` (lane RS-2, PR 310). True by default;
+   * false is a target from before that output existed.
+   */
+  readonly publishesAppliedRevision?: boolean;
   /** Committed literals that differ from what production runs; production's by default. */
   readonly committed?: Partial<Record<'certificate_arn' | 'api_hostname' | 'alert_emails' | 'sending_enabled', string>>;
   /**
@@ -351,6 +357,28 @@ function world(options: WorldOptions = {}): World {
     ].join('\n'),
   );
   writeFileSync(join(checkout, 'scripts/productionSmoke.mjs'), SMOKE);
+  // Lane RS-2 (PR 310): the second boundary. A target that does not publish the revision
+  // its apply registered is refused, because `deploy.sh release` would refuse it after
+  // the apply. Only the two lines rollback.sh greps for are needed here.
+  if (options.publishesAppliedRevision !== false) {
+    mkdirSync(join(checkout, 'infra/modules/cluster'), { recursive: true });
+    writeFileSync(
+      join(checkout, 'infra/modules/cluster/outputs.tf'),
+      [
+        'output "deployment_plan" {',
+        '  value = {',
+        '    api = {',
+        '      task_definition = aws_ecs_task_definition.api.arn',
+        '    }',
+        '    worker = {',
+        '      task_definition = aws_ecs_task_definition.worker.arn',
+        '    }',
+        '  }',
+        '}',
+        '',
+      ].join('\n'),
+    );
+  }
   const sending = options.sending ?? { api: 'false', worker: 'false' };
   const databaseHost = options.databaseHost ?? { api: MANAGED_HOST, worker: MANAGED_HOST };
   const committed = {
@@ -646,6 +674,28 @@ describe('rollback.sh refuses in one FAIL line, before anything is written', () 
     expectRefusal(unknown, unanswered, [`does not hold ${'f'.repeat(8)}, the merge of PR 272`, 'fetch origin there']);
     expect(unknown.calls()).toEqual([]);
     // The same world after the boundary plans.
+    expect(rollback(world()).code).toBe(0);
+  });
+
+  it('refuses a target that predates the applied-revision release, before reading production', () => {
+    // Lane RS-2 (PR 310). `deploy.sh release` holds every running task to the revision
+    // the apply registered and refuses a root that cannot name it, so a target from
+    // before that output would apply cleanly and *then* be refused — production left on
+    // a half-rolled-back plan. It is refused here, before the first AWS call.
+    //
+    // The vacuous-pass trap: a refusal that refused everything would also pass this. So
+    // the same world with the output present plans, below, and the message is the one
+    // an operator is meant to act on rather than any failure.
+    const older = world({ publishesAppliedRevision: false });
+    const run = rollback(older, ['--apply']);
+    expectRefusal(older, run, [
+      'does not publish deployment_plan.<service>.task_definition',
+      'this target predates the applied-revision release',
+      'a rollback across it is a hand reconciliation (release.md: recovery is a forward fix or a restore)',
+    ]);
+    expect(older.calls(), 'nothing is read from production').toEqual([]);
+    // The positive control: a target that publishes it plans, and this is not a second
+    // SHA boundary — the file in the target checkout is what decides.
     expect(rollback(world()).code).toBe(0);
   });
 
