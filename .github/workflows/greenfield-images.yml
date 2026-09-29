@@ -325,7 +325,7 @@ jobs:
       # Whatever this attempt's end, what it pushed: a re-run reuses only a tag this attests.
       - name: Keep what this attempt pushed
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: fss-image-pushed-${{ github.run_attempt }}
           path: ${{ runner.temp }}/fss-image-pushed/
@@ -365,7 +365,7 @@ jobs:
 
       # actions/upload-artifact v4, the pin the rehearsal uses.
       - name: Keep the digests
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: fss-image-digests
           path: ${{ runner.temp }}/fss-image-digests/image-digests.json
