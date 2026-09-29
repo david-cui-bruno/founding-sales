@@ -1,5 +1,5 @@
 -- ---------------------------------------------------------------------------
--- 0023_email_presentation.sql — the stop line goes; the word ban becomes a link ban
+-- 0024_email_presentation.sql — the stop line goes; the word ban becomes a link ban
 -- changes: hold_reason_codes, template_versions, outbound_messages
 --
 -- David, 29 September 2026: "The presentation decisions are now settled: remove the
@@ -13,11 +13,12 @@
 -- write. `docs/greenfield/decisions/email-presentation-20260929.md`.
 --
 -- A contract migration, like 0015, 0018, 0019 and 0021: both service ranges move to
--- {23, 23} (`packages/domain/db/schemaRange.ts`) and the release is a stop-migrate-start
--- one. The brief asked for a provisional 0024; the runner refuses a gap
--- (`MIGRATION_VERSIONS_NOT_CONTIGUOUS`, `migrationRunner.ts`), and 0022 is the last file
--- on main, so this is 0023. The coordinator renumbers it at merge if another 0023 lands
--- first.
+-- {24, 24} (`packages/domain/db/schemaRange.ts`) and the release is a stop-migrate-start
+-- one. It is applied after `0023_research.sql`, which landed on main first: the runner
+-- refuses a gap (`MIGRATION_VERSIONS_NOT_CONTIGUOUS`, `migrationRunner.ts`), so a
+-- migration takes the next free number rather than a reserved one, and this file was
+-- 0023 while it was written and moved up behind research without a byte of its SQL
+-- changing.
 --
 -- ## What the inspection found (at 043f84e4, before anything here was written)
 --
@@ -96,7 +97,7 @@
 --
 -- Approved template versions carrying the old stop line stay valid: the line is a
 -- sentence, not a link, and nothing here refuses it. They lose it at the next send,
--- where `composeSendBody` recognises the pre-0023 block and replaces it — no row is
+-- where `composeSendBody` recognises the pre-0024 block and replaces it — no row is
 -- edited by this file.
 --
 -- ## The lock, and what NOT VALID does and does not buy here
