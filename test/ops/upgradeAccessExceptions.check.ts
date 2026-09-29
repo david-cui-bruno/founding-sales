@@ -22,8 +22,8 @@ import { readRepositoryFile, repositoryPath } from './support/repository.ts';
  *
  * The behaviour against a real database is exercised by the upgrade test itself. What
  * these cases pin is the file's contract and the two rules that live outside it: that
- * the header form is gone, and that the baseline cannot move in the same change as a
- * migration.
+ * the header form is gone, and that the baseline cannot move in the same pull request
+ * as a migration.
  */
 
 const temporary: string[] = [];
@@ -86,7 +86,7 @@ describe('the `-- runtime-access:` header form is gone', () => {
   });
 });
 
-describe('the grants baseline may not move in the same change as a migration', () => {
+describe('the grants baseline may not move in the same pull request as a migration', () => {
   it('sees both halves, and neither alone', () => {
     expect(
       baselineAndMigrationBothChanged([
@@ -99,9 +99,9 @@ describe('the grants baseline may not move in the same change as a migration', (
     expect(baselineAndMigrationBothChanged(['tools/upgrade/main.ts'])).toBe(false);
   });
 
-  it('the upgrade workflow enforces the same rule, so a pull request cannot slip past the tool', () => {
+  it('the upgrade workflow enforces the same rule over the whole branch, not per commit', () => {
     const workflow = readRepositoryFile('.github/workflows/greenfield.yml');
-    expect(workflow).toContain('The grants baseline may not move in the same change as a migration');
+    expect(workflow).toContain('The grants baseline may not move in the same pull request as a migration');
     expect(workflow).toContain('tools/upgrade/grants-baseline.json');
   });
 });

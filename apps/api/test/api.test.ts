@@ -108,6 +108,7 @@ describe('the health route against a real database', () => {
       session: database.session,
       supportedClientVersions: CLIENT_VERSIONS,
       sendingEnabled: false,
+      environment: {},
     });
     expect(report).toEqual({
       status: 'serving',
@@ -120,9 +121,83 @@ describe('the health route against a real database', () => {
         accepted: true,
         reason: null,
       },
+      // No build argument in this process, so the honest answer is `null` rather than
+      // a missing field: that is exactly what a locally run API and every image built
+      // before `ARG FSS_BUILD_COMMIT` existed will answer.
+      build: { commit: null },
       // The published range, not the policy: `1.0.x` tops out at 1.0.999 (lane g78).
       supportedClientVersions: { minimum: '1.0.0', maximum: '1.0.999' },
       sendingEnabled: false,
+    });
+  });
+
+  /**
+   * The commit the image was built from (lane g-build-commit).
+   *
+   * The reason this field exists is a gate that had to know which code a running image
+   * was: `/health` could attest the schema and not the commit, so a repository variable
+   * was trusted for it and a wrong-but-plausible value was silently indistinguishable
+   * from a right one. So the three cases that matter are the value being *believable*:
+   * a real sha is reported, and anything that is not one is `null` rather than passed
+   * through for a reader to act on.
+   */
+  describe('the commit the image was built from', () => {
+    const COMMIT = '0123456789abcdef0123456789abcdef01234567';
+
+    it('reports the commit the image was built from', async () => {
+      const report = await buildHealthReport({
+        session: database.session,
+        supportedClientVersions: CLIENT_VERSIONS,
+        sendingEnabled: false,
+        environment: { FSS_BUILD_COMMIT: COMMIT },
+      });
+      expect(report.build).toEqual({ commit: COMMIT });
+    });
+
+    it('answers null, and still answers, when the image carries no commit', async () => {
+      const report = await buildHealthReport({
+        session: database.session,
+        supportedClientVersions: CLIENT_VERSIONS,
+        sendingEnabled: false,
+        environment: {},
+      });
+      // Present and null, not absent: a reader distinguishes "no commit" from "this API
+      // is too old to have the field" only if the field is always there.
+      expect(report.build).toEqual({ commit: null });
+      expect(Object.hasOwn(report.build, 'commit')).toBe(true);
+      expect(report.status).toBe('serving');
+    });
+
+    it('answers null for anything that is not a forty-character lower-case sha', async () => {
+      // An abbreviation, an upper-case sha, a branch name, a tag and blank. Each is
+      // somebody's guess at the commit, and a guess reported as a fact is the failure
+      // this field was added to prevent.
+      for (const value of ['0123456', COMMIT.toUpperCase(), 'main', `${COMMIT}0`, '   ', '']) {
+        const report = await buildHealthReport({
+          session: database.session,
+          supportedClientVersions: CLIENT_VERSIONS,
+          sendingEnabled: false,
+          environment: { FSS_BUILD_COMMIT: value },
+        });
+        expect(report.build).toEqual({ commit: null });
+      }
+    });
+
+    it('is reported even when the database cannot answer', async () => {
+      // The degraded branch builds its own object, so it is the one that would forget.
+      const report = await buildHealthReport({
+        session: {
+          query: async () => {
+            await Promise.resolve();
+            throw new Error('connection refused');
+          },
+        },
+        supportedClientVersions: CLIENT_VERSIONS,
+        sendingEnabled: false,
+        environment: { FSS_BUILD_COMMIT: COMMIT },
+      });
+      expect(report.status).toBe('degraded');
+      expect(report.build).toEqual({ commit: COMMIT });
     });
   });
 

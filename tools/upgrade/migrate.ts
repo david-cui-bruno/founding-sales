@@ -1,5 +1,3 @@
-import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
 import { cp, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,6 +13,11 @@ import {
 // resolve there. A relative path resolves inside whichever tree the file is in, which
 // is exactly the property the two-checkout arrangement needs.
 import { APP_RUNTIME_ROLE, MIGRATION_ROLE, readMigrationRole } from '../../apps/worker/src/tools/fss/migrate.ts';
+
+// The deployed-range comparison lives in a module of its own because the CI guard runs
+// it as a script, before `npm ci`, and must therefore not drag in anything this file
+// imports. Re-exported here so every existing caller is unaffected.
+export { compareDeployedMigrations, type DeployedMigrationDifference } from './deployedMigrations.ts';
 
 /**
  * Applying migrations the way a release applies them.
@@ -112,57 +115,3 @@ export async function withFailingMigration(directory: string, version: number): 
 }
 
 
-export interface DeployedMigrationDifference {
-  readonly fileName: string;
-  readonly reason: 'content_differs' | 'missing_in_head' | 'missing_in_base';
-  readonly baseChecksum: string | null;
-  readonly headChecksum: string | null;
-}
-
-/**
- * Every migration up to `through` must be byte-identical in the two checkouts.
- *
- * The runner records a sha256 of each file's bytes and refuses to continue when a
- * recorded file has changed (`MIGRATION_CHECKSUM_MISMATCH`), because migrations are
- * forward-only and there is nothing to fall back to. A branch that edits an already
- * deployed file and adds a new one would therefore be *refused by production* — and
- * would have passed this test, which applied HEAD's copy of the old file and recorded
- * HEAD's checksum for it.
- *
- * So the deployed range is compared before anything is applied, and the answer is the
- * same one production would give. The runner is still the backstop: 1..N are applied
- * from the base checkout and N+1..M from HEAD, so a difference this function somehow
- * missed fails again, with the runner's own error, at the second apply.
- */
-export function compareDeployedMigrations(
-  baseDirectory: string,
-  headDirectory: string,
-  through: number,
-): readonly DeployedMigrationDifference[] {
-  const checksum = (sql: string): string => createHash('sha256').update(sql, 'utf8').digest('hex');
-  const upTo = (directory: string): Map<string, string> =>
-    new Map(
-      loadMigrations(directory)
-        .filter(migration => migration.version <= through)
-        .map(migration => [migration.fileName, checksum(readFileSync(join(directory, migration.fileName), 'utf8'))]),
-    );
-  const base = upTo(baseDirectory);
-  const head = upTo(headDirectory);
-  const differences: DeployedMigrationDifference[] = [];
-  for (const [fileName, baseChecksum] of base) {
-    const headChecksum = head.get(fileName);
-    if (headChecksum === undefined) {
-      differences.push({ fileName, reason: 'missing_in_head', baseChecksum, headChecksum: null });
-      continue;
-    }
-    if (headChecksum !== baseChecksum) {
-      differences.push({ fileName, reason: 'content_differs', baseChecksum, headChecksum });
-    }
-  }
-  for (const [fileName, headChecksum] of head) {
-    if (!base.has(fileName)) {
-      differences.push({ fileName, reason: 'missing_in_base', baseChecksum: null, headChecksum });
-    }
-  }
-  return differences.sort((left, right) => left.fileName.localeCompare(right.fileName));
-}

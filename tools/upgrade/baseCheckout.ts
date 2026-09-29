@@ -40,8 +40,21 @@ import { join } from 'node:path';
  * comparison exists to prevent (GPT-6 review of PR 314, P1-6). Whenever this tool
  * builds one it stamps it with the digest of the lockfile it was built from. On the
  * next run: a matching stamp is reused; a stamp that disagrees means our own tree has
- * gone stale, so it is removed and rebuilt; no stamp at all means the directory is
- * somebody else's and the run refuses rather than deleting it.
+ * gone stale, so it is removed and rebuilt; **no stamp at all means the tree is
+ * unattributable, so it is reinstalled with `npm ci` and stamped.**
+ *
+ * The third of those used to be decided on evidence instead: npm leaves a hidden
+ * lockfile beside a tree it installed, and an earlier round compared the versions in it
+ * with the real `package-lock.json`. A third GPT-6 review round showed why that could
+ * not be made to hold. The hidden lockfile legitimately omits entries — optional
+ * dependencies for other platforms, 75 of 565 in this repository — so the comparison
+ * had to skip anything it did not find, and an omitted package's installed version can
+ * disagree with the lockfile without the check ever looking at it; the overlap floor
+ * that backed it up accepted half the tree. A check that can pass a tree it never
+ * verified is worse than no check, because it reports a provenance it does not have. So
+ * it is gone, and the unstamped tree simply pays one `npm ci`. The supported human case
+ * — pointing `--tree` at a checkout somebody prepared by hand — pays that install once
+ * and is stamped from then on.
  *
  * **The loader itself.** Every commit before this lane merged has no
  * `tools/upgrade/`, which includes the first pull request this job runs on. For those,
@@ -49,7 +62,8 @@ import { join } from 'node:path';
  * the base's own loader is preferred whenever it has one, because after this merges the
  * loader at N is the one that was written against schema N.
  *
- * Nothing here writes a tracked file, and `cleanup` removes only what it created.
+ * Nothing here writes a tracked file, and `cleanup` removes only what it created — see
+ * `prepareCheckout` for why a reinstalled `node_modules` is deliberately left behind.
  */
 
 /** The workspace packages a link farm repoints at the base tree. */
@@ -63,9 +77,9 @@ const WORKSPACE_PACKAGES: readonly (readonly [string, string])[] = [
 
 export type ModulesSource =
   | 'already present'
-  | "reused (that checkout's own npm install, agreeing with its lockfile)"
   | 'reused (stamped with this lockfile)'
   | 'rebuilt (the stamp named another lockfile)'
+  | 'reinstalled with npm ci over an unstamped node_modules, and left in place afterwards'
   | 'linked from HEAD (identical lockfile)'
   | 'npm ci in the base worktree (lockfiles differ)';
 
@@ -113,7 +127,6 @@ async function lockfileDigest(checkout: string): Promise<string | null> {
   return createHash('sha256').update(await readFile(path)).digest('hex');
 }
 
-/** `npm ci` in `checkout`, with the flags the greenfield gate uses. */
 /** The lockfile digest a previously built `node_modules` was stamped with, if ours. */
 async function readStamp(checkout: string): Promise<string | null> {
   try {
@@ -127,50 +140,14 @@ async function writeStamp(checkout: string, digest: string | null): Promise<void
   await writeFile(join(checkout, ...STAMP), `${digest ?? 'no package-lock.json'}\n`, 'utf8');
 }
 
-/**
- * Whether a `node_modules` this tool did not build was installed from the checkout's
- * own `package-lock.json`, according to npm's hidden lockfile.
- *
- * The two documents are not comparable by digest — the hidden lockfile is npm's own
- * resolution of the real one and legitimately omits entries (optional dependencies for
- * other platforms, for instance: 75 of 565 in this repository's tree). What cannot
- * legitimately differ is a *version*. A disagreeing one, or no hidden lockfile at all,
- * means the directory came from somewhere else.
- *
- * Returns the sentence naming the problem, or `null` when it agrees.
- */
-async function hiddenLockfileDisagreement(checkout: string): Promise<string | null> {
-  let hidden: unknown;
-  let real: unknown;
-  try {
-    hidden = JSON.parse(await readFile(join(checkout, 'node_modules', '.package-lock.json'), 'utf8'));
-    real = JSON.parse(await readFile(join(checkout, 'package-lock.json'), 'utf8'));
-  } catch {
-    return 'it carries no node_modules/.package-lock.json, so nothing says where it came from';
-  }
-  const hiddenPackages = (hidden as { packages?: Record<string, { version?: string }> }).packages ?? {};
-  const realPackages = (real as { packages?: Record<string, { version?: string; link?: boolean }> }).packages ?? {};
-  let compared = 0;
-  let wanted = 0;
-  for (const [name, entry] of Object.entries(realPackages)) {
-    if (name === '' || entry.link === true) continue;
-    wanted += 1;
-    const installed = hiddenPackages[name];
-    if (installed === undefined) continue;
-    compared += 1;
-    if (installed.version !== entry.version) {
-      return `${name} is ${installed.version ?? 'unknown'} there and ${entry.version ?? 'unknown'} in the lockfile`;
-    }
-  }
-  // An overlap this small is not an install of this lockfile at all — more likely a
-  // link farm an interrupted run left behind.
-  if (wanted > 0 && compared * 2 < wanted) {
-    return `only ${String(compared)} of its ${String(wanted)} packages are accounted for`;
-  }
-  return null;
-}
-
+/** `npm ci` in `checkout`, with the flags the greenfield gate uses. */
 async function install(checkout: string): Promise<void> {
+  // `npm ci` exists to install *from* a lockfile and refuses without one. Saying which
+  // file is missing beats relaying npm's exit code out of a subprocess whose stdout is
+  // discarded.
+  if (!existsSync(join(checkout, 'package-lock.json'))) {
+    throw new Error(`${checkout} has no package-lock.json, so npm ci cannot install its modules there`);
+  }
   const code = await new Promise<number | null>(resolve => {
     const child = spawn('npm', ['ci', '--ignore-scripts', '--no-audit', '--no-fund'], {
       cwd: checkout,
@@ -225,28 +202,34 @@ export async function prepareCheckout(base: string, head: string): Promise<BaseC
   const created: string[] = [];
   let modules: ModulesSource = 'already present';
   const [baseLock, headLock] = await Promise.all([lockfileDigest(base), lockfileDigest(head)]);
-  if (existsSync(join(base, 'node_modules'))) {
+  const modulesPath = join(base, 'node_modules');
+  if (existsSync(modulesPath)) {
     const stamped = await readStamp(base);
     if (stamped === null) {
-      // Not ours. It can still be trusted, but only on evidence: npm leaves a hidden
-      // lockfile beside the tree it installed, and that is what says which
-      // `package-lock.json` the tree came from. A checkout somebody prepared with
-      // `npm ci` — the ordinary way to point `--tree` at another branch — passes here.
-      const own = await hiddenLockfileDisagreement(base);
-      if (own !== null) {
-        throw new Error(
-          `${join(base, 'node_modules')} was not installed from that checkout's package-lock.json (${own}); remove it and let this run install, or run \`npm ci\` there`,
-        );
-      }
-      modules = "reused (that checkout's own npm install, agreeing with its lockfile)";
+      // Not ours, and nothing on disk can say where it came from, so it is reinstalled
+      // from the checkout's own lockfile and stamped. `npm ci` removes and recreates
+      // `node_modules` itself, which is what makes this safe to do to a directory this
+      // tool did not create: the result is an install of the lockfile that is sitting
+      // next to it, not a mixture.
+      //
+      // It is deliberately **not** added to `created`. Everything else in that list is
+      // something this run brought into existence; this directory existed before the
+      // run, in somebody's worktree, and the cost of being wrong in the two directions
+      // is not symmetrical. Leaving a correctly installed, stamped `node_modules`
+      // behind costs a few hundred megabytes and makes the next run's reuse free;
+      // deleting it would take away a tree the owner of that worktree put there, and
+      // `cleanup` runs on the failure path too. So this run consumes it and leaves it.
+      await install(base);
+      await writeStamp(base, baseLock);
+      modules = 'reinstalled with npm ci over an unstamped node_modules, and left in place afterwards';
     } else if (stamped !== baseLock) {
-      await rm(join(base, 'node_modules'), { recursive: true, force: true });
+      await rm(modulesPath, { recursive: true, force: true });
       modules = 'rebuilt (the stamp named another lockfile)';
     } else {
       modules = 'reused (stamped with this lockfile)';
     }
   }
-  if (!existsSync(join(base, 'node_modules'))) {
+  if (!existsSync(modulesPath)) {
     if (baseLock !== null && baseLock === headLock) {
       await buildLinkFarm(base, head);
       if (modules === 'already present') modules = 'linked from HEAD (identical lockfile)';
@@ -255,7 +238,9 @@ export async function prepareCheckout(base: string, head: string): Promise<BaseC
       if (modules === 'already present') modules = 'npm ci in the base worktree (lockfiles differ)';
     }
     await writeStamp(base, baseLock);
-    created.push(join(base, 'node_modules'));
+    // Ours, either because nothing was there or because a stale stamp of ours was: the
+    // one case `cleanup` may remove.
+    created.push(modulesPath);
   }
 
   let loader = join(base, 'tools', 'upgrade', 'fixtureMain.ts');

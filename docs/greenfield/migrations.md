@@ -100,11 +100,14 @@ Eleven steps, each printing its wall-clock seconds:
    `ACCESS EXCLUSIVE` held;
 6. data preservation, against the `-- changes:` headers above: per-table content
    hashes, the catalogue **shape** of every table (so a change to a table the fixture
-   leaves empty is still caught), and every **view definition** (`pg_get_viewdef`). A
-   view carries no rows of its own, so neither the hashes nor the shapes can see one
-   being replaced — and `effective_suppressions` is the view the suppression system
-   answers "is this handle suppressed?" from. A redefined view no migration names in a
-   `-- changes:` header fails;
+   leaves empty is still caught), and every **view definition** (`pg_get_viewdef`) in
+   every schema the application owns — derived from the catalogue, not a hard-coded
+   `public`, so a view a later migration puts elsewhere is covered the moment it
+   exists. A view carries no rows of its own, so neither the hashes nor the shapes can
+   see one being replaced, and `effective_suppressions` is the view the suppression
+   system answers "is this handle suppressed?" from. View keys are schema-qualified
+   (`public.effective_suppressions`); a bare name in a `-- changes:` header covers the
+   one in `public` and no other. A redefined view no migration names fails;
 7. the privileges at M, against a **committed baseline** (`tools/upgrade/grants-baseline.json`,
    taken at schema 22: both group roles' table and column grants, `PUBLIC`, sequences,
    functions and the schema grants) **plus** the `GRANT`/`REVOKE` lines migrations
@@ -128,11 +131,13 @@ Eleven steps, each printing its wall-clock seconds:
    migration: a migration that carries its own exemption — which is what the old
    `-- runtime-access: none` header was — reviews itself. That header form is gone.
 
-   **The baseline may not move in the same change as a migration.** `grants-baseline.json`
-   is what every comparison is against, so a pull request that edits both it and a
-   migration can launder any access change past the check. Regenerate it with
-   `grantsBaselineMain` in a commit of its own, containing no migration, where the diff
-   is the review; the `upgrade` job fails a change that moves both;
+   **The baseline and a migration may not change in the same pull request.**
+   `grants-baseline.json` is what every comparison is against, so a change that edits
+   both it and a migration can launder any access change past the check. Regenerate it
+   with `grantsBaselineMain` in a **pull request of its own**, containing no migration,
+   where the diff is the review — separate commits in the same branch are not enough,
+   and the `upgrade` job compares the whole branch against `origin/main`, so it refuses
+   them;
 8. `packages/domain/test/db/constraints.test.ts` at M, run by Vitest as itself, so the
    coverage gate at the bottom of that file applies: a new constraint with no failing
    insert fails the upgrade test too;
@@ -169,7 +174,10 @@ Eleven steps, each printing its wall-clock seconds:
       see it.
 
     A migration that replaced a routine must have had it **called** —
-    `pg_stat_user_functions` counts it, and an uncalled replacement fails the step;
+    `pg_stat_user_functions` counts it, and an uncalled replacement fails the step. The
+    evidence prints one row per overload with its signature; the rule sums them by bare
+    name, and **which overload the migration replaced is not attributed** — a name with
+    two overloads passes when either was called;
 11. recovery — the migrator run again at M is a no-op, and a synthetic migration whose
     second statement is invalid leaves the schema, every `schema_versions` row, the
     catalogue shape and a row written just before it exactly as they were. The snapshot

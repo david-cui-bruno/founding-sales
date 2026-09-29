@@ -257,29 +257,84 @@ export function shapeDifferences(before: ShapeSnapshot, after: ShapeSnapshot): r
  * *server* considers a change does. Materialized views (`relkind = 'm'`) are covered by
  * the same read; none exists in this schema today, and one added later is snapshotted
  * without anybody having to remember to come back here.
+ *
+ * **Every schema the application owns, not just `public`.** A second GPT-6 review round
+ * pointed out that "today's migrations happen to create their view in `public`" is a
+ * coincidence, not a rule: a view the application owns in another schema would have been
+ * invisible. The schema set is therefore read out of the catalogue (`applicationSchemas`)
+ * rather than written down here, and the keys are schema-qualified so that two views of
+ * the same name in different schemas cannot collide into one entry.
  */
 
-/** A view's name → its server-rendered definition (`pg_get_viewdef(oid, true)`). */
+/**
+ * The schemas this application owns, in name order.
+ *
+ * Derived, not listed. Everything in the cluster's catalogue that is not PostgreSQL's
+ * own (`pg_catalog`, `pg_toast`, the `pg_temp_*`/`pg_toast_temp_*` pairs a backend
+ * creates, `information_schema`) and was not created by an extension is the
+ * application's, because on this database nobody else creates schemas: the migrations
+ * are the only thing that has ever done so, and `grants.ts` checks its privileges on
+ * `public` because `public` is the only one they have created so far.
+ *
+ * Extension-owned schemas are excluded because an extension's objects are the
+ * extension's business, not a change a migration has to declare. Neither of the two
+ * extensions this schema installs — `pg_trgm` and `btree_gist` — creates a schema at
+ * all, so today this exclusion removes nothing; it is here so that installing one that
+ * does (PostGIS's `topology`, say) does not start failing releases over views the
+ * application never wrote.
+ *
+ * Reading it from the catalogue rather than from the migration text means a schema a
+ * future migration creates is covered the moment it exists, with nobody having to come
+ * back and add it to a list.
+ */
+export async function applicationSchemas(session: SessionQueryable): Promise<readonly string[]> {
+  const { rows } = await session.query<{ schema_name: string }>(
+    `SELECT n.nspname AS schema_name
+       FROM pg_namespace n
+      WHERE n.nspname NOT LIKE 'pg\\_%'
+        AND n.nspname <> 'information_schema'
+        AND NOT EXISTS (
+              SELECT 1
+                FROM pg_depend d
+               WHERE d.classid = 'pg_namespace'::regclass
+                 AND d.objid = n.oid
+                 AND d.deptype = 'e')
+      ORDER BY n.nspname`,
+  );
+  return rows.map(row => row.schema_name);
+}
+
+/**
+ * A view's schema-qualified name → its server-rendered definition
+ * (`pg_get_viewdef(oid, true)`). Keys read `public.effective_suppressions`.
+ */
 export type ViewSnapshot = ReadonlyMap<string, string>;
 
-/** Every view and materialized view in `public`, in name order. */
+/**
+ * Every view and materialized view in every schema the application owns, in
+ * schema-then-name order, keyed `schema.view`.
+ */
 export async function viewSnapshot(session: SessionQueryable): Promise<ViewSnapshot> {
-  const { rows } = await session.query<{ view_name: string; definition: string | null }>(
-    `SELECT c.relname AS view_name, pg_get_viewdef(c.oid, true) AS definition
+  const schemas = await applicationSchemas(session);
+  if (schemas.length === 0) return new Map();
+  const { rows } = await session.query<{ schema_name: string; view_name: string; definition: string | null }>(
+    `SELECT n.nspname AS schema_name, c.relname AS view_name, pg_get_viewdef(c.oid, true) AS definition
        FROM pg_class c
        JOIN pg_namespace n ON n.oid = c.relnamespace
-      WHERE n.nspname = 'public' AND c.relkind IN ('v', 'm')
-      ORDER BY c.relname`,
+      WHERE n.nspname = ANY($1) AND c.relkind IN ('v', 'm')
+      ORDER BY n.nspname, c.relname`,
+    [schemas],
   );
   const result = new Map<string, string>();
   // The definition is normalised for comparison, not for display: the pretty-printed
   // form is stable for an unchanged view, but trailing whitespace on a line is not worth
   // failing a release over, and the same definition must compare equal to itself.
-  for (const row of rows) result.set(row.view_name, (row.definition ?? '').trim());
+  for (const row of rows) result.set(`${row.schema_name}.${row.view_name}`, (row.definition ?? '').trim());
   return result;
 }
 
 export interface ViewDifference {
+  /** Schema-qualified, as `ViewSnapshot` keys it: `public.effective_suppressions`. */
   readonly view: string;
   readonly change: 'added' | 'dropped' | 'redefined';
   readonly before: string | null;

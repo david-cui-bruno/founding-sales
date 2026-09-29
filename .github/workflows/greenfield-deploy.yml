@@ -404,11 +404,16 @@ jobs:
               || { echo "::error::after a green smoke and read-back, ECR says fss-prod-$service runs an image built from '$commits', not $COMMIT: production is not running what this deploy released"; exit 1; }
             attested=$((attested + 1))
           done
-          if [ "$attested" -eq 0 ]; then
-            echo "::warning title=Set FSS_PROD_COMMIT::neither image could be attested; set FSS_PROD_COMMIT to $COMMIT by hand only once you have checked what production runs (release.md 4)"
-            exit 0
+          # 2 of 2, or it is not an attestation. One image agreeing says nothing about
+          # the other, and `FSS_PROD_COMMIT` names the commit *production* runs, not the
+          # commit one of its two services runs.
+          if [ "$attested" -eq 2 ]; then
+            echo "::notice title=Set FSS_PROD_COMMIT::ECR attests both production images were built from $COMMIT; production now runs it, so set FSS_PROD_COMMIT to $COMMIT (release.md 4)"
+          elif [ "$attested" -eq 1 ]; then
+            echo "::warning title=Verify before setting FSS_PROD_COMMIT::only one of the two production images could be attested (the warning above says which was not); check what production runs before setting FSS_PROD_COMMIT to $COMMIT (release.md 4)"
+          else
+            echo "::warning title=Verify before setting FSS_PROD_COMMIT::neither production image could be attested; check what production runs before setting FSS_PROD_COMMIT to $COMMIT (release.md 4)"
           fi
-          echo "::notice title=Set FSS_PROD_COMMIT::ECR attests $attested of 2 production images were built from $COMMIT; production now runs it, so set FSS_PROD_COMMIT to $COMMIT (release.md 4)"
 
   summary:
     name: One line

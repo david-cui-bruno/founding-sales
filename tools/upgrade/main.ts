@@ -28,6 +28,7 @@ import { runConstraintCases } from './constraints.ts';
 import { runChecksIn } from './checksRun.ts';
 import { enableRoutineTracking, routineCalls } from './routines.ts';
 import { parseOptions, UsageError, type Options } from './options.ts';
+import { redactConnectionStrings } from './redact.ts';
 import { Report, secondsSince } from './report.ts';
 
 /**
@@ -277,7 +278,13 @@ async function run(options: Options, report: Report): Promise<void> {
     // A new view is as much a declarable change as a new table: `-- changes:` is cheap
     // to write and a view appearing unannounced is worth a sentence from its author.
     const views = viewDifferences(beforeViews, afterViews);
-    const undeclaredViews = views.filter(difference => !budget.permitted.has(difference.view));
+    // View keys are schema-qualified (`public.effective_suppressions`) because the
+    // application may own more than one schema, while a `-- changes:` header names a
+    // bare object. A bare token covers `public` only — a header line for
+    // `effective_suppressions` must not silently also excuse `archive.effective_suppressions`.
+    const declaredView = (view: string): boolean =>
+      budget.permitted.has(view) || (view.startsWith('public.') && budget.permitted.has(view.slice('public.'.length)));
+    const undeclaredViews = views.filter(difference => !declaredView(difference.view));
     report.step(
       6,
       'data preservation, catalogue shape and view definitions',
@@ -549,10 +556,21 @@ async function run(options: Options, report: Report): Promise<void> {
     if (replacedRoutines.length > 0) {
       report.line();
       report.line('step 10 — routines this upgrade replaced, and whether a workflow called them');
+      // One row per overload, with the signature, because the count is summed by bare
+      // name: two functions of the same name are two rows here, and the sum is the
+      // number the pass/fail rule uses. Which overload a migration replaced is not
+      // attributed — see docs/greenfield/migrations.md.
       report.table(
-        ['routine', 'calls'],
-        calls.map(entry => [entry.routine, String(entry.calls)]),
+        ['routine', 'signature', 'calls'],
+        calls.flatMap(entry =>
+          entry.overloads.length === 0
+            ? [[entry.routine, '(no such function in public)', String(entry.calls)]]
+            : entry.overloads.map(overload => [entry.routine, overload.signature, String(overload.calls)]),
+        ),
       );
+      if (calls.some(entry => entry.overloads.length > 1)) {
+        report.line('  a name with more than one row is overloaded; the rule sums the rows');
+      }
     }
 
     report.line();
@@ -692,40 +710,87 @@ async function runRecovery(
   };
 }
 
+/**
+ * An artifact for a run that died before it could create its own.
+ *
+ * CI uploads `upgrade-evidence-*.txt` with `if-no-files-found: error`, so a run that
+ * fails while parsing its arguments — or one refused because its evidence path was
+ * already taken — leaves the upload step to fail with a message about a missing file
+ * instead of the message about what actually went wrong (GPT-6, third review of PR
+ * 314, P2). This writes one, under a name of its own so it can never be the file the
+ * exclusive create was protecting.
+ *
+ * Only in CI, and only into the runner's temporary directory: locally there is a
+ * terminal, and writing files somebody did not ask for is not this tool's business.
+ */
+async function writeFallbackEvidence(argv: readonly string[], message: string): Promise<void> {
+  const temporary = process.env['RUNNER_TEMP'];
+  if (process.env['GITHUB_ACTIONS'] !== 'true' || temporary === undefined || temporary === '') return;
+  const path = join(temporary, `upgrade-evidence-unstarted-${String(process.pid)}.txt`);
+  const text = [
+    'upgrade test: the run did not start',
+    '',
+    `arguments: ${redactConnectionStrings(argv.join(' '))}`,
+    `failure:   ${redactConnectionStrings(message)}`,
+    '',
+    'No database was created and no migration was applied. This file exists so that the',
+    'run leaves evidence of having been attempted; it is not evidence of an upgrade.',
+    '',
+  ].join('\n');
+  try {
+    await writeFile(path, text, { encoding: 'utf8', flag: 'wx' });
+  } catch {
+    // A fallback that cannot be written is not worth a second failure on top of the
+    // first one; the message is already on stderr and in the job log.
+  }
+}
+
 // ---------------------------------------------------------------------------- entry
 const report = new Report();
-let evidence: string | null = null;
+/**
+ * The evidence path, and **only once this process created the file itself**.
+ *
+ * The distinction is the whole of the rule. The exclusive create is what stops one run
+ * silently replacing another run's evidence, and an unconditional write at the end
+ * undid it: `wx` refused the existing path, the run carried on, and the `finally` block
+ * overwrote it anyway (GPT-6, third review of PR 314, P2). So the final write is
+ * conditional on the creation having succeeded, not on a path having been asked for.
+ */
+let ownedEvidence: string | null = null;
 try {
   const options = parseOptions(process.argv.slice(2), REPOSITORY_ROOT);
-  evidence = options.evidence;
   // A stub first, so that *every* attempted run leaves an artifact — including one that
   // dies in the install or the worktree before a single step ran (GPT-6 review, P2-2).
   // The `always()` upload step is only as good as the file being there.
-  //
-  // `wx`: create it, never open an existing one. Evidence that silently replaced an
-  // earlier run's evidence is worse than no evidence, because nothing says which run
-  // wrote it (GPT-6 review of PR 314, P2). A second run wants a second path.
-  if (evidence !== null) {
+  if (options.evidence !== null) {
     try {
       await writeFile(
-        evidence,
+        options.evidence,
         `upgrade test: schema ${String(options.from)} → ${String(options.to)}\nthe run did not reach the point of writing its report\n`,
         { encoding: 'utf8', flag: 'wx' },
       );
+      ownedEvidence = options.evidence;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
-        throw new Error(`${evidence} already exists; give this run an evidence path of its own rather than overwriting another run's`);
+        throw new Error(
+          `${options.evidence} already exists; give this run an evidence path of its own rather than overwriting another run's`,
+        );
       }
       throw error;
     }
   }
   await run(options, report);
 } catch (error) {
-  process.stderr.write(`${error instanceof Error ? error.message : 'the upgrade test failed'}\n`);
+  const message = error instanceof Error ? error.message : 'the upgrade test failed';
+  // Redacted here too. This is a terminal sink like the report is, and it is the one
+  // that carries an *unexpected* error — the kind whose message nobody wrote and which
+  // is therefore the likeliest to quote a connection URL (GPT-6, third review, P2).
+  process.stderr.write(`${redactConnectionStrings(message)}\n`);
   report.line();
-  report.line(error instanceof Error ? error.message : 'the upgrade test failed');
+  report.line(message);
   process.exitCode = 1;
+  if (ownedEvidence === null) await writeFallbackEvidence(process.argv.slice(2), message);
 } finally {
   process.stdout.write(report.toString());
-  if (evidence !== null) await writeFile(evidence, report.toString(), 'utf8');
+  if (ownedEvidence !== null) await writeFile(ownedEvidence, report.toString(), 'utf8');
 }

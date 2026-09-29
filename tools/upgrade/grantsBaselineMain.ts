@@ -24,7 +24,7 @@ import { capturePrivileges, serialiseGrantsBaseline } from './grants.ts';
  * that a lost permission or a table nobody granted anything on has to appear as a line
  * a reviewer approved, rather than as an expectation that silently moved.
  *
- * ## Regeneration belongs in its own commit, and that commit contains no migration
+ * ## Regeneration belongs in its own pull request, which contains no migration
  *
  * The baseline is the thing every privilege comparison is made against, so a commit free
  * to move both it and a migration can launder any access change at all: revoke the

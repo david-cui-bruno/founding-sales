@@ -98,6 +98,24 @@ RUN rm -rf packages/domain/db/testing
 # docs/greenfield/processes.md says so beside the health check itself.
 RUN install -d -m 1777 /tmp
 
+# ---------------------------------------------------------------------------
+# The commit these bytes were built from (lane g-build-commit).
+#
+# Last, on purpose. A build argument's value is part of the cache key of every
+# instruction after it, and this one changes on every commit: declared beside
+# `GIT_REVISION` at the top of the stage it would invalidate the dependency copy
+# and every source copy below it, and the layer cache would never hit again. Here
+# only this ENV and the metadata instructions after it are rebuilt, and the
+# `dependencies` stage — the expensive one, an emulated arm64 `npm ci` — is
+# untouched because it is a separate stage that never sees this argument.
+#
+# Unset is the empty string and the readers treat that as "no commit"
+# (`packages/domain/release/identity.ts`), so `docker build` with no argument
+# still produces a working image that says so rather than one that lies.
+# ---------------------------------------------------------------------------
+ARG FSS_BUILD_COMMIT=""
+ENV FSS_BUILD_COMMIT=${FSS_BUILD_COMMIT}
+
 USER node
 
 # `infra/modules/cluster/variables.tf` runs the same command through ECS. This

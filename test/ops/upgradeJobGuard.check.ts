@@ -1,9 +1,10 @@
-import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { createServer } from 'node:http';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { readRepositoryFile } from './support/repository.ts';
+import { readRepositoryFile, repositoryPath } from './support/repository.ts';
 
 /**
  * The upgrade job's guard — the step that decides what production runs, whether this
@@ -81,6 +82,19 @@ function repositoryOf(deployed: Tree, branch: Tree, between: readonly Tree[] = [
   git(path, 'config', 'user.email', 'guard@example.invalid');
   git(path, 'config', 'user.name', 'guard');
   mkdirSync(join(path, 'packages', 'domain', 'db', 'migrations'), { recursive: true });
+  mkdirSync(join(path, 'tools', 'upgrade'), { recursive: true });
+  // The guard runs the tool's own deployed-range comparison rather than a git-level
+  // one, so the fixture repository needs the four files that comparison is made of.
+  // They import nothing else — that is the property that lets the guard run before
+  // `npm ci`, and copying them here is how this test proves it.
+  for (const file of [
+    'tools/upgrade/deployedMigrations.ts',
+    'tools/upgrade/deployedMigrationsMain.ts',
+    'packages/domain/db/migrationRunner.ts',
+    'packages/domain/db/queryable.ts',
+  ]) {
+    cpSync(repositoryPath(file), join(path, file));
+  }
 
   const commit = (tree: Tree, message: string): string => {
     writeFileSync(join(path, 'packages', 'domain', 'db', 'schemaRange.ts'), rangeFile(tree.schema), 'utf8');
@@ -121,6 +135,7 @@ function guard(
     env: {
       ...process.env,
       GITHUB_OUTPUT: outputFile,
+      RUNNER_TEMP: mkdtempSync(join(tmpdir(), 'fss-runner-temp-')),
       PROD_COMMIT: repository.deployed,
       ...environment,
     },
@@ -140,18 +155,18 @@ const THREE = '-- changes: leads\nCREATE TABLE leads (id uuid primary key);\n';
 describe('the upgrade job decides what to run from what production runs, not from git history', () => {
   it('runs the upgrade when the branch declares a higher schema', () => {
     const repository = repositoryOf(
-      { schema: 22, migrations: { '0021_a.sql': ONE, '0022_b.sql': TWO } },
-      { schema: 23, migrations: { '0021_a.sql': ONE, '0022_b.sql': TWO, '0023_c.sql': THREE } },
+      { schema: 2, migrations: { '0001_a.sql': ONE, '0002_b.sql': TWO } },
+      { schema: 3, migrations: { '0001_a.sql': ONE, '0002_b.sql': TWO, '0003_c.sql': THREE } },
     );
-    const outcome = guard(repository, { PROD_SCHEMA: '22' });
+    const outcome = guard(repository, { PROD_SCHEMA: '2' });
     expect(outcome.status, outcome.out).toBe(0);
-    expect(outcome.outputs).toMatchObject({ run: 'yes', from: '22', to: '23' });
+    expect(outcome.outputs).toMatchObject({ run: 'yes', from: '2', to: '3' });
   });
 
   it('skips when the branch declares the deployed schema and every deployed file is identical', () => {
-    const tree = { schema: 22, migrations: { '0021_a.sql': ONE, '0022_b.sql': TWO } };
+    const tree = { schema: 2, migrations: { '0001_a.sql': ONE, '0002_b.sql': TWO } };
     const outcome = guard(repositoryOf(tree, { ...tree, migrations: { ...tree.migrations } }), {
-      PROD_SCHEMA: '22',
+      PROD_SCHEMA: '2',
     });
     expect(outcome.status, outcome.out).toBe(0);
     expect(outcome.outputs['run']).toBe('no');
@@ -159,69 +174,100 @@ describe('the upgrade job decides what to run from what production runs, not fro
 
   it('P0-1: refuses a deployed migration renamed to a number above the deployed schema', () => {
     // The whole finding in one case. `REQUIRED_SCHEMA` does not move, so the old guard
-    // reached its equal-schema skip; rename detection hid the deletion of 0022_b.sql.
+    // reached its equal-schema skip; rename detection hid the deletion of the deployed
+    // file. What refuses it is the runner's own loader, which is the point of calling
+    // the tool's comparison rather than reimplementing one: the deployed file is gone
+    // and the sequence has a hole, and production would refuse the same directory.
     const repository = repositoryOf(
-      { schema: 22, migrations: { '0021_a.sql': ONE, '0022_b.sql': TWO } },
-      { schema: 22, migrations: { '0021_a.sql': ONE, '0023_b.sql': TWO } },
+      { schema: 2, migrations: { '0001_a.sql': ONE, '0002_b.sql': TWO } },
+      { schema: 2, migrations: { '0001_a.sql': ONE, '0003_b.sql': TWO } },
     );
-    const outcome = guard(repository, { PROD_SCHEMA: '22' });
+    const outcome = guard(repository, { PROD_SCHEMA: '2' });
+    expect(outcome.status, outcome.out).not.toBe(0);
+    expect(outcome.out).toContain('this branch');
+    expect(outcome.out).toContain('expected migration 2, found 3');
+    expect(outcome.outputs['run']).toBeUndefined();
+  });
+
+  it('P0-1: refuses a deployed migration renamed within its own number', () => {
+    // The same escape without the sequence hole, so the checksum rule is what catches
+    // it: production recorded `0002_b.sql` and this branch offers `0002_c.sql`.
+    const repository = repositoryOf(
+      { schema: 2, migrations: { '0001_a.sql': ONE, '0002_b.sql': TWO } },
+      { schema: 2, migrations: { '0001_a.sql': ONE, '0002_c.sql': TWO } },
+    );
+    const outcome = guard(repository, { PROD_SCHEMA: '2' });
     expect(outcome.status, outcome.out).not.toBe(0);
     expect(outcome.out).toContain('MIGRATION_CHECKSUM_MISMATCH');
-    expect(outcome.out).toContain('0022_b.sql');
+    expect(outcome.out).toContain('0002_b.sql');
+    expect(outcome.out).toContain('0002_c.sql');
     expect(outcome.outputs['run']).toBeUndefined();
   });
 
   it('P0-1: refuses an edited deployed migration even when the branch adds a new one', () => {
     const repository = repositoryOf(
-      { schema: 22, migrations: { '0021_a.sql': ONE, '0022_b.sql': TWO } },
-      { schema: 23, migrations: { '0021_a.sql': ONE, '0022_b.sql': `${TWO}-- edited\n`, '0023_c.sql': THREE } },
+      { schema: 2, migrations: { '0001_a.sql': ONE, '0002_b.sql': TWO } },
+      { schema: 3, migrations: { '0001_a.sql': ONE, '0002_b.sql': `${TWO}-- edited\n`, '0003_c.sql': THREE } },
     );
-    const outcome = guard(repository, { PROD_SCHEMA: '22' });
+    const outcome = guard(repository, { PROD_SCHEMA: '2' });
     expect(outcome.status, outcome.out).not.toBe(0);
-    expect(outcome.out).toContain('0022_b.sql');
+    expect(outcome.out).toContain('0002_b.sql');
   });
 
   it('P0-1: refuses a deleted deployed migration', () => {
     const repository = repositoryOf(
-      { schema: 22, migrations: { '0021_a.sql': ONE, '0022_b.sql': TWO } },
-      { schema: 22, migrations: { '0021_a.sql': ONE } },
+      { schema: 2, migrations: { '0001_a.sql': ONE, '0002_b.sql': TWO } },
+      { schema: 2, migrations: { '0001_a.sql': ONE } },
     );
-    const outcome = guard(repository, { PROD_SCHEMA: '22' });
+    const outcome = guard(repository, { PROD_SCHEMA: '2' });
     expect(outcome.status, outcome.out).not.toBe(0);
     expect(outcome.outputs['run']).toBeUndefined();
   });
 
+  it('P0-1: refuses a .sql name the migration runner would not load', () => {
+    // The shell parser this replaced split a name at whitespace, so an invalid name
+    // could be read as a number the filter passed over. `loadMigrations` is the
+    // runner's own loader, so the answer here is production's answer.
+    const repository = repositoryOf(
+      { schema: 2, migrations: { '0001_a.sql': ONE, '0002_b.sql': TWO } },
+      { schema: 2, migrations: { '0001_a.sql': ONE, '0002_b.sql': TWO, '0002 b copy.sql': TWO } },
+    );
+    const outcome = guard(repository, { PROD_SCHEMA: '2' });
+    expect(outcome.status, outcome.out).not.toBe(0);
+    expect(outcome.out).toContain('NNNN_snake_case.sql');
+  });
+
   it('P0-2: refuses a deployed commit that is not an ancestor of origin/main', () => {
     const repository = repositoryOf(
-      { schema: 22, migrations: { '0022_b.sql': TWO } },
-      { schema: 23, migrations: { '0022_b.sql': TWO, '0023_c.sql': THREE } },
+      { schema: 2, migrations: { '0001_a.sql': ONE, '0002_b.sql': TWO } },
+      { schema: 3, migrations: { '0001_a.sql': ONE, '0002_b.sql': TWO, '0003_c.sql': THREE } },
     );
     // Move the released line somewhere the deployed commit cannot be reached from.
     git(repository.path, 'checkout', '--quiet', '--orphan', 'elsewhere');
     git(repository.path, 'commit', '--quiet', '--allow-empty', '-m', 'unrelated');
     git(repository.path, 'update-ref', 'refs/remotes/origin/main', git(repository.path, 'rev-parse', 'HEAD'));
     git(repository.path, 'checkout', '--quiet', 'main');
-    const outcome = guard(repository, { PROD_SCHEMA: '22' });
+    const outcome = guard(repository, { PROD_SCHEMA: '2' });
     expect(outcome.status, outcome.out).not.toBe(0);
     expect(outcome.out).toContain('origin/main');
   });
 
   it('P0-2: warns, and still runs, when the deployed commit is behind main at the same schema', () => {
     const repository = repositoryOf(
-      { schema: 22, migrations: { '0022_b.sql': TWO } },
-      { schema: 23, migrations: { '0022_b.sql': TWO, '0023_c.sql': THREE } },
-      [{ schema: 22, migrations: { '0022_b.sql': TWO } }],
+      { schema: 2, migrations: { '0001_a.sql': ONE, '0002_b.sql': TWO } },
+      { schema: 3, migrations: { '0001_a.sql': ONE, '0002_b.sql': TWO, '0003_c.sql': THREE } },
+      [{ schema: 2, migrations: { '0001_a.sql': ONE, '0002_b.sql': TWO } }],
     );
-    const outcome = guard(repository, { PROD_SCHEMA: '22' });
+    const outcome = guard(repository, { PROD_SCHEMA: '2' });
     expect(outcome.status, outcome.out).toBe(0);
     expect(outcome.out).toContain('FSS_PROD_COMMIT is behind');
-    expect(outcome.outputs).toMatchObject({ run: 'yes', from: '22', to: '23' });
+    expect(outcome.outputs).toMatchObject({ run: 'yes', from: '2', to: '3' });
   });
 
   it('refuses a missing or nonsense FSS_PROD_SCHEMA rather than treating it as nothing to do', () => {
-    const tree = { schema: 22, migrations: { '0022_b.sql': TWO } };
+    const tree = { schema: 2, migrations: { '0001_a.sql': ONE, '0002_b.sql': TWO } };
     const repository = repositoryOf(tree, { ...tree, migrations: { ...tree.migrations } });
-    for (const value of ['', 'twenty-two', '0']) {
+    for (const value of ['', 'two', '0']) {
       const outcome = guard(repository, { PROD_SCHEMA: value });
       expect(outcome.status, `${value}: ${outcome.out}`).not.toBe(0);
       expect(outcome.outputs['run']).toBeUndefined();
@@ -233,54 +279,148 @@ describe('the attestation step asks production, and only when there is an upgrad
   const body = runBody('What production actually runs, attested from production');
 
   /**
-   * `curl` answers `file://` too, so the step's own shell can be run against a health
-   * document on disk. Nothing here touches the network, and the step under test is the
-   * text in the workflow rather than a copy of it.
+   * A one-request HTTP server on loopback, so the step's own shell is run against a
+   * real status line. `file://` was not good enough once the step began requiring a
+   * 200: curl reports `000` for a file, and a harness that cannot produce the code
+   * under test proves nothing about it.
    */
-  function attest(health: string | null, environment: Readonly<Record<string, string>>): Outcome {
+  async function attest(
+    answer: { status: number; body: string; location?: string } | null,
+    environment: Readonly<Record<string, string>>,
+  ): Promise<Outcome> {
     const directory = mkdtempSync(join(tmpdir(), 'fss-attest-'));
     temporary.push(directory);
-    if (health !== null) writeFileSync(join(directory, 'health'), health, 'utf8');
-    const result = spawnSync('bash', ['-c', body], {
-      cwd: directory,
-      encoding: 'utf8',
-      env: { ...process.env, FSS_PRODUCTION_ORIGIN: `file://${directory}`, ...environment },
+    const server =
+      answer === null
+        ? null
+        : createServer((request, response) => {
+            const headers: Record<string, string> = { 'content-type': 'application/json' };
+            if (answer.location !== undefined) headers['location'] = answer.location;
+            response.writeHead(answer.status, headers);
+            response.end(answer.body);
+          });
+    const origin = await new Promise<string>(resolve => {
+      if (server === null) {
+        // Nothing listening: a port the test never binds.
+        resolve('http://127.0.0.1:9');
+        return;
+      }
+      server.listen(0, '127.0.0.1', () => {
+        const address = server.address();
+        resolve(`http://127.0.0.1:${String(typeof address === 'object' && address !== null ? address.port : 0)}`);
+      });
     });
-    return { status: result.status ?? -1, out: `${result.stdout}${result.stderr}`, outputs: {} };
+    try {
+      // `spawn`, not `spawnSync`: the server above is in this process, and a
+      // synchronous child blocks the event loop that would have answered it.
+      return await new Promise<Outcome>(resolve => {
+        const child = spawn('bash', ['-c', body], {
+          cwd: directory,
+          env: { ...process.env, FSS_PRODUCTION_ORIGIN: origin, RUNNER_TEMP: directory, PROD_COMMIT: COMMIT, ...environment },
+        });
+        let out = '';
+        child.stdout.on('data', (chunk: Buffer) => (out += chunk.toString('utf8')));
+        child.stderr.on('data', (chunk: Buffer) => (out += chunk.toString('utf8')));
+        child.on('close', code => resolve({ status: code ?? -1, out, outputs: {} }));
+      });
+    } finally {
+      server?.close();
+    }
   }
 
-  const SERVING = JSON.stringify({
-    status: 'serving',
-    schema: { declaredRange: { minimum: 22, maximum: 22 }, databaseVersion: 22, accepted: true },
+  const COMMIT = 'a'.repeat(40);
+  const serving = (extra: Record<string, unknown> = {}): { status: number; body: string } => ({
+    status: 200,
+    body: JSON.stringify({
+      status: 'serving',
+      schema: { declaredRange: { minimum: 22, maximum: 22 }, databaseVersion: 22, accepted: true },
+      ...extra,
+    }),
   });
 
-  it('accepts the shape production answers with today', () => {
-    const outcome = attest(SERVING, { PROD_SCHEMA: '22', FROM_SCHEMA: '22' });
+  it('accepts the shape production answers with today, which carries no build commit yet', async () => {
+    const outcome = await attest(serving(), { PROD_SCHEMA: '22', FROM_SCHEMA: '22' });
     expect(outcome.status, outcome.out).toBe(0);
     expect(outcome.out).toContain('FROM is attested');
+    // The transition: until an image built after this change is deployed, the commit
+    // is taken on trust and the job says so out loud.
+    expect(outcome.out).toContain('The build commit is not attested yet');
   });
 
-  it('refuses a variable that disagrees with what production attests', () => {
-    const outcome = attest(SERVING, { PROD_SCHEMA: '21', FROM_SCHEMA: '21' });
+  it('attests the commit once production reports one, and refuses a variable that disagrees with it', async () => {
+    const agreeing = await attest(serving({ build: { commit: COMMIT } }), { PROD_SCHEMA: '22', FROM_SCHEMA: '22' });
+    expect(agreeing.status, agreeing.out).toBe(0);
+    expect(agreeing.out).not.toContain('not attested yet');
+
+    const disagreeing = await attest(serving({ build: { commit: 'b'.repeat(40) } }), {
+      PROD_SCHEMA: '22',
+      FROM_SCHEMA: '22',
+    });
+    expect(disagreeing.status, disagreeing.out).not.toBe(0);
+    expect(disagreeing.out).toContain('the fixture would be written by the wrong application code');
+  });
+
+  it('treats a null build commit as the transition, not as an attestation', async () => {
+    const outcome = await attest(serving({ build: { commit: null } }), { PROD_SCHEMA: '22', FROM_SCHEMA: '22' });
+    expect(outcome.status, outcome.out).toBe(0);
+    expect(outcome.out).toContain('The build commit is not attested yet');
+  });
+
+  it('refuses a variable that disagrees with the schema production attests', async () => {
+    const outcome = await attest(serving(), { PROD_SCHEMA: '21', FROM_SCHEMA: '21' });
     expect(outcome.status, outcome.out).not.toBe(0);
     expect(outcome.out).toContain('the variable is stale');
   });
 
-  it('refuses a deployed commit whose own REQUIRED_SCHEMA is not what production runs', () => {
-    const outcome = attest(SERVING, { PROD_SCHEMA: '22', FROM_SCHEMA: '21' });
+  it('refuses a deployed commit whose own REQUIRED_SCHEMA is not what production runs', async () => {
+    const outcome = await attest(serving(), { PROD_SCHEMA: '22', FROM_SCHEMA: '21' });
     expect(outcome.status, outcome.out).not.toBe(0);
     expect(outcome.out).toContain('production is not running');
   });
 
-  it('fails closed when production does not answer', () => {
-    const outcome = attest(null, { PROD_SCHEMA: '22', FROM_SCHEMA: '22' });
-    expect(outcome.status, outcome.out).not.toBe(0);
-    expect(outcome.out).toContain('did not answer in three attempts');
+  it('refuses anything that is not a 200, a redirect with the right body included', async () => {
+    const redirect = await attest(
+      { status: 302, body: serving().body, location: 'https://elsewhere.example/health' },
+      { PROD_SCHEMA: '22', FROM_SCHEMA: '22' },
+    );
+    expect(redirect.status, redirect.out).not.toBe(0);
+    expect(redirect.out).toContain('did not answer 200');
+
+    const serverError = await attest({ status: 503, body: serving().body }, { PROD_SCHEMA: '22', FROM_SCHEMA: '22' });
+    expect(serverError.status, serverError.out).not.toBe(0);
   });
 
-  it('fails closed on a malformed answer rather than guessing', () => {
-    for (const malformed of ['not json at all', '{}', '{"schema":{}}', '{"schema":{"databaseVersion":"twenty-two"}}']) {
-      const outcome = attest(malformed, { PROD_SCHEMA: '22', FROM_SCHEMA: '22' });
+  it('refuses a service that is not serving, or that refuses its own schema', async () => {
+    const degraded = await attest(
+      {
+        status: 200,
+        body: JSON.stringify({ status: 'degraded', schema: { databaseVersion: 22, accepted: true } }),
+      },
+      { PROD_SCHEMA: '22', FROM_SCHEMA: '22' },
+    );
+    expect(degraded.status, degraded.out).not.toBe(0);
+    expect(degraded.out).toContain("not 'serving'");
+
+    const unaccepted = await attest(
+      {
+        status: 200,
+        body: JSON.stringify({ status: 'serving', schema: { databaseVersion: 22, accepted: false } }),
+      },
+      { PROD_SCHEMA: '22', FROM_SCHEMA: '22' },
+    );
+    expect(unaccepted.status, unaccepted.out).not.toBe(0);
+    expect(unaccepted.out).toContain('does not accept its own schema');
+  });
+
+  it('fails closed when production does not answer', async () => {
+    const outcome = await attest(null, { PROD_SCHEMA: '22', FROM_SCHEMA: '22' });
+    expect(outcome.status, outcome.out).not.toBe(0);
+    expect(outcome.out).toContain('did not answer 200 in three attempts');
+  });
+
+  it('fails closed on a malformed answer rather than guessing', async () => {
+    for (const malformed of ['not json at all', '{}', '{"status":"serving","schema":{"accepted":true}}']) {
+      const outcome = await attest({ status: 200, body: malformed }, { PROD_SCHEMA: '22', FROM_SCHEMA: '22' });
       expect(outcome.status, `${malformed}: ${outcome.out}`).not.toBe(0);
     }
   });
@@ -303,7 +443,7 @@ describe('the attestation step asks production, and only when there is an upgrad
 });
 
 describe('the baseline may not move in the same change as a migration', () => {
-  const body = runBody('The grants baseline may not move in the same change as a migration');
+  const body = runBody('The grants baseline may not move in the same pull request as a migration');
 
   it('names both halves of the rule', () => {
     expect(body).toContain('tools/upgrade/grants-baseline.json');

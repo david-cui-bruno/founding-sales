@@ -5,7 +5,7 @@ import { HandlerRegistry } from '@fss/domain/jobs/handlerRegistry.ts';
 import { createCloudWatchSink, loadCloudWatchTransport } from '@fss/domain/jobs/metricsCloudWatch.ts';
 import { defaultTodaySources } from '@fss/domain/today/build.ts';
 import { dueSequenceWorkSource } from '@fss/domain/sequences/todaySource.ts';
-import { discoverImageDigest } from '@fss/domain/release/identity.ts';
+import { buildCommit, discoverImageDigest } from '@fss/domain/release/identity.ts';
 import { isProductionEnvironmentName } from '@fss/domain/release/deployment.ts';
 import { WORKER_EXIT_CODES } from '../index.ts';
 import {
@@ -340,6 +340,9 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
     image_digest: identity.digest,
     image_digest_source: identity.source,
     image_digest_detail: identity.detail,
+    // Which source the image was built from, beside which bytes it is. Baked in by
+    // `ARG FSS_BUILD_COMMIT`; null on a laptop and on any image built before it existed.
+    build_commit: buildCommit(environment),
   });
 
   const sink = await createSink(config, log);
