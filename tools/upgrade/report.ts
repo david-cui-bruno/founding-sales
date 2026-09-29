@@ -1,13 +1,23 @@
 /**
  * The printed evidence. One writer, so that the CI artifact and the terminal are the
  * same bytes: a release record cites an artifact id, and an artifact nobody can compare
- * with what the operator saw is not evidence.
+ * with what the operator saw is not evidence. One writer is also one place to redact.
  */
+import { redactConnectionStrings } from './redact.ts';
+
 export class Report {
   readonly #lines: string[] = [];
 
+  /**
+   * Every line, from every source, goes through the redactor here.
+   *
+   * Redacting at each call site was not enough: the constraint runner's captured output
+   * reached the artifact unredacted (GPT-6 review of PR 314, P2). `line` is the single
+   * boundary — `step` and `table` both funnel through it — so a line that carries a
+   * connection URL cannot reach the evidence whoever wrote it.
+   */
   line(text = ''): void {
-    this.#lines.push(text);
+    this.#lines.push(redactConnectionStrings(text));
   }
 
   /** A step's one line: number, what it did, and its wall-clock seconds. */

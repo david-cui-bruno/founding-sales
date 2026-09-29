@@ -351,35 +351,73 @@ jobs:
             --commit "$COMMIT" --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" --gate-run-id "$GATE_RUN_ID" --cluster-name "$CLUSTER_NAME" \
             --operations-family "$OPERATIONS_FAMILY" --subnets "$TASK_SUBNETS" --security-group "$TASK_SECURITY_GROUP"
 
+      - name: What ECR says production runs, after the rollout
+        # `FSS_PROD_COMMIT` — the upgrade test's FROM — has to name the commit
+        # production's images were really built from, not the commit this run believes
+        # it deployed (GPT-6 review of PR 314, P0-2c). This is the same ECS -> ECR -> tag
+        # walk the gates job's guard makes, run after the rollout and the smoke instead
+        # of before it, so it attests the new state rather than the old one.
+        #
+        # It writes nothing: a workflow token cannot write a repository variable (GitHub
+        # documents no `variables` scope for `permissions:`), so the release helper sets
+        # `FSS_PROD_COMMIT` by hand and the notice below says what to set it to.
+        #
+        # **One case is fatal, the rest are warnings.** Not being able to ask — a
+        # refused call, an image with no commit tag — would turn a good release red for
+        # a reporting problem. ECR answering with a *different* commit would not: after
+        # a green smoke and read-back it means production is not running what this run
+        # deployed, and nothing else here would notice, because the record names digests
+        # and the smoke names an origin.
+        id: attest
+        run: |
+          set -euo pipefail
+          identity="$(aws sts get-caller-identity --query Arn --output text 2>/dev/null)" || identity=''
+          account="${identity#arn:aws:sts::}"
+          account="${account%%:*}"
+          if [[ ! "$account" =~ ^[0-9]{12}$ ]]; then
+            echo "::warning title=Set FSS_PROD_COMMIT::the session names no account, so ECR was not asked; set FSS_PROD_COMMIT by hand (release.md 4)"
+            exit 0
+          fi
+          cluster="arn:aws:ecs:${AWS_REGION}:${account}:cluster/fss-prod-cluster"
+          attested=0
+          for service in worker api; do
+            definition="$(aws ecs describe-services --cluster "$cluster" --services "fss-prod-$service" --output json 2>/dev/null \
+              | jq -r '.services | if length == 1 then .[0].taskDefinition // "" else "" end')" || definition=''
+            if [ -z "$definition" ]; then
+              echo "::warning::ECS does not describe fss-prod-$service; its image was not attested"
+              continue
+            fi
+            image="$(aws ecs describe-task-definition --task-definition "$definition" --output json 2>/dev/null \
+              | jq -r --arg name "$service" '[.taskDefinition.containerDefinitions[]? | select(.name == $name) | .image][0] // ""')" || image=''
+            if [[ ! "$image" =~ @(sha256:[0-9a-f]{64})$ ]]; then
+              echo "::warning::fss-prod-$service runs no image by digest; it was not attested"
+              continue
+            fi
+            commits="$(aws ecr describe-images --repository-name "fss-prod-$service" --image-ids "imageDigest=${BASH_REMATCH[1]}" --output json 2>/dev/null \
+              | jq -r '[.imageDetails[0].imageTags[]? | capture("^(ci-)?(?<c>[0-9a-f]{40})(-image)?$").c] | unique | join(" ")')" || commits=''
+            if [ -z "$commits" ]; then
+              echo "::warning::fss-prod-$service's running image carries no commit tag; it was not attested"
+              continue
+            fi
+            # The one fatal case.
+            [ "$commits" = "$COMMIT" ] \
+              || { echo "::error::after a green smoke and read-back, ECR says fss-prod-$service runs an image built from '$commits', not $COMMIT: production is not running what this deploy released"; exit 1; }
+            attested=$((attested + 1))
+          done
+          if [ "$attested" -eq 0 ]; then
+            echo "::warning title=Set FSS_PROD_COMMIT::neither image could be attested; set FSS_PROD_COMMIT to $COMMIT by hand only once you have checked what production runs (release.md 4)"
+            exit 0
+          fi
+          echo "::notice title=Set FSS_PROD_COMMIT::ECR attests $attested of 2 production images were built from $COMMIT; production now runs it, so set FSS_PROD_COMMIT to $COMMIT (release.md 4)"
+
   summary:
     name: One line
     needs: [gates, deploy, smoke, read-back]
     if: always() && needs.gates.result != 'skipped'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
-    permissions:
-      # One repository variable holding a commit sha, which is a public identifier.
-      # This job holds no production credential and assumes no role, which is why the
-      # write lives here rather than beside one that does.
-      actions: write
+    permissions: {}
     steps:
-      - name: Record the commit production now runs
-        # The upgrade test migrates from the DEPLOYED schema, and git history cannot say
-        # what that is: a branch's base is the commit it was cut from, not the commit
-        # whose images are running (GPT-6 review of PR 314, P0-2). `FSS_PROD_COMMIT` is
-        # that answer, and this is the only thing that moves it. `FSS_PROD_SCHEMA` is
-        # moved by hand by a schema release, because a CI deploy never changes the
-        # schema — a migration is a protected path and answers `manual`.
-        if: needs.deploy.outputs.decision == 'deploy' && needs.smoke.result == 'success' && needs.read-back.result == 'success'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          DEPLOYED: ${{ needs.gates.outputs.commit }}
-        run: |
-          set -euo pipefail
-          [ "${#DEPLOYED}" -eq 40 ] || { echo "FAIL: '$DEPLOYED' is not a full commit" >&2; exit 1; }
-          gh variable set FSS_PROD_COMMIT --body "$DEPLOYED"
-          echo "FSS_PROD_COMMIT is now $DEPLOYED"
       - name: One line
         env:
           COMMIT: ${{ needs.gates.outputs.commit }}

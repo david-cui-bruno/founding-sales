@@ -12,6 +12,7 @@ import { listFencesToReconcile, listMailboxesToReconcile } from '@fss/domain/out
 import { claimJobs, completeJob, enqueueJob, writeProgress } from '@fss/domain/jobs/jobStore.ts';
 import { recordFunnelFact } from '@fss/domain/funnel/facts.ts';
 import { commitDeletion, previewDeletion } from '@fss/domain/retention/deletion.ts';
+import { isSuppressed, listEffectiveSuppressions } from '@fss/domain/suppression/effective.ts';
 import { recordingSuppressionJournal } from '@fss/domain/suppression/journal.ts';
 import { readDashboard } from '@fss/domain/dashboard/aggregate.ts';
 import { liveDashboardSources } from '@fss/domain/dashboard/sendingSource.ts';
@@ -40,11 +41,15 @@ import type { FixtureHandles } from './fixture.ts';
  *
  * ## Every case asserts something specific
  *
- * A workflow that "did not throw" is not evidence. Today has to produce at least
- * `MINIMUM_TODAY_CARDS` cards and each read has to return the fixture's own firm with
- * its lane; eligibility has to reach a decision and a `skipped` is a failure. The
- * numbers below are properties of the fixture, so a fixture that quietly stopped
- * loading a part fails here as well as in step 3.
+ * A workflow that "did not throw" is not evidence, and neither is a workflow that ran
+ * over an empty set. Today has to produce at least `MINIMUM_TODAY_CARDS` cards and two
+ * named firms have to come back in the *exact* lanes the fixture's own data forces;
+ * eligibility has to reach a named decision and a `skipped` is a failure; the
+ * reconciliation sweep has to hand back the id of the fence the fixture left owed one,
+ * and zero fences is a failure rather than a pass; `effective_suppressions` has to
+ * carry the handle the fixture opted out and not the one it did not. The numbers and
+ * names below are properties of the fixture, so a fixture that quietly stopped loading
+ * a part fails here as well as in step 3.
  */
 
 /**
@@ -69,6 +74,39 @@ export const MINIMUM_TODAY_CARDS = 5;
  * assertion quietly becoming vacuous.
  */
 export const EXPECTED_ELIGIBILITY_DECISION = 'scoped_pause';
+
+/**
+ * The lane the fixture's primary firm's card must be in.
+ *
+ * Only two Today sources have a table to read today — callbacks and new firms — and
+ * the primary firm produces a task from both. `confirmReplyDisposition` in the
+ * fixture's classification part commits a callback on that firm for 2026-09-23 10:00
+ * in the workspace zone, an instant now permanently in the past, and every open
+ * callback due on or before the date being built is enumerated. The firm's own
+ * opportunity is still at the first pipeline stage, so the new-firm source produces a
+ * task for it too — and lane precedence (8.2: replies, callbacks, due work, new
+ * firms) makes the card's lane the callback's, because that is the highest-priority
+ * unfinished item.
+ *
+ * Pinned rather than merely required to be non-empty (GPT-6 review of PR 314, P1-3):
+ * a migration that mislaned every firm passed the old assertion. If a legitimate
+ * change moves this, the failure names both lanes and somebody decides which is
+ * right — that is the point, not a nuisance.
+ */
+export const EXPECTED_PRIMARY_FIRM_LANE = 'callback';
+
+/**
+ * The lane the fixture's opportunity-free firm's card must be in.
+ *
+ * The second pin, and the less accidental of the two: `newFirmLaneFirmId` is the one
+ * firm the fixture leaves with no opportunity of any kind, no callback and no call
+ * log, so the new-firm source is the only source in the build that can speak for it
+ * at all. Its card therefore has exactly one task and the lane is forced. A
+ * suppression would take it off the list entirely — the fixture's one suppression is
+ * `handle`-scoped for that reason — so a card in any other lane means the lane rule
+ * itself moved.
+ */
+export const EXPECTED_NEW_FIRM_LANE = 'new_firm';
 
 /**
  * Read Today for one actor and assert it is about the fixture, not merely non-throwing.
@@ -101,7 +139,9 @@ async function readTodayFor(
   }
   if (card === undefined) throw new Error("the admin's list does not carry the fixture's primary firm");
   if (card.firmName.trim().length === 0) throw new Error("the fixture firm's card carries no name");
-  if (card.lane.trim().length === 0) throw new Error("the fixture firm's card carries no lane");
+  if (card.lane !== EXPECTED_PRIMARY_FIRM_LANE) {
+    throw new Error(`the fixture firm's card is in lane ${card.lane}, and the fixture puts it in ${EXPECTED_PRIMARY_FIRM_LANE}`);
+  }
   if (card.dueAt.trim().length === 0) throw new Error("the fixture firm's card carries no due instant");
   // The expanded card is the second read, and the one that carries the tasks the lane
   // is a summary of. A card with a lane and no task behind it is a card about nothing.
@@ -110,7 +150,19 @@ async function readTodayFor(
   if (page.snapshotDate !== businessDate) throw new Error(`the expanded card is for ${page.snapshotDate}`);
   if (page.tasks.length === 0) throw new Error("the fixture firm's card carries no task");
   const lanes = [...new Set(page.tasks.map(task => task.lane))].sort();
-  return `${String(list.cards.length)} card(s) for ${list.snapshotDate}; the fixture firm is in lane ${card.lane} with ${String(page.tasks.length)} task(s) in lane(s) ${lanes.join(', ')}`;
+  // The second pinned lane. A firm with nothing but its own existence to recommend it
+  // can only be in lane 4, so this is the assertion that a mislaning migration cannot
+  // satisfy by accident.
+  const newFirmId = handles.newFirmLaneFirmId;
+  if (newFirmId === null) throw new Error('the fixture named no opportunity-free firm, so no lane can be pinned on one');
+  const newFirmCard = list.cards.find(candidate => candidate.firmId === newFirmId);
+  if (newFirmCard === undefined) {
+    throw new Error("the admin's list does not carry the fixture's opportunity-free firm, which the new-firm lane always produces");
+  }
+  if (newFirmCard.lane !== EXPECTED_NEW_FIRM_LANE) {
+    throw new Error(`the opportunity-free firm's card is in lane ${newFirmCard.lane}, and only ${EXPECTED_NEW_FIRM_LANE} can produce it`);
+  }
+  return `${String(list.cards.length)} card(s) for ${list.snapshotDate}; the fixture firm is in lane ${card.lane} with ${String(page.tasks.length)} task(s) in lane(s) ${lanes.join(', ')}; the opportunity-free firm is in lane ${newFirmCard.lane}`;
 }
 
 export interface WorkflowOutcome {
@@ -283,7 +335,31 @@ export async function runWorkflows(
         // owed, which is the part an upgrade can break.
         const fences = await listFencesToReconcile(session, { limit: 50 });
         const mailboxes = await listMailboxesToReconcile(session);
-        return `${String(fences.length)} fence(s) and ${String(mailboxes.length)} mailbox(es) owed reconciliation; no provider call made`;
+        // An empty set is not a pass (GPT-6 review of PR 314, P1-3). Until the fixture
+        // seeded one, this workflow enumerated nothing and reported success, which it
+        // would have done just as happily on a schema whose `outbound_messages` the
+        // migration had broken.
+        if (fences.length === 0) {
+          throw new Error('no fence is owed reconciliation; the fixture seeded none, so the enumeration proves nothing');
+        }
+        if (mailboxes.length === 0) {
+          throw new Error('no mailbox is owed reconciliation; the fixture seeded none, so the enumeration proves nothing');
+        }
+        const owed = handles.reconcilingFenceId;
+        if (owed === null) {
+          throw new Error("the fixture's reconciling fence part left no fence id, so there is nothing specific to require back");
+        }
+        const found = fences.find(fence => fence.outboundMessageId === owed);
+        if (found === undefined) {
+          throw new Error(`the enumeration did not return ${owed}, the fence the fixture left in reconciling with no attempt yet`);
+        }
+        // And the mailbox sweep has to name that fence's mailbox: the two enumerations
+        // are one pass in the worker, and a schema that broke the join in the second
+        // would leave the fence enumerated and never visited.
+        if (!mailboxes.some(mailbox => mailbox.mailboxId === found.mailboxId)) {
+          throw new Error(`the mailbox sweep does not name ${found.mailboxId}, which owns the fence owed an observation`);
+        }
+        return `${String(fences.length)} fence(s) and ${String(mailboxes.length)} mailbox(es) owed reconciliation, including the fixture's fence ${owed} on mailbox ${found.mailboxId}; no provider call made`;
       },
     },
     {
@@ -384,6 +460,52 @@ export async function runWorkflows(
         if (dashboard.sending.available !== true) throw new Error('the sending source reported unavailable');
         if (dashboard.enrollments.available !== true) throw new Error('the enrolment source reported unavailable');
         return `audience ${dashboard.audience}, ${String(dashboard.firmsInScope)} firm(s) in scope, ${String(dashboard.messages.incomingMatched)} matched message(s), ${String(dashboard.holds.open)} open hold(s)`;
+      },
+    },
+    {
+      name: 'suppression.effective (the view)',
+      run: async () => {
+        // The one read of `effective_suppressions`, the view 10.2 makes authoritative
+        // for email and dialing (GPT-6 review of PR 314, P0-4). A view carries no rows
+        // of its own, so neither the content hash nor the table-shape comparison in
+        // step 4 can see one being replaced; only asking it a question can. Until this
+        // existed, a migration that replaced the view with one returning nothing
+        // passed the whole run.
+        const suppressed = handles.suppressedHandleKey;
+        if (suppressed === null) {
+          throw new Error('the fixture seeded no suppression, so the view has nothing it must answer about');
+        }
+        // On the specific row, not on a count: a view returning somebody else's
+        // suppression is as wrong as one returning nothing.
+        const effective = await isSuppressed(admin, { scope: 'handle', canonicalKey: suppressed });
+        if (effective === null) {
+          throw new Error(`effective_suppressions does not carry ${suppressed}, the handle the fixture opted out before the upgrade`);
+        }
+        if (effective.canonicalKey !== suppressed) {
+          throw new Error(`the view answered about ${effective.canonicalKey}, not ${suppressed}`);
+        }
+        if (effective.source !== 'prospect_opt_out') {
+          throw new Error(`the opted-out handle is recorded as ${effective.source}, and the fixture wrote prospect_opt_out`);
+        }
+        if (!effective.canonicalizerVersionSupported) {
+          throw new Error(`the stored canonicaliser version ${effective.canonicalizerVersion} is not one this build understands`);
+        }
+        // The set read as well as the point read: they are different statements over
+        // the same view and a migration can break one without the other.
+        const listed = await listEffectiveSuppressions(admin, { scope: 'handle', limit: 200 });
+        if (!listed.some(entry => entry.canonicalKey === suppressed)) {
+          throw new Error(`the listing of ${String(listed.length)} effective handle suppression(s) does not include ${suppressed}`);
+        }
+        // The negative, which is cheap and deterministic here: the primary contact's
+        // address was never suppressed by anything the fixture or the steps above did,
+        // so a view that returned it would be over-suppressing rather than under-.
+        const clean = handles.unsuppressedHandleKey;
+        if (clean === null) throw new Error('the fixture named no unsuppressed handle, so the negative cannot be asserted');
+        const wrongly = await isSuppressed(admin, { scope: 'handle', canonicalKey: clean });
+        if (wrongly !== null) {
+          throw new Error(`${clean} reads as suppressed by ${wrongly.source}, and nothing ever suppressed it`);
+        }
+        return `${suppressed} is suppressed (${effective.source}, canonicaliser ${effective.canonicalizerVersion}) among ${String(listed.length)} effective handle suppression(s); ${clean} is not`;
       },
     },
   ];

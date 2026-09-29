@@ -25,6 +25,10 @@ export const REQUIRED_FIXTURE_PARTS: readonly string[] = Object.freeze([
   'legacy footer (pre-0015, no postal address)',
   'legacy footer (pre-0020, with postal address)',
   'prepared fence',
+  // Owed reconciliation *now*: `beginReconciling` leaves `reconcile_last_attempt_at`
+  // null, so the reconcile workflow must return this fence's id. Without it the
+  // workflow enumerated an empty set and reported success (GPT-6 review, P1-3).
+  'reconciling fence',
   'dial',
   'inbound mail',
   'classification',
@@ -36,5 +40,9 @@ export const REQUIRED_FIXTURE_PARTS: readonly string[] = Object.freeze([
   'operations',
   'schedule shift',
   'administrative pause',
+  // One handle suppression, so a workflow can read `effective_suppressions` and demand
+  // this row back. A view has no rows of its own for the hashes to catch, so a
+  // replacement returning nothing was invisible to every other step (GPT-6, P0-4).
+  'handle suppression',
   'shared two-workspace fixtures',
 ]);

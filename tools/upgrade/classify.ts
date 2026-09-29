@@ -118,6 +118,11 @@ interface Objects {
   /** Functions, procedures and triggers, by bare name, argument lists ignored. */
   readonly routines: readonly string[];
   readonly indexes: readonly string[];
+  /**
+   * Views and materialized views, by bare name. `CREATE OR REPLACE VIEW` records the
+   * name as well as `CREATE VIEW` does, so a file that replaces a view an earlier file
+   * created is answered from this list rather than from the name reading like an old one.
+   */
   readonly views: readonly string[];
   readonly types: readonly string[];
   readonly sequences: readonly string[];
@@ -442,6 +447,50 @@ function decide(statement: Statement, objects: Objects, depth = 0): Decision {
       ? { kind: 'touches-existing', statement, why: `CREATE TRIGGER ${name} on ${table}` }
       : { kind: 'additive', statement, why: `CREATE TRIGGER ${name} on ${table}, a new table` };
   }
+  // -------------------------------------------------------------------- views
+  // A view is a routine too, and the deliberate asymmetry with one is worth stating.
+  //
+  // Replacing a *function* is `replaces-routine`, which the release procedure lets out
+  // without a rehearsal — not because replacing a body is harmless, but because the
+  // upgrade test proves the new body was called: `pg_stat_user_functions` counts the
+  // calls, so a replacement nothing exercised fails the run. There is no equivalent
+  // proof for a view. A view is not called, it is selected from, and the server keeps
+  // no per-view read counter the test could hold a replacement to; worse, a
+  // replacement that returns the empty set is indistinguishable from one nobody
+  // queried. `effective_suppressions` (0006_policy.sql:265) is the view the suppression
+  // system answers "is this handle suppressed?" from, and it holds no rows of its own,
+  // so no content hash moves if it is quietly redefined to `WHERE false`.
+  //
+  // Until there is such a proof, a replaced view rehearses.
+  const replaceView = /^CREATE\s+(OR\s+REPLACE\s+)?(MATERIALIZED\s+)?VIEW\s+(?:IF\s+NOT\s+EXISTS\s+)?([^\s(]+)/iu.exec(sql);
+  if (replaceView?.[3] !== undefined) {
+    const name = bareName(replaceView[3]);
+    // A bare `CREATE VIEW` of a name that already exists is an error the server would
+    // raise, not a form to decide; it is answered the same way regardless, so the
+    // wording follows the statement rather than asserting an `OR REPLACE` that is
+    // not there.
+    const word = `CREATE ${replaceView[1] === undefined ? '' : 'OR REPLACE '}${replaceView[2] === undefined ? '' : 'MATERIALIZED '}VIEW`;
+    return objects.views.includes(name)
+      ? { kind: 'touches-existing', statement, why: `${word} ${name}, which already exists` }
+      : { kind: 'additive', statement, why: `${word} ${name}, a new view` };
+  }
+  const alterView = /^ALTER\s+(MATERIALIZED\s+)?VIEW\s+(?:IF\s+EXISTS\s+)?([^\s;]+)/iu.exec(sql);
+  if (alterView?.[2] !== undefined) {
+    const name = bareName(alterView[2]);
+    const word = alterView[1] === undefined ? 'VIEW' : 'MATERIALIZED VIEW';
+    return objects.views.includes(name)
+      ? { kind: 'touches-existing', statement, why: `ALTER ${word} ${name}, which already exists` }
+      : { kind: 'additive', statement, why: `ALTER ${word} ${name}, which does not exist at this version` };
+  }
+  // No materialized view exists in this corpus, so nothing here is written to a real
+  // case; what matters is that none of them reaches `additive` by falling through.
+  // A REFRESH rewrites the stored rows of something that already exists, which is
+  // `touches-existing`; every other materialized-view form stays `unclassified`.
+  const refresh = /^REFRESH\s+MATERIALIZED\s+VIEW\s+(?:CONCURRENTLY\s+)?(?:IF\s+EXISTS\s+)?([^\s;]+)/iu.exec(sql);
+  if (refresh?.[1] !== undefined) {
+    return { kind: 'touches-existing', statement, why: `REFRESH MATERIALIZED VIEW ${bareName(refresh[1])}` };
+  }
+
   const alterSequence = /^ALTER\s+SEQUENCE\s+(?:IF\s+EXISTS\s+)?([^\s;]+)/iu.exec(sql);
   if (alterSequence?.[1] !== undefined) {
     const name = bareName(alterSequence[1]);
@@ -497,12 +546,8 @@ function decide(statement: Statement, objects: Objects, depth = 0): Decision {
   if (routine?.[2] !== undefined) {
     return { kind: 'additive', statement, why: `CREATE ${(routine[1] ?? 'ROUTINE').toUpperCase()} ${routineName(routine[2])}` };
   }
-  const newObject = /^CREATE\s+(?:OR\s+REPLACE\s+)?(?:MATERIALIZED\s+)?VIEW\s+([^\s(]+)/iu.exec(sql);
-  if (newObject?.[1] !== undefined) {
-    // A view holds no rows: replacing one changes what a reader sees, but nothing a
-    // rehearsal of the data could lose, and the release procedure treats it as additive.
-    return { kind: 'additive', statement, why: `CREATE VIEW ${bareName(newObject[1])}` };
-  }
+  // `CREATE … VIEW` is decided above, with the existence check the additive answer here
+  // used to skip.
   const sequence = /^CREATE\s+(?:TEMPORARY\s+|TEMP\s+|UNLOGGED\s+)?SEQUENCE\s+(?:IF\s+NOT\s+EXISTS\s+)?([^\s;]+)/iu.exec(sql);
   if (sequence?.[1] !== undefined) {
     return { kind: 'additive', statement, why: `CREATE SEQUENCE ${bareName(sequence[1])}` };

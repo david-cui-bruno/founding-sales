@@ -1,0 +1,26 @@
+{
+  "_why": "The access changes somebody other than the migration signed off on, keyed by migration number. It exists because the thing being reviewed must not write its own review: when a `-- runtime-access: none` comment in a migration excused that migration's own table, and a `REVOKE` in a migration silently became the expectation the database was then held against, a table the runtime could not reach and a feature that had just lost its access both passed. `runtimeAccessNone` names a table deliberately unreachable by `app_runtime`, and is now the only thing that excuses one from the new-table rule. `existingTableDeltas` names every grant or revoke a migration performs on a table the committed baseline already knew; an undeclared one is an `undeclared_grant_change` finding. Every entry needs a `why` a person wrote — an empty or missing one is refused when the file is read. Adding an entry here is asking a reviewer for a privilege change, not granting yourself one: the pull request that adds it is where the review happens. See the header of tools/upgrade/grants.ts. Note that tools/upgrade/grants-baseline.json may never be regenerated in the same commit as a migration.",
+  "_example": {
+    "_why": "The shape, for whoever writes the next entry. Keys beginning with an underscore are ignored by loadAccessExceptions; only `migrations` is read. Copy the body, not this key.",
+    "0023": {
+      "runtimeAccessNone": [
+        {
+          "table": "some_table",
+          "why": "One sentence a reviewer wrote about why app_runtime must not reach this table."
+        }
+      ],
+      "existingTableDeltas": [
+        {
+          "table": "firms",
+          "role": "app_runtime",
+          "grant": [],
+          "revoke": [
+            "DELETE"
+          ],
+          "why": "One sentence a reviewer wrote about why the application is giving this privilege up."
+        }
+      ]
+    }
+  },
+  "migrations": {}
+}

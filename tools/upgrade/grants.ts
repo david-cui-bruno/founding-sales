@@ -32,7 +32,12 @@ import { statementsOf } from './sql.ts';
  * the expectation, and a new table with no grant is caught by the second rule below
  * rather than by the matrix comparison, which cannot see it.
  *
- * ## The three rules
+ * Because the baseline is what everything here is compared against, **it may not move in
+ * the same commit as a migration**: a diff free to change both can revoke a privilege
+ * and regenerate the baseline that would have caught it. `baselineAndMigrationBothChanged`
+ * below is what the CI job asks in order to refuse that.
+ *
+ * ## The four rules
  *
  * 1. **`grant_differs`** — the matrix above, for the two group roles' table and column
  *    grants, and for the four things the replay cannot speak about at all: grants to
@@ -42,10 +47,16 @@ import { statementsOf } from './sql.ts';
  *    a brand-new sequence or function is the business of the migration that added it
  *    and of the baseline regeneration that follows a schema release.
  * 2. **`new_table_without_access`** — every table that is new at M relative to the
- *    baseline must carry an explicit `GRANT … TO app_runtime` naming it, or be named in
- *    its migration's `-- runtime-access: none` header. "It inherited something from an
- *    `ON ALL TABLES`" does not count: that is the accident this rule exists to refuse.
- * 3. **`effective_access_differs`** — the two roles above are `NOLOGIN` groups. What
+ *    baseline must carry an explicit `GRANT … TO app_runtime` naming it, or be named as
+ *    a `runtimeAccessNone` entry in `access-exceptions.json`. "It inherited something
+ *    from an `ON ALL TABLES`" does not count: that is the accident this rule refuses.
+ * 3. **`undeclared_grant_change`** — a `GRANT` or a `REVOKE` in a migration naming a
+ *    table the baseline already knew must appear as a declared delta in
+ *    `access-exceptions.json`, with a `why` a reviewer wrote. This is the rule that
+ *    closes the second half of the hole above: a `REVOKE` changes the replayed
+ *    expectation, so without it actual and expected agree after a loss and the check
+ *    says nothing. See the section on that file below.
+ * 4. **`effective_access_differs`** — the two roles above are `NOLOGIN` groups. What
  *    production actually connects as is a login role that is a *member* of
  *    `app_runtime`, and membership is not privilege: a membership granted
  *    `INHERIT FALSE` carries nothing (see `migrate.ts`, which was bitten by exactly
@@ -121,10 +132,29 @@ interface ReplayStart {
   readonly tables: readonly string[];
 }
 
+/**
+ * One migration statement's effect on one (role, table) pair, kept so that the access
+ * rule below can hold each one against `access-exceptions.json`. The replay's own matrix
+ * cannot answer that question: it is the *sum* of the statements, and by the time two
+ * privileges have been added and one taken away there is nothing left to compare with a
+ * declaration written per migration.
+ */
+interface GrantStatement {
+  readonly version: number;
+  readonly verb: 'GRANT' | 'REVOKE';
+  readonly role: string;
+  readonly table: string;
+  readonly privileges: readonly string[];
+  /** `ON ALL TABLES IN SCHEMA public`, which reaches every table then present. */
+  readonly wholeSchema: boolean;
+}
+
 interface ReplayResult {
   readonly matrix: Matrix;
   /** Tables named one by one in a `GRANT … TO app_runtime`, never via `ON ALL TABLES`. */
   readonly explicitRuntimeGrants: ReadonlySet<string>;
+  /** Every table-level `GRANT`/`REVOKE` the replayed range performed, in file order. */
+  readonly statements: readonly GrantStatement[];
 }
 
 function copyMatrix(source: Matrix): Matrix {
@@ -143,6 +173,7 @@ function replay(directory: string, through: number, start: ReplayStart): ReplayR
   const matrix = copyMatrix(start.matrix);
   const present: string[] = [...start.tables];
   const explicitRuntimeGrants = new Set<string>();
+  const statements: GrantStatement[] = [];
 
   const forget = (table: string): void => {
     for (const byTable of matrix.values()) byTable.delete(table);
@@ -195,6 +226,9 @@ function replay(directory: string, through: number, start: ReplayStart): ReplayR
           if (verb === 'GRANT' && !wholeSchema && role === RUNTIME_GROUP_ROLE && privileges.length > 0) {
             explicitRuntimeGrants.add(table);
           }
+          if (privileges.length > 0 && (verb === 'GRANT' || verb === 'REVOKE')) {
+            statements.push({ version, verb, role, table, privileges, wholeSchema });
+          }
           const set = entry(matrix, role, table);
           for (const privilege of privileges) {
             if (verb === 'GRANT') {
@@ -209,7 +243,7 @@ function replay(directory: string, through: number, start: ReplayStart): ReplayR
       }
     }
   }
-  return { matrix, explicitRuntimeGrants };
+  return { matrix, explicitRuntimeGrants, statements };
 }
 
 /**
@@ -414,53 +448,200 @@ export function serialiseGrantsBaseline(baseline: GrantsBaseline): string {
   return `${JSON.stringify(baseline, null, 2)}\n`;
 }
 
-// ------------------------------------------------------------------- runtime-access
+// ------------------------------------------------------- reviewed access exceptions
 
-const RUNTIME_ACCESS_LINE = /^\s*--\s*runtime-access:\s*none\s+(.+?)\s*$/imu;
+/**
+ * `access-exceptions.json`: the access changes somebody *other than the migration*
+ * signed off on.
+ *
+ * The first version of this rule read `-- runtime-access: none <table>` out of the
+ * migration file itself, and a second GPT-6 review found the hole. It is the shape of
+ * the whole problem: **the thing being reviewed was writing its own review.** A
+ * migration author who wanted a table the runtime cannot reach wrote, in that same
+ * file, the comment that excused it; and a direct `REVOKE` on an existing table simply
+ * *became* the replayed expectation, so a feature quietly losing its access passed with
+ * no finding at all. That the comment travelled with the file's checksum made it
+ * tamper-evident after the fact, which is a different property from being reviewed.
+ *
+ * So both kinds of statement now live here, outside the migration text, keyed by the
+ * migration's four-digit number:
+ *
+ * 1. `runtimeAccessNone` — a table deliberately unreachable by `app_runtime`. This is
+ *    now the *only* thing that excuses a new table from `new_table_without_access`; the
+ *    header form is gone, parser and all.
+ * 2. `existingTableDeltas` — every declared grant loss or gain on a table the baseline
+ *    already knew. A `GRANT` or a `REVOKE` in a migration naming such a table, for one
+ *    of the `COMPARED_ROLES`, and not declared here, is `undeclared_grant_change`.
+ *
+ * Every entry carries a `why` that a person wrote, and an empty or missing one is
+ * refused when the file is *read* rather than reported as a finding: the purpose of the
+ * file is that somebody reviewed the access change, so an entry with no sentence in it
+ * is an entry nobody reviewed, and there is nothing to run the rest of the check about.
+ */
 
-export interface RuntimeAccessExceptions {
-  readonly version: number;
-  readonly fileName: string;
-  /** Tables the file says are deliberately unreachable by `app_runtime`. */
-  readonly tables: readonly string[];
+export interface RuntimeAccessNoneEntry {
+  /** The table `app_runtime` is meant not to reach. */
+  readonly table: string;
+  readonly why: string;
+}
+
+export interface ExistingTableDelta {
+  readonly table: string;
+  /** One of `COMPARED_ROLES`; a delta for any other role is refused on read. */
+  readonly role: string;
+  /** Privileges this migration adds, as `SELECT` or `UPDATE(detail)`. `ALL` expands. */
+  readonly grant: readonly string[];
+  /** Privileges this migration takes away, spelled the same way. */
+  readonly revoke: readonly string[];
+  readonly why: string;
+}
+
+export interface MigrationAccessExceptions {
+  readonly runtimeAccessNone: readonly RuntimeAccessNoneEntry[];
+  readonly existingTableDeltas: readonly ExistingTableDelta[];
+}
+
+export interface AccessExceptions {
+  readonly _why: string;
+  /** Keyed by migration number, so a range can be taken without re-parsing file names. */
+  readonly migrations: ReadonlyMap<number, MigrationAccessExceptions>;
+}
+
+const EMPTY_MIGRATION_EXCEPTIONS: MigrationAccessExceptions = { runtimeAccessNone: [], existingTableDeltas: [] };
+
+function objectAt(value: unknown, field: string): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error(`access-exceptions.json: ${field} is not a JSON object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function arrayAt(raw: Record<string, unknown>, key: string, field: string): readonly unknown[] {
+  const value = raw[key];
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error(`access-exceptions.json: ${field} is not an array`);
+  return value as readonly unknown[];
+}
+
+/** A `why` is the review. Blank, absent or whitespace is the same as unreviewed. */
+function whyAt(raw: Record<string, unknown>, field: string): string {
+  const why = raw['why'];
+  if (typeof why !== 'string' || why.trim().length === 0) {
+    throw new Error(
+      `access-exceptions.json: ${field} has no \`why\`; an access exception nobody wrote a reason for is ` +
+        'an access exception nobody reviewed',
+    );
+  }
+  return why;
+}
+
+function nameAt(raw: Record<string, unknown>, key: string, field: string): string {
+  const value = raw[key];
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new Error(`access-exceptions.json: ${field}.${key} is not a non-empty string`);
+  }
+  return value.trim().toLowerCase();
+}
+
+/** `['ALL']` → every privilege; `['UPDATE (detail)']` → `['UPDATE(detail)']`. */
+function normalisePrivileges(raw: readonly unknown[], field: string): readonly string[] {
+  const out = new Set<string>();
+  for (const item of raw) {
+    if (typeof item !== 'string') throw new Error(`access-exceptions.json: ${field} holds a non-string privilege`);
+    for (const privilege of privilegeList(item)) out.add(privilege);
+  }
+  return [...out].sort();
 }
 
 /**
- * `-- runtime-access: none some_table, another_table` — a migration's signed statement
- * that a table it creates is meant to be unreachable by the runtime.
+ * The committed exceptions file, from beside this one unless told otherwise.
  *
- * Read exactly as `changes.ts` reads `-- changes:`, and for the same reason: the line is
- * a comment, so it costs the database nothing and it travels with the file's checksum,
- * which means adding one after the fact fails `MIGRATION_CHECKSUM_MISMATCH` rather than
- * quietly excusing a table. A file with no such line excuses nothing.
- *
- * The parser lives here rather than in `changes.ts` because the two headers answer
- * different questions and are checked by different rules; `changes.ts` is not edited.
+ * Resolved against `import.meta.url` for the reason `loadGrantsBaseline` gives: the
+ * directory is copied into checkouts and run from working directories it does not pick.
  */
-export function runtimeAccessExceptionsOf(fileName: string, sql: string): RuntimeAccessExceptions {
-  const version = Number(FILE_NAME.exec(fileName)?.[1] ?? '0');
-  const match = RUNTIME_ACCESS_LINE.exec(sql);
-  if (match?.[1] === undefined) return { version, fileName, tables: [] };
-  const tables = match[1]
-    .split(/[\s,]+/u)
-    .map(part => part.trim().toLowerCase())
-    .filter(part => part.length > 0);
-  return { version, fileName, tables };
+export function loadAccessExceptions(path?: string | URL): AccessExceptions {
+  const from = path ?? new URL('./access-exceptions.json', import.meta.url);
+  const raw = objectAt(JSON.parse(readFileSync(from, 'utf8')) as unknown, 'the file');
+  const migrations = new Map<number, MigrationAccessExceptions>();
+  for (const [key, value] of Object.entries(objectAt(raw['migrations'] ?? {}, 'migrations'))) {
+    if (!/^\d{4}$/u.test(key)) {
+      throw new Error(`access-exceptions.json: '${key}' is not a four-digit migration number`);
+    }
+    const perMigration = objectAt(value, `migrations.${key}`);
+    const runtimeAccessNone = arrayAt(perMigration, 'runtimeAccessNone', `migrations.${key}.runtimeAccessNone`).map(
+      (item, at) => {
+        const field = `migrations.${key}.runtimeAccessNone[${String(at)}]`;
+        const entry = objectAt(item, field);
+        return { table: nameAt(entry, 'table', field), why: whyAt(entry, field) };
+      },
+    );
+    const existingTableDeltas = arrayAt(perMigration, 'existingTableDeltas', `migrations.${key}.existingTableDeltas`).map(
+      (item, at) => {
+        const field = `migrations.${key}.existingTableDeltas[${String(at)}]`;
+        const entry = objectAt(item, field);
+        const role = nameAt(entry, 'role', field);
+        if (!COMPARED_ROLES.includes(role)) {
+          throw new Error(`access-exceptions.json: ${field}.role is '${role}', which is not one of ${COMPARED_ROLES.join(', ')}`);
+        }
+        return {
+          table: nameAt(entry, 'table', field),
+          role,
+          grant: normalisePrivileges(arrayAt(entry, 'grant', `${field}.grant`), `${field}.grant`),
+          revoke: normalisePrivileges(arrayAt(entry, 'revoke', `${field}.revoke`), `${field}.revoke`),
+          why: whyAt(entry, field),
+        };
+      },
+    );
+    migrations.set(Number(key), { runtimeAccessNone, existingTableDeltas });
+  }
+  return { _why: typeof raw['_why'] === 'string' ? raw['_why'] : '', migrations };
 }
 
-/** Every table migrations `from`+1..`to` in `directory` excuse from the runtime-access rule. */
-export function runtimeAccessExceptions(directory: string, from: number, to: number): readonly string[] {
+/** Every table migrations `from`+1..`to` are excused from the runtime-access rule for. */
+export function runtimeAccessNoneTables(exceptions: AccessExceptions, from: number, to: number): readonly string[] {
   const excused = new Set<string>();
-  for (const fileName of readdirSync(directory).sort()) {
-    const match = FILE_NAME.exec(fileName);
-    if (match === null) continue;
-    const version = Number(match[1]);
+  for (const [version, perMigration] of exceptions.migrations) {
     if (version <= from || version > to) continue;
-    for (const table of runtimeAccessExceptionsOf(fileName, readFileSync(join(directory, fileName), 'utf8')).tables) {
-      excused.add(table);
-    }
+    for (const entry of perMigration.runtimeAccessNone) excused.add(entry.table);
   }
   return [...excused].sort();
+}
+
+/** What migration `version` declares about (`table`, `role`), with several entries unioned. */
+function declaredDelta(
+  exceptions: AccessExceptions,
+  version: number,
+  table: string,
+  role: string,
+): { readonly grant: ReadonlySet<string>; readonly revoke: ReadonlySet<string>; readonly declared: boolean } {
+  const grant = new Set<string>();
+  const revoke = new Set<string>();
+  let declared = false;
+  for (const delta of (exceptions.migrations.get(version) ?? EMPTY_MIGRATION_EXCEPTIONS).existingTableDeltas) {
+    if (delta.table !== table || delta.role !== role) continue;
+    declared = true;
+    for (const privilege of delta.grant) grant.add(privilege);
+    for (const privilege of delta.revoke) revoke.add(privilege);
+  }
+  return { grant, revoke, declared };
+}
+
+const MIGRATION_PATH = /(?:^|\/)packages\/domain\/db\/migrations\/\d{4}_[a-z0-9_]+\.sql$/u;
+const BASELINE_PATH = /(?:^|\/)tools\/upgrade\/grants-baseline\.json$/u;
+
+/**
+ * True when this diff changes both the baseline and a migration, which is never allowed.
+ *
+ * `grants-baseline.json` is the thing every comparison above is made against, so a
+ * commit free to move both it and a migration can launder any access change at all:
+ * revoke the privilege, regenerate the baseline, and the check compares the new state
+ * with a baseline that already agrees with it. Splitting them means the regeneration
+ * arrives on its own, with the diff — a permission that disappeared from a committed
+ * file — as the only thing a reviewer has to look at.
+ */
+export function baselineAndMigrationBothChanged(changedPaths: readonly string[]): boolean {
+  const normalised = changedPaths.map(path => path.replace(/\\/gu, '/').replace(/^\.\//u, ''));
+  return normalised.some(path => BASELINE_PATH.test(path)) && normalised.some(path => MIGRATION_PATH.test(path));
 }
 
 // ------------------------------------------------------------------------- the check
@@ -521,6 +702,8 @@ export interface ExpectedGrants {
   readonly matrix: Matrix;
   /** Tables migrations after the baseline granted to `app_runtime` by name. */
   readonly explicitRuntimeGrants: ReadonlySet<string>;
+  /** Every table-level `GRANT`/`REVOKE` those migrations performed, for the access rule. */
+  readonly statements: readonly GrantStatement[];
 }
 
 /**
@@ -566,7 +749,7 @@ const APPEND_ONLY_PROMISES: readonly { readonly table: string; readonly privileg
 ];
 
 export interface PrivilegeFinding {
-  readonly kind: 'grant_differs' | 'new_table_without_access' | 'effective_access_differs';
+  readonly kind: 'grant_differs' | 'new_table_without_access' | 'undeclared_grant_change' | 'effective_access_differs';
   readonly role: string;
   readonly object: string;
   readonly detail: string;
@@ -577,6 +760,7 @@ export interface PrivilegeReport {
   readonly tablesChecked: number;
   readonly effectiveChecks: number;
   readonly newTables: readonly string[];
+  /** Tables `access-exceptions.json` excuses from the runtime-access rule in this range. */
   readonly exceptions: readonly string[];
   readonly findings: readonly PrivilegeFinding[];
 }
@@ -586,6 +770,12 @@ export interface CheckPrivilegesOptions {
   readonly migrations: string;
   readonly toVersion: number;
   readonly baseline: GrantsBaseline;
+  /**
+   * The reviewed exceptions and declared deltas. Defaults to the committed
+   * `access-exceptions.json` beside this file, which is what a real run wants; a caller
+   * passes one explicitly to check a migration directory that is not the committed one.
+   */
+  readonly exceptions?: AccessExceptions | undefined;
   /** The login role production connects as. Defaults to the upgrade cluster's `fss_runtime`. */
   readonly runtimeLogin?: string | undefined;
 }
@@ -632,6 +822,7 @@ export async function checkPrivileges(
 ): Promise<PrivilegeReport> {
   const { baseline } = options;
   const login = options.runtimeLogin ?? DEFAULT_RUNTIME_LOGIN_ROLE;
+  const accessExceptions = options.exceptions ?? loadAccessExceptions();
   const findings: PrivilegeFinding[] = [];
 
   const expected = expectedGrants(options.migrations, baseline, options.toVersion);
@@ -666,7 +857,7 @@ export async function checkPrivileges(
   // ---- rule 2: a new table needs an explicit runtime grant or a written exception.
   const known = new Set(baseline.tables);
   const newTables = live.tables.filter(table => !known.has(table)).sort();
-  const exceptions = runtimeAccessExceptions(options.migrations, baseline.schemaVersion, options.toVersion);
+  const exceptions = runtimeAccessNoneTables(accessExceptions, baseline.schemaVersion, options.toVersion);
   const excused = new Set(exceptions);
   for (const table of newTables) {
     if (excused.has(table)) continue;
@@ -677,7 +868,31 @@ export async function checkPrivileges(
       object: table,
       detail:
         `new since schema ${String(baseline.schemaVersion)} with no \`GRANT … ON ${table} TO ${RUNTIME_GROUP_ROLE}\` ` +
-        `in its migration and no \`-- runtime-access: none ${table}\` header excusing it`,
+        `in its migration and no reviewed \`runtimeAccessNone\` entry for it in tools/upgrade/access-exceptions.json`,
+    });
+  }
+
+  // ---- rule 4: an access change on an existing table needs a declaration somebody else
+  // wrote. Without this the replay is its own authority: a `REVOKE` in a migration
+  // becomes the expectation, actual and expected agree, and a feature that just lost its
+  // access passes. Only tables the baseline already knew are in scope — a table this
+  // range created is the business of rule 2 and of the next baseline regeneration.
+  for (const statement of expected.statements) {
+    if (!known.has(statement.table)) continue;
+    const delta = declaredDelta(accessExceptions, statement.version, statement.table, statement.role);
+    const wanted = statement.verb === 'GRANT' ? delta.grant : delta.revoke;
+    const undeclared = statement.privileges.filter(privilege => !wanted.has(privilege));
+    if (undeclared.length === 0) continue;
+    findings.push({
+      kind: 'undeclared_grant_change',
+      role: statement.role,
+      object: statement.table,
+      detail:
+        `migration ${String(statement.version).padStart(4, '0')} ` +
+        `${statement.verb}s ${undeclared.join(', ')}${statement.wholeSchema ? ' (via ON ALL TABLES)' : ''} ` +
+        `on this existing table, and tools/upgrade/access-exceptions.json ` +
+        `${delta.declared ? 'declares no such' : 'declares no'} ` +
+        `${statement.verb === 'GRANT' ? 'grant' : 'revoke'} for it under "${String(statement.version).padStart(4, '0')}"`,
     });
   }
 

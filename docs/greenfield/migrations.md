@@ -98,19 +98,41 @@ Eleven steps, each printing its wall-clock seconds:
    `pg_stat_activity` sampled every 100 ms in a second connection — the printed table
    names every relation locked, the strongest mode taken and the longest
    `ACCESS EXCLUSIVE` held;
-6. data preservation, against the `-- changes:` headers above;
+6. data preservation, against the `-- changes:` headers above: per-table content
+   hashes, the catalogue **shape** of every table (so a change to a table the fixture
+   leaves empty is still caught), and every **view definition** (`pg_get_viewdef`). A
+   view carries no rows of its own, so neither the hashes nor the shapes can see one
+   being replaced — and `effective_suppressions` is the view the suppression system
+   answers "is this handle suppressed?" from. A redefined view no migration names in a
+   `-- changes:` header fails;
 7. the privileges at M, against a **committed baseline** (`tools/upgrade/grants-baseline.json`,
    taken at schema 22: both group roles' table and column grants, `PUBLIC`, sequences,
    functions and the schema grants) **plus** the `GRANT`/`REVOKE` lines migrations
-   N+1..M declare. Three rules, each of which the old replay-from-nothing check could
-   not state: a privilege the baseline had and the database no longer has is a loss and
-   fails; **every table new since the baseline must carry an explicit
-   `GRANT … TO app_runtime`, or be named in its migration's header as
-   `-- runtime-access: none <table>`** — a reviewed exception, because a table with
-   neither is a feature nobody can reach; and the effective privileges are checked
-   through the runtime **login** with `has_table_privilege('fss_runtime', …)`, not only
-   through the group, including that `audit_events` DELETE and `suppression_events`
-   UPDATE are still refused it;
+   N+1..M declare, each of which must be **declared in
+   `tools/upgrade/access-exceptions.json`**. Four rules, none of which the old
+   replay-from-nothing check could state:
+   - a privilege the baseline had and the database no longer has is a loss and fails;
+   - **every table new since the baseline must carry an explicit
+     `GRANT … TO app_runtime`**, or be listed under `runtimeAccessNone` in
+     `access-exceptions.json`, because a table with neither is a feature nobody can
+     reach;
+   - **a `GRANT` or `REVOKE` on a table the baseline already knew needs a declared
+     delta** in the same file. A `REVOKE` inside a migration used to *become* the
+     expectation, so a feature quietly losing access passed;
+   - the effective privileges are checked through the runtime **login** with
+     `has_table_privilege('fss_runtime', …)`, not only through the group, including
+     that `audit_events` DELETE and `suppression_events` UPDATE are still refused it.
+
+   Every entry in `access-exceptions.json` carries a `why` a human wrote, and a missing
+   or blank one is refused on read. The point of the file is that it is not the
+   migration: a migration that carries its own exemption — which is what the old
+   `-- runtime-access: none` header was — reviews itself. That header form is gone.
+
+   **The baseline may not move in the same change as a migration.** `grants-baseline.json`
+   is what every comparison is against, so a pull request that edits both it and a
+   migration can launder any access change past the check. Regenerate it with
+   `grantsBaselineMain` in a commit of its own, containing no migration, where the diff
+   is the review; the `upgrade` job fails a change that moves both;
 8. `packages/domain/test/db/constraints.test.ts` at M, run by Vitest as itself, so the
    coverage gate at the bottom of that file applies: a new constraint with no failing
    insert fails the upgrade test too;
@@ -120,15 +142,34 @@ Eleven steps, each printing its wall-clock seconds:
    comparison against an invented range. The worker's handler registry must be built the
    way its bootstrap builds it; a checkout that cannot is a failure, not a note;
 10. the workflows, in HEAD, as `app_runtime`, each asserting something specific rather
-    than not throwing: Today built (at least five cards) and read for both users, with
-    the fixture's own firm and its lane; the firm page with its zone and stage history;
-    the pipeline board; step eligibility for an active enrolment, which must reach one
-    named decision and fails on a skip; the provider-free half of the reconcile pass; a
-    job claimed → progress → completed with its fencing token and a stale token refused;
-    a funnel fact; a contact deleted through the retention path, leaving a tombstone; and
-    the dashboard with its live sources. A migration that replaced a routine must have
-    had it **called** — `pg_stat_user_functions` counts it, and an uncalled replacement
-    fails the step;
+    than not throwing. "Specific" is load-bearing: two of these used to pass over an
+    empty set, which proves nothing (GPT-6 review of PR 314, P1-3).
+    - Today built (at least five cards) and read for both users, with the fixture's own
+      firm on **the lane it is supposed to be on**, not merely some lane. Two are
+      pinned: the primary firm is `callback`, which is the *precedence* answer — it
+      also has an open `new_firm` task — and the one firm the fixture never opens an
+      opportunity for is `new_firm`, which is the single-source answer. Both are
+      deterministic because the fixture's confirmed callback is at a fixed instant in
+      the past; the constants say so.
+    - the firm page with its zone and stage history; the pipeline board.
+    - step eligibility for an active enrolment, which must reach one named decision and
+      fails on a skip.
+    - the provider-free half of the reconcile pass, which must return **the fixture's
+      own owed fence by id**, and its mailbox. The fixture seeds one through the real
+      commands (`prepareOutboundMessage` → `claimForDispatch` → `beginReconciling`,
+      which leaves `reconcile_last_attempt_at` null so it is owed now). Zero fences or
+      zero mailboxes is a failure, not a pass.
+    - a job claimed → progress → completed with its fencing token and a stale token
+      refused; a funnel fact; a contact deleted through the retention path, leaving a
+      tombstone; the dashboard with its live sources.
+    - **`effective_suppressions`**, read twice over — `isSuppressed` for the exact
+      handle the fixture suppressed, and `listEffectiveSuppressions` for the set
+      containing it — plus a handle nobody suppressed, which must come back absent. A
+      replacement view that returns nothing fails here; nothing else in the tool could
+      see it.
+
+    A migration that replaced a routine must have had it **called** —
+    `pg_stat_user_functions` counts it, and an uncalled replacement fails the step;
 11. recovery — the migrator run again at M is a no-op, and a synthetic migration whose
     second statement is invalid leaves the schema, every `schema_versions` row, the
     catalogue shape and a row written just before it exactly as they were. The snapshot
@@ -146,17 +187,44 @@ unreadable answer:
 
 | variable | what it is | who moves it |
 | --- | --- | --- |
-| `FSS_PROD_COMMIT` | the full sha of the commit production's images were built from | the `deployed-commit` job of `greenfield-deploy.yml`, after a green deploy, smoke and read-back |
+| `FSS_PROD_COMMIT` | the full sha of the commit production's images were built from | **by hand, with the release helper.** CI cannot: `GITHUB_TOKEN` has no `variables` scope, so `permissions:` cannot grant Variables: write. `greenfield-deploy.yml`'s read-back job prints the value to set, attested **from ECR** after the rollout and the smoke, and fails if ECR names a commit other than the one deployed |
 | `FSS_PROD_SCHEMA` | the schema version production is on | a schema release, by hand, in the step that migrates |
 
-The job checks out `FSS_PROD_COMMIT` as the base worktree, requires it to be an ancestor
-of HEAD, takes `FROM` from *that checkout's own* `schemaRange.ts` and refuses unless it
-equals `FSS_PROD_SCHEMA` — so a stale variable is caught by the other one. `TO` is HEAD's.
-When `FROM` equals `TO` the job still fails if any migration at or below `FROM` differs
-from the deployed bytes, and otherwise prints why it has nothing to do. An unset,
-non-numeric, zero or non-ancestral value fails the job; none of them is a green skip. The printed evidence — the timings, the lock table and the
-recovery sentence — is uploaded as `upgrade-evidence-<sha>.txt`, and
-`docs/greenfield/release.md` 3 says which releases cite it instead of a rehearsal.
+**The schema is attested from production itself.** A variable is what the release
+process last recorded, not what is running, so before it reads either one the job
+fetches production's public `GET /health` — no credential, the same origin the deploy
+smoke uses — and takes `schema.databaseVersion` from it. `FSS_PROD_SCHEMA` must equal
+that, and so must the `REQUIRED_SCHEMA` in `FSS_PROD_COMMIT`'s own `schemaRange.ts`.
+An unreachable or malformed `/health` fails the job after three attempts: "cannot tell
+what production runs" is never "nothing to check".
+
+**The commit is not attestable from the gate job, and that is survivable.** `/health`
+does not report the commit its image was built from (a follow-up will add it), so
+`FSS_PROD_COMMIT` is cross-checked rather than proved: it must be a commit in this
+repository, an ancestor of the branch *and* of `origin/main`, and declare the attested
+schema. What a wrong-but-plausible value could cost is bounded by immutability — any
+commit deployed at schema *N* has byte-identical migrations 1..*N* — so a lagging
+variable degrades the *fixture*, which is written by that commit's application code,
+and never the migration comparison. The job prints a warning naming the newest commit
+on main still at that schema when the variable is behind it.
+
+The job then checks out `FSS_PROD_COMMIT` as the base worktree and takes `FROM` from
+that checkout's own `schemaRange.ts`; `TO` is HEAD's.
+
+**Before any "nothing to do", the deployed files are compared.** Migrations 1..`FROM`
+are compared between the two trees as a manifest of *name and blob id*, not as a diff:
+`git diff --name-only` follows renames and prints only the post-image name, so renaming
+`0022_a.sql` to `0023_b.sql` while leaving `REQUIRED_SCHEMA` alone printed one path
+above the deployed schema, nothing to filter, and a green skip — while production, which
+holds a sha256 for the applied `0022_a.sql`, would refuse the release with
+`MIGRATION_CHECKSUM_MISMATCH`. The skip is allowed only when the manifests are
+identical. An unset, non-numeric, zero, non-ancestral or disagreeing value fails the
+job; none of them is a green skip. `test/ops/upgradeJobGuard.check.ts` runs the step's
+own shell over throwaway repositories, the rename case included.
+
+The printed evidence — the timings, the lock table and the recovery sentence — is
+uploaded as `upgrade-evidence-<sha>.txt`, and `docs/greenfield/release.md` 3 says which
+releases cite it instead of a rehearsal.
 
 The job lives in `greenfield.yml` rather than a workflow of its own, so that the run a
 release record names (`gateRunId`) is the run that holds the evidence, and so that a red
@@ -170,9 +238,9 @@ that decided it:
 
 | class | what earns it |
 | --- | --- |
-| `additive` | every statement recognised, and every object it names is new |
+| `additive` | every statement recognised, and every object it names is new — a `CREATE VIEW` of a name no earlier migration creates included |
 | `replaces-routine` | `CREATE OR REPLACE FUNCTION`/`PROCEDURE`/`TRIGGER`, or `ALTER FUNCTION`, of a routine that already exists |
-| `touches-existing` | `ALTER TABLE`, `CREATE INDEX`, `UPDATE`, `INSERT`, `DELETE … WHERE`, a `CREATE TRIGGER`, a default change, a `CHECK` added — on something that already exists |
+| `touches-existing` | `ALTER TABLE`, `CREATE INDEX`, `UPDATE`, `INSERT`, `DELETE … WHERE`, a `CREATE TRIGGER`, a default change, a `CHECK` added — on something that already exists. **`CREATE OR REPLACE VIEW` or `ALTER VIEW` of a view that already exists** is here too, and `REFRESH MATERIALIZED VIEW` with it |
 | `privilege` | `GRANT`/`REVOKE`/`ALTER ROLE` touching an existing object or role |
 | `destructive` | `DROP TABLE`/`COLUMN`/`CONSTRAINT`/`FUNCTION`/`TRIGGER`/`INDEX`, `TRUNCATE`, `DELETE` with no `WHERE` |
 | `unclassified` | a top-level form the classifier does not recognise, or a `DO $$ … $$` block whose body it cannot fully classify |
@@ -184,9 +252,18 @@ content hash never moved, and the release procedure would have said no rehearsal
 needed. A `DO` block whose body does parse is classified by its contents, so that example
 now reports `destructive` and names the `DELETE`.
 
-"Existing" is the set of tables and routines the earlier migrations in the same directory
-create and do not drop — not a guess from a name — and a statement inside a function body
-is not a statement the migration performs. `release.md` 3 rehearses
+**Why a replaced view rehearses and a replaced routine does not.** `replaces-routine`
+releases without a rehearsal because the upgrade test *proves the new body ran*:
+`track_functions` is on and `pg_stat_user_functions` counts the call during the workflow
+step, so a replacement nothing exercised fails. There is no equivalent proof for a view.
+A view is not called, it is selected from, and the server keeps no per-view read counter,
+so a replacement returning an empty set is indistinguishable from one nobody queried.
+`effective_suppressions` is the view the suppression system answers "is this handle
+suppressed?" from; until there is such a proof, a replaced view rehearses.
+
+"Existing" is the set of tables, views and routines the earlier migrations in the same
+directory create and do not drop — not a guess from a name — and a statement inside a
+function body is not a statement the migration performs. `release.md` 3 rehearses
 `touches-existing`, `privilege`, `destructive` and `unclassified`, and does not rehearse
 `additive` or `replaces-routine`.
 

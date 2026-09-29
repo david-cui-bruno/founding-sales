@@ -238,3 +238,73 @@ export function shapeDifferences(before: ShapeSnapshot, after: ShapeSnapshot): r
   }
   return found;
 }
+
+// ------------------------------------------------------------------ view definitions
+
+/**
+ * What a view *says*, which neither the content snapshot nor the shape snapshot sees.
+ *
+ * A GPT-6 review of PR 314 found the hole: `CREATE OR REPLACE VIEW` used to classify as
+ * `additive` — so the release skipped its rehearsal — and nothing downstream noticed,
+ * because a view holds no rows of its own to hash and `shapeSnapshot` reads ordinary
+ * tables (`relkind = 'r'`) only. `effective_suppressions`, the view the suppression
+ * system answers "is this handle suppressed?" from, could therefore be replaced with one
+ * whose WHERE clause is `false` and the whole upgrade test would stay green.
+ *
+ * So the definition is snapshotted too, as the server renders it. `pg_get_viewdef(oid,
+ * true)` is the pretty-printed form: it is the server's own normalisation of the parsed
+ * query, so whitespace and casing in the migration file do not move it and a change the
+ * *server* considers a change does. Materialized views (`relkind = 'm'`) are covered by
+ * the same read; none exists in this schema today, and one added later is snapshotted
+ * without anybody having to remember to come back here.
+ */
+
+/** A view's name → its server-rendered definition (`pg_get_viewdef(oid, true)`). */
+export type ViewSnapshot = ReadonlyMap<string, string>;
+
+/** Every view and materialized view in `public`, in name order. */
+export async function viewSnapshot(session: SessionQueryable): Promise<ViewSnapshot> {
+  const { rows } = await session.query<{ view_name: string; definition: string | null }>(
+    `SELECT c.relname AS view_name, pg_get_viewdef(c.oid, true) AS definition
+       FROM pg_class c
+       JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public' AND c.relkind IN ('v', 'm')
+      ORDER BY c.relname`,
+  );
+  const result = new Map<string, string>();
+  // The definition is normalised for comparison, not for display: the pretty-printed
+  // form is stable for an unchanged view, but trailing whitespace on a line is not worth
+  // failing a release over, and the same definition must compare equal to itself.
+  for (const row of rows) result.set(row.view_name, (row.definition ?? '').trim());
+  return result;
+}
+
+export interface ViewDifference {
+  readonly view: string;
+  readonly change: 'added' | 'dropped' | 'redefined';
+  readonly before: string | null;
+  readonly after: string | null;
+}
+
+/**
+ * Views added, dropped or redefined between two snapshots, in name order.
+ *
+ * Unlike `shapeDifferences`, an *added* view is reported rather than passed over. A new
+ * table is what `additive` means and the caller has `addedTables` for it; a new view is
+ * cheap to declare in the migration's `-- changes:` header, and the caller is better off
+ * being told about every view the upgrade moved than being asked to know which kind of
+ * movement to ask about.
+ */
+export function viewDifferences(before: ViewSnapshot, after: ViewSnapshot): readonly ViewDifference[] {
+  const found: ViewDifference[] = [];
+  for (const view of [...new Set([...before.keys(), ...after.keys()])].sort()) {
+    const was = before.get(view);
+    const now = after.get(view);
+    if (was === undefined && now !== undefined) found.push({ view, change: 'added', before: null, after: now });
+    else if (was !== undefined && now === undefined) found.push({ view, change: 'dropped', before: was, after: null });
+    else if (was !== undefined && now !== undefined && was !== now) {
+      found.push({ view, change: 'redefined', before: was, after: now });
+    }
+  }
+  return found;
+}

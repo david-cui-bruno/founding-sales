@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { cp, mkdir, readdir, readFile, rm, symlink } from 'node:fs/promises';
+import { cp, mkdir, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -32,8 +32,16 @@ import { join } from 'node:path';
  * When the locks differ, the link farm would be a lie — HEAD's third-party versions
  * running under the base's code could produce data the base image never could (GPT-6
  * review, P1-6) — so `npm ci` is run in the base worktree instead and the report says
- * which of the two happened. A base that already has a real `node_modules` is left
- * alone and used as it is.
+ * which of the two happened.
+ *
+ * A `node_modules` that is already there is **not** trusted for being there. It was,
+ * and a left-over tree from an earlier run at another commit — or a developer's own
+ * `npm install` — was then used silently, which is exactly the lie the lockfile
+ * comparison exists to prevent (GPT-6 review of PR 314, P1-6). Whenever this tool
+ * builds one it stamps it with the digest of the lockfile it was built from. On the
+ * next run: a matching stamp is reused; a stamp that disagrees means our own tree has
+ * gone stale, so it is removed and rebuilt; no stamp at all means the directory is
+ * somebody else's and the run refuses rather than deleting it.
  *
  * **The loader itself.** Every commit before this lane merged has no
  * `tools/upgrade/`, which includes the first pull request this job runs on. For those,
@@ -53,7 +61,21 @@ const WORKSPACE_PACKAGES: readonly (readonly [string, string])[] = [
   ['desktop', 'apps/desktop'],
 ];
 
-export type ModulesSource = 'already present' | 'linked from HEAD (identical lockfile)' | 'npm ci in the base worktree (lockfiles differ)';
+export type ModulesSource =
+  | 'already present'
+  | "reused (that checkout's own npm install, agreeing with its lockfile)"
+  | 'reused (stamped with this lockfile)'
+  | 'rebuilt (the stamp named another lockfile)'
+  | 'linked from HEAD (identical lockfile)'
+  | 'npm ci in the base worktree (lockfiles differ)';
+
+/**
+ * Where the provenance stamp lives. Not `node_modules/.package-lock.json` — npm's
+ * hidden lockfile is a different document from `package-lock.json`, so the two cannot
+ * be compared by digest, and a link farm has no hidden lockfile at all. This file says
+ * one thing only: the sha256 of the `package-lock.json` the directory was built from.
+ */
+const STAMP = ['node_modules', '.fss-upgrade-lockfile'] as const;
 
 export interface BaseCheckout {
   readonly directory: string;
@@ -92,6 +114,62 @@ async function lockfileDigest(checkout: string): Promise<string | null> {
 }
 
 /** `npm ci` in `checkout`, with the flags the greenfield gate uses. */
+/** The lockfile digest a previously built `node_modules` was stamped with, if ours. */
+async function readStamp(checkout: string): Promise<string | null> {
+  try {
+    return (await readFile(join(checkout, ...STAMP), 'utf8')).trim();
+  } catch {
+    return null;
+  }
+}
+
+async function writeStamp(checkout: string, digest: string | null): Promise<void> {
+  await writeFile(join(checkout, ...STAMP), `${digest ?? 'no package-lock.json'}\n`, 'utf8');
+}
+
+/**
+ * Whether a `node_modules` this tool did not build was installed from the checkout's
+ * own `package-lock.json`, according to npm's hidden lockfile.
+ *
+ * The two documents are not comparable by digest — the hidden lockfile is npm's own
+ * resolution of the real one and legitimately omits entries (optional dependencies for
+ * other platforms, for instance: 75 of 565 in this repository's tree). What cannot
+ * legitimately differ is a *version*. A disagreeing one, or no hidden lockfile at all,
+ * means the directory came from somewhere else.
+ *
+ * Returns the sentence naming the problem, or `null` when it agrees.
+ */
+async function hiddenLockfileDisagreement(checkout: string): Promise<string | null> {
+  let hidden: unknown;
+  let real: unknown;
+  try {
+    hidden = JSON.parse(await readFile(join(checkout, 'node_modules', '.package-lock.json'), 'utf8'));
+    real = JSON.parse(await readFile(join(checkout, 'package-lock.json'), 'utf8'));
+  } catch {
+    return 'it carries no node_modules/.package-lock.json, so nothing says where it came from';
+  }
+  const hiddenPackages = (hidden as { packages?: Record<string, { version?: string }> }).packages ?? {};
+  const realPackages = (real as { packages?: Record<string, { version?: string; link?: boolean }> }).packages ?? {};
+  let compared = 0;
+  let wanted = 0;
+  for (const [name, entry] of Object.entries(realPackages)) {
+    if (name === '' || entry.link === true) continue;
+    wanted += 1;
+    const installed = hiddenPackages[name];
+    if (installed === undefined) continue;
+    compared += 1;
+    if (installed.version !== entry.version) {
+      return `${name} is ${installed.version ?? 'unknown'} there and ${entry.version ?? 'unknown'} in the lockfile`;
+    }
+  }
+  // An overlap this small is not an install of this lockfile at all — more likely a
+  // link farm an interrupted run left behind.
+  if (wanted > 0 && compared * 2 < wanted) {
+    return `only ${String(compared)} of its ${String(wanted)} packages are accounted for`;
+  }
+  return null;
+}
+
 async function install(checkout: string): Promise<void> {
   const code = await new Promise<number | null>(resolve => {
     const child = spawn('npm', ['ci', '--ignore-scripts', '--no-audit', '--no-fund'], {
@@ -146,15 +224,37 @@ export async function prepareCheckout(base: string, head: string): Promise<BaseC
 
   const created: string[] = [];
   let modules: ModulesSource = 'already present';
+  const [baseLock, headLock] = await Promise.all([lockfileDigest(base), lockfileDigest(head)]);
+  if (existsSync(join(base, 'node_modules'))) {
+    const stamped = await readStamp(base);
+    if (stamped === null) {
+      // Not ours. It can still be trusted, but only on evidence: npm leaves a hidden
+      // lockfile beside the tree it installed, and that is what says which
+      // `package-lock.json` the tree came from. A checkout somebody prepared with
+      // `npm ci` — the ordinary way to point `--tree` at another branch — passes here.
+      const own = await hiddenLockfileDisagreement(base);
+      if (own !== null) {
+        throw new Error(
+          `${join(base, 'node_modules')} was not installed from that checkout's package-lock.json (${own}); remove it and let this run install, or run \`npm ci\` there`,
+        );
+      }
+      modules = "reused (that checkout's own npm install, agreeing with its lockfile)";
+    } else if (stamped !== baseLock) {
+      await rm(join(base, 'node_modules'), { recursive: true, force: true });
+      modules = 'rebuilt (the stamp named another lockfile)';
+    } else {
+      modules = 'reused (stamped with this lockfile)';
+    }
+  }
   if (!existsSync(join(base, 'node_modules'))) {
-    const [baseLock, headLock] = await Promise.all([lockfileDigest(base), lockfileDigest(head)]);
     if (baseLock !== null && baseLock === headLock) {
       await buildLinkFarm(base, head);
-      modules = 'linked from HEAD (identical lockfile)';
+      if (modules === 'already present') modules = 'linked from HEAD (identical lockfile)';
     } else {
       await install(base);
-      modules = 'npm ci in the base worktree (lockfiles differ)';
+      if (modules === 'already present') modules = 'npm ci in the base worktree (lockfiles differ)';
     }
+    await writeStamp(base, baseLock);
     created.push(join(base, 'node_modules'));
   }
 

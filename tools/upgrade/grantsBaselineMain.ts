@@ -24,6 +24,17 @@ import { capturePrivileges, serialiseGrantsBaseline } from './grants.ts';
  * that a lost permission or a table nobody granted anything on has to appear as a line
  * a reviewer approved, rather than as an expectation that silently moved.
  *
+ * ## Regeneration belongs in its own commit, and that commit contains no migration
+ *
+ * The baseline is the thing every privilege comparison is made against, so a commit free
+ * to move both it and a migration can launder any access change at all: revoke the
+ * privilege, regenerate the file, and the check compares the new state against a
+ * baseline that already agrees with it. Nothing is left for a reviewer to see. So a
+ * regeneration lands on its own, with **the diff as the review artefact** and no
+ * migration beside it to explain the lines away —
+ * `baselineAndMigrationBothChanged` in `grants.ts` is what CI asks to refuse the
+ * combination, and it does not care which of the two was the innocent one.
+ *
  * The file is deterministic: every list is sorted, the object's owner is written as the
  * literal `OWNER` rather than by name, and nothing about the throwaway cluster — its
  * port, its database name, its generated passwords — reaches the output. Regenerating

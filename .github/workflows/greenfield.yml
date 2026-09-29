@@ -100,6 +100,9 @@ jobs:
           --health-retries 20
     env:
       FSS_TEST_POSTGRES_URL: postgresql://postgres:greenfield-ci@127.0.0.1:5432/postgres
+      # The public health endpoint, which answers the schema production's database is
+      # actually on. No credential; the deploy workflow's smoke reads the same origin.
+      FSS_PRODUCTION_ORIGIN: ${{ vars.FSS_PRODUCTION_ORIGIN || 'https://api.usecallie.com' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -132,6 +135,11 @@ jobs:
           git cat-file -e "$PROD_COMMIT^{commit}" 2>/dev/null || fail "FSS_PROD_COMMIT $PROD_COMMIT is not a commit in this repository"
           git merge-base --is-ancestor "$PROD_COMMIT" HEAD \
             || fail "FSS_PROD_COMMIT $PROD_COMMIT is not an ancestor of this branch; rebase onto what production runs before releasing a schema change"
+          git rev-parse --verify --quiet origin/main >/dev/null \
+            || git fetch --no-tags --depth=0 origin main:refs/remotes/origin/main >/dev/null 2>&1 || true
+          git rev-parse --verify --quiet origin/main >/dev/null || fail 'origin/main is not in this checkout, so FSS_PROD_COMMIT cannot be cross-checked against the released line'
+          git merge-base --is-ancestor "$PROD_COMMIT" origin/main \
+            || fail "FSS_PROD_COMMIT $PROD_COMMIT is not an ancestor of origin/main; production would be running a commit that was never released"
 
           required_schema() {
             git show "$1:$range_file" | sed -n 's/^export const REQUIRED_SCHEMA = \([0-9][0-9]*\);$/\1/p'
@@ -142,21 +150,52 @@ jobs:
           [ -n "$to" ] || fail 'REQUIRED_SCHEMA could not be read from HEAD'
           [ "$from" = "$PROD_SCHEMA" ] \
             || fail "the deployed commit declares REQUIRED_SCHEMA $from but FSS_PROD_SCHEMA says $PROD_SCHEMA; one of the two is stale"
-          echo "production runs schema $from at $PROD_COMMIT; this branch declares $to"
+          echo "the variables say production runs schema $from at $PROD_COMMIT; this branch declares $to. Production is asked itself in the next step, but only if there is an upgrade to test"
+
+          # The schema is attestable from the gate job; the COMMIT is not. `/health` does
+          # not report the image's build commit (a follow-up will add it), so the best
+          # this job can do is the cross-checks above. That is survivable by immutability:
+          # any commit deployed at schema `from` has byte-identical migrations 1..from, so
+          # a lagging variable degrades only the code that writes the fixture — the shapes
+          # and rows the data lands in — and never the migration comparison below. Say so
+          # out loud when it is lagging, because a fixture written by older code tests less.
+          newest_at_from="$PROD_COMMIT"
+          for candidate in $(git rev-list --reverse "$PROD_COMMIT..origin/main"); do
+            [ "$(required_schema "$candidate")" = "$from" ] || break
+            newest_at_from="$candidate"
+          done
+          if [ "$newest_at_from" != "$PROD_COMMIT" ]; then
+            echo "::warning title=FSS_PROD_COMMIT is behind::FSS_PROD_COMMIT is $PROD_COMMIT, but $newest_at_from is the newest commit on main still at schema $from. The migrations compared are identical either way; the fixture is written by older application code than production runs."
+          fi
 
           # A migration at or below the deployed schema that differs from the deployed
           # bytes is refused whatever the schema numbers say: production's runner
-          # records a sha256 of each applied file and would refuse the changed one.
-          edited="$(git diff --name-only "$PROD_COMMIT" HEAD -- packages/domain/db/migrations \
-                    | awk -F/ -v from="$from" '{ n = $NF + 0; if (n > 0 && n <= from) print }')"
-          if [ -n "$edited" ]; then
-            echo 'a migration at or below the deployed schema was changed:'
-            echo "$edited"
+          # records a sha256 of each applied file and would refuse the changed one. This
+          # is the same comparison the tool makes at step 0, and it runs BEFORE any
+          # equal-schema skip, because a branch can leave REQUIRED_SCHEMA alone and still
+          # break the deployed history — renaming 0022_a.sql to 0023_b.sql, say.
+          #
+          # Compare the deployed files as a manifest of name and blob id, not as a diff:
+          # `git diff --name-only` follows renames and prints only the post-image name,
+          # whose number is above the deployed schema, so the rename above would print
+          # nothing to filter. `--no-renames` below is for the human-readable listing,
+          # which must show the deletion as a deletion.
+          deployed_manifest() {
+            git ls-tree -r "$1" -- packages/domain/db/migrations \
+              | awk -v from="$from" '{ name = $4; sub(/.*\//, "", name); if (name + 0 > 0 && name + 0 <= from) print name, $3 }' \
+              | sort
+          }
+          if [ "$(deployed_manifest "$PROD_COMMIT")" != "$(deployed_manifest HEAD)" ]; then
+            echo 'the deployed migrations 1..'"$from"' are not the bytes production applied:'
+            diff <(deployed_manifest "$PROD_COMMIT") <(deployed_manifest HEAD) || true
+            echo 'the files this branch changed under that number:'
+            git diff --name-only --no-renames "$PROD_COMMIT" HEAD -- packages/domain/db/migrations \
+              | awk -F/ -v from="$from" '{ n = $NF + 0; if (n > 0 && n <= from) print }'
             fail 'migrations are immutable once applied; production would refuse this with MIGRATION_CHECKSUM_MISMATCH'
           fi
 
           if [ "$from" = "$to" ]; then
-            echo "the schema this branch declares is the one production runs, and no deployed migration changed; there is no upgrade to test"
+            echo "the schema this branch declares is the one production runs, and every deployed migration is byte-identical; there is no upgrade to test"
             echo 'run=no' >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -166,6 +205,78 @@ jobs:
             echo "to=$to"
             echo "base_commit=$PROD_COMMIT"
           } >> "$GITHUB_OUTPUT"
+      - name: What production actually runs, attested from production
+        # The variables say what the release process last recorded. This says what
+        # production is answering right now, from the public health endpoint, with no
+        # credential (GPT-6 review of PR 314, P0-2a). A variable that disagrees with the
+        # running service is stale, and a stale FROM means the upgrade evidence is for
+        # an upgrade nobody will perform. Fail closed on unreachable and on malformed:
+        # "cannot tell" is never "nothing to check". Three attempts absorb a blip.
+        #
+        # **After the decision, not before it.** Asking production on every pull request
+        # would make a branch that touches no migration turn red when `api.usecallie.com`
+        # is having a bad minute. The step before this one settled, from the repository
+        # alone, whether there is an upgrade at all — including the byte comparison of
+        # every deployed migration, which no variable can lie about. So a skipped job
+        # makes no production call, and a job that is about to test an upgrade cannot
+        # start without an attested FROM.
+        id: attest
+        if: steps.range.outputs.run == 'yes'
+        env:
+          PROD_SCHEMA: ${{ vars.FSS_PROD_SCHEMA }}
+          FROM_SCHEMA: ${{ steps.range.outputs.from }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+          body=''
+          for attempt in 1 2 3; do
+            if body="$(curl --silent --show-error --fail --max-time 15 "$FSS_PRODUCTION_ORIGIN/health")"; then
+              break
+            fi
+            body=''
+            [ "$attempt" = 3 ] || sleep 5
+          done
+          [ -n "$body" ] || fail "production's $FSS_PRODUCTION_ORIGIN/health did not answer in three attempts; the schema production runs cannot be attested, so this job cannot say what to upgrade from"
+          version="$(printf '%s' "$body" | jq -r '.schema.databaseVersion // empty')"
+          case "$version" in
+            ''|*[!0-9]*) fail "production's /health does not report a schema version (.schema.databaseVersion); it answered: $(printf '%s' "$body" | head -c 300)" ;;
+          esac
+          [ "$version" -gt 0 ] || fail "production's /health reports schema version 0"
+          status="$(printf '%s' "$body" | jq -r '.status // "unknown"')"
+          accepted="$(printf '%s' "$body" | jq -r '.schema.accepted // "unknown"')"
+          [ "$status" = serving ] || echo "::warning::production's /health says status '$status', not 'serving'; taking its schema version anyway"
+          [ "$accepted" = true ] || echo "::warning::production's /health says the schema is not accepted (accepted=$accepted)"
+          [ "$version" = "$PROD_SCHEMA" ] \
+            || fail "FSS_PROD_SCHEMA says $PROD_SCHEMA but production's /health attests $version; the variable is stale, and an upgrade tested from the wrong schema is not the upgrade production performs"
+          [ "$version" = "$FROM_SCHEMA" ] \
+            || fail "the deployed commit declares REQUIRED_SCHEMA $FROM_SCHEMA but production's /health attests $version; FSS_PROD_COMMIT names a commit production is not running"
+          echo "production is answering on schema $version (status $status); FROM is attested"
+      - name: The grants baseline may not move in the same change as a migration
+        # `grants-baseline.json` is what every privilege comparison is against, so a
+        # change that moves both it and a migration can launder any access change past
+        # the check (GPT-6 review of PR 314, P0-3). Regenerating the baseline belongs in
+        # its own commit, where the diff is the review. The same rule is expressed in
+        # `baselineAndMigrationBothChanged` in `tools/upgrade/grants.ts`, pinned by
+        # `test/ops/upgradeAccessExceptions.check.ts`.
+        run: |
+          set -euo pipefail
+          branch_point="$(git merge-base origin/main HEAD 2>/dev/null || true)"
+          if [ -z "$branch_point" ] || [ "$branch_point" = "$(git rev-parse HEAD)" ]; then
+            echo 'nothing of this branch to judge (it is main, or it shares no history with it)'
+            exit 0
+          fi
+          changed="$(git diff --name-only --no-renames "$branch_point" HEAD)"
+          baseline_moved=no
+          migration_moved=no
+          # `if`, not `&&`: under `set -e` a failing `grep` in `grep … && x=yes` ends the step.
+          if printf '%s\n' "$changed" | grep -qx 'tools/upgrade/grants-baseline.json'; then baseline_moved=yes; fi
+          if printf '%s\n' "$changed" | grep -qE '^packages/domain/db/migrations/[0-9]{4}_.*\.sql$'; then migration_moved=yes; fi
+          if [ "$baseline_moved" = yes ] && [ "$migration_moved" = yes ]; then
+            echo 'FAIL: this change moves tools/upgrade/grants-baseline.json and a migration together.' >&2
+            echo 'Regenerate the baseline in a commit of its own, with no migration in it, so the diff is reviewable.' >&2
+            exit 1
+          fi
+          echo "baseline moved: $baseline_moved; migration moved: $migration_moved"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         if: steps.range.outputs.run == 'yes'
         with:
@@ -205,7 +316,7 @@ jobs:
           npm run upgrade:test -- \
             --from "$FROM_SCHEMA" --to "$TO_SCHEMA" \
             --base "$RUNNER_TEMP/upgrade-base" \
-            --evidence "upgrade-evidence-$HEAD_SHA.txt"
+            --evidence "$RUNNER_TEMP/upgrade-evidence-$HEAD_SHA.txt"
       - name: Upload the evidence
         # `always()`: a failed upgrade is the run whose evidence somebody actually needs,
         # and the tool writes a stub report before its first step so that even a run that
@@ -215,7 +326,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: upgrade-evidence-${{ github.event.pull_request.head.sha || github.sha }}
-          path: upgrade-evidence-*.txt
+          # Outside both checkouts: the tool refuses an evidence path inside one,
+          # because a run that can overwrite its own tracked files is not evidence.
+          path: ${{ runner.temp }}/upgrade-evidence-*.txt
           if-no-files-found: error
 
   workflows:

@@ -86,6 +86,21 @@ export function parseOptions(argv: readonly string[], repositoryRoot: string): O
   if (!existsSync(baseMigrations)) throw new UsageError(`no migrations directory at ${baseMigrations}`);
 
   const evidenceValue = values.get('evidence');
+  const evidence = evidenceValue === undefined ? null : resolve(evidenceValue);
+  if (evidence !== null) {
+    // The evidence is written twice — a stub before the first step, the report at the
+    // end — and `--evidence` was unrestricted, so it could name a tracked file in
+    // either checkout and overwrite it (GPT-6 review of PR 314, P2). Both checkouts are
+    // working trees this run reads its own inputs out of; a run that rewrites its own
+    // migration files or its own tool is not evidence of anything. Put it elsewhere.
+    for (const [what, root] of [['the base checkout', base], ['the head checkout', tree]] as const) {
+      if (evidence === root || evidence.startsWith(`${root}/`)) {
+        throw new UsageError(
+          `--evidence ${evidence} is inside ${what} (${root}); write it outside both checkouts, where it cannot overwrite a tracked file`,
+        );
+      }
+    }
+  }
   return {
     from,
     to,
@@ -93,7 +108,7 @@ export function parseOptions(argv: readonly string[], repositoryRoot: string): O
     tree,
     migrations,
     baseMigrations,
-    evidence: evidenceValue === undefined ? null : resolve(evidenceValue),
+    evidence,
     allowRemoteCluster: flags.has('allow-remote-test-cluster'),
   };
 }

@@ -16,10 +16,12 @@ import {
   differences,
   shapeDifferences,
   shapeSnapshot,
+  viewDifferences,
+  viewSnapshot,
   snapshot,
 } from './snapshot.ts';
 import { backendPidOf, sampleLocks, SAMPLE_INTERVAL_MS } from './locks.ts';
-import { checkPrivileges, loadGrantsBaseline } from './grants.ts';
+import { checkPrivileges, loadAccessExceptions, loadGrantsBaseline } from './grants.ts';
 import { changeBudget } from './changes.ts';
 import { classifyMigration, type Classification } from './classify.ts';
 import { runConstraintCases } from './constraints.ts';
@@ -217,6 +219,11 @@ async function run(options: Options, report: Report): Promise<void> {
     const before = await snapshot(owner.session);
     const beforeColumns = await columnNames(owner.session);
     const beforeShape = await shapeSnapshot(owner.session);
+    // Views carry no rows of their own, so neither the content hash nor the table shape
+    // can see one being replaced. `effective_suppressions` is the view the suppression
+    // system answers "is this handle suppressed?" from: a replacement returning nothing
+    // would leave every hash and every shape identical (GPT-6 review of PR 314, P0-4).
+    const beforeViews = await viewSnapshot(owner.session);
     const beforeRows = [...before.values()].reduce((total, table) => total + table.rows, 0);
     report.step(
       4,
@@ -247,6 +254,7 @@ async function run(options: Options, report: Report): Promise<void> {
     const after = await snapshot(owner.session);
     const afterColumns = await columnNames(owner.session);
     const afterShape = await shapeSnapshot(owner.session);
+    const afterViews = await viewSnapshot(owner.session);
     const added = new Set<string>([
       ...addedTables(before, after),
       ...[...afterColumns].filter(column => !beforeColumns.has(column)),
@@ -266,11 +274,15 @@ async function run(options: Options, report: Report): Promise<void> {
     // shape of every table the migrations did not name must be identical too.
     const shapes = shapeDifferences(beforeShape, afterShape);
     const undeclaredShapes = shapes.filter(difference => !budget.permitted.has(difference.table));
+    // A new view is as much a declarable change as a new table: `-- changes:` is cheap
+    // to write and a view appearing unannounced is worth a sentence from its author.
+    const views = viewDifferences(beforeViews, afterViews);
+    const undeclaredViews = views.filter(difference => !budget.permitted.has(difference.view));
     report.step(
       6,
-      'data preservation and catalogue shape',
+      'data preservation, catalogue shape and view definitions',
       secondsSince(started),
-      `${String(changed.length)} table(s) changed rows, ${String(shapes.length)} changed shape, ${String(undeclaredRows.length + undeclaredShapes.length)} undeclared, ${String(addedTables(before, after).length)} added`,
+      `${String(changed.length)} table(s) changed rows, ${String(shapes.length)} changed shape, ${String(views.length)} view(s) changed, ${String(undeclaredRows.length + undeclaredShapes.length + undeclaredViews.length)} undeclared, ${String(addedTables(before, after).length)} added`,
     );
     if (undeclaredRows.length > 0) {
       failures.push(
@@ -283,12 +295,22 @@ async function run(options: Options, report: Report): Promise<void> {
       );
     }
 
+    if (undeclaredViews.length > 0) {
+      failures.push(
+        `step 6: ${undeclaredViews.map(difference => `${difference.view} (${difference.change})`).join(', ')} — no migration in ${String(options.from + 1)}..${String(options.to)} names ${undeclaredViews.length === 1 ? 'it' : 'them'} in a \`-- changes:\` header`,
+      );
+    }
+
     // ------------------------------------------------------------------------ step 7
     started = process.hrtime.bigint();
     const privileges = await checkPrivileges(owner.session, {
       migrations: options.migrations,
       toVersion: options.to,
       baseline: loadGrantsBaseline(),
+      // Out of the migration text and into a committed file a reviewer has to touch
+      // separately: a migration that writes its own exemption reviews itself (GPT-6
+      // review of PR 314, P0-3). A malformed or unexplained entry throws here.
+      exceptions: loadAccessExceptions(),
     });
     report.step(
       7,
@@ -442,6 +464,12 @@ async function run(options: Options, report: Report): Promise<void> {
     );
 
     report.line();
+    report.line('step 6 — view definitions the upgrade changed');
+    report.table(
+      ['view', 'change'],
+      views.map(difference => [difference.view, difference.change]),
+    );
+    report.line();
     report.line('step 6 — tables the upgrade changed');
     report.table(
       ['table', 'rows before', 'rows after', 'rows', 'shape', 'declared by'],
@@ -482,7 +510,9 @@ async function run(options: Options, report: Report): Promise<void> {
       privileges.findings.map(finding => [finding.kind, finding.role, finding.object, finding.detail]),
     );
     report.line(`  new tables: ${privileges.newTables.join(', ') || 'none'}`);
-    report.line(`  reviewed \`-- runtime-access: none\` exceptions: ${privileges.exceptions.join(', ') || 'none'}`);
+    report.line(
+      `  tables reviewed as unreachable by app_runtime (access-exceptions.json): ${privileges.exceptions.join(', ') || 'none'}`,
+    );
 
     report.line();
     report.line('step 9 — startup, each checkout declaring its own range');
@@ -671,12 +701,23 @@ try {
   // A stub first, so that *every* attempted run leaves an artifact — including one that
   // dies in the install or the worktree before a single step ran (GPT-6 review, P2-2).
   // The `always()` upload step is only as good as the file being there.
+  //
+  // `wx`: create it, never open an existing one. Evidence that silently replaced an
+  // earlier run's evidence is worse than no evidence, because nothing says which run
+  // wrote it (GPT-6 review of PR 314, P2). A second run wants a second path.
   if (evidence !== null) {
-    await writeFile(
-      evidence,
-      `upgrade test: schema ${String(options.from)} → ${String(options.to)}\nthe run did not reach the point of writing its report\n`,
-      'utf8',
-    );
+    try {
+      await writeFile(
+        evidence,
+        `upgrade test: schema ${String(options.from)} → ${String(options.to)}\nthe run did not reach the point of writing its report\n`,
+        { encoding: 'utf8', flag: 'wx' },
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+        throw new Error(`${evidence} already exists; give this run an evidence path of its own rather than overwriting another run's`);
+      }
+      throw error;
+    }
   }
   await run(options, report);
 } catch (error) {

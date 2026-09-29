@@ -27,7 +27,8 @@ import { storeRefreshToken } from '@fss/domain/mail/tokens.ts';
 import { findMatchCandidates, recordMatches } from '@fss/domain/mail/matching.ts';
 import { normalizeMetadata, recordMessage, storeMessageBody } from '@fss/domain/mail/messages.ts';
 import { recordingReplyPromoter } from '@fss/domain/mail/replyLane.ts';
-import { claimForDispatch, prepareOutboundMessage, recordSent } from '@fss/domain/outbound/fence.ts';
+import { beginReconciling, claimForDispatch, prepareOutboundMessage, recordSent } from '@fss/domain/outbound/fence.ts';
+import { RECONCILE_WINDOW_HOURS } from '@fss/domain/outbound/types.ts';
 import { setCallingWindow } from '@fss/domain/policy/callingWindows.ts';
 import { openPause } from '@fss/domain/policy/pauses.ts';
 import { recordStatePosture } from '@fss/domain/policy/postures.ts';
@@ -40,6 +41,8 @@ import { consumeTerminalStops } from '@fss/domain/sequences/terminalStops.ts';
 import { updateSetting } from '@fss/domain/settings/store.ts';
 import { POSTURE_STATEMENT_KEYS } from '@fss/domain/src/rules/statePosture.ts';
 import { SENDING_STOP_LINE } from '@fss/domain/src/rules/templates.ts';
+import { canonicalizeHandle } from '@fss/domain/src/rules/suppressionCanonicalization.ts';
+import { recordSuppression } from '@fss/domain/suppression/events.ts';
 import { claimFinalization } from '@fss/domain/suppression/finalize.ts';
 import { recordingSuppressionJournal } from '@fss/domain/suppression/journal.ts';
 import { createTemplateVersion, readTemplateVersion } from '@fss/domain/templates/templates.ts';
@@ -167,6 +170,18 @@ export interface FixtureHandles {
   readonly mailboxId: string | null;
   readonly classifiedMessageId: string | null;
   readonly callingIdentityId: string | null;
+  /**
+   * A firm the fixture deliberately leaves with no opportunity, no callback and no
+   * call log, so the only Today source that can speak for it is the new-firm one.
+   * The workflow step pins its card's lane on that.
+   */
+  readonly newFirmLaneFirmId: string | null;
+  /** The fence left in `reconciling`, which the reconciliation enumeration must return. */
+  readonly reconcilingFenceId: string | null;
+  /** The canonical key of the handle the fixture opted out, as `effective_suppressions` holds it. */
+  readonly suppressedHandleKey: string | null;
+  /** A canonical handle the fixture never suppressed, for the negative half of that read. */
+  readonly unsuppressedHandleKey: string | null;
   /** The business date the Today snapshot was built for, and the instant used. */
   readonly businessDate: string;
   readonly now: string;
@@ -226,6 +241,39 @@ const LEGACY_TODAY_ALGORITHM_VERSION = 'today.1';
  * because the row it composes is a row written before that setting existed.
  */
 const LEGACY_POSTAL_ADDRESS = '1 Example Plaza, Suite 200, Providence, RI 02903';
+
+/**
+ * The handle the fixture opts out, and the firm whose contact it belongs to.
+ *
+ * Firm 21's contact, chosen because nothing else in the fixture writes to, dials or
+ * enrols that contact: a suppression on a handle the eligibility gate or the deletion
+ * workflow also reasons about would make those steps assert something else by accident.
+ * The scope is `handle` rather than `firm` deliberately — a firm-wide do-not-contact
+ * takes the firm off the Today list (`newFirmSource`), and the Today assertions are
+ * pinned to exact lanes.
+ */
+const SUPPRESSED_HANDLE = 'dana.21@firm21.example.test';
+
+/**
+ * The firm index whose card must come out in the `new_firm` lane.
+ *
+ * The last imported firm. `opportunitiesPart` opens opportunities for the first six
+ * firms and the deletable one only, so this firm has never had an opportunity of any
+ * kind, no callback and no call log — which leaves `newFirmSource` as the only source
+ * in the build that can produce a task for it.
+ */
+const NEW_FIRM_LANE_INDEX = IMPORTED_FIRMS - 1;
+
+/**
+ * The firm index the reconciling fence is prepared against.
+ *
+ * Firms 1, 2 and 3 already carry a fence each (the two legacy footers and the prepared
+ * one) and `outbound_messages_one_per_step_execution` plus
+ * `opportunities_one_open_per_firm` mean a fence needs a firm with an open opportunity
+ * of its own that no other fence has used. Index 4 is the last such firm:
+ * `openOpportunityIds` holds six entries and index 5 is the deletable firm's.
+ */
+const RECONCILING_FENCE_FIRM_INDEX = 4;
 
 /**
  * Every part this fixture must contain. Asserted by the caller so that an older or
@@ -291,6 +339,10 @@ interface State {
   callingIdentityId: string | null;
   callLogId: string | null;
   stepExecutionId: string | null;
+  newFirmLaneFirmId: string | null;
+  reconcilingFenceId: string | null;
+  suppressedHandleKey: string | null;
+  unsuppressedHandleKey: string | null;
   businessDate: string;
 }
 
@@ -388,6 +440,10 @@ export async function loadFixture(
     callingIdentityId: null,
     callLogId: null,
     stepExecutionId: null,
+    newFirmLaneFirmId: null,
+    reconcilingFenceId: null,
+    suppressedHandleKey: null,
+    unsuppressedHandleKey: null,
     businessDate: '',
   };
 
@@ -413,6 +469,7 @@ export async function loadFixture(
     legacyFooterWithoutAddressPart(session, asSalesperson, state),
     legacyFooterWithAddressPart(session, asSalesperson, state),
     preparedFencePart(session, asSalesperson, state),
+    reconcilingFencePart(session, asSalesperson, state),
     dialPart(asSalesperson, state),
     inboundMailPart(asSalesperson, state),
     classificationPart(asSalesperson, state),
@@ -424,6 +481,7 @@ export async function loadFixture(
     operationsPart(session, asAdmin, asWorker, state),
     shiftPart(asWorker, state),
     pausePart(asAdmin),
+    handleSuppressionPart(session, asSalesperson, state),
     sharedWorkspacesPart(session),
   ];
 
@@ -492,6 +550,10 @@ export async function loadFixture(
       mailboxId: state.mailboxId,
       classifiedMessageId: state.classifiedMessageId,
       callingIdentityId: state.callingIdentityId,
+      newFirmLaneFirmId: state.newFirmLaneFirmId,
+      reconcilingFenceId: state.reconcilingFenceId,
+      suppressedHandleKey: state.suppressedHandleKey,
+      unsuppressedHandleKey: state.unsuppressedHandleKey,
       businessDate: state.businessDate,
       now: NOW,
     },
@@ -694,6 +756,16 @@ function firmsPart(
       state.primaryFirmId = state.firmIds[0] ?? '';
       state.primaryContactId = state.contactIds[0] ?? '';
       state.primaryEmail = 'dana.01@firm01.example.test';
+      // The firm whose Today lane the workflow step pins. Recorded here rather than
+      // guessed there: which firms stay opportunity-free is a fact about this loader,
+      // and a workflow that worked it out for itself would re-derive the lane rule it
+      // is supposed to be checking.
+      state.newFirmLaneFirmId = state.firmIds[NEW_FIRM_LANE_INDEX] ?? null;
+      // The handle the suppression workflow must *not* find. The primary contact's
+      // address, canonicalised the way the suppression set spells it, so the negative
+      // half of that read compares like with like.
+      const unsuppressed = canonicalizeHandle(state.primaryEmail);
+      state.unsuppressedHandleKey = unsuppressed.ok ? unsuppressed.handle.value : null;
       return undefined;
     },
   };
@@ -1040,7 +1112,18 @@ async function prepareFixtureFence(
   session: SessionQueryable,
   asSalesperson: () => RepositoryContext,
   state: State,
-  input: { readonly firmIndex: number; readonly toAddress: string; readonly body: string; readonly what: string },
+  input: {
+    readonly firmIndex: number;
+    readonly toAddress: string;
+    readonly body: string;
+    readonly what: string;
+    /**
+     * Handed the fence's id when one was written. A callback rather than a return
+     * value because the return of this function is the *skip reason*, and a part that
+     * needs to drive the fence further needs both.
+     */
+    readonly capture?: ((outboundMessageId: string) => void) | undefined;
+  },
 ): Promise<string | undefined> {
   const prerequisite = fencePrerequisite(state);
   if (prerequisite !== undefined) return prerequisite;
@@ -1060,7 +1143,7 @@ async function prepareFixtureFence(
     templateVersionId,
     zone: ZONE,
   });
-  value(
+  const prepared = value(
     await prepareOutboundMessage(asSalesperson(), {
       stepExecutionId,
       firmId,
@@ -1076,6 +1159,7 @@ async function prepareFixtureFence(
     }),
     input.what,
   );
+  input.capture?.(prepared.outboundMessageId);
   return undefined;
 }
 
@@ -1170,6 +1254,111 @@ function preparedFencePart(
         body: fixtureBody('Hello.\n\nThis one is still waiting for its dispatch window.'),
         what: 'the prepared fence',
       }),
+  };
+}
+
+/**
+ * A fence left in `reconciling`, owed an observation the moment the upgrade finishes.
+ *
+ * Without it the reconciliation workflow enumerates an empty set and reports success,
+ * which proves nothing at all (GPT-6 review of PR 314, P1-3): `listFencesToReconcile`
+ * and `listMailboxesToReconcile` would answer zero on a schema whose
+ * `outbound_messages` the migration had broken just as happily as on a healthy one.
+ * So the fixture leaves exactly one fence the sweep must find, and the workflow
+ * asserts that id comes back.
+ *
+ * Driven through the three real commands, `prepared → dispatching → reconciling`.
+ * `beginReconciling` is the transition a worker that lost its lease performs and the
+ * one the sweep performs on an abandoned `dispatching` fence; it leaves
+ * `reconcile_last_attempt_at` null, which is what makes the fence owed *now* rather
+ * than after a backoff.
+ *
+ * No mailbox row of its own: `listMailboxesToReconcile` is a `DISTINCT` over the
+ * fences' own `mailbox_id`, so the mailbox part's mailbox is the one it returns, and a
+ * second mailbox here would only mean a second grant to encrypt.
+ */
+function reconcilingFencePart(
+  session: SessionQueryable,
+  asSalesperson: () => RepositoryContext,
+  state: State,
+): Part {
+  return {
+    name: 'reconciling fence',
+    tables: ['outbound_messages', 'outbound_message_events', 'step_executions', 'mailboxes'],
+    run: async () => {
+      let outboundMessageId: string | null = null;
+      const skipped = await prepareFixtureFence(session, asSalesperson, state, {
+        firmIndex: RECONCILING_FENCE_FIRM_INDEX,
+        toAddress: 'reconciling.fence@firm05.example.test',
+        body: fixtureBody('Hello.\n\nThis one went out into the dark and nobody knows whether it left.'),
+        what: 'the reconciling fence',
+        capture: id => {
+          outboundMessageId = id;
+        },
+      });
+      if (skipped !== undefined) return skipped;
+      // Narrowed through a local: the callback above assigns it, which TypeScript's
+      // control-flow analysis cannot see through.
+      const fenceId: string | null = outboundMessageId;
+      if (fenceId === null) throw new Error('the reconciling fence was prepared without an id');
+
+      value(
+        await claimForDispatch(asSalesperson(), { outboundMessageId: fenceId, businessDate: '2026-09-16' }),
+        'the reconciling fence\'s dispatch claim',
+      );
+      value(
+        await beginReconciling(asSalesperson(), {
+          outboundMessageId: fenceId,
+          detail: 'the fixture leaves one fence owed an observation, so the sweep has something to enumerate',
+          windowHours: RECONCILE_WINDOW_HOURS,
+        }),
+        'the move to reconciling',
+      );
+      state.reconcilingFenceId = fenceId;
+      return undefined;
+    },
+  };
+}
+
+/**
+ * One opted-out handle, so `effective_suppressions` has something to answer about.
+ *
+ * `effective_suppressions` is the view 10.2 makes authoritative for email and dialing,
+ * and no workflow read it before (GPT-6 review of PR 314, P0-4): a migration that
+ * replaced it with one returning nothing passed. A view carries no rows of its own, so
+ * neither the content hash nor the table shape in step 4 can see that happen either —
+ * only a read can.
+ *
+ * `prospect_opt_out` rather than `salesperson_manual`: it is terminal the instant it
+ * commits, so it opens no `manual_suppression_review` hold and enqueues no finalizer
+ * job, and therefore cannot change what the eligibility or dashboard steps decide.
+ * Written through `recordSuppression`, which is the only writer the table has, inside
+ * a transaction so the journal and the row commit together the way the command does in
+ * production.
+ */
+function handleSuppressionPart(
+  session: SessionQueryable,
+  asSalesperson: () => RepositoryContext,
+  state: State,
+): Part {
+  return {
+    name: 'handle suppression',
+    tables: ['suppression_events', 'suppression_finalizations'],
+    run: async () => {
+      const recorded = await withTransaction(
+        session,
+        async () =>
+          await recordSuppression(asSalesperson(), {
+            scope: 'handle',
+            value: SUPPRESSED_HANDLE,
+            source: 'prospect_opt_out',
+            commandId: 'fixture-handle-opt-out',
+            journal: recordingSuppressionJournal(),
+          }),
+      );
+      state.suppressedHandleKey = value(recorded, 'the handle suppression').canonicalKey;
+      return undefined;
+    },
   };
 }
 

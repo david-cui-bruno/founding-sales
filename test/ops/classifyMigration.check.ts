@@ -36,8 +36,9 @@ const SCRIPT = repositoryPath('infra/scripts/classify-migration.sh');
 /**
  * Migration 1 of every fixture directory: the world that already exists.
  *
- * It carries a routine and a trigger as well as the two tables, because "does this
- * routine already exist?" is now a question the classifier answers from the directory.
+ * It carries a routine, a trigger and a view as well as the two tables, because "does
+ * this routine already exist?" — and, since the second review of PR 314, "does this
+ * *view* already exist?" — is a question the classifier answers from the directory.
  */
 const FOUNDATION: readonly (readonly [string, string])[] = [
   [
@@ -48,6 +49,7 @@ const FOUNDATION: readonly (readonly [string, string])[] = [
       'CREATE TABLE append_only (id integer PRIMARY KEY);',
       'CREATE FUNCTION existing_routine() RETURNS trigger LANGUAGE plpgsql AS $guard$ BEGIN RETURN NEW; END; $guard$;',
       'CREATE TRIGGER existing_trigger BEFORE INSERT ON existing_table FOR EACH ROW EXECUTE FUNCTION existing_routine();',
+      'CREATE VIEW existing_view AS SELECT id, note FROM existing_table;',
       'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_runtime;',
       '',
     ].join('\n'),
@@ -297,6 +299,12 @@ describe('classify-migration.sh', () => {
     // informational, and a conservative answer on an old file costs nothing.
     const cases: readonly (readonly [string, string])[] = [
       ['0004_crm.sql', 'unclassified'],
+      // 0006 is the only file in the tree that creates a view. It is listed to hold the
+      // view tracking to its promise from the other side: creating `effective_suppressions`
+      // is additive *for this file*, so adding views to the classifier moved nothing here.
+      // The file as a whole is touches-existing for reasons that have nothing to do with
+      // the view — it alters tables 0001 through 0005 created.
+      ['0006_policy.sql', 'touches-existing'],
       ['0007_research.sql', 'unclassified'],
       ['0014_retention.sql', 'unclassified'],
       ['0017_release_records.sql', 'additive'],
@@ -467,5 +475,112 @@ describe('classify-migration.sh', () => {
       '0002_other_table.sql',
     );
     expect(other.stdout.split('\n')[0]).toBe('destructive');
+  });
+
+  // ------------------------------------------------------------------------- views
+  // The second review of PR 314, P0-4. `CREATE OR REPLACE VIEW` used to reach the
+  // additive fall-through, so replacing `effective_suppressions` — the view the
+  // suppression system answers "is this handle suppressed?" from — with one that
+  // returns nothing would have released without a rehearsal, and the upgrade test
+  // would not have noticed either, because a view has no rows of its own to hash.
+  //
+  // The asymmetry with a function is deliberate and is asserted below: a replaced
+  // function is `replaces-routine`, which releases without a rehearsal because
+  // `pg_stat_user_functions` proves the new body was called. A view is selected from,
+  // not called, so there is no such proof and a replaced view rehearses.
+
+  it('calls a CREATE OR REPLACE VIEW of a view that already exists touches-existing', () => {
+    const { status, stdout } = classifyOne('0002_view.sql', [
+      '-- changes: existing_view',
+      'CREATE OR REPLACE VIEW existing_view AS SELECT id, note FROM existing_table WHERE id > 0;',
+    ]);
+    expect(status).toBe(0);
+    expect(stdout.split('\n')[0]).toBe('touches-existing');
+    // The deciding line names the file, the line number and the view.
+    expect(stdout).toMatch(/0002_view\.sql:2 {2}CREATE OR REPLACE VIEW existing_view, which already exists/u);
+  });
+
+  it('keeps a CREATE OR REPLACE VIEW of a brand-new name additive', () => {
+    const { status, stdout } = classifyOne('0002_view.sql', [
+      '-- changes: none',
+      'CREATE OR REPLACE VIEW never_seen_view AS SELECT id FROM existing_table;',
+    ]);
+    expect(status).toBe(0);
+    expect(stdout.split('\n')[0]).toBe('additive');
+  });
+
+  it('calls an ALTER VIEW of a view that already exists touches-existing', () => {
+    const owner = classifyOne('0002_view_owner.sql', ['-- changes: existing_view', 'ALTER VIEW existing_view OWNER TO migration;']);
+    expect(owner.status).toBe(0);
+    expect(owner.stdout.split('\n')[0]).toBe('touches-existing');
+    expect(owner.stdout).toContain('ALTER VIEW existing_view, which already exists');
+
+    const options = classifyOne('0002_view_set.sql', [
+      '-- changes: existing_view',
+      'ALTER VIEW existing_view SET (security_barrier = true);',
+    ]);
+    expect(options.stdout.split('\n')[0]).toBe('touches-existing');
+    expect(options.stdout).toContain('ALTER VIEW existing_view, which already exists');
+  });
+
+  it('keeps a DROP VIEW of a view that already exists destructive', () => {
+    const { status, stdout } = classifyOne('0002_drop_view.sql', ['-- changes: existing_view', 'DROP VIEW existing_view;']);
+    expect(status).toBe(0);
+    expect(stdout.split('\n')[0]).toBe('destructive');
+    expect(stdout).toContain('DROP VIEW existing_view');
+
+    const absent = classifyOne('0002_drop_view.sql', ['-- changes: none', 'DROP VIEW IF EXISTS never_existed_view;']);
+    expect(absent.stdout.split('\n')[0]).toBe('additive');
+  });
+
+  it('calls a replacement of effective_suppressions that returns nothing touches-existing', () => {
+    // The review's own case, reproduced inline rather than by pointing at the real
+    // migration directory: a check that names another checkout passes on one machine
+    // and fails on every other. The shape is 0006_policy.sql's — a view over
+    // `suppression_events` that answers "is this handle suppressed?" — and the
+    // replacement is the quiet disaster: same name, same columns, `WHERE false`.
+    const { status, stdout } = classify(
+      [
+        [
+          '0002_policy.sql',
+          [
+            '-- changes: none',
+            'CREATE TABLE suppression_events (event_id uuid PRIMARY KEY, workspace_id uuid, scope text, canonical_key text);',
+            'CREATE VIEW effective_suppressions AS',
+            '  SELECT e.workspace_id, e.scope, e.canonical_key, e.event_id',
+            '    FROM suppression_events e',
+            '   WHERE e.supersedes_event_id IS NULL;',
+            '',
+          ].join('\n'),
+        ],
+        [
+          '0003_quiet.sql',
+          [
+            '-- changes: none',
+            'CREATE OR REPLACE VIEW effective_suppressions AS',
+            '  SELECT e.workspace_id, e.scope, e.canonical_key, e.event_id',
+            '    FROM suppression_events e',
+            '   WHERE false;',
+            '',
+          ].join('\n'),
+        ],
+      ],
+      '0003_quiet.sql',
+    );
+    expect(status).toBe(0);
+    expect(stdout.split('\n')[0]).toBe('touches-existing');
+    expect(stdout).toContain('CREATE OR REPLACE VIEW effective_suppressions, which already exists');
+  });
+
+  it('calls a REFRESH MATERIALIZED VIEW touches-existing rather than letting it fall through', () => {
+    // No materialized view exists in this corpus, so this is the promise rather than a
+    // real case: whatever else a migration does to one, it must not reach `additive` by
+    // matching nothing. A REFRESH rewrites stored rows; anything else stays unclassified.
+    const refreshed = classifyOne('0002_refresh.sql', ['-- changes: none', 'REFRESH MATERIALIZED VIEW some_matview;']);
+    expect(refreshed.stdout.split('\n')[0]).toBe('touches-existing');
+    expect(refreshed.stdout).toContain('REFRESH MATERIALIZED VIEW some_matview');
+
+    const clustered = classifyOne('0002_matview.sql', ['-- changes: none', 'CLUSTER some_matview USING some_matview_key;']);
+    expect(clustered.stdout.split('\n')[0]).toBe('unclassified');
   });
 });
