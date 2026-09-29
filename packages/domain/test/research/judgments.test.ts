@@ -38,8 +38,11 @@ const fact = (
 });
 
 /** The same fact, read off a page on somebody else's host. */
-const thirdPartyFact = (key: string, quote = 'a sentence somebody else published', id = key) =>
-  fact(key, quote, id, false);
+const thirdPartyFact = (
+  key: string,
+  quote: string | null = 'a sentence somebody else published',
+  id = key,
+): FirmFactDto & JudgmentInput['facts'][number] => fact(key, quote, id, false);
 
 const base: JudgmentInput = { facts: [], hasPhoneRoute: false, suppressed: false, contacts: [] };
 const withFacts = (...keys: string[]): JudgmentInput => ({
