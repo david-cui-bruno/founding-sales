@@ -29,6 +29,8 @@ export const RUN_IN_PROGRESS_MINUTES = 30;
 
 export interface RunRow {
   readonly id: string;
+  /** The firm the run is of. What chunk 2 clears its retry's reservation against. */
+  readonly firmId: string;
   readonly revision: number;
   readonly trigger: ResearchTrigger;
   readonly startedAt: string;
@@ -46,6 +48,7 @@ export interface RunRow {
 
 interface RunDbRow {
   readonly id: string;
+  readonly firm_id: string;
   readonly revision: number;
   readonly trigger: ResearchTrigger;
   readonly started_at: Date;
@@ -61,11 +64,12 @@ interface RunDbRow {
   readonly [column: string]: unknown;
 }
 
-const RUN_COLUMNS = `id, revision, trigger, started_at, completed_at, outcome, refusal_code,
+const RUN_COLUMNS = `id, firm_id, revision, trigger, started_at, completed_at, outcome, refusal_code,
   pages_fetched, facts_recorded, cost_cents, cost_estimated, extraction, brief`;
 
 const toRun = (row: RunDbRow): RunRow => ({
   id: row.id,
+  firmId: row.firm_id,
   revision: Number(row.revision),
   trigger: row.trigger,
   startedAt: row.started_at.toISOString(),

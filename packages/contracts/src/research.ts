@@ -71,6 +71,11 @@ export const RESEARCH_REFUSAL_CODES = [
   'lease_lost',
   'link_not_permitted',
   'model_unpriced',
+  /**
+   * The cents would not stretch: the firm already holds its three paid attempts for the
+   * day, or the counted request did not fit the reservation held for it.
+   */
+  'over_budget',
 ] as const;
 
 /**

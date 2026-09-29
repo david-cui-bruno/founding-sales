@@ -6,7 +6,7 @@ import { validateFactSelections, type AdmittedFact, type FactSource } from './fa
 import type { ProviderOutcome } from './providers.ts';
 import { judgeFirm, type JudgmentContact } from './judgments.ts';
 import { parsePageText } from './pageText.ts';
-import { claimResearchClearance } from './ceilings.ts';
+import { claimResearchClearance, RESEARCH_FIRM_MAX_RESERVATIONS } from './ceilings.ts';
 import { recordProviderCall, workspaceBusinessZone } from './ledger.ts';
 import {
   listAttempts,
@@ -240,7 +240,11 @@ export async function beginFirmResearch(
   const runId = await openRun(context, opening);
   if (runId === null) return accept({ kind: 'done', report: replayed(input.firmId, input.revision) });
 
-  const clearance = await claimResearchClearance(context, { at: input.at });
+  const clearance = await claimResearchClearance(context, {
+    firmId: input.firmId,
+    at: input.at,
+    attemptKind: 'first',
+  });
   if (!clearance.ok) {
     await refuseRun(context, { runId, at: input.at, refusalCode: clearance.reason });
     return refuse(clearance.reason);
@@ -262,15 +266,10 @@ export async function beginFirmResearch(
   return accept({ kind: 'reserved', runId });
 }
 
-/**
- * Reservations one run may ever hold, and therefore paid calls one firm can cost in a
- * day: three worst cases, nine cents at the defaults.
- *
- * It is a money bound, not a queue ladder, which is why it is here and not
- * `maxAttempts`: an admin requeue resets the attempt counter and a handler option can
- * lower the ladder to one, and neither may buy a fourth call.
- */
-export const RESEARCH_FIRM_MAX_RESERVATIONS = 3;
+// The bound on a firm's paid attempts in a day lives with the ceilings, because it is
+// enforced by the one clearance every reservation passes through. Re-exported here
+// because the handler composes the run from this file.
+export { RESEARCH_FIRM_MAX_RESERVATIONS };
 
 export type CallPermission =
   /** This claim may make exactly one call, against `reservationId`. */
@@ -355,33 +354,40 @@ export async function ensureResearchCalling(
     return { kind: 'closed' };
   }
 
+  // A retry is a new authorization and goes through the same clearance attempt 1 did:
+  // the firm's three rows a day, today's cents, the month's cents. It used to be an
+  // unchecked insert, which is how sixteen runs at 48 of 50 cents bought a
+  // fifty-first — and how two revisions of one firm in one day bought six calls.
   const attempt = rows.reduce((highest, row) => Math.max(highest, row.attempt), 0) + 1;
-  const settings = await readResearchSettings(context);
-  const businessTimeZone = await workspaceBusinessZone(context);
+  const clearance = await claimResearchClearance(context, {
+    firmId: run.firmId,
+    at: input.at,
+    attemptKind: 'retry',
+  });
+  if (!clearance.ok) {
+    // Refused, not failed: no ceiling was broken and nothing went wrong. The run closes
+    // with the ceiling that bound it, the settled attempts stay settled, and nothing new
+    // is opened.
+    await refuseRun(context, {
+      runId: input.runId,
+      at: input.at,
+      refusalCode: clearance.reason,
+      costCents: await subjectSettledCents(context, subject),
+      costEstimated: true,
+    });
+    return { kind: 'closed' };
+  }
   const fresh = await reserveAttempt(context, {
     providerKey: EXTRACTION_PROVIDER,
     subjectKind: 'research_run',
     subjectId: input.runId,
     attempt,
     at: input.at,
-    businessTimeZone,
-    cents: worstCaseRunCentsFor(settings),
+    businessTimeZone: clearance.value.businessTimeZone,
+    cents: clearance.value.worstCaseCents,
   });
   await markCalling(context, fresh.id);
   return { kind: 'calling', attempt, reservationId: fresh.id, cents: fresh.cents };
-}
-
-/** The reservation size, from the settings. Characters-per-token, as a bound. */
-function worstCaseRunCentsFor(settings: {
-  readonly modelName: string;
-  readonly maxPagesPerFirm: number;
-  readonly maxPageBytes: number;
-}): number {
-  return worstCaseRunCents({
-    modelName: settings.modelName,
-    maxPagesPerFirm: settings.maxPagesPerFirm,
-    maxPageBytes: settings.maxPageBytes,
-  });
 }
 
 export interface FinishResearchInput {

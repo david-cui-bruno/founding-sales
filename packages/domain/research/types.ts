@@ -30,6 +30,15 @@ export const RESEARCH_REFUSAL_CODES = [
   'link_not_permitted',
   // The model named in the settings has no reviewed price row.
   'model_unpriced',
+  /**
+   * The money would not stretch to this call, and no ceiling on cents is what bound it.
+   *
+   * Two places answer it, and they are the same fact at two moments: the clearance,
+   * when the firm already holds its three reservations for the business date, and
+   * chunk 3, when the exact token count of the request does not fit the reservation
+   * being held for it. Neither is a failure and neither costs anything.
+   */
+  'over_budget',
 ] as const;
 export type ResearchRefusalCode = (typeof RESEARCH_REFUSAL_CODES)[number];
 

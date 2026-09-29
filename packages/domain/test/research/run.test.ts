@@ -34,6 +34,19 @@ import type { ExtractionProvider, PageFetchProvider } from '../../research/provi
 const AT = '2026-09-28T14:00:00.000Z';
 const ZONE = 'America/New_York';
 
+/**
+ * Attempt 1's clearance for the seeded firm.
+ *
+ * One clearance function prices every reservation, attempt 1 and retry alike, so every
+ * call names the firm (its three rows a day are part of the decision) and which of the
+ * two it is (only attempt 1 consumes a unit of the day's firm count).
+ */
+const firstAttempt = (at: string): { firmId: string; at: string; attemptKind: 'first' } => ({
+  firmId: crm.alpha.firmId,
+  at,
+  attemptKind: 'first',
+});
+
 const bytes = (text: string): Uint8Array => new TextEncoder().encode(text);
 const hashOf = (text: string): string => createHash('sha256').update(text, 'utf8').digest('hex');
 
@@ -324,7 +337,7 @@ describe('one reservation per paid attempt', () => {
       businessTimeZone: ZONE,
       cents: 4,
     });
-    expect(await claimResearchClearance(context, { at: AT })).toEqual({ ok: false, reason: 'daily_cost_ceiling' });
+    expect(await claimResearchClearance(context, firstAttempt(AT))).toEqual({ ok: false, reason: 'daily_cost_ceiling' });
   });
 });
 
@@ -335,7 +348,7 @@ describe('the ceilings', () => {
       session,
     );
     await updateResearchSettings(admin, { enabled: false });
-    const claim = await claimResearchClearance(context, { at: AT });
+    const claim = await claimResearchClearance(context, firstAttempt(AT));
     expect(claim).toEqual({ ok: false, reason: 'research_disabled' });
   });
 
@@ -345,7 +358,7 @@ describe('the ceilings', () => {
       session,
     );
     await updateResearchSettings(admin, { dailyFirmCeiling: 0 });
-    expect(await claimResearchClearance(context, { at: AT })).toEqual({ ok: false, reason: 'daily_firm_ceiling' });
+    expect(await claimResearchClearance(context, firstAttempt(AT))).toEqual({ ok: false, reason: 'daily_firm_ceiling' });
   });
 
   it('consumes the counter, so the clearance after the last one refuses', async () => {
@@ -354,9 +367,9 @@ describe('the ceilings', () => {
       session,
     );
     await updateResearchSettings(admin, { dailyFirmCeiling: 2 });
-    expect((await claimResearchClearance(context, { at: AT })).ok).toBe(true);
-    expect((await claimResearchClearance(context, { at: AT })).ok).toBe(true);
-    expect(await claimResearchClearance(context, { at: AT })).toEqual({ ok: false, reason: 'daily_firm_ceiling' });
+    expect((await claimResearchClearance(context, firstAttempt(AT))).ok).toBe(true);
+    expect((await claimResearchClearance(context, firstAttempt(AT))).ok).toBe(true);
+    expect(await claimResearchClearance(context, firstAttempt(AT))).toEqual({ ok: false, reason: 'daily_firm_ceiling' });
   });
 
   it('refuses on the worst case before the call, not on the invoice after it', async () => {
@@ -366,7 +379,7 @@ describe('the ceilings', () => {
     );
     // One cent a day, and a run's worst case is two.
     await updateResearchSettings(admin, { dailyCostCeilingCents: 1 });
-    expect(await claimResearchClearance(context, { at: AT })).toEqual({ ok: false, reason: 'daily_cost_ceiling' });
+    expect(await claimResearchClearance(context, firstAttempt(AT))).toEqual({ ok: false, reason: 'daily_cost_ceiling' });
     expect(await researchClearanceAvailable(context, { at: AT })).toEqual({ ok: false, reason: 'daily_cost_ceiling' });
   });
 
@@ -382,9 +395,9 @@ describe('the ceilings', () => {
       businessTimeZone: ZONE,
       costCents: 9,
     });
-    expect(await claimResearchClearance(context, { at: AT })).toEqual({ ok: false, reason: 'monthly_cost_ceiling' });
+    expect(await claimResearchClearance(context, firstAttempt(AT))).toEqual({ ok: false, reason: 'monthly_cost_ceiling' });
     // A new month starts the budget again.
-    expect((await claimResearchClearance(context, { at: '2026-10-05T14:00:00.000Z' })).ok).toBe(true);
+    expect((await claimResearchClearance(context, firstAttempt('2026-10-05T14:00:00.000Z'))).ok).toBe(true);
   });
 
   it('does not consume a unit when it only asks', async () => {
