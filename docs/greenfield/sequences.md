@@ -223,8 +223,8 @@ changed, so the tables still admit its values. The code treats each one as unkno
   dropped on read (`rows.ts`);
 * `enrollment_linkedin_results` is never written; a deletion still removes its rows.
 
-`packages/domain/test/sequences/removedLinkedIn.test.ts` writes each value with SQL and
-proves each rule.
+`packages/domain/test/retention/deletionSequences.test.ts` writes each value with SQL
+and proves each rule.
 
 ## The job
 
@@ -325,7 +325,7 @@ mode and left the sequence running, which is invariant 3. See
 
 ## Authoring and starting a sequence on the Mac (lane g88)
 
-The editor window (`apps/desktop/src/renderer/sequenceEditor.ts`, decisions in
+The editor view (`apps/desktop/src/renderer/sequences/`, decisions in
 `sequenceView.ts`, commands in `apps/desktop/src/main/sequenceBridge.ts`) drives the
 existing commands in the order a founder meets them. There is no authoring endpoint of
 its own.
@@ -338,8 +338,9 @@ its own.
    Callie cannot fill (`TEMPLATE_VARIABLE_NAMES`, in `@fss/contracts`) and a visible
    opt-out link (`hasOptOutLink`; the bare word is fine). Since 26 September 2026 the approval answers
    more than 89 words, more than one link, a link in the subject and pricing or guarantee
-   language as `warnings` (`TEMPLATE_WARNING_CODES`), not refusals. **Approve** is a separate
-   press. A refused approval lists every issue, read from the refusal's body, because the
+   language as `warnings` (`TEMPLATE_WARNING_CODES`), not refusals. Approval is not a separate
+   press: the save carries `approve: true`, and `/templates/approve` has no caller here.
+   A refused approval lists every issue, read from the refusal's body, because the
    Mac's transport cuts a reason code at 80 characters.
 3. **Steps** — the draft's steps as typed controls: Call or Email, a delay in business
    days or hours after enrolment, the template an email sends or what a call does when
@@ -355,22 +356,16 @@ its own.
 The stop conditions read as one sentence. The codes, a template's content hash, its footer
 and its declared variables are behind **Details**.
 
-### Review and resume
+### Resume
 
-`POST /enrollments/resume/preview { enrollmentId }` answers
-`{ asOf, preview: { kind, unionMilliseconds, shiftMilliseconds, openHoldIds, firmTimeZone,
-holds[], steps[] } }`. Each step has its
-`dueAt` now and the `proposedDueAt` a confirmation gives it. `previewResume` and
-`resumeEnrollment` share `resumeDecisionFor`: the same window since the last applied
-shift, the same composition and decision, and the same `shiftDueInstant`. The preview
-locks nothing and writes nothing, not even the `review_required` flag.
-
-**Review and resume** on a held enrollment opens that review. It shows what held the
-enrollment and each remaining step as *from → to* in the firm's zone, and **Resume with
-these dates** is the only control that resumes. The bridge refuses to resume an
-enrollment whose review is not on screen and opens the review instead. When a hold is
-still open, the review says so and offers no confirmation. The confirmation decides again
-under its lock. See `docs/archive/decisions/g88-founder-authoring-and-review.md`.
+**A held enrollment resumes on its own** (wave 2, S4.1). There is no review to open and
+no control that resumes one: once every hold against it clears, the scheduler calls
+`resumeEnrollment` (`packages/domain/sequences/resume.ts`), which decides the shift under
+its own lock. `/enrollments/resume` and `/enrollments/resume/preview` went with the
+1.0.14 client minimum (lane W3-C2), and migration 0021 removed the `review_required`
+state they were about; `ENROLLMENT_PATHS` is `/enrollments`, `/enrollments/enroll`,
+`/enrollments/stop` and `/enrollments/steps`. The seven-day review as it was built is in
+`docs/archive/decisions/g88-founder-authoring-and-review.md`.
 
 ## Adding a step channel, or a terminal condition
 

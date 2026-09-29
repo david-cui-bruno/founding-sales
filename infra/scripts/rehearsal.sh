@@ -513,11 +513,10 @@ rehearsal_teardown() {
 #   5. the two lock records of this run's state key: the S3 `<key>.tflock` object and the
 #      DynamoDB item, either of which blocks the next run of the same prefix.
 #
-# Six classes AWS keeps listing after it has accepted the deletion are candidates to be
-# set aside — an `ecs` service, cluster, task or task-definition; an `ec2`
-# `network-interface/`, `security-group/` or `security-group-rule/`; a `kms` `key/`; an
-# `rds` `auto-backup:` — but **the class is not the evidence** (review of PR 292b). Being
-# listed is not being there, and being of a settling class is not being settled, so each
+# The classes AWS keeps listing after it has accepted the deletion are candidates to be
+# set aside — an `ecs` service, cluster, task or task-definition; **every** `ec2`
+# resource; a `kms` `key/`; an `rds` `auto-backup:` — but **the class is not the
+# evidence** (review of PR 292b). Being listed is not being there, and being of a settling class is not being settled, so each
 # candidate is asked of its own service what state it is in, and only what is gone,
 # inactive, draining to nothing or pending deletion is set aside:
 #
@@ -526,15 +525,23 @@ rehearsal_teardown() {
 #   * a network interface EC2 no longer has;
 #   * a security group EC2 no longer has, or whose VPC is gone, or which holds no rule
 #     and no interface; a security group rule EC2 no longer has;
+#   * any other `ec2:*` — a subnet, a VPC, a route table, an internet gateway — that
+#     EC2 answers a NotFound code for, and only then. Run 36547424579 destroyed all 119
+#     resources and then failed five reads of the teardown and five of the guard on one
+#     subnet ARN that `describe-subnets` called `InvalidSubnetID.NotFound`: the tagging
+#     API served it for thirteen minutes after its VPC was gone. Existence is the whole
+#     reading for these — they have no draining or pending state — and every
+#     confirmation is logged by ARN. An `ec2:` class with no reader counts as there;
 #   * a KMS key PendingDeletion, PendingReplicaDeletion or Disabled;
 #   * an automated backup retained or deleting.
 #
 # Anything else of those classes is a leftover like any other, reported with the state it
-# was read in. An ACTIVE service, an Enabled key or a live security group is exactly what
-# a failed teardown leaves. A security group that really stayed keeps the run's VPC, and
-# a VPC is not a candidate at all. Run 36209569741 found one group and eight rules still
-# listed that `describe-security-groups` answered `InvalidGroup.NotFound` for: that is the
-# reading, not the class, and it is what this makes.
+# was read in. An ACTIVE service, an Enabled key, a live security group or a subnet EC2
+# still describes is exactly what a failed teardown leaves — a VPC EC2 still has fails
+# the guard as loudly as it ever did, because the reading is what settles it and not the
+# class. Run 36209569741 found one group and eight rules still listed that
+# `describe-security-groups` answered `InvalidGroup.NotFound` for: that is the reading,
+# not the class, and it is what this makes.
 #
 # **A reading that cannot be made is not an absence.** Every response is checked for the
 # shape it must have — a projection that is not a list of the expected rows is a failed
@@ -571,7 +578,7 @@ rehearsal_state_location() {
 #   rehearsal_read_or_absent <what> <aws argument>...
 # Only codes that say the thing is not there. A malformed identifier says the identifier
 # could not be read, which is a failure like any other (review of PR 292c).
-REHEARSAL_GONE_ERROR_CODES="InvalidGroup.NotFound InvalidGroupId.NotFound InvalidNetworkInterfaceID.NotFound InvalidSecurityGroupRuleId.NotFound InvalidVpcID.NotFound NotFoundException DBInstanceAutomatedBackupNotFound"
+REHEARSAL_GONE_ERROR_CODES="InvalidGroup.NotFound InvalidGroupId.NotFound InvalidNetworkInterfaceID.NotFound InvalidSecurityGroupRuleId.NotFound InvalidVpcID.NotFound InvalidSubnetID.NotFound InvalidRouteTableID.NotFound InvalidInternetGatewayID.NotFound NotFoundException DBInstanceAutomatedBackupNotFound"
 rehearsal_read_or_absent() {
   local what=$1 status code
   shift
@@ -667,6 +674,7 @@ rehearsal_ecs_absent() {
 #   rehearsal_settling_state <class> <arn>
 rehearsal_settling_state() {
   local kind=$1 arn=$2 resource cluster identifier state running pending reason status vpc rules egress
+  local what call flag field
   resource="${arn#arn:*:*:*:*:}"
   identifier="${resource#*/}"
   REHEARSAL_SETTLED=no
@@ -818,6 +826,33 @@ EOF
         PendingDeletion | PendingReplicaDeletion | Disabled) REHEARSAL_SETTLED=yes ;;
       esac
       ;;
+    ec2-subnet | ec2-vpc | ec2-route-table | ec2-internet-gateway)
+      # Every other `ec2:*` the tagging API returns, confirmed with the service's own
+      # describe call and counted only if EC2 says it exists (run 36547424579, 29
+      # September 2026). That run destroyed all 119 resources and then failed the
+      # teardown and the guard five reads apiece on one subnet ARN, which
+      # `describe-subnets` answered `InvalidSubnetID.NotFound` for: the tagging API
+      # served the entry for thirteen minutes after the VPC holding it was gone.
+      #
+      # Existence is the whole reading here — a subnet, a VPC, a route table and an
+      # internet gateway have no draining or pending-deletion state to read — so what
+      # is set aside is exactly what EC2 answered a NotFound code for. Anything else
+      # of these classes is reported as still there, and an `ec2:` class with no reader
+      # below falls through to the default and counts as still there as well.
+      case "$kind" in
+        ec2-subnet)           what='subnet';           call='describe-subnets';           flag='--subnet-ids';           field='Subnets[0].SubnetId' ;;
+        ec2-vpc)              what='VPC';              call='describe-vpcs';              flag='--vpc-ids';              field='Vpcs[0].VpcId' ;;
+        ec2-route-table)      what='route table';      call='describe-route-tables';      flag='--route-table-ids';      field='RouteTables[0].RouteTableId' ;;
+        ec2-internet-gateway) what='internet gateway'; call='describe-internet-gateways'; flag='--internet-gateway-ids'; field='InternetGateways[0].InternetGatewayId' ;;
+      esac
+      rehearsal_read_or_absent "the $what $identifier" ec2 "$call" "$flag" "$identifier" \
+        --query "$field" --output text || return 1
+      if [ "$REHEARSAL_READ_ABSENT" = yes ]; then
+        REHEARSAL_SETTLED=yes; REHEARSAL_STATE_DETAIL="EC2 has no such $what"; return 0
+      fi
+      rehearsal_require_state "$kind" "$identifier" "the $what"
+      REHEARSAL_STATE_DETAIL="still there"
+      ;;
     rds-auto-backup)
       # By ARN, which is what the tagging API listed. A live backup answers `active`; a
       # well-formed ARN RDS does not know answers `(InvalidParameterValue)`, which is not
@@ -868,6 +903,7 @@ if not isinstance(rows, list):
     sys.exit("FAIL: the tagging API answered something that is not a list of resources, "
              "so the guard cannot say the run left nothing: " + raw[:200])
 SETTLING_ECS = ("service", "cluster", "task", "task-definition")
+# The three with a state of their own; every other `ec2:*` is confirmed by existence.
 SETTLING_EC2 = ("network-interface", "security-group", "security-group-rule")
 
 
@@ -879,8 +915,12 @@ def candidate(arn):
     head = resource.split("/", 1)[0]
     if service == "ecs" and head in SETTLING_ECS:
         return "ecs-" + head
-    if service == "ec2" and head in SETTLING_EC2:
-        return head
+    if service == "ec2":
+        # Every EC2 resource is asked of EC2 (run 36547424579). The tagging API served a
+        # deleted subnet for thirteen minutes after its VPC was gone, and five reads in a
+        # row failed on a resource `describe-subnets` answered InvalidSubnetID.NotFound
+        # for. A class with no reader in `rehearsal_settling_state` still counts as there.
+        return head if head in SETTLING_EC2 else "ec2-" + head
     if service == "kms" and head == "key":
         return "kms-key"
     if service == "rds" and resource.startswith("auto-backup:"):
@@ -908,6 +948,12 @@ PY
     fi
     rehearsal_settling_state "$kind" "$arn" || return 1
     if [ "$REHEARSAL_SETTLED" = yes ]; then
+      # Every EC2 confirmation is logged on its own line, because the tagging API's
+      # stale rows are the ones that stop a teardown and the run's log is where an
+      # operator reads which ARN was confirmed gone and by which call (run 36547424579).
+      case "$arn" in
+        arn:aws:ec2:*) rehearsal_log "confirmed with EC2: $arn is set aside ($REHEARSAL_STATE_DETAIL)" >&2 ;;
+      esac
       aside="$aside$kind
 "
     else

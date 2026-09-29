@@ -1759,6 +1759,8 @@ describe('the protected-path guard reads every commit since production’s, befo
       'certs/rds-global-bundle.pem',
       'tsconfig.base.json',
       'eslint.config.mjs',
+      // Dependabot's configuration opens update pull requests; it cannot change what CI runs.
+      '.github/dependabot.yml',
     ]);
     const passed = guard(world(at(base)), app, directory);
     expect(passed.outputs['decision'], passed.output).toBe('pass');
@@ -1774,6 +1776,9 @@ describe('the protected-path guard reads every commit since production’s, befo
       'scripts/productionSmoke.mjs',
       'scripts/releaseArtifact.mjs',
       '.github/workflows/greenfield.yml',
+      '.github/workflows/x.yml',
+      // Anything else under .github is unknown to this deploy, so it stays on the manual path.
+      '.github/CODEOWNERS',
       'cloud/terraform/main.tf',
       'src/main/index.ts',
     ]) {
@@ -1856,6 +1861,21 @@ describe('the schema acceptance rule and the migration runner are protected, wit
     expect(verdicts['packages/domain/db/schemaRange.ts']).toContain('schema acceptance');
     const rest = classify(['packages/domain/db/workspaceScope.ts', 'packages/domain/db/index.ts', 'packages/domain/today/x.ts']);
     expect(Object.values(rest)).toEqual(['', '', '']);
+  });
+});
+
+describe('under .github, only the workflows are protected', () => {
+  it('deploys a dependabot change and holds a workflow change, whatever else it does not know', () => {
+    const verdicts = classify([
+      '.github/dependabot.yml',
+      '.github/workflows/x.yml',
+      '.github/workflows/greenfield-deploy.yml',
+      '.github/CODEOWNERS',
+    ]);
+    expect(verdicts['.github/dependabot.yml']).toBe('');
+    expect(verdicts['.github/workflows/x.yml']).toBe('a workflow');
+    expect(verdicts['.github/workflows/greenfield-deploy.yml']).toBe('a workflow');
+    expect(verdicts['.github/CODEOWNERS']).toBe('not an application path this deploy knows');
   });
 });
 

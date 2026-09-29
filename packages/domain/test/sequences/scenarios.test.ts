@@ -23,7 +23,7 @@ import { FIXTURE_SIGN_OFF, seedSequences, type SeededSequences } from './support
  * Appendix G scenarios 26, 28, 31, 32 and 33, and the terminal stop the coordinator
  * made a requirement of this lane (`docs/decisions/g3a-domain-event-outbox.md`).
  * Scenarios 9 and 18 were LinkedIn's; LinkedIn was removed on 25 September 2026, and
- * `removedLinkedIn.test.ts` proves what a row stored before then does now.
+ * `test/retention/deletionSequences.test.ts` proves what a row stored before then does now.
  *
  * Each one is a sentence from the specification that this lane is accepted on, and
  * each is run against a real PostgreSQL with two workspaces seeded, because the

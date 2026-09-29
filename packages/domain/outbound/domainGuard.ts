@@ -87,8 +87,10 @@ export async function readSendingDomain(
  *     which is the zero-step path: the mailbox a person connected *is* the domain FSS
  *     sends from;
  *   * `operator` — `fss admin workspace bootstrap --sending-domain`, for a workspace
- *     whose mailbox connected before this function existed;
- *   * `admin` — `POST /outbound/domain`, for a future desktop control.
+ *     whose mailbox connected before this function existed.
+ *
+ * `POST /outbound/domain` was the third caller and went with W2-S S6; `registeredBy`
+ * still declares `admin` for a desktop control nothing serves yet.
  *
  * ## What it never does
  *

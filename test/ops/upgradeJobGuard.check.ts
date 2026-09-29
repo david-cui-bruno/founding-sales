@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -287,9 +287,19 @@ describe('the attestation step asks production, and only when there is an upgrad
   async function attest(
     answer: { status: number; body: string; location?: string } | null,
     environment: Readonly<Record<string, string>>,
-  ): Promise<Outcome> {
+  ): Promise<Outcome & { readonly sleeps: readonly string[] }> {
     const directory = mkdtempSync(join(tmpdir(), 'fss-attest-'));
     temporary.push(directory);
+    // The step sleeps five seconds between its three attempts, which is right in CI
+    // and is 10 s of wall time per refused answer here — 30 s of this file's runtime,
+    // spent waiting on nothing. A `sleep` of our own, first on PATH, records the wait
+    // instead of taking it. Nothing else about the step changes: it still makes three
+    // real requests against a real status line, and the recording is asserted below,
+    // so a step that stopped backing off would be visible rather than merely faster.
+    const bin = join(directory, 'bin');
+    mkdirSync(bin, { recursive: true });
+    const sleepLog = join(directory, 'sleeps');
+    writeFileSync(join(bin, 'sleep'), `#!/bin/sh\necho "$1" >> ${JSON.stringify(sleepLog)}\n`, { encoding: 'utf8', mode: 0o755 });
     const server =
       answer === null
         ? null
@@ -313,15 +323,29 @@ describe('the attestation step asks production, and only when there is an upgrad
     try {
       // `spawn`, not `spawnSync`: the server above is in this process, and a
       // synchronous child blocks the event loop that would have answered it.
-      return await new Promise<Outcome>(resolve => {
+      return await new Promise<Outcome & { readonly sleeps: readonly string[] }>(resolve => {
         const child = spawn('bash', ['-c', body], {
           cwd: directory,
-          env: { ...process.env, FSS_PRODUCTION_ORIGIN: origin, RUNNER_TEMP: directory, PROD_COMMIT: COMMIT, ...environment },
+          env: {
+            ...process.env,
+            PATH: `${bin}:${process.env['PATH'] ?? ''}`,
+            FSS_PRODUCTION_ORIGIN: origin,
+            RUNNER_TEMP: directory,
+            PROD_COMMIT: COMMIT,
+            ...environment,
+          },
         });
         let out = '';
         child.stdout.on('data', (chunk: Buffer) => (out += chunk.toString('utf8')));
         child.stderr.on('data', (chunk: Buffer) => (out += chunk.toString('utf8')));
-        child.on('close', code => resolve({ status: code ?? -1, out, outputs: {} }));
+        child.on('close', code =>
+          resolve({
+            status: code ?? -1,
+            out,
+            outputs: {},
+            sleeps: existsSync(sleepLog) ? readFileSync(sleepLog, 'utf8').split('\n').filter(line => line !== '') : [],
+          }),
+        );
       });
     } finally {
       server?.close();
@@ -412,10 +436,12 @@ describe('the attestation step asks production, and only when there is an upgrad
     expect(unaccepted.out).toContain('does not accept its own schema');
   });
 
-  it('fails closed when production does not answer', async () => {
+  it('fails closed when production does not answer, after three attempts five seconds apart', async () => {
     const outcome = await attest(null, { PROD_SCHEMA: '22', FROM_SCHEMA: '22' });
     expect(outcome.status, outcome.out).not.toBe(0);
     expect(outcome.out).toContain('did not answer 200 in three attempts');
+    // Three attempts, so two waits, and the blip the retry is for is a five-second one.
+    expect(outcome.sleeps).toEqual(['5', '5']);
   });
 
   it('fails closed on a malformed answer rather than guessing', async () => {

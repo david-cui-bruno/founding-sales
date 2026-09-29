@@ -107,7 +107,7 @@ schedule change governs every mailbox the moment it lands. `admin_daily_cap` onl
 lowers and `raised_daily_cap` only raises, to at most 75, under a database ceiling of
 100.
 
-**A raise is earned, and it counts only while it stays earned** (lane g87, audit S06).
+**A raise is earned, and an admin may override the lock** (lane g87, audit S06; wave 2, S4.6).
 12.7 says "After sustained healthy results they may raise a mailbox to 75". Until g87
 `setAdminCap` accepted `raiseTo: 75` for a mailbox on its first day and
 `effectiveDailyCap` let the raise replace the schedule, so the whole ramp was one admin
@@ -122,12 +122,12 @@ click deep. The rule now has two parts (`raiseRefusal` in `outbound/ramp.ts`):
 
 `POST /outbound/cap` refuses any non-null `raiseTo` that fails either part, and the code
 is the command's 409 `reason`. Lowering, and clearing a raise, are never refused for
-health, because both only shrink the cap. The gate asks the same question again before
-every send (`dailyCapInForce`): a stored raise lifts the day's cap only while the rule
-holds, and otherwise the schedule's cap governs that day. So a raise written before
-g87, a late bounce that took back the thirtieth day, or a bad fortnight after the raise
-can never put a mailbox above what the schedule allows it that day. `POST
-/outbound/status` reports that cap in force, not the stored column.
+health, because both only shrink the cap. A raise that is *stored* is then honoured as
+written at every send (`effectiveDailyCap`): the rule is checked when the raise is set,
+not again on the way out. `POST /outbound/cap/override` (wave 2, S4.6) is how an admin
+sets one the rule would refuse — any raise up to the hard ceiling of 100, whatever the
+mailbox's health — and it answers the part of the rule not met as a `warning` rather
+than a refusal. `POST /outbound/status` reports the cap in force, not the stored column.
 
 Ten is a number the specification does not give. It is the longest step the table takes
 ("Weeks 5–6", ten sending days at one cap). Changing it is David's decision, like the
@@ -139,7 +139,7 @@ Until g87 `setAdminCap` read absent as null, so lowering a raised mailbox during
 incident silently cleared the raise too, and raising it cleared the lowering.
 
 That number only grows if somebody closes the day, and until lane G15 nobody did.
-`closeSendDay`, `listDaysToClose`, `recordDaySignal` and `countDirectSend` were built
+`closeSendDay`, `listDaysToClose` and `recordDaySignal` were built
 and tested here with no caller anywhere, so `healthy_sending_days` was zero for every
 mailbox that had ever existed, the cap was five a day for ever, and the three counters
 `rampHealthFailure` judges a day on were always zero. This rule used to read as though
@@ -297,13 +297,12 @@ section's line, and the checkboxes would have been missing even with the row in 
 The missing row was real, and it is what g57 fixed. The section itself needs 1.0.4.
 
 `registerSendingDomain(context, { domain, registeredBy })` (`outbound/domainGuard.ts`)
-is now the only thing that creates the row. It has three callers:
+is now the only thing that creates the row. It has two callers:
 
 | Caller | `registeredBy` | When |
 |---|---|---|
 | The Gmail callback (`apps/api/src/routes/gmail.ts`), after `completeGmailGrant` returns | `mailbox_connect` | Every mailbox connect. This is the zero-step path: the connected address's domain becomes the sending domain. |
 | `fss admin workspace bootstrap --sending-domain <domain>`, through `deploy.sh bootstrap` (release.md 5.1a) | `operator` | A workspace whose mailbox connected before g57. Idempotent, so 5.1a can pass the flag on every re-run. |
-| `POST /outbound/domain` (admin only, `{ domain }`, command receipt `register_sending_domain`) | `admin` | For a future desktop "Add sending domain" control. No desktop build calls it yet. |
 
 It follows four rules, and each has a test:
 
