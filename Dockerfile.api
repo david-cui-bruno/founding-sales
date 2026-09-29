@@ -97,6 +97,24 @@ COPY packages/contracts/src packages/contracts/src
 # The test harness is never in the image: it starts a PostgreSQL cluster.
 RUN rm -rf packages/domain/db/testing
 
+# ---------------------------------------------------------------------------
+# The commit these bytes were built from (lane g-build-commit).
+#
+# Last, on purpose. A build argument's value is part of the cache key of every
+# instruction after it, and this one changes on every commit: declared beside
+# `GIT_REVISION` at the top of the stage it would invalidate the dependency copy
+# and every source copy below it, and the layer cache would never hit again. Here
+# only this ENV and the metadata instructions after it are rebuilt, and the
+# `dependencies` stage — the expensive one, an emulated arm64 `npm ci` — is
+# untouched because it is a separate stage that never sees this argument.
+#
+# Unset is the empty string and the readers treat that as "no commit"
+# (`packages/domain/release/identity.ts`), so `docker build` with no argument
+# still produces a working image that says so rather than one that lies.
+# ---------------------------------------------------------------------------
+ARG FSS_BUILD_COMMIT=""
+ENV FSS_BUILD_COMMIT=${FSS_BUILD_COMMIT}
+
 # The API writes nothing to disk. The image is ready for
 # `readonlyRootFilesystem` today; the worker's liveness file is the only thing
 # in either process that needs a writable path.

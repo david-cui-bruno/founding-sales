@@ -19,8 +19,8 @@ import { readRepositoryFile, repositoryPath } from './support/repository.ts';
  * stub `gh`s for its `gates` and `download`; and `infra/scripts/deploy.sh current`. The
  * workflow itself is held to P6's shape (27 September 2026): five jobs, one gates job, the
  * record's put in the deploy job and its read-back in a job of its own after the smoke, no
- * push-time window, and the schema ranges read from the digests artifact, in 400 lines at
- * most.
+ * push-time window, and the schema ranges read from the digests artifact, within a line
+ * budget.
  *
  * **A gate decision gone stale before a write (reviews of PRs 273 and 278).** Every
  * production write — the put, each image's promotion write (`images.check.ts`), each
@@ -1964,11 +1964,22 @@ describe('deploy.sh current prints what an operator plan must be given, and refu
   });
 });
 
-describe('the deploy workflow, P6: five jobs, one gates job, the read-back after the smoke, 400 lines at most', () => {
+describe('the deploy workflow, P6: five jobs, one gates job, the read-back after the smoke, 465 lines at most', () => {
   const workflow = DEPLOY_WORKFLOW;
 
-  it('is 400 lines or fewer, has five jobs, and only the deploy and read-back jobs can assume a role', () => {
-    expect(workflow.split('\n').length).toBeLessThanOrEqual(401);
+  it('is 465 lines or fewer, has five jobs, and only the deploy and read-back jobs can assume a role', () => {
+    // The budget moved from 400 to 465 for lane RS, once, and the five-job list did not
+    // move. It buys one step: `read-back` asks ECR, after the rollout and the smoke,
+    // which commit production's images were really built from. That is the value
+    // `FSS_PROD_COMMIT` must be set to, and the upgrade test migrates *from* whatever
+    // it says (GPT-6 review of PR 314, P0-2c). Only a job holding the production role
+    // can ask, which is why it is here and not in `summary`.
+    //
+    // Nothing in this workflow *writes* the variable. A workflow token cannot: GitHub
+    // documents no `variables` scope for `permissions:` at all, so a `gh variable set`
+    // under `github.token` would warn on every deploy and change nothing. The release
+    // helper sets it by hand and the `upgrade` job fails closed when it is stale.
+    expect(workflow.split('\n').length).toBeLessThanOrEqual(465);
     const jobs = [...workflow.slice(workflow.indexOf('\njobs:\n')).matchAll(/^ {2}([a-z-]+):\n/gmu)].map(match => match[1]);
     expect(jobs).toEqual(['gates', 'deploy', 'smoke', 'read-back', 'summary']);
     for (const name of ['gates', 'smoke', 'summary']) expect(job(workflow, name), name).not.toContain('id-token: write');

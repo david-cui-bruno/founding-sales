@@ -137,3 +137,34 @@ export async function discoverImageDigest(
   }
   return unknown(reason);
 }
+
+/**
+ * Which commit this process's image was built from (lane g-build-commit).
+ *
+ * `discoverImageDigest` above answers "which bytes am I", which is what the release
+ * record compares. This answers "which source am I", which is what a reader of the
+ * public health document needs in order to know that a fixture, a smoke or an upgrade
+ * test really did run against the code it believes it ran against. Before this, the
+ * commit behind a running image was a repository variable somebody typed, and a
+ * wrong-but-plausible value was indistinguishable from a right one.
+ *
+ * The image build stamps it: `ARG FSS_BUILD_COMMIT` in both Dockerfiles, passed by
+ * `.github/workflows/greenfield-images.yml` as the commit being built. It is therefore
+ * baked into the image rather than supplied by a task definition, which is the whole
+ * point — a deployment cannot claim a commit it was not built from.
+ *
+ * Absent is `null`, not a throw and not a placeholder string. A locally run API has no
+ * such variable, and every image built before this change has none either; both must
+ * answer honestly rather than fail or omit the field. A malformed value is also `null`:
+ * a short sha, an upper-case one or a branch name is somebody's guess, and a guess must
+ * not be reported as a fact.
+ */
+export const BUILD_COMMIT_VARIABLE = 'FSS_BUILD_COMMIT';
+
+/** Forty lower-case hex digits, which is what `GITHUB_SHA` is and what a reader can resolve. */
+const BUILD_COMMIT_PATTERN = /^[0-9a-f]{40}$/u;
+
+export function buildCommit(environment: Environment): string | null {
+  const value = environment[BUILD_COMMIT_VARIABLE]?.trim() ?? '';
+  return BUILD_COMMIT_PATTERN.test(value) ? value : null;
+}

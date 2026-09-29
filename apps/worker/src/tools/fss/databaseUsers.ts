@@ -50,6 +50,21 @@ import { APP_RUNTIME_ROLE, MIGRATION_ROLE } from './migrate.ts';
  * `migration` to the connected user, once, and every later `fss migrate` then passes
  * that check for a reason rather than by the absence of one.
  *
+ * The predicate is `pg_has_role(current_user, 'migration', 'USAGE')` — inheritance —
+ * and deliberately not `'MEMBER'`. On PostgreSQL 16 a role created by a non-superuser
+ * `CREATEROLE` user is automatically granted back to its creator with `ADMIN TRUE,
+ * INHERIT FALSE, SET FALSE`, and 0001 creates `migration` while running as exactly
+ * such a user (the RDS master). So `MEMBER` is already true on a freshly migrated
+ * database — the automatic grant *is* a membership — while `USAGE` is false, because
+ * that membership does not inherit. Asking `MEMBER` therefore reported `already` and
+ * granted nothing, and the second `fss migrate` against that database was refused with
+ * `not_migration_role`. `migrate.ts`'s `readMigrationRole` is the consumer of this
+ * guarantee and asks `USAGE`, so the question this command is really answering is
+ * "will `fss migrate` accept this session afterwards"; it has to ask the same thing.
+ * The grant is written `WITH INHERIT TRUE` for the same reason: a plain `GRANT` does
+ * update an existing `INHERIT FALSE` membership, but the property being repaired is
+ * worth saying out loud rather than depending on.
+ *
  * It refuses when `app_runtime` or `migration` is missing, which means `fss migrate`
  * has not run. There is no migration number here and no SQL file: a role grant is not
  * a schema change and a database's login users are not the same thing in a rehearsal as
@@ -74,7 +89,13 @@ export interface DatabaseUserReport {
   readonly passwordSet: boolean;
 }
 
-/** Whether the connected user was already a member of `migration`, or has just been. */
+/**
+ * Whether the connected user already inherited `migration`, or has just been granted it.
+ *
+ * `'already'` means "already inherits" — the thing `fss migrate` checks — and not merely
+ * "is a member of": on PostgreSQL 16 a non-inheriting membership is the normal state of a
+ * freshly migrated database, and it is the state this command exists to repair.
+ */
 export type MigrationMembership = 'granted' | 'already';
 
 export interface DatabaseUsersReport {
@@ -301,29 +322,38 @@ export async function ensureRuntimeDatabaseUser(
 }
 
 /**
- * Make the connected user a member of `migration`, once, and report which it was.
+ * Make the connected user inherit `migration`, once, and report which it was.
  *
  * The first `fss migrate` on a fresh instance runs as the RDS master and passes the
  * membership check only because the role it checks does not exist yet. This is what
  * makes every run after it pass for a reason. The master is not a superuser, so the
  * check is genuine — and this grant is what makes it satisfiable.
+ *
+ * The predicate is the one `migrate.ts` tests, `USAGE`, because that is the question
+ * being answered: will `fss migrate` accept this session afterwards. `MEMBER` is the
+ * wrong question on PostgreSQL 16, where 0001's own creator holds a non-inheriting
+ * membership of `migration` automatically — see the module header.
  */
 async function withMigrationMembership(
   session: SessionQueryable,
   user: DatabaseUserReport,
 ): Promise<DatabaseUsersResult> {
-  const { rows } = await session.query<{ role: string; member: boolean }>(
-    `SELECT current_user AS role, pg_has_role(current_user, $1, 'MEMBER') AS member`,
+  const { rows } = await session.query<{ role: string; inherits: boolean }>(
+    `SELECT current_user AS role, pg_has_role(current_user, $1, 'USAGE') AS inherits`,
     [MIGRATION_ROLE],
   );
   const row = rows[0];
   const grantedTo = row?.role ?? 'unknown';
-  if (row?.member === true) {
+  if (row?.inherits === true) {
     return { ok: true, value: { user, migrationMembership: 'already', grantedTo } };
   }
+  // `WITH INHERIT TRUE` is explicit rather than implied. The membership usually already
+  // exists here with `INHERIT FALSE` (PostgreSQL 16's automatic grant to a CREATEROLE
+  // creator), and a plain `GRANT` would update it — but what this statement is for is
+  // the inheritance, so the statement says the inheritance.
   await executeOpaque(
     session,
-    await formatted(session, 'GRANT %I TO %I', [MIGRATION_ROLE, grantedTo]),
+    await formatted(session, 'GRANT %I TO %I WITH INHERIT TRUE', [MIGRATION_ROLE, grantedTo]),
     'granting the migration role to the connected user',
   );
   return { ok: true, value: { user, migrationMembership: 'granted', grantedTo } };

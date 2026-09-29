@@ -25,6 +25,14 @@ name: Greenfield images
 #     on `repository/fss-rh*` (`infra/policies/deployment-role-policy.json.tftpl`),
 #     so no IAM statement and no trust relationship changed, and it cannot write a
 #     production repository: `fss-prod-*` is outside its namespace;
+# Both builds stamp `FSS_BUILD_COMMIT=${GITHUB_SHA}` into the image, and the API reports
+# it at `GET /health` as `build.commit`. `GITHUB_SHA` is the same expression the existing
+# `GIT_REVISION` label uses and the same one the published tag is composed from
+# (`ci-${GITHUB_SHA}`), so a published image's tag and its self-reported commit cannot
+# disagree. On a pull request `GITHUB_SHA` is the ephemeral merge commit rather than the
+# branch head; that is correct there too — it names the tree that was actually built —
+# and no pull-request image is ever published or deployed.
+#
 #   * it builds and pushes each image once, as `fss-rh-<image>:ci-<commit>`. The
 #     repositories are IMMUTABLE, so a tag that already exists is never pushed again.
 #     It is reused only when an EARLIER attempt of this same run attests pushing that
@@ -126,6 +134,7 @@ jobs:
               --platform linux/arm64 \
               --file "Dockerfile.$service" \
               --build-arg "GIT_REVISION=${GITHUB_SHA}" \
+              --build-arg "FSS_BUILD_COMMIT=${GITHUB_SHA}" \
               --provenance=false \
               --tag "fss-$service:ci" \
               --load \
@@ -289,6 +298,7 @@ jobs:
                 --platform linux/arm64 \
                 --file "Dockerfile.$service" \
                 --build-arg "GIT_REVISION=${GITHUB_SHA}" \
+                --build-arg "FSS_BUILD_COMMIT=${GITHUB_SHA}" \
                 --provenance=false \
                 --metadata-file "$RUNNER_TEMP/$service-metadata.json" \
                 --tag "$uri:$tag" \
