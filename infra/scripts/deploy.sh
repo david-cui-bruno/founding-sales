@@ -393,16 +393,15 @@ deploy_release() {
 
   RUNNING_DIGESTS=unchecked
   # Empty on the rolling path, which starts from a running service whose family may
-  # carry newer revisions a CI deploy registered: there the digest and the count are the
-  # whole check, exactly as before. The schema path fills them in step 1.
   # The revision this apply registered for each service, from the apply's own output
   # (`deployment_plan`, read in release_read_root) rather than from anything ECS can be
   # asked afterwards. Both paths, because a completed rollback to a revision with the
   # same image digest is invisible to a digest comparison on either of them
-  # (PR 310 second review, P1). Empty only when the root predates this output, and then
-  # the check is the digest and the count, as it was.
+  # (PR 310 second review, P1), and a release with neither is refused rather than
+  # quietly weakened (PR 310 third review, P1).
   WORKER_APPLIED_DEFINITION="$(release_json_path "${DEPLOYMENT_PLAN:-}" "worker.task_definition")"
   API_APPLIED_DEFINITION="$(release_json_path "${DEPLOYMENT_PLAN:-}" "api.task_definition")"
+  release_require_applied_arns
   # Where the rollout poll leaves its last answer about the API service, so the timing
   # line reads its events out of a call that was made anyway.
   RELEASE_API_SERVICES_FILE="$(rehearsal_report_dir)/release-api-service.json"
@@ -538,6 +537,33 @@ release_start_both() {
   RELEASE_T_STABLE="$(release_now)"
 }
 
+# Before anything is scaled or migrated, on both paths: the apply named its revisions.
+#
+# A root that predates `deployment_plan`.<service>.task_definition leaves these empty,
+# and an empty applied ARN means the read after the wait falls back to the digest and
+# the count — which is exactly the check a same-digest rollback slips through. Degrading
+# quietly is the wrong answer to "this root is old": the release refuses, and says what
+# to do (PR 310 third review, P1).
+#
+# A dry run plans it instead. It changes nothing, it is what an operator runs to see the
+# commands, and a fixture-less dry run has no output to read at all.
+release_require_applied_arns() {
+  local missing=''
+  [ -n "$WORKER_APPLIED_DEFINITION" ] || missing="$missing $WORKER_SERVICE"
+  [ -n "$API_APPLIED_DEFINITION" ] || missing="$missing $API_SERVICE"
+  [ -n "$missing" ] || return 0
+  if rehearsal_dry_run; then
+    rehearsal_plan "refuse: the root's deployment_plan output names no task definition for$missing"
+    return 0
+  fi
+  echo "FAIL: the root's deployment_plan output names no task definition for$missing, so nothing here knows" >&2
+  echo "      which revision the apply registered. Without it a service that ECS rolled back to the previous" >&2
+  echo "      revision of the same image reads as a finished release, on either path." >&2
+  echo "      Apply the current root first — infra/modules/cluster puts <service>.task_definition, image and" >&2
+  echo "      schema range into deployment_plan — and then run this again." >&2
+  exit 1
+}
+
 # Before the migration: each service is on the revision *this apply* registered, and
 # that revision is this release.
 #
@@ -571,12 +597,6 @@ release_require_applied_definitions() {
       name=$WORKER_SERVICE applied=$WORKER_APPLIED_DEFINITION digest=$WORKER_DIGEST
     else
       name=$API_SERVICE applied=$API_APPLIED_DEFINITION digest=$API_DIGEST
-    fi
-    if [ -z "$applied" ]; then
-      echo "FAIL: the root's deployment_plan output names no task definition for $name, so nothing here knows which" >&2
-      echo "      revision the apply registered, and a schema release will not migrate on a guess. Apply the current" >&2
-      echo "      root (infra/modules/cluster adds <service>.task_definition to deployment_plan) and run this again." >&2
-      exit 1
     fi
     wanted_min="$(release_json_path "${DEPLOYMENT_PLAN:-}" "$service.schema_min")"
     wanted_max="$(release_json_path "${DEPLOYMENT_PLAN:-}" "$service.schema_max")"
@@ -666,12 +686,15 @@ release_elapsed() {
 # cannot: the stop happened in stop.sh, before the apply, in another process. So
 #
 #   * the start is stop.sh's own marker (release-stop-instant.txt) when this run can see
-#     one that names this root and this prefix, and otherwise the newest "has stopped N
-#     running tasks" event older than this release's scale-up;
-#   * the end is the newest "registered N targets" event that belongs to *this rollout's
-#     deployment* — not merely one that is recent. The poll's capture names the PRIMARY
-#     deployment this release created and when ECS created it, and a registration older
-#     than that deployment was some other rollout's (PR 310 second review, P2);
+#     one that names this root (canonicalised: the same root reaches stop.sh and this
+#     script spelled two ways) and this prefix, and otherwise the newest "has stopped N
+#     running tasks" event that is before this release's scale-up and inside the half
+#     hour a release fits in;
+#   * the end is the newest "registered N targets" event that is on the far side of this
+#     release's own scale-up *and* belongs to the deployment this release created. The
+#     poll's capture names that PRIMARY deployment and when ECS created it; a
+#     registration from before the scale-up cannot be this release finishing, however
+#     recent it looks (PR 310 second and third reviews, P2);
 #   * anything that does not make a pair — no marker and no event, no registration
 #     attributable to this deployment, a start that is not before the end, or a marker
 #     that names another release — is `unknown` (PR 310 review, P2).
@@ -688,7 +711,7 @@ release_api_unreachable_seconds() {
   local marker='' marker_file marker_line
   marker_file="$(rehearsal_report_dir)/release-stop-instant.txt"
   if [ -r "$marker_file" ]; then
-    marker_line="$(grep -F "root=$ROOT_DIRECTORY prefix=$PREFIX " "$marker_file" | tail -n 1)"
+    marker_line="$(grep -F "root=$(release_canonical_path "$ROOT_DIRECTORY") prefix=$PREFIX " "$marker_file" | tail -n 1)"
     marker="$(printf '%s' "$marker_line" | sed -n 's/.*api_stopped_at=\([0-9][0-9]*\).*/\1/p')"
   fi
   FSS_FILE="$RELEASE_API_SERVICES_FILE" FSS_MARKER="$marker" FSS_SCALED_AT="$RELEASE_T_SERVICES_START" \
@@ -701,8 +724,13 @@ from datetime import datetime
 # few seconds of skew cannot change a number printed in whole seconds. Further apart than
 # this is not skew, it is a different release, and a wrong number is worse than none.
 SAME_RELEASE_SECONDS = 6 * 60 * 60
-# ECS timestamps an event when it writes it, which can be a moment after the fact.
-SLACK_SECONDS = 30
+# ECS timestamps an event when it writes it, and its clock is not this machine. Small,
+# because the whole point is that the registration is on the far side of the scale-up.
+SLACK_SECONDS = 15
+# Without a marker, how far back a "has stopped" event may be and still be this
+# release's. A stop, an apply and two one-off tasks fit inside half an hour; anything
+# older is a different outage and `unknown` is the honest answer.
+STOP_WINDOW_SECONDS = 30 * 60
 
 def instant(raw):
     if isinstance(raw, (int, float)):
@@ -743,11 +771,20 @@ try:
         if when is None:
             continue
         at = instant(when)
-        # This deployment registered these targets. Not "recent enough": attributable.
-        if registered is None and at >= deployment_at - SLACK_SECONDS and re.search(r"registered [0-9]+ target", message):
+        # Not "recent enough": on the far side of this release's own scale-up, and
+        # belonging to the deployment this release created. A registration from before
+        # the scale-up cannot be this release finishing, whatever else is true of it
+        # (PR 310 third review, P2).
+        if (registered is None
+                and at >= scaled_at - SLACK_SECONDS
+                and at >= deployment_at - SLACK_SECONDS
+                and re.search(r"registered [0-9]+ target", message)):
             registered = at
-        # A stop from before this release was scaled up; the newest such is this one's.
-        if stopped is None and at < scaled_at and re.search(r"has stopped [0-9]+ running task", message):
+        # The fallback start, used only when no marker names this release: a stop from
+        # before the scale-up and inside the window a release fits in.
+        if (stopped is None
+                and scaled_at - STOP_WINDOW_SECONDS <= at < scaled_at
+                and re.search(r"has stopped [0-9]+ running task", message)):
             stopped = at
     marker = os.environ.get("FSS_MARKER") or ""
     if marker.isdigit():

@@ -190,6 +190,13 @@ if tool == "terraform":
                     known["taskDefinition"]["status"] = "INACTIVE"
             state["taskDefinitions"][fresh["taskDefinition"]["taskDefinitionArn"]] = fresh
             state["services"]["fss-prod-" + service]["taskDefinition"] = fresh["taskDefinition"]["taskDefinitionArn"]
+            # An apply republishes its outputs, and deployment_plan now names the
+            # revision it just registered (lane RS-2): the deploy that follows reads
+            # this, not the pre-apply value. A static output here would have modelled a
+            # root whose apply never ran.
+            planned_service = state["outputs"]["deployment_plan"][service]
+            planned_service["task_definition"] = fresh["taskDefinition"]["taskDefinitionArn"]
+            planned_service["image"] = planned[service + "_image"]
         save()
         print("Apply complete! Resources: 4 added, 2 changed, 4 destroyed.")
         sys.exit(0)
@@ -452,9 +459,23 @@ function world(options: WorldOptions = {}): World {
       operations_task_definition_arn: definitionArn('operations', 3),
       app_runtime_database_secret_arn: `arn:aws:secretsmanager:us-east-1:${ACCOUNT}:secret:fss-prod/app-runtime-database-aaaaaa`,
       task_network_configuration: { database_host: 'fss-prod-database.example.invalid' },
+      // Lane RS-2 (PR 310 third review): the apply names the revision it registered, and
+      // `deploy.sh release` refuses a root that does not. The rolled-back checkout's
+      // apply publishes it too — which is to say a rollback to a commit from before
+      // that output existed is refused, and has to be reconciled by hand.
       deployment_plan: {
-        api: { service_name: 'fss-prod-api', declared_desired_count: 2 },
-        worker: { service_name: 'fss-prod-worker', declared_desired_count: 1 },
+        api: {
+          service_name: 'fss-prod-api',
+          declared_desired_count: 2,
+          task_definition: definitionArn('api', 7),
+          image: image('api'),
+        },
+        worker: {
+          service_name: 'fss-prod-worker',
+          declared_desired_count: 1,
+          task_definition: definitionArn('worker', 4),
+          image: image('worker'),
+        },
         bootstrap: false,
       },
       worker_log_group_name: '/fss/fss-prod/worker',

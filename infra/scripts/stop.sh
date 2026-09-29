@@ -77,8 +77,12 @@ if ! rehearsal_dry_run; then
       # Named with the release it belongs to. `deploy.sh release` takes the instant only
       # when the root and the prefix are its own; the apply has not happened yet, so
       # those two are the whole identity available here.
+      # The root is canonicalised: the same root reaches the two scripts spelled two
+      # ways — the rehearsal workflow hands stop.sh an absolute path and deploy.sh a
+      # relative one — and a raw-string comparison would silently never match
+      # (PR 310 third review, P2).
       rehearsal_write_report "release-stop-instant.txt" \
-        "root=$ROOT_DIRECTORY prefix=$PREFIX api_stopped_at=$(date -u +%s)"
+        "root=$(release_canonical_path "$ROOT_DIRECTORY") prefix=$PREFIX api_stopped_at=$(date -u +%s)"
       ;;
     *)
       # A stop that stopped nothing must not leave an older release's instant behind for

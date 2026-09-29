@@ -49,6 +49,15 @@ release_plan_note() {
   printf 'PLAN %s\n' "$*" >&2
 }
 
+# One spelling of a directory, so two scripts handed the same root by different names
+# compare equal (PR 310 third review, P2: the rehearsal workflow gives stop.sh an
+# absolute root and deploy.sh a relative one). A path that is not a directory comes back
+# as it went in: this is for comparing, never for deciding whether something is there.
+release_canonical_path() {
+  local path=${1:-}
+  if [ -d "$path" ]; then (cd "$path" && pwd -P); else printf '%s\n' "$path"; fi
+}
+
 rehearsal_report_dir() {
   echo "${FSS_REHEARSAL_REPORTS:-/tmp/fss-rehearsal}"
 }
@@ -429,16 +438,18 @@ if applied:
 tasks = [t for t in (json.loads(os.environ["FSS_TASKS"] or "{}") or {}).get("tasks") or [] if t.get("lastStatus") == "RUNNING"]
 if len(tasks) != expected:
     (settling if applied else failures).append("{} task(s) are RUNNING and the root declares {}".format(len(tasks), expected))
-# What each running task must be on: the revision the apply registered when the caller
-# named one, and otherwise the deployment own revision, which is all an unnamed caller
-# has to compare with.
-wanted = applied or definition
 for task in tasks:
     label = "task {}".format(short(task.get("taskArn")))
-    if not wanted:
-        failures.append("{}: nothing names the task definition it should be running".format(label))
-    elif task.get("taskDefinitionArn") != wanted:
-        failures.append("{} runs {}, and this release is {}".format(label, short(task.get("taskDefinitionArn")), short(wanted)))
+    if applied:
+        # The revision the apply registered, not whatever the deployment reports: they
+        # are the same only because the check above already required it, and a task is
+        # held to the release rather than to what the service happens to say now.
+        if task.get("taskDefinitionArn") != applied:
+            failures.append("{} runs {}, and the apply registered {}".format(label, short(task.get("taskDefinitionArn")), short(applied)))
+    # Callers that name no revision are unchanged, wording included: this is the branch
+    # deploy.sh current and deploy.sh ci take, and each has its own rollout check.
+    elif definition and task.get("taskDefinitionArn") != definition:
+        failures.append("{} runs {}, and the deployment is {}".format(label, short(task.get("taskDefinitionArn")), short(definition)))
     found = next((c for c in task.get("containers") or [] if c.get("name") == container), None)
     if found is None:
         failures.append("{} has no container named {}".format(label, container))
