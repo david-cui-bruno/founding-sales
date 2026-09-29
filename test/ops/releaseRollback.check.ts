@@ -190,6 +190,13 @@ if tool == "terraform":
                     known["taskDefinition"]["status"] = "INACTIVE"
             state["taskDefinitions"][fresh["taskDefinition"]["taskDefinitionArn"]] = fresh
             state["services"]["fss-prod-" + service]["taskDefinition"] = fresh["taskDefinition"]["taskDefinitionArn"]
+            # An apply republishes its outputs, and deployment_plan now names the
+            # revision it just registered (lane RS-2): the deploy that follows reads
+            # this, not the pre-apply value. A static output here would have modelled a
+            # root whose apply never ran.
+            planned_service = state["outputs"]["deployment_plan"][service]
+            planned_service["task_definition"] = fresh["taskDefinition"]["taskDefinitionArn"]
+            planned_service["image"] = planned[service + "_image"]
         save()
         print("Apply complete! Resources: 4 added, 2 changed, 4 destroyed.")
         sys.exit(0)
@@ -292,6 +299,12 @@ interface WorldOptions {
    * wave 1 on) commits the four settings, `variables` (a commit from before) declares them.
    */
   readonly root?: 'literals' | 'variables';
+  /**
+   * Whether the target checkout's `infra/modules/cluster/outputs.tf` publishes
+   * `deployment_plan.<service>.task_definition` (lane RS-2, PR 310). True by default;
+   * false is a target from before that output existed.
+   */
+  readonly publishesAppliedRevision?: boolean;
   /** Committed literals that differ from what production runs; production's by default. */
   readonly committed?: Partial<Record<'certificate_arn' | 'api_hostname' | 'alert_emails' | 'sending_enabled', string>>;
   /**
@@ -344,6 +357,28 @@ function world(options: WorldOptions = {}): World {
     ].join('\n'),
   );
   writeFileSync(join(checkout, 'scripts/productionSmoke.mjs'), SMOKE);
+  // Lane RS-2 (PR 310): the second boundary. A target that does not publish the revision
+  // its apply registered is refused, because `deploy.sh release` would refuse it after
+  // the apply. Only the two lines rollback.sh greps for are needed here.
+  if (options.publishesAppliedRevision !== false) {
+    mkdirSync(join(checkout, 'infra/modules/cluster'), { recursive: true });
+    writeFileSync(
+      join(checkout, 'infra/modules/cluster/outputs.tf'),
+      [
+        'output "deployment_plan" {',
+        '  value = {',
+        '    api = {',
+        '      task_definition = aws_ecs_task_definition.api.arn',
+        '    }',
+        '    worker = {',
+        '      task_definition = aws_ecs_task_definition.worker.arn',
+        '    }',
+        '  }',
+        '}',
+        '',
+      ].join('\n'),
+    );
+  }
   const sending = options.sending ?? { api: 'false', worker: 'false' };
   const databaseHost = options.databaseHost ?? { api: MANAGED_HOST, worker: MANAGED_HOST };
   const committed = {
@@ -452,9 +487,23 @@ function world(options: WorldOptions = {}): World {
       operations_task_definition_arn: definitionArn('operations', 3),
       app_runtime_database_secret_arn: `arn:aws:secretsmanager:us-east-1:${ACCOUNT}:secret:fss-prod/app-runtime-database-aaaaaa`,
       task_network_configuration: { database_host: 'fss-prod-database.example.invalid' },
+      // Lane RS-2 (PR 310 third review): the apply names the revision it registered, and
+      // `deploy.sh release` refuses a root that does not. The rolled-back checkout's
+      // apply publishes it too — which is to say a rollback to a commit from before
+      // that output existed is refused, and has to be reconciled by hand.
       deployment_plan: {
-        api: { service_name: 'fss-prod-api', declared_desired_count: 2 },
-        worker: { service_name: 'fss-prod-worker', declared_desired_count: 1 },
+        api: {
+          service_name: 'fss-prod-api',
+          declared_desired_count: 2,
+          task_definition: definitionArn('api', 7),
+          image: image('api'),
+        },
+        worker: {
+          service_name: 'fss-prod-worker',
+          declared_desired_count: 1,
+          task_definition: definitionArn('worker', 4),
+          image: image('worker'),
+        },
         bootstrap: false,
       },
       worker_log_group_name: '/fss/fss-prod/worker',
@@ -625,6 +674,28 @@ describe('rollback.sh refuses in one FAIL line, before anything is written', () 
     expectRefusal(unknown, unanswered, [`does not hold ${'f'.repeat(8)}, the merge of PR 272`, 'fetch origin there']);
     expect(unknown.calls()).toEqual([]);
     // The same world after the boundary plans.
+    expect(rollback(world()).code).toBe(0);
+  });
+
+  it('refuses a target that predates the applied-revision release, before reading production', () => {
+    // Lane RS-2 (PR 310). `deploy.sh release` holds every running task to the revision
+    // the apply registered and refuses a root that cannot name it, so a target from
+    // before that output would apply cleanly and *then* be refused — production left on
+    // a half-rolled-back plan. It is refused here, before the first AWS call.
+    //
+    // The vacuous-pass trap: a refusal that refused everything would also pass this. So
+    // the same world with the output present plans, below, and the message is the one
+    // an operator is meant to act on rather than any failure.
+    const older = world({ publishesAppliedRevision: false });
+    const run = rollback(older, ['--apply']);
+    expectRefusal(older, run, [
+      'does not publish deployment_plan.<service>.task_definition',
+      'this target predates the applied-revision release',
+      'a rollback across it is a hand reconciliation (release.md: recovery is a forward fix or a restore)',
+    ]);
+    expect(older.calls(), 'nothing is read from production').toEqual([]);
+    // The positive control: a target that publishes it plans, and this is not a second
+    // SHA boundary — the file in the target checkout is what decides.
     expect(rollback(world()).code).toBe(0);
   });
 

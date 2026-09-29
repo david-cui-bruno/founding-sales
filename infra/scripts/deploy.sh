@@ -30,23 +30,79 @@
 #   * Rolling (no flag). The apply has pointed both services at the task definitions it
 #     registered and ECS is rolling them. Left: the declared count on each (one
 #     update-service each, no forced second rollout), one wait for both, and the running
-#     digests. No one-off task: the schema does not move, the database users are what the
+#     digests — the same `release_start_both` the schema path now uses. No one-off task: the schema does not move, the database users are what the
 #     last schema release ensured, and the production smoke answers what `fss verify`
 #     would. A release that moves the schema and forgot the flag is caught by the running
 #     digests: its tasks refuse the schema, the circuit breaker rolls them back, the
 #     service is stable, and the digest it runs is not this release's.
-#   * --schema-change (lane g70). Every declared range from migration 0006 on is a strict
-#     {N,N}, so there is no version that straddles a schema change: stop.sh took both
-#     services to zero before the apply (the apply cannot restart them: `ignore_changes =
-#     [desired_count]`). Step 1 asserts it and refuses, naming the stop, and does not scale
-#     them itself: by now the apply has pointed them at definitions that refuse the current
-#     schema, and a quiet stop here would make the wrong order look right. Then `fss
-#     migrate` and `fss admin database-users ensure` on the migration task (idempotent, on
-#     every schema release and bootstrap: it keeps the credential in app-runtime-database
-#     and the PostgreSQL role the same fact), `fss verify` on the operations task, the
-#     worker and then the API to their declared counts, the running digests, and `fss
-#     verify` again. A bootstrap (bootstrap=true) is an empty database, the largest schema
-#     change there is, so it needs the flag. The database never rolls back.
+#   * --schema-change (lane g70; shortened by lane RS-2). Every declared range from
+#     migration 0006 on is a strict {N,N}, so there is no version that straddles a schema
+#     change: stop.sh took both services to zero before the apply (the apply cannot
+#     restart them: `ignore_changes = [desired_count]`). Step 1 asserts it and refuses,
+#     naming the stop, and does not scale them itself: by now the apply has pointed them
+#     at definitions that refuse the current schema, and a quiet stop here would make the
+#     wrong order look right. Then, in six steps:
+#
+#       1/6  both services are already at zero, or this refuses and names the stop; and
+#            each is already on the revision this apply registered (the root's
+#            deployment_plan output), that revision is ACTIVE, its image is this
+#            release's digest and its schema range is the apply's, or this refuses and
+#            names the apply;
+#       2/6  `fss release-prepare` on the migration task: `fss migrate` and then
+#            `fss admin database-users ensure`, in that order, in ONE task (idempotent,
+#            on every schema release and bootstrap: it keeps the credential in
+#            app-runtime-database and the PostgreSQL role the same fact);
+#       3/6  `fss verify` on the operations task — the runtime credential against the new
+#            schema, before anything starts;
+#       4/6  the worker and the API to their declared counts, back to back, then ONE
+#            `wait services-stable` naming both;
+#       5/6  the rollout, polled until both services have finished it: one PRIMARY
+#            deployment ECS itself calls COMPLETED, on that applied revision, at the
+#            declared count with nothing pending, every running task carrying this
+#            release's digest;
+#       6/6  `fss verify` again, against what is deployed.
+#
+#     A failure at 2/6 or 3/6 leaves both services at zero and says so: nothing is
+#     serving and nothing starts by itself.
+#
+#     A bootstrap (bootstrap=true) is an empty database, the largest schema change there
+#     is, so it needs the flag. The database never rolls back.
+#
+#     ## What lane RS-2 changed, and why (29 September 2026)
+#
+#     Measured on the 0022 release: the API was unreachable for 8.7 minutes, and almost
+#     none of it was work. Three sequential one-off tasks cost about a minute each for
+#     sub-second work — RunTask start latency, three times — and the services were
+#     started one after the other, each with its declared count waited on and then a
+#     second, forced rollout waited on again: four waits for two services.
+#
+#     Two one-off tasks now, not three, because `migrate` and `database-users ensure`
+#     want the same identity, the same connection and the same moment. `verify` stays
+#     its own task: it needs the *runtime* secret, which the migration definition
+#     deliberately does not carry.
+#
+#     The forced second deployment is gone. It never had a stated reason: it arrived with
+#     the first version of this script (04933030) undocumented, and lane g80 dropped it
+#     from the rolling path with the reason that applies here too — "the apply that
+#     registered the task definitions has already updated the service, and a count change
+#     starts no second rollout" (docs/archive/decisions/g80-app-only-deploy-and-task-records.md,
+#     and the same fact in infra/modules/cluster/main.tf beside `ignore_changes`). On this
+#     path the service sits at desired count 0 pointing at the definition the apply
+#     registered, so `--desired-count N` starts that definition's tasks; forcing a second
+#     rollout stopped tasks that were already the release's and started them again. The
+#     guard is not the forced rollout, it is `release_require_release_running` after the
+#     wait. The PR 310 review found that read too weak to carry that weight on its own:
+#     `wait services-stable` returns on one deployment with running == desired and does
+#     NOT require `rolloutState=COMPLETED`, and a digest cannot tell two revisions of one
+#     image apart, so an infrastructure-only release could pass after a circuit-breaker
+#     rollback. So step 1 reads the revision the apply registered, before the schema
+#     moves, and step 5 polls until ECS itself calls the rollout COMPLETED on it. The
+#     rolling path carries the same ARN into its own read (PR 310 second review): an
+#     infrastructure-only release is exactly where two revisions share a digest.
+#
+#     Every step line carries a UTC timestamp, and the last line is `release-timing:`,
+#     which also goes into release-deploy.txt, so the next release is measured rather
+#     than remembered.
 #   * The running digests (lane g80). `wait services-stable` says one deployment has the
 #     tasks it wants, not which one, and a rolled-back service is stable. So every running
 #     task of both services is read and held to the release's digest and the declared
@@ -336,47 +392,72 @@ deploy_release() {
   rehearsal_log "services $WORKER_SERVICE (-> $WORKER_TARGET) and $API_SERVICE (-> $API_TARGET); bootstrap=$BOOTSTRAP"
 
   RUNNING_DIGESTS=unchecked
+  # Empty on the rolling path, which starts from a running service whose family may
+  # The revision this apply registered for each service, from the apply's own output
+  # (`deployment_plan`, read in release_read_root) rather than from anything ECS can be
+  # asked afterwards. Both paths, because a completed rollback to a revision with the
+  # same image digest is invisible to a digest comparison on either of them
+  # (PR 310 second review, P1), and a release with neither is refused rather than
+  # quietly weakened (PR 310 third review, P1).
+  WORKER_APPLIED_DEFINITION="$(release_json_path "${DEPLOYMENT_PLAN:-}" "worker.task_definition")"
+  API_APPLIED_DEFINITION="$(release_json_path "${DEPLOYMENT_PLAN:-}" "api.task_definition")"
+  release_require_applied_arns
+  # Where the rollout poll leaves its last answer about the API service, so the timing
+  # line reads its events out of a call that was made anyway.
+  RELEASE_API_SERVICES_FILE="$(rehearsal_report_dir)/release-api-service.json"
+  : >"$RELEASE_API_SERVICES_FILE"
   local deployed
+  # Every instant the timing line is computed from, as epoch seconds. `n/a` is what a
+  # part of the release that did not happen on this path reports (lane RS-2).
+  RELEASE_T_START="$(release_now)"
+  RELEASE_T_TASKS_START=n/a
+  RELEASE_T_TASKS_END=n/a
+  RELEASE_T_SERVICES_START=n/a
+  RELEASE_T_STABLE=n/a
   if [ "$SCHEMA_CHANGE" = "1" ]; then
-    rehearsal_log "1/7 stop-during-migration: both services must already be at zero ($([ "$BOOTSTRAP" = "true" ] && echo "the apply created them there" || echo "stop.sh put them there before the apply"))"
+    release_step "1/6 stop-during-migration: both services at zero ($([ "$BOOTSTRAP" = "true" ] && echo "the apply created them there" || echo "stop.sh put them there before the apply")), on the definitions the apply registered"
     release_require_service_stopped "$ENVIRONMENT" "$CLUSTER_ARN" "$API_SERVICE" || release_refuse_not_stopped "$API_SERVICE"
     release_require_service_stopped "$ENVIRONMENT" "$CLUSTER_ARN" "$WORKER_SERVICE" || release_refuse_not_stopped "$WORKER_SERVICE"
+    # The same step, because it is the same subject: what the stop and the apply left
+    # behind. Read before the migration, so a skipped or half-finished apply is a
+    # refusal that has cost nothing, rather than a schema that has already moved.
+    release_require_applied_definitions
 
-    rehearsal_log "2/7 fss migrate"
-    one_off migrate "$MIGRATION_TASK_DEFINITION" migration migrate --report /tmp/fss-migrate.json
+    # One task, two steps. `migrate` then `admin database-users ensure`, in that order,
+    # under one RunTask start: the tool runs them back to back on the one migration
+    # session and writes each step's own report, unchanged in shape.
+    release_step "2/6 fss release-prepare (fss migrate, then fss admin database-users ensure, in one migration task)"
+    RELEASE_T_TASKS_START="$(release_now)"
+    one_off release-prepare "$MIGRATION_TASK_DEFINITION" migration release-prepare \
+      --migrate-report /tmp/fss-migrate.json --users-report /tmp/fss-users.json \
+      || release_prestart_failed "fss release-prepare"
 
-    rehearsal_log "3/7 fss admin database-users ensure"
-    one_off database-users "$MIGRATION_TASK_DEFINITION" migration admin database-users ensure --report /tmp/fss-users.json
+    # Not folded into the task above: `verify` connects as the *runtime* identity, whose
+    # secret the migration task definition deliberately does not carry, and a pass here
+    # is what says the credential the services are about to use reaches the new schema.
+    release_step "3/6 fss verify (schema, before the services start)"
+    one_off verify-schema "$OPERATIONS_TASK_DEFINITION" operations verify --report /tmp/fss-verify-schema.json \
+      || release_prestart_failed "fss verify (schema)"
+    RELEASE_T_TASKS_END="$(release_now)"
 
-    rehearsal_log "4/7 fss verify (schema, before the services start)"
-    one_off verify-schema "$OPERATIONS_TASK_DEFINITION" operations verify --report /tmp/fss-verify-schema.json
+    release_step "4/6 $WORKER_SERVICE to $WORKER_TARGET and $API_SERVICE to $API_TARGET together, then one wait"
+    release_start_both
 
-    rehearsal_log "5/7 worker to $WORKER_TARGET"
-    release_start "$WORKER_SERVICE" "$WORKER_TARGET"
-    rehearsal_log "6/7 API to $API_TARGET"
-    release_start "$API_SERVICE" "$API_TARGET"
-
-    rehearsal_log "6/7 the running tasks of $WORKER_SERVICE and $API_SERVICE, against the release digests"
+    release_step "5/6 the running tasks of $WORKER_SERVICE and $API_SERVICE, against the release digests"
     release_require_release_running
 
-    rehearsal_log "7/7 fss verify (deployed)"
+    release_step "6/6 fss verify (deployed)"
     one_off verify-deployed "$OPERATIONS_TASK_DEFINITION" operations verify --report /tmp/fss-verify-deployed.json
-    deployed='migrate, users, verify, worker, API, running digests, verify'
+    deployed='release-prepare (migrate, users), verify, worker and API together, running digests, verify'
   else
-    rehearsal_log "1/3 one rolling deployment: $WORKER_SERVICE to $WORKER_TARGET and $API_SERVICE to $API_TARGET, on the task definitions the apply registered"
-    release_aws "$ENVIRONMENT" ecs update-service --cluster "$CLUSTER_ARN" --service "$WORKER_SERVICE" --desired-count "$WORKER_TARGET" \
-      --query 'service.[serviceName,desiredCount,taskDefinition]' --output text
-    release_aws "$ENVIRONMENT" ecs update-service --cluster "$CLUSTER_ARN" --service "$API_SERVICE" --desired-count "$API_TARGET" \
-      --query 'service.[serviceName,desiredCount,taskDefinition]' --output text
+    release_step "1/2 one rolling deployment: $WORKER_SERVICE to $WORKER_TARGET and $API_SERVICE to $API_TARGET, on the task definitions the apply registered, then one wait"
+    release_start_both
 
-    rehearsal_log "2/3 wait until both are stable"
-    release_aws "$ENVIRONMENT" ecs wait services-stable --cluster "$CLUSTER_ARN" --services "$WORKER_SERVICE" "$API_SERVICE" \
-      || deploy_fail "$WORKER_SERVICE and $API_SERVICE did not both become stable; read their events with aws ecs describe-services."
-
-    rehearsal_log "3/3 the running tasks of $WORKER_SERVICE and $API_SERVICE, against the release digests"
+    release_step "2/2 the running tasks of $WORKER_SERVICE and $API_SERVICE, against the release digests"
     release_require_release_running
     deployed='one rolling deployment of the worker and the API, running digests'
   fi
+  RELEASE_TIMING="$(release_timing_line)"
 
   # The read-back, only with --release-record: the record stored before the plan
   # (record.sh put) is there for the deployment now running.
@@ -393,8 +474,11 @@ deploy_release() {
   fi
 
   rehearsal_write_report "release-deploy.txt" \
-    "prefix=$PREFIX environment=$ENVIRONMENT schema_change=$SCHEMA_CHANGE bootstrap=$BOOTSTRAP worker=$WORKER_TARGET api=$API_TARGET api_digest=${API_DIGEST:-unset} worker_digest=$WORKER_DIGEST running_digests=$RUNNING_DIGESTS release_record=$RELEASE_RECORD_OUTCOME"
+    "prefix=$PREFIX environment=$ENVIRONMENT schema_change=$SCHEMA_CHANGE bootstrap=$BOOTSTRAP worker=$WORKER_TARGET api=$API_TARGET api_digest=${API_DIGEST:-unset} worker_digest=$WORKER_DIGEST running_digests=$RUNNING_DIGESTS release_record=$RELEASE_RECORD_OUTCOME
+$RELEASE_TIMING"
   rehearsal_log "deployed: $deployed${RELEASE_RECORD:+, release record}"
+  # Last, so it is the line an operator's eye lands on, and in the report beside it.
+  rehearsal_log "$RELEASE_TIMING"
 }
 
 # one_off <step> <task definition> <container> <command word>...
@@ -410,12 +494,330 @@ one_off() {
     --secret-arn "$secret_arn" --log-group "$LOG_GROUP" --log-stream-prefix "$container" -- "$@"
 }
 
-# release_start <service> <count>: the declared count, then one forced deployment, each waited on.
-release_start() {
-  release_aws "$ENVIRONMENT" ecs update-service --cluster "$CLUSTER_ARN" --service "$1" --desired-count "$2"
-  release_aws "$ENVIRONMENT" ecs wait services-stable --cluster "$CLUSTER_ARN" --services "$1"
-  release_aws "$ENVIRONMENT" ecs update-service --cluster "$CLUSTER_ARN" --service "$1" --force-new-deployment
-  release_aws "$ENVIRONMENT" ecs wait services-stable --cluster "$CLUSTER_ARN" --services "$1"
+# ---------------------------------------------------------------------------
+# Starting the services, and measuring the interruption (lane RS-2)
+# ---------------------------------------------------------------------------
+
+# Both services to their declared counts, back to back, and ONE wait naming both.
+#
+# This is now the whole of starting a release, on both paths. Before lane RS-2 the
+# schema path started the worker, waited, forced a second rollout of it, waited again,
+# and only then began the same four calls for the API — so the API's tasks were not
+# asked for until the worker had been through two rollouts. On the 0022 release that
+# was four and a half of the 8.7 minutes David felt, for a worker start that does not
+# gate the API at all.
+#
+# Neither the order nor the forced rollout was load-bearing:
+#
+#   * The worker and the API are independent at start-up. Both refuse a schema outside
+#     their declared range and exit 12, and the ranges are the same strict {N,N}; if one
+#     refuses, the other does too, and the circuit breaker rolls both back.
+#   * The forced deployment is gone. `terraform apply` updated each service's
+#     `task_definition` while it sat at desired count 0 (infra/modules/cluster/main.tf:
+#     "An apply that changes a task definition updates the service in place"), so
+#     `--desired-count N` starts the definition the apply registered. Lane g80 dropped
+#     it from the rolling path for exactly this reason
+#     (docs/archive/decisions/g80-app-only-deploy-and-task-records.md) and it has never
+#     had a stated reason on this one.
+#   * What proves the release is running is not a rollout but the read after the wait:
+#     `release_require_release_running` polls both services until ECS itself calls each
+#     rollout COMPLETED on the revision this apply registered, at the declared count with
+#     nothing pending and every task carrying this release's digest. The digest alone was
+#     not enough — two revisions of one image share it — which is why the ARN from
+#     `deployment_plan` is carried into the check on both paths (PR 310 reviews).
+release_start_both() {
+  release_aws "$ENVIRONMENT" ecs update-service --cluster "$CLUSTER_ARN" --service "$WORKER_SERVICE" --desired-count "$WORKER_TARGET" \
+    --query 'service.[serviceName,desiredCount,taskDefinition]' --output text
+  release_aws "$ENVIRONMENT" ecs update-service --cluster "$CLUSTER_ARN" --service "$API_SERVICE" --desired-count "$API_TARGET" \
+    --query 'service.[serviceName,desiredCount,taskDefinition]' --output text
+  RELEASE_T_SERVICES_START="$(release_now)"
+
+  release_aws "$ENVIRONMENT" ecs wait services-stable --cluster "$CLUSTER_ARN" --services "$WORKER_SERVICE" "$API_SERVICE" \
+    || deploy_fail "$WORKER_SERVICE and $API_SERVICE did not both become stable; read their events with aws ecs describe-services."
+  RELEASE_T_STABLE="$(release_now)"
+}
+
+# Before anything is scaled or migrated, on both paths: the apply named its revisions.
+#
+# A root that predates `deployment_plan`.<service>.task_definition leaves these empty,
+# and an empty applied ARN means the read after the wait falls back to the digest and
+# the count — which is exactly the check a same-digest rollback slips through. Degrading
+# quietly is the wrong answer to "this root is old": the release refuses, and says what
+# to do (PR 310 third review, P1).
+#
+# A dry run plans it instead. It changes nothing, it is what an operator runs to see the
+# commands, and a fixture-less dry run has no output to read at all.
+release_require_applied_arns() {
+  local missing=''
+  [ -n "$WORKER_APPLIED_DEFINITION" ] || missing="$missing $WORKER_SERVICE"
+  [ -n "$API_APPLIED_DEFINITION" ] || missing="$missing $API_SERVICE"
+  [ -n "$missing" ] || return 0
+  if rehearsal_dry_run; then
+    rehearsal_plan "refuse: the root's deployment_plan output names no task definition for$missing"
+    return 0
+  fi
+  echo "FAIL: the root's deployment_plan output names no task definition for$missing, so nothing here knows" >&2
+  echo "      which revision the apply registered. Without it a service that ECS rolled back to the previous" >&2
+  echo "      revision of the same image reads as a finished release, on either path." >&2
+  echo "      Apply the current root first — infra/modules/cluster puts <service>.task_definition, image and" >&2
+  echo "      schema range into deployment_plan — and then run this again." >&2
+  exit 1
+}
+
+# Before the migration: each service is on the revision *this apply* registered, and
+# that revision is this release.
+#
+# The apply's own output names the revision (`deployment_plan`.<service>.task_definition,
+# with the image and the schema range it was built with). Only `desired_count` is ignored
+# on either service, so an apply that registers a revision also points the service at it,
+# even at count zero — and nothing that can be asked of ECS afterwards recovers *which*
+# revision that was.
+#
+# The family's newest ACTIVE revision is deliberately not the test (PR 310 second review,
+# P1). It is wrong in both directions: a skipped apply that registered nothing leaves the
+# old revision as the newest and passes, and `deploy.sh ci` registers a revision before it
+# updates the service, so a correct hand apply would be refused while a CI deploy was in
+# flight.
+#
+# Four things, per service, all before anything is migrated, where a refusal costs
+# nothing: the service points at the apply's revision; that revision is ACTIVE; its image
+# is the digest this release names; and the schema range it declares is the one the apply
+# was made with. The last two are what turn "an apply ran" into "the right apply ran".
+release_require_applied_definitions() {
+  if rehearsal_dry_run; then
+    rehearsal_plan "aws ecs describe-services --cluster $CLUSTER_ARN --services $WORKER_SERVICE $API_SERVICE --output json (the revision each points at)"
+    rehearsal_plan "aws ecs describe-task-definition --task-definition <the apply's revision of each> --output json"
+    rehearsal_plan "refuse unless each service is on the revision deployment_plan names, that revision is ACTIVE, its image is this release's digest, and its schema range is the apply's"
+    return 0
+  fi
+  # bash 3.2 has no `${name^^}` and no associative array, so the pair is spelled out.
+  local service name applied digest wanted_min wanted_max answer current
+  for service in worker api; do
+    if [ "$service" = worker ]; then
+      name=$WORKER_SERVICE applied=$WORKER_APPLIED_DEFINITION digest=$WORKER_DIGEST
+    else
+      name=$API_SERVICE applied=$API_APPLIED_DEFINITION digest=$API_DIGEST
+    fi
+    wanted_min="$(release_json_path "${DEPLOYMENT_PLAN:-}" "$service.schema_min")"
+    wanted_max="$(release_json_path "${DEPLOYMENT_PLAN:-}" "$service.schema_max")"
+
+    answer="$(release_aws "$ENVIRONMENT" ecs describe-services --cluster "$CLUSTER_ARN" --services "$name" --output json)" \
+      || deploy_fail "ECS did not describe $name"
+    current="$(release_json_path "$answer" services.0.taskDefinition)"
+    if [ -z "$current" ]; then
+      deploy_fail "ECS does not say which task definition $name runs, so the apply cannot be confirmed and nothing will be migrated."
+    fi
+    if [ "$current" != "$applied" ]; then
+      echo "FAIL: $name is on $current, and this apply registered $applied." >&2
+      echo "      A schema release migrates only against the definitions its own apply put on the services." >&2
+      echo "      The plan in this root and the cloud disagree: apply this root again (and if the apply did run," >&2
+      echo "      make the plan from what production runs — infra/scripts/deploy.sh current $PREFIX), then run this again." >&2
+      exit 1
+    fi
+
+    answer="$(release_aws "$ENVIRONMENT" ecs describe-task-definition --task-definition "$applied" --output json)" \
+      || deploy_fail "ECS did not describe $applied, the revision this apply registered for $name"
+    FSS_JSON="$answer" FSS_NAME="$name" FSS_ARN="$applied" FSS_CONTAINER="$service" FSS_DIGEST="$digest" \
+      FSS_MIN="$wanted_min" FSS_MAX="$wanted_max" python3 - <<'PY' || exit 1
+# release-require-applied-definition
+import json, os, sys
+env = os.environ
+name, arn, container = env["FSS_NAME"], env["FSS_ARN"], env["FSS_CONTAINER"]
+definition = (json.loads(env["FSS_JSON"] or "{}") or {}).get("taskDefinition") or {}
+failures = []
+status = definition.get("status")
+if status != "ACTIVE":
+    failures.append("ECS reports it as {}, not ACTIVE".format(status or "no status"))
+found = next((c for c in definition.get("containerDefinitions") or [] if c.get("name") == container), None)
+if found is None:
+    failures.append("it has no container named {}".format(container))
+else:
+    image, digest = str(found.get("image") or ""), env["FSS_DIGEST"]
+    # A release names one image by digest; the revision the apply registered must be it.
+    if digest and not image.endswith("@" + digest):
+        failures.append("its {} container runs {} and this release is {}".format(container, image or "<none>", digest))
+    variables = dict((item.get("name"), item.get("value")) for item in found.get("environment") or [])
+    for key, wanted in (("FSS_SCHEMA_MIN", env["FSS_MIN"]), ("FSS_SCHEMA_MAX", env["FSS_MAX"])):
+        if not wanted:
+            continue
+        if variables.get(key) != wanted:
+            failures.append("it declares {}={} and this apply was made with {}".format(
+                key, variables.get(key) or "<unset>", wanted))
+if failures:
+    print("FAIL: {} runs {}, and that revision is not this release:".format(name, arn), file=sys.stderr)
+    for failure in failures:
+        print("      " + failure, file=sys.stderr)
+    print("      Nothing has been migrated. Apply this root again with this release's images, then run this again.", file=sys.stderr)
+    sys.exit(1)
+PY
+    rehearsal_log "$name is on $applied, the revision this apply registered, running $digest for schema $wanted_min-$wanted_max"
+  done
+}
+
+# A step before either service starts failed, and `set -euo pipefail` would otherwise
+# end the run with only the task runner's own message (PR 310 review, P2). Both services
+# are still at zero, which is the one thing an operator needs told: nothing is serving,
+# and nothing will start by itself.
+release_prestart_failed() {
+  echo "FAIL: $1 did not succeed, and $WORKER_SERVICE and $API_SERVICE are both still at zero." >&2
+  echo "      services remain stopped; repair and rerun release-prepare, or restore" >&2
+  echo "      (docs/greenfield/runbooks/restore.md). The database never rolls back, so a migration that" >&2
+  echo "      committed stays committed: a forward repair is a new digest, deployed again with --schema-change." >&2
+  exit 1
+}
+
+# Epoch seconds, UTC. One place, so every mark is the same clock.
+release_now() { date -u +%s; }
+
+# A step line with the instant it started, so a release log can be read as a timeline
+# rather than a list. `rehearsal_log` is left alone: every other script shares it.
+release_step() { rehearsal_log "$(date -u +%Y-%m-%dT%H:%M:%SZ) $*"; }
+
+# release_elapsed <from> <to>: whole seconds, or `n/a` when either mark was never taken.
+release_elapsed() {
+  case "$1$2" in *n/a*) echo 'n/a'; return 0 ;; esac
+  echo $(( $2 - $1 ))
+}
+
+# The interruption an operator actually feels: from the instant the API's last task went
+# away to the instant it registered its targets again.
+#
+# The other three parts of the timing line come from this script's own clock. This one
+# cannot: the stop happened in stop.sh, before the apply, in another process. So
+#
+#   * the start is stop.sh's own marker (release-stop-instant.txt) when this run can see
+#     one that names this root (canonicalised: the same root reaches stop.sh and this
+#     script spelled two ways) and this prefix, and otherwise the newest "has stopped N
+#     running tasks" event that is before this release's scale-up and inside the half
+#     hour a release fits in;
+#   * the end is the newest "registered N targets" event that is on the far side of this
+#     release's own scale-up *and* belongs to the deployment this release created. The
+#     poll's capture names that PRIMARY deployment and when ECS created it; a
+#     registration from before the scale-up cannot be this release finishing, however
+#     recent it looks (PR 310 second and third reviews, P2);
+#   * anything that does not make a pair — no marker and no event, no registration
+#     attributable to this deployment, a start that is not before the end, or a marker
+#     that names another release — is `unknown` (PR 310 review, P2).
+#
+# It makes no AWS call of its own: the events come out of the copy the last read of the
+# rollout poll left behind, so nothing is added to the release's wall clock. And it never
+# fails the deploy. This line is a measurement, not a gate.
+release_api_unreachable_seconds() {
+  if rehearsal_dry_run; then echo 'n/a'; return 0; fi
+  if [ "$SCHEMA_CHANGE" != "1" ]; then echo 'n/a'; return 0; fi
+  if [ ! -s "$RELEASE_API_SERVICES_FILE" ]; then echo 'unknown'; return 0; fi
+  # The marker counts only when it names this release: stop.sh writes the root and the
+  # prefix beside the instant, which is the whole identity there is before the apply.
+  local marker='' marker_file marker_line
+  marker_file="$(rehearsal_report_dir)/release-stop-instant.txt"
+  if [ -r "$marker_file" ]; then
+    marker_line="$(grep -F "root=$(release_canonical_path "$ROOT_DIRECTORY") prefix=$PREFIX " "$marker_file" | tail -n 1)"
+    marker="$(printf '%s' "$marker_line" | sed -n 's/.*api_stopped_at=\([0-9][0-9]*\).*/\1/p')"
+  fi
+  FSS_FILE="$RELEASE_API_SERVICES_FILE" FSS_MARKER="$marker" FSS_SCALED_AT="$RELEASE_T_SERVICES_START" \
+    FSS_APPLIED="$API_APPLIED_DEFINITION" python3 - <<'PY' 2>/dev/null || echo 'unknown'
+# release-api-unreachable
+import json, os, re, sys
+from datetime import datetime
+
+# ECS events are its clock and the marks are this machine's; both are UTC epochs, and a
+# few seconds of skew cannot change a number printed in whole seconds. Further apart than
+# this is not skew, it is a different release, and a wrong number is worse than none.
+SAME_RELEASE_SECONDS = 6 * 60 * 60
+# ECS timestamps an event when it writes it, and its clock is not this machine. Small,
+# because the whole point is that the registration is on the far side of the scale-up.
+SLACK_SECONDS = 15
+# Without a marker, how far back a "has stopped" event may be and still be this
+# release's. A stop, an apply and two one-off tasks fit inside half an hour; anything
+# older is a different outage and `unknown` is the honest answer.
+STOP_WINDOW_SECONDS = 30 * 60
+
+def instant(raw):
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    return datetime.fromisoformat(str(raw).strip().replace("Z", "+00:00")).timestamp()
+
+def answer(value):
+    print(value)
+    sys.exit(0)
+
+try:
+    scaled_at = float(os.environ["FSS_SCALED_AT"])
+except (KeyError, ValueError):
+    answer("unknown")
+
+try:
+    with open(os.environ["FSS_FILE"], encoding="utf-8") as handle:
+        services = (json.load(handle) or {}).get("services") or []
+    service = (services[0] if services else {}) or {}
+    # The deployment this release created, from the same capture: its revision is the one
+    # the apply registered, and ECS records when it created it. A registration older than
+    # that belongs to some other rollout, however recent it looks.
+    applied = os.environ.get("FSS_APPLIED") or ""
+    primary = next((d for d in service.get("deployments") or [] if d.get("status") == "PRIMARY"), None)
+    if primary is None:
+        answer("unknown")
+    if applied and primary.get("taskDefinition") != applied:
+        answer("unknown")
+    since = primary.get("createdAt")
+    if since is None:
+        answer("unknown")
+    deployment_at = instant(since)
+    # Newest first, which is the order ECS answers in.
+    events = service.get("events") or []
+    stopped = registered = None
+    for event in events:
+        message, when = str(event.get("message") or ""), event.get("createdAt")
+        if when is None:
+            continue
+        at = instant(when)
+        # Not "recent enough": on the far side of this release's own scale-up, and
+        # belonging to the deployment this release created. A registration from before
+        # the scale-up cannot be this release finishing, whatever else is true of it
+        # (PR 310 third review, P2).
+        if (registered is None
+                and at >= scaled_at - SLACK_SECONDS
+                and at >= deployment_at - SLACK_SECONDS
+                and re.search(r"registered [0-9]+ target", message)):
+            registered = at
+        # The fallback start, used only when no marker names this release: a stop from
+        # before the scale-up and inside the window a release fits in.
+        if (stopped is None
+                and scaled_at - STOP_WINDOW_SECONDS <= at < scaled_at
+                and re.search(r"has stopped [0-9]+ running task", message)):
+            stopped = at
+    marker = os.environ.get("FSS_MARKER") or ""
+    if marker.isdigit():
+        # stop.sh itself, which is the exact instant. The shell already required the
+        # marker to name this root and this prefix; this is the last sanity check, that
+        # it is before the scale-up and of the same day's work.
+        at = float(marker)
+        if at < scaled_at and scaled_at - at <= SAME_RELEASE_SECONDS:
+            stopped = at
+    if stopped is None or registered is None or registered <= stopped:
+        answer("unknown")
+    answer(str(int(round(registered - stopped))))
+except Exception:
+    answer("unknown")
+PY
+}
+
+# A duration as the timing line prints it: `42s` for a number, and the bare word for
+# `n/a` or `unknown`, because `unknowns` reads as a count of unknowns.
+release_seconds() {
+  case "$1" in
+    ''|*[!0-9-]*) printf '%s' "$1" ;;
+    *) printf '%ss' "$1" ;;
+  esac
+}
+
+# The one line this release is judged on next time.
+release_timing_line() {
+  printf 'release-timing: stop_to_migrate=%s migrate_tasks=%s services_start_to_stable=%s api_unreachable≈%s' \
+    "$(release_seconds "$(release_elapsed "$RELEASE_T_START" "$RELEASE_T_TASKS_START")")" \
+    "$(release_seconds "$(release_elapsed "$RELEASE_T_TASKS_START" "$RELEASE_T_TASKS_END")")" \
+    "$(release_seconds "$(release_elapsed "$RELEASE_T_SERVICES_START" "$RELEASE_T_STABLE")")" \
+    "$(release_seconds "$(release_api_unreachable_seconds)")"
 }
 
 release_refuse_not_stopped() { # release_refuse_not_stopped <service>
@@ -429,20 +831,69 @@ release_refuse_not_stopped() { # release_refuse_not_stopped <service>
 }
 
 # Both services read before this fails, so one run names everything that is not this release.
+# How long the read below will wait for a rollout to finish before giving up: the ECS
+# waiter has already returned by then, and this is the margin for health checks and the
+# target group's registration. Overridable so the offline suite does not sleep.
+RELEASE_SETTLE_READS=${FSS_RELEASE_SETTLE_READS:-40}
+RELEASE_SETTLE_SECONDS=${FSS_RELEASE_SETTLE_SECONDS:-15}
+
 release_require_release_running() {
-  local refused=0
-  release_require_running_digest "$ENVIRONMENT" "$CLUSTER_ARN" "$WORKER_SERVICE" worker "$WORKER_DIGEST" "$WORKER_TARGET" || refused=1
-  release_require_running_digest "$ENVIRONMENT" "$CLUSTER_ARN" "$API_SERVICE" api "$API_DIGEST" "$API_TARGET" || refused=1
-  if [ "$refused" -ne 0 ]; then
-    echo "FAIL: the services are stable and not running this release; see the lines above for what they run instead." >&2
-    if [ "$SCHEMA_CHANGE" != "1" ]; then
-      echo "      A release that adds a migration is a schema-change release: its tasks refuse the current schema and the" >&2
-      echo "      circuit breaker rolls them back. That order is stop.sh, the apply, then this command with --schema-change." >&2
-    fi
-    exit 1
-  fi
-  RUNNING_DIGESTS=verified
-  if rehearsal_dry_run; then RUNNING_DIGESTS=planned; fi
+  local reads=1 verdict
+  while :; do
+    verdict=0
+    release_read_release_running || verdict=$?
+    case "$verdict" in
+      0)
+        RUNNING_DIGESTS=verified
+        if rehearsal_dry_run; then RUNNING_DIGESTS=planned; fi
+        return 0
+        ;;
+      # 3 alone: nothing is wrong that finishing cannot mend, and neither service is
+      # wrong in a way it cannot come back from. Read it again.
+      3)
+        if [ "$reads" -ge "$RELEASE_SETTLE_READS" ]; then
+          echo "FAIL: $WORKER_SERVICE and $API_SERVICE did not both finish their rollout within $((RELEASE_SETTLE_READS * RELEASE_SETTLE_SECONDS))s of becoming stable." >&2
+          echo "      The last read is above. The services' own events:" >&2
+          release_service_events "$ENVIRONMENT" "$CLUSTER_ARN" "$WORKER_SERVICE"
+          release_service_events "$ENVIRONMENT" "$CLUSTER_ARN" "$API_SERVICE"
+          exit 1
+        fi
+        rehearsal_log "$(date -u +%Y-%m-%dT%H:%M:%SZ) the rollout has not finished (read $reads of $RELEASE_SETTLE_READS); reading again in ${RELEASE_SETTLE_SECONDS}s"
+        # Never `[ … ] && sleep`: `set -euo pipefail` is on, and a false test as the
+        # whole statement would end the deploy in the middle of a healthy rollout.
+        if [ "$RELEASE_SETTLE_SECONDS" -gt 0 ]; then sleep "$RELEASE_SETTLE_SECONDS"; fi
+        reads=$((reads + 1))
+        ;;
+      *)
+        echo "FAIL: the services are stable and not running this release; see the lines above for what they run instead." >&2
+        if [ "$SCHEMA_CHANGE" != "1" ]; then
+          echo "      A release that adds a migration is a schema-change release: its tasks refuse the current schema and the" >&2
+          echo "      circuit breaker rolls them back. That order is stop.sh, the apply, then this command with --schema-change." >&2
+        fi
+        exit 1
+        ;;
+    esac
+  done
+}
+
+# One read of both services. 0 both are this release; 3 neither is wrong and at least one
+# has not finished; 1 something waiting will not mend.
+#
+# Both are always read before a verdict, so one run names everything that is not this
+# release rather than the first thing it met. On a schema release each is held to the
+# task definition the apply registered as well as to the digest: `wait services-stable`
+# returns on one deployment with running == desired and does not require
+# `rolloutState=COMPLETED`, and two revisions of one image share a digest (PR 310, P1).
+release_read_release_running() {
+  local worker=0 api=0
+  release_require_running_digest "$ENVIRONMENT" "$CLUSTER_ARN" "$WORKER_SERVICE" worker "$WORKER_DIGEST" "$WORKER_TARGET" \
+    "$WORKER_APPLIED_DEFINITION" || worker=$?
+  RELEASE_SERVICES_CAPTURE="$RELEASE_API_SERVICES_FILE" \
+    release_require_running_digest "$ENVIRONMENT" "$CLUSTER_ARN" "$API_SERVICE" api "$API_DIGEST" "$API_TARGET" \
+      "$API_APPLIED_DEFINITION" || api=$?
+  if [ "$worker" = 1 ] || [ "$api" = 1 ]; then return 1; fi
+  if [ "$worker" = 0 ] && [ "$api" = 0 ]; then return 0; fi
+  return 3
 }
 
 # ===========================================================================

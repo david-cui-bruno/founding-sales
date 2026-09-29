@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -273,6 +273,81 @@ describe('fss admin database-users ensure', () => {
   it('refuses when no runtime secret variable is set, naming the variable and not its value', async () => {
     const { code } = await run(['admin', 'database-users', 'ensure']);
     expect(code).toBe(20);
+  });
+});
+
+/**
+ * Lane RS-2: `fss release-prepare` is the schema release's two migration-identity steps
+ * in one task — `migrate`, then `admin database-users ensure`.
+ *
+ * ## The vacuous-pass trap
+ *
+ * "One command that exits 0" is also what a command that did neither step would give,
+ * and "two reports" is also what a command that wrote two empty files would give. So the
+ * positive case asserts the *observable consequence* of each half — the applied schema
+ * version the migrate report names, and `pg_has_role` for the user `ensure` created —
+ * and the negative case asserts the order: a run that cannot reach the second step must
+ * still have done the first, and must refuse rather than report a pass.
+ */
+describe('fss release-prepare', () => {
+  const runtimeUser = `fss_prepare_${randomUUID().replaceAll('-', '').slice(0, 12)}`;
+  const password = `p${randomUUID().replaceAll('-', '')}`;
+  const secretValue = JSON.stringify({ username: runtimeUser, password, host: '127.0.0.1', port: 5432, dbname: 'ignored' });
+
+  afterAll(async () => {
+    const dropper = new pg.Client({ connectionString: databaseUrl });
+    await dropper.connect().catch(() => undefined);
+    await dropper.query(`DROP ROLE IF EXISTS "${runtimeUser}"`).catch(() => undefined);
+    await dropper.end().catch(() => undefined);
+  });
+
+  it('migrates and then ensures the runtime user, writing each step its own report', async () => {
+    const migrateReport = join(reports, 'prepare-migrate.json');
+    const usersReport = join(reports, 'prepare-users.json');
+    const { code, stdout } = await run(
+      ['release-prepare', '--migrate-report', migrateReport, '--users-report', usersReport],
+      { FSS_RUNTIME_DATABASE_SECRET_ARN: secretValue },
+    );
+    expect(code, stdout).toBe(0);
+
+    // One JSON answer on stdout, the two steps under it.
+    const answer = JSON.parse(stdout) as Record<string, Record<string, unknown>>;
+    const migrate = answer['migrate'] ?? {};
+    const users = answer['databaseUsers'] ?? {};
+
+    // The migrate half: the database is already migrated by this file's beforeAll, so
+    // `applied` is empty and the version is the one this tree produces — which is the
+    // assertion, because a command that never connected could not name it.
+    const version = await session.query<{ version: string }>(
+      'SELECT max(version)::text AS version FROM schema_versions',
+    );
+    expect(migrate['schemaVersionAfter']).toBe(Number(version.rows[0]?.version));
+    expect(migrate['currentSchemaVersion']).toBe(migrate['schemaVersionAfter']);
+
+    // The users half: the role exists, can log in, and is in the app_runtime group.
+    expect(users['user']).toMatchObject({ outcome: 'created', user: runtimeUser, canLogin: true });
+    const member = await session.query<{ member: boolean }>(
+      "SELECT pg_has_role($1, 'app_runtime', 'MEMBER') AS member",
+      [runtimeUser],
+    );
+    expect(member.rows[0]?.member).toBe(true);
+
+    // Each report file keeps the shape its own command writes, byte for byte: the
+    // deploy's two reports did not change when the two tasks became one.
+    expect(JSON.parse(readFileSync(migrateReport, 'utf8'))).toEqual(migrate);
+    expect(JSON.parse(readFileSync(usersReport, 'utf8'))).toEqual(users);
+  });
+
+  it('refuses, without a pass and without a users report, when the runtime secret is not injected', async () => {
+    const migrateReport = join(reports, 'prepare-migrate-only.json');
+    const usersReport = join(reports, 'prepare-users-missing.json');
+    const { code, stderr } = await run(['release-prepare', '--migrate-report', migrateReport, '--users-report', usersReport]);
+    expect(code).toBe(20);
+    expect(stderr).toContain('secret_variable_missing');
+    expect(stderr).not.toContain(password);
+    // The order is the point: migrate ran and reported, the second step did not.
+    expect(existsSync(migrateReport)).toBe(true);
+    expect(existsSync(usersReport)).toBe(false);
   });
 });
 

@@ -49,6 +49,15 @@ release_plan_note() {
   printf 'PLAN %s\n' "$*" >&2
 }
 
+# One spelling of a directory, so two scripts handed the same root by different names
+# compare equal (PR 310 third review, P2: the rehearsal workflow gives stop.sh an
+# absolute root and deploy.sh a relative one). A path that is not a directory comes back
+# as it went in: this is for comparing, never for deciding whether something is there.
+release_canonical_path() {
+  local path=${1:-}
+  if [ -d "$path" ]; then (cd "$path" && pwd -P); else printf '%s\n' "$path"; fi
+}
+
 rehearsal_report_dir() {
   echo "${FSS_REHEARSAL_REPORTS:-/tmp/fss-rehearsal}"
 }
@@ -311,9 +320,40 @@ release_require_service_stopped() {
 # A stable service may be a rolled-back one, so after every deploy the running tasks are
 # read: one deployment that did not fail, exactly the declared count RUNNING, every task
 # on that deployment's definition, and the container's pulled digest the release's.
-#   release_require_running_digest <environment> <cluster> <service> <container> <digest> <declared count>
+#
+#   release_require_running_digest <environment> <cluster> <service> <container> \
+#                                  <digest> <declared count> [<applied definition ARN>]
+#
+# ## The seventh argument (lane RS-2, PR 310 review, P1)
+#
+# `aws ecs wait services-stable` returns on one deployment with running == desired. It
+# does **not** require `rolloutState=COMPLETED`, so the waiter can return while health
+# checks are still running; and a digest comparison alone cannot tell two revisions of
+# the same image apart, so an infrastructure-only release whose old and new definitions
+# share a digest would pass this check after a circuit-breaker rollback.
+#
+# So a caller that knows which task definition the apply registered passes it as the
+# seventh argument, and then this also requires:
+#
+#   * `rolloutState` exactly `COMPLETED` — not merely "not FAILED";
+#   * `pendingCount` 0 and `desiredCount` equal to the declared count, so a service ECS
+#     has been asked for but has not finished scaling is not read as finished;
+#   * the PRIMARY deployment's `taskDefinition` to be that ARN, and every running task's
+#     to be it too.
+#
+# Called without it (deploy.sh `current`, which has already required COMPLETED through
+# `deploy_read_service`, and `deploy.sh ci`, which has its own rollout poll) nothing
+# changes.
+#
+# ## Return codes, because the caller may want to wait rather than give up
+#
+#   0  this release is what runs
+#   1  refuse now: a state waiting cannot mend — FAILED, the wrong definition, the wrong
+#      digest, a service that is not ACTIVE, a declared count ECS was never asked for
+#   3  not settled yet, with the seventh argument only: IN_PROGRESS, tasks pending, more
+#      than one deployment, or fewer running than desired. Read it again.
 release_require_running_digest() {
-  local environment=$1 cluster=$2 service=$3 container=$4 digest=$5 expected=$6
+  local environment=$1 cluster=$2 service=$3 container=$4 digest=$5 expected=$6 applied=${7:-}
   if rehearsal_dry_run; then
     rehearsal_plan "aws ecs describe-services --cluster $cluster --services $service --output json"
     rehearsal_plan "aws ecs list-tasks --cluster $cluster --service-name $service --desired-status RUNNING --output json"
@@ -327,6 +367,10 @@ release_require_running_digest() {
   fi
   local services listed described arns
   services="$(release_aws "$environment" ecs describe-services --cluster "$cluster" --services "$service" --output json)" || return 1
+  # Lane RS-2: a caller that wants this answer for something else — the release's timing
+  # line reads the service's events out of it — takes this copy rather than making a
+  # second call of its own.
+  if [ -n "${RELEASE_SERVICES_CAPTURE:-}" ]; then printf '%s' "$services" >"$RELEASE_SERVICES_CAPTURE"; fi
   listed="$(release_aws "$environment" ecs list-tasks --cluster "$cluster" --service-name "$service" \
     --desired-status RUNNING --output json)" || return 1
   arns="$(FSS_JSON="$listed" python3 -c '
@@ -339,11 +383,15 @@ sys.stdout.write(" ".join((json.loads(os.environ["FSS_JSON"] or "{}") or {}).get
     described="$(release_aws "$environment" ecs describe-tasks --cluster "$cluster" --tasks $arns --output json)" || return 1
   fi
   FSS_SERVICES="$services" FSS_TASKS="$described" FSS_NAME="$service" FSS_CONTAINER="$container" \
-    FSS_DIGEST="$digest" FSS_EXPECTED="$expected" python3 -c '
+    FSS_DIGEST="$digest" FSS_EXPECTED="$expected" FSS_APPLIED="$applied" python3 -c '
 import json, os, sys
 name, container, digest = os.environ["FSS_NAME"], os.environ["FSS_CONTAINER"], os.environ["FSS_DIGEST"]
 expected = int(os.environ["FSS_EXPECTED"])
+applied = os.environ.get("FSS_APPLIED") or ""
 failures = []
+# Lane RS-2: states that mend themselves. They are refusals when no applied definition
+# was named (the old behaviour, one read and a verdict) and "read it again" when one was.
+settling = []
 def short(arn):
     return str(arn or "<none>").rsplit("/", 1)[-1]
 entry = next((c for c in (json.loads(os.environ["FSS_SERVICES"] or "{}") or {}).get("services") or []
@@ -356,19 +404,51 @@ if entry.get("status") != "ACTIVE":
 deployments = entry.get("deployments") or []
 primary = next((d for d in deployments if d.get("status") == "PRIMARY"), None)
 if primary is None:
-    failures.append("it has no PRIMARY deployment")
+    (settling if applied else failures).append("it has no PRIMARY deployment")
     primary = {}
 if len(deployments) != 1:
-    failures.append("it has {} deployments, so a rollout is still under way or rolling back".format(len(deployments)))
+    (settling if applied else failures).append("it has {} deployments, so a rollout is still under way or rolling back".format(len(deployments)))
 if primary.get("rolloutState") == "FAILED":
     failures.append("its deployment failed: {}".format(primary.get("rolloutStateReason") or "no reason given"))
 definition = primary.get("taskDefinition")
+if applied:
+    # The waiter does not require this, and a digest cannot tell two revisions of the
+    # same image apart: a rollback to a definition with the same digest would otherwise
+    # read as a finished release.
+    if primary.get("rolloutState") != "COMPLETED":
+        settling.append("its rollout is {}, not COMPLETED".format(primary.get("rolloutState") or "unreported"))
+    # Guarding the comparison on a truthy definition was the bug: ECS omitting the
+    # field has to be a refusal, not a pass. A missing ARN was the one way that
+    # same-digest tasks on the old revision could still get through the opt-in
+    # check (PR 310 second review, P1).
+    if not definition:
+        failures.append("ECS does not say which task definition its deployment runs")
+    elif definition != applied:
+        failures.append("its deployment runs {} and the apply registered {}".format(short(definition), short(applied)))
+    counts = dict((field, entry.get(field)) for field in ("desiredCount", "runningCount", "pendingCount"))
+    if any(not isinstance(value, int) for value in counts.values()):
+        failures.append("ECS did not report all three counts")
+    else:
+        if counts["desiredCount"] != expected:
+            failures.append("ECS holds desired count {} and the root declares {}".format(counts["desiredCount"], expected))
+        if counts["pendingCount"] != 0:
+            settling.append("{} task(s) are still pending".format(counts["pendingCount"]))
+        if counts["runningCount"] != counts["desiredCount"]:
+            settling.append("{} of {} task(s) are running".format(counts["runningCount"], counts["desiredCount"]))
 tasks = [t for t in (json.loads(os.environ["FSS_TASKS"] or "{}") or {}).get("tasks") or [] if t.get("lastStatus") == "RUNNING"]
 if len(tasks) != expected:
-    failures.append("{} task(s) are RUNNING and the root declares {}".format(len(tasks), expected))
+    (settling if applied else failures).append("{} task(s) are RUNNING and the root declares {}".format(len(tasks), expected))
 for task in tasks:
     label = "task {}".format(short(task.get("taskArn")))
-    if definition and task.get("taskDefinitionArn") != definition:
+    if applied:
+        # The revision the apply registered, not whatever the deployment reports: they
+        # are the same only because the check above already required it, and a task is
+        # held to the release rather than to what the service happens to say now.
+        if task.get("taskDefinitionArn") != applied:
+            failures.append("{} runs {}, and the apply registered {}".format(label, short(task.get("taskDefinitionArn")), short(applied)))
+    # Callers that name no revision are unchanged, wording included: this is the branch
+    # deploy.sh current and deploy.sh ci take, and each has its own rollout check.
+    elif definition and task.get("taskDefinitionArn") != definition:
         failures.append("{} runs {}, and the deployment is {}".format(label, short(task.get("taskDefinitionArn")), short(definition)))
     found = next((c for c in task.get("containers") or [] if c.get("name") == container), None)
     if found is None:
@@ -381,15 +461,36 @@ for task in tasks:
         failures.append("{}: container {} runs {} and this release is {}".format(label, container, running, digest))
     else:
         print("{}: {} runs {} ({})".format(name, label, running, short(task.get("taskDefinitionArn"))))
-if failures:
+if failures or settling:
     print("FAIL: {} is not running this release (deployment {}, rollout {}):".format(
         name, short(definition), primary.get("rolloutState") or "unknown"), file=sys.stderr)
-    for failure in failures:
+    for failure in failures + settling:
         print("      " + failure, file=sys.stderr)
-    sys.exit(1)
+    # 3 when nothing is wrong that waiting cannot mend, so the caller reads it again.
+    sys.exit(1 if failures else 3)
 if expected == 0:
     print("{}: the root declares no task, and none runs".format(name))
 '
+}
+
+# The tail of a service's own events, which is what an operator would read next.
+#   release_service_events <environment> <cluster> <service> [<how many>]
+release_service_events() {
+  local environment=$1 cluster=$2 service=$3 count=${4:-8} services
+  services="$(release_aws "$environment" ecs describe-services --cluster "$cluster" --services "$service" --output json 2>/dev/null)" \
+    || { echo "      (its events could not be read)" >&2; return 0; }
+  FSS_JSON="$services" FSS_COUNT="$count" python3 -c '
+import json, os, sys
+try:
+    services = (json.loads(os.environ["FSS_JSON"] or "{}") or {}).get("services") or []
+    events = ((services[0] if services else {}) or {}).get("events") or []
+    for event in events[: int(os.environ["FSS_COUNT"])]:
+        print("      {} {}".format(event.get("createdAt") or "?", event.get("message") or ""), file=sys.stderr)
+    if not events:
+        print("      (ECS reports no events for this service)", file=sys.stderr)
+except Exception:
+    print("      (its events could not be read)", file=sys.stderr)
+' || true
 }
 
 # The registered task definition, as JSON (FSS_RELEASE_TASK_DEFINITION answers offline).
