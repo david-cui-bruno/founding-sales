@@ -168,7 +168,7 @@ describe('greenfield-google.yml is dispatch-only, in the production-deploy envir
   it('pins every action by commit sha, checks out first with no credential, and names one secret', () => {
     const uses = [...workflow.matchAll(/^ {6}- uses: (\S+)$|^ {8}uses: (\S+)$/gmu)].map(match => match[1] ?? match[2] ?? '');
     expect(uses).toEqual([
-      'actions/checkout@11d5960a326750d5838078e36cf38b85af677262',
+      'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
       'aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502',
       'google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093',
       'google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db',
@@ -177,7 +177,7 @@ describe('greenfield-google.yml is dispatch-only, in the production-deploy envir
     ]);
     for (const action of uses) expect(action, action).toMatch(/@[0-9a-f]{40}$/u);
     // The checkout is the first step and carries no token into the job.
-    expect(STEPS[0]?.name).toBe('actions/checkout@11d5960a326750d5838078e36cf38b85af677262');
+    expect(STEPS[0]?.name).toBe('actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1');
     expect(STEPS[0]?.text).toContain('persist-credentials: false');
     expect(at('Refuse any ambient')).toBe(1);
     expect([...new Set([...workflow.matchAll(/secrets\.([A-Z_]+)/gu)].map(match => match[1]))]).toEqual([
