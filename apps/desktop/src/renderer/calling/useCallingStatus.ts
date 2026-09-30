@@ -3,14 +3,15 @@ import type { CallingView } from '../../shared/operations.ts';
 
 /**
  * Whether this firm's Call button places the call in Callie, and its cadence (slice C1).
- * Null until the main process answers; `tel` whenever it cannot say twilio, so the
- * phone-app handoff is what the card shows while it waits and when in doubt.
+ * Null until the main process answers, and the Call button waits; `tel` only when the
+ * server said calling is off; `unavailable` when it could not say (review of C1, fold 1).
  */
 export interface CallingStatus {
   readonly view: CallingView | null;
   readonly resuming: boolean;
   reload(): void;
-  resume(): void;
+  /** "Resume calling". Resolves once the server answered, so the card can be read again. */
+  resume(): Promise<void>;
 }
 
 export function useCallingStatus(firmId: string | null): CallingStatus {
@@ -31,18 +32,19 @@ export function useCallingStatus(firmId: string | null): CallingStatus {
         if (mine === asked.current) setView(answer);
       },
       () => {
-        if (mine === asked.current) setView({ provider: 'tel', cadence: null });
+        // The bridge did not answer: not "calling is off", so not the phone app either.
+        if (mine === asked.current) setView({ provider: 'unavailable', cadence: null });
       },
     );
   }, [firmId]);
 
-  const resume = useCallback((): void => {
+  const resume = useCallback(async (): Promise<void> => {
     const api = globalThis.callieApi;
     if (api === undefined || firmId === null) return;
     setResuming(true);
     asked.current += 1;
     const mine = asked.current;
-    void api
+    await api
       .command('calling.resume', { firmId })
       .then(
         answer => {

@@ -162,7 +162,7 @@ export interface TodayBridgeHost {
   releasePause(input: ReleasePauseRequest): Promise<TodayState>;
 
   // ---- Calling from Callie (slice C1): the dial path when `calling_provider = twilio` ----
-  /** `tel` unless `GET /calls/calling` answers: the phone-app handoff is what a doubt keeps. */
+  /** `tel` only on the server's calling-off answer; `unavailable` when it could not say. */
   callingStatus(input: { readonly firmId: string }): Promise<CallingView>;
   /**
    * Place a call from Callie: the cadence, then `POST /calls/session`, then
@@ -191,6 +191,7 @@ interface LastSession {
 }
 
 const TEL: CallingView = Object.freeze({ provider: 'tel', cadence: null });
+const UNAVAILABLE: CallingView = Object.freeze({ provider: 'unavailable', cadence: null });
 
 /** The last handed-off call, so the outcome recorded next can name the number. */
 interface LastCall {
@@ -1047,8 +1048,12 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
     },
 
     async callingStatus(input) {
+      // Only the server's calling-off answer selects the phone app; anything it could not
+      // say is `unavailable`, and the Call button waits (review of C1, fold 1, finding 1).
       const status = await readCallingStatus(input.firmId);
-      return status === null ? TEL : { provider: 'twilio', cadence: status.cadence };
+      if (status === null) return TEL;
+      if ('reason' in status) return UNAVAILABLE;
+      return { provider: 'twilio', cadence: status.cadence };
     },
 
     async startCall(input) {
@@ -1056,7 +1061,7 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
       const refused = (reason: string): CallStart => ({ ok: false, reason: reason.slice(0, 80) });
       // 1. The cadence and the voicemail values. Not twilio (404) is a refusal here: the
       //    page only asks this after `callingStatus` said twilio, and it goes back to it.
-      const status = await readCallingStatus(input.firmId, true);
+      const status = await readCallingStatus(input.firmId);
       if (stale(mine)) return refused('identity_changed');
       if (status === null) return refused('calling_off');
       if ('reason' in status) return refused(status.reason);
@@ -1117,8 +1122,17 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
     },
 
     async resumeCalling(input) {
+      const mine = generation;
       await deps.api.command('/calls/cadence/resume', { firmId: input.firmId }, () => null);
-      return await host.callingStatus(input);
+      const status = await host.callingStatus(input);
+      // The parking hold made `/dial/check` answer "not callable": the open card's advice
+      // is read again, or Call would stay disabled after Resume (review of C1, fold 1, P2).
+      const page = expanded;
+      if (!stale(mine) && page !== null && page.firmId === input.firmId) {
+        const advice = await adviseRoutes(page, mine);
+        if (!stale(mine)) dialAdvice = advice;
+      }
+      return status;
     },
 
     async callHistory(input) {
@@ -1139,25 +1153,17 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
   };
 
   /**
-   * `GET /calls/calling` for one firm. Null when the server did not say twilio — the
-   * switch is off (404), or the read failed — unless `refusals` asks for the reason.
+   * `GET /calls/calling` for one firm: the status, null for the server's calling-off
+   * answer (`not_found`), or the reason it could not say.
    */
   async function readCallingStatus(
     firmId: string,
-  ): Promise<z.infer<typeof callingStatusResponseSchema> | null>;
-  async function readCallingStatus(
-    firmId: string,
-    refusals: true,
-  ): Promise<z.infer<typeof callingStatusResponseSchema> | { readonly reason: string } | null>;
-  async function readCallingStatus(
-    firmId: string,
-    refusals = false,
   ): Promise<z.infer<typeof callingStatusResponseSchema> | { readonly reason: string } | null> {
     const answer = await deps.api.read(`/calls/calling?firmId=${encodeURIComponent(firmId)}`, value =>
       callingStatusResponseSchema.parse(value),
     );
     if (answer.ok) return answer.value;
-    if (!refusals || answer.reason === 'not_found') return null;
+    if (answer.reason === 'not_found') return null;
     return { reason: answer.reason };
   }
   return host;

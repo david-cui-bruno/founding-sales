@@ -201,6 +201,10 @@ describe('calling status, history and recordings (slice C1)', () => {
     // Another workspace.
     expect((await get(`/calls/recording?sessionId=${sessionId}`, betaToken)).status).toBe(404);
     expect((await get(`/calls/history?firmId=${firmId}`, betaToken)).status).toBe(404);
+    // Not the calling-off answer (`not_found`), which the Mac reads as "use the phone app".
+    const status = await get(`/calls/calling?firmId=${firmId}`, betaToken);
+    expect(status.status).toBe(404);
+    expect(status.body['error']).toBe('firm_unknown');
     // The same workspace, but the firm is now somebody else's.
     await fixture.db.query('UPDATE firms SET assigned_user_id = $2 WHERE id = $1', [firmId, fixture.alpha.admin.userId]);
     try {

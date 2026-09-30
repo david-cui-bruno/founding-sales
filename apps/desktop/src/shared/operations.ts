@@ -276,11 +276,12 @@ const versionInput = z.strictObject({ sequenceVersionId: uuid });
 
 /**
  * Whether a firm's Call button places the call in Callie or hands the number to the phone
- * app. `tel` whenever the server does not answer "twilio" — the switch off, the read
- * refused or not answered — so the `tel:` handoff is what a doubt falls back to.
+ * app. `tel` **only** when the server said calling is off (`not_found`); `unavailable`
+ * when it could not say — no answer, a 503, a refusal — and the Call button waits rather
+ * than placing an untracked call through the phone app (review of C1, fold 1).
  */
 export const callingViewSchema = z.strictObject({
-  provider: z.enum(['tel', 'twilio']),
+  provider: z.enum(['tel', 'twilio', 'unavailable']),
   /** "Attempt N of 4", parked; null with `tel`. */
   cadence: callCadenceSchema.nullable(),
 });
@@ -449,7 +450,7 @@ export const OPERATIONS = {
     calls: [{ method: 'GET', path: '/calls/calling?firmId={uuid}' }],
     input: z.strictObject({ firmId: uuid }),
     output: callingViewSchema,
-    transform: 'tel unless the server answers twilio: a 404, a refusal or no answer keeps the phone-app handoff',
+    transform: 'tel only on the server’s calling-off answer (not_found); no answer or any other refusal is unavailable, never tel',
   },
   'calling.start': {
     kind: 'command',
@@ -474,10 +475,12 @@ export const OPERATIONS = {
     calls: [
       { method: 'POST', path: '/calls/cadence/resume' },
       { method: 'GET', path: '/calls/calling?firmId={uuid}' },
+      // The open card's advice again: the parking hold had made its numbers not callable.
+      { method: 'POST', path: '/dial/check' },
     ],
     input: z.strictObject({ firmId: uuid }),
     output: callingViewSchema,
-    transform: 'the review of a parked firm, then its cadence read again',
+    transform: 'the review of a parked firm, then its cadence and the open card’s dial advice read again',
   },
   'calling.history': {
     kind: 'read',

@@ -80,6 +80,10 @@ interface Sent {
 }
 
 function world(answers: Record<string, HttpAnswer>) {
+  return worldWith(() => undefined, answers);
+}
+
+function worldWith(dynamic: (path: string) => HttpAnswer | undefined, answers: Record<string, HttpAnswer>) {
   const sent: Sent[] = [];
   const api = createAuthedClient({
     baseUrl: 'https://api.example.test/',
@@ -94,7 +98,7 @@ function world(answers: Record<string, HttpAnswer>) {
         body: init.body === undefined ? null : (JSON.parse(init.body) as Record<string, unknown>),
       });
       if (parsed.pathname === '/today/firm') return await Promise.resolve({ status: 200, body: firmPage() });
-      return await Promise.resolve(answers[parsed.pathname] ?? { status: 404, body: { error: 'not_found' } });
+      return await Promise.resolve(dynamic(parsed.pathname) ?? answers[parsed.pathname] ?? { status: 404, body: { error: 'not_found' } });
     },
   });
   const opened: string[] = [];
@@ -206,14 +210,51 @@ describe('calling from Callie, in the main process', () => {
     }
   });
 
-  it('answers tel when the server does not say twilio, and the tel: handoff is untouched', async () => {
+  it('answers tel only for the server’s calling-off answer; no answer, a 503 or another refusal is unavailable', async () => {
     const off = world({});
     expect(await off.bridge.callingStatus({ firmId: FIRM_ID })).toEqual({ provider: 'tel', cadence: null });
     const down = world({ '/calls/calling': { status: 503, body: {} } });
-    expect(await down.bridge.callingStatus({ firmId: FIRM_ID })).toEqual({ provider: 'tel', cadence: null });
+    expect(await down.bridge.callingStatus({ firmId: FIRM_ID })).toEqual({ provider: 'unavailable', cadence: null });
+    const notYours = world({ '/calls/calling': { status: 404, body: { error: 'firm_unknown' } } });
+    expect(await notYours.bridge.callingStatus({ firmId: FIRM_ID })).toEqual({ provider: 'unavailable', cadence: null });
     const on = world({ '/calls/calling': calling(3) });
     expect(await on.bridge.callingStatus({ firmId: FIRM_ID })).toMatchObject({ provider: 'twilio', cadence: { nextAttempt: 3 } });
     expect(on.sent[0]?.query).toBe(`?firmId=${FIRM_ID}`);
+  });
+
+  it('reads the open card’s dial advice again after Resume calling', async () => {
+    // `/dial/check` answers "not callable" while parked, "callable" once resumed.
+    let callable = false;
+    const dialCheck = (): HttpAnswer => ({
+      status: 200,
+      body: {
+        advice: {
+          firmId: FIRM_ID,
+          callable,
+          reasons: callable ? [] : ['scoped_pause'],
+          routeId: ROUTE_ID,
+          e164: PROSPECT,
+          telUri: callable ? `tel:${PROSPECT}` : null,
+          firmTimeZone: 'America/New_York',
+          firmLocalTime: '10:05',
+          at: '2026-09-21T14:05:00.000Z',
+        },
+      },
+    });
+    const dynamic = worldWith(path => (path === '/dial/check' ? dialCheck() : undefined), {
+      '/calls/calling': calling(1),
+      '/calls/cadence/resume': accepted({ firmId: FIRM_ID, releasedHoldId: SESSION_ID }),
+    });
+    await dynamic.bridge.expand({ firmId: FIRM_ID });
+    expect((await dynamic.bridge.state()).dialAdvice[0]?.callable).toBe(false);
+    callable = true;
+    await dynamic.bridge.resumeCalling({ firmId: FIRM_ID });
+    expect((await dynamic.bridge.state()).dialAdvice[0]?.callable).toBe(true);
+    expect(dynamic.sent.map(entry => `${entry.method} ${entry.path}`).slice(-3)).toEqual([
+      'POST /calls/cadence/resume',
+      'GET /calls/calling',
+      'POST /dial/check',
+    ]);
   });
 
   it('keeps the live-call flag the updater waits on, and tells it when the call ends', async () => {

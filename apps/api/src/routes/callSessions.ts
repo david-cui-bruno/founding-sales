@@ -87,7 +87,11 @@ export async function routeCallSessions(request: ApiRequest, options: RoutingOpt
     const firmId = idOf('firmId');
     if (firmId === null) return { status: REFUSAL_STATUS.malformed_body, body: redactError('malformed_body') };
     const status = await readCallingStatus(scoped.context, firmId);
-    if (status === null) return notFound;
+    // Not `not_found`: that answer means "calling is off" to the Mac, which then hands the
+    // number to the phone app. A firm that is not the caller's is a refusal of its own.
+    if (status === null) {
+      return { status: REFUSAL_STATUS.not_found, body: { error: 'firm_unknown', message: 'No such firm.' } };
+    }
     return { status: 200, body: callingStatusResponseSchema.parse({ provider: 'twilio', ...status }) };
   }
 

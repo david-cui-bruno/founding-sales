@@ -21,7 +21,13 @@ import { useCallingStatus, type CallingStatus } from '../calling/useCallingStatu
 export interface DialCalling {
   readonly status: CallingStatus;
   readonly call: CallControl;
+  /** After "Resume calling": read the card again, its dial advice with it. */
+  readonly onResumed?: () => void;
 }
+
+/** While the Mac asks how this firm's calls are placed, and when it could not find out. */
+export const CALLING_CHECKING_SENTENCE = 'Checking how to place calls…';
+export const CALLING_UNAVAILABLE_SENTENCE = 'Calling is unavailable right now.';
 
 /**
  * The Today lanes (specification 8.2, 8.3, 9.1, 14.2).
@@ -57,6 +63,12 @@ export function DialPanel({
   const firmId = state.expanded?.firmId ?? '';
   if (calling?.status.view?.provider === 'twilio') {
     return <InAppDialPanel firmId={firmId} view={view} calling={calling} cadence={calling.status.view.cadence} />;
+  }
+  // Only the server's "calling is off" selects the phone app. Until it has answered, or
+  // when it could not, Call waits: an untracked phone-app call would bypass the session,
+  // the cadence and the budget (review of C1, fold 1, finding 1).
+  if (calling !== undefined && calling.status.view?.provider !== 'tel') {
+    return <WaitingDialPanel view={view} status={calling.status} />;
   }
   return (
     <div data-testid="dial-panel" className="mt-3 flex flex-col gap-2">
@@ -97,6 +109,40 @@ export function DialPanel({
   );
 }
 
+/** Call, disabled, while the calling status is unknown (slice C1). */
+function WaitingDialPanel({ view, status }: { readonly view: TodayScreenView; readonly status: CallingStatus }): JSX.Element {
+  const unavailable = status.view?.provider === 'unavailable';
+  return (
+    <div data-testid="dial-panel" className="mt-3 flex flex-col gap-2">
+      <CallAnnouncement />
+      {view.dialRoutes.map(entry => (
+        <div key={entry.route.routeId} data-testid="dial-route" className="flex flex-wrap items-center gap-2">
+          <Button data-testid="dial" disabled>
+            Call {entry.route.e164}
+          </Button>
+        </div>
+      ))}
+      <div className="flex items-center gap-2">
+        <p data-testid="calling-status" className="text-xs text-muted-foreground">
+          {unavailable ? CALLING_UNAVAILABLE_SENTENCE : CALLING_CHECKING_SENTENCE}
+        </p>
+        {unavailable ? (
+          <Button
+            variant="quiet"
+            size="sm"
+            data-testid="calling-retry"
+            onClick={() => {
+              status.reload();
+            }}
+          >
+            Try again
+          </Button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 /** The dial panel when calls are placed from Callie (slice C1). */
 function InAppDialPanel({
   firmId,
@@ -128,7 +174,9 @@ function InAppDialPanel({
               data-testid="call-resume"
               disabled={calling.status.resuming || !view.actionsEnabled}
               onClick={() => {
-                calling.status.resume();
+                void calling.status.resume().then(() => {
+                  calling.onResumed?.();
+                });
               }}
             >
               Resume calling
@@ -218,7 +266,18 @@ function ExpandedFirm({
           <TaskRow key={entry.task.itemId} entry={entry} state={state} actionsEnabled={view.actionsEnabled} actions={actions} />
         ))}
       </ul>
-      <DialPanel state={state} view={view} actions={actions} calling={{ status, call }} />
+      <DialPanel
+        state={state}
+        view={view}
+        actions={actions}
+        calling={{
+          status,
+          call,
+          onResumed: () => {
+            actions.expand(expanded.firmId);
+          },
+        }}
+      />
       <OutcomeForm state={state} view={view} enabled={view.actionsEnabled} actions={actions} callSessionId={callSessionId} />
     </section>
   );
