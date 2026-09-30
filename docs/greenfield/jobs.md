@@ -92,7 +92,8 @@ table:
 
 * **`urgent`** — somebody or the clock is waiting: `mail.sync`, `mail.reconcile`,
   `mail.recover`, `mail.watch_renew`, `classify.reply`, `suppression.finalize`,
-  `outbound.close_send_day`, `today.build`, `canary`.
+  `outbound.close_send_day`, `today.build`, `canary`, `telephony.sweep` (an abandoned
+  call session's reservation holds the day's telephony budget until it runs).
 * **`bulk`** — it may take as long as it takes: `sequence.action`,
   `sequence.terminal_stop`, `route.validate`, `retention.batch`, `research.firm`,
   `research.sweep`.

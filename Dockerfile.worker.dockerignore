@@ -32,6 +32,7 @@
 !packages/domain/retention
 !packages/domain/restore
 !packages/domain/release
+!packages/domain/calls
 !packages/domain/funnel
 !packages/contracts/package.json
 !packages/contracts/src
