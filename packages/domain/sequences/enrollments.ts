@@ -175,7 +175,12 @@ export async function enrollContact(
   } else {
     const permissionId = input.permissionId;
     if (permissionId === undefined) return refuseSequence('invalid_input');
-    const { rows: clockNow } = await context.db.query<{ now: Date }>('SELECT now() AS now');
+    // `clock_timestamp()`, not `now()`. `now()` is the instant the transaction began,
+    // and this one began before it waited for the send gate and for the firm's row — so a
+    // permission that expired during the wait would still be read as live, and a live
+    // `cold_legacy` enrollment could be superseded on the strength of it (the second
+    // review of PR 332). The wall clock inside the transaction is the honest answer.
+    const { rows: clockNow } = await context.db.query<{ now: Date }>('SELECT clock_timestamp() AS now');
     const verdict = await verifyFollowUpPermission(context, permissionId, {
       firmId: input.firmId,
       contactId: input.contactId,

@@ -4,6 +4,7 @@ import {
   callsPlacedTodayResponseSchema,
   dialCheckResponseSchema,
   loggedCallResultSchema,
+  templateVersionsResponseSchema,
   todayFirmResponseSchema,
   todayPauseReleaseResultSchema,
   todaySnoozeResultSchema,
@@ -169,6 +170,13 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
   /** `POST /dial/check`'s answer for each of the expanded card's usable numbers. */
   let dialAdvice: readonly DialAdviceView[] = [];
   /**
+   * The approved templates an outcome may promise (migration 0025). Read with the
+   * expansion, because that is when the form that offers them appears, and left alone
+   * when the read fails: an empty list means "nothing to promise", which is the safe
+   * answer and not a silent one — the form says so.
+   */
+  let followUpTemplates: readonly { readonly id: string; readonly name: string }[] = [];
+  /**
    * The URI each advised number would open, by route. It never crosses the bridge: a
    * renderer that cannot name a `tel:` string cannot ask for one to be opened, however
    * the page is edited later.
@@ -227,6 +235,7 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
       notice,
       handoffNotice: HANDOFF_LIMITATION_NOTICE,
       dialAdvice,
+      followUpTemplates,
       lastCall:
         lastCall === null
           ? null
@@ -280,6 +289,23 @@ export function createTodayBridge(deps: TodayBridgeDeps): TodayBridgeHost {
     remember(page.value);
     notice = null;
     dialAdvice = await adviseRoutes(page.value);
+    followUpTemplates = await approvedTemplates();
+  };
+
+  /**
+   * The approved, unretired template versions, newest first, as names a person reads.
+   *
+   * One read, with the expansion. A salesperson promising "an overview" on a call is
+   * promising *approved bytes*: the call log records which, the permission is bound to
+   * it, and the claim refuses a fence carrying anything else (P0-2). So the form needs
+   * the list, and this is the smallest read that answers it.
+   */
+  const approvedTemplates = async (): Promise<readonly { readonly id: string; readonly name: string }[]> => {
+    const answer = await deps.api.read('/templates', value => templateVersionsResponseSchema.parse(value), {});
+    if (!answer.ok) return [];
+    return answer.value.templates
+      .filter(template => template.approvedAt !== null && template.retiredAt === null)
+      .map(template => ({ id: template.id, name: template.name }));
   };
 
   /**

@@ -78,6 +78,7 @@ export function assigneeFirmPage(): NonNullable<CrmState['firm']> {
       stageKey: 'contacting',
       controlMode: 'automated',
       controlModeReason: null,
+      controlModeOrigin: null,
       openedAt: '2026-09-01T12:00:00.000Z',
       closedAt: null,
       closeReason: null,
@@ -224,9 +225,17 @@ export const EMPTY_DRAFT = {
 
 /** Lane g88: one published sequence, and nobody at the firm enrolled yet. */
 export const SEQUENCE_VERSION_ID = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+/** The one approved template that version's single step sends. */
+export const SEQUENCE_TEMPLATE_VERSION_ID = '33333333-3333-4333-8333-333333333333';
 export function firmSequences(overrides: Partial<NonNullable<CrmState['sequences']>> = {}): NonNullable<CrmState['sequences']> {
   return {
-    published: [{ sequenceVersionId: SEQUENCE_VERSION_ID, label: 'Founder plan v1' }],
+    published: [
+      {
+        sequenceVersionId: SEQUENCE_VERSION_ID,
+        label: 'Founder plan v1',
+        templateVersionIds: [SEQUENCE_TEMPLATE_VERSION_ID],
+      },
+    ],
     enrollments: [],
     readError: null,
     ...overrides,

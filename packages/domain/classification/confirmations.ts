@@ -394,6 +394,21 @@ export async function confirmReplyDisposition(
   // confirmation outright, so the command must not offer it either.
   const permitsFollowUp = input.disposition === 'interested' || input.disposition === 'follow_up_later';
   if (permitsFollowUp && callbackId === null && input.grantFollowUp !== false && chosen.contactId !== null) {
+    // The person confirming this reply is choosing this match, and since the second
+    // review of PR 332 the evidence must say so: a permission rests on a match that is
+    // `selected IS TRUE`, because an unresolved candidate is the classifier's opinion and
+    // not anybody's consent. A message with one unresolved match is resolved here, by the
+    // person doing the confirming, in the same transaction. An *ambiguous* message is not
+    // touched: several candidates are resolved by `resolveAmbiguity`, which releases the
+    // right holds, and this command refuses an unresolved ambiguity above.
+    if (chosen.selected === null && matches.length === 1) {
+      await context.db.query(
+        `UPDATE mail_message_matches
+            SET selected = true, resolved_at = now(), resolved_by_user_id = $3
+          WHERE workspace_id = $1 AND id = $2 AND selected IS NULL`,
+        [context.scope.workspaceId, chosen.id, actor.userId],
+      );
+    }
     const granted = await grantFollowUpPermission(context, {
       firmId: chosen.firmId,
       contactId: chosen.contactId,

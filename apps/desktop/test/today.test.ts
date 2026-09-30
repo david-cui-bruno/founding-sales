@@ -100,6 +100,7 @@ function state(overrides: Partial<TodayState> = {}): TodayState {
     mayMutate: true,
     role: 'salesperson',
     dialAdvice: [],
+    followUpTemplates: [],
     notice: null,
     handoffNotice: 'Once a call is handed to the phone app, Callie cannot recall it.',
     ...overrides,
@@ -415,6 +416,77 @@ describe('the Today bridge', () => {
       deviceId = '44444444-4444-4444-8444-444444444444';
       world.mode = 'down';
       expect((await bridge.expand({ firmId: FIRM_ID })).expanded?.tasks).toEqual([]);
+    });
+  });
+
+  it('offers the approved templates a call may promise, and sends the one chosen', async () => {
+    // The second review of PR 332 found the call-outcome grant path disconnected: the
+    // form offered a yes/no, the contract carried no template, and the route dropped the
+    // field. What a person promises on a call is *approved bytes*, so the form reads them
+    // and the command names the one chosen.
+    const TEMPLATE_ID = '66666666-6666-4666-8666-666666666666';
+    const { api, calls } = scriptedApi({
+      '/today/firm': { status: 200, body: firmPage() },
+      '/dial/check': advice(),
+      '/templates': {
+        status: 200,
+        body: {
+          templates: [
+            {
+              id: TEMPLATE_ID,
+              templateId: '77777777-7777-4777-8777-777777777777',
+              version: 1,
+              name: 'The overview',
+              subject: 'A note about {firm_name}',
+              body: 'Hello {contact_first_name}.',
+              contentHash: 'a'.repeat(64),
+              footerSignOff: 'Sam Example',
+              requiredVariables: [],
+              approvedAt: '2026-09-20T12:00:00.000Z',
+              retiredAt: null,
+              personalizationStrategy: null,
+            },
+            {
+              // Retired: offered by nothing, because nothing may promise it.
+              id: '88888888-8888-4888-8888-888888888888',
+              templateId: '99999999-9999-4999-8999-999999999999',
+              version: 1,
+              name: 'The old note',
+              subject: 'A note',
+              body: 'Hello.',
+              contentHash: 'b'.repeat(64),
+              footerSignOff: 'Sam Example',
+              requiredVariables: [],
+              approvedAt: '2026-09-01T12:00:00.000Z',
+              retiredAt: '2026-09-10T12:00:00.000Z',
+              personalizationStrategy: null,
+            },
+          ],
+        },
+      },
+      '/calls/log': accepted(null),
+    });
+    const bridge = createTodayBridge({
+      api,
+      handoff: opening(),
+      session: { state: async () => await Promise.resolve(sessionState()), refreshToday: async () => await Promise.resolve(null) },
+    });
+    const expanded = await bridge.expand({ firmId: FIRM_ID });
+    expect(expanded.followUpTemplates).toEqual([{ id: TEMPLATE_ID, name: 'The overview' }]);
+
+    await bridge.recordOutcome({
+      firmId: FIRM_ID,
+      contactId: null,
+      routeId: null,
+      itemId: null,
+      outcome: 'interested',
+      note: '',
+      callback: null,
+      doNotCallCoversAllContact: false,
+      followUpPermission: { scope: 'single_email', templateVersionId: TEMPLATE_ID },
+    });
+    expect(calls.find(call => call.path === '/calls/log')?.body).toMatchObject({
+      followUpPermission: { scope: 'single_email', templateVersionId: TEMPLATE_ID },
     });
   });
 

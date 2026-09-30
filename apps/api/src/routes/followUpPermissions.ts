@@ -85,7 +85,8 @@ export async function routeFollowUpPermissions(
     const everyFirm = actor.kind === 'system' || actor.role === 'admin';
     if (parsed.data.firmId !== undefined) {
       // A read about one firm answers the assignment question the same way the firm
-      // page does: an unassigned salesperson is told nothing about it.
+      // page does: an unassigned salesperson is told nothing about it. The answer's
+      // *contents* are decided by the query below, which carries the same rule.
       const firm = await readFirm(scoped.context, parsed.data.firmId);
       if (firm === null) return { status: REFUSAL_STATUS.not_found, body: redactError('not_found') };
       // A member who is not the assignee and not an admin learns nothing about the
@@ -98,11 +99,12 @@ export async function routeFollowUpPermissions(
     const permissions = await listFollowUpPermissions(scoped.context, {
       ...(parsed.data.firmId === undefined ? {} : { firmId: parsed.data.firmId }),
       ...(parsed.data.contactId === undefined ? {} : { contactId: parsed.data.contactId }),
-      // No firm id and not an administrator: the server, not the caller, decides which
-      // firms this answer may mention (P1-5).
-      ...(parsed.data.firmId === undefined && !everyFirm && actor.kind === 'user'
-        ? { assignedToUserId: actor.userId }
-        : {}),
+      // The server, not the caller, decides which firms this answer may mention (P1-5),
+      // and it decides it **in the query** — with or without a firm id. The `readFirm`
+      // above is a presentation choice, not an authorization: it picks `not_found` over
+      // an empty list for a firm this caller may not see, and a reassignment committing
+      // between it and this query can only make the answer narrower.
+      ...(everyFirm || actor.kind !== 'user' ? {} : { assignedToUserId: actor.userId }),
     });
     return {
       status: 200,

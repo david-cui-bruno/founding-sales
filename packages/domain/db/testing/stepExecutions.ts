@@ -157,6 +157,17 @@ export async function makeStepExecution(
       : [input.workspaceId, stepId, opportunityId, input.firmId, contactId, input.userId, zone],
   );
   const enrollmentId = enrollment.rows[0]?.id ?? '';
+  if (permissionId !== null) {
+    // The permission buys **this** run, which is what `enrollContact` records with
+    // `bindFollowUpPermission`. The fixture used to leave the binding null, so every
+    // send test ran against a permission that had bought nothing in particular
+    // (P0-3 of the second review of PR 332).
+    await session.query(
+      `UPDATE follow_up_permissions SET enrollment_id = $3
+        WHERE workspace_id = $1 AND id = $2 AND enrollment_id IS NULL`,
+      [input.workspaceId, permissionId, enrollmentId],
+    );
+  }
 
   const execution = await session.query<{ id: string }>(
     `INSERT INTO step_executions

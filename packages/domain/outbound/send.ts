@@ -14,7 +14,11 @@ import {
   releaseFence,
   type OutboundFenceRow,
 } from './fence.ts';
-import { consumeFollowUpPermission, lockPermissionForClaim } from '../sequences/followUpPermissions.ts';
+import {
+  consumeFollowUpPermission,
+  lockPermissionForClaim,
+  permissionStillLive,
+} from '../sequences/followUpPermissions.ts';
 import { reconcileFenceFooter } from './footer.ts';
 import type { SendFooterPolicy } from '../src/rules/templates.ts';
 import { decideSend, holdReasonForRefusal, type SendGateDeps, type SendPlan } from './gate.ts';
@@ -437,6 +441,15 @@ async function recheckAndClaim(
       if (!(await consumeFollowUpPermission(context, permission.id))) {
         await context.db.query('ROLLBACK');
         return { kind: 'not_ready', refusal: 'step_ineligible', detail: 'follow_up_scope_exhausted' };
+      }
+    } else if (permission !== null) {
+      // The scopes that spend nothing still have to be live at the instant the claim
+      // commits (P0-4 of the second review). `agreed_sequence` used to be admitted on the
+      // expiry the gate sampled before the token refresh, so a permission that expired —
+      // or was revoked — while this claim waited on a lock could still send.
+      if (!(await permissionStillLive(context, permission.id))) {
+        await context.db.query('ROLLBACK');
+        return { kind: 'not_ready', refusal: 'step_ineligible', detail: 'follow_up_expired' };
       }
     }
     await context.db.query('COMMIT');

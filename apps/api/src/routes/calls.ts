@@ -86,6 +86,10 @@ export async function routeCalls(request: ApiRequest, options: RoutingOptions): 
       ...(body.doNotCallCoversAllContact === undefined
         ? {}
         : { doNotCallCoversAllContact: body.doNotCallCoversAllContact }),
+      // The follow-up agreed on the call (migration 0025). The route parsed it and then
+      // dropped it, so nothing a person agreed to on a call ever reached the call log —
+      // the second review of PR 332 found the whole grant path disconnected here.
+      ...(body.followUpPermission === undefined ? {} : { followUpPermission: body.followUpPermission }),
       commandId: body.commandId,
       journal: deps.journal,
     }),

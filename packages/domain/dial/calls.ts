@@ -19,6 +19,7 @@ import {
   type PolicyRefusalCode,
   type PolicyResult,
 } from '../policy/types.ts';
+import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { applyManualModeStop } from '../sequences/terminalStops.ts';
 import { recordSuppression } from '../suppression/events.ts';
 import type { SuppressionJournal } from '../suppression/journal.ts';
@@ -165,6 +166,16 @@ export async function logCallOutcome(
   if (actor.kind !== 'user') return refusePolicy('invalid_input');
 
   // ---- 1. Decide ----------------------------------------------------------
+  //
+  // The send gate first, before any row (P1-4 of the second review of PR 332). An
+  // engaged call is a stop fact: it sets the opportunity manual and ends its
+  // enrollments, and `policy/sendGate.ts` asks every stop-fact writer to take the gate
+  // EXCLUSIVE before it locks anything. This function used to lock the firm first and
+  // reach the gate only at step 3 — the opposite of the claim's gate-then-firm order, so
+  // a claim waiting for the firm and a call waiting for the gate could deadlock. Taking
+  // it here costs nothing: the same lock is taken a few statements later either way, and
+  // a call that refuses releases it at the end of the caller's transaction.
+  await lockSendGateForStopFact(context);
   const firm = await loadFirmForUpdate(context, input.firmId);
   if (firm === null) return refusePolicy('firm_unknown');
   const permitted = decideFirmMutation(context, firm);
@@ -255,6 +266,14 @@ export async function logCallOutcome(
   }
 
   const effects = effectsForBoundStep(input.outcome, bound);
+  // An agreement belongs to the outcome that means a conversation happened. Anything
+  // else — a voicemail, a no-answer, "call me Tuesday" — agreed to nothing, and migration
+  // 0025's `call_logs_agreement_needs_interest` says so in the database. Refused here so
+  // a client that sends a stale field gets a code rather than a constraint violation.
+  if (input.followUpPermission !== undefined && input.outcome !== 'interested') {
+    return refusePolicy('invalid_input');
+  }
+
   const engaged = effects.setsManual;
   if (effects.suppressesNumber && input.journal === undefined) return refusePolicy('invalid_input');
 

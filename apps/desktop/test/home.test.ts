@@ -75,6 +75,7 @@ function today(overrides: Partial<TodayState> = {}): TodayState {
     role: 'admin',
     notice: null,
     dialAdvice: [],
+    followUpTemplates: [],
     handoffNotice: 'Once a call is handed to the phone app, Callie cannot recall it.',
     ...overrides,
   };

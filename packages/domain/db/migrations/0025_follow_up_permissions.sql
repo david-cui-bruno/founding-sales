@@ -358,10 +358,16 @@ ALTER TABLE call_logs
   ADD CONSTRAINT call_logs_agreed_follow_up_known
     CHECK (agreed_follow_up IS NULL OR agreed_follow_up IN ('single_email', 'agreed_sequence'));
 
+-- `IS NOT DISTINCT FROM` rather than `=`, and that is the whole of this line's history:
+-- a CHECK admits a row whose expression is *unknown*, so `(version IS NOT NULL) =
+-- (agreed_follow_up = 'single_email')` admitted a log that agreed to nothing while naming
+-- a template version — an orphan agreement id the permission could then be granted
+-- against. Both sides are boolean and neither is ever null, so the only rows this admits
+-- are the ones it names.
 ALTER TABLE call_logs
   ADD CONSTRAINT call_logs_agreement_names_what_was_agreed
-    CHECK ((agreed_template_version_id IS NOT NULL) = (agreed_follow_up = 'single_email')
-           AND (agreed_sequence_version_id IS NOT NULL) = (agreed_follow_up = 'agreed_sequence'));
+    CHECK ((agreed_template_version_id IS NOT NULL) = (agreed_follow_up IS NOT DISTINCT FROM 'single_email')
+           AND (agreed_sequence_version_id IS NOT NULL) = (agreed_follow_up IS NOT DISTINCT FROM 'agreed_sequence'));
 
 -- Only a conversation agrees to a follow-up. "Call me Tuesday" is a callback task, and
 -- this is that sentence in the database rather than in one command's branch.

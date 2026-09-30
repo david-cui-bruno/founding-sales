@@ -61,6 +61,9 @@ export function OutcomeForm({
   // grant by accident.
   const [followUp, setFollowUp] = useDraft(`${prefix}followUp`);
   const clear = useClearDrafts();
+  // The approved templates this call may promise. The value the select holds is the
+  // template version's id, which is what the permission is bound to (P0-2).
+  const templates = state.followUpTemplates;
   if (expanded === null) return null;
 
   const draft: OutcomeDraft = {
@@ -122,8 +125,8 @@ export function OutcomeForm({
                   },
           doNotCallCoversAllContact: built.command.doNotCallCoversAllContact ?? false,
           followUpPermission:
-            built.command.outcome === 'interested' && followUp === 'single_email'
-              ? { scope: 'single_email' }
+            built.command.outcome === 'interested' && followUp !== ''
+              ? { scope: 'single_email', templateVersionId: followUp }
               : null,
         });
         clear(prefix);
@@ -184,10 +187,16 @@ export function OutcomeForm({
           }}
         >
           <option value="">No follow-up e-mail</option>
-          <option value="single_email">Yes — one e-mail they asked for</option>
+          {templates.map(template => (
+            <option key={template.id} value={template.id}>
+              {`Yes — ${template.name}`}
+            </option>
+          ))}
         </Select>
         <span className="text-xs text-muted-foreground">
-          One e-mail, for fourteen days. A sequence is agreed on the firm page.
+          {templates.length === 0
+            ? 'No approved template to promise yet. Approve one in Sequences first.'
+            : 'One e-mail, the approved one you name, for fourteen days. A sequence is agreed on the firm page.'}
         </span>
       </Label>
 

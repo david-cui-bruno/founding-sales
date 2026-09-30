@@ -157,6 +157,45 @@ describe('a fence that disagrees with its enrollment is refused at the claim', (
     expect(sends).toBe(0);
   });
 
+  it('carries another approved template under an agreed_sequence permission', async () => {
+    // P0-2 of the second review. An `agreed_sequence` permission binds the published
+    // version, and David's agreed scope is *that version's steps* — so the step's
+    // template is the agreed bytes. Before this check the permission only compared the
+    // sequence version, and a fence frozen on another approved template sent.
+    const firm = await seedFirm(world, world.alpha, 'malformed-agreed-template');
+    const fenceId = await prepareFor(world, world.alpha, firm);
+    const { rows: other } = await world.database.session.query<{ id: string }>(
+      `INSERT INTO template_versions (workspace_id, template_id, version, name, subject, body,
+                                      content_hash, footer_sign_off, approved_at, approved_by_user_id)
+       SELECT workspace_id, gen_random_uuid(), 1, 'A second approved note', subject, body,
+              encode(sha256(random()::text::bytea), 'hex'), footer_sign_off, now(), approved_by_user_id
+         FROM template_versions WHERE workspace_id = $1 AND id = $2
+       RETURNING id`,
+      [workspaceId(), world.alpha.templateVersionId],
+    );
+    // The permission is left exactly as the fixture granted it: `agreed_sequence` on the
+    // published version this enrollment runs.
+    const { rows: scope } = await world.database.session.query<{ scope: string }>(
+      `SELECT p.scope FROM follow_up_permissions p
+         JOIN sequence_enrollments n ON n.workspace_id = p.workspace_id AND n.permission_id = p.id
+         JOIN step_executions e ON e.workspace_id = n.workspace_id AND e.enrollment_id = n.id
+         JOIN outbound_messages m ON m.workspace_id = e.workspace_id AND m.step_execution_id = e.id
+        WHERE m.workspace_id = $1 AND m.id = $2`,
+      [workspaceId(), fenceId],
+    );
+    expect(scope[0]?.scope).toBe('agreed_sequence');
+
+    await world.database.session.query(
+      'UPDATE outbound_messages SET template_version_id = $3 WHERE workspace_id = $1 AND id = $2',
+      [workspaceId(), fenceId, other[0]?.id ?? ''],
+    );
+    const { report, sends } = await dispatch(fenceId);
+    expect(report.outcome, JSON.stringify(report)).toBe('held');
+    expect(report.refusal).toBe('step_ineligible');
+    expect(report.detail).toBe('template_not_the_step\u2019s');
+    expect(sends).toBe(0);
+  });
+
   it('points at an execution for another person', async () => {
     const firm = await seedFirm(world, world.alpha, 'malformed-execution');
     const fenceId = await prepareFor(world, world.alpha, firm);

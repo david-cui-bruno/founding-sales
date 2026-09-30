@@ -186,7 +186,10 @@ send gate. It cannot form, and this is the argument, which every path here now o
 1. **The send gate first, always.** Every stop-fact writer takes it EXCLUSIVE
    (`lockSendGateForStopFact`) before it touches any row: `setManualControlMode`,
    `applyManualModeStop`, `logCallOutcome`, `enrollContact`, `revokeFollowUpPermission`,
-   the terminal stops. Every dispatch claim takes it SHARED (`lockSendGateForDispatch`)
+   the terminal stops. `logCallOutcome` did **not**, until the second review of PR 332
+   found it: it locked the firm and reached the gate only when it set manual mode, which
+   is the one order that could deadlock with a claim. It now takes the gate as its first
+   statement. Every dispatch claim takes it SHARED (`lockSendGateForDispatch`)
    before it touches any row. Nothing in either family locks a row before the gate.
 2. **Therefore the two families never hold a row the other needs.** A writer that holds
    the gate EXCLUSIVE excludes every claim from starting; a claim in flight holds it
@@ -206,7 +209,34 @@ send gate. It cannot form, and this is the argument, which every path here now o
 The tests are in `packages/domain/test/outbound/firmExclusivityAtSend.test.ts`: a barrier
 case that proves both claim transactions are open at once through `pg_locks` before the
 barrier is released, a tied-`started_at` case, and the review's deadlock shape run as a
-real claim against a real stop-fact writer.
+real claim against a real `logCallOutcome`, with SQLSTATE `40P01` asserted absent on both.
+
+## 6b. What the second review changed (30 September 2026)
+
+* **Only a selected match is consent.** A sole unselected `mail_message_matches` row no
+  longer qualifies; `confirmReplyDisposition` resolves the one match it acts on, in the
+  same transaction, because the person confirming the reply is choosing it.
+* **The fence's template must be its step's**, for every scope — an `agreed_sequence`
+  agrees to *the published version's steps*, so a fence frozen on another approved
+  template is refused at the claim (`template_not_the_step’s`).
+* **Liveness is checked for every scope at the claim.** The scopes that spend nothing get
+  `permissionStillLive` immediately before the commit, against `clock_timestamp()`.
+* **A later direct send takes the conversation back**, escalating
+  `direct_send_keep_automation` to `direct_send`; the choice can be made again. Only
+  `keepFollowingUpAfterDirectSend` may write the keep origin — `setManualControlMode`'s
+  input type excludes it.
+* **The call-outcome grant path works end to end.** The command carries the approved
+  template version, the route forwards it, and the Today form offers the approved
+  templates (one extra read, `POST /templates`). An agreed *sequence* is still granted
+  from the firm page.
+* **`enrollContact` reads `clock_timestamp()` after the gate**, so a permission that
+  expired while the command waited cannot supersede a legacy enrollment.
+* **The agreed-sequence bound is the real cadence**: start-anchored per 11.1 and computed
+  on the workspace's holiday calendar.
+* **The call-log agreement CHECK is explicitly Boolean**, because a CHECK admits an
+  unknown expression and a null agreement with a populated version id was getting in.
+* **The Mac matches the permission to the plan** and requires it unbound
+  (`livePermissionFor`).
 
 ## 7. Deviations from the brief, each with its reason
 

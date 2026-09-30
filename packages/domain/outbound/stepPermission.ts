@@ -83,6 +83,17 @@ export async function decideStepPermission(
   if (route.address !== fence.recipientAddress) {
     return refuseSend('step_ineligible', 'recipient_address_mismatch');
   }
+  // And the bytes: the fence's frozen template version must be the one **its own step**
+  // names (P0-2 of the second review of PR 332). The permission binds the bytes for a
+  // `single_email`, and for an `agreed_sequence` David's agreed scope is *the published
+  // version's steps* — so the step's template is the agreed template, and a fence frozen
+  // on some other approved template is bytes nobody agreed to whatever the scope is.
+  // `templateApprovalSource` only asks whether the frozen template is approved, which a
+  // swapped-in approved template also is.
+  const stepTemplateVersionId = await templateOfStep(context, execution.stepId);
+  if (stepTemplateVersionId !== null && fence.templateVersionId !== stepTemplateVersionId) {
+    return refuseSend('step_ineligible', 'template_not_the_step’s');
+  }
 
   const outcome = await composeEligibility().evaluate(context, {
     execution,
@@ -117,6 +128,21 @@ export async function decideStepPermission(
  * reaches Gmail, and an address that is no longer the route's — a correction, a merge —
  * is bytes addressed to somebody the permission never named.
  */
+/**
+ * The template version one step names, or null for a step that names none (a call task).
+ *
+ * `sequence_steps` is immutable once its version is published, so this is the agreed
+ * bytes for every scope: the enrollment runs one published version, and the permission
+ * was granted about that version's steps.
+ */
+async function templateOfStep(context: RepositoryContext, stepId: string): Promise<string | null> {
+  const { rows } = await context.db.query<{ template_version_id: string | null }>(
+    'SELECT template_version_id FROM sequence_steps WHERE workspace_id = $1 AND id = $2',
+    [context.scope.workspaceId, stepId],
+  );
+  return rows[0]?.template_version_id ?? null;
+}
+
 async function routeOfFence(
   context: RepositoryContext,
   fence: OutboundFenceRow,

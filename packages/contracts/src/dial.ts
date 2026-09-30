@@ -486,10 +486,18 @@ export const logCallOutcomeCommandSchema = z.strictObject({
    * e-mail permission, which is David's own distinction of 29 September 2026.
    */
   followUpPermission: z
-    .discriminatedUnion('scope', [
-      z.strictObject({ scope: z.literal('single_email') }),
-      z.strictObject({ scope: z.literal('agreed_sequence'), sequenceId: uuid }),
-    ])
+    .strictObject({
+      scope: z.literal('single_email'),
+      /**
+       * The approved bytes that were promised. `logCallOutcome` writes it onto the call
+       * log (`agreed_template_version_id`), which is where the agreement lives, and the
+       * permission is bound to it — so "e-mail me an overview" permits *that* e-mail
+       * rather than whichever approved template somebody picks later (P0-2). An
+       * `agreed_sequence` is granted through `POST /follow-up-permissions`, because it
+       * needs a version picker this command has no screen for (deviation 5).
+       */
+      templateVersionId: uuid,
+    })
     .optional(),
 });
 

@@ -12,7 +12,9 @@ import {
   waitUntilBlocked,
   type ExtraSession,
 } from './support/dispatchFixtures.ts';
-import { lockSendGateForStopFact } from '../../policy/sendGate.ts';
+import { withTransaction } from '../../db/queryable.ts';
+import { logCallOutcome } from '../../dial/calls.ts';
+import { repositoryContext, workspaceScope } from '../../db/workspaceScope.ts';
 
 /**
  * One active prospecting contact per firm, enforced immediately before the send
@@ -258,37 +260,67 @@ describe('the firm rule at the dispatch claim', () => {
     expect(`${refused?.report.refusal ?? ''}:${refused?.report.detail ?? ''}`).toContain('firm_already_enrolled');
   });
 
-  it('a claim and a stop-fact writer cannot deadlock: both take the send gate first', async () => {
-    // P1-4's deadlock: a claim waiting for the firm row while a call outcome waits for
-    // the send gate. It cannot form, because every stop-fact writer takes the gate
-    // EXCLUSIVE *before* any row and every claim takes it SHARED before any row, so the
-    // two can never hold a row lock the other needs. Here the stop-fact writer holds the
-    // firm row and then asks for the gate, which is the shape the review described; the
-    // claim is released by the writer's commit rather than by a deadlock detector, and
-    // PostgreSQL reports no deadlock at all.
+  it('a real claim and a real call outcome overlap without deadlocking', async () => {
+    // P1-4, as the second review asked for it: not a hand-made lock sequence with its
+    // errors swallowed, but the two real commands, forced to overlap, with the deadlock
+    // SQLSTATE asserted absent on both sides.
+    //
+    // The order is the whole argument. Every stop-fact writer — `logCallOutcome`
+    // included, since the second review — takes the send gate EXCLUSIVE before any row;
+    // every claim takes it SHARED before any row. So the call waits at the gate while the
+    // claim holds it, and the claim waits for the firm the barrier holds; when the
+    // barrier lets go, the claim finishes, drops the gate, and the call proceeds. No
+    // cycle exists to detect.
     const firm = await seedFirm(world, world.alpha, 'deadlock');
     const fenceId = await prospectingFence(firm);
+    const { rows: contacts } = await world.database.session.query<{ id: string }>(
+      'SELECT contact_id AS id FROM sequence_enrollments WHERE workspace_id = $1 AND firm_id = $2 LIMIT 1',
+      [workspaceId(), firm.firmId],
+    );
 
     await barrier.session.query('BEGIN');
     await barrier.session.query('SELECT id FROM firms WHERE workspace_id = $1 AND id = $2 FOR UPDATE', [
       workspaceId(),
       firm.firmId,
     ]);
+
     const gmail = world.clientWith(world.alpha, {});
     const claim = dispatchOutboundMessage(racer.context(workspaceId()), world.sendDeps(world.alpha, { gmail }), {
       outboundMessageId: fenceId,
     });
     await waitUntilBlocked(world.database.session, racer.pid);
-    // The writer now asks for the gate it would have taken first in the product. It is
-    // granted immediately: the claim holds the gate only in SHARE mode... and would
-    // block an EXCLUSIVE request, so the writer waits for the claim rather than
-    // deadlocking with it. Either way both finish, and nothing is aborted.
-    const writer = lockSendGateForStopFact(barrier.context(workspaceId()));
-    await barrier.session.query('COMMIT').catch(() => undefined);
-    await writer.catch(() => undefined);
-    const report = await claim;
-    expect(report.outcome, JSON.stringify(report)).toBe('sent');
-    await barrier.session.query('ROLLBACK');
+
+    // The call outcome, on its own connection, as `runPolicyCommand` runs it: one
+    // transaction, the real command. `no_answer` keeps it to the shape under test — the
+    // locks it takes and their order — without dragging the whole engaged-call stop in.
+    const caller = repositoryContext(
+      workspaceScope(workspaceId(), {
+        kind: 'user',
+        userId: world.alpha.workspace.salesperson.userId,
+        role: 'salesperson',
+      }),
+      second.session,
+    );
+    const call = withTransaction(second.session as Parameters<typeof withTransaction>[0], async () =>
+      await logCallOutcome(caller, {
+        firmId: firm.firmId,
+        ...(contacts[0]?.id === undefined ? {} : { contactId: contacts[0].id }),
+        outcome: 'no_answer',
+      }),
+    );
+
+    await barrier.session.query('COMMIT');
+    // Neither side is aborted. `40P01` is PostgreSQL's deadlock, and a failure of the
+    // ordering above would raise it on one of these two.
+    const report = await claim.catch((error: unknown) => error);
+    const logged = await call.catch((error: unknown) => error);
+    for (const [name, result] of [['the claim', report], ['the call outcome', logged]] as const) {
+      const code = (result as { code?: unknown })?.code;
+      expect(code, `${name} was aborted: ${String((result as { message?: string })?.message ?? '')}`).not.toBe('40P01');
+      expect(result, `${name} threw`).not.toBeInstanceOf(Error);
+    }
+    expect((report as SendReport).outcome, JSON.stringify(report)).toBe('sent');
+    expect((logged as { ok: boolean }).ok, JSON.stringify(logged)).toBe(true);
   });
 
   it('two concurrent claims at one firm send exactly one e-mail', async () => {

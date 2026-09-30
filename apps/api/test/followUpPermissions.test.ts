@@ -46,6 +46,26 @@ describe('the follow-up permission endpoints', () => {
     return { firmId, permissionId };
   }
 
+  /** One approved template version, which is what a call may promise. */
+  async function approvedTemplate(): Promise<string> {
+    const result = (answer: { body: unknown }): Record<string, unknown> =>
+      ((answer.body as { result?: unknown }).result ?? {}) as Record<string, unknown>;
+    const template = await post(
+      '/templates/create',
+      adminToken,
+      command({
+        name: `Overview ${randomUUID().slice(0, 8)}`,
+        subject: 'A question about {firm_name}',
+        body: `Hello {contact_first_name},\n\nA note about {firm_name}.\n\nSam Example\nCallie\n${SENDING_STOP_LINE}`,
+        footerSignOff: 'Sam Example\nCallie',
+        requiredVariables: ['firm_name', 'contact_first_name'],
+        approve: true,
+      }),
+    );
+    expect(template.status, JSON.stringify(template.body)).toBe(200);
+    return String(result(template)['id']);
+  }
+
   /** One published one-step version, which is what an `agreed_sequence` call agrees to. */
   async function publishedVersion(): Promise<string> {
     const result = (answer: { body: unknown }): Record<string, unknown> =>
@@ -123,6 +143,35 @@ describe('the follow-up permission endpoints', () => {
     expect(theirFirm.status).toBe(404);
   });
 
+  it('applies the assignee rule in the query, so a reassignment cannot expose rows', async () => {
+    // P1-5 of the second review. The firm id used to skip the assignee predicate: the
+    // route read the firm, decided, and then queried the whole firm. A reassignment
+    // committing between those two reads exposed the rows. Here the firm is assigned to
+    // the salesperson when the list is asked and to somebody else in the database, which
+    // is the state that race produces — and the answer is empty.
+    const firmId = (await fixture.db.query<{ firm_id: string }>(
+      'SELECT firm_id FROM follow_up_permissions WHERE workspace_id = $1 AND id = $2',
+      [fixture.alpha.workspaceId, minePermissionId],
+    )).rows[0]?.firm_id;
+    await fixture.db.query('UPDATE firms SET assigned_user_id = $3 WHERE workspace_id = $1 AND id = $2', [
+      fixture.alpha.workspaceId,
+      firmId,
+      fixture.alpha.admin.userId,
+    ]);
+    try {
+      const answer = await post('/follow-up-permissions/list', salespersonToken, { firmId });
+      // Either answer is safe; what must never happen is 200 with the firm's rows.
+      const permissions = (answer.body as { permissions?: readonly { id: string }[] }).permissions ?? [];
+      expect(permissions.map(permission => permission.id)).not.toContain(minePermissionId);
+    } finally {
+      await fixture.db.query('UPDATE firms SET assigned_user_id = $3 WHERE workspace_id = $1 AND id = $2', [
+        fixture.alpha.workspaceId,
+        firmId,
+        fixture.alpha.salesperson.userId,
+      ]);
+    }
+  });
+
   it('refuses a grant naming two pieces of evidence, before the domain is asked', async () => {
     const answer = await post(
       '/follow-up-permissions',
@@ -139,6 +188,98 @@ describe('the follow-up permission endpoints', () => {
     );
     expect(answer.status).toBe(409);
     expect((answer.body as { reason?: string }).reason).toBe('invalid_input');
+  });
+
+  it('records a call agreement end to end: the command, the call log, and the permission', async () => {
+    // The second review of PR 332 found this path disconnected: the route parsed
+    // `followUpPermission` and dropped it, and neither the form nor the contract carried
+    // the template version `logCallOutcome` needs. What a person promises on a call is
+    // approved bytes, and the log is where the agreement lives.
+    const templateVersionId = await approvedTemplate();
+    const firmId = await seedFirm(fixture, {
+      name: 'Cedar Test Advisers',
+      regionCode: 'RI',
+      postalCode: '02903',
+      assignedUserId: fixture.alpha.salesperson.userId,
+    });
+    const contactId = await seedContact(fixture, { firmId, fullName: 'Dana Example' });
+    const logged = await post(
+      '/calls/log',
+      salespersonToken,
+      command({
+        firmId,
+        contactId,
+        outcome: 'interested',
+        followUpPermission: { scope: 'single_email', templateVersionId },
+      }),
+    );
+    expect(logged.status, JSON.stringify(logged.body)).toBe(200);
+
+    // The log records what was agreed…
+    const { rows: log } = await fixture.db.query<{
+      id: string;
+      agreed_follow_up: string | null;
+      agreed_template_version_id: string | null;
+    }>(
+      `SELECT id, agreed_follow_up, agreed_template_version_id FROM call_logs
+        WHERE workspace_id = $1 AND firm_id = $2`,
+      [fixture.alpha.workspaceId, firmId],
+    );
+    expect(log).toHaveLength(1);
+    expect(log[0]?.agreed_follow_up).toBe('single_email');
+    expect(log[0]?.agreed_template_version_id).toBe(templateVersionId);
+
+    // …and the permission rests on that log, for that person, with those bytes.
+    const { rows: permission } = await fixture.db.query<{
+      scope: string;
+      contact_id: string;
+      call_log_id: string | null;
+      template_version_id: string | null;
+      max_steps: number | null;
+    }>(
+      `SELECT scope, contact_id, call_log_id, template_version_id, max_steps
+         FROM follow_up_permissions WHERE workspace_id = $1 AND firm_id = $2`,
+      [fixture.alpha.workspaceId, firmId],
+    );
+    expect(permission).toHaveLength(1);
+    expect(permission[0]).toMatchObject({
+      scope: 'single_email',
+      contact_id: contactId,
+      call_log_id: log[0]?.id,
+      template_version_id: templateVersionId,
+      max_steps: 1,
+    });
+  });
+
+  it('refuses a call agreement on an outcome that agreed to nothing', async () => {
+    const templateVersionId = await approvedTemplate();
+    const firmId = await seedFirm(fixture, {
+      name: 'Birch Test Partners',
+      regionCode: 'RI',
+      postalCode: '02903',
+      assignedUserId: fixture.alpha.salesperson.userId,
+    });
+    const contactId = await seedContact(fixture, { firmId, fullName: 'Robin Example' });
+    // "Call me Tuesday" is a callback task and grants no e-mail permission, whatever the
+    // client sends (David, 29 September 2026).
+    const logged = await post(
+      '/calls/log',
+      salespersonToken,
+      command({
+        firmId,
+        contactId,
+        outcome: 'callback_requested',
+        callback: { localDate: '2026-10-06', localTime: '09:00', sourceTimeZone: 'America/New_York' },
+        followUpPermission: { scope: 'single_email', templateVersionId },
+      }),
+    );
+    expect(logged.status).toBe(409);
+    expect(
+      (await fixture.db.query('SELECT 1 FROM follow_up_permissions WHERE workspace_id = $1 AND firm_id = $2', [
+        fixture.alpha.workspaceId,
+        firmId,
+      ])).rows,
+    ).toHaveLength(0);
   });
 
   it('refuses a revoke by a salesperson the firm is not assigned to', async () => {

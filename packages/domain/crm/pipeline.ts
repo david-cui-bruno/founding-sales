@@ -247,7 +247,14 @@ export async function setManualControlMode(
   input: {
     readonly opportunityId: string;
     readonly reason: string;
-    readonly origin: ManualModeOrigin;
+    /**
+     * One of the four causes. `direct_send_keep_automation` is **not** one of them: it is
+     * a person's choice rather than a cause of manual mode, and only
+     * `keepFollowingUpAfterDirectSend` may write it (P1-1 of the second review of PR
+     * 332). Excluding it here is what makes that a fact about the code rather than a rule
+     * about the routes.
+     */
+    readonly origin: Exclude<ManualModeOrigin, 'direct_send_keep_automation'>;
     readonly commandId?: string | undefined;
   },
 ): Promise<CrmResult<OpportunityRow>> {
@@ -270,13 +277,25 @@ export async function setManualControlMode(
     // and is then taken over by a person must stop being a signal, or the takeover
     // would be the one fact this design ignores. Escalation only — a signal never
     // overwrites a recorded takeover, and nothing here reverses manual mode.
-    if (input.origin === 'salesperson_command' && opportunity['control_mode_origin'] !== 'salesperson_command') {
+    // A *later* direct Gmail send is a fresh takeover, even of an opportunity whose
+    // origin is the choice to keep following up (P1-1 of the second review of PR 332).
+    // The person chose to let the automation continue after one hand-written message;
+    // writing again by hand is them taking the conversation back, and the choice can be
+    // made again with `keepFollowingUpAfterDirectSend`. It is still escalation only: a
+    // `salesperson_command` is never downgraded to `direct_send`.
+    const escalation =
+      input.origin === 'salesperson_command' && opportunity['control_mode_origin'] !== 'salesperson_command'
+        ? 'salesperson_command'
+        : input.origin === 'direct_send' && opportunity['control_mode_origin'] === 'direct_send_keep_automation'
+          ? 'direct_send'
+          : null;
+    if (escalation !== null) {
       const { rows: escalated } = await context.db.query<OpportunityRow>(
         `UPDATE opportunities
-            SET control_mode_origin = 'salesperson_command', updated_at = now()
+            SET control_mode_origin = $3, updated_at = now()
           WHERE workspace_id = $1 AND id = $2
           RETURNING ${OPPORTUNITY_COLUMNS}`,
-        [context.scope.workspaceId, input.opportunityId],
+        [context.scope.workspaceId, input.opportunityId, escalation],
       );
       const takenOver = escalated[0];
       if (takenOver !== undefined) {

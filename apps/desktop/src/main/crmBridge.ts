@@ -287,7 +287,7 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
       return;
     }
     const labels = new Map<string, string>();
-    const published: { sequenceVersionId: string; label: string }[] = [];
+    const published: { sequenceVersionId: string; label: string; templateVersionIds: string[] }[] = [];
     for (const sequence of list.value.sequences.slice(0, FIRM_PAGE_SEQUENCE_LIMIT)) {
       if (sequence.archivedAt !== null) continue;
       const versions = await deps.api.read('/sequences/versions', value => sequenceVersionsResponseSchema.parse(value), {
@@ -303,7 +303,15 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
         // A version with a LinkedIn step stored before 25 September 2026 (lane A2) is not
         // offered: `enrollContact` refuses it (`step_unknown`).
         const enrollable = version.state === 'published' && version.steps.every(step => step.channel !== 'removed');
-        if (enrollable) published.push({ sequenceVersionId: version.id, label });
+        if (enrollable) {
+          published.push({
+            sequenceVersionId: version.id,
+            label,
+            templateVersionIds: version.steps
+              .map(step => step.templateVersionId)
+              .filter((id): id is string => id !== null),
+          });
+        }
       }
     }
     sequences = {
@@ -592,7 +600,14 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
       // server refuses a second prospecting contact at the firm with
       // `firm_already_enrolled`. No new control, which is what "the minimum that lets
       // David grant a permission from the flows he already uses" asks for.
-      const permission = livePermissionFor(page, input.contactId);
+      const plan = sequences?.published.find(entry => entry.sequenceVersionId === input.sequenceVersionId);
+      const permission =
+        plan === undefined
+          ? null
+          : livePermissionFor(page, input.contactId, {
+              sequenceVersionId: plan.sequenceVersionId,
+              templateVersionIds: plan.templateVersionIds,
+            });
       const answer = await deps.api.command(
         '/enrollments/enroll',
         {
@@ -691,15 +706,28 @@ export function createCrmBridge(deps: CrmBridgeDeps): CrmBridgeHost {
 export function livePermissionFor(
   page: Extract<FirmPageResponse, { visibility: 'assigned_or_admin' }>,
   contactId: string,
+  plan: { readonly sequenceVersionId: string; readonly templateVersionIds: readonly string[] },
 ): string | null {
   const now = Date.now();
-  const usable = page.followUpPermissions.find(
-    permission =>
-      permission.contactId === contactId &&
-      permission.revokedAt === null &&
-      permission.consumedAt === null &&
-      Date.parse(permission.expiresAt) > now,
-  );
+  const usable = page.followUpPermissions.find(permission => {
+    if (permission.contactId !== contactId) return false;
+    if (permission.revokedAt !== null || permission.consumedAt !== null) return false;
+    if (Date.parse(permission.expiresAt) <= now) return false;
+    // Unbound. A permission that has already bought a run cannot buy another, and
+    // offering it here would be an enrollment the server rolls back (P0-3).
+    if (permission.enrollmentId !== null) return false;
+    // And it has to be a permission *for this plan*. An `agreed_sequence` names the
+    // published version it agreed to; a one-message scope names the approved bytes, so
+    // the plan must be the single step that sends them.
+    if (permission.scope === 'agreed_sequence') return permission.sequenceVersionId === plan.sequenceVersionId;
+    if (permission.scope === 'single_email' || permission.scope === 'contextual_reply') {
+      return (
+        plan.templateVersionIds.length === 1 &&
+        (permission.templateVersionId === null || permission.templateVersionId === plan.templateVersionIds[0])
+      );
+    }
+    return false;
+  });
   return usable?.id ?? null;
 }
 

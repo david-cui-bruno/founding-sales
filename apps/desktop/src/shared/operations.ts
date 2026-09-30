@@ -99,14 +99,13 @@ const outcomeInput = z.strictObject({
   /**
    * The follow-up the salesperson agreed to on the call (migration 0025). `null` is
    * "none", which is the default the form offers, and the only value the server accepts
-   * for any outcome other than `interested`. An `agreed_sequence` names its sequence;
-   * "Call me Tuesday" is `callback` above and grants no e-mail permission at all.
+   * for any outcome other than `interested`. It names the approved template version that
+   * was promised, because that is what the permission is bound to (P0-2). An agreed
+   * *sequence* is granted from the firm page; "Call me Tuesday" is `callback` above and
+   * grants no e-mail permission at all.
    */
   followUpPermission: z
-    .discriminatedUnion('scope', [
-      z.strictObject({ scope: z.literal('single_email') }),
-      z.strictObject({ scope: z.literal('agreed_sequence'), sequenceId: uuid }),
-    ])
+    .strictObject({ scope: z.literal('single_email'), templateVersionId: uuid })
     .nullable(),
 });
 
@@ -297,10 +296,12 @@ export const OPERATIONS = {
     kind: 'read',
     calls: [{ method: 'POST', path: '/today/firm' },
       { method: 'POST', path: '/dial/check' },
+      // The approved templates the outcome form may promise on a call (migration 0025).
+      { method: 'POST', path: '/templates' },
     ],
     input: z.strictObject({ firmId: uuid }),
     output: todayStateSchema,
-    transform: 'stale expansion from the in-memory page, eviction on 404 or not_assigned, and the dial advice per usable number',
+    transform: 'stale expansion from the in-memory page, eviction on 404 or not_assigned, the dial advice per usable number, and the approved templates a call may promise',
   },
   'today.callsPlaced': {
     kind: 'read',

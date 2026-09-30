@@ -446,6 +446,18 @@ export const FOLLOW_UP_CONSTRAINT_CASES: readonly Case[] = [
       }),
   },
   {
+    constraint: 'call_logs_agreement_names_what_was_agreed',
+    // The other direction, and the one the second review of PR 332 found open: a log that
+    // agreed to **nothing** while naming a template version. A CHECK admits an unknown
+    // expression, so `agreed_follow_up = 'single_email'` was null here and the row went in.
+    run: async f => await agreeingCall(f, { agreed_template_version_id: await seedTemplateVersion(f) }),
+  },
+  {
+    constraint: 'call_logs_agreement_names_what_was_agreed',
+    // The same hole with the sequence column.
+    run: async f => await agreeingCall(f, { agreed_sequence_version_id: await seedVersion(f) }),
+  },
+  {
     constraint: 'call_logs_agreed_template_fkey',
     run: async f =>
       await agreeingCall(f, { agreed_follow_up: 'single_email', agreed_template_version_id: ABSENT }),

@@ -171,7 +171,12 @@ async function grantSingleEmail(contactId: string, templateVersionId: string): P
  */
 async function seedInboundRequest(
   contactId: string,
-  options: { readonly disposition?: string; readonly withCallback?: boolean } = {},
+  options: {
+    readonly disposition?: string;
+    readonly withCallback?: boolean;
+    /** Leave the match unselected, which is a candidate nobody confirmed (P0-1, round 2). */
+    readonly selected?: boolean;
+  } = {},
 ): Promise<{ readonly messageId: string; readonly matchId: string; readonly confirmationId: string }> {
   const suffix = String(inboundCounter++);
   const { rows: mailbox } = await database.session.query<{ id: string }>(
@@ -195,11 +200,28 @@ async function seedInboundRequest(
     [seeded.alpha.workspaceId, mailbox[0]?.id ?? '', `fu-message-${suffix}`, `fu-thread-${suffix}`],
   );
   const messageId = message[0]?.id ?? '';
+  // `mail_message_matches_resolution_consistent`: a match is resolved or it is not, and
+  // `selected` is the resolution. So "selected" writes the resolution a person made, and
+  // "unselected" leaves the row as the classifier proposed it — unresolved, `selected`
+  // null — which is the state P0-1 of the second review is about.
+  const selected = options.selected ?? true;
   const { rows: match } = await database.session.query<{ id: string }>(
     `INSERT INTO mail_message_matches
-       (workspace_id, mail_message_id, firm_id, opportunity_id, contact_id, match_rule)
-     VALUES ($1, $2, $3, $4, $5, 'participant') RETURNING id`,
-    [seeded.alpha.workspaceId, messageId, crm.alpha.firmId, crm.alpha.opportunityId, contactId],
+       (workspace_id, mail_message_id, firm_id, opportunity_id, contact_id, match_rule,
+        selected, resolved_at, resolved_by_user_id)
+     VALUES ($1, $2, $3, $4, $5, 'participant',
+             $6::boolean, CASE WHEN $6::boolean THEN now() END,
+             CASE WHEN $6::boolean THEN $7::uuid END)
+     RETURNING id`,
+    [
+      seeded.alpha.workspaceId,
+      messageId,
+      crm.alpha.firmId,
+      crm.alpha.opportunityId,
+      contactId,
+      selected ? true : null,
+      seeded.alpha.salesperson.userId,
+    ],
   );
   let callbackId: string | null = null;
   if (options.withCallback === true) {
@@ -558,9 +580,25 @@ describe('follow_up: the permission is a pointer, and the evidence is the author
     ).rejects.toThrow('inbound_request_unconfirmed');
   });
 
+  it('refuses a sole match nobody selected: one candidate is still only a candidate', async () => {
+    // P0-1 of the second review. The verification used to accept an unselected match when
+    // it was the only one the message had, which is the classifier's opinion rather than
+    // anybody's consent. `selected` is the column a person writes.
+    const contactId = await addContact('Sole Unselected');
+    const inbound = await seedInboundRequest(contactId, { selected: false });
+    await expect(
+      grantFollowUpPermission(salesperson(), {
+        firmId: crm.alpha.firmId,
+        contactId,
+        mailMessageId: inbound.messageId,
+        grantedByUserId: seeded.alpha.salesperson.userId,
+      }),
+    ).rejects.toThrow('inbound_request_unconfirmed');
+  });
+
   it('refuses an ambiguous inbound message whose match nobody selected', async () => {
     const contactId = await addContact('Ambiguous');
-    const inbound = await seedInboundRequest(contactId);
+    const inbound = await seedInboundRequest(contactId, { selected: false });
     // A second candidate for the same message, at another firm, and neither selected:
     // `mail_message_matches_one_per_opportunity` means a second candidate is a second
     // *conversation*, which is exactly what an ambiguous inbound message is.
@@ -963,6 +1001,65 @@ describe('the manual-mode wall, resolved for follow-ups only (David, item 1)', (
     );
     expect(rows[0]?.control_mode).toBe('manual');
     expect(rows[0]?.control_mode_origin).toBe('direct_send_keep_automation');
+  });
+
+  it('and a later send by hand takes it back: the choice was about one message', async () => {
+    // P1-1 of the second review of PR 332. The person let the automation continue after
+    // writing once by hand; writing again by hand is them taking the conversation back,
+    // and the choice can be made again afterwards.
+    const contactId = await addContact('Wrote By Hand Twice');
+    const granted = await grantAgreedSequence(contactId);
+    const enrollmentId = await enrolFollowUp(contactId, granted.permissionId);
+    await setManualControlMode(salesperson(), {
+      opportunityId: crm.alpha.opportunityId,
+      reason: 'sent from Gmail by hand',
+      origin: 'direct_send',
+    });
+    await keepFollowingUpAfterDirectSend(salesperson(), {
+      opportunityId: crm.alpha.opportunityId,
+      reason: 'one answer; Callie keeps the agreed sequence',
+    });
+    expect(await controlModeSource().evaluate(worker(), await stepOf(enrollmentId))).toEqual({ ok: true });
+
+    // The second hand-written message.
+    await setManualControlMode(salesperson(), {
+      opportunityId: crm.alpha.opportunityId,
+      reason: 'sent from Gmail by hand again',
+      origin: 'direct_send',
+    });
+    expect(await controlModeSource().evaluate(worker(), await stepOf(enrollmentId))).toEqual({
+      ok: false,
+      reasonCode: 'opportunity_manual',
+      detail: 'takeover:direct_send',
+    });
+
+    // And the choice is still available, because it is a choice and not a state machine.
+    const again = await keepFollowingUpAfterDirectSend(salesperson(), {
+      opportunityId: crm.alpha.opportunityId,
+      reason: 'again: Callie keeps the agreed sequence',
+    });
+    expect(again.ok).toBe(true);
+    expect(await controlModeSource().evaluate(worker(), await stepOf(enrollmentId))).toEqual({ ok: true });
+  });
+
+  it('but a takeover is never downgraded by a later direct send', async () => {
+    const contactId = await addContact('Taken Over Then Sent By Hand');
+    const granted = await grantAgreedSequence(contactId);
+    const enrollmentId = await enrolFollowUp(contactId, granted.permissionId);
+    await takeOverOpportunity(salesperson(), {
+      opportunityId: crm.alpha.opportunityId,
+      reason: 'I will handle this firm myself',
+    });
+    await setManualControlMode(salesperson(), {
+      opportunityId: crm.alpha.opportunityId,
+      reason: 'sent from Gmail by hand',
+      origin: 'direct_send',
+    });
+    expect(await controlModeSource().evaluate(worker(), await stepOf(enrollmentId))).toEqual({
+      ok: false,
+      reasonCode: 'opportunity_manual',
+      detail: 'takeover:salesperson_command',
+    });
   });
 
   it('and that choice cannot relabel a takeover: it is conditional on the origin it replaces', async () => {

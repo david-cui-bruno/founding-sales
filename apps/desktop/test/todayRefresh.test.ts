@@ -29,6 +29,7 @@ const state = (overrides: Partial<TodayState> = {}): TodayState => ({
   asOf: '2026-09-21T13:00:00.000Z',
   mayMutate: true,
   dialAdvice: [],
+  followUpTemplates: [],
   role: 'admin',
   notice: null,
   handoffNotice: 'Once a call is handed to the phone app, Callie cannot recall it.',

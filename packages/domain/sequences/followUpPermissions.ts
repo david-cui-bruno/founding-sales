@@ -7,6 +7,7 @@ import {
 } from '@fss/contracts';
 import { decideFirmMutation } from '../crm/authorization.ts';
 import { loadFirmForUpdate } from '../crm/firms.ts';
+import { currentHolidayCalendar } from './calendars.ts';
 import type { RepositoryContext } from '../db/workspaceScope.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { resolveStepDue } from '../src/rules/cadence.ts';
@@ -316,8 +317,11 @@ export async function verifyFollowUpPermission(
  * confirmation a person made — a `mail_reply_confirmations` row for this message, at
  * this firm, with a disposition that asks to be written to, and **no callback
  * committed** (a `follow_up_later` that booked a call is a call, not an e-mail). The
- * match that names the recipient must be the chosen one: `selected = true`, or the only
- * match the message has. A match a merge re-pointed or a deletion removed withdraws the
+ * match that names the recipient must be the **chosen** one — `selected IS TRUE`, and
+ * nothing else. A sole match nobody selected is a candidate the classifier proposed and
+ * a person never confirmed, and the second review of PR 332 is right that it must not
+ * qualify: `selected` is the column a person writes, and "there was only one" is the
+ * classifier's opinion, not consent. A match a merge re-pointed or a deletion removed withdraws the
  * permission without anybody having to remember to. The direction is `incoming`
  * (migration 0009's vocabulary; the verification document of 29 September says
  * "inbound", which is the same thing in English and not in SQL).
@@ -371,11 +375,7 @@ async function verifyEvidence(
          JOIN mail_message_matches m
               ON m.workspace_id = c.workspace_id AND m.mail_message_id = c.mail_message_id
              AND m.firm_id = c.firm_id
-             AND (m.selected IS TRUE
-                  OR NOT EXISTS (SELECT 1 FROM mail_message_matches other
-                                  WHERE other.workspace_id = m.workspace_id
-                                    AND other.mail_message_id = m.mail_message_id
-                                    AND other.id <> m.id))
+             AND m.selected IS TRUE
         WHERE c.workspace_id = $1
           AND c.mail_message_id = $2
           AND c.firm_id = $3
@@ -609,16 +609,26 @@ async function defaultExpiry(
   );
   const version = await readSequenceVersion(context, versionId);
   if (version === null || version.steps.length === 0) return null;
-  return agreedSequenceExpiry(version.steps, grantedAt, rows[0]?.time_zone ?? 'America/New_York');
+  // The workspace's own calendar, because the schedule this bound has to cover is the one
+  // the engine will run: a holiday moves a step *later*, and a bound computed without one
+  // can end before the plan's own last step (the second review of PR 332).
+  const calendar = await currentHolidayCalendar(context);
+  return agreedSequenceExpiry(version.steps, grantedAt, rows[0]?.time_zone ?? 'America/New_York', calendar);
 }
 
 /**
  * When the last step of `steps` would be due if the sequence started at `from`.
  *
- * The calendar is deliberately omitted: a holiday shifts a due instant by a day, and a
- * permission's end is a bound rather than a schedule. Erring a day short of the plan
- * would refuse the plan's own last step, so the chain runs without holidays and the
- * bound is the earliest honest one that still covers every step.
+ * **The real cadence**, which is start-anchored: 11.1 counts every step's delay from the
+ * instant the enrollment began, not from the previous step's due instant
+ * (`src/rules/cadence.ts`). This used to chain them, which made the bound later than the
+ * plan — a three-step sequence of two business days each ended six days out instead of
+ * two — so an "agreed scope" could cover weeks nobody agreed to. And the calendar is
+ * passed, because a holiday moves a step later and a bound computed without one can end
+ * before the plan's own last step. Both are the second review of PR 332.
+ *
+ * The latest of the steps rather than the last by ordinal, because a delay is not
+ * required to increase with the ordinal.
  */
 export function agreedSequenceExpiry(
   steps: readonly SequenceStepRow[],
@@ -627,11 +637,11 @@ export function agreedSequenceExpiry(
   calendar?: WorkspaceHolidayCalendar | undefined,
 ): string {
   let instant = from;
-  for (const step of [...steps].sort((left, right) => left.ordinal - right.ordinal)) {
+  for (const step of steps) {
     // The cadence shape, inline rather than through `stepForCadence`: `enrollments.ts`
     // imports this module, and a cycle between the two would be a cycle the bundler has
     // to break rather than a dependency somebody chose.
-    instant = resolveStepDue(
+    const due = resolveStepDue(
       {
         id: step.id,
         ordinal: step.ordinal,
@@ -639,10 +649,11 @@ export function agreedSequenceExpiry(
         delay: step.delay,
         ...(step.onNoAnswer === null ? {} : { onNoAnswer: step.onNoAnswer }),
       },
-      instant,
+      from,
       zone,
       calendar,
     ).dueAt;
+    if (Date.parse(due) > Date.parse(instant)) instant = due;
   }
   // One day past the last step's due instant, so the step due on the final day is
   // inside the window rather than exactly on its edge (`expires_at > granted_at`, and
@@ -740,6 +751,29 @@ export async function consumeFollowUpPermission(
     [context.scope.workspaceId, permissionId],
   );
   return (consumed.rowCount ?? 0) > 0;
+}
+
+/**
+ * Is this permission still live, asked of the database's own clock inside the claim's
+ * transaction, immediately before it commits (P0-4 of the second review of PR 332)?
+ *
+ * `consumeFollowUpPermission` carries this for the two scopes that spend a message. Every
+ * other scope spent nothing, and used to commit on the strength of the expiry the gate
+ * sampled before the token refresh — so an `agreed_sequence` permission that expired, or
+ * was revoked, while the claim waited on a lock could still send. The row is already
+ * locked by `lockPermissionForClaim`, so this is a read of a row nobody else can be
+ * changing, and a false answer aborts the claim.
+ */
+export async function permissionStillLive(
+  context: RepositoryContext,
+  permissionId: string,
+): Promise<boolean> {
+  const { rows } = await context.db.query<{ live: boolean }>(
+    `SELECT (revoked_at IS NULL AND expires_at > clock_timestamp()) AS live
+       FROM follow_up_permissions WHERE workspace_id = $1 AND id = $2`,
+    [context.scope.workspaceId, permissionId],
+  );
+  return rows[0]?.live === true;
 }
 
 /**

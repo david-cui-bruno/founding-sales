@@ -427,6 +427,24 @@ function TakeOver({
   );
 }
 
+/**
+ * Whether "I will handle this myself" has anything left to say (P1-1 of the second review
+ * of PR 332).
+ *
+ * It used to be offered only while the opportunity was automated, which hid it in exactly
+ * the state a person most needs it: manual on a *signal* — a reply, an engaged call, or a
+ * direct send they said to keep following up after — is the state in which an evidenced
+ * follow-up still runs beside them. So the control is offered for every open opportunity
+ * except one already taken over by hand, where pressing it would change nothing.
+ */
+function takeoverOffered(
+  opportunity: NonNullable<Extract<FirmPageResponse, { visibility: 'assigned_or_admin' }>['opportunity']>,
+): boolean {
+  if (opportunity.status !== 'open') return false;
+  if (opportunity.controlMode === 'automated') return true;
+  return opportunity.controlModeOrigin !== 'salesperson_command';
+}
+
 function Opportunity({
   page,
   actionsEnabled,
@@ -451,7 +469,7 @@ function Opportunity({
             {`${inWords(opportunity.status)} at ${inWords(opportunity.stageKey)}, opened ${shortDay(opportunity.openedAt)}`}
             {opportunity.closeReason === null ? '' : ` · closed because ${inWords(opportunity.closeReason)}`}
           </p>
-          {opportunity.status === 'open' && opportunity.controlMode === 'automated' ? (
+          {takeoverOffered(opportunity) ? (
             <TakeOver enabled={actionsEnabled} saving={busy('take-over')} onTakeOver={onTakeOver} />
           ) : null}
           <ol data-testid="stage-history" className="mt-1 flex flex-col border-t border-border">
