@@ -155,7 +155,7 @@ Decided in `createCallSession` (`readCallCadence`, `packages/domain/calls/sessio
   stays an unanswered attempt in the 14-day history until an outcome that says somebody
   was reached (below) is recorded; a call that rang out, reached a machine, failed or was
   never classified counts, and nothing expires it but the window;
-* at most **4** in **14 days**; at most **one per business day** on the firm's clock, and
+* at most **4** in one **14-day window** `(t − 14 days, t]`; at most **one per business day** on the firm's clock, and
   the next at least **2 hours** of the clock from the previous attempt's time of day,
   measured from every counted session (the calling window itself is `authorizeDial`'s);
 * the count starts again after a recorded `interested`, `referral_or_wrong_person`,
@@ -168,7 +168,11 @@ Decided in `createCallSession` (`readCallCadence`, `packages/domain/calls/sessio
 * the firm is **parked when its fourth attempt is recorded unanswered** — an outcome of
   `no_answer`, `busy` or `voicemail_left` (`logCallOutcome`), or Twilio's final
   no-answer/busy with no outcome yet (`recordCallStatus`) — through `parkIfCadenceSpent`,
-  which takes the send gate before it looks for an open hold. A call request that finds
+  which takes the send gate before it looks for an open hold and counts the window that
+  ends at the firm's latest placed call (a late classification of an old call cannot
+  park a firm whose attempts never fell four in one window). A no-answer/busy callback
+  takes the gate and the firm row before the session row, the order consumption and Log
+  outcome use. A call request that finds
   the limit reached and no hold parks it only after `authorizeDial` accepts the caller,
   firm, route and identity; a refused request writes nothing. The hold is firm-scoped
   `scoped_pause` on `dial_authorization`, source `call_cadence_parked`, recovery
@@ -218,4 +222,6 @@ widened, which is a migration; until then `readVoicemailScript` answers the defa
   a blocked build's, or Restart to update — stops before the swap, and the staged,
   verified bundle is installed when the call ends (`callActivity.ts`, `Updater.callEnded`).
 * Closing the card or pressing Hang up while a call is being set up cancels it; a Device
-  or Call created afterwards is disconnected and destroyed at once.
+  or Call created afterwards is disconnected and destroyed at once, and the main process
+  (`calling.cancel`) binds nothing of that start to the next outcome. Stop, or leaving
+  the firm page, cancels a recording still being fetched.
