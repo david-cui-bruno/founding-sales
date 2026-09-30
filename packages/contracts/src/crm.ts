@@ -312,6 +312,7 @@ export const boardCardSchema = z.object({
 export type BoardCard = z.infer<typeof boardCardSchema>;
 
 /** `POST /pipeline/board`'s body. Lost sits behind a filter. */
+/** `includeLost` absent means true: installed desktops send `{}` and need the Lost column. */
 export const pipelineBoardRequestSchema = z.object({ includeLost: z.boolean().optional() });
 
 export const pipelineBoardResponseSchema = z.object({

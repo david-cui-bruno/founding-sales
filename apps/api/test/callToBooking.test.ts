@@ -360,7 +360,13 @@ describe('the call-to-booking walking skeleton, over HTTP', () => {
     });
 
     // ---- the board --------------------------------------------------------------------
-    const board = await api('/pipeline/board', salespersonToken, {});
+    // An installed desktop sends `{}` and still gets Lost; the new desktop sends false.
+    const installed = await api('/pipeline/board', salespersonToken, {});
+    expect(installed.status).toBe(200);
+    expect(
+      (installed.body['columns'] as { stage: { key: string } }[]).map(column => column.stage.key),
+    ).toEqual(['new', 'demo_booked', 'qualified', 'onboarding', 'won', 'lost']);
+    const board = await api('/pipeline/board', salespersonToken, { includeLost: false });
     expect(board.status).toBe(200);
     const columns = board.body['columns'] as { stage: { key: string; displayName: string }; firms: { id: string }[] }[];
     expect(columns.map(column => column.stage.displayName)).toEqual(['Interested', 'Demo booked', 'Decision pending', 'Onboarding', 'Live']);

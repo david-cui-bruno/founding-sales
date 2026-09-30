@@ -324,14 +324,17 @@ export async function runWorkflows(
       run: async () => {
         const board = await readPipelineBoardForActor(admin);
         const placed = board.columns.reduce((total, column) => total + column.firms.length, 0);
-        // 0028 (call-to-booking): five columns by default — Interested, Demo booked,
-        // Decision pending, Onboarding, Live — plus a retired stage only while something
-        // still sits in it; Lost only with the filter.
+        // 0028 (call-to-booking): Interested, Demo booked, Decision pending, Onboarding,
+        // Live and — by default, because installed desktops build their stage selector
+        // from the columns — Lost; a retired stage only while something still sits in it.
         const keys = board.columns.map(column => column.stage.key);
-        for (const key of ['new', 'demo_booked', 'qualified', 'onboarding', 'won']) {
+        for (const key of ['new', 'demo_booked', 'qualified', 'onboarding', 'won', 'lost']) {
           if (!keys.includes(key)) throw new Error(`the board has no ${key} column; it shows ${keys.join(', ')}`);
         }
-        if (keys.includes('lost')) throw new Error('the board shows Lost without the filter');
+        const hidden = await readPipelineBoardForActor(admin, { includeLost: false });
+        if (hidden.columns.some(column => column.stage.key === 'lost')) {
+          throw new Error('the board shows Lost although the request said includeLost: false');
+        }
         if (placed === 0) throw new Error('no firm is placed on the board, though the fixture opens opportunities');
         if (board.opportunityIdByFirmId[handles.primaryFirmId] === undefined) {
           throw new Error('the fixture firm has no opportunity an admin may change');

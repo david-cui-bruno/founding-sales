@@ -112,7 +112,11 @@ function mayChangeStage(context: RepositoryContext, assignedUserId: string | nul
 
 /**
  * The Kanban (call-to-booking, 0028): Interested, Demo booked, Decision pending,
- * Onboarding and Live, with Lost behind `includeLost`.
+ * Onboarding and Live, and Lost unless `includeLost` is explicitly false.
+ *
+ * Lost is shown by default (review fold 1, finding 4): installed desktops send `{}`
+ * and build their stage selector from these columns, so a board without Lost would
+ * take the Lost action away from them. The new desktop (slice K) sends `false`.
  *
  * Each firm is placed by its **current** opportunity — the open one, or else the most
  * recently closed one — so a Live customer stays in the Live column and a Lost firm
@@ -124,7 +128,7 @@ export async function readPipelineBoardForActor(
   context: RepositoryContext,
   options: { readonly limit?: number; readonly includeLost?: boolean } = {},
 ): Promise<PipelineBoardDto> {
-  const includeLost = options.includeLost === true;
+  const includeLost = options.includeLost !== false;
   const stages = await listPipelineStages(context);
   const { rows } = await context.db.query<BoardRow>(
     `SELECT f.*, s.key AS stage_key, o.id AS opportunity_id, o.status AS opportunity_status,

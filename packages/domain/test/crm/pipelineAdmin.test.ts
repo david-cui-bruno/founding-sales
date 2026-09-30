@@ -304,8 +304,8 @@ describe('the pipeline board read', () => {
     expect(board.opportunityIdByFirmId[crm.alpha.firmId]).not.toBe(crm.beta.opportunityId);
   });
 
-  it('shows the five Kanban columns in order, and Lost only behind its filter (0028)', async () => {
-    const board = await readPipelineBoardForActor(admin);
+  it('shows the Kanban columns in order, with Lost by default and without it on an explicit false (0028)', async () => {
+    const board = await readPipelineBoardForActor(admin, { includeLost: false });
     expect(board.columns.map(column => column.stage.key)).toEqual(['new', 'demo_booked', 'qualified', 'onboarding', 'won']);
     // Exactly one column holds the seeded firm, and it is the one its stage names.
     const holding = board.columns.filter(column => column.firms.length > 0);
@@ -313,7 +313,9 @@ describe('the pipeline board read', () => {
     expect(holding[0]?.stage.key).toBe('new');
     expect(board.cards[crm.alpha.firmId]).toEqual({ value: null, meeting: null, evidence: null, pinned: false });
 
-    const withLost = await readPipelineBoardForActor(admin, { includeLost: true });
+    // Absent is true: an installed desktop sends `{}` and builds its stage selector from
+    // the columns, so it must still see Lost.
+    const withLost = await readPipelineBoardForActor(admin);
     expect(withLost.columns.map(column => column.stage.key)).toEqual([
       'new',
       'demo_booked',
