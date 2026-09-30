@@ -1,4 +1,5 @@
 import { isAdminScope, type RepositoryContext } from '../db/workspaceScope.ts';
+import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { EMPTY_HOLIDAY_CALENDAR, type WorkspaceHolidayCalendar } from '../src/rules/businessDays.ts';
 import { acceptSequence, refuseSequence, type SequenceResult } from './types.ts';
 
@@ -86,6 +87,17 @@ export async function recordHolidayCalendar(
   if (!VERSION_PATTERN.test(input.version)) return refuseSequence('invalid_input');
   if (input.dates.some(date => !DATE_PATTERN.test(date))) return refuseSequence('invalid_input');
   if (context.scope.actor.kind !== 'user') return refuseSequence('admin_only');
+
+  // The current calendar is a window input every live run reads at dispatch
+  // (`dispatchHolidayCalendar` = frozen ∪ current), and a migration checks its fresh
+  // permission's expiry against the first e-mail placed with that union. The write takes
+  // the send gate EXCLUSIVE first, the same lock a migration, an enrolment or any stop
+  // fact takes, so a migration either commits before this calendar exists (and dispatch
+  // later sees a post-commit calendar change, which it re-checks and fails closed on) or
+  // starts after it commits and reads it. Without the gate a holiday committed between
+  // the migration's calendar read and its commit could move that e-mail past the expiry
+  // it was accepted against (follow-up-eligibility §6d).
+  await lockSendGateForStopFact(context);
 
   const taken = await context.db.query(
     'SELECT 1 FROM workspace_holiday_calendars WHERE workspace_id = $1 AND version = $2',

@@ -11,6 +11,7 @@ import { resolveStepDue } from '../../src/rules/cadence.ts';
 import { localInstant } from '../../src/rules/localClock.ts';
 import { placeEmailSend } from '../../src/rules/sendingWindow.ts';
 import { lockSendGateForStopFact } from '../../policy/sendGate.ts';
+import { dispatchHolidayCalendar } from '../../outbound/stepPermission.ts';
 import { completeStepExecution, runDueStepExecution } from '../../sequences/executions.ts';
 import { grantFollowUpPermission } from '../../sequences/followUpPermissions.ts';
 import { completedPrefix, migrateEnrollment } from '../../sequences/migrateEnrollment.ts';
@@ -829,6 +830,83 @@ describe('the fresh permission must outlive the step it pays for (PR 335 review,
       // The current calendar back to the seeded dates, under a new version.
       await recordHolidayCalendar(admin(), { version: `holidays.back-${suffix}`, dates: [...CALENDAR.dates] });
     }
+  });
+
+  describe('a holiday calendar written while a migration is in flight takes the send gate (round 8)', () => {
+    it('a migration holding the gate makes the calendar write wait; the write lands after, and dispatch sees the moved window', async () => {
+      // Fails without the gate in `recordHolidayCalendar`: the write would not wait, and
+      // would commit a holiday under a migration that checked its expiry without it.
+      const { hours, day: rawDay } = await midWindowDelay();
+      const { old, target, fresh } = await lateFollowUp(hours * 60 * 60 * 1000 + 2 * 60 * 1000, hours);
+      const suffix = crypto.randomUUID().slice(0, 8);
+      await second.query('BEGIN');
+      const migrated = await migrateEnrollment(contextOn(second, 'salesperson'), {
+        enrollmentId: old,
+        targetSequenceVersionId: target,
+        permissionId: fresh,
+      });
+      if (!migrated.ok) throw new Error(`the migration was refused: ${migrated.reason}`);
+      const writing = inTransaction(third, async () =>
+        await recordHolidayCalendar(contextOn(third, 'admin'), { version: `holidays.a-${suffix}`, dates: [...CALENDAR.dates, rawDay] }),
+      );
+      try {
+        expect(await someoneWaitsOnALock()).toBe(true);
+        await second.query('COMMIT');
+        expect((await writing).ok).toBe(true);
+
+        // The migration committed against the calendar without the holiday; the write
+        // then landed. Dispatch places with frozen ∪ current, so for the moved run the
+        // holiday is a post-commit change: the e-mail's send moves past the permission,
+        // and dispatch's own check (`follow_up_expired`) fails closed on it.
+        const moved = await readEnrollment(admin(), { enrollmentId: migrated.value.newEnrollmentId });
+        if (moved === null) throw new Error('the replacement enrollment disappeared');
+        const calendar = await dispatchHolidayCalendar(admin(), moved);
+        expect(calendar.dates).toContain(rawDay);
+        const [step] = await listStepExecutions(admin(), { enrollmentId: moved.id });
+        const { rows } = await database.session.query<{ expires_at: Date }>(
+          'SELECT expires_at FROM follow_up_permissions WHERE id = $1',
+          [fresh],
+        );
+        const sendAt = placeEmailSend(step?.dueAt ?? '', moved.firmTimeZone, { calendar }).sendAt;
+        expect(Date.parse(sendAt)).toBeGreaterThanOrEqual(rows[0]?.expires_at.getTime() ?? 0);
+      } finally {
+        // A failed assertion leaves the holding transaction open; end it before restoring.
+        await second.query('ROLLBACK');
+        await writing.catch(() => undefined);
+        await recordHolidayCalendar(admin(), { version: `holidays.a-back-${suffix}`, dates: [...CALENDAR.dates] });
+      }
+    });
+
+    it('a calendar write holding the gate makes the migration wait; the migration reads the new calendar and refuses', async () => {
+      // Fails without the gate in `recordHolidayCalendar`: the migration would not wait,
+      // would read the calendar before the holiday commits, and would migrate.
+      const { hours, day: rawDay } = await midWindowDelay();
+      const { old, target, fresh } = await lateFollowUp(hours * 60 * 60 * 1000 + 2 * 60 * 1000, hours);
+      const suffix = crypto.randomUUID().slice(0, 8);
+      await second.query('BEGIN');
+      expect(
+        (await recordHolidayCalendar(contextOn(second, 'admin'), { version: `holidays.b-${suffix}`, dates: [...CALENDAR.dates, rawDay] })).ok,
+      ).toBe(true);
+      const migrating = inTransaction(third, async () =>
+        await migrateEnrollment(contextOn(third, 'salesperson'), {
+          enrollmentId: old,
+          targetSequenceVersionId: target,
+          permissionId: fresh,
+        }),
+      );
+      try {
+        expect(await someoneWaitsOnALock()).toBe(true);
+        await second.query('COMMIT');
+        expect(await migrating).toEqual({ ok: false, reason: 'permission_expires_before_step' });
+        expect(await readEnrollment(admin(), { enrollmentId: old })).toMatchObject({ state: 'active' });
+        expect((await permissionRow(fresh)).enrollment_id).toBeNull();
+      } finally {
+        // A failed assertion leaves the holding transaction open; end it before restoring.
+        await second.query('ROLLBACK');
+        await migrating.catch(() => undefined);
+        await recordHolidayCalendar(admin(), { version: `holidays.b-back-${suffix}`, dates: [...CALENDAR.dates] });
+      }
+    });
   });
 
   it('still migrates a kept plan inside the permission, with rescheduledTo null', async () => {
