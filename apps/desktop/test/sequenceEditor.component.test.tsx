@@ -1,12 +1,14 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, render, renderHook, screen, waitFor, within } from '@testing-library/react';
+import type { ReactNode } from 'react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DraftsProvider } from '../src/renderer/app/drafts.tsx';
 import { createGeneration } from '../src/renderer/app/generation.ts';
 import type { SequenceState } from '../src/renderer/sequenceContract.ts';
 import { SequencesRoute } from '../src/renderer/sequences/SequencesRoute.tsx';
+import { useSequences } from '../src/renderer/sequences/useSequences.ts';
 import type { OperationApi, OperationName } from '../src/shared/operations.ts';
 import {
   SEQUENCE_IDS,
@@ -301,5 +303,41 @@ describe('a save that is not accepted keeps what was typed (PR 335 review, P1-4)
     await waitFor(() => {
       expect(screen.queryByTestId('template-form')).toBeNull();
     });
+  });
+});
+
+describe('the save action itself settles (PR 335 review, round 3)', () => {
+  it('settles false, rather than never, when the bridge rejects the save', async () => {
+    // Fails with the catch in `useSequences` removed: the promise would never settle, and
+    // the race below answers 'unsettled'.
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      install({ 'sequences.saveSteps': new Error('the bridge went away') }, base());
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } } });
+      const { result } = renderHook(() => useSequences('person', 0, createGeneration().guard), {
+        wrapper: ({ children }: { readonly children: ReactNode }) => (
+          <QueryClientProvider client={client}>{children}</QueryClientProvider>
+        ),
+      });
+      const settled = await Promise.race([
+        result.current.actions.saveSteps({ sequenceVersionId: PUBLISHED_ID, steps: [] }),
+        new Promise<'unsettled'>(resolve => setTimeout(() => resolve('unsettled'), 2000)),
+      ]);
+      expect(settled).toBe(false);
+    } finally {
+      quiet.mockRestore();
+    }
+  });
+
+  it('settles true for an accepted save and false for a refused one', async () => {
+    install({ 'sequences.saveSteps': base({ notice: 'steps_saved_as_version:2' }) }, base());
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } } });
+    const wrapper = ({ children }: { readonly children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+    const accepted = renderHook(() => useSequences('person', 0, createGeneration().guard), { wrapper });
+    expect(await accepted.result.current.actions.saveSteps({ sequenceVersionId: PUBLISHED_ID, steps: [] })).toBe(true);
+    install({ 'sequences.saveSteps': base({ notice: `draft_exists:2:${DRAFT_ID}` }) }, base());
+    expect(await accepted.result.current.actions.saveSteps({ sequenceVersionId: PUBLISHED_ID, steps: [] })).toBe(false);
   });
 });

@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import type { SessionQueryable } from '../../db/queryable.ts';
 import { createTestDatabase, type TestDatabase } from '../../db/testing/testDatabase.ts';
 import { repositoryContext, workspaceScope, type RepositoryContext } from '../../db/workspaceScope.ts';
-import { createDraftVersion, publishVersion, retireVersion } from '../../sequences/definitions.ts';
+import { createDraftVersion, publishVersion, retireVersion, type DraftStepInput } from '../../sequences/definitions.ts';
 import { allowAllEligibility } from '../../sequences/eligibility.ts';
 import { enrollContact, stepForCadence } from '../../sequences/enrollments.ts';
 import { databaseNow } from '../../policy/clock.ts';
@@ -685,6 +685,66 @@ describe('the fresh permission must outlive the step it pays for (PR 335 review,
       [seeded.alpha.workspaceId, version, rawDay, seeded.alpha.admin.userId],
     );
     await database.session.query('UPDATE sequence_enrollments SET holiday_calendar_version = $2 WHERE id = $1', [old, version]);
+    expect(
+      await migrateEnrollment(salesperson(), { enrollmentId: old, targetSequenceVersionId: target, permissionId: fresh }),
+    ).toEqual({ ok: false, reason: 'permission_expires_before_step' });
+    expect(await readEnrollment(admin(), { enrollmentId: old })).toMatchObject({ state: 'active' });
+    expect((await permissionRow(fresh)).enrollment_id).toBeNull();
+  });
+
+  /** A call task `hours` after the anchor (an elapsed delay, so the instant is exact). */
+  const callAfter = (ordinal: number, hours: number): DraftStepInput => ({
+    ordinal,
+    channel: 'call_task',
+    delay: { unit: 'elapsed', hours },
+    onNoAnswer: 'advance',
+  });
+
+  async function lateFollowUpTo(
+    targetSteps: (template: string) => readonly DraftStepInput[],
+    expiresInMs: number,
+  ): Promise<{ old: string; target: string; fresh: string }> {
+    const template = await approvedTemplate(admin(), 'A call, then an e-mail.');
+    const plan = await publishedPlan(admin(), [emailStep(template), callStep(2, 2)]);
+    const firm = await newFirm(database.session, seeded.alpha);
+    const old = await enrolled(plan.versionId, firm, { kind: 'follow_up', permissionId: await agreedPermission(firm, plan.versionId) });
+    await completeCurrent(old);
+    const target = await publishedVersionOf(admin(), plan.sequenceId, targetSteps(template));
+    const expiresAt = new Date(Date.parse(await databaseNow(admin())) + expiresInMs).toISOString();
+    return { old, target, fresh: await agreedPermission(firm, target, expiresAt) };
+  }
+
+  it('refuses when step k + 1 is a call inside the permission but the first e-mail after it is not (round 3)', async () => {
+    // Fails if only an e-mail step k + 1 is compared: the call is due in an hour, the
+    // e-mail 48 h after it, and the permission ends in a day.
+    const { old, target, fresh } = await lateFollowUpTo(
+      template => [emailStep(template), callAfter(2, 1), emailStep(template, 3, 49)],
+      24 * 60 * 60 * 1000,
+    );
+    expect(
+      await migrateEnrollment(salesperson(), { enrollmentId: old, targetSequenceVersionId: target, permissionId: fresh }),
+    ).toEqual({ ok: false, reason: 'permission_expires_before_step' });
+    expect(await readEnrollment(admin(), { enrollmentId: old })).toMatchObject({ state: 'active' });
+    expect((await permissionRow(fresh)).enrollment_id).toBeNull();
+  });
+
+  it('migrates a call-then-e-mail remainder when both fit inside the permission (round 3)', async () => {
+    const { old, target, fresh } = await lateFollowUpTo(
+      template => [emailStep(template), callAfter(2, 1), emailStep(template, 3, 49)],
+      10 * 24 * 60 * 60 * 1000,
+    );
+    const migrated = await migrateEnrollment(salesperson(), { enrollmentId: old, targetSequenceVersionId: target, permissionId: fresh });
+    if (!migrated.ok) throw new Error(`the migration was refused: ${migrated.reason}`);
+    expect(migrated.value.nextOrdinal).toBe(2);
+    expect((await permissionRow(fresh)).enrollment_id).toBe(migrated.value.newEnrollmentId);
+  });
+
+  it('refuses when the call task at step k + 1 is itself placed after the expiry (round 3)', async () => {
+    // Fails if a call step k + 1 is not compared: it is due 48 h out, the permission ends in a day.
+    const { old, target, fresh } = await lateFollowUpTo(
+      template => [emailStep(template), callAfter(2, 48)],
+      24 * 60 * 60 * 1000,
+    );
     expect(
       await migrateEnrollment(salesperson(), { enrollmentId: old, targetSequenceVersionId: target, permissionId: fresh }),
     ).toEqual({ ok: false, reason: 'permission_expires_before_step' });

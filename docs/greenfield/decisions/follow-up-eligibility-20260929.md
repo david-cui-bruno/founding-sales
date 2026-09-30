@@ -351,7 +351,10 @@ and `updateTemplateVersion` rewrote an approved template's text in place, so a l
   window with `placeEmailSend` on the frozen zone and calendar, and that placed instant is
   both `rescheduledTo` and the instant compared with the fresh permission's `expires_at` —
   a permission that would expire first refuses `permission_expires_before_step` before
-  the old run is touched, and stays unbound. (P2-a) The target
+  the old run is touched, and stays unbound. (Round 3) Step k + 1 is compared whatever
+  its channel (a call task at its due instant), and so is the **first e-mail** of the
+  remainder, projected with `successorDue` from each predecessor's projected instant and
+  placed with `placeEmailSend` — so a call now and an e-mail after the expiry refuses too. (P2-a) The target
   version is held `FOR SHARE` from its check to the commit, so a publication cannot
   retire it in between; the publication waits, and one that commits first makes the
   migration refuse `version_retired`.

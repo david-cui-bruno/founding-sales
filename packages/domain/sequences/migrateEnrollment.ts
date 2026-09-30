@@ -3,11 +3,13 @@ import { recordCrmAuditEvent } from '../crm/audit.ts';
 import { lockSendGateForStopFact } from '../policy/sendGate.ts';
 import { resolveStepDue } from '../src/rules/cadence.ts';
 import { placeEmailSend } from '../src/rules/sendingWindow.ts';
+import type { WorkspaceHolidayCalendar } from '../src/rules/businessDays.ts';
+import { successorDue } from './successor.ts';
 import { holidayCalendarByVersion } from './calendars.ts';
 import { completeEnrollment, FollowUpReuseError, stepForCadence, stopEnrollments } from './enrollments.ts';
 import { bindFollowUpPermission, readFollowUpPermission, verifyFollowUpPermission } from './followUpPermissions.ts';
 import { loadEnrollmentForUpdate, readSequenceVersion } from './rows.ts';
-import { acceptSequence, refuseSequence, type SequenceResult } from './types.ts';
+import { acceptSequence, refuseSequence, type SequenceResult, type SequenceStepRow } from './types.ts';
 
 /**
  * Moving a running enrollment to a newer published version, explicitly (send-path v2, S2).
@@ -122,6 +124,40 @@ export function completedPrefix(executions: readonly ExecutionForPrefix[]): numb
   const unfinished = executions.filter(execution => execution.state !== 'completed');
   if (unfinished.some(execution => execution.ordinal !== k + 1)) return null;
   return k;
+}
+
+/**
+ * Where the first e-mail of the remainder would be sent: `next` (step k + 1) at
+ * `nextAt`, then each later step at `successorDue` from its predecessor's projected
+ * instant, until an e-mail, which is placed in the sending window. Null when the
+ * remainder has no e-mail.
+ */
+export function firstEmailOfRemainder(
+  steps: readonly SequenceStepRow[],
+  next: SequenceStepRow,
+  nextAt: string,
+  startedAt: string,
+  zone: string,
+  calendar: WorkspaceHolidayCalendar,
+): string | null {
+  if (next.channel === 'email') return nextAt;
+  let previous = next;
+  let previousAt = nextAt;
+  for (const step of steps.filter(entry => entry.ordinal > next.ordinal).sort((a, b) => a.ordinal - b.ordinal)) {
+    const due = successorDue({
+      previous: stepForCadence(previous),
+      next: stepForCadence(step),
+      startedAt,
+      zone,
+      calendar,
+      completedAt: previousAt,
+    });
+    const at = step.channel === 'email' ? placeEmailSend(due.dueAt, zone, { calendar }).sendAt : due.dueAt;
+    if (step.channel === 'email') return at;
+    previous = step;
+    previousAt = at;
+  }
+  return null;
 }
 
 /**
@@ -277,17 +313,31 @@ export async function migrateEnrollment(
     schedule = { dueAt: late ? sendsAt : due.dueAt, sourceZone: due.sourceZone, ruleVersion: due.ruleVersion };
     if (late) rescheduledTo = sendsAt;
 
-    // PR 335 review, round 2: the fresh permission must still be live when the e-mail it
-    // pays for can leave. Otherwise binding it would end the old run for a follow-up that
-    // can only be held `follow_up_expired`. Refused here, before the old row is touched,
-    // with the permission unbound.
-    if (input.permissionId !== undefined && next.channel === 'email') {
+    // PR 335 review, rounds 2 and 3: the fresh permission must still be live when the
+    // run it buys can do what it was agreed for. Otherwise binding it would end the old
+    // run for a follow-up that can only be held `follow_up_expired`. Two instants are
+    // compared with `expires_at`, before the old row is touched:
+    //
+    //   * step k + 1 itself, as placed above (a call task is due where it is);
+    //   * the **first e-mail** of the remainder (k + 1 … n), projected on the frozen
+    //     cadence: each later step is where `successorDue` — the rule the step runner
+    //     uses — puts it when its predecessor is done at its own projected instant, and
+    //     an e-mail is then placed in the window with `placeEmailSend`.
+    //
+    // Either one at or after the expiry refuses `permission_expires_before_step`, with
+    // the permission unbound and the old enrollment active.
+    if (input.permissionId !== undefined) {
       const { rows: bound } = await context.db.query<{ expires_at: Date }>(
         'SELECT expires_at FROM follow_up_permissions WHERE workspace_id = $1 AND id = $2',
         [context.scope.workspaceId, input.permissionId],
       );
-      const expiresAt = bound[0]?.expires_at;
-      if (expiresAt === undefined || Date.parse(sendsAt) >= expiresAt.getTime()) {
+      const expiresAt = bound[0]?.expires_at.getTime();
+      const firstEmail = firstEmailOfRemainder(target.steps, next, sendsAt, old.startedAt, old.firmTimeZone, calendar);
+      if (
+        expiresAt === undefined ||
+        Date.parse(sendsAt) >= expiresAt ||
+        (firstEmail !== null && Date.parse(firstEmail) >= expiresAt)
+      ) {
         return refuseSequence('permission_expires_before_step');
       }
     }
